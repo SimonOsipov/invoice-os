@@ -69,8 +69,9 @@ const pagePath = (id: string, n: string) => `${EXTRACTIONS_PATH}/${id}/pages/${n
 const correctionPath = (id: string, field: string) => `${EXTRACTIONS_PATH}/${id}/fields/${field}/corrections`
 const lineItemsPath = (id: string) => `${EXTRACTIONS_PATH}/${id}/line-items`
 
-// e2e/ is ESM, so import.meta.url is the only cwd-independent anchor.
-const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/native_invoice.pdf')
+// e2e/ is ESM, so import.meta.url is the only cwd-independent anchor. Re-pointed at the rich
+// fixture by EXTR-18-05 so wire-derived assertions read real field content, not the mock's shape.
+const PDF_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents/rich_invoice.pdf')
 const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
 
 // The 201 body's complete key set (CorrectionResponse), sorted. Asserted as a WHOLE: an added
@@ -557,10 +558,10 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
 // TestRLS_LineItemsCorrectionRoundTripsThroughDetail (internal/extraction) prove without a
 // browser -- this row is the deployed-wire regression guard once the fix ships.
 //
-// mockDefaultLines (mock.go) is the extractor's fixed reading for every uploaded PDF: line 1 is
-// Widget / 2 / 500.00 / 1000.00. Only description is changed here, so the other three cells stay
-// a control -- if the whole row went missing rather than one cell staying stale, they would fail
-// too.
+// EXTR-18-05 re-pointed PDF_FIXTURE at rich_invoice.pdf: its own row-1 line item reads
+// Widget / 2 / 500.00 / 1000.00, transcribed off the wired extractor's reading, not mock.go.
+// Only description is changed here, so the other three cells stay a control -- if the whole row
+// went missing rather than one cell staying stale, they would fail too.
 
 test.describe('a line correction round-trips through Detail (API E2E, over the deployed gateway)', () => {
   test('EXTR13-API-04: line_items[1].description carries the correction, not the Widget reading', async () => {

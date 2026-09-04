@@ -8,10 +8,12 @@
 package extraction_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"slices"
@@ -972,5 +974,432 @@ func TestRLS_WiredPathTheReportStepActuallyRuns(t *testing.T) {
 	}
 	if between := regexp.MustCompile(`(?m)^  [A-Za-z][\w-]*:$`).FindString(yaml[gated:report]); between != "" {
 		t.Errorf("a new job (%q) starts between the gated extraction run and the report step; the report step would not inherit the DATABASE_* env and every TestRLS_* would self-skip", strings.TrimSpace(between))
+	}
+}
+
+// --- EXTR-18-02: the rich fixture's golden, read through the wired path -------------------
+
+// rfGolden and rfFixture are the rich invoice's committed inputs. rfGolden is untracked until
+// this subtask's executor commits it, and neither is wired into ci.yml yet -- see
+// TestGoldens_EveryCommittedGoldenHasACanaryStep.
+const (
+	rfGolden  = "rich_invoice.docling.json"
+	rfFixture = "rich_invoice.pdf"
+)
+
+// rfRiverJobID is a literal distinct from cwScoreWired's corpus-loop range (918200-918544+44).
+const rfRiverJobID = 918900
+
+// rfInvoiceNumber, rfTableRows, rfTableCols are fxBuildRichInvoice's own literals -- the
+// header row plus Widget/Gadget/Delivery in a 4-column table (fixtures_test.go).
+const (
+	rfInvoiceNumber = "ASC-2026-0918"
+	rfTableRows     = 5
+	rfTableCols     = 4
+)
+
+// rfRun drives ExtractWorker.Work once over the rich fixture through a real DoclingReader
+// replaying rfGolden, and returns every extraction_field_results row it wrote. Each call gets
+// its own fresh tenant via wkFixture, so calling it from more than one test cannot collide on
+// rfRiverJobID.
+func rfRun(t *testing.T) []wpRow {
+	t.Helper()
+	ctx := t.Context()
+
+	tenantID, documentID := wkFixture(t, ctx)
+	text := wpDoclingReader(t, dcReadNamedGolden(t, rfGolden))
+	rules := wpStoreRules(t)
+	ew := wpWorker(t, wkOK(), &wkOpener{body: fxRead(t, rfFixture)}, text, rules.load, &wkAuditRecorder{})
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(rfRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over %s: %v", rfFixture, err)
+	}
+	return wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, rfRiverJobID))
+}
+
+// Story AC #3. Every reason the rich fixture's wired path can emit, by field name and value --
+// never by count. Measured through a real docling:canary run (task-846's Implementation Plan),
+// not predicted from the story text.
+func TestRLS_RichFixtureResolvesEveryReasonTheWiredPathCanEmit(t *testing.T) {
+	rows := rfRun(t)
+
+	wpAssertRankZero(t, rows, "issue_date", stPtr("2026-03-12"), stPtr("ambiguous"))
+	var issueDateRows int
+	for _, r := range rows {
+		if r.name == "issue_date" {
+			issueDateRows++
+		}
+	}
+	if issueDateRows < 2 {
+		t.Errorf("issue_date carries %d row(s), want at least 2 (rank 0 plus >=1 alternative) for an %q verdict", issueDateRows, "ambiguous")
+	}
+
+	wpAssertRankZero(t, rows, "subtotal", stPtr("1500.00"), stPtr("inconsistent"))
+
+	// line_items[2] is the Gadget row -- confirmed against the golden, not an off-by-one guess.
+	wpAssertRankZero(t, rows, extraction.LineFieldName(2, extraction.LineRoleLineTotal), stPtr("900.00"), stPtr("inconsistent"))
+}
+
+// Story AC #3. At least two line_items[N] rows, each carrying a named description and
+// line_total -- never a bare count.
+func TestRLS_RichFixtureCarriesAtLeastTwoLineRows(t *testing.T) {
+	rows := rfRun(t)
+
+	indices := map[int]bool{}
+	for _, r := range rows {
+		if r.rank != 0 {
+			continue
+		}
+		idx, _, ok := extraction.ParseLineFieldName(r.name)
+		if !ok {
+			continue
+		}
+		indices[idx] = true
+	}
+	if len(indices) < 2 {
+		t.Fatalf("found %d distinct line_items[N] index(es), want at least 2: %v", len(indices), indices)
+	}
+
+	for idx := range indices {
+		desc := wpRankZero(t, rows, extraction.LineFieldName(idx, extraction.LineRoleDescription))
+		if desc.value == nil || *desc.value == "" {
+			t.Errorf("line_items[%d].description carries no value", idx)
+		}
+		total := wpRankZero(t, rows, extraction.LineFieldName(idx, extraction.LineRoleLineTotal))
+		if total.value == nil || *total.value == "" {
+			t.Errorf("line_items[%d].line_total carries no value", idx)
+		}
+	}
+}
+
+// Story AC #4. The printed invoice number, decided with reason SQL NULL -- store.go:150-151
+// binds a decided field's reason_code as NULL, never "".
+func TestRLS_RichFixtureInvoiceNumberIsNotINV001(t *testing.T) {
+	rows := rfRun(t)
+
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("ASC-2026-0918"), nil)
+}
+
+// Story AC #5. No document_text_layer verdict -- the rich fixture carries a real text layer.
+// Paired with a positive control (subtotal IS present) so this cannot pass by writing zero rows.
+func TestRLS_RichFixtureEmitsNoTextLayerVerdict(t *testing.T) {
+	rows := rfRun(t)
+
+	names := wpRankZeroNames(rows)
+	if !slices.Contains(names, "subtotal") {
+		t.Fatalf("no rank-0 subtotal row among %v; the positive control failed, so the absence check below proves nothing", names)
+	}
+	if slices.Contains(names, "document_text_layer") {
+		t.Errorf("a rank-0 document_text_layer row is present among %v; the rich fixture has a text layer and should never take that branch", names)
+	}
+}
+
+// EXTR-18-05 (task-849) AC-3. Ties e2e/topology/import-wizard.spec.ts's WIRE_FIELD_SET literal
+// to the real wired-path output, so a drift between the two is caught here instead of only on
+// the deployed run. Mirrors WIRE_FIELD_SET verbatim; keep both lists in sync by hand.
+func TestRLS_RichFixtureFieldNamesMatchTheE2EWireFieldSet(t *testing.T) {
+	rows := rfRun(t)
+	got := wpRankZeroNames(rows)
+
+	want := []string{
+		"buyer_name", "buyer_tin", "currency", "invoice_number", "issue_date", "line_items",
+		"line_items[1].description", "line_items[1].line_total", "line_items[1].quantity", "line_items[1].unit_price",
+		"line_items[2].description", "line_items[2].line_total", "line_items[2].quantity", "line_items[2].unit_price",
+		"line_items[3].description", "line_items[3].line_total", "line_items[3].quantity", "line_items[3].unit_price",
+		// Row 4's Qty and Unit Price are blank in the PDF, so no row is emitted for them.
+		"line_items[4].description", "line_items[4].line_total",
+		"subtotal", "supplier_name", "supplier_tin", "total", "vat",
+	}
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("wired field-name set differs from WIRE_FIELD_SET in import-wizard.spec.ts:\n got  %v\n want %v", got, want)
+	}
+}
+
+// EXTR-18-02 adversarial coverage: the golden is genuine, and stays honest about its PDF.
+
+// TestDoclingGolden_RichInvoiceIsMachineGenerated mirrors TestCorpusGoldens_AreMachineGenerated
+// for rich_invoice.docling.json, which that loop does not cover (rich_invoice is deliberately
+// excluded from corpusLayouts).
+func TestDoclingGolden_RichInvoiceIsMachineGenerated(t *testing.T) {
+	golden := dcReadNamedGolden(t, rfGolden)
+
+	dec := json.NewDecoder(bytes.NewReader(golden))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("decode %s: %v", rfGolden, err)
+	}
+	round, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatalf("re-serialise %s: %v", rfGolden, err)
+	}
+	round = append(round, '\n')
+	if !bytes.Equal(round, golden) {
+		t.Errorf("%s is not what `docling-canary.sh golden` writes (%d bytes re-serialised, %d committed); regenerate it from a freshly built image rather than editing it",
+			rfGolden, len(round), len(golden))
+	}
+
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("%s decodes to %T, want a JSON object", rfGolden, doc)
+	}
+	if v, _ := obj["docling_version"].(string); v == "" || v == "stub" {
+		t.Errorf("%s reports docling_version %q; it was generated by a stub image, not the pinned sidecar", rfGolden, v)
+	}
+}
+
+// TestDoclingGolden_RichInvoiceMatchesItsPDFsPrintedNumber is the local drift guard: nothing
+// else in this package ties the committed golden to the committed PDF, so a regenerated PDF
+// with a stale golden (or the reverse) passes every other test here. This reads both sources
+// independently -- the PDF's own content stream (the same path
+// TestFixtures_RichInvoicePrintsItsOwnNumber uses) and the golden's tokens, through a real
+// DoclingReader replay -- and fails if they disagree. It cannot reproduce what TableFormer
+// would read off a changed PDF, so it pins only the table's row/col shape as a coarse floor;
+// CI's `docling-canary.sh golden` step is the only oracle for finer drift (cell text, boxes).
+func TestDoclingGolden_RichInvoiceMatchesItsPDFsPrintedNumber(t *testing.T) {
+	raw := fxRead(t, fxRich)
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+	if !bytes.Contains(body, []byte(rfInvoiceNumber)) {
+		t.Fatalf("%s's own content stream does not carry %q; this test's oracle is broken, not the golden", fxRich, rfInvoiceNumber)
+	}
+
+	gPages, gTokens, _ := dcServeGolden(t, dcReadNamedGolden(t, rfGolden))
+	if len(gPages) != 1 {
+		t.Fatalf("%s carries %d page(s), want exactly 1", rfGolden, len(gPages))
+	}
+
+	var found bool
+	for _, p := range gTokens {
+		for _, tok := range p.Tokens {
+			if strings.Contains(tok.Text, rfInvoiceNumber) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("%s carries no token containing %q, the number %s's own content stream prints; the golden is stale relative to the PDF", rfGolden, rfInvoiceNumber, fxRich)
+	}
+
+	var tables int
+	for _, p := range gPages {
+		tables += len(p.Tables)
+		for _, tb := range p.Tables {
+			if tb.Rows != rfTableRows || tb.Cols != rfTableCols {
+				t.Errorf("%s's table is %dx%d, want %dx%d (fxBuildRichInvoice's header row plus 4 data rows)", rfGolden, tb.Rows, tb.Cols, rfTableRows, rfTableCols)
+			}
+		}
+	}
+	if tables != 1 {
+		t.Fatalf("%s carries %d table(s), want exactly 1", rfGolden, tables)
+	}
+}
+
+// --- EXTR-18-03: the no-recoverable-text fixture, wired through the real reader -----------
+
+// scanned_invoice.pdf is a 4x4 checkerboard with no real glyphs and cannot serve OCR testing
+// (sidecar/docling/tests/test_fixtures.py:9-10, test_convert.py:5-6,
+// testdata/gen_scanned_ocr_fixture.py:7-8). The specs below pin "no recoverable text", never
+// "OCR ran and found nothing".
+const (
+	sfGolden     = "scanned_invoice.docling.json"
+	sfRiverJobID = 919300 // distinct from every other literal in this file
+	sfPagesJobID = sfRiverJobID + 1
+)
+
+// Story AC #4. TextChars == 0 takes worker.go's wholesale-replacement branch (:196-202), which
+// writes ONE row and nothing else -- asserted as exactly one, not "at least one", because that
+// branch's whole claim is singularity.
+func TestRLS_ScannedFixtureSettlesTheTextLayerUnreadable(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	text := wpDoclingReader(t, dcReadNamedGolden(t, sfGolden))
+	rules := wpStoreRules(t)
+	ew := wpWorker(t, wkOK(), &wkOpener{body: fxRead(t, fxScanned)}, text, rules.load, &wkAuditRecorder{})
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(sfRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, sfRiverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	if len(rows) != 1 {
+		t.Fatalf("%s wrote %d row(s), want exactly 1: %v", fxScanned, len(rows), rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+}
+
+// Story AC #4's other half. The unreadable verdict is a text-layer reading, not a page-render
+// failure, so the page sink must still record a PUT -- what distinguishes this from
+// pages_not_rendered. wpWorker builds its own sink and never exposes it, so this drives
+// wkWorkerPages directly with a sink the test can read back.
+func TestRLS_ScannedFixturePagesStillRender(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	sink := &wkPageSink{}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: fxRead(t, fxScanned)}, wkPDFiumPages(sink), &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, sfGolden))
+	ew.Rules = wpStoreRules(t).load
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(sfPagesJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if _, _, calls := sink.snapshot(); calls < 1 {
+		t.Errorf("the page sink recorded %d call(s) for %s, want at least 1 -- an unreadable text verdict must not mean the pages never rendered", calls, fxScanned)
+	}
+}
+
+// --- EXTR-18-04: the DOCX fixture, wired through the real reader --------------------------
+
+// invoice.docx has no page image PDFium (or any renderer) can produce, so the wired run swaps
+// PageStore.Reader for a stub yielding one synthetic page and never reaches worker.go's
+// pages_not_rendered gate -- TestExtractWorker_PagesNotRenderedGateIsUntouched
+// (worker_internal_test.go) pins that this subtask leaves that gate untouched.
+const (
+	dxFixture    = "invoice.docx"
+	dxGolden     = "invoice.docling.json"
+	dxRiverJobID = 919400 // distinct from every other literal in this file
+)
+
+// Story AC #4. The DOCX fixture resolves invoice_number, issue_date and total by identity --
+// measured through a real docling:canary run (task-848's Implementation Notes), never by count.
+// reason_code is asserted nil: ReasonNone binds as SQL NULL, never "" (store.go:150-151).
+func TestRLS_DocxFixtureResolvesNamedFields(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	pages := &extraction.PageStore{Reader: &wkStubReader{pages: 1}, Sink: (&wkPageSink{}).put}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: fxRead(t, dxFixture)}, pages, &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, dxGolden))
+	ew.Rules = wpStoreRules(t).load
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(dxRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over %s: %v", dxFixture, err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, dxRiverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("ASC-2026-0919"), nil)
+	wpAssertRankZero(t, rows, "issue_date", stPtr("2026-08-14"), nil)
+	wpAssertRankZero(t, rows, "total", stPtr("4300.00"), nil)
+}
+
+// EXTR-18-04 adversarial coverage: the golden is genuine, and stays honestly DOCX-shaped.
+// Mirrors TestDoclingGolden_RichInvoiceIsMachineGenerated /
+// TestDoclingGolden_RichInvoiceMatchesItsPDFsPrintedNumber (EXTR-18-02) -- invoice.docx sits
+// outside corpusLayouts, so TestCorpusGoldens_AreMachineGenerated does not cover it either.
+
+// dxParagraphs is build_invoice_docx.py's PARAGRAPHS, transcribed. Nothing else in this package
+// ties the committed golden to the committed .docx -- without this, a regenerated .docx with a
+// stale golden (or the reverse) passes every other test here.
+var dxParagraphs = []string{
+	"Invoice No: ASC-2026-0919",
+	"Issue Date: 14 Aug 2026",
+	"Total: NGN 4,300.00",
+}
+
+// dxDocumentXML reads word/document.xml out of a .docx's own zip container. None of
+// dxParagraphs needs XML escaping (no <, >, &, ', "), so a python-docx single-run paragraph's
+// text survives as a literal byte substring -- the same coarse-floor idiom fxContent uses for a
+// PDF's content stream.
+func dxDocumentXML(t *testing.T, raw []byte) string {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		t.Fatalf("open %s as a zip: %v", dxFixture, err)
+	}
+	f, err := zr.Open("word/document.xml")
+	if err != nil {
+		t.Fatalf("%s carries no word/document.xml: %v", dxFixture, err)
+	}
+	defer f.Close()
+	body, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("read word/document.xml: %v", err)
+	}
+	return string(body)
+}
+
+// TestDoclingGolden_InvoiceDocxIsMachineGenerated mirrors
+// TestDoclingGolden_RichInvoiceIsMachineGenerated for invoice.docling.json.
+func TestDoclingGolden_InvoiceDocxIsMachineGenerated(t *testing.T) {
+	golden := dcReadNamedGolden(t, dxGolden)
+
+	dec := json.NewDecoder(bytes.NewReader(golden))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("decode %s: %v", dxGolden, err)
+	}
+	round, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatalf("re-serialise %s: %v", dxGolden, err)
+	}
+	round = append(round, '\n')
+	if !bytes.Equal(round, golden) {
+		t.Errorf("%s is not what `docling-canary.sh golden` writes (%d bytes re-serialised, %d committed); regenerate it from a freshly built image rather than editing it",
+			dxGolden, len(round), len(golden))
+	}
+
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("%s decodes to %T, want a JSON object", dxGolden, doc)
+	}
+	if v, _ := obj["docling_version"].(string); v == "" || v == "stub" {
+		t.Errorf("%s reports docling_version %q; it was generated by a stub image, not the pinned sidecar", dxGolden, v)
+	}
+}
+
+// TestDoclingGolden_InvoiceDocxMatchesItsFixturesParagraphs is the local drift guard, and also
+// pins the golden as a genuine DOCX reading: docling-canary.sh sends `Content-Type:
+// application/pdf` on every call regardless of the fixture's real type
+// (dcServeGolden/docling_align_test.go does the same in this suite), so nothing else here
+// distinguishes a DOCX golden from a PDF-shaped one committed under the wrong name.
+func TestDoclingGolden_InvoiceDocxMatchesItsFixturesParagraphs(t *testing.T) {
+	raw := fxRead(t, dxFixture)
+	xmlBody := dxDocumentXML(t, raw)
+	for _, p := range dxParagraphs {
+		if !strings.Contains(xmlBody, p) {
+			t.Fatalf("%s's own word/document.xml does not carry %q; this test's oracle is broken, not the golden", dxFixture, p)
+		}
+	}
+
+	gPages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, dxGolden))
+	if len(gPages) != 1 {
+		t.Fatalf("%s carries %d page(s), want exactly 1", dxGolden, len(gPages))
+	}
+	page := gPages[0]
+
+	if len(page.Tables) != 0 {
+		t.Errorf("%s carries %d table(s), want 0 -- a DOCX reading of three plain paragraphs should extract no table structure; a non-zero count is what a PDF-shaped golden committed under this name would look like", dxGolden, len(page.Tables))
+	}
+
+	if len(page.Tokens) != len(dxParagraphs) {
+		t.Fatalf("%s carries %d token(s), want exactly %d -- docling's DOCX path emits one token per paragraph, no word-split", dxGolden, len(page.Tokens), len(dxParagraphs))
+	}
+	for _, p := range dxParagraphs {
+		var found bool
+		for _, tok := range page.Tokens {
+			if tok.Text == p {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s carries no token equal to %q, one of invoice.docx's own paragraphs; the golden is stale relative to the fixture", dxGolden, p)
+		}
 	}
 }

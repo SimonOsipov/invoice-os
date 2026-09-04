@@ -30,6 +30,7 @@ const (
 	fxHybrid   = "hybrid_invoice.pdf"
 	fxTable    = "table_invoice.pdf"
 	fxDense    = "dense_invoice.pdf"
+	fxRich     = "rich_invoice.pdf"
 	fxMinBytes = 200 // floor: every fixture carries a catalog, a page tree, a page and a stream
 )
 
@@ -63,6 +64,8 @@ var fxCorpus = []struct {
 	// Not corpus_-prefixed on purpose: EXTR-14-09's learned-rule fixture, regenerated and
 	// byte-compared like the rest but outside every corpus_ ratchet.
 	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
+	// Not corpus_-prefixed on purpose: EXTR-18-01's rich fixture, outside every corpus_ ratchet.
+	{fxRich, fxBuildRichInvoice},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -273,6 +276,64 @@ func fxBuildTable() []byte {
 	}
 	for _, x := range fxTableColXs {
 		rules.WriteString(fxRuleV(x, fxTableRowYs[len(fxTableRowYs)-1], fxTableRowYs[0]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
+	})
+}
+
+// fxRichTableRowYs are the rich fixture's own horizontal rule positions: header-top,
+// header/row1, row1/row2, row2/row3, row3/row4, bottom (1 header + 4 data rows = 5 bands =
+// 6 lines). A separate array from fxTableRowYs -- that one is fxBuildTable's own, and
+// resizing it would change table_invoice.pdf's committed bytes.
+var fxRichTableRowYs = [6]int{590, 566, 542, 518, 494, 470}
+
+// fxBuildRichInvoice is one US-Letter page: header fields, a ruled 4-column/4-row table with a
+// deliberate line-total error (Gadget: 3 x 250.00 prints as 900.00, not 750.00) and a row whose
+// Qty and Unit Price are blank, and a split-label totals block whose Sub-total (1,500.00) does
+// not match the line sum (2,080.00). Both mismatches exceed reconcileTolerance, so
+// ReasonInconsistentTotal has something to catch.
+func fxBuildRichInvoice() []byte {
+	lines := []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Invoice No: ASC-2026-0918"},
+		{12, 72, 672, "Issue Date: 12/03/2026"},
+		{12, 72, 654, "Supplier: Kaduna Supply Limited"},
+		{12, 72, 636, "TIN: 30154829-0032"},
+		{12, 72, 618, "Currency: NGN"},
+	}
+	lines = append(lines, fxTableRowText(578, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(554, []string{"Widget", "2", "500.00", "1000.00"})...)
+	lines = append(lines, fxTableRowText(530, []string{"Gadget", "3", "250.00", "900.00"})...)
+	lines = append(lines, fxTableRowText(506, []string{"Delivery", "1", "120.00", "120.00"})...)
+	// Row 4 prints a description and a line total but no Qty or Unit Price. Both blanks fail
+	// liNormalizeQuantity/liNormalizeAmount, so LineItemResults emits no row for them
+	// (lineitems.go:95) and the wire OMITS the two cells -- the only subject EXTR13-E2E-01's
+	// empty-cell arm has once the real extractor replaces the mock's hand-authored reading.
+	lines = append(lines, fxTableRowText(482, []string{"Handling", "", "", "60.00"})...)
+	// Split-label shape (label Tj, then value Tj, same baseline) -- fxBuildCorpusTotalsBlock's
+	// precedent. The inline single-Tj form would not resolve ReasonNone for Reconcile to check.
+	lines = append(lines,
+		fxLine{12, 380, 440, "Sub-total"}, fxLine{12, 500, 440, "1,500.00"},
+		fxLine{12, 380, 422, "VAT"}, fxLine{12, 500, 422, "112.50"},
+		fxLine{12, 380, 404, "Total"}, fxLine{12, 500, 404, "1,612.50"},
+	)
+
+	// H before V, matching fxBuildTable's own loop shape.
+	var rules bytes.Buffer
+	for _, y := range fxRichTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxRichTableRowYs[len(fxRichTableRowYs)-1], fxRichTableRowYs[0]))
 	}
 
 	content := fxText(lines...)
@@ -971,6 +1032,168 @@ func TestFixtures_HybridHasTextOnPageOneOnly(t *testing.T) {
 	}
 }
 
+func TestFixtures_RichInvoicePrintsItsOwnNumber(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	if !bytes.Contains(body, []byte("ASC-2026-0918")) {
+		t.Errorf("%s page 1 content stream does not carry ASC-2026-0918, its own invoice number", fxRich)
+	}
+	if bytes.Contains(body, []byte("INV-001")) {
+		t.Errorf("%s page 1 content stream carries INV-001, another fixture's number", fxRich)
+	}
+}
+
+// fxRuleOpRe matches one fxRuleH/fxRuleV emission ("%d %d m\n%d %d l\nS\n"): a horizontal
+// rule's pair share the Y operand (2nd/4th group), a vertical rule's share the X operand
+// (1st/3rd group). The trailing \n is optional: fxContent trims trailing "\r\n" off the
+// stream, so the last rule in emission order has no trailing newline to match.
+var fxRuleOpRe = regexp.MustCompile(`(\d+) (\d+) m\n(\d+) (\d+) l\nS\n?`)
+
+func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	horiz, vert := 0, 0
+	for _, m := range fxRuleOpRe.FindAllSubmatch(body, -1) {
+		a, b, c, d := string(m[1]), string(m[2]), string(m[3]), string(m[4])
+		switch {
+		case b == d && a != c:
+			horiz++
+		case a == c && b != d:
+			vert++
+		}
+	}
+	if horiz != 6 {
+		t.Errorf("%s page 1 carries %d horizontal rule(s), want exactly 6", fxRich, horiz)
+	}
+	if vert != 5 {
+		t.Errorf("%s page 1 carries %d vertical rule(s), want exactly 5", fxRich, vert)
+	}
+
+	for _, row := range [][]string{
+		{"Widget", "2", "500.00", "1000.00"},
+		{"Gadget", "3", "250.00", "900.00"},
+		{"Delivery", "1", "120.00", "120.00"},
+	} {
+		for _, cell := range row {
+			if !bytes.Contains(body, []byte(cell)) {
+				t.Errorf("%s page 1 content stream does not carry data row cell %q", fxRich, cell)
+			}
+		}
+	}
+}
+
+// fxTjRe matches one fxText Tj emission ("%d %d Td\n(%s) Tj"): the Td x/y and the string drawn.
+var fxTjRe = regexp.MustCompile(`(\d+) (\d+) Td\n\(([^)]*)\) Tj`)
+
+// AC-6: the totals block is a label Tj followed by a value Tj on the same baseline, not one
+// inline "Label: value" string -- Reconcile's sum-check (reconcile.go:172) only tightens a
+// subtotal that already resolved ReasonNone, which an inline string would not.
+func TestFixtures_RichInvoiceTotalsAreSplitLabels(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	type placed struct{ x, y int }
+	toks := map[string]placed{}
+	matches := fxTjRe.FindAllSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s page 1 content stream carries no Td/Tj pair; the assertions below would prove nothing", fxRich)
+	}
+	for _, m := range matches {
+		x, _ := strconv.Atoi(string(m[1]))
+		y, _ := strconv.Atoi(string(m[2]))
+		text := string(m[3])
+		toks[text] = placed{x, y}
+		for _, pair := range [][2]string{{"Sub-total", "1,500.00"}, {"VAT", "112.50"}, {"Total", "1,612.50"}} {
+			if strings.Contains(text, pair[0]) && strings.Contains(text, pair[1]) {
+				t.Errorf("%s: one Tj %q carries both %q and %q -- want a split label/value pair", fxRich, text, pair[0], pair[1])
+			}
+		}
+	}
+
+	for _, pair := range []struct{ label, value string }{
+		{"Sub-total", "1,500.00"},
+		{"VAT", "112.50"},
+		{"Total", "1,612.50"},
+	} {
+		l, ok := toks[pair.label]
+		if !ok {
+			t.Fatalf("%s: no Tj carries the bare label %q", fxRich, pair.label)
+		}
+		v, ok := toks[pair.value]
+		if !ok {
+			t.Fatalf("%s: no Tj carries the bare value %q", fxRich, pair.value)
+		}
+		if l.y != v.y {
+			t.Errorf("%s: label %q sits at y=%d, value %q at y=%d -- want the same baseline", fxRich, pair.label, l.y, pair.value, v.y)
+		}
+		if l.x >= v.x {
+			t.Errorf("%s: label %q at x=%d is not left of value %q at x=%d", fxRich, pair.label, l.x, pair.value, v.x)
+		}
+	}
+}
+
+// TestFixtures_RichInvoiceCarriesItsIssueDate pins the ambiguous day/month reading (D-10) that
+// story AC 2's later 'ambiguous' verdict depends on -- nothing local pins it otherwise.
+func TestFixtures_RichInvoiceCarriesItsIssueDate(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	if !bytes.Contains(body, []byte("12/03/2026")) {
+		t.Errorf("%s page 1 content stream does not carry 12/03/2026, its ambiguous issue date", fxRich)
+	}
+}
+
+// TestFixtures_RichInvoiceBytesAreUnique guards against fxBuildRichInvoice silently returning
+// another fixture's bytes -- a bug several presence-only assertions elsewhere would not catch.
+func TestFixtures_RichInvoiceBytesAreUnique(t *testing.T) {
+	rich := fxRead(t, fxRich)
+	for _, f := range fxCorpus {
+		if f.name == fxRich {
+			continue
+		}
+		other := fxRead(t, f.name)
+		if bytes.Equal(rich, other) {
+			t.Errorf("%s is byte-identical to %s -- the builder returned the wrong fixture's bytes", fxRich, f.name)
+		}
+	}
+}
+
+// TestFixtures_RichInvoiceDoesNotResizeTableRowYs pins fxBuildTable's own row geometry: the
+// rich fixture's plan called for a separate fxRichTableRowYs precisely so this array stays
+// untouched and table_invoice.pdf's committed bytes do not silently drift.
+func TestFixtures_RichInvoiceDoesNotResizeTableRowYs(t *testing.T) {
+	want := [4]int{650, 626, 602, 578}
+	if fxTableRowYs != want {
+		t.Fatalf("fxTableRowYs is %v, want %v -- EXTR-18-01 must not resize fxBuildTable's own geometry", fxTableRowYs, want)
+	}
+}
+
 // fxBuildNPage is n blank US-Letter pages, for the page-cap boundary. MediaBox is inherited
 // from the page tree and a page carries no content stream, so one page costs about 75 bytes
 // and an 801-page document is ~60 KiB -- generated in-test, never committed.
@@ -987,4 +1210,59 @@ func fxBuildNPage(n int) []byte {
 		strings.Join(kids, " "), n, fxPageWidthPt, fxPageHeightPt))
 
 	return fxAssemble(objs)
+}
+
+// fxE2EDir holds the Playwright-side copies of a subset of this package's PDF corpus.
+const fxE2EDir = "../../e2e/fixtures/documents"
+
+// fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
+// fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
+// native_invoice_2p.pdf, which has no Go-side original of that name.
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich}
+
+// fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
+var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}
+
+// TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals closes a real gap: nothing held
+// e2e/fixtures/documents/native_invoice.pdf in step with its testdata/ original, so the two
+// could silently diverge. The completeness scan below guards fxE2ECopies itself: a new copy
+// dropped into fxE2EDir without a table entry (and without an fxE2EExempt reason) fails here.
+func TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals(t *testing.T) {
+	for _, name := range fxE2ECopies {
+		t.Run(name, func(t *testing.T) {
+			want := fxRead(t, name)
+			got, err := os.ReadFile(filepath.Join(fxE2EDir, name))
+			if err != nil {
+				t.Fatalf("read %s: %v", filepath.Join(fxE2EDir, name), err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("%s/%s does not match testdata/%s: %d byte(s) vs %d", fxE2EDir, name, name, len(got), len(want))
+			}
+		})
+	}
+
+	entries, err := os.ReadDir(fxE2EDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxE2EDir, err)
+	}
+	covered := make(map[string]bool, len(fxE2ECopies))
+	for _, name := range fxE2ECopies {
+		covered[name] = true
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pdf") || fxE2EExempt[e.Name()] {
+			continue
+		}
+		if !covered[e.Name()] {
+			t.Errorf("%s/%s is committed but fxE2ECopies does not guard it -- add it to the table or fxE2EExempt", fxE2EDir, e.Name())
+		}
+	}
+}
+
+// fxE2EExempt is a hole in the completeness scan above by design. Pinned at exactly one entry
+// so a future unguarded copy cannot be waved through by silently appending to it.
+func TestFixtures_E2EExemptionListStaysSingular(t *testing.T) {
+	if len(fxE2EExempt) != 1 {
+		t.Errorf("fxE2EExempt has %d entries, want exactly 1: %v -- each new exemption defeats the completeness scan for one more file", len(fxE2EExempt), fxE2EExempt)
+	}
 }

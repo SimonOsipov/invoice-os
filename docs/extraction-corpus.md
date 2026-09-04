@@ -288,7 +288,9 @@ field's shape and fails on a row naming a value the bytes do not carry.
 byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
 prefix so that none of the four edits above apply to it. Do not add a `corpusExpect` row, a
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
-section below says why.
+section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
+reason: a ruled table plus a deliberately inconsistent totals block, exercised by
+`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus.
 
 ## Learned rules
 

@@ -410,6 +410,32 @@ func TestReconcileCorpus_NoWrongCommentSurvivesInThePins(t *testing.T) {
 	}
 }
 
+// AC-5: rich_invoice.pdf sits in fxCorpus like fxLearnedTwoParty, but carries no corpus_
+// prefix and is not added to corpusLayouts or corpusTokenFloor.
+func TestFixtures_RichInvoiceIsNotACorpusLayout(t *testing.T) {
+	found := false
+	for _, f := range fxCorpus {
+		if f.name == fxRich {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%s is not in fxCorpus; the absence checks below would prove nothing", fxRich)
+	}
+
+	if strings.HasPrefix(fxRich, corpusPrefix) {
+		t.Errorf("%s carries the %s prefix; it is not a corpus layout", fxRich, corpusPrefix)
+	}
+	for _, name := range corpusLayouts {
+		if name == fxRich {
+			t.Errorf("%s is in corpusLayouts; it must stay out of every accuracy ratchet", fxRich)
+		}
+	}
+	if _, ok := corpusTokenFloor[fxRich]; ok {
+		t.Errorf("%s has a corpusTokenFloor entry; it must stay out of every accuracy ratchet", fxRich)
+	}
+}
+
 // C-02 builds each layout twice, which catches map-order non-determinism about 30% of the
 // time (measured: 6 of 20 runs). Repeating the build raises that to 20 of 20 without touching
 // C-02. Corpus entries only -- the raster fixtures are slow and are not this subtask's.

@@ -462,3 +462,27 @@ func TestPDFiumReader_AcceptsAtThePageCap(t *testing.T) {
 		t.Errorf("Read on a %d-page document called onPage %d time(s), want 1", prAtCap, calls)
 	}
 }
+
+// --- EXTR-18-03: the no-recoverable-text fixture's ink contrast --------------
+
+// TestPDFiumReader_ScannedAndDenseDifferInInk: scanned_invoice.pdf and dense_invoice.pdf are
+// both image-only (fxBuildScanned, fxBuildDense) -- no text layer for either to carry -- so ink
+// is what separates the checkerboard "no recoverable text" scan from a document with real
+// content. Uses prRead, never ptRead: pdfium reuses ImagePNG's buffer across renders, and only
+// prRead clones it (line 71 above), so comparing two ptRead reads would compare a buffer to
+// itself.
+func TestPDFiumReader_ScannedAndDenseDifferInInk(t *testing.T) {
+	scanned := prRead(t, fxScanned, prDefaultDPI)
+	dense := prRead(t, fxDense, prDefaultDPI)
+
+	if len(scanned) != 1 || len(dense) != 1 {
+		t.Fatalf("%s renders %d page(s), %s renders %d; want exactly 1 each", fxScanned, len(scanned), fxDense, len(dense))
+	}
+	sBytes, dBytes := len(scanned[0].ImagePNG), len(dense[0].ImagePNG)
+	if sBytes < prMinPNGBytes || dBytes < prMinPNGBytes {
+		t.Fatalf("%s ImagePNG is %d byte(s), %s is %d; want more than %d each -- one of these is not a rendered page", fxScanned, sBytes, fxDense, dBytes, prMinPNGBytes)
+	}
+	if dBytes < 2*sBytes {
+		t.Errorf("%s ImagePNG is %d byte(s), %s is %d (ratio %.2fx); want dense at least 2x scanned's size -- ink is what tells a real document from a blank scan", fxDense, dBytes, fxScanned, sBytes, float64(dBytes)/float64(sBytes))
+	}
+}

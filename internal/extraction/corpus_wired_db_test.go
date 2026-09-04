@@ -1175,3 +1175,62 @@ func TestDoclingGolden_RichInvoiceMatchesItsPDFsPrintedNumber(t *testing.T) {
 		t.Fatalf("%s carries %d table(s), want exactly 1", rfGolden, tables)
 	}
 }
+
+// --- EXTR-18-03: the no-recoverable-text fixture, wired through the real reader -----------
+
+// scanned_invoice.pdf is a 4x4 checkerboard with no real glyphs and cannot serve OCR testing
+// (sidecar/docling/tests/test_fixtures.py:9-10, test_convert.py:5-6,
+// testdata/gen_scanned_ocr_fixture.py:7-8). The specs below pin "no recoverable text", never
+// "OCR ran and found nothing".
+const (
+	sfGolden     = "scanned_invoice.docling.json"
+	sfRiverJobID = 919300 // distinct from every other literal in this file
+	sfPagesJobID = sfRiverJobID + 1
+)
+
+// Story AC #4. TextChars == 0 takes worker.go's wholesale-replacement branch (:196-202), which
+// writes ONE row and nothing else -- asserted as exactly one, not "at least one", because that
+// branch's whole claim is singularity.
+func TestRLS_ScannedFixtureSettlesTheTextLayerUnreadable(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	text := wpDoclingReader(t, dcReadNamedGolden(t, sfGolden))
+	rules := wpStoreRules(t)
+	ew := wpWorker(t, wkOK(), &wkOpener{body: fxRead(t, fxScanned)}, text, rules.load, &wkAuditRecorder{})
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(sfRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, sfRiverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	if len(rows) != 1 {
+		t.Fatalf("%s wrote %d row(s), want exactly 1: %v", fxScanned, len(rows), rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+}
+
+// Story AC #4's other half. The unreadable verdict is a text-layer reading, not a page-render
+// failure, so the page sink must still record a PUT -- what distinguishes this from
+// pages_not_rendered. wpWorker builds its own sink and never exposes it, so this drives
+// wkWorkerPages directly with a sink the test can read back.
+func TestRLS_ScannedFixturePagesStillRender(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	sink := &wkPageSink{}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: fxRead(t, fxScanned)}, wkPDFiumPages(sink), &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, sfGolden))
+	ew.Rules = wpStoreRules(t).load
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(sfPagesJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if _, _, calls := sink.snapshot(); calls < 1 {
+		t.Errorf("the page sink recorded %d call(s) for %s, want at least 1 -- an unreadable text verdict must not mean the pages never rendered", calls, fxScanned)
+	}
+}

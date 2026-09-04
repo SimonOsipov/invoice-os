@@ -962,9 +962,7 @@ describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the 
   })
 })
 
-// The reason span carries gridColumn '2 / -1', which starts an implicit second grid line.
-// Element children only -- the `{' '}` separator is a text node, neither a child element
-// nor a grid item.
+// Element children only: a text node is not a grid item.
 describe('BUG-09: a blocked register row costs no extra grid line', () => {
   const openRun = {
     run_state: 'open',

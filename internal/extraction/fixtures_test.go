@@ -1205,3 +1205,50 @@ func fxBuildNPage(n int) []byte {
 
 	return fxAssemble(objs)
 }
+
+// fxE2EDir holds the Playwright-side copies of a subset of this package's PDF corpus.
+const fxE2EDir = "../../e2e/fixtures/documents"
+
+// fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
+// fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
+// native_invoice_2p.pdf, which has no Go-side original of that name.
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense}
+
+// fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
+var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}
+
+// TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals closes a real gap: nothing held
+// e2e/fixtures/documents/native_invoice.pdf in step with its testdata/ original, so the two
+// could silently diverge. The completeness scan below guards fxE2ECopies itself: a new copy
+// dropped into fxE2EDir without a table entry (and without an fxE2EExempt reason) fails here.
+func TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals(t *testing.T) {
+	for _, name := range fxE2ECopies {
+		t.Run(name, func(t *testing.T) {
+			want := fxRead(t, name)
+			got, err := os.ReadFile(filepath.Join(fxE2EDir, name))
+			if err != nil {
+				t.Fatalf("read %s: %v", filepath.Join(fxE2EDir, name), err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("%s/%s does not match testdata/%s: %d byte(s) vs %d", fxE2EDir, name, name, len(got), len(want))
+			}
+		})
+	}
+
+	entries, err := os.ReadDir(fxE2EDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxE2EDir, err)
+	}
+	covered := make(map[string]bool, len(fxE2ECopies))
+	for _, name := range fxE2ECopies {
+		covered[name] = true
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".pdf") || fxE2EExempt[e.Name()] {
+			continue
+		}
+		if !covered[e.Name()] {
+			t.Errorf("%s/%s is committed but fxE2ECopies does not guard it -- add it to the table or fxE2EExempt", fxE2EDir, e.Name())
+		}
+	}
+}

@@ -321,15 +321,13 @@ func fxBuildRichInvoice() []byte {
 		fxLine{12, 380, 404, "Total"}, fxLine{12, 500, 404, "1,612.50"},
 	)
 
-	// V before H: fxContent's TrimRight(body, "\r\n") swallows the trailing "\n" of whichever
-	// rule is emitted last, dropping it from a reader's rule count. Verticals first keeps the
-	// swallowed rule a horizontal one, which still clears its lower (>=4 vs >=5) floor.
+	// H before V, matching fxBuildTable's own loop shape.
 	var rules bytes.Buffer
-	for _, x := range fxTableColXs {
-		rules.WriteString(fxRuleV(x, fxRichTableRowYs[len(fxRichTableRowYs)-1], fxRichTableRowYs[0]))
-	}
 	for _, y := range fxRichTableRowYs {
 		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxRichTableRowYs[len(fxRichTableRowYs)-1], fxRichTableRowYs[0]))
 	}
 
 	content := fxText(lines...)
@@ -1048,8 +1046,9 @@ func TestFixtures_RichInvoicePrintsItsOwnNumber(t *testing.T) {
 
 // fxRuleOpRe matches one fxRuleH/fxRuleV emission ("%d %d m\n%d %d l\nS\n"): a horizontal
 // rule's pair share the Y operand (2nd/4th group), a vertical rule's share the X operand
-// (1st/3rd group).
-var fxRuleOpRe = regexp.MustCompile(`(\d+) (\d+) m\n(\d+) (\d+) l\nS\n`)
+// (1st/3rd group). The trailing \n is optional: fxContent trims trailing "\r\n" off the
+// stream, so the last rule in emission order has no trailing newline to match.
+var fxRuleOpRe = regexp.MustCompile(`(\d+) (\d+) m\n(\d+) (\d+) l\nS\n?`)
 
 func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
 	raw := fxRead(t, fxRich)
@@ -1071,11 +1070,11 @@ func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
 			vert++
 		}
 	}
-	if horiz < 4 {
-		t.Errorf("%s page 1 carries %d horizontal rule(s), want at least 4", fxRich, horiz)
+	if horiz != 5 {
+		t.Errorf("%s page 1 carries %d horizontal rule(s), want exactly 5", fxRich, horiz)
 	}
-	if vert < 5 {
-		t.Errorf("%s page 1 carries %d vertical rule(s), want at least 5", fxRich, vert)
+	if vert != 5 {
+		t.Errorf("%s page 1 carries %d vertical rule(s), want exactly 5", fxRich, vert)
 	}
 
 	for _, row := range [][]string{
@@ -1088,6 +1087,104 @@ func TestFixtures_RichInvoiceCarriesARuledTable(t *testing.T) {
 				t.Errorf("%s page 1 content stream does not carry data row cell %q", fxRich, cell)
 			}
 		}
+	}
+}
+
+// fxTjRe matches one fxText Tj emission ("%d %d Td\n(%s) Tj"): the Td x/y and the string drawn.
+var fxTjRe = regexp.MustCompile(`(\d+) (\d+) Td\n\(([^)]*)\) Tj`)
+
+// AC-6: the totals block is a label Tj followed by a value Tj on the same baseline, not one
+// inline "Label: value" string -- Reconcile's sum-check (reconcile.go:172) only tightens a
+// subtotal that already resolved ReasonNone, which an inline string would not.
+func TestFixtures_RichInvoiceTotalsAreSplitLabels(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	type placed struct{ x, y int }
+	toks := map[string]placed{}
+	matches := fxTjRe.FindAllSubmatch(body, -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s page 1 content stream carries no Td/Tj pair; the assertions below would prove nothing", fxRich)
+	}
+	for _, m := range matches {
+		x, _ := strconv.Atoi(string(m[1]))
+		y, _ := strconv.Atoi(string(m[2]))
+		text := string(m[3])
+		toks[text] = placed{x, y}
+		for _, pair := range [][2]string{{"Sub-total", "1,500.00"}, {"VAT", "112.50"}, {"Total", "1,612.50"}} {
+			if strings.Contains(text, pair[0]) && strings.Contains(text, pair[1]) {
+				t.Errorf("%s: one Tj %q carries both %q and %q -- want a split label/value pair", fxRich, text, pair[0], pair[1])
+			}
+		}
+	}
+
+	for _, pair := range []struct{ label, value string }{
+		{"Sub-total", "1,500.00"},
+		{"VAT", "112.50"},
+		{"Total", "1,612.50"},
+	} {
+		l, ok := toks[pair.label]
+		if !ok {
+			t.Fatalf("%s: no Tj carries the bare label %q", fxRich, pair.label)
+		}
+		v, ok := toks[pair.value]
+		if !ok {
+			t.Fatalf("%s: no Tj carries the bare value %q", fxRich, pair.value)
+		}
+		if l.y != v.y {
+			t.Errorf("%s: label %q sits at y=%d, value %q at y=%d -- want the same baseline", fxRich, pair.label, l.y, pair.value, v.y)
+		}
+		if l.x >= v.x {
+			t.Errorf("%s: label %q at x=%d is not left of value %q at x=%d", fxRich, pair.label, l.x, pair.value, v.x)
+		}
+	}
+}
+
+// TestFixtures_RichInvoiceCarriesItsIssueDate pins the ambiguous day/month reading (D-10) that
+// story AC 2's later 'ambiguous' verdict depends on -- nothing local pins it otherwise.
+func TestFixtures_RichInvoiceCarriesItsIssueDate(t *testing.T) {
+	raw := fxRead(t, fxRich)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxRich)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	if !bytes.Contains(body, []byte("12/03/2026")) {
+		t.Errorf("%s page 1 content stream does not carry 12/03/2026, its ambiguous issue date", fxRich)
+	}
+}
+
+// TestFixtures_RichInvoiceBytesAreUnique guards against fxBuildRichInvoice silently returning
+// another fixture's bytes -- a bug several presence-only assertions elsewhere would not catch.
+func TestFixtures_RichInvoiceBytesAreUnique(t *testing.T) {
+	rich := fxRead(t, fxRich)
+	for _, f := range fxCorpus {
+		if f.name == fxRich {
+			continue
+		}
+		other := fxRead(t, f.name)
+		if bytes.Equal(rich, other) {
+			t.Errorf("%s is byte-identical to %s -- the builder returned the wrong fixture's bytes", fxRich, f.name)
+		}
+	}
+}
+
+// TestFixtures_RichInvoiceDoesNotResizeTableRowYs pins fxBuildTable's own row geometry: the
+// rich fixture's plan called for a separate fxRichTableRowYs precisely so this array stays
+// untouched and table_invoice.pdf's committed bytes do not silently drift.
+func TestFixtures_RichInvoiceDoesNotResizeTableRowYs(t *testing.T) {
+	want := [4]int{650, 626, 602, 578}
+	if fxTableRowYs != want {
+		t.Fatalf("fxTableRowYs is %v, want %v -- EXTR-18-01 must not resize fxBuildTable's own geometry", fxTableRowYs, want)
 	}
 }
 

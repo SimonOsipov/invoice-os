@@ -39,11 +39,16 @@ func TestUploadHandler_ExtensionWinsOverAContradictingContentType(t *testing.T) 
 		wantType string
 	}{
 		{"a pdf declared text/csv is a pdf", "scan.pdf", "text/csv", http.StatusCreated, upPDF},
-		{"a png declared application/pdf is a png", "scan.png", upPDF, http.StatusCreated, upPNG},
+		// Both signals name an accepted type and disagree, in both directions. The first row
+		// was a .png declared application/pdf until EXTR-15-03 narrowed .png out of the table.
+		{"a pdf declared as a docx is a pdf", "scan.pdf", upDOCX, http.StatusCreated, upPDF},
 		{"a docx declared image/jpeg is a docx", "scan.docx", upJPEG, http.StatusCreated, upDOCX},
 
-		// A KNOWN HOLE, pinned so a change to it is deliberate.
+		// KNOWN HOLES, pinned so a change to either is deliberate. The .png row is EXTR-15-03's
+		// own consequence: narrowing removed the EXTENSION, so a .png now falls through to the
+		// declared type like any other unknown one, and image bytes still enter under a lie.
 		{"a csv declared application/pdf is accepted as a pdf", "ledger.csv", upPDF, http.StatusCreated, upPDF},
+		{"a png declared application/pdf is accepted as a pdf", "scan.png", upPDF, http.StatusCreated, upPDF},
 	}
 
 	for _, c := range cases {
@@ -248,10 +253,10 @@ func TestUploadHandler_NoExtensionAndNoDeclaredTypeIsRefused(t *testing.T) {
 
 // --- the published table -------------------------------------------------------------------------
 
-// TestAcceptedDocumentTypes_IsTheFiveCanonicalTypesAndNoSpreadsheet reads the table EXTR-09-04's
+// TestAcceptedDocumentTypes_IsPDFAndDOCXAndNoSpreadsheet reads the table EXTR-09-04's
 // CLASSIFY-5 will compare its TypeScript copy against. It is a package-level literal precisely
 // so that comparison is possible, and this spec is what keeps it readable and honest.
-func TestAcceptedDocumentTypes_IsTheFiveCanonicalTypesAndNoSpreadsheet(t *testing.T) {
+func TestAcceptedDocumentTypes_IsPDFAndDOCXAndNoSpreadsheet(t *testing.T) {
 	got := extractionAcceptedTypes(t)
 	if len(got) == 0 {
 		t.Fatal("the accepted-type table read as empty; every assertion below would pass over nothing")
@@ -259,10 +264,6 @@ func TestAcceptedDocumentTypes_IsTheFiveCanonicalTypesAndNoSpreadsheet(t *testin
 
 	wantExtensions := map[string]string{
 		".pdf":  upPDF,
-		".png":  upPNG,
-		".jpg":  upJPEG,
-		".jpeg": upJPEG,
-		".webp": upWebP,
 		".docx": upDOCX,
 	}
 	if len(got) != len(wantExtensions) {
@@ -284,8 +285,14 @@ func TestAcceptedDocumentTypes_IsTheFiveCanonicalTypesAndNoSpreadsheet(t *testin
 		}
 		distinct[ct] = true
 	}
-	if len(distinct) != 5 {
-		t.Errorf("the table names %d distinct content type(s) %v, want the five document types", len(distinct), distinct)
+	// Derived from wantExtensions, never typed: two extensions may share a content type (.jpg
+	// and .jpeg did), so this is the aliasing claim, not a second count of the keys.
+	wantDistinct := map[string]bool{}
+	for _, ct := range wantExtensions {
+		wantDistinct[ct] = true
+	}
+	if len(distinct) != len(wantDistinct) {
+		t.Errorf("the table names %d distinct content type(s) %v, want the %d in %v", len(distinct), distinct, len(wantDistinct), wantDistinct)
 	}
 	for _, banned := range []string{upXLSX, "text/csv", "text/plain"} {
 		if distinct[banned] {

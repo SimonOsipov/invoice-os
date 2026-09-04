@@ -2003,8 +2003,8 @@ async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T>
   return read()
 }
 
-// The accepted-types line verbatim — the eight tokens this story grew it to.
-const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX'
+// The accepted-types line verbatim — the four types EXTR-15-03 narrowed it to.
+const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · DOCX'
 
 // kindRefusal() verbatim (lib/importRun.ts owns the copy), both directions — a run's kind
 // is whichever file landed first.
@@ -2258,7 +2258,7 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
   ])
 
   const acceptedLine = page.getByText(ACCEPTED_LINE, { exact: true })
-  await expect(acceptedLine, 'the accepted-types line states all eight types').toBeVisible()
+  await expect(acceptedLine, 'the accepted-types line states every accepted type').toBeVisible()
 
   // The ancestor chain, self-checked: the accepted line's parent is the card's padded
   // content div, whose parent is the card, whose grandparent is the wizard column

@@ -125,7 +125,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
             id="pf-import-file"
             className="pf-file"
             type="file"
-            accept=".csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.docx"
+            accept=".csv,.xlsx,.pdf,.docx"
             multiple
             aria-label="Choose files to import"
             onChange={(e) => ctx.addPickedFiles(Array.from(e.target.files ?? []))}
@@ -199,7 +199,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               attribute. Neither is the gate: a DROPPED file never meets accept (onDrop
               above hands it straight to addPickedFiles), so classifyPickedFile is. */}
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', letterSpacing: '0.06em' }}>
-            ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX
+            ACCEPTED · CSV · XLSX · PDF · DOCX
           </span>
 
           {/* The chosen-files list, per-file remove control and the two per-file refusal

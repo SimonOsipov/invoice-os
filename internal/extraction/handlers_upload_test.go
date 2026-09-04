@@ -252,11 +252,12 @@ func TestUploadHandler_PdfIs201WithDocumentId(t *testing.T) {
 	}
 }
 
-// TestUploadHandler_AcceptsAllFiveDocumentTypes: every accepted type, twice -- once resolved
-// from the extension with an untyped part, once resolved from a declared content type carrying
-// a ;charset= suffix behind an extension the table does not know. The asserted content_type is
-// the value the handler handed the store, so it reads the CLASSIFICATION, not the spy.
-func TestUploadHandler_AcceptsAllFiveDocumentTypes(t *testing.T) {
+// TestUploadHandler_AcceptsEveryTypeInTheAcceptedTable: every accepted type, twice -- once
+// resolved from the extension with an untyped part, once resolved from a declared content type
+// carrying a ;charset= suffix behind an extension the table does not know. The asserted
+// content_type is the value the handler handed the store, so it reads the CLASSIFICATION, not
+// the spy. "scan.DOCX" carries the case-insensitivity claim the narrowed-out "scan.PNG" used to.
+func TestUploadHandler_AcceptsEveryTypeInTheAcceptedTable(t *testing.T) {
 	cases := []struct {
 		name        string
 		filename    string
@@ -264,20 +265,14 @@ func TestUploadHandler_AcceptsAllFiveDocumentTypes(t *testing.T) {
 		wantContent string
 	}{
 		{"pdf by extension", "scan.pdf", "", upPDF},
-		{"png by extension", "scan.PNG", "", upPNG},
-		{"jpg by extension", "scan.jpg", "", upJPEG},
-		{"jpeg by extension", "scan.jpeg", "", upJPEG},
-		{"webp by extension", "scan.webp", "", upWebP},
-		{"docx by extension", "scan.docx", "", upDOCX},
+		{"docx by extension, upper case", "scan.DOCX", "", upDOCX},
 
 		{"pdf by content type", "scan.bin", upPDF + "; charset=utf-8", upPDF},
-		{"png by content type", "scan.bin", upPNG + "; charset=utf-8", upPNG},
-		{"jpeg by content type", "scan.bin", upJPEG + "; charset=utf-8", upJPEG},
-		{"webp by content type", "scan.bin", upWebP + "; charset=utf-8", upWebP},
 		{"docx by content type", "scan.bin", upDOCX + "; charset=utf-8", upDOCX},
 	}
-	if len(cases) < 11 {
-		t.Fatalf("the table holds %d case(s); the five types by extension and by content type need at least 11", len(cases))
+	// Relational: the population follows the accepted table rather than a literal typed here.
+	if want := 2 * len(upNarrowedInTypes); len(cases) < want {
+		t.Fatalf("the table holds %d case(s); every accepted type by extension and by content type needs at least %d", len(cases), want)
 	}
 
 	for _, c := range cases {
@@ -599,8 +594,8 @@ func upSortedKeys(m map[string]bool) string {
 // merges and unfalsifiable afterwards.
 //
 // Only the DOCUMENT half is compared, and that is the whole claim: Go holds the document
-// types alone (spreadsheets have their own route), so the shared domain is the six document
-// extensions. The TypeScript table also carries .csv/.xlsx, which is why a .csv declared
+// types alone (spreadsheets have their own route), so the shared domain is .pdf and .docx.
+// The TypeScript table also carries .csv/.xlsx, which is why a .csv declared
 // application/pdf classifies as a spreadsheet in the browser and as a PDF here.
 func TestUploadHandler_BrowserAndGoAcceptedTypeTablesAgree(t *testing.T) {
 	raw, err := os.ReadFile(upPickerSource)

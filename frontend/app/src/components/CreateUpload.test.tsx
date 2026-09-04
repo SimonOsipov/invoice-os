@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The picker must not contradict itself. EXTR-09-04 widened `accept` and the ACCEPTED
-// copy to all seven types but left three selection-time gates reading
+// copy to every accepted type but left three selection-time gates reading
 // hasImportableExtension, so a picked PDF was listed as "Unsupported file type" one line
 // under copy saying PDF is accepted. Authored RED against that state; EXTR-09-07 ended it.
 //

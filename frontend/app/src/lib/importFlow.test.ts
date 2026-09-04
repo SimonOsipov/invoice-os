@@ -830,7 +830,7 @@ describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-0
 // The spec that stood here (DOC-01-07, task-355, AC-6) asserted that a 20 MB csv still
 // opens the read gate, and its comment read "no size gate exists anywhere in
 // frontend/app/src today and none may be introduced". EXTR-09 Core AC #4 REVERSES that
-// decision deliberately: the picker now accepts five document types the extractor reads
+// decision deliberately: the picker now accepts document types the extractor reads
 // byte-by-byte, so a file the server will 413 must be refused where the user can still
 // see and remove it, not after a 15 MiB upload.
 //
@@ -976,8 +976,8 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
   // the declared 'application/pdf' and accepts the file as a PDF — EXTR-09-02's QA found
   // exactly that. TypeScript's table holds BOTH halves, so '.csv' is recognised and the
   // verdict is 'spreadsheet'. The file therefore never reaches POST /v1/documents on the
-  // client path. The two tables agree on the domain they share (the six document
-  // extensions); CLASSIFY-5 is what pins that shared domain.
+  // client path. The two tables agree on the domain they share (.pdf and .docx);
+  // CLASSIFY-5 is what pins that shared domain.
   it('CLASSIFY-2: the extension wins over a disagreeing content type', () => {
     expect(classifyPickedFile('scan.pdf', 'text/csv')).toBe('document')
     expect(classifyPickedFile('a.csv', 'application/pdf')).toBe('spreadsheet')

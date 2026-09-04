@@ -14,10 +14,6 @@ import (
 // leave the two free to drift.
 var acceptedDocumentTypes = map[string]string{
 	".pdf":  "application/pdf",
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".webp": "image/webp",
 	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
@@ -27,9 +23,6 @@ var acceptedDocumentTypes = map[string]string{
 // (TestRendersPageImages_TableIsExhaustiveOverAcceptedTypes).
 var pageImageFormats = map[string]bool{
 	"application/pdf": true,
-	"image/png":       false,
-	"image/jpeg":      false,
-	"image/webp":      false,
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": false,
 }
 

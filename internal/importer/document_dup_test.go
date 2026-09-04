@@ -724,9 +724,13 @@ func TestServiceImportDocument_UnreadableNumberQuarantineStaysDistinctFromDuplic
 	if mre.Field != "invoice_number" {
 		t.Errorf("racer[2] (mapper quarantine) Field = %q, want %q", mre.Field, "invoice_number")
 	}
-	if mre.Message != "invoice_number is missing or blank" {
-		t.Errorf("racer[2] (mapper quarantine) Message = %q, want the mapper's own message", mre.Message)
+	// Retargeted by EXTR-15-05: racer 2's extraction is ten fields READ with a blank number,
+	// so it takes the read-document branch, never the poor-scan one. The literal moved into
+	// document_map_test.go's assertReadDocumentMessage.
+	if mre.Message != ac2Message(t) {
+		t.Errorf("racer[2] (mapper quarantine) Message = %q, want the mapper's own read-document message %q", mre.Message, ac2Message(t))
 	}
+	assertReadDocumentMessage(t, mre.Message)
 	if mre.Message == msgDuplicateInvoiceNumber {
 		t.Fatalf("racer[2] (mapper quarantine) Message equals the duplicate guard's message -- the two quarantine reasons are indistinguishable")
 	}

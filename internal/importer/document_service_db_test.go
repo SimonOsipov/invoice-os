@@ -215,9 +215,12 @@ func TestServiceImportDocument_UnreadableInvoiceNumberQuarantinesBatchNoInvoiceW
 	if res.Errors[0].Field != "invoice_number" {
 		t.Errorf("Errors[0].Field = %q, want %q", res.Errors[0].Field, "invoice_number")
 	}
-	if res.Errors[0].Message != "invoice_number is missing or blank" {
-		t.Errorf("Errors[0].Message = %q, want the shipped documentCreateInput message", res.Errors[0].Message)
+	// Retargeted by EXTR-15-05: DOC-03 seeds ten fields with a NULL number, so it takes the
+	// read-document branch. DOC-14 below covers the poor-scan branch.
+	if res.Errors[0].Message != ac2Message(t) {
+		t.Errorf("Errors[0].Message = %q, want the mapper's read-document message %q", res.Errors[0].Message, ac2Message(t))
 	}
+	assertReadDocumentMessage(t, res.Errors[0].Message)
 
 	if got := countImportBatchesForEntity(t, super, entityID); got != 1 {
 		t.Fatalf("import_batches for entity = %d, want 1 (minted even on a mapper error, D-17)", got)
@@ -613,5 +616,60 @@ func TestServiceImportDocument_MapperQuarantinePathInvoiceViolationsMarshalsToEm
 	}
 	if string(violJSON) != "[]" {
 		t.Errorf("InvoiceViolations marshalled = %s, want [] (never null) on the mapper-error early return", violJSON)
+	}
+}
+
+// --- DOC-14 (EXTR-15-05 PS-7) --------------------------------------------
+
+// docSeedPoorScanExtraction seeds the exact rank-0 field set the extraction worker writes for
+// a document with no text layer: one document_text_layer row, NULL value, reason unreadable.
+// docSeedExtraction cannot express it -- that helper only walks mapperFieldNames.
+func docSeedPoorScanExtraction(t *testing.T, super *pgxpool.Pool, tenantID, documentID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", now)
+	seedExtractionField(t, super, tenantID, job, "document_text_layer", nil, sxPtr("unreadable"), 0, now)
+}
+
+// DOC-14: the poor scan reaches the batch-review screen as a scan-quality complaint, not as a
+// machine string about the tenant's data. End-to-end through the real ImportDocument, so a
+// mapper fix that never reaches the wire fails here.
+func TestServiceImportDocument_PoorScanQuarantineCarriesTheScanQualityMessage(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-14 tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-14 entity")
+	documentID := seedDocument(t, super, tenantID)
+	docSeedPoorScanExtraction(t, super, tenantID, documentID)
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v, want nil -- a poor scan is a domain outcome, not a returned error (D-9)", err)
+	}
+	if res.Status != "completed" || res.ReadyInvoices != 0 || res.QuarantinedInvoices != 1 {
+		t.Errorf("BatchResult = %+v, want completed/ready=0/quarantined=1", res)
+	}
+	if len(res.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1", len(res.Errors))
+	}
+	if res.Errors[0].Field != "invoice_number" {
+		t.Errorf("Errors[0].Field = %q, want %q", res.Errors[0].Field, "invoice_number")
+	}
+	if res.Errors[0].RuleKey != "" {
+		t.Errorf("Errors[0].RuleKey = %q, want empty -- a rule key would render this as already-imported", res.Errors[0].RuleKey)
+	}
+	assertPoorScanMessage(t, res.Errors[0].Message)
+	if res.Errors[0].Message == ac2Message(t) {
+		t.Errorf("Errors[0].Message = %q, which is the read-document message -- the poor scan is reported as if the document had been read", res.Errors[0].Message)
+	}
+
+	_, status, rowsTotal, rowsValid, rowsInvalid := docBatchRowByEntity(t, super, entityID)
+	if status != "completed" || rowsTotal != 1 || rowsValid != 0 || rowsInvalid != 1 {
+		t.Errorf("batch row = (%s, total=%d, valid=%d, invalid=%d), want (completed, 1, 0, 1)", status, rowsTotal, rowsValid, rowsInvalid)
+	}
+	if got := countInvoicesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("invoices for entity = %d, want 0", got)
 	}
 }

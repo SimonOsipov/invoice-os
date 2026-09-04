@@ -389,12 +389,14 @@ const dgWiredFloor = 7
 const dgBareGoldenStep = `scripts/ci/docling-canary.sh golden "$GITHUB_SHA"` + "\n"
 
 // dgGoldenIsWired reports whether ci.yml's changes filter names both name's pdf and json AND a
-// docling-canary.sh golden step names the json explicitly (filter entry + step invocation is
-// 2 occurrences).
+// docling-canary.sh golden step names them explicitly. A wired golden's step body repeats both
+// paths, so filter entry + step invocation is 2 occurrences for EACH path -- checking only
+// Contains on the pdf path is hollow: a step that mentions the .pdf but a filter missing its
+// own entry for it still contains the string once, from the step alone.
 func dgGoldenIsWired(yaml, name string) bool {
 	pdf := "internal/extraction/testdata/" + strings.TrimSuffix(name, ".docling.json") + ".pdf"
 	gold := "internal/extraction/testdata/" + name
-	return strings.Contains(yaml, pdf) && strings.Contains(yaml, gold) && strings.Count(yaml, gold) >= 2
+	return strings.Count(yaml, pdf) >= 2 && strings.Count(yaml, gold) >= 2
 }
 
 // Story AC #2. TestCorpusGoldens_TheCanaryJobCoversEveryLayout (corpus_wired_db_test.go) is the

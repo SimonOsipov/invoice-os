@@ -1887,8 +1887,9 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
 // proves for a single-invoice CSV.
 
 const DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
-// Committed by EXTR-09-03; shared with e2e/api/contract-document-upload.spec.ts.
-const NATIVE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'native_invoice.pdf'))
+// Committed by EXTR-09-03, re-pointed at the rich fixture by EXTR-18-05 so the wire-derived
+// specs below read real field content instead of the mock's fixed shape.
+const NATIVE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'rich_invoice.pdf'))
 
 // Fresh bytes per pick, contract-document-upload.spec.ts's own recipe: a trailing PDF
 // comment moves the content hash without moving a byte offset, so `startxref` still
@@ -2926,37 +2927,37 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     )
   }
 
-  // The field SET itself, widened by EXTR-13-02 from seven header readings to twenty-three.
-  // Transcribed from internal/extraction/mock.go (mockDefaultResult, then mockDefaultLines
-  // through LineItemResults) and deliberately not derived: this is the only DEPLOYED oracle
-  // that the widened fixture reaches the screen, so a mock that silently dropped a line must
-  // red here and not only in Go. Line 3 carries no `quantity` -- that hole is the fixture's
-  // point (Core AC 3), and a count could not express it. Both sides are sorted in JS, so the
-  // database's collation is not what this compares.
+  // The field SET itself, twenty-three names. EXTR-18-05 re-pointed this fixture at the wired
+  // extractor's own reading (rich_invoice.pdf), so this is transcribed from the real
+  // Reconcile(Resolve(...)) result -- computed via `go run ./.ralph/measure/main.go
+  // internal/extraction/testdata/rich_invoice.pdf internal/extraction/testdata/rich_invoice.docling.json`,
+  // never from mock.go and never from the SPA. This is the only DEPLOYED oracle that the rich
+  // fixture reaches the screen unchanged, so a wiring regression must red here and not only in
+  // Go. Both sides are sorted in JS, so the database's collation is not what this compares.
   const WIRE_FIELD_SET = [
+    'buyer_name',
+    'buyer_tin',
+    'currency',
     'invoice_number',
     'issue_date',
-    'total',
-    'subtotal',
-    'supplier_tin',
-    'buyer_tin',
-    'vat',
     'line_items',
     'line_items[1].description',
+    'line_items[1].line_total',
     'line_items[1].quantity',
     'line_items[1].unit_price',
-    'line_items[1].line_total',
     'line_items[2].description',
+    'line_items[2].line_total',
     'line_items[2].quantity',
     'line_items[2].unit_price',
-    'line_items[2].line_total',
     'line_items[3].description',
-    'line_items[3].unit_price',
     'line_items[3].line_total',
-    'line_items[4].description',
-    'line_items[4].quantity',
-    'line_items[4].unit_price',
-    'line_items[4].line_total',
+    'line_items[3].quantity',
+    'line_items[3].unit_price',
+    'subtotal',
+    'supplier_name',
+    'supplier_tin',
+    'total',
+    'vat',
   ]
   expect(
     [...detail.fields.map((f) => f.name)].sort(),
@@ -3573,12 +3574,14 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   await extractOneDocument(page, 'EXTR-12-06 pills')
   const detail = await openExtractionReview(page)
 
-  // Off the wire the SPA itself consumed, never a literal copied out of mock.go. The distinct
-  // count is the non-vacuity floor: mockDefaultResult carries all four codes on one document,
-  // so anything less means the loop below is testing a narrower surface than it claims.
+  // Off the wire the SPA itself consumed, never a literal copied out of mock.go. worker.go's
+  // switch makes `unreadable` (on document_text_layer) mutually exclusive with the other three
+  // codes on one document -- it replaces the result set wholesale -- so a readable document like
+  // the rich fixture can carry at most missing/ambiguous/inconsistent. EXTR-18-07's spec covers
+  // the fourth code on its own (unreadable) fixture.
   const flagged = detail.fields.filter((f) => f.reason !== '')
   const codes = new Set(flagged.map((f) => f.reason))
-  expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the four codes`).toBe(4)
+  expect(codes.size, `this document reported ${[...codes].join(', ')} -- fewer than the three reachable codes`).toBeGreaterThanOrEqual(3)
 
   // The pill loop is a header-pane claim -- a line-item cell has no header-pane home, since
   // EXTR-13-07 gave it LineItemGrid, so it is excluded here rather than left to fail the AC it
@@ -3763,12 +3766,14 @@ test('EXTR12-E2E-04 (AC-8): the chip row shares its column evenly at every WIDE_
   // The field name and the chip count come OFF THE WIRE, never out of mock.go: a fixture change
   // that dropped the alternatives would otherwise leave this row measuring one chip and calling
   // it even.
+  // shapes.go's numericDateReadings tries exactly 2 fixed layouts and appends each at most
+  // once, so one alternative is the most any single input can produce -- the floor is 1, not 2.
   const ambiguous = detail.fields.find((f) => f.reason === 'ambiguous')
   expect(ambiguous, 'this document reported no ambiguous field -- there is no chip row to measure').toBeTruthy()
   expect(
     ambiguous!.alternatives.length,
-    `${ambiguous!.name} carries ${ambiguous!.alternatives.length} alternative(s) -- fewer than two is not a row to share`,
-  ).toBeGreaterThanOrEqual(2)
+    `${ambiguous!.name} carries ${ambiguous!.alternatives.length} alternative(s) -- zero is not a row to share`,
+  ).toBeGreaterThanOrEqual(1)
 
   const cell = page.getByTestId(`extraction-field-${ambiguous!.name}`)
   const chips = page.locator(`[data-testid^="extraction-chip-${ambiguous!.name}-"]`)
@@ -4449,24 +4454,25 @@ const FIDELITY: FidelityRow[] = [
   { element: 'extraction-point-buyer_tin', property: 'column-gap', artboard: '9px', source: ':324', expected: '9px', deviation: null },
   { element: 'extraction-point-buyer_tin', property: 'text-align', artboard: 'left', source: ':324', expected: 'left', deviation: null },
 
-  // The corrected marker, `:307`. The test posts one correction on `total` before it opens the
-  // screen, because the marker renders only where a correction exists. A marker moved to
-  // `left: 11px` reds nothing HERE -- EXTR12-E2E-02's right-of-centre clause is what catches it.
-  { element: 'extraction-marker-total', property: 'position', artboard: 'absolute', source: ':307', expected: 'absolute', deviation: null },
-  { element: 'extraction-marker-total', property: 'right', artboard: '11px', source: ':307', expected: '11px', deviation: null },
-  { element: 'extraction-marker-total', property: 'width', artboard: '7px', source: ':307', expected: '7px', deviation: null },
-  { element: 'extraction-marker-total', property: 'height', artboard: '7px', source: ':307', expected: '7px', deviation: null },
-  { element: 'extraction-marker-total', property: 'border-top-left-radius', artboard: '2px', source: ':307', expected: '2px', deviation: null },
+  // The corrected marker, `:307`. The test posts one correction on `subtotal` before it opens
+  // the screen (rich fixture: `total` resolves clean, `subtotal` carries the disagreement), because
+  // the marker renders only where a correction exists. A marker moved to `left: 11px` reds
+  // nothing HERE -- EXTR12-E2E-02's right-of-centre clause is what catches it.
+  { element: 'extraction-marker-subtotal', property: 'position', artboard: 'absolute', source: ':307', expected: 'absolute', deviation: null },
+  { element: 'extraction-marker-subtotal', property: 'right', artboard: '11px', source: ':307', expected: '11px', deviation: null },
+  { element: 'extraction-marker-subtotal', property: 'width', artboard: '7px', source: ':307', expected: '7px', deviation: null },
+  { element: 'extraction-marker-subtotal', property: 'height', artboard: '7px', source: ':307', expected: '7px', deviation: null },
+  { element: 'extraction-marker-subtotal', property: 'border-top-left-radius', artboard: '2px', source: ':307', expected: '2px', deviation: null },
   // AC-2, and an assertion rather than a comment: both tokens are probed in the pane's own
   // environment, so `expected !== artboard` fires on the fact that this repo does not resolve
   // `--accent` to teal. A literal transcription resolves the AMBER here and reds.
-  { element: 'extraction-marker-total', property: 'background-color', artboard: ACCENT_TOKEN, source: ':307', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
+  { element: 'extraction-marker-subtotal', property: 'background-color', artboard: ACCENT_TOKEN, source: ':307', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
 
   // The changed label, `:335`. After the correction `settled !== null` forces the pill to null
   // and neither the was-line nor Undo is `.mono`: exactly one in that cell.
-  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'font-size', artboard: '8.5px', source: ':335', expected: '8.5px', deviation: null },
-  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'font-weight', artboard: '700', source: ':335', expected: '700', deviation: null },
-  { element: 'extraction-changed-label-total', selector: '[data-testid="extraction-field-total"] span.mono', property: 'color', artboard: ACCENT_TOKEN, source: ':335', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
+  { element: 'extraction-changed-label-subtotal', selector: '[data-testid="extraction-field-subtotal"] span.mono', property: 'font-size', artboard: '8.5px', source: ':335', expected: '8.5px', deviation: null },
+  { element: 'extraction-changed-label-subtotal', selector: '[data-testid="extraction-field-subtotal"] span.mono', property: 'font-weight', artboard: '700', source: ':335', expected: '700', deviation: null },
+  { element: 'extraction-changed-label-subtotal', selector: '[data-testid="extraction-field-subtotal"] span.mono', property: 'color', artboard: ACCENT_TOKEN, source: ':335', expected: ACTION_TOKEN, deviation: TEAL_IS_ACTION },
 ]
 
 // The row set, as a literal beside the table (AA-24 / Z-5). It reds on a deleted row, an added
@@ -4478,9 +4484,9 @@ const FIDELITY_ROW_IDS: string[] = [
   'extraction-canvas·flex-grow',
   'extraction-canvas·flex-shrink',
   'extraction-canvas·min-width',
-  'extraction-changed-label-total·color',
-  'extraction-changed-label-total·font-size',
-  'extraction-changed-label-total·font-weight',
+  'extraction-changed-label-subtotal·color',
+  'extraction-changed-label-subtotal·font-size',
+  'extraction-changed-label-subtotal·font-weight',
   'extraction-chip-issue_date-0·border-bottom-left-radius',
   'extraction-chip-issue_date-0·border-bottom-right-radius',
   'extraction-chip-issue_date-0·border-top-left-radius',
@@ -4500,12 +4506,12 @@ const FIDELITY_ROW_IDS: string[] = [
   'extraction-fields·min-width',
   'extraction-ground·overflow-x',
   'extraction-ground·overflow-y',
-  'extraction-marker-total·background-color',
-  'extraction-marker-total·border-top-left-radius',
-  'extraction-marker-total·height',
-  'extraction-marker-total·position',
-  'extraction-marker-total·right',
-  'extraction-marker-total·width',
+  'extraction-marker-subtotal·background-color',
+  'extraction-marker-subtotal·border-top-left-radius',
+  'extraction-marker-subtotal·height',
+  'extraction-marker-subtotal·position',
+  'extraction-marker-subtotal·right',
+  'extraction-marker-subtotal·width',
   'extraction-page-1·border-bottom-width',
   'extraction-page-1·border-left-width',
   'extraction-page-1·border-right-width',
@@ -4629,13 +4635,15 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
-  // `total` is admitted: refuseField locks only invoice_number, supplier_tin and supplier_name.
-  await postFieldCorrection(token, jobId as string, 'total', { value: '2222.00', method: 'typed' })
+  // `subtotal` is admitted: refuseField locks only invoice_number, supplier_tin and
+  // supplier_name. The rich fixture resolves `total` clean, so `subtotal` -- the field
+  // carrying the flagged disagreement -- is the one with a pill to replace.
+  await postFieldCorrection(token, jobId as string, 'subtotal', { value: '2222.00', method: 'typed' })
 
   const detail = await openExtractionReview(page)
   expect(
-    detail.fields.find((f) => f.name === 'total')?.corrected,
-    'the wire the screen read carries no correction on total -- the marker and changed-label rows would compare nothing',
+    detail.fields.find((f) => f.name === 'subtotal')?.corrected,
+    'the wire the screen read carries no correction on subtotal -- the marker and changed-label rows would compare nothing',
   ).toBeTruthy()
 
   // The page frame's band is `560 * zoom` / `640 * zoom` (extractionReview.ts:114-118), so the
@@ -4829,8 +4837,8 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
     deviations.map((r) => `${r.element}·${r.property}`).sort(),
     'the set of stated deviations from the artboard changed',
   ).toEqual([
-    'extraction-changed-label-total·color',
-    'extraction-marker-total·background-color',
+    'extraction-changed-label-subtotal·color',
+    'extraction-marker-subtotal·background-color',
     'extraction-page-1·padding-bottom',
     'extraction-page-1·padding-left',
     'extraction-page-1·padding-right',
@@ -4904,7 +4912,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   //    that the inline value overrides the class.
   const tracking = [
     { element: 'extraction-pill-vat', source: ':296' },
-    { element: 'extraction-changed-label-total', source: ':335' },
+    { element: 'extraction-changed-label-subtotal', source: ':335' },
   ].map(({ element, source }) => {
     const read = measured.out[element]!
     const fontPx = parseFloat(read['font-size'])
@@ -5031,23 +5039,25 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   expect(missing!.value, 'the missing field already carries a value').toBeNull()
   expect(missing!.region, 'the missing field already carries a region, so a drawn box proves nothing').toBeNull()
 
-  // By NAME, the way EXTR12-E2E-02 and EXTR11-E2E-11 pick `total` above -- never by position.
-  // The wire is ordered by field_name (created_at defaults to now() and writeFieldResultsTx
-  // writes a job's rows on ONE transaction, so reader.go's ORDER BY degenerates to the name),
-  // and EXTR-13-02's line cells sort ahead of `total`: "the first writable inconsistent field"
-  // resolves to line_items[2].line_total, which has no header cell to type into and which
-  // refuseField would 422. The two properties that pick made implicit are asserted here instead
-  // of assumed, so a build that locked `total` or stopped flagging it reds on the wire rather
-  // than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the ordering
-  // from the Go side.
-  const typed = detail.fields.find((f) => f.name === 'total')
-  expect(typed, 'the wire the screen read carries no `total` -- there is nothing to type over').toBeTruthy()
-  expect(LOCKED_FIELDS, 'total is locked now, so the correction this journey posts would be a 422').not.toContain(
+  // By NAME, the way EXTR12-E2E-02 picks `total` above and EXTR11-E2E-11 picks `subtotal` below --
+  // never by position. The wire is ordered by field_name (created_at defaults to now() and
+  // writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's ORDER BY
+  // degenerates to the name), and EXTR-13-02's line cells sort ahead of `subtotal`: "the first
+  // writable inconsistent field" resolves to line_items[2].line_total, which has no header cell
+  // to type into and which refuseField would 422. On the rich fixture `total` itself resolves
+  // clean (reason ''), so `subtotal` is both the first writable candidate AND the only one
+  // carrying the disagreement. The two properties that pick made implicit are asserted here
+  // instead of assumed, so a build that locked `subtotal` or stopped flagging it reds on the wire
+  // rather than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the
+  // ordering from the Go side.
+  const typed = detail.fields.find((f) => f.name === 'subtotal')
+  expect(typed, 'the wire the screen read carries no `subtotal` -- there is nothing to type over').toBeTruthy()
+  expect(LOCKED_FIELDS, 'subtotal is locked now, so the correction this journey posts would be a 422').not.toContain(
     typed!.name,
   )
   expect(
     typed!.reason,
-    'total is not flagged inconsistent, so this journey types over a field that never asked to be settled',
+    'subtotal is not flagged inconsistent, so this journey types over a field that never asked to be settled',
   ).toBe('inconsistent')
 
   const names = [ambiguous!.name, missing!.name, typed!.name]

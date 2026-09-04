@@ -194,3 +194,48 @@ docker rm -f docling-bench
 
 The harness refuses to report a latency for a document that yielded no tokens — timing the
 failure path is not a throughput measurement.
+
+## Enabling the sidecar on a fleet
+
+The sidecar is deployed and probed on every environment (see the top of this doc), but no
+environment routes real extraction through it until `EXTRACTOR=docling` is set on the
+`submission` service. This is the flip.
+
+**Default.** `submission` reads `EXTRACTOR` and `DOCLING_URL` at boot
+(`cmd/submission/main.go:135`) and passes them to `selectExtractor`
+(`cmd/submission/main.go:512-538`). An unset or empty `EXTRACTOR`, and the literal value
+`mock`, both resolve to `extraction.NewMockExtractor()`
+(`cmd/submission/main.go:519-520`) — a fleet with the variable absent behaves exactly as it
+did before the sidecar existed. `TestSelectExtractor_MockIsTheDefault`
+(`cmd/submission/main_test.go:1119`) pins this.
+
+**Boot-fatal, not silent fallback.** `EXTRACTOR=docling` requires `DOCLING_URL` to be set:
+`selectExtractor` returns an error naming `DOCLING_URL` when it is empty
+(`cmd/submission/main.go:522-523`), and `main()` treats any `selectExtractor` error as fatal
+in every environment — `log.Fatalf("submission: %v", err)`
+(`cmd/submission/main.go:136-138`). A malformed (but non-empty) `DOCLING_URL` fails the same
+way, one line down, when `NewDoclingExtractor` rejects it
+(`cmd/submission/main.go:530-533`). `TestSelectExtractor_DoclingRequiresURL`
+(`cmd/submission/main_test.go:1152`) pins the empty case. Practically: a flip with a missing
+or broken `DOCLING_URL` takes `submission` down at boot — it never comes up half-flipped
+serving mock extraction under a `docling` label.
+
+**Fork rule.** Railway environment forks (`pr-<N>`) are point-in-time copies of the
+environment they fork from. A plain variable set on `production` after a `pr-<N>`
+environment already exists does not retroactively appear there (see
+`docs/topology-e2e.md`'s "Railway variables" section for the same rule applied to
+`development`). A `pr-<N>` environment created before the flip needs `EXTRACTOR=docling` set
+on its own `submission` instance to match. Sealed variables never fork at all — `EXTRACTOR`
+is a plain variable, so this only affects when it needs to be set, not whether it forks.
+
+**Operator steps:**
+
+1. Set `EXTRACTOR=docling` on `production`'s `submission` service.
+2. Read the variable back to confirm the write.
+3. Redeploy `submission`, then confirm `GET /healthz/fleet` reports it `up` on the expected
+   build.
+4. If a `pr-<N>` environment already exists for an open PR, set `EXTRACTOR=docling` on that
+   environment's `submission` instance too — it did not inherit step 1.
+
+**Rollback.** Unset `EXTRACTOR` (or set it to `mock`) on `submission` and redeploy. This is
+the whole rollback: it returns the service to the default described above.

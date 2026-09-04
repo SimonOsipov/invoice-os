@@ -990,6 +990,55 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
   })
 })
 
+// The reason span carries gridColumn '2 / -1', which starts an implicit second grid line.
+// Element children only -- the `{' '}` separator is a text node, neither a child element
+// nor a grid item.
+describe('BUG-09: a blocked register row costs no extra grid line', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it("B09-1: a blocked register row renders exactly the head's grid children, and keeps its title", async () => {
+    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head')
+    expect(head, 'no list head -- the comparison below would be vacuous').not.toBeNull()
+    const rowEl = screen.getByTestId('invoice-row')
+
+    // Non-vacuity: the row must really be blocked, or two equal counts prove nothing.
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect(rowEl.children.length).toBe((head as HTMLElement).children.length)
+  })
+
+  it('B09-2: an awaiting-approval register row renders the same grid children as a selectable one', async () => {
+    const awaiting = row({ id: 'inv-await', invoice_number: 'INV-AWAIT', status: 'validated', approval: openRun })
+    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    mockFetchSequence([listResponse([awaiting, selectable], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const [awaitingRow, cleanRow] = screen.getAllByTestId('invoice-row')
+    const [awaitingBox, cleanBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
+
+    // Non-vacuity: one row really blocked, the other really selectable.
+    expect(awaitingBox.disabled).toBe(true)
+    expect(awaitingBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(cleanBox.disabled).toBe(false)
+
+    expect(awaitingRow.children.length).toBe(cleanRow.children.length)
+  })
+})
+
 // Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
 // alone ("Needs attention") does not say so.
 const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'

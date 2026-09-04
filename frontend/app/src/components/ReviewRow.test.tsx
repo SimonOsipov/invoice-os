@@ -494,6 +494,8 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
 // count row-level children only, so a reason re-added INSIDE a cell is invisible to them.
 describe('BUG-09 QA: the deleted line cannot come back through a blind spot', () => {
   const REVIEW_CELLS = 7
+  // A reason sentence's clause before the em dash; the whole sentence if it has none.
+  const lead = (reason: string) => reason.split('—')[0].trim()
   const openRun: InvoiceApproval = {
     run_state: 'open',
     pending_ord: 1,
@@ -531,6 +533,12 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
 
     expect(draftRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(skipReasonLabel('not_validated'))
     expect(awaitingRow.textContent).not.toContain(skipReasonLabel('awaiting_approval'))
+
+    // The lead phrase too, so a TRUNCATED re-add cannot slip past exact containment.
+    // Derived, never authored here -- skipReasonLabel stays the sole source of the copy.
+    // The status pills read DRAFT/VALIDATED, so neither phrase collides with one.
+    expect(draftRow.textContent).not.toContain(lead(skipReasonLabel('not_validated')))
+    expect(awaitingRow.textContent).not.toContain(lead(skipReasonLabel('awaiting_approval')))
   })
 
   it('QA-B09-8: the KEPT badge and the source-file line nest inside their own cells, so the busiest row is still seven wide', () => {

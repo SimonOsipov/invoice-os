@@ -505,6 +505,59 @@ describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA
   })
 })
 
+// BUG-09. A blocked row renders one MORE grid child than a selectable one -- the reason
+// span. Counted against a sibling row, so a column added to both sides stays green here.
+describe('BUG-09: a blocked review row costs no extra grid line', () => {
+  const openRun: InvoiceApproval = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  function renderPair(blockedOver: Partial<InvoiceRecord>, cleanOver: Partial<InvoiceRecord>) {
+    render(
+      <>
+        <Row r={row({ id: 'inv-blocked', ...blockedOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={row({ id: 'inv-clean', ...cleanOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+      </>,
+    )
+    const [blockedRow, cleanRow] = screen.getAllByTestId('review-row')
+    const [blockedBox, cleanBox] = screen.getAllByTestId('review-select') as HTMLInputElement[]
+    return { blockedRow, cleanRow, blockedBox, cleanBox }
+  }
+
+  it('B09-3: a not-validated review row renders the same grid children as a selectable one, and keeps its title', () => {
+    const { blockedRow, cleanRow, blockedBox, cleanBox } = renderPair(
+      { status: 'draft', approval: null },
+      { status: 'validated', approval: null },
+    )
+
+    // Non-vacuity: one row really blocked, the other really selectable -- two equally
+    // wrong rows would otherwise satisfy the count below.
+    expect(blockedBox.disabled).toBe(true)
+    expect(blockedBox.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect(cleanBox.disabled).toBe(false)
+
+    expect(blockedRow.children.length).toBe(cleanRow.children.length)
+  })
+
+  it('B09-4: an awaiting-approval review row renders the same grid children as a selectable one', () => {
+    const { blockedRow, cleanRow, blockedBox, cleanBox } = renderPair(
+      { status: 'validated', approval: openRun },
+      { status: 'validated', approval: null },
+    )
+
+    expect(blockedBox.disabled).toBe(true)
+    expect(blockedBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(cleanBox.disabled).toBe(false)
+
+    expect(blockedRow.children.length).toBe(cleanRow.children.length)
+  })
+})
+
 // Minimal register ctx/fetch for the ReviewRow/InvoicesList parity check (A16-2f) --
 // mirrors InvoiceDetail.test.tsx's own local pair; InvoicesList is otherwise only
 // exercised by InvoicesList.test.tsx.

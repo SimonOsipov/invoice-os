@@ -52,4 +52,8 @@ describe('BUG-09: the row blocked-reason node stays deleted', () => {
   it('the testid invoice-blocked-reason appears in no file', () => {
     expect(filesContaining('invoice-blocked-reason')).toEqual([])
   })
+
+  it('the testid review-select-blocked-reason appears in no file', () => {
+    expect(filesContaining('review-select-blocked-reason')).toEqual([])
+  })
 })

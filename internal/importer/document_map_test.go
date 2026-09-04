@@ -979,6 +979,12 @@ func TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch(t *t
 			fields: []extractedField{{Name: "document_text_layer", Value: nil, Reason: nil}},
 		},
 		{
+			// The clause QA found unpinned: a LONE unreadable field that is not the text-layer
+			// one. Without this case, dropping the name check from isPoorScan survives the suite.
+			name:   "one unreadable field that is not the text layer",
+			fields: []extractedField{{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")}},
+		},
+		{
 			name: "text layer field plus one other field",
 			fields: []extractedField{
 				{Name: "document_text_layer", Value: nil, Reason: mpPtr("unreadable")},

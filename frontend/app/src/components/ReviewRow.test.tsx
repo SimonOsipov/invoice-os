@@ -289,9 +289,9 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
 })
 
 // RED (APPR-16-02, task-535, Mode A). The selection checkbox gains the same four-layer
-// disabled-with-reason recipe the Re-validate button and InvoicesList's own checkbox
-// already carry: real `disabled`, an inline mute, a visible reason node, and
-// `title`/`aria-describedby` pointing at it with a PER-ROW id. `document.getElementById`
+// disabled-with-reason recipe the Re-validate button already carries: real `disabled`,
+// an inline mute, a visible reason node, and `title`/`aria-describedby` pointing at it
+// with a PER-ROW id. `document.getElementById`
 // off the checkbox's own `aria-describedby` is used throughout instead of a guessed
 // testid -- it proves the id actually resolves to a rendered node, not just that some
 // attribute string exists.

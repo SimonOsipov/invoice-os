@@ -290,8 +290,59 @@ func fxBuildTable() []byte {
 	})
 }
 
-// fxBuildRichInvoice is a stub awaiting EXTR-18-01's implementation.
-func fxBuildRichInvoice() []byte { return nil }
+// fxRichTableRowYs are the rich fixture's own horizontal rule positions: header-top,
+// header/row1, row1/row2, row2/row3, bottom (1 header + 3 data rows = 4 bands = 5 lines).
+// A separate array from fxTableRowYs -- that one is fxBuildTable's own, and resizing it would
+// change table_invoice.pdf's committed bytes.
+var fxRichTableRowYs = [5]int{590, 566, 542, 518, 494}
+
+// fxBuildRichInvoice is one US-Letter page: header fields, a ruled 4-column/3-row table with a
+// deliberate line-total error (Gadget: 3 x 250.00 prints as 900.00, not 750.00), and a
+// split-label totals block whose Sub-total (1,500.00) does not match the line sum (2,020.00).
+// Both mismatches exceed reconcileTolerance, so ReasonInconsistentTotal has something to catch.
+func fxBuildRichInvoice() []byte {
+	lines := []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Invoice No: ASC-2026-0918"},
+		{12, 72, 672, "Issue Date: 12/03/2026"},
+		{12, 72, 654, "Supplier: Kaduna Supply Limited"},
+		{12, 72, 636, "TIN: 30154829-0032"},
+		{12, 72, 618, "Currency: NGN"},
+	}
+	lines = append(lines, fxTableRowText(578, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(554, []string{"Widget", "2", "500.00", "1000.00"})...)
+	lines = append(lines, fxTableRowText(530, []string{"Gadget", "3", "250.00", "900.00"})...)
+	lines = append(lines, fxTableRowText(506, []string{"Delivery", "1", "120.00", "120.00"})...)
+	// Split-label shape (label Tj, then value Tj, same baseline) -- fxBuildCorpusTotalsBlock's
+	// precedent. The inline single-Tj form would not resolve ReasonNone for Reconcile to check.
+	lines = append(lines,
+		fxLine{12, 380, 440, "Sub-total"}, fxLine{12, 500, 440, "1,500.00"},
+		fxLine{12, 380, 422, "VAT"}, fxLine{12, 500, 422, "112.50"},
+		fxLine{12, 380, 404, "Total"}, fxLine{12, 500, 404, "1,612.50"},
+	)
+
+	// V before H: fxContent's TrimRight(body, "\r\n") swallows the trailing "\n" of whichever
+	// rule is emitted last, dropping it from a reader's rule count. Verticals first keeps the
+	// swallowed rule a horizontal one, which still clears its lower (>=4 vs >=5) floor.
+	var rules bytes.Buffer
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxRichTableRowYs[len(fxRichTableRowYs)-1], fxRichTableRowYs[0]))
+	}
+	for _, y := range fxRichTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
+	})
+}
 
 // --- the golden corpus ------------------------------------------------------
 

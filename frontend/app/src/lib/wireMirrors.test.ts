@@ -768,8 +768,6 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // LOCKED_FIELDS (ExtractionFields.test.tsx) vs handlers_correction.go's lockedFields -- a Go
 //   map[string]string, not a slice; it needs a different extractor, and refuseField's 422 is
 //   already pinned by the correction e2e.
-// ExtractionJob / ExtractionJobsResponse (e2e/api/client.ts) -- no SPA copy exists, so a
-//   three-way row is impossible; the SPA does not read the jobs list.
 // CorrectionRequest's optionality asymmetry -- tsInterfaceKeys strips '?', so the SPA's
 //   all-required keys compare equal to client.ts's optional region/anchor_label. A live
 //   pre-existing defect, not this story's; the three line-items interfaces are non-optional on

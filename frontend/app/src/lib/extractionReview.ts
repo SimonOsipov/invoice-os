@@ -75,6 +75,7 @@ export interface ExtractionDetail {
   id: string
   document_id: string
   state: string
+  failure_kind: string | null
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

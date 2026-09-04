@@ -98,7 +98,7 @@ const WITH_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows
 const WITHOUT_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: null, document: null }
 
 function job(id: string, createdAt: string): ExtractionJob {
-  return { id, document_id: DOCUMENT_ID, state: 'succeeded', created_at: createdAt, last_error: null }
+  return { id, document_id: DOCUMENT_ID, state: 'succeeded', created_at: createdAt, last_error: null, failure_kind: null }
 }
 
 const NEWEST_FIRST = [job(NEWER_JOB, '2026-06-12T12:00:00Z'), job(OLDER_JOB, '2026-06-12T11:00:00Z')]

@@ -119,7 +119,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			terminal = true
 			return nil
 		}
-		return advanceJobTx(ctx, tx, args.TenantID, j.ID, "extracting", "", job.Attempt)
+		return advanceJobTx(ctx, tx, args.TenantID, j.ID, "extracting", "", job.Attempt, "")
 	}); err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			state = "dead_lettered"
 		}
 		if txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
-			if advErr := advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt); advErr != nil {
+			if advErr := advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt, kind); advErr != nil {
 				return advErr
 			}
 			// An attempt with retries left is not a terminal outcome, so it is not an event
@@ -259,7 +259,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, results); err != nil {
 				return err
 			}
-			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt); err != nil {
+			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt, ""); err != nil {
 				return err
 			}
 			return w.Audit(ctx, tx, ExtractionAudit{

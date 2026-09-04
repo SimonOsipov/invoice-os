@@ -35,10 +35,12 @@ func (s *Store) EnsureJob(ctx context.Context, tenantID, documentID, extractor, 
 	return job, err
 }
 
-// Advance writes a caller-computed state, attempts count and error onto one job row.
+// Advance writes a caller-computed state, attempts count and error onto one job row. It
+// carries no failure kind: the worker calls advanceJobTx directly, and this wrapper has no
+// production caller (TestExtractionStore_AdvanceClearsFailureKindToNull).
 func (s *Store) Advance(ctx context.Context, tenantID, jobID, state, lastErr string, attempts int) error {
 	return db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
-		return advanceJobTx(ctx, tx, tenantID, jobID, state, lastErr, attempts)
+		return advanceJobTx(ctx, tx, tenantID, jobID, state, lastErr, attempts, "")
 	})
 }
 
@@ -106,18 +108,23 @@ func ensureJobTx(ctx context.Context, tx pgx.Tx, tenantID, documentID, extractor
 }
 
 // advanceJobTx turns zero rows affected into an error: the row is the caller's own, so a
-// no-op means the tenant did not match. An empty lastErr binds SQL NULL, the same
-// no-sentinels rule ReasonNone follows, which also means every advance clears a prior error.
-func advanceJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, state, lastErr string, attempts int) error {
+// no-op means the tenant did not match. An empty lastErr or kind binds SQL NULL, the same
+// no-sentinels rule ReasonNone follows, which also means every advance clears a prior error
+// and a prior kind (TestExtractionStore_AdvanceClearsFailureKindToNull).
+func advanceJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, state, lastErr string, attempts int, kind FailureKind) error {
 	var lastError any
 	if lastErr != "" {
 		lastError = lastErr
 	}
+	var failureKind any
+	if kind != "" {
+		failureKind = string(kind)
+	}
 
 	ct, err := tx.Exec(ctx,
-		`UPDATE extraction_jobs SET state = $3, attempts = $4, last_error = $5
+		`UPDATE extraction_jobs SET state = $3, attempts = $4, last_error = $5, failure_kind = $6
 		  WHERE tenant_id = $1 AND id = $2`,
-		tenantID, jobID, state, attempts, lastError)
+		tenantID, jobID, state, attempts, lastError, failureKind)
 	if err != nil {
 		return fmt.Errorf("extraction: advance job %s: %w", jobID, err)
 	}

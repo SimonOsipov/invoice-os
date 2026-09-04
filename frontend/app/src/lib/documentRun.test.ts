@@ -39,6 +39,7 @@ function job(over: Partial<ExtractionJob>): ExtractionJob {
     state: 'queued',
     created_at: '2026-08-30T10:00:00Z',
     last_error: null,
+    failure_kind: null,
     ...over,
   }
 }

@@ -1016,6 +1016,7 @@ export interface ExtractionJob {
   state: string
   created_at: string
   last_error: string | null
+  failure_kind: string | null
 }
 
 export interface ExtractionJobsResponse {
@@ -1082,6 +1083,7 @@ export interface ExtractionDetail {
   id: string
   document_id: string
   state: string
+  failure_kind: string | null
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

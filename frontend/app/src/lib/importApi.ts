@@ -167,6 +167,8 @@ export interface ExtractionJob {
   state: string
   created_at: string
   last_error: string | null
+  // Never absent: the Go tag carries no omitempty, so a job that never failed sends null.
+  failure_kind: string | null
 }
 
 export interface ExtractionJobsResponse {

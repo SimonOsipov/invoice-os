@@ -1875,3 +1875,54 @@ func TestExtractionDetail_FailureKindAgreesWithTheJobsList(t *testing.T) {
 		})
 	}
 }
+
+// EXTR-15-01 QA. The migration adds no backfill, so every job that dead-lettered before it
+// carries failure_kind NULL while its state and last_error say it failed. Both DTOs must serve
+// that row as an explicit null rather than omitting the key or inventing a kind: EXTR-15-04
+// renders the generic sentence on it, never an empty pill.
+func TestExtractionDetail_LegacyDeadLetteredJobCarriesANullFailureKind(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	r := rdReader(t)
+	reqCtx, tenantID, documentID := rdTenant(t, ctx, "active")
+	// Seeded exactly as a pre-migration row reads: terminal, with an error, and no kind.
+	jobID := rdSeedJob(t, ctx, tenantID, documentID, "dead_lettered", time.Now().UTC(), stPtr("legacy: extraction failed"))
+	if got := stJobFailureKind(t, ctx, jobID); got != nil {
+		t.Fatalf("the seeded legacy row carries failure_kind %q, want NULL -- it is no longer a legacy row", *got)
+	}
+
+	detail, err := r.Detail(reqCtx, jobID)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobID, err)
+	}
+	db, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("marshal the detail: %v", err)
+	}
+	if got := rvdJSONKey(t, db, "failure_kind"); got != "null" {
+		t.Errorf("the legacy job's detail reports failure_kind %s, want null", got)
+	}
+	// The state half: null must mean "no kind recorded", not "nothing failed".
+	if detail.State != "dead_lettered" {
+		t.Errorf("the legacy job's detail reports state %q, want dead_lettered", detail.State)
+	}
+
+	resp, err := r.JobsForDocument(reqCtx, documentID)
+	if err != nil {
+		t.Fatalf("JobsForDocument for %s: %v", documentID, err)
+	}
+	if len(resp.Jobs) != 1 {
+		t.Fatalf("the document holds %d job(s), want 1", len(resp.Jobs))
+	}
+	jb, err := json.Marshal(resp.Jobs[0])
+	if err != nil {
+		t.Fatalf("marshal the job state: %v", err)
+	}
+	if got := rvdJSONKey(t, jb, "failure_kind"); got != "null" {
+		t.Errorf("the legacy job's list entry reports failure_kind %s, want null", got)
+	}
+	if resp.Jobs[0].LastError == nil {
+		t.Error("the legacy job's list entry reports a nil last_error; the row was seeded with one")
+	}
+}

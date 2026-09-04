@@ -35,9 +35,10 @@ func (s *Store) EnsureJob(ctx context.Context, tenantID, documentID, extractor, 
 	return job, err
 }
 
-// Advance writes a caller-computed state, attempts count and error onto one job row. It
-// carries no failure kind: the worker calls advanceJobTx directly, and this wrapper has no
-// production caller (TestExtractionStore_AdvanceClearsFailureKindToNull).
+// Advance writes a caller-computed state, attempts count and error onto one job row. It takes
+// no failure kind: the worker calls advanceJobTx directly, and this wrapper is test-only. The
+// "" it passes clears a prior kind (TestExtractionStore_AdvanceClearsFailureKindToNull); no
+// test pins the zero-production-callers claim, so re-measure it before relying on it.
 func (s *Store) Advance(ctx context.Context, tenantID, jobID, state, lastErr string, attempts int) error {
 	return db.WithinTenantTx(ctx, s.Pool, tenantID, func(tx pgx.Tx) error {
 		return advanceJobTx(ctx, tx, tenantID, jobID, state, lastErr, attempts, "")

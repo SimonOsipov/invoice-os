@@ -2516,3 +2516,57 @@ func TestExtractWorker_NilTextKeepsTheExtractorPath(t *testing.T) {
 		t.Errorf("the success event carries FailureKind %q, want empty", evs[0].FailureKind)
 	}
 }
+
+// EXTR-15-01 QA. River replays a non-terminal job, so the column is written more than once for
+// one row. Each advance overwrites: the second stage's kind replaces the first's rather than
+// accumulating beside it, and the attempt that finally succeeds clears it. Three attempts on
+// ONE extraction_jobs row -- ensureJobTx keys off river_job_id, so the shared id is what makes
+// this a replay rather than three separate jobs.
+func TestExtractWorker_FailureKindOverwritesOnReplayAndClearsOnSuccess(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	boom := errors.New("extr-15-01: the stage under test refused")
+
+	const riverJobID = int64(901504)
+
+	// Attempt 1 of 3: the opener fails. Retries remain, so the state is "failed", which Work
+	// does not treat as terminal -- attempt 2 re-enters the stage chain.
+	if err := wkWorkerAudit(t, wkOK(), &wkOpener{err: boom}, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("attempt 1 returned %v, want the opener's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "failed")
+	if got := stJobFailureKind(t, ctx, xid); got == nil || *got != string(extraction.FailureDocumentUnavailable) {
+		t.Fatalf("attempt 1 stored failure_kind %v, want %q -- attempt 2 would then prove nothing",
+			got, extraction.FailureDocumentUnavailable)
+	}
+
+	// Attempt 2 of 3: a DIFFERENT stage fails on the same row.
+	if err := wkWorkerText(t, wkOK(), wkNewOpener(), &wkErrReader{err: boom}, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("attempt 2 returned %v, want the text reader's error", err)
+	}
+	stAssertJobState(t, ctx, xid, "failed")
+	got := stJobFailureKind(t, ctx, xid)
+	if got == nil {
+		t.Fatalf("attempt 2 left failure_kind NULL, want %q", extraction.FailureTextNotRead)
+	}
+	// Equality, not Contains: a COALESCE keeps attempt 1's kind and a concatenating writer
+	// keeps both, and only an exact match refuses each.
+	if *got != string(extraction.FailureTextNotRead) {
+		t.Errorf("the replay stored failure_kind %q, want exactly %q -- the write accumulated rather than overwrote",
+			*got, extraction.FailureTextNotRead)
+	}
+
+	// Attempt 3 of 3 settles cleanly. A reader that sees state='succeeded' beside a non-NULL
+	// failure_kind is the bug the clear-on-clean-advance rule closes.
+	if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("attempt 3: %v", err)
+	}
+	stAssertJobState(t, ctx, xid, "succeeded")
+	if got := stJobFailureKind(t, ctx, xid); got != nil {
+		t.Errorf("the succeeding attempt left failure_kind %q, want SQL NULL", *got)
+	}
+}

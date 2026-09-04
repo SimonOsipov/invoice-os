@@ -1670,3 +1670,115 @@ func TestExtractionStore_AdvanceClearsFailureKindToNull(t *testing.T) {
 	}
 	stAssertJobState(t, ctx, job.ID, "succeeded")
 }
+
+// ---------------------------------------------------------------------------
+// EXTR-15-01 QA — adversarial coverage for failure_kind
+// ---------------------------------------------------------------------------
+
+// The new column rides tenant_isolation (FOR ALL, USING only) rather than a policy of its own,
+// so the coverage is assumed, not stated. This proves it: tenant A can neither read nor
+// overwrite tenant B's kind, and the tenant-B control rules out a query that reaches nothing.
+func TestRLS_ExtractionJobFailureKindIsNotReadableOrWritableAcrossTenants(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	h := stRequire(t)
+	s := stStore(t)
+	tenantA, _ := stTenant(t, ctx)
+	tenantB, documentB := stTenant(t, ctx)
+
+	jobB, err := s.EnsureJob(ctx, tenantB, documentB, stExtractor, stExtractorVersion, 901502)
+	if err != nil {
+		t.Fatalf("EnsureJob for tenant B: %v", err)
+	}
+	stPlantFailureKind(t, ctx, jobB.ID, "text_not_read")
+
+	readAs := func(tenantID string) []string {
+		t.Helper()
+		var out []string
+		if err := db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
+			rows, qErr := tx.Query(ctx, `SELECT failure_kind FROM extraction_jobs WHERE id = $1`, jobB.ID)
+			if qErr != nil {
+				return qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var k *string
+				if sErr := rows.Scan(&k); sErr != nil {
+					return sErr
+				}
+				out = append(out, fmt.Sprintf("%v", k != nil && *k == "text_not_read"))
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read failure_kind as %s: %v", tenantID, err)
+		}
+		return out
+	}
+
+	// The control first: an absence proved by a query that returns nothing for anyone is no
+	// proof at all.
+	if got := readAs(tenantB); len(got) != 1 || got[0] != "true" {
+		t.Fatalf("tenant B reads its own failure_kind as %v, want [true]", got)
+	}
+	if got := readAs(tenantA); len(got) != 0 {
+		t.Errorf("tenant A read %d row(s) of tenant B's failure_kind (%v), want none", len(got), got)
+	}
+
+	var affected int64
+	if err := db.WithinTenantTx(ctx, h.app, tenantA, func(tx pgx.Tx) error {
+		tag, xErr := tx.Exec(ctx,
+			`UPDATE extraction_jobs SET failure_kind = 'extract_failed' WHERE id = $1`, jobB.ID)
+		affected = tag.RowsAffected()
+		return xErr
+	}); err != nil {
+		t.Fatalf("cross-tenant failure_kind UPDATE: %v", err)
+	}
+	if affected != 0 {
+		t.Errorf("an UPDATE of failure_kind naming only tenant B's job touched %d row(s) under tenant A", affected)
+	}
+	if got := stJobFailureKind(t, ctx, jobB.ID); got == nil || *got != "text_not_read" {
+		t.Errorf("tenant B's failure_kind is %v after tenant A's write, want text_not_read", got)
+	}
+}
+
+// The empty kind is refused by the CHECK and unreachable through the binding: both halves,
+// because either alone is satisfied by a writer that never emits ” for the wrong reason.
+func TestExtractionJobs_FailureKindEmptyStringIsRefusedAndUnreachable(t *testing.T) {
+	ctx := t.Context()
+	stRequireFailureKind(t, ctx)
+
+	h := stRequire(t)
+	s := stStore(t)
+	tenantID, documentID := stTenant(t, ctx)
+
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version, failure_kind)
+		 VALUES ($1, $2, $3, $4, '')`,
+		tenantID, documentID, stExtractor, stExtractorVersion)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Errorf("inserting an empty failure_kind returned %v, want SQLSTATE 23514", err)
+	}
+
+	// The unreachable half. An advance carrying the empty kind must bind SQL NULL: were it
+	// binding the literal '', the CHECK above would turn every clean advance into an error.
+	job, err := s.EnsureJob(ctx, tenantID, documentID, stExtractor, stExtractorVersion, 901503)
+	if err != nil {
+		t.Fatalf("EnsureJob: %v", err)
+	}
+	if err := s.Advance(ctx, tenantID, job.ID, "extracting", "", 1); err != nil {
+		t.Fatalf("an advance carrying the empty kind was refused: %v", err)
+	}
+	if got := stJobFailureKind(t, ctx, job.ID); got != nil {
+		t.Errorf("an advance carrying the empty kind stored %q, want SQL NULL", *got)
+	}
+	var empties int
+	if err := h.super.QueryRow(ctx,
+		`SELECT count(*) FROM extraction_jobs WHERE failure_kind = ''`).Scan(&empties); err != nil {
+		t.Fatalf("count empty-string kinds: %v", err)
+	}
+	if empties != 0 {
+		t.Errorf("%d extraction_jobs row(s) carry failure_kind = '', want 0", empties)
+	}
+}

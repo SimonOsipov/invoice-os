@@ -51,6 +51,7 @@ import type {
   ExtractionRegion,
   LineItemsResponse,
 } from '../lib/extractionReview'
+import { deadLetterRefusal } from '../lib/documentRun'
 import { linesFromFields, linesToPost } from '../lib/lineItems'
 import type { LineItemInput, LineRole } from '../lib/lineItems'
 import type { PlatformCtx } from '../types'
@@ -77,6 +78,44 @@ const LOADING_SPINNER = '.apic-loading-spin'
 // §6's ladder, in the story's own words: `failed` is NOT terminal (River retries), so it
 // takes the still-reading sentence beside `queued` and `extracting`.
 const UNSETTLED = ['queued', 'extracting', 'failed'] as const
+
+// -- EXTR-15-04 (task-830) ---------------------------------------------------------------
+//
+// The dead-letter branch stops rendering the COULD_NOT_READ constant and renders the same
+// per-kind sentence documentRun.ts hands the import run, so BOTH surfaces say one thing for
+// one failure. Read off that module, never re-typed: a second copy of the prose is the drift
+// this whole subtask exists to remove.
+//
+// The widened signature, aliased for the same reason documentRun.test.ts aliases it: TS
+// accepts the shipped one-arg export where a two-arg type is wanted, so this file compiles
+// before and after the change and its reds are assertion reds.
+type Refuse = (failureKind: string | null, lastError: string | null) => string
+const refuse: Refuse = deadLetterRefusal
+
+// migrations/20260904154655_extraction_jobs_failure_kind.sql's CHECK set. Floored against
+// that migration in documentRun.test.ts's TS15-1; this file consumes the list.
+const KINDS = [
+  'document_unavailable',
+  'pages_not_rendered',
+  'page_rows_not_written',
+  'extract_failed',
+  'text_not_read',
+] as const
+
+// ExtractionDetail carries failure_kind but NO last_error (extractionReview.ts:74-82), so this
+// surface can only ever render the null-detail variant. That is the sentence pinned below.
+function sentenceFor(kind: string | null): string {
+  return refuse(kind, null)
+}
+
+/** The six sentences the screen may render, keyed by the kind that produces each. */
+function allSentences(): [string, string][] {
+  return [...KINDS.map((k): [string, string] => [k, sentenceFor(k)]), ['<null>', sentenceFor(null)]]
+}
+
+function occurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1
+}
 
 const LETTER: ExtractionPage = { page: 1, width_px: 1275, height_px: 1651 } // US-Letter @150
 const A4: ExtractionPage = { page: 2, width_px: 1240, height_px: 1754 } // A4 @150
@@ -553,19 +592,43 @@ describe('the state ladder', () => {
     expect((root().textContent ?? '').replace(STILL_READING, '').trim()).toBe('')
   })
 
-  it('renders one sentence and no canvas for a dead-lettered job', async () => {
-    const dead = mkDetail({ state: 'dead_lettered' })
+  // EXTR-15-04 (task-830), RED. The single row this replaced asserted the ONE constant
+  // COULD_NOT_READ sentence for ANY dead-lettered job, and that the rendered text was only
+  // that. Both claims are retargeted here, per kind — neither is dropped: TS15-7/8 keep the
+  // first, TS15-9 keeps the second and strengthens it into a count.
+  it.each([...KINDS, null])('TS15-7/8: a dead-lettered job of kind %s renders that kind’s own sentence and no canvas', async (kind) => {
+    const dead = mkDetail({ state: 'dead_lettered', failure_kind: kind })
     expect(dead.pages.length, 'the fixture carries no page — the absence below is vacuous').toBe(3)
+    expect(dead.fields.length, 'the fixture carries no field — the absence below is vacuous').toBe(3)
 
     render(review({ ctx: serving(dead).ctx }))
     await flush()
 
-    // `D-9`: EXTR-15 owns the designed could-not-read screen. This is the minimum honest
-    // placeholder, and it must not be the still-reading sentence — River is done retrying.
     expect(screen.queryByTestId('extraction-canvas'), 'a dead-lettered job rendered the document pane').toBeNull()
-    expect(screen.getByText(COULD_NOT_READ), 'the could-not-read sentence did not render').toBeTruthy()
+    expect(frames(), 'a dead-lettered job rendered page frames').toHaveLength(0)
+    expect(screen.getByText(sentenceFor(kind)), `the ${kind} sentence did not render`).toBeTruthy()
     expect(screen.queryByText(STILL_READING), 'a dead-lettered job is not still being read').toBeNull()
-    expect((root().textContent ?? '').replace(COULD_NOT_READ, '').trim()).toBe('')
+    // The retired constant, by name: this is what reds a branch still rendering it.
+    expect(screen.queryByText(COULD_NOT_READ), 'the screen still renders the one-size-fits-all sentence').toBeNull()
+  })
+
+  it.each([...KINDS, null])('TS15-9: exactly one terminal sentence renders for kind %s, and it is that kind’s', async (kind) => {
+    render(review({ ctx: serving(mkDetail({ state: 'dead_lettered', failure_kind: kind })).ctx }))
+    await flush()
+
+    const text = root().textContent ?? ''
+    const six = allSentences()
+    // Floor: six DISTINCT sentences, or the count below cannot discriminate.
+    expect(new Set(six.map(([, s]) => s)).size, 'two kinds share one sentence — the count below is meaningless').toBe(6)
+
+    const shown = six.filter(([, s]) => text.includes(s)).map(([k]) => k)
+    // A count, not a presence check: a screen stacking two kinds' sentences at once still
+    // fails here, where a getByText on the right one would pass.
+    expect(shown, `the screen showed ${shown.length} terminal sentences, not exactly one`).toEqual([kind ?? '<null>'])
+
+    // "one sentence" read literally, as the row this replaced did: strip it and the screen
+    // has nothing else to say.
+    expect(text.replace(sentenceFor(kind), '').trim(), 'the dead-letter screen says something beside its sentence').toBe('')
   })
 
   it('leaves exactly one of the migration’s states to the else-branch, and it is succeeded', () => {
@@ -609,9 +672,53 @@ describe('the state ladder', () => {
     expect(document.querySelector(LOADING_SPINNER), 'a settled job still showed the loading surface').toBeNull()
     expect(screen.queryByText(STILL_READING), 'a settled job claimed to be still reading').toBeNull()
     expect(screen.queryByText(COULD_NOT_READ), 'a settled job claimed it could not be read').toBeNull()
+    // Retargeted with the branch (EXTR-15-04): once COULD_NOT_READ is gone from the shell the
+    // row above can only ever pass, so the absence is re-floored on the six live sentences.
+    const settledText = root().textContent ?? ''
+    expect(
+      allSentences().filter(([, s]) => settledText.includes(s)).map(([k]) => k),
+      'a settled job rendered a terminal failure sentence',
+    ).toEqual([])
     expect(canvasPane()).toBeTruthy()
     expect(fieldsPane()).toBeTruthy()
     expect(frames(), 'the settled control rendered no frame').toHaveLength(3)
+  })
+
+  it('TS15-10: the one-size-fits-all sentence is gone from the shell, and the still-reading one is not', () => {
+    const src = source()
+    // The CONTROL half. Without it a moved, emptied or renamed component reads as "zero
+    // occurrences" and this row passes on nothing at all. STILL_READING is the sibling
+    // constant this subtask deliberately leaves alone.
+    expect(occurrences(src, STILL_READING), 'the control needle is gone — the absence below is vacuous').toBe(1)
+
+    expect(occurrences(src, COULD_NOT_READ), 'the shell still declares the one-size-fits-all sentence').toBe(0)
+    // AC-7's last clause: the comment naming EXTR-15 as the owner of the real screen goes
+    // with the placeholder it annotates.
+    expect(occurrences(src, 'honest placeholder'), 'the placeholder comment outlived the placeholder').toBe(0)
+  })
+
+  it('TS15-11: the kind comes from the detail read, and no jobs-list value is reachable here', () => {
+    const src = source()
+    // Floors first, so the four absences below cannot pass on an empty or gutted scan.
+    expect(occurrences(src, 'getExtractionDetail'), 'the shell no longer reads its detail').toBeGreaterThan(0)
+    expect(src, 'the shell does not read the kind off the detail it already fetches').toContain('failure_kind')
+
+    for (const forbidden of ['getExtractions', 'ExtractionJob', 'pollVerdict', 'newestJob']) {
+      expect(
+        new RegExp(String.raw`\b${forbidden}\b`).test(src),
+        `the shell reaches for ${forbidden} — the jobs list is not on this surface`,
+      ).toBe(false)
+    }
+
+    // The prop contract on the other side of the mount, so a widened one is noticed here.
+    const app = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    expect(app, 'the scan ran over a moved or renamed App').toContain('<ExtractionReview')
+    const mount = /<ExtractionReview([^/>]*)\/>/.exec(app)
+    expect(mount, 'no ExtractionReview mount found — the prop pin below is vacuous').not.toBeNull()
+    expect(
+      Array.from((mount as RegExpExecArray)[1].matchAll(/(\w+)=/g), (m) => m[1]),
+      'ExtractionReview is mounted with props other than ctx and jobId',
+    ).toEqual(['ctx', 'jobId'])
   })
 })
 

@@ -11,6 +11,9 @@
 // `new Error('not implemented — …')` before returning anything; each message spells the
 // expected shape. That IS the correct RED reason (assertion / not-implemented), never an
 // import or collection error — same precedent as importRun.test.ts's own BULK-03 header.
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import * as documentRunModule from './documentRun'
@@ -74,6 +77,17 @@ function runFile(id: string, name: string): RunFile {
   return { id, name, groupId: '', outcome: { kind: 'pending' } }
 }
 
+// --- EXTR-15-04 (task-830) shared seam ----------------------------------------
+//
+// The widened signature. Declared as a TYPE and assigned, never called two-arg against the
+// shipped export: TS accepts a one-arg function where a two-arg type is wanted, so this
+// compiles against BOTH the shipped `deadLetterRefusal(lastError)` and the widened
+// `deadLetterRefusal(failureKind, lastError)`. The red below is therefore an assertion red,
+// not a package-wide `tsc` red that would mask every other typecheck failure. The arity
+// itself has its own oracle in TS15-1.
+type Refuse = (failureKind: string | null, lastError: string | null) => string
+const refuse: Refuse = deadLetterRefusal
+
 // --- POLL-1 ----------------------------------------------------------------
 
 describe('isTerminalExtractionState — only succeeded and dead_lettered end the poll (POLL-1, AC-5)', () => {
@@ -120,7 +134,9 @@ describe('pollVerdict — the budget expires into a failed outcome, never a hang
     // causes of a failed file distinguishable from each other, not one generic sentence.
     expect(pollBudgetRefusal().length).toBeGreaterThan(0)
     expect(verdict.reason).toBe(pollBudgetRefusal())
-    expect(pollBudgetRefusal()).not.toBe(deadLetterRefusal('pdfium: render failed'))
+    // Retargeted, not weakened, for EXTR-15-04's widened signature: the kind is now the
+    // first argument. Same claim -- the budget reason is not the dead-letter reason.
+    expect(pollBudgetRefusal()).not.toBe(refuse('pages_not_rendered', 'pdfium: render failed'))
   })
 })
 
@@ -958,7 +974,9 @@ describe('pollUntilSettled — a terminal state reports no word (POLL-8, Core AC
     expect(sleep).not.toHaveBeenCalled()
     expect(verdict.kind).toBe('failed')
     if (verdict.kind !== 'failed') throw new Error('unreachable — narrowed above')
-    expect(verdict.reason).toBe(deadLetterRefusal(LAST_ERROR))
+    // Retargeted for the widened signature. The fixture's failure_kind is null, so the
+    // expected sentence is the unknown-kind one -- still the verbatim relay this row claims.
+    expect(verdict.reason).toBe(refuse(null, LAST_ERROR))
   })
 })
 
@@ -1078,5 +1096,244 @@ describe('newestJob — a created_at tie is broken by first occurrence, not last
     expect([first, second]).toHaveLength(2)
     expect(newestJob([first, second])?.id).toBe('job-a')
     expect(newestJob([second, first])?.id).toBe('job-b')
+  })
+})
+
+// ==========================================================================================
+// EXTR-15-04 (task-830) — RED specs, Mode A. Six terminal sentences that say what was tried
+// and what to do next. Written BEFORE deadLetterRefusal/pollBudgetRefusal are widened; every
+// row here fails on its own assertion against the shipped one-sentence-fits-all bodies.
+// ==========================================================================================
+
+// The CHECK set of migrations/20260904154655_extraction_jobs_failure_kind.sql, in the order
+// internal/extraction/audit.go declares it. Floored against that migration in TS15-1, so the
+// list cannot drift from the column.
+const KINDS = [
+  'document_unavailable',
+  'pages_not_rendered',
+  'page_rows_not_written',
+  'extract_failed',
+  'text_not_read',
+] as const
+
+const NO_KIND = '<null>'
+
+/** The six sentences, keyed by the kind that produced each. `null` is the sixth. */
+function terminalSentences(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const k of KINDS) out[k] = refuse(k, null)
+  out[NO_KIND] = refuse(null, null)
+  return out
+}
+
+/** The seven strings AC-2 and AC-3 range over: the six plus the budget refusal. */
+function allRefusals(): Record<string, string> {
+  return { ...terminalSentences(), '<budget>': pollBudgetRefusal() }
+}
+
+// AC-2's "names a next action", as two independent properties rather than prose: the sentence
+// offers MANUAL work and says the person ENTERS something. Both matchers are proved
+// non-vacuous against a control in TS15-2 before any absence is read off them.
+const MANUAL = /\bmanual(?:ly)?\b/i
+const ENTRY = /\b(?:enter|enters|entered|entering|entry|type|typing|keying|by hand)\b/i
+
+const DEAD_PROMISE = 'open it again later'
+
+function readRepoFile(rel: string, needle: string): string {
+  const src = readFileSync(path.join(process.cwd(), rel), 'utf8')
+  // Planted needle: a moved, renamed or gutted file must fail loudly rather than yield ''
+  // and make every absence below vacuous.
+  expect(src.length, `the scan read nothing from ${rel}`).toBeGreaterThan(500)
+  expect(src, `the scan ran over a moved or renamed ${rel}`).toContain(needle)
+  return src
+}
+
+/** The View union's members, read from types.ts rather than re-typed here. */
+function viewMembers(): string[] {
+  const src = readRepoFile('src/types.ts', 'export type View =')
+  const line = /export type View =([^\n]*)/.exec(src)
+  expect(line, 'no View union found — the screen-name absence below would be vacuous').not.toBeNull()
+  return Array.from((line as RegExpExecArray)[1].matchAll(/'([a-z_]+)'/g), (m) => m[1])
+}
+
+/**
+ * The member this sentence names as a destination, or null. Two shapes: "<member> screen" and
+ * "go to/open/return to <member>". Deliberately NOT a bare substring test — 'create',
+ * 'detail' and 'reports' are ordinary English words and banning them outright would push the
+ * implementer into contorted prose without catching one real dead promise.
+ */
+function namesAScreen(sentence: string, members: readonly string[]): string | null {
+  for (const m of members) {
+    if (new RegExp(String.raw`\b${m}\b\s+(?:screen|page|tab|view|section)\b`, 'i').test(sentence)) return m
+    if (new RegExp(String.raw`\b(?:go to|open|return to|visit|navigate to|back to)\s+(?:the\s+)?${m}\b`, 'i').test(sentence)) return m
+  }
+  return null
+}
+
+describe('deadLetterRefusal — one sentence per failure kind (TS15-1, AC-1)', () => {
+  // Its own row so it cannot mask the sentence assertions below it: the signature and the
+  // prose are two separate ways for this to be wrong, and both must be measurable.
+  it('TS15-1: deadLetterRefusal takes the kind and the error', () => {
+    // Function.length is the declared parameter count. Without this row nothing here can
+    // tell a widened function from one that silently ignores its second argument.
+    // NOTE for whoever writes the body: a DEFAULT or REST parameter is not counted, so
+    // `(failureKind, lastError = null)` reads 1 here and keeps this red. Declare both plain.
+    expect(deadLetterRefusal.length, 'deadLetterRefusal still takes one argument').toBe(2)
+  })
+
+  it('TS15-1: the kind list is the migration’s CHECK set, and it yields six distinct sentences that echo no identifier', () => {
+    // Floor first: an empty or drifted kind list would make every row below vacuous.
+    const sql = readRepoFile('../../migrations/20260904154655_extraction_jobs_failure_kind.sql', 'ADD COLUMN failure_kind')
+    const declared = Array.from(sql.matchAll(/'([a-z_]+)'/g), (m) => m[1])
+    expect(declared.length, 'the migration’s CHECK named no kind').toBe(KINDS.length)
+    expect([...declared].sort(), 'the kind list has drifted from the column’s CHECK set').toEqual([...KINDS].sort())
+
+    const all = terminalSentences()
+    expect(Object.keys(all), 'six sentences: five kinds plus the unknown/absent one').toHaveLength(6)
+    expect(new Set(Object.values(all)).size, 'two kinds share one sentence').toBe(6)
+
+    for (const [key, sentence] of Object.entries(all)) {
+      expect(sentence.length, `${key} returned nothing`).toBeGreaterThan(40)
+      // The refusal is prose, not a relayed identifier. This is what reds a body that
+      // interpolates the kind token and calls it a sentence — the shipped shape.
+      expect(sentence, `${key}: the sentence echoes a snake_case identifier`).not.toMatch(/[a-z]_[a-z]/)
+      for (const k of KINDS) {
+        expect(sentence.includes(k), `${key}: the sentence names the raw kind ${k}`).toBe(false)
+      }
+    }
+  })
+})
+
+describe('every refusal names manual entry as the next step (TS15-2, AC-2)', () => {
+  it('TS15-2: the two matchers catch a control and reject a bare failure report', () => {
+    // Non-vacuity: without this, a matcher broken into never-matching would turn every row
+    // below into a silent pass on the day someone edits it.
+    const control = 'Nothing was read from it — enter this invoice manually to carry on.'
+    expect(MANUAL.test(control), 'the manual matcher does not match its own control').toBe(true)
+    expect(ENTRY.test(control), 'the entry matcher does not match its own control').toBe(true)
+    expect(MANUAL.test('Extraction failed for this document — boom')).toBe(false)
+  })
+
+  it.each(Object.keys(allRefusals()))('TS15-2: %s offers manual entry', (key) => {
+    const sentence = allRefusals()[key]
+    expect(sentence.length, `${key} returned nothing`).toBeGreaterThan(0)
+    expect(sentence, `${key} does not offer manual work`).toMatch(MANUAL)
+    expect(sentence, `${key} does not say what the person enters`).toMatch(ENTRY)
+  })
+})
+
+describe('no refusal promises a screen that does not exist (TS15-3, AC-3)', () => {
+  it('TS15-3: the View union carries no documents member — the reason the old promise was dead', () => {
+    const members = viewMembers()
+    // Two floors on the parse and one on the premise. If `documents` is ever added to View
+    // this row fails, and AC-3's whole rationale needs revisiting rather than silently
+    // outliving it.
+    expect(members.length, 'the View union parsed to nothing').toBeGreaterThan(10)
+    expect(members, 'the View parse lost a known member').toEqual(expect.arrayContaining(['dashboard', 'extraction']))
+    expect(members, 'View now has a documents member — "open it again later" may no longer be a dead promise').not.toContain('documents')
+  })
+
+  it('TS15-3: namesAScreen catches a real destination and clears an ordinary sentence', () => {
+    const members = viewMembers()
+    expect(namesAScreen('Open it again on the extraction screen.', members), 'the screen matcher is blind').toBe('extraction')
+    expect(namesAScreen('Go to the dashboard.', members), 'the screen matcher is blind to a navigation verb').toBe('dashboard')
+    expect(namesAScreen('The reader opened the file and got no text — enter the invoice manually.', members)).toBeNull()
+  })
+
+  it.each(Object.keys(allRefusals()))('TS15-3: %s promises no destination', (key) => {
+    const sentence = allRefusals()[key]
+    expect(sentence.toLowerCase(), `${key} still promises "${DEAD_PROMISE}"`).not.toContain(DEAD_PROMISE)
+    expect(sentence, `${key} carries a route`).not.toMatch(/[/#]/)
+    expect(namesAScreen(sentence, viewMembers()), `${key} names a screen`).toBeNull()
+  })
+})
+
+describe('extract_failed carries last_error as a subordinate clause (TS15-4, AC-4)', () => {
+  const KIND = 'extract_failed'
+
+  it('TS15-4: a non-empty last_error appears verbatim, and empty/null take the shipped fallback', () => {
+    const FALLBACK = 'the server gave no reason'
+
+    const withError = refuse(KIND, 'boom')
+    expect(withError, 'the server’s reason was dropped').toContain('boom')
+
+    const withEmpty = refuse(KIND, '')
+    const withNull = refuse(KIND, null)
+    expect(withEmpty, 'an empty last_error lost the fallback').toContain(FALLBACK)
+    expect(withNull, 'a null last_error lost the fallback').toContain(FALLBACK)
+    expect(withEmpty, 'empty and null must read identically').toBe(withNull)
+
+    // Discriminating floor: without this the three could all be one constant string.
+    expect(withError, 'the detail clause is not carried at all').not.toBe(withNull)
+
+    // The detail is SUBORDINATE, never the sentence: swapping the fallback for the real
+    // reason must reproduce the error variant exactly, so the surrounding prose is one
+    // sentence and not two different ones.
+    expect(
+      withNull.replace(FALLBACK, 'boom'),
+      'the two variants are different sentences, not one sentence with one clause swapped',
+    ).toBe(withError)
+
+    // And it is still a sentence with a next step, not a bare error report.
+    expect(withError, 'the error variant lost the next step').toMatch(MANUAL)
+  })
+})
+
+describe('the budget refusal states its budget in seconds, derived (TS15-5, AC-5)', () => {
+  it('TS15-5: the seconds come from EXTRACTION_POLL_BUDGET_MS, and the dead promise is gone', () => {
+    expect(EXTRACTION_POLL_BUDGET_MS, 'the budget constant is not a usable number').toBeGreaterThan(1000)
+    const seconds = String(Math.round(EXTRACTION_POLL_BUDGET_MS / 1000))
+    expect(seconds.length, 'the derived token is empty — the assertion below is vacuous').toBeGreaterThan(0)
+
+    const sentence = pollBudgetRefusal()
+    expect(sentence, 'the budget is not stated in seconds').toContain(seconds)
+    expect(sentence, 'the budget is printed in raw milliseconds').not.toContain(String(EXTRACTION_POLL_BUDGET_MS))
+
+    expect(sentence.toLowerCase(), `the budget sentence still promises "${DEAD_PROMISE}"`).not.toContain(DEAD_PROMISE)
+    expect(sentence, 'the budget sentence offers no next step').toMatch(MANUAL)
+  })
+})
+
+describe('pollVerdict passes the newest job’s failure_kind through (TS15-6, AC-6)', () => {
+  it.each([...KINDS])('TS15-6: a dead_lettered job of kind %s settles with that kind’s sentence', (kind) => {
+    const verdict = pollVerdict([job({ state: 'dead_lettered', failure_kind: kind, last_error: 'boom' })], 0)
+
+    expect(verdict).toEqual({ kind: 'failed', reason: refuse(kind, 'boom') })
+  })
+
+  it('TS15-6: the five kinds settle into five different reasons, and the newest job’s kind is the one used', () => {
+    const reasons = KINDS.map((k) => {
+      const v = pollVerdict([job({ state: 'dead_lettered', failure_kind: k, last_error: 'boom' })], 0)
+      if (v.kind !== 'failed') throw new Error(`kind ${k} did not settle as failed`)
+      return v.reason
+    })
+    // The whole point of AC-6: a reducer that drops the kind returns one string five times.
+    expect(new Set(reasons).size, 'pollVerdict returns the same reason for every failure kind').toBe(KINDS.length)
+
+    // newestJob picks by created_at, not array order — so the kind must travel with THAT job.
+    const older = job({ id: 'old', created_at: '2026-08-30T09:00:00Z', state: 'dead_lettered', failure_kind: 'document_unavailable', last_error: 'old' })
+    const newer = job({ id: 'new', created_at: '2026-08-30T11:00:00Z', state: 'dead_lettered', failure_kind: 'text_not_read', last_error: 'new' })
+    expect(pollVerdict([newer, older], 0)).toEqual({ kind: 'failed', reason: refuse('text_not_read', 'new') })
+  })
+})
+
+describe('the deployed dead-letter assertion tracks the shipped sentence (TS15-10b, AC-10)', () => {
+  // e2e/topology specs run only on the deploy gate, so this is their local oracle: the needle
+  // EXTR10-E2E-02 pins must be a fragment of the pages_not_rendered sentence and of no other,
+  // or that spec stays green on a substring the code no longer emits.
+  it('TS15-10b: the e2e needle is a discriminating fragment of the pages_not_rendered sentence', () => {
+    const spec = readRepoFile('../../e2e/topology/import-wizard.spec.ts', 'EXTR10-E2E-02')
+    const m = /const DEAD_LETTER_NEEDLE = '([^']+)'/.exec(spec)
+    expect(m, 'EXTR10-E2E-02 no longer pins its dead-letter reason through DEAD_LETTER_NEEDLE').not.toBeNull()
+    const needle = (m as RegExpExecArray)[1]
+    expect(needle.length, 'the needle is too short to identify a sentence').toBeGreaterThan(20)
+
+    const all = terminalSentences()
+    expect(all['pages_not_rendered'], 'the deployed spec pins text the pages_not_rendered sentence does not contain').toContain(needle)
+    const others = Object.entries(all).filter(([k]) => k !== 'pages_not_rendered')
+    expect(others.length, 'nothing to discriminate against').toBe(5)
+    for (const [k, sentence] of others) {
+      expect(sentence.includes(needle), `the needle also matches ${k} — it does not identify the kind`).toBe(false)
+    }
   })
 })

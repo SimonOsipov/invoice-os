@@ -2535,6 +2535,12 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
 // review-routing render, so the text this spec measures might never actually paint.
 // Holding the good pipeline open removes that race structurally: Promise.all cannot
 // resolve, so the card cannot unmount, until this spec explicitly releases it.
+// This upload is *.pdf bytes that are not a PDF, so pdfium fails to open it and the worker
+// dead-letters at pages_not_rendered (worker.go). EXTR-15-04 gives that kind its own sentence,
+// so the needle must be a fragment of THAT sentence and of no other kind's --
+// documentRun.test.ts's TS15-10b is this literal's only local oracle.
+const DEAD_LETTER_NEEDLE = 'Extraction failed for this document'
+
 test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating the card', async ({ page }, testInfo) => {
   // Upload+enqueue, ~20-40s River backoff to dead-letter (attempt^4s: 1s then 16s), two
   // widest-first sweeps, then the held release -- matches EXTR09-E2E-01's cold-fleet budget.
@@ -2656,7 +2662,7 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
     // The good pipeline is held open, so nothing can route the run away underneath this
     // wait -- the long reason is a stable state here, not a race.
     await expect(badRow, 'the dead-letter reason must render before the long-label sweep').toContainText(
-      'Extraction failed for this document',
+      DEAD_LETTER_NEEDLE,
       { timeout: 90_000 },
     )
     longSweep = await sweepWidths('long-label (dead-lettered)')

@@ -1916,6 +1916,22 @@ function uniqueTwoPagePdfBytes(): Buffer {
   return Buffer.concat([NATIVE_INVOICE_2P_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// Committed by EXTR-09-03. Image-only scan, no text layer -- settles document_text_layer =
+// unreadable. Same recipe, same permanent-enqueue-key reason as uniquePdfBytes().
+const SCANNED_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'scanned_invoice.pdf'))
+
+function uniqueScannedPdfBytes(): Buffer {
+  return Buffer.concat([SCANNED_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// Committed by EXTR-09-03. Image-only like SCANNED_INVOICE_PDF, but OCR-readable -- the pair
+// proves "no text layer" and "unreadable" are not the same verdict. Same recipe.
+const DENSE_INVOICE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'dense_invoice.pdf'))
+
+function uniqueDensePdfBytes(): Buffer {
+  return Buffer.concat([DENSE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -6408,6 +6424,105 @@ test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll exte
     body: JSON.stringify({ before, after }, null, 2),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-18-07 · the deployed proof: docling's real reading, not the mock's fixed shape ---
+//
+// Cannot run before EXTRACTOR=docling is set on production and this PR leaves draft (D-35) --
+// dev-env.yml gates the whole deployed e2e job on `pull_request.draft == false`. Authored and
+// pushed now; their first real run is that deploy gate, not this pass.
+
+test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-18-07 rich')
+  const detail = await openExtractionReview(page)
+
+  const field = detail.fields.find((f) => f.name === 'invoice_number')
+  expect(field, 'no invoice_number field on the wire').toBeTruthy()
+  // Equality, never a negation: a reachable-but-empty sidecar settles succeeded with the field
+  // absent, and `undefined !== 'MOCK-INV-0001'` would pass on a broken extractor.
+  expect(field!.value, "the settled number is not the fixture's printed number").toBe('ASC-2026-0918')
+  expect(field!.reason, 'a decided field must carry reason ""').toBe('')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render', async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'EXTR-18-07 scanned', {
+    name: 'scanned_invoice.pdf',
+    buffer: uniqueScannedPdfBytes(),
+  })
+  const detail = await openExtractionReview(page)
+
+  const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
+  expect(textLayer, 'no document_text_layer field on the wire').toBeTruthy()
+  expect(textLayer!.reason, 'a scan with no recoverable text must settle unreadable').toBe('unreadable')
+
+  // The pages must still render -- unreadable is a TEXT verdict, not a render failure. Distinct
+  // from pages_not_rendered, which this fixture must NOT trigger (EXTR18-E2E-03 is the control).
+  expect(detail.pages.length, 'a document with no page rows cannot prove the pages render').toBeGreaterThan(0)
+  await expect(page.getByTestId('extraction-page-1'), 'page 1 frame must render').toBeVisible()
+  const img = page.getByTestId('extraction-page-image-1')
+  await expect(img, "page 1's bytes must load").toBeVisible({ timeout: 60_000 })
+  // Polled, never read once: naturalWidth is 0 until the blob decodes.
+  await expect
+    .poll(
+      async () =>
+        img.evaluate((el) => {
+          const i = el as HTMLImageElement
+          return i.complete && i.naturalWidth > 0
+        }),
+      { message: "page 1's bytes never decoded", timeout: 60_000 },
+    )
+    .toBe(true)
+
+  const cell = page.getByTestId('extraction-field-document_text_layer')
+  await expect(cell, 'document_text_layer rendered no cell').toBeVisible()
+  await expect(cell.getByText(REASON_PILL.unreadable, { exact: true }), 'the unreadable pill did not render').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // D-23's one unmitigated residual risk: docling OCR timing on Railway hardware is unmeasured
+  // (docs/docling-sidecar.md's numbers explicitly disclaim Railway). If this reds on the
+  // invoice-detail 240s TIMEOUT rather than a value/shape mismatch, that is evidence the risk
+  // fired -- the fix is a targeted timeout bump here, done as a follow-up once observed, never
+  // guessed in advance.
+  await extractOneDocument(page, 'EXTR-18-07 dense', { name: 'dense_invoice.pdf', buffer: uniqueDensePdfBytes() })
+  const detail = await openExtractionReview(page)
+
+  // No document_text_layer row at all -- the OCR-succeeded half of the EXTR18-E2E-02 pair.
+  const textLayer = detail.fields.find((f) => f.name === 'document_text_layer')
+  expect(textLayer, 'an OCR-readable image page must carry no document_text_layer field').toBeUndefined()
+
+  const total = detail.fields.find((f) => f.name === 'total')
+  const currency = detail.fields.find((f) => f.name === 'currency')
+  expect(total, 'no total field on the wire').toBeTruthy()
+  expect(currency, 'no currency field on the wire').toBeTruthy()
+  expect(total!.reason, 'total must be decided').toBe('')
+  expect(currency!.reason, 'currency must be decided').toBe('')
+  expect(total!.value, 'total must carry a value').not.toBeNull()
+  expect(currency!.value, 'currency must carry a value').not.toBeNull()
+
+  // Not asserted: invoice_number. OCR reads the label as "INV0ICE NO:" (digit zero for letter
+  // O), the Tier-1 anchor misses, and the field settles missing (D-33). No decided-field floor
+  // above 4 either -- the measured run cleared 5 at exactly 5, zero margin.
+
+  const lines = wireLines(detail)
+  expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

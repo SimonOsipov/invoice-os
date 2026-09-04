@@ -1205,9 +1205,9 @@ export function isRowSelectable(row: Pick<InvoiceRecord, 'status' | 'approval'>)
 // Total over the causes it can HONESTLY name, not over every non-selectable row. Only
 // draft/validated are pre-submission (legalTransitions, store.go), so only there does a
 // submit block have a cause worth naming: an open run names the approval cause, a draft
-// names the not-validated one. Every later status returns null and the row renders no
-// reason -- its STATUS PILL is already the explanation, and "validate it first" beside an
-// accepted invoice is simply false. No new SPA string for the silent statuses
+// names the not-validated one. Every later status returns null -- its STATUS PILL is
+// already the explanation, and "validate it first" beside an accepted invoice is simply
+// false. No new SPA string for the silent statuses
 // ([gates-on-the-wire]); the two it does return come from skipReasonLabel (GAP-3), never a
 // fresh literal, so they stay byte-identical to the post-click skip panel. Never reads
 // `can_approve` (AC #7) -- this is the SUBMIT gate's reason. Pinned by A06-4's per-cell

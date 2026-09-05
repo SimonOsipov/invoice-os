@@ -407,6 +407,7 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 async function goToInvoices(page: Page): Promise<void> {
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'goToInvoices did not update the URL').toHaveURL(/\/invoices$/)
 }
 
 // Scoped to invoices-list so a batch-submit results panel showing the same number
@@ -596,6 +597,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await signInAs(page, 'firm')
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
 
   const membersTable = page.getByTestId('members-table')
@@ -612,6 +614,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await page.getByTestId('persona-toast-dismiss').click()
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(membersTable).toBeVisible()
   await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)

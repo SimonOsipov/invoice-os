@@ -31,7 +31,7 @@ import { createEntity, createInvoice, listInvoices, login, rollup, validateInvoi
 import { freshTin } from '../api/fixtures'
 import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
 import { WIDE_WIDTHS } from './layout'
-import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
 // nothing). The FLAT wire shape POST /v1/invoices takes -- supplier_tin/vat as strings --
@@ -114,8 +114,24 @@ function navButton(page: Page, label: string) {
   return sidebar(page).locator('nav.pf-nav-list').getByRole('button', { name: label })
 }
 
+// dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that would
+// pass on any trailing-slash path.
+const NAV_URL: Record<string, string | RegExp> = {
+  Overview: new URL('/', APP_URL).href,
+  Invoices: /\/invoices$/,
+  Approvals: /\/approvals$/,
+  Rules: /\/rules$/,
+  Customers: /\/customers$/,
+  Reports: /\/reports$/,
+  Workflows: /\/workflows$/,
+  Clients: /\/clients$/,
+  Audit: /\/audit$/,
+  Settings: /\/settings$/,
+}
+
 async function goTo(page: Page, label: string): Promise<void> {
   await navButton(page, label).click()
+  await expect(page, `goTo(${label}) did not update the URL`).toHaveURL(NAV_URL[label])
 }
 
 // navLabelSpan()/navIconSpan(): the two unclassed spans a nav button renders around its

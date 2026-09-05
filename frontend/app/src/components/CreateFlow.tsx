@@ -64,7 +64,7 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 22 }}>
         {/* "Cancel" implies undo, and on the review step there is nothing to undo: the
             invoices were persisted at import time (§10.10), the batch exists, and this
-            button does the identical setView('invoices') that "Finish · go to invoices"
+            button does the identical navigate('invoices') that "Finish · go to invoices"
             does 400px below it. Naming it after where it goes is the only honest label
             on a surface where everything is already saved. The other three steps keep
             "Cancel", where abandoning genuinely discards work in progress. */}

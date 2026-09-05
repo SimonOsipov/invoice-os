@@ -67,6 +67,7 @@ vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
   vi.stubGlobal('localStorage', createMemoryStorage())
+  window.history.replaceState(null, '', '/')
 })
 
 afterEach(() => {

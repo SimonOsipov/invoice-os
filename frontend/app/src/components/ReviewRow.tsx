@@ -135,7 +135,7 @@ export function Row({
   // (task-286) row already followed. Keyboard activation (role/tabIndex/onKeyDown) for
   // BOTH row surfaces is task-302 — no AC of this subtask covers it, and adding it only
   // here would preempt that ticket's own scope rather than close it; a fake `<a href>`
-  // is not an option either way, since this SPA has no router.
+  // is not an option either way, since the URL carries no ids yet.
   return (
     <>
       <div

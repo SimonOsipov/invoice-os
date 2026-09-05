@@ -183,7 +183,7 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 			return n == "TestCIRunFiltersReachEveryTestInThePackage" ||
 				strings.HasPrefix(n, "TestPurge") ||
 				strings.HasPrefix(n, "TestHandlerMapping") ||
-				strings.HasPrefix(n, "TestExtractionFailureKind")
+				strings.HasPrefix(n, "TestExtraction")
 		}
 		var historical []string
 		for _, n := range names {

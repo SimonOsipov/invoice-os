@@ -1011,3 +1011,57 @@ func TestProvisionResetRefusesWhenBootstrapDisabled(t *testing.T) {
 	}
 	assertResidueSurvivesProvision(t, cfg, "BootstrapFlag=false (PR-shaped environment, ResetFlag=true)")
 }
+
+// ---- EXTR-19-06 (AC-9): a job holding layout_tokens ------------------------
+
+// ltSeedJobWithTokens inserts one extraction job carrying layout_tokens under tenantID and
+// returns its id. Reset and the purge both delete the ROW, so nothing here reads the column
+// back afterwards -- there is no row left to read it from.
+func ltSeedJobWithTokens(t *testing.T, pool *pgxpool.Pool, tenantID, marker string) string {
+	t.Helper()
+	ctx := context.Background()
+
+	var documentID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO documents (tenant_id, storage_key, content_hash, size_bytes, filename)
+		 VALUES ($1, $2, $3, 1, $4) RETURNING id`,
+		tenantID, marker+"/doc.docx", strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), marker,
+	).Scan(&documentID); err != nil {
+		t.Fatalf("seed documents fixture: %v", err)
+	}
+
+	var jobID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version, layout_tokens)
+		 VALUES ($1, $2, 'mock', 'v1', $3::jsonb) RETURNING id`,
+		tenantID, documentID, `["Invoice No: ASC-2026-0919", "Total: NGN 4,300.00"]`,
+	).Scan(&jobID); err != nil {
+		t.Fatalf("seed an extraction job holding layout_tokens: %v", err)
+	}
+	if n := mustCount(t, pool,
+		`SELECT count(*) FROM extraction_jobs WHERE id = $1 AND layout_tokens IS NOT NULL`, jobID); n != 1 {
+		t.Fatalf("precondition: the seeded job holds no layout_tokens, so the row's later absence proves nothing about the column")
+	}
+	return jobID
+}
+
+// LT-10 (AC-9). db.Reset TRUNCATEs extraction_jobs, so retention ends with the row.
+func TestResetClearsAJobHoldingLayoutTokens(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Errorf("restore curated demo state after reset test: %v", err)
+		}
+	})
+
+	jobID := ltSeedJobWithTokens(t, pool, demoTenantID, "reset-layout-tokens-"+uuid.NewString())
+
+	if err := db.Reset(ctx, superDSN); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, jobID); n != 0 {
+		t.Errorf("the job holding layout_tokens survived Reset (%d row(s)), want 0", n)
+	}
+}

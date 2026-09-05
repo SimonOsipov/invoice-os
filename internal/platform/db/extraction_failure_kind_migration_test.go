@@ -172,8 +172,12 @@ func TestExtractionFailureKind_DownDropsExactlyThatColumn(t *testing.T) {
 	if !failureKindColumnPresent(t, ctx, tx) {
 		t.Fatalf("extraction_jobs.%s is absent after the Up body replayed", failureKindColumn)
 	}
-	if afterUp := extractionJobsColumns(t, ctx, tx); !slices.Equal(afterUp, before) {
-		t.Errorf("columns after the Down/Up round trip = %v, want the original %v", afterUp, before)
+	// Set equality, not ordinal: the Down drops failure_kind and the Up re-adds it LAST, so any
+	// column stamped after it swaps ordinals across the round trip. The claim here is that the
+	// Down took nothing it does not own, which is a set property.
+	afterUp := slices.Sorted(slices.Values(extractionJobsColumns(t, ctx, tx)))
+	if wantSet := slices.Sorted(slices.Values(before)); !slices.Equal(afterUp, wantSet) {
+		t.Errorf("columns after the Down/Up round trip = %v, want the original set %v", afterUp, wantSet)
 	}
 }
 

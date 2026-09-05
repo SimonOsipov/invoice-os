@@ -113,3 +113,9 @@ func AppendAnchorRuleForTest(ctx context.Context, tx pgx.Tx, tenantID, fingerpri
 func JobLayoutForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLayout, bool, error) {
 	return jobLayoutTx(ctx, tx, tenantID, jobID)
 }
+
+// MaxLayoutTokensJSONForTest and LayoutTokensStorableForTest hand the external test package
+// EXTR-19-06's cap and gate: worker_db_test.go is package extraction_test and can name neither.
+const MaxLayoutTokensJSONForTest = maxLayoutTokensJSON
+
+func LayoutTokensStorableForTest(tokens []string) ([]byte, bool) { return layoutTokensStorable(tokens) }

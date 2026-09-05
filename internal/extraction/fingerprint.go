@@ -274,6 +274,25 @@ func MarshalAnchorObservations(obs []AnchorObservation) ([]byte, error) {
 	return json.Marshal(obs)
 }
 
+// maxLayoutTokensJSON caps extraction_jobs.layout_tokens at the column's own CHECK. The gate
+// measures len(json.Marshal) plus one byte per comma: Postgres renders a jsonb array with ", "
+// and Go does not, so char_length(layout_tokens::text) runs up to N-1 chars longer than the Go
+// encoding (TestRLS_ABoxlessJobAtExactlyTheTokenCapStoresItsTokens).
+const maxLayoutTokensJSON = 262144
+
+// layoutTokensStorable encodes page-1's token texts for extraction_jobs.layout_tokens. ok is
+// false when the value cannot be stored; a refusal writes SQL NULL and leaves the job
+// succeeded, and nothing here truncates.
+//
+// MODE-A STUB (task-908, Test-first: yes): returns (nil, false) for every input so EXTR-19-06's
+// pre-authored specs compile and red on their assertions rather than on a missing symbol.
+// Precedent: db.Bootstrap's stub at ab26ca94. The executor writes the real body -- normalise a
+// nil slice to []string{} (json.Marshal of nil is `null`, which jsonb_typeof refuses), marshal,
+// then refuse on a marshal error, on len(b)+max(0,len(tokens)-1) > maxLayoutTokensJSON, and on
+// any token holding a raw NUL, which jsonb_in refuses before any CHECK runs.
+// TestLayoutTokensGate_AgreesWithPostgresOverTheWholeByteSpace is the oracle.
+func layoutTokensStorable(tokens []string) ([]byte, bool) { return nil, false }
+
 // UnmarshalAnchorObservations reads the column back. An unknown key is ignored, as ParseRule
 // ignores one; an element outside the normalised box or below page 1 is an error.
 func UnmarshalAnchorObservations(raw []byte) ([]AnchorObservation, error) {

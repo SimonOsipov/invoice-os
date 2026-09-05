@@ -1291,3 +1291,21 @@ func TestPurgeBoundedByStatementTimeout(t *testing.T) {
 		}
 	})
 }
+
+// LT-11 (AC-9). The boot-time purge deletes the row too: demopurge.go's table list is
+// column-blind, and TestPurgeTableListCoversEveryTenantOwnedTable is what keeps it complete.
+func TestPurgeClearsAJobHoldingLayoutTokens(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+
+	reseedOnCleanup(t, superDSN)
+	jobID := ltSeedJobWithTokens(t, pool, demoTenantID, "purge-layout-tokens-"+uuid.NewString())
+
+	if _, err := db.PurgeDemoTenants(ctx, superDSN); err != nil {
+		t.Fatalf("PurgeDemoTenants: %v", err)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, jobID); n != 0 {
+		t.Errorf("the job holding layout_tokens survived the purge (%d row(s)), want 0", n)
+	}
+}

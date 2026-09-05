@@ -3881,3 +3881,178 @@ func TestRLS_ExtractionFieldCorrectionsLengthAndPageBounds(t *testing.T) {
 		assertCorrectionCheckFires(t, insert(c.field, c.actor, c.page), c.what, c.constraint)
 	}
 }
+
+// ---- EXTR-19-06: extraction_jobs.layout_tokens ------------------------------------------
+
+// ltCap is the column's own serialised ceiling, in the chars char_length(jsonb::text) counts.
+// Postgres renders a jsonb array with ", " and Go does not, so this is NOT len(json.Marshal).
+const ltCap = 262144
+
+// ltArrayRendering builds an n-element ASCII JSON array already in Postgres's own canonical
+// rendering -- "[" + `"e"` joined by ", " + "]" -- measuring exactly want chars. Computed by
+// padding the last element, so no fixture here is hand-counted.
+func ltArrayRendering(t *testing.T, n, want int) string {
+	t.Helper()
+	elems := make([]string, n)
+	for i := range elems {
+		elems[i] = "x"
+	}
+	render := func() string {
+		quoted := make([]string, n)
+		for i, e := range elems {
+			quoted[i] = `"` + e + `"`
+		}
+		return "[" + strings.Join(quoted, ", ") + "]"
+	}
+	if out := render(); len(out) > want {
+		t.Fatalf("a %d-element array already renders as %d chars, over the %d wanted", n, len(out), want)
+	} else {
+		elems[n-1] += strings.Repeat("x", want-len(out))
+	}
+	out := render()
+	if len(out) != want {
+		t.Fatalf("the array fixture is %d chars, want exactly %d", len(out), want)
+	}
+	return out
+}
+
+// LT-8 (AC-7). The type conjunct and the size conjunct, each with its own case, plus the JSON
+// null literal: json.Marshal of a nil slice is `null` and jsonb_typeof('null') is not 'array',
+// so a writer that forgets to normalise nil dead-letters the job. Must-fail mutation: drop the
+// jsonb_typeof conjunct -- the object case reds.
+func TestRLS_ExtractionJobsLayoutTokensBounds(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "LT-8/a.pdf")
+	defer cleanupDoc()
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_jobs WHERE id = ANY($1)`, probes)
+	}()
+
+	// Both sides of the boundary, computed rather than hand-counted: the accepted case must sit
+	// exactly ON the cap, or nothing here guards it.
+	atCap := ltArrayRendering(t, 500, ltCap)
+	overCap := ltArrayRendering(t, 500, ltCap+1)
+	atCapID := ""
+
+	for _, c := range []struct {
+		what    string
+		tokens  any // nil encodes SQL NULL; a Go string is cast ::jsonb
+		wantErr bool
+	}{
+		{"a JSON object", `{"a":1}`, true},
+		{"a JSON string scalar", `"x"`, true},
+		{"the JSON null literal", `null`, true},
+		{"an array over the cap", overCap, true},
+		{"a 300 KiB array", ltArrayRendering(t, 500, 307200), true},
+		{"SQL NULL", nil, false},
+		{"a 3-element array", `["Invoice No: X-1","Buyer: Honeywell Group","Total: 300.00"]`, false},
+		{"an empty JSON array", `[]`, false},
+		{"an array saturating the cap", atCap, false},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		if c.what == "an array saturating the cap" {
+			atCapID = id
+		}
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx,
+				`INSERT INTO extraction_jobs (id, tenant_id, document_id, extractor, extractor_version, layout_tokens)
+				 VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+				id, h.tenantA, docA, ejExtractor, ejExtractorVersion, c.tokens)
+			return e
+		})
+		if !c.wantErr {
+			if err != nil {
+				t.Errorf("INSERT with %s: want success, got: %v", c.what, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("INSERT with %s succeeded, want CHECK violation (SQLSTATE 23514)", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("INSERT with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != "extraction_jobs_layout_tokens_check" {
+			t.Errorf("INSERT with %s tripped constraint %q, want extraction_jobs_layout_tokens_check", c.what, got)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM extraction_jobs WHERE id = $1`, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+
+	// The accepted boundary case is only a boundary if Postgres re-renders it at the cap: the
+	// fixture is written in PG's canonical form, and this is what proves that claim.
+	if atCapID != "" {
+		var rendered *int
+		if err := h.super.QueryRow(ctx,
+			`SELECT char_length(layout_tokens::text) FROM extraction_jobs WHERE id = $1`, atCapID).Scan(&rendered); err != nil {
+			t.Fatalf("read back the saturating array: %v", err)
+		}
+		if rendered == nil || *rendered != ltCap {
+			t.Errorf("the saturating array renders as %v chars, want exactly %d -- the fixture is not on the boundary the CHECK measures", rendered, ltCap)
+		}
+	}
+}
+
+// LT-9 (AC-8). Inheritance is a claim: a new column on an already-policied table is only
+// covered because the policy is row-scoped and has no column list. This reads it.
+func TestRLS_LayoutTokensAreNotReadableAcrossTenants(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "LT-9/a.pdf")
+	defer cleanupDoc()
+	jobA, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	const tokens = `["Invoice No: ASC-2026-0919","Total: NGN 4,300.00"]`
+	if _, err := h.super.Exec(ctx,
+		`UPDATE extraction_jobs SET layout_tokens = $2::jsonb WHERE id = $1`, jobA, tokens); err != nil {
+		t.Fatalf("store layout_tokens on tenant A's job: %v -- without a stored value the zero below is not isolation", err)
+	}
+
+	read := func(tenantID string) []string {
+		t.Helper()
+		var out []string
+		if err := db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
+			rows, e := tx.Query(ctx, `SELECT layout_tokens::text FROM extraction_jobs WHERE id = $1`, jobA)
+			if e != nil {
+				return e
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var raw *string
+				if e := rows.Scan(&raw); e != nil {
+					return e
+				}
+				out = append(out, ltNullable(raw))
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read layout_tokens as %s: %v", tenantID, err)
+		}
+		return out
+	}
+
+	// Control first: the same query under A returns the row, so B's zero is RLS and not a bad id.
+	if got := read(h.tenantA); len(got) != 1 || !strings.Contains(got[0], "ASC-2026-0919") {
+		t.Fatalf("tenant A read %v for its own job, want one row carrying its tokens", got)
+	}
+	if got := read(h.tenantB); len(got) != 0 {
+		t.Errorf("tenant B read %d row(s) %v for tenant A's job, want zero rows -- a redacted NULL would still confirm the row exists", len(got), got)
+	}
+}
+
+func ltNullable(p *string) string {
+	if p == nil {
+		return "NULL"
+	}
+	return *p
+}

@@ -434,9 +434,9 @@ jobs:
         # test. Placed after the step above because that one ends with DownTo(0) +
         # MigrateUp, which wipes anything seeded before it.
         #
-        # TestExtractionFailureKind (EXTR-15-01): the reset->up round-trip above cannot catch
+        # TestExtraction* (EXTR-15-01, EXTR-19-06): the reset->up round-trip above cannot catch
         # an over-broad Down, because the re-up restores whatever it took with it.
-        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestDemoRepairMigration|TestExtractionFailureKind' ./internal/platform/db/...
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestDemoRepairMigration|TestExtraction' ./internal/platform/db/...
       - name: Bootstrap-SQL pgx-caller suite (fail-closed GUCs, idempotency, rotation) + per-test visibility & skip gate
         # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its three
         # role passwords from session GUCs instead of psql-only \set/:'var', so a pgx

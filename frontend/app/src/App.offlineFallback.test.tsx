@@ -147,4 +147,15 @@ describe('offline fallback: a rejected mint still seats the visitor (F-021)', ()
       expect(capturedCtx, 'Sidebar never rendered -- the app dead-ended instead of opening a workspace').toBeDefined(),
     )
   })
+
+  // Adversarial: the catch branch does not narrow on err's type, so a rejection that isn't
+  // an ApiError (a network abort, a raw TypeError) must fall back the same way.
+  it('OFF-6: a non-ApiError rejection still seats the visitor unverified', async () => {
+    signInMock.mockRejectedValueOnce(new TypeError('network aborted'))
+    await renderAppFresh()
+
+    const parsed = await waitForPersistedSession()
+    expect(parsed.token).toBeNull()
+    expect(parsed.verified).toBe(false)
+  })
 })

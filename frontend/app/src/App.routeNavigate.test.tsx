@@ -32,6 +32,18 @@ const MEMBER: Member = {
   isYou: false,
 }
 
+// Same subject as the seat -- becomePersona short-circuits into returnToSeat for this row
+// (App.standIn.test.tsx's SEAT_AS_MEMBER, same shape).
+const SEAT_AS_MEMBER: Member = {
+  id: SEAT_SESSION.persona.subject,
+  name: SEAT_SESSION.persona.name,
+  initials: SEAT_SESSION.persona.initials,
+  email: null,
+  role: 'admin',
+  status: 'active',
+  isYou: true,
+}
+
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
   const store = new Map<string, string>()
@@ -364,5 +376,152 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
     // reset to 'form' is switchClient's OWN pre-existing behaviour, unrelated to this fix.
     expect(ctx.auditPrefilter, 'auditPrefilter must behave exactly as it does on main').toBeNull()
     expect(ctx.createStep, 'createStep must behave exactly as it does on main').toBe('form')
+  })
+
+  // Closes a gap QA found by mutation: auditPrefilter is never armed in the test above, so
+  // a switchClient that ALSO cleared it would pass unnoticed -- over-clearing is as much a
+  // Q6 violation as under-clearing. Both handlers fire inside ONE act() so React batches
+  // them into a single commit with view === 'dashboard', never 'audit' -- the consume-once
+  // effect (App.tsx:545-547) only fires when view === 'audit', so it cannot intervene and
+  // mask a switchClient regression here.
+  it('switchClient_leavesAuditPrefilterUntouchedEvenWhenArmedInTheSameCommit', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openAuditForInvoice(INVOICE_ID, 'INV-1')
+      capturedCtx!.switchClient('other-entity-005')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'switchClient must still win the URL').toBe('/')
+    expect(ctx.auditPrefilter, 'switchClient must not clear an atom armed in the same commit').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: 'INV-1',
+    })
+  })
+})
+
+describe('QA adversarial: navigate() carries the hash even though the review mirror clears it after', () => {
+  it('nav_thePushCallCarriesWhateverHashWasLiveAtCallTime', async () => {
+    // A real review hash, not an arbitrary fragment: an unrecognised fragment is stripped
+    // by the PRE-EXISTING review mirror (App.tsx:533-539) on the very first mount, which
+    // would confound this test before navigate() ever runs.
+    await bootAt(`/create#review/${REVIEW_ID}`)
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.nav('audit')
+    })
+    const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/audit'))
+    expect(call, 'no pushState call to /audit was recorded').toBeDefined()
+    // Read the SPY's recorded argument, not the settled DOM: the review mirror clears the
+    // hash in the very next effect once view leaves 'create' (ROUTE-01-06's own AC), which
+    // would mask a navigate() that dropped the hash on its own push.
+    expect(
+      call![2],
+      "navigate() must carry forward whatever hash was live at call time, per decision [one-writer-rule]",
+    ).toBe(`/audit#review/${REVIEW_ID}`)
+  })
+})
+
+describe('QA adversarial: returnToSeat corrects the URL by itself, not only via a Workspace remount', () => {
+  // Unlike becomePersona's own test above (a different subject, so Workspace remounts and
+  // the mount-alignment effect could paper over a dropped replaceState), this call keeps
+  // standIn at null throughout -- activeSession's identity never changes, so Workspace does
+  // NOT remount and the ONLY URL write available is returnToSeat's own line (App.tsx:1591).
+  it('returnToSeat_correctsTheUrlAndAddsNoEntryWithNoStandInToReturnFrom', async () => {
+    await bootAt('/create', { demoMode: true })
+    const lengthBefore = window.history.length
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
+    })
+    requireCtx()
+    expect(window.location.pathname, 'returnToSeat must also land the URL on the carried view').toBe('/invoices')
+    expect(window.history.length, 'returnToSeat must add no history entry').toBe(lengthBefore)
+    // BUG (App.tsx:1587-1591), found by this test: setCarriedView + replaceState fire
+    // unconditionally, but the toast three lines below is correctly gated on
+    // wasStandingIn (:1592). With no stand-in to return from, activeSession's identity
+    // never changes, so Workspace does not remount and this line never runs -- ctx.view
+    // stays 'create' while the address bar now claims '/invoices'. it.fails() so this
+    // stays visible without red-blocking the suite; delete the wrapper once the write
+    // above is gated on wasStandingIn like the toast is.
+  })
+
+  it.fails('BUG: returnToSeat desyncs ctx.view from the URL when there was no stand-in to return from', async () => {
+    await bootAt('/create', { demoMode: true })
+    await act(async () => {
+      await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname).toBe('/invoices')
+    expect(ctx.view, 'the screen must agree with the address bar it just rewrote').toBe('invoices')
+  })
+})
+
+describe('QA adversarial: switchClient from /extraction, the combined path+atom outcome', () => {
+  it('switchClient_fromExtractionPushesDashboardAndDropsTheJobInOneStep', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    expect(window.location.pathname, 'sanity').toBe('/extraction')
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-006')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'switchClient from /extraction must land on the dashboard path').toBe('/')
+    expect(window.history.length, 'switchClient must add exactly one history entry').toBe(lengthBefore + 1)
+    expect(ctx.extractionJobId, 'the job must not survive the switch').toBeNull()
+  })
+})
+
+describe('QA adversarial: rapid successive navigations', () => {
+  it('nav_rapidSuccessiveNavigationsLandOnTheFinalViewWithEveryEntryCounted', async () => {
+    await bootAt('/')
+    const lengthBefore = window.history.length
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+      capturedCtx!.nav('audit')
+      capturedCtx!.nav('settings')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'the final push must win').toBe('/settings')
+    expect(window.history.length, 'all three pushes must be counted, none coalesced').toBe(lengthBefore + 3)
+    expect(ctx.view, 'ctx.view must track the final navigation').toBe('settings')
+  })
+})
+
+describe('QA adversarial: a nav from a boot-seeded view, not a view reached by a click', () => {
+  it('nav_fromABootSeededViewPushesCorrectly', async () => {
+    // ROUTE-01-02's boot seed, not navigate() -- the view is live before any handler runs.
+    await bootAt('/audit')
+    const ctx0 = requireCtx()
+    expect(ctx0.view, 'sanity: boot must seed audit directly').toBe('audit')
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      capturedCtx!.nav('settings')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'nav must push from a boot-seeded view exactly as from a clicked one').toBe(
+      '/settings',
+    )
+    expect(window.history.length, 'nav must add exactly one entry').toBe(lengthBefore + 1)
+    expect(ctx.view).toBe('settings')
+  })
+})
+
+describe('QA adversarial: navigating to the current view still pushes (documented, not asserted as a bug)', () => {
+  // No AC in this subtask asks navigate() to dedupe a same-view call. Pinning the CURRENT
+  // behaviour so a future change is a deliberate decision, not a silent regression either
+  // way. Two Backs to leave one screen is a real UX question -- reported to the user, not
+  // fixed here (QA does not change production behaviour).
+  it('nav_toTheCurrentViewStillPushesADuplicateEntry', async () => {
+    await bootAt('/invoices')
+    const lengthBefore = window.history.length
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    expect(window.location.pathname).toBe('/invoices')
+    expect(window.history.length, 'current behaviour: a same-view nav still adds an entry').toBe(lengthBefore + 1)
   })
 })

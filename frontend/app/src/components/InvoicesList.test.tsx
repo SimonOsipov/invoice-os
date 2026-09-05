@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import { skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
+import { LIVE_POLL_MS, skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
 import { BULK_COPY, bulkBarView } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
@@ -1824,5 +1824,193 @@ describe('InvoicesList: a filter refetch swaps the rows instead of rebuilding th
     const pager = screen.getByTestId('invoices-pager')
     expect(pager.textContent, "the newest envelope's own pagination").toContain('OF 2')
     expect(pager.textContent, 'the pre-filter total must not survive the refetch').not.toContain('OF 60')
+  })
+})
+
+// QA Stage 4 (BUG-10-01, task-864). The five specs above cover truth-table rows 4, 5, 6,
+// 10 and 17 (.ralph/SUBTASK-01-ARCH.md §2). These cover the reachable rows they left open
+// -- 7, 13/14 and the paging/company-switch paths D-3 widened -- plus the poll gate C-1,
+// which the architect found by reading and which no test in this repo could see.
+describe('QA BUG-10-01: the held envelope at its edges', () => {
+  it('QA-B10-1: the 2s poll stops behind an ErrorState -- a held page with a queued row must not re-request forever (C-1)', async () => {
+    const queued = [row({ id: 'inv-q', invoice_number: 'INV-QUEUED', status: 'queued' })]
+    const urls: string[] = []
+    // Every request resolves: an unresolved tick would leave `tickInFlight` latched and
+    // freeze the poll for a reason that has nothing to do with the gate under test.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        urls.push(url)
+        return urlParams(url).get('needs_attention') === 'true'
+          ? Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filtered refetch failed' }) })
+          : Promise.resolve(listResponse(queued, { limit: 50, offset: 0, total: 1 }))
+      }),
+    )
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-QUEUED')
+
+    // Non-vacuity: this fixture genuinely polls. Without that, the freeze below would
+    // hold for reasons unrelated to `showRows`.
+    await waitFor(() => expect(urls.length, 'a queued row must start the 2s poll').toBeGreaterThan(1), { timeout: LIVE_POLL_MS * 2, interval: 100 })
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByRole('button', { name: 'Retry' })
+
+    const behindTheError = urls.length
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, LIVE_POLL_MS * 2 + 500))
+    })
+    expect(urls.length, 'the held rows are off screen behind the ErrorState, so nothing may poll for them').toBe(behindTheError)
+  }, 20000)
+
+  it('QA-B10-2: a filter refetch that comes back total:0 renders the honest empty state, never the held rows (truth-table row 14)', async () => {
+    const mounted = [row({ id: 'inv-a', invoice_number: 'INV-A' }), row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 2 })))
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve(listResponse([], { limit: 50, offset: 0, total: 0 })))
+
+    expect(await screen.findByTestId('invoices-empty'), "total:0 classifies as 'empty', which has no rows branch at all").toBeDefined()
+    for (const number of ['INV-A', 'INV-B']) {
+      expect(screen.queryByText(number), `${number} is held, not live -- it must not survive a zero-result filter`).toBeNull()
+    }
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would print the held envelope's totals over an empty result").toBeNull()
+  })
+
+  it('QA-B10-3: a held page whose own slice is empty keeps the page-empty state through a refetch, never a spinner (truth-table row 7)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(p1, { limit: 50, offset: 0, total: 110 })))
+    await screen.findByTestId('invoices-pager')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve(listResponse([], { limit: 50, offset: 50, total: 45 })))
+    expect((await screen.findByTestId('invoices-empty-page')).textContent).toContain('No invoices on this page')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('needs_attention'), 'the third GET must really be the filtered refetch').toBe('true')
+
+    // calls[2] deliberately unresolved: the in-flight window over an EMPTY held slice.
+    expect(screen.queryByTestId('invoices-empty-page'), 'the frame that was on screen when the refetch started stays on screen').not.toBeNull()
+    expect(screen.queryByText('Loading invoices…'), 'an empty held slice is still a hold, not a reason to blank the page').toBeNull()
+    expect(screen.getByTestId('invoices-pager').textContent, "the held envelope's own totals, unchanged mid-flight").toContain('OF 45')
+  })
+
+  it('QA-B10-4: the hold re-syncs on every success -- a second refetch holds the FILTERED envelope, not the first page (AC-5)', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const filtered = [row({ id: 'inv-f1', invoice_number: 'INV-F1' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(page1, { limit: 50, offset: 0, total: 60 })))
+    expect((await screen.findByTestId('invoices-pager')).textContent).toContain('OF 60')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 1 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('needs_attention'), 'the toggle is off again, so the third GET carries no filter').toBeNull()
+
+    // calls[2] unresolved. This is the ONLY window that separates a re-syncing hold from
+    // a set-once one (`setHeld((h) => h ?? list.data)`); in any settled state the two are
+    // the same reference, which is why the AC-5 spec above cannot discriminate them.
+    expect(screen.getAllByTestId('invoice-row'), 'one row held, not the superseded fifty').toHaveLength(1)
+    expect(screen.queryByText('INV-F1')).not.toBeNull()
+    expect(screen.queryByText('INV-0'), 'the first page was superseded and must not come back under the hold').toBeNull()
+    expect(screen.getByTestId('invoices-pager').textContent, "the most recent envelope's totals").toContain('OF 1')
+  })
+
+  it('QA-B10-5: paging holds the previous page rather than blanking, and the pager stays frozen for the round trip (F-04)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const p2 = [row({ id: 'inv-p2', invoice_number: 'INV-PAGE2' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(p1, { limit: 50, offset: 0, total: 51 })))
+    await screen.findByText('INV-0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('offset'), 'the click must really be paging, not a no-op').toBe('50')
+
+    // D-3: the hold is per-refetch, not per-cause, so paging stops blanking too.
+    expect(screen.getAllByTestId('invoice-row'), 'page 1 stays readable while page 2 is fetched').toHaveLength(50)
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
+    // `busy={loading || ...}` freezes BOTH directions, so the still-mounted pager opens
+    // no double-navigation path (A16-4g).
+    for (const name of ['← Previous', 'Next →']) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, `${name} must be frozen for the whole in-flight window`).toBe(true)
+    }
+
+    await settle(() => calls[1].resolve(listResponse(p2, { limit: 50, offset: 50, total: 51 })))
+    await screen.findByText('INV-PAGE2')
+    expect(screen.queryByText('INV-0'), 'the held page is discarded the instant page 2 lands').toBeNull()
+  })
+
+  it("QA-B10-6: a company switch mid-refetch discards the previous entity's envelope even when it resolves late", async () => {
+    const ent1 = [row({ id: 'inv-e1', entity_id: 'ent-1', invoice_number: 'INV-ENT1' })]
+    const calls = pendingFetch()
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1')} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-ENT1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+
+    rerender(<InvoicesList ctx={listCtx('ent-2')} />)
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('entity_id'), 'the switch fires its own entity-scoped refetch').toBe('ent-2')
+
+    // The ent-1 refetch resolves AFTER the switch. useAsync's runId guard drops the
+    // dispatch; `fresh` drops the held ent-1 envelope. Either fence alone suffices --
+    // this asserts the pair, since the hold is what made the second one load-bearing.
+    await settle(() => calls[1].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+
+    expect(screen.queryByText('INV-ENT1'), "ent-1's rows must never reach an ent-2 viewer").toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would print ent-1's totals").toBeNull()
+    expect(screen.queryByText('Loading invoices…'), 'a company switch is a full-page spinner, never a hold').not.toBeNull()
+  })
+
+  it('QA-B10-7: both rows branches keep the fence jsdom cannot observe -- `fresh` per branch, and a `state` check in showRows', () => {
+    // Static, not runtime, and deliberately so: the frame this protects is the one
+    // committed render between a company switch and useAsync's passive `start` dispatch
+    // (truth-table row 9). The entity-switch spec above records the same limit in its
+    // own comment -- act() flushes straight through that commit. Dropping `fresh` from
+    // both branches leaves the whole 3746-test suite green, which is what this covers.
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+
+    const gates = source.split('\n').filter((l) => /rows\.length (===|>) 0 &&/.test(l) && l.includes('showRows'))
+    expect(gates, 'exactly two rows-render gates: the fresh-and-empty page and the populated list').toHaveLength(2)
+    for (const gate of gates) {
+      expect(gate, 'a rows branch without `fresh` paints the previous company page for one commit').toMatch(/&& fresh &&/)
+      expect(gate, 'and `view != null` must precede the dereference in the same chain').toMatch(/view != null/)
+    }
+
+    const showRowsDef = source.match(/const showRows = [^\n]+/)?.[0]
+    expect(showRowsDef, 'showRows must be defined').toBeDefined()
+    expect(showRowsDef, "showRows carries a `state` check, not a bare `view != null` -- 'empty' and 'error' own their own branches").toMatch(/state ===/)
   })
 })

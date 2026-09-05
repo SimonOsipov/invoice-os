@@ -106,8 +106,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   )
   const state = invoicesViewState(base, list)
   // A plain boolean, not a re-compared `state === 'loading'`, at the two Pager call
-  // sites below: both sit inside a `state === 'ready'` branch, where TS narrows `state`
-  // to the literal 'ready' and rejects that comparison as unreachable.
+  // sites below: under `showRows` those branches render mid-refetch too, and `busy` has
+  // to freeze the pager for exactly that window.
   const loading = state === 'loading'
   // Last envelope useAsync resolved, held across a refetch so the table swaps rows
   // instead of unmounting -- useAsync's own contract (async-state.ts) is untouched.
@@ -146,11 +146,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   }, [list.data])
 
   // The single row source for the whole component (replaces the old inline `(list.data
-  // ?? []).map`). MUST be memoized: `live ?? list.data ?? []` as a bare expression
+  // ?? []).map`). MUST be memoized: `live ?? view?.invoices ?? []` as a bare expression
   // allocates a fresh `[]` on every render even when neither input changed, which would
   // make the prune effect below re-run every render forever. `live` MUST be in the deps
-  // — the overlay tick never calls `list.run()`, so `list.data` alone would never change
-  // on a poll and the prune effect would never fire for a row that advances past
+  // — the overlay tick never calls `list.run()`, so `view` alone would never change on a
+  // poll and the prune effect would never fire for a row that advances past
   // `validated` between polls.
   //
   // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
@@ -161,7 +161,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // Every downstream consumer (selection, the live-poll gate, the empty-state check
   // below) sees only this client's own rows; there is exactly one `rows` in this
   // component. `ctx.mode`/`ctx.active.entityId` join the dep list alongside
-  // `live`/`list.data` so that frame is covered immediately, without waiting on the
+  // `live`/`view` so that frame is covered immediately, without waiting on the
   // refetch.
   const rows = useMemo(
     () => gateByActiveEntity(live ?? view?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
@@ -218,9 +218,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   // One result item plus the invoice number it resolves to, captured from `rows` at
   // submit time (see submitSelection) rather than looked up live at render time: the
-  // success path calls `list.run()` right after, which nulls `list.data` for the
-  // duration of the refetch, so a live `rows.find` would flicker every row to its raw
-  // UUID until the refetch lands.
+  // success path calls `list.run()` right after, and a live `rows.find` would print a
+  // raw UUID for any row that refetch drops.
   const [results, setResults] = useState<{ item: BatchSubmitResultItem; invoiceNumber: string }[] | null>(null)
   const [submitError, setSubmitError] = useState<ApiError | null>(null)
   // Ref guard mirrors App.tsx's `reqInFlight` (App.tsx:106-113): React batches state

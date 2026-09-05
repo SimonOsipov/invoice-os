@@ -3516,8 +3516,10 @@ func TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors(t *testing.T) {
 // `WHERE tenant_id = $1 AND layout_fingerprint = $2` -- over the in-memory value worker.go:194
 // computed and worker.go:230 passed. Nothing between the two parses it.
 //
-// Nothing else in the tree drives a learned rule through Work: learn_corpus_db_test.go's own
-// header records that it does NOT prove Work composes Resolve. The store-level halves of the
+// Nothing else in the tree drives a learned rule through Work on the BOXLESS branch.
+// TestRLS_ExtractWorkerAppliesLearnedRulesForItsOwnFingerprint (worker_pipeline_db_test.go) does
+// it on the v1: PDF branch and is the analogue these mirror; learn_corpus_db_test.go calls
+// Resolve directly and never reaches Work at all. The store-level halves of the
 // plan (a PDF sees no b1: rule; the lookup discriminates both ways; rules do not cross tenants)
 // are already shipped in anchor_store_db_test.go and are re-homed here as ARMS -- the query is
 // namespace-blind, so re-running a shipped store assertion with a b1:-shaped literal in place of
@@ -3668,6 +3670,15 @@ func TestRLS_ABoxlessLearnedRuleFiresOnItsOwnLayout(t *testing.T) {
 
 	ruleID := stSeedAnchorRule(t, ctx, ownerID, fpA, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
 	otherRuleID := stSeedAnchorRule(t, ctx, otherID, fpA, "supplier_name", wkOurRefRule, extraction.RuleSchemaVersion)
+	// AC-4's other half, and the needle its zero needs from INSIDE its own run: the owner also
+	// holds a rule under the PDF's v1: key. The boxless arms below must still be served exactly
+	// one rule, and the PDF arm exactly the other. Without it, "the PDF was served nothing" is
+	// also what a lookup that fails on every PDF run would produce.
+	pdfFingerprint := extraction.Fingerprint(rvCorpusPages(t, dcCorpusFixture))
+	if !strings.HasPrefix(pdfFingerprint, extraction.FingerprintVersion+":") {
+		t.Fatalf("the corpus fixture fingerprints to %q, want a key in the %q namespace", pdfFingerprint, extraction.FingerprintVersion)
+	}
+	pdfRuleID := stSeedAnchorRule(t, ctx, ownerID, pdfFingerprint, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
 
 	missing := stPtr(string(extraction.ReasonMissing))
 
@@ -3731,9 +3742,9 @@ func TestRLS_ABoxlessLearnedRuleFiresOnItsOwnLayout(t *testing.T) {
 	}
 	wpAssertRankZero(t, prime.rows, "buyer_name", stPtr(wkOurRefValuePrime), nil)
 
-	// AC-4. The same tenant, the same stored b1: rule, a PDF run: the seam is asked for a v1:
-	// key and serves nothing. Its needle is the `a` arm above -- that rule IS served to this
-	// tenant when the key is b1:, so the empty slice here is not an empty table.
+	// AC-4. The same tenant holds both a b1: rule and a v1: one, and a PDF run is asked for the
+	// v1: key: it must be served that rule and only that rule. The needle is inside the run, so
+	// the result discriminates a namespace boundary from a lookup that answers nothing.
 	pdfDoc := wkSecondDocument(t, ctx, ownerID)
 	pdfRules := wpStoreRules(t)
 	pdfEW := wpWorker(t, wkOK(), wpCorpusOpener(t),
@@ -3752,8 +3763,14 @@ func TestRLS_ABoxlessLearnedRuleFiresOnItsOwnLayout(t *testing.T) {
 	if pdfFP == fpA {
 		t.Fatalf("a PDF run was asked for A's boxless key %q; the two namespaces collided", fpA)
 	}
-	if len(pdfServed) != 0 {
-		t.Errorf("a PDF run in the rule-owning tenant was served %v for %q, want none -- no v1: lookup can match a b1: key", arIDs(pdfServed), pdfFP)
+	if pdfFP != pdfFingerprint {
+		t.Fatalf("a PDF run was asked for %q, want the corpus fixture's own %q", pdfFP, pdfFingerprint)
+	}
+	// Exactly the v1: rule and never the b1: one. The tenant holds both, so this arm reads the
+	// namespace boundary in one run rather than resting on the b1: arms above.
+	if len(pdfServed) != 1 || pdfServed[0].ID != pdfRuleID {
+		t.Errorf("a PDF run in the rule-owning tenant was served %v for %q, want exactly its v1: rule %s -- a b1: key can never answer a v1: lookup, and a lookup that answered nothing at all would also read as an empty slice",
+			arIDs(pdfServed), pdfFP, pdfRuleID)
 	}
 }
 
@@ -3818,4 +3835,74 @@ func TestRLS_ABoxlessLearnedRuleDoesNotReachAnotherLayout(t *testing.T) {
 		t.Errorf("running A in the tenant that stored a rule for %q was served %v when asked for %q", fpB, arIDs(bOnA.served), bOnA.asked)
 	}
 	wpAssertRankZero(t, bOnA.rows, "buyer_name", nil, missing)
+}
+
+// EXTR-19-05 QA (Mode B). The shared empty identity is a layout key like any other, and this is
+// the subtask that proves scoping, so its containment is asserted rather than inherited.
+// TestRLS_ABoxlessDocumentWithNoRecognisedLabelGetsTheSharedEmptyIdentity proves nothing can be
+// LEARNED into that bucket; it never seeds one, and so never asks where a rule already sitting
+// there reaches. b1:e3b0c442... is ONE constant every label-free document in every tenant
+// computes, which makes a rule under it the widest-reaching rule this system can hold.
+func TestRLS_ABoxlessRuleAtTheSharedEmptyIdentityStaysInsideItAndItsTenant(t *testing.T) {
+	ctx := t.Context()
+	ownerID, ownerDoc := wkFixture(t, ctx)
+	otherID, otherDoc := wkFixture(t, ctx)
+
+	// "Widget assembly" and the Our-Ref line trip no anchorLexicon pattern, so the element list
+	// is empty and the identity is the shared constant.
+	blankWire := wkDoclingWire(t,
+		map[string]any{"text": "Widget assembly"}, map[string]any{"text": wkOurRefLineA})
+	empty := extraction.BoxlessFingerprint(nil)
+	_, blankTokens, blankRes := dcServeGolden(t, blankWire)
+	if blankRes.TextChars == 0 {
+		t.Fatalf("the label-free wire reads as 0 text char(s); the boxless write is gated on it and no run below happens")
+	}
+	if got := extraction.BoxlessFingerprint(blankTokens); got != empty {
+		t.Fatalf("the label-free wire fingerprints to %q, want the shared empty-element digest %q", got, empty)
+	}
+	// Discrimination floor: a labelled layout must NOT compute the shared key, or every zero
+	// below would hold over one key and prove nothing.
+	wireA, fpA := wkBoxlessWire(t, dxGolden, dxParagraphs, wkOurRefLineA)
+	if fpA == empty {
+		t.Fatalf("A fingerprints to the empty-element digest %q; there is no containment claim left to make", empty)
+	}
+
+	ruleID := stSeedAnchorRule(t, ctx, ownerID, empty, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
+	missing := stPtr(string(extraction.ReasonMissing))
+
+	// The needle: the bucket is LIVE. What keeps it empty in production is LearnRule's refusal
+	// over an empty anchor list, which is a property of the anchor list and not of
+	// anchorRulesForTx -- so a rule that reaches the row by any other route does fire.
+	blank := wkRunBoxless(t, ctx, ownerID, ownerDoc, 915251, blankWire)
+	if blank.asked != empty {
+		t.Fatalf("the seam was asked for %q over a label-free document, want the shared %q", blank.asked, empty)
+	}
+	if len(blank.served) != 1 || blank.served[0].ID != ruleID {
+		t.Fatalf("the seam served %v under the shared key, want exactly the seeded rule %s", arIDs(blank.served), ruleID)
+	}
+	wpAssertRankZero(t, blank.rows, "buyer_name", stPtr(wkOurRefValueA), nil)
+
+	// Containment, layout half. The widest key in the system still does not reach a LABELLED
+	// layout, and A carries the same Our-Ref token, so this zero is the predicate and not a
+	// content coincidence.
+	labelled := wkRunBoxless(t, ctx, ownerID, wkSecondDocument(t, ctx, ownerID), 915252, wireA)
+	if labelled.asked != fpA {
+		t.Fatalf("the seam was asked for %q over A, want A's own %q", labelled.asked, fpA)
+	}
+	if len(labelled.served) != 0 {
+		t.Errorf("a rule under the shared empty identity was served to A's layout: %v", arIDs(labelled.served))
+	}
+	wpAssertRankZero(t, labelled.rows, "buyer_name", nil, missing)
+
+	// Containment, tenant half. The key is a CONSTANT, so a second tenant's label-free document
+	// asks for the byte-identical string -- the one case where only tenancy separates two
+	// lookups. The blank arm above is its needle.
+	away := wkRunBoxless(t, ctx, otherID, otherDoc, 915253, blankWire)
+	if away.asked != empty {
+		t.Fatalf("the second tenant was asked for %q, want the identical shared %q", away.asked, empty)
+	}
+	if len(away.served) != 0 {
+		t.Errorf("the shared empty identity carried a rule across tenants: %v", arIDs(away.served))
+	}
+	wpAssertRankZero(t, away.rows, "buyer_name", nil, missing)
 }

@@ -1087,54 +1087,6 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
   })
 })
 
-// Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
-// alone ("Needs attention") does not say so.
-const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'
-
-describe('InvoicesList: the needs-attention toggle says what it now includes', () => {
-  it('the line is absent while the toggle is off, present while it is on, and gone again when it is off', async () => {
-    // Three responses: mount, the ON refetch, the OFF refetch (needsAttention is in `deps`).
-    mockFetchSequence([
-      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([row({ id: 'o2', invoice_number: 'INV-OFF-2' })], { limit: 50, offset: 0, total: 1 }),
-    ])
-
-    render(<InvoicesList ctx={listCtx()} />)
-    await screen.findByText('INV-OFF-1')
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the unfiltered register must not carry the line').toBeNull()
-
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByText('INV-ON')
-    // Exact-text match: the copy is its own line, not a clause inside a longer paragraph.
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the ON filter must name what it sweeps in').not.toBeNull()
-
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByText('INV-OFF-2')
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'toggling back off must remove it').toBeNull()
-  })
-
-  // QA adversarial. The zero-row branch is the case the explainer matters most in — the
-  // register looks identical to a genuinely invoice-less one. The generic "No invoices yet"
-  // beside it is a KNOWN GAP with no owner: that empty state never consults the toggle.
-  // Deliberately unasserted here so fixing the copy does not have to delete this test.
-  it('the line survives a filtered result set that comes back empty', async () => {
-    mockFetchSequence([
-      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([], { limit: 50, offset: 0, total: 0 }),
-    ])
-
-    render(<InvoicesList ctx={listCtx()} />)
-    await screen.findByText('INV-A1')
-
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByTestId('invoices-empty')
-
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the explainer is not nested under the populated branch').not.toBeNull()
-    expect(screen.getByTestId('needs-attention-toggle'), 'and the toggle stays reachable to clear the filter').toBeDefined()
-  })
-})
-
 // RED specs (APPR-16-03, task-537, Stage 2.5/Mode A), authored before the fix in
 // afba8c8: batch-submit called submitSelection directly on click (pre-fix
 // InvoicesList.tsx:426/264), one click transmitting every selected invoice with no
@@ -2015,7 +1967,7 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
   })
 })
 
-// BUG-10-02 (task-865), Mode A RED. Replaces the explainer's two specs above, which assert
+// BUG-10-02 (task-865). Replaces the explainer's two specs, which assert
 // only that a string appears and disappears -- neither survives as an absence check, because
 // a spec asserting a string no code path can render passes forever. Those two die with the
 // source in the same commit.

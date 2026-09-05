@@ -5066,3 +5066,316 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
     expect(document.body.textContent, 'the sentence is on the page, not only in an attribute').toContain(ROLE)
   })
 })
+
+// RED specs (task-899, BUG-14-02, Mode A). Every reason node, every aria-describedby and the
+// six REASON_ID consts still exist, so each absence spec below fails on its own assertion.
+// `title=` survives on all seven controls ([title-survives]); the pins that keep that
+// argument honest are the two title specs at the end.
+describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-14-02)', () => {
+  const ID = 'inv-reason-gone-1'
+
+  // Sentinels, not the real backend copy: each is >= 20 chars and carries an em dash, so the
+  // needle floor and the truncated-re-add check below are both discriminating.
+  const R = {
+    ubl: 'No UBL document exists for this invoice yet — validate it first.',
+    approve: 'Only an approver can approve this invoice — ask an admin on your team.',
+    reject: 'A rejection needs the workflow role this step waits on — ask whoever holds it.',
+    revalidate: 'Re-validate applies to drafts that have changed — this one has not.',
+    submit: 'Only a validated invoice can be submitted — validate it first.',
+    resolveOutside: 'Only an admin can mark this invoice resolved outside — ask one.',
+  }
+
+  const REASON_TESTIDS = [
+    'view-ubl-blocked-reason',
+    'approve-blocked-reason',
+    'reject-blocked-reason',
+    'revalidate-blocked-reason',
+    'submit-blocked-reason',
+    'resolve-outside-blocked-reason',
+  ]
+
+  // The five controls in the top-right cluster. `resolve-outside` lives ~570 lines down in
+  // the failed card ([cluster-scoped-stability]) and is scoped to that card separately.
+  const CLUSTER_TITLED = ['view-ubl', 'detail-approve', 'detail-reject', 'revalidate', 'detail-submit']
+
+  // A reason sentence's clause before the em dash -- BUG-09's `lead()` catcher
+  // (ReviewRow.test.tsx:495), which sees a reason re-added in truncated form.
+  const lead = (reason: string) => reason.split('—')[0].trim()
+
+  // `view-ubl` and `invoice-actions` are siblings inside the actions column, which carries no
+  // testid of its own. Asserting the column contains all three rows is the floor: a nesting
+  // change that broke this read would otherwise turn every absence claim below vacuous.
+  function actionColumn(): HTMLElement {
+    const column = screen.getByTestId('view-ubl').parentElement
+    expect(column, 'the actions column must exist').toBeTruthy()
+    expect(column!.contains(screen.getByTestId('detail-decision-actions')), 'row 2 is in the column').toBe(true)
+    expect(column!.contains(screen.getByTestId('invoice-actions')), 'row 3 is in the column').toBe(true)
+    return column!
+  }
+
+  // Every reason string populated AND `reject !== approve`, so all six nodes render today.
+  function blockedFailed(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRecord {
+    return detailRecord({
+      id: ID,
+      status: 'failed',
+      can_view_ubl: false,
+      ubl_blocked_reason: R.ubl,
+      can_approve: false,
+      approve_blocked_reason: R.approve,
+      can_reject: false,
+      reject_blocked_reason: R.reject,
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: R.revalidate,
+      can_submit: false,
+      submit_blocked_reason: R.submit,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: R.resolveOutside,
+      ...over,
+    })
+  }
+
+  it('BUG-14-02 AC-1: no blocked-reason node renders when every reason string is populated', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+
+    // Floor: the controls the reasons explain are all up, so an unmounted page cannot be
+    // what makes the six absence claims below pass.
+    const controls = [...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside'].filter((id) => screen.queryByTestId(id) != null)
+    expect(controls, 'every gated control must be mounted').toEqual([...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside'])
+
+    const rendered = REASON_TESTIDS.filter((id) => screen.queryAllByTestId(id).length > 0)
+    expect(rendered, 'no blocked-reason node may render on any wire').toEqual([])
+  })
+
+  it('BUG-14-02 AC-1: reject-blocked-reason is gone even on the one wire that makes it render', async () => {
+    // The divergent fixture shape from InvoiceDetail.test.tsx:3460 -- `reject !== approve` is
+    // what makes InvoiceDetail.tsx:786's second conjunct true. THIS is the fixture that gives
+    // the claim a red phase: on a matching pair the node never renders and the assertion
+    // would pass today, proving nothing.
+    const S = 'Only a validated invoice can be approved or rejected.'
+    mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: R.reject }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
+
+    expect(rejectBtn.disabled, 'floor: the control the sentence explains is up and refusing').toBe(true)
+    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+  })
+
+  it('BUG-14-02 AC-1: the cluster prints no sentence its own titles carry', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    const column = actionColumn()
+    const card = screen.getByTestId('failed-dead-end')
+
+    const printed: string[] = []
+    for (const [id, scope] of [
+      ...CLUSTER_TITLED.map((id) => [id, column] as const),
+      ['resolve-outside', card] as const,
+    ]) {
+      // Read the needle out of the DOM, never author it here: a spec that spells the sentence
+      // itself stops tracking what the page actually shows.
+      const title = screen.getByTestId(id).getAttribute('title')
+      expect(title, `${id} carries the backend sentence in its title`).toBeTruthy()
+      expect(title!.length, `${id}'s title is a real needle, not a fragment`).toBeGreaterThanOrEqual(20)
+      if (scope.textContent?.includes(title!) === true) printed.push(id)
+    }
+    expect(printed, 'no control may print the sentence its title carries, at any nesting depth').toEqual([])
+  })
+
+  it('BUG-14-02 AC-1: the cluster prints no truncated re-add of a reason either', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    const column = actionColumn()
+    const card = screen.getByTestId('failed-dead-end')
+
+    const printed: string[] = []
+    for (const [id, scope] of [
+      ...CLUSTER_TITLED.map((id) => [id, column] as const),
+      ['resolve-outside', card] as const,
+    ]) {
+      const title = screen.getByTestId(id).getAttribute('title')
+      expect(title, `${id} carries the backend sentence in its title`).toBeTruthy()
+      const clause = lead(title!)
+      expect(clause.length, `${id}'s lead clause is a real needle`).toBeGreaterThanOrEqual(20)
+      expect(clause, `${id}'s title must actually have a lead clause to truncate`).not.toBe(title)
+      if (scope.textContent?.includes(clause) === true) printed.push(id)
+    }
+    expect(printed, 'a reason may not come back in truncated form').toEqual([])
+  })
+
+  it('BUG-14-02 AC-4: no control carries aria-describedby and the cluster holds none at all', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    const column = actionColumn()
+
+    const ALL_CONTROLS = [...CLUSTER_TITLED, 'edit-toggle', 'resolve-outside']
+    const found = ALL_CONTROLS.map((id) => screen.getByTestId(id))
+    expect(found, 'floor: every control resolved').toHaveLength(ALL_CONTROLS.length)
+
+    const described = ALL_CONTROLS.filter((id) => screen.getByTestId(id).hasAttribute('aria-describedby'))
+    expect(described, 'no control describes itself through a removed node').toEqual([])
+
+    expect(Array.from(column.querySelectorAll('[aria-describedby]')).map((el) => el.getAttribute('data-testid'))).toEqual([])
+
+    // A describedby left behind pointing at a deleted node is worse than none: it is a
+    // silent dangle no absence check above would see.
+    const dangling = Array.from(document.querySelectorAll('[aria-describedby]'))
+      .map((el) => el.getAttribute('aria-describedby')!)
+      .filter((id) => document.getElementById(id) == null)
+    expect(dangling, 'no aria-describedby may point at a missing element').toEqual([])
+  })
+
+  it('BUG-14-02 AC-3: every control keeps an accessible name and exposes disabled natively', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+
+    for (const name of ['View UBL/XML', 'Approve', 'Reject', 'Edit', 'Re-validate', 'Submit']) {
+      const btn = screen.getByRole('button', { name }) as HTMLButtonElement
+      expect(btn.disabled, `${name} exposes its refusal through the native attribute`).toBe(true)
+    }
+  })
+
+  it('BUG-14-02 AC-4: every DISABLED control still carries its backend title verbatim', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+
+    const pairs: [string, string][] = [
+      ['view-ubl', R.ubl],
+      ['detail-approve', R.approve],
+      ['detail-reject', R.reject],
+      ['revalidate', R.revalidate],
+      ['detail-submit', R.submit],
+      ['resolve-outside', R.resolveOutside],
+    ]
+    for (const [id, sentence] of pairs) {
+      const btn = screen.getByTestId(id) as HTMLButtonElement
+      expect(btn.disabled, `floor: ${id} is refusing`).toBe(true)
+      expect(btn.getAttribute('title'), `${id}'s title is the wire's sentence, never SPA-authored`).toBe(sentence)
+    }
+  })
+
+  it('BUG-14-02 AC-4: no ENABLED control in the cluster carries a title', async () => {
+    // [title-survives] rests on a `title` never firing because it only ever sits on a
+    // DISABLED control -- a property only the backend enforces (P-15). This pins it SPA-side.
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'failed',
+        can_view_ubl: true,
+        can_approve: true,
+        can_reject: true,
+        can_edit: true,
+        can_revalidate: true,
+        can_submit: true,
+        can_resolve_outside: true,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+    const column = actionColumn()
+
+    const buttons = [...Array.from(column.querySelectorAll('button')), ...Array.from(screen.getByTestId('failed-dead-end').querySelectorAll('button'))]
+    const enabled = buttons.filter((b) => !b.disabled)
+    expect(enabled.length, 'floor: the sweep found enabled controls to judge').toBeGreaterThanOrEqual(6)
+
+    const titled = enabled.filter((b) => b.hasAttribute('title')).map((b) => b.getAttribute('data-testid') ?? b.textContent)
+    expect(titled, 'an enabled control with a title is a live tooltip in every browser').toEqual([])
+  })
+
+  it('BUG-14-02 AC-1: the failed card renders no reason in either resolve-outside arm', async () => {
+    for (const [arm, over] of [
+      ['unresolved', {}],
+      [
+        'resolved',
+        {
+          kept_as_is_at: '2026-07-02T09:00:00Z',
+          kept_as_is_by: APP_PERSONAS.firm.subject,
+          kept_as_is_reason: 'Settled directly with the buyer',
+        },
+      ],
+    ] as [string, Partial<InvoiceDetailRecord>][]) {
+      cleanup()
+      mockDetailFetch(blockedFailed(over))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const card = await screen.findByTestId('failed-dead-end')
+
+      // Floor per arm: prove the arm's own control mounted, or the absence claim is vacuous.
+      const control = arm === 'resolved' ? 'resolve-outside-undo' : 'resolve-outside'
+      expect(within(card).queryAllByTestId(control), `floor: the ${arm} arm's control`).toHaveLength(1)
+      expect(screen.queryAllByTestId('resolve-outside-blocked-reason'), `${arm} arm renders no reason`).toHaveLength(0)
+    }
+  })
+
+  it('BUG-14-02 AC-5: the six testids are declared RETIRED, not merely dropped', async () => {
+    // [retired-not-just-removed]. The two lists are module-private to their describe, so this
+    // reads them out of the source -- the same readFileSync idiom as :2820 and :3127.
+    const src = readFileSync(path.join(process.cwd(), 'src/components/InvoiceDetail.test.tsx'), 'utf8')
+    const block = (name: string) => {
+      const open = src.indexOf(`const ${name} = [`)
+      expect(open, `${name} must be declared`).toBeGreaterThan(-1)
+      const close = src.indexOf('\n  ]', open)
+      expect(close, `${name}'s block must close`).toBeGreaterThan(open)
+      return src.slice(open, close)
+    }
+    const untouched = block('UNTOUCHED_TESTIDS')
+    const retired = block('RETIRED_TESTIDS')
+
+    // Floors: a broken slice would return a block matching nothing, which reads as success.
+    expect(untouched.includes("'edit-toggle'"), 'the UNTOUCHED slice really is that list').toBe(true)
+    expect(retired.includes("'violations-scroll'"), 'the RETIRED slice really is that list').toBe(true)
+
+    const stillDeclaredLive = REASON_TESTIDS.filter((id) => untouched.includes(`'${id}'`))
+    expect(stillDeclaredLive, 'a deleted node may not stay declared as rendered surface').toEqual([])
+
+    const notRetired = REASON_TESTIDS.filter((id) => !retired.includes(`'${id}'`))
+    expect(notRetired, 'each deleted testid is named in RETIRED_TESTIDS so a resurrection reds').toEqual([])
+  })
+
+  it('BUG-14-02: edit-toggle refuses to open the editor when can_edit is false, in the handler', async () => {
+    // React suppresses click on a disabled button (measured), so `fireEvent.click` here would
+    // pass whether or not the guard exists. Invoke the handler off the fiber's props instead
+    // -- that is the stray programmatic path BUG-14-01 opened by mounting Edit at every status.
+    const onClickOf = (el: Element) => {
+      const key = Object.keys(el).find((k) => k.startsWith('__reactProps$'))
+      expect(key, 'floor: the React props key must be readable, or this test proves nothing').toBeTruthy()
+      const props = (el as unknown as Record<string, { onClick?: () => void }>)[key!]
+      expect(typeof props.onClick, 'floor: the control must carry an onClick to exercise').toBe('function')
+      return props.onClick!
+    }
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const blocked = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
+    expect(blocked.disabled, 'floor: the attribute barrier is up').toBe(true)
+    await act(async () => {
+      onClickOf(blocked)()
+    })
+    expect(screen.queryAllByTestId('edit-invoice'), 'the handler must gate on can_edit too').toHaveLength(0)
+
+    // Positive control: the same programmatic path DOES open the editor when the wire allows
+    // it, so the absence above is the guard, not an unreachable handler.
+    cleanup()
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const allowed = await screen.findByTestId('edit-toggle')
+    await act(async () => {
+      onClickOf(allowed)()
+    })
+    expect(await screen.findByTestId('edit-invoice')).toBeTruthy()
+  })
+})

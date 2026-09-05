@@ -1,6 +1,5 @@
 // Specs for the import report step's pure view-model (M4-08-05, task-174) —
-// reportSummary over the POST /v1/imports 201 body, plus the
-// [detail-target-exclusive] DetailSelection constructors + detailTarget resolver.
+// reportSummary over the POST /v1/imports 201 body.
 //
 // vitest environment is 'node' (vitest.config.ts) — no jsdom, no Testing Library.
 // Nothing here touches a DOM or a component.
@@ -47,25 +46,17 @@
 //   RPT-06  rule_set_version: null -> null, 3 -> 3 (toBeNull, not toBeFalsy)            (AC1)
 //   RPT-07  Trap B — status:'failed' (REACHABLE path, not defensive) -> kind:'failed'   (AC10)
 //           with NO counter keys spread on; status: undefined also fails safe
-//   RPT-10  detailTarget resolves all three constructors' outputs correctly            (AC7,9)
-//   RPT-11  each constructor returns BOTH keys via toEqual, never a partial object      (AC8)
-//   RPT-13  fail-safe direction: an illegal both-set DetailSelection resolves           (AC7)
-//           'imported', never the mock fallback under a real imported id
 //
 // Trap C (JSON-null coercion) is already closed upstream by normalizeReport
 // (IMPAPI-12) — deliberately no spec for it here, see importReport.ts's module doc.
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import type { ImportReport } from './importApi'
-import {
-  clearSelection,
-  detailTarget,
-  reportSummary,
-  selectImported,
-  selectMock,
-  type DetailSelection,
-  type ReportSummary,
-} from './importReport'
+import { reportSummary, type ReportSummary } from './importReport'
 
 // Self-consistent base fixture (numbers add up) — used by specs that are not
 // exercising RPT-01's inconsistency trap. Individual tests override only the fields
@@ -180,30 +171,6 @@ describe('reportSummary: Trap B, status:"failed" is a reachable path (RPT-07)', 
   })
 })
 
-describe('detailTarget / DetailSelection constructors ([detail-target-exclusive], RPT-10, RPT-11, RPT-13)', () => {
-  it('RPT-10: detailTarget resolves each constructor output correctly, including selectMock whose importedInvoiceId is null (not absent)', () => {
-    expect(detailTarget(selectMock('INV-1'))).toEqual({ kind: 'mock', selectedId: 'INV-1' })
-    expect(detailTarget(selectImported('uuid-123'))).toEqual({ kind: 'imported', invoiceId: 'uuid-123' })
-    expect(detailTarget(clearSelection())).toEqual({ kind: 'mock', selectedId: null })
-  })
-
-  it('RPT-11: each constructor returns BOTH keys (toEqual, not toMatchObject — a partial object is exactly the bug this guards)', () => {
-    const mock: DetailSelection = selectMock('INV-X')
-    const imported: DetailSelection = selectImported('uuid-x')
-    const cleared: DetailSelection = clearSelection()
-
-    expect(mock).toEqual({ selectedId: 'INV-X', importedInvoiceId: null })
-    expect(imported).toEqual({ selectedId: null, importedInvoiceId: 'uuid-x' })
-    expect(cleared).toEqual({ selectedId: null, importedInvoiceId: null })
-  })
-
-  it('RPT-13: fail-safe direction — an illegal both-set state (unconstructible via the constructors, reachable only by an inline literal bypassing them) resolves "imported", never the mock fallback under a real imported id', () => {
-    const illegal: DetailSelection = { selectedId: 'INV-1', importedInvoiceId: 'uuid-real' }
-
-    expect(detailTarget(illegal)).toEqual({ kind: 'imported', invoiceId: 'uuid-real' })
-  })
-})
-
 // --- QA (task-174, Stage 4 Mode B) — adversarial / edge coverage, node-testable only.
 // The four blocks that exercised structuralErrorRows/violationRows (empty-array inputs,
 // the neither-row-nor-rows StructuralRow, the row-0 guard, verbatim severity, the
@@ -223,4 +190,86 @@ describe('reportSummary: an unrecognised non-"failed" status also fails safe (QA
 
     expect(s).toEqual({ kind: 'failed', id: 'batch-processing' })
   })
+})
+
+// --- D-1 (task-919, ROUTE-02-04, Mode A) — static scan: the five deleted identifiers
+// stay dead. Same shape as rowBlockedReasonRemoved.test.ts: SELF is excluded from the
+// walk so this file's own needles (including the RPT-10/11/13 code above, pre-deletion)
+// never self-trip.
+const SRC = fileURLToPath(new URL('..', import.meta.url))
+const SELF = fileURLToPath(import.meta.url)
+// D-4 (App.routeNavigate.test.tsx) asserts the symbol's ABSENCE from ctx at runtime via
+// `'selectInvoice' in ctx`, which necessarily names it as a literal -- excluded from the
+// walk below; the declaration-shape check further down covers it instead.
+const ROUTE_NAVIGATE_TEST = join(SRC, 'App.routeNavigate.test.tsx')
+
+function sourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue
+    const p = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...sourceFiles(p))
+    else if (/\.tsx?$/.test(entry.name) && p !== SELF && p !== ROUTE_NAVIGATE_TEST) out.push(p)
+  }
+  return out
+}
+
+const FILES = sourceFiles(SRC)
+const CORPUS = FILES.map((path) => [path, readFileSync(path, 'utf8')] as const)
+
+function filesContaining(needle: string): string[] {
+  return CORPUS.filter(([, text]) => text.includes(needle)).map(([path]) => path)
+}
+
+describe('ROUTE-02-04 (task-919): DetailSelection / selectInvoice deletion sweep (D-1)', () => {
+  it('control: the scan reaches the SPA source tree', () => {
+    expect(
+      FILES.length,
+      'the scan drifted off frontend/app/src -- every absence check below would be vacuous',
+    ).toBeGreaterThanOrEqual(200)
+  })
+
+  it('control: importedInvoiceId is still found (the scan can see a match)', () => {
+    expect(filesContaining('importedInvoiceId').length).toBeGreaterThan(0)
+  })
+
+  it('selectInvoice appears in no file', () => {
+    expect(filesContaining('selectInvoice')).toEqual([])
+  })
+
+  it('selectMock appears in no file', () => {
+    expect(filesContaining('selectMock')).toEqual([])
+  })
+
+  it('detailTarget appears in no file', () => {
+    expect(filesContaining('detailTarget')).toEqual([])
+  })
+
+  it('DetailTarget appears in no file', () => {
+    expect(filesContaining('DetailTarget')).toEqual([])
+  })
+
+  it('DetailSelection appears in no file', () => {
+    expect(filesContaining('DetailSelection')).toEqual([])
+  })
+})
+
+// Compensator for ROUTE_NAVIGATE_TEST's exclusion above: it may hold the five identifiers
+// only as quoted runtime strings (D-4's `'selectInvoice' in ctx`), never as a declaration
+// or binding -- a real reintroduction there must still be caught.
+describe('ROUTE-02-04 (task-919): App.routeNavigate.test.tsx names no deleted identifier as a declaration (D-4 exclusion compensator)', () => {
+  const routeNavigateSrc = readFileSync(ROUTE_NAVIGATE_TEST, 'utf8')
+
+  it('control: the excluded file is reachable and non-empty', () => {
+    expect(routeNavigateSrc.length).toBeGreaterThan(0)
+  })
+
+  it.each(['selectInvoice', 'selectMock', 'detailTarget', 'DetailTarget', 'DetailSelection'])(
+    '%s appears in no declaration/binding form',
+    (name) => {
+      for (const shape of [`function ${name}`, `${name}:`, `${name} =`, `const ${name}`]) {
+        expect(routeNavigateSrc, `found declaration-shape "${shape}"`).not.toContain(shape)
+      }
+    },
+  )
 })

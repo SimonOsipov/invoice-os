@@ -9,7 +9,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseRoute, routePath } from './lib/route'
+import { routePath, seedFromPath } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -30,7 +30,6 @@ import {
 import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
-import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
   getExtractions,
@@ -314,12 +313,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
   // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
   // a review hash into an already-open tab's address bar does not navigate until reload.
+  const [bootSeed] = useState(() => seedFromPath(window.location.pathname))
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
+  // Plain const, not a useState: read by the lazy initializers below (all run once at
+  // mount) and by bootHref further down, so no memoization is needed.
+  const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : bootSeed.view)
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
-  const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname) ?? 'dashboard')),
-  )
+  const [view, setView] = useState<View>(bootView)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
   // invoice typed instead keeps its provenance. Cleared wherever `draft` is reseeded --
@@ -341,21 +342,19 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [groupIndex, setGroupIndex] = useState(0)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
-  // ONE atom for what the detail view renders, never two loose fields
-  // ([detail-target-exclusive], debate F6). Written ONLY through the three total
-  // constructors below, so every write sets both members and "forgot to clear the
-  // counterpart" is a type error rather than a discipline. Two independent fields would
-  // mean one click-through hijacks the detail view for the rest of the session: every
-  // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
-  // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
-  // this state with an inline object literal — go through a constructor.
-  const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
+  // The invoice the detail view renders. One real UUID or nothing -- the mock branch it
+  // used to share this slot with was deleted in M5-09-04.
+  const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(
+    bootView === 'detail' ? bootSeed.invoiceId : null,
+  )
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(null)
   // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
   // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
-  const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
+  const [extractionJobId, setExtractionJobId] = useState<string | null>(
+    bootView === 'extraction' ? bootSeed.jobId : null,
+  )
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -514,13 +513,26 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [createStep, entityId, active.entityId])
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  // Reads bootSeed rather than the live atoms -- at mount they agree, and bootSeed is
+  // what the URL actually carried.
+  const bootHref = routePath(
+    bootView,
+    bootView === 'detail' ? bootSeed.invoiceId : bootView === 'extraction' ? bootSeed.jobId : null,
+  )
   useEffect(() => {
-    window.history.replaceState(null, '', routePath(view) + window.location.hash)
+    window.history.replaceState(null, '', bootHref + window.location.hash)
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.
+  // All three setters run in this one handler so the id lands in the same commit as
+  // the view, matching openImportedInvoice/openExtraction's one-handler invariant.
   useEffect(() => {
-    const onPopState = () => setView(parseRoute(window.location.pathname) ?? 'dashboard')
+    const onPopState = () => {
+      const r = seedFromPath(window.location.pathname)
+      setView(r.view)
+      setDetailInvoiceId(r.invoiceId)
+      setExtractionJobId(r.jobId)
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
@@ -560,9 +572,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // The one URL writer for real navigation, mirroring the mount-alignment effect above.
   // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
   // to every pushed entry.
-  function navigate(view: View) {
+  // `id` is a parameter, not a state read: openImportedInvoice/openExtraction call this
+  // BEFORE their own setState commits, so reading the atom here would serialise the
+  // previous invoice/job.
+  function navigate(view: View, id: string | null = null) {
     setView(view)
-    window.history.pushState(null, '', routePath(view) + window.location.hash)
+    window.history.pushState(null, '', routePath(view, id) + window.location.hash)
   }
 
   function nav(id: View) {
@@ -577,7 +592,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function switchClient(id: string) {
     setActiveEntityId(id)
     navigate('dashboard')
-    setDetailSel(clearSelection())
+    setDetailInvoiceId(null)
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
@@ -1175,11 +1190,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     )
   }
 
-  function selectInvoice(number: string) {
-    navigate('detail')
-    setDetailSel(selectMock(number))
-  }
-
   // Click-through from a rule-violation row in the import report (Core AC4), from a row in
   // the invoices list, and — since INVCR-01-03 — the landing point of a successful manual
   // filing. `id` is always a real invoice UUID, never a mock invoice number, so InvoiceDetail
@@ -1188,8 +1198,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // server's own row" IS the whole affirmation that a filing succeeded, and a second route
   // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
-    navigate('detail')
-    setDetailSel(selectImported(id))
+    navigate('detail', id)
+    setDetailInvoiceId(id)
   }
 
   // Both setters in one handler, so the first render that sees view === 'audit' already
@@ -1202,7 +1212,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Same one-handler shape as openAuditForInvoice above, same reason.
   function openExtraction(jobId: string) {
     setExtractionJobId(jobId)
-    navigate('extraction')
+    navigate('extraction', jobId)
   }
 
   function setSettingsTab(t: SettingsTab) {
@@ -1372,7 +1382,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     mapping,
     armedField,
     dragField,
-    selectedId: detailSel.selectedId,
     invoiceQuery,
     switcherOpen,
     sandbox,
@@ -1409,7 +1418,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     documentStages,
     importError,
     reviewBatchIds,
-    importedInvoiceId: detailSel.importedInvoiceId,
+    importedInvoiceId: detailInvoiceId,
     auditPrefilter,
     extractionJobId,
     nav,
@@ -1440,7 +1449,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     skipUpload,
     enterByHand,
     fileDraft,
-    selectInvoice,
     openImportedInvoice,
     openAuditForInvoice,
     openExtraction,

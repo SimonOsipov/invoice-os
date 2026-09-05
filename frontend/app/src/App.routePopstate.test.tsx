@@ -15,6 +15,7 @@ import type { PlatformCtx } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -240,7 +241,9 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
       capturedCtx!.openExtraction(JOB_A)
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: openExtraction must push /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'sanity: openExtraction must push /extraction/<jobId>').toBe(
+      `/extraction/${JOB_A}`,
+    )
     expect(ctx.extractionJobId, 'sanity: the job id must be set').toBe(JOB_A)
 
     await act(async () => {
@@ -261,6 +264,116 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
       extractionReviewMounts,
       'no ExtractionReview may render for a null job id -- App.tsx\'s view===extraction && extractionJobId!=null gate',
     ).toHaveLength(0)
+  })
+})
+
+describe('N-5: Back onto the bare list clears a stale invoice id', () => {
+  it('popstate_backFromDetailToInvoicesClearsTheImportedId', async () => {
+    await bootAt(`/invoices/${INVOICE_ID}`)
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /invoices/<id> must seed detail').toBe('detail')
+    expect(ctx.importedInvoiceId, 'sanity: the boot id must seed the selection').toBe(INVOICE_ID)
+
+    await popTo('/invoices')
+    ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the invoices list').toBe('invoices')
+    expect(ctx.importedInvoiceId, 'Back onto the bare list must clear the stale invoice id').toBeNull()
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe('/invoices')
+  })
+})
+
+describe('N-6: Back onto /extraction/<jobId> restores the job id together with the view', () => {
+  it('popstate_backOntoExtractionRestoresTheJobId', async () => {
+    await bootAt('/invoices')
+    const ctx0 = requireCtx()
+    expect(ctx0.view, 'sanity: booting at /invoices must seed the list').toBe('invoices')
+
+    await popTo(`/extraction/${JOB_A}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the extraction view').toBe('extraction')
+    expect(
+      ctx.extractionJobId,
+      'Back must restore the job id in the same commit as the view, not a render later',
+    ).toBe(JOB_A)
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe(`/extraction/${JOB_A}`)
+  })
+})
+
+// QA gap-fill: task-914's own AC-5 ("Back onto /invoices/<id> from elsewhere restores detail
+// AND the id") has no row in the architect's Test Specs table (only N-5's reverse direction
+// and N-6's extraction mirror do) -- this is the missing mirror of N-6 for the detail side.
+describe('AC-5: Back onto /invoices/<id> from elsewhere restores detail and the id', () => {
+  it('popstate_backOntoInvoiceDetailRestoresTheImportedId', async () => {
+    await bootAt('/invoices')
+    const ctx0 = requireCtx()
+    expect(ctx0.view, 'sanity: booting at /invoices must seed the list').toBe('invoices')
+
+    await popTo(`/invoices/${INVOICE_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the detail view').toBe('detail')
+    expect(
+      ctx.importedInvoiceId,
+      'Back must restore the invoice id in the same commit as the view, not a render later',
+    ).toBe(INVOICE_ID)
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe(`/invoices/${INVOICE_ID}`)
+  })
+})
+
+describe('Adversarial: Back onto a view that takes no id clears whichever id was live', () => {
+  it('popstate_backOntoAnIdlessViewClearsALiveExtractionJob', async () => {
+    await bootAt(`/extraction/${JOB_A}`)
+    let ctx = requireCtx()
+    expect(ctx.extractionJobId, 'sanity: booting at /extraction/<id> must seed the job').toBe(JOB_A)
+
+    await popTo('/settings')
+    ctx = requireCtx()
+    expect(ctx.view, 'Back onto an id-less view must still restore that view').toBe('settings')
+    expect(ctx.extractionJobId, 'an id-less target must clear a live job id, not leave it stale').toBeNull()
+    expect(ctx.importedInvoiceId, 'an id-less target must not carry an invoice id either').toBeNull()
+  })
+})
+
+describe('Adversarial: rapid double-Back across two different drill-down ids', () => {
+  it('popstate_rapidDoubleBackAcrossTwoIdsLandsOnTheSecondIdOnly', async () => {
+    await bootAt('/invoices')
+
+    // Two Back presses in the same flush, each landing on a DIFFERENT id-carrying path --
+    // the final commit must carry ONLY the second id, with no bleed from the first.
+    await act(async () => {
+      window.history.replaceState(null, '', `/invoices/${INVOICE_ID}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      window.history.replaceState(null, '', `/extraction/${JOB_A}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    const ctx = requireCtx()
+    expect(ctx.view, 'the second hop must win, not stall on the first').toBe('extraction')
+    expect(ctx.extractionJobId, 'the second hop\'s job id must land').toBe(JOB_A)
+    expect(ctx.importedInvoiceId, 'the first hop\'s invoice id must not survive the second hop').toBeNull()
+  })
+})
+
+describe('Adversarial: an id needing percent-encoding round-trips through push then Back', () => {
+  it('popstate_anEncodedIdRoundTripsThroughPushThenBack', async () => {
+    const RAW_ID = 'job a/b?c'
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(RAW_ID)
+    })
+    let ctx = requireCtx()
+    expect(
+      window.location.pathname,
+      'the pushed URL must percent-encode the raw id, not embed it literally',
+    ).toBe(`/extraction/${encodeURIComponent(RAW_ID)}`)
+    expect(ctx.extractionJobId, 'the live atom keeps the raw, undecoded id').toBe(RAW_ID)
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await popTo(`/extraction/${encodeURIComponent(RAW_ID)}`)
+    ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the extraction view').toBe('extraction')
+    expect(ctx.extractionJobId, 'Back must decode the id back to its original raw form').toBe(RAW_ID)
   })
 })
 
@@ -326,17 +439,19 @@ describe('Adversarial: Back into a view whose data was cleared elsewhere', () =>
   it('popstate_backToInvoiceAfterACompanySwitchRendersNoStaleSelection', async () => {
     await bootAt('/')
     await act(async () => {
-      capturedCtx!.selectInvoice('INV-001')
+      capturedCtx!.openImportedInvoice('dddddddd-1111-4111-8111-111111111111')
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: selectInvoice must push /invoice').toBe('/invoice')
-    expect(ctx.selectedId, 'sanity: the selection must be armed').toBe('INV-001')
+    expect(window.location.pathname, 'sanity: openImportedInvoice must push /invoices/<id>').toBe(
+      '/invoices/dddddddd-1111-4111-8111-111111111111',
+    )
+    expect(ctx.importedInvoiceId, 'sanity: the selection must be armed').toBe('dddddddd-1111-4111-8111-111111111111')
 
     await act(async () => {
       capturedCtx!.switchClient('other-entity-777')
     })
     ctx = requireCtx()
-    expect(ctx.selectedId, 'sanity: switchClient must already clear the selection').toBeNull()
+    expect(ctx.importedInvoiceId, 'sanity: switchClient must already clear the selection').toBeNull()
 
     await popTo('/invoice')
     ctx = requireCtx()
@@ -344,7 +459,6 @@ describe('Adversarial: Back into a view whose data was cleared elsewhere', () =>
     // Matches decision [route-01-limitations]: a cold /invoice has no selection and
     // InvoiceDetail renders its EmptyState -- a popstate-reached /invoice must be the
     // same, not the previous company's row.
-    expect(ctx.selectedId, 'a popstate-restored /invoice must not resurrect the old company\'s selection').toBeNull()
     expect(ctx.importedInvoiceId, 'a popstate-restored /invoice must not resurrect an imported-invoice target either').toBeNull()
   })
 })

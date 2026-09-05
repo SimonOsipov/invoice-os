@@ -110,13 +110,12 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
 
 // onUnauthorized defaults to a throwaway spy -- exposed as a param (not read back off ctx)
 // so a 401 test can pass its own spy and assert on it directly.
-function detailCtx(importedInvoiceId: string, onUnauthorized: () => void = vi.fn()): PlatformCtx {
+function detailCtx(importedInvoiceId: string | null, onUnauthorized: () => void = vi.fn()): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', onUnauthorized),
-    selectedId: null,
     importedInvoiceId,
     nav: () => {},
   }
@@ -347,6 +346,19 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
+})
+
+describe('InvoiceDetail dispatcher: a null importedInvoiceId (task-919, ROUTE-02-04, D-3)', () => {
+  it('renders the EmptyState floor and the All-invoices button, no fetch', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoiceDetail ctx={detailCtx(null)} />)
+
+    expect(screen.getByText('No invoice selected')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /All invoices/ })).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-reason-lands-on-the-detail])', () => {

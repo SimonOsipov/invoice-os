@@ -408,4 +408,83 @@ describe('ROUTE-02-02: cold-boot seeding reaches both ids', () => {
   })
 })
 
+// QA (ROUTE-02-02, task-912): adversarial coverage the B-1..B-9 specs above did not
+// exercise. No existence check on the id is owed here -- seedFromPath is a pure path
+// parse, decoupled from data. Whether an unknown/foreign id gets a fallback surface is
+// downstream rendering's job (see decision note in task-912's QA findings).
+describe('QA adversarial coverage (ROUTE-02-02)', () => {
+  it('boot_aWellFormedButUnknownIdStillReachesCtxUnvalidated', async () => {
+    const unknownId = '00000000-0000-0000-0000-000000000000'
+    await bootAt(`/invoices/${unknownId}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'a well-formed id must still seed detail regardless of whether it names a real row').toBe(
+      'detail',
+    )
+    expect(
+      ctx.importedInvoiceId,
+      'boot performs no existence check -- the id reaches ctx verbatim; a fallback for an unknown id is not this subtask\'s job',
+    ).toBe(unknownId)
+  })
+
+  it('boot_aQueryStringAndAReviewHashTogetherStillDropTheIdAndNeverEchoSearch', async () => {
+    const hash = `#review/${REVIEW_ID}`
+    await bootAt(`/invoices/${DETAIL_ID}?foo=bar${hash}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'the review hash must still win with a query string also present').toBe('create')
+    expect(ctx.importedInvoiceId, "the path's id must not survive when the hash wins").toBeNull()
+    expect(window.location.search, 'the alignment must never echo the query string').toBe('')
+    expect(window.location.hash, 'the alignment must still preserve the hash').toBe(hash)
+  })
+
+  it('boot_initialViewBeatsBothTheReviewHashAndThePathsIdOnRemount', async () => {
+    const hash = `#review/${REVIEW_ID}`
+    await bootAt(`/invoices/${DETAIL_ID}${hash}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the review hash beats the path on the first mount').toBe('create')
+    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'audit')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, 'initialView must beat both the hash and the path on the remount').toBe('audit')
+    expect(ctx.importedInvoiceId, "the path's id must not survive when initialView wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on /audit').toBe('/audit')
+  })
+
+  it('boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId', async () => {
+    // B-6 only exercises 'audit'; this exercises a different id-less branch of bootHref's
+    // ternary (routePath('settings', null)) so the fallback arm isn't proven by one view alone.
+    await bootAt(`/extraction/${JOB_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the first mount seeds extraction from the path').toBe('extraction')
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'settings')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, 'initialView must beat the path').toBe('settings')
+    expect(ctx.extractionJobId, "the path's job id must not survive when initialView wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on /settings').toBe('/settings')
+  })
+
+  it('boot_theIdSurvivesRepeatedStrictModeRemounts', async () => {
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt(`/invoices/${DETAIL_ID}`, { strict: true })
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'StrictMode double-invocation must not lose the id').toBe(DETAIL_ID)
+    expect(
+      window.location.pathname,
+      'StrictMode double-invocation must not drop the id from the aligned URL',
+    ).toBe(`/invoices/${DETAIL_ID}`)
+    const differing = replaceSpy.mock.calls.filter(
+      (call) => call[2] !== `/invoices/${DETAIL_ID}`,
+    )
+    expect(
+      differing,
+      `every replaceState call under StrictMode must agree on the id-carrying URL: ${JSON.stringify(differing)}`,
+    ).toHaveLength(0)
+  })
+})
+
 

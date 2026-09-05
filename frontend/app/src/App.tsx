@@ -316,8 +316,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // a review hash into an already-open tab's address bar does not navigate until reload.
   const [bootSeed] = useState(() => seedFromPath(window.location.pathname))
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
-  // Plain const, not a useState: read only by the lazy initializers below, all of which
-  // run once at mount.
+  // Plain const, not a useState: read by the lazy initializers below (all run once at
+  // mount) and by bootHref further down, so no memoization is needed.
   const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : bootSeed.view)
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.

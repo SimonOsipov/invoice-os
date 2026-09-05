@@ -20,6 +20,8 @@ import type { PlatformCtx, View } from './types'
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const DETAIL_ID = 'd1e2a3b4-c5d6-47e8-89fa-bc0123456789'
+const JOB_ID = 'f1e2a3b4-c5d6-47e8-89fa-bc0123456790'
 
 const MEMBER: Member = {
   id: 'm-boot-001',
@@ -319,6 +321,90 @@ describe('QA adversarial coverage', () => {
     expect(ctx.view, 'the review hash must win over a completely unrelated path').toBe('create')
     expect(window.location.pathname, 'the alignment must correct the path to /create').toBe('/create')
     expect(window.location.hash, 'the alignment must carry the hash along').toBe(hash)
+  })
+})
+
+// ROUTE-02-02: seedFromPath's id reaches ctx and survives the mount alignment.
+describe('ROUTE-02-02: cold-boot seeding reaches both ids', () => {
+  it('boot_detailPathSeedsTheIdOnTheFirstCommittedRender (B-1)', async () => {
+    await bootAt(`/invoices/${DETAIL_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, `booting at /invoices/${DETAIL_ID} should seed 'detail', got '${ctx.view}'`).toBe('detail')
+    expect(ctx.importedInvoiceId, 'the id must reach ctx.importedInvoiceId at boot').toBe(DETAIL_ID)
+  })
+
+  it('boot_extractionPathSeedsTheJobIdAndMountsTheReviewScreen (B-2)', async () => {
+    await bootAt(`/extraction/${JOB_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, `booting at /extraction/${JOB_ID} should seed 'extraction', got '${ctx.view}'`).toBe('extraction')
+    expect(ctx.extractionJobId, 'the id must reach ctx.extractionJobId at boot').toBe(JOB_ID)
+    expect(screen.queryByTestId('extraction-review'), 'ExtractionReview must mount once the job id is seeded').toBeTruthy()
+  })
+
+  it('boot_theAlignmentDoesNotDropTheIdFromTheUrlAfterMount (B-3)', async () => {
+    await bootAt(`/invoices/${DETAIL_ID}`)
+    requireCtx()
+    expect(
+      window.location.pathname,
+      'the alignment must not rewrite the id-carrying path to the bare /invoice',
+    ).toBe(`/invoices/${DETAIL_ID}`)
+  })
+
+  it('boot_theAlignmentWritesTheIdCarryingUrlOnceAndNeverPushState (B-4)', async () => {
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await bootAt(`/invoices/${DETAIL_ID}`)
+    requireCtx()
+    expect(pushSpy, 'mount must never call pushState').not.toHaveBeenCalled()
+    // calls[0] is bootAt's own boot-setup replaceState (the AC-5 harness trap), not the
+    // app's. The app's writes start at calls[1]: the mount alignment, then the untouched
+    // review-hash mirror (App.tsx ~536), which also replaceState's on this same commit.
+    const appCalls = replaceSpy.mock.calls.slice(1)
+    expect(appCalls[0]?.[2], "the alignment's own replaceState call must carry the id").toBe(
+      `/invoices/${DETAIL_ID}`,
+    )
+    const droppingId = appCalls.filter((call) => call[2] === '/invoice')
+    expect(droppingId, 'no app replaceState call may ever drop the id back to the bare /invoice path').toHaveLength(
+      0,
+    )
+  })
+
+  it('boot_theReviewHashBeatsThePathAndDropsThePathsId (B-5)', async () => {
+    const hash = `#review/${REVIEW_ID}`
+    await bootAt(`/invoices/${DETAIL_ID}${hash}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'a live review hash must still win over a path carrying an id').toBe('create')
+    expect(ctx.importedInvoiceId, "the path's id must not survive when the review hash wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on /create').toBe('/create')
+    expect(window.location.hash, 'the alignment must preserve the review hash').toBe(hash)
+  })
+
+  it('boot_initialViewBeatsThePathAndDropsItsId (B-6)', async () => {
+    await bootAt(`/invoices/${DETAIL_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the first mount seeds detail from the path').toBe('detail')
+    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'audit')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, `a DEMO-06 initialView carry must beat the path, got '${ctx.view}'`).toBe('audit')
+    expect(ctx.importedInvoiceId, "the path's id must not survive when initialView wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on /audit').toBe('/audit')
+  })
+
+  it('boot_aMalformedIdSegmentFallsBackToDashboardWithNoUncaughtError (B-9)', async () => {
+    const onError = vi.fn()
+    window.addEventListener('error', onError)
+    try {
+      await bootAt('/invoices/%zz')
+      const ctx = requireCtx()
+      expect(ctx.view, `a malformed id segment must fall back to dashboard, got '${ctx.view}'`).toBe('dashboard')
+    } finally {
+      window.removeEventListener('error', onError)
+    }
+    expect(onError, 'booting a malformed id segment must throw no uncaught error').not.toHaveBeenCalled()
   })
 })
 

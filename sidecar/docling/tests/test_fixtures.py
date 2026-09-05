@@ -15,6 +15,7 @@ test_convert.py's T-04-17) -- Go's own TestFixtures_MatchTheirGenerator already 
 bytes, so a second guard here would just be duplication.
 """
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -80,3 +81,37 @@ def test_invoice_docx_matches_its_generator():
         f"{build_invoice_docx.FIXTURE} does not match its generator -- "
         "run `python tests/fixtures/build_invoice_docx.py --update`"
     )
+
+
+# --- EXTR-19-01: the discriminating pair and its control ---------------------------------
+#
+# Written Mode A: red until EXTR-19-01 commits the two generators and their .docx files.
+
+
+def _assert_docx_matches_its_generator(module: str) -> None:
+    # Imported here rather than at module level: the generator does not exist yet, and a
+    # module-level import would error collection for every test in this file, not just this one.
+    path = FIXTURES / f"{module}.py"
+    assert path.exists(), f"{path} is missing -- EXTR-19-01 has not written this generator yet"
+
+    build = importlib.import_module(module)
+    assert build.FIXTURE.exists(), (
+        f"{build.FIXTURE} is not committed -- run `python tests/fixtures/{module}.py --update`"
+    )
+    committed = build.FIXTURE.read_bytes()
+    regenerated = build.build()
+    assert committed == regenerated, (
+        f"{build.FIXTURE} does not match its generator -- "
+        f"run `python tests/fixtures/{module}.py --update`"
+    )
+
+
+def test_stacked_invoice_docx_matches_its_generator():
+    # Fixture B. Same idiom as test_invoice_docx_matches_its_generator above: this is the ONLY
+    # byte-fidelity guard for boxless_stacked_invoice.docx.
+    _assert_docx_matches_its_generator("build_stacked_invoice_docx")
+
+
+def test_inline_variant_docx_matches_its_generator():
+    # Fixture A-prime, the near-miss control.
+    _assert_docx_matches_its_generator("build_inline_variant_docx")

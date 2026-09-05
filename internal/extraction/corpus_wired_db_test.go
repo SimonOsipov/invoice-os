@@ -1313,19 +1313,19 @@ var dxParagraphs = []string{
 	"Total: NGN 4,300.00",
 }
 
-// dxDocumentXML reads word/document.xml out of a .docx's own zip container. None of
-// dxParagraphs needs XML escaping (no <, >, &, ', "), so a python-docx single-run paragraph's
-// text survives as a literal byte substring -- the same coarse-floor idiom fxContent uses for a
-// PDF's content stream.
-func dxDocumentXML(t *testing.T, raw []byte) string {
+// dxDocumentXML reads word/document.xml out of a .docx's own zip container. No transcribed
+// paragraph in this file needs XML escaping (no <, >, &, ', "), so a python-docx single-run
+// paragraph's text survives as a literal byte substring -- the same coarse-floor idiom
+// fxContent uses for a PDF's content stream. name is only for the failure message.
+func dxDocumentXML(t *testing.T, name string, raw []byte) string {
 	t.Helper()
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
-		t.Fatalf("open %s as a zip: %v", dxFixture, err)
+		t.Fatalf("open %s as a zip: %v", name, err)
 	}
 	f, err := zr.Open("word/document.xml")
 	if err != nil {
-		t.Fatalf("%s carries no word/document.xml: %v", dxFixture, err)
+		t.Fatalf("%s carries no word/document.xml: %v", name, err)
 	}
 	defer f.Close()
 	body, err := io.ReadAll(f)
@@ -1372,7 +1372,7 @@ func TestDoclingGolden_InvoiceDocxIsMachineGenerated(t *testing.T) {
 // distinguishes a DOCX golden from a PDF-shaped one committed under the wrong name.
 func TestDoclingGolden_InvoiceDocxMatchesItsFixturesParagraphs(t *testing.T) {
 	raw := fxRead(t, dxFixture)
-	xmlBody := dxDocumentXML(t, raw)
+	xmlBody := dxDocumentXML(t, dxFixture, raw)
 	for _, p := range dxParagraphs {
 		if !strings.Contains(xmlBody, p) {
 			t.Fatalf("%s's own word/document.xml does not carry %q; this test's oracle is broken, not the golden", dxFixture, p)
@@ -1402,6 +1402,179 @@ func TestDoclingGolden_InvoiceDocxMatchesItsFixturesParagraphs(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("%s carries no token equal to %q, one of invoice.docx's own paragraphs; the golden is stale relative to the fixture", dxGolden, p)
+		}
+	}
+}
+
+// --- EXTR-19-01: the discriminating pair and its control ----------------------------------
+//
+// Three boxless DOCX fixtures, written Mode A: red until EXTR-19-01 commits the four new
+// files. A is the shipped invoice.docx (dxFixture/dxGolden). A-prime is its near-miss control:
+// same template, different data, one extra interior line item. B carries the same three anchor
+// labels in the same order but stacks each label alone on its own paragraph.
+//
+// Nothing here calls BoxlessFingerprint -- that function arrives in EXTR-19-02.
+
+const (
+	bxStackedFixture = "boxless_stacked_invoice.docx"
+	bxStackedGolden  = "boxless_stacked_invoice.docling.json"
+	bxInlineFixture  = "boxless_inline_variant.docx"
+	bxInlineGolden   = "boxless_inline_variant.docling.json"
+)
+
+// bxInlineExtraParagraph must trip no anchorLexicon pattern: a stray "Total", "Date" or "Tax"
+// in it adds a fourth observation and breaks EXTR-19-02 AC-2.
+// TestBoxlessFixtures_TheExtraParagraphMatchesNoAnchor is the guard.
+const (
+	bxInlineExtraParagraph = "Widget x 2 NGN 1,000.00"
+	bxInlineTotalParagraph = "Total: NGN 7,150.00"
+)
+
+// bxStackedParagraphs is build_stacked_invoice_docx.py's PARAGRAPHS, transcribed. The bare
+// labels are the whole point: this list IS the structural difference from A that
+// TestBoxlessFingerprint_DiscriminatesTheStackedLayoutFromTheInlineOne (EXTR-19-02) reads.
+var bxStackedParagraphs = []string{
+	"Invoice No",
+	"ASC-2026-0920",
+	"Issue Date",
+	"14 Aug 2026",
+	"Total",
+	"NGN 4,300.00",
+}
+
+// bxInlineParagraphs is build_inline_variant_docx.py's PARAGRAPHS, transcribed. The line item
+// sits at index 2, strictly between Issue Date and Total; appended after Total it would shift
+// no anchor ordinal. TestBoxlessFixtures_TheControlShiftsAnAnchorOrdinal is why.
+var bxInlineParagraphs = []string{
+	"Invoice No: ASC-2026-0921",
+	"Issue Date: 03 Sep 2026",
+	bxInlineExtraParagraph,
+	bxInlineTotalParagraph,
+}
+
+var bxPair = []struct {
+	fixture    string
+	golden     string
+	paragraphs []string
+}{
+	{bxStackedFixture, bxStackedGolden, bxStackedParagraphs},
+	{bxInlineFixture, bxInlineGolden, bxInlineParagraphs},
+}
+
+// bxAssertPairIsWhole keeps every loop below from passing over an emptied table.
+func bxAssertPairIsWhole(t *testing.T) {
+	t.Helper()
+	if len(bxPair) != 2 {
+		t.Fatalf("bxPair names %d fixture(s), want 2 -- every loop below would assert over less than the pair", len(bxPair))
+	}
+	if len(bxStackedParagraphs) != 6 || len(bxInlineParagraphs) != 4 {
+		t.Fatalf("bxStackedParagraphs has %d entry(s) and bxInlineParagraphs %d, want 6 and 4",
+			len(bxStackedParagraphs), len(bxInlineParagraphs))
+	}
+}
+
+// Story AC #3. Mirrors TestDoclingGolden_InvoiceDocxIsMachineGenerated over the new pair.
+func TestDoclingGolden_BoxlessPairIsMachineGenerated(t *testing.T) {
+	bxAssertPairIsWhole(t)
+
+	for _, f := range bxPair {
+		golden := dcReadNamedGolden(t, f.golden)
+
+		dec := json.NewDecoder(bytes.NewReader(golden))
+		dec.UseNumber()
+		var doc any
+		if err := dec.Decode(&doc); err != nil {
+			t.Fatalf("decode %s: %v", f.golden, err)
+		}
+		round, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			t.Fatalf("re-serialise %s: %v", f.golden, err)
+		}
+		round = append(round, '\n')
+		if !bytes.Equal(round, golden) {
+			t.Errorf("%s is not what `docling-canary.sh golden` writes (%d bytes re-serialised, %d committed); regenerate it from a freshly built image rather than editing it",
+				f.golden, len(round), len(golden))
+		}
+
+		obj, ok := doc.(map[string]any)
+		if !ok {
+			t.Fatalf("%s decodes to %T, want a JSON object", f.golden, doc)
+		}
+		if v, _ := obj["docling_version"].(string); v == "" || v == "stub" {
+			t.Errorf("%s reports docling_version %q; it was generated by a stub image, not the pinned sidecar", f.golden, v)
+		}
+	}
+}
+
+// Story AC #4. Boxless is the premise the whole story rests on: every DOCX token carries the
+// zero box, which is why Fingerprint cannot tell A from B and BoxlessFingerprint must.
+func TestDoclingGolden_BoxlessPairIsBoxless(t *testing.T) {
+	bxAssertPairIsWhole(t)
+
+	for _, f := range bxPair {
+		gPages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, f.golden))
+		if len(gPages) != 1 {
+			t.Fatalf("%s carries %d page(s), want exactly 1", f.golden, len(gPages))
+		}
+		page := gPages[0]
+
+		if page.Number != 1 {
+			t.Errorf("%s page[0].Number = %d, want 1", f.golden, page.Number)
+		}
+		if page.WidthPt != 0 || page.HeightPt != 0 {
+			t.Errorf("%s page[0] is %vx%v pt, want 0x0 -- a DOCX reading carries no page geometry, and a non-zero size is what a PDF-shaped golden committed under this name would look like",
+				f.golden, page.WidthPt, page.HeightPt)
+		}
+		if len(page.Tables) != 0 {
+			t.Errorf("%s carries %d table(s), want 0 -- these fixtures are plain paragraphs, no table structure", f.golden, len(page.Tables))
+		}
+
+		if len(page.Tokens) == 0 {
+			t.Fatalf("%s carries no token; the per-token assertion below would be vacuous", f.golden)
+		}
+		for i, tok := range page.Tokens {
+			r := tok.Region
+			if r.X0 != 0 || r.Y0 != 0 || r.X1 != 0 || r.Y1 != 0 {
+				t.Errorf("%s token[%d] %q has region (%v,%v)-(%v,%v), want the zero box -- a positioned token means this golden is not a DOCX reading",
+					f.golden, i, tok.Text, r.X0, r.Y0, r.X1, r.Y1)
+			}
+		}
+	}
+}
+
+// Story AC #5. Ties each committed golden to its own committed .docx, in both directions:
+// nothing else in this package says the two were generated from the same source.
+//
+// The token order pin is not decoration -- TestBoxlessFixtures_TheControlShiftsAnAnchorOrdinal
+// reads raw token ordinals, and B being *stacked* rather than merely six-paragraphs-long is
+// asserted nowhere else in this subtask.
+func TestDoclingGolden_BoxlessPairMatchesItsFixturesParagraphs(t *testing.T) {
+	bxAssertPairIsWhole(t)
+
+	for _, f := range bxPair {
+		xmlBody := dxDocumentXML(t, f.fixture, fxRead(t, f.fixture))
+		for _, p := range f.paragraphs {
+			if !strings.Contains(xmlBody, p) {
+				t.Fatalf("%s's own word/document.xml does not carry %q; this test's oracle is broken, not the golden", f.fixture, p)
+			}
+		}
+
+		gPages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, f.golden))
+		if len(gPages) != 1 {
+			t.Fatalf("%s carries %d page(s), want exactly 1", f.golden, len(gPages))
+		}
+		page := gPages[0]
+
+		// AC #4's "one token per generator paragraph". Measured for invoice.docx (3 for 3);
+		// an inference for these two until their goldens exist. If a real reading disagrees,
+		// AC #4's premise is wrong -- take that to the architect, do not relax this line.
+		if len(page.Tokens) != len(f.paragraphs) {
+			t.Fatalf("%s carries %d token(s), want exactly %d -- docling's DOCX path emits one token per paragraph, no word-split", f.golden, len(page.Tokens), len(f.paragraphs))
+		}
+		for i, p := range f.paragraphs {
+			if page.Tokens[i].Text != p {
+				t.Errorf("%s token[%d] = %q, want %q -- the golden is stale relative to %s, or its paragraph order moved", f.golden, i, page.Tokens[i].Text, p, f.fixture)
+			}
 		}
 	}
 }

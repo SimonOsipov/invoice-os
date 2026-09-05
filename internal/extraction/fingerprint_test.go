@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -377,5 +378,183 @@ func TestAnchorObservations_ProjectionReproducesFingerprint(t *testing.T) {
 	}
 	if !sawNonEmpty {
 		t.Fatal("every layout yielded zero observations; the equality above would pass vacuously")
+	}
+}
+
+// --- EXTR-19-01: the discriminating pair and its control ----------------------------------
+//
+// Written Mode A: red until EXTR-19-01 commits the two new .docx files and their goldens.
+// The fixture constants and the transcribed paragraph lists live in corpus_wired_db_test.go
+// (bxStackedGolden, bxInlineGolden, bxInlineParagraphs, ...), same package.
+
+// bxPage1 serves a committed golden through the real DoclingReader and returns the page whose
+// Number is 1 -- AnchorObservations' own page selection (fingerprint.go:105-109), not slice
+// position. Fails loudly on an empty page so no assertion below can pass over zero tokens.
+func bxPage1(t *testing.T, golden string) extraction.TokenPage {
+	t.Helper()
+
+	_, pages, _ := dcServeGolden(t, dcReadNamedGolden(t, golden))
+	for _, p := range pages {
+		if p.Number != 1 {
+			continue
+		}
+		if len(p.Tokens) == 0 {
+			t.Fatalf("%s page 1 carries no token; every assertion over it would be vacuous", golden)
+		}
+		return p
+	}
+	t.Fatalf("%s carries no page numbered 1 (%d page(s) read)", golden, len(pages))
+	return extraction.TokenPage{}
+}
+
+func bxOnePage(p extraction.TokenPage) []extraction.TokenPage {
+	return []extraction.TokenPage{p}
+}
+
+// bxTokenIndex is the slice index of the page-1 token reading exactly want, or -1. Indexed by
+// text and never through AnchorObservations: its tiebreak sort (fingerprint.go:134-146)
+// reorders zero-box observations alphabetically by label, which destroys the raw ordinal.
+func bxTokenIndex(page extraction.TokenPage, want string) int {
+	for i, tok := range page.Tokens {
+		if tok.Text == want {
+			return i
+		}
+	}
+	return -1
+}
+
+func bxTexts(page extraction.TokenPage) []string {
+	out := make([]string, len(page.Tokens))
+	for i, tok := range page.Tokens {
+		out[i] = tok.Text
+	}
+	return out
+}
+
+func bxSortedLabels(obs []extraction.AnchorObservation) []string {
+	out := make([]string, len(obs))
+	for i, o := range obs {
+		out[i] = o.Label
+	}
+	slices.Sort(out)
+	return out
+}
+
+// bxWantLabels is asserted as a literal rather than by cross-comparing the three fixtures:
+// three empty observation lists are also all equal to each other.
+var bxWantLabels = []string{"invoice_no", "issue_date", "total"}
+
+// Story AC #6. The pair must discriminate on STRUCTURE, never on label vocabulary -- without
+// this, a later regeneration could drift B into carrying a fourth label and the split that
+// EXTR-19-02 measures would be meaningless.
+func TestBoxlessFixtures_ShareTheSameAnchorLabelSet(t *testing.T) {
+	fixtures := []struct{ role, golden string }{
+		{"A (invoice.docx)", dxGolden},
+		{"A-prime (boxless_inline_variant.docx)", bxInlineGolden},
+		{"B (boxless_stacked_invoice.docx)", bxStackedGolden},
+	}
+	if len(fixtures) != 3 {
+		t.Fatalf("this test names %d fixture(s), want A, A-prime and B", len(fixtures))
+	}
+
+	for _, f := range fixtures {
+		got := bxSortedLabels(extraction.AnchorObservations(bxOnePage(bxPage1(t, f.golden))))
+		if !slices.Equal(got, bxWantLabels) {
+			t.Errorf("%s yields anchor labels %v, want exactly %v once each", f.role, got, bxWantLabels)
+		}
+	}
+}
+
+// Story AC #6, second half: the defect this story exists to fix, pinned. A and B collide under
+// the geometric fingerprint because every DOCX token carries the zero box
+// (TestFingerprint_BoxlessTokensDegradeToTheLabelSet is the mechanism). Pinned so a later
+// change that accidentally splits them at v1 is visible.
+//
+// This is a change-detector, not evidence that the pair discriminates: any two boxless pages
+// carrying the same three labels collide here. The discrimination is EXTR-19-02's AC-1.
+func TestBoxlessFixtures_CollideUnderTheGeometricFingerprint(t *testing.T) {
+	a := bxOnePage(bxPage1(t, dxGolden))
+	b := bxOnePage(bxPage1(t, bxStackedGolden))
+
+	fpA := extraction.Fingerprint(a)
+	fpB := extraction.Fingerprint(b)
+
+	// A label-less page also collides with any other label-less page, on sha256(""). Rule it
+	// out before asserting the equality.
+	fpEmpty := extraction.Fingerprint([]extraction.TokenPage{{Number: 1}})
+	if fpA == fpEmpty || fpB == fpEmpty {
+		t.Fatalf("Fingerprint(A) = %q, Fingerprint(B) = %q, Fingerprint(an empty page) = %q -- a fixture matched no anchor label, so the equality below would be vacuous", fpA, fpB, fpEmpty)
+	}
+	if len(fpA) != 67 {
+		t.Fatalf("Fingerprint(A) = %q (%d bytes), want 67", fpA, len(fpA))
+	}
+	if fpA != fpB {
+		t.Errorf("Fingerprint(A) = %q, Fingerprint(B) = %q, want equal -- v1 sees only the sorted label set on boxless tokens, so this pair MUST collide today; if it no longer does, the geometric fingerprint moved and every stored rule is invalidated", fpA, fpB)
+	}
+}
+
+// Story AC #7. The control is a near-miss, not a tie: A-prime's extra line item sits INSIDE
+// the anchor run, so at least one anchor's raw token ordinal differs from A's. This is what
+// falsifies the rejected token-ordinal fingerprint scheme (D-5) -- appended after Total it
+// would shift nothing and prove nothing.
+func TestBoxlessFixtures_TheControlShiftsAnAnchorOrdinal(t *testing.T) {
+	a := bxPage1(t, dxGolden)
+	ap := bxPage1(t, bxInlineGolden)
+
+	aTotal := bxTokenIndex(a, dxParagraphs[2])
+	apIssue := bxTokenIndex(ap, bxInlineParagraphs[1])
+	apExtra := bxTokenIndex(ap, bxInlineExtraParagraph)
+	apTotal := bxTokenIndex(ap, bxInlineTotalParagraph)
+
+	for _, probe := range []struct {
+		what  string
+		index int
+	}{
+		{"A / " + dxParagraphs[2], aTotal},
+		{"A-prime / " + bxInlineParagraphs[1], apIssue},
+		{"A-prime / " + bxInlineExtraParagraph, apExtra},
+		{"A-prime / " + bxInlineTotalParagraph, apTotal},
+	} {
+		if probe.index < 0 {
+			t.Fatalf("no page-1 token reads %s; the index assertions below cannot be trusted.\n  A       = %q\n  A-prime = %q", probe.what, bxTexts(a), bxTexts(ap))
+		}
+	}
+
+	if len(ap.Tokens) != len(a.Tokens)+1 {
+		t.Errorf("A-prime carries %d page-1 token(s), A carries %d; want exactly one more.\n  A       = %q\n  A-prime = %q", len(ap.Tokens), len(a.Tokens), bxTexts(a), bxTexts(ap))
+	}
+	if apTotal <= aTotal {
+		t.Errorf("A-prime's total sits at page-1 token index %d, A's at %d; want strictly greater -- the control must shift at least one anchor ordinal.\n  A       = %q\n  A-prime = %q", apTotal, aTotal, bxTexts(a), bxTexts(ap))
+	}
+	if apExtra <= apIssue || apExtra >= apTotal {
+		t.Errorf("A-prime's extra line item sits at index %d, outside the open interval (issue_date %d, total %d); an appended paragraph shifts no ordinal and degenerates the control into a tie.\n  A-prime = %q", apExtra, apIssue, apTotal, bxTexts(ap))
+	}
+}
+
+// Story AC #8. An absence assertion, so it carries a control needle that must be FOUND. If the
+// line item tripped \btotal\b, \bdate\b or \btax\b it would add a fourth AnchorObservation and
+// silently break EXTR-19-02 AC-2 (A-prime equals A) -- with A-prime still passing every other
+// test in this subtask.
+func TestBoxlessFixtures_TheExtraParagraphMatchesNoAnchor(t *testing.T) {
+	oneToken := func(text string) []extraction.TokenPage {
+		return []extraction.TokenPage{{
+			Number: 1,
+			Tokens: []extraction.Token{{Text: text, Region: extraction.Region{Page: 1}}},
+		}}
+	}
+
+	if got := extraction.AnchorObservations(oneToken(bxInlineTotalParagraph)); len(got) != 1 {
+		t.Fatalf("control needle: AnchorObservations(%q) = %d observation(s), want exactly 1 -- the lexicon scan does not find a known anchor, so the absence assertion below proves nothing", bxInlineTotalParagraph, len(got))
+	}
+
+	if got := extraction.AnchorObservations(oneToken(bxInlineExtraParagraph)); len(got) != 0 {
+		t.Errorf("AnchorObservations(%q) = %+v, want none -- A-prime's line item must trip no anchorLexicon pattern", bxInlineExtraParagraph, got)
+	}
+
+	// ...and it must be the paragraph the committed fixture actually carries, not a string that
+	// only ever existed in this file.
+	ap := bxPage1(t, bxInlineGolden)
+	if bxTokenIndex(ap, bxInlineExtraParagraph) < 0 {
+		t.Errorf("%s carries no page-1 token equal to %q; the guard above is scanning a string the fixture does not contain.\n  A-prime = %q", bxInlineGolden, bxInlineExtraParagraph, bxTexts(ap))
 	}
 }

@@ -171,7 +171,7 @@ export function InvoiceActivityCard({
               {toggle.label}
             </button>
           )}
-          {/* A <button>, not an <a>: there is no URL to point at. The SPA has no router. */}
+          {/* A <button>, not an <a>: the URL carries no invoice id to point at. */}
           <button
             type="button"
             data-testid="activity-open-in-audit"

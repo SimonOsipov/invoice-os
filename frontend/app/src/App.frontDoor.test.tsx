@@ -135,4 +135,14 @@ describe('front door: the redirect arm (F-201)', () => {
     expect(window.location.href).toBe('http://localhost/')
     expect(screen.getByText('Choose an account')).toBeTruthy()
   })
+
+  // Adversarial: landingBase() trims before checking truthiness (auth.ts:71), so a
+  // whitespace-only VITE_LANDING_URL is the boundary between the two arms, not just "unset".
+  it('FD-6: a landing URL that trims to empty behaves like unset', () => {
+    stubLocation()
+    vi.stubEnv('VITE_LANDING_URL', '   ')
+    render(<App />)
+    expect(window.location.href).toBe('http://localhost/')
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+  })
 })

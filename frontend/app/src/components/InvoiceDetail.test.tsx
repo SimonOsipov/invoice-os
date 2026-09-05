@@ -720,13 +720,13 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
 
     const btn = await screen.findByTestId('detail-submit')
     expect((btn as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(reason)
+    expect(btn.getAttribute('title')).toBe(reason)
   })
 
   // THE MUTATION ORACLE -- do not soften or drop. Presence stopped being discriminating
   // once Submit always renders; this now rides on the `disabled` property and the
-  // absence of reason text. A component that re-derives `status === 'validated'` yields
-  // disabled=true here; one that derives the reason client-side renders text here.
+  // absence of a title. A component that re-derives `status === 'validated'` yields
+  // disabled=true here; one that derives the reason client-side carries a title here.
   it('F-255#1: renders Submit off the wire flag, not the status -- can_submit:true on a rejected invoice renders it enabled', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'rejected', can_edit: true, can_submit: true, submit_blocked_reason: null }))
 
@@ -734,7 +734,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
 
     const btn = await screen.findByTestId('detail-submit')
     expect((btn as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
+    expect(btn.hasAttribute('title')).toBe(false)
   })
 
   it('AC2/F-255#2: clicking Submit arms a confirmation and sends nothing', async () => {
@@ -1045,27 +1045,26 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(submitCalls).toHaveLength(0)
   })
 
-  it('the blocked reason renders verbatim from the wire, not from a client status map', async () => {
+  it('the blocked reason comes verbatim from the wire, not from a client status map', async () => {
     const sentinel = 'Sentinel reason ZZQ-7.'
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: sentinel }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('submit-blocked-reason')
-    expect(reasonEl.textContent).toBe(sentinel)
+    expect((await screen.findByTestId('detail-submit')).getAttribute('title')).toBe(sentinel)
   })
 
-  it('when the wire says submittable, Submit is enabled and no reason text renders', async () => {
+  it('when the wire says submittable, Submit is enabled and carries no reason at all', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true, submit_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = await screen.findByTestId('detail-submit')
     expect((btn as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
+    expect(btn.hasAttribute('title')).toBe(false)
   })
 
-  it('a rejected invoice renders both blocked reasons side by side', async () => {
+  it('a rejected invoice carries both blocked reasons, each on its own control', async () => {
     const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
     const submitReason = 'Only validated invoices can be submitted — edit this invoice and re-validate it first.'
     mockDetailFetch(
@@ -1082,27 +1081,22 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const revalidateEl = await screen.findByTestId('revalidate-blocked-reason')
-    const submitEl = await screen.findByTestId('submit-blocked-reason')
-    expect(revalidateEl.textContent).toBe(revalidateReason)
-    expect(submitEl.textContent).toBe(submitReason)
-    expect(revalidateEl.textContent).not.toBe(submitEl.textContent)
+    const revalidateBtn = await screen.findByTestId('revalidate')
+    const submitBtn = await screen.findByTestId('detail-submit')
+    expect(revalidateBtn.getAttribute('title')).toBe(revalidateReason)
+    expect(submitBtn.getAttribute('title')).toBe(submitReason)
+    expect(revalidateBtn.getAttribute('title')).not.toBe(submitBtn.getAttribute('title'))
   })
 
-  it('the disabled Submit points aria-describedby at its own reason element and mirrors it in title', async () => {
+  it('the disabled Submit carries the wire sentence in title and describes itself through nothing', async () => {
     const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = await screen.findByTestId('detail-submit')
-    const reasonEl = await screen.findByTestId('submit-blocked-reason')
-    const describedBy = btn.getAttribute('aria-describedby')
-    expect(describedBy).toBe(reasonEl.id)
     expect(btn.getAttribute('title')).toBe(reason)
-    // 'revalidate-blocked-reason-text' mirrors REVALIDATE_REASON_ID (InvoiceDetail.tsx) --
-    // guards against a copy-paste id collision between the two reason elements.
-    expect(describedBy).not.toBe('revalidate-blocked-reason-text')
+    expect(btn.hasAttribute('aria-describedby')).toBe(false)
   })
 
   // QA adversarial (mutation survivor): removing `filter: 'none'` from the disabled
@@ -1172,9 +1166,8 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(screen.getByTestId('detail-reject')).toBeTruthy()
   })
 
-  // Layer 3 (the visible reason text) is the whole justification for rendering disabled
-  // rather than hidden -- a disabled button is out of the tab order, so the reason must
-  // stay reachable even though the button itself is not.
+  // A disabled button is out of the tab order, so the keyboard must not reach the arm/confirm
+  // flow by any other route either.
   it('the disabled Submit refuses focus, and Enter/Space never arm the confirmation', async () => {
     const reason = 'Only validated invoices can be submitted — re-validate this invoice first.'
     mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: false, submit_blocked_reason: reason }))
@@ -1190,7 +1183,7 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
       fireEvent.keyUp(btn, { key })
     }
     expect(screen.queryByTestId('detail-submit-confirm-prompt')).toBeNull()
-    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(reason)
+    expect(btn.getAttribute('title')).toBe(reason)
   })
 
   // A contradictory wire (can_submit:true with a non-null submit_blocked_reason -- never
@@ -1251,7 +1244,7 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
   const ID = 'inv-role-blocked-1'
   const ROLE_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
 
-  it('a preparer on a validated invoice sees Submit disabled with the role sentence as visible text', async () => {
+  it('a preparer on a validated invoice sees Submit disabled, carrying the role sentence', async () => {
     // `validated` is the status where a preparer actually meets the block: can_edit is true,
     // so the bar renders, and can_submit is false only because of the role.
     mockDetailFetch(
@@ -1262,11 +1255,11 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     const btn = await screen.findByTestId('detail-submit')
     expect((btn as HTMLButtonElement).disabled).toBe(true)
-    // Visible text node, not only the title attribute ([revalidate-visibility]).
-    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(ROLE_REASON)
+    // The wire's own sentence, never SPA-authored ([title-survives]).
+    expect(btn.getAttribute('title')).toBe(ROLE_REASON)
   })
 
-  it('the disabled Submit points aria-describedby at the role reason and mirrors it in title', async () => {
+  it('the role-blocked Submit carries the role sentence in title and describes itself through nothing', async () => {
     mockDetailFetch(
       detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: ROLE_REASON }),
     )
@@ -1274,10 +1267,8 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = await screen.findByTestId('detail-submit')
-    const reasonEl = await screen.findByTestId('submit-blocked-reason')
-    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
     expect(btn.getAttribute('title')).toBe(ROLE_REASON)
-    expect(btn.getAttribute('aria-describedby')).not.toBe('revalidate-blocked-reason-text')
+    expect(btn.hasAttribute('aria-describedby')).toBe(false)
   })
 
   it('clicking the role-blocked Submit sends nothing and does not arm', async () => {
@@ -1307,13 +1298,11 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
     expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  // The only shape where BOTH reason nodes render at once: rejected keeps can_edit true, so
-  // the bar is up, can_revalidate is false, and the role arm overrides the status sentence
-  // for Submit. Existing id-collision guards ('...points aria-describedby at its own reason
-  // element...') run on draft, where the revalidate node is absent -- a shared id would go
-  // unseen there. Resolves each describedby through getElementById rather than comparing
-  // strings, so a swap that keeps both ids distinct still fails.
-  it('a preparer on a rejected invoice gets both reasons on distinct nodes, each control describing its own', async () => {
+  // The only shape where BOTH reasons are live at once: rejected keeps can_edit true, so the
+  // bar is up, can_revalidate is false, and the role arm overrides the status sentence for
+  // Submit. A copy-paste that fed one control the other's sentence would pass every
+  // single-reason spec above and only fail here.
+  it('a preparer on a rejected invoice gets both reasons, each on its own control', async () => {
     const revalidateReason = 'Only draft invoices can be re-validated — edit this invoice to return it to draft.'
     mockDetailFetch(
       detailRecord({
@@ -1329,25 +1318,18 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const submitEl = await screen.findByTestId('submit-blocked-reason')
-    const revalidateEl = screen.getByTestId('revalidate-blocked-reason')
-    expect(submitEl.id).not.toBe(revalidateEl.id)
-    expect(submitEl.textContent).toBe(ROLE_REASON)
-    expect(revalidateEl.textContent).toBe(revalidateReason)
-
-    const submitBtn = screen.getByTestId('detail-submit')
+    const submitBtn = await screen.findByTestId('detail-submit')
     const revalidateBtn = screen.getByTestId('revalidate')
-    expect(document.getElementById(submitBtn.getAttribute('aria-describedby') ?? '')).toBe(submitEl)
-    expect(document.getElementById(revalidateBtn.getAttribute('aria-describedby') ?? '')).toBe(revalidateEl)
     expect(submitBtn.getAttribute('title')).toBe(ROLE_REASON)
     expect(revalidateBtn.getAttribute('title')).toBe(revalidateReason)
+    expect(submitBtn.getAttribute('title')).not.toBe(revalidateBtn.getAttribute('title'))
   })
 
   // Anti-drift on the ROLE-blocked shape. The existing sentinel spec ('...not from a client
   // status map') fixtures draft, which a component re-deriving copy from status could still
   // pass by keying its map on draft alone; validated + can_submit:false is reachable ONLY
   // via the role, so a sentinel here has no status the SPA could have derived it from.
-  it('a sentence the SPA has never seen renders verbatim on the validated role-blocked shape', async () => {
+  it('a sentence the SPA has never seen is carried verbatim on the validated role-blocked shape', async () => {
     const sentinel = 'Sentinel role refusal QQV-42 — not any shipped copy.'
     mockDetailFetch(
       detailRecord({ id: ID, status: 'validated', can_edit: true, can_revalidate: false, can_submit: false, submit_blocked_reason: sentinel }),
@@ -1355,9 +1337,7 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('submit-blocked-reason')
-    expect(reasonEl.textContent).toBe(sentinel)
-    expect(screen.getByTestId('detail-submit').getAttribute('title')).toBe(sentinel)
+    expect((await screen.findByTestId('detail-submit')).getAttribute('title')).toBe(sentinel)
     // No shipped sentence leaks in beside it.
     expect(document.body.textContent).not.toContain('ask an appro' + 'ver on your team')
     expect(document.body.textContent).not.toContain('Only validated invoices can be sub' + 'mitted')
@@ -2183,9 +2163,8 @@ describe('InvoiceDetail Compliance panel: the kept banner is a draft-only concep
 })
 
 // RED specs (Mode A). None of `resolve-outside` / `resolve-outside-reason` /
-// `resolve-outside-blocked-reason` / `detail-resolved-banner` / `resolve-outside-undo`
-// exist yet, so every spec here fails on a missing element or a wrong disabled/call state,
-// never a type/import error.
+// `detail-resolved-banner` / `resolve-outside-undo` existed when these were written, so every
+// spec here failed on a missing element or a wrong disabled/call state, never a type error.
 describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
   it('T7-1: resolve action renders inside the failed card, not invoice-actions', async () => {
     mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
@@ -2221,16 +2200,15 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     const btn = (await screen.findByTestId('resolve-outside')) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
-    expect(screen.getByTestId('resolve-outside-blocked-reason').textContent).toBe(reason)
+    expect(btn.getAttribute('title')).toBe(reason)
   })
 
-  it('T7-4: no reason means no reason element, never a fallback', async () => {
+  it('T7-4: no reason means no title at all, never a fallback', async () => {
     mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: false, resolve_outside_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    await screen.findByTestId('resolve-outside')
-    expect(screen.queryAllByTestId('resolve-outside-blocked-reason')).toHaveLength(0)
+    expect((await screen.findByTestId('resolve-outside')).hasAttribute('title')).toBe(false)
   })
 
   it("T7-5: the disabled primary button neutralises its hover filter", async () => {
@@ -2472,7 +2450,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
   // CodeRabbit review finding 2 (Core AC #4): a blocked Undo must carry the server reason,
   // same as the mark-resolved button, never a silently disabled control.
-  it('T7-17: a blocked Undo shows the server reason, not a silently disabled control', async () => {
+  it('T7-17: a blocked Undo carries the server reason, not a silently disabled control', async () => {
     const reason = 'Only an approver can mark an invoice resolved outside the system — ask an admin or a reviewer on your team.'
     mockDetailFetch(
       detailRecord({
@@ -2489,9 +2467,7 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     const btn = (await screen.findByTestId('resolve-outside-undo')) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
-    const reasonEl = screen.getByTestId('resolve-outside-blocked-reason')
-    expect(reasonEl.textContent).toBe(reason)
-    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
+    expect(btn.getAttribute('title')).toBe(reason)
   })
 
   // CodeRabbit review finding 3: resolveOutsideError must render in BOTH the resolved and
@@ -2530,9 +2506,9 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
   })
 })
 
-// RED specs (task-401, BUG-04-05, Mode A). None of `view-ubl` /
-// `view-ubl-blocked-reason` / `ubl-modal` / `ubl-modal-close` exist yet, so every spec
-// here fails on a missing element or a wrong string, never a type/import error (this
+// RED specs (task-401, BUG-04-05, Mode A). None of `view-ubl` / `ubl-modal` /
+// `ubl-modal-close` existed when these were written, so every spec
+// here failed on a missing element or a wrong string, never a type/import error (this
 // file's convention, :391-393). Tests-only, no stub: the App.tsx/types.ts teardown of
 // `xmlOpen`/`openXml`/`closeXml` and the local mount MUST land in one commit, because a
 // window where both App.tsx and LiveInvoiceDetail mount XmlModal double-mounts it and
@@ -2599,9 +2575,8 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     const bar = await screen.findByTestId('invoice-actions')
     const btn = screen.getByTestId('view-ubl')
     expect(within(bar).queryByTestId('view-ubl')).toBeNull()
-    // Parent IDENTITY, not merely "outside the bar": a wrapping <div> around the
-    // button+reason pair fuses them into ONE flex item of the outer column and breaks its
-    // alignItems:'flex-end' / gap:8. Only a fragment keeps them as two direct children.
+    // Parent IDENTITY, not merely "outside the bar": a wrapping <div> of its own would make
+    // the button a nested flex item and break the outer column's alignItems:'flex-end'/gap:8.
     expect(btn.parentElement).toBe(bar.parentElement)
   })
 
@@ -2662,15 +2637,11 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = (await screen.findByTestId('view-ubl')) as HTMLButtonElement
-    const reasonEl = screen.getByTestId('view-ubl-blocked-reason')
     expect(btn.disabled, 'layer 1: a real HTML disabled attribute').toBe(true)
-    expect(btn.getAttribute('title')).toBe(REASON)
-    expect(reasonEl.textContent, 'layer 3: the em dash and every byte, unmodified').toBe(REASON)
-    // Second half of T4's fragment oracle: the reason is the column's own child too.
-    expect(reasonEl.parentElement).toBe(btn.parentElement)
+    expect(btn.getAttribute('title'), 'the em dash and every byte, unmodified').toBe(REASON)
   })
 
-  it('T9/AC4: aria-describedby points at its OWN reason node, colliding with neither existing one', async () => {
+  it('T9/AC4: each blocked control carries its OWN sentence, never a neighbour\'s', async () => {
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -2688,13 +2659,11 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = await screen.findByTestId('view-ubl')
-    const reasonEl = screen.getByTestId('view-ubl-blocked-reason')
-    expect(reasonEl.id).not.toBe('')
-    expect(btn.getAttribute('aria-describedby')).toBe(reasonEl.id)
-    // All THREE disabled controls render together on this fixture, so a copy-pasted id
-    // would be a live collision, not a hypothetical one (mirrors :766-768).
-    expect(reasonEl.id).not.toBe(screen.getByTestId('revalidate-blocked-reason').id)
-    expect(reasonEl.id).not.toBe(screen.getByTestId('submit-blocked-reason').id)
+    expect(btn.getAttribute('title')).toBe(REASON)
+    // All THREE blocked controls render together on this fixture, so a copy-pasted wire
+    // read would be a live mix-up, not a hypothetical one.
+    expect(btn.getAttribute('title')).not.toBe(screen.getByTestId('revalidate').getAttribute('title'))
+    expect(btn.getAttribute('title')).not.toBe(screen.getByTestId('detail-submit').getAttribute('title'))
   })
 
   it('T10/AC4: a blocked control is muted inline, not merely disabled -- and takes no filter', async () => {
@@ -2742,14 +2711,13 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
   // The degenerate wire shape -- representable (a dropped key normalises to
   // can_view_ubl:false with a null reason, invoices.test.ts G7), and the SPA has no
   // authority to author copy for it. Disabled, silent, nothing invented.
-  it('T13/AC5: a null ubl_blocked_reason renders no reason node and no invented copy', async () => {
+  it('T13/AC5: a null ubl_blocked_reason carries no reason and no invented copy', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const btn = (await screen.findByTestId('view-ubl')) as HTMLButtonElement
     expect(btn.disabled).toBe(true)
-    expect(screen.queryAllByTestId('view-ubl-blocked-reason')).toHaveLength(0)
     expect(btn.hasAttribute('title')).toBe(false)
     expect(btn.hasAttribute('aria-describedby')).toBe(false)
     expect(screen.queryByText(/cannot be rendered/i)).toBeNull()
@@ -2943,10 +2911,9 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     expect(document.activeElement, 'an enabled control must be in the tab order').toBe(btn)
   })
 
-  // KILLS: `aria-hidden="true"` on the reason node. Once the button leaves the tab order
-  // (asserted here), layer 3 is the ONLY layer a screen-reader user can still reach --
-  // hiding it makes the refusal silent. Mirrors :835-837 for Submit.
-  it('Q5/AC4: a blocked control refuses focus and the keyboard, and its reason stays in the a11y tree', async () => {
+  // KILLS: a refusal that only the pointer can reach. The button leaves the tab order
+  // (asserted here), so the native `disabled` state is what an assistive tech reads.
+  it('Q5/AC4: a blocked control refuses focus and the keyboard, and still carries its reason', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: REASON }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -2960,48 +2927,39 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     }
     expect(screen.queryAllByTestId('ubl-modal')).toHaveLength(0)
 
-    const reasonEl = screen.getByTestId('view-ubl-blocked-reason')
-    expect(reasonEl.getAttribute('aria-hidden')).toBeNull()
-    expect(reasonEl.hasAttribute('hidden')).toBe(false)
-    expect(screen.getByText(REASON)).toBe(reasonEl)
+    expect((btn as HTMLButtonElement).disabled).toBe(true)
+    expect(btn.getAttribute('title')).toBe(REASON)
   })
 
   // The worst case the backend can actually build: all six Missing() gaps joined
-  // (internal/invoice/ubl_test.go:361) inside a maxWidth:320 column.
-  // KILLS: `whiteSpace: 'nowrap'` / `overflow: 'hidden'` on the reason node.
-  it('Q6/AC4: the longest reason the backend can produce renders whole, with nothing forcing it onto one line', async () => {
+  // (internal/invoice/ubl_test.go:361).
+  // KILLS: any client-side truncation or ellipsis on the way to the attribute.
+  it('Q6/AC4: the longest reason the backend can produce is carried whole', async () => {
     const longest =
       'This invoice cannot be rendered as a UBL document — it is missing an invoice number, an issue date, a currency, a supplier name, a buyer name and at least one line item.'
     mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: longest }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('view-ubl-blocked-reason')
-    expect(reasonEl.textContent, 'no client-side truncation or ellipsis').toBe(longest)
-    // jsdom does no layout, so this is the reachable half -- nothing in the inline style
-    // may stop the text wrapping inside the column's cap. The rendered result belongs to
-    // the visual gate (task-401 §G, RALPH 3.5).
-    const s = (reasonEl as HTMLElement).style
-    expect(s.whiteSpace).toBe('')
-    expect(s.overflow).toBe('')
-    expect(s.textOverflow).toBe('')
-    expect(reasonEl.parentElement?.style.maxWidth, 'still inside the 320 column').toBe('320px')
+    const btn = await screen.findByTestId('view-ubl')
+    expect(btn.getAttribute('title'), 'no client-side truncation or ellipsis').toBe(longest)
+    expect(btn.parentElement?.style.maxWidth, 'still inside the 320 column').toBe('320px')
   })
 
-  // KILLS: dangerouslySetInnerHTML. The reason is server-authored and rendered verbatim
-  // ([ubl-reason-copy-is-server-authored]); verbatim must mean as TEXT.
-  it('Q7/AC4: a reason carrying markup renders as text, never as HTML', async () => {
+  // KILLS: dangerouslySetInnerHTML, or any other route from the reason string into the DOM
+  // as markup. The reason is server-authored ([ubl-reason-copy-is-server-authored]) and now
+  // reaches the page only as an attribute value.
+  it('Q7/AC4: a reason carrying markup is carried as text, never parsed as HTML', async () => {
     const nasty = 'Missing <script>alert(1)</script> & <b>a supplier name</b>'
     mockDetailFetch(detailRecord({ id: ID, can_view_ubl: false, ubl_blocked_reason: nasty }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('view-ubl-blocked-reason')
-    expect(reasonEl.textContent).toBe(nasty)
-    expect(reasonEl.querySelector('script'), 'never parsed as markup').toBeNull()
-    expect(reasonEl.querySelector('b')).toBeNull()
-    expect(reasonEl.childElementCount, 'one text node, no element children').toBe(0)
-    expect(screen.getByTestId('view-ubl').getAttribute('title')).toBe(nasty)
+    const btn = await screen.findByTestId('view-ubl')
+    expect(btn.getAttribute('title')).toBe(nasty)
+    const column = btn.parentElement!
+    expect(column.querySelector('script'), 'never parsed as markup').toBeNull()
+    expect(column.querySelector('b')).toBeNull()
   })
 
   // KILLS: `disabled={!inv.can_view_ubl || inv.ubl_blocked_reason != null}`. Mirrors
@@ -3188,7 +3146,7 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(screen.queryAllByTestId('detail-reject')).toHaveLength(0)
   })
 
-  it('4: permutation 1 -- both allowed, no reason: enabled, unmuted, no reason node (AC-2)', async () => {
+  it('4: permutation 1 -- both allowed, no reason: enabled, unmuted, no reason at all (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: null, can_reject: true, reject_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3199,11 +3157,11 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(rejectBtn.disabled).toBe(false)
     expect(approveBtn.style.background).toBe('')
     expect(rejectBtn.style.background).toBe('')
-    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
-    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(approveBtn.hasAttribute('title')).toBe(false)
+    expect(rejectBtn.hasAttribute('title')).toBe(false)
   })
 
-  it('5: permutation 2 -- both blocked, same reason: disabled, muted, one visible node (AC-2)', async () => {
+  it('5: permutation 2 -- both blocked, same reason: disabled, muted, carried on both, printed nowhere (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3214,12 +3172,12 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(rejectBtn.disabled).toBe(true)
     expect(approveBtn.style.background).not.toBe('')
     expect(rejectBtn.style.background).not.toBe('')
-    const nodes = screen.getAllByText(S)
-    expect(nodes).toHaveLength(1)
-    expect(nodes[0].textContent).toBe(S)
+    expect(approveBtn.getAttribute('title')).toBe(S)
+    expect(rejectBtn.getAttribute('title')).toBe(S)
+    expect(screen.queryAllByText(S)).toHaveLength(0)
   })
 
-  it('6: permutation 3 -- both blocked, no reason: disabled, muted, no reason node, nothing invented (AC-2)', async () => {
+  it('6: permutation 3 -- both blocked, no reason: disabled, muted, no reason at all, nothing invented (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3230,31 +3188,28 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(rejectBtn.disabled).toBe(true)
     expect(approveBtn.style.background).not.toBe('')
     expect(rejectBtn.style.background).not.toBe('')
-    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
-    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
     expect(approveBtn.hasAttribute('title')).toBe(false)
     expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
     expect(rejectBtn.hasAttribute('title')).toBe(false)
     expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and the reason still renders (AC-2)', async () => {
+  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and the reason still rides along (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
     expect(approveBtn.disabled).toBe(false)
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(approveBtn.getAttribute('title')).toBe(S)
   })
 
-  it.each(APPROVAL_GATE_SENTENCES)('8: the visible reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
+  it.each(APPROVAL_GATE_SENTENCES)('8: the carried reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: sentence, can_reject: false, reject_blocked_reason: sentence }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('approve-blocked-reason')
-    expect(reasonEl.textContent).toBe(sentence)
+    expect((await screen.findByTestId('detail-approve')).getAttribute('title')).toBe(sentence)
   })
 
   it('9: the disabled Approve neutralises filter, guarding .v2-btn-primary:hover from brightening it (AC-2)', async () => {
@@ -3278,7 +3233,7 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(btn.style.cursor).toBe('')
   })
 
-  it('11: the disabled Approve refuses focus, and its reason stays reachable (AC-2)', async () => {
+  it('11: the disabled Approve refuses focus, and still carries its reason (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3286,31 +3241,28 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
 
     btn.focus()
     expect(document.activeElement).not.toBe(btn)
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(btn.getAttribute('title')).toBe(S)
   })
 
-  it('12: aria-describedby on both controls resolves to a real element in the document (AC-2)', async () => {
+  it('12: neither control describes itself through a node (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const approveBtn = await screen.findByTestId('detail-approve')
     const rejectBtn = screen.getByTestId('detail-reject')
 
-    const approveDescribedBy = approveBtn.getAttribute('aria-describedby')
-    const rejectDescribedBy = rejectBtn.getAttribute('aria-describedby')
-    expect(approveDescribedBy).toBeTruthy()
-    expect(rejectDescribedBy).toBeTruthy()
-    expect(document.getElementById(approveDescribedBy as string)).toBeTruthy()
-    expect(document.getElementById(rejectDescribedBy as string)).toBeTruthy()
+    expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('13: a sentence shared by both controls prints exactly once in the document (AC-2)', async () => {
+  it('13: a sentence shared by both controls prints nowhere in the document (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('detail-approve')
 
-    expect(screen.getAllByText(S)).toHaveLength(1)
+    expect(screen.queryAllByText(S)).toHaveLength(0)
+    expect(document.body.textContent).not.toContain(S)
   })
 
   it('14: clicking a disabled Approve sends no request and adds no new control to the page (AC-2)', async () => {
@@ -3367,10 +3319,8 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   })
 
   // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which
-  // only proves reachability for Approve. AC-2 layer 3's whole justification is that a
-  // disabled button is out of the tab order, so Reject's own reason must clear the same
-  // bar, not just Approve's.
-  it('19: the disabled Reject refuses focus while its reason stays reachable in the accessible tree', async () => {
+  // only covers Approve. Reject's own reason must clear the same bar.
+  it('19: the disabled Reject refuses focus while still carrying its own reason', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
@@ -3378,25 +3328,20 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
 
     rejectBtn.focus()
     expect(document.activeElement).not.toBe(rejectBtn)
-    const describedBy = rejectBtn.getAttribute('aria-describedby')
-    expect(describedBy).toBeTruthy()
-    const reasonEl = document.getElementById(describedBy as string)
-    expect(reasonEl).toBeTruthy()
-    expect(reasonEl?.textContent).toBe(S)
-    expect(screen.getByText(S)).toBeTruthy()
+    expect(rejectBtn.getAttribute('title')).toBe(S)
+    expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
   // QA-added (task-554, Mode B adversarial): HTML-significant characters in the reason
-  // survive to textContent unchanged -- React's own child-text escaping, not a bespoke
-  // sanitiser, so this pins that nothing mangles the wire string on the way to the DOM.
+  // survive unchanged -- React's own escaping, not a bespoke sanitiser, so this pins that
+  // nothing mangles the wire string on the way to the DOM.
   it('a reason with an ampersand, an em dash and a quote survives to the DOM unchanged', async () => {
     const tricky = 'Blocked — "urgent" review needed & a second signer must confirm.'
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: tricky }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    const reasonEl = await screen.findByTestId('approve-blocked-reason')
-    expect(reasonEl.textContent).toBe(tricky)
+    expect((await screen.findByTestId('detail-approve')).getAttribute('title')).toBe(tricky)
   })
 
   // QA-added (task-554, Mode B adversarial, defensive): Stage 1 confirmed can_approve and
@@ -3441,23 +3386,22 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   })
 
   // CodeRabbit PR #167 fix: decisionBlockedReasons's array was positional
-  // (index 0 always rendered as "approve"), so a reject-only reason was mislabelled
-  // as the approve reason. These four rows bind each attribute/node to its own wire
+  // (index 0 always read as "approve"), so a reject-only reason was mislabelled
+  // as the approve reason. These four rows bind each control's title to its own wire
   // field directly and prove the mislabelling is gone.
-  it('same sentence on both fields: one visible node under approve-blocked-reason, no reject-blocked-reason, both controls describedby it', async () => {
+  it('same sentence on both fields: both controls carry it, neither prints it', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
     const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
 
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
-    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
-    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
-    expect(rejectBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
+    expect(approveBtn.getAttribute('title')).toBe(S)
+    expect(rejectBtn.getAttribute('title')).toBe(S)
+    expect(document.body.textContent).not.toContain(S)
   })
 
-  it('different sentences on both fields: two nodes, each under its own testid, each control describedby its own node', async () => {
+  it('different sentences on both fields: each control carries its OWN, never its neighbour\'s', async () => {
     const reject = 'A different reason entirely.'
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: reject }))
 
@@ -3465,10 +3409,8 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
     const rejectBtn = screen.getByTestId('detail-reject') as HTMLButtonElement
 
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
-    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(reject)
-    expect(approveBtn.getAttribute('aria-describedby')).toBe('approve-blocked-reason-text')
-    expect(rejectBtn.getAttribute('aria-describedby')).toBe('reject-blocked-reason-text')
+    expect(approveBtn.getAttribute('title')).toBe(S)
+    expect(rejectBtn.getAttribute('title')).toBe(reject)
   })
 
   it('regression: a reject-only reason never mislabels as the approve reason, and Approve stays clean', async () => {
@@ -3477,21 +3419,19 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
 
-    expect(screen.getByTestId('reject-blocked-reason').textContent).toBe(S)
-    expect(screen.queryAllByTestId('approve-blocked-reason')).toHaveLength(0)
+    expect(screen.getByTestId('detail-reject').getAttribute('title')).toBe(S)
     expect(approveBtn.disabled).toBe(false)
     expect(approveBtn.hasAttribute('title')).toBe(false)
     expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('approve blocked, reject clear: only approve-blocked-reason renders, Reject carries no title/aria-describedby', async () => {
+  it('approve blocked, reject clear: only Approve carries a reason, Reject carries none', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: true, reject_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     const rejectBtn = (await screen.findByTestId('detail-reject')) as HTMLButtonElement
 
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
-    expect(screen.queryAllByTestId('reject-blocked-reason')).toHaveLength(0)
+    expect(screen.getByTestId('detail-approve').getAttribute('title')).toBe(S)
     expect(rejectBtn.hasAttribute('title')).toBe(false)
     expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
@@ -4027,7 +3967,7 @@ describe('InvoiceDetail demo-only blocked-by-role note (task-594, DEMO-06-06)', 
 
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
     expect(approveBtn.disabled).toBe(true)
-    expect(screen.getByTestId('approve-blocked-reason').textContent).toBe(S)
+    expect(approveBtn.getAttribute('title')).toBe(S)
     expect(screen.getByTestId('persona-blocked-note')).toBeTruthy()
   })
 
@@ -4443,7 +4383,6 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // The survivors of InvoiceDetail.tsx's own set, plus SourceDocumentCard's 5. ViolationsTable
   // contributed one (`violations-scroll`) until BUG-13-01 retired it; it now renders none.
   const UNTOUCHED_TESTIDS = [
-    'approve-blocked-reason',
     'buyer-tin',
     'computed-line-sum',
     'detail-approve',
@@ -4483,19 +4422,14 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'line-remove',
     'line-row',
     'not-validated',
-    'reject-blocked-reason',
     'rejection-reason-row',
     'rejection-reasons',
     'resolve-outside',
-    'resolve-outside-blocked-reason',
     'resolve-outside-reason',
     'resolve-outside-undo',
     'revalidate',
-    'revalidate-blocked-reason',
     'stale-verdict',
-    'submit-blocked-reason',
     'view-ubl',
-    'view-ubl-blocked-reason',
     'violations-table',
     // SourceDocumentCard.tsx
     'open-extraction-review',
@@ -4525,8 +4459,9 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // every scenario that mounts a rule_set_version, so it must be declared here now.
   const BUG_13_TESTIDS = ['compliance-ruleset-version', 'compliance-card']
 
-  // Deleted by AUDIT-09-02, AUDIT-09-06 and BUG-13-01. A resurrection is as much a surface
-  // change as a deletion, and `git grep` cannot see one that arrives under a new component.
+  // Deleted by AUDIT-09-02, AUDIT-09-06, BUG-13-01 and BUG-14-02. A resurrection is as much
+  // a surface change as a deletion, and `git grep` cannot see one that arrives under a new
+  // component.
   const RETIRED_TESTIDS = [
     'status-history',
     'status-history-row',
@@ -4541,6 +4476,14 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'approval-trail-notify-note',
     // BUG-13-01: retired with the scroll recipe the table no longer needs.
     'violations-scroll',
+    // BUG-14-02: the blocked-reason layer is gone; every refusal rides the control's own
+    // `title` and native `disabled` instead.
+    'approve-blocked-reason',
+    'reject-blocked-reason',
+    'resolve-outside-blocked-reason',
+    'revalidate-blocked-reason',
+    'submit-blocked-reason',
+    'view-ubl-blocked-reason',
   ]
 
   const A_DOCUMENT: MockResponse = {
@@ -4560,8 +4503,8 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // so no single fixture can render the surface. Each one names the ids it is here for.
   const SCENARIOS: { name: string; mount: () => Promise<void> }[] = [
     {
-      // failed-dead-end + resolve-outside's unresolved arm + a stale rejection card + every
-      // blocked-reason line at once.
+      // failed-dead-end + resolve-outside's unresolved arm + a stale rejection card, with
+      // every gate refusing. Since BUG-14-01 this mounts `invoice-actions` too.
       name: 'failed, unvalidated, blocked everywhere',
       mount: async () => {
         mockDetailFetch(
@@ -5049,11 +4992,11 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
     expect(enabled, 'only Edit reads can_edit').toEqual(['edit-toggle'])
   })
 
-  // Restores the claim the executor deleted with main's `submit-blocked-reason is null` /
-  // `body does not contain ROLE_REASON` pair: BUG-14-01 makes the role sentence reachable on
-  // four statuses where it never rendered, and nothing else pins that. Scoped to reachability,
-  // NOT to the node's existence -- BUG-14-02 deletes the node and retargets this spec with it.
-  it('AC-1: the submit reason a non-approver gets on a non-editable status now reaches the page', async () => {
+  // BUG-14-01 makes the role sentence reachable on four statuses it never reached before, and
+  // this is the only pin on where a submit reason may land on a NON-EDITABLE status.
+  // Retargeted by BUG-14-02 off the deleted node onto the control's own `title`; the second
+  // half is the [reason-text-disappears] half -- reaching the control is not printing it.
+  it('AC-1: the submit reason a non-approver gets on a non-editable status reaches the control, and only the control', async () => {
     const ROLE = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE }))
 
@@ -5062,13 +5005,12 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', 
 
     const submit = screen.getByTestId('detail-submit') as HTMLButtonElement
     expect(submit.disabled, 'floor: the control the sentence explains is up and refusing').toBe(true)
-    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(ROLE)
-    expect(document.body.textContent, 'the sentence is on the page, not only in an attribute').toContain(ROLE)
+    expect(submit.getAttribute('title'), 'the wire sentence reaches the control that refuses').toBe(ROLE)
+    expect(document.body.textContent, 'and it is printed nowhere').not.toContain(ROLE)
   })
 })
 
-// RED specs (task-899, BUG-14-02, Mode A). Every reason node, every aria-describedby and the
-// six REASON_ID consts still exist, so each absence spec below fails on its own assertion.
+// The blocked-reason layer is gone: no reason node, no aria-describedby, no REASON_ID const.
 // `title=` survives on all seven controls ([title-survives]); the pins that keep that
 // argument honest are the two title specs at the end.
 describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-14-02)', () => {

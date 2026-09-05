@@ -1,7 +1,9 @@
-// learn.go: one correction becomes one rule. The geometry here is the inverse of relatedTokens
-// (resolve.go), so a derived rule fires on the page it was derived from
-// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve). Pure -- no clock, no database, no
-// network, no goroutine, and no map on the path (resolve_internal_test.go scans for each).
+// learn.go: one correction becomes one rule. LearnRule inverts relatedTokens (resolve.go) from a
+// pointed box; LearnBoxlessRule inverts the RelSameToken arm from token text alone, with no
+// geometry at all. Either way a derived rule fires on the page it was derived from
+// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
+// TestLearnBoxlessRule_RoundTripsThroughResolve). Pure -- no clock, no database, no network, no
+// goroutine, and no map on the path (resolve_internal_test.go scans for each).
 package extraction
 
 import (
@@ -125,8 +127,9 @@ func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) 
 				`,"max_distance":` + hundredthsJSON(0) +
 				`},"shape":` + jsonString(string(shape)) + `}`
 
-			// A body ParseRule rejects is a defect, not a stored row -- and the parsed rule is
-			// where the next line's loc comes from.
+			// Reachable, not defensive: a raw tab or newline inside the label spells invalid
+			// JSON (TestLearnBoxlessRule_RefusesALabelJSONCannotSpell). r is also where the
+			// loc below comes from.
 			r, err := ParseRule([]byte(b))
 			if err != nil {
 				continue
@@ -135,6 +138,8 @@ func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) 
 			// and trims, either of which moves the match end
 			// (TestLearnBoxlessRule_TakesLocFromTheEmittedLabelNotTheMatcher).
 			loc := r.re.FindStringIndex(text)
+			// Reachable: the byte cap can split the label's trailing word, leaving a \b that
+			// cannot hold (TestLearnBoxlessRule_ACappedLabelThatCannotRefindIsDropped).
 			if loc == nil {
 				continue
 			}

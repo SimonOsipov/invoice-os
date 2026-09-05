@@ -341,8 +341,8 @@ as a `TierLearned` candidate with no alternatives —
 
 A correction carries a method. A **`typed`** correction — a reviewer retyping a value — writes
 the correction row and **zero rules**. An **`undone`** correction likewise writes **zero rules**.
-Only `pointed`, where the reviewer drew a box on the page, teaches anything, because only a box
-carries the geometry a rule is derived from.
+Only `pointed`, where the reviewer drew a box on the page, teaches anything: the handler's
+learning branch is gated on that box.
 
 A pointed correction that **anchors to nothing** — an empty corner of the page, a box no anchor
 observation stands in a relation to, a job that recorded no layout at all — still commits the

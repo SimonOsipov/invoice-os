@@ -954,3 +954,309 @@ func TestLearnBoxlessRule_RefusesATokenTwoLexiconIdsMatch(t *testing.T) {
 		t.Errorf("control: body = %s, want %s", lr.Body, lbxTotalBody)
 	}
 }
+
+// --- EXTR-19-07 QA: the branches the ten ACs leave uncovered ---------------------------
+//
+// Recon A-2 called three guards unreachable. Two of them fire on ordinary DOCX text, measured
+// below, so each gets a spec: a reachable branch with no test is a branch nothing pins.
+
+// AC-7, second arm. The shipped empty-label spec uses a supplier_tin fixture, and ShapeTIN
+// rejects the whole token either way -- so it refuses whether or not learnedLabel's ok is
+// honoured, and cannot tell the guard from the shape. Under ShapeName the whole token IS a
+// reading, so ignoring that ok derives {"label":"", ...} -- a rule that matches every token of
+// every later document. Must-fail mutation: `if !ok` -> `if !ok && false` at learn.go:120.
+func TestLearnBoxlessRule_NeverEmitsAnEmptyLabel(t *testing.T) {
+	tok := "x" + strings.Repeat(" ", 130) + "tin: Acme Trading Ltd"
+
+	// The lexicon really matches, and the 128 capped bytes are pure whitespace, so learnedLabel
+	// is what refuses. Without this the refusal below could be "nothing matched".
+	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "supplier_tin")
+	if len(texts) != 1 {
+		t.Fatalf("lexicon id %q matched %d time(s) on the fixture, want exactly 1", "supplier_tin", len(texts))
+	}
+	if texts[0] == "" || strings.TrimSpace(texts[0]) != "" {
+		t.Fatalf("matched text = %q (%d bytes), want non-empty whitespace that trims to empty", texts[0], len(texts[0]))
+	}
+
+	// ShapeName reads the whole token, so a hit carrying the empty label WOULD qualify. Without
+	// this the refusal is the shape's and the guard could be deleted unnoticed.
+	if got := extraction.ShapeName.Normalize(tok); len(got) != 1 || got[0] != tok {
+		t.Fatalf("ShapeName.Normalize(the fixture) = %q, want exactly one reading equal to the token", got)
+	}
+
+	if lr, ok := extraction.LearnBoxlessRule("supplier_name", tok, []string{tok}); ok {
+		t.Errorf("LearnBoxlessRule(supplier_name, the whitespace-swallowed match) ok = true, body = %s, want false", lr.Body)
+	}
+
+	// The harm the guard prevents, measured: ParseRule accepts an empty label, and the rule it
+	// compiles fires on a token that has nothing to do with the fixture.
+	const empty = `{"label":"","relation":{"kind":"same_token","max_distance":0.00},"shape":"name"}`
+	emptyRule, err := extraction.ParseRule([]byte(empty))
+	if err != nil {
+		t.Fatalf("ParseRule(%s) error = %v, want nil: the guard, not ParseRule, is what refuses", empty, err)
+	}
+	stranger := lbxPage([]string{"Nothing here resembles the fixture"})
+	if got := extraction.Resolve(stranger, extraction.RuleSet{Learned: []extraction.AnchorRule{
+		{ID: "empty-label", Field: "supplier_name", Rule: emptyRule},
+	}}); len(got) == 0 {
+		t.Error("Resolve(an unrelated token, the empty-label rule) returned no candidate; the empty label is meant to match everything, so this spec's premise is wrong")
+	}
+
+	// Must-stay-green: a match the cap does not swallow derives for the same field.
+	plain := []string{"Supplier: Acme Trading Ltd"}
+	lr, ok := extraction.LearnBoxlessRule("supplier_name", "Acme Trading Ltd", plain)
+	if !ok {
+		t.Fatalf("control: LearnBoxlessRule(supplier_name, %q, %v) ok = false, want true", "Acme Trading Ltd", plain)
+	}
+	const want = `{"label":"(?i)\\bSupplier\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"name"}`
+	if string(lr.Body) != want {
+		t.Errorf("control: body = %s, want %s", lr.Body, want)
+	}
+}
+
+// Recon A-2 says ParseRule can never reject a derived body. It can: jsonString escapes only \
+// and ", so a raw tab or newline inside the matched label spells invalid JSON. A DOCX paragraph
+// carries tabs, so this is the story's own input class. The hit is skipped, which is safe --
+// but it is the ParseRule guard, not the shape, that does it.
+func TestLearnBoxlessRule_RefusesALabelJSONCannotSpell(t *testing.T) {
+	for _, tc := range []struct{ name, tok string }{
+		{"interior tab", "Amount\tDue: 300.00"},
+		{"interior newline", "Amount\nDue: 300.00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The lexicon matches across the control byte, so the refusal is not a miss.
+			texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tc.tok})), "total")
+			if len(texts) != 1 || !strings.ContainsAny(texts[0], "\t\n") {
+				t.Fatalf("lexicon id %q matched %q, want exactly one match carrying the control byte", "total", texts)
+			}
+
+			// ParseRule is what refuses, named directly so a jsonString that learns to escape
+			// control bytes reds here rather than silently changing the derivation.
+			body := `{"label":"(?i)\\b` + texts[0] + `\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"amount"}`
+			if _, err := extraction.ParseRule([]byte(body)); err == nil {
+				t.Fatalf("ParseRule(%q) error = nil, want non-nil: this spec's premise is that the body does not parse", body)
+			}
+
+			if lr, ok := extraction.LearnBoxlessRule("total", "300.00", []string{tc.tok}); ok {
+				t.Errorf("LearnBoxlessRule(total, %q) ok = true, body = %s, want false", tc.tok, lr.Body)
+			}
+		})
+	}
+
+	// Must-stay-green: the same label spelled with a plain space derives, so the refusals above
+	// are about the control byte and not about the "Amount Due" fixture family.
+	plain := []string{"Amount Due: 300.00"}
+	lr, ok := extraction.LearnBoxlessRule("total", "300.00", plain)
+	if !ok {
+		t.Fatalf("control: LearnBoxlessRule(total, %q, %v) ok = false, want true", "300.00", plain)
+	}
+	const want = `{"label":"(?i)\\bAmount Due\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"amount"}`
+	if string(lr.Body) != want {
+		t.Errorf("control: body = %s, want %s", lr.Body, want)
+	}
+}
+
+// Recon A-2 also says the emitted label always re-finds on its own token. It does not: the
+// 128-byte cap can land inside the label's trailing word, leaving a \b that cannot hold. The
+// consequence is not cosmetic -- dropping that hit turns a two-body refusal into a derivation.
+// Must-fail mutation: `if loc == nil { continue }` -> `if loc == nil { loc = mloc }` at
+// learn.go:138, and the 122-dash arm refuses instead of deriving.
+func TestLearnBoxlessRule_ACappedLabelThatCannotRefindIsDropped(t *testing.T) {
+	// 120 dashes: the subtotal match is exactly 128 bytes, the cap splits nothing, its label
+	// re-finds, and its body competes with total's -- two distinct bodies, so a refusal.
+	fits := []string{"sub" + strings.Repeat("-", 120) + "total: 300.00"}
+	// 122 dashes: the cap now falls inside the trailing "total", so the emitted label ends
+	// \btot\b, which cannot match "tota" -- the hit is dropped and only total's body survives.
+	splits := []string{"sub" + strings.Repeat("-", 122) + "total: 300.00"}
+
+	for _, tokens := range [][]string{fits, splits} {
+		texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage(tokens)), "subtotal")
+		if len(texts) != 1 || len(texts[0]) != 128 {
+			t.Fatalf("lexicon id %q matched %d text(s) of %d bytes on %d dashes, want exactly one capped to 128", "subtotal", len(texts), len(texts[0]), len(tokens[0]))
+		}
+		if got := lbxLabelTexts(extraction.AnchorObservations(lbxPage(tokens)), "total"); len(got) != 1 || got[0] != "total" {
+			t.Fatalf("lexicon id %q matched %q, want exactly [\"total\"]: the second body this spec turns on", "total", got)
+		}
+	}
+
+	// The two fixtures differ only in whether the cap splits a word.
+	if lr, ok := extraction.LearnBoxlessRule("subtotal", "300.00", fits); ok {
+		t.Errorf("LearnBoxlessRule(subtotal, 120 dashes) ok = true, body = %s, want false: two labels read 300.00", lr.Body)
+	}
+	lr, ok := extraction.LearnBoxlessRule("subtotal", "300.00", splits)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(subtotal, 122 dashes) ok = false, want true: the split label cannot re-find, so only one body survives")
+	}
+	if string(lr.Body) != lbxTotalBodyLower {
+		t.Errorf("LearnBoxlessRule(subtotal, 122 dashes) body = %s, want %s", lr.Body, lbxTotalBodyLower)
+	}
+}
+
+// lbxTotalBodyLower is lbxTotalBody's lower-case twin: learnedLabel QuoteMetas the matched text
+// verbatim, so "Total" and "total" are different labels and different bodies.
+const lbxTotalBodyLower = `{"label":"(?i)\\btotal\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"amount"}`
+
+// Every shipped fixture puts its label at byte 0, so none of them can tell a derivation that
+// searches the token from one that only reads its head. Must-fail mutation: add
+// `|| loc[0] != 0` to the loc guard at learn.go:138.
+func TestLearnBoxlessRule_DerivesFromALabelInsideTheToken(t *testing.T) {
+	tokens := []string{"Invoice total: 300.00"}
+
+	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage(tokens)), "total")
+	if len(texts) != 1 || texts[0] != "total" {
+		t.Fatalf("lexicon id %q matched %q, want exactly [\"total\"]", "total", texts)
+	}
+	if got := strings.Index(tokens[0], texts[0]); got == 0 {
+		t.Fatalf("the label sits at byte 0 of %q; this spec needs it inside the token", tokens[0])
+	}
+
+	lr, ok := extraction.LearnBoxlessRule("total", "300.00", tokens)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(total, %q, %v) ok = false, want true", "300.00", tokens)
+	}
+	if string(lr.Body) != lbxTotalBodyLower {
+		t.Errorf("LearnBoxlessRule(total, a label inside the token) body = %s, want %s", lr.Body, lbxTotalBodyLower)
+	}
+
+	// The round trip is what makes the offset real rather than arithmetic.
+	got := extraction.Resolve(lbxPage(tokens), extraction.RuleSet{Learned: []extraction.AnchorRule{
+		{ID: "learned-boxless", Field: "total", Rule: lr.Rule},
+	}})
+	if len(got) != 1 || got[0].Value != "300.00" || got[0].Tier != extraction.TierLearned {
+		t.Errorf("Resolve(%v, the derived rule) = %+v, want exactly one TierLearned candidate %q", tokens, got, "300.00")
+	}
+}
+
+// The lexicon id never reaches the body: Resolve applies a learned rule to the field its ROW
+// names, so the derivation must not restrict itself to the field's own label. Accepted, and
+// sharp -- correcting supplier_tin here writes "the TIN is whatever follows Total". Must-fail
+// mutation: skip a matcher whose m.ID is not tier1Specs' label id for field.
+func TestLearnBoxlessRule_TheAnchorsLexiconIdDoesNotConstrainTheField(t *testing.T) {
+	tokens := []string{"Total: 12345678-0001"}
+
+	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage(tokens)), "supplier_tin")
+	if len(texts) != 0 {
+		t.Fatalf("lexicon id %q matched %q on %q, want none: the point is that the field's OWN label is absent", "supplier_tin", texts, tokens[0])
+	}
+
+	lr, ok := extraction.LearnBoxlessRule("supplier_tin", "12345678-0001", tokens)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(supplier_tin, %q, %v) ok = false, want true", "12345678-0001", tokens)
+	}
+	const want = `{"label":"(?i)\\bTotal\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
+	if string(lr.Body) != want {
+		t.Errorf("LearnBoxlessRule(supplier_tin, a total-labelled TIN) body = %s, want %s", lr.Body, want)
+	}
+	if lr.Anchor.Label != "total" {
+		t.Errorf("anchor label = %q, want %q: the anchor records which lexicon entry hit, the body records the field's shape", lr.Anchor.Label, "total")
+	}
+}
+
+// Two hits can share a body and differ in Anchor.Text -- capAnchorLabelBytes runs before
+// TrimSpace, so " tin" and "tin" emit one label and two anchors. The body is what is stored, so
+// D-27 holds; the anchor is the FIRST hit in token order and reaches the correction row.
+// Must-fail mutation: update anchor on every hit instead of only the first (learn.go:152-153).
+func TestLearnBoxlessRule_KeepsTheFirstAnchorWhenTwoHitsShareABody(t *testing.T) {
+	const spaced, bare = "Acme tin: 12345678-0001", "tin: 12345678-0001"
+	const wantBody = `{"label":"(?i)\\btin\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
+
+	// The two tokens really do produce different matched texts, or there is nothing to order.
+	spacedText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{spaced})), "supplier_tin")
+	bareText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{bare})), "supplier_tin")
+	if len(spacedText) != 1 || len(bareText) != 1 {
+		t.Fatalf("lexicon id %q matched %q and %q, want exactly one each", "supplier_tin", spacedText, bareText)
+	}
+	if spacedText[0] == bareText[0] {
+		t.Fatalf("both tokens matched %q; this spec needs two DIFFERENT matched texts that share one label", spacedText[0])
+	}
+
+	for _, tc := range []struct {
+		name   string
+		tokens []string
+		anchor string
+	}{
+		{"spaced first", []string{spaced, bare}, spacedText[0]},
+		{"bare first", []string{bare, spaced}, bareText[0]},
+	} {
+		lr, ok := extraction.LearnBoxlessRule("supplier_tin", "12345678-0001", tc.tokens)
+		if !ok {
+			t.Fatalf("%s: LearnBoxlessRule(supplier_tin, %q, %v) ok = false, want true: one body, so no ambiguity", tc.name, "12345678-0001", tc.tokens)
+		}
+		if string(lr.Body) != wantBody {
+			t.Errorf("%s: body = %s, want %s: the stored bytes must not depend on token order", tc.name, lr.Body, wantBody)
+		}
+		if lr.Anchor.Text != tc.anchor {
+			t.Errorf("%s: anchor text = %q, want %q: the first hit in token order wins", tc.name, lr.Anchor.Text, tc.anchor)
+		}
+	}
+
+	// The difference is erased where the anchor lands: handlers_correction.go writes
+	// strings.TrimSpace(lr.Anchor.Text) into the correction row.
+	if strings.TrimSpace(spacedText[0]) != strings.TrimSpace(bareText[0]) {
+		t.Errorf("TrimSpace(%q) = %q and TrimSpace(%q) = %q; the correction row would record two different anchor_labels for one rule",
+			spacedText[0], strings.TrimSpace(spacedText[0]), bareText[0], strings.TrimSpace(bareText[0]))
+	}
+}
+
+// readsAs compares a reading to the value with ==, and the value is never a pattern. Must-fail
+// mutation: strings.HasPrefix(v, value) instead of v == value at learn.go:165 -- an empty
+// correction then matches every reading and the first arm reds.
+func TestLearnBoxlessRule_RefusesAnEmptyValueAndSkipsEmptyTokens(t *testing.T) {
+	qualifying := []string{"Total: 300.00"}
+
+	// Floor: the fixture is one a non-empty value derives from, so the refusal below is the
+	// empty value's doing.
+	if _, ok := extraction.LearnBoxlessRule("total", "300.00", qualifying); !ok {
+		t.Fatal("the fixture does not derive for 300.00; every arm below would be vacuous")
+	}
+	if lr, ok := extraction.LearnBoxlessRule("total", "", qualifying); ok {
+		t.Errorf("LearnBoxlessRule(total, the empty value, %v) ok = true, body = %s, want false", qualifying, lr.Body)
+	}
+
+	// A nil and an empty token list are the same refusal, not a panic and a refusal.
+	for _, tokens := range [][]string{nil, {}} {
+		if lr, ok := extraction.LearnBoxlessRule("total", "300.00", tokens); ok {
+			t.Errorf("LearnBoxlessRule(total, %q, %#v) ok = true, body = %s, want false", "300.00", tokens, lr.Body)
+		}
+	}
+
+	// An empty token carries no lexicon match and must not disturb one that does.
+	withBlanks := []string{"", "Total: 300.00", ""}
+	lr, ok := extraction.LearnBoxlessRule("total", "300.00", withBlanks)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(total, %q, %v) ok = false, want true", "300.00", withBlanks)
+	}
+	if string(lr.Body) != lbxTotalBody {
+		t.Errorf("LearnBoxlessRule(total, blanks around the hit) body = %s, want %s", lr.Body, lbxTotalBody)
+	}
+}
+
+// A shape can read one token two ways. readsAs must try every reading, not the first: an
+// ambiguous numeric date reads day-first and month-first, and the reviewer's correction is what
+// says which. Must-fail mutation: read only shape.Normalize(raw)[0] at learn.go:164.
+func TestLearnBoxlessRule_MatchesAnyReadingOfAnAmbiguousShape(t *testing.T) {
+	tokens := []string{"Date: 12/03/2026"}
+
+	// Two readings, and the one this spec corrects to is NOT the first -- otherwise reading
+	// only the head would pass.
+	readings := extraction.ShapeDate.Normalize("12/03/2026")
+	if len(readings) != 2 {
+		t.Fatalf("ShapeDate.Normalize(%q) = %q, want exactly two readings", "12/03/2026", readings)
+	}
+	const want = "2026-12-03"
+	if readings[0] == want {
+		t.Fatalf("ShapeDate.Normalize(%q)[0] = %q, want the corrected value to be the SECOND reading", "12/03/2026", readings[0])
+	}
+	if readings[1] != want {
+		t.Fatalf("ShapeDate.Normalize(%q) = %q, want %q among them", "12/03/2026", readings, want)
+	}
+
+	lr, ok := extraction.LearnBoxlessRule("issue_date", want, tokens)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(issue_date, %q, %v) ok = false, want true", want, tokens)
+	}
+	const wantBody = `{"label":"(?i)\\bDate\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"date"}`
+	if string(lr.Body) != wantBody {
+		t.Errorf("LearnBoxlessRule(issue_date, the month-first reading) body = %s, want %s", lr.Body, wantBody)
+	}
+}

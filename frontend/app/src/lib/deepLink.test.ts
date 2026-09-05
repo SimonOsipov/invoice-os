@@ -1,6 +1,6 @@
-// RED specs (ROUTE-05-01) — pin the deepLink.ts storage contract before the executor
-// implements the bodies. Mirrors session.test.ts: spyOnConsole for the warn-never-error
-// invariant, explicit `now` per call (this repo's convention over vi.useFakeTimers).
+// Specs for the deepLink.ts storage contract. Mirrors session.test.ts: spyOnConsole for
+// the warn-never-error invariant, explicit `now` per call (this repo's convention over
+// vi.useFakeTimers).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -61,6 +61,23 @@ describe('captureDestination', () => {
     captureDestination('/settings', 2000)
 
     expect(readDestination(2000)).toBe('/settings')
+  })
+
+  // No length cap in the design or ACs — this pins that a defensively-added truncation
+  // limit would be a regression, not a feature.
+  it('capture_acceptsAVeryLongPathname', () => {
+    const longPath = '/' + 'a'.repeat(10_000)
+    captureDestination(longPath, 1000)
+
+    expect(readDestination(1000)).toBe(longPath)
+  })
+
+  // The stored path is app-relative only (isCapturablePath), never off-origin, so a query
+  // string carries no auth/identity risk here — preserved as-is for the caller to navigate to.
+  it('capture_preservesAQueryString', () => {
+    captureDestination('/audit?invoiceId=42', 1000)
+
+    expect(readDestination(1000)).toBe('/audit?invoiceId=42')
   })
 })
 
@@ -135,6 +152,33 @@ describe('readDestination', () => {
 
     expect(readDestination(1000)).toBeNull()
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  // AC-6 lists a wrong-typed `path` alongside bad-shape `path` as a distinct corruption case.
+  it('read_aNonStringPathValueIsRejected', () => {
+    const { warn } = spyOnConsole()
+    sessionStorage.setItem(DEEP_LINK_KEY, JSON.stringify({ v: 1, path: 42, at: 1000 }))
+
+    expect(readDestination(1000)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  // `at: 0` is a legitimate epoch timestamp, not "missing" — guards against a falsy-check
+  // bug (`!parsed.at`) that would reject it.
+  it('read_aTimestampOfZeroIsValid', () => {
+    const { warn } = spyOnConsole()
+    sessionStorage.setItem(DEEP_LINK_KEY, JSON.stringify({ v: 1, path: '/audit', at: 0 }))
+
+    expect(readDestination(0)).toBe('/audit')
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  // The `at === now` boundary sits between "valid" and "future-rejected" and isn't hit by
+  // either read_theBoundaryIsInclusive (TTL edge) or read_aFutureTimestampIsRejected (well past it).
+  it('read_isValidAtTheExactCaptureInstant', () => {
+    captureDestination('/audit', 5000)
+
+    expect(readDestination(5000)).toBe('/audit')
   })
 })
 

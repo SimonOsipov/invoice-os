@@ -520,6 +520,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [createStep, entityId, active.entityId])
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  // Also clears it unconditionally: a persona-switch remount must not inherit a stray one.
   useEffect(() => {
     window.history.replaceState(null, '', routePath(view) + window.location.hash)
     clearDestination()

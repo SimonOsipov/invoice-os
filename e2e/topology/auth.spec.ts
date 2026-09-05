@@ -272,6 +272,9 @@ test('deployed app: a top-level path is a working deep link', async ({ page }) =
 // the arrival is the LANDING page, not /audit. The journey needs no history depth and must not
 // claim any.
 test('deployed app: a signed-out deep link returns to its destination after sign-in', async ({ page }) => {
+  // The explicit budgets below already sum to 50s, which does not fit the config's 60s default
+  // envelope once the initial goto is cold too.
+  test.setTimeout(120_000)
   const errors = collectErrors(page)
 
   // No response assertion: the front door navigates away during load. 'a visit with no session
@@ -298,7 +301,12 @@ test('deployed app: a signed-out deep link returns to its destination after sign
 
   // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
   // only have come from the restored destination.
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  // 30s, not the file's 15s default: this assertion alone absorbs SignInModal's 1100ms
+  // redirectTimer, a cross-origin hard navigation, a cold SPA boot and the /v1/me round trip
+  // that mints the marker.
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
+  // The two below keep the default budget on purpose: the marker already gated on a mounted
+  // workspace, and AuditView is a static import (App.tsx), so no further fetch precedes the h1.
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the restored destination did not settle on /audit').toHaveURL(/\/audit$/)
 

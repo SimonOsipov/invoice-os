@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-// ROUTE-05-02: the capture call inside the front-door effect (App.tsx:1685-1689), which
-// must run under the same activeSession/autoPersona guards as the bounce it precedes.
+// ROUTE-05-02: the capture call inside the front-door effect (App.tsx, the effect under the
+// "The single front door" comment), which must run under the same activeSession/autoPersona
+// guards as the bounce it precedes.
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -515,7 +516,7 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     // first mount boots at a live non-root path, so bootPath never reaches readDestination()
     // at all on mount 1 -- the blob is then written straight to sessionStorage, bypassing
     // captureDestination, so nothing in this test has EVER gone through the read call site.
-    // Proves the remount's unconditional clearDestination() sweep (App.tsx:525) and
+    // Proves the remount's unconditional clearDestination() sweep (App.tsx:526) and
     // initialView's precedence (App.tsx:326-327) hold even so.
     await bootWorkspaceAt('/clients', { demoMode: true })
     let ctx = requireCtx()
@@ -579,8 +580,8 @@ function interceptHref() {
 }
 
 // ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
-// front-door effect re-fires on the resulting activeSession->null transition (deps
-// [activeSession, autoPersona], App.tsx:1701) -- App.routeBoot.test.tsx's
+// front-door effect re-fires on the resulting activeSession->null transition (its deps are
+// [activeSession, autoPersona]) -- App.routeBoot.test.tsx's
 // signOut_thePathnameDoesNotSurviveIntoTheNextSignIn proves that ordering under real
 // navigation. So AC-2/AC-4 below hold today without any new production line; only AC-1's
 // OTHER scenario -- a destination stored BEFORE this signOut, left by an earlier, unrelated
@@ -805,8 +806,8 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
   })
 
   it('noUrl_aQueryStringNeverEntersTheCapturedDestination', () => {
-    // Nothing else in this file pins the ARGUMENT the front door passes: mutating it to
-    // `pathname + search` leaves all 29 sibling specs green (measured, task-926 Stage 1).
+    // Pins the ARGUMENT the front door passes. Before this spec and the journey spec above,
+    // `pathname + search` at that call site left every other spec in this file green.
     const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?foo=1' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)

@@ -177,6 +177,15 @@ const draftInvoice: InvoiceRecord = {
   rule_set_version: null,
   can_approve: false,
   approve_blocked_reason: null,
+  can_submit: false,
+  submit_blocked_reason: null,
+}
+
+// A row the server would answer `can_submit` on from its status alone. Derived from
+// status ONLY -- the approval half is the rule this story deleted. Specs about the gate
+// set can_submit explicitly instead of calling this.
+function rowAt(status: InvoiceStatus, over: Partial<InvoiceRecord> = {}): InvoiceRecord {
+  return { ...draftInvoice, status, can_submit: status === 'validated', ...over }
 }
 
 // Approval fixtures (APPR-08-09). `run_state` is the only field the predicate reads;
@@ -2611,21 +2620,22 @@ describe('DETAIL_SUBMIT_COPY', () => {
 })
 
 describe('selection helpers', () => {
-  it('I-sel-1: only validated rows with no open approval run are selectable', () => {
+  it("I-sel-1: selectableIds is the server's answer, and the approval fact cannot move it", () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
-    const rows: InvoiceRecord[] = statuses.map((status, i) => ({ ...draftInvoice, id: `inv-${i}`, status }))
+    const rows: InvoiceRecord[] = statuses.map((status, i) => rowAt(status, { id: `inv-${i}` }))
 
-    // draftInvoice carries approval: null, so these rows keep their original meaning.
+    // One row answered true, six false -- so the loop below has both polarities to hold.
     expect(selectableIds(rows)).toEqual(['inv-1'])
-    // EXTENDED (APPR-08-09): the status dimension crossed with the approval fact.
-    // 7 x 3 = 21 cases, of which exactly two are true (validated+null, validated+approved).
+    // 7 x 3 = 21 cases: swapping the approval fact under a fixed answer changes nothing.
     for (const row of rows) {
       for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
-        const expected = row.status === 'validated' && approval?.run_state !== 'open'
+        // A typed const, not a fresh literal: the narrowed Pick<> rejects the excess keys
+        // that make the non-interference claim worth stating.
+        const candidate: InvoiceRecord = { ...row, approval }
         expect(
-          isRowSelectable({ ...row, approval }),
+          isRowSelectable(candidate),
           `status=${row.status} run_state=${approval?.run_state ?? 'null'}`,
-        ).toBe(expected)
+        ).toBe(row.can_submit)
       }
     }
   })
@@ -2639,10 +2649,7 @@ describe('selection helpers', () => {
   })
 
   it('I-sel-3: pruneSelection drops departed and no-longer-validated ids', () => {
-    const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated' },
-      { ...draftInvoice, id: 'b', status: 'queued' },
-    ]
+    const rows: InvoiceRecord[] = [rowAt('validated', { id: 'a' }), rowAt('queued', { id: 'b' })]
 
     expect(pruneSelection(['a', 'b', 'c'], rows)).toEqual(['a'])
   })
@@ -2653,207 +2660,154 @@ describe('selectAllState', () => {
     // LOAD-BEARING EDGE (addendum A9a): Array.prototype.every() over an empty array is
     // vacuously true, so a naive selectAllState would render a CHECKED select-all on a
     // page with zero selectable rows.
-    const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'draft' },
-      { ...draftInvoice, id: 'b', status: 'queued' },
-    ]
+    const rows: InvoiceRecord[] = [rowAt('draft', { id: 'a' }), rowAt('queued', { id: 'b' })]
 
     expect(selectAllState([], rows)).toBe('none')
   })
 
   it('S-2: every selectable id selected is all', () => {
-    const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated' },
-      { ...draftInvoice, id: 'b', status: 'validated' },
-    ]
+    const rows: InvoiceRecord[] = [rowAt('validated', { id: 'a' }), rowAt('validated', { id: 'b' })]
 
     expect(selectAllState(['a', 'b'], rows)).toBe('all')
   })
 
   it('S-3: a strict non-empty subset is some', () => {
-    const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated' },
-      { ...draftInvoice, id: 'b', status: 'validated' },
-    ]
+    const rows: InvoiceRecord[] = [rowAt('validated', { id: 'a' }), rowAt('validated', { id: 'b' })]
 
     expect(selectAllState(['a'], rows)).toBe('some')
   })
 
   it('S-4: a selection holding only a stale id is never all, even when lengths coincidentally match', () => {
-    const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'validated' }]
+    const rows: InvoiceRecord[] = [rowAt('validated', { id: 'a' })]
 
     expect(selectAllState(['stale-id'], rows)).not.toBe('all')
   })
 })
 
-// RED specs (APPR-08-09, task-500, Stage 2.5/Mode A) — isRowSelectable must read the
-// row's approval fact, not just its status, so an awaiting-approval invoice cannot be
-// batch-selected into a submit the server would only skip. isRowSelectable's body is
-// still `row.status === 'validated'` (its `// stub` marker), so every spec below that
-// involves an open run fails on its assertion, never on an import or compile error.
-describe('isRowSelectable reads the approval fact (APPR-08-09)', () => {
-  it('A-sel-1: a validated row with an open run is NOT selectable', () => {
-    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: OPEN_RUN })).toBe(false)
+// The server answers the submit gate per row. Every spec below drives that answer and
+// keeps the approval fact set beside it, so a re-derivation from `approval` reds them.
+describe('the selection helpers carry the server answer through (APPR-08-09, BUG-12)', () => {
+  it('A-sel-1: a validated row the server refused is NOT selectable, open run or not', () => {
+    expect(isRowSelectable(gateRow({ status: 'validated', approval: OPEN_RUN, can_submit: false }))).toBe(false)
   })
 
-  it('A-sel-2: a validated row with an approved run IS selectable', () => {
-    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: APPROVED_RUN })).toBe(true)
+  it('A-sel-2: a validated row with an approved run IS selectable when the server says so', () => {
+    expect(isRowSelectable(gateRow({ status: 'validated', approval: APPROVED_RUN, can_submit: true }))).toBe(true)
   })
 
   it('A-sel-3: a validated row with no approval run at all IS selectable (AC #5, an unarmed tenant is unchanged)', () => {
-    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: null })).toBe(true)
+    expect(isRowSelectable(gateRow({ status: 'validated', approval: null, can_submit: true }))).toBe(true)
   })
 
-  it('A-sel-4: selectableIds excludes awaiting-approval rows from a mixed page', () => {
+  it('A-sel-4: selectableIds excludes the refused rows from a mixed page', () => {
+    // The first three rows are all validated ON PURPOSE -- a status mix alone would score
+    // the same under the deleted rule. Only can_submit separates them.
     const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'clear', status: 'validated', approval: null },
-      { ...draftInvoice, id: 'awaiting', status: 'validated', approval: OPEN_RUN },
-      { ...draftInvoice, id: 'approved', status: 'validated', approval: APPROVED_RUN },
-      { ...draftInvoice, id: 'draft', status: 'draft', approval: OPEN_RUN },
+      gateRow({ id: 'clear', status: 'validated', approval: null, can_submit: true }),
+      gateRow({ id: 'awaiting', status: 'validated', approval: OPEN_RUN, can_submit: false }),
+      gateRow({ id: 'approved', status: 'validated', approval: APPROVED_RUN, can_submit: true }),
+      gateRow({ id: 'draft', status: 'draft', approval: OPEN_RUN, can_submit: false }),
     ]
 
     expect(selectableIds(rows)).toEqual(['clear', 'approved'])
   })
 
-  it('A-sel-5: pruneSelection drops an id whose row came back from the server with an open run', () => {
+  it('A-sel-5: pruneSelection drops an id whose row came back from the server refused', () => {
     const before: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: null },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+      gateRow({ id: 'a', status: 'validated', approval: null, can_submit: true }),
+      gateRow({ id: 'b', status: 'validated', approval: null, can_submit: true }),
     ]
-    // The same selection survives the pre-fetch rows -- so the drop below is the approval
-    // fact biting, not an id that merely left the page.
+    // The same selection survives the pre-fetch rows -- so the drop below is the server's
+    // answer biting, not an id that merely left the page.
     expect(pruneSelection(['a', 'b'], before)).toEqual(['a', 'b'])
 
     const afterRefetch: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+      gateRow({ id: 'a', status: 'validated', approval: OPEN_RUN, can_submit: false }),
+      gateRow({ id: 'b', status: 'validated', approval: null, can_submit: true }),
     ]
 
     expect(pruneSelection(['a', 'b'], afterRefetch)).toEqual(['b'])
   })
 
-  it('A-sel-6: selectAllState reports none on a page where every row is awaiting approval', () => {
+  it('A-sel-6: selectAllState reports none on a page the server refused entirely', () => {
     const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+      gateRow({ id: 'a', status: 'validated', approval: OPEN_RUN, can_submit: false }),
+      gateRow({ id: 'b', status: 'validated', approval: OPEN_RUN, can_submit: false }),
     ]
 
     // The selectableIds leg is load-bearing (QA Stage 4, task-500): `selectAllState([], …)`
-    // alone returns 'none' via `matched === 0` for ANY page, so it passed under the
-    // status-only stub too. A-sel-7 is the other discriminator.
+    // alone returns 'none' via `matched === 0` for ANY page. A-sel-7 is the other
+    // discriminator.
     expect(selectableIds(rows)).toEqual([])
     expect(selectAllState([], rows)).toBe('none')
   })
 
-  it("A-sel-7: selectAllState is none even when every open-run id sits in the selection -- a stale selection can't inflate past the empty guard", () => {
+  it("A-sel-7: selectAllState is none even when every refused id sits in the selection -- a stale selection can't inflate past the empty guard", () => {
     const rows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: OPEN_RUN },
+      gateRow({ id: 'a', status: 'validated', approval: OPEN_RUN, can_submit: false }),
+      gateRow({ id: 'b', status: 'validated', approval: OPEN_RUN, can_submit: false }),
     ]
 
     expect(selectAllState(['a', 'b'], rows)).toBe('none')
   })
 })
 
-// FAIL-OPEN, pinned as a recorded decision rather than an accident (APPR-08-09, B5).
-// `InvoiceApproval.run_state` is a bare `string` with no union, and normaliseInvoiceRow
-// passes it through untouched ([gates-on-the-wire]), so anything that is not exactly
-// 'open' -- a typo, a case variant, an absent key -- reads as SELECTABLE. Accepted: the
-// column is CHECK-constrained, and the SERVER gate is authoritative (a wrongly-selectable
-// row is skipped with awaiting_approval), so this is a display inconsistency, never a
-// bypass. If a future change makes it fail CLOSED, these three specs are what must be
-// re-decided rather than silently flipped.
-describe('isRowSelectable fails OPEN on an unrecognised run_state (APPR-08-09, decision B5)', () => {
-  it("A-sel-8: an unknown run_state ('opened', 'OPEN') on a non-null approval reads as selectable", () => {
-    for (const run_state of ['opened', 'OPEN', 'Open', 'approved_pending']) {
-      expect(
-        isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state } }),
-        `run_state=${run_state}`,
-      ).toBe(true)
-    }
-  })
+// A-sel-8..12 are DELETED, not rewritten. Their subject -- how the SPA interprets an
+// unrecognised `run_state` -- ceased to exist: isRowSelectable cannot mis-read a malformed
+// approval because it never reads one. B12-12's fail-closed decode replaces them.
 
-  it('A-sel-9: an empty-string run_state on a non-null approval reads as selectable', () => {
-    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: { ...OPEN_RUN, run_state: '' } })).toBe(true)
-  })
-
-  it('A-sel-10: an absent run_state key on a non-null approval reads as selectable', () => {
-    // The wire cannot produce this today (RowFacts has no omitempty), and the type forbids
-    // it -- the cast is what makes the undefined branch reachable at all.
-    const noRunState = { ...OPEN_RUN, run_state: undefined } as unknown as InvoiceApproval
-
-    expect(isRowSelectable({ ...draftInvoice, status: 'validated', approval: noRunState })).toBe(true)
-  })
-
-  it('A-sel-11: fail-open never rescues a non-validated status', () => {
-    expect(isRowSelectable({ ...draftInvoice, status: 'draft', approval: { ...OPEN_RUN, run_state: 'opened' } })).toBe(false)
-  })
-
-  it('A-sel-12: a non-object approval fails open too, and never throws', () => {
-    // normaliseInvoiceRow coerces a string/number/array/absent `approval` to null before a
-    // row reaches here (invoices.ts:501-517), so this pins the PREDICATE's own behaviour
-    // for the day someone builds a row without it -- `?.` only guards null/undefined.
-    const junk = ['open', 42, [], true, undefined]
-
-    for (const approval of junk) {
-      const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval } as unknown as InvoiceRecord
-      expect(() => isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).not.toThrow()
-      expect(isRowSelectable(row), `approval=${JSON.stringify(approval) ?? 'undefined'}`).toBe(true)
-    }
-  })
-})
-
-// QA Stage 4 (task-500) — the whole (status x run_state) surface, with LITERAL expected
-// values rather than I-sel-1's oracle, which recomputes the implementation's own
-// expression and so cannot catch a rule that is wrong in both places at once.
-//
-// `run_state` has five wire values: null (no run) plus the four the CHECK allows
-// (migrations/20260809232011_approval_runs.sql:40). Only 'open' blocks; the other four
-// read as selectable. That is EQUIVALENT to the server gate
-// (TransmitClear = !policyActive || approvedRun, gate.go:39) on every reachable state,
-// but only because of four invariants living outside the SPA: ApplyValidation always arms
-// (store.go:1938), a rejection demotes to draft in the same tx (decision.go:319),
-// every walk back to draft cancels the live run (engine.go:262), and 'approved' is EXISTS
-// over all runs while `run_state` is the newest one (gate.go:104). If any of those change,
-// this table is the SPA-side thing that must be re-decided.
-describe('isRowSelectable over the whole status x run_state surface (APPR-08-09, QA Stage 4)', () => {
+// The whole (status x run_state) surface, now claiming NON-INTERFERENCE. A matrix over
+// two dimensions the gate no longer reads would return a constant and prove nothing, so
+// each combination is driven at BOTH polarities instead: `return true` and `return false`
+// each red one half. `run_state` has five wire values -- null (no run) plus the four the
+// CHECK allows (migrations/20260809232011_approval_runs.sql:40).
+describe('neither status nor run_state can move the gate (APPR-08-09, BUG-12)', () => {
   const RUN_STATES = [null, 'open', 'approved', 'rejected', 'cancelled'] as const
 
-  it('A-sel-13: exactly four of the 35 combinations are selectable, and all four are validated', () => {
+  it('A-sel-13: can_submit decides every one of the 35 status x run_state cells, at both polarities', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
-    const selectable: string[] = []
+    let cells = 0
 
     for (const status of statuses) {
       for (const run_state of RUN_STATES) {
-        const approval = run_state === null ? null : { ...OPEN_RUN, run_state }
-        if (isRowSelectable({ ...draftInvoice, status, approval })) selectable.push(`${status}/${run_state ?? 'no-run'}`)
+        for (const want of [true, false]) {
+          cells++
+          const candidate = gateRow({
+            status,
+            approval: run_state === null ? null : { ...OPEN_RUN, run_state },
+            can_submit: want,
+          })
+          expect(isRowSelectable(candidate), `${status}/${run_state ?? 'no-run'}/${want}`).toBe(want)
+        }
       }
     }
 
-    expect(selectable).toEqual([
-      'validated/no-run',
-      'validated/approved',
-      'validated/rejected',
-      'validated/cancelled',
-    ])
+    // Anti-trim: 7 statuses x 5 run states x 2 polarities. A shrunken loop would otherwise
+    // pass by simply asserting less.
+    expect(statuses).toHaveLength(7)
+    expect(cells).toBe(70)
   })
 
-  it('A-sel-14: an open run on every non-validated status is still non-selectable -- the status half dominates', () => {
+  it('A-sel-14: an open run on every non-validated status follows the server, not the status', () => {
     const nonValidated: InvoiceStatus[] = ['draft', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
 
     for (const status of nonValidated) {
-      expect(isRowSelectable({ ...draftInvoice, status, approval: OPEN_RUN }), `status=${status}`).toBe(false)
-      expect(isRowSelectable({ ...draftInvoice, status, approval: null }), `status=${status}`).toBe(false)
+      expect(isRowSelectable(gateRow({ status, approval: OPEN_RUN, can_submit: false })), `status=${status}`).toBe(false)
+      // The inverted leg: a status the old rule refused outright is selectable when the
+      // server clears it. This is the half a status set could never pass.
+      expect(isRowSelectable(gateRow({ status, approval: OPEN_RUN, can_submit: true })), `status=${status}`).toBe(true)
     }
   })
 
-  it('A-sel-15: a page mixing all five run states selects the four non-open ids, in row order', () => {
-    const rows: InvoiceRecord[] = RUN_STATES.map((run_state) => ({
-      ...draftInvoice,
-      id: run_state ?? 'no-run',
-      status: 'validated' as InvoiceStatus,
-      approval: run_state === null ? null : { ...OPEN_RUN, run_state },
-    }))
+  it("A-sel-15: a page mixing all five run states selects the four the server cleared, in row order", () => {
+    const rows: InvoiceRecord[] = RUN_STATES.map((run_state) =>
+      gateRow({
+        id: run_state ?? 'no-run',
+        status: 'validated',
+        approval: run_state === null ? null : { ...OPEN_RUN, run_state },
+        can_submit: run_state !== 'open',
+      }),
+    )
 
     expect(selectableIds(rows)).toEqual(['no-run', 'approved', 'rejected', 'cancelled'])
     // 'some', not 'all': the open-run id is in the selection but not in `selectable`, so it
@@ -2862,14 +2816,14 @@ describe('isRowSelectable over the whole status x run_state surface (APPR-08-09,
     expect(selectAllState(['no-run', 'approved', 'rejected', 'cancelled', 'open'], rows)).toBe('all')
   })
 
-  it('A-sel-16: when a run CLOSES between fetches the row becomes selectable again, but pruneSelection does not resurrect a dropped id', () => {
+  it("A-sel-16: when the server's answer FLIPS between fetches the row becomes selectable again, but pruneSelection does not resurrect a dropped id", () => {
     const open: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: OPEN_RUN },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+      gateRow({ id: 'a', status: 'validated', approval: OPEN_RUN, can_submit: false }),
+      gateRow({ id: 'b', status: 'validated', approval: null, can_submit: true }),
     ]
     const closed: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated', approval: APPROVED_RUN },
-      { ...draftInvoice, id: 'b', status: 'validated', approval: null },
+      gateRow({ id: 'a', status: 'validated', approval: APPROVED_RUN, can_submit: true }),
+      gateRow({ id: 'b', status: 'validated', approval: null, can_submit: true }),
     ]
 
     // Fetch 1: the approver has not decided, so 'a' is dropped from the selection.
@@ -2884,73 +2838,62 @@ describe('isRowSelectable over the whole status x run_state surface (APPR-08-09,
   })
 })
 
-// RED specs (APPR-12-06, task-531, Stage 2.5/Mode A) — selectBlockedReason is the pure
-// helper the register/review checkboxes read to name WHY a row can't be selected for
-// submit. Built on skipReasonLabel(batchSubmitReason*) (GAP-3), never a fresh literal, so
-// the pre-click reason stays byte-identical to the post-click skip panel. Every spec below
-// fails on the stub's thrown `not implemented`, the correct RED reason.
-describe('selectBlockedReason (APPR-12-06)', () => {
-  it('A06-1: a selectable row (validated, no open run) has a null reason', () => {
-    expect(selectBlockedReason({ ...draftInvoice, status: 'validated', approval: null })).toBeNull()
+// selectBlockedReason names WHY a row can't be selected for submit. The sentence is the
+// SERVER's, echoed verbatim -- the SPA authors none of them and maps none of them.
+describe('selectBlockedReason (APPR-12-06, BUG-12)', () => {
+  it('A06-1: a row the server cleared has a null reason', () => {
+    expect(selectBlockedReason(gateRow({ status: 'validated', approval: null, can_submit: true }))).toBeNull()
   })
 
-  it("A06-2: an open-run row names the approval cause, byte-identical to skipReasonLabel('awaiting_approval')", () => {
-    const row = { ...draftInvoice, status: 'validated' as InvoiceStatus, approval: OPEN_RUN }
-    expect(selectBlockedReason(row)).toBe(skipReasonLabel('awaiting_approval'))
+  it("A06-2: an open-run row carries the server's approval sentence, verbatim", () => {
+    const sentence = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+    const row = gateRow({ status: 'validated', approval: OPEN_RUN, can_submit: false, submit_blocked_reason: sentence })
+    expect(selectBlockedReason(row)).toBe(sentence)
   })
 
-  it("A06-3: a draft row -- the only pre-submission status that isn't validated -- names the status cause, byte-identical to skipReasonLabel('not_validated')", () => {
-    const row = { ...draftInvoice, status: 'draft' as InvoiceStatus, approval: null }
-    expect(selectBlockedReason(row)).toBe(skipReasonLabel('not_validated'))
+  it("A06-3: a draft row carries the server's status sentence, verbatim", () => {
+    const sentence = 'Only validated invoices can be submitted — re-validate this invoice first.'
+    const row = gateRow({ status: 'draft', approval: null, can_submit: false, submit_blocked_reason: sentence })
+    expect(selectBlockedReason(row)).toBe(sentence)
   })
 
-  // A06-4 asserted TOTALITY only (`not.toBeNull()`), which is why it stayed green while
-  // ten deployed rows read "Not validated — validate it first" beside an ACCEPTED pill.
-  // It now asserts TRUTHFULNESS: the EXACT expected string, or null, for all 35 cells.
-  it('A06-4: truthfulness — every cell of the status x run_state matrix returns the exact reason it can honestly name, or null', () => {
-    const AWAITING = skipReasonLabel('awaiting_approval')
-    const NOT_VALIDATED = skipReasonLabel('not_validated')
+  // The predecessor asserted a per-cell SPA table. With the copy off the wire the honest
+  // claim inverts: the server's sentence rides every cell unchanged, and a cleared row is
+  // silent in every cell. Both polarities, so a constant return reds one of them.
+  it('A06-4: the reason is the server\'s, in every one of the 35 cells, at both polarities', () => {
+    const SENTENCE = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+    const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
     const runStates = ['none', 'open', 'approved', 'rejected', 'cancelled'] as const
-    type RunKey = (typeof runStates)[number]
 
-    // Written out cell by cell ON PURPOSE. An expectation derived from a predicate would
-    // just re-run the implementation and pass on whatever it does. Only the two
-    // pre-submission statuses may carry a sentence; the five later ones say nothing,
-    // because the status pill beside them is already the answer.
-    const EXPECTED: Record<InvoiceStatus, Record<RunKey, string | null>> = {
-      draft: { none: NOT_VALIDATED, open: AWAITING, approved: NOT_VALIDATED, rejected: NOT_VALIDATED, cancelled: NOT_VALIDATED },
-      validated: { none: null, open: AWAITING, approved: null, rejected: null, cancelled: null },
-      queued: { none: null, open: null, approved: null, rejected: null, cancelled: null },
-      submitted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
-      accepted: { none: null, open: null, approved: null, rejected: null, cancelled: null },
-      rejected: { none: null, open: null, approved: null, rejected: null, cancelled: null },
-      failed: { none: null, open: null, approved: null, rejected: null, cancelled: null },
-    }
-
-    const statuses = Object.keys(EXPECTED) as InvoiceStatus[]
     let cells = 0
     for (const status of statuses) {
       for (const run of runStates) {
         cells++
-        const candidate = { ...draftInvoice, status, approval: run === 'none' ? null : { ...OPEN_RUN, run_state: run } }
-        expect(selectBlockedReason(candidate), `status=${status} run_state=${run}`).toBe(EXPECTED[status][run])
+        const approval = run === 'none' ? null : { ...OPEN_RUN, run_state: run }
+        expect(
+          selectBlockedReason(gateRow({ status, approval, can_submit: false, submit_blocked_reason: SENTENCE })),
+          `blocked status=${status} run_state=${run}`,
+        ).toBe(SENTENCE)
+        expect(
+          selectBlockedReason(gateRow({ status, approval, can_submit: true, submit_blocked_reason: SENTENCE })),
+          `cleared status=${status} run_state=${run}`,
+        ).toBeNull()
       }
     }
 
-    // The table must cover the whole union, not a subset someone trimmed: 7 statuses x 5
-    // run states. A shrunken EXPECTED would otherwise pass by simply asserting less.
+    // Anti-trim: 7 statuses x 5 run states. A shrunken loop would pass by asserting less.
     expect(statuses).toHaveLength(7)
     expect(cells).toBe(35)
   })
 
   // The defect stated as its own spec, so the guard survives a future rewrite of A06-4's
   // table: no post-submission row may be told to validate itself.
-  it('A06-4b: no post-submission status ever returns the not-validated sentence, at any run_state', () => {
+  it('A06-4b: a post-submission row stays silent on the server\'s own null, at any run_state', () => {
     const postSubmission: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'rejected', 'failed']
 
     for (const status of postSubmission) {
       for (const approval of [null, OPEN_RUN, APPROVED_RUN]) {
-        const candidate = { ...draftInvoice, status, approval }
+        const candidate = gateRow({ status, approval, can_submit: false, submit_blocked_reason: null })
         expect(
           selectBlockedReason(candidate),
           `status=${status} run_state=${approval?.run_state ?? 'null'} -- a row already past submission cannot be "validated first"`,
@@ -2962,13 +2905,14 @@ describe('selectBlockedReason (APPR-12-06)', () => {
 
 describe('selectBlockedReason does not read can_approve (APPR-12-06, AC #7)', () => {
   it('A06-12: a validated row with no open run stays SELECTABLE with a NULL reason even when blocked from approving (can_approve:false + a non-null approve_blocked_reason) — guards against harmonising the submit and approve gates', () => {
-    const candidate: InvoiceRecord = {
-      ...draftInvoice,
+    const candidate: InvoiceRecord = gateRow({
       status: 'validated',
       approval: null,
+      can_submit: true,
+      submit_blocked_reason: null,
       can_approve: false,
       approve_blocked_reason: 'Waiting on the Finance Lead seat',
-    }
+    })
 
     expect(isRowSelectable(candidate), 'the submit gate must stay independent of the approve gate').toBe(true)
     expect(selectBlockedReason(candidate)).toBeNull()
@@ -3411,9 +3355,9 @@ describe('pruneSelection: real churn (adversarial)', () => {
     // introduce a brand-new validated row 'd' that was never selected.
     const priorSelection = ['a', 'b', 'c', 'z']
     const polledRows: InvoiceRecord[] = [
-      { ...draftInvoice, id: 'a', status: 'validated' },
-      { ...draftInvoice, id: 'b', status: 'queued' },
-      { ...draftInvoice, id: 'd', status: 'validated' },
+      rowAt('validated', { id: 'a' }),
+      rowAt('queued', { id: 'b' }),
+      rowAt('validated', { id: 'd' }),
     ]
 
     const result = pruneSelection(priorSelection, polledRows)
@@ -3425,7 +3369,7 @@ describe('pruneSelection: real churn (adversarial)', () => {
   })
 
   it('P-sel-2: a selection that becomes fully invalid across one churn collapses to empty, not an error', () => {
-    const rows: InvoiceRecord[] = [{ ...draftInvoice, id: 'a', status: 'accepted' }]
+    const rows: InvoiceRecord[] = [rowAt('accepted', { id: 'a' })]
 
     expect(pruneSelection(['a', 'b'], rows)).toEqual([])
   })
@@ -4383,11 +4327,9 @@ describe('claim: state==="ready" implies pagination.total>0, given invoiceListIs
 
 describe('selectAllState and selectableIds never span beyond the given rows', () => {
   it('a 50-row page with 12 selectable rows selects exactly those 12', () => {
-    const rows: InvoiceRecord[] = Array.from({ length: 50 }, (_, i) => ({
-      ...draftInvoice,
-      id: `inv-${i}`,
-      status: i < 12 ? 'validated' : 'draft',
-    }))
+    const rows: InvoiceRecord[] = Array.from({ length: 50 }, (_, i) =>
+      rowAt(i < 12 ? 'validated' : 'draft', { id: `inv-${i}` }),
+    )
 
     const ids = selectableIds(rows)
     expect(ids).toHaveLength(12)

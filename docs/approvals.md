@@ -903,11 +903,11 @@ off — still submits the same invoice. Pinned by
 - The invoice detail page's approve/reject controls and its approval card. Both
   render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1) and
   behave identically whether the flag is on or off.
-- The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA
-  reads `run_state` off these facts in `isRowSelectable`
-  (`frontend/app/src/lib/invoices.ts`) and refuses the checkbox, so an open run blocks
-  batch **selection** in the browser whatever the flag says. Visibility is ungated, but the
-  SPA turns it into a block.
+- The per-row `approval` facts on `GET /v1/invoices`. They are display copy only. Both row
+  checkboxes read `can_submit` / `submit_blocked_reason` instead (`isRowSelectable`,
+  `selectBlockedReason`, `frontend/app/src/lib/invoices.ts`), and that pair is gated above,
+  so with the flag off an open run no longer blocks batch **selection** in the browser.
+  BUG-12 removed the SPA-side re-derivation that used to make it do so.
 - The `awaiting_approval` list filter.
 - The `awaiting_approval` **count** on the dashboard rollup's `Bucket`
   (`internal/dashboard/store.go`, `GET /v1/rollup`). The Approvals nav badge

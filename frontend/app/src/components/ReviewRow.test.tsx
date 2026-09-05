@@ -6,8 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { ImportBatch } from '../lib/importApi'
 import {
-  selectBlockedReason,
-  skipReasonLabel,
   type InvoiceApproval,
   type InvoiceDetailRecord,
   type InvoiceListResponse,
@@ -25,7 +23,7 @@ interface MockResponse {
 }
 
 function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
-  return {
+  const built = {
     id: 'inv-x',
     entity_id: 'ent-1',
     import_batch_id: null,
@@ -55,8 +53,13 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    submit_blocked_reason: null,
     ...over,
-  }
+  } as InvoiceRecord
+  // Stands in for the server's answer on an unarmed tenant. Derived from status ONLY --
+  // deriving the approval half too would put the deleted client rule back in a fixture.
+  // Specs about the gate set can_submit explicitly.
+  return { ...built, can_submit: over.can_submit ?? built.status === 'validated' }
 }
 
 function listRow(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
@@ -135,6 +138,14 @@ type SubmitGateOver = Partial<InvoiceRecord> & {
 function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
   return { ...row(), ...over } as InvoiceRecord
 }
+
+// submitGate's reachable sentences (internal/invoice/handlers.go). Every spec below sets
+// one on the row: the SPA authors none of them any more, so there is nothing to derive.
+const SUBMIT_REASON = {
+  role: 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.',
+  notValidated: 'Only validated invoices can be submitted — re-validate this invoice first.',
+  awaiting: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+} as const
 
 function renderGateRow(over: SubmitGateOver = {}) {
   render(
@@ -277,22 +288,23 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
   }
 
   it('RR-appr-1: awaiting-approval disables, clear-validated enables -- the enabled leg is what pins the call site to the ROW', () => {
-    renderRow({ status: 'validated', approval: openRun })
-    expect(selectBox().disabled, 'validated + open run is not selectable').toBe(true)
+    renderGateRow({ status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting })
+    expect(selectBox().disabled, 'the server refused this row').toBe(true)
     cleanup()
 
-    // The discriminator: a status-only call site reads `.status` off a string, gets
-    // undefined, and disables EVERY checkbox -- which the line above cannot tell apart.
-    renderRow({ status: 'validated', approval: null })
-    expect(selectBox().disabled, 'validated + no run stays selectable (AC #5)').toBe(false)
+    // The discriminator: a call site reading anything but the row gets the same answer
+    // for every row -- which the line above cannot tell apart.
+    renderGateRow({ status: 'validated', approval: null, can_submit: true, submit_blocked_reason: null })
+    expect(selectBox().disabled, 'the server cleared this row').toBe(false)
     cleanup()
 
-    renderRow({ status: 'validated', approval: { ...openRun, run_state: 'approved' } })
-    expect(selectBox().disabled, 'validated + approved run stays selectable').toBe(false)
+    // Same run state as the enabled leg, opposite answer: the run cannot be what decides.
+    renderGateRow({ status: 'validated', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.role })
+    expect(selectBox().disabled, 'a clear status and no run do not overrule the server').toBe(true)
   })
 
   it('RR-appr-2: parity -- the awaiting-approval checkbox is the SAME disabled control a draft row already renders, apart from the reason each one now states for itself', () => {
-    renderRow({ status: 'draft', approval: null })
+    renderGateRow({ status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })
     const draftBox = selectBox()
     // `title` dropped from the shared shape: overruled by APPR-16 Core AC-2 (user,
     // 2026-08-16) -- draft and awaiting-approval now state two DIFFERENT reasons, so a
@@ -304,7 +316,7 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
     }
     cleanup()
 
-    renderRow({ status: 'validated', approval: openRun })
+    renderGateRow({ status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting })
     const awaitingBox = selectBox()
 
     expect({
@@ -312,7 +324,7 @@ describe('ReviewRow: an open approval run disables the row checkbox (APPR-08-09,
       disabled: awaitingBox.disabled,
       label: awaitingBox.getAttribute('aria-label'),
     }, 'awaiting-approval renders exactly the draft row shape, apart from its own reason').toEqual(draftShape)
-    expect(awaitingBox.getAttribute('title')).toBe(selectBlockedReason({ status: 'validated', approval: openRun }))
+    expect(awaitingBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
   })
 })
 
@@ -333,25 +345,24 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
   }
 
   it('A16-2a: validated + open run disables the checkbox and carries the reason in its title', () => {
-    const shape = { status: 'validated' as const, approval: openRun }
-    const reason = selectBlockedReason(shape)
-    renderRow(shape)
+    const shape = { status: 'validated' as const, approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting }
+    renderGateRow(shape)
     const box = selectBox()
 
     expect(box.disabled).toBe(true)
-    expect(box.getAttribute('title')).toBe(reason)
+    expect(box.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
   })
 
   it('A16-2b: draft + no run renders the not-validated reason, not the approval one', () => {
-    renderRow({ status: 'draft', approval: null })
+    renderGateRow({ status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })
     const title = selectBox().getAttribute('title')
 
-    expect(title).toBe(skipReasonLabel('not_validated'))
-    expect(title).not.toBe(skipReasonLabel('awaiting_approval'))
+    expect(title).toBe(SUBMIT_REASON.notValidated)
+    expect(title).not.toBe(SUBMIT_REASON.awaiting)
   })
 
   it('A16-2c: a selectable row is enabled and carries no title', () => {
-    renderRow({ status: 'validated', approval: null })
+    renderGateRow({ status: 'validated', approval: null, can_submit: true, submit_blocked_reason: null })
     const box = selectBox()
 
     expect(box.disabled).toBe(false)
@@ -477,12 +488,10 @@ describe('ReviewRow: the checkbox now states its own reason, retargeting [select
       due_at: null,
       overdue: false,
     }
-    const shape = { status: 'validated' as const, approval: openRun }
-    const reason = selectBlockedReason(shape)
-    renderRow(shape)
+    renderGateRow({ status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting })
     const box = screen.getByTestId('review-select') as HTMLInputElement
 
-    expect(box.getAttribute('title'), 'A06-6 pinned this null; APPR-16 Core AC-2 overrules it').toBe(reason)
+    expect(box.getAttribute('title'), 'A06-6 pinned this null; APPR-16 Core AC-2 overrules it').toBe(SUBMIT_REASON.awaiting)
   })
 })
 
@@ -501,8 +510,8 @@ describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA
   it("A16-2h: two blocked rows with DIFFERENT reasons each carry their own title, not the sibling's", () => {
     render(
       <>
-        <Row r={row({ id: 'inv-draft', status: 'draft', approval: null })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
-        <Row r={row({ id: 'inv-awaiting', status: 'validated', approval: openRun })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-draft', status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-awaiting', status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
       </>,
     )
     const [draftBox, awaitingBox] = screen.getAllByTestId('review-select') as HTMLInputElement[]
@@ -511,23 +520,23 @@ describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA
 
     // One sentence reused for both rows would pass whichever assertion happens to match
     // -- pinning both directions closes that gap.
-    expect(draftReason).toBe(skipReasonLabel('not_validated'))
-    expect(awaitingReason).toBe(skipReasonLabel('awaiting_approval'))
+    expect(draftReason).toBe(SUBMIT_REASON.notValidated)
+    expect(awaitingReason).toBe(SUBMIT_REASON.awaiting)
     expect(draftReason).not.toBe(awaitingReason)
   })
 
   it('A16-2i: a row transitioning from blocked to selectable drops its title, not left stale', () => {
-    const shared = row({ id: 'inv-transition', status: 'draft', approval: null })
+    const shared = gateRow({ id: 'inv-transition', status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })
     const { rerender } = render(
       <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
     )
     const box = screen.getByTestId('review-select') as HTMLInputElement
     // The first render must really be blocked, or the absence half below is vacuous.
     expect(box.disabled).toBe(true)
-    expect(box.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect(box.getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
 
     rerender(
-      <Row r={{ ...shared, status: 'validated' }} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+      <Row r={{ ...shared, status: 'validated', can_submit: true, submit_blocked_reason: null }} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
     )
 
     expect(box.disabled).toBe(false)
@@ -547,11 +556,11 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
     overdue: false,
   }
 
-  function renderPair(blockedOver: Partial<InvoiceRecord>, cleanOver: Partial<InvoiceRecord>) {
+  function renderPair(blockedOver: SubmitGateOver, cleanOver: SubmitGateOver) {
     render(
       <>
-        <Row r={row({ id: 'inv-blocked', ...blockedOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
-        <Row r={row({ id: 'inv-clean', ...cleanOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-blocked', ...blockedOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-clean', ...cleanOver })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
       </>,
     )
     const [blockedRow, cleanRow] = screen.getAllByTestId('review-row')
@@ -561,14 +570,14 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
 
   it('B09-3: a not-validated review row renders the same grid children as a selectable one, and keeps its title', () => {
     const { blockedRow, cleanRow, blockedBox, cleanBox } = renderPair(
-      { status: 'draft', approval: null },
-      { status: 'validated', approval: null },
+      { status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated },
+      { status: 'validated', approval: null, can_submit: true, submit_blocked_reason: null },
     )
 
     // Non-vacuity: one row really blocked, the other really selectable -- two equally
     // wrong rows would otherwise satisfy the count below.
     expect(blockedBox.disabled).toBe(true)
-    expect(blockedBox.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect(blockedBox.getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
     expect(cleanBox.disabled).toBe(false)
 
     expect(blockedRow.children.length).toBe(cleanRow.children.length)
@@ -576,12 +585,12 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
 
   it('B09-4: an awaiting-approval review row renders the same grid children as a selectable one', () => {
     const { blockedRow, cleanRow, blockedBox, cleanBox } = renderPair(
-      { status: 'validated', approval: openRun },
-      { status: 'validated', approval: null },
+      { status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting },
+      { status: 'validated', approval: null, can_submit: true, submit_blocked_reason: null },
     )
 
     expect(blockedBox.disabled).toBe(true)
-    expect(blockedBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(blockedBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
     expect(cleanBox.disabled).toBe(false)
 
     expect(blockedRow.children.length).toBe(cleanRow.children.length)
@@ -593,6 +602,8 @@ describe('BUG-09: a blocked review row costs no extra grid line', () => {
 describe('BUG-09 QA: the deleted line cannot come back through a blind spot', () => {
   const REVIEW_CELLS = 7
   // A reason sentence's clause before the em dash; the whole sentence if it has none.
+  // The sentences are the SERVER's now, and submitGate's draft and rejected arms share
+  // one lead -- so a pair fed to this helper must be asserted distinct, never assumed.
   const lead = (reason: string) => reason.split('—')[0].trim()
   const openRun: InvoiceApproval = {
     run_state: 'open',
@@ -604,10 +615,10 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
   }
 
   it("QA-B09-6: a blocked review row renders exactly SEVEN grid children, pinned as a literal and against the grid's own tracks", () => {
-    renderRow({ status: 'draft', approval: null })
+    renderGateRow({ status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })
 
     // Non-vacuity: the row must really be blocked.
-    expect((screen.getByTestId('review-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect((screen.getByTestId('review-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
 
     // A second, independent denominator: the literal cannot drift away from the grid.
     expect(REVIEW_GRID_COLUMNS.trim().split(/\s+/).length, 'the grid declares a track per cell').toBe(REVIEW_CELLS)
@@ -617,8 +628,8 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
   it('QA-B09-7: a blocked review row prints its reason nowhere in its own text, at any nesting depth', () => {
     render(
       <>
-        <Row r={row({ id: 'inv-draft', status: 'draft', approval: null })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
-        <Row r={row({ id: 'inv-awaiting', status: 'validated', approval: openRun })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-draft', status: 'draft', approval: null, can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
+        <Row r={gateRow({ id: 'inv-awaiting', status: 'validated', approval: openRun, can_submit: false, submit_blocked_reason: SUBMIT_REASON.awaiting })} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />
       </>,
     )
     const [draftRow, awaitingRow] = screen.getAllByTestId('review-row')
@@ -626,17 +637,18 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
 
     // Non-vacuity: each row really holds its OWN sentence in `title`, so both strings are
     // on the page -- just never as rendered text.
-    expect(draftBox.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
-    expect(awaitingBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(draftBox.getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
+    expect(awaitingBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
 
-    expect(draftRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(skipReasonLabel('not_validated'))
-    expect(awaitingRow.textContent).not.toContain(skipReasonLabel('awaiting_approval'))
+    expect(draftRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(SUBMIT_REASON.notValidated)
+    expect(awaitingRow.textContent).not.toContain(SUBMIT_REASON.awaiting)
 
-    // The lead phrase too, so a TRUNCATED re-add cannot slip past exact containment.
-    // Derived, never authored here -- skipReasonLabel stays the sole source of the copy.
+    // The lead phrase too, so a TRUNCATED re-add cannot slip past exact containment. The
+    // two leads must DIFFER, or each row is only re-asserting the other's absence.
     // The status pills read DRAFT/VALIDATED, so neither phrase collides with one.
-    expect(draftRow.textContent).not.toContain(lead(skipReasonLabel('not_validated')))
-    expect(awaitingRow.textContent).not.toContain(lead(skipReasonLabel('awaiting_approval')))
+    expect(lead(SUBMIT_REASON.notValidated)).not.toBe(lead(SUBMIT_REASON.awaiting))
+    expect(draftRow.textContent).not.toContain(lead(SUBMIT_REASON.notValidated))
+    expect(awaitingRow.textContent).not.toContain(lead(SUBMIT_REASON.awaiting))
   })
 
   it('QA-B09-8: the KEPT badge and the source-file line nest inside their own cells, so the busiest row is still seven wide', () => {
@@ -683,7 +695,7 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     }))
     render(
       <Row
-        r={listRow({ status: 'draft' })}
+        r={listRow({ status: 'draft', can_submit: false, submit_blocked_reason: SUBMIT_REASON.notValidated })}
         batches={[]}
         checked={false}
         expanded
@@ -697,7 +709,7 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
 
     // Non-vacuity, both halves: the panel really rendered, and the row really is blocked.
     await screen.findByTestId('review-revalidate')
-    expect((screen.getByTestId('review-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect((screen.getByTestId('review-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
 
     expect(screen.getByTestId('review-row').children.length, 'expanding a blocked row widened it').toBe(REVIEW_CELLS)
   })

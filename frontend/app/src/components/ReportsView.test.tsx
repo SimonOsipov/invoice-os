@@ -100,6 +100,8 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    can_submit: false,
+    submit_blocked_reason: null,
     ...over,
   }
 }

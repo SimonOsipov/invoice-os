@@ -130,6 +130,8 @@ const baseRow: InvoiceRecord = {
   rule_set_version: 2,
   can_approve: true,
   approve_blocked_reason: null,
+  can_submit: false,
+  submit_blocked_reason: null,
 }
 
 function approvableRow(id: string): InvoiceRecord {

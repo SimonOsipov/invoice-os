@@ -412,9 +412,32 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
       {/* `state` reflects the ENTITY-SCOPED fetch itself ([entity-id-restored]) -- a
           genuinely invoice-less entity resolves to 'empty' directly, server-side
-          (invoiceListIsEmpty reads `pagination.total`, never `rows.length`), so this rung
-          fires only on a genuine zero-total set. */}
-      {(state === 'idle' || state === 'empty') && (
+          (invoiceListIsEmpty reads `pagination.total`, never `rows.length`), so both rungs
+          fire only on a genuine zero-total set. Which of the two is chosen reads
+          `needsAttention`, never the response: asyncReducer nulls `data` off the ready
+          branch, so by render time the payload that would say so is gone. `idle` (no
+          gateway) is deliberately unqualified -- it keeps one copy in either filter state. */}
+      {state === 'empty' && needsAttention && (
+        <div data-testid="invoices-empty-filtered">
+          <EmptyState title="Nothing needs attention" message="No invoice in this register is waiting on you. Clear the filter to see the rest." />
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+            <button
+              onClick={() => {
+                setNeedsAttention(false)
+                setOffset(0)
+                setSelected([])
+                disarm()
+              }}
+              data-testid="clear-needs-attention"
+              className="v2-btn v2-btn-ghost pf-btn"
+            >
+              Show all invoices
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(state === 'idle' || (state === 'empty' && !needsAttention)) && (
         <div data-testid="invoices-empty">
           <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>

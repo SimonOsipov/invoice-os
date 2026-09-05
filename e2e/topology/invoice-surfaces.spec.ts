@@ -1589,31 +1589,30 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   // and the Phase 3.5 deploy-gate checklist, not by a browser assertion here.
   await expect(page.getByTestId('failure-detail')).toContainText('was not recorded')
   // `can_edit` is false for a failed invoice ([gates-on-the-wire], store.go's
-  // canEdit/canTransition), so the `can_edit`-gated actions bar (Edit, Re-validate, and
-  // Submit together) renders nothing -- `edit-invoice` would be vacuous here (Edit is never
-  // clicked), so `invoice-actions`/`edit-toggle` are the real guard ([actions-visibility]).
-  // No button matches /submit/i either: the detail page's own Submit is gated by that same
-  // `can_edit` check, and the register's Submit button is unmounted while on the detail
-  // view -- App.tsx's view switch is exclusive, never both mounted at once. The Approve/
-  // Reject pair (task-554, APPR-13-04) is gated on `!editing` alone, not `can_edit`, so it
-  // still renders here -- outside this bar, per-status disabled state covered by the SPA
-  // unit suite, not asserted here.
-  await expect(page.getByTestId('revalidate')).toHaveCount(0)
-  await expect(page.getByTestId('invoice-actions')).toHaveCount(0)
-  await expect(page.getByTestId('edit-toggle')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(0)
+  // canEdit/canTransition), but the bar is always present ([actions-visibility]) -- Edit,
+  // Re-validate and Submit render disabled rather than vanishing, which is the whole point:
+  // the user can tell "not allowed" from "not there". The single /submit/i match is the
+  // detail page's own; the register's Submit is unmounted while on the detail view, App.tsx's
+  // view switch being exclusive. The Approve/Reject pair (task-554, APPR-13-04) is gated on
+  // `!editing` alone, so it still renders here -- outside this bar, per-status disabled state
+  // covered by the SPA unit suite, not asserted here.
+  await expect(page.getByTestId('invoice-actions')).toHaveCount(1)
+  await expect(page.getByTestId('revalidate')).toBeDisabled()
+  await expect(page.getByTestId('edit-toggle')).toBeDisabled()
+  await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: /submit/i })).toBeDisabled()
 
   // BUG-04-07 (story AC1): the UBL control sits OUTSIDE that bar
   // ([ubl-button-outside-invoice-actions]) because can_view_ubl tracks CONTENT, not
   // lifecycle -- and `failed` is exactly where a compliance user needs the document most.
-  // Free-riding on this fixture: cleanInvoiceFields is UBL-complete, and the line above
-  // already proves the bar is gone, so no standalone test could assert anything stronger.
+  // Free-riding on this fixture: cleanInvoiceFields is UBL-complete, so View UBL is enabled
+  // here while every control in the bar above is disabled -- that contrast is the claim.
   await expect(page.getByTestId('view-ubl')).toBeVisible()
   await expect(page.getByTestId('view-ubl')).toBeEnabled()
   await expect(page.getByTestId('view-ubl-blocked-reason')).toHaveCount(0)
 
-  // resolve-outside is the one permitted control on this dead-end card -- present
-  // alongside the removed actions bar, not inside it.
+  // resolve-outside is the one ENABLED control on this dead-end card, and it lives in the
+  // card, not in the disabled actions bar above.
   await expect(page.getByTestId('resolve-outside')).toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

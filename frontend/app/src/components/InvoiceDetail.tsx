@@ -3,7 +3,8 @@
 // rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
 // end, the five-node state strip) fetched from the gateway; otherwise renders an honest
 // EmptyState ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
-// into two independently-gated actions ([actions-visibility], [edit-ux]). The
+// into two independently-gated actions ([edit-ux]); the bar holding them is always present,
+// each control disabled off its own wire flag ([actions-visibility]). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
@@ -633,38 +634,25 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
           </div>
 
-          {/* The actions bar ([actions-visibility], INVED-01-07). `inv.can_edit` is the
-              ONE and ONLY gate on it, read straight off the wire ([gates-on-the-wire]) --
-              this component holds no status list of its own for these two actions, which
-              is the whole point of the story: the backend derives both flags from
-              legalTransitions (canEdit/canRevalidate, store.go:919-960), so a lifecycle
-              change can never leave the SPA showing an action the machine refuses. On
-              queued/submitted/accepted/failed can_edit is false and nothing here renders,
-              leaving the failed dead-end card as the whole story on a failed invoice.
-              `!editing` hides the bar while the inline editor owns the screen; it returns
-              on Save or Cancel ([D-actions-hidden-while-editing]).
-
-              Why `can_edit` ALONE and not `can_edit || can_revalidate`: canRevalidate is
-              draft-only and canEdit yields {draft, validated, rejected} (store.go:940/960),
-              so `can_revalidate` IMPLIES `can_edit` -- the `||` arm is unreachable today,
-              and adding it would erase AC #7's intent that NEITHER action renders past the
-              editable states. Widening the gate is a deliberate human decision, guarded on
-              the backend by TestCanRevalidate_AgreesWithThePromotionEdge; it must not be
-              pre-empted here by a defensive `||`. Submit nests inside this same gate too,
-              independently controlled by `inv.can_submit` -- see TestCanSubmit_ImpliesCanEdit. */}
-          {/* Outer column wraps the can_edit-gated bar AND the submit skip/error banners
-              together, so both stay in one right-aligned flex item ([D-actions-column]).
-              The banners live OUTSIDE the `invoice-actions` gate on purpose: a submit that
-              lands can flip can_edit to false on refetch (e.g. a duplicate_request skip on
-              an invoice a PRIOR request already queued), and the banner describing that
-              outcome must still render -- [never-report-success-on-a-skip] is not allowed
-              to depend on the record still being editable afterward. */}
+          {/* The actions bar is always present ([actions-visibility]); each control is
+              disabled off its own wire flag ([gates-on-the-wire]), so the set never shifts
+              with status. `!editing` still hides the bar while the inline editor owns the
+              screen ([D-actions-hidden-while-editing]). canEdit/canRevalidate derive from
+              legalTransitions -- internal/invoice/store.go:1536-1538 and :1558 (block
+              :1515-1569). */}
+          {/* Outer column wraps the actions bar AND the submit skip/error banners together,
+              so both stay in one right-aligned flex item ([D-actions-column]). The banners
+              live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
+              inline editor owns the screen, and the banner describing a skipped submit must
+              still render -- [never-report-success-on-a-skip] is not allowed to depend on
+              the bar being mounted. */}
           {(!editing || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
-              {/* The canonical document, always offered -- NOT behind `can_edit` like the bar
-                  below ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
-                  completeness, not lifecycle, and a compliance user needs the document most on
-                  queued/submitted/accepted/failed, where that bar is gone. Same four disabled
+              {/* The canonical document, always offered -- and OUTSIDE the bar below
+                  ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
+                  completeness, not lifecycle, so it does not follow the bar's flags on
+                  queued/submitted/accepted/failed, where every action in that bar is
+                  disabled. Same four disabled
                   layers as :523-542, minus `filter: 'none'` -- that neutralises
                   .v2-btn-primary's brightening :hover (app-layer.css:213); .v2-btn-ghost's
                   :hover (:215) sets no filter. Hidden while `editing`
@@ -872,15 +860,21 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
-              {inv.can_edit && !editing && (
+              {!editing && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button
                       type="button"
                       data-testid="edit-toggle"
                       onClick={() => setEditing(true)}
+                      disabled={!inv.can_edit}
                       className="v2-btn v2-btn-primary pf-btn"
-                      style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        ...(!inv.can_edit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                      }}
                     >
                       Edit
                     </button>

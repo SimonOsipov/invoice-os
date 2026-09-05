@@ -1118,33 +1118,31 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     expect(btn.style.filter).toBe('none')
   })
 
-  // QA adversarial (mutation survivor): widening the bar's gate to `can_edit ||
-  // can_submit` passes every other spec, because can_submit:true implies can_edit:true on
-  // every REAL wire shape (TestCanSubmit_ImpliesCanEdit) -- the Go tripwire proves the
-  // implication, not that the SPA didn't also widen. Synthetic/contradictory fixture
-  // isolates the SPA's own gate.
-  it('the actions bar stays gated on can_edit alone -- a wire with can_submit:true but can_edit:false renders no bar at all', async () => {
+  // QA adversarial (mutation survivor): a blanket `disabled={!inv.can_edit}` across the whole
+  // bar passes every other spec, because can_submit:true implies can_edit:true on every REAL
+  // wire shape (TestCanSubmit_ImpliesCanEdit). Synthetic/contradictory fixture isolates the
+  // two gates from each other.
+  it('each control reads its own flag -- a wire with can_submit:true but can_edit:false disables Edit and leaves Submit enabled', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: true, submit_blocked_reason: null }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('invoice-status-badge')
 
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
-    expect(screen.queryByTestId('detail-submit')).toBeNull()
+    expect(screen.queryByTestId('invoice-actions'), 'the bar mounts at every status').not.toBeNull()
+    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(false)
   })
 
   // Follow-up flagged in the executor's own Implementation Notes (structural deviation
   // that moved the skip/error banners outside the `can_edit` gate): the banner surviving
   // a can_edit:false refetch must not drag actionable controls out with it.
   //
-  // BUG-04-05 amends the boundary, additively: `view-ubl` DOES render here now, and that
-  // is not a widening of this rule. What no banner may drag out is a *lifecycle* control
-  // -- edit / re-validate / submit, the three that live behind `can_edit`. The read-only
-  // UBL viewer never sat behind that gate ([ubl-button-outside-invoice-actions]): it reads
-  // can_view_ubl, which tracks CONTENT completeness and is status-independent. Asserted
-  // rather than left implicit, so the four `toBeNull()`s below can never be read as
-  // "nothing at all renders beside the banner".
-  it('a duplicate_request skip banner surviving a can_edit:false refetch renders no actionable buttons alongside it', async () => {
+  // BUG-14 restates the rule: what no banner may do is leave a *lifecycle* control
+  // CLICKABLE -- edit / re-validate / submit all stay mounted and go disabled. view-ubl and
+  // the decision pair are gated on `!editing` alone ([ubl-button-outside-invoice-actions],
+  // task-554/APPR-13-04) and are asserted below so the disabled claims are not read as
+  // "nothing else renders beside the banner".
+  it('a duplicate_request skip banner surviving a can_edit:false refetch leaves the lifecycle controls present but disabled', async () => {
     const trueState = detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false })
     mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }), [], {
       detailSequence: [trueState],
@@ -1162,11 +1160,11 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     fireEvent.click(screen.getByTestId('detail-submit-confirm'))
 
     await screen.findByTestId('detail-submit-skipped')
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
-    expect(screen.queryByTestId('edit-toggle')).toBeNull()
-    expect(screen.queryByTestId('revalidate')).toBeNull()
-    expect(screen.queryByTestId('detail-submit')).toBeNull()
-    // view-ubl and the decision pair are the controls that stay -- see this test's comment.
+    expect(screen.queryByTestId('invoice-actions'), 'the bar survives the refetch').not.toBeNull()
+    for (const id of ['edit-toggle', 'revalidate', 'detail-submit']) {
+      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, `${id} is disabled, not absent`).toBe(true)
+    }
+    // view-ubl and the decision pair are gated on !editing alone -- see this test's comment.
     expect(screen.getByTestId('view-ubl')).toBeTruthy()
     // task-554/APPR-13-04 (AC-1): gated on `!editing` only, like view-ubl -- a can_edit:false
     // refetch must not drag the decision pair out with the lifecycle controls it deletes.
@@ -1295,23 +1293,18 @@ describe('InvoiceDetail: a preparer sees the role refusal, verbatim (APPR-01 AC-
     expect(submitCalls).toHaveLength(0)
   })
 
-  // Pins a DELIBERATE silence, so the invariant comment at InvoiceDetail.tsx's submit
-  // reason node is not later read as a bug report. submitGate's role arm emits the sentence
-  // on every status, but the reason node lives inside the can_edit-gated actions bar -- on a
-  // queued invoice there is no Submit control to explain, so nothing renders. Do not widen
-  // that gate; 'the actions bar stays gated on can_edit alone' is its mutation oracle.
-  it("a preparer's role sentence on a non-editable invoice renders no bar and no reason", async () => {
+  // submitGate's role arm emits the sentence on every status, so pin that it never lands on
+  // an ENABLED control: on a queued invoice the bar is up (BUG-14) and Submit is disabled.
+  it("a preparer's role sentence on a non-editable invoice leaves Submit present and disabled", async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE_REASON }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    // Positive companion: the record really rendered, so the absences below are not an
+    // Positive companion: the record really rendered, so the claims below are not an
     // empty document.
     await screen.findByTestId('invoice-status-badge')
 
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
-    expect(screen.queryByTestId('detail-submit')).toBeNull()
-    expect(screen.queryByTestId('submit-blocked-reason')).toBeNull()
-    expect(document.body.textContent).not.toContain(ROLE_REASON)
+    expect(screen.queryByTestId('invoice-actions'), 'the bar mounts at every status').not.toBeNull()
+    expect((screen.getByTestId('detail-submit') as HTMLButtonElement).disabled).toBe(true)
   })
 
   // The only shape where BOTH reason nodes render at once: rejected keeps can_edit true, so
@@ -2201,7 +2194,8 @@ describe('InvoiceDetail resolve-outside control (Core AC #1/#4/#5/#6)', () => {
 
     const card = await screen.findByTestId('failed-dead-end')
     expect(within(card).getByTestId('resolve-outside')).toBeTruthy()
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    // The bar mounts on failed too (BUG-14), so the claim is containment, not absence.
+    expect(within(screen.getByTestId('invoice-actions')).queryByTestId('resolve-outside')).toBeNull()
   })
 
   it('T7-2: mark-resolved is disabled until a reason is typed', async () => {
@@ -2584,15 +2578,17 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
     expect(await screen.findByTestId('view-ubl')).toBeTruthy()
   })
 
-  // The whole reason the control sits outside `invoice-actions`: a compliance user needs
-  // the document most on the statuses where that bar is gone.
-  it('T3/AC2: renders where the actions bar does not', async () => {
+  // The whole reason the control sits outside `invoice-actions`: can_view_ubl tracks CONTENT,
+  // not lifecycle, so the document stays reachable on the statuses where every control inside
+  // that bar is disabled.
+  it('T3/AC2: renders outside the bar, on a status where the bar itself is disabled', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
-    expect(await screen.findByTestId('view-ubl')).toBeTruthy()
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    const viewUbl = await screen.findByTestId('view-ubl')
+    expect(screen.getByTestId('invoice-actions').contains(viewUbl), 'never inside the bar').toBe(false)
+    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled, 'floor: the bar really is disabled here').toBe(true)
   })
 
   it('T4/AC3: is a sibling of invoice-actions -- never inside it, never in a wrapper of its own', async () => {
@@ -3157,14 +3153,15 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role.",
   ]
 
-  it('1: both controls render on a queued, can_edit:false invoice, while invoice-actions stays gone (AC-1)', async () => {
+  it('1: both controls render on a queued, can_edit:false invoice, alongside a disabled actions bar (AC-1)', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: false, approve_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     expect(await screen.findByTestId('detail-approve')).toBeTruthy()
     expect(screen.getByTestId('detail-reject')).toBeTruthy()
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.queryByTestId('invoice-actions'), 'the bar is disabled here, never gone').not.toBeNull()
+    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('2: the pair sits outside invoice-actions and after view-ubl in document order (AC-1, AC-2)', async () => {
@@ -3342,9 +3339,9 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   // rather than weakened: (a) neither button is inside `invoice-actions`, the guarantee
   // that survives a `can_edit:false` refetch and is the whole point of AC-1; (b) the shared
   // wrapper is a direct child of the same parent holding `view-ubl` and `invoice-actions`,
-  // so all three are siblings in the action column; (c) the wrapper renders under the same
-  // `!editing` gate as `view-ubl`, not `can_edit` -- proven by a second render where
-  // `can_edit:false` removes `invoice-actions` but not the wrapper.
+  // so all three are siblings in the action column; (c) all three render under the same
+  // `!editing` gate, never `can_edit` -- proven by a second render where `can_edit:false`
+  // leaves every one of them mounted, the bar merely disabled.
   it('17: detail-decision-actions is a sibling of view-ubl and invoice-actions in the action column, gated on !editing like view-ubl -- never on can_edit', async () => {
     mockDetailFetch(detailRecord({ id: ID, ...editable, can_approve: true, can_reject: true }))
 
@@ -3361,12 +3358,13 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(decisionActions.parentElement).toBe(bar.parentElement)
     cleanup()
 
-    // can_edit:false removes invoice-actions (its own can_edit && !editing gate) but must
-    // not remove detail-decision-actions, which is gated on !editing alone, like view-ubl.
+    // can_edit:false removes none of the three rows -- all are gated on !editing alone
+    // (BUG-14). The bar stays in the column with its controls disabled.
     mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     expect(await screen.findByTestId('detail-decision-actions')).toBeTruthy()
-    expect(screen.queryByTestId('invoice-actions')).toBeNull()
+    expect(screen.getByTestId('invoice-actions').parentElement).toBe(screen.getByTestId('view-ubl').parentElement)
+    expect((screen.getByTestId('edit-toggle') as HTMLButtonElement).disabled).toBe(true)
   })
 
   // QA-added (task-554 row 19): closes the Approve/Reject asymmetry left by row 11, which

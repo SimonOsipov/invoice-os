@@ -218,6 +218,19 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function postLineItems(',
     floor: 4,
   },
+  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 13 is the shipped 12
+  // plus source_document_id: the three-way equality is set-based and so blind to a key added
+  // to all three legs at once, and the floor is what bites.
+  {
+    ts: 'InvoiceCreateInput',
+    go: 'createRequest',
+    goPath: 'internal/invoice/handlers.go',
+    goAnchor: 'func CreateHandler(',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function createInvoice(',
+    e2eAnchor: 'export function createInvoice(',
+    floor: 13,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -337,6 +350,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'LineItemInput',
       'LineItemsRequest',
       'LineItemsResponse',
+      'InvoiceCreateInput',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -395,6 +409,27 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(src, 'the scan read the wrong file').toContain('function goStructKeys')
     expect(src).toContain('wire mirror: Go read_model.go <-> lib/approvals.ts <-> e2e/api/client.ts')
     expect(src, 'ApprovalRun lost its row in WIRE_STRUCTS').toContain("{ go: 'Run', ts: 'ApprovalRun'")
+  })
+
+  // EXTR-15-06 AC-7, precondition for the InvoiceCreateInput row above. A WIRE_MIRRORS row
+  // carries ONE `ts` name and reads both TypeScript legs with it, and tsInterfaceKeys' body
+  // regex is `[^{}]*`. e2e/api/client.ts today names the type CreateInvoiceInput and inlines
+  // `line_items?: Array<{...}>`, so the row's third leg reads [] on both counts -- the floor
+  // row would then report a two-leg mirror as a three-leg one.
+  it('wireMirrors_theE2ECreateInputIsNamedAndFlatEnoughToRead', () => {
+    const e2e = repoFile(E2E_CLIENT)
+    expect(e2e, 'the scan read the wrong file').toContain('export function createInvoice(')
+
+    expect(
+      tsInterfaceKeys(e2e, 'InvoiceCreateInput').length,
+      'e2e/api/client.ts must export InvoiceCreateInput (not CreateInvoiceInput), with no nested object literal in its body -- tsInterfaceKeys reads [] otherwise',
+    ).toBeGreaterThan(0)
+
+    // Control needle: the extractor demonstrably reads THIS interface name out of the SPA
+    // file, so the zero above is the e2e declaration's own shape, not a broken scan.
+    expect(
+      tsInterfaceKeys(repoFile('frontend/app/src/lib/invoices.ts'), 'InvoiceCreateInput').length,
+    ).toBeGreaterThan(0)
   })
 })
 

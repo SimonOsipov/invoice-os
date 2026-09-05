@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+// jsdom for a real Storage: these specs assert clear(), null-for-absent and JSON
+// round-trip, which a hand-rolled stub would re-implement and can diverge from.
+// The `node` default only has sessionStorage on Node >= 24; CI pins Node 22.
 // Specs for the deepLink.ts storage contract. Mirrors session.test.ts: spyOnConsole for
 // the warn-never-error invariant, explicit `now` per call (this repo's convention over
 // vi.useFakeTimers).

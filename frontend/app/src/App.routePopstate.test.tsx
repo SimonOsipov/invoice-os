@@ -299,6 +299,84 @@ describe('N-6: Back onto /extraction/<jobId> restores the job id together with t
   })
 })
 
+// QA gap-fill: task-914's own AC-5 ("Back onto /invoices/<id> from elsewhere restores detail
+// AND the id") has no row in the architect's Test Specs table (only N-5's reverse direction
+// and N-6's extraction mirror do) -- this is the missing mirror of N-6 for the detail side.
+describe('AC-5: Back onto /invoices/<id> from elsewhere restores detail and the id', () => {
+  it('popstate_backOntoInvoiceDetailRestoresTheImportedId', async () => {
+    await bootAt('/invoices')
+    const ctx0 = requireCtx()
+    expect(ctx0.view, 'sanity: booting at /invoices must seed the list').toBe('invoices')
+
+    await popTo(`/invoices/${INVOICE_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the detail view').toBe('detail')
+    expect(
+      ctx.importedInvoiceId,
+      'Back must restore the invoice id in the same commit as the view, not a render later',
+    ).toBe(INVOICE_ID)
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe(`/invoices/${INVOICE_ID}`)
+  })
+})
+
+describe('Adversarial: Back onto a view that takes no id clears whichever id was live', () => {
+  it('popstate_backOntoAnIdlessViewClearsALiveExtractionJob', async () => {
+    await bootAt(`/extraction/${JOB_A}`)
+    let ctx = requireCtx()
+    expect(ctx.extractionJobId, 'sanity: booting at /extraction/<id> must seed the job').toBe(JOB_A)
+
+    await popTo('/settings')
+    ctx = requireCtx()
+    expect(ctx.view, 'Back onto an id-less view must still restore that view').toBe('settings')
+    expect(ctx.extractionJobId, 'an id-less target must clear a live job id, not leave it stale').toBeNull()
+    expect(ctx.importedInvoiceId, 'an id-less target must not carry an invoice id either').toBeNull()
+  })
+})
+
+describe('Adversarial: rapid double-Back across two different drill-down ids', () => {
+  it('popstate_rapidDoubleBackAcrossTwoIdsLandsOnTheSecondIdOnly', async () => {
+    await bootAt('/invoices')
+
+    // Two Back presses in the same flush, each landing on a DIFFERENT id-carrying path --
+    // the final commit must carry ONLY the second id, with no bleed from the first.
+    await act(async () => {
+      window.history.replaceState(null, '', `/invoices/${INVOICE_ID}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+      window.history.replaceState(null, '', `/extraction/${JOB_A}`)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    const ctx = requireCtx()
+    expect(ctx.view, 'the second hop must win, not stall on the first').toBe('extraction')
+    expect(ctx.extractionJobId, 'the second hop\'s job id must land').toBe(JOB_A)
+    expect(ctx.importedInvoiceId, 'the first hop\'s invoice id must not survive the second hop').toBeNull()
+  })
+})
+
+describe('Adversarial: an id needing percent-encoding round-trips through push then Back', () => {
+  it('popstate_anEncodedIdRoundTripsThroughPushThenBack', async () => {
+    const RAW_ID = 'job a/b?c'
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(RAW_ID)
+    })
+    let ctx = requireCtx()
+    expect(
+      window.location.pathname,
+      'the pushed URL must percent-encode the raw id, not embed it literally',
+    ).toBe(`/extraction/${encodeURIComponent(RAW_ID)}`)
+    expect(ctx.extractionJobId, 'the live atom keeps the raw, undecoded id').toBe(RAW_ID)
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await popTo(`/extraction/${encodeURIComponent(RAW_ID)}`)
+    ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the extraction view').toBe('extraction')
+    expect(ctx.extractionJobId, 'Back must decode the id back to its original raw form').toBe(RAW_ID)
+  })
+})
+
 // --- QA adversarial coverage below (route-01-04, Mode B) --------------------------
 
 describe('Adversarial: rapid double-Back and Back-Forward-Back', () => {

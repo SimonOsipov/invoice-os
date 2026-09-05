@@ -847,3 +847,61 @@ describe('the jobs-list exclusion (AC-5, AC-6)', () => {
     expect(documentRun).toContain('newestJob')
   })
 })
+
+// EXTR-15-10 AC-3 — Go batchResponse <-> the SPA's ImportBatch. TWO legs, own guard.
+//
+// Deliberately NOT a WIRE_MIRRORS row. Every row's e2eAnchor is mandatory and is read out of
+// E2E_CLIENT, and e2e/api/client.ts declares no ImportBatch and no batch-fetching function --
+// a row would need e2e surface written only to satisfy this table. e2e/api/import.spec.ts's
+// ImportResponse is not it: a labelled SUBSET (so a set-equality row reds on sight) of a
+// DIFFERENT Go struct (importResponse), in a file E2E_CLIENT never reads.
+
+const IMPORT_BATCH_GO_PATH = 'internal/importer/handlers.go'
+const IMPORT_BATCH_GO_ANCHOR = 'func GetHandler('
+const IMPORT_BATCH_SPA_PATH = 'frontend/app/src/lib/importApi.ts'
+const IMPORT_BATCH_SPA_ANCHOR = 'export async function getImportBatch('
+
+// 10 shipped keys + document_id. The set equality below is blind to a key added to both legs
+// at once, and tsInterfaceKeys' body regex is `[^{}]*` -- a nested object literal on either
+// leg extracts ZERO, and [] agrees with []. The floor is what bites in both cases.
+const IMPORT_BATCH_FLOOR = 11
+
+describe('wire mirror: Go batchResponse <-> lib/importApi.ts ImportBatch (EXTR-15-10)', () => {
+  it('importBatchMirror_controlNeedleBothSourceFilesWereActuallyRead', () => {
+    expect(repoFile(IMPORT_BATCH_GO_PATH), `lost anchor on ${IMPORT_BATCH_GO_PATH}`).toContain(IMPORT_BATCH_GO_ANCHOR)
+    expect(repoFile(IMPORT_BATCH_SPA_PATH), `lost anchor on ${IMPORT_BATCH_SPA_PATH}`).toContain(
+      IMPORT_BATCH_SPA_ANCHOR,
+    )
+  })
+
+  it('importBatchMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    expect(
+      goStructKeys(repoFile(IMPORT_BATCH_GO_PATH), 'batchResponse').length,
+      'extracted no keys for Go batchResponse',
+    ).toBeGreaterThan(0)
+    expect(
+      tsInterfaceKeys(repoFile(IMPORT_BATCH_SPA_PATH), 'ImportBatch').length,
+      'extracted no keys for the SPA ImportBatch',
+    ).toBeGreaterThan(0)
+  })
+
+  it('importBatchMirror_bothLegsNameDocumentIdAndTheKeySetsAgree', () => {
+    const goKeys = goStructKeys(repoFile(IMPORT_BATCH_GO_PATH), 'batchResponse')
+    const spaKeys = tsInterfaceKeys(repoFile(IMPORT_BATCH_SPA_PATH), 'ImportBatch')
+
+    expect(goKeys.length, `Go batchResponse must clear its floor of ${IMPORT_BATCH_FLOOR}`).toBeGreaterThanOrEqual(
+      IMPORT_BATCH_FLOOR,
+    )
+    expect(spaKeys.length, `the SPA ImportBatch must clear its floor of ${IMPORT_BATCH_FLOOR}`).toBeGreaterThanOrEqual(
+      IMPORT_BATCH_FLOOR,
+    )
+
+    // goStructKeys splits ',' off the tag, so `document_id,omitempty` extracts as document_id
+    // and passes here while a spreadsheet batch sends no key at all. Go's
+    // TestBatchResponse_DocumentIDIsAPointerTaggedWithoutOmitempty is the oracle for that.
+    expect(goKeys, 'Go batchResponse is missing document_id').toContain('document_id')
+    expect(spaKeys, 'the SPA ImportBatch is missing document_id').toContain('document_id')
+
+    expect(keySetDiff(goKeys, spaKeys), 'batchResponse vs the SPA ImportBatch').toEqual([])
+  })
+})

@@ -3183,3 +3183,130 @@ describe('EXTR-15-09 SW-11 (D1/D3): the CSV cells follow the CSV header', () => 
     expect(wrong).toEqual([])
   })
 })
+
+// --- EXTR-15-10 (task-855, Mode A): the batch's document id reaches the row -------------
+//
+// RED on landing. `UnreadableRowAll` has no `documentId`, so every read below goes through
+// documentIdOf and fails on VALUE (undefined), never on an import or collection error. The
+// cast is what keeps `pnpm --filter @invoice-os/app typecheck` green in both states: a named
+// property read would be a type error until the field lands.
+//
+// Landing AC-4 reds `tsc --noEmit` at ~21 fixture sites across this file,
+// ReviewBatch.test.tsx, ReviewInvoicesTab.test.tsx and ReviewAlreadyImportedTab.test.tsx:
+// unreadableRowsAll's Pick widens to include document_id, and UnreadableRowAll[] literals
+// gain a required documentId. The shipped toEqual/toContainEqual row literals do NOT red —
+// vitest's toEqual treats a missing key and an undefined one as equal.
+
+type BatchWithDocument = Pick<ImportBatch, 'id' | 'filename' | 'errors'> & { document_id: string | null }
+
+function documentIdOf(row: UnreadableRowAll): unknown {
+  return (row as unknown as Record<string, unknown>).documentId
+}
+
+// Two quarantined batches that differ in BOTH filename and document id. Equal values on
+// either axis could not tell per-batch threading from a scalar threaded to the whole tab.
+const DOC_A: BatchWithDocument = {
+  id: 'batch-a',
+  filename: 'alpha.pdf',
+  document_id: 'doc-a',
+  errors: [
+    { row: 1, message: 'could not read page 1' },
+    { row: 2, message: 'could not read page 2' },
+  ],
+}
+
+const DOC_B: BatchWithDocument = {
+  id: 'batch-b',
+  filename: 'beta.docx',
+  document_id: 'doc-b',
+  errors: [
+    { row: 1, message: 'could not read page 1' },
+    { row: 3, message: 'could not read page 3' },
+  ],
+}
+
+describe('unreadableRowsAll: each row carries its OWN batch document id (EXTR-15-10)', () => {
+  it('BD-4 (AC-5): a two-batch run yields four rows and exactly two per document id', () => {
+    const rows = unreadableRowsAll([DOC_A, DOC_B])
+
+    expect(rows).toHaveLength(4)
+
+    const byDocument = new Map<unknown, number>()
+    for (const r of rows) byDocument.set(documentIdOf(r), (byDocument.get(documentIdOf(r)) ?? 0) + 1)
+    expect(Object.fromEntries(byDocument)).toEqual({ 'doc-a': 2, 'doc-b': 2 })
+  })
+
+  it("BD-5 (AC-5): every row's document id is its OWN batch's — a scalar threaded to the tab files rows against the wrong document", () => {
+    // The two batches share the row NUMBER 1, so the pairing cannot be recovered from `row`.
+    const rows = unreadableRowsAll([DOC_A, DOC_B])
+
+    const pairs = rows.map((r) => [r.file, documentIdOf(r)])
+    expect(pairs).toEqual([
+      ['alpha.pdf', 'doc-a'],
+      ['alpha.pdf', 'doc-a'],
+      ['beta.docx', 'doc-b'],
+      ['beta.docx', 'doc-b'],
+    ])
+
+    // The fixture discriminates only while the two batches differ on both axes.
+    expect(DOC_A.filename).not.toBe(DOC_B.filename)
+    expect(DOC_A.document_id).not.toBe(DOC_B.document_id)
+  })
+
+  it('BD-6 (AC-6): a batch with document_id null yields rows with documentId null, and no leg renders the string "null"', () => {
+    const spreadsheet: BatchWithDocument = {
+      id: 'batch-c',
+      filename: null,
+      document_id: null,
+      errors: [{ row: 4, message: 'bad date' }],
+    }
+
+    const rows = unreadableRowsAll([spreadsheet])
+
+    expect(rows).toHaveLength(1)
+    expect(documentIdOf(rows[0])).toBeNull()
+
+    // The display path stays clean: BULK-06-23's rule, re-run over a null document id.
+    expect(rows[0].file).toBe('source not recorded')
+    expect(unreadableCsvAll(rows, 'spreadsheet')).not.toContain('null')
+  })
+})
+
+describe('the document id is display and hand-off only, never a discriminator (EXTR-15-10)', () => {
+  // Reads a top-level function's body by declaration, closing at the first column-0 `}`.
+  function bodyOf(source: string, decl: string): string {
+    const start = source.indexOf(decl)
+    if (start === -1) throw new Error(`no \`${decl}\` declaration in lib/reviewBatch.ts`)
+    const end = source.indexOf('\n}\n', start)
+    if (end === -1) throw new Error(`${decl} is not closed by a top-level \`}\``)
+    return source.slice(start, end + 3)
+  }
+
+  it('BD-4b (AC-4): UnreadableRowAll declares documentId as string | null', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    // CONTROL: the shipped `file` key proves the interface was found and read.
+    const body = /export interface UnreadableRowAll extends UnreadableRow \{([^{}]*)\}/.exec(source)?.[1] ?? ''
+    expect(body, 'UnreadableRowAll extracted empty').toContain('file: string')
+
+    expect(body, 'a `documentId?: string` would satisfy every behavioural spec above').toMatch(
+      /documentId:\s*string \| null/,
+    )
+  })
+
+  it("BD-7 (AC-7): neither batchUnit's nor runUnit's body names document_id — UN-4 covers only batchUnit", () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    // Each control needle is a symbol the DECLARATION line does not already contain, so an
+    // emptied body fails it rather than passing every absence below on nothing.
+    for (const [decl, needle] of [
+      ['export function batchUnit', 'classifyPickedFile'],
+      ['export function runUnit', 'batchUnit('],
+    ]) {
+      const body = bodyOf(source, decl)
+      expect(body, `${decl} no longer derives the unit`).toContain(needle)
+      expect(body, `${decl} reads the document id — the unit comes from the filename`).not.toContain('document_id')
+      expect(body).not.toContain('documentId')
+    }
+  })
+})

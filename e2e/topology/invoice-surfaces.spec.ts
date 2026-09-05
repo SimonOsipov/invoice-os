@@ -19,7 +19,7 @@
 // internal/invoice/payload.go's MBSPayload nests it again before the engine
 // evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
 // fixtures.ts's BAD_INVOICE_KEYS pins.
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
 import {
   login,
   createEntity,
@@ -253,6 +253,126 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
   return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
 }
 
+// listFetchOn(): the register's list GET, matched by its `needs_attention` search param --
+// the same predicate the list-surface test writes inline at :478-483/:490-495.
+// [waitForResponse-on-the-list-is-poll-ambiguous] does not bite here: shouldPollList needs a
+// row whose status isInFlight, and every fixture invoice below is draft or validated.
+async function listFetchOn(page: Page, want: boolean, action: () => Promise<void>): Promise<void> {
+  const settled = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('needs_attention') === (want ? 'true' : null),
+  )
+  await action()
+  await settled
+}
+
+async function toggleNeedsAttention(page: Page, want: boolean): Promise<void> {
+  await listFetchOn(page, want, () => page.getByTestId('needs-attention-toggle').click())
+}
+
+// installRowLatch()/readRowLatch(): the presence-over-time sampler, modelled on
+// demo-persona.spec.ts's installSwitchLatch. An OBSERVER, never a timer: a fixed-period
+// sampler straddles a flash shorter than its period, and a single post-toggle snapshot
+// cannot see a container that emptied and refilled inside the round trip.
+//
+// Its honest limit: MutationObserver callbacks fire at microtask checkpoints, so a state
+// existing only WITHIN one React commit is invisible to it. The defect this catches held a
+// spinner across a whole network round trip -- hundreds of checkpoints.
+type RowSample = { rows: number; list: boolean; spinner: boolean }
+type RowLatch = { samples: RowSample[] }
+
+async function installRowLatch(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // textContent, not innerText: innerText forces a reflow on every mutation, and the
+    // spinner's label is real text either way (packages/api-client Loading has no testid).
+    const read = (): RowSample => ({
+      rows: document.querySelectorAll('[data-testid="invoice-row"]').length,
+      list: document.querySelector('[data-testid="invoices-list"]') !== null,
+      spinner: (document.body.textContent ?? '').includes('Loading invoices'),
+    })
+    const latch: RowLatch = { samples: [read()] }
+    const w = window as unknown as { __bug10RowLatch: RowLatch; __bug10RowObserver: MutationObserver }
+    w.__bug10RowLatch = latch
+    const observer = new MutationObserver(() => {
+      const now = read()
+      const last = latch.samples[latch.samples.length - 1]
+      // Consecutive-identical dedupe, so a viewport sweep cannot grow the array without
+      // changing any of the three facts. A distinct state is always recorded.
+      if (last.rows === now.rows && last.list === now.list && last.spinner === now.spinner) return
+      latch.samples.push(now)
+    })
+    w.__bug10RowObserver = observer
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  })
+}
+
+async function readRowLatch(page: Page): Promise<RowSample[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __bug10RowLatch?: RowLatch; __bug10RowObserver?: MutationObserver }
+    w.__bug10RowObserver?.disconnect()
+    return w.__bug10RowLatch?.samples ?? []
+  })
+}
+
+// settledY()/sweepY(): where the head and the first row STAND, read once the layout has
+// stopped moving. layout.ts's helpers compare two locators in ONE state; this compares one
+// locator across TWO states separated by a user action, a shape neither has, so the sweep
+// is inline here rather than added to layout.ts.
+//
+// Settled means two consecutive reads agree. A boundingBox() taken straight after
+// setViewportSize can report a transform mid-reflow rather than settled layout
+// ([drawer-animation-defeats-geometry-specs]). A null or zero-height box never settles, so
+// it fails the poll rather than passing as a match.
+type HeadRowY = { width: number; headY: number; rowY: number; headHeight: number }
+
+async function settledY(head: Locator, row: Locator, label: string): Promise<Omit<HeadRowY, 'width'>> {
+  let last: Omit<HeadRowY, 'width'> | null = null
+  const read = async (): Promise<Omit<HeadRowY, 'width'> | null> => {
+    const [headBox, rowBox] = await Promise.all([head.boundingBox(), row.boundingBox()])
+    if (!headBox || !rowBox) return null
+    if (headBox.height <= 0 || rowBox.height <= 0) return null
+    return { headY: headBox.y, rowY: rowBox.y, headHeight: headBox.height }
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const now = await read()
+        const stable = now != null && last != null && now.headY === last.headY && now.rowY === last.rowY
+        last = now
+        return stable
+      },
+      {
+        message: `${label}: the head and the first row never settled to a stable y (a never-settling read means one of them did not render, or rendered zero-height)`,
+        timeout: 10_000,
+      },
+    )
+    .toBe(true)
+
+  return last!
+}
+
+async function sweepY(page: Page, head: Locator, row: Locator, label: string): Promise<HeadRowY[]> {
+  const entry = page.viewportSize()
+  const measured: HeadRowY[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      // persona-surfaces.spec.ts:742's precedent -- prove the viewport really arrived
+      // before reading anything that depends on it.
+      await expect
+        .poll(() => page.evaluate(() => window.innerWidth), { message: `${label}: the viewport never reached ${width}px` })
+        .toBe(width)
+      measured.push({ width, ...(await settledY(head, row, `${label} at ${width}px`)) })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  return measured
+}
+
 // submitSelected(): arms via batch-submit, confirms via batch-submit-confirm, then waits
 // for the POST .../invoices/submissions response. Unlike a list GET, this URL is
 // unambiguous -- a poll tick never POSTs ([waitForResponse-on-the-list-is-poll-ambiguous]
@@ -482,6 +602,183 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 
   // The needle came out of the DOM above, so no copy of the sentence is authored here.
   await expect(blockedRow, 'the row must not print the sentence its title carries').not.toContainText(title)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Core AC-2 and AC-3. Neither claim can be made in vitest -- jsdom has no layout engine, so
+// "nothing above the rows moved" and "the rows never emptied for a round trip" are
+// browser-only (docs/e2e-convention.md, "Target surface").
+//
+// Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
+// container's first child (InvoicesList.tsx:553-554), so an in-container offset is 0 in both
+// filter states and the assertion would be vacuous. The defect moved the container itself.
+//
+// Two open story findings shape this fixture, which avoids both by construction:
+//   .ralph/STORY-FINDING-AC2.md -- a live selection mounts `batch-submit-summary` above the
+//   list (InvoicesList.tsx:491-495), and the toggle's own setSelected([]) unmounts it,
+//   moving the table by more than the offset under test. This fixture never clicks a
+//   checkbox and never calls select-all, so that bar is absent from both measurements.
+//   .ralph/STORY-FINDING-SEARCH.md -- the header search box's `q` rides the SAME request as
+//   `needs_attention`. This fixture never types in it, so the row set differs between the
+//   two states because of the filter alone.
+test('register geometry: toggling needs-attention moves nothing above the rows and never empties them', async ({ page }, testInfo) => {
+  // Two create+validate round trips, a sign-in, an entity switch, three toggle round trips
+  // and two four-width sweeps whose per-width settle poll is bounded at 10s each.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-10 toggle geometry ${stamp}`, tin: freshTin() })
+
+  // attn: the bad fixture fires one error-severity violation and stays `draft`, which is
+  // needs_attention. clean: zero violations promotes it to `validated`; the governed firm
+  // tenant arms a run on it, but an `open` run is not `rejected`, so it is not
+  // needs_attention -- the list-surface test at :435 records the same reasoning.
+  const attnNumber = `INV-BUG10-ATTN-${stamp}`
+  const attn = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(attnNumber) })
+  await validateInvoice(token, attn.id)
+
+  const cleanNumber = `INV-BUG10-CLEAN-${stamp}`
+  const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
+  await validateInvoice(token, clean.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const attnRow = invoiceRowByNumber(page, attnNumber)
+  const cleanRow = invoiceRowByNumber(page, cleanNumber)
+  const head = page.getByTestId('invoices-list').locator('.pf-list-head')
+  // The first row SLOT, not a particular invoice: the two states legitimately put different
+  // invoices first, and where the first row starts is the claim.
+  const firstRow = page.getByTestId('invoice-row').first()
+
+  await expect(attnRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  const unfilteredCount = await page.getByTestId('invoice-row').count()
+
+  // The sampler goes in BEFORE the toggle it has to watch.
+  await installRowLatch(page)
+
+  await toggleNeedsAttention(page, true)
+  await expect(cleanRow, 'the clean invoice must leave the DOM, or the filter did nothing').toHaveCount(0)
+  await expect(attnRow).toBeVisible()
+
+  // Non-vacuity, before any geometry: the two states must really be two different tables.
+  const filteredCount = await page.getByTestId('invoice-row').count()
+  expect(filteredCount, 'the filtered register must still hold a row, or the geometry below measures an empty table').toBeGreaterThan(0)
+  expect(filteredCount, 'the filtered set must be strictly smaller than the unfiltered one, or the two states are the same table').toBeLessThan(unfilteredCount)
+
+  // Core AC-3, read off the sampler that watched the toggle above.
+  const samples = await readRowLatch(page)
+  expect(samples.length, 'the sampler recorded nothing -- it never installed, or the page never mutated').toBeGreaterThan(1)
+  const sampledRows = samples.map((s) => s.rows)
+  const lowWater = Math.min(...sampledRows)
+  const highWater = Math.max(...sampledRows)
+  // Non-vacuity for the three claims below: a sampler that only ever saw one state proves
+  // nothing about the window between them.
+  expect(highWater, 'the sampler never saw the row set change, so it did not span the toggle').toBeGreaterThan(lowWater)
+  expect(lowWater, 'the row container emptied at some point while the filter changed').toBeGreaterThan(0)
+  expect(samples.filter((s) => !s.list), 'invoices-list was unmounted at some point while the filter changed').toEqual([])
+  expect(samples.filter((s) => s.spinner), 'the full-page spinner appeared at some point while the filter changed').toEqual([])
+
+  await toggleNeedsAttention(page, false)
+  await expect(cleanRow).toBeVisible()
+
+  // Core AC-2. Sweep every width in the OFF state, toggle ONCE, sweep again in the ON state,
+  // then compare per width. The claim is state-dependent, not history-dependent, so
+  // interleaving a toggle inside the sweep would cost four round trips instead of one.
+  const unfiltered = await sweepY(page, head, firstRow, 'unfiltered')
+  await toggleNeedsAttention(page, true)
+  const filtered = await sweepY(page, head, firstRow, 'filtered')
+
+  for (const [label, sweep] of [
+    ['unfiltered', unfiltered],
+    ['filtered', filtered],
+  ] as const) {
+    // sweepY records a width only when its settle poll succeeded, so a sweep that measured
+    // nothing returns [] and every comparison below it passes.
+    expect(sweep.map((m) => m.width), `the ${label} sweep must have measured every WIDE_WIDTHS entry, in order`).toEqual([...WIDE_WIDTHS])
+  }
+
+  for (const [i, width] of WIDE_WIDTHS.entries()) {
+    // Relationships between the two states, never a dimension. The only literal is the 1px
+    // sub-pixel tolerance layout.ts's assertSameHeight already uses.
+    expect(unfiltered[i].headY, `the head must be on screen at ${width}px, or its position is not a position`).toBeGreaterThan(0)
+    expect(unfiltered[i].headHeight, `the head must have rendered at ${width}px`).toBeGreaterThan(0)
+    expect(
+      Math.abs(filtered[i].headY - unfiltered[i].headY),
+      `the column-header row moved when the filter changed at ${width}px (${unfiltered[i].headY} -> ${filtered[i].headY})`,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      Math.abs(filtered[i].rowY - unfiltered[i].rowY),
+      `the first invoice row moved when the filter changed at ${width}px (${unfiltered[i].rowY} -> ${filtered[i].rowY})`,
+    ).toBeLessThanOrEqual(1)
+  }
+
+  await testInfo.attach('toggle-position-parity.json', {
+    body: JSON.stringify({ entity: entity.name, attnNumber, cleanNumber, unfilteredCount, filteredCount, samples, unfiltered, filtered }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Core AC-6. The zero-result filtered state was unreachable on the seeded Honeywell
+// register, so it had never been observed on a deployed build. This entity holds ONLY clean
+// validated invoices, so needs_attention returns a genuine zero-total set.
+//
+// No search term is typed (.ralph/STORY-FINDING-SEARCH.md): `q` rides the same request as
+// `needs_attention`, so a search matching nothing would reach this SAME branch by a path
+// whose copy is false -- and this test would pass on the wrong path.
+test('register empty state: a filter that matches nothing says so, and offers the way back', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-10 zero result ${stamp}`, tin: freshTin() })
+
+  const numbers = [`INV-BUG10-ZERO-A-${stamp}`, `INV-BUG10-ZERO-B-${stamp}`]
+  for (const number of numbers) {
+    const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(number) })
+    await validateInvoice(token, created.id)
+  }
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const emptyFiltered = page.getByTestId('invoices-empty-filtered')
+
+  // Non-vacuity, both before the toggle: this entity really has rows, and the branch under
+  // test is not already on screen.
+  for (const number of numbers) {
+    await expect(invoiceRowByNumber(page, number), 'the register must really hold invoices, or the filtered empty state below is just an empty register').toBeVisible()
+  }
+  await expect(emptyFiltered, 'the filtered empty state must not be on screen before the filter is on').toHaveCount(0)
+
+  await toggleNeedsAttention(page, true)
+
+  await expect(emptyFiltered).toBeVisible()
+  await expect(emptyFiltered).toContainText('Nothing needs attention')
+  await expect(page.getByTestId('invoice-row'), 'a zero-result filter must render no rows at all').toHaveCount(0)
+  // The unfiltered zero-state must not be what rendered: it owns "No invoices yet" and its
+  // own page-level create button (InvoicesList.tsx:442-446), and neither is true here.
+  await expect(page.getByTestId('invoices-empty'), 'the unfiltered zero-state is false here -- this register is not empty').toHaveCount(0)
+  // Scoped, never page-wide: Header.tsx:136 renders a PERSISTENT create CTA on every screen,
+  // so a page-wide absence claim is false against correct product behaviour.
+  await expect(emptyFiltered).not.toContainText('New invoice')
+
+  // Core AC-6's way back.
+  await listFetchOn(page, false, () => page.getByTestId('clear-needs-attention').click())
+  for (const number of numbers) {
+    await expect(invoiceRowByNumber(page, number), 'Show all invoices must return the unfiltered register').toBeVisible()
+  }
+  await expect(emptyFiltered).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -9,7 +9,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseRoute, routePath } from './lib/route'
+import { parseRoute, routePath, seedFromPath } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -314,12 +314,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
   // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
   // a review hash into an already-open tab's address bar does not navigate until reload.
+  const [bootSeed] = useState(() => seedFromPath(window.location.pathname))
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
+  // Plain const, not a useState: read only by the lazy initializers below, all of which
+  // run once at mount.
+  const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : bootSeed.view)
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
-  const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname)?.view ?? 'dashboard')),
-  )
+  const [view, setView] = useState<View>(bootView)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
   // invoice typed instead keeps its provenance. Cleared wherever `draft` is reseeded --
@@ -349,13 +351,17 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
   // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
   // this state with an inline object literal — go through a constructor.
-  const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
+  const [detailSel, setDetailSel] = useState<DetailSelection>(
+    bootView === 'detail' && bootSeed.invoiceId !== null ? selectImported(bootSeed.invoiceId) : clearSelection(),
+  )
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(null)
   // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
   // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
-  const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
+  const [extractionJobId, setExtractionJobId] = useState<string | null>(
+    bootView === 'extraction' ? bootSeed.jobId : null,
+  )
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery] = useState('')
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -514,8 +520,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [createStep, entityId, active.entityId])
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  // Reads bootSeed rather than the live atoms -- at mount they agree, and bootSeed is
+  // what the URL actually carried.
+  const bootHref = routePath(
+    bootView,
+    bootView === 'detail' ? bootSeed.invoiceId : bootView === 'extraction' ? bootSeed.jobId : null,
+  )
   useEffect(() => {
-    window.history.replaceState(null, '', routePath(view) + window.location.hash)
+    window.history.replaceState(null, '', bootHref + window.location.hash)
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.

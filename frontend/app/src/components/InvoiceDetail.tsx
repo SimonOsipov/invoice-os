@@ -638,7 +638,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   data-testid="view-ubl"
                   onClick={() => setUblOpen(true)}
                   disabled={!inv.can_view_ubl}
-                  title={inv.ubl_blocked_reason ?? undefined}
+                  title={!inv.can_view_ubl ? (inv.ubl_blocked_reason ?? undefined) : undefined}
                   className="v2-btn v2-btn-ghost pf-btn"
                   style={{
                     height: 32,
@@ -674,7 +674,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
                         disabled={!inv.can_approve}
-                        title={inv.approve_blocked_reason ?? undefined}
+                        title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 32,
@@ -726,7 +726,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       data-testid="detail-reject"
                       onClick={() => setRejectOpen(true)}
                       disabled={!inv.can_reject || rejectOpen}
-                      title={inv.reject_blocked_reason ?? undefined}
+                      title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
                         height: 32,
@@ -843,13 +843,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                             InvoicesList.tsx:347's `opacity`, a sub-second in-flight state that
                             does not suppress the hover swap (Surface Conflicts -- one precedent
                             picked, not blended).
-                        `title` rides along ([title-survives]); it is never the sole barrier. */}
+                        `title` rides along ([title-survives]) but only while the WIRE says blocked,
+                        never on an enabled control and never on a transient in-flight disable. */}
                     <button
                       type="button"
                       data-testid="revalidate"
                       onClick={handleRevalidate}
                       disabled={revalidateDisabled}
-                      title={inv.revalidate_blocked_reason ?? undefined}
+                      title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
                         height: 32,
@@ -878,7 +879,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           data-testid="detail-submit"
                           onClick={() => toSubmitPhase({ type: 'arm' })}
                           disabled={!inv.can_submit}
-                          title={inv.submit_blocked_reason ?? undefined}
+                          title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
                             height: 32,
@@ -1142,7 +1143,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         data-testid="resolve-outside-undo"
                         onClick={() => void handleUndoResolveOutside()}
                         disabled={!inv.can_resolve_outside || undoing}
-                        title={inv.resolve_outside_blocked_reason ?? undefined}
+                        title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
                           height: 32,
@@ -1179,7 +1180,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           data-testid="resolve-outside"
                           onClick={() => void handleResolveOutside()}
                           disabled={resolveOutsideDisabled}
-                          title={inv.resolve_outside_blocked_reason ?? undefined}
+                          title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
                             height: 32,

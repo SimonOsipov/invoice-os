@@ -3194,14 +3194,19 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and the reason still rides along (AC-2)', async () => {
+  // The title half is RE-POINTED, not weakened: task-899 AC #4 (BUG-14-02) forbids a title on
+  // an ENABLED control, since that is a live native tooltip and the story's Out of Scope bars
+  // the reason as on-demand disclosure. AC-2's own subject -- enabled state reads can_approve
+  // alone -- is the `disabled` assertion, kept. This also makes 4/5/6/7 one table: the title
+  // tracks the wire's flag, never the reason string's mere presence.
+  it('7: permutation 4 -- a contradictory wire (can_approve:true with a reason set) still enables Approve, and carries no tooltip (AC-2, task-899 AC #4)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: true, approve_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const approveBtn = (await screen.findByTestId('detail-approve')) as HTMLButtonElement
     expect(approveBtn.disabled).toBe(false)
-    expect(approveBtn.getAttribute('title')).toBe(S)
+    expect(approveBtn.getAttribute('title')).toBeNull()
   })
 
   it.each(APPROVAL_GATE_SENTENCES)('8: the carried reason is byte-identical to the wire -- %s (AC-2)', async (sentence) => {
@@ -5430,5 +5435,106 @@ describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-02)', 
     expect(card.querySelector('script'), 'never parsed as markup').toBeNull()
     expect(card.querySelector('b')).toBeNull()
     expect(card.textContent, 'and never printed as text either').not.toContain('an admin')
+  })
+})
+
+// task-899 AC #4. The pin above nulls every reason, so it can only prove a property of its
+// own fixture. This one populates all six reasons AND sets every can_* true -- the shape a
+// contradictory wire produces -- and asserts the cluster carries no `title` at all. A title
+// on an ENABLED control is a live native tooltip in every browser, which is the on-demand
+// disclosure the story's Out of Scope forbids and the only reason [title-survives] holds.
+describe('InvoiceDetail action cluster: `title` is gated on the wire, not just present (BUG-14-02, task-899 AC #4)', () => {
+  const ID = 'inv-title-gate-1'
+
+  const R = {
+    ubl: 'No UBL document exists for this invoice yet — validate it first.',
+    approve: 'Only an approver can approve this invoice — ask an admin on your team.',
+    reject: 'A rejection needs the workflow role this step waits on — ask whoever holds it.',
+    revalidate: 'Re-validate applies to drafts that have changed — this one has not.',
+    submit: 'Only a validated invoice can be submitted — validate it first.',
+    resolveOutside: 'Only an admin can mark this invoice resolved outside — ask one.',
+  }
+
+  // Every reason populated; `can` flips the six permissions together.
+  function reasonedFailed(can: boolean, over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRecord {
+    return detailRecord({
+      id: ID,
+      status: 'failed',
+      can_edit: false,
+      can_view_ubl: can,
+      ubl_blocked_reason: R.ubl,
+      can_approve: can,
+      approve_blocked_reason: R.approve,
+      can_reject: can,
+      reject_blocked_reason: R.reject,
+      can_revalidate: can,
+      revalidate_blocked_reason: R.revalidate,
+      can_submit: can,
+      submit_blocked_reason: R.submit,
+      can_resolve_outside: can,
+      resolve_outside_blocked_reason: R.resolveOutside,
+      ...over,
+    })
+  }
+
+  const COLUMN_CONTROLS = ['view-ubl', 'detail-approve', 'detail-reject', 'revalidate', 'detail-submit'] as const
+
+  it('AC-4: with every can_* true and every reason populated, no control in the cluster carries a title', async () => {
+    mockDetailFetch(reasonedFailed(true))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+
+    for (const testid of COLUMN_CONTROLS) {
+      const btn = screen.getByTestId(testid) as HTMLButtonElement
+      expect(btn.disabled, `floor: the wire permits ${testid}, so it is clickable`).toBe(false)
+      expect(btn.getAttribute('title'), `${testid} carries no tooltip while the wire permits it`).toBeNull()
+    }
+
+    // Refusing only because its reason box is empty -- a local UI state, not the wire.
+    const resolve = within(card).getByTestId('resolve-outside') as HTMLButtonElement
+    expect(resolve.getAttribute('title'), 'resolve-outside carries no tooltip while the wire permits it').toBeNull()
+
+    expect(card.textContent, 'and the sentence is printed nowhere either').not.toContain(R.resolveOutside)
+  })
+
+  it('AC-4: the resolved arm -- an enabled Undo carries no title', async () => {
+    mockDetailFetch(
+      reasonedFailed(true, {
+        kept_as_is_at: '2026-07-02T09:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Settled directly with the buyer',
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+
+    const undo = within(card).getByTestId('resolve-outside-undo') as HTMLButtonElement
+    expect(undo.disabled, 'floor: the wire permits it, so it is clickable').toBe(false)
+    expect(undo.getAttribute('title'), 'an enabled Undo carries no tooltip').toBeNull()
+  })
+
+  // Reachability. Without this the two pins above could pass on a component that never reads
+  // the reasons at all -- the exact hole task-899 opened in the earlier pin.
+  it('reachability: flip every can_* false and the same six strings reappear as titles', async () => {
+    mockDetailFetch(reasonedFailed(false))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+
+    const expected: Record<string, string> = {
+      'view-ubl': R.ubl,
+      'detail-approve': R.approve,
+      'detail-reject': R.reject,
+      revalidate: R.revalidate,
+      'detail-submit': R.submit,
+    }
+    for (const testid of COLUMN_CONTROLS) {
+      const btn = screen.getByTestId(testid) as HTMLButtonElement
+      expect(btn.disabled, `${testid} refuses`).toBe(true)
+      expect(btn.getAttribute('title'), `${testid} carries its wire sentence`).toBe(expected[testid])
+    }
+    expect((within(card).getByTestId('resolve-outside') as HTMLButtonElement).getAttribute('title')).toBe(R.resolveOutside)
   })
 })

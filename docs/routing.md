@@ -96,7 +96,10 @@ after sign-in`.
   epic Q7). Also inherits a known defect: Back into an older review batch after opening
   a second one in the same tab relinks the wrong batch onto that history entry. An
   externally-held link (copied, bookmarked) is unaffected — it still cold-loads its own
-  batch. See `decision [second-batch-relinks-an-older-entry]` in `.ralph/ROUTE-01-final.md`.
+  batch. That second half is pinned by `App.routeReviewHash.test.tsx`'s
+  `link_anExternallyHeldReviewLinkStillColdLoadsItsOwnBatch`, which names `decision
+  [second-batch-relinks-an-older-entry]`. The decision's own text is in ROUTE-01's run log,
+  which never ships — `.ralph/` is gitignored.
 - **ROUTE-04** — filters and sub-tabs in the URL.
 - **ROUTE-05** — **shipped.** A signed-out visit to a real path returns there after sign-in;
   the destination rides `sessionStorage`, not the URL (section above). ROUTE-02 inherits it

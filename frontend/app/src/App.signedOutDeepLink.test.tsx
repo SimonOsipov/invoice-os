@@ -468,3 +468,70 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     warnSpy.mockRestore()
   })
 })
+
+// ROUTE-05-04, AC-5. The two other planned specs for this subtask (an abandoned attempt
+// not hijacking a later sign-in, and the expired blob still being cleared) are dropped as
+// same-level duplicates of restore_anExpiredDestinationFallsBackToDashboard above (:367-382):
+// that spec already boots the rendered app with an expired blob and asserts dashboard, the
+// root URL, and sessionStorage having been swept. Stubbing Date.now forward and backdating
+// `at` both reach the identical `now - at > TTL` branch that spec already exercises.
+describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
+  it('expiry_atTheBoundaryTheDestinationStillApplies', async () => {
+    // deepLink.test.ts's read_theBoundaryIsInclusive proves the boundary at the module
+    // level; nothing exercises it through App.tsx's own call site (App.tsx:320-321), which
+    // calls readDestination() with no `now` argument -- so proving the boundary here means
+    // controlling the real clock the app reads. Fake only Date: becomePersona's real
+    // BUSY_MS delay elsewhere in this file must not hang under a fully-faked clock.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const at = 1_700_000_000_000
+    vi.setSystemTime(at)
+    captureDestination('/audit', at)
+    vi.setSystemTime(at + DEEP_LINK_TTL_MS)
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await bootWorkspaceAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'a destination exactly at the TTL boundary must still apply').toBe('audit')
+    expect(window.location.pathname, 'the URL must settle on the still-valid destination').toBe('/audit')
+    expect(errSpy, 'a boundary-valid destination is a normal outcome and must not error').not.toHaveBeenCalled()
+    errSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('expiry_aPersonaSwitchRemountIgnoresAStoredDestination', async () => {
+    // Distinct from restore_aDemoPersonaSwitchDoesNotResurrectAConsumedDestinationForTheNewPersona
+    // (:408) and restore_consumesEvenWhenItDoesNotWin (:301): both boot at '/', so bootPath's
+    // ternary (App.tsx:320-321) already calls readDestination() on the FIRST mount. Here the
+    // first mount boots at a live non-root path, so bootPath never reaches readDestination()
+    // at all on mount 1 -- the blob is then written straight to sessionStorage, bypassing
+    // captureDestination, so nothing in this test has EVER gone through the read call site.
+    // Proves the remount's unconditional clearDestination() sweep (App.tsx:525) and
+    // initialView's precedence (App.tsx:326-327) hold even so.
+    await bootWorkspaceAt('/clients', { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: a live non-root boot lands on the path itself, not dashboard').toBe('clients')
+
+    sessionStorage.setItem(
+      DEEP_LINK_KEY,
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', at: Date.now() }),
+    )
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'invoices')
+    })
+    ctx = requireCtx()
+    expect(
+      ctx.view,
+      "the new persona's carried view must win, not the destination stashed after mount 1",
+    ).toBe('invoices')
+    expect(
+      readDestination(),
+      'the remount must still sweep a destination its own first mount never read',
+    ).toBeNull()
+    expect(
+      errSpy,
+      'a persona-switch remount ignoring a stored destination is a normal outcome and must not error',
+    ).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+})

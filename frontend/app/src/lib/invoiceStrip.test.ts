@@ -668,6 +668,88 @@ describe('stripNodes: a reached node captions its attribution', () => {
     expect(swept).toBe(ALL_RUNS.length * ALL_STATUSES.length)
     expect(swept).toBe(77)
   })
+
+  it('S-39: the two em-dash routes stay distinguishable on a current node', () => {
+    // '—' means no row; '— · Ada' means a row whose changed_at will not parse. Both reach
+    // the caption through the same cell, and only `current` is new here -- S-31 pins the
+    // `done` node.
+    const noRow = strip([], null, 'draft')[0]
+    expect(noRow.state).toBe('current')
+    expect(noRow.at).toBeNull()
+    expect(noRow.caption).toBe('—')
+
+    const badDate = strip([h('draft', 'not-a-date')], null, 'draft')[0]
+    expect(badDate.state).toBe('current')
+    expect(badDate.at).toBe('not-a-date') // reached: the string is present, just unrenderable
+    expect(badDate.actor?.text).toBe('Ada Lovelace')
+    expect(badDate.caption).toBe('— · Ada')
+    expect(badDate.caption).not.toContain('NaN')
+    expect(badDate.caption).not.toContain('Invalid')
+
+    expect(badDate.caption).not.toBe(noRow.caption)
+  })
+
+  it('S-42: a current node captions exactly what the SAME node captions once done', () => {
+    // The Core AC's "same shape a done node uses" as an equality, not a second literal:
+    // one history, two statuses, the node's caption must not move when the cursor passes.
+    const cases: Array<[number, InvoiceStatus, InvoiceStatus]> = [
+      [0, 'draft', 'validated'],
+      [1, 'validated', 'queued'],
+      [3, 'queued', 'accepted'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+
+    for (const [idx, whileCurrent, whileDone] of cases) {
+      const where = `node${idx} ${whileCurrent}->${whileDone}`
+      const cur = strip(HISTORY_TO_QUEUED, null, whileCurrent)[idx]
+      const done = strip(HISTORY_TO_QUEUED, null, whileDone)[idx]
+      expect(cur.state, where).toBe('current')
+      expect(done.state, where).toBe('done')
+      expect(cur.caption, where).toBe(done.caption)
+      // Anti-vacuity: an equality over two placeholders would pass too.
+      expect(cur.caption, where).not.toBe('—')
+      expect(cur.caption, where).not.toBe('Not reached')
+      expect(cur.caption, where).toMatch(/^\d\d:\d\d · \S/)
+    }
+  })
+
+  it('S-43: on the spine `at` and `actor` are null together, so no caption dangles its separator', () => {
+    // S-27 sweeps actor => at over all five nodes and records that the converse is FALSE on
+    // node 3. Scoped to the spine the converse holds, and it is what keeps `HH:MM · ` off
+    // the screen now that a current node renders.
+    const histories: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+      ['badDate', [h('draft', 'not-a-date'), h('validated', T_VALIDATED, { from_status: 'draft' })]],
+    ]
+    expect(histories.length).toBeGreaterThan(0)
+
+    let checked = 0
+    let bothSet = 0
+    let bothNull = 0
+    for (const [hName, history] of histories) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          for (const idx of [0, 1, 3, 4]) {
+            const n = strip(history, run, status)[idx]
+            const where = `${hName}/${rName}/${status} ${n.key}`
+            expect(n.at === null, where).toBe(n.actor === null)
+            if (n.at === null) bothNull += 1
+            else bothSet += 1
+            expect(n.caption.endsWith(' · '), where).toBe(false)
+            expect(n.caption.trim(), where).not.toBe('')
+            checked += 1
+          }
+        }
+      }
+    }
+    expect(checked).toBe(histories.length * ALL_RUNS.length * ALL_STATUSES.length * 4)
+    expect(checked).toBe(1232)
+    // Anti-vacuity: both arms of the biconditional are actually reached.
+    expect(bothSet).toBeGreaterThan(0)
+    expect(bothNull).toBeGreaterThan(0)
+  })
 })
 
 // ---------------------------------------------------------------------------

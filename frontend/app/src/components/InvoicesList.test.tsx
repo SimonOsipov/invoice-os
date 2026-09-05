@@ -2071,6 +2071,8 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
 
     const filtered = await screen.findByTestId('invoices-empty-filtered')
     expect(filtered.textContent, 'the filtered empty state must say which kind of empty this is').toContain('Nothing needs attention')
+    expect(filtered.textContent, 'the System Design copy verbatim (.ralph/PLAN.md:498-502) -- this sentence IS the claim, so a reword is a new claim').toContain('No invoice in this register is waiting on you. Clear the filter to see the rest.')
+    expect(within(filtered).getByTestId('clear-needs-attention').textContent, 'the way back must say where it goes -- S2 clicks it by testid and would not notice a rename').toBe('Show all invoices')
     expect(screen.queryByTestId('invoices-empty'), 'the generic copy must be REPLACED, not joined -- two empty states at once is the same lie twice').toBeNull()
     expect(screen.queryByText('No invoices yet'), 'a workspace that has invoices must never be told it has none').toBeNull()
     expect(screen.queryByText(/New invoice/), 'create is not the way out of a filter').toBeNull()
@@ -2118,11 +2120,66 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
 
     render(<InvoicesList ctx={listCtx()} />)
 
+    // Before the click too: idle+filter-off is the DEFAULT no-gateway state, and the
+    // post-click assertion below cannot see it blanked.
+    expect(screen.getByTestId('invoices-empty').textContent, 'the unfiltered idle copy is the default, not a post-click state').toContain('No invoices yet')
+
     fireEvent.click(screen.getByTestId('needs-attention-toggle'))
 
     const empty = screen.getByTestId('invoices-empty')
     expect(empty.textContent, 'idle is unqualified by the filter: one copy in either filter state').toContain('No invoices yet')
     expect(screen.queryByTestId('invoices-empty-filtered'), 'a build with no backend behind it may not claim nothing needs attention -- Out of Scope fence').toBeNull()
     expect(fetchMock, 'no gateway means no request, whatever the toggle says').not.toHaveBeenCalled()
+  })
+})
+
+// QA BUG-10-03. The filtered copy asserts what the server answered. Only `state === 'empty'`
+// carries an answer; 'loading' and 'error' carry none, so neither may print the claim.
+describe('QA BUG-10-03: the filtered empty state claims nothing before the server has answered', () => {
+  it('the cold in-flight window shows the spinner, never the filtered copy (truth-table row 5)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention'), 'the filtered refetch really is in flight').toBe('true')
+
+    // calls[1] deliberately unresolved: nothing has answered, so nothing may be claimed.
+    expect(screen.queryByText('Loading invoices…'), 'with no envelope to hold, the cold window is the spinner').not.toBeNull()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'an unanswered request is not an empty result set').toBeNull()
+    expect(screen.queryByTestId('invoices-empty'), 'nor is it an empty workspace').toBeNull()
+  })
+
+  it('the held in-flight window shows the held rows, never the filtered copy (truth-table row 6)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse([row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })], { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+
+    expect(screen.queryByText('INV-MOUNTED'), 'the hold is what makes this row distinct from row 5').not.toBeNull()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'held rows and "nothing needs attention" are the same lie twice').toBeNull()
+  })
+
+  it('a failed filtered refetch shows the error, never the filtered copy (truth-table row 10)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse([row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })], { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filtered refetch failed' }) }))
+
+    expect(await screen.findByRole('button', { name: 'Retry' }), 'the failure really did reach the screen').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'a request that failed says nothing about what needs attention').toBeNull()
   })
 })

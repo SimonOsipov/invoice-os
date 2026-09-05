@@ -344,8 +344,9 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       {/* No page-level "New invoice" here: the persistent header-bar CTA (Header.tsx) is
-          the single create affordance for the populated list. The empty state below keeps
-          its own button (standard zero-state pattern). The "Needs attention" toggle sits
+          the single create affordance for the populated list. The UNFILTERED empty state
+          below keeps its own button (standard zero-state pattern); the filtered one
+          offers a way out of the filter instead. The "Needs attention" toggle sits
           in the header row (not gated by async state) so it stays reachable even when the
           filtered result set is itself empty. */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>

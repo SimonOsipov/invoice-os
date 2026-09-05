@@ -95,6 +95,7 @@ async function signInFirm(page: Page): Promise<void> {
 async function goToInvoices(page: Page): Promise<void> {
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'goToInvoices did not update the URL').toHaveURL(/\/invoices$/)
 }
 
 // openInvoiceRow(): fix cycle 1 (M5-09-08, task-256) -- the text match is scoped to the
@@ -111,6 +112,7 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoice$/)
 }
 
 // The state strip (StatusStrip.tsx) replaced the status-history timeline: every scenario
@@ -811,6 +813,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // fresh entity therefore has EXACTLY one needs_attention invoice before any fix, so the
   // pre-fix pill is asserted to an exact value, not just captured for a later diff.
   await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(page, 'inline nav to Clients did not update the URL').toHaveURL(/\/clients$/)
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
   // Exact even though this flow now arms an open approval run on validate (the firm tenant
   // is governed, this file's own beforeAll) -- needs_attention's approval arm is
@@ -866,6 +869,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // arc's business-flow assertion to buildMixedCsv's exact row count: only the overview
   // label + a rendered "<N> TOTAL" donut total are asserted, never a specific N.
   await page.getByRole('button', { name: /Overview/ }).click()
+  // dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that
+  // would pass on any trailing-slash path.
+  await expect(page, 'inline nav to Overview did not update the URL').toHaveURL(new URL('/', APP_URL).href)
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   await expect(page.getByText(/^\d+ TOTAL$/)).toBeVisible()
 
@@ -876,6 +882,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // not a stale snapshot) -- `toContainText` retries while the fresh ClientsView mount's
   // rollup refetch settles.
   await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(page, 'inline nav to Clients did not update the URL').toHaveURL(/\/clients$/)
   // Zero survives approvals: this flow now arms an open run on validate (governed tenant),
   // but a validated invoice with an open run is awaiting_approval's population, never
   // needs_attention's (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
@@ -1954,6 +1961,7 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
   await signInFirm(page)
   await selectEntity(page, entity.name)
   await page.getByRole('button', { name: /Customers/ }).click()
+  await expect(page, 'inline nav to Customers did not update the URL').toHaveURL(/\/customers$/)
   await expect(page.getByRole('heading', { name: 'Customers & vendors' })).toBeVisible()
 
   await expect(
@@ -1976,6 +1984,7 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
 async function goToReports(page: Page): Promise<void> {
   await page.getByRole('button', { name: /Reports/ }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
+  await expect(page, 'goToReports did not update the URL').toHaveURL(/\/reports$/)
 }
 
 // The KPI tile row's own markup (ReportsView.tsx): a `<div className="label">` holding the

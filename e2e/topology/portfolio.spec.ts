@@ -46,6 +46,7 @@ async function signInFirm(page: Page): Promise<void> {
 // (Day-60 arc). Extracted here since every test in this file drives Clients.
 async function goToClients(page: Page): Promise<void> {
   await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(page, 'goToClients did not update the URL').toHaveURL(/\/clients$/)
 }
 
 // selectEntity(): a local copy of persona-surfaces.spec.ts's own helper of the same name

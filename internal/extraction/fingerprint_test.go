@@ -558,3 +558,90 @@ func TestBoxlessFixtures_TheExtraParagraphMatchesNoAnchor(t *testing.T) {
 		t.Errorf("%s carries no page-1 token equal to %q; the guard above is scanning a string the fixture does not contain.\n  A-prime = %q", bxInlineGolden, bxInlineExtraParagraph, bxTexts(ap))
 	}
 }
+
+// --- EXTR-19-01 QA (Mode B): adversarial coverage ------------------------------------------
+
+// bxPlacements classifies every lexicon-matched page-1 token as "whole" (the matched label IS
+// the token) or "leading" (the token carries a value after the label). Derived from the live
+// anchorLexicon through AnchorObservations, never from a transcribed literal, so a fixture
+// regenerated with a different label shape cannot hide behind an edited constant.
+func bxPlacements(t *testing.T, page extraction.TokenPage) []string {
+	t.Helper()
+	out := make([]string, 0, len(page.Tokens))
+	for _, tok := range page.Tokens {
+		one := []extraction.TokenPage{{
+			Number: 1,
+			Tokens: []extraction.Token{{Text: tok.Text, Region: extraction.Region{Page: 1}}},
+		}}
+		for _, o := range extraction.AnchorObservations(one) {
+			placement := "leading"
+			if o.Text == tok.Text {
+				placement = "whole"
+			}
+			out = append(out, o.Label+"="+placement)
+		}
+	}
+	return out
+}
+
+// Story AC #6/#7, the structural difference itself. AC #6 pins that A, A-prime and B share a
+// label SET, and AC #5 pins each golden's exact token texts -- but nothing asserts the property
+// that makes B a different LAYOUT: B's anchor label spans its whole token, A's is a prefix with
+// the value trailing. That is what EXTR-19-02's BoxlessFingerprint must read, and a fixture
+// regenerated as "Invoice No:" (still stacked, still six paragraphs, still the same label set)
+// would pass every other test in this subtask while erasing it.
+func TestBoxlessFixtures_TheStackedFixtureAloneCarriesWholeTokenLabels(t *testing.T) {
+	a := bxPlacements(t, bxPage1(t, dxGolden))
+	ap := bxPlacements(t, bxPage1(t, bxInlineGolden))
+	b := bxPlacements(t, bxPage1(t, bxStackedGolden))
+
+	wantLeading := []string{"invoice_no=leading", "issue_date=leading", "total=leading"}
+	wantWhole := []string{"invoice_no=whole", "issue_date=whole", "total=whole"}
+
+	if !slices.Equal(a, wantLeading) {
+		t.Errorf("A (%s) placements = %v, want %v", dxGolden, a, wantLeading)
+	}
+	if !slices.Equal(ap, wantLeading) {
+		t.Errorf("A-prime (%s) placements = %v, want %v -- the control must match A structurally, extra line item included", bxInlineGolden, ap, wantLeading)
+	}
+	if !slices.Equal(b, wantWhole) {
+		t.Errorf("B (%s) placements = %v, want %v -- B is the STACKED layout: each label alone on its paragraph, its value on the next", bxStackedGolden, b, wantWhole)
+	}
+	// The pair is only discriminating if these two differ. Asserted after the literals above
+	// so two empty lists cannot satisfy it.
+	if slices.Equal(a, b) {
+		t.Errorf("A and B carry identical anchor placements %v; the pair discriminates on nothing and EXTR-19-02 has no signal to read", a)
+	}
+}
+
+// bxInvoiceNumber is the ASC-YYYY-NNNN printed on a golden's page 1, or "".
+var bxInvoiceNumberRE = regexp.MustCompile(`ASC-\d{4}-\d{4}`)
+
+func bxInvoiceNumber(page extraction.TokenPage) string {
+	for _, tok := range page.Tokens {
+		if m := bxInvoiceNumberRE.FindString(tok.Text); m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
+// EXTR-19-01 QA. The three fixtures import under one business entity in EXTR-19-02's wired
+// specs; a repeated number collides on invoices_tenant_entity_number_uq. The subtask chose
+// 0919/0920/0921 for exactly this reason and pinned it nowhere.
+func TestBoxlessFixtures_InvoiceNumbersDoNotCollide(t *testing.T) {
+	seen := map[string]string{}
+	for _, golden := range []string{dxGolden, bxInlineGolden, bxStackedGolden} {
+		num := bxInvoiceNumber(bxPage1(t, golden))
+		if num == "" {
+			t.Fatalf("%s prints no ASC-YYYY-NNNN invoice number; the uniqueness assertion below would compare empty strings", golden)
+		}
+		if prior, dup := seen[num]; dup {
+			t.Errorf("%s and %s both print invoice number %s; importing both under one entity violates invoices_tenant_entity_number_uq", prior, golden, num)
+		}
+		seen[num] = golden
+	}
+	if len(seen) != 3 {
+		t.Errorf("the three fixtures yield %d distinct invoice number(s) %v, want 3", len(seen), seen)
+	}
+}

@@ -1,5 +1,5 @@
-"""Fixture provenance guards for T-03-6/T-03-7/T-04-9/T-04-18 -- pure file scans plus one
-docx regeneration compare (build_docx.py imports `docx`, already installed for
+"""Fixture provenance guards for T-03-6/T-03-7/T-04-9/T-04-18 -- pure file scans plus four
+docx regeneration compares (build_docx.py imports `docx`, already installed for
 msword_backend.py -- see its own docstring), no DocumentConverter needed.
 
 native_invoice.pdf and native_3page.pdf are byte-identical copies of

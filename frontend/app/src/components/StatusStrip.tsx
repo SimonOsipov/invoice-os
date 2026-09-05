@@ -18,7 +18,7 @@ const TONE: Record<StripState, { bg: string; border: string; text: string }> = {
 
 export function StatusStrip({ nodes }: { nodes: StripNode[] }): ReactNode {
   return (
-    // ViolationsTable's pf-scroll-x recipe: the strip is DESIGNED to overflow, and a scroll
+    // The pf-scroll-x recipe (platform.css): the strip is DESIGNED to overflow, and a scroll
     // region a keyboard user cannot reach hides the far node.
     <div
       data-testid="status-strip"

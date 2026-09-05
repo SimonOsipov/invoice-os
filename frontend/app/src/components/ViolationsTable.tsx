@@ -6,13 +6,10 @@
 //
 // Empty violations -> the clean-pass block (AC-5); this is the single source of that
 // state, inherited by M4 without change. Non-empty -> a semantic <table>, columns
-// Severity | Message | Rule key | Path | Rule-set version, in response order (backend
-// pre-sorts by rule_key then path — do NOT re-sort here).
+// Severity | Message | Rule key | Path, in response order (backend pre-sorts by rule_key
+// then path — do NOT re-sort here).
 
 import { severityStyle, type Violation } from '../lib/validationApi'
-
-// Five headers ~529px of padding+content; smaller leaves Message crushed.
-export const TABLE_MIN_WIDTH = 720
 
 export interface ViolationsTableProps {
   violations: Violation[]
@@ -37,23 +34,19 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
     )
   }
 
+  // overflowX below is a clip failsafe, not an affordance: the Compliance card is
+  // overflow:hidden, so under the table's min-content the overflow would be unrecoverable.
   return (
     <div
-      data-testid="violations-scroll"
-      className="pf-scroll-x"
-      tabIndex={0}
-      role="group"
-      aria-label="Violations table, scroll horizontally for more columns"
       style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}
     >
-      <table style={{ width: '100%', minWidth: TABLE_MIN_WIDTH, borderCollapse: 'collapse' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ background: 'var(--bg-1)' }}>
             <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Severity</th>
             <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Message</th>
             <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Rule key</th>
             <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Path</th>
-            <th style={{ textAlign: 'left', padding: '11px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 11, fontWeight: 600, color: 'var(--fg-3)' }}>Rule-set version</th>
           </tr>
         </thead>
         <tbody>
@@ -67,14 +60,15 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
                     <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
                   </span>
                 </td>
-                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 13, color: 'var(--fg-2)' }}>{v.message}</td>
-                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                {/* overflowWrap:'anywhere', not break-word: only `anywhere` shrinks the
+                    min-content width table-layout:auto reads when sizing the table. */}
+                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 13, color: 'var(--fg-2)', overflowWrap: 'anywhere', lineHeight: 1.5 }}>{v.message}</td>
+                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)', overflowWrap: 'anywhere', lineHeight: 1.4 }}>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{v.rule_key}</span>
                 </td>
-                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
+                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)', overflowWrap: 'anywhere', lineHeight: 1.4 }}>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{v.path ?? '—'}</span>
                 </td>
-                <td style={{ padding: '10px 18px', borderBottom: '1px solid var(--line-1)', fontSize: 13, color: 'var(--fg-2)' }}>{ruleSetVersion}</td>
               </tr>
             )
           })}

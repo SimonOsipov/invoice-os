@@ -1600,6 +1600,66 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The agreement invariant, in one browser session: the register row and that invoice's own
+// detail page give the SAME verdict and the SAME sentence, refused then permitted.
+// LIMIT: every PR environment runs APPROVALS_ENFORCED=true and production runs it off, and
+// pushes to main run zero browser specs -- so a green run here proves agreement, never the
+// reported production symptom. That symptom's evidence is an owed manual pass after merge.
+test('submit gate: the register row and its own detail page never disagree -- refused, then permitted', async ({ page }) => {
+  // Two nav round trips plus an approval walk on a possibly cold fleet; the sibling
+  // detail-submit spec budgets the same.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  // Self-seeded: a CI retry gets a fresh worker and re-runs beforeAll only.
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG12 agree ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-BUG12-AGREE-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  const validated = await validateInvoice(token, inv.id)
+  expect(validated.status, 'the clean fixture must promote draft -> validated, arming the seeded firm run').toBe('validated')
+  const armed = await getInvoiceApproval(token, inv.id)
+  expect(armed.state, 'without an OPEN run both legs below collapse into one polarity').toBe('open')
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  // Leg 1 -- refused, on both surfaces.
+  const box = invoiceRowByNumber(page, invoiceNumber).getByTestId('invoice-select')
+  await expect(box).toBeDisabled()
+  const registerTitle = (await box.getAttribute('title')) ?? ''
+  expect(registerTitle.length, 'a blank title would let the cross-surface equality below pass on two empties').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, "the register must carry the server's own sentence, not one of its own").toBe(AWAITING_APPROVAL_REASON)
+
+  await openInvoiceRow(page, invoiceNumber)
+  const submitBtn = page.getByTestId('detail-submit')
+  await expect(submitBtn).toBeVisible()
+  await expect(submitBtn).toBeDisabled()
+  await expect(page.getByTestId('submit-blocked-reason')).toHaveText(AWAITING_APPROVAL_REASON)
+  const detailReason = ((await page.getByTestId('submit-blocked-reason').textContent()) ?? '').trim()
+  expect(detailReason.length, 'the same floor on the detail half').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, 'the whole bug, as one assertion: the two surfaces must not disagree').toBe(detailReason)
+
+  // A validated invoice does not poll (shouldPollList needs queued/submitted), so this
+  // back-and-reopen round trip IS the refetch, not navigation garnish.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  // Leg 2 -- permitted, on both surfaces. The enabled reads are the control that the
+  // fixture really flipped; without them leg 1 could be two refused reads.
+  await expect(box).toBeEnabled()
+  expect(await box.getAttribute('title'), 'React drops title={undefined}, so the attribute is absent, not empty').toBeNull()
+
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(submitBtn).toBeEnabled()
+  await expect(page.getByTestId('submit-blocked-reason'), 'the reason node unmounts when the reason is null').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // INVCR-01-16 (task-292) AC-3 -- Core AC 1's ordering claim ("no success copy before the
 // response") made OBSERVABLE rather than merely asserted. CreateForm.tsx's own header
 // comment states the contract: "NOTHING here may affirm a filing. There is no success

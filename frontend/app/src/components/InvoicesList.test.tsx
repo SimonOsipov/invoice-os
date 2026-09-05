@@ -1831,7 +1831,7 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
 
     await settle(() => calls[1].resolve(listResponse([], { limit: 50, offset: 0, total: 0 })))
 
-    expect(await screen.findByTestId('invoices-empty'), "total:0 classifies as 'empty', which has no rows branch at all").toBeDefined()
+    expect(await screen.findByTestId('invoices-empty-filtered'), "total:0 classifies as 'empty'; with the filter on that is the filtered branch, which has no rows branch at all").toBeDefined()
     for (const number of ['INV-A', 'INV-B']) {
       expect(screen.queryByText(number), `${number} is held, not live -- it must not survive a zero-result filter`).toBeNull()
     }
@@ -2052,5 +2052,77 @@ describe('InvoicesList: the needs-attention filter changes the rows, and nothing
     // Equality between two measured states, never the literal 22: a later redesign may move
     // this margin and must survive, as long as it moves in both states.
     expect(titleBlock().style.marginBottom, 'the header must not slide when the filter flips').toBe(off)
+  })
+})
+
+// BUG-10-03 (task-866). Closes the gap the deleted explainer specs recorded as "a KNOWN GAP
+// with no owner": the generic empty state never consulted the toggle.
+describe('InvoicesList: an empty register says which kind of empty it is', () => {
+  it('a filtered result set that comes back empty says nothing needs attention', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const filtered = await screen.findByTestId('invoices-empty-filtered')
+    expect(filtered.textContent, 'the filtered empty state must say which kind of empty this is').toContain('Nothing needs attention')
+    expect(screen.queryByTestId('invoices-empty'), 'the generic copy must be REPLACED, not joined -- two empty states at once is the same lie twice').toBeNull()
+    expect(screen.queryByText('No invoices yet'), 'a workspace that has invoices must never be told it has none').toBeNull()
+    expect(screen.queryByText(/New invoice/), 'create is not the way out of a filter').toBeNull()
+  })
+
+  it('the filtered empty state offers the way back to the full register', async () => {
+    const fetchMock = mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByTestId('invoices-empty-filtered')
+
+    fireEvent.click(screen.getByTestId('clear-needs-attention'))
+
+    await waitFor(() => expect(fetchMock.mock.calls, 'clearing the filter must go back to the wire, not just repaint').toHaveLength(3))
+    const [clearUrl] = fetchMock.mock.calls[2] as [string]
+    expect(urlParams(clearUrl).get('needs_attention'), 'the way back must DROP the filter, not re-send it').toBeNull()
+    expect(urlParams(clearUrl).get('offset'), 'and land on page 1').toBe('0')
+
+    expect(await screen.findByText('INV-A1'), 'the rest of the register must come back').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'the filtered empty state must not survive its own exit').toBeNull()
+  })
+
+  it('a genuinely invoice-less workspace still reads No invoices yet with New invoice', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+
+    const empty = await screen.findByTestId('invoices-empty')
+    expect(empty.textContent, 'the default filter-off zero-total workspace keeps the honest copy').toContain('No invoices yet')
+    expect(within(empty).getByText(/New invoice/), 'and keeps the create affordance -- here there is nothing to un-filter').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'nothing is filtered here, so the filtered copy must not over-branch onto it').toBeNull()
+  })
+
+  it('the no-gateway idle branch keeps the same copy even with the filter on', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const empty = screen.getByTestId('invoices-empty')
+    expect(empty.textContent, 'idle is unqualified by the filter: one copy in either filter state').toContain('No invoices yet')
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'a build with no backend behind it may not claim nothing needs attention -- Out of Scope fence').toBeNull()
+    expect(fetchMock, 'no gateway means no request, whatever the toggle says').not.toHaveBeenCalled()
   })
 })

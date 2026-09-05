@@ -3086,12 +3086,11 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     expect(columns()[0].children.length).toBeGreaterThan(0)
   })
 
-  // The `!editing` half of AC#3, which nothing covered: every pre-existing
-  // `invoice-actions` absence assertion (:794, :827, :1112) is about can_edit:false.
-  // It needs the banner, for the same reason T7 does and one step further -- once 05
-  // widened the outer column to `!editing || banner`, `editing` with NO banner drops the
-  // whole column, so the bar's own `!editing` is load-bearing in exactly one state.
-  // KILLS: `{inv.can_edit && (` on InvoiceDetail.tsx:511.
+  // The `!editing` half of AC#3, and since BUG-14-01 the ONLY spec that can see the bar's
+  // own `!editing`: it needs the banner, because once 05 widened the outer column to
+  // `!editing || banner`, `editing` with NO banner drops the whole column -- so the bar's
+  // gate is load-bearing in exactly one state, and every banner-less spec passes with it
+  // widened. KILLS: widening the bar's own `{!editing && (`.
   it('Q12/AC3: the actions bar stays gated on !editing even with a banner holding the column open', async () => {
     mockDetailFetch(detailRecord({ id: ID, ...editable }), [], {
       submitResponses: [
@@ -4993,5 +4992,77 @@ describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC
     expect(bar, 'floor: all three rows mount on a can_edit:false invoice').not.toBeNull()
     expect(decisionActions.parentElement).toBe(viewUbl.parentElement)
     expect((bar as HTMLElement).parentElement, 'the bar shares the column, at every status').toBe(viewUbl.parentElement)
+  })
+})
+
+// QA-added (Stage 4, BUG-14-01). Three gaps the Mode-A specs leave: AC-1's four named
+// statuses are only spot-checked at accepted/queued; nothing isolates Edit's flag from the
+// other five; and the executor DELETED rather than flipped the two assertions at main's
+// :1312/:1313, dropping the only pin on where a submit reason may appear.
+describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-01)', () => {
+  const ID = 'inv-qa-cluster-1'
+  const NON_EDITABLE: InvoiceStatus[] = ['queued', 'submitted', 'accepted', 'failed']
+  const BAR_CONTROLS = ['edit-toggle', 'revalidate', 'detail-submit']
+
+  // AC-1 names four statuses and three controls; the Mode-A specs prove the BAR mounts at
+  // all seven but only prove the three controls disabled at accepted (AC-3) and queued.
+  it('AC-1: all three bar controls are present and disabled at each of the four non-editable statuses', async () => {
+    const seen: string[] = []
+    for (const status of NON_EDITABLE) {
+      mockDetailFetch(detailRecord({ id: ID, status, can_edit: false, can_revalidate: false, can_submit: false }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      for (const id of BAR_CONTROLS) {
+        const el = screen.queryByTestId(id) as HTMLButtonElement | null
+        if (el != null && el.disabled) seen.push(`${status}/${id}`)
+      }
+      cleanup()
+    }
+    // Equality is the floor: a status that rendered nothing contributes no entries.
+    expect(seen).toEqual(NON_EDITABLE.flatMap((s) => BAR_CONTROLS.map((c) => `${s}/${c}`)))
+  })
+
+  // Isolates Edit's own flag. A `disabled={!inv.can_edit}` copied onto the bar's wrapper, or
+  // onto its siblings, satisfies every all-false fixture; only a can_edit-true/rest-false
+  // wire separates them. No REAL wire pairs can_edit:true with can_view_ubl:false, which is
+  // the point -- the fixture is synthetic on purpose.
+  it('AC-2: can_edit true with every other flag false leaves Edit the one enabled control', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'draft',
+        can_edit: true,
+        can_revalidate: false,
+        can_submit: false,
+        can_view_ubl: false,
+        can_approve: false,
+        can_reject: false,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+
+    const enabled = ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'].filter(
+      (id) => (screen.getByTestId(id) as HTMLButtonElement).disabled === false,
+    )
+    expect(enabled, 'only Edit reads can_edit').toEqual(['edit-toggle'])
+  })
+
+  // Restores the claim the executor deleted with main's `submit-blocked-reason is null` /
+  // `body does not contain ROLE_REASON` pair: BUG-14-01 makes the role sentence reachable on
+  // four statuses where it never rendered, and nothing else pins that. Scoped to reachability,
+  // NOT to the node's existence -- BUG-14-02 deletes the node and retargets this spec with it.
+  it('AC-1: the submit reason a non-approver gets on a non-editable status now reaches the page', async () => {
+    const ROLE = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false, submit_blocked_reason: ROLE }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+
+    const submit = screen.getByTestId('detail-submit') as HTMLButtonElement
+    expect(submit.disabled, 'floor: the control the sentence explains is up and refusing').toBe(true)
+    expect(screen.getByTestId('submit-blocked-reason').textContent).toBe(ROLE)
+    expect(document.body.textContent, 'the sentence is on the page, not only in an attribute').toContain(ROLE)
   })
 })

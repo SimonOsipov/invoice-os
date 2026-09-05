@@ -634,12 +634,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
           </div>
 
-          {/* The actions bar is always present ([actions-visibility]); each control is
-              disabled off its own wire flag ([gates-on-the-wire]), so the set never shifts
-              with status. `!editing` still hides the bar while the inline editor owns the
-              screen ([D-actions-hidden-while-editing]). canEdit/canRevalidate derive from
-              legalTransitions -- internal/invoice/store.go:1536-1538 and :1558 (block
-              :1515-1569). */}
+          {/* Always present ([actions-visibility]); each control disables off its own wire flag
+              ([gates-on-the-wire]); `!editing` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
           {/* Outer column wraps the actions bar AND the submit skip/error banners together,
               so both stay in one right-aligned flex item ([D-actions-column]). The banners
               live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
@@ -992,9 +988,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                   {/* Same convention, for Submit ([gates-on-the-wire]). The wire guarantees
                       submit_blocked_reason != null implies !can_submit; the converse does NOT
-                      hold, so key off the reason alone. Reachability is still the bar's
-                      can_edit gate above: a non-approver's sentence arrives on queued too and
-                      deliberately renders nowhere, there being no Submit button to explain. */}
+                      hold, so key off the reason alone. Since BUG-14-01 the bar mounts at every
+                      status, so a non-approver's sentence on queued now renders here too. */}
                   {inv.submit_blocked_reason != null && (
                     <div id={SUBMIT_REASON_ID} data-testid="submit-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
                       {inv.submit_blocked_reason}

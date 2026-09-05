@@ -487,9 +487,9 @@ func GetHandler(
 		// The reason is non-null EXACTLY when canEdit && !canRevalidate (i.e.
 		// validated/rejected). Not merely !canRevalidate: on queued/submitted/
 		// accepted/failed the copy would be a lie, since those statuses cannot be
-		// edited back to draft either. The SPA renders Re-validate disabled at every
-		// status ([actions-visibility]), so a null reason means there is no copy to
-		// show, never that the action is permitted.
+		// edited back to draft either. The SPA renders Re-validate at every status,
+		// disabled off !can_revalidate ([actions-visibility]), so a null reason means
+		// either the action is permitted (draft) or there is no honest copy for it.
 		resp := getResponse{
 			Invoice:                     inv,
 			RuleSetVersion:              inv.RuleSetVersion,

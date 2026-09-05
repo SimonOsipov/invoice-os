@@ -4826,3 +4826,174 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     ).toEqual(RAIL_ORDER)
   })
 })
+
+// RED specs (BUG-14-01, Mode A). The bar is gated `inv.can_edit && !editing`
+// (InvoiceDetail.tsx:875) today, so every spec below that needs it on a can_edit:false
+// record fails on a missing element, never an import/compile error.
+describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC-2/AC-3)', () => {
+  const ID = 'inv-stable-cluster-1'
+  const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected', 'queued', 'submitted', 'accepted', 'failed']
+  const EDITABLE_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected']
+  // The closed set AC-2/AC-3 are about -- the story's "stable control set" table.
+  const CONTROLS = ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']
+  // The disabled recipe .v2-btn-primary needs; detail-submit is the sibling to match.
+  const MUTED_PROPS = ['background', 'color', 'cursor', 'filter'] as const
+
+  it('the actions bar mounts on every status, never unmounting with can_edit', async () => {
+    const mounted: InvoiceStatus[] = []
+    for (const status of ALL_STATUSES) {
+      mockDetailFetch(detailRecord({ id: ID, status, can_edit: EDITABLE_STATUSES.includes(status) }))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      await screen.findByTestId('invoice-status-badge')
+      if (screen.queryByTestId('invoice-actions') != null) mounted.push(status)
+      cleanup()
+    }
+    // Equality is both the floor (seven renders really happened) and the claim.
+    expect(mounted, 'invoice-actions must mount at every status').toEqual(ALL_STATUSES)
+  })
+
+  it('Edit is present and disabled when can_edit is false', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+
+    const btn = screen.queryByTestId('edit-toggle') as HTMLButtonElement | null
+    expect(btn, 'Edit must mount even when can_edit is false').not.toBeNull()
+    expect((btn as HTMLButtonElement).disabled, 'present-and-disabled, never absent').toBe(true)
+  })
+
+  it('Edit is present and enabled when can_edit is true, and clicking it still enters the editor', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const btn = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
+    expect(btn.disabled, 'a blanket disabled would satisfy the row above and break Edit').toBe(false)
+    fireEvent.click(btn)
+    expect(screen.getByTestId('edit-invoice'), 'the click still opens the editor').toBeTruthy()
+  })
+
+  it('disabled Edit carries the same inline style layers as disabled Submit', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false, can_submit: false }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    const edit = screen.queryByTestId('edit-toggle') as HTMLButtonElement | null
+    const submit = screen.queryByTestId('detail-submit') as HTMLButtonElement | null
+    // Floor first: both buttons mount, and Submit's own recipe is really applied, so the
+    // equality below can never be satisfied by two blank styles.
+    expect(edit, 'Edit must mount to be compared').not.toBeNull()
+    expect(submit, 'Submit must mount to be compared').not.toBeNull()
+    const editStyle = (edit as HTMLButtonElement).style
+    const submitStyle = (submit as HTMLButtonElement).style
+    for (const prop of MUTED_PROPS) expect(submitStyle[prop], `disabled Submit sets ${prop}`).not.toBe('')
+    for (const prop of MUTED_PROPS) expect(editStyle[prop], `disabled Edit matches Submit's ${prop}`).toBe(submitStyle[prop])
+  })
+
+  // MUTATION ORACLE: an unconditional spread satisfies the parity row above while killing
+  // the enabled button's legitimate .v2-btn-primary:hover.
+  it('an enabled Edit carries none of the four muted style properties', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const edit = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
+
+    expect(edit.disabled).toBe(false)
+    for (const prop of MUTED_PROPS) expect(edit.style[prop], `enabled Edit must not set ${prop}`).toBe('')
+  })
+
+  it('a role that permits nothing yields six controls, all disabled', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        can_edit: false,
+        can_revalidate: false,
+        can_submit: false,
+        can_view_ubl: false,
+        can_approve: false,
+        can_reject: false,
+        can_resolve_outside: false,
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+
+    // Floor before any disabled claim -- an empty collection satisfies the loop below.
+    const resolved = CONTROLS.filter((id) => screen.queryAllByTestId(id).length === 1)
+    expect(resolved, 'each of the six resolves exactly once').toEqual(CONTROLS)
+    for (const id of CONTROLS) {
+      expect((screen.getByTestId(id) as HTMLButtonElement).disabled, `${id} must be disabled, not absent`).toBe(true)
+    }
+  })
+
+  it('the control set is identical at a can_edit-true and a can_edit-false status', async () => {
+    const collect = () => CONTROLS.filter((id) => screen.queryByTestId(id) != null)
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_submit: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    const editableSet = collect()
+    expect(editableSet, 'floor: the editable status shows all six').toEqual(CONTROLS)
+    cleanup()
+
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', can_edit: false, can_submit: false }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    expect(collect(), 'membership must not shift with status').toEqual(editableSet)
+  })
+
+  // The `!editing` half, which this story does not widen. Companion to 'Q12/AC3: the
+  // actions bar stays gated on !editing even with a banner holding the column open'.
+  it('the editor still owns the screen: clicking Edit unmounts the bar', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_edit: true, can_revalidate: true, can_submit: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+
+    expect(screen.queryByTestId('invoice-actions'), 'the !editing half survives the widen').toBeNull()
+  })
+
+  // Reshapes 'T7-1: resolve action renders inside the failed card, not invoice-actions',
+  // whose `invoice-actions is null` half goes vacuous once the bar always mounts.
+  it('reshaped: resolve-outside is not a descendant of invoice-actions', async () => {
+    mockDetailFetch(detailRecord({ status: 'failed', can_resolve_outside: true }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+
+    const resolveOutside = await screen.findByTestId('resolve-outside')
+    const bar = screen.queryByTestId('invoice-actions')
+    expect(bar, 'floor: the bar mounts on failed too, so this claim is not vacuous').not.toBeNull()
+    expect((bar as HTMLElement).contains(resolveOutside), 'the resolve action lives in the failed card').toBe(false)
+  })
+
+  // Reshapes 'T3/AC2: renders where the actions bar does not' -- same genre.
+  it('reshaped: view-ubl is not a descendant of invoice-actions', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_submit: false }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const viewUbl = await screen.findByTestId('view-ubl')
+    const bar = screen.queryByTestId('invoice-actions')
+    expect(bar, 'floor: the bar mounts on queued too, so this claim is not vacuous').not.toBeNull()
+    expect((bar as HTMLElement).contains(viewUbl), 'view-ubl is a sibling of the bar, not a child').toBe(false)
+  })
+
+  // Strengthens '17: detail-decision-actions is a sibling of view-ubl and invoice-actions
+  // ... never on can_edit', whose name already claimed exactly this while its second
+  // render asserted invoice-actions away.
+  it('all three action rows are siblings in one column on a can_edit:false invoice', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'queued', can_edit: false, can_approve: true, can_reject: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const decisionActions = await screen.findByTestId('detail-decision-actions')
+    const viewUbl = screen.getByTestId('view-ubl')
+    const bar = screen.queryByTestId('invoice-actions')
+    expect(bar, 'floor: all three rows mount on a can_edit:false invoice').not.toBeNull()
+    expect(decisionActions.parentElement).toBe(viewUbl.parentElement)
+    expect((bar as HTMLElement).parentElement, 'the bar shares the column, at every status').toBe(viewUbl.parentElement)
+  })
+})

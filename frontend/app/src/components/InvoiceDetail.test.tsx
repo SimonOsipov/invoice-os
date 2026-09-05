@@ -3251,16 +3251,21 @@ describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
     const approveBtn = await screen.findByTestId('detail-approve')
     const rejectBtn = screen.getByTestId('detail-reject')
 
+    // Reachability first: an absence-only claim would also pass on a page that dropped the
+    // reason altogether, which is the regression this suite exists to catch.
+    expect(approveBtn.getAttribute('title')).toBe(S)
+    expect(rejectBtn.getAttribute('title')).toBe(S)
     expect(approveBtn.hasAttribute('aria-describedby')).toBe(false)
     expect(rejectBtn.hasAttribute('aria-describedby')).toBe(false)
   })
 
-  it('13: a sentence shared by both controls prints nowhere in the document (AC-2)', async () => {
+  it('13: a sentence both controls carry prints nowhere in the document (AC-2)', async () => {
     mockDetailFetch(detailRecord({ id: ID, can_approve: false, approve_blocked_reason: S, can_reject: false, reject_blocked_reason: S }))
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
-    await screen.findByTestId('detail-approve')
+    const approveBtn = await screen.findByTestId('detail-approve')
 
+    expect(approveBtn.getAttribute('title'), 'floor: the sentence reached the page at all').toBe(S)
     expect(screen.queryAllByText(S)).toHaveLength(0)
     expect(document.body.textContent).not.toContain(S)
   })

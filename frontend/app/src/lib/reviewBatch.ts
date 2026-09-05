@@ -48,6 +48,7 @@ import {
   type InvoiceStatus,
   type RuleCount,
 } from './invoices'
+import { classifyPickedFile } from './importFlow'
 import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
@@ -1361,4 +1362,26 @@ export function fixEditPatch(
     patch[key] = value
   }
   return patch
+}
+
+// --- EXTR-15-08 (task-834): the review unit ---
+//
+// Which noun a review surface uses for its items. Derived from the batch FILENAME through
+// importFlow.ts's shipped classifier -- the SPA's one extension table -- never from the
+// batch's stored-document id, which the spreadsheet path sets too and so cannot
+// discriminate. UN-4 scans this function's body for exactly that; UN-5 scans the file for
+// a second extension table.
+export type ReviewUnit = 'spreadsheet' | 'document'
+
+export function batchUnit(batch: Pick<ImportBatch, 'filename'>): ReviewUnit {
+  // 'spreadsheet' is the fallback for a null/unrecorded/unclassifiable name, so a batch
+  // written before any of this reads byte-identically to how it reads today (UN-2).
+  return classifyPickedFile(batch.filename ?? '', '') === 'document' ? 'document' : 'spreadsheet'
+}
+
+// All-must-agree, and 'spreadsheet' for []. NOT runKindOf (importRun.ts:93), which is
+// first-classifiable-wins over PickedFile[] -- UN-3's mixed run is where the two diverge.
+// A mixed run is unreachable (addPickedFiles refuses one) but defined rather than a crash.
+export function runUnit(batches: Pick<ImportBatch, 'filename'>[]): ReviewUnit {
+  return batches.length > 0 && batches.every((b) => batchUnit(b) === 'document') ? 'document' : 'spreadsheet'
 }

@@ -310,7 +310,7 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
   // documentRun.ts's deadLetterRefusal owns every terminal sentence (EXTR-15-04). The e2e spec
   // cannot import it -- e2e/ has no dependency on frontend/app -- so it pins two literals and
   // this reads them back out of the owner. documentRun.test.ts's TS15-10b covers the shorter
-  // DEAD_LETTER_NEEDLE the same way, and discriminates it against all seven kinds.
+  // DEAD_LETTER_NEEDLE the same way, and discriminates it against the other six sentences.
   const OWNER = join(REPO_ROOT, 'frontend/app/src/lib/documentRun.ts')
   const owner = readFileSync(OWNER, 'utf8')
 

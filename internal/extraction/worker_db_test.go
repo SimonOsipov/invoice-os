@@ -2180,7 +2180,7 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 				t.Errorf("stored failure_kind = %q, want %q", got, tc.want)
 			}
 			if prior, dup := written[extraction.FailureKind(got)]; dup {
-				t.Errorf("stored failure_kind %q was already written by %s -- the four stages must be distinguishable", got, prior)
+				t.Errorf("stored failure_kind %q was already written by %s -- the six stages must be distinguishable", got, prior)
 			}
 			written[extraction.FailureKind(got)] = tc.name
 

@@ -7192,7 +7192,7 @@ test('EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not
   const job = jobs[EMPTY_DOCX_NAME]
   expect(job.state, 'a DOCX the reader refuses must dead-letter, not succeed').toBe('dead_lettered')
 
-  // EQUALITY, never "not pages_not_rendered": four other kinds satisfy that negation, and the
+  // EQUALITY, never "not pages_not_rendered": five other kinds satisfy that negation, and the
   // whole claim here is that the render stage never ran at all for a boxless format.
   expect(
     job.failure_kind,

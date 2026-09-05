@@ -198,7 +198,7 @@ func TestFailureKind_VocabularyIsExactlySix(t *testing.T) {
 }
 
 // EXTR-15-01 FK-10. Two packages ship a FailureKind and both travel under the wire key
-// failure_kind: this package's five on extraction_jobs, internal/submission's three on
+// failure_kind: this package's six on extraction_jobs, internal/submission's three on
 // invoices. The collision is deliberate (D-15) and safe only while the vocabularies are
 // disjoint -- a shared value would make a rendered label ambiguous.
 //

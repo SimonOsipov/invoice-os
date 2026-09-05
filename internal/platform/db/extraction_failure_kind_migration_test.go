@@ -215,6 +215,32 @@ func failureKindInList(section string) []string {
 	return out
 }
 
+// namedUp is one migration's filename and its already-split Up section.
+type namedUp struct {
+	name string
+	up   string
+}
+
+// pickLatestFailureKindDeclaration sorts by name and returns the last declaration plus every
+// candidate. Split out so a fixture can drive the sort: fs.Glob already returns sorted names,
+// so the directory scan alone could never catch a dropped Sort.
+func pickLatestFailureKindDeclaration(files []namedUp) (string, []string, []string) {
+	sorted := slices.Clone(files)
+	slices.SortFunc(sorted, func(a, b namedUp) int { return strings.Compare(a.name, b.name) })
+
+	var gotName string
+	var got, candidates []string
+	for _, f := range sorted {
+		kinds := failureKindInList(f.up)
+		if kinds == nil {
+			continue
+		}
+		candidates = append(candidates, f.name)
+		gotName, got = f.name, kinds
+	}
+	return gotName, got, candidates
+}
+
 // latestFailureKindDeclaration returns the lexicographically last migration whose Up section
 // declares the extraction_jobs failure_kind vocabulary, and that vocabulary. Filenames lead with
 // the goose stamp, so lexical order is apply order and the last declaration is the live one.
@@ -226,25 +252,21 @@ func latestFailureKindDeclaration(t *testing.T) (string, []string) {
 		t.Fatalf("glob *.sql in migrations.FS: %v", err)
 	}
 	// Population floor: a mis-resolved FS returning nothing would report every absence below
-	// clean. 58 files shipped when this was written.
+	// clean. 59 files shipped when this was written.
 	if len(names) <= 50 {
 		t.Fatalf("the migrations scan read %d .sql file(s), want more than 50", len(names))
 	}
-	slices.Sort(names)
 
-	var gotName string
-	var got []string
-	var candidates []string
+	files := make([]namedUp, 0, len(names))
 	for _, name := range names {
-		kinds := failureKindInList(auditEntitySectionOf(t, name, "Up"))
-		if kinds == nil {
-			continue
-		}
-		candidates = append(candidates, name)
-		gotName, got = name, kinds
+		files = append(files, namedUp{name: name, up: auditEntitySectionOf(t, name, "Up")})
 	}
-	if len(candidates) == 0 {
-		t.Fatalf("no migration Up declares an extraction_jobs failure_kind IN-list; the assertions below would be vacuous")
+	gotName, got, candidates := pickLatestFailureKindDeclaration(files)
+	// Two candidates, not one: with a single declaration "pick the last" is the only answer and
+	// a selector that ignored order would score clean on the real directory.
+	if len(candidates) < 2 {
+		t.Fatalf("the scan found %d declaration(s) (%v); with fewer than two, picking the last proves nothing",
+			len(candidates), candidates)
 	}
 	// The anchor matches real shipped SQL, not only this test's fixtures.
 	if !slices.Contains(candidates, layoutNotWrittenPredecessor) {
@@ -381,6 +403,17 @@ func TestExtractionFailureKind_LayoutNotWrittenMigrationRoundTrips(t *testing.T)
 		t.Errorf("after Down the job still holds failure_kind %q, want NULL", *kind)
 	}
 
+	// The Down's NO FORCE must be paired: dropping only the restoring FORCE leaves extraction_jobs
+	// cross-tenant readable by its owner, and every assertion above still passes.
+	var forceSec bool
+	if err := tx.QueryRow(ctx,
+		`SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.extraction_jobs'::regclass`).Scan(&forceSec); err != nil {
+		t.Fatalf("read extraction_jobs relforcerowsecurity after the Down: %v", err)
+	}
+	if !forceSec {
+		t.Errorf("after Down extraction_jobs relforcerowsecurity = false, want true -- the Down's NO FORCE is still in effect and tenant isolation is off")
+	}
+
 	afterDown := failureKindCheckValues(t, ctx, tx)
 	if slices.Contains(afterDown, layoutNotWrittenKind) {
 		t.Errorf("after Down the CHECK still admits %v, want the five-value list back", afterDown)
@@ -440,22 +473,39 @@ ALTER TABLE extraction_jobs ADD COLUMN failure_kind text CHECK (failure_kind IS 
 -- +goose Down
 ALTER TABLE extraction_jobs DROP COLUMN failure_kind;
 `
-	files := []struct{ name, sql string }{
-		{"20260904154655_a.sql", fiveOnly},
-		{"20260905120000_b.sql", sixUpFiveDown},
+	// Deliberately NOT in stamp order, and the later stamp is not last in the slice: a selector
+	// that took the last ENTRY would settle on the five-value file and red below. The real
+	// directory cannot catch that -- fs.Glob returns names already sorted.
+	unrelated := "-- +goose Up\nSELECT 1;\n-- +goose Down\nSELECT 1;\n"
+	files := []namedUp{
+		{"20260905120000_b.sql", upOfFixture(t, sixUpFiveDown)},
+		{"20260904154655_a.sql", upOfFixture(t, fiveOnly)},
+		{"20260101000000_unrelated.sql", upOfFixture(t, unrelated)},
 	}
-	var lastName string
-	var last []string
-	for _, f := range files {
-		body, ok := auditEntityUpOf(f.sql)
-		if !ok {
-			t.Fatalf("fixture %s carries both goose markers; the splitter did not find them", f.name)
-		}
-		if kinds := failureKindInList(body); kinds != nil {
-			lastName, last = f.name, kinds
-		}
-	}
+	lastName, last, candidates := pickLatestFailureKindDeclaration(files)
 	if lastName != "20260905120000_b.sql" || len(last) != 6 {
-		t.Errorf("the scan settled on %s with %v, want the later file's six-value list", lastName, last)
+		t.Errorf("the scan settled on %s with %v, want 20260905120000_b.sql's six-value list", lastName, last)
 	}
+	// Both declarations are seen; the unrelated file is not one of them.
+	if !slices.Equal(candidates, []string{"20260904154655_a.sql", "20260905120000_b.sql"}) {
+		t.Errorf("candidates = %v, want both declarations in stamp order and nothing else", candidates)
+	}
+
+	// An empty scan reads as no declaration, never as a clean match.
+	if name, kinds, cand := pickLatestFailureKindDeclaration(nil); name != "" || kinds != nil || cand != nil {
+		t.Errorf("an empty scan yielded (%q, %v, %v), want no declaration", name, kinds, cand)
+	}
+	if _, _, cand := pickLatestFailureKindDeclaration([]namedUp{files[2]}); cand != nil {
+		t.Errorf("a directory with no declaration yielded candidates %v, want none", cand)
+	}
+}
+
+// upOfFixture is auditEntityUpOf with the both-markers precondition asserted.
+func upOfFixture(t *testing.T, sql string) string {
+	t.Helper()
+	up, ok := auditEntityUpOf(sql)
+	if !ok {
+		t.Fatalf("fixture carries both goose markers; the splitter did not find them")
+	}
+	return up
 }

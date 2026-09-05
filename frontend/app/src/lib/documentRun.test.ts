@@ -1100,7 +1100,7 @@ describe('newestJob — a created_at tie is broken by first occurrence, not last
 })
 
 // ==========================================================================================
-// EXTR-15-04 (task-830) — RED specs, Mode A. Six terminal sentences that say what was tried
+// EXTR-15-04 (task-830) — RED specs, Mode A. Seven terminal sentences that say what was tried
 // and what to do next. Written BEFORE deadLetterRefusal/pollBudgetRefusal are widened; every
 // row here fails on its own assertion against the shipped one-sentence-fits-all bodies.
 // ==========================================================================================
@@ -1224,7 +1224,7 @@ describe('deadLetterRefusal — one sentence per failure kind (TS15-1, AC-1)', (
   it('TS15-1: the kind list is the LAST migration’s CHECK set, and it yields seven distinct sentences that echo no identifier', () => {
     // Floor first: an empty or drifted kind list would make every row below vacuous.
     const names = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
-    // Population floor: a mis-resolved path returning [] would report all-clear. 58 shipped.
+    // Population floor: a mis-resolved path returning [] would report all-clear. 59 shipped.
     expect(names.length, 'the migrations scan read nothing').toBeGreaterThan(50)
     const bodies = names.map((name) => ({ name, sql: readFileSync(path.join(MIGRATIONS_DIR, name), 'utf8') }))
 

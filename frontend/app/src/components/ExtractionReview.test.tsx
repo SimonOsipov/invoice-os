@@ -676,7 +676,7 @@ describe('the state ladder', () => {
     expect(screen.queryByText(STILL_READING), 'a settled job claimed to be still reading').toBeNull()
     expect(screen.queryByText(COULD_NOT_READ), 'a settled job claimed it could not be read').toBeNull()
     // Retargeted with the branch (EXTR-15-04): once COULD_NOT_READ is gone from the shell the
-    // row above can only ever pass, so the absence is re-floored on the six live sentences.
+    // row above can only ever pass, so the absence is re-floored on the seven live sentences.
     const settledText = root().textContent ?? ''
     expect(
       allSentences().filter(([, s]) => settledText.includes(s)).map(([k]) => k),

@@ -973,7 +973,9 @@ describe('InvoiceDetail submit control ([gates-on-the-wire], [no-bulk-on-detail]
     fireEvent.click(screen.getByTestId('detail-submit-confirm'))
 
     const skip = await screen.findByTestId('detail-submit-skipped')
-    expect(skip.textContent).toContain('Waiting on approval — an approver must approve it first')
+    expect(skip.textContent).toContain(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
     expect(skip.textContent).not.toContain('awaiting_approval')
     expect(screen.queryByTestId('detail-submit-error')).toBeNull()
     expect(screen.getByTestId('detail-submit')).toBeTruthy()

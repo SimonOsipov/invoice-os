@@ -2403,8 +2403,27 @@ describe('skipReasonLabel', () => {
   it('I-skip-1: skipReasonLabel maps all three reachable reasons and passes others through', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
-    expect(skipReasonLabel('awaiting_approval')).toBe('Waiting on approval — an approver must approve it first')
+    expect(skipReasonLabel('awaiting_approval')).toBe(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
     expect(skipReasonLabel('wat')).toBe('wat')
+
+    // Three tokens, three distinct non-empty sentences: a map collapsed onto one shared
+    // string would still satisfy the three assertions above once they all name it.
+    const labels = ['not_validated', 'duplicate_request', 'awaiting_approval'].map(skipReasonLabel)
+    expect(labels).toHaveLength(3)
+    expect(labels.filter((l) => l.length > 0)).toHaveLength(3)
+    expect(new Set(labels).size).toBe(3)
+  })
+
+  // The server owns this sentence: awaitingApprovalReason, internal/invoice/handlers.go. Its
+  // Go half (TestAwaitingApprovalReason_MatchesTheSPASkipLabel) never runs on a frontend-only
+  // PR -- CI's `go` path filter excludes frontend/**.
+  it('the awaiting-approval label is the server sentence, byte for byte', () => {
+    expect(skipReasonLabel('awaiting_approval')).toBe(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
+    expect(skipReasonLabel('not_validated')).not.toBe(skipReasonLabel('awaiting_approval'))
   })
 })
 
@@ -2437,6 +2456,21 @@ describe('singleSubmitOutcome', () => {
 
     expect(result.kind).not.toBe('queued')
     expect(result).toEqual({ kind: 'skipped', message: skipReasonLabel('duplicate_request') })
+  })
+
+  // The two cases above use skipReasonLabel as their own oracle, so neither can catch the
+  // label moving. This one spells the server sentence.
+  it('singleSubmitOutcome: an awaiting_approval item carries the server sentence verbatim', () => {
+    const items: BatchSubmitResultItem[] = [
+      { invoice_id: 'inv-1', enqueued: false, status: 'validated', reason: 'awaiting_approval' },
+    ]
+
+    const result = singleSubmitOutcome('inv-1', items)
+
+    expect(result).toEqual({
+      kind: 'skipped',
+      message: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    })
   })
 
   it('singleSubmitOutcome: a non-boolean truthy enqueued is not queued', () => {
@@ -3938,12 +3972,15 @@ describe('no production source under src/ authors a submit-blocked sentence (APP
     expect(productionOnly('can sub' + 'mit an invoice to NRS/MBS')).toEqual([])
   })
 
-  it('the awaiting-approval sentence appears in no production file either (APPR-08-05)', () => {
+  it('the awaiting-approval sentence appears in exactly one production file -- the sanctioned mirror', () => {
     // awaitingApprovalReason (handlers.go). Split on either side of the em dash, never
-    // through it. Deliberately NOT the same string as SKIP_REASON_LABELS.awaiting_approval,
-    // which is the SPA's own label for the batch endpoint's machine skip code.
-    expect(productionOnly('This invoice is waiting on appro' + 'val')).toEqual([])
-    expect(productionOnly('it can be sub' + 'mitted once an approver approves it')).toEqual([])
+    // through it. SKIP_REASON_LABELS.awaiting_approval now carries those bytes verbatim under
+    // a two-sided guard, so lib/invoices.ts is the one file allowed to spell them; every other
+    // production file is still forbidden to author the server's copy. toEqual, not a filter:
+    // deleting the mirror empties the array and reds this too.
+    const MIRROR = ['lib/invoices.ts']
+    expect(productionOnly('This invoice is waiting on appro' + 'val')).toEqual(MIRROR)
+    expect(productionOnly('it can be sub' + 'mitted once an approver approves it')).toEqual(MIRROR)
   })
 })
 

@@ -64,6 +64,10 @@ type createRequest struct {
 	VAT           *string       `json:"vat"`
 	Total         *string       `json:"total"`
 	LineItems     []lineItemReq `json:"line_items"`
+	// Appended last so the mirrored SPA/e2e types keep every existing key's
+	// position; absent and explicit null are both "no document"
+	// (TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument).
+	SourceDocumentID *string `json:"source_document_id"`
 }
 
 // transitionReq is the POST /v1/invoices/{id}/transitions wire body ([D12]:
@@ -150,7 +154,7 @@ type listItem struct {
 // this handler does not reject a caller-supplied value with a 400, it is
 // silently superseded. Architect ruling (task-293 AC #8): supplier identity
 // is the firm's own data, never the caller's wire body, and a 400 here would
-// break e2e/api/client.ts's CreateInvoiceInput, which has sent these two
+// break e2e/api/client.ts's InvoiceCreateInput, which has sent these two
 // fields since M4-07-05 -- override keeps that harness green while closing
 // the false supplier-tin-format violation for API-created entities.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, error), log *slog.Logger) http.HandlerFunc {
@@ -175,6 +179,18 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 		if req.InvoiceNumber == "" {
 			writeError(w, http.StatusBadRequest, "invoice_number is required")
 			return
+		}
+		// Named 400 rather than the store's 22P02 -> ErrValidation, which names
+		// nothing (TestCreateHandler_MalformedSourceDocumentID400). A document
+		// belonging to another tenant is NOT checked here: the composite FK
+		// invoices_tenant_source_document_fk refuses it inside the tx, so the
+		// answer cannot become an existence oracle
+		// (TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence).
+		if req.SourceDocumentID != nil {
+			if _, err := uuid.Parse(*req.SourceDocumentID); err != nil {
+				writeError(w, http.StatusBadRequest, "source_document_id must be a well-formed uuid")
+				return
+			}
 		}
 
 		lineItems := make([]LineItemInput, len(req.LineItems))
@@ -201,6 +217,8 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 			VAT:           req.VAT,
 			Total:         req.Total,
 			LineItems:     lineItems,
+			// SourceRows stays nil: a hand-typed invoice has no sheet rows.
+			SourceDocumentID: req.SourceDocumentID,
 		})
 		if err != nil {
 			status, msg := statusForErr(err)

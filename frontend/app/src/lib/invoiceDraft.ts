@@ -118,10 +118,16 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
 
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
 // object-literal insertion order is what crosses the network. It follows createRequest's
-// own field order (handlers.go:51-64) and InvoiceCreateInput's declaration order.
+// own field order (handlers.go's `type createRequest`) and InvoiceCreateInput's
+// declaration order.
+//
+// sourceDocumentId (EXTR-15-06) is a third, OPTIONAL parameter rather than a field on
+// Draft: the id is recorded by the hand-off, never typed by the operator, and Draft holds
+// only what the operator types. Omitted => the key never crosses the wire (SD-8).
 export function draftToCreateRequest(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'>,
+  sourceDocumentId?: string,
 ): InvoiceCreateInput {
   const amounts = draft.items.map(lineAmount)
   const lineItems: LineItemCreateInput[] = draft.items.map((item, index) => {
@@ -156,6 +162,9 @@ export function draftToCreateRequest(
     vat: vat === null ? null : renderScaled(vat),
     total: total === null ? null : renderScaled(total),
     line_items: lineItems,
+    // Spread, not `source_document_id: sourceDocumentId`: an explicit `undefined` would
+    // still make the key PRESENT, and SD-8 reads presence with `in`, not the value.
+    ...(sourceDocumentId === undefined ? {} : { source_document_id: sourceDocumentId }),
   }
 }
 

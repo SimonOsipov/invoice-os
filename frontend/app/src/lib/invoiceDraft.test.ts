@@ -250,7 +250,7 @@ describe('draftToCreateRequest: wire key order', () => {
     // apiFetch JSON.stringifies the returned object verbatim, so object-literal
     // insertion order IS what crosses the network -- the mapper's own header comment
     // (invoiceDraft.ts:111-113) states the return literal is deliberately ordered to
-    // match createRequest's declaration order (handlers.go:51-64). No other DRAFT-*
+    // match createRequest's declaration order (handlers.go's `type createRequest`). No other DRAFT-*
     // spec pins this: they all read named properties, which is order-independent.
     const draft: Draft = {
       ...baseDraft,
@@ -560,33 +560,25 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
-// RED specs (EXTR-15-06, task-832, Mode A) -- SD-8 / AC-8.
+// EXTR-15-06, task-832 -- SD-8 / AC-8.
 //
-// draftToCreateRequest takes two arguments today; the recorded document id arrives as a
-// THIRD, optional one, so every shipped call site and every DRAFT-* fixture above keeps
-// compiling. The cast below is what lets `pnpm typecheck` stay green while the assertions
-// fail honestly -- DELETE IT once the signature widens.
+// The recorded document id is draftToCreateRequest's THIRD, optional parameter, so every
+// shipped call site and every DRAFT-* fixture above keeps compiling.
 //
 // `Draft` was deliberately narrowed (types.ts:79-81) to fields that have a column and a wire
 // key; a document id is recorded by the hand-off, not typed by the operator, so it does not
 // belong on that type. If EXTR-15-07 records it on `Draft` instead, this spec is what has to
 // change -- the decision is stated here rather than assumed.
-const draftToCreateRequestWithDocument = draftToCreateRequest as unknown as (
-  draft: Draft,
-  entity: Pick<Entity, 'id' | 'name' | 'tin'>,
-  sourceDocumentId?: string,
-) => Record<string, unknown>
-
 const SD8_DOCUMENT_ID = '7f1c2a90-1c4b-4f0e-9f2a-2c0f5f3a11bd'
 
 describe('draftToCreateRequest: source_document_id (EXTR-15-06)', () => {
   it('SD-8 a recorded document id crosses the wire; none omits the key entirely', () => {
-    const withDocument = draftToCreateRequestWithDocument(baseDraft, baseEntity, SD8_DOCUMENT_ID)
+    const withDocument = draftToCreateRequest(baseDraft, baseEntity, SD8_DOCUMENT_ID)
     expect(withDocument.source_document_id).toBe(SD8_DOCUMENT_ID)
 
     // Absent, not null: JSON.stringify drops `undefined`, so `in` is the only honest oracle
     // for "the key never crossed".
-    const withoutDocument = draftToCreateRequestWithDocument(baseDraft, baseEntity)
+    const withoutDocument = draftToCreateRequest(baseDraft, baseEntity)
     expect('source_document_id' in withoutDocument).toBe(false)
 
     // Control: the mapper really ran in the second call. Without it the `in` check above
@@ -599,7 +591,7 @@ describe('draftToCreateRequest: source_document_id (EXTR-15-06)', () => {
     // The header note pins the return literal to createRequest's declaration order, and an
     // additive wire field is appended (handlers.go:235-240 states that convention for
     // getResponse). DRAFT-10 above still pins the 12-key order when no document was recorded.
-    const result = draftToCreateRequestWithDocument(baseDraft, baseEntity, SD8_DOCUMENT_ID)
+    const result = draftToCreateRequest(baseDraft, baseEntity, SD8_DOCUMENT_ID)
 
     expect(Object.keys(result)).toEqual([
       'entity_id',

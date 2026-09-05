@@ -1,7 +1,7 @@
-// fingerprint.go: the layout fingerprint -- which anchor labels appear on page 1, in what
-// reading order, and in which third of the page. Never supplier identity: that is not known
-// until after extraction, and one supplier commonly has several layouts. The same page-1
-// observations are also kept whole (AnchorObservations) and stored as
+// fingerprint.go: two page-1 layout fingerprints -- Fingerprint (labels, reading order, page
+// third) and BoxlessFingerprint (labels, document order, label placement). Never supplier
+// identity: unknown until after extraction; one supplier often has several layouts. Page-1
+// observations are kept whole (AnchorObservations) and stored as
 // extraction_jobs.layout_anchors, so a later correction can name the anchor it sat under.
 package extraction
 
@@ -42,8 +42,8 @@ func CollectTokens(dst *[]TokenPage) func(Page) error {
 	}
 }
 
-// FingerprintVersion prefixes every fingerprint. Bumping it makes every stored rule stop
-// matching, which is the intended invalidation: no migration, no stale-rule window.
+// FingerprintVersion prefixes only Fingerprint's v1 hash. Bumping it invalidates every stored
+// v1 rule; BoxlessFingerprintVersion is the separate lever for b1 rules.
 const FingerprintVersion = "v1"
 
 // anchorMatcher is one anchorLexicon pattern, compiled.

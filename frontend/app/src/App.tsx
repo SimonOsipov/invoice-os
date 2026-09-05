@@ -318,7 +318,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname) ?? 'dashboard')),
+    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname)?.view ?? 'dashboard')),
   )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
@@ -520,7 +520,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.
   useEffect(() => {
-    const onPopState = () => setView(parseRoute(window.location.pathname) ?? 'dashboard')
+    const onPopState = () => setView(parseRoute(window.location.pathname)?.view ?? 'dashboard')
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])

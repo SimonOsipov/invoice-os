@@ -79,6 +79,7 @@ import {
   PERSONAS,
   type CorrectionResponse,
   type ExtractionDetail,
+  type ExtractionJob,
   type ExtractionJobsResponse,
   type ExtractionReason,
   type ExtractionRegion,
@@ -1944,6 +1945,43 @@ function uniqueGarbageBytes(): Buffer {
   return Buffer.concat([Buffer.from('not a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// The canonical DOCX type, on both sides of the wire: ACCEPTED_PICKED_TYPES (lib/importFlow.ts)
+// and acceptedDocumentTypes (internal/extraction/classify.go) carry this exact spelling.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+// A byte-for-byte copy of internal/extraction/testdata/invoice.docx, the fixture the Go
+// golden pins (corpus_wired_db_test.go: ASC-2026-0919 / 2026-08-14 / 4300.00). That golden
+// was recorded through a LOCAL docling; EXTR15-E2E-03 is the first read of these bytes by
+// the DEPLOYED sidecar.
+const GOLDEN_INVOICE_DOCX = readFileSync(join(DOCUMENT_FIXTURES, 'golden_invoice.docx'))
+
+// Fresh bytes per pick, same permanent-enqueue-key reason as uniquePdfBytes() -- but a zip
+// cannot take a trailing comment the way a PDF can. What moves the content hash here is the
+// zip's OWN end-of-central-directory comment: the last 22 bytes are the EOCD record, its
+// comment-length field is the final two, and every reader finds the EOCD by scanning back for
+// its signature. The archive stays readable and every member's offset is untouched.
+// deployedProofGuards.test.ts unzips a freshened copy and reads the golden's number back out.
+function uniqueGoldenDocxBytes(): Buffer {
+  const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
+  const out = Buffer.concat([GOLDEN_INVOICE_DOCX, comment])
+  out.writeUInt16LE(comment.length, GOLDEN_INVOICE_DOCX.length - 2)
+  return out
+}
+
+// A well-formed but EMPTY zip named *.docx -- invoice-surfaces.spec.ts's extr09Docx recipe,
+// rebuilt here because importing it would re-register that file's own tests. 22 bytes of EOCD
+// (PK\x05\x06 then 16 zero bytes) plus a comment that carries the uniqueness. A DOCX is
+// boxless, so the worker skips the render entirely (EXTR-15-02) and this reaches the reader,
+// which cannot convert it: docling answers 422 and the job dead-letters at text_not_read.
+function uniqueEmptyDocxBytes(): Buffer {
+  const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
+  const out = Buffer.alloc(22 + comment.length)
+  out.set([0x50, 0x4b, 0x05, 0x06], 0)
+  out.writeUInt16LE(comment.length, 20)
+  out.set(comment, 22)
+  return out
+}
+
 // The step strip carries no testid, so it is anchored on the 'Import' chip label E2E-10
 // above established is unique here: label span -> chip div -> strip, one chip per direct
 // child div. Self-checking — a wrong ancestor resolves zero chips.
@@ -2541,6 +2579,18 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
 // documentRun.test.ts's TS15-10b is this literal's only local oracle.
 const DEAD_LETTER_NEEDLE = 'it may be damaged, or protected by a password'
 
+// EXTR-15-12 (T1). The WHOLE pages_not_rendered sentence, copied from its sole owner,
+// documentRun.ts's deadLetterRefusal. deployedProofGuards.test.ts reads that function's
+// `case 'pages_not_rendered'` return and fails if this string is not byte-identical.
+const DEAD_LETTER_SENTENCE =
+  'This file is a PDF, and the reader could not open it — it may be damaged, or protected by a password. Enter this invoice manually to carry on.'
+
+// The opening of the kind-less sentence -- deadLetterRefusal's `default` arm, which is what
+// renders when failure_kind never reaches the wire, and the only arm that puts River's own
+// last_error in front of a person. Asserting its ABSENCE is what makes T1 a claim about the
+// kind and not merely about some long reason. Guarded against the same source.
+const GENERIC_FAILURE_OPENING = 'Reading this document failed'
+
 test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating the card', async ({ page }, testInfo) => {
   // Upload+enqueue, ~20-40s River backoff to dead-letter (attempt^4s: 1s then 16s), two
   // widest-first sweeps, then the held release -- matches EXTR09-E2E-01's cold-fleet budget.
@@ -2665,6 +2715,17 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
       DEAD_LETTER_NEEDLE,
       { timeout: 90_000 },
     )
+
+    // T1 (EXTR-15-12): the WHOLE sentence, not the fragment above -- a fragment cannot tell a
+    // truncated render from a complete one. And the kind-less sentence must be absent: it is
+    // the arm that renders when failure_kind is null, and the only one that would put River's
+    // raw pdfium error in front of a person.
+    await expect(badRow, 'the row must carry the whole pages_not_rendered sentence').toContainText(DEAD_LETTER_SENTENCE)
+    await expect(
+      badRow,
+      'the row fell back to the kind-less sentence -- failure_kind did not reach this render',
+    ).not.toContainText(GENERIC_FAILURE_OPENING)
+
     longSweep = await sweepWidths('long-label (dead-lettered)')
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
@@ -6451,6 +6512,17 @@ test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll exte
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// === EXTR-15 · the deployed proof: the terminal states and the hand-off =================
+//
+// GATE-ONLY, every test from here to the EXTR-18-07 marker below. Topology specs run only on
+// the deploy gate and this PR's environment does not exist while the PR is a draft, so none
+// of them has a local oracle beyond `typecheck` + `playwright test --list`.
+//
+// deployedProofGuards.test.ts scans exactly this span -- marker to marker -- and requires
+// every `buffer:` argument inside it to be one of the fresh-per-call fixture helpers. The
+// EXTR-18-07 block below carries the same rule under a narrower allowlist; this span is
+// separate because two of its documents are DOCX, which no unique*PdfBytes() helper mints.
+//
 // --- EXTR-15-07 (task-833) · the hand-off row's geometry --------------------------------
 //
 // AC-10, authored in Mode A and UNEXECUTED here: topology specs run only on the deploy
@@ -6488,8 +6560,9 @@ function sameRect(a: Rect, b: Rect, slackPx = 1): boolean {
 test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutter holds at every width', async ({
   page,
 }, testInfo) => {
-  // Upload + enqueue + River's attempt^4s backoff to dead-letter, then four widths.
-  test.setTimeout(300_000)
+  // Upload + enqueue + River's attempt^4s backoff to dead-letter, four widths, then AC-5's
+  // hand-off journey (a filing plus an invoice-detail load) on the far side of all of it.
+  test.setTimeout(420_000)
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -6499,12 +6572,23 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
   await selectEntity(page, entity.name)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  // Registered before the pick, same reason as EXTR09-E2E-01's own waiter: the upload can
+  // resolve before an awaited setInputFiles returns. AC-5 below compares the filed invoice's
+  // source document against THIS id.
+  const documentPost = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/submission/v1/documents'),
+    { timeout: 120_000 },
+  )
   // *.pdf bytes that are not a PDF: pdfium refuses it on all three attempts and the worker
   // dead-letters deterministically (uniqueGarbageBytes' own doc comment).
   await page
     .locator('input[type="file"]#pf-import-file')
     .setInputFiles({ name: 'handoff-dead-letter.pdf', mimeType: 'application/pdf', buffer: uniqueGarbageBytes() })
   await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const handOffDocumentId = ((await (await documentPost).json()) as { document_id?: string }).document_id
+  expect(handOffDocumentId, 'the refused document must still be stored').toMatch(/^[0-9a-fA-F-]{36}$/)
 
   const card = page.getByTestId('document-failures-card')
   await expect(card, 'an all-failed document run must land on the failures card').toBeVisible({ timeout: 180_000 })
@@ -6591,10 +6675,330 @@ test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutt
     expect(s.clearance, `the control must not overflow the row's right content edge at ${s.width}px`).toBeGreaterThanOrEqual(-0.5)
   }
 
+  // --- AC-5 (EXTR-15-12): the single-document hand-off, end to end -----------------------
+  //
+  // The geometry above proved the control is THERE. This walks it: enabled under a persona
+  // whose entity is resolved, then the manual form, then a real filing, then the document
+  // reappearing on the invoice's own detail screen. Appended to this test rather than given
+  // its own so the ~3-minute dead-letter wait is paid once.
+  await expect(button, 'a resolved entity must arm the hand-off, not merely render it').toBeEnabled()
+  await button.click()
+
+  const handOffNumber = `EXTR15-HO-${Date.now()}`
+  const invoiceId = await fileHandOffDraft(page, handOffNumber)
+
+  // The affirmation is the server's own row, the same one every other filing path lands on.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(handOffNumber)
+
+  // Equality against the file that was uploaded, never "a card is present": the card renders
+  // for an invoice with NO document too, and says so.
+  const sourceCard = page.getByTestId('source-document-card')
+  await expect(sourceCard, "the hand-off's document must reach the invoice it produced").toContainText(
+    'handoff-dead-letter.pdf',
+  )
+  await expect(page.getByTestId('view-source-document'), 'the stored file must be openable from here').toHaveCount(1)
+  await expect(
+    page.getByTestId('why-no-source-document'),
+    'the card took its no-document arm -- source_document_id never crossed the create wire',
+  ).toHaveCount(0)
+
+  // And the wire behind it, read with this run's own token: the card renders a filename, and
+  // two documents in one tenant can share one.
+  const source = await readSourceDocument(token, invoiceId)
+  expect(source.document, 'the source-document read returned no document for a hand-off invoice').not.toBeNull()
+  expect(source.document!.id, "the invoice names a document that is not the one that failed").toBe(handOffDocumentId)
+
   await testInfo.attach('handoff-row-geometry.json', {
     body: JSON.stringify(samples, null, 2),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-15-12 (task-836) · the pipeline, proved on the deployed build -----------------
+//
+// Three claims EXTR-15 makes that have no honest unit oracle, and can only be settled here:
+//   1. the DEPLOYED sidecar reads a real DOCX -- the Go golden was recorded through a LOCAL
+//      docling, and this project has already been burned by that once (a local canary read
+//      55 OCR tokens where Railway read zero);
+//   2. a hand-off from a MULTI-document run attaches the row's own document -- every other
+//      guard on this is a mocked fixture, and a mock cannot catch an id-mapping defect
+//      because the mock is where the id mapping is asserted;
+//   3. a boxless format that the reader cannot open dead-letters at text_not_read, the kind
+//      whose sentence EXTR-15-04 wrote.
+
+/** Fills the manual form the hand-off lands on, files it, and returns the new invoice's id. */
+async function fileHandOffDraft(page: Page, invoiceNumber: string): Promise<string> {
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+
+  // A fresh number per call: defaultDraft seeds a FIXED literal and
+  // (tenant_id, entity_id, invoice_number) is unique, so a Playwright retry would 409 on the
+  // row its own first attempt filed.
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  await expect(fileBtn, 'a resolved entity and a non-blank number must arm the primary').toBeEnabled()
+
+  const [res] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+      { timeout: 60_000 },
+    ),
+    fileBtn.click(),
+  ])
+  expect(res.status(), 'the hand-off filing must be a 201').toBe(201)
+  const id = ((await res.json()) as { id?: string }).id
+  expect(id, 'the create response carried no invoice id').toMatch(/^[0-9a-fA-F-]{36}$/)
+
+  await expect(page.getByTestId('invoice-detail'), 'a filed hand-off must land on the real invoice detail').toBeVisible({
+    timeout: 60_000,
+  })
+  return id as string
+}
+
+// A narrow local type over GET /v1/invoices/{id}/source-document rather than a client.ts
+// helper: frontend/app already mirrors this body key-for-key under wireMirrors.test.ts, and a
+// second typed mirror here would be one more thing to keep in step for one assertion.
+interface SourceDocumentBody {
+  invoice_id: string
+  source_rows: number[] | null
+  document: { id: string; filename: string | null } | null
+}
+
+async function readSourceDocument(token: string, invoiceId: string): Promise<SourceDocumentBody> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/invoices/${invoiceId}/source-document`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(res.status, `GET /v1/invoices/${invoiceId}/source-document`).toBe(200)
+  return (await res.json()) as SourceDocumentBody
+}
+
+/**
+ * Runs N documents through the wizard in ONE run and returns each one's stored id and the job
+ * it settled on. Asserts NO landing: the three tests below each land somewhere different (the
+ * invoice detail, the review batch surface, the failures card), so a helper that picked one
+ * would be wrong for the other two — each states its own.
+ */
+async function runDocuments(
+  page: Page,
+  label: string,
+  files: { name: string; mimeType: string; buffer: Buffer }[],
+): Promise<{ token: string; documentIds: Record<string, string>; jobs: Record<string, ExtractionJob> }> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  const documentIds: Record<string, string> = {}
+  // Recorded INSIDE the POST route, EXTR10-E2E-02's own idiom: the handler completes before
+  // the app can see the response, so no poll for this document can precede the assignment. A
+  // page.on('response') listener cannot give that ordering.
+  await page.route('**/api/submission/v1/documents', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const body = requestBody(route.request())
+    const res = await route.fetch()
+    const text = await res.text()
+    try {
+      const parsed = JSON.parse(text) as { document_id?: string }
+      // The multipart body carries `filename="…"` in ASCII near its head, so this resolves
+      // even though the rest of it is binary.
+      const named = files.find((f) => body.includes(f.name))
+      if (named && typeof parsed.document_id === 'string') documentIds[named.name] = parsed.document_id
+    } catch {
+      /* fulfil unchanged; the poll below fails loudly if the upload really broke */
+    }
+    await route.fulfill({ response: res, body: text })
+  })
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect
+    .poll(() => Object.keys(documentIds).length, {
+      message: `not every document reached storage (${JSON.stringify(documentIds)})`,
+      timeout: 120_000,
+    })
+    .toBe(files.length)
+
+  const jobs: Record<string, ExtractionJob> = {}
+  for (const f of files) {
+    await expect
+      .poll(
+        async () => {
+          const { jobs: found } = await getExtractions(token, documentIds[f.name])
+          const job = found[0]
+          if (!job) return 'no job for this document yet'
+          jobs[f.name] = job
+          // 'failed' is NOT terminal — River retries it; only succeeded/dead_lettered end it.
+          return job.state === 'succeeded' || job.state === 'dead_lettered' ? 'terminal' : job.state
+        },
+        { message: `${f.name}'s extraction never reached a terminal state`, timeout: 240_000, intervals: [1_000] },
+      )
+      .toBe('terminal')
+  }
+  return { token, documentIds, jobs }
+}
+
+const GOLDEN_DOCX_NAME = 'golden_invoice.docx'
+const EMPTY_DOCX_NAME = 'empty_container.docx'
+
+test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling', async ({
+  page,
+}) => {
+  // Two documents through a cold sidecar, then a filing and a detail load.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  const scannedName = 'scanned_invoice.pdf'
+  const denseName = 'dense_invoice.pdf'
+  // Both quarantine, for DIFFERENT measured reasons, and neither needs a new artifact: the
+  // scan settles document_text_layer = unreadable with no number at all, and the dense page's
+  // label OCRs as "INV0ICE NO:" so its invoice_number settles missing (D-33). They carry
+  // different filenames and different document ids, so the two rows are genuinely
+  // distinguishable — a pair whose items are naturally equal proves nothing.
+  const { token, documentIds } = await runDocuments(page, 'EXTR-15-12 two documents', [
+    { name: scannedName, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+  ])
+
+  expect(
+    documentIds[scannedName],
+    'both files resolved to ONE stored document -- the pair cannot discriminate anything below',
+  ).not.toBe(documentIds[denseName])
+
+  // (a) routeAfterRun cannot take the 'single' arm on a two-file run (lib/importRun.ts), so
+  // the landing is the review surface carrying EVERY batch id. The hash is where that id list
+  // is observable: App.tsx mirrors reviewBatchIds into it, one id per batch.
+  await expect
+    .poll(() => new URL(page.url()).hash, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+
+  // (b) both documents reach the Unreadable tab, told apart by their own file labels. A
+  // tab-level scalar document id would pass a same-document pair; two labelled rows cannot.
+  // The tab is matched on its prefix, not on its count: the count is a second statement of
+  // what toHaveCount below already asserts, and matching it here would fail one step earlier
+  // with a locator error instead of a row count.
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable documents \(/ })
+  await expect(unreadableTab, 'neither document quarantined -- there is no unreadable tab').toHaveCount(1)
+  await unreadableTab.click()
+
+  const unreadableRows = page.getByTestId('unreadable-row')
+  await expect(unreadableRows, 'both documents must render as their own rows').toHaveCount(2)
+  const rowLabels = await unreadableRows.evaluateAll((els) => els.map((el) => el.textContent ?? ''))
+  const scannedIdx = rowLabels.findIndex((t) => t.includes(scannedName))
+  const denseIdx = rowLabels.findIndex((t) => t.includes(denseName))
+  expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+
+  // (c) the SCANNED row's own control, and the invoice it produces named by equality against
+  // the scanned document — never "is not null", which the dense document would satisfy too.
+  const scannedButton = unreadableRows.nth(scannedIdx).getByRole('button', { name: 'Enter it by hand' })
+  await expect(scannedButton, 'a resolved entity must arm the hand-off on this row').toBeEnabled()
+  await scannedButton.click()
+
+  const invoiceNumber = `EXTR15-MULTI-${Date.now()}`
+  const invoiceId = await fileHandOffDraft(page, invoiceNumber)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  const source = await readSourceDocument(token, invoiceId)
+  expect(source.document, 'the filed invoice names no source document at all').not.toBeNull()
+  expect(source.document!.id, "the hand-off attached the wrong row's document").toBe(documentIds[scannedName])
+  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[denseName])
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+/**
+ * Waits for a document run to come to REST and names the surface it stopped on. An
+ * OBSERVATION: the caller attaches the answer rather than asserting it, so a routing change
+ * moves a recorded string instead of reddening a case about extraction.
+ */
+async function settledRunSurface(page: Page): Promise<string> {
+  let seen = 'nothing yet'
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('invoice-detail').isVisible()) seen = 'invoice detail'
+        else if (await page.getByTestId('review-table').isVisible()) seen = 'review batch surface'
+        else if (await page.getByText(/^BATCH /).first().isVisible()) seen = 'review batch surface'
+        else if (await page.getByTestId('document-failures-card').isVisible()) seen = 'the failures card'
+        else seen = 'nothing yet'
+        return seen !== 'nothing yet'
+      },
+      { message: 'the run never came to rest on any surface', timeout: 180_000 },
+    )
+    .toBe(true)
+  return seen
+}
+
+test('EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its printed fields', async ({ page }, testInfo) => {
+  // One DOCX on a fleet that may be cold, then the import and the detail landing.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  const { token, jobs } = await runDocuments(page, 'EXTR-15-12 docx', [
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  const job = jobs[GOLDEN_DOCX_NAME]
+  expect(
+    job.state,
+    `the DOCX did not settle succeeded (kind ${job.failure_kind ?? 'null'}, error ${job.last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  const detail = await getExtractionDetail(token, job.id)
+  // Zero pages is the CONTRACT, not an absence of evidence: pageImageFormats marks DOCX
+  // boxless (classify.go), so worker.go skips the render, the page rows and the layout.
+  expect(detail.pages, 'a boxless format must write no page rows').toEqual([])
+
+  // Equality on all three, never a negation: a reachable-but-EMPTY sidecar settles succeeded
+  // with every field absent, and `undefined !== 'MOCK-INV-0001'` passes on exactly that. Three
+  // fields, so one lucky read cannot carry the case. The values are the Go golden's
+  // (corpus_wired_db_test.go's TestRLS_DocxFixtureResolvesNamedFields), which was recorded
+  // through a local docling -- this is the first read of them by the deployed one.
+  const valueOf = (name: string) => {
+    const f = detail.fields.find((x) => x.name === name)
+    expect(f, `no ${name} field on the wire (fields: ${detail.fields.map((x) => x.name).join(', ') || 'none'})`).toBeTruthy()
+    return f!.value
+  }
+  expect(valueOf('invoice_number'), "the settled number is not the DOCX's printed number").toBe('ASC-2026-0919')
+  expect(valueOf('issue_date'), "the settled date is not the DOCX's printed date").toBe('2026-08-14')
+  expect(valueOf('total'), "the settled total is not the DOCX's printed total").toBe('4300.00')
+
+  // OBSERVED, not asserted. Which surface the run lands on is routeAfterRun's business and
+  // no AC of this story's; what this waits for is the run coming to REST, so the console gate
+  // below reads a finished journey rather than one mid-navigation.
+  const landing = await settledRunSurface(page)
+  await testInfo.attach('docx-run-landing.txt', { body: landing, contentType: 'text/plain' })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not_read', async ({ page }) => {
+  // Upload plus River's three attempts at attempt^4s backoff, each one a fast 422.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { jobs } = await runDocuments(page, 'EXTR-15-12 empty docx', [
+    { name: EMPTY_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueEmptyDocxBytes() },
+  ])
+  const job = jobs[EMPTY_DOCX_NAME]
+  expect(job.state, 'a DOCX the reader refuses must dead-letter, not succeed').toBe('dead_lettered')
+
+  // EQUALITY, never "not pages_not_rendered": four other kinds satisfy that negation, and the
+  // whole claim here is that the render stage never ran at all for a boxless format.
+  expect(
+    job.failure_kind,
+    `the kind was ${job.failure_kind ?? 'null'} (error ${job.last_error ?? 'none'})`,
+  ).toBe('text_not_read')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -118,6 +118,11 @@ export function ReviewUnreadableTab({
           return (
             <div
               key={i}
+              // The row is the only handle a deployed spec has on WHICH document a hand-off
+              // belongs to: the file label and the button are siblings inside it, and the
+              // same filename also renders in the files strip above the tabs
+              // (import-wizard.spec.ts's EXTR15-E2E-02).
+              data-testid="unreadable-row"
               style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
             >
               {/* `file` resolves through the SAME "source not recorded" fallback as the

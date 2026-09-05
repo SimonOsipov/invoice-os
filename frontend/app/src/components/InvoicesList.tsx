@@ -109,10 +109,20 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // sites below: both sit inside a `state === 'ready'` branch, where TS narrows `state`
   // to the literal 'ready' and rejects that comparison as unreachable.
   const loading = state === 'loading'
+  // Last envelope useAsync resolved, held across a refetch so the table swaps rows
+  // instead of unmounting -- useAsync's own contract (async-state.ts) is untouched.
+  const [held, setHeld] = useState<FetchedInvoiceList | null>(null)
+  useEffect(() => {
+    if (list.data != null) setHeld(list.data)
+  }, [list.data])
+
   // Both sides are `string | undefined` (in-house has no entity) -- `undefined ===
-  // undefined` correctly reads as fresh there. False whenever `list.data` is still
-  // null so this can be read safely ahead of the `list.data != null` render guards.
-  const fresh = list.data != null && list.data.fetchedEntityId === activeEntityId
+  // undefined` correctly reads as fresh there. Read off `view`, so a held envelope from
+  // the previous company can never reach a render branch.
+  const view = list.data ?? held
+  const fresh = view != null && view.fetchedEntityId === activeEntityId
+  const holding = state === 'loading' && fresh
+  const showRows = state === 'ready' || holding
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) — a poll tick never calls
   // list.run() (THE LOAD-BEARING TRAP: that dispatches useAsync's 'start' action, nulls
@@ -154,8 +164,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // `live`/`list.data` so that frame is covered immediately, without waiting on the
   // refetch.
   const rows = useMemo(
-    () => gateByActiveEntity(live ?? list.data?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
-    [live, list.data, ctx.mode, ctx.active.entityId],
+    () => gateByActiveEntity(live ?? view?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    [live, view, ctx.mode, ctx.active.entityId],
   )
 
   const [selected, setSelected] = useState<string[]>([])
@@ -222,7 +232,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // M5-09-07 live-refresh poll ([poll-interval-2s]): gated on any row being in-flight
   // AND the tab being visible — both from the tested predicate, never re-derived inline.
   const visible = useDocumentVisible()
-  const active = shouldPollList(rows, visible)
+  const active = shouldPollList(rows, visible) && showRows
   // CodeRabbit fix cycle 2, finding 4: overlapping ticks. useLiveRefresh's interval fires
   // unconditionally, so a round-trip slower than LIVE_POLL_MS leaves two listInvoices()
   // calls in flight under the same `gen`; the older can resolve last and re-install stale
@@ -403,7 +413,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'loading' && <Loading label="Loading invoices…" />}
+      {state === 'loading' && !holding && <Loading label="Loading invoices…" />}
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
@@ -436,12 +446,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           page or a poll tick that just emptied it. Both are trustworthy pagination
           now that the envelope is known to belong to this entity, so the Pager is
           mounted either way and the user can page back. */}
-      {state === 'ready' && list.data != null && fresh && rows.length === 0 && (
+      {showRows && view != null && fresh && rows.length === 0 && (
         <div data-testid="invoices-empty-page">
           <EmptyState title="No invoices on this page" message="Go back to see the rest of the register." />
           <div style={{ marginTop: 16 }}>
             <Pager
-              pagination={list.data.pagination}
+              pagination={view.pagination}
               busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)
@@ -455,7 +465,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && list.data != null && fresh && rows.length > 0 && (
+      {showRows && view != null && fresh && rows.length > 0 && (
         <>
           {/* Two stages in ONE bar, the confirm a borderTop-separated section inside it --
               never a modal ([no-modal]), mirroring ApprovalsView.tsx:231-310. The outer
@@ -614,7 +624,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               server clamps `limit`, and a client constant here would hide that clamp. */}
           <div style={{ marginTop: 16 }}>
             <Pager
-              pagination={list.data.pagination}
+              pagination={view.pagination}
               busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)

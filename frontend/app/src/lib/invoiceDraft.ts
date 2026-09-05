@@ -248,11 +248,16 @@ export async function fileDraftInvoice(
 // it is the client-side half of the server's own 400 `invoice_number is required`. NO
 // trim: '' is the mapper's absent sentinel and neither layer rewrites an operator's
 // content ([no-trim-at-either-layer]).
+// Exported so surfaces that refuse on the SAME predicate before this gate is reachable --
+// ReviewUnreadableTab's hand-off, whose document produced no invoice -- render this gate's
+// own words rather than a copy of them.
+export const ENTITY_REQUIRED_REASON = 'Filing needs a linked entity'
+
 export function fileDraftGate(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'> | null,
 ): { canFile: true } | { canFile: false; reason: string } {
-  if (entity === null) return { canFile: false, reason: 'Filing needs a linked entity' }
+  if (entity === null) return { canFile: false, reason: ENTITY_REQUIRED_REASON }
   if (draft.number === '') return { canFile: false, reason: 'Invoice number is required' }
   return { canFile: true }
 }

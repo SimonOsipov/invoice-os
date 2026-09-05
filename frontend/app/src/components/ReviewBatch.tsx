@@ -414,6 +414,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 
       {activeTab === 'unreadable' && (
         <ReviewUnreadableTab
+          ctx={ctx}
           rows={rows}
           rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
           batchIds={batchIds}

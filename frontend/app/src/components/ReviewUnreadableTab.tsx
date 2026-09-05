@@ -28,7 +28,9 @@
 // is pure and spec'd (`unreadableCsvAll`, CSV-1 + BULK-06-… File-column siblings); only
 // the Blob/anchor click lives here.
 
+import { ENTITY_REQUIRED_REASON } from '../lib/invoiceDraft'
 import { unreadableCsvAll, type ReviewUnit, type UnreadableRowAll } from '../lib/reviewBatch'
+import type { PlatformCtx } from '../types'
 
 // Widened by one column, File, at the front (BULK-01-07, AC #5) -- UNREADABLE_GRID had
 // no such column when this tab could only ever show one batch's rows.
@@ -57,12 +59,16 @@ function downloadCsv(rows: UnreadableRowAll[], batchIds: string[], unit: ReviewU
 }
 
 export function ReviewUnreadableTab({
+  ctx,
   rows,
   rowsTotal,
   batchIds,
   onImportCorrected,
   unit,
 }: {
+  // One prop, not a second `onEnterByHand` entry: it carries BOTH ctx.enterByHand and
+  // ctx.activeEntity, exactly as ReviewInvoicesTab already takes it from the same shell.
+  ctx: PlatformCtx
   rows: UnreadableRowAll[]
   // Summed across every batch in the run (BULK-01-07) -- was the one batch's own
   // `rows_total`.
@@ -100,23 +106,66 @@ export function ReviewUnreadableTab({
           <span>Field</span>
           <span>Why it could not be read</span>
         </div>
-        {rows.map((r, i) => (
-          <div
-            key={i}
-            style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
-          >
-            {/* `file` resolves through the SAME "source not recorded" fallback as the
-                CSV export (unreadableRowsAll, lib/reviewBatch.ts) — never '', never the
-                literal null. */}
-            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all' }}>{r.file}</span>
-            {/* `row: null` is an em dash, never "ROW null" — the server told us it could
-                not attribute the failure to a line, and that is a fact worth stating. */}
-            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
-            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-word' }}>{r.column}</span>
-            {/* VERBATIM. No client-authored reason string, ever. */}
-            <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>{r.message}</span>
-          </div>
-        ))}
+        {rows.map((r, i) => {
+          // Per-row, like ReviewAlreadyImportedTab's: N rows render at once and every one
+          // of them is refused when no entity is resolved.
+          const reasonId = `unreadable-handoff-reason-${i}`
+          const documentId = r.documentId
+          // The resolved-entity predicate every filing gate reads (fileDraftGate,
+          // CreateUpload.tsx) — never a client id, which can be non-null before the
+          // entity is fetched.
+          const blocked = ctx.activeEntity === null
+          return (
+            <div
+              key={i}
+              style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, alignItems: 'baseline', padding: '11px 18px', borderTop: i === 0 ? 'none' : '1px solid var(--line-1)' }}
+            >
+              {/* `file` resolves through the SAME "source not recorded" fallback as the
+                  CSV export (unreadableRowsAll, lib/reviewBatch.ts) — never '', never the
+                  literal null. */}
+              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-all' }}>{r.file}</span>
+              {/* `row: null` is an em dash, never "ROW null" — the server told us it could
+                  not attribute the failure to a line, and that is a fact worth stating. */}
+              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{r.row == null ? '—' : r.row}</span>
+              <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', wordBreak: 'break-word' }}>{r.column}</span>
+              {/* VERBATIM. No client-authored reason string, ever. */}
+              <span style={{ fontSize: 13, color: 'var(--fg-1)' }}>
+                {r.message}
+                {/* Inside the "why" cell, so no new grid track (UT-5). A spreadsheet row
+                    has no document to hand off, and neither has a document row whose
+                    upload never reached storage — both render no control at all. */}
+                {unit === 'document' && documentId !== null && (
+                  <span style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginTop: 8 }}>
+                    {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx's
+                        four layers, and CreateFlow.tsx's DocumentFailureRow offers the
+                        same hand-off on the import run's failure list. The inline spread
+                        is disabled-only: on an enabled button it would kill the legitimate
+                        :hover affordance. */}
+                    <button
+                      onClick={blocked ? undefined : () => ctx.enterByHand(documentId)}
+                      disabled={blocked}
+                      title={blocked ? ENTITY_REQUIRED_REASON : undefined}
+                      aria-describedby={blocked ? reasonId : undefined}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 30,
+                        padding: '0 12px',
+                        fontSize: 12.5,
+                        flex: 'none',
+                        ...(blocked ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                      }}
+                    >
+                      Enter it by hand
+                    </button>
+                    {blocked && (
+                      <span id={reasonId} style={{ fontSize: 12, color: 'var(--fg-3)', flex: 'none' }}>{ENTITY_REQUIRED_REASON}</span>
+                    )}
+                  </span>
+                )}
+              </span>
+            </div>
+          )
+        })}
         <div style={{ padding: '11px 18px', borderTop: '1px solid var(--line-1)', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.55 }}>
           Field names are the importer&rsquo;s own, not your spreadsheet&rsquo;s headings, and are a best guess on numeric errors.
         </div>

@@ -295,11 +295,18 @@ describe('ReviewAlreadyImportedTab: QA -- keyboard / accessibility of the disabl
 // (ReviewUnreadableTab.test.tsx) is what makes the prop REQUIRED, and that one is red
 // under `typecheck`, not under vitest.
 import type { ReviewUnit } from '../lib/reviewBatch'
+import type { PlatformCtx } from '../types'
 import { ReviewUnreadableTab } from './ReviewUnreadableTab'
 
 type WithUnit<C> = C extends (p: infer P) => infer R ? (p: P & { unit: ReviewUnit }) => R : never
 const AlreadyImportedTab = ReviewAlreadyImportedTab as unknown as WithUnit<typeof ReviewAlreadyImportedTab>
 const UnreadableTab = ReviewUnreadableTab as unknown as WithUnit<typeof ReviewUnreadableTab>
+
+// EXTR-15-11 made `ctx` a required prop on ReviewUnreadableTab. SW-6 below does not
+// exercise the hand-off — its unreadable row carries `documentId: null`, so no control
+// renders on either branch (UT-6, ReviewUnreadableTab.test.tsx) — and SW-6 reads only the
+// `.label` header, which the control never reaches. The stub exists to be readable.
+const INERT_CTX = { activeEntity: null, enterByHand: () => {} } as unknown as PlatformCtx
 
 // The table is the header's own parent: header first, then one child per data row.
 function headerOf(root: HTMLElement): HTMLElement {
@@ -354,7 +361,7 @@ describe('EXTR-15-09 SW-6 (AC-6): the branch changes copy, never layout', () => 
       const { container, unmount } = render(
         <>
           <AlreadyImportedTab rows={[{ file: 'f', row: null, invoiceId: 'inv-1' }]} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} unit={unit} />
-          <UnreadableTab rows={[{ file: 'f', row: null, column: 'issue_date', message: 'unreadable', documentId: null }]} rowsTotal={1} batchIds={['b1']} onImportCorrected={vi.fn()} unit={unit} />
+          <UnreadableTab ctx={INERT_CTX} rows={[{ file: 'f', row: null, column: 'issue_date', message: 'unreadable', documentId: null }]} rowsTotal={1} batchIds={['b1']} onImportCorrected={vi.fn()} unit={unit} />
         </>,
       )
       const labels = Array.from(container.querySelectorAll('.label')) as HTMLElement[]

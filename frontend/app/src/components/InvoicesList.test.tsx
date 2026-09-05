@@ -2014,3 +2014,54 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
     expect(showRowsDef, "showRows carries a `state` check, not a bare `view != null` -- 'empty' and 'error' own their own branches").toMatch(/state ===/)
   })
 })
+
+// BUG-10-02 (task-865), Mode A RED. Replaces the explainer's two specs above, which assert
+// only that a string appears and disappears -- neither survives as an absence check, because
+// a spec asserting a string no code path can render passes forever. Those two die with the
+// source in the same commit.
+function aboveTable(container: HTMLElement): string[] {
+  const root = container.firstElementChild as HTMLElement
+  // tagName|className alone is not identifying here: both surviving children are <div> with
+  // no className, so the sequence would compare as identical DIV| entries either way.
+  return Array.from(root.children).map((el) => `${el.tagName}|${el.className}|${el.getAttribute('data-testid') ?? ''}`)
+}
+
+describe('InvoicesList: the needs-attention filter changes the rows, and nothing else', () => {
+  it('nothing above the table mounts or unmounts when the filter is toggled', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { container } = render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    expect(screen.queryByTestId('invoices-list'), 'the OFF snapshot must be taken over a rendered table, never a blank screen').not.toBeNull()
+    const off = aboveTable(container)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    expect(screen.queryByTestId('invoices-list'), 'and so must the ON snapshot').not.toBeNull()
+
+    expect(aboveTable(container), 'the filter must not add or remove a sibling around the table').toEqual(off)
+  })
+
+  it('the title block bottom margin does not change with the filter', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    const titleBlock = () => screen.getByTestId('needs-attention-toggle').parentElement as HTMLElement
+    const off = titleBlock().style.marginBottom
+    expect(off, 'an unset margin on both reads would make the equality below vacuous').not.toBe('')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+
+    // Equality between two measured states, never the literal 22: a later redesign may move
+    // this margin and must survive, as long as it moves in both states.
+    expect(titleBlock().style.marginBottom, 'the header must not slide when the filter flips').toBe(off)
+  })
+})

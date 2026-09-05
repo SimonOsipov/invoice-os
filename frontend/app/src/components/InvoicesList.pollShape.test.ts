@@ -40,3 +40,16 @@ describe('the !fresh branch is keyed on identity alone, never row count', () => 
     expect(freshDef, 'must not fall back to a content-shape check').not.toMatch(/invoices\.length|rows\.length/)
   })
 })
+
+// BUG-10-02. Runs in CI on push, unlike any browser spec ([dev-env-skips-e2e-on-push]) --
+// the only mechanical fence against either half of the 23px jump coming back.
+describe('the needs-attention filter mounts nothing of its own above the table (BUG-10-02)', () => {
+  it('no element is gated on needsAttention alone, and no margin is keyed on it', () => {
+    // Control needle first: a rename, a moved file or an unreadable read would make the two
+    // negations below pass over an empty string, proving nothing.
+    expect(src, 'the toggle itself must still be in this file, or the negations below are vacuous').toContain('data-testid="needs-attention-toggle"')
+
+    expect(src, 'no element above the table may mount on the filter alone').not.toMatch(/\{needsAttention && \(/)
+    expect(src, 'the header margin must not move with the filter -- the other half of the 23px jump').not.toMatch(/marginBottom: needsAttention/)
+  })
+})

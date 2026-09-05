@@ -23,6 +23,13 @@
 // them; changing one is a one-line edit to this table. FIVE are NOT free: B8, A3, A4, A6
 // and A7 must read "already in the register" for the document unit, where the spreadsheet
 // unit keeps "already in your ledger" (EXTR-15-09 AC). Those five are marked `AC` below.
+// SIX more are now settled by 09's architecture pass and are no longer proposals: R4, R5
+// and R6 (D1, the middle CSV column is dropped, not renamed), U4 and A5 (D4, an em dash,
+// not the word `Document`) and C1 (D2, one unbranched paragraph carrying both grains).
+//
+// AC-3 forbids "row"/"rows" as an ENGLISH NOUN in a document branch, not the identifier:
+// `{rows.length}` and `${batch.rows_total}` stay, because they name a variable. SW-3 is
+// the guard and strips every `{...}` / `${...}` expression before it applies the regex.
 //
 // BOUNDARY. The census pins the 31 sites it knows about, measured on this branch. It
 // CANNOT catch a thirty-second unit-ambiguous string added later, nor a seventh file. Its
@@ -96,26 +103,24 @@ const SITES: Site[] = [
     id: 'R4',
     file: REVIEW_BATCH,
     spreadsheetLiteral: "'Row,Field,Why it could not be read'",
-    documentLiteral: "'Document,Field,Why it could not be read'",
+    documentLiteral: "'Field,Why it could not be read'",
   },
   {
-    // 09, unresolved and left to you at the point of edit: in a DOCUMENT run File and
-    // Document name the same thing, so this proposal's header carries the same fact in two
-    // adjacent columns and the Document one would repeat the File one on every line. The
-    // alternatives are dropping a column for the document unit (which makes the two CSVs
-    // different shapes) or keeping the duplication (which makes them the same shape and
-    // one column redundant). The proposal below keeps the shape; it is not a decision.
-    // R6 has the identical question.
+    // 09 D1: the middle column is DROPPED for a document, not renamed to `Document`. In a
+    // document run File already holds the name, so a Document column would repeat it on
+    // every line while the row number it replaced is always empty
+    // (internal/importer/document.go omits Row on all three RowError paths). R6 is the
+    // same decision. SW-11 pins that the CELLS follow the header, not just the header.
     id: 'R5',
     file: REVIEW_BATCH,
     spreadsheetLiteral: "'File,Row,Field,Why it could not be read'",
-    documentLiteral: "'File,Document,Field,Why it could not be read'",
+    documentLiteral: "'File,Field,Why it could not be read'",
   },
   {
-    id: 'R6', // Same File-vs-Document duplication as R5 — see that row.
+    id: 'R6', // Same dropped middle column as R5 — see that row.
     file: REVIEW_BATCH,
     spreadsheetLiteral: "'File,Row,Invoice id'",
-    documentLiteral: "'File,Document,Invoice id'",
+    documentLiteral: "'File,Invoice id'",
   },
   {
     id: 'R7',
@@ -220,7 +225,10 @@ const SITES: Site[] = [
     id: 'U4',
     file: UNREADABLE_TAB,
     spreadsheetLiteral: '<span>Row</span>',
-    documentLiteral: '<span>Document</span>',
+    // 09 D4: an em dash, matching the cells beside it, which already render one for a
+    // null row. Two WHOLE spans so both literals survive this census and the grid keeps
+    // exactly one child per column (AC-6; SW-6 is the parity oracle).
+    documentLiteral: '<span>—</span>',
   },
   {
     id: 'U5',
@@ -262,7 +270,10 @@ const SITES: Site[] = [
     id: 'A5',
     file: ALREADY_IMPORTED_TAB,
     spreadsheetLiteral: '<span>Row</span>',
-    documentLiteral: '<span>Document</span>',
+    // 09 D4: an em dash, matching the cells beside it, which already render one for a
+    // null row. Two WHOLE spans so both literals survive this census and the grid keeps
+    // exactly one child per column (AC-6; SW-6 is the parity oracle).
+    documentLiteral: '<span>—</span>',
   },
   {
     id: 'A6', // AC: "already in the register"
@@ -288,15 +299,16 @@ const SITES: Site[] = [
 
   // --- components/CreateUpload.tsx (1) ---
   {
-    // Rendered at pickedFiles.length === 0, where runKindOf answers null and there is no
-    // unit yet — see this file's report note; 09 may need a unit-neutral sentence here
-    // rather than a branch. The needle stops at the `{' '}` split, not at invoice_number.
+    // 09 D2 settles this one: it is UNBRANCHED. The site renders at pickedFiles.length
+    // === 0, where runKindOf answers null and no unit exists yet, so the paragraph states
+    // BOTH grains and the document sentence names the extensions rather than the word
+    // "spreadsheet" (AC-3 bans that word in a document branch). The shipped spreadsheet
+    // needle stops at the `{' '}` split, not at invoice_number. SW-8 pins the ordering.
     id: 'C1',
     file: CREATE_UPLOAD,
     spreadsheetLiteral:
       'The parser extracts buyer details, line items and totals. One row is one line item; rows group into invoices by the column you map to',
-    documentLiteral:
-      'The extractor reads buyer details, line items and totals off each document. One document is one invoice',
+    documentLiteral: 'That grain is CSV and XLSX only: in a PDF or a DOCX, one document is one invoice.',
   },
 ]
 
@@ -342,5 +354,109 @@ describe('review-copy census (EXTR-15-08)', () => {
     const total = FILES.reduce((sum, f) => sum + readSrc(f).split('\n').length, 0)
 
     expect(total).toBeGreaterThanOrEqual(2000)
+  })
+
+  // The instrument checking itself. CEN-2 counts occurrences by plain substring, so a
+  // needle that is a substring of a sibling needle counts the sibling's site too and the
+  // `=== 1` reads as a duplicate. Several spreadsheet needles are deliberately longer than
+  // the sentence they name for exactly this reason (R4 inside R5, B4 inside B7, A3 inside
+  // A7). This spec is what keeps that property true after an edit to the table.
+  it('CEN-5 (GREEN on landing): no census needle is a substring of another in the same file', () => {
+    const needles = SITES.flatMap((s) => [
+      { id: `${s.id}.spreadsheet`, file: s.file, text: s.spreadsheetLiteral },
+      { id: `${s.id}.document`, file: s.file, text: s.documentLiteral },
+    ])
+    const collisions: string[] = []
+
+    for (const a of needles) {
+      for (const b of needles) {
+        if (a === b || a.file !== b.file) continue
+        if (b.text.includes(a.text)) collisions.push(`${a.id} is a substring of ${b.id}`)
+      }
+    }
+
+    expect(collisions).toEqual([])
+  })
+})
+
+// --- EXTR-15-09 (task-835, Mode A) ---------------------------------------------------
+
+// AC-3 bans "row"/"rows" as an ENGLISH NOUN from a document branch, never the identifier:
+// `{rows.length}` and `${batch.rows_total}` are variable names the branch still reads, and
+// `\brows?\b` matches the first of those. Every `{...}` / `${...}` expression is therefore
+// removed before the regex runs. `${...}` first, so no orphan `$` survives.
+function stripExpressions(literal: string): string {
+  return literal.replace(/\$\{[^}]*\}/g, ' ').replace(/\{[^}]*\}/g, ' ')
+}
+
+const ROW_NOUN = /\brows?\b/i
+const SPREADSHEET_WORD = /spreadsheet/i
+
+describe('EXTR-15-09 SW-3 (AC-3): no document branch speaks spreadsheet', () => {
+  // SW-3 IS NOT A SOURCE ORACLE ON ITS OWN. Two of its three claims are about the census
+  // table, which this pass can edit; only the presence claim reaches the shipped file. The
+  // pair SW-3 ∧ CEN-2 is the oracle: CEN-2 fails if the source does not carry the literal,
+  // SW-3 fails if the literal carries the wrong word. Weakening either one alone lets a
+  // document branch that still says "rows" through.
+  it('SW-3 (RED until EXTR-15-09): every document literal ships, and none says row or spreadsheet', () => {
+    const sources = new Map(FILES.map((f) => [f, readSrc(f)]))
+    const wrong: string[] = []
+
+    for (const site of SITES) {
+      const prose = stripExpressions(site.documentLiteral)
+      if (!sources.get(site.file)!.includes(site.documentLiteral)) {
+        wrong.push(`${site.id} document branch is not in ${site.file}`)
+      }
+      if (ROW_NOUN.test(prose)) wrong.push(`${site.id} document branch says "row": ${JSON.stringify(prose)}`)
+      if (SPREADSHEET_WORD.test(site.documentLiteral)) {
+        wrong.push(`${site.id} document branch says "spreadsheet": ${JSON.stringify(site.documentLiteral)}`)
+      }
+    }
+
+    expect(wrong).toEqual([])
+  })
+
+  // The control for the two absence claims above. Run the SAME regexes through the SAME
+  // stripper over the spreadsheet column, where both words are everywhere: if this floor
+  // is met, a clean document column means the words are gone, not that the scan is broken.
+  it('SW-3 control (GREEN on landing): the same regexes fire heavily on the spreadsheet column', () => {
+    const rowHits = SITES.filter((s) => ROW_NOUN.test(stripExpressions(s.spreadsheetLiteral)))
+    const spreadsheetHits = SITES.filter((s) => SPREADSHEET_WORD.test(s.spreadsheetLiteral))
+
+    expect(rowHits.length, 'the row-noun regex found nothing to match; SW-3 would pass vacuously').toBeGreaterThanOrEqual(20)
+    expect(spreadsheetHits.length, 'the spreadsheet regex found nothing to match').toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('EXTR-15-09 SW-10 (AC-9): the run unit is derived once and handed down', () => {
+  // A child that re-derives is a second source of truth for one fact, and the two can
+  // disagree the moment either derivation changes. ReviewBatch.tsx owns the call; the tabs
+  // receive it. Scanning source, not behaviour: a second derivation returning the same
+  // answer is invisible to any render.
+  it('SW-10 (RED until EXTR-15-09): runUnit is called once, in ReviewBatch.tsx, and passed to both tabs', () => {
+    const parent = readSrc(REVIEW_BATCH_TSX)
+    const unreadable = readSrc(UNREADABLE_TAB)
+    const alreadyImported = readSrc(ALREADY_IMPORTED_TAB)
+
+    // Controls: these three needles exist today, so a moved or emptied file cannot satisfy
+    // the two zero-count claims below by scanning nothing.
+    expect(parent, 'ReviewBatch.tsx was not read').toContain('reviewHeaderAll(')
+    expect(unreadable, 'ReviewUnreadableTab.tsx was not read').toContain('export function ReviewUnreadableTab')
+    expect(alreadyImported, 'ReviewAlreadyImportedTab.tsx was not read').toContain('export function ReviewAlreadyImportedTab')
+
+    expect(occurrences(parent, 'runUnit(')).toBe(1)
+    expect(occurrences(unreadable, 'runUnit(')).toBe(0)
+    expect(occurrences(alreadyImported, 'runUnit(')).toBe(0)
+    expect(occurrences(unreadable, 'batchUnit(')).toBe(0)
+    expect(occurrences(alreadyImported, 'batchUnit(')).toBe(0)
+
+    // ...and the derived value actually reaches both tabs, or "called once" is satisfied by
+    // a call whose result is dropped.
+    for (const tag of ['<ReviewUnreadableTab', '<ReviewAlreadyImportedTab']) {
+      const start = parent.indexOf(tag)
+      expect(start, `${tag} is not rendered by ReviewBatch.tsx`).toBeGreaterThan(-1)
+      const element = parent.slice(start, parent.indexOf('/>', start))
+      expect(element, `${tag} must be handed the run unit as a prop`).toContain('unit=')
+    }
   })
 })

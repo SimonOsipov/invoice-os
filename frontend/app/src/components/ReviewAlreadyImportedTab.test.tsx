@@ -282,3 +282,148 @@ describe('ReviewAlreadyImportedTab: QA -- keyboard / accessibility of the disabl
     expect(button.getAttribute('title')).toBe('The matching invoice was not recorded for this row.')
   })
 })
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): the unit branch on the two tabs --------
+//
+// RED reason on landing: `unit` is not a prop yet, so React drops it and both branches
+// render today's spreadsheet copy. Every spec below fails on a WRONG RENDERED STRING, or
+// on a wrong element count -- never on an import error or a missing component.
+//
+// The components are reached through a cast because their props types do not carry `unit`
+// yet and an unknown JSX prop is a compile error, which would take this file's shipped
+// AIMPTAB specs down with it. The cast target IS the props shape being demanded; SW-4
+// (ReviewUnreadableTab.test.tsx) is what makes the prop REQUIRED, and that one is red
+// under `typecheck`, not under vitest.
+import type { ReviewUnit } from '../lib/reviewBatch'
+import { ReviewUnreadableTab } from './ReviewUnreadableTab'
+
+type WithUnit<C> = C extends (p: infer P) => infer R ? (p: P & { unit: ReviewUnit }) => R : never
+const AlreadyImportedTab = ReviewAlreadyImportedTab as unknown as WithUnit<typeof ReviewAlreadyImportedTab>
+const UnreadableTab = ReviewUnreadableTab as unknown as WithUnit<typeof ReviewUnreadableTab>
+
+// The table is the header's own parent: header first, then one child per data row.
+function headerOf(root: HTMLElement): HTMLElement {
+  const header = root.querySelector('.label')
+  expect(header, 'the tab rendered no `.label` header row').not.toBeNull()
+  return header as HTMLElement
+}
+
+describe('EXTR-15-09 SW-5 (AC-5): the middle column header matches the cells beside it', () => {
+  // D4, and the census rows U4/A5 are WRONG where they proposed `<span>Document</span>`.
+  // A `Document` column would be empty on every line -- the three document-path RowError
+  // constructions (internal/importer/document.go) all omit Row, so `row` is null and the
+  // cell beside this header already renders an em dash. The header follows the cells.
+  it('SW-5 (RED until EXTR-15-09): document shows an em dash over em-dash cells; spreadsheet shows Row over the number', () => {
+    const { unmount } = render(
+      <AlreadyImportedTab
+        rows={[{ file: 'june.pdf', row: null, invoiceId: 'inv-1' }]}
+        rowsTotal={1}
+        batchIds={['b1']}
+        onOpenInvoice={vi.fn()}
+        unit="document"
+      />,
+    )
+    const docHeader = headerOf(screen.getByTestId('review-already-imported-tab'))
+    const docTable = docHeader.parentElement as HTMLElement
+    expect(docHeader.children[1].textContent, 'the document header must be an em dash, never the word Document').toBe('—')
+    expect(docTable.children[1].children[1].textContent, 'the cell beside it is already an em dash').toBe('—')
+    unmount()
+
+    render(
+      <AlreadyImportedTab
+        rows={[{ file: 'june.csv', row: 7, invoiceId: 'inv-1' }]}
+        rowsTotal={1}
+        batchIds={['b1']}
+        onOpenInvoice={vi.fn()}
+        unit="spreadsheet"
+      />,
+    )
+    const ssHeader = headerOf(screen.getByTestId('review-already-imported-tab'))
+    const ssTable = ssHeader.parentElement as HTMLElement
+    expect(ssHeader.children[1].textContent, 'AC-2: the spreadsheet header is unchanged').toBe('Row')
+    expect(ssTable.children[1].children[1].textContent).toBe('7')
+  })
+})
+
+describe('EXTR-15-09 SW-6 (AC-6): the branch changes copy, never layout', () => {
+  // Two halves, and the first is what stops the second passing vacuously: a `unit` prop
+  // React silently drops renders two IDENTICAL trees, and identical trees trivially have
+  // equal column counts. So the branches are required to DIFFER first.
+  it('SW-6 (RED until EXTR-15-09): both branches differ in copy and declare the same number of header columns', () => {
+    const renderTabs = (unit: ReviewUnit) => {
+      const { container, unmount } = render(
+        <>
+          <AlreadyImportedTab rows={[{ file: 'f', row: null, invoiceId: 'inv-1' }]} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} unit={unit} />
+          <UnreadableTab rows={[{ file: 'f', row: null, column: 'issue_date', message: 'unreadable' }]} rowsTotal={1} batchIds={['b1']} onImportCorrected={vi.fn()} unit={unit} />
+        </>,
+      )
+      const labels = Array.from(container.querySelectorAll('.label')) as HTMLElement[]
+      const shape = labels.map((l) => l.children.length)
+      const middles = labels.map((l) => l.children[1]?.textContent ?? '')
+      unmount()
+      return { shape, middles }
+    }
+
+    const spreadsheet = renderTabs('spreadsheet')
+    const document_ = renderTabs('document')
+
+    // Discrimination control. Without this, a dropped prop passes the parity check below.
+    expect(document_.middles, 'the two branches rendered the same header; the unit prop is not wired').not.toEqual(spreadsheet.middles)
+
+    // AC-6: one grid child per column in BOTH arms. Today: 3 on the already-imported tab,
+    // 4 on the unreadable tab.
+    expect(spreadsheet.shape).toEqual([3, 4])
+    expect(document_.shape).toEqual([3, 4])
+  })
+
+  it('SW-6 constants (GREEN on landing): the two grid literals and their use sites are untouched', () => {
+    const already = readFileSync(path.join(process.cwd(), 'src/components/ReviewAlreadyImportedTab.tsx'), 'utf8')
+    const unreadable = readFileSync(path.join(process.cwd(), 'src/components/ReviewUnreadableTab.tsx'), 'utf8')
+
+    expect(already).toContain("const ALREADY_IMPORTED_GRID = '150px 90px 1fr'")
+    expect(unreadable).toContain("const UNREADABLE_GRID = '150px 90px 170px 1fr'")
+
+    // Exactly two use sites each -- the header row and the data row. A third, or a
+    // unit-keyed second constant, is a layout branch and AC-6 forbids it.
+    expect(already.split('gridTemplateColumns: ALREADY_IMPORTED_GRID').length - 1).toBe(2)
+    expect(unreadable.split('gridTemplateColumns: UNREADABLE_GRID').length - 1).toBe(2)
+    expect(already.split('gridTemplateColumns').length - 1).toBe(2)
+    expect(unreadable.split('gridTemplateColumns').length - 1).toBe(2)
+  })
+})
+
+describe('EXTR-15-09 SW-7 (AC-1): a duplicate is "already in the register" for a document', () => {
+  // "your ledger" is the spreadsheet unit's phrase and stays byte-identical there (AC-2).
+  // Asserted over rendered TEXT, not source, so a branch that shipped the register wording
+  // into an unreachable arm cannot satisfy it.
+  it('SW-7 (RED until EXTR-15-09): the document tab says register and never ledger; the spreadsheet tab says the reverse', () => {
+    const textOf = (unit: ReviewUnit) => {
+      const { unmount } = render(
+        <AlreadyImportedTab
+          rows={[{ file: 'f', row: null, invoiceId: 'inv-1' }]}
+          rowsTotal={4}
+          batchIds={['b1']}
+          onOpenInvoice={vi.fn()}
+          unit={unit}
+        />,
+      )
+      const text = screen.getByTestId('review-already-imported-tab').textContent ?? ''
+      unmount()
+      return text
+    }
+
+    const documentText = textOf('document')
+    const spreadsheetText = textOf('spreadsheet')
+
+    // A3, A4, A6 and A7 all carry the phrase, so four is the floor, not one.
+    expect(documentText.split('already in the register').length - 1, 'A3/A4/A6/A7 must all read "already in the register"').toBeGreaterThanOrEqual(4)
+    expect(documentText).not.toContain('already in your ledger')
+
+    // AC-2, the freeze: the spreadsheet arm is untouched. A4's spreadsheet sentence does
+    // not carry the phrase at all ("These rows match invoices this workspace already
+    // holds"), so its floor is three, not four.
+    expect(spreadsheetText.split('already in your ledger').length - 1, 'A3/A6/A7 must still read "already in your ledger"').toBeGreaterThanOrEqual(3)
+    expect(spreadsheetText).toContain('These rows match invoices this workspace already holds')
+    expect(spreadsheetText).not.toContain('already in the register')
+  })
+})

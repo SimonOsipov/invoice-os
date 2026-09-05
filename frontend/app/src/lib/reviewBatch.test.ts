@@ -2982,3 +2982,203 @@ describe('the derivation reads one field and owns no extension table (EXTR-15-08
     }
   })
 })
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): the unit branch in lib -----------------
+//
+// THE CONTRACT THESE SPECS PIN. Seven exports in reviewBatch.ts carry copy that names the
+// unit. Each gains `unit: ReviewUnit` as its LAST parameter and branches on it. None of
+// them derives the unit itself, even where the argument it already receives would allow it
+// (reviewHeaderAll and filesStrip both see `filename`): AC-9 puts the derivation in
+// ReviewBatch.tsx, once, and a second derivation is a second source of truth for one fact.
+// SW-2's structural half is the guard on that; SW-10 (reviewCopy.census.test.ts) is the
+// component-side half.
+//
+// RED reason on landing. The seven functions exist and ignore a trailing argument, so
+// every document-branch assertion below fails on a WRONG STRING -- the spreadsheet copy
+// where the document copy belongs -- never on a missing export or an import error. The
+// spreadsheet half is green today by construction: AC-2 is a preservation rule and a
+// preservation rule has nothing to turn red. It is here as the freeze, not as the red.
+//
+// The calls go through typed shims for the reason UN-1..5 above use a namespace import:
+// this file holds 200-odd shipped specs and one compile error takes all of them down. The
+// shim's cast target IS the signature being demanded.
+type UnitLast<A extends unknown[], R> = (...args: [...A, ReviewUnitT]) => R
+
+const reviewHeaderU = reviewHeader as unknown as UnitLast<[Parameters<typeof reviewHeader>[0], { allTotal: number }], ReturnType<typeof reviewHeader>>
+const reviewHeaderAllU = reviewHeaderAll as unknown as UnitLast<[Parameters<typeof reviewHeaderAll>[0], { allTotal: number }], ReturnType<typeof reviewHeaderAll>>
+const reviewTabsU = reviewTabs as unknown as UnitLast<[Parameters<typeof reviewTabs>[0]], ReturnType<typeof reviewTabs>>
+const unreadableCsvU = unreadableCsv as unknown as UnitLast<[Parameters<typeof unreadableCsv>[0]], string>
+const unreadableCsvAllU = unreadableCsvAll as unknown as UnitLast<[Parameters<typeof unreadableCsvAll>[0]], string>
+const alreadyImportedCsvAllU = alreadyImportedCsvAll as unknown as UnitLast<[Parameters<typeof alreadyImportedCsvAll>[0]], string>
+const filesStripU = filesStrip as unknown as UnitLast<[Parameters<typeof filesStrip>[0], ImportRun | null], ReturnType<typeof filesStrip>>
+
+// Spreadsheet-NAMED on purpose: the fixture is not what selects the branch, the argument
+// is. `created_at` is never asserted whole -- fmtDateTime renders in the runner's local
+// zone -- so the specs freeze the prose prefix and require both branches to share a tail.
+const UNIT_BATCH = {
+  id: 'b1',
+  filename: 'june.csv',
+  rows_total: 3,
+  rows_valid: 0,
+  rule_set_version: 3,
+  created_at: '2026-01-02T03:04:05Z',
+  status: 'completed',
+  errors: [],
+} as unknown as ImportBatch
+
+const SS_SUBLINE_PREFIX = '3 ROWS READ · SERVER VERDICT · RULE SET NG-MBS v3 · '
+const DOC_SUBLINE_PREFIX = '3 DOCUMENTS READ · SERVER VERDICT · RULE SET NG-MBS v3 · '
+
+// A message carrying a comma, so a cell count has to honour RFC-4180 quoting rather than
+// splitting on every comma -- SW-11 would otherwise mis-count a perfectly good line.
+const CSV_MESSAGE = 'bad, date'
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let cell = ''
+  let quoted = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cell += '"'
+        i++
+      } else if (ch === '"') quoted = false
+      else cell += ch
+    } else if (ch === '"') quoted = true
+    else if (ch === ',') {
+      cells.push(cell)
+      cell = ''
+    } else cell += ch
+  }
+  cells.push(cell)
+  return cells
+}
+
+describe('EXTR-15-09 SW-2 (AC-1/AC-2): the seven lib branches, spreadsheet half frozen', () => {
+  it('SW-2 (RED until EXTR-15-09): each of the seven returns today’s string for spreadsheet and the document string for document', () => {
+    const live = { allTotal: 7 }
+    const unreadable = [{ row: 4, column: 'issue_date', message: CSV_MESSAGE }]
+    const unreadableAll = [{ file: 'june.csv', row: 4, column: 'issue_date', message: CSV_MESSAGE }]
+    const alreadyImported = [{ file: 'june.csv', row: 4, invoiceId: 'inv-1' }]
+    const counts = { invoices: 7, unreadable: 2, alreadyImported: 1 }
+    const wrong: string[] = []
+    const check = (id: string, actual: string, expected: string) => {
+      if (actual !== expected) wrong.push(`${id}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`)
+    }
+
+    // R1/R2 -- the header subline. Prefix, then a tail equality: the tail is fmtDateTime's
+    // local-zone rendering, and freezing it whole would red this spec in CI.
+    const r1ss = reviewHeaderU(UNIT_BATCH, live, 'spreadsheet').subline
+    const r1doc = reviewHeaderU(UNIT_BATCH, live, 'document').subline
+    check('R1 spreadsheet', r1ss.slice(0, SS_SUBLINE_PREFIX.length), SS_SUBLINE_PREFIX)
+    check('R1 document', r1doc.slice(0, DOC_SUBLINE_PREFIX.length), DOC_SUBLINE_PREFIX)
+    check('R1 tail', r1doc.slice(DOC_SUBLINE_PREFIX.length), r1ss.slice(SS_SUBLINE_PREFIX.length))
+
+    const r2ss = reviewHeaderAllU([UNIT_BATCH], live, 'spreadsheet').subline
+    const r2doc = reviewHeaderAllU([UNIT_BATCH], live, 'document').subline
+    check('R2 spreadsheet', r2ss.slice(0, SS_SUBLINE_PREFIX.length), SS_SUBLINE_PREFIX)
+    check('R2 document', r2doc.slice(0, DOC_SUBLINE_PREFIX.length), DOC_SUBLINE_PREFIX)
+    check('R2 tail', r2doc.slice(DOC_SUBLINE_PREFIX.length), r2ss.slice(SS_SUBLINE_PREFIX.length))
+
+    // R3 -- the tab strip. Only the unreadable label branches; the other two labels are
+    // frozen in BOTH units, which is half of AC-6 (no tab added, renamed or dropped).
+    const strip = (tabs: ReturnType<typeof reviewTabs>) => tabs.map((t) => `${t.id}=${t.label}`).join('|')
+    check('R3 spreadsheet', strip(reviewTabsU(counts, 'spreadsheet')), 'invoices=Invoices (7)|unreadable=Unreadable rows (2)|already-imported=Already imported (1)')
+    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Unreadable documents (2)|already-imported=Already imported (1)')
+
+    // R4/R5/R6 -- the three CSV headers. D1: the middle column is DROPPED for a document,
+    // never renamed to `Document`. In a document run the row number is always empty
+    // (internal/importer/document.go omits Row on all three RowError paths) and the
+    // adjacent File column already holds the name, so a Document column would repeat File
+    // on every line. SW-11 below pins that the CELLS follow.
+    check('R4 spreadsheet', unreadableCsvU(unreadable, 'spreadsheet').split('\n')[0], 'Row,Field,Why it could not be read')
+    check('R4 document', unreadableCsvU(unreadable, 'document').split('\n')[0], 'Field,Why it could not be read')
+    check('R5 spreadsheet', unreadableCsvAllU(unreadableAll, 'spreadsheet').split('\n')[0], 'File,Row,Field,Why it could not be read')
+    check('R5 document', unreadableCsvAllU(unreadableAll, 'document').split('\n')[0], 'File,Field,Why it could not be read')
+    check('R6 spreadsheet', alreadyImportedCsvAllU(alreadyImported, 'spreadsheet').split('\n')[0], 'File,Row,Invoice id')
+    check('R6 document', alreadyImportedCsvAllU(alreadyImported, 'document').split('\n')[0], 'File,Invoice id')
+
+    // R7 -- the per-file report's fallback reason for a file that produced nothing.
+    check('R7 spreadsheet', filesStripU([UNIT_BATCH], null, 'spreadsheet')[0].reason ?? '', '0 of 3 rows produced an invoice')
+    check('R7 document', filesStripU([UNIT_BATCH], null, 'document')[0].reason ?? '', '0 of 3 documents produced an invoice')
+
+    expect(wrong).toEqual([])
+  })
+
+  // The only spec that can see WHERE the unit came from. Every assertion above passes just
+  // as well against a reviewHeaderAll that ignored its third argument and derived the unit
+  // off `batches[0].filename` -- the fixture is a .csv and the argument says 'spreadsheet',
+  // so the two agree. This one does not.
+  it('SW-2 structure (RED until EXTR-15-09): all seven declare `unit: ReviewUnit` and none re-derives it', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+    // Control: the file was read and holds the type, so the per-function lookups below
+    // cannot all miss and leave the loop reporting nothing.
+    expect(source, 'lib/reviewBatch.ts was not read').toContain('export type ReviewUnit')
+
+    const NAMES = ['reviewHeader', 'reviewHeaderAll', 'reviewTabs', 'unreadableCsv', 'unreadableCsvAll', 'alreadyImportedCsvAll', 'filesStrip']
+    const wrong: string[] = []
+
+    for (const name of NAMES) {
+      const start = source.indexOf(`export function ${name}(`)
+      if (start === -1) {
+        wrong.push(`${name}: no \`export function ${name}(\` declaration`)
+        continue
+      }
+      const params = source.slice(start, source.indexOf('): ', start))
+      if (!params.includes('unit: ReviewUnit')) wrong.push(`${name}: no \`unit: ReviewUnit\` parameter`)
+      // An optional or defaulted unit silently no-ops for a caller that forgets it -- the
+      // same defect AC-4 forbids on the two tab components.
+      if (params.includes('unit?:') || /unit: ReviewUnit\s*=/.test(params)) wrong.push(`${name}: the unit is optional or defaulted`)
+      if (params.includes('batchUnit(') || params.includes('runUnit(')) wrong.push(`${name}: derives its own unit`)
+    }
+
+    expect(wrong).toEqual([])
+  })
+})
+
+describe('EXTR-15-09 SW-11 (D1/D3): the CSV cells follow the CSV header', () => {
+  // A builder that branched its header and left the cell array alone ships a three-column
+  // header over four-column lines, and every header-only spec passes it. This one does not:
+  // the column count is asserted PER LINE against the header's own.
+  it('SW-11 (RED until EXTR-15-09): every line of every branch has exactly as many cells as its header', () => {
+    const unreadableAll = [
+      { file: 'june.pdf', row: null, column: 'issue_date', message: CSV_MESSAGE },
+      { file: 'july.pdf', row: null, column: '—', message: 'no invoice number' },
+    ]
+    const alreadyImported = [
+      { file: 'june.pdf', row: null, invoiceId: 'inv-1' },
+      { file: 'july.pdf', row: null, invoiceId: null },
+    ]
+    const cases = [
+      { id: 'R5 spreadsheet', csv: unreadableCsvAllU(unreadableAll, 'spreadsheet'), columns: 4 },
+      { id: 'R5 document', csv: unreadableCsvAllU(unreadableAll, 'document'), columns: 3 },
+      { id: 'R6 spreadsheet', csv: alreadyImportedCsvAllU(alreadyImported, 'spreadsheet'), columns: 3 },
+      { id: 'R6 document', csv: alreadyImportedCsvAllU(alreadyImported, 'document'), columns: 2 },
+      { id: 'R4 spreadsheet', csv: unreadableCsvU([{ row: 4, column: 'issue_date', message: CSV_MESSAGE }], 'spreadsheet'), columns: 3 },
+      { id: 'R4 document', csv: unreadableCsvU([{ row: null, column: 'issue_date', message: CSV_MESSAGE }], 'document'), columns: 2 },
+    ]
+    const wrong: string[] = []
+
+    for (const c of cases) {
+      const lines = c.csv.split('\n')
+      // Floor, so a builder that returned only its header cannot satisfy a per-line check
+      // over an empty set.
+      if (lines.length < 2) {
+        wrong.push(`${c.id}: ${lines.length} line(s); the data rows are missing`)
+        continue
+      }
+      lines.forEach((line, i) => {
+        const n = splitCsvLine(line).length
+        if (n !== c.columns) wrong.push(`${c.id} line ${i}: ${n} cells, want ${c.columns} — ${JSON.stringify(line)}`)
+      })
+    }
+
+    // Control: the comma inside CSV_MESSAGE survives as ONE cell, so the counts above are
+    // real counts and not an artifact of a naive split.
+    const quoted = splitCsvLine(unreadableCsvAllU(unreadableAll, 'spreadsheet').split('\n')[1])
+    expect(quoted[quoted.length - 1], 'the RFC-4180 splitter is not honouring quotes').toBe(CSV_MESSAGE)
+
+    expect(wrong).toEqual([])
+  })
+})

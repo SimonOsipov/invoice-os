@@ -8,6 +8,9 @@
 // against today's component -- a genuine behavioural RED, not a resolution error. Second
 // test file for this component; ctx cast follows CreateFlow.test.tsx:60
 // (`as unknown as PlatformCtx`).
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -396,5 +399,63 @@ describe('ImportProgress — spreadsheet path unmoved (SHEET-3, EXTR-10-05, Core
     expect(statusText(r[4])).toBe(REASON)
     expect(statusColor(r[4])).toBe('var(--status-red-text)')
     expect(hasShimmer(r[4])).toBe(false)
+  })
+})
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): the footer's unit ----------------------
+//
+// AC-8, census site P1. "groups" is spreadsheet-only: the server groups rows into invoices
+// by the column mapped to invoice_number, and nothing groups when one document is one
+// invoice. The branch keys off ctx.runKind, which this card already reads for its rows --
+// no new prop.
+//
+// RED reason on landing: the footer is unbranched, so the document render returns today's
+// spreadsheet sentence. The failure is a wrong string, never a missing element.
+
+const SPREADSHEET_FOOTER =
+  'Remaining time is unknown — the server reads, groups, stores and validates each file in one request, and how long that takes depends on the file.'
+const DOCUMENT_FOOTER =
+  'Remaining time is unknown — the server reads, extracts and validates each document in one request, and how long that takes depends on the file.'
+const UNBRANCHED_FOOTER =
+  'Do not close this tab — each file imports on its own request, and closing it can leave the file in progress half-written.'
+
+function footerParagraphs(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll('[data-testid="import-progress"] p')).map((p) => (p.textContent ?? '').trim())
+}
+
+describe('EXTR-15-09 SW-9 (AC-8): the footer does not tell a document run the server grouped it', () => {
+  afterEach(() => cleanup())
+
+  it('SW-9 (RED until EXTR-15-09): a document run reads "extracts"; a spreadsheet run is byte-identical to today', () => {
+    const docRun: ImportRun = { files: [runFile('f1', 'a.pdf')], cursor: 0, status: 'running' }
+    const doc = footerParagraphs(render(<ImportProgress ctx={progressCtx('document', docRun, { f1: { kind: 'reading' } })} />).container)
+    cleanup()
+
+    const sheetRun: ImportRun = { files: [sheetFile('s1', 'a.csv', { kind: 'pending' })], cursor: 0, status: 'running' }
+    const sheet = footerParagraphs(render(<ImportProgress ctx={progressCtx('spreadsheet', sheetRun, {})} />).container)
+
+    // Control for the absence claim below: the card really rendered its two-paragraph
+    // footer, and the second paragraph is unbranched and identical in both units.
+    expect(doc, 'the document card rendered no footer').toHaveLength(2)
+    expect(sheet, 'the spreadsheet card rendered no footer').toHaveLength(2)
+    expect(doc[1]).toBe(UNBRANCHED_FOOTER)
+    expect(sheet[1]).toBe(UNBRANCHED_FOOTER)
+
+    expect(doc[0]).toBe(DOCUMENT_FOOTER)
+    expect(doc[0]).not.toContain('groups')
+    // AC-2, the freeze. This half is green today and is here as the ratchet.
+    expect(sheet[0]).toBe(SPREADSHEET_FOOTER)
+  })
+
+  it('SW-9 source (RED until EXTR-15-09): one sentence, two arms — the shared prose is not duplicated', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/components/ImportProgress.tsx'), 'utf8')
+    const count = (needle: string) => src.split(needle).length - 1
+
+    // Control needle. It is also the assertion: branching the whole sentence instead of
+    // the clause leaves two copies of the shared prose to drift apart on the next edit.
+    expect(count('Remaining time is unknown'), 'the footer sentence must exist exactly once').toBe(1)
+
+    expect(count('the server reads, groups, stores and validates each file in one request')).toBe(1)
+    expect(count('the server reads, extracts and validates each document in one request')).toBe(1)
   })
 })

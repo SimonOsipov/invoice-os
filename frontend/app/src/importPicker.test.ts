@@ -256,3 +256,48 @@ describe('PN-8: the e2e ACCEPTED_LINE names the narrowed set', () => {
     }
   })
 })
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): SW-8, census site C1 -------------------
+//
+// AC-7 / D2. C1 is the ONE of the 31 sites that does NOT branch. It renders at
+// pickedFiles.length === 0, where runKindOf answers null and no unit exists yet, so the
+// paragraph has to carry BOTH grains at once. Naming the extensions rather than the word
+// "spreadsheet" is what keeps it inside AC-3.
+//
+// RED reason on landing: the second sentence is simply not in the file. The absence half
+// (no "spreadsheet") is paired with the presence of the shipped sentence, so a rewrite
+// that emptied the paragraph cannot satisfy it over nothing.
+
+const SPREADSHEET_GRAIN = 'One row is one line item; rows group into invoices by the column you map to'
+const DOCUMENT_GRAIN = 'That grain is CSV and XLSX only: in a PDF or a DOCX, one document is one invoice.'
+const RUN_CAP = 'Pick up to five files per run.'
+
+describe('SW-8 (EXTR-15-09, AC-7): the empty picker states both grains', () => {
+  it('SW-8 (RED until EXTR-15-09): the document grain follows the spreadsheet one, in the same paragraph', () => {
+    const code = pickerCode()
+
+    // AC-2 freeze and the control needle in one: the shipped sentence is byte-identical.
+    const ssAt = code.indexOf(SPREADSHEET_GRAIN)
+    expect(ssAt, 'the shipped spreadsheet grain sentence is gone; SW-8 has lost its anchor').toBeGreaterThan(-1)
+
+    const docAt = code.indexOf(DOCUMENT_GRAIN)
+    const capAt = code.indexOf(RUN_CAP)
+    expect(capAt, `the paragraph must still end with ${JSON.stringify(RUN_CAP)}`).toBeGreaterThan(-1)
+    expect(docAt, 'the document grain sentence is not in CreateUpload.tsx').toBeGreaterThan(-1)
+
+    // D2 pins the ORDER: spreadsheet grain, then document grain, then the run cap.
+    expect(ssAt).toBeLessThan(docAt)
+    expect(docAt).toBeLessThan(capAt)
+
+    // ...and all three sit in ONE <p>, not in a second paragraph or a sibling branch.
+    const open = code.lastIndexOf('<p', ssAt)
+    const close = code.indexOf('</p>', ssAt)
+    expect(open, 'the spreadsheet grain is not inside a <p>').toBeGreaterThan(-1)
+    expect(docAt > open && docAt < close, 'the document grain is in a different paragraph').toBe(true)
+    expect(capAt > open && capAt < close, 'the run cap left the paragraph').toBe(true)
+
+    // AC-3: the document half names the extensions, never the word.
+    expect(DOCUMENT_GRAIN).not.toMatch(/spreadsheet/i)
+    expect(DOCUMENT_GRAIN).not.toMatch(/\brows?\b/i)
+  })
+})

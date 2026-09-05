@@ -241,7 +241,9 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
       capturedCtx!.openExtraction(JOB_A)
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: openExtraction must push /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'sanity: openExtraction must push /extraction/<jobId>').toBe(
+      `/extraction/${JOB_A}`,
+    )
     expect(ctx.extractionJobId, 'sanity: the job id must be set').toBe(JOB_A)
 
     await act(async () => {

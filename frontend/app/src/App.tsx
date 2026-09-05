@@ -9,7 +9,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseRoute, routePath, seedFromPath } from './lib/route'
+import { routePath, seedFromPath } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -531,8 +531,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.
+  // All three setters run in this one handler so the id lands in the same commit as
+  // the view, matching openImportedInvoice/openExtraction's one-handler invariant.
   useEffect(() => {
-    const onPopState = () => setView(parseRoute(window.location.pathname)?.view ?? 'dashboard')
+    const onPopState = () => {
+      const r = seedFromPath(window.location.pathname)
+      setView(r.view)
+      setDetailSel(r.invoiceId !== null ? selectImported(r.invoiceId) : clearSelection())
+      setExtractionJobId(r.jobId)
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
@@ -572,9 +579,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // The one URL writer for real navigation, mirroring the mount-alignment effect above.
   // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
   // to every pushed entry.
-  function navigate(view: View) {
+  // `id` is a parameter, not a state read: openImportedInvoice/openExtraction call this
+  // BEFORE their own setState commits, so reading the atom here would serialise the
+  // previous invoice/job.
+  function navigate(view: View, id: string | null = null) {
     setView(view)
-    window.history.pushState(null, '', routePath(view) + window.location.hash)
+    window.history.pushState(null, '', routePath(view, id) + window.location.hash)
   }
 
   function nav(id: View) {
@@ -1200,7 +1210,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // server's own row" IS the whole affirmation that a filing succeeded, and a second route
   // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
-    navigate('detail')
+    navigate('detail', id)
     setDetailSel(selectImported(id))
   }
 
@@ -1214,7 +1224,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Same one-handler shape as openAuditForInvoice above, same reason.
   function openExtraction(jobId: string) {
     setExtractionJobId(jobId)
-    navigate('extraction')
+    navigate('extraction', jobId)
   }
 
   function setSettingsTab(t: SettingsTab) {

@@ -409,7 +409,9 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
       capturedCtx!.openExtraction(JOB_A)
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: openExtraction must have pushed /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'sanity: openExtraction must have pushed /extraction/<jobId>').toBe(
+      `/extraction/${JOB_A}`,
+    )
     expect(ctx.extractionJobId, 'sanity: the job id was never written').toBe(JOB_A)
 
     await act(async () => {
@@ -502,7 +504,7 @@ describe('QA adversarial: switchClient from /extraction, the combined path+atom 
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
     })
-    expect(window.location.pathname, 'sanity').toBe('/extraction')
+    expect(window.location.pathname, 'sanity').toBe(`/extraction/${JOB_A}`)
     const lengthBefore = window.history.length
 
     await act(async () => {

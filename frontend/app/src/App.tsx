@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
-import { captureDestination } from './lib/deepLink'
+import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -315,11 +315,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
   // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
   // a review hash into an already-open tab's address bar does not navigate until reload.
+  // A stored destination only applies to a boot that landed on the bare root — the landing
+  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
+  const [bootPath] = useState<string>(() =>
+    window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
+  )
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname) ?? 'dashboard')),
+    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(bootPath) ?? 'dashboard')),
   )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
@@ -517,6 +522,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   useEffect(() => {
     window.history.replaceState(null, '', routePath(view) + window.location.hash)
+    clearDestination()
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.

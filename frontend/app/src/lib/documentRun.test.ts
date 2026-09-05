@@ -32,7 +32,7 @@ import {
 import type { DocumentPipelineDeps, DocumentRowState, DocumentRunFile } from './documentRun'
 import type { ExtractionJob, ImportReport } from './importApi'
 import { routeAfterRun } from './importRun'
-import type { ImportRun, RunFile } from './importRun'
+import type { FileOutcome, ImportRun, RunFile } from './importRun'
 import { LIVE_POLL_MS } from './invoices'
 
 function job(over: Partial<ExtractionJob>): ExtractionJob {
@@ -1365,5 +1365,98 @@ describe('the deployed dead-letter assertion tracks the shipped sentence (TS15-1
     for (const [k, sentence] of others) {
       expect(sentence.includes(needle), `the needle also matches ${k} — it does not identify the kind`).toBe(false)
     }
+  })
+})
+
+// ============================================================================
+// RED specs (EXTR-15-07, task-833, Mode A) — the hand-off's provenance.
+//
+// A dead-lettered document is stored and can never be re-extracted, so the only route left
+// is manual entry; the invoice typed that way must still name the document it came from
+// (EXTR-15-06 shipped source_document_id on the create wire). That id has to survive the
+// pipeline that failed.
+//
+// startDocumentRun binds `documentId` INSIDE the try (documentRun.ts:167), so the catch at
+// :179 holds only f.id/f.name/err. Hoisting it to `let documentId: string | undefined` is
+// what makes the table below pass — and the undefined leg is why it must stay optional:
+// when deps.upload itself throws, no document exists to hand off.
+//
+// documentIdOf casts rather than reading the property directly. The one typecheck red for
+// the missing field belongs to importRun.test.ts's HO-2, where AC-1 owns it.
+function documentIdOf(outcome: FileOutcome): string | undefined {
+  return (outcome as { documentId?: string }).documentId
+}
+
+describe('startDocumentRun — a failure names the document it failed on (HO-1, AC-2)', () => {
+  const DOC_ID = 'doc-a.pdf-stored'
+  type Leg = 'poll-verdict' | 'poll-throws' | 'import-throws' | 'upload-throws'
+
+  // Every leg uploads the SAME id, so a row's expectation differs only by where the
+  // pipeline died — never by what upload returned.
+  function depsFor(leg: Leg): DocumentPipelineDeps {
+    return {
+      upload: async () => {
+        if (leg === 'upload-throws') throw new Error('network: connection reset')
+        return DOC_ID
+      },
+      poll: async () => {
+        if (leg === 'poll-throws') throw new Error('GET /v1/extractions: 502 bad gateway')
+        if (leg === 'poll-verdict') return { kind: 'failed', reason: 'docling: no text layer and no page render' }
+        return { kind: 'succeeded', jobId: 'job-1' }
+      },
+      importDocument: async () => {
+        if (leg === 'import-throws') throw new Error('POST /v1/imports: 502 bad gateway')
+        return report('batch-1')
+      },
+      onStage: () => {},
+    }
+  }
+
+  const table: { leg: Leg; want: string | undefined; why: string }[] = [
+    // The non-succeeded verdict (documentRun.ts:170-174) is already inside the try, so it
+    // can see the binding today; red only because the field does not exist yet.
+    { leg: 'poll-verdict', want: DOC_ID, why: 'the poll returned a terminal failure' },
+    // The two post-upload throws land in the catch, where the hoist is load-bearing.
+    { leg: 'poll-throws', want: DOC_ID, why: 'poll rejected after the upload stored the document' },
+    { leg: 'import-throws', want: DOC_ID, why: 'importDocument rejected after the upload stored the document' },
+    // The one honest undefined: upload never returned, so there is nothing to hand off.
+    { leg: 'upload-throws', want: undefined, why: 'upload itself threw — no document exists' },
+  ]
+
+  for (const row of table) {
+    it(`HO-1 ${row.leg}: documentId is ${row.want ?? 'undefined'} — ${row.why}`, async () => {
+      const outcomes = await startDocumentRun(docFiles(['a.pdf']), depsFor(row.leg))
+
+      // Population floor and kind first, so the undefined row is never a vacuous pass on an
+      // empty array or on an 'imported' outcome that carries no documentId by definition.
+      expect(outcomes).toHaveLength(1)
+      const outcome = outcomes[0].outcome
+      expect(outcome.kind).toBe('failed')
+      if (outcome.kind !== 'failed') throw new Error('unreachable — asserted above')
+      expect(outcome.message.length, 'a failed outcome always carries a reason').toBeGreaterThan(0)
+
+      expect(documentIdOf(outcome)).toBe(row.want)
+    })
+  }
+
+  it('HO-1e: within ONE run, the file whose upload threw carries no id while its sibling does', async () => {
+    // The discriminator the four single-file rows cannot be: one pipeline hoisting
+    // correctly and the other not is invisible to a run of size 1.
+    const files = docFiles(['ok.pdf', 'boom.pdf'])
+    const deps: DocumentPipelineDeps = {
+      upload: async (file) => {
+        if (file.name === 'boom.pdf') throw new Error('network: connection reset')
+        return `doc-${file.name}`
+      },
+      poll: async () => ({ kind: 'failed', reason: 'docling: no text layer and no page render' }),
+      importDocument: async () => report('batch-1'),
+      onStage: () => {},
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes.map((o) => o.name)).toEqual(['ok.pdf', 'boom.pdf'])
+    expect(outcomes.map((o) => o.outcome.kind)).toEqual(['failed', 'failed'])
+    expect(outcomes.map((o) => documentIdOf(o.outcome))).toEqual(['doc-ok.pdf', undefined])
   })
 })

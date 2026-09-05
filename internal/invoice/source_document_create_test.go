@@ -227,3 +227,76 @@ func TestRLS_CreateSourceDocumentRefusalIsTheFKNotAbsence(t *testing.T) {
 			presentBody, absentBody)
 	}
 }
+
+// TestCreateHandler_TwoInvoicesMayNameOneSourceDocument (EXTR-15-07 HO-11,
+// AC-11): the hand-off button stays clickable after a filing, so the same
+// document can be typed up twice. Nothing forbids that -- 20260802163544_
+// documents.sql:60-61 creates a PARTIAL, non-unique index on
+// source_document_id, and the spreadsheet path already writes N invoices
+// against one document. The guard against filing the SAME invoice twice is
+// the shipped duplicate-number outcome, not a per-document one.
+//
+// Green by design, not red: the server half shipped in EXTR-15-06. This is
+// the regression pin AC-11's claim rests on -- without it, a later "one
+// invoice per document" unique index would break the surface silently.
+func TestCreateHandler_TwoInvoicesMayNameOneSourceDocument(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	tenantID := seedTenant(t, super, "EXTR-15-07 HO-11 tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-15-07 HO-11 entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	store := NewStore(app)
+
+	const firstNumber = "EXTR-15-07-HO11-A"
+	const secondNumber = "EXTR-15-07-HO11-B"
+
+	firstRec, firstBody := createViaHandler(t, store, tenantID,
+		createBodyWithDocument(entityID, firstNumber, documentID))
+	if firstRec.Code != http.StatusCreated {
+		t.Fatalf("first filing: status = %d, want 201 (body=%s)", firstRec.Code, firstBody)
+	}
+
+	// Leg 1: the SAME number again. The duplicate-number 409 is the guard,
+	// and it must be that -- never a 500 from an index nobody expected.
+	dupRec, dupBody := createViaHandler(t, store, tenantID,
+		createBodyWithDocument(entityID, firstNumber, documentID))
+	if dupRec.Code != http.StatusConflict {
+		t.Errorf("second filing, same number: status = %d, want 409 (body=%s)", dupRec.Code, dupBody)
+	}
+	if !strings.Contains(dupBody, "duplicate invoice number") {
+		t.Errorf("second filing, same number: body = %s, want the shipped duplicate-number refusal", dupBody)
+	}
+	if n := invoiceCountByNumber(t, super, tenantID, firstNumber); n != 1 {
+		t.Errorf("count(invoices where invoice_number=%q) = %d, want 1 -- the 409 must leave exactly the first row", firstNumber, n)
+	}
+
+	// Leg 2: a DIFFERENT number against the same document. Both persist, and
+	// both carry the pointer. This is what a unique index would break.
+	secondRec, secondBody := createViaHandler(t, store, tenantID,
+		createBodyWithDocument(entityID, secondNumber, documentID))
+	if secondRec.Code != http.StatusCreated {
+		t.Fatalf("second filing, new number: status = %d, want 201 (body=%s)", secondRec.Code, secondBody)
+	}
+
+	var first, second invoiceBody
+	if err := json.Unmarshal([]byte(firstBody), &first); err != nil {
+		t.Fatalf("decode first response %q: %v", firstBody, err)
+	}
+	if err := json.Unmarshal([]byte(secondBody), &second); err != nil {
+		t.Fatalf("decode second response %q: %v", secondBody, err)
+	}
+	if first.ID == "" || second.ID == "" || first.ID == second.ID {
+		t.Fatalf("want two distinct invoice ids, got %q and %q", first.ID, second.ID)
+	}
+
+	for _, c := range []struct {
+		label string
+		id    string
+	}{{"first", first.ID}, {"second", second.ID}} {
+		got := sourceDocumentOf(t, super, c.id)
+		if got == nil || *got != documentID {
+			t.Errorf("%s invoice: source_document_id = %v, want %q", c.label, got, documentID)
+		}
+	}
+}

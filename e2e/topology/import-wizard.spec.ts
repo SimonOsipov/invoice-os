@@ -6451,6 +6451,154 @@ test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll exte
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// --- EXTR-15-07 (task-833) · the hand-off row's geometry --------------------------------
+//
+// AC-10, authored in Mode A and UNEXECUTED here: topology specs run only on the deploy
+// gate, and this PR's environment does not exist until it leaves draft. Subtask 13 is what
+// runs it. The local oracle at authoring time was `pnpm --filter @invoice-os/e2e typecheck`
+// plus `playwright test --list`.
+//
+// Placed ABOVE the EXTR-18-07 block deliberately: deployedProofGuards.test.ts scans that
+// block from its marker to EOF and requires every `buffer:` argument in it to be a
+// `unique*PdfBytes()` call. This test's fixture is uniqueGarbageBytes() — fresh per call for
+// the same enqueue-key reason, but not a PDF and not that helper family.
+//
+// Reached by a run whose ONLY file dead-letters: routeAfterRun answers `none`, applyRoute
+// calls markRunFailed, and CreateFlow renders the failures card on the 'documents' step.
+// A single-file run removes EXTR10-E2E-02's race entirely -- 'failed' is terminal, so the
+// card cannot be routed out from under the sweep and nothing needs holding open.
+//
+// Containment is measured with overlapOf (layout.ts:68-77), which returns a Rect. The
+// identity `overlapOf(inner, outer) === inner` is the only expression of "inner is wholly
+// inside outer"; rectsOverlap (layout.ts:55-58) returns a boolean and is true for a row
+// hanging half out of its card, so it cannot state this at all.
+//
+// NO ASSERTION STATES A PIXEL WIDTH. A width assertion passes on the very bug it should
+// catch (a row that fits at 2560 and overflows at 1280 has the same width at both). What
+// is asserted instead is a RELATIONSHIP that must hold at every width.
+function sameRect(a: Rect, b: Rect, slackPx = 1): boolean {
+  return (
+    Math.abs(a.x - b.x) <= slackPx &&
+    Math.abs(a.y - b.y) <= slackPx &&
+    Math.abs(a.width - b.width) <= slackPx &&
+    Math.abs(a.height - b.height) <= slackPx
+  )
+}
+
+test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutter holds at every width', async ({
+  page,
+}, testInfo) => {
+  // Upload + enqueue + River's attempt^4s backoff to dead-letter, then four widths.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-15-07 handoff ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  // *.pdf bytes that are not a PDF: pdfium refuses it on all three attempts and the worker
+  // dead-letters deterministically (uniqueGarbageBytes' own doc comment).
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'handoff-dead-letter.pdf', mimeType: 'application/pdf', buffer: uniqueGarbageBytes() })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const card = page.getByTestId('document-failures-card')
+  await expect(card, 'an all-failed document run must land on the failures card').toBeVisible({ timeout: 180_000 })
+
+  const rows = page.getByTestId('document-failure-row')
+  // Non-empty FIRST: an empty locator satisfies every containment check below vacuously.
+  await expect(rows, 'the failure must render as its own row').toHaveCount(1)
+  await expect(rows.first(), 'the row must name why the document was refused').toContainText(DEAD_LETTER_NEEDLE)
+
+  const button = rows.first().getByRole('button', { name: 'Enter it by hand' })
+  await expect(button, 'a stored document must offer the hand-off').toHaveCount(1)
+  const reason = rows.first().locator('span').filter({ hasText: DEAD_LETTER_NEEDLE }).first()
+  await expect(reason, 'the reason sentence must be measurable').toHaveCount(1)
+
+  type Sample = { width: number; clearance: number; rowWidth: number }
+  const samples: Sample[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first — WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the
+    // window gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [cardBox, rowBox, reasonBox, buttonBox, rowEdges] = await Promise.all([
+          card.boundingBox(),
+          rows.first().boundingBox(),
+          reason.boundingBox(),
+          button.boundingBox(),
+          rows.first().evaluate(edgesOf),
+        ])
+        return { cardBox, rowBox, reasonBox, buttonBox, rowEdges }
+      }
+      const m = await settledRead(read, `hand-off row at ${width}px`)
+      expect(
+        m.cardBox && m.rowBox && m.reasonBox && m.buttonBox,
+        `card, row, reason and button must all render at ${width}px`,
+      ).toBeTruthy()
+
+      // (a) the row is CONTAINED by the card — the intersection is the row's own rect.
+      expect(
+        sameRect(overlapOf(m.rowBox!, m.cardBox!), m.rowBox!),
+        `the row must sit wholly inside the card at ${width}px (row ${JSON.stringify(m.rowBox)}, card ${JSON.stringify(m.cardBox)})`,
+      ).toBe(true)
+
+      // (b) the reason and the control are both contained by their row, same identity.
+      expect(
+        sameRect(overlapOf(m.reasonBox!, m.rowBox!), m.reasonBox!),
+        `the reason must sit wholly inside its row at ${width}px (reason ${JSON.stringify(m.reasonBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+      expect(
+        sameRect(overlapOf(m.buttonBox!, m.rowBox!), m.buttonBox!),
+        `the control must sit wholly inside its row at ${width}px (button ${JSON.stringify(m.buttonBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+
+      // (c) the gutter between the control's right edge and the row's right CONTENT edge
+      // (edgesOf subtracts the row's own border and padding, so this is the gap the
+      // recipe's `padding: '10px 14px'` declares, not the border box).
+      samples.push({
+        width,
+        clearance: m.rowEdges.right - (m.buttonBox!.x + m.buttonBox!.width),
+        rowWidth: m.rowBox!.width,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(
+    samples.map((s) => s.width),
+    'every WIDE_WIDTHS entry must be measured, widest first',
+  ).toEqual([...WIDE_WIDTHS])
+
+  // The gutter is a RELATIONSHIP, compared against this run's own widest reading rather
+  // than a literal. A row that fits at 2560 and overflows at 1280 moves this number;
+  // a row whose width merely changes with the viewport does not.
+  const widest = samples[0].clearance
+  for (const s of samples) {
+    expect(
+      Math.abs(s.clearance - widest),
+      `the control's clearance from the row's right content edge must not change with the viewport (${s.width}px: ${s.clearance}, 2560px: ${widest})`,
+    ).toBeLessThanOrEqual(1)
+    expect(s.clearance, `the control must not overflow the row's right content edge at ${s.width}px`).toBeGreaterThanOrEqual(-0.5)
+  }
+
+  await testInfo.attach('handoff-row-geometry.json', {
+    body: JSON.stringify(samples, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // --- EXTR-18-07 · the deployed proof: docling's real reading, not the mock's fixed shape ---
 //
 // Cannot run before EXTRACTOR=docling is set on production and this PR leaves draft (D-35) --

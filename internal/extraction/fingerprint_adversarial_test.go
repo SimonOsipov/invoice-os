@@ -562,3 +562,92 @@ func TestBoxlessFingerprint_ReadsPageOneOnly(t *testing.T) {
 		t.Errorf("BoxlessFingerprint([page 2, page 1]) = %q, want %q -- page 2 leaked in because it sorted first in the input slice", got, alone)
 	}
 }
+
+// --- EXTR-19-02 QA (Mode B): three surviving mutants from the Stage-4 pass -------------------
+
+// AC-3/AC-5. One element per (token, matcher), from the LEFTMOST match only. Switching to
+// FindAllStringIndex compiles, reads as a fix, and moves every stored b1: value; nothing in the
+// Stage-2.5 set noticed, because no fixture repeats a label inside one token.
+func TestBoxlessFingerprint_EmitsOneElementPerTokenAndMatcher(t *testing.T) {
+	repeats := []string{"Total Total", "Invoice No and Invoice Number", "Grand Total and Total"}
+	for _, text := range repeats {
+		got := extraction.AnchorLabelPlacementsForTest(text)
+		if len(got) != 1 {
+			t.Errorf("AnchorLabelPlacementsForTest(%q) = %v, want exactly 1 element -- a repeated label inside one token is still one hit", text, got)
+		}
+	}
+
+	// Control needle: two DIFFERENT matchers over one token DO yield two elements, so the
+	// count above is a leftmost-match rule and not a blanket one-per-token cap.
+	if got := extraction.AnchorLabelPlacementsForTest("Sub-total"); !slices.Equal(got, []string{"subtotal:w", "total:i"}) {
+		t.Errorf("AnchorLabelPlacementsForTest(%q) = %v, want [subtotal:w total:i]", "Sub-total", got)
+	}
+
+	// The digest, not only the helper: a page whose token names total twice must land on the
+	// page whose token names it once.
+	twice := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{bxZeroTok("Total Total")}}})
+	once := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{bxZeroTok("Total: NGN 1.00")}}})
+	bxRealValue(t, "Total Total", twice)
+	bxRealValue(t, "Total: NGN 1.00", once)
+	if twice != once {
+		t.Errorf("BoxlessFingerprint(%q) = %q, BoxlessFingerprint(%q) = %q, want equal -- both are one leading total and nothing else",
+			"Total Total", twice, "Total: NGN 1.00", once)
+	}
+}
+
+// AC-6. The FIRST page numbered 1 is the whole input; a second one is not appended. Deleting
+// BoxlessFingerprint's break survived the whole Stage-2.5 set, because no spec there hands it
+// two page-1s.
+func TestBoxlessFingerprint_ReadsTheFirstPageNumberedOne(t *testing.T) {
+	first := []extraction.Token{bxZeroTok("Invoice No")}
+	second := []extraction.Token{bxZeroTok("Total")}
+
+	alone := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: first}})
+	other := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: second}})
+	both := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: append(append([]extraction.Token{}, first...), second...)}})
+	for _, c := range []struct{ role, fp string }{{"page 1 alone", alone}, {"the second page-1 alone", other}, {"both token runs on one page", both}} {
+		bxRealValue(t, c.role, c.fp)
+	}
+	// Three distinguishable outcomes, or "first wins" cannot be told from "both" or "last".
+	if n := bxDistinct([]string{alone, other, both}); n != 3 {
+		t.Fatalf("the three token runs yield %d distinct value(s) [%q %q %q], want 3; the assertion below would pass whichever page won", n, alone, other, both)
+	}
+
+	got := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: first}, {Number: 1, Tokens: second}})
+	if got != alone {
+		t.Errorf("BoxlessFingerprint([page 1, page 1]) = %q, want %q -- only the first page numbered 1 is read", got, alone)
+	}
+}
+
+// AC-5. labelPlacement compares BYTE offsets against len(text): the whole-token arm requires an
+// exact byte-for-byte fit, so an invisible trailing space demotes "Total" from w to l and moves
+// the layout onto the inline identity. Same hazard class as "Invoice No:" -- see
+// TestBoxlessFingerprint_SplitsWholeLeadingAndInlineLabels -- and the reason a stacked fixture
+// must be generated, never hand-typed. Trimming here is a deliberate change, not a tidy-up.
+func TestBoxlessFingerprint_ClassifiesOnRawBytes(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{"Total", "total:w"},
+		{"Total ", "total:l"},
+		{" Total", "total:i"},
+		{"Totalé", "total:l"}, // a multi-byte tail is a tail; len is bytes, not runes
+	}
+
+	fps := make([]string, 0, len(cases))
+	for _, c := range cases {
+		got := extraction.AnchorLabelPlacementsForTest(c.text)
+		if !slices.Equal(got, []string{c.want}) {
+			t.Errorf("AnchorLabelPlacementsForTest(%q) = %v, want [%s]", c.text, got, c.want)
+		}
+		fp := extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{bxZeroTok(c.text)}}})
+		bxRealValue(t, c.text, fp)
+		fps = append(fps, fp)
+	}
+	if len(fps) != len(cases) {
+		t.Fatalf("fingerprinted %d of %d case(s)", len(fps), len(cases))
+	}
+
+	// w, l and i are three identities here too, so the placements above are load-bearing.
+	if n := bxDistinct(fps[:3]); n != 3 {
+		t.Errorf("%q, %q and %q yield %d distinct fingerprint(s) %q, want 3", cases[0].text, cases[1].text, cases[2].text, n, fps[:3])
+	}
+}

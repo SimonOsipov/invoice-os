@@ -914,3 +914,29 @@ func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
 		}
 	}
 }
+
+// --- EXTR-19-02 QA (Mode B) -----------------------------------------------------------------
+
+// bxFixturePinned is the boxless value of each committed DOCX golden, derived independently of
+// the implementation from the golden's page-1 texts and anchorLexicon. Everything downstream
+// (EXTR-19-04/05 rule lookups) keys on these, so a moved value is a rule-invalidation event.
+var bxFixturePinned = []struct{ golden, want string }{
+	{dxGolden, "b1:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxInlineGolden, "b1:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxStackedGolden, "b1:e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f"},
+}
+
+// AC-1/AC-2 as absolute values. The relational specs above say A != B and A == A-prime; they
+// hold under any implementation that moves all three together. This one does not.
+func TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures(t *testing.T) {
+	if len(bxFixturePinned) != 3 {
+		t.Fatalf("bxFixturePinned pins %d fixture(s), want 3", len(bxFixturePinned))
+	}
+	for _, c := range bxFixturePinned {
+		got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden)))
+		if got != c.want {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved, which invalidates every stored b1: rule and needs a BoxlessFingerprintVersion bump.\n  elements = %v",
+				c.golden, got, c.want, bxElements(bxPage1(t, c.golden)))
+		}
+	}
+}

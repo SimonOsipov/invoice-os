@@ -2867,3 +2867,118 @@ describe('QA-311-5: unreadableRowsAll across two files erroring on the SAME row 
     expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv' })
   })
 })
+
+// --- EXTR-15-08 (task-834, Mode A / test-first): the review unit derivation -------------
+//
+// RED on landing. `batchUnit`/`runUnit` do not exist in reviewBatch.ts yet, so every spec
+// below fails on the explicit `not implemented — …` thrown here, never on an
+// import/collection error. That is why the module is reached through a NAMESPACE import
+// rather than a named one: a named import of a missing export is a link error, which
+// would take this file's 200-odd shipped specs down with it.
+//
+// The derivation reads the batch FILENAME through classifyPickedFile, never
+// `import_batches.document_id` — the spreadsheet path stores its upload in `documents`
+// too (internal/importer/service.go), so document_id is set on both kinds and cannot
+// discriminate. UN-4 is the guard that pins that.
+import * as unitModule from './reviewBatch'
+
+type ReviewUnitT = 'spreadsheet' | 'document'
+
+function notImplemented(name: string, shape: string): never {
+  throw new Error(`not implemented — lib/reviewBatch.ts must export ${name}: ${shape}`)
+}
+
+function batchUnit(batch: Pick<ImportBatch, 'filename'>): ReviewUnitT {
+  const fn = (unitModule as Record<string, unknown>).batchUnit
+  if (typeof fn !== 'function') {
+    notImplemented('batchUnit', "(batch: Pick<ImportBatch,'filename'>) => 'spreadsheet' | 'document'")
+  }
+  return (fn as (b: Pick<ImportBatch, 'filename'>) => ReviewUnitT)(batch)
+}
+
+function runUnit(batches: Pick<ImportBatch, 'filename'>[]): ReviewUnitT {
+  const fn = (unitModule as Record<string, unknown>).runUnit
+  if (typeof fn !== 'function') {
+    notImplemented('runUnit', "(batches: Pick<ImportBatch,'filename'>[]) => 'spreadsheet' | 'document'")
+  }
+  return (fn as (b: Pick<ImportBatch, 'filename'>[]) => ReviewUnitT)(batches)
+}
+
+const UNIT_SRC = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
+
+describe('batchUnit: the unit comes from the filename, through the shipped classifier (EXTR-15-08)', () => {
+  // TWO document extensions, not six. EXTR-15-03 narrowed ACCEPTED_PICKED_TYPES to
+  // .csv/.xlsx/.pdf/.docx; a six-row table would pass against a classifier that never
+  // narrowed.
+  it("UN-1 (AC-1): .pdf/.docx in any case are 'document'; .csv/.xlsx in any case are 'spreadsheet'", () => {
+    for (const filename of ['invoice.pdf', 'INVOICE.PDF', 'invoice.docx', 'Invoice.DOCX']) {
+      expect(batchUnit({ filename })).toBe('document')
+    }
+    for (const filename of ['ledger.csv', 'LEDGER.CSV', 'ledger.xlsx', 'Ledger.XLSX']) {
+      expect(batchUnit({ filename })).toBe('spreadsheet')
+    }
+  })
+
+  // 'spreadsheet' is the FALLBACK, so a batch imported before any of this reads
+  // byte-identically to how it reads today. 'a.png' pins EXTR-15-03's narrowing having a
+  // consequence: images left the table, so such a batch now classifies null and lands
+  // here — and it can only be pre-narrowing data.
+  it("UN-2 (AC-2): null, '', and any name outside both sets fall back to 'spreadsheet'", () => {
+    expect(batchUnit({ filename: null })).toBe('spreadsheet')
+    for (const filename of ['', 'a', 'a.csv.bak', 'a.txt', 'a.png']) {
+      expect(batchUnit({ filename })).toBe('spreadsheet')
+    }
+  })
+})
+
+describe("runUnit: 'document' only when every batch is one (EXTR-15-08)", () => {
+  // The mixed case is unreachable by construction — addPickedFiles refuses a mixed
+  // selection (importRun.ts kindRefusal) — but it is DEFINED rather than left to crash or
+  // to answer off the first element, which is what runKindOf (importRun.ts:93) does.
+  it("UN-3 (AC-3): all-document is 'document'; all-spreadsheet, mixed and [] are 'spreadsheet'", () => {
+    expect(runUnit([{ filename: 'a.pdf' }, { filename: 'b.docx' }])).toBe('document')
+    expect(runUnit([{ filename: 'a.csv' }, { filename: 'b.xlsx' }])).toBe('spreadsheet')
+    expect(runUnit([{ filename: 'a.pdf' }, { filename: 'b.csv' }])).toBe('spreadsheet')
+    expect(runUnit([{ filename: 'a.csv' }, { filename: 'b.pdf' }])).toBe('spreadsheet')
+    expect(runUnit([])).toBe('spreadsheet')
+  })
+})
+
+// Source scans. A behavioural spec cannot see WHICH field was read: a batchUnit branching
+// on document_id would answer correctly for every fixture above, because a fixture's
+// filename and its document_id would agree.
+describe('the derivation reads one field and owns no extension table (EXTR-15-08)', () => {
+  function batchUnitBody(source: string): string {
+    const start = source.indexOf('export function batchUnit')
+    if (start === -1) {
+      notImplemented('batchUnit', 'no `export function batchUnit` declaration in lib/reviewBatch.ts')
+    }
+    const end = source.indexOf('\n}\n', start)
+    if (end === -1) throw new Error('batchUnit is not closed by a top-level `}`')
+    return source.slice(start, end + 3)
+  }
+
+  it("UN-4 (AC-4): batchUnit's body names classifyPickedFile and none of document_id/rows_total/status/errors", () => {
+    const body = batchUnitBody(readFileSync(UNIT_SRC, 'utf8'))
+
+    // CONTROL, paired with the four absences below: an emptied or renamed function would
+    // otherwise satisfy every not.toContain and pass on nothing.
+    expect(body).toContain('classifyPickedFile')
+
+    for (const forbidden of ['document_id', 'rows_total', 'status', 'errors']) {
+      expect(body).not.toContain(forbidden)
+    }
+  })
+
+  it('UN-5 (AC-5): reviewBatch.ts imports classifyPickedFile from ./importFlow and declares no extension of its own', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    expect(source).toMatch(/import\s*\{[^}]*\bclassifyPickedFile\b[^}]*\}\s*from\s*'\.\/importFlow'/)
+
+    // One extension table in the SPA (importFlow.ts's ACCEPTED_PICKED_TYPES). A second
+    // one here is how the two silently disagree after the next narrowing.
+    for (const ext of ['.csv', '.xlsx', '.pdf', '.docx']) {
+      expect(source).not.toContain(`'${ext}'`)
+    }
+  })
+})

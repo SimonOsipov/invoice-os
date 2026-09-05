@@ -196,27 +196,27 @@ describe('AC-6: the alignment writes no history entry, and is idempotent', () =>
     ).toHaveLength(0)
   })
 
-  // No AC test pins the alignment's own dependency array. `ctx.nav` still just calls
-  // `setView` at this point in the story (navigate()/pushState is ROUTE-01-03), so a
-  // later view change is reachable today without any history write. The pre-existing
-  // review-hash mirror (App.tsx:524-530, untouched, out of scope) ALSO depends on `view`
-  // and legitimately re-fires on every nav -- so this checks for a replaceState call
-  // naming the NEW view's own path specifically, which only a widened alignment would
-  // ever produce; a raw call-count comparison would false-fail on the mirror's own calls.
+  // No AC test pins the alignment's own dependency array. Since ROUTE-01-03, `ctx.nav`
+  // calls navigate(), which pushState's straight to the new path -- so the pre-existing
+  // review-hash mirror (App.tsx:533-539, untouched, out of scope), keyed on `view`, now
+  // legitimately replaceState's that same path back on every nav. That makes "did some
+  // replaceState call name /invoices" unusable as a discriminator: the mirror produces
+  // exactly that call on a correct build. Count calls instead -- the mirror contributes
+  // exactly one; a widened mount alignment would contribute a second.
   it('boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount', async () => {
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     await bootAt('/audit')
     const ctx = requireCtx()
+    const callsBeforeNav = replaceSpy.mock.calls.length
 
     await act(async () => {
       ctx.nav('invoices')
     })
 
-    const wroteInvoicesPath = replaceSpy.mock.calls.some((call) => typeof call[2] === 'string' && call[2].startsWith('/invoices'))
     expect(
-      wroteInvoicesPath,
-      'a post-mount view change must not re-trigger the mount-only alignment effect (it would replaceState to /invoices)',
-    ).toBe(false)
+      replaceSpy.mock.calls.length - callsBeforeNav,
+      'exactly one replaceState is expected after a view change (the review-hash mirror, App.tsx:533-539); a second would mean the mount-only alignment effect re-ran',
+    ).toBe(1)
   })
 })
 

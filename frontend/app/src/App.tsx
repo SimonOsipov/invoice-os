@@ -309,12 +309,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // URL as `pathname + window.location.hash`, preserving it.
   //
   // There is NO `hashchange` listener, by decision. D4 asks that the screen survive a
-  // RELOAD, which it does. In-SPA history navigation does not exist for any surface in
-  // this app (replaceState everywhere, no router), and a listener for this one screen
-  // would make the app half-routed with a divergence the mirror effect below cannot
-  // reconcile (hash hand-deleted while the review screen is still mounted). Recorded
-  // limitation: pasting a review hash into an already-open tab's address bar does not
-  // navigate until reload.
+  // RELOAD, which it does. Path routing now pushes real history entries (navigate(),
+  // below); this hash still has no listener, and adding one here would make review
+  // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
+  // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
+  // a review hash into an already-open tab's address bar does not navigate until reload.
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
@@ -547,8 +546,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     if (view === 'audit' && auditPrefilter != null) setAuditPrefilter(null)
   }, [view, auditPrefilter])
 
+  // The one URL writer for real navigation, mirroring the mount-alignment effect above.
+  // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
+  // to every pushed entry.
+  function navigate(view: View) {
+    setView(view)
+    window.history.pushState(null, '', routePath(view) + window.location.hash)
+  }
+
   function nav(id: View) {
-    setView(id)
+    navigate(id)
     setSwitcherOpen(false)
   }
 
@@ -558,7 +565,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   function switchClient(id: string) {
     setActiveEntityId(id)
-    setView('dashboard')
+    navigate('dashboard')
     setDetailSel(clearSelection())
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
@@ -579,10 +586,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // dashboard, and leaving this set means the next visit to Workflows reopens the
     // builder mid-edit instead of the policy list the user asked for.
     setEditingPolicyId(null)
+    // A job belongs to ONE entity. Routing makes /extraction reachable by Back, so leaving
+    // this set renders the company just left under the incoming company's chrome.
+    setExtractionJobId(null)
   }
 
   function openCreate() {
-    setView('create')
+    navigate('create')
     setCreateStep('upload')
     setDraft(defaultDraft(active))
     setFilingError(null)
@@ -613,7 +623,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   function closeCreate() {
-    setView('invoices')
+    navigate('invoices')
   }
 
   function updateDraft<K extends keyof Draft>(field: K, value: Draft[K]) {
@@ -1136,7 +1146,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   function selectInvoice(number: string) {
-    setView('detail')
+    navigate('detail')
     setDetailSel(selectMock(number))
   }
 
@@ -1148,7 +1158,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // server's own row" IS the whole affirmation that a filing succeeded, and a second route
   // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
-    setView('detail')
+    navigate('detail')
     setDetailSel(selectImported(id))
   }
 
@@ -1156,13 +1166,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // carries the atom -- AuditView reads it during THAT render, before any effect runs.
   function openAuditForInvoice(invoiceId: string, invoiceNumber: string | null) {
     setAuditPrefilter({ invoiceId, invoiceNumber })
-    setView('audit')
+    navigate('audit')
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
   function openExtraction(jobId: string) {
     setExtractionJobId(jobId)
-    setView('extraction')
+    navigate('extraction')
   }
 
   function setSettingsTab(t: SettingsTab) {
@@ -1574,7 +1584,11 @@ export default function App() {
       // Symmetric with becomePersona: a sign-out (or a newer switch) mid-floor
       // invalidates this commit.
       if (identityGen.current !== gen) return
-      setCarriedView(carryView(view))
+      const carried = carryView(view)
+      setCarriedView(carried)
+      // replaceState, not push: a persona switch must not be Back-able, and the address
+      // bar must not still name a screen (e.g. /create) the carried view left behind.
+      window.history.replaceState(null, '', routePath(carried) + window.location.hash)
       setStandIn(null)
       if (wasStandingIn) {
         setToast({ name: seatMember.name, initials: seatMember.initials, role: seatMember.role, seq: ++toastSeq.current })
@@ -1601,7 +1615,10 @@ export default function App() {
       // A sign-out (or a newer switch) mid-mint invalidates this commit -- the Workspace
       // it would resurrect is already gone.
       if (identityGen.current !== gen) return
-      setCarriedView(carryView(view))
+      const carried = carryView(view)
+      setCarriedView(carried)
+      // Same reason as returnToSeat above.
+      window.history.replaceState(null, '', routePath(carried) + window.location.hash)
       setStandIn(next)
       setToast({ name: member.name, initials: member.initials, role: member.role, seq: ++toastSeq.current })
     },

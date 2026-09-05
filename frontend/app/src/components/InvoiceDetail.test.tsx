@@ -4484,7 +4484,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
   // What BUG-13 puts on this page. The chip ships in BUG-13-01 and lands in `seen` on
   // every scenario that mounts a rule_set_version, so it must be declared here now.
-  const BUG_13_TESTIDS = ['compliance-ruleset-version']
+  const BUG_13_TESTIDS = ['compliance-ruleset-version', 'compliance-card']
 
   // Deleted by AUDIT-09-02, AUDIT-09-06 and BUG-13-01. A resurrection is as much a surface
   // change as a deletion, and `git grep` cannot see one that arrives under a new component.

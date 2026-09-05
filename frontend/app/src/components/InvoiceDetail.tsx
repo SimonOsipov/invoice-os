@@ -380,7 +380,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
         ? (ctx.members.find((m) => m.isYou && m.role === 'preparer') ?? null)
         : null
     // A live rejection leads the rail, matching failed-dead-end's position; a demoted/
-    // historical one stays below Compliance so it doesn't overstate a resolved event.
+    // historical one stays below Approval state so it doesn't overstate a resolved event.
     const rejectionLeadsRail = rejectionProvenance(inv.status) === 'current'
     const rejectionCard = shouldShowRejectionCard(inv) ? (
       <div data-testid="rejection-reasons" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
@@ -1134,6 +1134,53 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               )}
             </div>
 
+            <div data-testid="compliance-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <span className="card-title">Compliance</span>
+                {/* Gated on the same condition that chooses the table over not-validated:
+                    an invoice never validated must not be told a version. */}
+                {inv.rule_set_version != null && (
+                  <span data-testid="compliance-ruleset-version" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                    Rule-set v{inv.rule_set_version}
+                  </span>
+                )}
+              </div>
+              <div style={{ padding: 16 }}>
+                {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching
+                    ReviewRow.tsx's own kept-as-is banner rather than inventing a second
+                    tone for the same fact. */}
+                {kept && (
+                  <div
+                    data-testid="detail-kept-banner"
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                  >
+                    <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
+                    <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
+                  </div>
+                )}
+                {verdict === 'stale' && (
+                  <div
+                    data-testid="stale-verdict"
+                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
+                  >
+                    Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
+                  </div>
+                )}
+                {inv.rule_set_version != null ? (
+                  <div data-testid="violations-table">
+                    <ViolationsTable violations={inv.violations} ruleSetVersion={inv.rule_set_version} />
+                  </div>
+                ) : (
+                  <div
+                    data-testid="not-validated"
+                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+                  >
+                    Not yet validated — run Re-validate to check compliance.
+                  </div>
+                )}
+              </div>
+            </div>
+
             <InvoiceActivityCard ctx={ctx} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} />
           </div>
 
@@ -1292,53 +1339,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 </div>
               </div>
             )}
-
-            <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <span className="card-title">Compliance</span>
-                {/* Gated on the same condition that chooses the table over not-validated:
-                    an invoice never validated must not be told a version. */}
-                {inv.rule_set_version != null && (
-                  <span data-testid="compliance-ruleset-version" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                    Rule-set v{inv.rule_set_version}
-                  </span>
-                )}
-              </div>
-              <div style={{ padding: 16 }}>
-                {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching
-                    ReviewRow.tsx's own kept-as-is banner rather than inventing a second
-                    tone for the same fact. */}
-                {kept && (
-                  <div
-                    data-testid="detail-kept-banner"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
-                  >
-                    <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
-                    <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
-                  </div>
-                )}
-                {verdict === 'stale' && (
-                  <div
-                    data-testid="stale-verdict"
-                    style={{ marginBottom: 12, padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)' }}
-                  >
-                    Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
-                  </div>
-                )}
-                {inv.rule_set_version != null ? (
-                  <div data-testid="violations-table">
-                    <ViolationsTable violations={inv.violations} ruleSetVersion={inv.rule_set_version} />
-                  </div>
-                ) : (
-                  <div
-                    data-testid="not-validated"
-                    style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
-                  >
-                    Not yet validated — run Re-validate to check compliance.
-                  </div>
-                )}
-              </div>
-            </div>
 
             <ApprovalStateCard run={approval} />
 

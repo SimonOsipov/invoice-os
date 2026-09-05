@@ -4336,6 +4336,48 @@ describe('InvoiceDetail moves the Compliance card into the main column (BUG-13-0
       'the clean-pass sentence must read off the same rule-set version',
     ).toBeTruthy()
   })
+
+  // QA adversarial. Every other position spec (invoiceDetail_complianceCardIsTheMainColumnsSecondChild)
+  // fixtures a validated invoice, so the position claim was never checked against the OTHER
+  // body state -- a testid moved onto the not-validated wrapper instead of the card itself
+  // would pass that spec and still fail here.
+  it('invoiceDetail_notValidatedInvoiceCompliancePositionUnchanged', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', rule_set_version: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const column = await screen.findByTestId('invoice-main-column')
+    await screen.findByTestId('not-validated')
+    const card = complianceCard()
+    expect(within(card).getByTestId('not-validated'), 'the not-validated body belongs to the card').toBeTruthy()
+
+    const children = Array.from(column.children)
+    expect(children, 'the main column must hold exactly three cards').toHaveLength(3)
+    expect(children[1], 'child 2 must be the Compliance card, in either body state').toBe(card)
+  })
+
+  // QA adversarial. A draft with no IRN and no rejection reasons suppresses fiscal-record-card
+  // AND both rejection-card arms, leaving the rail down to its two unconditional members
+  // (Approval state, Source document) -- the emptiest the rail gets. The card's departure
+  // must not strand the rail's remaining cards or break their own rendering.
+  it('invoiceDetail_railStaysSaneWhenNearlyEmptyAfterTheCardLeaves', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', rule_set_version: 3, violations: [] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const rail = await screen.findByTestId('invoice-rail')
+    // Positive control: the rail's two unconditional members both mounted.
+    expect(within(rail).getByTestId('approval-card'), 'approval-card must still mount').toBeTruthy()
+    expect(within(rail).getByTestId('source-document-card'), 'source-document-card must still mount').toBeTruthy()
+
+    expect(within(rail).queryByTestId('fiscal-record-card'), 'no IRN, no fiscal record').toBeNull()
+    expect(within(rail).queryByTestId('failed-dead-end'), 'not a failed invoice').toBeNull()
+    expect(within(rail).queryByTestId('rejection-reasons'), 'no rejection reasons on this fixture').toBeNull()
+    expect(within(rail).queryByTestId('compliance-card'), 'the Compliance card must never re-enter the rail').toBeNull()
+
+    const column = screen.getByTestId('invoice-main-column')
+    const children = Array.from(column.children)
+    expect(children, 'the main column must still hold exactly three cards').toHaveLength(3)
+    expect(children[1]).toBe(complianceCard())
+  })
 })
 
 // AUDIT-09-05 QA. The card's own suite proves it calls ctx.openAuditForInvoice with the two

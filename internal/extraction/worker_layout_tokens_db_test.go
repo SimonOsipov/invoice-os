@@ -6,7 +6,6 @@ package extraction_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -14,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -64,19 +62,13 @@ func wtRun(t *testing.T, ctx context.Context, ew *extraction.ExtractWorker, tena
 	return wkExtractionJobID(t, ctx, tenantID, riverJobID)
 }
 
-// wtTokens reads extraction_jobs.layout_tokens as text. Mode-A: before EXTR-19-06's migration
-// the column does not exist, which is the strongest form of "this job stored no tokens", so it
-// reads as absent and every assertion below reds on its own claim rather than on a scan error.
+// wtTokens reads extraction_jobs.layout_tokens as text. Nil is SQL NULL: the job stored no
+// page-1 token text.
 func wtTokens(t *testing.T, ctx context.Context, jobID string) *string {
 	t.Helper()
 	var raw *string
-	err := stRequire(t).super.QueryRow(ctx,
-		`SELECT layout_tokens::text FROM extraction_jobs WHERE id = $1`, jobID).Scan(&raw)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "42703" {
-		return nil
-	}
-	if err != nil {
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT layout_tokens::text FROM extraction_jobs WHERE id = $1`, jobID).Scan(&raw); err != nil {
 		t.Fatalf("read layout_tokens for job %s: %v", jobID, err)
 	}
 	return raw

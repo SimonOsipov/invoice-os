@@ -283,15 +283,45 @@ const maxLayoutTokensJSON = 262144
 // layoutTokensStorable encodes page-1's token texts for extraction_jobs.layout_tokens. ok is
 // false when the value cannot be stored; a refusal writes SQL NULL and leaves the job
 // succeeded, and nothing here truncates.
-//
-// MODE-A STUB (task-908, Test-first: yes): returns (nil, false) for every input so EXTR-19-06's
-// pre-authored specs compile and red on their assertions rather than on a missing symbol.
-// Precedent: db.Bootstrap's stub at ab26ca94. The executor writes the real body -- normalise a
-// nil slice to []string{} (json.Marshal of nil is `null`, which jsonb_typeof refuses), marshal,
-// then refuse on a marshal error, on len(b)+max(0,len(tokens)-1) > maxLayoutTokensJSON, and on
-// any token holding a raw NUL, which jsonb_in refuses before any CHECK runs.
 // TestLayoutTokensGate_AgreesWithPostgresOverTheWholeByteSpace is the oracle.
-func layoutTokensStorable(tokens []string) ([]byte, bool) { return nil, false }
+func layoutTokensStorable(tokens []string) ([]byte, bool) {
+	for _, tok := range tokens {
+		// The input, not the output: text that genuinely reads the six-character escape
+		// marshals to a doubled backslash and Postgres takes it. jsonb_in refuses a raw NUL
+		// before any CHECK runs.
+		if strings.ContainsRune(tok, 0) {
+			return nil, false
+		}
+	}
+	if tokens == nil {
+		tokens = []string{}
+	}
+	b, err := json.Marshal(tokens)
+	if err != nil {
+		return nil, false
+	}
+	if len(b)+max(0, len(tokens)-1) > maxLayoutTokensJSON {
+		return nil, false
+	}
+	return b, true
+}
+
+// pageOneTokenTexts is page 1's token text in document order, page 1 by Number as
+// BoxlessFingerprint selects it. Nil for a page set carrying no page numbered 1;
+// layoutTokensStorable normalises that to [].
+func pageOneTokenTexts(pages []TokenPage) []string {
+	for _, page := range pages {
+		if page.Number != 1 {
+			continue
+		}
+		out := make([]string, 0, len(page.Tokens))
+		for _, tok := range page.Tokens {
+			out = append(out, tok.Text)
+		}
+		return out
+	}
+	return nil
+}
 
 // UnmarshalAnchorObservations reads the column back. An unknown key is ignored, as ParseRule
 // ignores one; an element outside the normalised box or below page 1 is an error.

@@ -197,7 +197,17 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			if err != nil {
 				return err
 			}
-			return writeLayoutTx(ctx, tx, args.TenantID, row.ID, fingerprint, anchors)
+			if err := writeLayoutTx(ctx, tx, args.TenantID, row.ID, fingerprint, anchors); err != nil {
+				return err
+			}
+			// One gate, one degradation path: a refused token set stores SQL NULL and leaves
+			// the job succeeded, because an error escaping this transaction would dead-letter
+			// a document whose extraction is correct.
+			tokens, ok := layoutTokensStorable(pageOneTokenTexts(textTokens))
+			if !ok {
+				tokens = nil
+			}
+			return writeLayoutTokensTx(ctx, tx, args.TenantID, row.ID, tokens)
 		}); err != nil {
 			// Cleared so the rule lookup below stays shut for a job that stored no layout.
 			fingerprint = ""

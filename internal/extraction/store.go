@@ -154,6 +154,28 @@ func writeLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, fingerprint 
 	return nil
 }
 
+// writeLayoutTokensTx records page-1's token text for a boxless job, in writeLayoutTx's own
+// transaction so the identity and the input a rule is derived from share one fate. A nil tokens
+// binds SQL NULL through an untyped nil: the empty string cast to jsonb is a syntax error, not
+// NULL. Zero rows affected is an error for writeLayoutTx's reason: the row is the caller's own.
+func writeLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string, tokens []byte) error {
+	var v any
+	if tokens != nil {
+		v = string(tokens)
+	}
+	ct, err := tx.Exec(ctx,
+		`UPDATE extraction_jobs SET layout_tokens = $3
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID, v)
+	if err != nil {
+		return fmt.Errorf("extraction: write layout tokens for job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("extraction: write layout tokens for job %s: no row affected", jobID)
+	}
+	return nil
+}
+
 // writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
 // alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
 // the reason_code CHECK admits four words or NULL, and the all-NULL arm is what

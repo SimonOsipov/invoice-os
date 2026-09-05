@@ -54,7 +54,9 @@ one-rule writer above actually hold, and it's pinned by
 ## Boot precedence
 
 `initialView` (DEMO-06 persona-switch carry) → review hash (`#review/<uuid>`) → path →
-`dashboard`. See `App.tsx:320-321`.
+`dashboard`. See `App.tsx:326-327`. The path tier reads `bootPath` (`App.tsx:320-322`),
+not `window.location.pathname` directly — ROUTE-05-03 substitutes a restored deep-link
+destination there when the live path is the bare root; it is not a new precedence tier.
 
 ## The ROUTE-02..06 boundary
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -314,11 +315,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
   // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
   // a review hash into an already-open tab's address bar does not navigate until reload.
+  // A stored destination only applies to a boot that landed on the bare root — the landing
+  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
+  const [bootPath] = useState<string>(() =>
+    window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
+  )
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname) ?? 'dashboard')),
+    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(bootPath) ?? 'dashboard')),
   )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
@@ -514,8 +520,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [createStep, entityId, active.entityId])
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  // Also clears it unconditionally: a persona-switch remount must not inherit a stray one.
   useEffect(() => {
     window.history.replaceState(null, '', routePath(view) + window.location.hash)
+    clearDestination()
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.
@@ -1581,6 +1589,9 @@ export default function App() {
     window.history.replaceState(null, '', '/' + window.location.hash)
     setToast(null)
     clearSession()
+    // Wipes a destination captured before this session — the pathname reset above only
+    // stops a NEW one being captured on the way out.
+    clearDestination()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
     // With it unset we now land on the app's own persona-picker, which is a front door;
@@ -1685,7 +1696,11 @@ export default function App() {
   useEffect(() => {
     if (activeSession || autoPersona) return
     const dest = landingBase()
-    if (dest) window.location.href = dest
+    if (dest) {
+      // Same statement block as the navigation that destroys it — nothing can interleave.
+      captureDestination(window.location.pathname)
+      window.location.href = dest
+    }
   }, [activeSession, autoPersona])
 
   if (!activeSession) {

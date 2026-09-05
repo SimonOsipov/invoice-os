@@ -101,6 +101,22 @@ func approveFlagsOf(t *testing.T, row map[string]json.RawMessage, label string) 
 	return string(raw), string(rawReason)
 }
 
+// submitFlagsOf is approveFlagsOf's twin for the submit pair (BUG-12). Same rule: an
+// absent key is a Fatal, because "the server did not say" is what makes a row surface
+// guess, and guessing is the defect BUG-12 removes.
+func submitFlagsOf(t *testing.T, row map[string]json.RawMessage, label string) (canSubmit, reason string) {
+	t.Helper()
+	raw, ok := row["can_submit"]
+	if !ok {
+		t.Fatalf("%s has no \"can_submit\" key -- every list row must carry it, with no omitempty (keys present: %v)", label, sortedKeys(row))
+	}
+	rawReason, ok := row["submit_blocked_reason"]
+	if !ok {
+		t.Fatalf("%s has no \"submit_blocked_reason\" key -- every list row must carry it, with no omitempty (keys present: %v)", label, sortedKeys(row))
+	}
+	return string(raw), string(rawReason)
+}
+
 func sortedKeys(row map[string]json.RawMessage) []string {
 	out := make([]string, 0, len(row))
 	for k := range row {

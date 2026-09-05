@@ -13,18 +13,22 @@ import (
 )
 
 // auditKinds is the vocabulary under test. audit_internal_test.go owns the assertion that
-// these are the only five; here they are the seed for the near-miss set below.
+// these are the only six; here they are the seed for the near-miss set below.
+//
+// EXTR-19-03: the sixth is a literal so this file compiles before the const exists. Swap it for
+// extraction.FailureLayoutNotWritten once audit.go declares it.
 var auditKinds = []extraction.FailureKind{
 	extraction.FailureDocumentUnavailable,
 	extraction.FailurePagesNotRendered,
 	extraction.FailurePageRowsNotWritten,
 	extraction.FailureExtractFailed,
 	extraction.FailureTextNotRead,
+	extraction.FailureKind("layout_not_written"),
 }
 
 // auditNearMisses derives the spellings a hand-written caller or a hand-edited SQL filter
 // produces. Every one must be refused: audit_log is append-only, so a row written under a
-// near-miss is permanently unreadable by the five-value vocabulary.
+// near-miss is permanently unreadable by the six-value vocabulary.
 func auditNearMisses(v string) []string {
 	return []string{
 		strings.ToUpper(v),
@@ -41,8 +45,8 @@ func auditNearMisses(v string) []string {
 }
 
 func TestFailureKind_ValidRejectsNearMissesOfEveryValue(t *testing.T) {
-	if len(auditKinds) != 5 {
-		t.Fatalf("seeded %d kind(s), want 5; the derivation below would under-cover", len(auditKinds))
+	if len(auditKinds) != 6 {
+		t.Fatalf("seeded %d kind(s), want 6; the derivation below would under-cover", len(auditKinds))
 	}
 
 	// Positive half: without it, Valid() returning false for everything passes the rejections.
@@ -71,8 +75,8 @@ func TestFailureKind_ValidRejectsNearMissesOfEveryValue(t *testing.T) {
 			}
 		}
 	}
-	if checked < 5*len(auditNearMisses("a_b")) {
-		t.Errorf("checked %d near-miss(es), want %d; a shrunken set reports clean over spellings nobody tried", checked, 5*len(auditNearMisses("a_b")))
+	if checked < 6*len(auditNearMisses("a_b")) {
+		t.Errorf("checked %d near-miss(es), want %d; a shrunken set reports clean over spellings nobody tried", checked, 6*len(auditNearMisses("a_b")))
 	}
 }
 

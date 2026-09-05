@@ -271,15 +271,17 @@ func TestNewExtractionAuditor_FailedRefusesAnInvalidFailureKind(t *testing.T) {
 	}
 }
 
-// The gate admits five kinds, so the row must carry the one the event carried. A constant
+// The gate admits six kinds, so the row must carry the one the event carried. A constant
 // substituted after the gate reads as clean against a single-kind fixture. text_not_read is
 // carried here from EXTR-17-01, ahead of the stage that sets it: the gate is Valid(), which
 // already admits it, so an adapter that could not write it would be found only in production.
+// layout_not_written (EXTR-19-03) is carried the same way, ahead of EXTR-19-04's stage; it is a
+// literal until audit.go declares the const, then swap it for extraction.FailureLayoutNotWritten.
 func TestNewExtractionAuditor_FailedEchoesTheEventsFailureKind(t *testing.T) {
 	kinds := []extraction.FailureKind{
 		extraction.FailureDocumentUnavailable, extraction.FailurePagesNotRendered,
 		extraction.FailurePageRowsNotWritten, extraction.FailureExtractFailed,
-		extraction.FailureTextNotRead,
+		extraction.FailureTextNotRead, extraction.FailureKind("layout_not_written"),
 	}
 	seen := map[string]bool{}
 	for _, kind := range kinds {

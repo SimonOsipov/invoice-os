@@ -2199,14 +2199,19 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 		})
 	}
 
-	// Set equality against the whole vocabulary: five distinct values is satisfied by five
-	// values that are not the five FailureKind declares.
+	// Set equality against the whole vocabulary: six distinct values is satisfied by six
+	// values that are not the six FailureKind declares.
+	//
+	// EXTR-19-03 widens this to six; EXTR-19-04 adds the lever that writes the sixth. Between
+	// those two commits both set-equality Fatalfs below are DELIBERATELY red. Literal, not the
+	// const, so this compiles before audit.go declares it.
 	want := map[extraction.FailureKind]bool{
-		extraction.FailureDocumentUnavailable: true,
-		extraction.FailurePagesNotRendered:    true,
-		extraction.FailurePageRowsNotWritten:  true,
-		extraction.FailureExtractFailed:       true,
-		extraction.FailureTextNotRead:         true,
+		extraction.FailureDocumentUnavailable:        true,
+		extraction.FailurePagesNotRendered:           true,
+		extraction.FailurePageRowsNotWritten:         true,
+		extraction.FailureExtractFailed:              true,
+		extraction.FailureTextNotRead:                true,
+		extraction.FailureKind("layout_not_written"): true,
 	}
 	if len(written) != len(want) {
 		t.Fatalf("the levers wrote %d distinct failure_kind value(s) (%v), want %d", len(written), written, len(want))

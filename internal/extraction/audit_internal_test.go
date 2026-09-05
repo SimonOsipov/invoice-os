@@ -132,13 +132,17 @@ func TestFailureKind_TextNotReadIsValid(t *testing.T) {
 	}
 }
 
-func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
+// EXTR-19-03 AC-1. The values are spelled as literals, not as the consts: a boxless layout the
+// reader could not store is its own stage, and this test has to be able to red before the const
+// FailureLayoutNotWritten exists.
+func TestFailureKind_VocabularyIsExactlySix(t *testing.T) {
 	want := map[string]FailureKind{
 		"FailureDocumentUnavailable": "document_unavailable",
 		"FailurePagesNotRendered":    "pages_not_rendered",
 		"FailurePageRowsNotWritten":  "page_rows_not_written",
 		"FailureExtractFailed":       "extract_failed",
 		"FailureTextNotRead":         "text_not_read",
+		"FailureLayoutNotWritten":    "layout_not_written",
 	}
 
 	seen := map[FailureKind]string{}
@@ -150,23 +154,23 @@ func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
 			t.Errorf("%s is the empty string; a blank kind is indistinguishable from an unset field", name)
 		}
 		if prior, dup := seen[k]; dup {
-			t.Errorf("%s and %s both carry %q; the five kinds must be pairwise distinct", prior, name, k)
+			t.Errorf("%s and %s both carry %q; the six kinds must be pairwise distinct", prior, name, k)
 		}
 		seen[k] = name
 	}
-	if len(seen) != 5 {
-		t.Errorf("the five names resolve to %d distinct value(s), want 5", len(seen))
+	if len(seen) != 6 {
+		t.Errorf("the six names resolve to %d distinct value(s), want 6", len(seen))
 	}
 
 	// "" is invalid too: a success carries no kind, and Valid() is what the adapter would
 	// use to refuse a half-filled failure payload.
-	for _, k := range []FailureKind{"", "quokka", "extraction_failed", "Document_Unavailable", "document_unavailable "} {
+	for _, k := range []FailureKind{"", "quokka", "extraction_failed", "Document_Unavailable", "document_unavailable ", "layout_not_writen", "LAYOUT_NOT_WRITTEN"} {
 		if k.Valid() {
 			t.Errorf("FailureKind(%q).Valid() = true, want false", k)
 		}
 	}
 
-	// Exactly five in source: reflect cannot see a const, so a sixth one added later has to
+	// Exactly six in source: reflect cannot see a const, so a seventh one added later has to
 	// be a deliberate edit here.
 	got := failureKindConsts(t)
 	if len(got) != len(want) {
@@ -188,7 +192,7 @@ func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
 	}
 	for name := range got {
 		if _, ok := want[name]; !ok {
-			t.Errorf("const %s is a FailureKind this test does not name; a sixth kind widens the audit vocabulary and needs a label", name)
+			t.Errorf("const %s is a FailureKind this test does not name; a seventh kind widens the audit vocabulary and needs a label", name)
 		}
 	}
 }
@@ -202,8 +206,8 @@ func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
 // internal/submission from a test file in this package would break it.
 func TestFailureKind_DisjointFromSubmissionsVocabulary(t *testing.T) {
 	mine := failureKindConsts(t)
-	if len(mine) != 5 {
-		t.Fatalf("internal/extraction declares %d FailureKind const(s) (%v), want exactly 5", len(mine), mine)
+	if len(mine) != 6 {
+		t.Fatalf("internal/extraction declares %d FailureKind const(s) (%v), want exactly 6", len(mine), mine)
 	}
 
 	const submissionSrc = "../submission/failure.go"

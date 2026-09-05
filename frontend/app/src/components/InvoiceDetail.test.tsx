@@ -3094,7 +3094,7 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
 // RED specs (task-554, APPR-13-04, Mode A). Neither `detail-approve` nor `detail-reject`
 // exists yet, so every row below fails on a missing element, never an import/type error.
 // Arm/confirm and the reject-reason input row are APPR-13-05 -- this subtask (and these
-// specs) cover only the resting/idle pair and its four-layer disabled recipe.
+// specs) cover only the resting/idle pair and its disabled recipe (two layers since BUG-14-02).
 describe('InvoiceDetail Approve/Reject controls (task-554, APPR-13-04)', () => {
   const ID = 'inv-decision-1'
   const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
@@ -5324,5 +5324,111 @@ describe('InvoiceDetail action cluster -- the blocked-reason layer is gone (BUG-
       onClickOf(allowed)()
     })
     expect(await screen.findByTestId('edit-invoice')).toBeTruthy()
+  })
+})
+
+// QA adversarial coverage for BUG-14-02. The absence pins above take their needle from each
+// control's own `title`, so a replacement sentence the SPA authored ITSELF -- a different
+// string, under no testid -- passes every one of them, and BUG-14-03's static guard greps the
+// six retired testids, which such a node would not carry. AC-1 forbids "replacement text in
+// their place", so the closing oracle is a closed-world read of the column's own text.
+describe('InvoiceDetail action cluster -- QA adversarial coverage (BUG-14-02)', () => {
+  const ID = 'inv-reason-gone-qa-1'
+
+  const R = {
+    ubl: 'No UBL document exists for this invoice yet — validate it first.',
+    approve: 'Only an approver can approve this invoice — ask an admin on your team.',
+    reject: 'A rejection needs the workflow role this step waits on — ask whoever holds it.',
+    revalidate: 'Re-validate applies to drafts that have changed — this one has not.',
+    submit: 'Only a validated invoice can be submitted — validate it first.',
+    resolveOutside: 'Only an admin can mark this invoice resolved outside — ask one.',
+  }
+
+  function blockedFailed(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRecord {
+    return detailRecord({
+      id: ID,
+      status: 'failed',
+      can_view_ubl: false,
+      ubl_blocked_reason: R.ubl,
+      can_approve: false,
+      approve_blocked_reason: R.approve,
+      can_reject: false,
+      reject_blocked_reason: R.reject,
+      can_edit: false,
+      can_revalidate: false,
+      revalidate_blocked_reason: R.revalidate,
+      can_submit: false,
+      submit_blocked_reason: R.submit,
+      can_resolve_outside: false,
+      resolve_outside_blocked_reason: R.resolveOutside,
+      ...over,
+    })
+  }
+
+  it('BUG-14-02 AC-1: the action column prints its control labels and nothing else', async () => {
+    mockDetailFetch(blockedFailed())
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('failed-dead-end')
+
+    const column = screen.getByTestId('view-ubl').parentElement!
+    expect(column.contains(screen.getByTestId('detail-decision-actions')), 'floor: row 2 is in the column').toBe(true)
+    expect(column.contains(screen.getByTestId('invoice-actions')), 'floor: row 3 is in the column').toBe(true)
+
+    const buttons = Array.from(column.querySelectorAll('button'))
+    expect(buttons.map((b) => b.getAttribute('data-testid')), 'floor: the six controls are the column').toEqual([
+      'view-ubl',
+      'detail-approve',
+      'detail-reject',
+      'edit-toggle',
+      'revalidate',
+      'detail-submit',
+    ])
+
+    // Closed world, deliberately strict (the trade UNTOUCHED_TESTIDS already takes above): the
+    // column's whole text IS its buttons' text. Any prose beside a refusing control -- reason,
+    // hint or SPA-authored substitute, testid or not -- makes these two strings differ.
+    expect(column.textContent, 'no prose sits beside a refusing control').toBe(buttons.map((b) => b.textContent).join(''))
+    expect(column.textContent!.trim().length, 'floor: the labels are really there').toBeGreaterThan(30)
+  })
+
+  it('BUG-14-02 AC-4: both resolve-outside arms carry the wire sentence on the control alone', async () => {
+    for (const [arm, control, over] of [
+      ['unresolved', 'resolve-outside', {}],
+      [
+        'resolved',
+        'resolve-outside-undo',
+        {
+          kept_as_is_at: '2026-07-02T09:00:00Z',
+          kept_as_is_by: APP_PERSONAS.firm.subject,
+          kept_as_is_reason: 'Settled directly with the buyer',
+        },
+      ],
+    ] as [string, string, Partial<InvoiceDetailRecord>][]) {
+      cleanup()
+      mockDetailFetch(blockedFailed(over))
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+      const card = await screen.findByTestId('failed-dead-end')
+
+      const btn = within(card).getByTestId(control) as HTMLButtonElement
+      expect(btn.disabled, `floor: the ${arm} arm's control is refusing`).toBe(true)
+      expect(btn.getAttribute('title'), `the ${arm} arm carries the wire sentence verbatim`).toBe(R.resolveOutside)
+      expect(btn.hasAttribute('aria-describedby'), `the ${arm} arm describes itself through nothing`).toBe(false)
+      expect(card.textContent, `the ${arm} arm prints the sentence nowhere`).not.toContain(R.resolveOutside)
+    }
+  })
+
+  it('BUG-14-02 AC-1: a reason carrying markup reaches the failed card as an attribute, never as nodes', async () => {
+    const nasty = 'Resolution needs <script>alert(1)</script> an <b>admin</b> — ask one on your team.'
+    mockDetailFetch(blockedFailed({ resolve_outside_blocked_reason: nasty }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const card = await screen.findByTestId('failed-dead-end')
+
+    const btn = within(card).getByTestId('resolve-outside') as HTMLButtonElement
+    expect(btn.getAttribute('title'), 'floor: the string reached the control').toBe(nasty)
+    expect(card.querySelector('script'), 'never parsed as markup').toBeNull()
+    expect(card.querySelector('b')).toBeNull()
+    expect(card.textContent, 'and never printed as text either').not.toContain('an admin')
   })
 })

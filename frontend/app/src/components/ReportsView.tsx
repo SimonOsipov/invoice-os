@@ -41,7 +41,7 @@ import type { PlatformCtx } from '../types'
 type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
 // `aria-describedby` target for the disabled export buttons' shared reason text. A module
-// const rather than useId(), same rationale as InvoiceDetail.tsx's REVALIDATE_REASON_ID:
+// const rather than useId(), same rationale as ReviewRow.tsx's REVALIDATE_REASON_ID:
 // only one ReportsView renders at a time.
 export const EXPORTS_BLOCKED_REASON_ID = 'exports-blocked-reason-text'
 

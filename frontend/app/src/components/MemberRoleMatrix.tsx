@@ -176,8 +176,8 @@ export function MemberRoleMatrix() {
  * permanently dead control that reads as broken and drops its own explanation out of the
  * tab order. Inertness here comes from there being nothing to click.
  *
- * That also means the four-layer disabled treatment (MoreMenu, from InvoiceDetail's
- * `[revalidate-visibility]`) does not apply: it exists to explain why a control the user
+ * That also means MoreMenu's four-layer disabled treatment (MemberParts.tsx:632-646) does
+ * not apply: it exists to explain why a control the user
  * expects to click is refusing, and this card refuses nothing. What survives is its layer
  * (3) alone — the visible `NOT BUILT` marker, which is the required explanation rather
  * than decoration, and the only layer a screenshot can see.

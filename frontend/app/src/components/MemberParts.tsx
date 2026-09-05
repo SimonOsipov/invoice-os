@@ -633,8 +633,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
                 // packages/design-tokens/*.css contains zero `:disabled` rules, and
                 // `.pf-menu-item:hover` is unguarded in BOTH stylesheets
                 // (platform.css:74-78, app-layer.css:272) — so a disabled row would still
-                // light up under the pointer and read as clickable. Four layers, the
-                // InvoiceDetail.tsx:406-444 ([revalidate-visibility]) treatment:
+                // light up under the pointer and read as clickable. Four layers (InvoiceDetail's
+                // own recipe dropped to two in BUG-14-02; this menu keeps all four):
                 // (1) the real `disabled` attribute above — genuinely unclickable;
                 // (2) this inline swap, which outranks that unguarded :hover so the row
                 //     stops reacting to the pointer. `transparent` rather than

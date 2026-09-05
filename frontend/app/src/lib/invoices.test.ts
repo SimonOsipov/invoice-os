@@ -2975,6 +2975,144 @@ describe('selectBlockedReason does not read can_approve (APPR-12-06, AC #7)', ()
   })
 })
 
+// RED specs (Stage 2.5, Mode A) — both gate functions become thin readers of the two new
+// wire keys. `status` and `approval` are still set on every fixture below ON PURPOSE: the
+// claim is that neither is read any more, which a fixture that omitted them could not make.
+//
+// The submit pair is not declared on InvoiceRecord yet, so the override type names it
+// explicitly and the build stays a value test, never a type test. When the pair lands on
+// InvoiceRecord the intersection is redundant, not wrong.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...draftInvoice, ...over } as InvoiceRecord
+}
+
+// submitGate's reachable non-null answers (internal/invoice/handlers.go), plus one string
+// the SPA has never seen — a `LABELS[reason] ?? ''` regression would pass on the five
+// known sentences and blank the sixth.
+const SERVER_SUBMIT_SENTENCES = [
+  'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.',
+  'Only validated invoices can be submitted — re-validate this invoice first.',
+  'Only validated invoices can be submitted — edit this invoice and re-validate it first.',
+  'Only validated invoices can be submitted.',
+  'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+  'A sentence the SPA has never seen.',
+]
+
+describe('the submit gate is the wire, not a re-derivation (BUG-12)', () => {
+  it('B12-1: isRowSelectable is can_submit, nothing else', () => {
+    // Both polarities, each one contradicting the status/approval rule: a constant
+    // implementation reds on one of the two.
+    expect(
+      isRowSelectable(gateRow({ can_submit: true, status: 'draft', approval: OPEN_RUN })),
+      'a draft under an open run is selectable when the server says so',
+    ).toBe(true)
+    expect(
+      isRowSelectable(gateRow({ can_submit: false, status: 'validated', approval: null })),
+      'a clear validated row is NOT selectable when the server says so',
+    ).toBe(false)
+  })
+
+  it('B12-2: the production bug, at the unit level', () => {
+    // DEMO-2026-9003: the server cleared the transmit gate while the newest approval run
+    // is still open, and the register refused the checkbox anyway.
+    const candidate = gateRow({
+      can_submit: true,
+      submit_blocked_reason: null,
+      status: 'validated',
+      approval: OPEN_RUN,
+    })
+
+    expect(isRowSelectable(candidate)).toBe(true)
+    expect(selectBlockedReason(candidate)).toBeNull()
+  })
+
+  it('B12-3: selectBlockedReason echoes the server, verbatim', () => {
+    expect(SERVER_SUBMIT_SENTENCES, 'an empty table would assert nothing').toHaveLength(6)
+
+    for (const sentence of SERVER_SUBMIT_SENTENCES) {
+      const candidate = gateRow({ can_submit: false, submit_blocked_reason: sentence, status: 'validated' })
+      expect(selectBlockedReason(candidate), `sentence=${sentence}`).toBe(sentence)
+    }
+  })
+
+  it('B12-4: a blocked row with a null reason is silent', () => {
+    // Driven on a PRE-submission status too: on `accepted` the SPA's own rule already
+    // returns null, so that leg alone could not tell a wire read from the old status list.
+    for (const status of ['draft', 'validated', 'accepted'] as InvoiceStatus[]) {
+      const candidate = gateRow({ can_submit: false, submit_blocked_reason: null, status, approval: null })
+      expect(isRowSelectable(candidate), `status=${status}`).toBe(false)
+      expect(selectBlockedReason(candidate), `status=${status}`).toBeNull()
+    }
+  })
+})
+
+describe('neither gate function names status or approval (BUG-12)', () => {
+  const SOURCE = readFileSync(fileURLToPath(new URL('./invoices.ts', import.meta.url)), 'utf8')
+  const GATES = ['isRowSelectable', 'selectBlockedReason']
+  const slice = (name: string): string => new RegExp(`export function ${name}\\([\\s\\S]*?\\n\\}`).exec(SOURCE)?.[0] ?? ''
+
+  it('B12-5a: control — the slicer really returns each function body', () => {
+    expect(GATES).toHaveLength(2)
+    for (const name of GATES) {
+      const body = slice(name)
+      expect(body.length, `${name}: the slicer found nothing, so the absence below is vacuous`).toBeGreaterThan(60)
+      expect(body, `${name}: the slice is some other function`).toContain(name)
+      expect(body, `${name}: the slice stops before the body`).toContain('row.')
+    }
+  })
+
+  it('B12-5: neither gate function names status or approval', () => {
+    for (const name of GATES) {
+      const body = slice(name)
+      expect(body, `${name} still reads the status set`).not.toContain('status')
+      expect(body, `${name} still reads the approval run`).not.toContain('approval')
+    }
+  })
+})
+
+describe('normaliseInvoiceRow fails closed on the submit gate (BUG-12)', () => {
+  const normalised = (over: Record<string, unknown>): Record<string, unknown> =>
+    normaliseInvoiceRow({ ...draftInvoice, ...over } as unknown as InvoiceRecord) as unknown as Record<string, unknown>
+
+  it('B12-12: only a real boolean true decodes to can_submit true', () => {
+    // The signature is (raw: InvoiceRecord) => InvoiceRecord and the body spreads `...raw`,
+    // so tsc is green with or without the decode line. This is its only oracle.
+    const cases: Array<{ label: string; over: Record<string, unknown>; want: boolean }> = [
+      { label: 'absent', over: {}, want: false },
+      { label: "the string 'true'", over: { can_submit: 'true' }, want: false },
+      { label: 'the number 1', over: { can_submit: 1 }, want: false },
+      { label: 'null', over: { can_submit: null }, want: false },
+      { label: 'false', over: { can_submit: false }, want: false },
+      { label: 'true', over: { can_submit: true }, want: true },
+    ]
+    expect(cases).toHaveLength(6)
+
+    for (const c of cases) {
+      expect(normalised(c.over).can_submit, `can_submit ${c.label}`).toBe(c.want)
+    }
+  })
+
+  it('B12-12b: submit_blocked_reason is null when the server did not say, and verbatim when it did', () => {
+    const sentence = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+    const cases: Array<{ label: string; over: Record<string, unknown>; want: string | null }> = [
+      { label: 'absent', over: {}, want: null },
+      { label: 'undefined', over: { submit_blocked_reason: undefined }, want: null },
+      { label: 'null', over: { submit_blocked_reason: null }, want: null },
+      { label: 'a server sentence', over: { submit_blocked_reason: sentence }, want: sentence },
+    ]
+    expect(cases).toHaveLength(4)
+
+    for (const c of cases) {
+      expect(normalised(c.over).submit_blocked_reason, `submit_blocked_reason ${c.label}`).toBe(c.want)
+    }
+  })
+})
+
 describe('live-refresh predicates', () => {
   it('I-poll-1: isInFlight is true for exactly queued and submitted', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']
@@ -3415,7 +3553,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 29 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 31 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -3463,6 +3601,10 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // must NOT appear here.
       'can_approve',
       'approve_blocked_reason',
+      // BUG-12: +2 -- the submit pair joins the list wire as a listItem sibling, from the
+      // same submitGate call the detail wire already used.
+      'can_submit',
+      'submit_blocked_reason',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]

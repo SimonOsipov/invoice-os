@@ -857,6 +857,66 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
   })
 })
 
+// RED spec (Stage 2.5, Mode A) — the register renders the server's answer. The submit pair
+// is not on InvoiceRecord yet, so the override type names it and this stays a value test.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...row(), ...over } as InvoiceRecord
+}
+
+describe('InvoicesList: the register reads the wire submit gate (BUG-12)', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+  // submitGate's role rung (internal/invoice/handlers.go).
+  const SERVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+  it("B12-6: the register renders the server's enabled answer on an open run", async () => {
+    // Both polarities on one page, each contradicting the status/approval rule: a gate
+    // stuck open or stuck shut reds one of the two rows.
+    const rows = [
+      gateRow({
+        id: 'open-clear',
+        invoice_number: 'INV-OPEN-CLEAR',
+        status: 'validated',
+        approval: openRun,
+        can_submit: true,
+        submit_blocked_reason: null,
+      }),
+      gateRow({
+        id: 'wire-blocked',
+        invoice_number: 'INV-WIRE-BLOCKED',
+        status: 'validated',
+        approval: null,
+        can_submit: false,
+        submit_blocked_reason: SERVER_REASON,
+      }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OPEN-CLEAR')
+
+    const clear = screen.getByLabelText('Select invoice INV-OPEN-CLEAR') as HTMLInputElement
+    const blocked = screen.getByLabelText('Select invoice INV-WIRE-BLOCKED') as HTMLInputElement
+
+    expect(clear.disabled, 'the server cleared this row while its newest run is still open').toBe(false)
+    expect(clear.getAttribute('title')).toBeNull()
+
+    expect(blocked.disabled, 'the server refused this row despite a clear status and no run').toBe(true)
+    expect(blocked.getAttribute('title')).toBe(SERVER_REASON)
+  })
+})
+
 // BUG-09 deleted the visible sibling and its per-row aria-describedby id -- a
 // full-width line of prose under every blocked row. The reason copy is still
 // skipReasonLabel's own (GAP-3), never an SPA-authored literal.

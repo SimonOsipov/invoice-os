@@ -125,6 +125,33 @@ function renderRow(over: Partial<InvoiceRecord> = {}, batches: ImportBatch[] = [
   )
 }
 
+// The submit pair is not declared on InvoiceRecord yet, so the override type names it and
+// the gate specs below stay value tests, never type tests.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...row(), ...over } as InvoiceRecord
+}
+
+function renderGateRow(over: SubmitGateOver = {}) {
+  render(
+    <Row
+      r={gateRow(over)}
+      batches={[]}
+      checked={false}
+      expanded={false}
+      onToggleExpand={() => {}}
+      onToggle={() => {}}
+      ctx={reviewRowCtx()}
+      base="https://gw"
+      onChanged={() => {}}
+    />,
+  )
+}
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
@@ -332,9 +359,10 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
   })
 
   it('A16-2d: a post-submission row is disabled and silent -- the status pill is the explanation', () => {
-    // selectBlockedReason returns null outside draft/validated (invoices.ts:1213):
-    // an accepted row with a lingering open run must render disabled, but no reason.
-    renderRow({ status: 'accepted', approval: openRun })
+    // The silence is the SERVER's own null: submitBlockedReason returns nil on every
+    // status where canEdit is false (handlers.go), so no SPA status list is needed to
+    // keep an accepted row -- even one with a lingering open run -- disabled and quiet.
+    renderGateRow({ status: 'accepted', approval: openRun, can_submit: false, submit_blocked_reason: null })
     const box = selectBox()
 
     expect(box.disabled).toBe(true)
@@ -342,8 +370,18 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
   })
 
   it('A16-2f: parity -- ReviewRow and InvoicesList set a byte-identical title for the same row', async () => {
-    const shared = row({ id: 'inv-parity', status: 'validated', approval: openRun })
-    const expected = selectBlockedReason(shared)
+    // BOTH sides read the row's own sentence. Deriving `expected` from selectBlockedReason
+    // compares the function under test with itself, and moving only one side would compare
+    // a node against an attribute and pass while proving nothing.
+    const PARITY_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+    const shared = gateRow({
+      id: 'inv-parity',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: PARITY_REASON,
+    })
+    const expected = PARITY_REASON
 
     render(
       <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
@@ -364,6 +402,66 @@ describe('ReviewRow: the checkbox states its own blocked reason (APPR-16-02, Cor
     expect(listTitle).toBe(expected)
     // D-8: compared directly too, so a failure names WHICH two surfaces disagree.
     expect(reviewTitle).toBe(listTitle)
+  })
+})
+
+// RED specs (Stage 2.5, Mode A) — the review row reads the wire, and it is the same wire
+// the register reads.
+describe('ReviewRow: the review row reads the wire submit gate (BUG-12)', () => {
+  const openRun: InvoiceApproval = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+  // submitGate's role rung (internal/invoice/handlers.go) — new to both row surfaces.
+  const ROLE_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+  function selectBox(): HTMLInputElement {
+    return screen.getByTestId('review-select') as HTMLInputElement
+  }
+
+  it('B12-7: the review row renders the same', () => {
+    // Both polarities, each contradicting the status/approval rule.
+    renderGateRow({ status: 'validated', approval: openRun, can_submit: true, submit_blocked_reason: null })
+    expect(selectBox().disabled, 'the server cleared this row while its newest run is open').toBe(false)
+    expect(selectBox().getAttribute('title')).toBeNull()
+    cleanup()
+
+    renderGateRow({ status: 'validated', approval: null, can_submit: false, submit_blocked_reason: ROLE_REASON })
+    expect(selectBox().disabled, 'the server refused this row despite a clear status and no run').toBe(true)
+    expect(selectBox().getAttribute('title')).toBe(ROLE_REASON)
+  })
+
+  it('B12-8: the role refusal reaches both surfaces', async () => {
+    const shared = gateRow({
+      id: 'inv-role',
+      invoice_number: 'INV-ROLE',
+      status: 'validated',
+      approval: null,
+      can_submit: false,
+      submit_blocked_reason: ROLE_REASON,
+    })
+
+    render(
+      <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    const reviewTitle = selectBox().getAttribute('title')
+    const reviewDisabled = selectBox().disabled
+    cleanup()
+
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
+    mockRegisterFetch([shared])
+    render(<InvoicesList ctx={registerCtx()} />)
+    await screen.findByText(shared.invoice_number)
+    const listBox = screen.getByTestId('invoice-select') as HTMLInputElement
+
+    expect(reviewDisabled).toBe(true)
+    expect(reviewTitle).toBe(ROLE_REASON)
+    expect(listBox.disabled).toBe(true)
+    expect(listBox.getAttribute('title')).toBe(ROLE_REASON)
   })
 })
 

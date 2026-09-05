@@ -31,6 +31,7 @@ import { describe, expect, it } from 'vitest'
 import {
   invoiceStatusStyle,
   pruneSelection,
+  selectableIds,
   skipReasonLabel,
   type BatchSubmitResultItem,
   type EditFieldKey,
@@ -1562,6 +1563,42 @@ function buildMixedReviewPage(): InvoiceRecord[] {
   const rejected = buildRows(4, 'rejected')
   return [...validated, ...draftWithError, ...draftClean, ...queued, ...rejected]
 }
+
+// RED spec (Stage 2.5, Mode A) — the bar's arithmetic follows the wire through
+// selectableIds/pruneSelection, with no edit to bulkBarView itself.
+//
+// The submit pair is not declared on InvoiceRecord yet, so the override type names it.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(id: string, over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...mkRow(id, 'draft'), ...over } as InvoiceRecord
+}
+
+describe('bulkBarView follows the server, not a status set (BUG-12)', () => {
+  it('B12-11: the bulk bar follows the server', () => {
+    // All three rows share one status ON PURPOSE. A validated/draft mix would score the
+    // same under the old status rule and prove nothing.
+    const rows = [
+      gateRow('a', { can_submit: true, submit_blocked_reason: null }),
+      gateRow('b', { can_submit: false, submit_blocked_reason: 'Only validated invoices can be submitted — re-validate this invoice first.' }),
+      gateRow('c', { can_submit: true, submit_blocked_reason: null }),
+    ]
+    // The arms really differ: 2 of 3, never 0 of 3 or 3 of 3.
+    expect(rows).toHaveLength(3)
+
+    expect(selectableIds(rows), 'the page-scoped count is the server answer').toEqual(['a', 'c'])
+
+    const view = bulkBarView(['a', 'b', 'c'], rows, 'idle', false)
+    expect(view.eligible, 'the blocked id must not reach the wire').toEqual(['a', 'c'])
+    // notReady is rows.length - pageEligible; bulkBarView exposes no pageEligible field.
+    expect(view.notReady).toBe(1)
+    expect(view.submitAllLabel).toBe('Submit all 2 on this page for transmission')
+    expect(view.canSubmitAll).toBe(true)
+  })
+})
 
 describe('bulkBarView: eligible IS pruneSelection, not the raw selection (BULK-1, AC-2)', () => {
   it('BULK-1: 5 selected ids, 2 of which left the page or are no longer validated, prune to the 3 survivors, in order', () => {

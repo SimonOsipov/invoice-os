@@ -10,8 +10,9 @@ const AUDIENCES = [
 ]
 
 export function TrustStrip() {
+  // data-strip: stable selector for the audience-strip test oracle
   return (
-    <section style={{ borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
+    <section data-strip="audience" style={{ borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)' }}>
       <div
         style={{
           maxWidth: 1280,

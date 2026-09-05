@@ -3509,3 +3509,313 @@ func TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors(t *testing.T) {
 		t.Errorf("LearnRule refused %+v under a usable anchor box; if this is deliberate, AC-9's refusal is no longer attributable to the DOCX's zero geometry", region)
 	}
 }
+
+// --- EXTR-19-05: a boxless rule applies to its layout and to nothing else -------------------
+//
+// Core AC-3. A b1: rule is scoped by ONE string equality in ONE predicate -- anchor_store.go:51,
+// `WHERE tenant_id = $1 AND layout_fingerprint = $2` -- over the in-memory value worker.go:194
+// computed and worker.go:230 passed. Nothing between the two parses it.
+//
+// Nothing else in the tree drives a learned rule through Work: learn_corpus_db_test.go's own
+// header records that it does NOT prove Work composes Resolve. The store-level halves of the
+// plan (a PDF sees no b1: rule; the lookup discriminates both ways; rules do not cross tenants)
+// are already shipped in anchor_store_db_test.go and are re-homed here as ARMS -- the query is
+// namespace-blind, so re-running a shipped store assertion with a b1:-shaped literal in place of
+// "layout-x" proves nothing that test does not.
+
+// wkOurRefRule is a same_token rule over a label anchorLexicon does not carry. Both halves are
+// load-bearing. same_token is the only relation that can fire on a boxless document: right and
+// below die at relatedTokens' usableBox(anchor) guard (resolve.go:185-187) because every DOCX
+// token carries the zero box. And the non-lexicon label means no Tier-1 rule can produce the
+// same candidate -- extraction_field_results has no tier column, so a value Tier-1 could also
+// reach would attribute to nothing.
+const wkOurRefRule = `{"label":"(?i)\\bOur Ref\\b","relation":{"kind":"same_token","max_distance":0},"shape":"name"}`
+
+// The Our-Ref paragraph each document carries and the value sameTokenValue leaves behind. A'
+// carries a different one, so its rank-0 row cannot pass by reading A's.
+const (
+	wkOurRefLineA      = "Our Ref: OR-77"
+	wkOurRefValueA     = "OR-77"
+	wkOurRefLinePrime  = "Our Ref: OR-99"
+	wkOurRefValuePrime = "OR-99"
+)
+
+// wkPinnedBoxless returns golden's pinned b1: digest from bxFixturePinned, the constant
+// TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures holds the committed goldens to.
+func wkPinnedBoxless(t *testing.T, golden string) string {
+	t.Helper()
+	for _, c := range bxFixturePinned {
+		if c.golden == golden {
+			return c.want
+		}
+	}
+	t.Fatalf("bxFixturePinned pins no digest for %s", golden)
+	return ""
+}
+
+// wkBoxlessWire builds a one-page docling body from a committed golden's transcribed paragraphs
+// plus extra, with no box on any token -- the shape docling's DOCX path emits -- and refuses to
+// return one that does not fingerprint to that golden's PINNED value. The floor is what keeps a
+// hand-authored wire from becoming a second, unpinned source of truth: without it a drifted
+// transcription would read as a keying defect.
+func wkBoxlessWire(t *testing.T, golden string, paragraphs []string, extra ...string) ([]byte, string) {
+	t.Helper()
+	texts := append(slices.Clone(paragraphs), extra...)
+	if len(texts) == 0 {
+		t.Fatalf("wkBoxlessWire was handed no paragraph for %s", golden)
+	}
+	toks := make([]map[string]any, 0, len(texts))
+	for _, p := range texts {
+		toks = append(toks, map[string]any{"text": p})
+	}
+	wire := wkDoclingWire(t, toks...)
+
+	pages, tokens, res := dcServeGolden(t, wire)
+	if len(pages) != 1 || res.TextChars == 0 {
+		t.Fatalf("the %s wire reads as %d page(s) carrying %d text char(s), want 1 and more than 0",
+			golden, len(pages), res.TextChars)
+	}
+	if len(tokens) != 1 || len(tokens[0].Tokens) != len(texts) {
+		t.Fatalf("the %s wire yields %d token page(s) carrying %d token(s), want 1 and %d",
+			golden, len(tokens), len(tokens[0].Tokens), len(texts))
+	}
+	fp := extraction.BoxlessFingerprint(tokens)
+	if want := wkPinnedBoxless(t, golden); fp != want {
+		t.Fatalf("the hand-authored %s wire fingerprints to %q, want the committed golden's pinned %q -- the transcribed paragraphs no longer stand in for the golden on disk, and every rule assertion over this wire would be about a document nothing pins",
+			golden, fp, want)
+	}
+	return wire, fp
+}
+
+// wkBoxlessRun is one boxless Work run as these specs read it.
+type wkBoxlessRun struct {
+	asked  string
+	served []extraction.AnchorRule
+	rows   []wpRow
+	jobID  string
+}
+
+// wkRunBoxless drives one boxless Work over wire. The seam is the production
+// (*Store).AnchorRulesFor over the app pool (wpStoreRules), never a stub: a stubbed lookup would
+// make these specs about the test rather than about the predicate under it.
+func wkRunBoxless(t *testing.T, ctx context.Context, tenantID, documentID string, riverJobID int64, wire []byte) wkBoxlessRun {
+	t.Helper()
+	rules := wpStoreRules(t)
+	if err := wkBoxlessDocx(t, wire, rules.load, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over river job %d returned %v, want nil", riverJobID, err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	asked, served := rules.wpOnlyCall(t)
+	return wkBoxlessRun{asked: asked, served: served, rows: wpResults(t, ctx, xid), jobID: xid}
+}
+
+// wkSecondDocument seeds another documents row in tenantID. Not stDocument: that helper writes
+// one fixed content_hash and documents_tenant_content_hash_uq refuses a second in the same
+// tenant.
+func wkSecondDocument(t *testing.T, ctx context.Context, tenantID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	sum := sha256.Sum256([]byte(id))
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO documents (id, tenant_id, storage_key, content_hash, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, tenantID, "extr-19-05/"+id, hex.EncodeToString(sum[:]), 2048); err != nil {
+		t.Fatalf("seed a second document for tenant %s: %v", tenantID, err)
+	}
+	return id
+}
+
+// wkAssertNoGeometry checks that one rank-0 row carries all-NULL geometry.
+func wkAssertNoGeometry(t *testing.T, ctx context.Context, jobID, field string) {
+	t.Helper()
+	for _, b := range wkFieldBoxes(t, ctx, jobID) {
+		if b.name != field || b.rank != 0 {
+			continue
+		}
+		if b.page != nil || b.x0 != nil || b.y0 != nil || b.x1 != nil || b.y1 != nil {
+			t.Errorf("%s rank-0 carries geometry %s, want all-NULL -- usableRegion refuses a DOCX token's zero box, so a value that arrived WITH a box did not come off this document's tokens", field, b)
+		}
+		return
+	}
+	t.Errorf("job %s wrote no rank-0 row named %q", jobID, field)
+}
+
+// EXTR-19-05 AC-1 (fires on its own layout), AC-3 (reaches a second document of that layout),
+// AC-4 (invisible to a PDF run) and AC-6 (never crosses tenants). Five Work runs, three tenants,
+// one rule body.
+//
+// Every zero here has a positive needle on the SAME document under the SAME key, so none of them
+// is a content coincidence: the bare tenant fills neither field, the owner fills buyer_name, and
+// the other tenant fills supplier_name.
+func TestRLS_ABoxlessLearnedRuleFiresOnItsOwnLayout(t *testing.T) {
+	ctx := t.Context()
+	ownerID, ownerDoc := wkFixture(t, ctx) // stores the buyer_name rule
+	otherID, otherDoc := wkFixture(t, ctx) // stores a supplier_name rule under the IDENTICAL key
+	bareID, bareDoc := wkFixture(t, ctx)   // stores none: the Tier-1 baseline
+
+	wireA, fpA := wkBoxlessWire(t, dxGolden, dxParagraphs, wkOurRefLineA)
+	wirePrime, fpPrime := wkBoxlessWire(t, bxInlineGolden, bxInlineParagraphs, wkOurRefLinePrime)
+	// AC-3's premise, asserted rather than assumed: A' is a DIFFERENT document -- different data,
+	// an extra interior line item, a different ref value -- of the SAME layout.
+	if fpPrime != fpA {
+		t.Fatalf("A' fingerprints to %q and A to %q; AC-3 is about one rule reaching two documents of ONE layout, and these are two", fpPrime, fpA)
+	}
+	if reflect.DeepEqual(dxParagraphs, bxInlineParagraphs) {
+		t.Fatalf("A and A' transcribe the same paragraphs; AC-3 would hold over one document twice")
+	}
+
+	ruleID := stSeedAnchorRule(t, ctx, ownerID, fpA, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
+	otherRuleID := stSeedAnchorRule(t, ctx, otherID, fpA, "supplier_name", wkOurRefRule, extraction.RuleSchemaVersion)
+
+	missing := stPtr(string(extraction.ReasonMissing))
+
+	// AC-1. The rule fires on its own layout, and the value it produces is one no Tier-1 rule
+	// can reach -- which is the only way a row in a table with no tier column can attribute.
+	a := wkRunBoxless(t, ctx, ownerID, ownerDoc, 915231, wireA)
+	if a.asked != fpA {
+		t.Fatalf("the Rules seam was asked for %q over A, want A's own %q", a.asked, fpA)
+	}
+	if len(a.served) != 1 || a.served[0].ID != ruleID || a.served[0].Field != "buyer_name" {
+		t.Fatalf("the seam served %v over A, want exactly the seeded buyer_name rule %s", arIDs(a.served), ruleID)
+	}
+	wpAssertRankZero(t, a.rows, "buyer_name", stPtr(wkOurRefValueA), nil)
+	// AC-6, the leak direction. The other tenant's rule sits under the IDENTICAL key and names
+	// supplier_name. Its absence here is attributable because the `other` arm below shows that
+	// same rule firing on this same wire in its own tenant.
+	wpAssertRankZero(t, a.rows, "supplier_name", nil, missing)
+	// The stored identity and the looked-up one are one value: Work never re-reads the column.
+	if row := stJobLayout(t, ctx, a.jobID); row.Fingerprint == nil || *row.Fingerprint != fpA {
+		t.Errorf("A stored layout_fingerprint %s while the seam was asked for %q", wkStr(row.Fingerprint), fpA)
+	}
+	wkAssertNoGeometry(t, ctx, a.jobID, "buyer_name")
+
+	// AC-6, the other direction, over the identical wire and the identical key.
+	other := wkRunBoxless(t, ctx, otherID, otherDoc, 915232, wireA)
+	if other.asked != fpA {
+		t.Fatalf("the seam was asked for %q in the second tenant, want the same %q -- the key is a property of the document, not of the tenant", other.asked, fpA)
+	}
+	if len(other.served) != 1 || other.served[0].ID != otherRuleID || other.served[0].Field != "supplier_name" {
+		t.Fatalf("the seam served %v in the second tenant, want exactly its own supplier_name rule %s", arIDs(other.served), otherRuleID)
+	}
+	wpAssertRankZero(t, other.rows, "supplier_name", stPtr(wkOurRefValueA), nil)
+	wpAssertRankZero(t, other.rows, "buyer_name", nil, missing)
+
+	// The floor both positives rest on. With NO rule stored, the identical wire fills neither
+	// field: without this arm "buyer_name = OR-77" is also what a worker stamping every field
+	// would write, and "supplier_name missing" would be a fact about Tier-1 rather than tenancy.
+	bare := wkRunBoxless(t, ctx, bareID, bareDoc, 915233, wireA)
+	if len(bare.served) != 0 {
+		t.Fatalf("a tenant that stored no rule was served %v", arIDs(bare.served))
+	}
+	wpAssertRankZero(t, bare.rows, "buyer_name", nil, missing)
+	wpAssertRankZero(t, bare.rows, "supplier_name", nil, missing)
+	// ...and Tier-1 still reads what it always read, so the two zeros above are not an empty run.
+	wpAssertRankZero(t, bare.rows, "invoice_number", stPtr("ASC-2026-0919"), nil)
+	wpAssertRankZero(t, bare.rows, "issue_date", stPtr("2026-08-14"), nil)
+	wpAssertRankZero(t, bare.rows, "total", stPtr("4300.00"), nil)
+
+	// AC-3. One rule, a second document of the same layout, that document's OWN value. This is
+	// the "coverage grows with use" half; without it the identity is a per-document id.
+	//
+	// Its OWN documents row, never ownerDoc again: a fingerprint keyed on the document id would
+	// satisfy every other assertion in this test and fail only here.
+	primeDoc := wkSecondDocument(t, ctx, ownerID)
+	prime := wkRunBoxless(t, ctx, ownerID, primeDoc, 915234, wirePrime)
+	if prime.asked != fpA {
+		t.Fatalf("the seam was asked for %q over A', want A's own %q", prime.asked, fpA)
+	}
+	if len(prime.served) != 1 || prime.served[0].ID != ruleID {
+		t.Fatalf("the seam served %v over A', want exactly the seeded rule %s", arIDs(prime.served), ruleID)
+	}
+	wpAssertRankZero(t, prime.rows, "buyer_name", stPtr(wkOurRefValuePrime), nil)
+
+	// AC-4. The same tenant, the same stored b1: rule, a PDF run: the seam is asked for a v1:
+	// key and serves nothing. Its needle is the `a` arm above -- that rule IS served to this
+	// tenant when the key is b1:, so the empty slice here is not an empty table.
+	pdfDoc := wkSecondDocument(t, ctx, ownerID)
+	pdfRules := wpStoreRules(t)
+	pdfEW := wpWorker(t, wkOK(), wpCorpusOpener(t),
+		wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName)), pdfRules.load, &wkAuditRecorder{})
+	const pdfRiverJobID = int64(915235)
+	if err := pdfEW.Work(ctx,
+		extraction.NewExtractJobForTest(pdfRiverJobID, 1, 3, ownerID, pdfDoc, uuid.NewString())); err != nil {
+		t.Fatalf("Work over a PDF in the rule-owning tenant returned %v, want nil", err)
+	}
+	pdfXID := wkExtractionJobID(t, ctx, ownerID, pdfRiverJobID)
+	stAssertJobState(t, ctx, pdfXID, "succeeded")
+	pdfFP, pdfServed := pdfRules.wpOnlyCall(t)
+	if !strings.HasPrefix(pdfFP, extraction.FingerprintVersion+":") {
+		t.Fatalf("a PDF run was asked for %q, want a key in the %q namespace", pdfFP, extraction.FingerprintVersion)
+	}
+	if pdfFP == fpA {
+		t.Fatalf("a PDF run was asked for A's boxless key %q; the two namespaces collided", fpA)
+	}
+	if len(pdfServed) != 0 {
+		t.Errorf("a PDF run in the rule-owning tenant was served %v for %q, want none -- no v1: lookup can match a b1: key", arIDs(pdfServed), pdfFP)
+	}
+}
+
+// EXTR-19-05 AC-2 (a rule does not reach another layout carrying the same labels) and AC-5's
+// reverse direction. Four Work runs, two tenants, one rule body, two layouts that carry the same
+// three anchor labels and the same Our-Ref token and differ only in structure.
+//
+// Strictly better than the v1: analogue it mirrors.
+// TestRLS_ALearnedRuleIsNeverLoadedUnderAnotherLayoutsFingerprint has to confess in its own
+// comment (learn_corpus_db_test.go:582-585) that its cross-layout zero "would stay green if the
+// fingerprint gate were removed", because the other layout happens to carry no matching token.
+// Here each zero has its needle on the IDENTICAL document: B under a fp(B)-keyed rule DOES yield
+// OR-77, and A under a fp(A)-keyed rule does too. Must-fail mutation: drop
+// `AND layout_fingerprint = $2` from anchorRulesForTx and both zeros below go red.
+func TestRLS_ABoxlessLearnedRuleDoesNotReachAnotherLayout(t *testing.T) {
+	ctx := t.Context()
+	aOwnerID, aOwnerDoc := wkFixture(t, ctx)
+	bOwnerID, bOwnerDoc := wkFixture(t, ctx)
+
+	wireA, fpA := wkBoxlessWire(t, dxGolden, dxParagraphs, wkOurRefLineA)
+	wireB, fpB := wkBoxlessWire(t, bxStackedGolden, bxStackedParagraphs, wkOurRefLineA)
+	if fpA == fpB {
+		t.Fatalf("A and B both fingerprint to %q; there is no cross-layout claim left to make", fpA)
+	}
+
+	aRuleID := stSeedAnchorRule(t, ctx, aOwnerID, fpA, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
+	bRuleID := stSeedAnchorRule(t, ctx, bOwnerID, fpB, "buyer_name", wkOurRefRule, extraction.RuleSchemaVersion)
+
+	missing := stPtr(string(extraction.ReasonMissing))
+
+	// The two needles first. A zero over a rule that fires nowhere would be free.
+	aOnA := wkRunBoxless(t, ctx, aOwnerID, aOwnerDoc, 915241, wireA)
+	if aOnA.asked != fpA || len(aOnA.served) != 1 || aOnA.served[0].ID != aRuleID {
+		t.Fatalf("A's rule over A: the seam was asked %q and served %v, want %q and [%s]", aOnA.asked, arIDs(aOnA.served), fpA, aRuleID)
+	}
+	wpAssertRankZero(t, aOnA.rows, "buyer_name", stPtr(wkOurRefValueA), nil)
+
+	bOnB := wkRunBoxless(t, ctx, bOwnerID, bOwnerDoc, 915242, wireB)
+	if bOnB.asked != fpB || len(bOnB.served) != 1 || bOnB.served[0].ID != bRuleID {
+		t.Fatalf("B's rule over B: the seam was asked %q and served %v, want %q and [%s]", bOnB.asked, arIDs(bOnB.served), fpB, bRuleID)
+	}
+	wpAssertRankZero(t, bOnB.rows, "buyer_name", stPtr(wkOurRefValueA), nil)
+
+	// AC-2. The fp(A)-keyed rule over B. B carries the same labels and the same Our-Ref token --
+	// bOnB proved it -- so this zero is the predicate and nothing else. It is also a cross-tenant
+	// refusal: B's owner holds a live rule for fpB, and A's tenant asking for fpB gets none.
+	aOnB := wkRunBoxless(t, ctx, aOwnerID, aOwnerDoc, 915243, wireB)
+	if aOnB.asked != fpB {
+		t.Fatalf("the seam was asked for %q over B, want B's own %q -- A's is %q, and a lookup on A's key would make the zero below meaningless", aOnB.asked, fpB, fpA)
+	}
+	if len(aOnB.served) != 0 {
+		t.Errorf("running B in the tenant that stored a rule for %q was served %v when asked for %q", fpA, arIDs(aOnB.served), aOnB.asked)
+	}
+	wpAssertRankZero(t, aOnB.rows, "buyer_name", nil, missing)
+
+	// AC-5's reverse direction, so a lookup that ignored its argument would fail on both sides.
+	bOnA := wkRunBoxless(t, ctx, bOwnerID, bOwnerDoc, 915244, wireA)
+	if bOnA.asked != fpA {
+		t.Fatalf("the seam was asked for %q over A, want A's own %q -- B's is %q", bOnA.asked, fpA, fpB)
+	}
+	if len(bOnA.served) != 0 {
+		t.Errorf("running A in the tenant that stored a rule for %q was served %v when asked for %q", fpB, arIDs(bOnA.served), bOnA.asked)
+	}
+	wpAssertRankZero(t, bOnA.rows, "buyer_name", nil, missing)
+}

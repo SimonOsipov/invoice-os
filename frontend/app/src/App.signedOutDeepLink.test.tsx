@@ -121,6 +121,20 @@ vi.mock('./components/Sidebar', () => ({
   },
 }))
 
+const { captureDestinationSpy } = vi.hoisted(() => ({ captureDestinationSpy: vi.fn() }))
+
+// ROUTE-05-05: wraps the REAL captureDestination -- every other spec in this file calls it
+// directly to seed sessionStorage and must see identical behaviour. Only
+// signOut_reFiresTheFrontDoorEffectButThePathIsAlreadyRootSoNothingIsCaptured below reads
+// captureDestinationSpy.mock.calls, because readDestination() alone can't distinguish "the
+// front-door effect never re-ran" from "it re-ran and was correctly refused" -- both leave
+// storage empty.
+vi.mock('./lib/deepLink', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/deepLink')>()
+  captureDestinationSpy.mockImplementation(actual.captureDestination)
+  return { ...actual, captureDestination: captureDestinationSpy }
+})
+
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
   vi.stubGlobal('localStorage', createMemoryStorage())
@@ -129,6 +143,7 @@ beforeEach(() => {
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
   capturedCtx = undefined
+  captureDestinationSpy.mockClear()
 })
 
 afterEach(() => {
@@ -235,26 +250,6 @@ describe('front door: adversarial coverage (QA)', () => {
 
     stubLocation({ pathname: '/reports' })
     render(<App />)
-    expect(readDestination()).toBe('/reports')
-  })
-
-  it('capture_aSignedOutTransitionAlsoCapturesTheCurrentPath', () => {
-    // Not a fresh boot: a LIVE session renders first (front-door effect's guard returns
-    // early, nothing captured), then ctx.signOut() -- the same callback the 401 seam fires
-    // (App.suspended.test.tsx:166) -- flips activeSession to null. The effect's dependency
-    // array is [activeSession, autoPersona], so it re-runs and reaches the capture on this
-    // transition, not just on a sessionless mount.
-    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
-    const { hrefWrites } = stubLocation({ pathname: '/reports' })
-    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    render(<App />)
-    expect(readDestination()).toBeNull()
-    expect(hrefWrites).toEqual([])
-
-    expect(capturedCtx?.signOut).toBeDefined()
-    act(() => {
-      capturedCtx?.signOut()
-    })
     expect(readDestination()).toBe('/reports')
   })
 })
@@ -550,5 +545,110 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     console.error('control: this deliberate call must be observed')
     expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
     errSpy.mockRestore()
+  })
+})
+
+// ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
+// front-door effect re-fires on the resulting activeSession->null transition (deps
+// [activeSession, autoPersona], App.tsx:1701) -- App.routeBoot.test.tsx's
+// signOut_thePathnameDoesNotSurviveIntoTheNextSignIn proves that ordering under real
+// navigation. So AC-2/AC-4 below hold today without any new production line; only AC-1's
+// OTHER scenario -- a destination stored BEFORE this signOut, left by an earlier, unrelated
+// sessionless bounce -- needs clearDestination() added to signOut, since the pathname
+// rewrite has no power over a value already sitting in storage.
+describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
+  it('signOut_reFiresTheFrontDoorEffectButThePathIsAlreadyRootSoNothingIsCaptured', async () => {
+    // Was capture_aSignedOutTransitionAlsoCapturesTheCurrentPath, which used this file's
+    // stubLocation() -- a static object history.replaceState cannot update, so it froze the
+    // pre-signOut pathname ('/reports') and observed a capture that can never happen in the
+    // real app: signOut always rewrites the pathname to '/' first, and '/' is refused.
+    // Rewritten under real jsdom navigation (bootWorkspaceAt); readDestination() alone can't
+    // tell "the effect never re-ran" from "it re-ran and was correctly refused" (both leave
+    // storage empty), so captureDestinationSpy pins the call itself as proof of the re-fire.
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await bootWorkspaceAt('/reports')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /reports must seed that view').toBe('reports')
+    captureDestinationSpy.mockClear()
+
+    await act(async () => {
+      ctx.signOut()
+    })
+
+    expect(
+      captureDestinationSpy,
+      "the front-door effect's dependency array is [activeSession, autoPersona] -- it must re-run on this transition and reach its capture call",
+    ).toHaveBeenCalledWith('/')
+    expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
+  })
+
+  it('signOut_clearsAStoredDestination', async () => {
+    // Genuinely RED without the fix (Stage 1): the pathname rewrite alone cannot reach a
+    // value already written to sessionStorage by an earlier, unrelated sessionless bounce --
+    // only clearDestination() inside signOut removes it.
+    await bootWorkspaceAt('/audit')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /audit must seed that view').toBe('audit')
+
+    // Simulates a stray leftover written after this mount's own sweep (App.tsx:526) already
+    // ran, so signOut is the only remaining thing that can clear it.
+    captureDestination('/settings')
+    expect(readDestination(), 'sanity: the stray blob is present before signOut').toBe('/settings')
+
+    await act(async () => {
+      ctx.signOut()
+    })
+
+    expect(readDestination(), 'a destination stored before this signOut must not survive it').toBeNull()
+  })
+
+  it('signOut_capturesNothingOnTheWayOut', async () => {
+    // GREEN on arrival: no fix required for this scenario -- signOut's pathname rewrite to
+    // '/' (App.tsx:1589) already lands before the front-door effect re-fires, and '/' is
+    // refused. A landing URL is configured so the re-fire actually attempts the capture (and
+    // is refused), rather than skipping it via the `if (dest)` guard. Confirmed able to fail:
+    // deleting App.tsx:1589 leaves '/audit' captured here (see the sign-in test below).
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await bootWorkspaceAt('/audit')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /audit must seed that view').toBe('audit')
+
+    await act(async () => {
+      ctx.signOut()
+    })
+
+    expect(
+      sessionStorage.getItem(DEEP_LINK_KEY),
+      'signOut must capture nothing new on the way out',
+    ).toBeNull()
+    expect(window.location.pathname, 'signOut must reset the pathname to /').toBe('/')
+  })
+
+  it('signOut_thenSignInLandsOnTheDashboard', async () => {
+    // GREEN on arrival: signOut's pathname reset to '/' (App.tsx:1589) runs before the
+    // front-door effect's re-fire, so the re-fire can only ever try to capture '/', never
+    // '/audit' -- and '/' is refused. Without that reset, the re-fire would capture '/audit'
+    // for real (this file's landing URL makes the capture attempt happen, not skip via the
+    // `if (dest)` guard), and this boot's own restore (App.tsx:320-322) would then seed
+    // 'audit' instead of 'dashboard' -- confirmed by temporarily deleting App.tsx:1589.
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const first = await bootWorkspaceAt('/audit')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /audit must seed that view').toBe('audit')
+
+    await act(async () => {
+      ctx.signOut()
+    })
+    first.unmount()
+
+    capturedCtx = undefined
+    const second = await bootWorkspaceAt('/')
+    const nextCtx = requireCtx()
+    expect(
+      nextCtx.view,
+      'a sign-in after a sign-out must land on dashboard, not the screen just left',
+    ).toBe('dashboard')
+    expect(window.location.pathname).toBe('/')
+    second.unmount()
   })
 })

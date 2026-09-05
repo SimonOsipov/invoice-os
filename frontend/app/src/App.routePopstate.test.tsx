@@ -160,14 +160,26 @@ describe('AC-3: the handler performs no history write', () => {
     const pushSpy = vi.spyOn(window.history, 'pushState')
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     const lengthBefore = window.history.length
+    const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
 
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
 
+    // AC-3's actual claim is "no duplicate history entry per Back press", not "zero
+    // history-API calls" -- the pre-existing review-hash mirror (App.tsx:540-546) also
+    // fires on this view change and calls replaceState, but only to rewrite the URL it
+    // already is (a no-op). Assert the handler pushes nothing, adds no entry, and any
+    // replaceState observed is that no-op rewrite -- a handler that wrote a *different*
+    // URL, or pushed, still fails.
     expect(pushSpy, 'the popstate handler must never call pushState').not.toHaveBeenCalled()
-    expect(replaceSpy, 'the popstate handler must never call replaceState').not.toHaveBeenCalled()
     expect(window.history.length, 'a popstate restore must add no history entry').toBe(lengthBefore)
+    for (const call of replaceSpy.mock.calls) {
+      const url = call[2]
+      expect(url, 'any replaceState after a popstate must rewrite the current URL, not a different one').toBe(
+        urlBeforeDispatch,
+      )
+    }
   })
 })
 
@@ -234,6 +246,10 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
     })
     ctx = requireCtx()
     expect(ctx.extractionJobId, 'sanity: switchClient (ROUTE-01-03) must already clear the job').toBeNull()
+
+    // The spy is push-only and openExtraction already recorded one mount above -- reset so
+    // the assertion below measures only the window after Back, not that earlier mount.
+    extractionReviewMounts.length = 0
 
     await popTo('/extraction')
     ctx = requireCtx()

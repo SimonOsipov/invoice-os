@@ -9,6 +9,7 @@ package extraction_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"regexp"
 	"slices"
@@ -200,7 +201,8 @@ func TestFingerprint_IsDeterministicAcrossRuns(t *testing.T) {
 
 // F-08: boxless tokens (every DOCX token) all sort equal and land in band 0, so the fingerprint
 // degenerates to the sorted set of matched labels: equal under reordering, different when a
-// label is missing.
+// label is missing. That degeneracy is the defect BoxlessFingerprint exists to answer --
+// TestBoxlessFingerprint_ChangesWhenTheLabelParagraphsAreReordered is its sibling.
 func TestFingerprint_BoxlessTokensDegradeToTheLabelSet(t *testing.T) {
 	zero := func(text string) extraction.Token {
 		return extraction.Token{Text: text, Region: extraction.Region{Page: 1, X0: 0, Y0: 0, X1: 0, Y1: 0}}
@@ -643,5 +645,272 @@ func TestBoxlessFixtures_InvoiceNumbersDoNotCollide(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Errorf("the three fixtures yield %d distinct invoice number(s) %v, want 3", len(seen), seen)
+	}
+}
+
+// --- EXTR-19-02: BoxlessFingerprint and its namespace --------------------------------------
+//
+// Written Mode A: red against fingerprint.go's stub until Stage 3 implements
+// BoxlessFingerprint and labelPlacement. Every equality spec here first asserts the value is
+// 67 bytes and is not the zero-observation value, so the stub's "" cannot satisfy one
+// vacuously -- the same guard EXTR-04-03's own red commit needed on Fingerprint.
+
+// bxColumnCapBytes is layout_fingerprint's CHECK on both extraction_anchor_rules and
+// extraction_jobs. A boxless value must fit it, which is why this story ships no migration.
+const bxColumnCapBytes = 128
+
+// bxZeroTok is a page-1 token at the zero box -- every DOCX token, and the whole reason a
+// second identity function exists.
+func bxZeroTok(text string) extraction.Token {
+	return extraction.Token{Text: text, Region: extraction.Region{Page: 1}}
+}
+
+// bxElements rebuilds the element list BoxlessFingerprint hashes, through the production
+// classifier. Failure messages and fixture preconditions only; never compared to a digest.
+func bxElements(page extraction.TokenPage) []string {
+	out := make([]string, 0, len(page.Tokens))
+	for _, tk := range page.Tokens {
+		out = append(out, extraction.AnchorLabelPlacementsForTest(tk.Text)...)
+	}
+	return out
+}
+
+// bxRealValue fails unless fp is a usable boxless fingerprint. Run before every equality and
+// every difference assertion below.
+func bxRealValue(t *testing.T, role, fp string) {
+	t.Helper()
+	want := extraction.BoxlessFingerprintVersion + ":"
+	if len(fp) != 67 || !strings.HasPrefix(fp, want) {
+		t.Fatalf("BoxlessFingerprint(%s) = %q (%d bytes), want 67 bytes prefixed %q", role, fp, len(fp), want)
+	}
+	if fp == bxEmptyFingerprint {
+		t.Fatalf("BoxlessFingerprint(%s) = %q, the zero-observation value -- that input matched no anchor label, so any assertion over it proves nothing", role, fp)
+	}
+}
+
+func bxDeepCopy(p extraction.TokenPage) extraction.TokenPage {
+	out := p
+	out.Tokens = make([]extraction.Token, len(p.Tokens))
+	copy(out.Tokens, p.Tokens)
+	return out
+}
+
+func bxDistinct(in []string) int {
+	seen := map[string]struct{}{}
+	for _, s := range in {
+		seen[s] = struct{}{}
+	}
+	return len(seen)
+}
+
+// AC-1. A and B carry the same three labels in the same order and collide under Fingerprint --
+// TestBoxlessFixtures_CollideUnderTheGeometricFingerprint pins that collision. This story
+// exists so that they do not collide here.
+func TestBoxlessFingerprint_DiscriminatesTheStackedLayoutFromTheInlineOne(t *testing.T) {
+	aPage := bxPage1(t, dxGolden)
+	bPage := bxPage1(t, bxStackedGolden)
+
+	fpA := extraction.BoxlessFingerprint(bxOnePage(aPage))
+	fpB := extraction.BoxlessFingerprint(bxOnePage(bPage))
+	bxRealValue(t, "A / "+dxGolden, fpA)
+	bxRealValue(t, "B / "+bxStackedGolden, fpB)
+
+	if fpA == fpB {
+		t.Errorf("BoxlessFingerprint(A) = %q, BoxlessFingerprint(B) = %q, want different -- A's labels lead their values, B's stand alone.\n  A elements = %v\n  B elements = %v",
+			fpA, fpB, bxElements(aPage), bxElements(bPage))
+	}
+}
+
+// AC-2, Core AC-1's control. Same template, different number/date/total, one extra interior
+// line item: a fingerprint that moved here would match no stored rule for a layout it has
+// already seen.
+func TestBoxlessFingerprint_MatchesTheSameTemplateWithDifferentData(t *testing.T) {
+	aPage := bxPage1(t, dxGolden)
+	apPage := bxPage1(t, bxInlineGolden)
+
+	fpA := extraction.BoxlessFingerprint(bxOnePage(aPage))
+	fpAP := extraction.BoxlessFingerprint(bxOnePage(apPage))
+	bxRealValue(t, "A / "+dxGolden, fpA)
+	bxRealValue(t, "A-prime / "+bxInlineGolden, fpAP)
+
+	// The control must differ as a document, or the equality is trivially true.
+	if slices.Equal(bxTexts(aPage), bxTexts(apPage)) {
+		t.Fatalf("A and A-prime carry identical page-1 token texts %q; the equality below proves nothing", bxTexts(aPage))
+	}
+
+	if fpA != fpAP {
+		t.Errorf("BoxlessFingerprint(A) = %q, BoxlessFingerprint(A-prime) = %q, want equal -- only the values beside the labels and one non-anchor line item differ.\n  A       elements = %v\n  A-prime elements = %v",
+			fpA, fpAP, bxElements(aPage), bxElements(apPage))
+	}
+}
+
+// AC-3, Core AC-2. Purity over token texts and page numbers: two independent decodes of one
+// golden, and a deep copy of one of them, agree.
+func TestBoxlessFingerprint_IsStableAcrossReads(t *testing.T) {
+	first := bxPage1(t, dxGolden)
+	second := bxPage1(t, dxGolden) // a second httptest server and a second decode
+
+	if len(first.Tokens) == 0 || len(second.Tokens) == 0 {
+		t.Fatalf("read 1 carries %d token(s), read 2 carries %d; want both non-empty", len(first.Tokens), len(second.Tokens))
+	}
+	// Independence asserted, not assumed: two aliases of one slice agree for the wrong reason.
+	if &first.Tokens[0] == &second.Tokens[0] {
+		t.Fatal("the two reads share one backing array, so they are not independent values")
+	}
+	third := bxDeepCopy(first)
+	if &third.Tokens[0] == &first.Tokens[0] {
+		t.Fatal("bxDeepCopy returned an alias of its input")
+	}
+
+	fp := extraction.BoxlessFingerprint(bxOnePage(first))
+	bxRealValue(t, "read 1 of "+dxGolden, fp)
+
+	for _, c := range []struct{ name, got string }{
+		{"a second independent read", extraction.BoxlessFingerprint(bxOnePage(second))},
+		{"a deep copy of read 1", extraction.BoxlessFingerprint(bxOnePage(third))},
+	} {
+		if c.got != fp {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q", c.name, c.got, fp)
+		}
+	}
+}
+
+// bxFillerTokens builds n page-1 tokens cycling two anchor-bearing paragraphs and one that
+// trips no pattern. The element list is long on purpose; the digest still has to be 64 hex.
+func bxFillerTokens(n int) []extraction.Token {
+	out := make([]extraction.Token, n)
+	for i := range out {
+		switch i % 3 {
+		case 0:
+			out[i] = bxZeroTok(fmt.Sprintf("Invoice No: X-%d", i))
+		case 1:
+			out[i] = bxZeroTok(fmt.Sprintf("Total: %d", i))
+		default:
+			out[i] = bxZeroTok(fmt.Sprintf("Widget %d shipped in a crate", i))
+		}
+	}
+	return out
+}
+
+// AC-4, D-AC-1. The value is written to the existing layout_fingerprint column, so its width
+// is a schema fact, not a style choice.
+func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
+	hexOnly := regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+	three := []extraction.Token{
+		bxZeroTok("Invoice No: ASC-2026-0919"),
+		bxZeroTok("Issue Date: 14 Aug 2026"),
+		bxZeroTok("Total: NGN 4,300.00"),
+	}
+	big := bxFillerTokens(200)
+
+	// The wide case must really hash a long element list, or fixed width is only ever proved
+	// on short input.
+	if got := len(bxElements(extraction.TokenPage{Number: 1, Tokens: big})); got < 100 {
+		t.Fatalf("the 200-token page yields %d hashed element(s), want at least 100", got)
+	}
+
+	cases := []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"an empty page 1", []extraction.TokenPage{{Number: 1}}},
+		{"a 3-token page", []extraction.TokenPage{{Number: 1, Tokens: three}}},
+		{"a 200-token page", []extraction.TokenPage{{Number: 1, Tokens: big}}},
+	}
+
+	got := make([]string, 0, len(cases))
+	for _, c := range cases {
+		fp := extraction.BoxlessFingerprint(c.pages)
+		got = append(got, fp)
+
+		if len(fp) != 67 {
+			t.Errorf("BoxlessFingerprint(%s) = %q, %d bytes, want exactly 67", c.name, fp, len(fp))
+			continue
+		}
+		if len(fp) > bxColumnCapBytes {
+			t.Errorf("BoxlessFingerprint(%s) is %d bytes, over layout_fingerprint's %d-byte CHECK", c.name, len(fp), bxColumnCapBytes)
+		}
+		if !strings.HasPrefix(fp, "b1:") {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want it to start with \"b1:\"", c.name, fp)
+			continue
+		}
+		if h := strings.TrimPrefix(fp, "b1:"); !hexOnly.MatchString(h) {
+			t.Errorf("BoxlessFingerprint(%s) hex part = %q (%d chars), want 64 lowercase hex characters", c.name, h, len(h))
+		}
+	}
+
+	// Fixed width must not come from a fixed value.
+	if n := bxDistinct(got); n != len(cases) {
+		t.Errorf("the %d inputs yield %d distinct fingerprint(s) %q, want %d -- a constant return is also 67 bytes", len(cases), n, got, len(cases))
+	}
+}
+
+// AC-4, D-AC-2, the namespace claim. The cross product below is a backstop, not the proof: two
+// unequal digests never collide however the versions are spelled. What holds for EVERY input
+// is the prefix pair -- each function stamps its own version and the two versions differ -- so
+// this test fails if either constant moves or one is ever derived from the other.
+func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
+	if extraction.BoxlessFingerprintVersion != "b1" {
+		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b1")
+	}
+	if extraction.FingerprintVersion != "v1" {
+		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v1")
+	}
+	if extraction.BoxlessFingerprintVersion == extraction.FingerprintVersion {
+		t.Fatalf("both versions are %q; the two namespaces have merged and every assertion below is meaningless", extraction.FingerprintVersion)
+	}
+
+	boxed := headerTokens()
+	stacked := []extraction.Token{bxZeroTok("Invoice No"), bxZeroTok("Issue Date"), bxZeroTok("Total")}
+	inline := []extraction.Token{bxZeroTok("Invoice No: A-1"), bxZeroTok("Issue Date: 14 Aug 2026"), bxZeroTok("Total: 1.00")}
+
+	inputs := []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"nil", nil},
+		{"no pages", []extraction.TokenPage{}},
+		{"an empty page 1", []extraction.TokenPage{{Number: 1}}},
+		{"a page 1 matching no pattern", []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{bxZeroTok("xyzzy plugh")}}}},
+		{"a boxed header", []extraction.TokenPage{{Number: 1, Tokens: boxed}}},
+		{"a boxless stacked page", []extraction.TokenPage{{Number: 1, Tokens: stacked}}},
+		{"a boxless inline page", []extraction.TokenPage{{Number: 1, Tokens: inline}}},
+		{"page 2 first, then a boxed page 1", []extraction.TokenPage{{Number: 2, Tokens: stacked}, {Number: 1, Tokens: boxed}}},
+	}
+	if len(inputs) != 8 {
+		t.Fatalf("this test spans %d input(s), want 8", len(inputs))
+	}
+
+	bx := make([]string, 0, len(inputs))
+	geo := make([]string, 0, len(inputs))
+	for _, in := range inputs {
+		b := extraction.BoxlessFingerprint(in.pages)
+		g := extraction.Fingerprint(in.pages)
+
+		if len(b) != 67 || !strings.HasPrefix(b, extraction.BoxlessFingerprintVersion+":") {
+			t.Errorf("BoxlessFingerprint(%s) = %q (%d bytes), want 67 bytes prefixed %q", in.name, b, len(b), extraction.BoxlessFingerprintVersion+":")
+		}
+		if len(g) != 67 || !strings.HasPrefix(g, extraction.FingerprintVersion+":") {
+			t.Errorf("Fingerprint(%s) = %q (%d bytes), want 67 bytes prefixed %q", in.name, g, len(g), extraction.FingerprintVersion+":")
+		}
+		bx = append(bx, b)
+		geo = append(geo, g)
+	}
+
+	// Eight inputs, not one input eight times.
+	if n := bxDistinct(bx); n < 2 {
+		t.Errorf("the eight inputs yield %d distinct boxless value(s) %q; the cross product below compares one value against itself", n, bx)
+	}
+	if n := bxDistinct(geo); n < 2 {
+		t.Errorf("the eight inputs yield %d distinct geometric value(s) %q", n, geo)
+	}
+
+	for i, b := range bx {
+		for j, g := range geo {
+			if b == g {
+				t.Errorf("BoxlessFingerprint(%s) = %q equals Fingerprint(%s); the two namespaces collide", inputs[i].name, b, inputs[j].name)
+			}
+		}
 	}
 }

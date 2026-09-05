@@ -165,6 +165,26 @@ func Fingerprint(pages []TokenPage) string {
 	return FingerprintVersion + ":" + hex.EncodeToString(sum[:])
 }
 
+// BoxlessFingerprintVersion prefixes every boxless fingerprint. Disjoint from
+// FingerprintVersion on byte 0, which is what makes a "b1:" value unable to collide with any
+// "v1:" value in the shared layout_fingerprint column.
+const BoxlessFingerprintVersion = "b1"
+
+// labelPlacement says where a lexicon match sits inside its own token: "w" whole, "l" leading,
+// "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i.
+//
+// STUB -- EXTR-19-02 Stage 2.5. The body is Stage 3's.
+func labelPlacement(text string, loc []int) string { return "" }
+
+// BoxlessFingerprint identifies a page-1 layout with no usable geometry -- every DOCX token
+// carries the zero box -- by which anchor labels appear, in document order, and how each
+// label sits inside its own token. Nothing sorts: the order IS the signal, which is what
+// separates it from Fingerprint. A page carrying no recognised label still fingerprints, to
+// sha256(""), matching Fingerprint's own documented behaviour.
+//
+// STUB -- EXTR-19-02 Stage 2.5. The body is Stage 3's.
+func BoxlessFingerprint(pages []TokenPage) string { return "" }
+
 // AnchorLabelText is the lexicon pattern's own matched substring for o.Label against tok,
 // capped at maxAnchorLabelBytes on a rune boundary. "" when o.Label names no lexicon entry or
 // its pattern does not match tok.Text.

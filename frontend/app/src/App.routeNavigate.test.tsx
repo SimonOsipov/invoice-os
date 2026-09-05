@@ -291,6 +291,24 @@ describe('AC-3: a pushed URL never carries a query string', () => {
     expect(call![2], 'a pushed URL must never carry a query string').toBe('/audit')
     expect(window.location.search, 'the live URL must carry no query string either').toBe('')
   })
+
+  // QA found the test above cannot distinguish navigate() reading location.search from
+  // navigate() not: the mount-alignment effect (App.tsx:513-515) unconditionally strips
+  // search on EVERY mount, so search is already '' by the time nav() runs above --
+  // `+ window.location.search` mutated into navigate()'s push SURVIVES that test. Re-inject
+  // search AFTER mount, isolating navigate()'s own construction of the pushed string from
+  // the spy's recorded argument (the mirror running afterwards is irrelevant here).
+  it('nav_neverEchoesASearchStringThatAppearsAfterMount', async () => {
+    await bootAt('/')
+    window.history.replaceState(null, '', window.location.pathname + '?injected=1')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.nav('audit')
+    })
+    const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/audit'))
+    expect(call, 'no pushState call to /audit was recorded').toBeDefined()
+    expect(call![2], 'navigate() must never echo a live location.search into its own push').toBe('/audit')
+  })
 })
 
 describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', () => {

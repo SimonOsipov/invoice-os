@@ -830,7 +830,7 @@ describe('canReadColumns — entity contract did not move (BULK-03-11, BULK-01-0
 // The spec that stood here (DOC-01-07, task-355, AC-6) asserted that a 20 MB csv still
 // opens the read gate, and its comment read "no size gate exists anywhere in
 // frontend/app/src today and none may be introduced". EXTR-09 Core AC #4 REVERSES that
-// decision deliberately: the picker now accepts five document types the extractor reads
+// decision deliberately: the picker now accepts document types the extractor reads
 // byte-by-byte, so a file the server will 413 must be refused where the user can still
 // see and remove it, not after a 15 MiB upload.
 //
@@ -935,11 +935,16 @@ const CLASSIFY_TABLE: Array<[string, string, PickedKind]> = [
   ['ledger.csv', 'text/plain', 'spreadsheet'],
   ['book.xlsx', CLASSIFY_XLSX, 'spreadsheet'],
   ['scan.pdf', 'application/pdf', 'document'],
-  ['scan.png', 'image/png', 'document'],
-  ['scan.jpg', 'image/jpeg', 'document'],
-  ['scan.jpeg', 'image/jpeg', 'document'],
-  ['scan.webp', 'image/webp', 'document'],
   ['letter.docx', CLASSIFY_DOCX, 'document'],
+]
+
+// EXTR-15-03: what LEFT the table (BQ-2). Named once; PN-6's population is derived from it, so
+// the refusal count follows the narrowing rather than a literal typed beside it.
+const CLASSIFY_NARROWED_OUT: Array<[string, string]> = [
+  ['scan.png', 'image/png'],
+  ['scan.jpg', 'image/jpeg'],
+  ['scan.jpeg', 'image/jpeg'],
+  ['scan.webp', 'image/webp'],
 ]
 
 describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
@@ -948,7 +953,7 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
   // verdict, an UNRECOGNISED one falls through to the declared content type.
   it('CLASSIFY-1: every row of the accepted-type table resolves', () => {
     // Vacuity floor: an empty table would make the loop below assert over nothing.
-    expect(CLASSIFY_TABLE.length, 'the §1 table must have all nine rows').toBe(9)
+    expect(CLASSIFY_TABLE.length, 'the narrowed table must have all five rows').toBe(5)
 
     for (const [name, contentType, expected] of CLASSIFY_TABLE) {
       expect(classifyPickedFile(name, contentType), `${name} declared ${contentType}`).toBe(expected)
@@ -971,8 +976,8 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
   // the declared 'application/pdf' and accepts the file as a PDF — EXTR-09-02's QA found
   // exactly that. TypeScript's table holds BOTH halves, so '.csv' is recognised and the
   // verdict is 'spreadsheet'. The file therefore never reaches POST /v1/documents on the
-  // client path. The two tables agree on the domain they share (the six document
-  // extensions); CLASSIFY-5 is what pins that shared domain.
+  // client path. The two tables agree on the domain they share (.pdf and .docx);
+  // CLASSIFY-5 is what pins that shared domain.
   it('CLASSIFY-2: the extension wins over a disagreeing content type', () => {
     expect(classifyPickedFile('scan.pdf', 'text/csv')).toBe('document')
     expect(classifyPickedFile('a.csv', 'application/pdf')).toBe('spreadsheet')
@@ -988,7 +993,9 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
     expect(classifyPickedFile('BOOK.XLSX', CLASSIFY_XLSX.toUpperCase())).toBe('spreadsheet')
     // Extension absent, so the parameterised declared type is the only thing to read.
     expect(classifyPickedFile('noextension', 'text/csv; charset=utf-8')).toBe('spreadsheet')
-    expect(classifyPickedFile('noextension', 'Image/JPEG; charset=binary')).toBe('document')
+    // Was Image/JPEG until EXTR-15-03 dropped it; the case-and-charset claim needs a type that
+    // is still accepted, and PN-6 owns the refusal of the ones that are not.
+    expect(classifyPickedFile('noextension', `${CLASSIFY_DOCX.toUpperCase()}; charset=binary`)).toBe('document')
   })
 
   // CLASSIFY-4 — null is a refusal, never a fallback kind. The positive control runs FIRST
@@ -1004,6 +1011,60 @@ describe('classifyPickedFile (CLASSIFY-1..4, EXTR-09-04)', () => {
     // '.csv.bak' is not a csv: hasImportableExtension's last-segment rule (FLOW-05) must
     // survive the replacement, not be loosened into a substring match.
     expect(classifyPickedFile('ledger.csv.bak', 'application/octet-stream')).toBeNull()
+  })
+})
+
+// ============================================================================
+// PN-6 (EXTR-15-03, task-854, Mode A) — the client gate narrows to PDF + DOCX.
+// ============================================================================
+// `accept` gates the OS picker only: CreateUpload hands a DROPPED file straight to
+// addPickedFiles unfiltered, so classifyPickedFile is the real client refusal. Narrowing the
+// attribute without narrowing this function narrows nothing.
+
+describe('classifyPickedFile after the narrowing (PN-6, EXTR-15-03)', () => {
+  it('PN-6: the four dropped extensions and their three content types are null', () => {
+    // Controls first, both kinds. The nulls below all hold for a function that returns null
+    // for everything — these are what separate a narrowed gate from a broken one.
+    expect(classifyPickedFile('scan.pdf', 'application/pdf'), 'control: .pdf must still resolve').toBe('document')
+    expect(classifyPickedFile('letter.docx', CLASSIFY_DOCX), 'control: .docx must still resolve').toBe('document')
+    expect(classifyPickedFile('ledger.csv', 'text/csv'), 'control: .csv must still resolve').toBe('spreadsheet')
+    expect(classifyPickedFile('book.xlsx', CLASSIFY_XLSX), 'control: .xlsx must still resolve').toBe('spreadsheet')
+
+    // Population, derived: four extensions and the three distinct types behind them.
+    expect(CLASSIFY_NARROWED_OUT.length, 'the narrowed-out table must not be empty').toBe(4)
+    const droppedTypes = [...new Set(CLASSIFY_NARROWED_OUT.map(([, type]) => type))]
+    expect(droppedTypes.length, 'the four dropped extensions carry three distinct content types').toBe(3)
+
+    // By extension. Each declared with its own former content type, so a gate that dropped the
+    // extension but kept the type still reds here.
+    for (const [name, type] of CLASSIFY_NARROWED_OUT) {
+      expect(classifyPickedFile(name, type), `${name} declared ${type} must be refused`).toBeNull()
+      expect(classifyPickedFile(name, ''), `${name} with no declared type must be refused`).toBeNull()
+    }
+
+    // By declared type alone — no extension to read, so the type is the only signal.
+    for (const type of droppedTypes) {
+      expect(classifyPickedFile('noextension', type), `a file declared ${type} must be refused`).toBeNull()
+      expect(classifyPickedFile('noextension', `${type}; charset=binary`), `${type} with a charset parameter must be refused`).toBeNull()
+    }
+
+    // Case is not an escape hatch: CLASSIFY-3's rule cuts both ways.
+    expect(classifyPickedFile('SCAN.PNG', 'IMAGE/PNG')).toBeNull()
+  })
+
+  it('PN-6: the accepted table is exactly .csv, .xlsx, .pdf, .docx', () => {
+    // The narrowed set restated as an equality over what RESOLVES, so it cannot pass over a
+    // gate that refuses everything.
+    const probes: Array<[string, string]> = [
+      ['ledger.csv', 'text/csv'],
+      ['book.xlsx', CLASSIFY_XLSX],
+      ['scan.pdf', 'application/pdf'],
+      ['letter.docx', CLASSIFY_DOCX],
+      ...CLASSIFY_NARROWED_OUT,
+      ['archive.zip', 'application/zip'],
+    ]
+    const resolved = probes.filter(([name, type]) => classifyPickedFile(name, type) !== null).map(([name]) => name)
+    expect(resolved.sort()).toEqual(['book.xlsx', 'ledger.csv', 'letter.docx', 'scan.pdf'])
   })
 })
 

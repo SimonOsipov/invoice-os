@@ -3,7 +3,10 @@
 package extraction_test
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -94,4 +97,53 @@ func TestExtractionPackage_DoesNotImportDocumentPackage(t *testing.T) {
 		t.Fatalf("scan B: go list -deps -test returned %d lines; the fence below would pass vacuously", len(scanB))
 	}
 	assertFenced(t, "scan B", scanB)
+}
+
+// EXTR-15-01 FK-11 (AC-11). scripts/ci/rls-test-gate.sh fails a step on any skipped or
+// zero-ran suite, so stRequire is this package's one sanctioned skip site. A story that adds
+// a second one reds here rather than on the gate.
+func TestExtractionPackage_HasExactlyOneSkipSite(t *testing.T) {
+	names, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob *_test.go: %v", err)
+	}
+	// The floor first: this scan asserts an ABSENCE, and zero files read reports clean.
+	// 91 measured at aaee0c3d.
+	if len(names) < 30 {
+		t.Fatalf("read %d test file(s) in internal/extraction, want at least 30 (91 measured)", len(names))
+	}
+
+	// Both needles are assembled from fragments so this file does not match its own scan.
+	skipCall := regexp.MustCompile(`\bt\.Sk` + `ip(f|Now)?\(`)
+	declRE := regexp.MustCompile(`func stReq` + `uire\(`)
+
+	skipSites := map[string]int{}
+	declares := []string{}
+	for _, name := range names {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		src := string(raw)
+		if n := len(skipCall.FindAllString(src, -1)); n > 0 {
+			skipSites[name] = n
+		}
+		if declRE.MatchString(src) {
+			declares = append(declares, name)
+		}
+	}
+
+	// The control needle: the one sanctioned site must still be found, or the count below
+	// reads the same on a package whose test files stopped being parsed at all.
+	if len(declares) != 1 || declares[0] != "store_db_test.go" {
+		t.Fatalf("stRequire is declared in %v, want exactly [store_db_test.go]", declares)
+	}
+	if got := skipSites["store_db_test.go"]; got != 1 {
+		t.Errorf("store_db_test.go holds %d t.Skip call(s), want exactly 1 (stRequire)", got)
+	}
+	for name, n := range skipSites {
+		if name != "store_db_test.go" {
+			t.Errorf("%s holds %d t.Skip call(s); stRequire is this package's only sanctioned skip site and the CI gate fails on a second", name, n)
+		}
+	}
 }

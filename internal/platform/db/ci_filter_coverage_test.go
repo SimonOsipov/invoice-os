@@ -182,7 +182,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 		postdatesTheFrozenFilters := func(n string) bool {
 			return n == "TestCIRunFiltersReachEveryTestInThePackage" ||
 				strings.HasPrefix(n, "TestPurge") ||
-				strings.HasPrefix(n, "TestHandlerMapping")
+				strings.HasPrefix(n, "TestHandlerMapping") ||
+				strings.HasPrefix(n, "TestExtractionFailureKind")
 		}
 		var historical []string
 		for _, n := range names {

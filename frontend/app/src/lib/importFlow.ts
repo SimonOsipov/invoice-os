@@ -90,14 +90,13 @@ export interface AcceptedPickedType {
 // to the declared type, and listing it would make 'notes.txt' declared text/plain a
 // spreadsheet (CLASSIFY-4 requires null). A .csv declared text/plain still resolves — by
 // its extension, which wins (CLASSIFY-1).
+//
+// PNG/JPEG/WebP left this table with EXTR-15-03; lib/sourceDocument.ts deliberately kept its
+// image rows, so a document stored before the narrowing still previews (PN-9).
 export const ACCEPTED_PICKED_TYPES: readonly AcceptedPickedType[] = [
   { ext: '.csv', kind: 'spreadsheet', contentTypes: ['text/csv'] },
   { ext: '.xlsx', kind: 'spreadsheet', contentTypes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'] },
   { ext: '.pdf', kind: 'document', contentTypes: ['application/pdf'] },
-  { ext: '.png', kind: 'document', contentTypes: ['image/png'] },
-  { ext: '.jpg', kind: 'document', contentTypes: ['image/jpeg'] },
-  { ext: '.jpeg', kind: 'document', contentTypes: ['image/jpeg'] },
-  { ext: '.webp', kind: 'document', contentTypes: ['image/webp'] },
   { ext: '.docx', kind: 'document', contentTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'] },
 ]
 

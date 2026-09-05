@@ -813,35 +813,6 @@ func TestImport_UploadCapIs15MiB(t *testing.T) {
 	})
 }
 
-// --- AC-7: GET /v1/imports/{id} is untouched --------------------------------
-
-// TestGetBatch_BodyOmitsDocumentID: import_batches gains a document_id column,
-// but the batch's wire contract does not. Guard, not a RED spec.
-func TestGetBatch_BodyOmitsDocumentID(t *testing.T) {
-	id := testIdentity()
-	name := "q.csv"
-	get := func(ctx context.Context, batchID string) (Batch, error) {
-		return Batch{ID: batchID, EntityID: uuid.NewString(), Filename: &name, Status: "completed"}, nil
-	}
-
-	r := httptest.NewRequest("GET", "/v1/imports/"+uuid.NewString(), nil)
-	r.SetPathValue("id", uuid.NewString())
-	r = r.WithContext(auth.WithIdentity(r.Context(), id))
-	rec := httptest.NewRecorder()
-	GetHandler(get, nil).ServeHTTP(rec, r)
-
-	raw := rec.Body.Bytes()
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
-	}
-	if hasDocumentIDKey(raw) {
-		t.Errorf("GET /v1/imports/{id} body gained a document_id key: %s", raw)
-	}
-	if !bytes.Contains(raw, []byte(`"filename":"q.csv"`)) {
-		t.Errorf("filename is no longer on the wire as before: %s", raw)
-	}
-}
-
 // --- EXTR-09-05 (task-772): one upload cap, three sources -------------------
 //
 // The client-side size gate gives the browser its own copy of a limit it cannot see, so

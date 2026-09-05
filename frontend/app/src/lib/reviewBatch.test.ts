@@ -635,14 +635,14 @@ describe('channelTiles: unreadable sums BOTH RowError shapes in one batch (SHELL
 
 describe('reviewTabs (AC-4, §7.2)', () => {
   it('SHELL-5: the Unreadable rows tab is OMITTED from the array at zero, not merely hidden — length 1, the remaining tab is "invoices"', () => {
-    const result = reviewTabs({ invoices: 12, unreadable: 0, alreadyImported: 0 })
+    const result = reviewTabs({ invoices: 12, unreadable: 0, alreadyImported: 0 }, 'spreadsheet')
 
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('invoices')
   })
 
   it('SHELL-5b (NEW — nothing in the frozen table pinned the label format or that the two counts come from different sources): both tabs render, each with its own count', () => {
-    const result = reviewTabs({ invoices: 500, unreadable: 4, alreadyImported: 0 })
+    const result = reviewTabs({ invoices: 500, unreadable: 4, alreadyImported: 0 }, 'spreadsheet')
 
     expect(result.map((t) => t.label)).toEqual(['Invoices (500)', 'Unreadable rows (4)'])
   })
@@ -680,7 +680,7 @@ describe('reviewTabs + channelTiles on an all-quarantined batch (QA Stage 4 — 
     }
 
     const tiles = channelTiles(batch, { cleanTotal: 0, failingTotal: 0 })
-    const tabs = reviewTabs({ invoices: 0, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported })
+    const tabs = reviewTabs({ invoices: 0, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported }, 'spreadsheet')
 
     expect(tiles.frozen.unreadable).toBe(10)
     expect(tabs.map((t) => t.label)).toEqual(['Invoices (0)', 'Unreadable rows (10)'])
@@ -913,21 +913,24 @@ describe('isAlreadyImported: an empty-string rule_key (BUG08-QA-3, presence vs e
 
 describe('unreadableRowsAll / alreadyImportedRowsAll: mixed batches across a multi-file run (BUG08-QA-4)', () => {
   it('BUG08-QA-4: a duplicate-only file, a structural-only file, and a mixed file each contribute rows to the right channel under the right file label', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'f1.csv',
+      document_id: null,
       errors: [
         { rows: [1, 2], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-1', message: 'dup' },
       ],
     }
-    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b2',
       filename: 'f2.csv',
+      document_id: null,
       errors: [{ row: 5, message: 'bad row' }],
     }
-    const b3: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b3: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b3',
       filename: 'f3.csv',
+      document_id: null,
       errors: [
         { row: 9, message: 'bad row 2' },
         { rows: [10], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-2', message: 'dup2' },
@@ -943,8 +946,8 @@ describe('unreadableRowsAll / alreadyImportedRowsAll: mixed batches across a mul
       { row: 10, invoiceId: 'inv-2', file: 'f3.csv' },
     ])
     expect(unreadable).toEqual([
-      { row: 5, column: '—', message: 'bad row', file: 'f2.csv' },
-      { row: 9, column: '—', message: 'bad row 2', file: 'f3.csv' },
+      { row: 5, column: '—', message: 'bad row', file: 'f2.csv', documentId: null },
+      { row: 9, column: '—', message: 'bad row 2', file: 'f3.csv', documentId: null },
     ])
   })
 })
@@ -957,7 +960,7 @@ describe('alreadyImportedCsvAll: RFC-4180 escaping on the fields the new export 
       { file: 'd\ne.csv', row: 3, invoiceId: null },
     ]
 
-    const csv = alreadyImportedCsvAll(rows)
+    const csv = alreadyImportedCsvAll(rows, 'spreadsheet')
 
     expect(csv).toBe(['File,Row,Invoice id', '"a""b.csv",1,inv-1', 'c.csv,2,"inv,2"', '"d\ne.csv",3,'].join('\n'))
   })
@@ -997,11 +1000,11 @@ describe('channelTilesAll: the reconciliation property (AC-4) across a mixed MUL
 
 describe('reviewTabs: the third tab (AIMP-7, AC-3)', () => {
   it('AIMP-7: the third tab appears with a true label and is omitted at zero', () => {
-    expect(reviewTabs({ invoices: 0, unreadable: 0, alreadyImported: 750 }).map((t) => t.label)).toEqual([
+    expect(reviewTabs({ invoices: 0, unreadable: 0, alreadyImported: 750 }, 'spreadsheet').map((t) => t.label)).toEqual([
       'Invoices (0)',
       'Already imported (750)',
     ])
-    expect(reviewTabs({ invoices: 3, unreadable: 2, alreadyImported: 0 }).map((t) => t.label)).toEqual([
+    expect(reviewTabs({ invoices: 3, unreadable: 2, alreadyImported: 0 }, 'spreadsheet').map((t) => t.label)).toEqual([
       'Invoices (3)',
       'Unreadable rows (2)',
     ])
@@ -1015,7 +1018,7 @@ describe('alreadyImportedCsvAll (AIMP-9, AC-3)', () => {
       { file: 'c.csv', row: null, invoiceId: null },
     ]
 
-    const csv = alreadyImportedCsvAll(rows)
+    const csv = alreadyImportedCsvAll(rows, 'spreadsheet')
     const lines = csv.split('\n')
 
     expect(lines[0]).toBe(ALREADY_IMPORTED_CSV_HEADER_ALL)
@@ -1026,7 +1029,7 @@ describe('alreadyImportedCsvAll (AIMP-9, AC-3)', () => {
 
 describe('unreadableCsvAll: no longer carries duplicate rows (AIMP-10, AC-6)', () => {
   it('AIMP-10: the structural CSV is byte-unchanged and no longer contains duplicate rows', () => {
-    const csv = unreadableCsvAll(unreadableRowsAll([{ id: 'b1', filename: 'a.csv', errors: mixedErrors() }]))
+    const csv = unreadableCsvAll(unreadableRowsAll([{ id: 'b1', filename: 'a.csv', document_id: null, errors: mixedErrors() }]), 'spreadsheet')
 
     expect(csv).toBe(
       [
@@ -1058,7 +1061,7 @@ describe('reviewHeader (AC-2, SHELL-8 — the model takes NO file parameter, so 
       created_at: '2026-07-30T00:00:00Z',
     }
 
-    const result = reviewHeader(batch, { allTotal: 500 })
+    const result = reviewHeader(batch, { allTotal: 500 }, 'spreadsheet')
 
     expect(result.title).toBe('500 invoices imported')
     expect(result.batchId).toBe('a1b2c3d4-e5f6-47a8-89ab-cdef01234567')
@@ -1074,7 +1077,7 @@ describe('unreadableCsv (AC-5, CSV-1 — the §7.4 "Download this list (CSV)" se
       { row: null, column: '—', message: 'unreadable file structure' },
     ]
 
-    const csv = unreadableCsv(rows)
+    const csv = unreadableCsv(rows, 'spreadsheet')
     const lines = csv.split('\n')
 
     expect(lines[0]).toBe('Row,Field,Why it could not be read')
@@ -2447,6 +2450,7 @@ function mkBatch(id: string, filename: string | null, overrides: Partial<ImportB
     id,
     entity_id: 'e1',
     filename,
+    document_id: null,
     status: 'completed',
     rows_total: 10,
     rows_valid: 10,
@@ -2608,7 +2612,7 @@ describe('channelTilesAll: sums the frozen channel and labels the min non-null r
 
 describe('reviewHeaderAll: states the files, sums the rows, never prints a null (BULK-01-06, AC-6)', () => {
   it('BULK-06-12: one batch -> filesLine "from a.csv"; three -> "from 3 files"; rows read is the sum', () => {
-    const one = reviewHeaderAll([mkBatch('b1', 'a.csv', { rows_total: 1500 })], { allTotal: 500 })
+    const one = reviewHeaderAll([mkBatch('b1', 'a.csv', { rows_total: 1500 })], { allTotal: 500 }, 'spreadsheet')
     expect(one.filesLine).toBe('from a.csv')
     expect(one.subline).toContain('1500 ROWS READ')
 
@@ -2619,13 +2623,14 @@ describe('reviewHeaderAll: states the files, sums the rows, never prints a null 
         mkBatch('b3', 'c.csv', { rows_total: 300 }),
       ],
       { allTotal: 500 },
+      'spreadsheet',
     )
     expect(three.filesLine).toBe('from 3 files')
     expect(three.subline).toContain('600 ROWS READ')
   })
 
   it('BULK-06-22: a single batch with filename:null renders filesLine "source not recorded" — never "from null", never a bare "from "', () => {
-    const header = reviewHeaderAll([mkBatch('b1', null, { rows_total: 10 })], { allTotal: 5 })
+    const header = reviewHeaderAll([mkBatch('b1', null, { rows_total: 10 })], { allTotal: 5 }, 'spreadsheet')
 
     expect(header.filesLine).toBe('source not recorded')
     expect(header.filesLine).not.toContain('null')
@@ -2635,14 +2640,16 @@ describe('reviewHeaderAll: states the files, sums the rows, never prints a null 
 
 describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7)', () => {
   it('BULK-06-13: a rows:[5,6] error in b1 and a row:2 in b2 yield THREE entries, each carrying its own filename', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ rows: [5, 6], message: 'quarantined: duplicate invoice_number' }],
     }
-    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b2',
       filename: 'b.csv',
+      document_id: null,
       errors: [{ row: 2, message: 'bad row' }],
     }
 
@@ -2654,28 +2661,32 @@ describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7
   })
 
   it('BULK-06-14: an error with neither row nor rows still yields ONE row:null entry, carrying its filename — the no-swallow rule survives widening', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ message: 'unreadable file structure' }],
     }
 
     const result = unreadableRowsAll([b1])
 
-    expect(result).toEqual([{ row: null, column: '—', message: 'unreadable file structure', file: 'a.csv' }])
+    expect(result).toEqual([
+      { row: null, column: '—', message: 'unreadable file structure', file: 'a.csv', documentId: null },
+    ])
   })
 
   it('BULK-06-23: an unreadable row belonging to a filename:null batch renders "source not recorded" in the File column and the CSV cell, never the literal null', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: null,
+      document_id: null,
       errors: [{ row: 1, message: 'm1' }],
     }
 
     const rows = unreadableRowsAll([b1])
     expect(rows[0].file).toBe('source not recorded')
 
-    const csv = unreadableCsvAll(rows)
+    const csv = unreadableCsvAll(rows, 'spreadsheet')
     expect(csv.split('\n')[1]).toBe('source not recorded,1,—,m1')
     expect(csv).not.toContain('null')
   })
@@ -2684,11 +2695,11 @@ describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7
 describe('unreadableCsvAll (BULK-01-06, AC-7): the CSV gains a File column', () => {
   it('BULK-06-15: header is File,Row,Field,Why it could not be read; a null row renders an empty cell; a comma-bearing filename is RFC-4180 quoted', () => {
     const rows: UnreadableRowAll[] = [
-      { row: 5, column: '—', message: 'bad row', file: 'a,b.csv' },
-      { row: null, column: '—', message: 'unreadable file structure', file: 'source not recorded' },
+      { row: 5, column: '—', message: 'bad row', file: 'a,b.csv', documentId: null },
+      { row: null, column: '—', message: 'unreadable file structure', file: 'source not recorded', documentId: null },
     ]
 
-    const csv = unreadableCsvAll(rows)
+    const csv = unreadableCsvAll(rows, 'spreadsheet')
     const lines = csv.split('\n')
 
     expect(lines[0]).toBe('File,Row,Field,Why it could not be read')
@@ -2705,7 +2716,7 @@ describe('filesStrip: the whole per-file report, batch GETs merged with the in-s
       status: 'finished',
     }
 
-    const rows = filesStrip([], run)
+    const rows = filesStrip([], run, 'spreadsheet')
 
     expect(rows).toHaveLength(1)
     expect(rows[0].filename).toBe('broken.csv')
@@ -2715,14 +2726,14 @@ describe('filesStrip: the whole per-file report, batch GETs merged with the in-s
   it('BULK-06-17: filesStrip(batches, null) survives a deep link — one row per batch, and no run-only failure rows', () => {
     const batches: ImportBatch[] = [mkBatch('b1', 'a.csv'), mkBatch('b2', 'b.csv')]
 
-    const rows = filesStrip(batches, null)
+    const rows = filesStrip(batches, null, 'spreadsheet')
 
     expect(rows).toHaveLength(2)
     expect(rows.map((r) => r.id).sort()).toEqual(['b1', 'b2'])
   })
 
   it('BULK-06-18: a batch with filename:null renders "source not recorded" in filesStrip — never \'\' and never the literal null', () => {
-    const rows = filesStrip([mkBatch('b1', null)], null)
+    const rows = filesStrip([mkBatch('b1', null)], null, 'spreadsheet')
 
     expect(rows[0].filename).toBe('source not recorded')
   })
@@ -2768,10 +2779,10 @@ describe('filesStrip: the whole per-file report, batch GETs merged with the in-s
       status: 'finished',
     }
 
-    const liveRows = filesStrip([batch], liveRun)
+    const liveRows = filesStrip([batch], liveRun, 'spreadsheet')
     expect(liveRows.find((r) => r.id === 'b1')?.reason).toBe(message)
 
-    const deepLinkRows = filesStrip([batch], null)
+    const deepLinkRows = filesStrip([batch], null, 'spreadsheet')
     expect(deepLinkRows.find((r) => r.id === 'b1')?.reason).toBe(message)
   })
 })
@@ -2807,7 +2818,7 @@ describe('QA-311-1: filesStrip over the zero-row early-"failed" batch (service.g
       errors: [],
     })
 
-    const rows = filesStrip([zeroRowBatch], null)
+    const rows = filesStrip([zeroRowBatch], null, 'spreadsheet')
 
     expect(rows).toHaveLength(1)
     expect(rows[0].filename).toBe('headers-only.csv')
@@ -2824,14 +2835,14 @@ describe('QA-311-2: reviewHeaderAll pins its timestamp choice at N>1 batches (no
     const first = mkBatch('b1', 'a.csv', { created_at: '2026-01-01T00:00:00Z' })
     const second = mkBatch('b2', 'b.csv', { created_at: '2026-06-15T12:00:00Z' })
 
-    const header = reviewHeaderAll([first, second], { allTotal: 10 })
+    const header = reviewHeaderAll([first, second], { allTotal: 10 }, 'spreadsheet')
 
     expect(header.subline).toContain(fmtDateTime(first.created_at))
     expect(header.subline).not.toContain(fmtDateTime(second.created_at))
 
     // Reversing array order reverses which timestamp wins — confirms the rule is
     // genuinely "array position 0", not e.g. "earliest" or "latest" by value.
-    const reversed = reviewHeaderAll([second, first], { allTotal: 10 })
+    const reversed = reviewHeaderAll([second, first], { allTotal: 10 }, 'spreadsheet')
     expect(reversed.subline).toContain(fmtDateTime(second.created_at))
     expect(reversed.subline).not.toContain(fmtDateTime(first.created_at))
   })
@@ -2852,7 +2863,7 @@ describe('QA-311-3: filesStrip row order — batches array order wins, run-only 
 
     // `batches` deliberately passed in z-before-a order (neither alphabetical nor
     // created_at order) to prove filesStrip does not silently re-sort.
-    const rows = filesStrip([bZ, bA], run)
+    const rows = filesStrip([bZ, bA], run, 'spreadsheet')
 
     expect(rows.map((r) => r.filename)).toEqual(['z-file.csv', 'a-file.csv', 'first-refused.csv', 'second-refused.csv'])
   })
@@ -2872,8 +2883,8 @@ describe('QA-311-4: a batch known to `run` but absent from `batches` (in-flight 
     // behaviour, not endorsing it) the file is silently absent from the strip rather
     // than rendering a placeholder row, because batchRows is sourced from `batches`
     // alone and runOnlyFailures only reads 'failed' outcomes.
-    expect(() => filesStrip([otherBatch], run)).not.toThrow()
-    const rows = filesStrip([otherBatch], run)
+    expect(() => filesStrip([otherBatch], run, 'spreadsheet')).not.toThrow()
+    const rows = filesStrip([otherBatch], run, 'spreadsheet')
     expect(rows.map((r) => r.id)).toEqual(['b-other'])
     expect(rows.find((r) => r.filename === 'in-flight.csv')).toBeUndefined()
   })
@@ -2886,29 +2897,473 @@ describe('QA-311-4: a batch known to `run` but absent from `batches` (in-flight 
       status: 'finished',
     }
 
-    expect(() => filesStrip([staleBatch], run)).not.toThrow()
-    const rows = filesStrip([staleBatch], run)
+    expect(() => filesStrip([staleBatch], run, 'spreadsheet')).not.toThrow()
+    const rows = filesStrip([staleBatch], run, 'spreadsheet')
     expect(rows.map((r) => r.filename).sort()).toEqual(['stale.csv', 'unrelated.csv'])
   })
 })
 
 describe('QA-311-5: unreadableRowsAll across two files erroring on the SAME row number — both survive, each attributed to its own file', () => {
   it('row 3 in file A and row 3 in file B both appear, not deduped, not merged, each carrying its own file label', () => {
-    const fileA: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const fileA: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'bA',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ row: 3, message: 'bad date in A' }],
     }
-    const fileB: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const fileB: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'bB',
       filename: 'b.csv',
+      document_id: null,
       errors: [{ row: 3, message: 'bad date in B' }],
     }
 
     const result = unreadableRowsAll([fileA, fileB])
 
     expect(result).toHaveLength(2)
-    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in A', file: 'a.csv' })
-    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv' })
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in A', file: 'a.csv', documentId: null })
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv', documentId: null })
+  })
+})
+
+// --- EXTR-15-08 (task-834, Mode A / test-first): the review unit derivation -------------
+//
+// RED on landing. `batchUnit`/`runUnit` do not exist in reviewBatch.ts yet, so every spec
+// below fails on the explicit `not implemented — …` thrown here, never on an
+// import/collection error. That is why the module is reached through a NAMESPACE import
+// rather than a named one: a named import of a missing export is a link error, which
+// would take this file's 200-odd shipped specs down with it.
+//
+// The derivation reads the batch FILENAME through classifyPickedFile, never
+// `import_batches.document_id` — the spreadsheet path stores its upload in `documents`
+// too (internal/importer/service.go), so document_id is set on both kinds and cannot
+// discriminate. UN-4 is the guard that pins that.
+import * as unitModule from './reviewBatch'
+
+type ReviewUnitT = 'spreadsheet' | 'document'
+
+function notImplemented(name: string, shape: string): never {
+  throw new Error(`not implemented — lib/reviewBatch.ts must export ${name}: ${shape}`)
+}
+
+function batchUnit(batch: Pick<ImportBatch, 'filename'>): ReviewUnitT {
+  const fn = (unitModule as Record<string, unknown>).batchUnit
+  if (typeof fn !== 'function') {
+    notImplemented('batchUnit', "(batch: Pick<ImportBatch,'filename'>) => 'spreadsheet' | 'document'")
+  }
+  return (fn as (b: Pick<ImportBatch, 'filename'>) => ReviewUnitT)(batch)
+}
+
+function runUnit(batches: Pick<ImportBatch, 'filename'>[]): ReviewUnitT {
+  const fn = (unitModule as Record<string, unknown>).runUnit
+  if (typeof fn !== 'function') {
+    notImplemented('runUnit', "(batches: Pick<ImportBatch,'filename'>[]) => 'spreadsheet' | 'document'")
+  }
+  return (fn as (b: Pick<ImportBatch, 'filename'>[]) => ReviewUnitT)(batches)
+}
+
+const UNIT_SRC = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
+
+describe('batchUnit: the unit comes from the filename, through the shipped classifier (EXTR-15-08)', () => {
+  // TWO document extensions, not six. EXTR-15-03 narrowed ACCEPTED_PICKED_TYPES to
+  // .csv/.xlsx/.pdf/.docx; a six-row table would pass against a classifier that never
+  // narrowed.
+  it("UN-1 (AC-1): .pdf/.docx in any case are 'document'; .csv/.xlsx in any case are 'spreadsheet'", () => {
+    for (const filename of ['invoice.pdf', 'INVOICE.PDF', 'invoice.docx', 'Invoice.DOCX']) {
+      expect(batchUnit({ filename })).toBe('document')
+    }
+    for (const filename of ['ledger.csv', 'LEDGER.CSV', 'ledger.xlsx', 'Ledger.XLSX']) {
+      expect(batchUnit({ filename })).toBe('spreadsheet')
+    }
+  })
+
+  // 'spreadsheet' is the FALLBACK, so a batch imported before any of this reads
+  // byte-identically to how it reads today. 'a.png' pins EXTR-15-03's narrowing having a
+  // consequence: images left the table, so such a batch now classifies null and lands
+  // here — and it can only be pre-narrowing data.
+  it("UN-2 (AC-2): null, '', and any name outside both sets fall back to 'spreadsheet'", () => {
+    expect(batchUnit({ filename: null })).toBe('spreadsheet')
+    for (const filename of ['', 'a', 'a.csv.bak', 'a.txt', 'a.png']) {
+      expect(batchUnit({ filename })).toBe('spreadsheet')
+    }
+  })
+})
+
+describe("runUnit: 'document' only when every batch is one (EXTR-15-08)", () => {
+  // The mixed case is unreachable by construction — addPickedFiles refuses a mixed
+  // selection (importRun.ts kindRefusal) — but it is DEFINED rather than left to crash or
+  // to answer off the first element, which is what runKindOf (importRun.ts:93) does.
+  it("UN-3 (AC-3): all-document is 'document'; all-spreadsheet, mixed and [] are 'spreadsheet'", () => {
+    expect(runUnit([{ filename: 'a.pdf' }, { filename: 'b.docx' }])).toBe('document')
+    expect(runUnit([{ filename: 'a.csv' }, { filename: 'b.xlsx' }])).toBe('spreadsheet')
+    expect(runUnit([{ filename: 'a.pdf' }, { filename: 'b.csv' }])).toBe('spreadsheet')
+    expect(runUnit([{ filename: 'a.csv' }, { filename: 'b.pdf' }])).toBe('spreadsheet')
+    expect(runUnit([])).toBe('spreadsheet')
+  })
+})
+
+// Source scans. A behavioural spec cannot see WHICH field was read: a batchUnit branching
+// on document_id would answer correctly for every fixture above, because a fixture's
+// filename and its document_id would agree.
+describe('the derivation reads one field and owns no extension table (EXTR-15-08)', () => {
+  function batchUnitBody(source: string): string {
+    const start = source.indexOf('export function batchUnit')
+    if (start === -1) {
+      notImplemented('batchUnit', 'no `export function batchUnit` declaration in lib/reviewBatch.ts')
+    }
+    const end = source.indexOf('\n}\n', start)
+    if (end === -1) throw new Error('batchUnit is not closed by a top-level `}`')
+    return source.slice(start, end + 3)
+  }
+
+  it("UN-4 (AC-4): batchUnit's body names classifyPickedFile and none of document_id/rows_total/status/errors", () => {
+    const body = batchUnitBody(readFileSync(UNIT_SRC, 'utf8'))
+
+    // CONTROL, paired with the four absences below: an emptied or renamed function would
+    // otherwise satisfy every not.toContain and pass on nothing.
+    expect(body).toContain('classifyPickedFile')
+
+    for (const forbidden of ['document_id', 'rows_total', 'status', 'errors']) {
+      expect(body).not.toContain(forbidden)
+    }
+  })
+
+  it('UN-5 (AC-5): reviewBatch.ts imports classifyPickedFile from ./importFlow and declares no extension of its own', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    expect(source).toMatch(/import\s*\{[^}]*\bclassifyPickedFile\b[^}]*\}\s*from\s*'\.\/importFlow'/)
+
+    // One extension table in the SPA (importFlow.ts's ACCEPTED_PICKED_TYPES). A second
+    // one here is how the two silently disagree after the next narrowing.
+    for (const ext of ['.csv', '.xlsx', '.pdf', '.docx']) {
+      expect(source).not.toContain(`'${ext}'`)
+    }
+  })
+})
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): the unit branch in lib -----------------
+//
+// THE CONTRACT THESE SPECS PIN. Seven exports in reviewBatch.ts carry copy that names the
+// unit. Each gains `unit: ReviewUnit` as its LAST parameter and branches on it. None of
+// them derives the unit itself, even where the argument it already receives would allow it
+// (reviewHeaderAll and filesStrip both see `filename`): AC-9 puts the derivation in
+// ReviewBatch.tsx, once, and a second derivation is a second source of truth for one fact.
+// SW-2's structural half is the guard on that; SW-10 (reviewCopy.census.test.ts) is the
+// component-side half.
+//
+// RED reason on landing. The seven functions exist and ignore a trailing argument, so
+// every document-branch assertion below fails on a WRONG STRING -- the spreadsheet copy
+// where the document copy belongs -- never on a missing export or an import error. The
+// spreadsheet half is green today by construction: AC-2 is a preservation rule and a
+// preservation rule has nothing to turn red. It is here as the freeze, not as the red.
+//
+// The calls go through typed shims for the reason UN-1..5 above use a namespace import:
+// this file holds 200-odd shipped specs and one compile error takes all of them down. The
+// shim's cast target IS the signature being demanded.
+type UnitLast<A extends unknown[], R> = (...args: [...A, ReviewUnitT]) => R
+
+const reviewHeaderU = reviewHeader as unknown as UnitLast<[Parameters<typeof reviewHeader>[0], { allTotal: number }], ReturnType<typeof reviewHeader>>
+const reviewHeaderAllU = reviewHeaderAll as unknown as UnitLast<[Parameters<typeof reviewHeaderAll>[0], { allTotal: number }], ReturnType<typeof reviewHeaderAll>>
+const reviewTabsU = reviewTabs as unknown as UnitLast<[Parameters<typeof reviewTabs>[0]], ReturnType<typeof reviewTabs>>
+const unreadableCsvU = unreadableCsv as unknown as UnitLast<[Parameters<typeof unreadableCsv>[0]], string>
+const unreadableCsvAllU = unreadableCsvAll as unknown as UnitLast<[Parameters<typeof unreadableCsvAll>[0]], string>
+const alreadyImportedCsvAllU = alreadyImportedCsvAll as unknown as UnitLast<[Parameters<typeof alreadyImportedCsvAll>[0]], string>
+const filesStripU = filesStrip as unknown as UnitLast<[Parameters<typeof filesStrip>[0], ImportRun | null], ReturnType<typeof filesStrip>>
+
+// Spreadsheet-NAMED on purpose: the fixture is not what selects the branch, the argument
+// is. `created_at` is never asserted whole -- fmtDateTime renders in the runner's local
+// zone -- so the specs freeze the prose prefix and require both branches to share a tail.
+const UNIT_BATCH = {
+  id: 'b1',
+  filename: 'june.csv',
+  rows_total: 3,
+  rows_valid: 0,
+  rule_set_version: 3,
+  created_at: '2026-01-02T03:04:05Z',
+  status: 'completed',
+  errors: [],
+} as unknown as ImportBatch
+
+const SS_SUBLINE_PREFIX = '3 ROWS READ · SERVER VERDICT · RULE SET NG-MBS v3 · '
+const DOC_SUBLINE_PREFIX = '3 DOCUMENTS READ · SERVER VERDICT · RULE SET NG-MBS v3 · '
+
+// A message carrying a comma, so a cell count has to honour RFC-4180 quoting rather than
+// splitting on every comma -- SW-11 would otherwise mis-count a perfectly good line.
+const CSV_MESSAGE = 'bad, date'
+
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let cell = ''
+  let quoted = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cell += '"'
+        i++
+      } else if (ch === '"') quoted = false
+      else cell += ch
+    } else if (ch === '"') quoted = true
+    else if (ch === ',') {
+      cells.push(cell)
+      cell = ''
+    } else cell += ch
+  }
+  cells.push(cell)
+  return cells
+}
+
+describe('EXTR-15-09 SW-2 (AC-1/AC-2): the seven lib branches, spreadsheet half frozen', () => {
+  it('SW-2 (GREEN since EXTR-15-09): each of the seven returns today’s string for spreadsheet and the document string for document', () => {
+    const live = { allTotal: 7 }
+    const unreadable = [{ row: 4, column: 'issue_date', message: CSV_MESSAGE }]
+    const unreadableAll = [{ file: 'june.csv', row: 4, column: 'issue_date', message: CSV_MESSAGE, documentId: null }]
+    const alreadyImported = [{ file: 'june.csv', row: 4, invoiceId: 'inv-1' }]
+    const counts = { invoices: 7, unreadable: 2, alreadyImported: 1 }
+    const wrong: string[] = []
+    const check = (id: string, actual: string, expected: string) => {
+      if (actual !== expected) wrong.push(`${id}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`)
+    }
+
+    // R1/R2 -- the header subline. Prefix, then a tail equality: the tail is fmtDateTime's
+    // local-zone rendering, and freezing it whole would red this spec in CI.
+    const r1ss = reviewHeaderU(UNIT_BATCH, live, 'spreadsheet').subline
+    const r1doc = reviewHeaderU(UNIT_BATCH, live, 'document').subline
+    check('R1 spreadsheet', r1ss.slice(0, SS_SUBLINE_PREFIX.length), SS_SUBLINE_PREFIX)
+    check('R1 document', r1doc.slice(0, DOC_SUBLINE_PREFIX.length), DOC_SUBLINE_PREFIX)
+    check('R1 tail', r1doc.slice(DOC_SUBLINE_PREFIX.length), r1ss.slice(SS_SUBLINE_PREFIX.length))
+
+    const r2ss = reviewHeaderAllU([UNIT_BATCH], live, 'spreadsheet').subline
+    const r2doc = reviewHeaderAllU([UNIT_BATCH], live, 'document').subline
+    check('R2 spreadsheet', r2ss.slice(0, SS_SUBLINE_PREFIX.length), SS_SUBLINE_PREFIX)
+    check('R2 document', r2doc.slice(0, DOC_SUBLINE_PREFIX.length), DOC_SUBLINE_PREFIX)
+    check('R2 tail', r2doc.slice(DOC_SUBLINE_PREFIX.length), r2ss.slice(SS_SUBLINE_PREFIX.length))
+
+    // R3 -- the tab strip. Only the unreadable label branches; the other two labels are
+    // frozen in BOTH units, which is half of AC-6 (no tab added, renamed or dropped).
+    const strip = (tabs: ReturnType<typeof reviewTabs>) => tabs.map((t) => `${t.id}=${t.label}`).join('|')
+    check('R3 spreadsheet', strip(reviewTabsU(counts, 'spreadsheet')), 'invoices=Invoices (7)|unreadable=Unreadable rows (2)|already-imported=Already imported (1)')
+    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Unreadable documents (2)|already-imported=Already imported (1)')
+
+    // R4/R5/R6 -- the three CSV headers. D1: the middle column is DROPPED for a document,
+    // never renamed to `Document`. In a document run the row number is always empty
+    // (internal/importer/document.go omits Row on all three RowError paths) and the
+    // adjacent File column already holds the name, so a Document column would repeat File
+    // on every line. SW-11 below pins that the CELLS follow.
+    check('R4 spreadsheet', unreadableCsvU(unreadable, 'spreadsheet').split('\n')[0], 'Row,Field,Why it could not be read')
+    check('R4 document', unreadableCsvU(unreadable, 'document').split('\n')[0], 'Field,Why it could not be read')
+    check('R5 spreadsheet', unreadableCsvAllU(unreadableAll, 'spreadsheet').split('\n')[0], 'File,Row,Field,Why it could not be read')
+    check('R5 document', unreadableCsvAllU(unreadableAll, 'document').split('\n')[0], 'File,Field,Why it could not be read')
+    check('R6 spreadsheet', alreadyImportedCsvAllU(alreadyImported, 'spreadsheet').split('\n')[0], 'File,Row,Invoice id')
+    check('R6 document', alreadyImportedCsvAllU(alreadyImported, 'document').split('\n')[0], 'File,Invoice id')
+
+    // R7 -- the per-file report's fallback reason for a file that produced nothing.
+    check('R7 spreadsheet', filesStripU([UNIT_BATCH], null, 'spreadsheet')[0].reason ?? '', '0 of 3 rows produced an invoice')
+    check('R7 document', filesStripU([UNIT_BATCH], null, 'document')[0].reason ?? '', '0 of 3 documents produced an invoice')
+
+    expect(wrong).toEqual([])
+  })
+
+  // The only spec that can see WHERE the unit came from. Every assertion above passes just
+  // as well against a reviewHeaderAll that ignored its third argument and derived the unit
+  // off `batches[0].filename` -- the fixture is a .csv and the argument says 'spreadsheet',
+  // so the two agree. This one does not.
+  it('SW-2 structure (GREEN since EXTR-15-09): all seven declare `unit: ReviewUnit` and none re-derives it', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+    // Control: the file was read and holds the type, so the per-function lookups below
+    // cannot all miss and leave the loop reporting nothing.
+    expect(source, 'lib/reviewBatch.ts was not read').toContain('export type ReviewUnit')
+
+    const NAMES = ['reviewHeader', 'reviewHeaderAll', 'reviewTabs', 'unreadableCsv', 'unreadableCsvAll', 'alreadyImportedCsvAll', 'filesStrip']
+    const wrong: string[] = []
+
+    for (const name of NAMES) {
+      const start = source.indexOf(`export function ${name}(`)
+      if (start === -1) {
+        wrong.push(`${name}: no \`export function ${name}(\` declaration`)
+        continue
+      }
+      const params = source.slice(start, source.indexOf('): ', start))
+      if (!params.includes('unit: ReviewUnit')) wrong.push(`${name}: no \`unit: ReviewUnit\` parameter`)
+      // An optional or defaulted unit silently no-ops for a caller that forgets it -- the
+      // same defect AC-4 forbids on the two tab components.
+      if (params.includes('unit?:') || /unit: ReviewUnit\s*=/.test(params)) wrong.push(`${name}: the unit is optional or defaulted`)
+      if (params.includes('batchUnit(') || params.includes('runUnit(')) wrong.push(`${name}: derives its own unit`)
+    }
+
+    expect(wrong).toEqual([])
+  })
+})
+
+describe('EXTR-15-09 SW-11 (D1/D3): the CSV cells follow the CSV header', () => {
+  // A builder that branched its header and left the cell array alone ships a three-column
+  // header over four-column lines, and every header-only spec passes it. This one does not:
+  // the column count is asserted PER LINE against the header's own.
+  it('SW-11 (GREEN since EXTR-15-09): every line of every branch has exactly as many cells as its header', () => {
+    const unreadableAll = [
+      { file: 'june.pdf', row: null, column: 'issue_date', message: CSV_MESSAGE, documentId: null },
+      { file: 'july.pdf', row: null, column: '—', message: 'no invoice number', documentId: null },
+    ]
+    const alreadyImported = [
+      { file: 'june.pdf', row: null, invoiceId: 'inv-1' },
+      { file: 'july.pdf', row: null, invoiceId: null },
+    ]
+    const cases = [
+      { id: 'R5 spreadsheet', csv: unreadableCsvAllU(unreadableAll, 'spreadsheet'), columns: 4 },
+      { id: 'R5 document', csv: unreadableCsvAllU(unreadableAll, 'document'), columns: 3 },
+      { id: 'R6 spreadsheet', csv: alreadyImportedCsvAllU(alreadyImported, 'spreadsheet'), columns: 3 },
+      { id: 'R6 document', csv: alreadyImportedCsvAllU(alreadyImported, 'document'), columns: 2 },
+      { id: 'R4 spreadsheet', csv: unreadableCsvU([{ row: 4, column: 'issue_date', message: CSV_MESSAGE }], 'spreadsheet'), columns: 3 },
+      { id: 'R4 document', csv: unreadableCsvU([{ row: null, column: 'issue_date', message: CSV_MESSAGE }], 'document'), columns: 2 },
+    ]
+    const wrong: string[] = []
+
+    for (const c of cases) {
+      const lines = c.csv.split('\n')
+      // Floor, so a builder that returned only its header cannot satisfy a per-line check
+      // over an empty set.
+      if (lines.length < 2) {
+        wrong.push(`${c.id}: ${lines.length} line(s); the data rows are missing`)
+        continue
+      }
+      lines.forEach((line, i) => {
+        const n = splitCsvLine(line).length
+        if (n !== c.columns) wrong.push(`${c.id} line ${i}: ${n} cells, want ${c.columns} — ${JSON.stringify(line)}`)
+      })
+    }
+
+    // Control: the comma inside CSV_MESSAGE survives as ONE cell, so the counts above are
+    // real counts and not an artifact of a naive split.
+    const quoted = splitCsvLine(unreadableCsvAllU(unreadableAll, 'spreadsheet').split('\n')[1])
+    expect(quoted[quoted.length - 1], 'the RFC-4180 splitter is not honouring quotes').toBe(CSV_MESSAGE)
+
+    expect(wrong).toEqual([])
+  })
+})
+
+// --- EXTR-15-10 (task-855, Mode A): the batch's document id reaches the row -------------
+//
+// RED on landing. `UnreadableRowAll` has no `documentId`, so every read below goes through
+// documentIdOf and fails on VALUE (undefined), never on an import or collection error. The
+// cast is what keeps `pnpm --filter @invoice-os/app typecheck` green in both states: a named
+// property read would be a type error until the field lands.
+//
+// Landing AC-4 reds `tsc --noEmit` at ~21 fixture sites across this file,
+// ReviewBatch.test.tsx, ReviewInvoicesTab.test.tsx and ReviewAlreadyImportedTab.test.tsx:
+// unreadableRowsAll's Pick widens to include document_id, and UnreadableRowAll[] literals
+// gain a required documentId. The shipped toEqual/toContainEqual row literals do NOT red —
+// vitest's toEqual treats a missing key and an undefined one as equal.
+
+type BatchWithDocument = Pick<ImportBatch, 'id' | 'filename' | 'errors'> & { document_id: string | null }
+
+function documentIdOf(row: UnreadableRowAll): unknown {
+  return (row as unknown as Record<string, unknown>).documentId
+}
+
+// Two quarantined batches that differ in BOTH filename and document id. Equal values on
+// either axis could not tell per-batch threading from a scalar threaded to the whole tab.
+const DOC_A: BatchWithDocument = {
+  id: 'batch-a',
+  filename: 'alpha.pdf',
+  document_id: 'doc-a',
+  errors: [
+    { row: 1, message: 'could not read page 1' },
+    { row: 2, message: 'could not read page 2' },
+  ],
+}
+
+const DOC_B: BatchWithDocument = {
+  id: 'batch-b',
+  filename: 'beta.docx',
+  document_id: 'doc-b',
+  errors: [
+    { row: 1, message: 'could not read page 1' },
+    { row: 3, message: 'could not read page 3' },
+  ],
+}
+
+describe('unreadableRowsAll: each row carries its OWN batch document id (EXTR-15-10)', () => {
+  it('BD-4 (AC-5): a two-batch run yields four rows and exactly two per document id', () => {
+    const rows = unreadableRowsAll([DOC_A, DOC_B])
+
+    expect(rows).toHaveLength(4)
+
+    const byDocument = new Map<unknown, number>()
+    for (const r of rows) byDocument.set(documentIdOf(r), (byDocument.get(documentIdOf(r)) ?? 0) + 1)
+    expect(Object.fromEntries(byDocument)).toEqual({ 'doc-a': 2, 'doc-b': 2 })
+  })
+
+  it("BD-5 (AC-5): every row's document id is its OWN batch's — a scalar threaded to the tab files rows against the wrong document", () => {
+    // The two batches share the row NUMBER 1, so the pairing cannot be recovered from `row`.
+    const rows = unreadableRowsAll([DOC_A, DOC_B])
+
+    const pairs = rows.map((r) => [r.file, documentIdOf(r)])
+    expect(pairs).toEqual([
+      ['alpha.pdf', 'doc-a'],
+      ['alpha.pdf', 'doc-a'],
+      ['beta.docx', 'doc-b'],
+      ['beta.docx', 'doc-b'],
+    ])
+
+    // The fixture discriminates only while the two batches differ on both axes.
+    expect(DOC_A.filename).not.toBe(DOC_B.filename)
+    expect(DOC_A.document_id).not.toBe(DOC_B.document_id)
+  })
+
+  it('BD-6 (AC-6): a batch with document_id null yields rows with documentId null, and no leg renders the string "null"', () => {
+    const spreadsheet: BatchWithDocument = {
+      id: 'batch-c',
+      filename: null,
+      document_id: null,
+      errors: [{ row: 4, message: 'bad date' }],
+    }
+
+    const rows = unreadableRowsAll([spreadsheet])
+
+    expect(rows).toHaveLength(1)
+    expect(documentIdOf(rows[0])).toBeNull()
+
+    // The display path stays clean: BULK-06-23's rule, re-run over a null document id.
+    expect(rows[0].file).toBe('source not recorded')
+    expect(unreadableCsvAll(rows, 'spreadsheet')).not.toContain('null')
+  })
+})
+
+describe('the document id is display and hand-off only, never a discriminator (EXTR-15-10)', () => {
+  // Reads a top-level function's body by declaration, closing at the first column-0 `}`.
+  function bodyOf(source: string, decl: string): string {
+    const start = source.indexOf(decl)
+    if (start === -1) throw new Error(`no \`${decl}\` declaration in lib/reviewBatch.ts`)
+    const end = source.indexOf('\n}\n', start)
+    if (end === -1) throw new Error(`${decl} is not closed by a top-level \`}\``)
+    return source.slice(start, end + 3)
+  }
+
+  it('BD-4b (AC-4): UnreadableRowAll declares documentId as string | null', () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    // CONTROL: the shipped `file` key proves the interface was found and read.
+    const body = /export interface UnreadableRowAll extends UnreadableRow \{([^{}]*)\}/.exec(source)?.[1] ?? ''
+    expect(body, 'UnreadableRowAll extracted empty').toContain('file: string')
+
+    expect(body, 'a `documentId?: string` would satisfy every behavioural spec above').toMatch(
+      /documentId:\s*string \| null/,
+    )
+  })
+
+  it("BD-7 (AC-7): neither batchUnit's nor runUnit's body names document_id — UN-4 covers only batchUnit", () => {
+    const source = readFileSync(UNIT_SRC, 'utf8')
+
+    // Each control needle is a symbol the DECLARATION line does not already contain, so an
+    // emptied body fails it rather than passing every absence below on nothing.
+    for (const [decl, needle] of [
+      ['export function batchUnit', 'classifyPickedFile'],
+      ['export function runUnit', 'batchUnit('],
+    ]) {
+      const body = bodyOf(source, decl)
+      expect(body, `${decl} no longer derives the unit`).toContain(needle)
+      expect(body, `${decl} reads the document id — the unit comes from the filename`).not.toContain('document_id')
+      expect(body).not.toContain('documentId')
+    }
   })
 })

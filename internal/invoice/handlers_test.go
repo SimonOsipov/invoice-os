@@ -5986,3 +5986,118 @@ func TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal(t *testing
 		t.Errorf("awaitingApprovalReason is indistinguishable from internal/approval's ErrNotAwaitingApproval copy %q", approvalPackage409)
 	}
 }
+
+// --- source_document_id on the create wire (EXTR-15-06) --------------------
+
+// TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument (SD-1, AC-1): an
+// absent key and an explicit null both reach the store as a nil
+// SourceDocumentID. The third leg is the positive control -- without it the two
+// nil assertions pass vacuously against a handler that has no such wire key at
+// all, which is exactly today's handler.
+func TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	entityID := uuid.NewString()
+	documentID := uuid.NewString()
+
+	call := func(rawBody string) CreateInput {
+		t.Helper()
+		var gotIn CreateInput
+		create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+			gotIn = in
+			return Invoice{ID: uuid.NewString(), EntityID: entityID, InvoiceNumber: "SD1", Status: StatusDraft}, nil
+		}
+		rec, _ := doInvoiceCreate(t, create, &identity, rawBody)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+		}
+		return gotIn
+	}
+
+	absent := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1"}`, entityID))
+	if absent.SourceDocumentID != nil {
+		t.Errorf("absent key: SourceDocumentID = %q, want nil", *absent.SourceDocumentID)
+	}
+
+	explicitNull := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1","source_document_id":null}`, entityID))
+	if explicitNull.SourceDocumentID != nil {
+		t.Errorf("explicit null: SourceDocumentID = %q, want nil", *explicitNull.SourceDocumentID)
+	}
+
+	supplied := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1","source_document_id":%q}`, entityID, documentID))
+	if supplied.SourceDocumentID == nil {
+		t.Fatalf("a well-formed source_document_id was dropped: SourceDocumentID = nil, want %q", documentID)
+	}
+	if *supplied.SourceDocumentID != documentID {
+		t.Errorf("SourceDocumentID = %q, want %q", *supplied.SourceDocumentID, documentID)
+	}
+}
+
+// TestCreateHandler_MalformedSourceDocumentID400 (SD-3, AC-3): a malformed
+// source_document_id is refused by the handler's own uuid.Parse guard before
+// the store runs, with a body naming the field. The store's 22P02 mapping
+// yields the bare sentinel text, which names nothing -- reaching it would mean
+// the guard never ran.
+func TestCreateHandler_MalformedSourceDocumentID400(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when source_document_id is not a well-formed uuid")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD3","source_document_id":"not-a-uuid"}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want a message naming source_document_id", resp.Error)
+	}
+	if resp.Error == ErrValidation.Error() {
+		t.Errorf("error = %q -- that is the store's generic mapping, not the handler's uuid.Parse guard", resp.Error)
+	}
+	if strings.Contains(rec.Body.String(), "22P02") {
+		t.Errorf("body leaks the postgres code 22P02: %s", rec.Body.String())
+	}
+}
+
+// An empty string is not absent: it decodes to a non-nil *string, so it must reach the guard.
+// A guard rewritten as `!= nil && *v != ""` would drop it through to the store's 22P02
+// mapping, which SD-3 forbids, and nothing else would fail.
+func TestCreateHandler_EmptySourceDocumentIDIsRefusedByTheGuard(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when source_document_id is the empty string")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD3E","source_document_id":""}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want a message naming source_document_id", resp.Error)
+	}
+}
+
+// The guard is one arm of a sequential chain, so which error a doubly-invalid body gets is
+// positional. Pinned because a validation map would iterate in a random order and flip it.
+func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when the body is invalid")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"","source_document_id":"not-a-uuid"}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want the invoice_number refusal -- the non-blank checks run first", resp.Error)
+	}
+	if !strings.Contains(resp.Error, "invoice_number") {
+		t.Errorf("error = %q, want a message naming invoice_number", resp.Error)
+	}
+}

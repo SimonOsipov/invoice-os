@@ -48,6 +48,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1011,5 +1012,84 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 	}
 	if batchCount != 0 {
 		t.Errorf("import_batches rows for entity = %d, want 0 (dry run with a filename present must still persist nothing)", batchCount)
+	}
+}
+
+// --- EXTR-15-10 (task-855, Mode A): document_id on the GET body ------------
+
+// BD-2 (AC-2): a batchResponse with no stored document serialises an explicit
+// "document_id":null. A `,omitempty` on the tag drops the key instead, and the
+// SPA's ImportBatch.document_id would then read `undefined`, not null.
+//
+// DOC-01's TestGetBatch_BodyOmitsDocumentID (handlers_upload_once_test.go)
+// pins the opposite and must be DELETED, not weakened: `,omitempty` satisfies
+// both only until something populates the field. hasDocumentIDKey itself
+// stays -- its other two call sites are the preview endpoint's.
+func TestBatchResponse_DocumentIDSerialisesAsExplicitNull(t *testing.T) {
+	b, err := json.Marshal(batchResponse{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// CONTROL, paired with the assertion below: rule_set_version is the shipped
+	// pointer-with-no-omitempty this mirrors, so a miss below is the new field's
+	// own absence, not a broken predicate.
+	if !bytes.Contains(b, []byte(`"rule_set_version":null`)) {
+		t.Fatalf("control needle: body %s no longer contains \"rule_set_version\":null", b)
+	}
+	if !bytes.Contains(b, []byte(`"document_id":null`)) {
+		t.Errorf("body = %s, want it to contain \"document_id\":null (EXTR-15-10 AC-2)", b)
+	}
+}
+
+// BD-2b (AC-2): the tag is exactly `document_id` and the field is *string. The
+// marshal spec above passes on a plain `string` too, once anything populates
+// it -- "" renders "document_id":"" and never null.
+func TestBatchResponse_DocumentIDIsAPointerTaggedWithoutOmitempty(t *testing.T) {
+	ty := reflect.TypeOf(batchResponse{})
+
+	// CONTROL: Filename is the shipped *string-with-a-bare-tag this mirrors.
+	fn, ok := ty.FieldByName("Filename")
+	if !ok || fn.Tag.Get("json") != "filename" {
+		t.Fatalf("control needle: batchResponse.Filename's json tag is no longer a bare `filename`")
+	}
+
+	f, ok := ty.FieldByName("DocumentID")
+	if !ok {
+		t.Fatalf("not implemented -- batchResponse must carry DocumentID *string `json:\"document_id\"` (EXTR-15-10 AC-2)")
+	}
+	if got := f.Tag.Get("json"); got != "document_id" {
+		t.Errorf("json tag = %q, want exactly %q -- no omitempty", got, "document_id")
+	}
+	if f.Type.String() != "*string" {
+		t.Errorf("DocumentID is %s, want *string", f.Type)
+	}
+}
+
+// BD-8 (AC-1/AC-2 seam, not in the plan's table): the field can exist on BOTH
+// Batch and batchResponse and still never be copied between them, leaving the
+// SPA a permanent null. Asserts on the raw body, not on batchResponseBody --
+// json.Unmarshal drops an unknown key silently.
+func TestGetHandler_BodyCarriesTheBatchDocumentID(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	batchID := uuid.NewString()
+	documentID := uuid.NewString()
+
+	batch := batchWithDocumentID(t, Batch{
+		ID:        batchID,
+		EntityID:  uuid.NewString(),
+		Status:    "completed",
+		RowsTotal: 1,
+		Errors:    []RowError{},
+		CreatedAt: time.Now().UTC(),
+	}, documentID)
+
+	rec, _ := doImportGetBatch(t, func(context.Context, string) (Batch, error) { return batch, nil }, &id, batchID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	want := `"document_id":"` + documentID + `"`
+	if !bytes.Contains(rec.Body.Bytes(), []byte(want)) {
+		t.Errorf("body = %s, want it to contain %s -- GetHandler must copy Batch.DocumentID into batchResponse", rec.Body.String(), want)
 	}
 }

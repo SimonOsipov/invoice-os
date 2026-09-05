@@ -418,7 +418,7 @@ export type InvoiceEditInput = Partial<
 }
 
 // One entry of createInvoice's `line_items` array (lineItemReq echo, createRequest.
-// LineItems, handlers.go:51-64, INVCR-01-02/task-278). Same five nullable-string fields
+// LineItems, handlers.go's `type createRequest`). Same five nullable-string fields
 // as LineItemEditInput -- deliberately a SEPARATE type, not reused: create and edit are
 // different endpoints (createRequest vs editReq) that could diverge independently. NO
 // `id`/`line_no`: line_no is system-assigned 1..N by array position (handlers.go:38-41)
@@ -431,9 +431,9 @@ export interface LineItemCreateInput {
   line_tax: string | null
 }
 
-// createInvoice's POST body (createRequest, handlers.go:51-64). `entity_id`/
+// createInvoice's POST body (handlers.go's `type createRequest`). `entity_id`/
 // `invoice_number` are the two REQUIRED fields -- blank rejects 400 before create ever
-// runs (handlers.go:138-145); every other header field is nullable. The mapper
+// runs (CreateHandler's non-blank guard); every other header field is nullable. The mapper
 // (draftToCreateRequest, lib/invoiceDraft.ts) never emits `buyer_address`/`wht`/
 // `doc_type` -- they have no column and no wire field.
 export interface InvoiceCreateInput {
@@ -449,6 +449,10 @@ export interface InvoiceCreateInput {
   vat: string | null
   total: string | null
   line_items: LineItemCreateInput[]
+  // EXTR-15-06: the document a hand-off was started from. Optional and appended last --
+  // an absent key is "no document", and JSON.stringify drops `undefined`, so nothing
+  // crosses the wire when the invoice was typed from scratch.
+  source_document_id?: string
 }
 
 // The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from

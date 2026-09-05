@@ -114,9 +114,12 @@ func TestServiceImportDocument_ZeroFieldExtractionQuarantinesNoInvoiceNumberNoPa
 	if res.Errors[0].Field != "invoice_number" {
 		t.Errorf("Errors[0].Field = %q, want %q", res.Errors[0].Field, "invoice_number")
 	}
-	if res.Errors[0].Message != "invoice_number is missing or blank" {
-		t.Errorf("Errors[0].Message = %q, want the shipped documentCreateInput message", res.Errors[0].Message)
+	// Retargeted by EXTR-15-05: an EMPTY field set is not the one-entry document_text_layer
+	// set AC-1 keys on, so a zero-field extraction takes the read-document branch.
+	if res.Errors[0].Message != ac2Message(t) {
+		t.Errorf("Errors[0].Message = %q, want the mapper's read-document message %q", res.Errors[0].Message, ac2Message(t))
 	}
+	assertReadDocumentMessage(t, res.Errors[0].Message)
 	if got := countInvoicesForEntity(t, super, entityID); got != 0 {
 		t.Errorf("invoices for entity = %d, want 0 -- a zero-field extraction must never write a garbage invoice", got)
 	}

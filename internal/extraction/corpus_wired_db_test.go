@@ -1263,9 +1263,11 @@ func TestRLS_ScannedFixturePagesStillRender(t *testing.T) {
 // --- EXTR-18-04: the DOCX fixture, wired through the real reader --------------------------
 
 // invoice.docx has no page image PDFium (or any renderer) can produce, so the wired run swaps
-// PageStore.Reader for a stub yielding one synthetic page and never reaches worker.go's
-// pages_not_rendered gate -- TestExtractWorker_PagesNotRenderedGateIsUntouched
-// (worker_internal_test.go) pins that this subtask leaves that gate untouched.
+// PageStore.Reader for a stub yielding one synthetic page. It stays on the PDF path -- wkOpener
+// defaults ContentType to application/pdf -- so EXTR-15-02's RendersPageImages gate does not
+// apply to it. The boxless path is TestRLS_ExtractWorkerWritesBoxlessFieldRowsForADocx
+// (worker_db_test.go), and TestExtractWorker_PagesNotRenderedGateIsScopedToRenderableFormats
+// pins where that gate sits.
 const (
 	dxFixture    = "invoice.docx"
 	dxGolden     = "invoice.docling.json"

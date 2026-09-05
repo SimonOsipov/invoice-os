@@ -116,7 +116,13 @@ export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
       </div>
       <div style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
-          Remaining time is unknown — the server reads, groups, stores and validates each file in one request, and how long that takes depends on the file.
+          {/* "groups" is spreadsheet-only: nothing groups when one document is one
+              invoice. The clause branches, not the sentence — SW-9 source pins that. */}
+          Remaining time is unknown —{' '}
+          {ctx.runKind === 'document'
+            ? 'the server reads, extracts and validates each document in one request'
+            : 'the server reads, groups, stores and validates each file in one request'}
+          , and how long that takes depends on the file.
         </p>
         {/* Not a politeness. handlers.go runs the import on r.Context(), so a client
             disconnect CANCELS the request mid-flight — after CreateBatch and some rows

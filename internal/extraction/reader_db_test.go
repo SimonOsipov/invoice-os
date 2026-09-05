@@ -528,7 +528,9 @@ func TestExtractionJobState_MarshalsTheExactKeySet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal JobState: %v", err)
 	}
-	const wantJob = `{"id":"","document_id":"","state":"","created_at":"0001-01-01T00:00:00Z","last_error":null}`
+	// EXTR-15-01 FK-5: failure_kind carries no omitempty, so a job that never failed
+	// serialises an explicit null rather than an absent key. Declared last, beside last_error.
+	const wantJob = `{"id":"","document_id":"","state":"","created_at":"0001-01-01T00:00:00Z","last_error":null,"failure_kind":null}`
 	if string(b) != wantJob {
 		t.Errorf("a zero JobState marshals to\n  %s\nwant\n  %s", b, wantJob)
 	}
@@ -539,7 +541,7 @@ func TestExtractionJobState_MarshalsTheExactKeySet(t *testing.T) {
 	if err := json.Unmarshal(b, &decoded); err != nil {
 		t.Fatalf("unmarshal JobState: %v", err)
 	}
-	wantKeys := []string{"created_at", "document_id", "id", "last_error", "state"}
+	wantKeys := []string{"created_at", "document_id", "failure_kind", "id", "last_error", "state"}
 	gotKeys := make([]string, 0, len(decoded))
 	for k := range decoded {
 		gotKeys = append(gotKeys, k)

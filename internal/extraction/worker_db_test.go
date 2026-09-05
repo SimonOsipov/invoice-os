@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -147,6 +148,9 @@ type wkOpener struct {
 	seen []wkSeen
 	body []byte
 	err  error
+	// contentType is what the served Document declares. Empty means wkDefaultContentType, so
+	// every spec written before EXTR-15-02's gate keeps the PDF path byte for byte.
+	contentType string
 }
 
 func (o *wkOpener) open(ctx context.Context, documentID string) (extraction.Document, error) {
@@ -157,7 +161,11 @@ func (o *wkOpener) open(ctx context.Context, documentID string) (extraction.Docu
 	if o.err != nil {
 		return extraction.Document{}, o.err
 	}
-	return extraction.Document{Bytes: o.body, ContentType: "application/pdf"}, nil
+	ct := o.contentType
+	if ct == "" {
+		ct = wkDefaultContentType
+	}
+	return extraction.Document{Bytes: o.body, ContentType: ct}, nil
 }
 
 func (o *wkOpener) count() int {
@@ -177,6 +185,20 @@ func (o *wkOpener) first(t *testing.T) wkSeen {
 }
 
 func wkNewOpener() *wkOpener { return &wkOpener{body: []byte("extr-09 worker fixture")} }
+
+// The two content types EXTR-15-02's gate separates. wkDefaultContentType is every existing
+// spec's, unchanged.
+const (
+	wkDefaultContentType = "application/pdf"
+	wkDocxContentType    = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+// wkDocxOpener serves invoice.docx's real bytes under the DOCX content type. The real fixture,
+// not a placeholder: the specs that reach the sidecar replay that document's own golden.
+func wkDocxOpener(t *testing.T) *wkOpener {
+	t.Helper()
+	return &wkOpener{body: fxRead(t, dxFixture), contentType: wkDocxContentType}
+}
 
 // wkForeignArgs is the other worker TestRLS_ExtractAddToRegistersOnTheCallersBundle puts on
 // the shared bundle. It is declared here rather than borrowed from another package because
@@ -261,6 +283,98 @@ func (*wkErrReader) Version() string { return "v1" }
 
 func (r *wkErrReader) Read(context.Context, extraction.Document, func(extraction.Page) error) (extraction.PageResult, error) {
 	return extraction.PageResult{}, r.err
+}
+
+// wkErrForbiddenRender is what a page reader that must never run returns when it does.
+var wkErrForbiddenRender = errors.New("extr-15-02: PageStore.Reader ran for a format that renders no page images")
+
+// wkForbiddenReader is the page reader EXTR-15-02's boxless specs wire. It exists because a
+// benign wkStubReader makes those specs green before the gate is written -- rendering a DOCX
+// through a stub succeeds, so "the job settled" proves nothing. This one records the call and
+// refuses, which is what a real PDFiumReader does with DOCX bytes.
+//
+// It refuses rather than panics on purpose: a panic here aborts the whole test binary and takes
+// every other spec's result with it. The recorded count is the same detector without that cost.
+type wkForbiddenReader struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (*wkForbiddenReader) Name() string    { return "extr-15-forbidden-reader" }
+func (*wkForbiddenReader) Version() string { return "v1" }
+
+func (r *wkForbiddenReader) Read(context.Context, extraction.Document, func(extraction.Page) error) (extraction.PageResult, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return extraction.PageResult{}, wkErrForbiddenRender
+}
+
+func (r *wkForbiddenReader) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// wkForbiddenPages refuses on both halves of the render: Ingest reads before it PUTs, so the
+// sink is the second line rather than the first.
+func wkForbiddenPages(r *wkForbiddenReader) *extraction.PageStore {
+	return &extraction.PageStore{Reader: r, Sink: func(context.Context, string, []byte) error {
+		return errors.New("extr-15-02: the page sink ran for a format that renders no page images")
+	}}
+}
+
+// wkBox is one field-result row's geometry. Every column is nullable, and all-NULL together is
+// the arm extraction_field_results' _region_complete CHECK accepts for a field with no box.
+type wkBox struct {
+	name           string
+	rank           int
+	page           *int
+	x0, y0, x1, y1 *float64
+}
+
+func (b wkBox) String() string {
+	f := func(p *float64) string {
+		if p == nil {
+			return "NULL"
+		}
+		return strconv.FormatFloat(*p, 'g', -1, 64)
+	}
+	p := "NULL"
+	if b.page != nil {
+		p = strconv.Itoa(*b.page)
+	}
+	return fmt.Sprintf("{%s rank=%d page=%s bbox=(%s,%s,%s,%s)}", b.name, b.rank, p, f(b.x0), f(b.y0), f(b.x1), f(b.y1))
+}
+
+// wkFieldBoxes reads every field-result row's geometry for one job. It fatals on an empty set:
+// "no row carries a box" holds vacuously over no rows at all.
+func wkFieldBoxes(t *testing.T, ctx context.Context, jobID string) []wkBox {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT field_name, candidate_rank, page, bbox_x0, bbox_y0, bbox_x1, bbox_y1
+		   FROM extraction_field_results WHERE extraction_job_id = $1
+		  ORDER BY field_name, candidate_rank`, jobID)
+	if err != nil {
+		t.Fatalf("read field-result geometry for job %s: %v", jobID, err)
+	}
+	defer rows.Close()
+
+	out := []wkBox{}
+	for rows.Next() {
+		var b wkBox
+		if err := rows.Scan(&b.name, &b.rank, &b.page, &b.x0, &b.y0, &b.x1, &b.y1); err != nil {
+			t.Fatalf("scan field-result geometry for job %s: %v", jobID, err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read field-result geometry for job %s: %v", jobID, err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("job %s wrote no field-result row at all; an all-NULL geometry assertion would hold over nothing", jobID)
+	}
+	return out
 }
 
 // wkPageSink records the worker's PUTs and, per call, whether the context it arrived on
@@ -2038,6 +2152,7 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 	// Subtests, not a bare loop: one arm that cannot reach its stage must not stop the other
 	// three from proving theirs.
 	written := map[extraction.FailureKind]string{}
+	onRow := map[extraction.FailureKind]string{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &wkAuditRecorder{}
@@ -2068,6 +2183,19 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 				t.Errorf("stored failure_kind %q was already written by %s -- the four stages must be distinguishable", got, prior)
 			}
 			written[extraction.FailureKind(got)] = tc.name
+
+			// EXTR-15-01 FK-7 (AC-9): the same kind on the ROW, not only in the audit payload.
+			// Runs after the payload assertions so a pre-migration schema fails on the column
+			// rather than hiding the shipped half of this arm.
+			stRequireFailureKind(t, ctx)
+			row := stJobFailureKind(t, ctx, jobID)
+			if row == nil || *row != string(tc.want) {
+				t.Fatalf("extraction_jobs.failure_kind = %v, want %q -- the payload carries the kind, the row does not", row, tc.want)
+			}
+			if prior, dup := onRow[extraction.FailureKind(*row)]; dup {
+				t.Errorf("row failure_kind %q was already written by %s", *row, prior)
+			}
+			onRow[extraction.FailureKind(*row)] = tc.name
 		})
 	}
 
@@ -2091,6 +2219,19 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 	for k := range written {
 		if !want[k] {
 			t.Errorf("a lever wrote failure_kind %q, which FailureKind does not declare", k)
+		}
+	}
+
+	// FK-7: the same set equality over what reached the ROW. Asserted separately from the
+	// payload set so a writer that filled the payload from one source and the column from
+	// another cannot satisfy both with one value.
+	if len(onRow) != len(want) {
+		t.Fatalf("the levers wrote %d distinct extraction_jobs.failure_kind value(s) (%v), want %d",
+			len(onRow), onRow, len(want))
+	}
+	for k := range want {
+		if _, ok := onRow[k]; !ok {
+			t.Errorf("no lever wrote failure_kind %q onto the row", k)
 		}
 	}
 }
@@ -2487,5 +2628,305 @@ func TestExtractWorker_NilTextKeepsTheExtractorPath(t *testing.T) {
 	}
 	if evs[0].FailureKind != "" {
 		t.Errorf("the success event carries FailureKind %q, want empty", evs[0].FailureKind)
+	}
+}
+
+// EXTR-15-01 QA. River replays a non-terminal job, so the column is written more than once for
+// one row. Each advance overwrites: the second stage's kind replaces the first's rather than
+// accumulating beside it, and the attempt that finally succeeds clears it. Three attempts on
+// ONE extraction_jobs row -- ensureJobTx keys off river_job_id, so the shared id is what makes
+// this a replay rather than three separate jobs.
+func TestExtractWorker_FailureKindOverwritesOnReplayAndClearsOnSuccess(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	boom := errors.New("extr-15-01: the stage under test refused")
+
+	const riverJobID = int64(901504)
+
+	// Attempt 1 of 3: the opener fails. Retries remain, so the state is "failed", which Work
+	// does not treat as terminal -- attempt 2 re-enters the stage chain.
+	if err := wkWorkerAudit(t, wkOK(), &wkOpener{err: boom}, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("attempt 1 returned %v, want the opener's error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "failed")
+	if got := stJobFailureKind(t, ctx, xid); got == nil || *got != string(extraction.FailureDocumentUnavailable) {
+		t.Fatalf("attempt 1 stored failure_kind %v, want %q -- attempt 2 would then prove nothing",
+			got, extraction.FailureDocumentUnavailable)
+	}
+
+	// Attempt 2 of 3: a DIFFERENT stage fails on the same row.
+	if err := wkWorkerText(t, wkOK(), wkNewOpener(), &wkErrReader{err: boom}, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, boom) {
+		t.Fatalf("attempt 2 returned %v, want the text reader's error", err)
+	}
+	stAssertJobState(t, ctx, xid, "failed")
+	got := stJobFailureKind(t, ctx, xid)
+	if got == nil {
+		t.Fatalf("attempt 2 left failure_kind NULL, want %q", extraction.FailureTextNotRead)
+	}
+	// Equality, not Contains: a COALESCE keeps attempt 1's kind and a concatenating writer
+	// keeps both, and only an exact match refuses each.
+	if *got != string(extraction.FailureTextNotRead) {
+		t.Errorf("the replay stored failure_kind %q, want exactly %q -- the write accumulated rather than overwrote",
+			*got, extraction.FailureTextNotRead)
+	}
+
+	// Attempt 3 of 3 settles cleanly. A reader that sees state='succeeded' beside a non-NULL
+	// failure_kind is the bug the clear-on-clean-advance rule closes.
+	if err := wkWorkerAudit(t, wkOK(), wkNewOpener(), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("attempt 3: %v", err)
+	}
+	stAssertJobState(t, ctx, xid, "succeeded")
+	if got := stJobFailureKind(t, ctx, xid); got != nil {
+		t.Errorf("the succeeding attempt left failure_kind %q, want SQL NULL", *got)
+	}
+}
+
+// --- EXTR-15-02: a format that renders no page images ------------------------------------
+//
+// One predicate, RendersPageImages(doc.ContentType), gates two non-adjacent call sites: the
+// render/page-row/layout block and the learned-rule load. A boxless document skips both.
+
+// DX-3 (AC-2). A DOCX never reaches w.Pages.Ingest, so it writes no page rows and no layout.
+// A layout fingerprint over boxless tokens collapses to the anchor-label sequence with no
+// positional discrimination, which would apply one document's learned rules to unrelated ones.
+func TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	reader := &wkForbiddenReader{}
+	const riverJobID = int64(915201)
+	err := wkWorkerPages(t, wkOK(), wkDocxOpener(t), wkForbiddenPages(reader), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+
+	// Read before the error: the count names the cause, where a bare "Work failed" does not.
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for a DOCX, want 0 -- a format with no page images must not reach w.Pages.Ingest", n)
+	}
+	if err != nil {
+		t.Fatalf("Work over a DOCX returned %v, want nil -- it must settle rather than fail at a render it should never attempt", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if ids := wkPageRowIDs(t, ctx, documentID); len(ids) != 0 {
+		t.Errorf("a DOCX wrote %d extraction_page_images row(s) (%v), want 0", len(ids), ids)
+	}
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint != nil {
+		t.Errorf("a DOCX carries layout_fingerprint %s, want SQL NULL", wkStr(row.Fingerprint))
+	}
+	if row.Anchors != nil {
+		t.Errorf("a DOCX carries layout_anchors %s, want SQL NULL", wkStr(row.Anchors))
+	}
+}
+
+// DX-4 (AC-3). The rule seam is the second, non-adjacent call site. The PDF arm is the control:
+// without it, "zero calls" is also what a broken seam looks like.
+func TestRLS_ExtractWorkerLoadsNoLearnedRulesForABoxlessFormat(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	// DOCX arm: the real fixture, its own docling golden replayed, the render forbidden.
+	docxRules := wpStoreRules(t)
+	reader := &wkForbiddenReader{}
+	docxEW := wkWorkerPages(t, wkOK(), wkDocxOpener(t), wkForbiddenPages(reader), &wkAuditRecorder{})
+	docxEW.Text = wpDoclingReader(t, dcReadNamedGolden(t, dxGolden))
+	docxEW.Rules = docxRules.load
+
+	const docxRiverJobID = int64(915202)
+	docxErr := docxEW.Work(ctx,
+		extraction.NewExtractJobForTest(docxRiverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for a DOCX, want 0", n)
+	}
+	if docxErr != nil {
+		t.Fatalf("Work over a DOCX returned %v, want nil", docxErr)
+	}
+	docxJobID := wkExtractionJobID(t, ctx, tenantID, docxRiverJobID)
+	stAssertJobState(t, ctx, docxJobID, "succeeded")
+	if asked, _ := docxRules.calls(); len(asked) != 0 {
+		t.Errorf("the Rules seam was called %d time(s) for a DOCX (%v), want 0 -- with no fingerprint of its own a lookup hands this document another layout's learned rules", len(asked), asked)
+	}
+
+	// PDF arm, same seam and same tenant: one call, with the fingerprint the row stored.
+	pdfRules := wpStoreRules(t)
+	pdfEW := wpWorker(t, wkOK(), wpCorpusOpener(t),
+		wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName)), pdfRules.load, &wkAuditRecorder{})
+
+	const pdfRiverJobID = int64(915203)
+	if err := pdfEW.Work(ctx,
+		extraction.NewExtractJobForTest(pdfRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over a PDF: %v", err)
+	}
+	pdfJobID := wkExtractionJobID(t, ctx, tenantID, pdfRiverJobID)
+	stAssertJobState(t, ctx, pdfJobID, "succeeded")
+
+	fp, _ := pdfRules.wpOnlyCall(t)
+	if fp == "" {
+		t.Fatalf("the Rules seam was asked for the empty fingerprint on a PDF; the control arm proves nothing")
+	}
+	pdfRow := stJobLayout(t, ctx, pdfJobID)
+	if pdfRow.Fingerprint == nil || *pdfRow.Fingerprint != fp {
+		t.Errorf("the PDF stored layout_fingerprint %s but the Rules seam was asked for %q; the gate must not have moved the hoist",
+			wkStr(pdfRow.Fingerprint), fp)
+	}
+}
+
+// DX-5 (AC-4). The DOCX settles succeeded off its own text. Values by identity, measured
+// through a real docling run and already pinned by TestRLS_DocxFixtureResolvesNamedFields --
+// what is new here is that they arrive with the render skipped, and that every stored row binds
+// an all-NULL region because usableRegion refuses a zero box.
+func TestRLS_ExtractWorkerWritesBoxlessFieldRowsForADocx(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	reader := &wkForbiddenReader{}
+	ew := wkWorkerPages(t, wkOK(), wkDocxOpener(t), wkForbiddenPages(reader), &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, dxGolden))
+	ew.Rules = wpStoreRules(t).load
+
+	const riverJobID = int64(915204)
+	err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for a DOCX, want 0", n)
+	}
+	if err != nil {
+		t.Fatalf("Work over %s returned %v, want nil", dxFixture, err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("ASC-2026-0919"), nil)
+	wpAssertRankZero(t, rows, "issue_date", stPtr("2026-08-14"), nil)
+	wpAssertRankZero(t, rows, "total", stPtr("4300.00"), nil)
+
+	if ids := wkPageRowIDs(t, ctx, documentID); len(ids) != 0 {
+		t.Errorf("a DOCX wrote %d extraction_page_images row(s), want 0", len(ids))
+	}
+	for _, b := range wkFieldBoxes(t, ctx, xid) {
+		if b.page != nil || b.x0 != nil || b.y0 != nil || b.x1 != nil || b.y1 != nil {
+			t.Errorf("field row %s carries geometry; a boxless token must bind page and every bbox column as SQL NULL", b)
+		}
+	}
+}
+
+// DX-6 (AC-5). The kind names the read, never the render. Equality against the literal: "not
+// pages_not_rendered" is also satisfied by document_unavailable.
+func TestRLS_ExtractWorkerDeadLettersADocxAsTextNotRead(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	boom := errors.New("extr-15-02: the sidecar could not convert this document")
+	reader := &wkForbiddenReader{}
+	ew := wkWorkerPages(t, wkOK(), wkDocxOpener(t), wkForbiddenPages(reader), &wkAuditRecorder{})
+	ew.Text = &wkErrReader{err: boom}
+	ew.Rules = func(context.Context, string, string) ([]extraction.AnchorRule, error) {
+		return []extraction.AnchorRule{}, nil
+	}
+
+	const riverJobID = int64(915205)
+	err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString()))
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for a DOCX, want 0", n)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("Work returned %v, want the text reader's error -- the read is the first stage a boxless document can fail at", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+	stRequireFailureKind(t, ctx)
+	got := stJobFailureKind(t, ctx, xid)
+	if got == nil || *got != string(extraction.FailureTextNotRead) {
+		t.Fatalf("extraction_jobs.failure_kind = %s, want exactly %q; %q is unreachable for a format that renders no page images",
+			wkStr(got), extraction.FailureTextNotRead, extraction.FailurePagesNotRendered)
+	}
+}
+
+// DX-7 (AC-6). GREEN BY DESIGN -- this is the regression guard on the PDF path, not a red. It
+// would fail if the gate were keyed on anything a PDF can also be (a zero-page render, a nil
+// token set) rather than on the content type. Each half is observed: the sink PUT, the rows
+// landed, the fingerprint is well formed, and the rule seam was asked for that same value once.
+func TestRLS_ExtractWorkerStillRendersAndLoadsRulesForAPDF(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	sink := &wkPageSink{}
+	rules := wpStoreRules(t)
+	ew := wkWorkerPages(t, wkOK(), wpCorpusOpener(t), wkPDFiumPages(sink), &wkAuditRecorder{})
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName))
+	ew.Rules = rules.load
+
+	const riverJobID = int64(915206)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over a PDF: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if _, _, calls := sink.snapshot(); calls < 1 {
+		t.Errorf("the page sink recorded %d call(s) for a PDF, want at least 1 -- the render must still run", calls)
+	}
+	if ids := wkPageRowIDs(t, ctx, documentID); len(ids) == 0 {
+		t.Errorf("a PDF wrote no extraction_page_images row; the page inventory must still be written")
+	}
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil {
+		t.Fatalf("a PDF carries layout_fingerprint NULL; the layout must still be written")
+	}
+	if !regexp.MustCompile(`^v[0-9]+:[0-9a-f]{64}$`).MatchString(*row.Fingerprint) {
+		t.Errorf("a PDF carries layout_fingerprint %q, want a versioned sha256", *row.Fingerprint)
+	}
+	if row.Anchors == nil {
+		t.Errorf("a PDF carries layout_anchors NULL, want the observed anchors")
+	}
+
+	fp, _ := rules.wpOnlyCall(t)
+	if fp != *row.Fingerprint {
+		t.Errorf("the Rules seam was asked for %q, the row stored %q", fp, *row.Fingerprint)
+	}
+}
+
+// DX-8 (AC-8). Under EXTRACTOR=mock -- Text nil -- a DOCX now reaches MockExtractor instead of
+// dead-lettering. Local and CI only; every deployed fleet runs docling. Asserted rather than
+// left to be discovered by whoever next runs the suite.
+func TestRLS_ExtractWorkerRunsTheMockExtractorForADocx(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	reader := &wkForbiddenReader{}
+	// Text stays nil: that is what keeps Work on the Extractor branch.
+	ew := wkWorkerPages(t, extraction.NewMockExtractor(), wkDocxOpener(t), wkForbiddenPages(reader), &wkAuditRecorder{})
+
+	const riverJobID = int64(915207)
+	err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for a DOCX, want 0", n)
+	}
+	if err != nil {
+		t.Fatalf("Work over a DOCX with Text nil returned %v, want nil", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	if rows := wpResults(t, ctx, xid); len(rows) == 0 {
+		t.Errorf("the mock extractor wrote no field-result row")
+	}
+
+	var name string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT extractor FROM extraction_jobs WHERE id = $1`, xid).Scan(&name); err != nil {
+		t.Fatalf("read extractor for job %s: %v", xid, err)
+	}
+	if name != "mock" {
+		t.Errorf("job %s records extractor %q, want %q -- the result set did not come off MockExtractor", xid, name, "mock")
 	}
 }

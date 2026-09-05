@@ -8,6 +8,7 @@ import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
+import { deadLetterRefusal } from '../lib/documentRun'
 import {
   applyDraft,
   getExtractionDetail,
@@ -25,7 +26,6 @@ import { ExtractionCanvas } from './ExtractionCanvas'
 import { ExtractionFields } from './ExtractionFields'
 
 const STILL_READING = 'This document is still being read.'
-const COULD_NOT_READ = 'This document could not be read.'
 const SAVE = 'Save what you settled'
 
 // River retries a `failed` job, so it is not terminal and takes the still-reading sentence.
@@ -144,8 +144,9 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
   } else if (UNSETTLED.includes(data.state)) {
     content = <div style={SENTENCE}>{STILL_READING}</div>
   } else if (data.state === 'dead_lettered') {
-    // The designed could-not-read screen is EXTR-15's; this is the honest placeholder (`D-9`).
-    content = <div style={SENTENCE}>{COULD_NOT_READ}</div>
+    // The same sentence the import run's card shows for this kind, from its sole copy owner.
+    // ExtractionDetail carries no last_error, so the detail clause is always the fallback.
+    content = <div style={SENTENCE}>{deadLetterRefusal(data.failure_kind, null)}</div>
   } else {
     const wire = data.fields
     // The canvas follows the draft: a chosen chip moves the highlight to that alternative's own

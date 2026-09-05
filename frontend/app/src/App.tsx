@@ -317,6 +317,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   const [view, setView] = useState<View>(initialView ?? (bootBatchIds.length > 0 ? 'create' : 'dashboard'))
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
+  // The document a dead-lettered extraction left behind, recorded by enterByHand so the
+  // invoice typed instead keeps its provenance. Cleared wherever `draft` is reseeded --
+  // it describes THIS draft, not the session.
+  const [handOffDocumentId, setHandOffDocumentId] = useState<string | null>(null)
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchIds.length > 0 ? 'review' : 'form')
   // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
   // route (lib/importRun's routeAfterRun) carries every batch id created in the run.
@@ -552,6 +556,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setDetailSel(clearSelection())
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
+    setHandOffDocumentId(null)
     setCreateStep('form')
     // A batch belongs to ONE entity. Leaving this set would keep the review screen's
     // deep-link id pointing at the company just left — and the mirror effect above would
@@ -575,6 +580,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setView('create')
     setCreateStep('upload')
     setDraft(defaultDraft(active))
+    setHandOffDocumentId(null)
     setFilingError(null)
     setSwitcherOpen(false)
     resetImport()
@@ -1095,6 +1101,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   function skipUpload() {
+    setHandOffDocumentId(null)
+    setCreateStep('form')
+  }
+
+  // The route out of a dead-lettered document (EXTR-15-07). Same landing as skipUpload --
+  // the form step -- but it records the stored document first, so the filing below sends
+  // source_document_id. `run` is deliberately left alone: backing out of the form must
+  // return the user to the same failure list (CreateFlow.test.tsx's HO-5b).
+  function enterByHand(documentId: string) {
+    setHandOffDocumentId(documentId)
     setCreateStep('form')
   }
 
@@ -1116,13 +1132,20 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function fileDraft() {
     const base = gatewayBase()
     if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
-    void fileDraftInvoice(draft, activeEntity, {
-      create: (input) => createInvoice(authedFetch, base, input),
-      inFlight: reqInFlight,
-      onPending: setFiling,
-      onError: setFilingError,
-      onCreated: openImportedInvoice,
-    })
+    void fileDraftInvoice(
+      draft,
+      activeEntity,
+      {
+        create: (input) => createInvoice(authedFetch, base, input),
+        inFlight: reqInFlight,
+        onPending: setFiling,
+        onError: setFilingError,
+        onCreated: openImportedInvoice,
+      },
+      // The hand-off's document, or nothing at all: a draft typed from scratch sends no
+      // source_document_id (invoiceDraft.test.ts's HO-6b -- omitted, never null).
+      handOffDocumentId ?? undefined,
+    )
   }
 
   function selectInvoice(number: string) {
@@ -1388,6 +1411,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     backToImport,
     restartImport,
     skipUpload,
+    enterByHand,
     fileDraft,
     selectInvoice,
     openImportedInvoice,

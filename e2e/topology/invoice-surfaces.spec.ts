@@ -4204,25 +4204,25 @@ import { apiBase, getExtractions, listInvoices, type ExtractionJob } from '../ap
 //
 //   PDF  — end to end. Uploaded through POST /v1/documents, extracted, imported through
 //          POST /v1/imports/document, opened from the invoice the run produced.
-//   PNG  — the document is real (uploaded, stored, its bytes served by the real
-//   DOCX     GET /v1/documents/{id}); the invoice->document LINK is synthesized. Neither type
-//            can produce an invoice today: ExtractWorker renders pages before it extracts
-//            (worker.go), PDFium reads PDFs only, so the job dead-letters, and
-//            Store.SettledExtraction selects `state = 'succeeded'` — so the import 404s. The
-//            probe therefore intercepts ONE call, GET /v1/invoices/{id}/source-document,
-//            fetches the real response and replaces only its `document` object with the real
-//            uploaded row. Every other field, and the bytes the image canvas renders, are the
-//            server's own.
+//   DOCX — the document is real (uploaded, stored, its bytes served by the real
+//          GET /v1/documents/{id}); the invoice->document LINK is synthesized, because the
+//          import 404s whenever the extraction has not settled `succeeded`
+//          (Store.SettledExtraction). The probe therefore intercepts ONE call,
+//          GET /v1/invoices/{id}/source-document, fetches the real response and replaces only
+//          its `document` object with the real uploaded row. Every other field is the
+//          server's own.
+//
+// EXTR-15-03 narrowed the accepted set to PDF + DOCX, so the third leg is gone: a PNG is now
+// REFUSED by POST /v1/documents, and that refusal is asserted below in the leg's place.
 //
 // The interception count is asserted because it is the harness's own instrument: a probe whose
-// route never fired would record the PDF's canvas three times and read as evidence.
+// route never fired would record the PDF's canvas twice and read as evidence.
 //
-// Two findings this run is expected to reproduce, neither of them fixed here:
-//   - DOCX classifies as `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the
-//     extension map nor the content-type map), which CONTRADICTS the EXTR epic's decision that
-//     "DOCX joins the spreadsheet side of the previewer". Owner: EXTR-15.
-//   - PNG/JPEG/WebP/DOCX always dead-letter, and the per-document enqueue key is permanent, so
-//     each gets exactly one attempt. Owner: EXTR-17.
+// One finding this run reproduces, and it is now SETTLED rather than outstanding: DOCX
+// classifies as `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the extension
+// map nor the content-type map). EXTR-15 kept it that way on purpose. No browser renders a
+// .docx, so the previewer has nothing to draw; what EXTR-15 shipped instead is the
+// extraction review screen, which shows the document's structured content field by field.
 
 const EXTR09_DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
 const EXTR09_PDF_BYTES = new Uint8Array(readFileSync(join(EXTR09_DOCUMENT_FIXTURES, 'native_invoice.pdf')))
@@ -4237,8 +4237,13 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 )
 
 // A well-formed EMPTY zip: the 22-byte end-of-central-directory record with a comment. A .docx
-// IS a zip, and nothing on the observed path opens it — the worker fails at page rendering and
-// the `unrenderable` canvas fetches no bytes at all. The comment carries the uniqueness.
+// IS a zip. The comment carries the uniqueness.
+//
+// NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
+// these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
+// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard.spec.ts rebuilds it as
+// uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
+// path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
   const comment = new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)
   const out = new Uint8Array(22 + comment.length)
@@ -4271,10 +4276,9 @@ interface Extr09Upload {
   content_hash: string
 }
 
-// Multipart, so a bare fetch rather than api-client (which forces application/json). The hash
-// is computed here from the same bytes the server hashes (document.Service.Store: hex sha256 of
-// the raw body), so the substituted record below carries the row's REAL content hash.
-async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<Extr09Upload> {
+// Multipart, so a bare fetch rather than api-client (which forces application/json). Raw
+// because the PNG leg reads a REFUSAL off this route and extr09Upload below throws on one.
+async function extr09UploadRaw(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<{ status: number; body: string }> {
   const form = new FormData()
   form.set('file', new Blob([bytes], { type }), filename)
   const res = await fetch(`${apiBase()}/api/submission/v1/documents`, {
@@ -4282,13 +4286,20 @@ async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filen
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
-  if (res.status !== 201) throw new Error(`POST /v1/documents ${filename}: ${res.status} ${await res.text()}`)
-  const body = (await res.json()) as Omit<Extr09Upload, 'content_hash'>
+  return { status: res.status, body: await res.text() }
+}
+
+// The hash is computed here from the same bytes the server hashes (document.Service.Store: hex
+// sha256 of the raw body), so the substituted record below carries the row's REAL content hash.
+async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<Extr09Upload> {
+  const res = await extr09UploadRaw(token, bytes, filename, type)
+  if (res.status !== 201) throw new Error(`POST /v1/documents ${filename}: ${res.status} ${res.body.slice(0, 300)}`)
+  const body = JSON.parse(res.body) as Omit<Extr09Upload, 'content_hash'>
   return { ...body, content_hash: createHash('sha256').update(bytes).digest('hex') }
 }
 
-// Polls to a TERMINAL state. 'failed' is not one -- River retries three times, so a PNG passes
-// through it twice before it dead-letters. Returns whatever it last saw when the budget runs
+// Polls to a TERMINAL state. 'failed' is not one -- River retries three times, so a document
+// passes through it twice before it dead-letters. Returns whatever it last saw when the budget runs
 // out; a timeout is an observation here, not a failure.
 async function extr09Settle(token: string, documentId: string): Promise<ExtractionJob | null> {
   const deadline = Date.now() + 120_000
@@ -4317,10 +4328,20 @@ async function extr09Canvas(page: Page): Promise<string> {
   return seen
 }
 
-test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over a PNG and a DOCX on a synthesized invoice->document link', async ({
+// PN-13 (EXTR-15-03, task-854). The legs, named once. `intercepted` is asserted against
+// SYNTHESIZED_LEGS.length rather than a typed count: swapping one literal for another leaves the
+// instrument exactly as hardcoded as it was, and that is the defect this plan has caught twice.
+//
+// EXTR-15-03 drops PNG from the accepted set, so SYNTHESIZED_LEGS loses it. The substitution
+// block loops over this const, so adding or removing a leg moves the count on its own.
+const REAL_LEG = 'pdf'
+const SYNTHESIZED_LEGS = ['docx'] as const
+const ALL_LEGS = [REAL_LEG, ...SYNTHESIZED_LEGS] as const
+
+test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over a DOCX on a synthesized invoice->document link', async ({
   page,
 }, testInfo) => {
-  // Three uploads, two dead-letter cycles (River backs off between attempts) and one full
+  // Two uploads, a refusal, one settle that may back off between attempts and one full
   // extract-and-import, on a fleet that may be cold.
   test.setTimeout(420_000)
   const errors = collectErrors(page)
@@ -4329,7 +4350,12 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   const entity = await createEntity(token, { name: `EXTR-09-09 previewer ${Date.now()}`, tin: freshTin() })
 
   const pdf = await extr09Upload(token, extr09Unique(EXTR09_PDF_BYTES, '%'), 'native_invoice.pdf', 'application/pdf')
-  const png = await extr09Upload(token, extr09Unique(EXTR09_PNG_BYTES, ''), 'scan_invoice.png', 'image/png')
+  // EXTR-15-03's refusal, in the leg's place: a PNG no longer reaches `documents` at all, so
+  // the previewer can never be handed one from this route again.
+  const pngRefusal = await extr09UploadRaw(token, extr09Unique(EXTR09_PNG_BYTES, ''), 'scan_invoice.png', 'image/png')
+  expect(pngRefusal.status, `POST /v1/documents accepted a PNG: ${pngRefusal.body.slice(0, 300)}`).toBe(400)
+  expect(pngRefusal.body, 'the PNG refusal must be the shipped copy').toContain('this file type cannot be read here')
+
   const docx = await extr09Upload(
     token,
     extr09Docx(),
@@ -4339,12 +4365,11 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   const settled = {
     pdf: await extr09Settle(token, pdf.document_id),
-    png: await extr09Settle(token, png.document_id),
     docx: await extr09Settle(token, docx.document_id),
   }
 
-  // Each type is offered to the import route, including the two expected to 404: "no invoice
-  // exists" is the observation, and only the attempt can establish it.
+  // Each type is offered to the import route, including one that may 404: "no invoice exists"
+  // is the observation, and only the attempt can establish it.
   async function importDocument(documentId: string): Promise<{ status: number; body: string }> {
     const res = await fetch(`${apiBase()}/api/invoice/v1/imports/document`, {
       method: 'POST',
@@ -4355,7 +4380,6 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   }
   const imported = {
     pdf: await importDocument(pdf.document_id),
-    png: await importDocument(png.document_id),
     docx: await importDocument(docx.document_id),
   }
 
@@ -4432,11 +4456,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       await page.getByTestId('source-modal-close').click()
     }
 
-    substitute = png
-    observed.png = await openPreviewer()
-
-    substitute = docx
-    observed.docx = await openPreviewer()
+    for (const leg of SYNTHESIZED_LEGS) {
+      substitute = { pdf, docx }[leg]
+      observed[leg] = await openPreviewer()
+    }
   }
 
   await testInfo.attach('documentPreviewer.md', {
@@ -4448,34 +4471,41 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
-      ...(['pdf', 'png', 'docx'] as const).map((leg) => {
-        const up = { pdf, png, docx }[leg]
+      ...ALL_LEGS.map((leg) => {
+        const up = { pdf, docx }[leg]
         const job = settled[leg]
-        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === 'pdf' ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
+        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === REAL_LEG ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
       }),
       '',
       `PDF embed: \`${JSON.stringify(pdfEmbed)}\`. Meta responses substituted: ${intercepted}.`,
       '',
       '## Findings',
       '',
-      '1. **DOCX renders the `unrenderable` canvas.** `docx` appears in neither `EXTENSION_KINDS` nor',
-      '   `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`), so `classifyDocument` returns',
-      '   `unrenderable` and nothing is fetched for it. This CONTRADICTS the EXTR epic decision that',
-      '   "DOCX joins the spreadsheet side of the previewer". Not fixed here — **owner: EXTR-15**.',
-      '2. **AC #2 and AC #3 are unmet by the pipeline, not by the previewer.** No PNG or DOCX can reach',
-      '   an invoice today: `ExtractWorker.Work` renders pages before it extracts, PDFium reads PDFs',
-      '   only, the job dead-letters, and `Store.SettledExtraction` selects `state = \'succeeded\'`. Both',
-      '   import attempts above are the evidence. **Owner: EXTR-17** (re-extraction, and a non-mock',
-      '   extractor).',
+      '1. **DOCX renders the `unrenderable` canvas, and EXTR-15 settled that it should.** `docx` appears',
+      '   in neither `EXTENSION_KINDS` nor `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`),',
+      '   so `classifyDocument` returns `unrenderable` and nothing is fetched for it. No browser renders',
+      '   a .docx, so there is nothing here for a previewer to draw. What EXTR-15 delivered instead is',
+      '   the extraction REVIEW screen, which shows the document\'s structured content field by field.',
+      '   The epic\'s "DOCX joins the spreadsheet side of the previewer" is SUPERSEDED, not outstanding.',
+      '2. **The DOCX leg is synthesized because THIS fixture cannot settle, not because DOCX cannot.**',
+      '   `Store.SettledExtraction` selects `state = \'succeeded\'`, and the empty zip above never gets',
+      '   there: EXTR-15-02 made DOCX boxless, so the worker skips page rendering, the reader refuses',
+      '   the bytes and the job dead-letters at `text_not_read`. A REAL DOCX does reach an invoice now —',
+      '   import-wizard.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
+      '   asserts its printed number, date and total. The import attempt above is the evidence for this',
+      '   fixture only.',
       '3. **One attempt each.** The enqueue key `extract:<document_id>` is permanent, so a dead-lettered',
       '   document is never re-enqueued through this seam.',
     ].join('\n'),
   })
 
   // The instrument, not the product: without this a probe whose route never fired would record
-  // the PDF's canvas three times and read as evidence. Every other line above is observation.
+  // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
   if (invoiceNumber !== '') {
-    expect(intercepted, 'the PNG and DOCX legs must each have substituted exactly one meta response').toBe(2)
+    expect(
+      intercepted,
+      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+    ).toBe(SYNTHESIZED_LEGS.length)
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

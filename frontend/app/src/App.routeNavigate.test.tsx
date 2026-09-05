@@ -439,37 +439,30 @@ describe('QA adversarial: navigate() carries the hash even though the review mir
   })
 })
 
-describe('QA adversarial: returnToSeat corrects the URL by itself, not only via a Workspace remount', () => {
-  // Unlike becomePersona's own test above (a different subject, so Workspace remounts and
-  // the mount-alignment effect could paper over a dropped replaceState), this call keeps
-  // standIn at null throughout -- activeSession's identity never changes, so Workspace does
-  // NOT remount and the ONLY URL write available is returnToSeat's own line (App.tsx:1591).
-  it('returnToSeat_correctsTheUrlAndAddsNoEntryWithNoStandInToReturnFrom', async () => {
+describe('QA adversarial: returnToSeat with no stand-in is a true no-op', () => {
+  // No identity change means no Workspace remount, so nothing should touch the URL or
+  // history -- carrying 'create' to 'invoices' only matters for a freshly mounted Workspace.
+  it('returnToSeat_withNoStandInLeavesTheUrlAndHistoryUntouched', async () => {
     await bootAt('/create', { demoMode: true })
     const lengthBefore = window.history.length
     await act(async () => {
       await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
     })
     requireCtx()
-    expect(window.location.pathname, 'returnToSeat must also land the URL on the carried view').toBe('/invoices')
+    expect(window.location.pathname, 'no stand-in to return from means nothing to correct').toBe('/create')
     expect(window.history.length, 'returnToSeat must add no history entry').toBe(lengthBefore)
-    // BUG (App.tsx:1587-1591), found by this test: setCarriedView + replaceState fire
-    // unconditionally, but the toast three lines below is correctly gated on
-    // wasStandingIn (:1592). With no stand-in to return from, activeSession's identity
-    // never changes, so Workspace does not remount and this line never runs -- ctx.view
-    // stays 'create' while the address bar now claims '/invoices'. it.fails() so this
-    // stays visible without red-blocking the suite; delete the wrapper once the write
-    // above is gated on wasStandingIn like the toast is.
   })
 
-  it.fails('BUG: returnToSeat desyncs ctx.view from the URL when there was no stand-in to return from', async () => {
+  // Formerly it.fails(): the explicit write fired unconditionally while the remount that
+  // moves ctx.view did not, desyncing the two. Deleting the write (App.tsx) closes the gap.
+  it('returnToSeat_withNoStandInLeavesCtxViewAgreeingWithTheUrl', async () => {
     await bootAt('/create', { demoMode: true })
     await act(async () => {
       await capturedCtx!.returnToSeat!('create', SEAT_AS_MEMBER)
     })
     const ctx = requireCtx()
-    expect(window.location.pathname).toBe('/invoices')
-    expect(ctx.view, 'the screen must agree with the address bar it just rewrote').toBe('invoices')
+    expect(window.location.pathname).toBe('/create')
+    expect(ctx.view, 'the screen must agree with the address bar').toBe('create')
   })
 })
 

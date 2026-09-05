@@ -1586,9 +1586,6 @@ export default function App() {
       if (identityGen.current !== gen) return
       const carried = carryView(view)
       setCarriedView(carried)
-      // replaceState, not push: a persona switch must not be Back-able, and the address
-      // bar must not still name a screen (e.g. /create) the carried view left behind.
-      window.history.replaceState(null, '', routePath(carried) + window.location.hash)
       setStandIn(null)
       if (wasStandingIn) {
         setToast({ name: seatMember.name, initials: seatMember.initials, role: seatMember.role, seq: ++toastSeq.current })
@@ -1617,8 +1614,6 @@ export default function App() {
       if (identityGen.current !== gen) return
       const carried = carryView(view)
       setCarriedView(carried)
-      // Same reason as returnToSeat above.
-      window.history.replaceState(null, '', routePath(carried) + window.location.hash)
       setStandIn(next)
       setToast({ name: member.name, initials: member.initials, role: member.role, seq: ++toastSeq.current })
     },

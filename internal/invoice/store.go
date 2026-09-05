@@ -1671,16 +1671,18 @@ type ListGateFacts struct {
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
-// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above it must NOT
-// consult s.approvalsEnforced: the flag gates enforcement, not visibility
-// (docs/approvals.md section 11, TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
+// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above, the map it
+// RETURNS must not be shaped by s.approvalsEnforced: the flag gates enforcement, not
+// visibility (docs/approvals.md section 11,
+// TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
 // RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
 // The returned map is the visibility half; ListGateFacts.TransmitClear is gate
 // INPUT, never wire copy, and folds the flag through s.transmitClear.
 //
-// The two gate reads are here rather than inside approval.RowFactsTx so that helper's
+// The three gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
-// both are set-shaped, so the whole request stays constant in page size.
+// all three are set-shaped, so the whole request stays constant in page size
+// (TestStoreRowFacts_TransmitClearIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
 	var gate ListGateFacts

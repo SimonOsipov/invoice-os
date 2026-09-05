@@ -994,9 +994,12 @@ runs the one-tenant seeder until this branch merges and deploys:
    after the flip means a typo (`yes`, `on` and untrimmed whitespace are all rejected).
 6. **Reversible.** Set the same variable to `false` — prefer that to deleting the key:
    unset also means off, but delete is a second code path. The flag touches exactly one
-   field, `TransmitClear` (`internal/invoice/store.go:1532-1536`, pinned by
-   `internal/invoice/row_facts_store_test.go:115`); arming, runs, decisions and audit rows
-   are written identically either way, so nothing is lost flipping in either direction. The
+   verdict, `TransmitClear` — on `ApprovalFacts` for the detail wire and on
+   `ListGateFacts` for every list row, both folded by `Store.transmitClear`
+   (`internal/invoice/store.go`, pinned by
+   `TestStore_TransmitClearFoldIsTheOnlyReadPathFlagReader`); arming, runs, decisions and
+   audit rows are written identically either way, so nothing is lost flipping in either
+   direction. The
    redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it runs neither of
    the gateway's two boot-time destructive steps — `db.Reset`, gated off the persistent
    environment by `RAILWAY_ENVIRONMENT_NAME`, nor the DEMO-04 demo-tenant purge, which

@@ -4298,7 +4298,8 @@ func TestListHandler_SubmitFlagsOnEveryRow(t *testing.T) {
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of the action-flag keys
 // that are still detail-only, mirroring TestListHandler_NoRuleSetVersionKey -- they live
 // on GetHandler's getResponse wrapper, never on the domain Invoice nor on List's own
-// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve pair.
+// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve and
+// submit pairs.
 //
 // APPR-12-09 (A09-7) moved TWO of the former 13 literals from the absent half to the
 // PRESENT half: `can_approve` and `approve_blocked_reason` ship per row, from the same

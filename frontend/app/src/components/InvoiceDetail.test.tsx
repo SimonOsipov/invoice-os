@@ -2119,6 +2119,69 @@ describe('InvoiceDetail Compliance panel: the rule-set version is stated once (B
     expect(screen.getByTestId('not-validated')).toBeTruthy()
     expect(screen.queryByTestId('compliance-ruleset-version')).toBeNull()
   })
+
+  // QA Mode B (BUG-13-01). `!= null`, not truthiness: rule-set 0 is a validated invoice,
+  // and a `&&` gate would silently drop both the chip and the table for it. The two other
+  // chip specs use 4, so neither can tell the two gates apart.
+  it('invoiceDetail_ruleSetVersionZeroStillStatesTheVersionAndRendersTheTable', async () => {
+    mockDetailFetch(
+      detailRecord({
+        rule_set_version_id: 'rsv-0',
+        rule_set_version: 0,
+        violations: [{ rule_key: 'buyer-tin-required', severity: 'error', message: 'Buyer TIN is required.', path: 'buyer.tin' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('compliance-ruleset-version').textContent).toBe('Rule-set v0')
+    expect(screen.queryByTestId('not-validated')).toBeNull()
+    expect(within(screen.getByTestId('violations-table')).getAllByRole('cell')).toHaveLength(4)
+  })
+
+  // QA Mode B (BUG-13-01). Two live oracles read the version scoped INSIDE
+  // `violations-table` -- the clean-pass sentence here at :2076 and at
+  // invoice-surfaces.spec.ts:657-658. Both stop discriminating if the chip ever drifts
+  // into that subtree, and `compliance-ruleset-version` alone cannot see the move.
+  it('invoiceDetail_theVersionChipSitsOutsideTheViolationsTableSubtree', async () => {
+    mockDetailFetch(
+      detailRecord({
+        rule_set_version_id: 'rsv-4',
+        rule_set_version: 4,
+        violations: [{ rule_key: 'buyer-tin-required', severity: 'error', message: 'Buyer TIN is required.', path: 'buyer.tin' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const chip = screen.getByTestId('compliance-ruleset-version')
+    const table = screen.getByTestId('violations-table')
+    expect(table.contains(chip)).toBe(false)
+    // Beside the title, not merely elsewhere on the page: same parent as "Compliance".
+    expect(chip.parentElement?.querySelector('.card-title')?.textContent).toBe('Compliance')
+  })
+
+  // QA Mode B (BUG-13-01). OPEN, adjudication owed: on a CLEAN-PASS validated invoice the
+  // version now reads twice inside the Compliance card -- the new header chip, and the
+  // green block's own "Evaluated against rule-set v4." Core AC-5 says the version is
+  // stated once in the card; `## Out of Scope` fences the clean-pass block's wording.
+  // Characterized, not endorsed: flip this to a `toBe(1)` if the user rules it a defect.
+  it('invoiceDetail_cleanPassInvoiceStatesTheVersionTwiceInTheCard', async () => {
+    mockDetailFetch(
+      detailRecord({ status: 'draft', rule_set_version_id: 'rsv-4', rule_set_version: 4, violations: [] }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    const chip = screen.getByTestId('compliance-ruleset-version')
+    const statements = [chip.textContent, screen.getByTestId('violations-table').textContent].filter((t) => t?.includes('rule-set v4') || t === 'Rule-set v4')
+    expect(statements, 'the chip and the green block both name the rule-set version').toHaveLength(2)
+    expect(chip.textContent).toBe('Rule-set v4')
+    expect(screen.getByTestId('violations-table').textContent).toContain('Evaluated against rule-set v4.')
+  })
 })
 
 // The kept mark means "kept as-is" only on a draft; on a failed invoice it means
@@ -4241,8 +4304,8 @@ describe('InvoiceDetail "Open in Audit →" wiring (AUDIT-09-05)', () => {
 describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUDIT-09-09 AC-5)', () => {
   const ID = 'inv-surface-1'
 
-  // The 54 survivors of InvoiceDetail.tsx's own set, plus the child components this story
-  // never opened: SourceDocumentCard (5) and ViolationsTable (1).
+  // The survivors of InvoiceDetail.tsx's own set, plus SourceDocumentCard's 5. ViolationsTable
+  // contributed one (`violations-scroll`) until BUG-13-01 retired it; it now renders none.
   const UNTOUCHED_TESTIDS = [
     'approve-blocked-reason',
     'buyer-tin',

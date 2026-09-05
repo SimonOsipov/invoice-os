@@ -149,4 +149,66 @@ describe('ViolationsTable', () => {
     expect(within(firstRow).getAllByRole('cell')[3].textContent).toBe('$.total')
     expect(within(secondRow).getAllByRole('cell')[3].textContent).toBe('—')
   })
+
+  // QA Mode B (BUG-13-01). violationsTable_longMessageRendersInFull reads textContent, so
+  // it survives a CSS truncation: adding whiteSpace:'nowrap' + overflow:'hidden' +
+  // textOverflow:'ellipsis' to this cell reddens NOTHING in jsdom (measured), yet it is
+  // exactly the "never truncated with an ellipsis or clipped" Core AC-4 forbids. jsdom
+  // applies no CSS, so declaration is the only thing this layer can observe. e2e D7
+  // (BUG-13-03) is the rendered oracle; this is the cheap one that fires first.
+  it('violationsTable_messageCellDeclaresNoTruncation', () => {
+    render(<ViolationsTable violations={[violation({ message: UNBREAKABLE_MESSAGE })]} ruleSetVersion={3} />)
+
+    const cell = screen.getByText(UNBREAKABLE_MESSAGE).closest('td') as HTMLElement
+    expect(cell).not.toBeNull()
+    expect(cell.style.textOverflow).toBe('')
+    expect(cell.style.whiteSpace).not.toBe('nowrap')
+    expect(cell.style.overflow).not.toBe('hidden')
+    expect(cell.style.maxHeight).toBe('')
+    expect(cell.style.getPropertyValue('-webkit-line-clamp')).toBe('')
+  })
+
+  // QA Mode B (BUG-13-01). severityStyle falls back to MUTED_STYLE on an unmapped value.
+  // Every prior case used a mapped severity, so the fallback row's shape was unpinned:
+  // a row that lost its pill would still have four cells, but not four RENDERED ones.
+  it('violationsTable_unknownSeverityStillRendersAFullRow', () => {
+    render(
+      <ViolationsTable
+        violations={[violation({ severity: 'critical' as unknown as Violation['severity'], rule_key: 'unmapped.rule', path: '$.unmapped' })]}
+        ruleSetVersion={3}
+      />,
+    )
+
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(1)
+    const cells = within(rows[0]).getAllByRole('cell')
+    expect(cells).toHaveLength(4)
+    expect(cells[0].textContent).toBe('Info')
+    expect(cells[1].textContent).toBe('Total does not equal subtotal plus VAT')
+    expect(cells[2].textContent).toBe('unmapped.rule')
+    expect(cells[3].textContent).toBe('$.unmapped')
+  })
+
+  // QA Mode B (BUG-13-01). Every wrap assertion above renders exactly one or two rows, so
+  // a wrap declaration applied per-index rather than per-row would pass them all. Assert
+  // over every row of a wide set, with a length floor so the loop cannot pass vacuously.
+  it('violationsTable_everyRowOfManyDeclaresTheWrapOnAllThreeTextCells', () => {
+    const many = Array.from({ length: 25 }, (_, i) =>
+      violation({ rule_key: `rule_${i}_unbroken_key`, path: i % 3 === 0 ? undefined : `$_line_${i}_total`, message: `${UNBREAKABLE_MESSAGE}_${i}` }),
+    )
+    render(<ViolationsTable violations={many} ruleSetVersion={3} />)
+
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(25)
+    for (const row of rows) {
+      const cells = within(row).getAllByRole('cell') as HTMLElement[]
+      expect(cells).toHaveLength(4)
+      // Severity (index 0) is a pill, not free text -- it is deliberately not in this set.
+      for (const cell of cells.slice(1)) expect(cell.style.overflowWrap).toBe('anywhere')
+    }
+    // The em-dash placeholder rides the same wrapping cell as a real path.
+    const placeholderCells = rows.map((r) => within(r).getAllByRole('cell')[3]).filter((c) => c.textContent === '—')
+    expect(placeholderCells.length).toBeGreaterThan(0)
+    for (const cell of placeholderCells) expect((cell as HTMLElement).style.overflowWrap).toBe('anywhere')
+  })
 })

@@ -411,6 +411,10 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   // above: it drives one invoice to `failed` (via queued) so the card has real audit rows
   // to measure. No browser submit control is involved.
   [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 2],
+  // The action-cluster geometry block's test.beforeAll (BUG-14-04), same shape as the two
+  // above: it drives one invoice to `failed` (via queued) purely to get a can_edit-false
+  // status to measure the cluster at. No browser submit control is involved.
+  [INVOICE_SURFACES, 'unattributed', 'transitionInvoice:queued', 3],
   // AUDIT-09-08's deployed journey: the FIRS-rejection leg submits from the register via
   // submitSelected, so the helper's one click expands to this call site (AC-7).
   [INVOICE_SURFACES, 'test:detail surface: a FIRS rejection redens the final node only', 'click:batch-submit-confirm', 1],

@@ -495,6 +495,69 @@ describe('ReviewRow: the checkbox now states its own reason, retargeting [select
   })
 })
 
+// QA adversarial (Stage 4, Mode B, BUG-12): A16-2f pins parity on ONE sentence and B12-8 on
+// the role rung. submitGate can reach five, two of which share every byte before the em
+// dash, and the register had never seen the role one at all.
+describe('ReviewRow + InvoicesList: all five server sentences reach both titles, verbatim (BUG-12, QA Stage 4)', () => {
+  // internal/invoice/handlers.go: notApproverTransmitReason, submitBlockedReason's three
+  // arms, awaitingApprovalReason. Byte-for-byte.
+  const SERVER_SENTENCES = [
+    'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.',
+    'Only validated invoices can be submitted — re-validate this invoice first.',
+    'Only validated invoices can be submitted — edit this invoice and re-validate it first.',
+    'Only validated invoices can be submitted.',
+    'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+  ]
+
+  it('B12-14a: control -- the table holds five DISTINCT sentences', () => {
+    // An empty or deduplicated table would make the loop below assert nothing, and two
+    // of these differ only after the dash.
+    expect(SERVER_SENTENCES).toHaveLength(5)
+    expect(new Set(SERVER_SENTENCES).size).toBe(5)
+  })
+
+  it('B12-14: each sentence lands byte-identical on review-select and on invoice-select', async () => {
+    let checked = 0
+
+    for (const [i, sentence] of SERVER_SENTENCES.entries()) {
+      const shared = gateRow({
+        id: `inv-sentence-${i}`,
+        invoice_number: `INV-SENTENCE-${i}`,
+        status: 'validated',
+        approval: null,
+        can_submit: false,
+        submit_blocked_reason: sentence,
+      })
+
+      render(
+        <Row r={shared} batches={[]} checked={false} expanded={false} onToggleExpand={() => {}} onToggle={() => {}} ctx={reviewRowCtx()} base="https://gw" onChanged={() => {}} />,
+      )
+      const reviewBox = screen.getByTestId('review-select') as HTMLInputElement
+      const reviewTitle = reviewBox.getAttribute('title')
+      const reviewDisabled = reviewBox.disabled
+      cleanup()
+
+      vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')
+      mockRegisterFetch([shared])
+      render(<InvoicesList ctx={registerCtx()} />)
+      await screen.findByText(shared.invoice_number)
+      const listBox = screen.getByTestId('invoice-select') as HTMLInputElement
+
+      expect(reviewDisabled, `review row, sentence=${sentence}`).toBe(true)
+      expect(listBox.disabled, `register row, sentence=${sentence}`).toBe(true)
+      // Verbatim on each surface, then against each other, so a failure names which one
+      // substituted and which two disagree.
+      expect(reviewTitle, `review row, sentence=${sentence}`).toBe(sentence)
+      expect(listBox.getAttribute('title'), `register row, sentence=${sentence}`).toBe(sentence)
+      expect(reviewTitle, `surfaces disagree, sentence=${sentence}`).toBe(listBox.getAttribute('title'))
+      cleanup()
+      checked += 1
+    }
+
+    expect(checked, 'the loop skipped a sentence').toBe(5)
+  })
+})
+
 // QA adversarial (Stage 4, Mode B, task-535): two cases A16-2a..g don't cover --
 // cross-row reason pairing, and a live blocked-to-selectable transition.
 describe('ReviewRow: adversarial coverage on the checkbox reason (APPR-16-02, QA Stage 4)', () => {

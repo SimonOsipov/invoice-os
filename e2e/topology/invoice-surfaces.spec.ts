@@ -920,8 +920,8 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   })
   await validateInvoice(token, inv.id)
   // The firm tenant is governed (this file's own beforeAll) -- validating arms an open
-  // approval run, and isRowSelectable disables the checkbox on one. Close it over the side
-  // channel before the row is ever selected.
+  // approval run, and the SERVER then answers can_submit:false, which is what disables the
+  // checkbox (submitGate). Close the run over the side channel before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
@@ -1057,10 +1057,9 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   // AC-10: the transmit GATE is already clear here -- TransmitClearTx tests
   // EXISTS(state='approved') over ALL runs, and the first leg's approval above already
-  // satisfies that. This approval is for isRowSelectable instead, which reads only the
-  // LATEST run's state, and the revalidate above just cancelled that run and armed a fresh
-  // open one (revalidate.go/store.go demotion path). Without this, the checkbox below stays
-  // disabled even though the server would happily accept the resubmit.
+  // satisfies that. Since BUG-12 the checkbox reads that same verdict off can_submit, so
+  // this second approval is redundant; it is kept because approveUntilClosed is a no-op on
+  // a closed run and deleting it would widen this leg's scope.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   // Resubmit leg: back to the list -- this test still resubmits through the register's
@@ -1308,9 +1307,8 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   const row = invoiceRowByNumber(page, invoiceNumber)
 
-  // AC-8: a failed row can never be batch-selected. isRowSelectable is `validated` AND no
-  // open approval run (APPR-08-09); a `failed` row fails the status half, so the second
-  // half never comes into it here.
+  // AC-8: a failed row can never be batch-selected. The checkbox reads can_submit, and
+  // submitGate refuses a `failed` row at its status rung, before approval is consulted.
   await expect(row.getByTestId('invoice-select')).toBeDisabled()
 
   await openInvoiceRow(page, invoiceNumber)
@@ -3444,7 +3442,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   const invoiceNumber = `INV-AUDIT09-RAIL-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT) })
   await validateInvoice(token, inv.id)
-  // Validating arms the governed tenant's run, and isRowSelectable disables the checkbox
+  // Validating arms the governed tenant's run, and the server answers can_submit:false
   // while one is open -- close it before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 

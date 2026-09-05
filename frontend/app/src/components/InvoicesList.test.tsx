@@ -821,12 +821,10 @@ describe('InvoicesList: resolved-failed marker', () => {
   })
 })
 
-// RED spec (APPR-08-09, task-500, Stage 2.5/Mode A) — the observable form of AC #3's
-// parity claim. An awaiting-approval row renders the SAME disabled checkbox a not-yet-
-// validated row already renders: present, disabled, unchecked, no title, no tooltip, no
-// new copy ([selectable-parity-not-new-copy]). It fails today because isRowSelectable's
-// body is still status-only (its `// stub` marker), so the open-run row's checkbox is
-// enabled and select-all sweeps it in.
+// APPR-08-09 AC #3's parity claim, in its observable form. An awaiting-approval row
+// renders the SAME disabled checkbox a not-yet-validated row already renders: present,
+// disabled, unchecked ([selectable-parity-not-new-copy]). Since BUG-12 the row is disabled
+// because the SERVER said so -- `can_submit: false` on the fixture, not a status rule here.
 describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-09)', () => {
   const openRun = {
     run_state: 'open',

@@ -3057,6 +3057,112 @@ describe('normaliseInvoiceRow fails closed on the submit gate (BUG-12)', () => {
   })
 })
 
+// QA adversarial (Stage 4, Mode B): three claims the B12 specs leave without an oracle of
+// their own.
+describe('the submit gate, adversarial (BUG-12, QA Stage 4)', () => {
+  // submitBlockedReason forks draft from rejected on purpose (handlers.go) and the two
+  // sentences share every byte before the em dash.
+  const DRAFT_SENTENCE = 'Only validated invoices can be submitted — re-validate this invoice first.'
+  const REJECTED_SENTENCE = 'Only validated invoices can be submitted — edit this invoice and re-validate it first.'
+
+  it('B12-3b: an enabled row renders no reason, even when the wire still carries one', () => {
+    // can_submit true and a stale sentence together is what a half-applied server change
+    // looks like. Dropping selectBlockedReason's `can_submit ?` guard puts that sentence
+    // in the title of an ENABLED checkbox -- a tooltip that contradicts the control.
+    for (const sentence of [DRAFT_SENTENCE, REJECTED_SENTENCE]) {
+      const candidate = gateRow({ can_submit: true, submit_blocked_reason: sentence, status: 'draft' })
+      expect(isRowSelectable(candidate), `sentence=${sentence}`).toBe(true)
+      expect(selectBlockedReason(candidate), `sentence=${sentence}`).toBeNull()
+    }
+  })
+
+  it('B12-13: the draft and rejected sentences share a lead, so nothing may split them on the dash', () => {
+    const lead = (s: string): string => s.split('—')[0].trim()
+
+    // The hazard, stated as a fact about the copy: the two sentences are different, and
+    // their leads are not.
+    expect(DRAFT_SENTENCE).not.toBe(REJECTED_SENTENCE)
+    expect(lead(DRAFT_SENTENCE)).toBe(lead(REJECTED_SENTENCE))
+
+    // So the whole sentence has to survive, both ways round.
+    const draft = selectBlockedReason(gateRow({ can_submit: false, submit_blocked_reason: DRAFT_SENTENCE, status: 'draft' }))
+    const rejected = selectBlockedReason(gateRow({ can_submit: false, submit_blocked_reason: REJECTED_SENTENCE, status: 'rejected' }))
+    expect(draft).toBe(DRAFT_SENTENCE)
+    expect(rejected).toBe(REJECTED_SENTENCE)
+    expect(draft).not.toBe(rejected)
+  })
+
+  it('B12-13b: no gate function and neither row surface splits a reason apart', () => {
+    const sources = [
+      ['lib/invoices.ts', readFileSync(fileURLToPath(new URL('./invoices.ts', import.meta.url)), 'utf8')],
+      ['components/InvoicesList.tsx', readFileSync(fileURLToPath(new URL('../components/InvoicesList.tsx', import.meta.url)), 'utf8')],
+      ['components/ReviewRow.tsx', readFileSync(fileURLToPath(new URL('../components/ReviewRow.tsx', import.meta.url)), 'utf8')],
+    ] as const
+
+    expect(sources).toHaveLength(3)
+    for (const [label, text] of sources) {
+      expect(text.length, `${label} was not read -- every absence below would be vacuous`).toBeGreaterThan(1000)
+      expect(text, `${label} lost its anchor`).toContain('selectBlockedReason')
+      expect(text, `${label} splits a reason on the em dash`).not.toContain("split('—')")
+    }
+  })
+})
+
+// The two row surfaces must keep calling ONE gate. Inlining `!r.can_submit` at either call
+// site is behaviour-identical today and no rendered spec can see it, so this static scan is
+// its only oracle -- and a second surface deriving its own answer is the bug BUG-12 closed.
+describe('both row surfaces call the shared gate, neither re-derives (BUG-12, QA Stage 4)', () => {
+  const SURFACES = [
+    ['InvoicesList.tsx', 'invoice-select'],
+    ['ReviewRow.tsx', 'review-select'],
+  ] as const
+
+  it('B12-15a: control -- both component sources are read and still render their checkbox', () => {
+    expect(SURFACES).toHaveLength(2)
+    for (const [file, testid] of SURFACES) {
+      const text = readFileSync(fileURLToPath(new URL(`../components/${file}`, import.meta.url)), 'utf8')
+      expect(text.length, `${file} was not read`).toBeGreaterThan(1000)
+      expect(text, `${file} no longer renders ${testid}`).toContain(`data-testid="${testid}"`)
+    }
+  })
+
+  it('B12-15: neither surface names the wire keys itself', () => {
+    for (const [file] of SURFACES) {
+      const text = readFileSync(fileURLToPath(new URL(`../components/${file}`, import.meta.url)), 'utf8')
+      expect(text, `${file} calls isRowSelectable`).toContain('isRowSelectable(r)')
+      expect(text, `${file} calls selectBlockedReason`).toContain('selectBlockedReason(r)')
+      expect(text, `${file} reads can_submit itself`).not.toContain('can_submit')
+      expect(text, `${file} reads submit_blocked_reason itself`).not.toContain('submit_blocked_reason')
+    }
+  })
+})
+
+// AC-8: the bulk bar's arithmetic must inherit the gate rather than re-run it.
+describe('the selection helpers delegate, they do not re-derive (BUG-12, QA Stage 4)', () => {
+  const SOURCE = readFileSync(fileURLToPath(new URL('./invoices.ts', import.meta.url)), 'utf8')
+  const HELPERS = ['selectableIds', 'pruneSelection', 'selectAllState']
+  const body = (name: string): string => new RegExp(`export function ${name}\\([\\s\\S]*?\\n\\}`).exec(SOURCE)?.[0] ?? ''
+
+  it('B12-16a: control -- the slicer really returns each helper body', () => {
+    expect(HELPERS).toHaveLength(3)
+    for (const name of HELPERS) {
+      const slice = body(name)
+      expect(slice.length, `${name}: the slicer found nothing, so the absence below is vacuous`).toBeGreaterThan(60)
+      expect(slice, `${name}: the slice is some other function`).toContain(name)
+      expect(slice, `${name}: the slice stops before the body`).toContain('return')
+    }
+  })
+
+  it('B12-16: none of the three names status or approval', () => {
+    for (const name of HELPERS) {
+      const slice = body(name)
+      expect(slice, `${name} re-derives from the status set`).not.toContain('status')
+      expect(slice, `${name} re-derives from the approval run`).not.toContain('approval')
+      expect(slice, `${name} must reach the gate, directly or through selectableIds`).toMatch(/isRowSelectable|selectableIds\(/)
+    }
+  })
+})
+
 describe('live-refresh predicates', () => {
   it('I-poll-1: isInFlight is true for exactly queued and submitted', () => {
     const statuses: InvoiceStatus[] = ['draft', 'validated', 'queued', 'submitted', 'accepted', 'rejected', 'failed']

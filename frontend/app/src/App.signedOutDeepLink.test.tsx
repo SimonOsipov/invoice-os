@@ -367,18 +367,27 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
   it('restore_anExpiredDestinationFallsBackToDashboard', async () => {
     captureDestination('/audit', Date.now() - (DEEP_LINK_TTL_MS + 1000))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // QA addition (ROUTE-05-04 AC-5): task-924's own Stage 1 validation recommended this
+    // spy on this test specifically; it landed on the two new specs but not here.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await bootWorkspaceAt('/')
     const ctx = requireCtx()
     expect(ctx.view, 'an expired destination must fall back to dashboard').toBe('dashboard')
     expect(window.location.pathname, 'the URL must settle on the bare root').toBe('/')
     expect(warnSpy, 'expiry is a normal outcome and must warn nothing').not.toHaveBeenCalled()
+    expect(errSpy, 'the abandoned-attempt path is a normal outcome and must not error').not.toHaveBeenCalled()
     // readDestination()'s own TTL check returns null whether cleared or merely expired --
     // read the raw key so this can actually distinguish the two.
     expect(
       sessionStorage.getItem(DEEP_LINK_KEY),
       'the expired destination must actually be removed from storage, not just filtered by readDestination()',
     ).toBeNull()
+    // Vacuity control (App.offlineFallback.test.tsx:118-120): proves the spy is live and
+    // would have caught a real console.error, so the absence above is not a spy nobody wired.
+    console.error('control: this deliberate call must be observed')
+    expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
     warnSpy.mockRestore()
+    errSpy.mockRestore()
   })
 
   it('restore_noStoredDestinationBootsToDashboardAsToday', async () => {
@@ -493,6 +502,10 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     expect(ctx.view, 'a destination exactly at the TTL boundary must still apply').toBe('audit')
     expect(window.location.pathname, 'the URL must settle on the still-valid destination').toBe('/audit')
     expect(errSpy, 'a boundary-valid destination is a normal outcome and must not error').not.toHaveBeenCalled()
+    // Vacuity control (App.offlineFallback.test.tsx:118-120): proves the spy is live and
+    // would have caught a real console.error, so the absence above is not a spy nobody wired.
+    console.error('control: this deliberate call must be observed')
+    expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
     errSpy.mockRestore()
     vi.useRealTimers()
   })
@@ -532,6 +545,10 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
       errSpy,
       'a persona-switch remount ignoring a stored destination is a normal outcome and must not error',
     ).not.toHaveBeenCalled()
+    // Vacuity control (App.offlineFallback.test.tsx:118-120): proves the spy is live and
+    // would have caught a real console.error, so the absence above is not a spy nobody wired.
+    console.error('control: this deliberate call must be observed')
+    expect(errSpy, 'the spy must catch a real call -- otherwise the assertion above is vacuous').toHaveBeenCalledTimes(1)
     errSpy.mockRestore()
   })
 })

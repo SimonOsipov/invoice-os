@@ -2208,7 +2208,7 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 			stRequireFailureKind(t, ctx)
 			row := stJobFailureKind(t, ctx, jobID)
 			if row == nil || *row != string(tc.want) {
-				t.Fatalf("extraction_jobs.failure_kind = %v, want %q -- the payload carries the kind, the row does not", row, tc.want)
+				t.Fatalf("extraction_jobs.failure_kind = %s, want %q -- the payload carries the kind, the row does not", wkStr(row), tc.want)
 			}
 			if prior, dup := onRow[extraction.FailureKind(*row)]; dup {
 				t.Errorf("row failure_kind %q was already written by %s", *row, prior)
@@ -3265,5 +3265,247 @@ func TestRLS_NoBoxlessTerminalStateCarriesANullFailureKind(t *testing.T) {
 				t.Errorf("extraction_jobs.failure_kind = %q, which FailureKind does not declare", *got)
 			}
 		})
+	}
+}
+
+// --- EXTR-19-04 QA: the classes the acceptance specs do not reach --------------------------
+
+// wkPageNumberedWire is wkDoclingWire with the page number as the caller's, so a spec can reach
+// a document whose only page is not page 1 -- the selection BoxlessFingerprint and
+// AnchorObservations both make by Number and neither by slice position.
+func wkPageNumberedWire(t *testing.T, number int, tokens ...map[string]any) []byte {
+	t.Helper()
+	if len(tokens) == 0 {
+		t.Fatalf("wkPageNumberedWire was handed no token; the page would read as empty")
+	}
+	b, err := json.Marshal(map[string]any{
+		"pages": []map[string]any{{
+			"number": number, "width_pt": 595.0, "height_pt": 842.0,
+			"tokens": tokens, "tables": []any{},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build the docling wire body: %v", err)
+	}
+	return b
+}
+
+// QA-1 (EXTR-19-04 AC-2, the half the acceptance specs leave open). TextChars > 0 keeps the
+// whitespace-only document out of the boxless write, but it does NOT keep out a document whose
+// text simply matches no lexicon entry, or one whose only page is page 2. Both fingerprint to
+// sha256 over an EMPTY element list -- one constant, shared by every such document in every
+// tenant -- and the new `fingerprint != ""` gate opens the rule lookup on it. That bucket is
+// live, so what keeps it harmless is asserted here rather than argued: the same empty anchor
+// list is what LearnRule reads, so no correction can ever put a rule INTO it.
+func TestRLS_ABoxlessDocumentWithNoRecognisedLabelGetsTheSharedEmptyIdentity(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	// Discrimination floor. The labelled golden must fingerprint DIFFERENTLY, or "the stored
+	// value equals an independently computed empty digest" is also what a worker storing one
+	// constant for every document would satisfy.
+	_, goldenTokens, _ := dcServeGolden(t, dcReadNamedGolden(t, dxGolden))
+	empty := extraction.BoxlessFingerprint(nil)
+	if labelled := extraction.BoxlessFingerprint(goldenTokens); labelled == empty {
+		t.Fatalf("%s fingerprints to %q, the empty-element digest; every equality below would hold over any two documents", dxGolden, labelled)
+	}
+
+	cases := []struct {
+		name       string
+		riverJobID int64
+		wire       []byte
+	}{
+		{
+			// "Widget assembly" and "42.00" carry no label word, so every anchorLexicon
+			// pattern misses. Asserted below, never assumed.
+			name:       "page 1 matches no lexicon entry",
+			riverJobID: 915221,
+			wire:       wkDoclingWire(t, map[string]any{"text": "Widget assembly"}, map[string]any{"text": "42.00"}),
+		},
+		{
+			// A labelled page that is not page 1: both selectors skip it, so the element list
+			// is empty for a reason the first case cannot reach.
+			name:       "the only page is page 2",
+			riverJobID: 915222,
+			wire:       wkPageNumberedWire(t, 2, map[string]any{"text": "Invoice No: ASC-2026-0919"}),
+		},
+	}
+	if len(cases) != 2 {
+		t.Fatalf("the table carries %d case(s), want 2 -- no lexicon hit, and no page 1", len(cases))
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Floors: the read really produced text, and it really produced no observation.
+			// Without both, the assertions below would be about an empty read.
+			_, tokens, res := dcServeGolden(t, tc.wire)
+			if res.TextChars == 0 {
+				t.Fatalf("the body reads as %d text char(s), want more than 0 -- the boxless write is gated on it and nothing below would run", res.TextChars)
+			}
+			if n := len(extraction.AnchorObservations(tokens)); n != 0 {
+				t.Fatalf("the body yields %d anchor observation(s), want 0 -- a token here matches the lexicon and this case is no longer about the empty identity", n)
+			}
+
+			rules := wpStoreRules(t)
+			if err := wkBoxlessDocx(t, tc.wire, rules.load, &wkAuditRecorder{}).Work(ctx,
+				extraction.NewExtractJobForTest(tc.riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+				t.Fatalf("Work returned %v, want nil -- a document the lexicon does not recognise still settles", err)
+			}
+			xid := wkExtractionJobID(t, ctx, tenantID, tc.riverJobID)
+			stAssertJobState(t, ctx, xid, "succeeded")
+
+			row := stJobLayout(t, ctx, xid)
+			if row.Fingerprint == nil || *row.Fingerprint != empty {
+				t.Fatalf("stored layout_fingerprint %s, want the shared empty-element digest %q", wkStr(row.Fingerprint), empty)
+			}
+			// [] and never NULL: the column's CHECK takes an array, and this is the only class
+			// that writes an EMPTY one.
+			if row.Anchors == nil {
+				t.Fatalf("stored layout_anchors NULL, want an empty JSON array")
+			}
+			got, err := extraction.UnmarshalAnchorObservations([]byte(*row.Anchors))
+			if err != nil {
+				t.Fatalf("decode the stored layout_anchors %s: %v", *row.Anchors, err)
+			}
+			if len(got) != 0 {
+				t.Errorf("stored %d anchor observation(s) %+v, want 0", len(got), got)
+			}
+
+			// The gate is `fingerprint != ""`, and this value is not "": the lookup runs, on a
+			// key every label-free document shares.
+			asked, _ := rules.calls()
+			if len(asked) != 1 || asked[0] != empty {
+				t.Fatalf("the Rules seam was asked %v, want exactly one call for %q", asked, empty)
+			}
+
+			// What makes that shared key harmless. LearnRule reads the job's own observations,
+			// and there are none, so the best a pointed correction anywhere on the page can do
+			// is refuse. A real box is posted on purpose: a refusal over an unusable REGION
+			// would prove nothing about the anchors.
+			region := extraction.Region{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.3, Y1: 0.25}
+			if _, ok := extraction.LearnRule("issue_date", region, got); ok {
+				t.Errorf("LearnRule derived a rule from %d anchor observation(s); a rule under the shared empty identity would fire on every label-free document this tenant ever uploads", len(got))
+			}
+			// Control for that refusal: the SAME call over the labelled golden's own anchors
+			// does derive one, so the zero above is about the empty list and not about the
+			// field, the region or a seam that always refuses.
+			if _, ok := extraction.LearnRule("issue_date", region, extraction.AnchorObservations(goldenTokens)); ok {
+				t.Errorf("the control derived a rule from the golden's BOXLESS anchors; those carry the zero box, so it must refuse too -- this control is no longer a control")
+			}
+		})
+	}
+}
+
+// QA-2 (EXTR-19-04 AC-11, the retryable half). Every shipped boxless lever runs at the final
+// attempt, so nothing observed what a job with retries LEFT settles as. "failed, with its kind,
+// and silent" is a different claim from "dead_lettered, with its kind, and one event", and the
+// stuck-at-'extracting' row the rejected placement would have shipped is invisible to a spec
+// that only ever drives attempt 3 of 3.
+func TestRLS_ARetryableBoxlessLayoutWriteFailureStaysFailedAndEmitsNothing(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	stRequireFailureKind(t, ctx)
+
+	const riverJobID = int64(915223)
+	err := wkBoxlessDocx(t, wkInvertedBoxWire(t), wkNoRules, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+	if err == nil {
+		t.Fatalf("Work returned nil on a refused layout write; River takes that as done and never retries the job")
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	// Equality on the literal: "not dead_lettered" is also satisfied by 'extracting', which is
+	// precisely the permanently stuck row this stage's placement exists to prevent.
+	stAssertJobState(t, ctx, xid, "failed")
+	if got := stJobFailureKind(t, ctx, xid); got == nil || *got != string(extraction.FailureLayoutNotWritten) {
+		t.Fatalf("extraction_jobs.failure_kind = %s on a retryable attempt, want %q -- the kind is written on every failed advance, not only on the terminal one",
+			wkStr(got), extraction.FailureLayoutNotWritten)
+	}
+	if row := stJobLayout(t, ctx, xid); row.Fingerprint != nil || row.Anchors != nil {
+		t.Errorf("a refused layout write left layout_fingerprint %s and layout_anchors %s, want both SQL NULL -- the write's own transaction must have rolled back",
+			wkStr(row.Fingerprint), wkStr(row.Anchors))
+	}
+	if rows := wkAuditRowsForJob(t, ctx, tenantID, xid); len(rows) != 0 {
+		t.Fatalf("a retryable attempt wrote %d extraction.* audit row(s), want 0 -- an attempt with retries left is not a terminal outcome: %v", len(rows), rows)
+	}
+
+	// The control that makes that zero mean something, and the same job's retry in one: River
+	// hands the SAME river_job_id back at the final attempt.
+	if err := wkBoxlessDocx(t, wkInvertedBoxWire(t), wkNoRules, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 3, 3, tenantID, documentID, uuid.NewString())); err == nil {
+		t.Fatalf("the final attempt returned nil; without it the silence above is also what a broken audit seam looks like")
+	}
+	if got := wkExtractionJobID(t, ctx, tenantID, riverJobID); got != xid {
+		t.Fatalf("the retry settled extraction job %s, want the first attempt's own %s -- a second row means the layout write is not idempotent across attempts", got, xid)
+	}
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+	rows := wkAuditRowsForJob(t, ctx, tenantID, xid)
+	if len(rows) != 1 {
+		t.Fatalf("the final attempt wrote %d extraction.* audit row(s), want exactly 1: %v", len(rows), rows)
+	}
+	if got, _ := rows[0].payload["failure_kind"].(string); got != string(extraction.FailureLayoutNotWritten) {
+		t.Errorf("the terminal event carries failure_kind %q, want %q", got, extraction.FailureLayoutNotWritten)
+	}
+}
+
+// QA-3. The boxless branch is gated on the FORMAT, never on the geometry: RendersPageImages is a
+// strict allowlist over two content types, so anything else -- including the NULL
+// declared_content_type docs/document-upload.md records a direct API caller can store against
+// real PDF bytes -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
+// geometry under a b1: identity and a pointed correction against it CAN learn a rule. AC-9's
+// "a boxless job learns nothing" is a property of a DOCX's zero boxes, not of the b1: namespace,
+// and this is the spec that says which.
+func TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	wire := wkDoclingWire(t, map[string]any{
+		"text": "Invoice No: ASC-2026-0919",
+		"x0":   0.1, "y0": 0.2, "x1": 0.3, "y1": 0.25,
+	})
+	// Floor: all four keys really arrived, so the token carries the wire's box rather than the
+	// zero box doclingBox.region falls back to on a partial one.
+	_, tokens, _ := dcServeGolden(t, wire)
+	obs := extraction.AnchorObservations(tokens)
+	if len(obs) != 1 {
+		t.Fatalf("the body yields %d anchor observation(s), want exactly 1", len(obs))
+	}
+	if obs[0].X0 == 0 && obs[0].X1 == 0 {
+		t.Fatalf("the observation carries the zero box %+v; the wire box was dropped and this spec is about the DOCX case again", obs[0])
+	}
+
+	rules := wpStoreRules(t)
+	const riverJobID = int64(915224)
+	if err := wkBoxlessDocx(t, wire, rules.load, &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work returned %v, want nil", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil || !strings.HasPrefix(*row.Fingerprint, extraction.BoxlessFingerprintVersion+":") {
+		t.Fatalf("stored layout_fingerprint %s, want the %q namespace -- the branch is chosen by content type, never by whether the tokens have boxes",
+			wkStr(row.Fingerprint), extraction.BoxlessFingerprintVersion)
+	}
+	if row.Anchors == nil {
+		t.Fatalf("stored layout_anchors NULL, want the observed anchors")
+	}
+	got, err := extraction.UnmarshalAnchorObservations([]byte(*row.Anchors))
+	if err != nil {
+		t.Fatalf("decode the stored layout_anchors %s: %v", *row.Anchors, err)
+	}
+	if !reflect.DeepEqual(got, obs) {
+		t.Fatalf("stored %+v, want the read's own %+v", got, obs)
+	}
+	if asked, _ := rules.calls(); len(asked) != 1 || asked[0] != *row.Fingerprint {
+		t.Errorf("the Rules seam was asked %v, want exactly one call for the stored %q", asked, *row.Fingerprint)
+	}
+
+	// The boundary, stated as an assertion. A value token under this anchor is learnable here,
+	// where the same call over a DOCX's zero-box anchors refuses (AC-9).
+	region := extraction.Region{Page: 1, X0: 0.1, Y0: 0.26, X1: 0.3, Y1: 0.3}
+	if _, ok := extraction.LearnRule("invoice_number", region, got); !ok {
+		t.Errorf("LearnRule refused %+v under a usable anchor box; if this is deliberate, AC-9's refusal is no longer attributable to the DOCX's zero geometry", region)
 	}
 }

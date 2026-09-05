@@ -7155,7 +7155,8 @@ test('EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its print
 
   const detail = await getExtractionDetail(token, job.id)
   // Zero pages is the CONTRACT, not an absence of evidence: pageImageFormats marks DOCX
-  // boxless (classify.go), so worker.go skips the render, the page rows and the layout.
+  // boxless (classify.go), so worker.go skips the render and the page rows. Since EXTR-19-04 it
+  // does write a b1 layout -- a column on the job, never a page row.
   expect(detail.pages, 'a boxless format must write no page rows').toEqual([])
 
   // Equality on all three, never a negation: a reachable-but-EMPTY sidecar settles succeeded

@@ -147,9 +147,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err != nil {
 		kind = FailureDocumentUnavailable
 	}
-	// Boxless formats skip the render, the page rows and the layout: a fingerprint over boxless
-	// tokens would hand one document's learned rules to unrelated ones
-	// (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
+	// A format with no page images skips the render and the page rows. Its layout is the b1
+	// write below, not this one (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
 	if err == nil && RendersPageImages(doc.ContentType) {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).

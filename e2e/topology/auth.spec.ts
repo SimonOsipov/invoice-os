@@ -352,8 +352,9 @@ for (const id of PERSONA_IDS) {
       await page.locator(`#si-otp-${i}`).fill(digits[i])
     }
 
-    // Every destination strips ?persona= on arrival (App.tsx:1615-1620), so the wire value
-    // is only observable on the outbound navigation request — armed BEFORE the click.
+    // Every destination strips ?persona= on arrival (each app's effect commented "Drop the
+    // consumed ?persona="), so the wire value is only observable on the outbound navigation
+    // request — armed BEFORE the click.
     const base = EXPECTED_BASE[id]
     const [navRequest] = await Promise.all([
       page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(base)),

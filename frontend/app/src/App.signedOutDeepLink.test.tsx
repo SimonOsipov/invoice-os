@@ -142,8 +142,8 @@ vi.mock('./lib/deepLink', async (importOriginal) => {
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
   vi.stubGlobal('localStorage', createMemoryStorage())
-  // sessionStorage has no Node-v25/jsdom collision (deepLink.test.ts:14-16) -- clearing
-  // the real one is enough, no stub needed.
+  // sessionStorage has no Node-v25/jsdom collision -- clearing the real one is enough, no
+  // stub needed. Same beforeEach as deepLink.test.ts.
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
   capturedCtx = undefined

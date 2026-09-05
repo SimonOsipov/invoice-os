@@ -170,6 +170,11 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling',
     'EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its printed fields',
     'EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not_read',
+    // EXTR-15-13. The first sits ABOVE the EXTR-15 marker (its fixtures are CSV, which enqueues
+    // no extraction, so the span's freshness rule has nothing to protect); this floor is scanned
+    // over the whole file, so registering it here still covers it.
+    'EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row',
+    'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -243,10 +248,11 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
   })
 
   // Population floor: without it the check above passes vacuously the moment every real call
-  // site is refactored behind a forwarder.
-  it('all five uploads in the span are real helper call sites', () => {
+  // site is refactored behind a forwarder. Raised 5 -> 8 by EXTR-15-13, whose EXTR15-E2E-06
+  // adds three more uploads to the span.
+  it('every upload in the span is a real helper call site', () => {
     const calls = bufferArgs.filter((a) => FRESH_HELPERS.includes(a))
-    expect(calls.length, `only ${calls.length} helper call site(s) in the span`).toBeGreaterThanOrEqual(5)
+    expect(calls.length, `only ${calls.length} helper call site(s) in the span`).toBeGreaterThanOrEqual(8)
   })
 
   it('every named helper exists and mints its UUID inline', () => {

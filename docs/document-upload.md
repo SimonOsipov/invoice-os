@@ -48,6 +48,10 @@ caller's transaction. The key is per **document**, so:
 - The dedupe is **permanent, not in-flight**. A document whose extraction dead-letters is
   never re-enqueued through this seam
   (`TestRLS_EnqueueExtractionRefusesEvenAfterTheJobDeadLetters`). Re-extraction is EXTR-17's.
+- A dead-letter is therefore terminal for the user too, and since EXTR-15-04 it says so by name:
+  the job's `failure_kind` reaches the client, which renders one of six sentences off it
+  (`deadLetterRefusal`, `frontend/app/src/lib/documentRun.ts`) and offers manual entry as the way
+  out. Nothing here retries.
 
 DOCX is accepted by this route and skips page rendering: it extracts from the text layer
 alone, with no page images and no field regions. With the permanent key above, it gets

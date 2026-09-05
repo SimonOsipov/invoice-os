@@ -6512,6 +6512,159 @@ test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll exte
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// --- EXTR-15-13 (task-857) · AC-1: the spreadsheet flow, untouched -----------------------
+//
+// EXTR-15-09 rewrote 31 copy sites behind a `unit` branch. Its hardest constraint is the one
+// no census can state: the SPREADSHEET arm still renders on the deployed build, byte for byte.
+// reviewCopy.census.test.ts pins BOTH literals of every site in SOURCE; only a browser can say
+// which branch a real CSV run takes.
+//
+// DELIBERATELY ABOVE the EXTR-15 deployed-proof marker below. That span requires every
+// `buffer:` argument inside it to be a fresh-per-call fixture helper, because a repeated
+// document collides on the permanent per-document enqueue key and settles on a previous run's
+// job. A CSV import enqueues no extraction at all, so the rule has nothing to protect here --
+// the span's own header gives that same reason for the file's other Buffer.from(...) probes.
+//
+// TWO imports, because the three literals never share a screen. `ROWS READ` (census R1/R2) is
+// the batch header and `Row` (U4) is the Unreadable tab's grid header, both on the batch
+// surface; `Rows stored` (B5) is a RejectedFile tile, which renders only when NO batch in the
+// run reached 'completed' (reviewShellStateAll, lib/reviewBatch.ts). A header-only file is the
+// one fixture that reaches it.
+//
+// Each literal is asserted WITH its document twin's absence. Presence alone still passes on a
+// screen rendering both branches, which is what a half-landed sweep looks like.
+
+/**
+ * The screen's rendered text, for byte-exact copy claims.
+ *
+ * NOT getByText(string), which is case-INSENSITIVE substring matching: it cannot state
+ * "byte-identical", and it reads the tab label `Already imported (1)` as the tile value
+ * `already imported`. innerText, never textContent -- textContent concatenates across element
+ * boundaries and would manufacture substrings that nothing renders.
+ */
+async function screenText(page: Page): Promise<string> {
+  return (await page.locator('body').innerText()).replace(/\u00a0/g, ' ')
+}
+
+// R1/R2's two arms minus the ${...} each interpolates, copied from the census table
+// (frontend/app/src/lib/reviewCopy.census.test.ts) rather than retyped off the component.
+const SPREADSHEET_READ_LINE = 'ROWS READ · SERVER VERDICT · RULE SET '
+const DOCUMENT_READ_LINE = 'DOCUMENTS READ · SERVER VERDICT · RULE SET '
+
+test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row', async ({ page }) => {
+  // Two full CSV imports through the wizard on a fleet that may be cold. Neither enqueues an
+  // extraction, so this is the cheapest of the EXTR-15 deployed cases.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-15-13 spreadsheet ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // --- import 1: the mixed fixture, whose rows quarantine structurally (E2E-04's own flow) --
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'extr15-sweep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const sweepPreview = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await sweepPreview
+
+  // subtotal has no ALIAS entry, so auto-recognize never places it -- E2E-04's own reasoning.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const sweepImport = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await sweepImport
+
+  // (a) the batch header's counted noun (R1/R2), and the tab label's (R3).
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable rows \(\d+\)$/ })
+  await expect(unreadableTab, "the mixed fixture's structural failures must open this tab").toBeVisible({
+    timeout: 60_000,
+  })
+  await expect(
+    page.getByRole('button', { name: /^Unreadable documents \(/ }),
+    'the document tab label reached a spreadsheet run',
+  ).toHaveCount(0)
+
+  const batchScreen = await screenText(page)
+  expect(batchScreen, 'the batch header must keep the spreadsheet noun').toContain(SPREADSHEET_READ_LINE)
+  expect(batchScreen, 'the document branch reached a spreadsheet run').not.toContain(DOCUMENT_READ_LINE)
+
+  // (b) the Unreadable tab's grid header (U4). Resolved from a SIBLING cell rather than
+  // searched page-wide: an exact 'Row' is three characters and would match a cell elsewhere.
+  // The chain is self-checked by what the resolved row must also contain (EXTR09-E2E-04's idiom).
+  await unreadableTab.click()
+  const whyCell = page.getByText('Why it could not be read', { exact: true })
+  await expect(whyCell, "the unreadable grid's last header cell").toHaveCount(1)
+  const headerRow = whyCell.locator('xpath=..')
+  await expect(
+    headerRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(headerRow.getByText('Row', { exact: true }), 'the row-number column must still be headed Row').toHaveCount(1)
+  await expect(
+    headerRow.getByText('—', { exact: true }),
+    "the document arm's em-dash header reached a spreadsheet run",
+  ).toHaveCount(0)
+
+  // --- import 2: a header-only file, the one fixture reaching RejectedFile (INVCR-E2E-4's) --
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles({
+    name: 'extr15-header-only.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8'),
+  })
+
+  const rejectedPreview = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await rejectedPreview
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const rejectedImport = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Import 0 rows' }).click()
+  await rejectedImport
+
+  // (c) the RejectedFile tiles (B5/B6) and the sentence above them (B4).
+  await expect(page.getByText('Nothing was imported', { exact: true }), "§7.5's rejected-file surface").toBeVisible({
+    timeout: 60_000,
+  })
+  const rejectedScreen = await screenText(page)
+  expect(rejectedScreen, 'the stored tile must keep the spreadsheet noun').toContain('Rows stored')
+  expect(rejectedScreen, "B5's document arm reached a spreadsheet run").not.toContain('Documents stored')
+  expect(rejectedScreen, 'the quarantined tile must keep the spreadsheet noun').toContain('Rows quarantined')
+  expect(rejectedScreen, "B6's document arm reached a spreadsheet run").not.toContain('Documents quarantined')
+  expect(rejectedScreen, "B4's spreadsheet arm").toContain(
+    'it held no data rows — a spreadsheet with only a header row, for example.',
+  )
+  expect(rejectedScreen, "B4's document arm reached a spreadsheet run").not.toContain(
+    'nothing invoice-shaped could be found in it',
+  )
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // === EXTR-15 · the deployed proof: the terminal states and the hand-off =================
 //
 // GATE-ONLY, every test from here to the EXTR-18-07 marker below. Topology specs run only on
@@ -6783,13 +6936,35 @@ async function runDocuments(
   page: Page,
   label: string,
   files: { name: string; mimeType: string; buffer: Buffer }[],
-): Promise<{ token: string; documentIds: Record<string, string>; jobs: Record<string, ExtractionJob> }> {
+): Promise<{
+  token: string
+  entityId: string
+  documentIds: Record<string, string>
+  jobs: Record<string, ExtractionJob>
+}> {
   const token = await login(PERSONAS.A)
   const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
 
   await signInFirm(page)
   await selectEntity(page, entity.name)
 
+  return { token, entityId: entity.id, ...(await runDocumentsIn(page, token, files)) }
+}
+
+/**
+ * runDocuments' wizard half: pick, extract and settle N documents in the entity the page has
+ * ALREADY selected. Split out for EXTR15-E2E-06 (EXTR-15-13), which needs a SECOND run in the
+ * same entity — a cross-run collision is the only way the already-imported channel has a
+ * determined winner.
+ *
+ * The route handler is registered per call. Playwright matches the most recently added handler
+ * first, so an earlier run's `files` closure never sees this run's uploads.
+ */
+async function runDocumentsIn(
+  page: Page,
+  token: string,
+  files: { name: string; mimeType: string; buffer: Buffer }[],
+): Promise<{ documentIds: Record<string, string>; jobs: Record<string, ExtractionJob> }> {
   const documentIds: Record<string, string> = {}
   // Recorded INSIDE the POST route, EXTR10-E2E-02's own idiom: the handler completes before
   // the app can see the response, so no poll for this document can precede the assignment. A
@@ -6841,7 +7016,7 @@ async function runDocuments(
       )
       .toBe('terminal')
   }
-  return { token, documentIds, jobs }
+  return { documentIds, jobs }
 }
 
 const GOLDEN_DOCX_NAME = 'golden_invoice.docx'
@@ -6999,6 +7174,284 @@ test('EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not
     job.failure_kind,
     `the kind was ${job.failure_kind ?? 'null'} (error ${job.last_error ?? 'none'})`,
   ).toBe('text_not_read')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-15-13 (task-857) · AC-2/AC-3: the document unit, rendered and contained --------
+//
+// AC-2 is EXTR15-E2E-05's mirror: the DOCUMENT arm of the same census sites, on the deployed
+// build. AC-3 is the containment sweep over what this story LENGTHENED -- the hand-off control
+// subtask 11 put in the Unreadable tab, and the two "Not imported" tiles whose text grew
+// ("already in the register" is six characters longer than "already imported").
+//
+// ONE test for both, because the journey is the expensive part: three extractions on a fleet
+// that may be cold. EXTR15-E2E-01 folds its AC-5 walk into its geometry sweep for the same
+// reason.
+//
+// TWO RUNS IN ONE ENTITY, and that ordering IS the oracle. The already-imported channel needs
+// the colliding invoice to exist BEFORE the second import runs. Two copies inside one run
+// would race -- startDocumentRun imports through Promise.all (lib/documentRun.ts) -- and while
+// the SHAPE would still hold (storeDuplicateRowError sets rule_key on both the up-front
+// precheck and the racing-INSERT backstop, and isAlreadyImported reads only that key), nothing
+// would say WHICH file landed in which channel, and this case names files.
+//
+// Run 2's second file is scanned_invoice.pdf, EXTR15-E2E-02's own choice and for its reason:
+// it settles SUCCEEDED with no readable number, so the import quarantines it into the
+// unreadable channel with its document id attached (EXTR-15-10) -- which is what puts a
+// hand-off control on the row at all. A file that dead-letters produces no batch and never
+// reaches this screen.
+//
+// NO LOCAL ORACLE, like every case in this span. If the deployed sidecar reads either fixture
+// differently from EXTR15-E2E-02/03's measurements, this reds on a job state or a tab count
+// with a message naming which.
+
+const REPEAT_DOCX_NAME = 'golden_invoice_again.docx'
+const QUARANTINED_PDF_NAME = 'scanned_invoice.pdf'
+// The golden's printed number, the same literal EXTR15-E2E-03 asserts off the wire.
+const GOLDEN_DOCX_NUMBER = 'ASC-2026-0919'
+
+test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width', async ({
+  page,
+}, testInfo) => {
+  // Three extractions across two runs on a fleet that may be cold, then a four-width sweep.
+  test.setTimeout(900_000)
+  const errors = collectErrors(page)
+
+  // --- run 1: one DOCX, whose invoice is what run 2 collides with ------------------------
+  const { token, entityId, jobs: seedJobs } = await runDocuments(page, 'EXTR-15-13 register', [
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  expect(
+    seedJobs[GOLDEN_DOCX_NAME].state,
+    `the seeding DOCX did not settle succeeded (kind ${seedJobs[GOLDEN_DOCX_NAME].failure_kind ?? 'null'}, error ${seedJobs[GOLDEN_DOCX_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  // The precondition read off the REGISTER, not off the landing: which surface run 1 ends on is
+  // routeAfterRun's business and no AC of this story's, but the invoice existing is the whole
+  // basis of run 2. Listed by entity rather than searched by `q`, so nothing here depends on
+  // the search predicate's matching rules.
+  const seeded = await listInvoices(token, { entity_id: entityId, limit: 50 })
+  expect(
+    seeded.invoices.map((i) => i.invoice_number),
+    'run 1 stored no invoice under the golden number -- run 2 has nothing to collide with',
+  ).toContain(GOLDEN_DOCX_NUMBER)
+
+  // --- run 2: the same document again, beside one that quarantines -----------------------
+  const { jobs } = await runDocumentsIn(page, token, [
+    { name: REPEAT_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+    { name: QUARANTINED_PDF_NAME, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
+  ])
+  expect(jobs[REPEAT_DOCX_NAME].state, 'the repeat DOCX must read as well as the first one did').toBe('succeeded')
+  expect(
+    jobs[QUARANTINED_PDF_NAME].state,
+    `the scan settled ${jobs[QUARANTINED_PDF_NAME].state} (kind ${jobs[QUARANTINED_PDF_NAME].failure_kind ?? 'null'}) -- a dead-letter writes no batch and never reaches the review screen`,
+  ).toBe('succeeded')
+
+  // Two files cannot take routeAfterRun's 'single' arm, so the landing is the review surface
+  // carrying both batch ids -- EXTR15-E2E-02's own reading of the hash.
+  await expect
+    .poll(() => new URL(page.url()).hash, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+
+  // --- AC-2: the header, the tiles and both tab labels ----------------------------------
+  const registerTabName = 'Already imported (1)'
+  const unreadableTabName = 'Unreadable documents (1)'
+  await expect(
+    page.getByRole('button', { name: unreadableTabName }),
+    'the scan must quarantine into its own tab, labelled in documents',
+  ).toHaveCount(1)
+  await expect(
+    page.getByRole('button', { name: registerTabName }),
+    'the repeat DOCX must collide into the already-imported channel',
+  ).toHaveCount(1)
+  await expect(
+    page.getByRole('button', { name: /^Unreadable rows \(/ }),
+    'the spreadsheet tab label reached a document run',
+  ).toHaveCount(0)
+
+  const header = await screenText(page)
+  expect(header, 'the batch header must count documents (R1/R2)').toContain(`2 ${DOCUMENT_READ_LINE}`)
+  expect(header, 'the spreadsheet branch reached a document run').not.toContain(SPREADSHEET_READ_LINE)
+  expect(header, "B1's document arm").toContain('Built from 0 documents. Every one of these exists in the ledger')
+  expect(header, "B1's spreadsheet arm reached a document run").not.toContain(
+    'rows. Every one of these exists in the ledger',
+  )
+  expect(header, "B8's document arm -- the AC's own wording").toContain('1 already in the register')
+  expect(header, "B10's document arm").toContain('1 invoices already in the register. Nothing to fix.')
+  expect(header, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
+  expect(header, "B2's document arm").toContain('1 unreadable documents')
+  expect(header, "B2's spreadsheet arm reached a document run").not.toContain('1 unreadable rows')
+
+  // --- AC-2: the already-imported tab body ----------------------------------------------
+  await page.getByRole('button', { name: registerTabName }).click()
+  const register = await screenText(page)
+  expect(register, "A3's document arm").toContain('1 documents were already in the register')
+  expect(register, "A4's document arm").toContain(
+    'These documents are already in the register, so the import had nothing new to add. Nothing is wrong with them and there is nothing to correct.',
+  )
+  expect(register, "A7's document arm").toContain('1 of 2 documents were already in the register.')
+  expect(register, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
+
+  // A5/A6: the grid header, resolved from a sibling cell for the reason EXTR15-E2E-05 gives.
+  const registerVerdictCell = page.getByText('Invoice already in the register', { exact: true })
+  await expect(registerVerdictCell, "the already-imported grid's verdict header (A6)").toHaveCount(1)
+  const registerHeaderRow = registerVerdictCell.locator('xpath=..')
+  await expect(
+    registerHeaderRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(registerHeaderRow.getByText('—', { exact: true }), "A5's document arm").toHaveCount(1)
+  await expect(
+    registerHeaderRow.getByText('Row', { exact: true }),
+    "A5's spreadsheet arm reached a document run",
+  ).toHaveCount(0)
+
+  // --- AC-2: the unreadable tab body, and the row AC-3 then measures ---------------------
+  await page.getByRole('button', { name: unreadableTabName }).click()
+  const unreadable = await screenText(page)
+  expect(unreadable, "U2's document arm").toContain('1 documents never became invoices')
+  expect(unreadable, "U3's document arm").toContain(
+    'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.',
+  )
+  expect(unreadable, "U3's spreadsheet arm reached a document run").not.toContain('The importer could not read them')
+  expect(unreadable, "U5's document arm").toContain('1 of 2 documents. The invoices that did import are unaffected.')
+
+  const whyCell = page.getByText('Why it could not be read', { exact: true })
+  await expect(whyCell, "the unreadable grid's last header cell").toHaveCount(1)
+  const unreadableHeaderRow = whyCell.locator('xpath=..')
+  await expect(
+    unreadableHeaderRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(unreadableHeaderRow.getByText('—', { exact: true }), "U4's document arm").toHaveCount(1)
+  await expect(
+    unreadableHeaderRow.getByText('Row', { exact: true }),
+    "U4's spreadsheet arm reached a document run",
+  ).toHaveCount(0)
+
+  // --- AC-3: the containment sweep ------------------------------------------------------
+  //
+  // Non-empty FIRST, every time: an empty locator satisfies every containment check below
+  // vacuously, and on a broken deploy that is exactly how this sweep would go green.
+  const row = page.getByTestId('unreadable-row')
+  await expect(row, 'the scan must render as its own row').toHaveCount(1)
+  await expect(row.first(), 'the row must name the file it came from').toContainText(QUARANTINED_PDF_NAME)
+  const card = row.first().locator('xpath=..')
+  await expect(card, 'the resolved parent is the grid card, which also carries the header').toContainText(
+    'Why it could not be read',
+  )
+  const handOff = row.first().getByRole('button', { name: 'Enter it by hand' })
+  await expect(handOff, 'a stored document must offer the hand-off (EXTR-15-11)').toHaveCount(1)
+
+  // The two tiles this story lengthened, each resolved from its VALUE text up to the Tile root
+  // (ReviewBatch.tsx's Tile renders value and caption as the two children of one div). Each
+  // chain is self-checked by the caption its tile must also carry.
+  const registerTileValue = page.getByText('1 already in the register', { exact: true })
+  await expect(registerTileValue, "B8's tile value").toHaveCount(1)
+  const registerTile = registerTileValue.locator('xpath=..')
+  await expect(registerTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
+    'Nothing to fix.',
+  )
+  const unreadableTileValue = page.getByText('1 unreadable documents', { exact: true })
+  await expect(unreadableTileValue, "B2's tile value").toHaveCount(1)
+  const unreadableTile = unreadableTileValue.locator('xpath=..')
+  await expect(unreadableTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
+    'No invoice exists for them.',
+  )
+
+  type Fit = { width: number; rowSlack: number; handOffSlack: number; registerSlack: number; unreadableSlack: number }
+  const fits: Fit[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the window
+    // gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [cardBox, rowBox, handOffBox, rowEdges, registerText, registerBox, unreadableText, unreadableBox] =
+          await Promise.all([
+            card.boundingBox(),
+            row.first().boundingBox(),
+            handOff.boundingBox(),
+            row.first().evaluate(edgesOf),
+            registerTileValue.evaluate(edgesOf),
+            registerTile.evaluate(edgesOf),
+            unreadableTileValue.evaluate(edgesOf),
+            unreadableTile.evaluate(edgesOf),
+          ])
+        return { cardBox, rowBox, handOffBox, rowEdges, registerText, registerBox, unreadableText, unreadableBox }
+      }
+      const m = await settledRead(read, `document review screen at ${width}px`)
+      expect(m.cardBox && m.rowBox && m.handOffBox, `card, row and control must all render at ${width}px`).toBeTruthy()
+
+      // (a) the row is CONTAINED by its card -- the intersection is the row's own rect.
+      // rectsOverlap (layout.ts:55-58) is a boolean and is true for a row hanging half out, so
+      // it cannot state this at all; overlapOf returns the Rect that can.
+      expect(
+        sameRect(overlapOf(m.rowBox!, m.cardBox!), m.rowBox!),
+        `the row must sit wholly inside its card at ${width}px (row ${JSON.stringify(m.rowBox)}, card ${JSON.stringify(m.cardBox)})`,
+      ).toBe(true)
+
+      // (b) the hand-off control is contained by its row, the same identity. This is the
+      // subtask-11 control, and it lives inside the row's 1fr track -- the one track that can
+      // be squeezed to nothing.
+      expect(
+        sameRect(overlapOf(m.handOffBox!, m.rowBox!), m.handOffBox!),
+        `the hand-off control must sit wholly inside its row at ${width}px (button ${JSON.stringify(m.handOffBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+
+      // (c) the row's four grid tracks fit the box the card gave it. (a) cannot see this: a
+      // grid container keeps its own width while its tracks overflow, so the box stays inside
+      // the card while the cells hang out of it.
+      expect(
+        m.rowEdges.scrollWidth,
+        `the row's grid tracks overflow their own box at ${width}px (${m.rowEdges.scrollWidth} > ${m.rowEdges.clientWidth})`,
+      ).toBeLessThanOrEqual(m.rowEdges.clientWidth + 1)
+
+      // (d) each lengthened tile value stays inside its tile, and its TEXT fits the box it was
+      // given. Both, never one: a block child keeps its parent's content width while the text
+      // inside it overflows, so the edge check alone passes on the very defect this guards.
+      for (const [label, text, tile] of [
+        ['the already-in-the-register tile', m.registerText, m.registerBox],
+        ['the unreadable-documents tile', m.unreadableText, m.unreadableBox],
+      ] as const) {
+        expect(text.outerLeft, `${label}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
+          tile.left - 0.5,
+        )
+        expect(text.outerRight, `${label}'s value must end inside its tile at ${width}px`).toBeLessThanOrEqual(
+          tile.right + 0.5,
+        )
+        expect(
+          text.scrollWidth,
+          `${label}'s value text overflows its own box at ${width}px (${text.scrollWidth} > ${text.clientWidth})`,
+        ).toBeLessThanOrEqual(text.clientWidth + 1)
+      }
+
+      fits.push({
+        width,
+        rowSlack: m.rowEdges.clientWidth - m.rowEdges.scrollWidth,
+        handOffSlack: m.rowEdges.right - (m.handOffBox!.x + m.handOffBox!.width),
+        registerSlack: m.registerBox.right - m.registerText.outerRight,
+        unreadableSlack: m.unreadableBox.right - m.unreadableText.outerRight,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // The sweep ran every width, in order -- a loop that measured fewer would otherwise pass on
+  // whatever it did reach.
+  expect(fits.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('document-review-containment.json', {
+    body: JSON.stringify(fits, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

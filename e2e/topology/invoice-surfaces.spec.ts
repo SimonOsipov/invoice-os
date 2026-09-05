@@ -3447,10 +3447,11 @@ import { apiBase, getExtractions, listInvoices, type ExtractionJob } from '../ap
 // The interception count is asserted because it is the harness's own instrument: a probe whose
 // route never fired would record the PDF's canvas twice and read as evidence.
 //
-// One finding this run is expected to reproduce, not fixed here: DOCX classifies as
-// `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the extension map nor the
-// content-type map), which CONTRADICTS the EXTR epic's decision that "DOCX joins the
-// spreadsheet side of the previewer".
+// One finding this run reproduces, and it is now SETTLED rather than outstanding: DOCX
+// classifies as `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the extension
+// map nor the content-type map). EXTR-15 kept it that way on purpose. No browser renders a
+// .docx, so the previewer has nothing to draw; what EXTR-15 shipped instead is the
+// extraction review screen, which shows the document's structured content field by field.
 
 const EXTR09_DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
 const EXTR09_PDF_BYTES = new Uint8Array(readFileSync(join(EXTR09_DOCUMENT_FIXTURES, 'native_invoice.pdf')))
@@ -3465,8 +3466,13 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 )
 
 // A well-formed EMPTY zip: the 22-byte end-of-central-directory record with a comment. A .docx
-// IS a zip, and nothing on the observed path opens it — the worker fails at page rendering and
-// the `unrenderable` canvas fetches no bytes at all. The comment carries the uniqueness.
+// IS a zip. The comment carries the uniqueness.
+//
+// NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
+// these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
+// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard.spec.ts rebuilds it as
+// uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
+// path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
   const comment = new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)
   const out = new Uint8Array(22 + comment.length)
@@ -3704,13 +3710,19 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '',
       '## Findings',
       '',
-      '1. **DOCX renders the `unrenderable` canvas.** `docx` appears in neither `EXTENSION_KINDS` nor',
-      '   `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`), so `classifyDocument` returns',
-      '   `unrenderable` and nothing is fetched for it. This CONTRADICTS the EXTR epic decision that',
-      '   "DOCX joins the spreadsheet side of the previewer". Not fixed here — **owner: EXTR-15**.',
-      '2. **The DOCX leg is synthesized because the import can 404.** `Store.SettledExtraction`',
-      '   selects `state = \'succeeded\'`, so a DOCX whose extraction has not settled there produces no',
-      '   invoice. The import attempt above is the evidence.',
+      '1. **DOCX renders the `unrenderable` canvas, and EXTR-15 settled that it should.** `docx` appears',
+      '   in neither `EXTENSION_KINDS` nor `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`),',
+      '   so `classifyDocument` returns `unrenderable` and nothing is fetched for it. No browser renders',
+      '   a .docx, so there is nothing here for a previewer to draw. What EXTR-15 delivered instead is',
+      '   the extraction REVIEW screen, which shows the document\'s structured content field by field.',
+      '   The epic\'s "DOCX joins the spreadsheet side of the previewer" is SUPERSEDED, not outstanding.',
+      '2. **The DOCX leg is synthesized because THIS fixture cannot settle, not because DOCX cannot.**',
+      '   `Store.SettledExtraction` selects `state = \'succeeded\'`, and the empty zip above never gets',
+      '   there: EXTR-15-02 made DOCX boxless, so the worker skips page rendering, the reader refuses',
+      '   the bytes and the job dead-letters at `text_not_read`. A REAL DOCX does reach an invoice now —',
+      '   import-wizard.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
+      '   asserts its printed number, date and total. The import attempt above is the evidence for this',
+      '   fixture only.',
       '3. **One attempt each.** The enqueue key `extract:<document_id>` is permanent, so a dead-lettered',
       '   document is never re-enqueued through this seam.',
     ].join('\n'),

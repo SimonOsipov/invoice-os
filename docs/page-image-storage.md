@@ -1,9 +1,10 @@
 # Page-image storage
 
 Every **PDF** that goes through extraction is rendered to one PNG per page, and those PNGs are
-what a review canvas will draw a highlighted region on. Since EXTR-09 the upload route also
-accepts PNG, JPEG, WebP and DOCX; since EXTR-15 those four skip the render instead of
-dead-lettering at it, so they carry no page images and no field regions
+what a review canvas will draw a highlighted region on. Since EXTR-15-03 the upload route accepts
+**PDF and DOCX only** — PNG, JPEG and WebP are 400s — and a format with no page images skips the
+render rather than dead-lettering at it, which since EXTR-15-02 means DOCX extracts from its text
+layer alone and carries no page images and no field regions
 ([docs/document-upload.md](document-upload.md)). This page records the four things about
 them that are not obvious from the code: the render profile, the object-key scheme, where the
 800-page cap comes from, and how long the objects live.

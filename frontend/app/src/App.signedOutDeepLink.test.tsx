@@ -151,6 +151,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // expiry_atTheBoundaryTheDestinationStillApplies fakes Date; its trailing useRealTimers()
+  // is skipped if an assertion throws, and a frozen clock would leak into the next spec.
+  // Idempotent when no timers were faked.
+  vi.useRealTimers()
   cleanup()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()

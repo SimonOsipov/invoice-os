@@ -395,6 +395,14 @@ off, though: measured, both still pass with the policy disabled, because the sto
 `tenant_id` predicate filters the row. The oracle for the mechanism is
 `TestRLS_ExtractionAnchorRulesCrossTenantSelectRefused`, which reds when the policy is dropped.
 
+Both oracles read the `v1:` namespace, and the layout one says in its own comment that its
+cross-layout zero would survive the fingerprint gate being removed. The `b1:` boxless equivalents
+do not have that weakness — `TestRLS_ABoxlessLearnedRuleDoesNotReachAnotherLayout` and
+`TestRLS_ABoxlessRuleAtTheSharedEmptyIdentityStaysInsideItAndItsTenant` put the same token on
+both layouts, so each zero reds when `AND layout_fingerprint = $2` is dropped. Their tenant halves
+inherit the same blindness to the policy: measured, they pass with either the predicate or the
+policy removed, and red only when both are.
+
 ### When a learned rule misfires
 
 **The response path is the corpus owner** — the `## Owner` section at the foot of this document.
@@ -425,9 +433,10 @@ broken in `compareRegions`: the two tokens share a baseline, so their `Y0` is bi
 
 The remedy today is a **second pointed correction** on a distinguishing label — a token whose
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
-so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to the
-fingerprint, so changing it invalidates every stored rule for every tenant and requires a
-`FingerprintVersion` bump.
+so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to **both**
+fingerprints, so changing it invalidates every stored rule for every tenant and requires a
+`FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the same
+`anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every `b1:` key too.
 
 ### learned_two_party.pdf is not a corpus layout
 

@@ -1,7 +1,7 @@
-// fingerprint.go: the layout fingerprint -- which anchor labels appear on page 1, in what
-// reading order, and in which third of the page. Never supplier identity: that is not known
-// until after extraction, and one supplier commonly has several layouts. The same page-1
-// observations are also kept whole (AnchorObservations) and stored as
+// fingerprint.go: two page-1 layout fingerprints -- Fingerprint (labels, reading order, page
+// third) and BoxlessFingerprint (labels, document order, label placement). Never supplier
+// identity: unknown until after extraction; one supplier often has several layouts. Page-1
+// observations are kept whole (AnchorObservations) and stored as
 // extraction_jobs.layout_anchors, so a later correction can name the anchor it sat under.
 package extraction
 
@@ -42,8 +42,8 @@ func CollectTokens(dst *[]TokenPage) func(Page) error {
 	}
 }
 
-// FingerprintVersion prefixes every fingerprint. Bumping it makes every stored rule stop
-// matching, which is the intended invalidation: no migration, no stale-rule window.
+// FingerprintVersion prefixes only Fingerprint's v1 hash. Bumping it invalidates every stored
+// v1 rule; BoxlessFingerprintVersion is the separate lever for b1 rules.
 const FingerprintVersion = "v1"
 
 // anchorMatcher is one anchorLexicon pattern, compiled.
@@ -165,6 +165,56 @@ func Fingerprint(pages []TokenPage) string {
 	return FingerprintVersion + ":" + hex.EncodeToString(sum[:])
 }
 
+// BoxlessFingerprintVersion prefixes every boxless fingerprint. Disjoint from
+// FingerprintVersion on byte 0, which is what makes a "b1:" value unable to collide with any
+// "v1:" value in the shared layout_fingerprint column.
+const BoxlessFingerprintVersion = "b1"
+
+// labelPlacement says where a lexicon match sits inside its own token: "w" whole, "l" leading,
+// "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i; the
+// l/i boundary is this scheme's own. A trailing separator alone makes a label lead a value,
+// which TestBoxlessFingerprint_SplitsWholeLeadingAndInlineLabels pins on "Invoice No:".
+func labelPlacement(text string, loc []int) string {
+	switch {
+	case loc[0] == 0 && loc[1] == len(text):
+		return "w"
+	case loc[0] == 0:
+		return "l"
+	default:
+		return "i"
+	}
+}
+
+// BoxlessFingerprint identifies a page-1 layout with no usable geometry -- every DOCX token
+// carries the zero box -- by which anchor labels appear, in document order, and how each
+// label sits inside its own token. Nothing sorts: the order IS the signal, which is what
+// separates it from Fingerprint. A page carrying no recognised label still fingerprints, to
+// sha256(""), matching Fingerprint's own documented behaviour.
+// TestBoxlessFingerprint_ChangesWhenTheLabelParagraphsAreReordered is the only guard on the
+// no-sort rule: on every committed fixture alphabetical order coincides with document order.
+func BoxlessFingerprint(pages []TokenPage) string {
+	elems := make([]string, 0, 8)
+	for _, page := range pages {
+		// Page 1 by Number, not by slice position, as AnchorObservations selects it.
+		if page.Number != 1 {
+			continue
+		}
+		for _, tok := range page.Tokens {
+			for _, m := range anchorLabelMatchers {
+				if loc := m.RE.FindStringIndex(tok.Text); loc != nil {
+					elems = append(elems, m.ID+":"+labelPlacement(tok.Text, loc))
+				}
+			}
+		}
+		break
+	}
+
+	// A label id is [a-z_]+ and a placement is one letter, so neither separator can occur
+	// inside an element.
+	sum := sha256.Sum256([]byte(strings.Join(elems, "|")))
+	return BoxlessFingerprintVersion + ":" + hex.EncodeToString(sum[:])
+}
+
 // AnchorLabelText is the lexicon pattern's own matched substring for o.Label against tok,
 // capped at maxAnchorLabelBytes on a rune boundary. "" when o.Label names no lexicon entry or
 // its pattern does not match tok.Text.
@@ -222,6 +272,55 @@ func MarshalAnchorObservations(obs []AnchorObservation) ([]byte, error) {
 		obs = []AnchorObservation{}
 	}
 	return json.Marshal(obs)
+}
+
+// maxLayoutTokensJSON caps extraction_jobs.layout_tokens at the column's own CHECK. The gate
+// measures len(json.Marshal) plus one byte per comma: Postgres renders a jsonb array with ", "
+// and Go does not, so char_length(layout_tokens::text) runs up to N-1 chars longer than the Go
+// encoding (TestRLS_ABoxlessJobAtExactlyTheTokenCapStoresItsTokens).
+const maxLayoutTokensJSON = 262144
+
+// layoutTokensStorable encodes page-1's token texts for extraction_jobs.layout_tokens. ok is
+// false when the value cannot be stored; a refusal writes SQL NULL and leaves the job
+// succeeded, and nothing here truncates.
+// TestLayoutTokensGate_AgreesWithPostgresOverTheWholeByteSpace is the oracle.
+func layoutTokensStorable(tokens []string) ([]byte, bool) {
+	for _, tok := range tokens {
+		// The input, not the output: text that genuinely reads the six-character escape
+		// marshals to a doubled backslash and Postgres takes it. jsonb_in refuses a raw NUL
+		// before any CHECK runs.
+		if strings.ContainsRune(tok, 0) {
+			return nil, false
+		}
+	}
+	if tokens == nil {
+		tokens = []string{}
+	}
+	b, err := json.Marshal(tokens)
+	if err != nil {
+		return nil, false
+	}
+	if len(b)+max(0, len(tokens)-1) > maxLayoutTokensJSON {
+		return nil, false
+	}
+	return b, true
+}
+
+// pageOneTokenTexts is page 1's token text in document order, page 1 by Number as
+// BoxlessFingerprint selects it. Nil for a page set carrying no page numbered 1;
+// layoutTokensStorable normalises that to [].
+func pageOneTokenTexts(pages []TokenPage) []string {
+	for _, page := range pages {
+		if page.Number != 1 {
+			continue
+		}
+		out := make([]string, 0, len(page.Tokens))
+		for _, tok := range page.Tokens {
+			out = append(out, tok.Text)
+		}
+		return out
+	}
+	return nil
 }
 
 // UnmarshalAnchorObservations reads the column back. An unknown key is ignored, as ParseRule

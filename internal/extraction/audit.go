@@ -17,20 +17,25 @@ type FailureKind string
 // committing the page rows are two stages that fail for different reasons and are fixed in
 // different places. text_not_read is the text read's path
 // (TestExtractWorker_FailureKindPerStage drives one lever per value).
+//
+// FailureLayoutNotWritten is declared ahead of the stage that sets it, so no commit ever
+// writes a value the extraction_jobs CHECK refuses; EXTR-19-04 adds its lever.
 const (
 	FailureDocumentUnavailable FailureKind = "document_unavailable"
 	FailurePagesNotRendered    FailureKind = "pages_not_rendered"
 	FailurePageRowsNotWritten  FailureKind = "page_rows_not_written"
 	FailureExtractFailed       FailureKind = "extract_failed"
 	FailureTextNotRead         FailureKind = "text_not_read"
+	FailureLayoutNotWritten    FailureKind = "layout_not_written"
 )
 
-// Valid reports whether k is one of the five kinds. "" is invalid: a success carries no kind,
+// Valid reports whether k is one of the six kinds. "" is invalid: a success carries no kind,
 // and the adapter gates its failure branch on this, refusing a half-filled failure payload.
 func (k FailureKind) Valid() bool {
 	switch k {
 	case FailureDocumentUnavailable, FailurePagesNotRendered,
-		FailurePageRowsNotWritten, FailureExtractFailed, FailureTextNotRead:
+		FailurePageRowsNotWritten, FailureExtractFailed, FailureTextNotRead,
+		FailureLayoutNotWritten:
 		return true
 	}
 	return false

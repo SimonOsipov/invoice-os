@@ -120,7 +120,7 @@ boxless this way — `msword_backend` constructs no provenance — which is why 
 reports `width_pt`/`height_pt` of 0.
 
 A refusal from this service is no longer swallowed: since EXTR-15-04 the worker records a
-`failure_kind` on the dead-lettered job and the client renders one of six terminal sentences off
+`failure_kind` on the dead-lettered job and the client renders one of seven terminal sentences off
 it (`frontend/app/src/lib/documentRun.ts`, `deadLetterRefusal`). A 422 from `/convert` — a
 container the converter cannot open, an empty DOCX — becomes `text_not_read`, which is the arm
 telling the user the file itself is the problem rather than the service.

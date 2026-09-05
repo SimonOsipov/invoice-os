@@ -74,6 +74,20 @@ func AnchorLabelIDsForTest(text string) []string {
 	return ids
 }
 
+// AnchorLabelPlacementsForTest returns "<id>:<placement>" for every anchorLexicon pattern
+// matching text, in BoxlessFingerprint's own (token, matcher) order. Sibling of
+// AnchorLabelIDsForTest: labelPlacement is unexported and every fingerprint spec is external,
+// so this hands them the production classifier instead of a copy of it.
+func AnchorLabelPlacementsForTest(text string) []string {
+	var out []string
+	for _, m := range anchorLabelMatchers {
+		if loc := m.RE.FindStringIndex(text); loc != nil {
+			out = append(out, m.ID+":"+labelPlacement(text, loc))
+		}
+	}
+	return out
+}
+
 // MaxCandidatesPerFieldForTest exposes the per-field cap so V-13 asserts the production
 // constant rather than a copy of it.
 const MaxCandidatesPerFieldForTest = maxCandidatesPerField
@@ -99,3 +113,9 @@ func AppendAnchorRuleForTest(ctx context.Context, tx pgx.Tx, tenantID, fingerpri
 func JobLayoutForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLayout, bool, error) {
 	return jobLayoutTx(ctx, tx, tenantID, jobID)
 }
+
+// MaxLayoutTokensJSONForTest and LayoutTokensStorableForTest hand the external test package
+// EXTR-19-06's cap and gate: worker_db_test.go is package extraction_test and can name neither.
+const MaxLayoutTokensJSONForTest = maxLayoutTokensJSON
+
+func LayoutTokensStorableForTest(tokens []string) ([]byte, bool) { return layoutTokensStorable(tokens) }

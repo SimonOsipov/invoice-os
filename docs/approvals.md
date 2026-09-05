@@ -858,7 +858,7 @@ whether anyone can **see** that a run is open.
 
 - `Store.Transition` refusing a move into `queued` while a run is open.
 - `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
-- `can_submit` / `submit_blocked_reason` on the invoice wire.
+- `can_submit` / `submit_blocked_reason` on both invoice wires — the detail body and every list row.
 
 **The two doors refuse in different registers**, and that is not a defect. `Store.Transition`
 answers `409` with `awaitingApprovalReason` (`internal/invoice/handlers.go`) — the same

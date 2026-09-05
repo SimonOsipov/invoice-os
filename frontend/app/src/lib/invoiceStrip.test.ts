@@ -989,6 +989,46 @@ describe('stripNodes: totality over malformed input', () => {
     // Control: the same helper DOES surface an actor name when the row is well-formed.
     expect(strip(history, null, 'draft')[0].actor?.text).toBe('Ada Lovelace')
   })
+
+  it('S-40: no spine node ever captions "Waiting", on any history x run x status', () => {
+    // The removed exception captioned a `current` spine node 'Waiting'. Node 3 (index 2) is
+    // approvalNode's and still owns the word, so it is excluded -- and the counters below
+    // prove the sweep reaches it anyway, so the prohibition discriminates.
+    const SWEEP: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+      ...MALFORMED.map(([name, history]) => [name, history] as [string, StatusChange[]]),
+    ]
+
+    let cases = 0
+    let node3Waiting = 0
+    let currentWithAttribution = 0
+    for (const [hName, history] of SWEEP) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          const where = `${hName}/${rName}/${status}`
+          const nodes = strip(history, run, status)
+          // Node 0 sits at or behind every cursor, so the sweep is never all-unreached.
+          expect(nodes[0].state, where).not.toBe('unreached')
+          for (const idx of [0, 1, 3, 4]) {
+            const n = nodes[idx]
+            expect(n.caption, `${where} ${n.key}`).not.toContain('Waiting')
+            if (n.state === 'current' && /^\d\d:\d\d/.test(n.caption)) currentWithAttribution += 1
+          }
+          if (nodes[2].caption === 'Waiting') node3Waiting += 1
+          cases += 1
+        }
+      }
+    }
+
+    expect(cases).toBe(SWEEP.length * ALL_RUNS.length * ALL_STATUSES.length)
+    expect(cases).toBeGreaterThanOrEqual(847) // floor: 11 histories x 11 runs x 7 statuses
+    // Anti-vacuity: node 3 does say the word (so the scan is live), and a `current` spine
+    // node does render an attribution (so the sweep reaches the state this story changed).
+    expect(node3Waiting).toBeGreaterThan(0)
+    expect(currentWithAttribution).toBeGreaterThan(0)
+  })
 })
 
 describe('stripNodes: the default branch captions a blank run state', () => {
@@ -1044,5 +1084,70 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     // StatusStrip, which is a pure renderer and imports the types only.
     const ALLOWED = ['InvoiceDetail.tsx', 'StatusStrip.test.tsx', 'StatusStrip.tsx', 'invoiceStrip.test.ts']
     expect(importers.filter((f) => !ALLOWED.includes(f))).toEqual([])
+  })
+
+  it('S-41: spineNode carries no "Waiting" literal and no per-status caption branch', () => {
+    // Scoped to spineNode's body deliberately: approvalNode owns the word legitimately, so
+    // a whole-file grep would be satisfied by the wrong site and report a false pass.
+    const count = (s: string, needle: string) => s.split(needle).length - 1
+
+    // Brace-balanced body of a top-level function. '' when the name is gone -- the CONTAINS
+    // floors below turn that into a loud failure instead of a silent zero.
+    const fnBody = (s: string, name: string): string => {
+      const start = s.indexOf(`function ${name}(`)
+      const open = start < 0 ? -1 : s.indexOf('{', s.indexOf(')', start))
+      if (open < 0) return ''
+      let depth = 0
+      for (let i = open; i < s.length; i++) {
+        if (s[i] === '{') depth += 1
+        else if (s[i] === '}' && --depth === 0) return s.slice(open + 1, i)
+      }
+      return ''
+    }
+
+    const bare = stripComments(readFileSync(join(SRC_DIR, 'lib', 'invoiceStrip.ts'), 'utf8'))
+    const spine = fnBody(bare, 'spineNode')
+    const approval = fnBody(bare, 'approvalNode')
+    // The slice is real AND bounded: it holds what only spineNode has, and none of what
+    // only approvalNode has.
+    expect(spine).toContain("'Accepted by FIRS'")
+    expect(spine).toContain('latestInto(history')
+    expect(spine).not.toContain("'Approval voided'")
+    expect(approval).toContain("'Approval voided'")
+
+    // Planted hit: the same needle finds approvalNode's own literals, so a zero on the
+    // spine is an absence and not a dead search.
+    const approvalWaiting = count(approval, "'Waiting'")
+    expect(approvalWaiting).toBeGreaterThanOrEqual(2)
+    // Every 'Waiting' in the file is one of approvalNode's. Counted, not pinned: node 3 is
+    // free to grow another one.
+    expect(count(bare, "'Waiting'")).toBe(approvalWaiting)
+    expect(count(spine, "'Waiting'")).toBe(0)
+
+    // The caption is one expression with no per-status arm. The state and label ternaries
+    // above it keep their own `status ===` and sit outside the slice.
+    const capStart = spine.indexOf('const caption')
+    const capEnd = spine.indexOf('return', capStart)
+    expect(capStart).toBeGreaterThanOrEqual(0)
+    expect(capEnd).toBeGreaterThan(capStart)
+    const caption = spine.slice(capStart, capEnd)
+    expect(caption).toContain('attribution(at, actor)')
+    expect(caption).not.toContain('KEY_OF') // bounded: it stops before the return
+    expect(caption).not.toMatch(/status\s*===/)
+    expect(caption).not.toContain("'Waiting'")
+    // Control: the same regex DOES match the state ternary the slice excludes.
+    expect(spine.slice(0, capStart)).toMatch(/status\s*===/)
+
+    // Scoped, not over-broad: one more 'Waiting' planted in approvalNode leaves this green.
+    const planted = bare.replace(approval, () => `${approval}  const x = 'Waiting'\n`)
+    expect(count(fnBody(planted, 'approvalNode'), "'Waiting'")).toBe(approvalWaiting + 1)
+    expect(count(fnBody(planted, 'spineNode'), "'Waiting'")).toBe(0)
+    expect(fnBody(planted, 'spineNode')).toBe(spine)
+
+    // The comment strip is load-bearing: a comment inside spineNode that quotes the word is
+    // not a literal, and must not turn the guard red.
+    const mentioned = bare.replace(spine, () => `${spine}  // the old arm said 'Waiting'\n`)
+    expect(count(fnBody(mentioned, 'spineNode'), "'Waiting'")).toBe(1) // raw: the mention counts
+    expect(count(fnBody(stripComments(mentioned), 'spineNode'), "'Waiting'")).toBe(0)
   })
 })

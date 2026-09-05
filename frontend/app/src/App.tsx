@@ -30,7 +30,6 @@ import {
 import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
-import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
   getExtractions,
@@ -343,16 +342,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [groupIndex, setGroupIndex] = useState(0)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
-  // ONE atom for what the detail view renders, never two loose fields
-  // ([detail-target-exclusive], debate F6). Written ONLY through the three total
-  // constructors below, so every write sets both members and "forgot to clear the
-  // counterpart" is a type error rather than a discipline. Two independent fields would
-  // mean one click-through hijacks the detail view for the rest of the session: every
-  // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
-  // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
-  // this state with an inline object literal — go through a constructor.
-  const [detailSel, setDetailSel] = useState<DetailSelection>(
-    bootView === 'detail' && bootSeed.invoiceId !== null ? selectImported(bootSeed.invoiceId) : clearSelection(),
+  // The invoice the detail view renders. One real UUID or nothing -- the mock branch it
+  // used to share this slot with was deleted in M5-09-04.
+  const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(
+    bootView === 'detail' ? bootSeed.invoiceId : null,
   )
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
@@ -537,7 +530,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     const onPopState = () => {
       const r = seedFromPath(window.location.pathname)
       setView(r.view)
-      setDetailSel(r.invoiceId !== null ? selectImported(r.invoiceId) : clearSelection())
+      setDetailInvoiceId(r.invoiceId)
       setExtractionJobId(r.jobId)
     }
     window.addEventListener('popstate', onPopState)
@@ -599,7 +592,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function switchClient(id: string) {
     setActiveEntityId(id)
     navigate('dashboard')
-    setDetailSel(clearSelection())
+    setDetailInvoiceId(null)
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
@@ -1197,11 +1190,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     )
   }
 
-  function selectInvoice(number: string) {
-    navigate('detail')
-    setDetailSel(selectMock(number))
-  }
-
   // Click-through from a rule-violation row in the import report (Core AC4), from a row in
   // the invoices list, and — since INVCR-01-03 — the landing point of a successful manual
   // filing. `id` is always a real invoice UUID, never a mock invoice number, so InvoiceDetail
@@ -1211,7 +1199,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
     navigate('detail', id)
-    setDetailSel(selectImported(id))
+    setDetailInvoiceId(id)
   }
 
   // Both setters in one handler, so the first render that sees view === 'audit' already
@@ -1394,7 +1382,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     mapping,
     armedField,
     dragField,
-    selectedId: detailSel.selectedId,
     invoiceQuery,
     switcherOpen,
     sandbox,
@@ -1431,7 +1418,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     documentStages,
     importError,
     reviewBatchIds,
-    importedInvoiceId: detailSel.importedInvoiceId,
+    importedInvoiceId: detailInvoiceId,
     auditPrefilter,
     extractionJobId,
     nav,
@@ -1462,7 +1449,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     skipUpload,
     enterByHand,
     fileDraft,
-    selectInvoice,
     openImportedInvoice,
     openAuditForInvoice,
     openExtraction,

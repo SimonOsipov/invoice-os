@@ -105,7 +105,6 @@ function ctx(): PlatformCtx {
     mode: 'firm',
     user: { name: 'Chinedu Okafor', initials: 'CO', tenantName: 'Okafor & Partners', verified: true },
     active: { name: 'Lagos Logistics Ltd' },
-    selectedId: null,
     importedInvoiceId: 'inv-1',
     nav: vi.fn(),
     openExtraction: vi.fn(),

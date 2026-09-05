@@ -18,9 +18,8 @@
 // previous-entity page on screen. gateByActiveEntity (lib/invoices.ts) stays as a
 // render-time invariant on TOP of the server-side filter -- see its own doc comment for
 // why (a company switch's pre-refetch frame would otherwise flash the previous client's
-// rows). Row click routes through the existing selectImported/importedInvoiceId/
-// detailTarget->'imported' seam with the real invoice UUID ([reuse-imported-seam]);
-// rename deferred.
+// rows). Row click routes through openImportedInvoice, which writes the real invoice
+// UUID straight to ctx.importedInvoiceId ([reuse-imported-seam]).
 //
 // M5-09-06 (task-257, Core AC #1) adds the selection model + batch submit below without
 // touching any of the above: per-row/select-all checkboxes, a selection bar, and a

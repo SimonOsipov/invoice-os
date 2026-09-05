@@ -148,7 +148,7 @@ function mockFetch(source: SourceDocumentResponse, jobs: readonly ExtractionJob[
   return wire
 }
 
-type DetailCtx = Pick<PlatformCtx, 'authedFetch' | 'getToken' | 'mode' | 'user' | 'selectedId' | 'importedInvoiceId' | 'nav'> & {
+type DetailCtx = Pick<PlatformCtx, 'authedFetch' | 'getToken' | 'mode' | 'user' | 'importedInvoiceId' | 'nav'> & {
   active: Pick<PlatformCtx['active'], 'name'>
   openExtraction: (jobId: string) => void
 }
@@ -160,7 +160,6 @@ function detailCtx(openExtraction: (jobId: string) => void): PlatformCtx {
     mode: 'firm',
     user: { name: 'Chinedu Okafor', initials: 'CO', tenantName: 'Okafor & Partners', verified: true },
     active: { name: 'Lagos Logistics Ltd' },
-    selectedId: null,
     importedInvoiceId: 'inv-1',
     nav: vi.fn(),
     openExtraction,

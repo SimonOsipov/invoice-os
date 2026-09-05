@@ -39,15 +39,6 @@
 //
 // TRAP C — JSON-null coercion. ALREADY CLOSED upstream by normalizeReport (IMPAPI-12,
 // mutation-verified); no re-coercion and no spec for it here — see plan §B.
-//
-// [detail-target-exclusive] / F6 supersession (plan §C4): selectedId and
-// importedInvoiceId are replaced by one DetailSelection atom written ONLY through the
-// three constructors below (clearSelection/selectMock/selectImported), so "forgot to
-// clear the other field" becomes a type error rather than a runtime bug. detailTarget
-// resolves the atom to a render target; RPT-13 pins its fail-safe direction — an
-// illegal both-set state (unconstructible via the constructors, reachable only by an
-// inline literal bypassing them) resolves 'imported', never a mock invoice rendered
-// under a real UUID.
 import type { ImportReport } from './importApi'
 
 export type ReportSummary =
@@ -92,40 +83,4 @@ export function reportSummary(r: ImportReport): ReportSummary {
     // rule set numbered 0, a false zero (RPT-06).
     rule_set_version: r.rule_set_version,
   }
-}
-
-// --- detail-target selection ([detail-target-exclusive], debate F6, plan §C4) ---
-
-export interface DetailSelection {
-  selectedId: string | null
-  importedInvoiceId: string | null
-}
-
-// The three constructors are TOTAL — each returns BOTH members, so there is no way to
-// set one target and leave the other stale. That is the whole point of the atom: a
-// partial write is not something an author has to remember to avoid, it is a type error.
-export function clearSelection(): DetailSelection {
-  return { selectedId: null, importedInvoiceId: null }
-}
-
-export function selectMock(number: string): DetailSelection {
-  return { selectedId: number, importedInvoiceId: null }
-}
-
-export function selectImported(id: string): DetailSelection {
-  return { selectedId: null, importedInvoiceId: id }
-}
-
-export type DetailTarget = { kind: 'imported'; invoiceId: string } | { kind: 'mock'; selectedId: string | null }
-
-// Fail-safe direction (RPT-13): an illegal both-set DetailSelection — unconstructible
-// via the three constructors above, reachable only by an inline literal bypassing them
-// in App.tsx — resolves 'imported', so the failure degrades to an honest placeholder
-// rather than a mock invoice rendered under a real UUID.
-export function detailTarget(sel: DetailSelection): DetailTarget {
-  // importedInvoiceId is tested FIRST on purpose. If both are somehow set, resolving
-  // 'imported' shows an honest placeholder; resolving 'mock' would render an unrelated
-  // mock invoice under a real invoice's UUID (RPT-13).
-  if (sel.importedInvoiceId !== null) return { kind: 'imported', invoiceId: sel.importedInvoiceId }
-  return { kind: 'mock', selectedId: sel.selectedId }
 }

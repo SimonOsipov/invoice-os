@@ -116,7 +116,6 @@ function detailCtx(importedInvoiceId: string | null, onUnauthorized: () => void 
     active: { entityId: 'ent-1' },
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', onUnauthorized),
-    selectedId: null,
     importedInvoiceId,
     nav: () => {},
   }

@@ -1294,8 +1294,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             )}
 
             <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
-              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)' }}>
+              <div style={{ padding: '13px 18px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <span className="card-title">Compliance</span>
+                {/* Gated on the same condition that chooses the table over not-validated:
+                    an invoice never validated must not be told a version. */}
+                {inv.rule_set_version != null && (
+                  <span data-testid="compliance-ruleset-version" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+                    Rule-set v{inv.rule_set_version}
+                  </span>
+                )}
               </div>
               <div style={{ padding: 16 }}>
                 {/* The persisted reason, verbatim (BUG-03-03) -- amber, matching

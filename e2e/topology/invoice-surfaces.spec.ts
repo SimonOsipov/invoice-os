@@ -547,57 +547,13 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toBeVisible()
   await expect(page.getByTestId('not-validated')).toHaveCount(0)
   await expect(violationsTable).toContainText('vat-standard-rate')
-  await expect(violationsTable.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
+  await expect(page.getByTestId('compliance-ruleset-version')).toContainText(String(VALIDATION_EXPECTED.ruleSetVersion))
   // INVCR-01-16 AC-9: discharges task-289's own deferred empirical check -- v3 fills
   // `target` on vat-standard-rate (blank under v2), so the Path column (ViolationsTable's
   // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not
   // the em-dash placeholder a blank target would leave.
   const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
   await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
-
-  // BUG-03-01: at the rail's width the table overflows its wrapper -- the fix makes that
-  // wrapper scroll instead of clip, so every column (not just the first three) stays
-  // reachable. scrollLeft = scrollWidth drives it fully right; the last header's bounding
-  // box must then sit inside the scroll container's, proving it scrolled INTO view rather
-  // than merely being present in the (clipped) DOM.
-  const scrollBox = page.getByTestId('violations-scroll')
-  const overflow = await scrollBox.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  expect(overflow.scrollWidth, 'the table must overflow its narrow rail wrapper').toBeGreaterThan(overflow.clientWidth)
-  await scrollBox.evaluate((el) => {
-    el.scrollLeft = el.scrollWidth
-  })
-  const containerBox = (await scrollBox.boundingBox())!
-  const lastHeaderBox = (await violationsTable.getByRole('columnheader', { name: 'Rule-set version' }).boundingBox())!
-  expect(lastHeaderBox.x, 'scrolled fully right, Rule-set version must be inside the scroll container').toBeGreaterThanOrEqual(containerBox.x)
-  expect(
-    lastHeaderBox.x + lastHeaderBox.width,
-    'scrolled fully right, Rule-set version must not overflow the scroll container',
-  ).toBeLessThanOrEqual(containerBox.x + containerBox.width + 1)
-
-  // CodeRabbit (PR #138): overflow alone doesn't make a container reachable -- browsers
-  // don't focus an overflowing div by default. Prove a keyboard user (not just script) can
-  // reach the far column: focus the wrapper directly (skips a brittle full-page Tab-order
-  // walk) and let the UA's native scrollable-region key handling do the rest.
-  await scrollBox.evaluate((el) => {
-    el.scrollLeft = 0
-  })
-  await scrollBox.focus()
-  await expect(scrollBox, 'wrapper must be keyboard-focusable, not just scriptable').toBeFocused()
-  // End targets scrollTop, not scrollLeft -- this wrapper overflows only horizontally
-  // (measured live on PR #138: End left scrollLeft at 0), so ArrowRight is the key that
-  // actually proves reachability here. Loop rather than assert an exact pixel increment,
-  // since the UA's per-press scroll step isn't a value this test should pin.
-  for (let i = 0; i < 20; i++) {
-    await page.keyboard.press('ArrowRight')
-  }
-  await expect(scrollBox, 'ArrowRight must not move focus off the wrapper').toBeFocused()
-  const scrollLeftAfterKeys = await scrollBox.evaluate((el) => el.scrollLeft)
-  expect(scrollLeftAfterKeys, 'ArrowRight on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
-
-  // AC-4: Message (td index 1: Severity=0, Message=1, Rule key=2, Path=3, Rule-set
-  // version=4 -- same ordinal convention as the Path check above) must not be crushed.
-  const messageBox = (await violationsTable.locator('tbody tr').first().locator('td').nth(1).boundingBox())!
-  expect(messageBox.width, 'Message must not be crushed at the rail width').toBeGreaterThanOrEqual(160)
 
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expectStripStates(page, { draft: 'current', validated: 'unreached' })

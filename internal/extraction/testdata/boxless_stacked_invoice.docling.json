@@ -1,0 +1,33 @@
+{
+  "docling_version": "1.10.0",
+  "pages": [
+    {
+      "height_pt": 0.0,
+      "number": 1,
+      "tables": [],
+      "tokens": [
+        {
+          "text": "Invoice No"
+        },
+        {
+          "text": "ASC-2026-0920"
+        },
+        {
+          "text": "Issue Date"
+        },
+        {
+          "text": "14 Aug 2026"
+        },
+        {
+          "text": "Total"
+        },
+        {
+          "text": "NGN 4,300.00"
+        }
+      ],
+      "width_pt": 0.0
+    }
+  ],
+  "reader": "docling",
+  "version": "v1"
+}

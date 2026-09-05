@@ -7,7 +7,13 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
-import { captureDestination, readDestination, DEEP_LINK_TTL_MS } from './lib/deepLink'
+import {
+  captureDestination,
+  readDestination,
+  DEEP_LINK_KEY,
+  DEEP_LINK_SCHEMA_VERSION,
+  DEEP_LINK_TTL_MS,
+} from './lib/deepLink'
 import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -253,9 +259,9 @@ describe('front door: adversarial coverage (QA)', () => {
   })
 })
 
-// ROUTE-05-03, Mode A. The App-level capture above (ROUTE-05-02) stores the destination;
-// this describe block is the OTHER half -- Workspace's boot restoring it. Not yet wired:
-// App.tsx still seeds `view` from `parseRoute(window.location.pathname)` alone.
+// ROUTE-05-03. The App-level capture above (ROUTE-05-02) stores the destination; this
+// describe block is the OTHER half -- Workspace's boot restoring it via `bootPath`
+// (App.tsx:320-322), substituted into the `view` seed at App.tsx:326-327.
 describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () => {
   it('restore_vacuityControl_theBootAtHelperObservesARealViewAndUrl', async () => {
     // Proves this describe block's harness (real jsdom navigation, dynamic re-import, the
@@ -366,7 +372,12 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     expect(ctx.view, 'an expired destination must fall back to dashboard').toBe('dashboard')
     expect(window.location.pathname, 'the URL must settle on the bare root').toBe('/')
     expect(warnSpy, 'expiry is a normal outcome and must warn nothing').not.toHaveBeenCalled()
-    expect(readDestination(), 'the expired destination must still be consumed').toBeNull()
+    // readDestination()'s own TTL check returns null whether cleared or merely expired --
+    // read the raw key so this can actually distinguish the two.
+    expect(
+      sessionStorage.getItem(DEEP_LINK_KEY),
+      'the expired destination must actually be removed from storage, not just filtered by readDestination()',
+    ).toBeNull()
     warnSpy.mockRestore()
   })
 
@@ -378,12 +389,12 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
   })
 
   it('restore_strictModeYieldsTheSameResult', async () => {
-    // Catches a naive "read-then-clear inside the initializer" implementation: StrictMode
-    // double-invokes lazy initializers, so a version that clears storage as a SIDE EFFECT
-    // of the read (rather than splitting read-in-render / clear-in-effect) would have its
-    // two invocations race -- the first sees '/audit' and clears it, the second sees
-    // nothing, and which one the committed state resolves to isn't guaranteed. A correct
-    // split implementation is deterministic regardless.
+    // QA (Stage 4): does NOT catch a naive read-then-clear-inside-the-initializer variant
+    // -- verified empirically (React 19.2.7) that StrictMode's double-invoked lazy
+    // initializer commits the FIRST call's return value, so that variant still passes this
+    // assertion by coincidence. This spec only pins that the SHIPPED split (read in the
+    // initializer, clear in the mount effect) is StrictMode-safe, not that mount-alignment
+    // effect and initializer are protecting against that particular defect.
     captureDestination('/audit')
     await bootWorkspaceAt('/', { strict: true })
     const ctx = requireCtx()
@@ -412,5 +423,48 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     ctx = requireCtx()
     expect(ctx.view, "the new persona's carried view must win, not a resurrected destination").toBe('invoices')
     expect(readDestination(), 'no destination must resurface for the new persona').toBeNull()
+  })
+
+  // QA adversarial coverage (Stage 4).
+  it('restore_adversarial_aFreshCaptureBetweenTwoSeparateBootsIsRestoredByTheSecond', async () => {
+    // Distinct from restore_isSingleUse (same destination gone by boot 2): proves restore
+    // isn't gated by an "only ever once per tab" flag -- it's pure storage state.
+    const first = await bootWorkspaceAt('/')
+    requireCtx()
+    expect(readDestination(), 'sanity: nothing stored for the first boot').toBeNull()
+    first.unmount()
+
+    captureDestination('/reports')
+    capturedCtx = undefined
+    const second = await bootWorkspaceAt('/')
+    const ctx = requireCtx()
+    expect(
+      ctx.view,
+      'a destination captured after the first boot tore down must still restore on the next boot',
+    ).toBe('reports')
+    expect(window.location.pathname).toBe('/reports')
+    second.unmount()
+  })
+
+  it('restore_adversarial_aCorruptRootShapedEntryIsRejectedNotRestored', async () => {
+    // captureDestination() itself refuses to store '/'; this shape only reaches storage via
+    // a bypass. Raw sessionStorage write, deliberately skipping captureDestination's guard.
+    sessionStorage.setItem(
+      DEEP_LINK_KEY,
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/', at: Date.now() }),
+    )
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await bootWorkspaceAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'a corrupt-shaped entry must fall back to dashboard').toBe('dashboard')
+    expect(window.location.pathname).toBe('/')
+    expect(warnSpy, 'a corrupt destination warns once, per readDestination\'s own contract').toHaveBeenCalledWith(
+      expect.stringContaining('ignoring corrupt destination'),
+    )
+    expect(
+      sessionStorage.getItem(DEEP_LINK_KEY),
+      'the corrupt entry must still be swept by the unconditional mount-effect clear',
+    ).toBeNull()
+    warnSpy.mockRestore()
   })
 })

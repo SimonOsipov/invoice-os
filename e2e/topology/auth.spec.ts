@@ -212,12 +212,16 @@ test('deployed app: Forward re-applies the view Back left', async ({ page }) => 
 test("deployed app: Back from the session's first screen leaves for the landing page", async ({ page }) => {
   const errors = collectErrors(page)
 
+  const landingRes = await page.goto(LANDING_URL)
+  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
+  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+
   const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
   await page.goto(url)
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 
-  // No in-app navigation happened -- this is the session's first (and only) workspace
-  // entry, so Back must exit the app rather than restore a prior view.
+  // Landing is the only history entry before the workspace, so a Back landing there
+  // proves boot replaced that entry rather than pushing a new one.
   await page.goBack()
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
 

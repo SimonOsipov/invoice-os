@@ -563,3 +563,15 @@ describe('QA adversarial: navigating to the current view still pushes (documente
     expect(window.history.length, 'current behaviour: a same-view nav still adds an entry').toBe(lengthBefore + 1)
   })
 })
+
+// QA Mode B adversarial (task-919, ROUTE-02-04): D-4 only proved `selectInvoice` is gone
+// from the REAL ctx. AC-2 also claims `selectedId` is gone, but nothing asserted that
+// against the real Workspace-built ctx (only against local test-double stubs, which
+// trivially lack a field never listed in their own literal). Assert it here instead.
+describe('QA adversarial: ctx.selectedId is gone from the real ctx, not just test stubs (task-919)', () => {
+  it('ctx exposes no selectedId key', async () => {
+    await bootAt('/')
+    const ctx = requireCtx()
+    expect('selectedId' in ctx).toBe(false)
+  })
+})

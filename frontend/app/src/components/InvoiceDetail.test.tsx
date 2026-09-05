@@ -361,6 +361,66 @@ describe('InvoiceDetail dispatcher: a null importedInvoiceId (task-919, ROUTE-02
   })
 })
 
+// QA Mode B adversarial (task-919, ROUTE-02-04): the D-specs proved the dispatcher picks
+// the right branch for a single id. None of them proved `key={ctx.importedInvoiceId}`
+// itself does its job -- that switching invoices remounts LiveInvoiceDetail instead of
+// re-rendering it in place, so local state (edit mode, in-progress form edits) from the
+// invoice just left cannot leak into the next one.
+describe('InvoiceDetail: key={importedInvoiceId} remount discipline (task-919, ROUTE-02-04, QA adversarial)', () => {
+  it('switching invoiceId while mid-edit remounts instead of carrying the edit form and its typed value over', async () => {
+    const invoiceA = detailRecord({
+      id: 'inv-remount-a',
+      invoice_number: 'INV-REMOUNT-A',
+      status: 'validated',
+      can_edit: true,
+      buyer_name: 'Alpha Buyer',
+    })
+    const invoiceB = detailRecord({
+      id: 'inv-remount-b',
+      invoice_number: 'INV-REMOUNT-B',
+      status: 'validated',
+      can_edit: true,
+      buyer_name: 'Beta Buyer',
+    })
+    mockDetailFetch(invoiceA, [], { detailSequence: [invoiceB] })
+
+    const { rerender } = render(<InvoiceDetail ctx={detailCtx('inv-remount-a')} />)
+    await screen.findByText('INV-REMOUNT-A')
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    const buyerInput = await screen.findByDisplayValue('Alpha Buyer')
+    fireEvent.change(buyerInput, { target: { value: 'UNSAVED LEAKED EDIT' } })
+    expect(await screen.findByDisplayValue('UNSAVED LEAKED EDIT')).toBeTruthy()
+
+    rerender(<InvoiceDetail ctx={detailCtx('inv-remount-b')} />)
+    await screen.findByText('INV-REMOUNT-B')
+
+    // A real remount discards the previous invoice's editor entirely -- no leftover edit
+    // form, no leaked typed value, and the toggle is back to its unclicked state.
+    expect(screen.queryByTestId('edit-invoice'), 'the previous invoice\'s edit form must not survive the switch').toBeNull()
+    expect(screen.queryByText('UNSAVED LEAKED EDIT'), 'the unsaved edit must not leak onto the next invoice').toBeNull()
+    expect(screen.getByTestId('edit-toggle'), 'invoice B must render its own, un-clicked toggle').toBeTruthy()
+    expect(screen.getByText('Beta Buyer'), 'invoice B must show its OWN buyer, not a stale one').toBeTruthy()
+  })
+
+  it('importedInvoiceId non-null -> null -> non-null again renders cleanly at each step, with a fresh fetch on return', async () => {
+    const invoiceA = detailRecord({ id: 'inv-cycle-a', invoice_number: 'INV-CYCLE-A', status: 'validated' })
+    const invoiceAAgain = detailRecord({ id: 'inv-cycle-a', invoice_number: 'INV-CYCLE-A', status: 'validated' })
+    mockDetailFetch(invoiceA, [], { detailSequence: [invoiceAAgain] })
+
+    const { rerender } = render(<InvoiceDetail ctx={detailCtx('inv-cycle-a')} />)
+    await screen.findByText('INV-CYCLE-A')
+
+    rerender(<InvoiceDetail ctx={detailCtx(null)} />)
+    expect(screen.getByText('No invoice selected')).toBeTruthy()
+    expect(screen.queryByText('INV-CYCLE-A'), 'the EmptyState floor must not carry the previous invoice on screen').toBeNull()
+
+    rerender(<InvoiceDetail ctx={detailCtx('inv-cycle-a')} />)
+    expect(await screen.findByText('INV-CYCLE-A')).toBeTruthy()
+    expect(screen.queryByText('No invoice selected'), 'returning to a real id must clear the EmptyState floor').toBeNull()
+  })
+})
+
 describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-reason-lands-on-the-detail])', () => {
   it('AC-7: a failed invoice with failure_kind null renders the fallback explanation, not the deleted "no reason recorded" line', async () => {
     mockDetailFetch(detailRecord({ failure_kind: null, rejection_reasons: [] }))

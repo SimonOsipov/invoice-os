@@ -37,8 +37,8 @@ read by the seam. This is a security fence, not a style choice: `App.tsx` once l
 link — Back to that history entry walked back into the workspace with no OTP. Echoing
 `location.search` into a pushed URL would reopen that hole on every navigation.
 
-The two pre-existing history writers — the review-hash mirror (`App.tsx:527`, which
-does echo `search`) and the persona-strip clear (`App.tsx:1618`) — are deliberately left
+The two pre-existing history writers — the review-hash mirror (`App.tsx:543`, which
+does echo `search`) and the persona-strip clear (`App.tsx:1650`) — are deliberately left
 alone and pinned byte-identical by `App.routeReviewHash.test.tsx`.
 
 ## Why `Workspace` can't mount while `?persona=` is live

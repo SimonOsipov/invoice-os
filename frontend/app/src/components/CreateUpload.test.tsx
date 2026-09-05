@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The picker must not contradict itself. EXTR-09-04 widened `accept` and the ACCEPTED
-// copy to all seven types but left three selection-time gates reading
+// copy to every accepted type but left three selection-time gates reading
 // hasImportableExtension, so a picked PDF was listed as "Unsupported file type" one line
 // under copy saying PDF is accepted. Authored RED against that state; EXTR-09-07 ended it.
 //
@@ -108,15 +108,11 @@ describe('CreateUpload — the picker no longer contradicts its own ACCEPTED cop
     // the AC-1 control — a fix that special-cases only .pdf fails here.
     const CASES: readonly [string, string][] = [
       ['scan.pdf', 'application/pdf'],
-      ['scan.png', 'image/png'],
-      ['scan.jpg', 'image/jpeg'],
-      ['scan.jpeg', 'image/jpeg'],
-      ['scan.webp', 'image/webp'],
       ['scan.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
       ['ledger.csv', 'text/csv'],
       ['ledger.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
     ]
-    expect(CASES).toHaveLength(8)
+    expect(CASES).toHaveLength(4)
 
     for (const [name, type] of CASES) {
       const { container, unmount } = render(<CreateUpload ctx={uploadCtx([picked(name, type)])} />)
@@ -125,6 +121,30 @@ describe('CreateUpload — the picker no longer contradicts its own ACCEPTED cop
       expect(s.note, name).not.toMatch(UNSUPPORTED_NOTE)
       expect(s.dropzoneStyle, name).not.toContain(INVALID_BORDER)
       expect(s.primaryDisabled, name).toBe(false)
+      unmount()
+    }
+  })
+
+  // PN (EXTR-15-03 AC #7/#12): the four types PICKER-FB-3 no longer lists are RETARGETED here,
+  // not deleted. They must read exactly like the .zip of PICKER-FB-2 — an unsupported note, a
+  // reddened dropzone and a dead primary — because a dropped file bypasses `accept` entirely.
+  it('PICKER-FB-3b: a picked image is now unsupported, reddens the dropzone and blocks the primary', () => {
+    const NARROWED_OUT: readonly [string, string][] = [
+      ['scan.png', 'image/png'],
+      ['scan.jpg', 'image/jpeg'],
+      ['scan.jpeg', 'image/jpeg'],
+      ['scan.webp', 'image/webp'],
+    ]
+    expect(NARROWED_OUT).toHaveLength(4)
+
+    for (const [name, type] of NARROWED_OUT) {
+      const { container, unmount } = render(<CreateUpload ctx={uploadCtx([picked(name, type)])} />)
+      const s = surface(container)
+      // The file is really on screen, so the refusal below is a refusal of a rendered row.
+      expect(s.note, name).toContain(name)
+      expect(s.note, name).toMatch(UNSUPPORTED_NOTE)
+      expect(s.dropzoneStyle, name).toContain(INVALID_BORDER)
+      expect(s.primaryDisabled, name).toBe(true)
       unmount()
     }
   })

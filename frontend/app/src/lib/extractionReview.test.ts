@@ -583,6 +583,7 @@ describe('getExtractionDetail', () => {
       id: JOB_ID,
       document_id: 'd1',
       state: 'succeeded',
+      failure_kind: null,
       document: mkDocument(),
       pages: [],
       fields: [],

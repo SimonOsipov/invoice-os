@@ -359,8 +359,11 @@ function goStructKeys(source: string, structName: string): string[] {
   return keys
 }
 
+// The `extends` clause is optional in the pattern: without it an interface that extends
+// anything yields '' -- zero keys, which reads exactly like clean.
 function tsInterfaceKeys(source: string, interfaceName: string): string[] {
-  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const body =
+    new RegExp(`export interface\\s+${interfaceName}(?:\\s+extends\\s+[^{]*?)?\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
   const keys: string[] = []
   for (const rawSeg of body.split(/[\n;]/)) {
     const seg = rawSeg.trim()
@@ -444,5 +447,45 @@ describe('wire mirror: Go internal/audit/reader.go <-> e2e/api/client.ts (AUDIT-
     expect(goStructKeys(goFixture, 'Fixture')).toEqual(['a', 'b'])
     expect(tsInterfaceKeys(tsFixtureMissingB, 'Fixture')).toEqual(['a'])
     expect(keySetDiff(goStructKeys(goFixture, 'Fixture'), tsInterfaceKeys(tsFixtureMissingB, 'Fixture'))).toEqual(['b'])
+  })
+})
+
+// InvoiceListItem and GetInvoiceResult both extend the bare Invoice, so neither can
+// inherit the other's siblings -- each declares its own copy. This file is the only guard
+// on the list one: nothing in e2e/ constructs a literal of either type, so tsc never
+// notices a missing key.
+const INVOICE_MIRROR_PATH = fileURLToPath(new URL('./client.ts', import.meta.url))
+const SUBMIT_PAIR = ['can_submit', 'submit_blocked_reason']
+
+describe('wire mirror: the e2e invoice list item carries the submit gate (BUG-12)', () => {
+  it('B12-10a: control needle + floor for the e2e mirror scan', () => {
+    const source = readFileSync(INVOICE_MIRROR_PATH, 'utf8')
+    expect(source.length, 'e2e/api/client.ts was not read').toBeGreaterThan(0)
+    expect(source, 'lost anchor on e2e/api/client.ts').toContain('export interface InvoiceListItem')
+
+    expect(tsInterfaceKeys(source, 'Invoice').length, 'Invoice under its floor').toBeGreaterThanOrEqual(25)
+    expect(tsInterfaceKeys(source, 'InvoiceListItem').length, 'InvoiceListItem under its floor').toBeGreaterThanOrEqual(3)
+
+    // The permanent positive control, in the same file and on an extending interface: the
+    // extractor can find this exact key. Nothing in this story moves GetInvoiceResult.
+    const detail = tsInterfaceKeys(source, 'GetInvoiceResult')
+    expect(detail.length, 'GetInvoiceResult under its floor').toBeGreaterThanOrEqual(15)
+    for (const key of SUBMIT_PAIR) expect(detail, `${key} must still be on GetInvoiceResult`).toContain(key)
+  })
+
+  it('B12-10b: the e2e client mirror carries the pair', () => {
+    const source = readFileSync(INVOICE_MIRROR_PATH, 'utf8')
+    const listItem = tsInterfaceKeys(source, 'InvoiceListItem')
+
+    expect(SUBMIT_PAIR).toHaveLength(2)
+    for (const key of SUBMIT_PAIR) {
+      expect(listItem, `${key} must be declared on InvoiceListItem`).toContain(key)
+      // Required, never optional: an optional key lets a consumer read undefined and treat
+      // "the server did not say" as an open question.
+      expect(source, `${key} must not be optional on the list mirror`).not.toMatch(
+        new RegExp(`^\\s{2}${key}\\?\\s*:`, 'm'),
+      )
+    }
+    expect(listItem.length, 'InvoiceListItem must carry the pair on top of its floor').toBeGreaterThanOrEqual(5)
   })
 })

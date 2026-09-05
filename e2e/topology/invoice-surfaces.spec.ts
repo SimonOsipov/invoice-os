@@ -96,6 +96,7 @@ async function signInFirm(page: Page): Promise<void> {
 async function goToInvoices(page: Page): Promise<void> {
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'goToInvoices did not update the URL').toHaveURL(/\/invoices$/)
 }
 
 // openInvoiceRow(): fix cycle 1 (M5-09-08, task-256) -- the text match is scoped to the
@@ -112,6 +113,7 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoice$/)
 }
 
 // The state strip (StatusStrip.tsx) replaced the status-history timeline: every scenario
@@ -1108,6 +1110,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // fresh entity therefore has EXACTLY one needs_attention invoice before any fix, so the
   // pre-fix pill is asserted to an exact value, not just captured for a later diff.
   await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(page, 'inline nav to Clients did not update the URL').toHaveURL(/\/clients$/)
   const clientRow = page.locator('.pf-list-row').filter({ hasText: entity.name })
   // Exact even though this flow now arms an open approval run on validate (the firm tenant
   // is governed, this file's own beforeAll) -- needs_attention's approval arm is
@@ -1163,6 +1166,9 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // arc's business-flow assertion to buildMixedCsv's exact row count: only the overview
   // label + a rendered "<N> TOTAL" donut total are asserted, never a specific N.
   await page.getByRole('button', { name: /Overview/ }).click()
+  // dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that
+  // would pass on any trailing-slash path.
+  await expect(page, 'inline nav to Overview did not update the URL').toHaveURL(new URL('/', APP_URL).href)
   await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
   await expect(page.getByText(/^\d+ TOTAL$/)).toBeVisible()
 
@@ -1173,6 +1179,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   // not a stale snapshot) -- `toContainText` retries while the fresh ClientsView mount's
   // rollup refetch settles.
   await page.getByRole('button', { name: /Clients/ }).click()
+  await expect(page, 'inline nav to Clients did not update the URL').toHaveURL(/\/clients$/)
   // Zero survives approvals: this flow now arms an open run on validate (governed tenant),
   // but a validated invoice with an open run is awaiting_approval's population, never
   // needs_attention's (TestStoreRollup_ApprovalRejectedArmIsDraftOnly).
@@ -1217,8 +1224,8 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   })
   await validateInvoice(token, inv.id)
   // The firm tenant is governed (this file's own beforeAll) -- validating arms an open
-  // approval run, and isRowSelectable disables the checkbox on one. Close it over the side
-  // channel before the row is ever selected.
+  // approval run, and the SERVER then answers can_submit:false, which is what disables the
+  // checkbox (submitGate). Close the run over the side channel before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
@@ -1354,10 +1361,9 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   // AC-10: the transmit GATE is already clear here -- TransmitClearTx tests
   // EXISTS(state='approved') over ALL runs, and the first leg's approval above already
-  // satisfies that. This approval is for isRowSelectable instead, which reads only the
-  // LATEST run's state, and the revalidate above just cancelled that run and armed a fresh
-  // open one (revalidate.go/store.go demotion path). Without this, the checkbox below stays
-  // disabled even though the server would happily accept the resubmit.
+  // satisfies that. Since BUG-12 the checkbox reads that same verdict off can_submit, so
+  // this second approval is redundant; it is kept because approveUntilClosed is a no-op on
+  // a closed run and deleting it would widen this leg's scope.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   // Resubmit leg: back to the list -- this test still resubmits through the register's
@@ -1611,9 +1617,8 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   const row = invoiceRowByNumber(page, invoiceNumber)
 
-  // AC-8: a failed row can never be batch-selected. isRowSelectable is `validated` AND no
-  // open approval run (APPR-08-09); a `failed` row fails the status half, so the second
-  // half never comes into it here.
+  // AC-8: a failed row can never be batch-selected. The checkbox reads can_submit, and
+  // submitGate refuses a `failed` row at its status rung, before approval is consulted.
   await expect(row.getByTestId('invoice-select')).toBeDisabled()
 
   await openInvoiceRow(page, invoiceNumber)
@@ -1915,6 +1920,74 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   await expect(systemActor).not.toHaveClass(/mono/)
 
   await assertFiscalRecord(page, invoiceNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The agreement invariant, in one browser session: the register row and that invoice's own
+// detail page give the SAME verdict and the SAME sentence, refused then permitted.
+// LIMIT: every PR environment runs APPROVALS_ENFORCED=true and production runs it off, and
+// pushes to main run zero browser specs -- so a green run here proves agreement, never the
+// reported production symptom. That symptom's evidence is an owed manual pass after merge.
+test('submit gate: the register row and its own detail page never disagree -- refused, then permitted', async ({ page }) => {
+  // Two nav round trips plus an approval walk on a possibly cold fleet; the sibling
+  // detail-submit spec budgets the same.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  // Self-seeded: a CI retry gets a fresh worker and re-runs beforeAll only.
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG12 agree ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-BUG12-AGREE-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  const validated = await validateInvoice(token, inv.id)
+  expect(validated.status, 'the clean fixture must promote draft -> validated, arming the seeded firm run').toBe('validated')
+  const armed = await getInvoiceApproval(token, inv.id)
+  expect(armed.state, 'without an OPEN run both legs below collapse into one polarity').toBe('open')
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  // Leg 1 -- refused, on both surfaces.
+  const box = invoiceRowByNumber(page, invoiceNumber).getByTestId('invoice-select')
+  await expect(box).toBeDisabled()
+  const registerTitle = (await box.getAttribute('title')) ?? ''
+  expect(registerTitle.length, 'a blank title would let the cross-surface equality below pass on two empties').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, "the register must carry the server's own sentence, not one of its own").toBe(AWAITING_APPROVAL_REASON)
+
+  await openInvoiceRow(page, invoiceNumber)
+  const submitBtn = page.getByTestId('detail-submit')
+  await expect(submitBtn).toBeVisible()
+  await expect(submitBtn).toBeDisabled()
+  // BUG-14-04: the detail half moved from a rendered node to the control's own `title` --
+  // BUG-14-02 deleted submit-blocked-reason ([reason-text-disappears]). The parity claim is
+  // unchanged and deliberately NOT split by surface: both halves still read the sentence a
+  // user's browser actually received, and they must still be the same sentence.
+  await expect(submitBtn).toHaveAttribute('title', AWAITING_APPROVAL_REASON)
+  const detailReason = (await submitBtn.getAttribute('title')) ?? ''
+  expect(detailReason.length, 'the same floor on the detail half').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, 'the whole bug, as one assertion: the two surfaces must not disagree').toBe(detailReason)
+
+  // A validated invoice does not poll (shouldPollList needs queued/submitted), so this
+  // back-and-reopen round trip IS the refetch, not navigation garnish.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  // Leg 2 -- permitted, on both surfaces. The enabled reads are the control that the
+  // fixture really flipped; without them leg 1 could be two refused reads.
+  await expect(box).toBeEnabled()
+  expect(await box.getAttribute('title'), 'React drops title={undefined}, so the attribute is absent, not empty').toBeNull()
+
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(submitBtn).toBeEnabled()
+  // [absence-assertions-replaced] (BUG-14-04): was a toHaveCount(0) on the deleted
+  // submit-blocked-reason node, which can never render again. Same fact against the control
+  // that still exists, and the same shape as the register half above -- React drops
+  // title={undefined}, so the attribute is absent rather than empty.
+  expect(await submitBtn.getAttribute('title'), 'an unblocked control carries no reason').toBeNull()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -2271,6 +2344,7 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
   await signInFirm(page)
   await selectEntity(page, entity.name)
   await page.getByRole('button', { name: /Customers/ }).click()
+  await expect(page, 'inline nav to Customers did not update the URL').toHaveURL(/\/customers$/)
   await expect(page.getByRole('heading', { name: 'Customers & vendors' })).toBeVisible()
 
   await expect(
@@ -2293,6 +2367,7 @@ test('customers-whole-set: every buyer appears and no KPI cards render', async (
 async function goToReports(page: Page): Promise<void> {
   await page.getByRole('button', { name: /Reports/ }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
+  await expect(page, 'goToReports did not update the URL').toHaveURL(/\/reports$/)
 }
 
 // The KPI tile row's own markup (ReportsView.tsx): a `<div className="label">` holding the
@@ -4373,7 +4448,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   const invoiceNumber = `INV-AUDIT09-RAIL-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT) })
   await validateInvoice(token, inv.id)
-  // Validating arms the governed tenant's run, and isRowSelectable disables the checkbox
+  // Validating arms the governed tenant's run, and the server answers can_submit:false
   // while one is open -- close it before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
@@ -4443,25 +4518,25 @@ import { apiBase, getExtractions, listInvoices, type ExtractionJob } from '../ap
 //
 //   PDF  — end to end. Uploaded through POST /v1/documents, extracted, imported through
 //          POST /v1/imports/document, opened from the invoice the run produced.
-//   PNG  — the document is real (uploaded, stored, its bytes served by the real
-//   DOCX     GET /v1/documents/{id}); the invoice->document LINK is synthesized. Neither type
-//            can produce an invoice today: ExtractWorker renders pages before it extracts
-//            (worker.go), PDFium reads PDFs only, so the job dead-letters, and
-//            Store.SettledExtraction selects `state = 'succeeded'` — so the import 404s. The
-//            probe therefore intercepts ONE call, GET /v1/invoices/{id}/source-document,
-//            fetches the real response and replaces only its `document` object with the real
-//            uploaded row. Every other field, and the bytes the image canvas renders, are the
-//            server's own.
+//   DOCX — the document is real (uploaded, stored, its bytes served by the real
+//          GET /v1/documents/{id}); the invoice->document LINK is synthesized, because the
+//          import 404s whenever the extraction has not settled `succeeded`
+//          (Store.SettledExtraction). The probe therefore intercepts ONE call,
+//          GET /v1/invoices/{id}/source-document, fetches the real response and replaces only
+//          its `document` object with the real uploaded row. Every other field is the
+//          server's own.
+//
+// EXTR-15-03 narrowed the accepted set to PDF + DOCX, so the third leg is gone: a PNG is now
+// REFUSED by POST /v1/documents, and that refusal is asserted below in the leg's place.
 //
 // The interception count is asserted because it is the harness's own instrument: a probe whose
-// route never fired would record the PDF's canvas three times and read as evidence.
+// route never fired would record the PDF's canvas twice and read as evidence.
 //
-// Two findings this run is expected to reproduce, neither of them fixed here:
-//   - DOCX classifies as `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the
-//     extension map nor the content-type map), which CONTRADICTS the EXTR epic's decision that
-//     "DOCX joins the spreadsheet side of the previewer". Owner: EXTR-15.
-//   - PNG/JPEG/WebP/DOCX always dead-letter, and the per-document enqueue key is permanent, so
-//     each gets exactly one attempt. Owner: EXTR-17.
+// One finding this run reproduces, and it is now SETTLED rather than outstanding: DOCX
+// classifies as `unrenderable` (lib/sourceDocument.ts — `docx` is in neither the extension
+// map nor the content-type map). EXTR-15 kept it that way on purpose. No browser renders a
+// .docx, so the previewer has nothing to draw; what EXTR-15 shipped instead is the
+// extraction review screen, which shows the document's structured content field by field.
 
 const EXTR09_DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
 const EXTR09_PDF_BYTES = new Uint8Array(readFileSync(join(EXTR09_DOCUMENT_FIXTURES, 'native_invoice.pdf')))
@@ -4476,8 +4551,13 @@ const EXTR09_PNG_BYTES = new Uint8Array(
 )
 
 // A well-formed EMPTY zip: the 22-byte end-of-central-directory record with a comment. A .docx
-// IS a zip, and nothing on the observed path opens it — the worker fails at page rendering and
-// the `unrenderable` canvas fetches no bytes at all. The comment carries the uniqueness.
+// IS a zip. The comment carries the uniqueness.
+//
+// NO LONGER INERT. EXTR-15-02 made DOCX boxless, so the worker skips page rendering and hands
+// these bytes to the reader, which refuses them: the job dead-letters at text_not_read. This
+// recipe is therefore also EXTR-15-12's T3 fixture — import-wizard.spec.ts rebuilds it as
+// uniqueEmptyDocxBytes() for EXTR15-E2E-04, which asserts exactly that kind. On the previewer
+// path observed HERE it still reaches the `unrenderable` canvas, which fetches no bytes at all.
 function extr09Docx(): Uint8Array<ArrayBuffer> {
   const comment = new TextEncoder().encode(`e2e-${crypto.randomUUID()}`)
   const out = new Uint8Array(22 + comment.length)
@@ -4510,10 +4590,9 @@ interface Extr09Upload {
   content_hash: string
 }
 
-// Multipart, so a bare fetch rather than api-client (which forces application/json). The hash
-// is computed here from the same bytes the server hashes (document.Service.Store: hex sha256 of
-// the raw body), so the substituted record below carries the row's REAL content hash.
-async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<Extr09Upload> {
+// Multipart, so a bare fetch rather than api-client (which forces application/json). Raw
+// because the PNG leg reads a REFUSAL off this route and extr09Upload below throws on one.
+async function extr09UploadRaw(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<{ status: number; body: string }> {
   const form = new FormData()
   form.set('file', new Blob([bytes], { type }), filename)
   const res = await fetch(`${apiBase()}/api/submission/v1/documents`, {
@@ -4521,13 +4600,20 @@ async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filen
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   })
-  if (res.status !== 201) throw new Error(`POST /v1/documents ${filename}: ${res.status} ${await res.text()}`)
-  const body = (await res.json()) as Omit<Extr09Upload, 'content_hash'>
+  return { status: res.status, body: await res.text() }
+}
+
+// The hash is computed here from the same bytes the server hashes (document.Service.Store: hex
+// sha256 of the raw body), so the substituted record below carries the row's REAL content hash.
+async function extr09Upload(token: string, bytes: Uint8Array<ArrayBuffer>, filename: string, type: string): Promise<Extr09Upload> {
+  const res = await extr09UploadRaw(token, bytes, filename, type)
+  if (res.status !== 201) throw new Error(`POST /v1/documents ${filename}: ${res.status} ${res.body.slice(0, 300)}`)
+  const body = JSON.parse(res.body) as Omit<Extr09Upload, 'content_hash'>
   return { ...body, content_hash: createHash('sha256').update(bytes).digest('hex') }
 }
 
-// Polls to a TERMINAL state. 'failed' is not one -- River retries three times, so a PNG passes
-// through it twice before it dead-letters. Returns whatever it last saw when the budget runs
+// Polls to a TERMINAL state. 'failed' is not one -- River retries three times, so a document
+// passes through it twice before it dead-letters. Returns whatever it last saw when the budget runs
 // out; a timeout is an observation here, not a failure.
 async function extr09Settle(token: string, documentId: string): Promise<ExtractionJob | null> {
   const deadline = Date.now() + 120_000
@@ -4556,10 +4642,20 @@ async function extr09Canvas(page: Page): Promise<string> {
   return seen
 }
 
-test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over a PNG and a DOCX on a synthesized invoice->document link', async ({
+// PN-13 (EXTR-15-03, task-854). The legs, named once. `intercepted` is asserted against
+// SYNTHESIZED_LEGS.length rather than a typed count: swapping one literal for another leaves the
+// instrument exactly as hardcoded as it was, and that is the defect this plan has caught twice.
+//
+// EXTR-15-03 drops PNG from the accepted set, so SYNTHESIZED_LEGS loses it. The substitution
+// block loops over this const, so adding or removing a leg moves the count on its own.
+const REAL_LEG = 'pdf'
+const SYNTHESIZED_LEGS = ['docx'] as const
+const ALL_LEGS = [REAL_LEG, ...SYNTHESIZED_LEGS] as const
+
+test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over a DOCX on a synthesized invoice->document link', async ({
   page,
 }, testInfo) => {
-  // Three uploads, two dead-letter cycles (River backs off between attempts) and one full
+  // Two uploads, a refusal, one settle that may back off between attempts and one full
   // extract-and-import, on a fleet that may be cold.
   test.setTimeout(420_000)
   const errors = collectErrors(page)
@@ -4568,7 +4664,12 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   const entity = await createEntity(token, { name: `EXTR-09-09 previewer ${Date.now()}`, tin: freshTin() })
 
   const pdf = await extr09Upload(token, extr09Unique(EXTR09_PDF_BYTES, '%'), 'native_invoice.pdf', 'application/pdf')
-  const png = await extr09Upload(token, extr09Unique(EXTR09_PNG_BYTES, ''), 'scan_invoice.png', 'image/png')
+  // EXTR-15-03's refusal, in the leg's place: a PNG no longer reaches `documents` at all, so
+  // the previewer can never be handed one from this route again.
+  const pngRefusal = await extr09UploadRaw(token, extr09Unique(EXTR09_PNG_BYTES, ''), 'scan_invoice.png', 'image/png')
+  expect(pngRefusal.status, `POST /v1/documents accepted a PNG: ${pngRefusal.body.slice(0, 300)}`).toBe(400)
+  expect(pngRefusal.body, 'the PNG refusal must be the shipped copy').toContain('this file type cannot be read here')
+
   const docx = await extr09Upload(
     token,
     extr09Docx(),
@@ -4578,12 +4679,11 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
 
   const settled = {
     pdf: await extr09Settle(token, pdf.document_id),
-    png: await extr09Settle(token, png.document_id),
     docx: await extr09Settle(token, docx.document_id),
   }
 
-  // Each type is offered to the import route, including the two expected to 404: "no invoice
-  // exists" is the observation, and only the attempt can establish it.
+  // Each type is offered to the import route, including one that may 404: "no invoice exists"
+  // is the observation, and only the attempt can establish it.
   async function importDocument(documentId: string): Promise<{ status: number; body: string }> {
     const res = await fetch(`${apiBase()}/api/invoice/v1/imports/document`, {
       method: 'POST',
@@ -4594,7 +4694,6 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
   }
   const imported = {
     pdf: await importDocument(pdf.document_id),
-    png: await importDocument(png.document_id),
     docx: await importDocument(docx.document_id),
   }
 
@@ -4671,11 +4770,10 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       await page.getByTestId('source-modal-close').click()
     }
 
-    substitute = png
-    observed.png = await openPreviewer()
-
-    substitute = docx
-    observed.docx = await openPreviewer()
+    for (const leg of SYNTHESIZED_LEGS) {
+      substitute = { pdf, docx }[leg]
+      observed[leg] = await openPreviewer()
+    }
   }
 
   await testInfo.attach('documentPreviewer.md', {
@@ -4687,34 +4785,41 @@ test('EXTR09-E2E-06 (EXTR-09-09): the previewer over a PDF end to end, and over 
       '',
       '| Leg | Upload | Extraction | `POST /v1/imports/document` | Canvas rendered | Link |',
       '|---|---|---|---|---|---|',
-      ...(['pdf', 'png', 'docx'] as const).map((leg) => {
-        const up = { pdf, png, docx }[leg]
+      ...ALL_LEGS.map((leg) => {
+        const up = { pdf, docx }[leg]
         const job = settled[leg]
-        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === 'pdf' ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
+        return `| ${leg.toUpperCase()} | \`${up.filename}\` · ${up.content_type}, ${up.size_bytes} B, reused=${up.reused}, \`${up.content_hash.slice(0, 16)}…\` | ${job ? `${job.state}${job.last_error ? ` - ${job.last_error.replace(/\|/g, '/').slice(0, 120)}` : ''}` : 'no job row'} | ${imported[leg].status} | \`${observed[leg] ?? 'not observed'}\` | ${leg === REAL_LEG ? 'real - this invoice IS this document' : "SYNTHESIZED - only the meta response's `document` object was replaced; its id/filename/content-type/size/hash are the real row's, while `uploaded_at`, `uploaded_by`, `invoices_created` and `other_invoice_rows` are placeholders"} |`
       }),
       '',
       `PDF embed: \`${JSON.stringify(pdfEmbed)}\`. Meta responses substituted: ${intercepted}.`,
       '',
       '## Findings',
       '',
-      '1. **DOCX renders the `unrenderable` canvas.** `docx` appears in neither `EXTENSION_KINDS` nor',
-      '   `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`), so `classifyDocument` returns',
-      '   `unrenderable` and nothing is fetched for it. This CONTRADICTS the EXTR epic decision that',
-      '   "DOCX joins the spreadsheet side of the previewer". Not fixed here — **owner: EXTR-15**.',
-      '2. **AC #2 and AC #3 are unmet by the pipeline, not by the previewer.** No PNG or DOCX can reach',
-      '   an invoice today: `ExtractWorker.Work` renders pages before it extracts, PDFium reads PDFs',
-      '   only, the job dead-letters, and `Store.SettledExtraction` selects `state = \'succeeded\'`. Both',
-      '   import attempts above are the evidence. **Owner: EXTR-17** (re-extraction, and a non-mock',
-      '   extractor).',
+      '1. **DOCX renders the `unrenderable` canvas, and EXTR-15 settled that it should.** `docx` appears',
+      '   in neither `EXTENSION_KINDS` nor `CONTENT_TYPE_KINDS` (`frontend/app/src/lib/sourceDocument.ts`),',
+      '   so `classifyDocument` returns `unrenderable` and nothing is fetched for it. No browser renders',
+      '   a .docx, so there is nothing here for a previewer to draw. What EXTR-15 delivered instead is',
+      '   the extraction REVIEW screen, which shows the document\'s structured content field by field.',
+      '   The epic\'s "DOCX joins the spreadsheet side of the previewer" is SUPERSEDED, not outstanding.',
+      '2. **The DOCX leg is synthesized because THIS fixture cannot settle, not because DOCX cannot.**',
+      '   `Store.SettledExtraction` selects `state = \'succeeded\'`, and the empty zip above never gets',
+      '   there: EXTR-15-02 made DOCX boxless, so the worker skips page rendering, the reader refuses',
+      '   the bytes and the job dead-letters at `text_not_read`. A REAL DOCX does reach an invoice now —',
+      '   import-wizard.spec.ts\'s EXTR15-E2E-03 (EXTR-15-12) reads one through the deployed sidecar and',
+      '   asserts its printed number, date and total. The import attempt above is the evidence for this',
+      '   fixture only.',
       '3. **One attempt each.** The enqueue key `extract:<document_id>` is permanent, so a dead-lettered',
       '   document is never re-enqueued through this seam.',
     ].join('\n'),
   })
 
   // The instrument, not the product: without this a probe whose route never fired would record
-  // the PDF's canvas three times and read as evidence. Every other line above is observation.
+  // the PDF's canvas for every leg and read as evidence. Every other line above is observation.
   if (invoiceNumber !== '') {
-    expect(intercepted, 'the PNG and DOCX legs must each have substituted exactly one meta response').toBe(2)
+    expect(
+      intercepted,
+      `each synthesized leg (${SYNTHESIZED_LEGS.join(', ')}) must have substituted exactly one meta response`,
+    ).toBe(SYNTHESIZED_LEGS.length)
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

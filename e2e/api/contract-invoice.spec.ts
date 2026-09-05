@@ -45,6 +45,7 @@ import {
   validateInvoice,
   rawFetch,
   listInvoices,
+  getInvoice,
   rollup,
   createApprovalPolicy,
   putApprovalPolicyDraft,
@@ -1222,6 +1223,53 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
         (blocked.body as { error: string }).error,
         'the 409 must carry the same awaiting-approval sentence the transitions door uses elsewhere',
       ).toBe(AWAITING_APPROVAL_REASON)
+    })
+
+    // The wire half of the agreement invariant: ONE gate call feeds both responses, so the
+    // list row and the detail body can never disagree about the same invoice.
+    // Placement is load-bearing -- below this describe no policy version stays active, every
+    // invoice reads can_submit: true on both wires, and the agreement would hold vacuously.
+    test('the list row and the detail body agree on can_submit and its sentence, both polarities', async () => {
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-BUG12-WIRE-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated, arming the seeded firm run').toBe('validated')
+
+      const armed = await getInvoiceApproval(token, created.id)
+      expect(armed.state, 'without an OPEN run both polarities collapse into one and the agreement is vacuous').toBe('open')
+
+      // entity_id + limit 200 then .find(): this entity's backlog accumulates across the
+      // whole file and the list defaults to 50, so invoices[0] would be the wrong invoice.
+      const [openList, openBody] = await Promise.all([
+        listInvoices(token, { entity_id: entity.id, limit: 200 }),
+        getInvoice(token, created.id),
+      ])
+      const openRow = openList.invoices.find((i) => i.id === created.id)
+      expect(openRow, "the fixture must appear in its own entity's list page").toBeDefined()
+
+      // The refused leg is pinned to false and to the known sentence BEFORE the two wires
+      // are compared -- otherwise both polarities could be the same polarity twice.
+      expect(openRow!.can_submit, 'an open run must refuse on the list wire').toBe(false)
+      expect(openBody.can_submit, 'an open run must refuse on the detail wire').toBe(false)
+      expect(openRow!.submit_blocked_reason, "the list wire must carry the server's own sentence").toBe(AWAITING_APPROVAL_REASON)
+      expect(openBody.submit_blocked_reason, "the detail wire must carry the server's own sentence").toBe(AWAITING_APPROVAL_REASON)
+      expect(openRow!.can_submit, 'refused: the two wires must agree on the verdict').toBe(openBody.can_submit)
+      expect(openRow!.submit_blocked_reason, 'refused: the two wires must agree on the sentence').toBe(openBody.submit_blocked_reason)
+
+      const closed = await approveUntilClosed(created.id, await firmApproverTokens())
+      expect(closed.state, 'the run must really close, or polarity 2 repeats polarity 1').toBe('approved')
+
+      const [clearList, clearBody] = await Promise.all([
+        listInvoices(token, { entity_id: entity.id, limit: 200 }),
+        getInvoice(token, created.id),
+      ])
+      const clearRow = clearList.invoices.find((i) => i.id === created.id)
+      expect(clearRow, "the fixture must still appear in its own entity's list page").toBeDefined()
+      expect(clearRow!.can_submit, 'a closed run must permit on the list wire').toBe(true)
+      expect(clearBody.can_submit, 'a closed run must permit on the detail wire').toBe(true)
+      expect(clearRow!.submit_blocked_reason, 'a permitted row names no reason').toBeNull()
+      expect(clearBody.submit_blocked_reason, 'a permitted body names no reason').toBeNull()
+      expect(clearRow!.can_submit, 'permitted: the two wires must agree on the verdict').toBe(clearBody.can_submit)
+      expect(clearRow!.submit_blocked_reason, 'permitted: the two wires must agree on the sentence').toBe(clearBody.submit_blocked_reason)
     })
   })
 

@@ -15,16 +15,23 @@ import { describe, expect, it } from 'vitest'
 const SRC_DIR = dirname(fileURLToPath(import.meta.url))
 const CREATE_UPLOAD = join(SRC_DIR, 'components', 'CreateUpload.tsx')
 
-// AC #1, verbatim. Eight extensions, seven types (.jpg and .jpeg are one type).
-const EXPECTED_ACCEPT = '.csv,.xlsx,.pdf,.png,.jpg,.jpeg,.webp,.docx'
+// EXTR-15-03 AC #4, verbatim. Narrowed from eight extensions to four: PNG, JPEG and WebP are
+// dropped from the picker and the server together (BQ-2). The previewer keeps its image rows —
+// lib/sourceDocument.ts is deliberately NOT narrowed, and PN-9 below is the fence.
+const EXPECTED_ACCEPT = '.csv,.xlsx,.pdf,.docx'
 const EXPECTED_EXTENSIONS = EXPECTED_ACCEPT.split(',')
 const EXPECTED_COPY_TOKENS = EXPECTED_EXTENSIONS.map((e) => e.replace('.', '').toUpperCase())
 
-// The 17 locators EXTR-09-04 migrates: 14 in import-wizard.spec.ts, 3 in
-// invoice-surfaces.spec.ts. The floor is a lower bound, never an equality — adding a
-// locator must not red this.
+// The 17 locators EXTR-09-04 migrated: 14 in import-wizard.spec.ts, 3 in
+// invoice-surfaces.spec.ts. Floors, never equalities — adding a locator must not red these.
+// Held PER FILE as well as in total: EXTR-15-03 retargets the PNG leg in
+// invoice-surfaces.spec.ts, and a total-only floor is met while that file loses all three.
 const SWEPT_LOCATOR_FLOOR = 17
-const SWEPT_SPECS = ['import-wizard.spec.ts', 'invoice-surfaces.spec.ts']
+const SWEPT_LOCATOR_FLOOR_BY_SPEC: Record<string, number> = {
+  'import-wizard.spec.ts': 14,
+  'invoice-surfaces.spec.ts': 3,
+}
+const SWEPT_SPECS = Object.keys(SWEPT_LOCATOR_FLOOR_BY_SPEC)
 
 // Comments in CreateUpload.tsx discuss `accept` and the word "spreadsheet" at length. Every
 // scan below reads CODE, so the prose explaining a rule can never satisfy or violate it.
@@ -63,8 +70,8 @@ function acceptedCopyTokens(): string[] {
     .filter((t) => t.length > 0)
 }
 
-describe('PICKER-1: the accept attribute names all seven accepted types', () => {
-  it('PICKER-1: the accept attribute names all seven accepted types', () => {
+describe('PICKER-1: the accept attribute names every accepted type', () => {
+  it('PICKER-1: the accept attribute names every accepted type', () => {
     const accept = acceptAttribute()
     const exts = accept.split(',').map((e) => e.trim())
 
@@ -175,6 +182,23 @@ describe('PICKER-3: no spec pins the accept attribute, and the swept locators st
     ).toBeGreaterThanOrEqual(SWEPT_LOCATOR_FLOOR)
   })
 
+  // PN-10 (EXTR-15-03 AC #9/#10): the floor again, PER FILE. Retargeting the PNG leg must move
+  // its locators, not delete them, and the total-only floor above is met by a file that loses
+  // all three of its while another gains three.
+  it('PN-10: each swept spec still carries its own share of #pf-import-file', () => {
+    const files = walkE2E()
+    expect(files.length, 'the walk visited no e2e file at all').toBeGreaterThanOrEqual(10)
+
+    for (const [name, floor] of Object.entries(SWEPT_LOCATOR_FLOOR_BY_SPEC)) {
+      const spec = files.find((f) => f.rel.endsWith(name))
+      expect(spec, `${name} must still exist under e2e/`).toBeDefined()
+      const n = countOccurrences(spec!.content, '#pf-import-file')
+      expect(n, `${name} carries #pf-import-file ${n} time(s), want at least ${floor} — a retarget moves a locator, it does not delete one`).toBeGreaterThanOrEqual(
+        floor,
+      )
+    }
+  })
+
   // AC #5, the absence half. Runs its own floor first so it can never pass over an empty
   // or gutted corpus.
   it('PICKER-3 absence: no file under e2e/ pins an accept attribute', () => {
@@ -195,5 +219,85 @@ describe('PICKER-3: no spec pins the accept attribute, and the swept locators st
     for (const f of files) {
       expect(f.content, `e2e/${f.rel} must not pin an accept attribute — locate the input by #pf-import-file`).not.toContain('accept="')
     }
+  })
+})
+
+// --- PN-8 (EXTR-15-03 AC #9): the deploy-gate copy narrows with the picker ----------------
+
+// import-wizard.spec.ts asserts the visible ACCEPTED line verbatim and runs only on the deploy
+// gate. Read here so a stale literal reds in the unit suite instead of on the gate, an hour later.
+const IMPORT_WIZARD_SPEC = join(repoRoot(), 'e2e', 'topology', 'import-wizard.spec.ts')
+
+describe('PN-8: the e2e ACCEPTED_LINE names the narrowed set', () => {
+  it('PN-8: ACCEPTED_LINE is the five narrowed tokens, and names neither PNG nor WEBP', () => {
+    const src = readFileSync(IMPORT_WIZARD_SPEC, 'utf8')
+    expect(src.length, 'e2e/topology/import-wizard.spec.ts must be non-empty').toBeGreaterThan(0)
+
+    const decls = src.match(/const ACCEPTED_LINE = '[^']*'/g) ?? []
+    expect(decls.length, 'import-wizard.spec.ts must declare exactly one ACCEPTED_LINE; this scan has lost its anchor').toBe(1)
+    const line = /const ACCEPTED_LINE = '([^']*)'/.exec(src)![1]
+
+    // Control needle: the literal really is the visible copy, so the absences below are
+    // absences from the line rather than from a mis-parse.
+    expect(line.startsWith('ACCEPTED ·'), `ACCEPTED_LINE is ${JSON.stringify(line)}; it must still be the visible ACCEPTED · … copy`).toBe(true)
+
+    const tokens = line
+      .split('·')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0)
+    // Equality, not an absence: an emptied line cannot pass this.
+    expect(tokens, `ACCEPTED_LINE is ${JSON.stringify(line)}`).toEqual(['ACCEPTED', ...EXPECTED_COPY_TOKENS])
+    expect(tokens.length).toBe(5)
+    for (const dropped of ['PNG', 'JPG', 'JPEG', 'WEBP']) {
+      expect(tokens, `ACCEPTED_LINE still names ${dropped}`).not.toContain(dropped)
+    }
+    for (const kept of ['PDF', 'DOCX']) {
+      expect(tokens, `ACCEPTED_LINE must still name ${kept}`).toContain(kept)
+    }
+  })
+})
+
+// --- EXTR-15-09 (task-835, Mode A / test-first): SW-8, census site C1 -------------------
+//
+// AC-7 / D2. C1 is the ONE of the 31 sites that does NOT branch. It renders at
+// pickedFiles.length === 0, where runKindOf answers null and no unit exists yet, so the
+// paragraph has to carry BOTH grains at once. Naming the extensions rather than the word
+// "spreadsheet" is what keeps it inside AC-3.
+//
+// RED reason on landing: the second sentence is simply not in the file. The absence half
+// (no "spreadsheet") is paired with the presence of the shipped sentence, so a rewrite
+// that emptied the paragraph cannot satisfy it over nothing.
+
+const SPREADSHEET_GRAIN = 'One row is one line item; rows group into invoices by the column you map to'
+const DOCUMENT_GRAIN = 'That grain is CSV and XLSX only: in a PDF or a DOCX, one document is one invoice.'
+const RUN_CAP = 'Pick up to five files per run.'
+
+describe('SW-8 (EXTR-15-09, AC-7): the empty picker states both grains', () => {
+  it('SW-8 (GREEN since EXTR-15-09): the document grain follows the spreadsheet one, in the same paragraph', () => {
+    const code = pickerCode()
+
+    // AC-2 freeze and the control needle in one: the shipped sentence is byte-identical.
+    const ssAt = code.indexOf(SPREADSHEET_GRAIN)
+    expect(ssAt, 'the shipped spreadsheet grain sentence is gone; SW-8 has lost its anchor').toBeGreaterThan(-1)
+
+    const docAt = code.indexOf(DOCUMENT_GRAIN)
+    const capAt = code.indexOf(RUN_CAP)
+    expect(capAt, `the paragraph must still end with ${JSON.stringify(RUN_CAP)}`).toBeGreaterThan(-1)
+    expect(docAt, 'the document grain sentence is not in CreateUpload.tsx').toBeGreaterThan(-1)
+
+    // D2 pins the ORDER: spreadsheet grain, then document grain, then the run cap.
+    expect(ssAt).toBeLessThan(docAt)
+    expect(docAt).toBeLessThan(capAt)
+
+    // ...and all three sit in ONE <p>, not in a second paragraph or a sibling branch.
+    const open = code.lastIndexOf('<p', ssAt)
+    const close = code.indexOf('</p>', ssAt)
+    expect(open, 'the spreadsheet grain is not inside a <p>').toBeGreaterThan(-1)
+    expect(docAt > open && docAt < close, 'the document grain is in a different paragraph').toBe(true)
+    expect(capAt > open && capAt < close, 'the run cap left the paragraph').toBe(true)
+
+    // AC-3: the document half names the extensions, never the word.
+    expect(DOCUMENT_GRAIN).not.toMatch(/spreadsheet/i)
+    expect(DOCUMENT_GRAIN).not.toMatch(/\brows?\b/i)
   })
 })

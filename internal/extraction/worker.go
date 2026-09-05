@@ -119,7 +119,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			terminal = true
 			return nil
 		}
-		return advanceJobTx(ctx, tx, args.TenantID, j.ID, "extracting", "", job.Attempt)
+		return advanceJobTx(ctx, tx, args.TenantID, j.ID, "extracting", "", job.Attempt, "")
 	}); err != nil {
 		return err
 	}
@@ -147,14 +147,17 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err != nil {
 		kind = FailureDocumentUnavailable
 	}
-	if err == nil {
+	// Boxless formats skip the render, the page rows and the layout: a fingerprint over boxless
+	// tokens would hand one document's learned rules to unrelated ones
+	// (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
+	if err == nil && RendersPageImages(doc.ContentType) {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
 		if images, tokenPages, _, err = w.Pages.Ingest(ctx, args.TenantID, doc); err != nil {
 			kind = FailurePagesNotRendered
 		}
 	}
-	if err == nil {
+	if err == nil && RendersPageImages(doc.ContentType) {
 		// Hoisted out of the closure below: the layout row and the rule lookup must read one
 		// Fingerprint over the same PDFium tokens.
 		fingerprint = Fingerprint(tokenPages)
@@ -202,11 +205,16 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			}}
 		default:
 			var learned []AnchorRule
-			// Not swallowed: a dropped rule set would read clean while the tenant's
-			// corrections were silently gone. extract_failed, because field extraction is the
-			// stage that failed and text_not_read names the read.
-			if learned, err = w.Rules(ctx, args.TenantID, fingerprint); err != nil {
-				kind = FailureExtractFailed
+			// No fingerprint, so Tier-1 anchors only rather than a bucket keyed on ""
+			// (TestRLS_ExtractWorkerLoadsNoLearnedRulesForABoxlessFormat). EXTR-19 gives these
+			// documents a layout identity.
+			if RendersPageImages(doc.ContentType) {
+				// Not swallowed: a dropped rule set would read clean while the tenant's
+				// corrections were silently gone. extract_failed, because field extraction is
+				// the stage that failed and text_not_read names the read.
+				if learned, err = w.Rules(ctx, args.TenantID, fingerprint); err != nil {
+					kind = FailureExtractFailed
+				}
 			}
 			if err == nil {
 				// Entity{} skips Reconcile's advisory supplier cross-check; invoice.Store
@@ -225,7 +233,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			state = "dead_lettered"
 		}
 		if txErr := db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
-			if advErr := advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt); advErr != nil {
+			if advErr := advanceJobTx(ctx, tx, args.TenantID, row.ID, state, err.Error(), job.Attempt, kind); advErr != nil {
 				return advErr
 			}
 			// An attempt with retries left is not a terminal outcome, so it is not an event
@@ -259,7 +267,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, results); err != nil {
 				return err
 			}
-			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt); err != nil {
+			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt, ""); err != nil {
 				return err
 			}
 			return w.Audit(ctx, tx, ExtractionAudit{

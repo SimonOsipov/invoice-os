@@ -229,8 +229,8 @@ export type SignedInUser = {
   verified: boolean
 }
 
-// The Audit screen's cross-screen pre-filter (AUDIT-09-05). The SPA has no router and no URL
-// params, so this atom IS the hand-off. `invoiceId` must be a real invoice UUID -- the reader
+// The Audit screen's cross-screen pre-filter (AUDIT-09-05). The URL names the view, not
+// invoice ids, so this atom IS the hand-off. `invoiceId` must be a real invoice UUID -- the reader
 // 400s on anything else (internal/audit/handlers.go:187-189). `invoiceNumber` is nullable
 // because the pill reads the number and a payload need not carry one.
 export type AuditPrefilter = { invoiceId: string; invoiceNumber: string | null }
@@ -484,6 +484,10 @@ export type PlatformCtx = {
   // the user is going back precisely to keep.
   restartImport: () => void
   skipUpload: () => void
+  // The route out of a dead-lettered document (EXTR-15-07). Lands on the same 'form' step
+  // skipUpload does, but records the stored document so the filing carries
+  // source_document_id. Offered only on a failure row that HAS one.
+  enterByHand: (documentId: string) => void
   // The manual path's ONLY action. Fire-and-forget: it never rejects and never returns a
   // verdict — outcomes arrive through `filing`/`filingError` and, on 201, through the
   // navigation to the real invoice detail. There is deliberately no companion

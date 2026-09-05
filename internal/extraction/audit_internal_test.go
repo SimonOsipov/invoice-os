@@ -193,6 +193,82 @@ func TestFailureKind_VocabularyIsExactlyFive(t *testing.T) {
 	}
 }
 
+// EXTR-15-01 FK-10. Two packages ship a FailureKind and both travel under the wire key
+// failure_kind: this package's five on extraction_jobs, internal/submission's three on
+// invoices. The collision is deliberate (D-15) and safe only while the vocabularies are
+// disjoint -- a shared value would make a rendered label ambiguous.
+//
+// A source scan, not an import: deps_test.go's fence runs `go list -deps -test`, so importing
+// internal/submission from a test file in this package would break it.
+func TestFailureKind_DisjointFromSubmissionsVocabulary(t *testing.T) {
+	mine := failureKindConsts(t)
+	if len(mine) != 5 {
+		t.Fatalf("internal/extraction declares %d FailureKind const(s) (%v), want exactly 5", len(mine), mine)
+	}
+
+	const submissionSrc = "../submission/failure.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, submissionSrc, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v -- a file the scan cannot read is a file it reports clean on", submissionSrc, err)
+	}
+
+	theirs := map[string]string{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		var carried string
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			switch {
+			case vs.Type != nil:
+				carried = ""
+				if id, ok := vs.Type.(*ast.Ident); ok {
+					carried = id.Name
+				}
+			case len(vs.Values) > 0:
+				carried = ""
+			}
+			if carried != "FailureKind" {
+				continue
+			}
+			for i := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				bl, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || bl.Kind != token.STRING {
+					continue
+				}
+				lit, err := strconv.Unquote(bl.Value)
+				if err != nil {
+					t.Fatalf("unquote %s = %s: %v", vs.Names[i].Name, bl.Value, err)
+				}
+				theirs[vs.Names[i].Name] = lit
+			}
+		}
+	}
+	if len(theirs) != 3 {
+		t.Fatalf("%s declares %d FailureKind const(s) (%v), want exactly 3", submissionSrc, len(theirs), theirs)
+	}
+
+	byValue := map[string]string{}
+	for name, lit := range mine {
+		byValue[lit] = "internal/extraction." + name
+	}
+	for name, lit := range theirs {
+		if prior, clash := byValue[lit]; clash {
+			t.Errorf("internal/submission.%s and %s both carry %q; one failure_kind value would render two different sentences",
+				name, prior, lit)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // T1-2 — no error text in the payload
 // ---------------------------------------------------------------------------

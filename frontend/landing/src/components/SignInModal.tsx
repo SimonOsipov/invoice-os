@@ -137,7 +137,9 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
             <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>Pick a demo profile to continue. Each role opens only the workspace it's allowed to use.</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
               {LANDING_PERSONAS.map((p) => (
+                // data-persona: stable selector for the persona-picker test oracle
                 <button
+                  data-persona={p.id}
                   key={p.id}
                   onClick={() => pickPersona(p)}
                   className="si-persona"

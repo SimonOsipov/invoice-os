@@ -619,3 +619,53 @@ describe('fetchDocumentBytes', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-1')
   })
 })
+
+// -- PN-9 (EXTR-15-03, task-854): the previewer is NOT narrowed --------------------------
+
+// EXTR-15-03 drops PNG, JPEG and WebP from the picker and from POST /v1/documents. It must not
+// touch this module: documents stored before the narrowing still have to render on an invoice
+// detail. This is the fence — it fails if the narrowing reaches lib/sourceDocument.ts.
+describe('PN-9: a stored image document still classifies and still renders', () => {
+  const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp']
+  const IMAGE_CONTENT_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+
+  it('PN-9: classifyDocument still answers image, by extension and by declared type', () => {
+    // Control: a type the previewer never claimed. Without it "everything is an image" passes.
+    expect(classifyDocument('a.zip', 'application/zip'), 'control: an unrenderable must not read as an image').toBe('unrenderable')
+    expect(classifyDocument('a.pdf', null), 'control: a pdf must still read as a pdf').toBe('pdf')
+
+    for (const ext of IMAGE_EXTENSIONS) {
+      expect(classifyDocument(`a.${ext}`, null), `.${ext} by extension`).toBe('image')
+      expect(classifyDocument(`A.${ext.toUpperCase()}`, null), `.${ext} upper-cased`).toBe('image')
+    }
+    for (const type of IMAGE_CONTENT_TYPES) {
+      expect(classifyDocument(null, type), `${type} by declared type`).toBe('image')
+      expect(classifyDocument(null, `${type}; charset=binary`), `${type} with a parameter`).toBe('image')
+    }
+  })
+
+  it('PN-9: sourceDocumentState still routes an image document to the bytes channel', () => {
+    for (const ext of IMAGE_EXTENSIONS) {
+      const doc = mkDocument({ filename: `a.${ext}` })
+      expect(sourceDocumentState(mkMeta('ready', doc), 'idle', 'ready'), `.${ext} fetched`).toBe('image')
+      expect(sourceDocumentState(mkMeta('ready', doc), 'idle', 'error'), `.${ext} fetch failed`).toBe('failed')
+    }
+    // Control: the routing really is per-kind, not a constant.
+    expect(sourceDocumentState(mkMeta('ready', mkDocument({ filename: 'a.csv' })), 'ready', 'idle')).toBe('spreadsheet')
+  })
+
+  it('PN-9: the two kind tables in sourceDocument.ts still carry their image rows', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'sourceDocument.ts'), 'utf8')
+    expect(src.length, 'sourceDocument.ts must be non-empty').toBeGreaterThan(0)
+    // Control needle: the scan landed on the two tables it is about to read.
+    expect(src, 'EXTENSION_KINDS must still exist').toContain('const EXTENSION_KINDS')
+    expect(src, 'CONTENT_TYPE_KINDS must still exist').toContain('const CONTENT_TYPE_KINDS')
+
+    for (const ext of IMAGE_EXTENSIONS) {
+      expect(src, `EXTENSION_KINDS must keep ${ext}: 'image' — a document stored before EXTR-15-03 still has to render`).toContain(`${ext}: 'image'`)
+    }
+    for (const type of IMAGE_CONTENT_TYPES) {
+      expect(src, `CONTENT_TYPE_KINDS must keep '${type}': 'image'`).toContain(`'${type}': 'image'`)
+    }
+  })
+})

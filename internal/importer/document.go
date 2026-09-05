@@ -8,6 +8,7 @@ package importer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -103,6 +104,26 @@ var mapperFieldNames = []string{
 	"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
 }
 
+// The two sentences the mapper quarantines a document with. Written down here, not assembled
+// at call time, so TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals can find them.
+const (
+	poorScanMessage = "The scan of this document was too poor to read, so no invoice fields could be taken from it. Ask the supplier whether they can send the original PDF, or enter this invoice manually to carry on."
+
+	noInvoiceNumberMessage = "This document was read, but no invoice number was found on it. Enter this invoice manually to carry on."
+)
+
+// isPoorScan reports the field set the extraction worker writes when a document yields no text
+// at all: one document_text_layer row, reason unreadable. The predicate is over the whole set,
+// never one field's reason code -- an unreadable invoice_number among ten read fields is a read
+// document (TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch).
+func isPoorScan(fields []extractedField) bool {
+	if len(fields) != 1 {
+		return false
+	}
+	f := fields[0]
+	return f.Name == "document_text_layer" && f.Reason != nil && *f.Reason == "unreadable"
+}
+
 // documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput.
 // Pure. supplier_tin/supplier_name are never set -- Store.Create overwrites both from the
 // entity on every write (store.go:220-221, Q11), so writing a value here would state a claim
@@ -120,9 +141,15 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		invoiceNumber = strings.TrimSpace(*v)
 	}
 	if invoiceNumber == "" {
+		// Field stays the wire key either way -- the review screen machine-reads it
+		// (TestDocumentCreateInput_EveryQuarantineBranchKeepsItsMachineFieldKey).
+		message := noInvoiceNumberMessage
+		if isPoorScan(ex.Fields) {
+			message = poorScanMessage
+		}
 		return invoice.CreateInput{}, &RowError{
 			Field:   "invoice_number",
-			Message: "invoice_number is missing or blank",
+			Message: message,
 		}
 	}
 
@@ -130,9 +157,13 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 	if v := values["issue_date"]; v != nil {
 		parsed, err := parseIssueDate(*v)
 		if err != nil {
+			// parseIssueDate's own text names the wire field and is shaped for the
+			// spreadsheet path; the only failure it has is a non-YYYY-MM-DD value, so the
+			// sentence below says the same thing to a person
+			// (TestDocumentCreateInput_IssueDateFailureWrapsTheParseErrorNamingTheValue).
 			return invoice.CreateInput{}, &RowError{
 				Field:   "issue_date",
-				Message: err.Error(),
+				Message: fmt.Sprintf("The issue date on this document reads %q, which is not a date this importer can read. It accepts dates written as YYYY-MM-DD, such as 2026-03-01. Enter this invoice manually to carry on.", strings.TrimSpace(*v)),
 			}
 		}
 		issueDate = parsed

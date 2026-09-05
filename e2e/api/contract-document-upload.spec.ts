@@ -233,6 +233,13 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
     expect(job.document_id, 'DOCUP-01: the job belongs to the document just uploaded').toBe(documentId)
     expect(job.id, 'DOCUP-01: job id').toMatch(UUID_RE)
     expect(job.last_error, 'DOCUP-01: a succeeded job carries no error').toBeNull()
+    // EXTR-15-01 AC-4, deployed: JobState's failure_kind tag carries no omitempty, so the key
+    // is present and null on a job that never failed. The key set is the only oracle that
+    // catches an absent key -- a `toBeNull()` alone reads the same on undefined.
+    expect(Object.keys(job).sort(), 'DOCUP-01: the JobState key set drifted from internal/extraction/reader.go').toEqual(
+      ['created_at', 'document_id', 'failure_kind', 'id', 'last_error', 'state'].sort(),
+    )
+    expect(job.failure_kind, 'DOCUP-01: a succeeded job reports a null failure_kind').toBeNull()
 
     // An independent re-read pinning the list itself as non-empty -- an empty jobs[] satisfies
     // every find() above vacuously.

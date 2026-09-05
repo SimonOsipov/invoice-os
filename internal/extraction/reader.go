@@ -32,6 +32,10 @@ type JobState struct {
 	State      string    `json:"state"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastError  *string   `json:"last_error"`
+	// No omitempty on either pointer: a job that never failed must send an explicit null, so
+	// the client can tell "no kind" from "key not sent"
+	// (TestExtractionJobState_MarshalsTheExactKeySet).
+	FailureKind *string `json:"failure_kind"`
 }
 
 // JobsResponse is the envelope. Jobs is never nil: a nil slice marshals to JSON null, and a
@@ -76,7 +80,7 @@ func jobsForDocumentTx(ctx context.Context, tx pgx.Tx, documentID string) ([]Job
 	out := []JobState{}
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, document_id, state, created_at, last_error
+		`SELECT id, document_id, state, created_at, last_error, failure_kind
 		   FROM extraction_jobs
 		  WHERE document_id = $1
 		  ORDER BY created_at DESC, id DESC
@@ -89,7 +93,7 @@ func jobsForDocumentTx(ctx context.Context, tx pgx.Tx, documentID string) ([]Job
 
 	for rows.Next() {
 		var j JobState
-		if err := rows.Scan(&j.ID, &j.DocumentID, &j.State, &j.CreatedAt, &j.LastError); err != nil {
+		if err := rows.Scan(&j.ID, &j.DocumentID, &j.State, &j.CreatedAt, &j.LastError, &j.FailureKind); err != nil {
 			return out, fmt.Errorf("extraction: scan job for document %s: %w", documentID, err)
 		}
 		out = append(out, j)
@@ -172,12 +176,15 @@ type ExtractionDocument struct {
 // the review screen draws. These are wire structs, not the domain Field/Region: those carry no
 // tags and FieldResult embeds Field, which wireMirrors.test.ts's extractor cannot read.
 type ExtractionDetail struct {
-	ID         string                 `json:"id"`
-	DocumentID string                 `json:"document_id"`
-	State      string                 `json:"state"`
-	Document   ExtractionDocument     `json:"document"`
-	Pages      []ExtractionPage       `json:"pages"`
-	Fields     []ExtractionFieldState `json:"fields"`
+	ID         string `json:"id"`
+	DocumentID string `json:"document_id"`
+	State      string `json:"state"`
+	// Beside state, the other scalar a reader consults to explain a terminal job. No
+	// omitempty (TestExtractionDetail_FailureKindMarshalsAsExplicitNull).
+	FailureKind *string                `json:"failure_kind"`
+	Document    ExtractionDocument     `json:"document"`
+	Pages       []ExtractionPage       `json:"pages"`
+	Fields      []ExtractionFieldState `json:"fields"`
 }
 
 // emptyDetail is what every failure path returns: a nil slice marshals to JSON null and every
@@ -221,12 +228,12 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 
 	var storedAt time.Time
 	err := tx.QueryRow(ctx,
-		`SELECT j.id, j.document_id, j.state,
+		`SELECT j.id, j.document_id, j.state, j.failure_kind,
 		        d.filename, d.declared_content_type, d.size_bytes, d.created_at
 		   FROM extraction_jobs j
 		   JOIN documents d ON d.id = j.document_id
 		  WHERE j.id = $1`,
-		jobID).Scan(&out.ID, &out.DocumentID, &out.State,
+		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind,
 		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

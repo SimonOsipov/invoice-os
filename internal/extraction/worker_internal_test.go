@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"reflect"
 	"regexp"
@@ -615,21 +617,22 @@ func TestReadText_DiscardsAPartialReadThatFailsMidStream(t *testing.T) {
 	}
 }
 
-// --- EXTR-18-04: scope guard -------------------------------------------------------------
+// --- EXTR-15-02: the lifted render gate ---------------------------------------------------
 
-// TestExtractWorker_PagesNotRenderedGateIsUntouched is a ratchet, not a feature test:
-// EXTR-18-04 reaches the worker by swapping PageStore.Reader, never by touching worker.go. The
-// pages_not_rendered gate stays EXTR-15's to lift; a subtask that edits it has left this
-// story's scope.
-func TestExtractWorker_PagesNotRenderedGateIsUntouched(t *testing.T) {
+// TestExtractWorker_PagesNotRenderedGateIsScopedToRenderableFormats is EXTR-18-04's ratchet,
+// converted by its named owner. That ratchet froze the pages_not_rendered gate as "EXTR-15's to
+// lift"; EXTR-15-02 lifts it, so the scan now requires the Ingest guard to sit INSIDE the
+// RendersPageImages branch instead of forbidding the edit. The control needle and the count of
+// one are kept: without them a moved or duplicated gate reads as a clean pass.
+func TestExtractWorker_PagesNotRenderedGateIsScopedToRenderableFormats(t *testing.T) {
 	raw, err := os.ReadFile("worker.go")
 	if err != nil {
 		t.Fatalf("read worker.go: %v", err)
 	}
 	src := string(raw)
 
-	// Control needle: prove the scan reads the right file, or a moved/renamed Work method
-	// would leave every absence below reading as a clean pass.
+	// Control needle: prove the scan reads the right file, or every absence below reads as a
+	// clean pass over a moved or renamed Work method.
 	if !strings.Contains(src, "func (w *ExtractWorker) Work(") {
 		t.Fatalf("worker.go carries no Work method; this scan is reading the wrong file")
 	}
@@ -640,7 +643,41 @@ func TestExtractWorker_PagesNotRenderedGateIsUntouched(t *testing.T) {
 
 	guard := regexp.MustCompile(
 		`if images, tokenPages, _, err = w\.Pages\.Ingest\(ctx, args\.TenantID, doc\); err != nil \{\s*kind = FailurePagesNotRendered\s*\}`)
-	if !guard.MatchString(src) {
-		t.Errorf("worker.go no longer guards w.Pages.Ingest's error branch with `kind = FailurePagesNotRendered` exactly as before this story; worker.go must stay untouched")
+	loc := guard.FindStringIndex(src)
+	if loc == nil {
+		t.Fatalf("worker.go no longer guards w.Pages.Ingest's error branch with `kind = FailurePagesNotRendered`; the gate keeps its shape, only its enclosing branch changes")
+	}
+
+	// Parsed rather than matched by regex: the predicate may sit in the enclosing if's
+	// condition or its init, and a scan that pinned one spelling would refuse the other.
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "worker.go", raw, 0)
+	if err != nil {
+		t.Fatalf("parse worker.go: %v", err)
+	}
+
+	var gates int
+	nested := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		head := src[fset.Position(ifs.Pos()).Offset:fset.Position(ifs.Body.Pos()).Offset]
+		if !strings.Contains(head, "RendersPageImages") {
+			return true
+		}
+		gates++
+		if fset.Position(ifs.Body.Pos()).Offset <= loc[0] && loc[1] <= fset.Position(ifs.Body.End()).Offset {
+			nested = true
+		}
+		return true
+	})
+
+	if gates == 0 {
+		t.Fatalf("worker.go never consults RendersPageImages; a format with no page images still reaches w.Pages.Ingest and still dead-letters at pages_not_rendered")
+	}
+	if !nested {
+		t.Errorf("worker.go calls RendersPageImages in %d branch(es), none of which encloses the w.Pages.Ingest guard; the render, the page rows and the layout must all sit inside that branch", gates)
 	}
 }

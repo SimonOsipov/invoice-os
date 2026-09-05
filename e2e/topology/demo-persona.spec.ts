@@ -407,6 +407,7 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 async function goToInvoices(page: Page): Promise<void> {
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'goToInvoices did not update the URL').toHaveURL(/\/invoices$/)
 }
 
 // Scoped to invoices-list so a batch-submit results panel showing the same number
@@ -438,6 +439,11 @@ function validInvoiceFields(invoiceNumber: string) {
 const STAFFED_TO_STEP_REASON =
   "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
 const ADMIN_OR_REVIEWER_REASON = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
+
+// handlers.go's two submitGate sentences, transcribed verbatim. Distinct from the approve
+// pair above: these name the TRANSMIT door.
+const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+const NOT_APPROVER_TRANSMIT_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
 
 // BUG-14: the six blocked-reason nodes are gone and every control in the cluster now
 // renders at every status and for every role, disabled rather than absent. Folake's subject
@@ -544,6 +550,12 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   await signInAs(page, 'firm')
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // The seat's register: refused on the approval rung, in the server's own words.
+  const seatBox = page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) }).getByTestId('invoice-select')
+  await expect(seatBox).toBeDisabled()
+  expect(await seatBox.getAttribute('title')).toBe(AWAITING_APPROVAL_REASON)
+
   await openInvoiceRow(page, invoiceNumber)
 
   // BUG-14-04: the seat's refusal, read off the WIRE and asserted against the control's
@@ -572,7 +584,22 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   // page; re-select the entity BEFORE the row can be re-opened.
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // The role rung fires ahead of the approval rung, so the SAME disabled checkbox now
+  // carries a DIFFERENT sentence -- that change is the oracle, not the disabled state,
+  // which never moved. Re-taken after the switch: carryView remounted the page.
+  const preparerBox = page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) }).getByTestId('invoice-select')
+  await expect(preparerBox).toBeDisabled()
+  expect(await preparerBox.getAttribute('title')).toBe(NOT_APPROVER_TRANSMIT_REASON)
+
   await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('detail-submit')).toBeDisabled()
+  // BUG-14-04: the detail half moved from a rendered node to the control's own `title`
+  // (BUG-14-02 deleted submit-blocked-reason). The cross-surface parity claim above is
+  // unchanged -- both surfaces still carry the same sentence, and it is still the
+  // preparer's, not the seat's.
+  await expect(page.getByTestId('detail-submit')).toHaveAttribute('title', NOT_APPROVER_TRANSMIT_REASON)
 
   await expect(page.getByTestId('detail-approve')).toBeVisible()
 
@@ -583,8 +610,9 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   for (const testid of CLUSTER_CONTROLS) {
     await expect(page.getByTestId(testid), `${testid} must still resolve for a preparer`).toHaveCount(1)
   }
-  // The role-gated pair, and only that pair: approvalGate is the one gate in the cluster
-  // that reads the caller's role, so a role switch can only move these two. can_edit and
+  // The role-gated controls, and only those: approvalGate and submitGate are the two gates
+  // in the cluster that read the caller's role, so a role switch can only move these three
+  // (detail-submit is asserted disabled with its own sentence above). can_edit and
   // can_view_ubl are status- and content-derived (handlers.go, ubl.Missing) and are
   // deliberately NOT asserted disabled here -- a preparer may legitimately edit a validated
   // invoice and read a complete one's UBL, and claiming otherwise would red on correct code.
@@ -618,6 +646,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await signInAs(page, 'firm')
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
 
   const membersTable = page.getByTestId('members-table')
@@ -634,6 +663,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await page.getByTestId('persona-toast-dismiss').click()
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(membersTable).toBeVisible()
   await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)

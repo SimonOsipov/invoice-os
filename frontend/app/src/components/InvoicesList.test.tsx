@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import { LIVE_POLL_MS, skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
+import { LIVE_POLL_MS, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
 import { BULK_COPY, bulkBarView } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
@@ -76,7 +76,7 @@ function listResponse(invoices: InvoiceRecord[], pagination: { limit: number; of
 }
 
 function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
-  return {
+  const built = {
     id: 'inv-x',
     entity_id: 'ent-1',
     import_batch_id: null,
@@ -106,8 +106,13 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    submit_blocked_reason: null,
     ...over,
-  }
+  } as InvoiceRecord
+  // Stands in for the server's answer on an unarmed tenant. Derived from status ONLY --
+  // deriving the approval half too would put the deleted client rule back in a fixture.
+  // Specs about the gate set can_submit explicitly.
+  return { ...built, can_submit: over.can_submit ?? built.status === 'validated' }
 }
 
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
@@ -816,12 +821,10 @@ describe('InvoicesList: resolved-failed marker', () => {
   })
 })
 
-// RED spec (APPR-08-09, task-500, Stage 2.5/Mode A) — the observable form of AC #3's
-// parity claim. An awaiting-approval row renders the SAME disabled checkbox a not-yet-
-// validated row already renders: present, disabled, unchecked, no title, no tooltip, no
-// new copy ([selectable-parity-not-new-copy]). It fails today because isRowSelectable's
-// body is still status-only (its `// stub` marker), so the open-run row's checkbox is
-// enabled and select-all sweeps it in.
+// APPR-08-09 AC #3's parity claim, in its observable form. An awaiting-approval row
+// renders the SAME disabled checkbox a not-yet-validated row already renders: present,
+// disabled, unchecked ([selectable-parity-not-new-copy]). Since BUG-12 the row is disabled
+// because the SERVER said so -- `can_submit: false` on the fixture, not a status rule here.
 describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-09)', () => {
   const openRun = {
     run_state: 'open',
@@ -834,8 +837,15 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
 
   it('AC-3 parity: an awaiting-approval row keeps a PRESENT, disabled, unchecked checkbox and select-all counts 1', async () => {
     const rows = [
-      row({ id: 'clear', invoice_number: 'INV-CLEAR', status: 'validated' }),
-      row({ id: 'awaiting', invoice_number: 'INV-AWAIT', status: 'validated', approval: openRun }),
+      gateRow({ id: 'clear', invoice_number: 'INV-CLEAR', status: 'validated', can_submit: true, submit_blocked_reason: null }),
+      gateRow({
+        id: 'awaiting',
+        invoice_number: 'INV-AWAIT',
+        status: 'validated',
+        approval: openRun,
+        can_submit: false,
+        submit_blocked_reason: SUBMIT_REASON.awaiting,
+      }),
     ]
     mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
 
@@ -857,6 +867,74 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
   })
 })
 
+// RED spec (Stage 2.5, Mode A) — the register renders the server's answer. The submit pair
+// is not on InvoiceRecord yet, so the override type names it and this stays a value test.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...row(), ...over } as InvoiceRecord
+}
+
+// submitGate's reachable sentences (internal/invoice/handlers.go). Every retargeted spec
+// below sets one on the row: the SPA authors none of them any more.
+const SUBMIT_REASON = {
+  role: 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.',
+  notValidated: 'Only validated invoices can be submitted — re-validate this invoice first.',
+  awaiting: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+} as const
+
+describe('InvoicesList: the register reads the wire submit gate (BUG-12)', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+  // submitGate's role rung (internal/invoice/handlers.go).
+  const SERVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+  it("B12-6: the register renders the server's enabled answer on an open run", async () => {
+    // Both polarities on one page, each contradicting the status/approval rule: a gate
+    // stuck open or stuck shut reds one of the two rows.
+    const rows = [
+      gateRow({
+        id: 'open-clear',
+        invoice_number: 'INV-OPEN-CLEAR',
+        status: 'validated',
+        approval: openRun,
+        can_submit: true,
+        submit_blocked_reason: null,
+      }),
+      gateRow({
+        id: 'wire-blocked',
+        invoice_number: 'INV-WIRE-BLOCKED',
+        status: 'validated',
+        approval: null,
+        can_submit: false,
+        submit_blocked_reason: SERVER_REASON,
+      }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OPEN-CLEAR')
+
+    const clear = screen.getByLabelText('Select invoice INV-OPEN-CLEAR') as HTMLInputElement
+    const blocked = screen.getByLabelText('Select invoice INV-WIRE-BLOCKED') as HTMLInputElement
+
+    expect(clear.disabled, 'the server cleared this row while its newest run is still open').toBe(false)
+    expect(clear.getAttribute('title')).toBeNull()
+
+    expect(blocked.disabled, 'the server refused this row despite a clear status and no run').toBe(true)
+    expect(blocked.getAttribute('title')).toBe(SERVER_REASON)
+  })
+})
+
 // BUG-09 deleted the visible sibling and its per-row aria-describedby id -- a
 // full-width line of prose under every blocked row. The reason copy is still
 // skipReasonLabel's own (GAP-3), never an SPA-authored literal.
@@ -871,26 +949,45 @@ describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the 
   }
 
   it("A06-5: a blocked checkbox is genuinely disabled and carries the server's reason in its title attribute", async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
     mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
 
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-BLOCKED')
 
     const checkbox = screen.getByTestId('invoice-select') as HTMLInputElement
-    const reason = skipReasonLabel('not_validated')
+    const reason = SUBMIT_REASON.notValidated
 
     // The real disabled attribute -- a keyboard user cannot reach it.
     expect(checkbox.disabled).toBe(true)
     checkbox.focus()
     expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
 
-    expect(checkbox.getAttribute('title'), "the SPA must carry skipReasonLabel's own sentence, not a substitute").toBe(reason)
+    expect(checkbox.getAttribute('title'), "the SPA must carry the server's own sentence, not a substitute").toBe(reason)
   })
 
   it('A06-5b: two blocked rows on the same page each carry their OWN reason in their title', async () => {
-    const notValidated = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'draft' })
-    const awaitingApproval = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated', approval: openRun })
+    const notValidated = gateRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const awaitingApproval = gateRow({
+      id: 'inv-b',
+      invoice_number: 'INV-B',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
     mockFetchSequence([listResponse([notValidated, awaitingApproval], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -899,8 +996,8 @@ describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the 
     const checkboxes = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
     expect(checkboxes).toHaveLength(2)
     const titles = checkboxes.map((c) => c.getAttribute('title'))
-    expect(titles[0]).toBe(skipReasonLabel('not_validated'))
-    expect(titles[1]).toBe(skipReasonLabel('awaiting_approval'))
+    expect(titles[0]).toBe(SUBMIT_REASON.notValidated)
+    expect(titles[1]).toBe(SUBMIT_REASON.awaiting)
     expect(titles[0], 'two blocked rows must not share one reason').not.toBe(titles[1])
   })
 
@@ -908,8 +1005,21 @@ describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the 
   // disabled-only style swap that outranks the unguarded :hover) -- stripping it
   // entirely left all 33 specs in this file green.
   it('QA-1: layer 2 -- the disabled-only cursor/opacity swap lands on a blocked checkbox and NOT on a selectable one', async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
-    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const selectable = gateRow({
+      id: 'inv-ok',
+      invoice_number: 'INV-OK',
+      status: 'validated',
+      approval: null,
+      can_submit: true,
+      submit_blocked_reason: null,
+    })
     mockFetchSequence([listResponse([blocked, selectable], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -974,7 +1084,13 @@ describe('BUG-09: a blocked register row costs no extra grid line', () => {
   }
 
   it("B09-1: a blocked register row renders exactly the head's grid children, and keeps its title", async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
     mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -985,13 +1101,27 @@ describe('BUG-09: a blocked register row costs no extra grid line', () => {
     const rowEl = screen.getByTestId('invoice-row')
 
     // Non-vacuity: the row must really be blocked, or two equal counts prove nothing.
-    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
     expect(rowEl.children.length).toBe((head as HTMLElement).children.length)
   })
 
   it('B09-2: an awaiting-approval register row renders the same grid children as a selectable one', async () => {
-    const awaiting = row({ id: 'inv-await', invoice_number: 'INV-AWAIT', status: 'validated', approval: openRun })
-    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    const awaiting = gateRow({
+      id: 'inv-await',
+      invoice_number: 'INV-AWAIT',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
+    const selectable = gateRow({
+      id: 'inv-ok',
+      invoice_number: 'INV-OK',
+      status: 'validated',
+      approval: null,
+      can_submit: true,
+      submit_blocked_reason: null,
+    })
     mockFetchSequence([listResponse([awaiting, selectable], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -1002,7 +1132,7 @@ describe('BUG-09: a blocked register row costs no extra grid line', () => {
 
     // Non-vacuity: one row really blocked, the other really selectable.
     expect(awaitingBox.disabled).toBe(true)
-    expect(awaitingBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(awaitingBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
     expect(cleanBox.disabled).toBe(false)
 
     expect(awaitingRow.children.length).toBe(cleanRow.children.length)
@@ -1025,7 +1155,13 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
   }
 
   it('QA-B09-3: the head and a blocked row each render exactly SIX grid children, pinned as a literal', async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
     mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -1034,15 +1170,28 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head') as HTMLElement
     expect(head).not.toBeNull()
     // Non-vacuity: the row must really be blocked.
-    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(skipReasonLabel('not_validated'))
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
 
     expect(head.children.length, 'the head is the denominator B09-1 divides by').toBe(REGISTER_CELLS)
     expect(screen.getByTestId('invoice-row').children.length, 'a blocked row is checkbox + five cells, nothing more').toBe(REGISTER_CELLS)
   })
 
   it('QA-B09-4: a blocked row prints its reason nowhere in its own text, at any nesting depth', async () => {
-    const notValidated = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'draft' })
-    const awaiting = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated', approval: openRun })
+    const notValidated = gateRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const awaiting = gateRow({
+      id: 'inv-b',
+      invoice_number: 'INV-B',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
     mockFetchSequence([listResponse([notValidated, awaiting], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -1052,11 +1201,11 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     // Non-vacuity: both rows really are blocked, and each really holds its own sentence
     // in `title` -- so the strings below exist on the page, just never as rendered text.
     const [aBox, bBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
-    expect(aBox.getAttribute('title')).toBe(skipReasonLabel('not_validated'))
-    expect(bBox.getAttribute('title')).toBe(skipReasonLabel('awaiting_approval'))
+    expect(aBox.getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
+    expect(bBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
 
-    expect(aRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(skipReasonLabel('not_validated'))
-    expect(bRow.textContent).not.toContain(skipReasonLabel('awaiting_approval'))
+    expect(aRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(SUBMIT_REASON.notValidated)
+    expect(bRow.textContent).not.toContain(SUBMIT_REASON.awaiting)
   })
 
   it('QA-B09-5: the ERROR chip and the RESOLVED marker nest inside the status cell, so the busiest row is still six wide', async () => {
@@ -1635,6 +1784,57 @@ describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, AP
     const preamble = source.slice(Math.max(0, declIdx - 700), declIdx)
     expect(preamble, 'a comment must say WHY submitSelection takes no AbortSignal -- omission alone is not documentation').toMatch(/\bsignal\b/i)
     expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
+  })
+})
+
+// Rendering resultLabel (InvoicesList.tsx) from `r.reason` raw reds nothing else in the
+// suite, so the panel could show the operator the machine token. The sentence is spelled
+// here rather than read from skipReasonLabel -- a helper-derived oracle cannot catch the
+// label moving.
+describe('InvoicesList: the bulk-submit result panel speaks the server sentence', () => {
+  it('an awaiting_approval skip renders awaitingApprovalReason, never the wire token', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: false, reason: 'awaiting_approval' }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+
+    expect(panel.textContent, 'the panel must name the row it reports on').toContain('INV-A')
+    expect(panel.textContent).toContain(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
+    expect(panel.textContent, 'the machine token is not operator copy').not.toContain('awaiting_approval')
+  })
+
+  it('a queued row still reads Queued, so the skip arm is not the only reachable one', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    expect(panel.textContent).toContain('Queued')
+    expect(panel.textContent).not.toContain('waiting on approval')
   })
 })
 

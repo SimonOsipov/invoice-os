@@ -2,12 +2,13 @@
 // ROUTE-05-02: the capture call inside the front-door effect (App.tsx:1685-1689), which
 // must run under the same activeSession/autoPersona guards as the bounce it precedes.
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
 import { readDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
+import type { PlatformCtx } from './types'
 import App from './App'
 
 let originalLocation: PropertyDescriptor | undefined
@@ -34,7 +35,8 @@ function createMemoryStorage() {
 // override (every capture spec here boots off '/'), and an `hrefWrites` recorder via
 // `get`/`set href` accessors -- a plain field only remembers the last write, so a
 // zero-write case would be indistinguishable from the untouched initial value.
-function stubLocation(overrides: { search?: string; pathname?: string } = {}) {
+// `hash` (QA addition) defaults to '' like the parent helper; only the hash spec below sets it.
+function stubLocation(overrides: { search?: string; pathname?: string; hash?: string } = {}) {
   const hrefWrites: string[] = []
   Object.defineProperty(window, 'location', {
     configurable: true,
@@ -47,7 +49,7 @@ function stubLocation(overrides: { search?: string; pathname?: string } = {}) {
         hrefWrites.push(v)
       },
       pathname: overrides.pathname ?? '/',
-      hash: '',
+      hash: overrides.hash ?? '',
       hostname: 'localhost',
       origin: 'http://localhost',
       search: overrides.search ?? '',
@@ -64,8 +66,16 @@ function workspaceIsRendered(): boolean {
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
 
-// Matches sibling App test files that mount a live session; harmless no-op otherwise.
-vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
+// QA addition: captures ctx so the signed-out-transition spec can call ctx.signOut()
+// directly, same pattern as App.suspended.test.tsx:52-57. Harmless no-op for every other
+// spec in this file, which never reads capturedCtx.
+let capturedCtx: PlatformCtx | undefined
+vi.mock('./components/Sidebar', () => ({
+  Sidebar: (p: { ctx: PlatformCtx }) => {
+    capturedCtx = p.ctx
+    return null
+  },
+}))
 
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
@@ -74,6 +84,7 @@ beforeEach(() => {
   // the real one is enough, no stub needed.
   sessionStorage.clear()
   window.history.replaceState(null, '', '/')
+  capturedCtx = undefined
 })
 
 afterEach(() => {
@@ -151,5 +162,55 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(readDestination()).toBeNull()
     expect(hrefWrites).toEqual([])
     expect(screen.getByText('Choose an account')).toBeTruthy()
+  })
+})
+
+// QA adversarial coverage (Stage 4). A path+?persona= combination is already exercised
+// by capture_aLivePersonaParamStoresNothing above -- not repeated here.
+describe('front door: adversarial coverage (QA)', () => {
+  it('capture_aDeepPathWithAHashCapturesPathOnly', () => {
+    // window.location.pathname structurally excludes the fragment, so a hash present at
+    // boot must not leak into the stored value -- would catch a rewrite that read
+    // `pathname + hash` instead of `pathname` alone.
+    const { hrefWrites } = stubLocation({ pathname: '/audit', hash: '#x' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    expect(readDestination()).toBe('/audit')
+    expect(hrefWrites).toEqual(['https://landing.example'])
+  })
+
+  it('capture_aSecondSessionlessRenderOverwritesTheFirst', () => {
+    // sessionStorage.setItem always overwrites; the most recent deep link is the one a
+    // later consumer should replay. Would catch an accidental "only capture once" guard.
+    const first = stubLocation({ pathname: '/audit' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const { unmount } = render(<App />)
+    expect(readDestination()).toBe('/audit')
+    expect(first.hrefWrites).toEqual(['https://landing.example'])
+    unmount()
+
+    stubLocation({ pathname: '/reports' })
+    render(<App />)
+    expect(readDestination()).toBe('/reports')
+  })
+
+  it('capture_aSignedOutTransitionAlsoCapturesTheCurrentPath', () => {
+    // Not a fresh boot: a LIVE session renders first (front-door effect's guard returns
+    // early, nothing captured), then ctx.signOut() -- the same callback the 401 seam fires
+    // (App.suspended.test.tsx:166) -- flips activeSession to null. The effect's dependency
+    // array is [activeSession, autoPersona], so it re-runs and reaches the capture on this
+    // transition, not just on a sessionless mount.
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    const { hrefWrites } = stubLocation({ pathname: '/reports' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    expect(readDestination()).toBeNull()
+    expect(hrefWrites).toEqual([])
+
+    expect(capturedCtx?.signOut).toBeDefined()
+    act(() => {
+      capturedCtx?.signOut()
+    })
+    expect(readDestination()).toBe('/reports')
   })
 })

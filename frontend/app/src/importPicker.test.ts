@@ -273,7 +273,7 @@ const DOCUMENT_GRAIN = 'That grain is CSV and XLSX only: in a PDF or a DOCX, one
 const RUN_CAP = 'Pick up to five files per run.'
 
 describe('SW-8 (EXTR-15-09, AC-7): the empty picker states both grains', () => {
-  it('SW-8 (RED until EXTR-15-09): the document grain follows the spreadsheet one, in the same paragraph', () => {
+  it('SW-8 (GREEN since EXTR-15-09): the document grain follows the spreadsheet one, in the same paragraph', () => {
     const code = pickerCode()
 
     // AC-2 freeze and the control needle in one: the shipped sentence is byte-identical.

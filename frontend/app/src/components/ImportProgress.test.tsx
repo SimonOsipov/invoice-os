@@ -426,7 +426,7 @@ function footerParagraphs(container: HTMLElement): string[] {
 describe('EXTR-15-09 SW-9 (AC-8): the footer does not tell a document run the server grouped it', () => {
   afterEach(() => cleanup())
 
-  it('SW-9 (RED until EXTR-15-09): a document run reads "extracts"; a spreadsheet run is byte-identical to today', () => {
+  it('SW-9 (GREEN since EXTR-15-09): a document run reads "extracts"; a spreadsheet run is byte-identical to today', () => {
     const docRun: ImportRun = { files: [runFile('f1', 'a.pdf')], cursor: 0, status: 'running' }
     const doc = footerParagraphs(render(<ImportProgress ctx={progressCtx('document', docRun, { f1: { kind: 'reading' } })} />).container)
     cleanup()
@@ -447,7 +447,7 @@ describe('EXTR-15-09 SW-9 (AC-8): the footer does not tell a document run the se
     expect(sheet[0]).toBe(SPREADSHEET_FOOTER)
   })
 
-  it('SW-9 source (RED until EXTR-15-09): one sentence, two arms — the shared prose is not duplicated', () => {
+  it('SW-9 source (GREEN since EXTR-15-09): one sentence, two arms — the shared prose is not duplicated', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/components/ImportProgress.tsx'), 'utf8')
     const count = (needle: string) => src.split(needle).length - 1
 

@@ -28,7 +28,7 @@
 // is pure and spec'd (`unreadableCsvAll`, CSV-1 + BULK-06-… File-column siblings); only
 // the Blob/anchor click lives here.
 
-import { unreadableCsvAll, type UnreadableRowAll } from '../lib/reviewBatch'
+import { unreadableCsvAll, type ReviewUnit, type UnreadableRowAll } from '../lib/reviewBatch'
 
 // Widened by one column, File, at the front (BULK-01-07, AC #5) -- UNREADABLE_GRID had
 // no such column when this tab could only ever show one batch's rows.
@@ -40,15 +40,18 @@ const UNREADABLE_GRID = '150px 90px 170px 1fr'
 // `batchIds` (was a single `batchId`) names the download: `.join('-')` over a
 // single-element array returns that element verbatim, so a single-batch run's filename
 // stays byte-identical to the shipped one.
-function downloadCsv(rows: UnreadableRowAll[], batchIds: string[]): void {
+function downloadCsv(rows: UnreadableRowAll[], batchIds: string[], unit: ReviewUnit): void {
   // The BOM is what makes Excel read the em dash and any non-ASCII supplier name as
   // UTF-8 rather than the local ANSI codepage — the same mojibake class the importer's
   // own decoder exists to undo, and this file's whole purpose is to be opened in Excel.
-  const blob = new Blob([`﻿${unreadableCsvAll(rows)}`], { type: 'text/csv;charset=utf-8' })
+  const blob = new Blob([`﻿${unreadableCsvAll(rows, unit)}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `unreadable-rows-${batchIds.join('-')}.csv`
+  a.download =
+    unit === 'document'
+      ? `unreadable-documents-${batchIds.join('-')}.csv`
+      : `unreadable-rows-${batchIds.join('-')}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -58,6 +61,7 @@ export function ReviewUnreadableTab({
   rowsTotal,
   batchIds,
   onImportCorrected,
+  unit,
 }: {
   rows: UnreadableRowAll[]
   // Summed across every batch in the run (BULK-01-07) -- was the one batch's own
@@ -67,22 +71,32 @@ export function ReviewUnreadableTab({
   // longer key off one id.
   batchIds: string[]
   onImportCorrected: () => void
+  // Required and undefaulted: a caller that forgot it would ship a document run still
+  // saying "rows", and only the compiler can see that (SW-4a, ReviewUnreadableTab.test.tsx).
+  unit: ReviewUnit
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Amber panel — CreateUpload.tsx:203-226's shape. Amber, not red: nothing here
           failed a rule, so the red the compliance channel owns would mis-signal it. */}
       <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>{rows.length} rows never became invoices</div>
+        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
+          {unit === 'document' ? <>{rows.length} documents never became invoices</> : <>{rows.length} rows never became invoices</>}
+        </div>
         <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
-          The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.
+          {unit === 'document'
+            ? 'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.'
+            : 'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'}
         </p>
       </div>
 
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div className="label" style={{ display: 'grid', gridTemplateColumns: UNREADABLE_GRID, gap: 14, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <span>File</span>
-          <span>Row</span>
+          {/* Two whole spans, not one span around a ternary — reviewCopy.census.test.ts
+              (U4) needles each header cell as written. The em dash is what the cells
+              below already render for a null row (SW-5, ReviewAlreadyImportedTab.test.tsx). */}
+          {unit === 'document' ? <span>—</span> : <span>Row</span>}
           <span>Field</span>
           <span>Why it could not be read</span>
         </div>
@@ -110,7 +124,7 @@ export function ReviewUnreadableTab({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
-          onClick={() => downloadCsv(rows, batchIds)}
+          onClick={() => downloadCsv(rows, batchIds, unit)}
           className="v2-btn v2-btn-ghost pf-btn"
           style={{ height: 36, padding: '0 14px', fontSize: 13 }}
         >
@@ -124,7 +138,11 @@ export function ReviewUnreadableTab({
           Import a corrected file
         </button>
         <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--fg-3)' }}>
-          {rows.length} of {rowsTotal} rows. The invoices that did import are unaffected.
+          {unit === 'document' ? (
+            <>{rows.length} of {rowsTotal} documents. The invoices that did import are unaffected.</>
+          ) : (
+            <>{rows.length} of {rowsTotal} rows. The invoices that did import are unaffected.</>
+          )}
         </span>
       </div>
     </div>

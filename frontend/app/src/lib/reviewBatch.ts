@@ -573,7 +573,13 @@ export interface ReviewHeader {
 export function reviewHeader(
   batch: Pick<ImportBatch, 'id' | 'rows_total' | 'rule_set_version' | 'created_at'>,
   live: { allTotal: number },
+  unit: ReviewUnit,
 ): ReviewHeader {
+  // Only the counted noun branches; the rule-set/date tail is shared.
+  const read =
+    unit === 'document'
+      ? `${batch.rows_total} DOCUMENTS READ · SERVER VERDICT · RULE SET `
+      : `${batch.rows_total} ROWS READ · SERVER VERDICT · RULE SET `
   return {
     title: `${live.allTotal} invoices imported`,
     batchId: batch.id,
@@ -581,7 +587,7 @@ export function reviewHeader(
     // version is null) -- rendered verbatim and never re-cased here, because uppercasing
     // is CSS's job and a `.toUpperCase()` would also uppercase 'not evaluated' into a
     // shout. fmtDateTime is lib/format.ts's; no date formatting is authored here.
-    subline: `${batch.rows_total} ROWS READ · SERVER VERDICT · RULE SET ${ruleSetLabel(batch.rule_set_version)} · ${fmtDateTime(batch.created_at)}`,
+    subline: `${read}${ruleSetLabel(batch.rule_set_version)} · ${fmtDateTime(batch.created_at)}`,
   }
 }
 
@@ -598,9 +604,12 @@ export interface ReviewHeaderAll {
   filesLine: string
 }
 
+// `unit` is a parameter even though `filename` is in reach: a second derivation is a
+// second source of truth (SW-2 structure, reviewBatch.test.ts).
 export function reviewHeaderAll(
   batches: Pick<ImportBatch, 'id' | 'filename' | 'rows_total' | 'rule_set_version' | 'created_at'>[],
   live: { allTotal: number },
+  unit: ReviewUnit,
 ): ReviewHeaderAll {
   const rowsTotal = batches.reduce((sum, b) => sum + b.rows_total, 0)
   const label = ruleSetLabel(minNonNullVersion(batches.map((b) => b.rule_set_version)))
@@ -610,10 +619,14 @@ export function reviewHeaderAll(
         ? `from ${batches[0].filename}`
         : SOURCE_NOT_RECORDED
       : `from ${batches.length} files`
+  const read =
+    unit === 'document'
+      ? `${rowsTotal} DOCUMENTS READ · SERVER VERDICT · RULE SET `
+      : `${rowsTotal} ROWS READ · SERVER VERDICT · RULE SET `
   return {
     title: `${live.allTotal} invoices imported`,
     batchIds: batches.map((b) => b.id),
-    subline: `${rowsTotal} ROWS READ · SERVER VERDICT · RULE SET ${label} · ${fmtDateTime(batches[0]?.created_at)}`,
+    subline: `${read}${label} · ${fmtDateTime(batches[0]?.created_at)}`,
     filesLine,
   }
 }
@@ -632,9 +645,19 @@ export interface ReviewTab {
 
 // `alreadyImported` is required, not optional: a caller that silently omitted it would
 // drop the tab for a run that has already-imported rows, and no spec could catch it.
-export function reviewTabs(counts: { invoices: number; unreadable: number; alreadyImported: number }): ReviewTab[] {
+export function reviewTabs(
+  counts: { invoices: number; unreadable: number; alreadyImported: number },
+  unit: ReviewUnit,
+): ReviewTab[] {
   const tabs: ReviewTab[] = [{ id: 'invoices', label: `Invoices (${counts.invoices})` }]
-  if (counts.unreadable > 0) tabs.push({ id: 'unreadable', label: `Unreadable rows (${counts.unreadable})` })
+  // Only the unreadable label names the unit; the other two are frozen in both units so
+  // no tab is added, renamed or dropped by the branch (SW-2, reviewBatch.test.ts).
+  if (counts.unreadable > 0)
+    tabs.push({
+      id: 'unreadable',
+      label:
+        unit === 'document' ? `Unreadable documents (${counts.unreadable})` : `Unreadable rows (${counts.unreadable})`,
+    })
   if (counts.alreadyImported > 0)
     tabs.push({ id: 'already-imported', label: `Already imported (${counts.alreadyImported})` })
   return tabs
@@ -670,6 +693,11 @@ export function reviewHash(view: View, createStep: CreateStep, reviewBatchIds: s
 // gone (`[raw-source-line-dropped]`), only this rendered table.
 export const UNREADABLE_CSV_HEADER = 'Row,Field,Why it could not be read'
 
+// The document unit DROPS the Row column rather than renaming it: every RowError the
+// document path builds omits Row (internal/importer/document.go), so the column would be
+// empty on every line. SW-11 (reviewBatch.test.ts) pins the cells following the header.
+export const UNREADABLE_CSV_HEADER_DOC = 'Field,Why it could not be read'
+
 // A field is quoted iff it contains a comma, a double quote, CR or LF; embedded quotes
 // are doubled. The em dash needs no quoting (it is neither) and must survive verbatim --
 // escaping it would put visible quotes around a placeholder in Excel.
@@ -677,13 +705,15 @@ function csvCell(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
-export function unreadableCsv(rows: UnreadableRow[]): string {
+export function unreadableCsv(rows: UnreadableRow[], unit: ReviewUnit): string {
   const lines = rows.map((r) =>
     // `row: null` is an EMPTY cell, never the string 'null': the server told us it could
     // not attribute the failure to a line, and "null" in a spreadsheet reads as data.
-    [r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
+    (unit === 'document' ? [r.column, r.message] : [r.row == null ? '' : String(r.row), r.column, r.message])
+      .map(csvCell)
+      .join(','),
   )
-  return [UNREADABLE_CSV_HEADER, ...lines].join('\n')
+  return [unit === 'document' ? UNREADABLE_CSV_HEADER_DOC : UNREADABLE_CSV_HEADER, ...lines].join('\n')
 }
 
 // Additive sibling of UNREADABLE_CSV_HEADER/unreadableCsv, gaining the File column a
@@ -692,11 +722,19 @@ export function unreadableCsv(rows: UnreadableRow[]): string {
 // them today, and BULK-01-07 owns switching it over.
 export const UNREADABLE_CSV_HEADER_ALL = 'File,Row,Field,Why it could not be read'
 
-export function unreadableCsvAll(rows: UnreadableRowAll[]): string {
+// Same dropped column as UNREADABLE_CSV_HEADER_DOC above — see that note.
+export const UNREADABLE_CSV_HEADER_ALL_DOC = 'File,Field,Why it could not be read'
+
+export function unreadableCsvAll(rows: UnreadableRowAll[], unit: ReviewUnit): string {
   const lines = rows.map((r) =>
-    [r.file, r.row == null ? '' : String(r.row), r.column, r.message].map(csvCell).join(','),
+    (unit === 'document'
+      ? [r.file, r.column, r.message]
+      : [r.file, r.row == null ? '' : String(r.row), r.column, r.message]
+    )
+      .map(csvCell)
+      .join(','),
   )
-  return [UNREADABLE_CSV_HEADER_ALL, ...lines].join('\n')
+  return [unit === 'document' ? UNREADABLE_CSV_HEADER_ALL_DOC : UNREADABLE_CSV_HEADER_ALL, ...lines].join('\n')
 }
 
 // The already-imported channel's own download, DELIBERATELY a second file rather than
@@ -704,13 +742,23 @@ export function unreadableCsvAll(rows: UnreadableRowAll[]): string {
 // "Why it could not be read" would restate the bug in the export.
 export const ALREADY_IMPORTED_CSV_HEADER_ALL = 'File,Row,Invoice id'
 
-export function alreadyImportedCsvAll(rows: AlreadyImportedRowAll[]): string {
+// Same dropped column as UNREADABLE_CSV_HEADER_DOC above — see that note.
+export const ALREADY_IMPORTED_CSV_HEADER_ALL_DOC = 'File,Invoice id'
+
+export function alreadyImportedCsvAll(rows: AlreadyImportedRowAll[], unit: ReviewUnit): string {
   const lines = rows.map((r) =>
     // An unattributed row and an unresolved invoice id are both EMPTY cells, never the
     // string 'null' -- which reads as data in a spreadsheet.
-    [r.file, r.row == null ? '' : String(r.row), r.invoiceId ?? ''].map(csvCell).join(','),
+    (unit === 'document'
+      ? [r.file, r.invoiceId ?? '']
+      : [r.file, r.row == null ? '' : String(r.row), r.invoiceId ?? '']
+    )
+      .map(csvCell)
+      .join(','),
   )
-  return [ALREADY_IMPORTED_CSV_HEADER_ALL, ...lines].join('\n')
+  return [unit === 'document' ? ALREADY_IMPORTED_CSV_HEADER_ALL_DOC : ALREADY_IMPORTED_CSV_HEADER_ALL, ...lines].join(
+    '\n',
+  )
 }
 
 // --- Files strip (AC-8/9/10/11/12, BULK-01-06) ---
@@ -745,17 +793,21 @@ export interface FileStripRow {
 // same fact for a given batch. NEVER `batch.status`
 // ([reason-comes-from-errors-not-status]) -- a fully-quarantined file still finalizes
 // 'completed' server-side (service.go:923), and its reason lives only in `errors`.
-function batchReason(batch: Pick<ImportBatch, 'rows_valid' | 'rows_total' | 'errors'>): string | null {
+function batchReason(batch: Pick<ImportBatch, 'rows_valid' | 'rows_total' | 'errors'>, unit: ReviewUnit): string | null {
   if (batch.rows_valid > 0) return null
   if (batch.errors.length > 0) return batch.errors.map((e) => e.message).join('; ')
-  return `0 of ${batch.rows_total} rows produced an invoice`
+  return unit === 'document'
+    ? `0 of ${batch.rows_total} documents produced an invoice`
+    : `0 of ${batch.rows_total} rows produced an invoice`
 }
 
-export function filesStrip(batches: ImportBatch[], run: ImportRun | null): FileStripRow[] {
+// `unit` is a parameter even though `filename` is in reach: a second derivation is a
+// second source of truth (SW-2 structure, reviewBatch.test.ts).
+export function filesStrip(batches: ImportBatch[], run: ImportRun | null, unit: ReviewUnit): FileStripRow[] {
   const batchRows: FileStripRow[] = batches.map((b) => ({
     id: b.id,
     filename: filenameLabel(b.filename),
-    reason: batchReason(b),
+    reason: batchReason(b, unit),
   }))
   // Run-only failures: a file whose outcome never became a batch at all
   // (FileOutcome's 'failed' kind carries no batchId), so it is never represented among

@@ -187,7 +187,7 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                     later is learning it too late. */}
                 <p style={{ fontSize: 13, color: 'var(--fg-3)', margin: 0, maxWidth: 420, lineHeight: 1.55 }}>
                   The parser extracts buyer details, line items and totals. One row is one line item; rows group into invoices by the column you map to{' '}
-                  <span className="mono" style={{ fontSize: 11.5 }}>invoice_number</span> — one invoice or five hundred, the same way. Pick up to five files per run.
+                  <span className="mono" style={{ fontSize: 11.5 }}>invoice_number</span> — one invoice or five hundred, the same way. That grain is CSV and XLSX only: in a PDF or a DOCX, one document is one invoice. Pick up to five files per run.
                 </p>
               </>
             )}

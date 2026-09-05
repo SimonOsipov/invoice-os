@@ -9,17 +9,13 @@
 //
 // SW-4 IS THEREFORE TWO SPECS AT TWO LAYERS, and neither one alone is the oracle:
 //   SW-4a  the compile-time half. `pnpm --filter @invoice-os/app typecheck` is its ONLY
-//          oracle — vitest strips types, so it runs green under vitest either way. Today
-//          the `@ts-expect-error` directives below are UNUSED (omitting `unit` compiles
-//          fine), which tsc reports as TS2578; when 09 lands they become used and tsc
-//          goes quiet. That inversion is the spec.
+//          oracle — vitest strips types, so it runs green under vitest either way. The
+//          two `@ts-expect-error` directives below are USED: omitting `unit` is a tsc
+//          error, so tsc is quiet. Make the prop optional and they go unused, which tsc
+//          reports as TS2578. That inversion is the spec.
 //   SW-4b  the source-scan half, so the vitest leg is not blind to AC-4 entirely. It sees
 //          `unit?:` and a default value, which is what an executor reaches for when the
 //          existing render call sites start failing to compile.
-//
-// MODE B WILL HAVE TO EDIT ReviewAlreadyImportedTab.test.tsx. Twelve shipped render calls
-// in that file omit `unit`, and every one becomes a tsc error the moment AC-4 lands. That
-// is the prop doing its job, not a regression.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -33,7 +29,7 @@ function readSrc(rel: string): string {
 }
 
 describe('EXTR-15-09 SW-4 (AC-4): the unit is a required prop on both review tabs', () => {
-  it('SW-4a (RED under `typecheck` until EXTR-15-09; always green under vitest): omitting `unit` must not compile', () => {
+  it('SW-4a (GREEN under `typecheck` since EXTR-15-09; always green under vitest): omitting `unit` must not compile', () => {
     const missingOnUnreadable = (
       // @ts-expect-error AC-4: `unit` is required. While this directive is UNUSED, tsc
       // reports TS2578 here and that IS this spec's red.
@@ -49,7 +45,7 @@ describe('EXTR-15-09 SW-4 (AC-4): the unit is a required prop on both review tab
     expect(missingOnAlreadyImported).toBeTruthy()
   })
 
-  it('SW-4b (RED until EXTR-15-09): each tab declares `unit: ReviewUnit`, neither optional nor defaulted', () => {
+  it('SW-4b (GREEN since EXTR-15-09): each tab declares `unit: ReviewUnit`, neither optional nor defaulted', () => {
     const files = ['src/components/ReviewUnreadableTab.tsx', 'src/components/ReviewAlreadyImportedTab.tsx']
     const wrong: string[] = []
 

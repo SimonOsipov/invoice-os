@@ -23,7 +23,7 @@ describe('ReviewAlreadyImportedTab: AC-5, the per-row route-out', () => {
     const rows: AlreadyImportedRowAll[] = [{ file: 'june.csv', row: 5, invoiceId: 'inv-1' }]
     const onOpenInvoice = vi.fn()
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={5} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={5} batchIds={['b1']} onOpenInvoice={onOpenInvoice} unit="spreadsheet" />)
 
     fireEvent.click(screen.getByRole('button', { name: 'View invoice' }))
 
@@ -35,7 +35,7 @@ describe('ReviewAlreadyImportedTab: AC-5, the per-row route-out', () => {
     const rows: AlreadyImportedRowAll[] = [{ file: 'june.csv', row: 5, invoiceId: null }]
     const onOpenInvoice = vi.fn()
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={5} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={5} batchIds={['b1']} onOpenInvoice={onOpenInvoice} unit="spreadsheet" />)
 
     const button = screen.getByRole('button', { name: 'View invoice' }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
@@ -53,7 +53,7 @@ describe('ReviewAlreadyImportedTab: AC-2, neutral framing', () => {
       { file: 'july.csv', row: 8, invoiceId: null },
     ]
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={10} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={10} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
 
     // Positive assertion first -- an empty render must not vacuously pass the negative
     // checks below just because it renders no text at all.
@@ -70,7 +70,7 @@ describe('ReviewAlreadyImportedTab: AC-3, null-row and filename-fallback renderi
   it('AIMPTAB-4: a null row renders an em dash and the filename fallback survives', () => {
     const rows: AlreadyImportedRowAll[] = [{ file: 'source not recorded', row: null, invoiceId: 'inv-2' }]
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
 
     expect(screen.getByText('—')).toBeTruthy()
     expect(screen.getByText('source not recorded')).toBeTruthy()
@@ -103,7 +103,7 @@ describe('ReviewAlreadyImportedTab: [C3] N rows can be unresolved at once, so th
       { file: 'july.csv', row: 8, invoiceId: null },
     ]
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={2} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={2} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
 
     const buttons = screen.getAllByRole('button', { name: 'View invoice' })
     expect(buttons).toHaveLength(2)
@@ -123,7 +123,7 @@ describe('ReviewAlreadyImportedTab: [C3] N rows can be unresolved at once, so th
 
 describe('ReviewAlreadyImportedTab: QA -- zero rows', () => {
   it('AIMPTAB-QA-1: an empty channel renders a truthful zero state, no row controls', () => {
-    render(<ReviewAlreadyImportedTab rows={[]} rowsTotal={0} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={[]} rowsTotal={0} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
 
     expect(screen.getByText('0 rows were already in your ledger')).toBeTruthy()
     expect(screen.getByText('0 of 0 rows were already in your ledger.')).toBeTruthy()
@@ -142,7 +142,7 @@ describe('ReviewAlreadyImportedTab: QA -- scale (the real repro: 750 rows / 250 
     }
     const onOpenInvoice = vi.fn()
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={900} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={900} batchIds={['b1']} onOpenInvoice={onOpenInvoice} unit="spreadsheet" />)
 
     expect(screen.getByText('750 rows were already in your ledger')).toBeTruthy()
     expect(screen.getByText('750 of 900 rows were already in your ledger.')).toBeTruthy()
@@ -175,7 +175,7 @@ describe('ReviewAlreadyImportedTab: QA -- mixed resolved/unresolved routing', ()
     ]
     const onOpenInvoice = vi.fn()
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1']} onOpenInvoice={onOpenInvoice} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1']} onOpenInvoice={onOpenInvoice} unit="spreadsheet" />)
 
     const buttons = screen.getAllByRole('button', { name: 'View invoice' }) as HTMLButtonElement[]
     expect(buttons).toHaveLength(3)
@@ -203,7 +203,7 @@ describe('ReviewAlreadyImportedTab: QA -- per-row file label in a multi-file run
     ]
     const onOpenInvoice = vi.fn()
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1', 'b2']} onOpenInvoice={onOpenInvoice} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={3} batchIds={['b1', 'b2']} onOpenInvoice={onOpenInvoice} unit="spreadsheet" />)
 
     for (const [file, rowLabel, invoiceId] of [
       ['june.csv', '5', 'inv-1'],
@@ -240,7 +240,7 @@ describe('ReviewAlreadyImportedTab: QA -- CSV download wiring', () => {
       capturedDownload = this.download
     })
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={10} batchIds={['b1', 'b2']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={10} batchIds={['b1', 'b2']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
     fireEvent.click(screen.getByRole('button', { name: 'Download this list (CSV)' }))
 
     expect(capturedDownload).toBe('already-imported-rows-b1-b2.csv') // own file, own name -- not the unreadable export's
@@ -257,7 +257,7 @@ describe('ReviewAlreadyImportedTab: QA -- CSV download wiring', () => {
     })
     const bytes = new Uint8Array(buf)
     expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]) // UTF-8 BOM, byte-exact
-    expect(new TextDecoder('utf-8').decode(bytes.slice(3))).toBe(alreadyImportedCsvAll(rows))
+    expect(new TextDecoder('utf-8').decode(bytes.slice(3))).toBe(alreadyImportedCsvAll(rows, 'spreadsheet'))
 
     createSpy.mockRestore()
     revokeSpy.mockRestore()
@@ -269,7 +269,7 @@ describe('ReviewAlreadyImportedTab: QA -- keyboard / accessibility of the disabl
   it('AIMPTAB-QA-6: a disabled row control cannot take focus, and its reason text matches aria-describedby', () => {
     const rows: AlreadyImportedRowAll[] = [{ file: 'june.csv', row: 5, invoiceId: null }]
 
-    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} />)
+    render(<ReviewAlreadyImportedTab rows={rows} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} unit="spreadsheet" />)
 
     const button = screen.getByRole('button', { name: 'View invoice' }) as HTMLButtonElement
     button.focus()
@@ -313,7 +313,7 @@ describe('EXTR-15-09 SW-5 (AC-5): the middle column header matches the cells bes
   // A `Document` column would be empty on every line -- the three document-path RowError
   // constructions (internal/importer/document.go) all omit Row, so `row` is null and the
   // cell beside this header already renders an em dash. The header follows the cells.
-  it('SW-5 (RED until EXTR-15-09): document shows an em dash over em-dash cells; spreadsheet shows Row over the number', () => {
+  it('SW-5 (GREEN since EXTR-15-09): document shows an em dash over em-dash cells; spreadsheet shows Row over the number', () => {
     const { unmount } = render(
       <AlreadyImportedTab
         rows={[{ file: 'june.pdf', row: null, invoiceId: 'inv-1' }]}
@@ -349,7 +349,7 @@ describe('EXTR-15-09 SW-6 (AC-6): the branch changes copy, never layout', () => 
   // Two halves, and the first is what stops the second passing vacuously: a `unit` prop
   // React silently drops renders two IDENTICAL trees, and identical trees trivially have
   // equal column counts. So the branches are required to DIFFER first.
-  it('SW-6 (RED until EXTR-15-09): both branches differ in copy and declare the same number of header columns', () => {
+  it('SW-6 (GREEN since EXTR-15-09): both branches differ in copy and declare the same number of header columns', () => {
     const renderTabs = (unit: ReviewUnit) => {
       const { container, unmount } = render(
         <>
@@ -396,7 +396,7 @@ describe('EXTR-15-09 SW-7 (AC-1): a duplicate is "already in the register" for a
   // "your ledger" is the spreadsheet unit's phrase and stays byte-identical there (AC-2).
   // Asserted over rendered TEXT, not source, so a branch that shipped the register wording
   // into an unreachable arm cannot satisfy it.
-  it('SW-7 (RED until EXTR-15-09): the document tab says register and never ledger; the spreadsheet tab says the reverse', () => {
+  it('SW-7 (GREEN since EXTR-15-09): the document tab says register and never ledger; the spreadsheet tab says the reverse', () => {
     const textOf = (unit: ReviewUnit) => {
       const { unmount } = render(
         <AlreadyImportedTab

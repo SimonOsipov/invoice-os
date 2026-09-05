@@ -11,21 +11,16 @@
 // This project has shipped that mistake before. So every row below asserts a PRESENCE,
 // and CEN-3/CEN-4 assert that the files being scanned are the real, populated ones.
 //
-// STATE ON LANDING — read this before changing anything here:
-//   CEN-1  SITES.length === 31 ......................... GREEN today
-//   CEN-2  both literals present, exactly once each .... RED today, green when 09 lands
-//   CEN-3  control needles found ...................... GREEN today
-//   CEN-4  the six files total >= 2000 lines .......... GREEN today
-// CEN-2 is the ONLY red one. If you are told "the census is red", that is CEN-2 doing its
-// job — the table is not the failing thing and must not be rewritten to make it pass.
+// All four census specs are GREEN since EXTR-15-09. If CEN-2 fails, the table is not the
+// failing thing and must not be rewritten to make it pass: either a document branch has
+// gone missing from the source, or a spreadsheet one has been edited.
 //
-// THE DOCUMENT LITERALS ARE PROPOSALS. EXTR-15-09 owns the wording and may change any of
-// them; changing one is a one-line edit to this table. FIVE are NOT free: B8, A3, A4, A6
-// and A7 must read "already in the register" for the document unit, where the spreadsheet
-// unit keeps "already in your ledger" (EXTR-15-09 AC). Those five are marked `AC` below.
-// SIX more are now settled by 09's architecture pass and are no longer proposals: R4, R5
-// and R6 (D1, the middle CSV column is dropped, not renamed), U4 and A5 (D4, an em dash,
-// not the word `Document`) and C1 (D2, one unbranched paragraph carrying both grains).
+// THE DOCUMENT LITERALS ARE THE SHIPPED WORDING, settled by EXTR-15-09. FIVE carry an AC
+// of their own: B8, A3, A4, A6 and A7 read "already in the register" for the document
+// unit, where the spreadsheet unit keeps "already in your ledger". Those five are marked
+// `AC` below. SIX were settled by 09's architecture pass: R4, R5 and R6 (D1, the middle
+// CSV column is dropped, not renamed), U4 and A5 (D4, an em dash, not the word
+// `Document`) and C1 (D2, one unbranched paragraph carrying both grains).
 //
 // AC-3 forbids "row"/"rows" as an ENGLISH NOUN in a document branch, not the identifier:
 // `{rows.length}` and `${batch.rows_total}` stay, because they name a variable. SW-3 is
@@ -323,11 +318,10 @@ describe('review-copy census (EXTR-15-08)', () => {
     expect(new Set(SITES.map((s) => s.id)).size).toBe(31)
   })
 
-  // The one RED spec. Every documentLiteral is absent until EXTR-15-09 lands, and the
-  // spreadsheet half must survive alongside it — the unit is a branch, not a replacement.
-  // `=== 1`, never `>= 1`: a duplicated sentence is a second site that 09 would have to
-  // keep in step, and the census would not see it.
-  it('CEN-2 (RED until EXTR-15-09): both literals appear exactly once in their file', () => {
+  // Both halves must be present at once — the unit is a branch, not a replacement.
+  // `=== 1`, never `>= 1`: a duplicated sentence is a second site to keep in step, and the
+  // census would not see it.
+  it('CEN-2 (GREEN since EXTR-15-09): both literals appear exactly once in their file', () => {
     const sources = new Map(FILES.map((f) => [f, readSrc(f)]))
     const wrong: string[] = []
 
@@ -398,7 +392,7 @@ describe('EXTR-15-09 SW-3 (AC-3): no document branch speaks spreadsheet', () => 
   // pair SW-3 ∧ CEN-2 is the oracle: CEN-2 fails if the source does not carry the literal,
   // SW-3 fails if the literal carries the wrong word. Weakening either one alone lets a
   // document branch that still says "rows" through.
-  it('SW-3 (RED until EXTR-15-09): every document literal ships, and none says row or spreadsheet', () => {
+  it('SW-3 (GREEN since EXTR-15-09): every document literal ships, and none says row or spreadsheet', () => {
     const sources = new Map(FILES.map((f) => [f, readSrc(f)]))
     const wrong: string[] = []
 
@@ -433,7 +427,7 @@ describe('EXTR-15-09 SW-10 (AC-9): the run unit is derived once and handed down'
   // disagree the moment either derivation changes. ReviewBatch.tsx owns the call; the tabs
   // receive it. Scanning source, not behaviour: a second derivation returning the same
   // answer is invisible to any render.
-  it('SW-10 (RED until EXTR-15-09): runUnit is called once, in ReviewBatch.tsx, and passed to both tabs', () => {
+  it('SW-10 (GREEN since EXTR-15-09): runUnit is called once, in ReviewBatch.tsx, and passed to both tabs', () => {
     const parent = readSrc(REVIEW_BATCH_TSX)
     const unreadable = readSrc(UNREADABLE_TAB)
     const alreadyImported = readSrc(ALREADY_IMPORTED_TAB)
@@ -449,14 +443,20 @@ describe('EXTR-15-09 SW-10 (AC-9): the run unit is derived once and handed down'
     expect(occurrences(alreadyImported, 'runUnit(')).toBe(0)
     expect(occurrences(unreadable, 'batchUnit(')).toBe(0)
     expect(occurrences(alreadyImported, 'batchUnit(')).toBe(0)
+    // RejectedFile and RejectedRun live in ReviewBatch.tsx and take `unit` as a prop. A
+    // second derivation there would be `batchUnit`, not `runUnit` — and for RejectedFile,
+    // over its ONE batch, it would answer differently from runUnit's all-must-agree rule.
+    expect(occurrences(parent, 'batchUnit(')).toBe(0)
 
-    // ...and the derived value actually reaches both tabs, or "called once" is satisfied by
-    // a call whose result is dropped.
-    for (const tag of ['<ReviewUnreadableTab', '<ReviewAlreadyImportedTab']) {
+    // ...and the DERIVED value reaches all four children, or "called once" is satisfied by a
+    // call whose result is dropped. `unit={unit}`, never a bare `unit=`: a hard-coded
+    // `unit={'spreadsheet'}` contains `unit=` and would pass, leaving SW-14/SW-17 as the
+    // only oracles for a child wired to a constant.
+    for (const tag of ['<ReviewUnreadableTab', '<ReviewAlreadyImportedTab', '<RejectedFile', '<RejectedRun']) {
       const start = parent.indexOf(tag)
       expect(start, `${tag} is not rendered by ReviewBatch.tsx`).toBeGreaterThan(-1)
       const element = parent.slice(start, parent.indexOf('/>', start))
-      expect(element, `${tag} must be handed the run unit as a prop`).toContain('unit=')
+      expect(element, `${tag} must be handed the derived run unit`).toContain('unit={unit}')
     }
   })
 })

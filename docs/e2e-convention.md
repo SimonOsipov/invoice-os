@@ -22,8 +22,8 @@ Target capability flows: `auth`, `portfolio`, `validation`, `import`,
 layer — `auth.spec.ts`, `import-wizard.spec.ts`,
 `invoice-surfaces.spec.ts`, `portfolio.spec.ts`, `isolation.spec.ts`); no dated file
 remains (M4-14). The `validation` capability is driven by
-`e2e/topology/invoice-surfaces.spec.ts`, which asserts the rule-set version against a live
-rendered `ViolationsTable` cell. Exact file/directory layout is the implementation's
+`e2e/topology/invoice-surfaces.spec.ts`, which asserts the rule-set version against the
+Compliance card's header chip. Exact file/directory layout is the implementation's
 choice — the rule is the *organizing axis* (capability, not date), not a fixed tree.
 
 ## Keep the browser layer thin (the pyramid)

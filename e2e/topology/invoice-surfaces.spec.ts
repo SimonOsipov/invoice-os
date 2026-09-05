@@ -19,7 +19,7 @@
 // internal/invoice/payload.go's MBSPayload nests it again before the engine
 // evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
 // fixtures.ts's BAD_INVOICE_KEYS pins.
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { test, expect, type Page, type Request, type Locator } from '@playwright/test'
 import {
   login,
   createEntity,
@@ -2946,6 +2946,371 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
     // C5 is C4's floor: C4 passes trivially against a collapsed or unrendered record card.
     expect(recordBox!.height, `the record card must be a real card (${recordBox!.height}px tall)`).toBeGreaterThan(100)
     expect(activityBox!.y, `the card must start below the record card (record ends ${recordBox!.y + recordBox!.height}, card starts ${activityBox!.y})`).toBeGreaterThanOrEqual(recordBox!.y + recordBox!.height - 1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+// BUG-13-03: the only layer that can observe this defect (jsdom performs no layout). Ten
+// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b -- from .ralph/bug-13-arch.md's
+// `## Layout assertion`; D6/D8 are deliberately absent (measured unreachable in Chromium
+// under table-layout:auto).
+//
+// R (real) = badInvoiceFields fires vat-standard-rate through createInvoice, a genuine,
+// short, natively-breaking violation -- see the fixture's own comment above. S (stubbed) =
+// the SAME invoice's detail response with only `violations` replaced via page.route, for
+// the wrap-under-an-unbreakable-token cases no seeded rule can reach (every real rule_key
+// is hyphenated, every real target short -- [e2e-fixture]). `Zenith compliance` sorts after
+// every seeded business_entity name, "Honeywell Group" included.
+test.describe.serial("detail surface: the compliance card's geometry", () => {
+  let entityName = ''
+  let invoiceNumber = ''
+
+  test.beforeAll(async () => {
+    const token = await login(PERSONAS.A)
+    entityName = `Zenith compliance ${Date.now()}`
+    const entity = await createEntity(token, { name: entityName, tin: freshTin() })
+    invoiceNumber = `INV-BUG1303-${Date.now()}`
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, invoice.id)
+  })
+
+  // Same idiom as the sibling activity-card block above: window.innerWidth is the resize's
+  // own completion signal, not the setViewportSize promise.
+  async function resizeTo(page: Page, width: number) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+  }
+
+  async function openCompliance(page: Page): Promise<Locator> {
+    await signInFirm(page)
+    await selectEntity(page, entityName)
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    const card = page.getByTestId('compliance-card')
+    await expect(card).toBeVisible()
+    await expect(page.getByTestId('violations-table')).toBeVisible()
+    return card
+  }
+
+  // [fixture-lengths]: every character in [A-Za-z0-9_$] -- dots and brackets only USUALLY
+  // resist breaking under UAX #14 LB29/LB30, and this fixture's one job is to never break.
+  // All three long strings on ONE row: with overflowWrap:'anywhere' removed from only one
+  // <td> (the mutant D4b/D7 must catch), the OTHER two still wrap and collapse to their
+  // header-driven min-content regardless of their own long text, which is exactly what the
+  // arch doc's per-cell headroom arithmetic assumes.
+  const STUB_VIOLATION = {
+    severity: 'error',
+    message: 'total_arithmetic_violation_subtotal_plus_vat_must_equal_total_computed_1234567_declared_1234599_delta_32',
+    rule_key: 'total_arithmetic_subtotal_plus_vat_must_equal_total_recomputed_from_line_items',
+    path: '$_invoice_lines_3_line_total_computed_from_unit_price_times_quantity_plus_line_tax',
+  }
+
+  // The fetch-and-patch idiom, copied from the EXTR-09 source-document probe (:3640-3671):
+  // route.fetch() for the real body, a non-200 guard that throws rather than substituting
+  // into nothing, an interception counter, then fulfil with only the one field replaced.
+  async function openComplianceStubbed(page: Page): Promise<{ card: Locator; intercepted: () => number }> {
+    let intercepted = 0
+    await page.route('**/api/invoice/v1/invoices/*', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback()
+        return
+      }
+      const response = await route.fetch()
+      if (response.status() !== 200) {
+        throw new Error(`invoice detail answered ${response.status()}; the stub has no real response to substitute into`)
+      }
+      const real = (await response.json()) as Record<string, unknown>
+      if (!('violations' in real)) {
+        // The same single-segment glob also catches violation-summary (the list rollup) --
+        // it carries no `violations` key, so pass it through untouched.
+        await route.fulfill({ response })
+        return
+      }
+      intercepted++
+      await route.fulfill({ response, json: { ...real, violations: [STUB_VIOLATION] } })
+    })
+    const card = await openCompliance(page)
+    return { card, intercepted: () => intercepted }
+  }
+
+  // violations-scroll is retired (BUG-13-01) -- the wrapper is now anonymous, ViolationsTable's
+  // own returned <div>, the sole child of the `violations-table` testid div.
+  function wrapperOf(page: Page): Locator {
+    return page.getByTestId('violations-table').locator('> div')
+  }
+
+  const overflowOf = (el: Element) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })
+
+  // 1180 is the AC's own floor (610px main column, [premise-1180]); 1315 is where the
+  // column crosses the retired 720px TABLE_MIN_WIDTH ([premise-1315]). WIDE_WIDTHS itself
+  // stays unedited so no other spec sharing the constant is disturbed.
+  const COMPLIANCE_WIDTHS = [...WIDE_WIDTHS, 1315, 1180] as const
+
+  test('D1: the compliance card is the same width as the activity card', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const activity = page.getByTestId('invoice-activity')
+    await expect(activity).toBeVisible()
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [c, a] = await Promise.all([card.boundingBox(), activity.boundingBox()])
+        expect(c && a, `the compliance card and the activity card must both render at ${width}px`).toBeTruthy()
+        expect(
+          Math.abs(c!.width - a!.width),
+          `the two cards must share a width at ${width}px (${c!.width} vs ${a!.width})`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D2: the compliance card fills the main column', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const column = page.getByTestId('invoice-main-column')
+
+    // slackPx 1, not the helper's 24 default: a stretched flex item in a column-flex
+    // wrapper, same reasoning as the sibling block's C1.
+    const fits = await assertFillsColumn(page, card, column, 'compliance-card vs main column', 1)
+    expect(fits.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+
+    // The hole assertFillsColumn leaves (bug-13-03-arch-validation.md #2): it bounds
+    // max(left,right) <= slackPx, which a card overflowing its column on BOTH sides
+    // satisfies too, because both gaps go negative. This floor is the single-sided bound's
+    // blind spot.
+    for (const f of fits) {
+      expect(f.left, `the card must not start left of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+      expect(f.right, `the card must not extend right of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D3: the compliance card clears the right rail', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const rail = page.getByTestId('invoice-rail')
+
+    const entryViewport = page.viewportSize()
+    const shared: Array<{ width: number; height: number }> = []
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [c, r] = await Promise.all([card.boundingBox(), rail.boundingBox()])
+        expect(c && r, `the card and the rail must both render at ${width}px`).toBeTruthy()
+        expect(c!.x + c!.width, `the card must end before the rail begins at ${width}px`).toBeLessThanOrEqual(r!.x + 1)
+        expect(
+          rectsOverlap(c!, r!),
+          `the card must not overlap the rail at ${width}px: ${JSON.stringify(overlapOf(c!, r!))}`,
+        ).toBe(false)
+        shared.push({ width, height: overlapOf(c!, r!).height })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // The floor rectsOverlap needs: both axes, so the x-only check above would pass on a
+    // card sitting squarely on the rail's left edge even if the two never share a y-band.
+    expect(
+      shared.filter((s) => s.height > 0),
+      `the card and the rail must share a y-band at some swept width, or rectsOverlap above proves nothing:\n${JSON.stringify(shared)}`,
+    ).not.toHaveLength(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D4a: the violations table never scrolls sideways', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const wrapper = wrapperOf(page)
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        expect(fit.clientWidth, `the wrapper must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        expect(
+          fit.scrollWidth - fit.clientWidth,
+          `the table must not scroll sideways at ${width}px: ${JSON.stringify(fit)}`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D4b: the violations table never scrolls sideways, with a rule key, path and message that cannot break at a space or a hyphen', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const wrapper = wrapperOf(page)
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        expect(fit.clientWidth, `the wrapper must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        expect(
+          fit.scrollWidth - fit.clientWidth,
+          `the table must not scroll sideways at ${width}px: ${JSON.stringify(fit)}`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // D4b's own non-vacuity floor (D10b covers the exact read-back separately): without
+    // this, a route glob that never matched would leave D4b proving D4a again on the short
+    // real value.
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D5: a fitting table fills its wrapper', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const wrapper = wrapperOf(page)
+    const table = page.getByTestId('violations-table').locator('table')
+
+    const entryViewport = page.viewportSize()
+    const checked: number[] = []
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        // Scoped to where D4a holds, per the plan: once the wrapper itself scrolls,
+        // clientWidth reads the viewport rather than the content and this comparison
+        // stops meaning anything. On the real fixture D4a holds at every swept width, so
+        // this never skips here -- the floor below is what proves that, not assumes it.
+        if (fit.scrollWidth - fit.clientWidth > 1) continue
+        const tableBox = await table.boundingBox()
+        expect(tableBox, `the table must render at ${width}px`).toBeTruthy()
+        expect(
+          tableBox!.width,
+          `a fitting table must fill its wrapper at ${width}px (${tableBox!.width} vs ${fit.clientWidth})`,
+        ).toBeGreaterThanOrEqual(fit.clientWidth - 1)
+        checked.push(width)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // D5's own floor: the same shape as the sibling block's A4/A5. If D4a never held, the
+    // loop body above never ran and D5 proved nothing.
+    expect(checked.length, 'D5 must have run at least once, or D4a never held at any swept width').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D7: the same message occupies more height at 1180 than at 2560', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const messageCell = page.getByTestId('violations-table').locator('tbody tr').first().locator('td').nth(1)
+
+    await resizeTo(page, 2560)
+    const wide = await messageCell.boundingBox()
+    expect(wide, 'the message cell must render at 2560px').toBeTruthy()
+
+    await resizeTo(page, 1180)
+    const narrow = await messageCell.boundingBox()
+    expect(narrow, 'the message cell must render at 1180px').toBeTruthy()
+
+    // Same text, same font: more height at 1180 than 2560 only if the 104-char token
+    // actually broke into further lines, rather than the column silently widening instead.
+    expect(
+      narrow!.height,
+      `the message cell must stand taller at 1180 (${narrow!.height}px) than at 2560 (${wide!.height}px), or the 104-char token did not wrap`,
+    ).toBeGreaterThan(wide!.height)
+
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D9: the card sits between the record card and the activity card', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const column = page.getByTestId('invoice-main-column')
+    const activity = page.getByTestId('invoice-activity')
+    await expect(activity).toBeVisible()
+
+    await resizeTo(page, 1280)
+    const record = column.locator('> div').first()
+    const recordTestId = await record.getAttribute('data-testid')
+    expect(recordTestId, 'the record card must come first in the main column, not the compliance card').not.toBe('compliance-card')
+    expect(recordTestId, 'the record card must come first in the main column, not the activity card').not.toBe('invoice-activity')
+    const [recordBox, cardBox, activityBox] = await Promise.all([record.boundingBox(), card.boundingBox(), activity.boundingBox()])
+    expect(recordBox && cardBox && activityBox, 'all three main-column cards must render at 1280px').toBeTruthy()
+    // The floor beneath the ordering: a collapsed record card would pass the inequalities
+    // below trivially.
+    expect(recordBox!.height, `the record card must be a real card (${recordBox!.height}px tall)`).toBeGreaterThan(100)
+    expect(
+      recordBox!.y + recordBox!.height,
+      `the record card must end before the compliance card begins (record ends ${recordBox!.y + recordBox!.height}, card starts ${cardBox!.y})`,
+    ).toBeLessThanOrEqual(cardBox!.y + 1)
+    expect(
+      cardBox!.y + cardBox!.height,
+      `the compliance card must end before the activity card begins (card ends ${cardBox!.y + cardBox!.height}, activity starts ${activityBox!.y})`,
+    ).toBeLessThanOrEqual(activityBox!.y + 1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D10a: the real fixture renders at least one violation row', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const rows = page.getByTestId('violations-table').locator('tbody tr')
+    await expect(rows.first()).toBeVisible()
+    const rowCount = await rows.count()
+    expect(
+      rowCount,
+      'D1/D2/D3/D9/D4a/D5 all measure this table -- an empty table would satisfy D4a/D5 vacuously',
+    ).toBeGreaterThanOrEqual(1)
+    const messageText = (await rows.first().locator('td').nth(1).textContent())?.trim() ?? ''
+    expect(messageText.length, 'the Message cell must carry real text, not an empty placeholder').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D10b: the stub actually applied', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const row = page.getByTestId('violations-table').locator('tbody tr').first()
+
+    // Without this, D4b and D7 would pass on the short real values, for the wrong reason.
+    await expect(row.locator('td').nth(1), 'the Message cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.message,
+    )
+    await expect(row.locator('td').nth(2), 'the Rule key cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.rule_key,
+    )
+    await expect(row.locator('td').nth(3), 'the Path cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.path,
+    )
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

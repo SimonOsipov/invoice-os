@@ -20,7 +20,7 @@ import { seedConsent } from './landingConsent'
 // WHY THIS IS E2E AND NOT UNIT: F-6 and F-7 carry `unit_applicable = 0` in the system map — a
 // unit test on either raises no coverage, because the unit slot is not in their denominator.
 // Only a Playwright citation can close them. F-5 needs both dimensions; its unit half lives in
-// Hero.validationPreview.dom.test.tsx (TEST-01-02).
+// Hero.validationPreview.dom.test.tsx (TEST-01-03).
 //
 // RETYPED, NOT IMPORTED — the opposite of the unit tests' convention, and deliberately so.
 // Every expected value below is retyped from its source rather than imported: importing

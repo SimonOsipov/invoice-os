@@ -155,6 +155,8 @@ afterEach(() => {
   // is skipped if an assertion throws, and a frozen clock would leak into the next spec.
   // Idempotent when no timers were faked.
   vi.useRealTimers()
+  // Console spies here are restored inline; this catches the ones a throwing spec skips.
+  vi.restoreAllMocks()
   cleanup()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()

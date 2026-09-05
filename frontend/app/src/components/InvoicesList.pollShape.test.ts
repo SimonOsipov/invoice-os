@@ -52,4 +52,10 @@ describe('the needs-attention filter mounts nothing of its own above the table (
     expect(src, 'no element above the table may mount on the filter alone').not.toMatch(/\{needsAttention && \(/)
     expect(src, 'the header margin must not move with the filter -- the other half of the 23px jump').not.toMatch(/marginBottom: needsAttention/)
   })
+
+  // QA adversarial: the two negations above are construct-shaped, so a ternary form of the
+  // same copy nested one level deeper slips past both. This one is shaped on the copy.
+  it('the explainer sentence is in no code path (AC-1)', () => {
+    expect(src, 'the register may not explain the filter in a line of its own').not.toContain('Includes invoices an approver sent back.')
+  })
 })

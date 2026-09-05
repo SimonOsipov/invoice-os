@@ -1973,9 +1973,25 @@ describe('QA BUG-10-01: the held envelope at its edges', () => {
 // source in the same commit.
 function aboveTable(container: HTMLElement): string[] {
   const root = container.firstElementChild as HTMLElement
-  // tagName|className alone is not identifying here: both surviving children are <div> with
-  // no className, so the sequence would compare as identical DIV| entries either way.
+  // The three ready-state children are the header block, the table and the pager wrapper.
+  // Only the table is identified: the other two both fingerprint as the bare `DIV||`.
   return Array.from(root.children).map((el) => `${el.tagName}|${el.className}|${el.getAttribute('data-testid') ?? ''}`)
+}
+
+// Sibling-level only is not enough: a node re-added INSIDE the header block leaves the array
+// above untouched. Caught by 'no element is added or removed above the table at any depth'.
+function surfaceAboveTable(container: HTMLElement): string[] {
+  const root = container.firstElementChild as HTMLElement
+  const out: string[] = []
+  const walk = (el: Element, depth: number) => {
+    out.push(`${depth}|${el.tagName}|${el.getAttribute('class') ?? ''}|${el.getAttribute('data-testid') ?? ''}`)
+    for (const child of Array.from(el.children)) walk(child, depth + 1)
+  }
+  for (const child of Array.from(root.children)) {
+    if (child.getAttribute('data-testid') === 'invoices-list') break
+    walk(child, 0)
+  }
+  return out
 }
 
 describe('InvoicesList: the needs-attention filter changes the rows, and nothing else', () => {
@@ -1995,6 +2011,27 @@ describe('InvoicesList: the needs-attention filter changes the rows, and nothing
     expect(screen.queryByTestId('invoices-list'), 'and so must the ON snapshot').not.toBeNull()
 
     expect(aboveTable(container), 'the filter must not add or remove a sibling around the table').toEqual(off)
+  })
+
+  // QA adversarial. Tag/class/testid only, never inline style -- the chip's own active
+  // border/background/colour must stay free to change (AC-5).
+  it('QA: no element is added or removed above the table at any depth', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { container } = render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    const off = surfaceAboveTable(container)
+    expect(off.some((f) => f.endsWith('|needs-attention-toggle')), 'the walk must reach the toggle, or the equality below is vacuous').toBe(true)
+    expect(off.some((f) => f.includes('|H1|')), 'and the title, so it covers the block whose margin moved').toBe(true)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    expect(screen.queryByTestId('invoices-list'), 'the ON snapshot must be taken over a rendered table').not.toBeNull()
+
+    expect(surfaceAboveTable(container), 'the filter must not mount a node anywhere above the table').toEqual(off)
   })
 
   it('the title block bottom margin does not change with the filter', async () => {

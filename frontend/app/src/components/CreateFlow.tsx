@@ -18,6 +18,10 @@ import { ReviewBatch } from './ReviewBatch'
 import { ImportProgress } from './ImportProgress'
 import type { PlatformCtx } from '../types'
 
+// Byte-identical to fileDraftGate's own refusal for the same predicate (invoiceDraft.ts:
+// 255), reused rather than re-authored — the hand-off lands on the step that gate guards.
+const HAND_OFF_BLOCKED_REASON = 'Filing needs a linked entity'
+
 // The wizard serves THREE paths with different step lists — the 1-step Enter typed path,
 // the 3-step Import/Map/Review spreadsheet import and the 2-step Import/Review document
 // run — so the header is resolved by wizardHeader (lib/importFlow.ts) rather than a flat
@@ -106,12 +110,17 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
             <>
               <CreateUpload ctx={ctx} />
               {documentFailures.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 14 }}>
-                  {documentFailures.map((f, i) => (
-                    <span key={i} style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4 }}>
-                      <span className="mono" style={{ fontSize: 11 }}>{f.name}</span>: {f.message}
-                    </span>
-                  ))}
+                <div style={{ marginTop: 14 }}>
+                  {/* The card literal is a byte-copy of CreateUpload's own outer card and
+                      carries nothing else — CreateFlow.test.tsx's HO-9b reads both files
+                      and compares them. The list's own layout lives on the child below. */}
+                  <div data-testid="document-failures-card" style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: 14 }}>
+                      {documentFailures.map((f, i) => (
+                        <DocumentFailureRow key={i} ctx={ctx} failure={f} index={i} />
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </>
@@ -120,6 +129,68 @@ export function CreateFlow({ ctx }: { ctx: PlatformCtx }) {
           {createStep === 'review' && <ReviewBatch ctx={ctx} />}
         </>
       )}
+    </div>
+  )
+}
+
+// One failed document. The row recipe is a byte-copy of ReviewBatch's files-strip row
+// (HO-9a reads that file and compares), and the inner flex line copies its layout too, so
+// the control lands on the row's right content edge at every width (EXTR15-E2E-01's
+// constant-clearance sweep).
+//
+// The hand-off is offered only where a document was actually stored: a file whose upload
+// itself threw has nothing to hand off, so it renders no control at all rather than a
+// disabled one (HO-4a). Where one exists the entity gate is disabled-with-a-VISIBLE-reason
+// — APPR-16 shipped a `title=` alone and two QA passes could not see it in Chromium.
+function DocumentFailureRow({
+  ctx,
+  failure,
+  index,
+}: {
+  ctx: PlatformCtx
+  failure: { name: string; message: string; documentId?: string }
+  index: number
+}) {
+  const documentId = failure.documentId
+  // The resolved-entity predicate every filing gate reads (CreateUpload.tsx:98,
+  // fileDraftGate) — never a client id, which can be non-null before the entity is fetched.
+  const blocked = ctx.activeEntity === null
+  // Per-row, like ReviewAlreadyImportedTab's: N rows render at once and every one of them
+  // is refused when no entity is resolved.
+  const reasonId = `document-failure-handoff-reason-${index}`
+  return (
+    <div data-testid="document-failure-row" style={{ padding: '10px 14px', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.4, wordBreak: 'break-all', flex: 1 }}>
+          <span className="mono" style={{ fontSize: 11 }}>{failure.name}</span>: {failure.message}
+        </span>
+        {documentId !== undefined && (
+          <>
+            {/* Disabled-with-reason, never hidden — ReviewAlreadyImportedTab.tsx:77-94's
+                four layers. The inline spread is disabled-only: on an enabled button it
+                would kill the legitimate :hover affordance. */}
+            <button
+              onClick={blocked ? undefined : () => ctx.enterByHand(documentId)}
+              disabled={blocked}
+              title={blocked ? HAND_OFF_BLOCKED_REASON : undefined}
+              aria-describedby={blocked ? reasonId : undefined}
+              className="v2-btn v2-btn-ghost pf-btn"
+              style={{
+                height: 30,
+                padding: '0 12px',
+                fontSize: 12.5,
+                flex: 'none',
+                ...(blocked ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+              }}
+            >
+              Enter it by hand
+            </button>
+            {blocked && (
+              <span id={reasonId} style={{ fontSize: 12, color: 'var(--fg-3)', flex: 'none' }}>{HAND_OFF_BLOCKED_REASON}</span>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

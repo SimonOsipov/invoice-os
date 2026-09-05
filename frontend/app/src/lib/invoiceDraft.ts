@@ -204,17 +204,21 @@ export type FileDraftDeps = {
 // NEVER REJECTS: every failure lands on onError as an ApiError and the returned promise
 // still resolves (SUBMIT-2). The caller does `void fileDraftInvoice(...)`, so a rejection
 // would surface as an unhandled promise rejection and the user would see nothing at all.
+// sourceDocumentId (EXTR-15-07) is a FOURTH, optional parameter mirroring
+// draftToCreateRequest's third — threaded, never stashed in module state, so two filings
+// from one module cannot leak it into each other (HO-6c).
 export async function fileDraftInvoice(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'>,
   deps: FileDraftDeps,
+  sourceDocumentId?: string,
 ): Promise<void> {
   if (deps.inFlight.current) return
   deps.inFlight.current = true
   deps.onError(null)
   deps.onPending(true)
   try {
-    const created = await deps.create(draftToCreateRequest(draft, entity))
+    const created = await deps.create(draftToCreateRequest(draft, entity, sourceDocumentId))
     deps.onCreated(created.id)
   } catch (err: unknown) {
     // Raw, unmapped: ApiError.message already carries the gateway's own {"error":…}

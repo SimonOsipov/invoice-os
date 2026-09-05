@@ -163,14 +163,18 @@ export function startDocumentRun(
 ): Promise<DocumentRunOutcome[]> {
   return Promise.all(
     files.map(async (f): Promise<DocumentRunOutcome> => {
+      // Declared OUTSIDE the try so the catch can carry it: a document that dead-letters
+      // is the one CreateFlow's hand-off hands to manual entry. Stays undefined only when
+      // deps.upload itself threw — no document was ever stored. Pinned by HO-1's table.
+      let documentId: string | undefined
       try {
-        const documentId = await deps.upload(f.file)
+        documentId = await deps.upload(f.file)
         const verdict = await deps.poll(documentId, f.id)
         // Carried VERBATIM: the poll owns the wording, this only relays it.
         if (verdict.kind !== 'succeeded') {
           const reason = verdict.kind === 'failed' ? verdict.reason : 'extraction never settled'
           deps.onStage(f.id, { kind: 'failed', reason })
-          return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason } }
+          return { id: f.id, name: f.name, outcome: { kind: 'failed', message: reason, documentId } }
         }
         deps.onStage(f.id, { kind: 'processing' })
         const report = await deps.importDocument(documentId)
@@ -179,7 +183,7 @@ export function startDocumentRun(
       } catch (err) {
         const message = messageOf(err)
         deps.onStage(f.id, { kind: 'failed', reason: message })
-        return { id: f.id, name: f.name, outcome: { kind: 'failed', message } }
+        return { id: f.id, name: f.name, outcome: { kind: 'failed', message, documentId } }
       }
     }),
   )

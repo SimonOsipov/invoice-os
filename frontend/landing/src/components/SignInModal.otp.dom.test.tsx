@@ -96,9 +96,17 @@ describe('vacuity controls', () => {
 
   // AC #4: without this, a no-op typing helper would leave every other row green
   // for the wrong reason (nothing ever reaches DEMO_CODE, so both branches look inert).
+  // Re-rendering off current state is required: a raw DOM write that never reached
+  // `code` still reads back from `otpEl(0).value` untouched (nothing re-renders over
+  // it) -- measured, this assertion alone stayed green under a naive `el.value = x`
+  // helper. Forcing a render pulls from the real `code` array and overwrites it.
   it('control: one keystroke reaches React state', async () => {
     await mountAtOtp()
     await typeDigit(0, '4')
+    expect(otpEl(0).value).toBe('4')
+    await act(async () => {
+      root.render(createElement(SignInModal, { onClose: vi.fn() }))
+    })
     expect(otpEl(0).value).toBe('4')
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -215,6 +223,35 @@ describe('OTP box', () => {
     // setLoading(true) still fires and the button text flips to "Signing in...".
     expect(document.querySelector('button.v2-btn-primary')!.textContent).toContain('Verify & continue')
     expect(locationStub.href).toBe('https://www.ascomply.com/')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  // QA addition (Stage 4): OTP-1..10 all pick the `firm` persona, so nothing exercises
+  // a different `target` branch through BASE_BY_TARGET (auth.ts) -- a base swapped onto
+  // the wrong persona target would go uncaught. `developer` maps to `ops`.
+  it('OTP-11 (QA addition): a non-firm persona routes through its own destination branch', async () => {
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.example.test')
+    await act(async () => {
+      root.render(createElement(SignInModal, { onClose: vi.fn() }))
+    })
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-persona="developer"]')!.click()
+    })
+    await typeCode(DEMO_CODE)
+    await clickByText('Verify & continue')
+    await act(async () => {
+      vi.advanceTimersByTime(1100)
+    })
+    expect(locationStub.href).toBe('https://ops.example.test?persona=developer')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  // QA addition (Stage 4): no row exercises a paste (a multi-char `input` value in one
+  // box) -- a real path, since users copy the demo code and can paste into box 0.
+  it('OTP-12 (QA addition): pasting multiple characters into one box keeps only the last digit', async () => {
+    await mountAtOtp()
+    await typeDigit(0, DEMO_CODE) // one input event carrying all six characters
+    expect(otpEl(0).value).toBe('0') // .slice(-1) of '481920'
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

@@ -4779,9 +4779,9 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   })
 })
 
-// RED specs (BUG-14-01, Mode A). The bar is gated `inv.can_edit && !editing`
-// (InvoiceDetail.tsx:875) today, so every spec below that needs it on a can_edit:false
-// record fails on a missing element, never an import/compile error.
+// RED specs (BUG-14-01, Mode A). The bar was gated `inv.can_edit && !editing` when these
+// were written, so every spec below that needs it on a can_edit:false record failed on a
+// missing element, never an import/compile error. The gate is now `!editing` alone.
 describe('InvoiceDetail action cluster: the control set is stable (BUG-14-01, AC-2/AC-3)', () => {
   const ID = 'inv-stable-cluster-1'
   const ALL_STATUSES: InvoiceStatus[] = ['draft', 'validated', 'rejected', 'queued', 'submitted', 'accepted', 'failed']

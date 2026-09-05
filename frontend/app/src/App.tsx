@@ -1589,6 +1589,9 @@ export default function App() {
     window.history.replaceState(null, '', '/' + window.location.hash)
     setToast(null)
     clearSession()
+    // Wipes a destination captured before this session — the pathname reset above only
+    // stops a NEW one being captured on the way out.
+    clearDestination()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
     // With it unset we now land on the app's own persona-picker, which is a front door;

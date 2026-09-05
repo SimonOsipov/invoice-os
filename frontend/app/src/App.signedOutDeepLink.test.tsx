@@ -548,6 +548,33 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
   })
 })
 
+// QA addition (Stage 4, AC-3). Neither harness above can observe a real signOut redirect:
+// stubLocation() freezes pathname so signOut's replaceState is invisible (the ROUTE-05-05
+// rewrite's whole reason for existing); real un-stubbed navigation lets replaceState work
+// but jsdom silently refuses to update `.href` for a cross-origin write (confirmed: assigning
+// window.location.href under bootWorkspaceAt leaves .href unchanged, only logging "Not
+// implemented: navigation to another Document"). A Proxy over the REAL location forwards
+// pathname reads/replaceState to jsdom untouched while intercepting only the `href` setter.
+function interceptHref() {
+  const hrefWrites: string[] = []
+  const real = window.location
+  const proxy = new Proxy(real, {
+    set(target, prop, value) {
+      if (prop === 'href') {
+        hrefWrites.push(value)
+        return true
+      }
+      return Reflect.set(target, prop, value)
+    },
+    get(target, prop) {
+      const v = (target as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof v === 'function' ? v.bind(target) : v
+    },
+  })
+  Object.defineProperty(window, 'location', { configurable: true, value: proxy })
+  return { hrefWrites }
+}
+
 // ROUTE-05-05. signOut's own pathname rewrite (App.tsx:1589) already lands before the
 // front-door effect re-fires on the resulting activeSession->null transition (deps
 // [activeSession, autoPersona], App.tsx:1701) -- App.routeBoot.test.tsx's
@@ -650,5 +677,33 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     ).toBe('dashboard')
     expect(window.location.pathname).toBe('/')
     second.unmount()
+  })
+
+  it('signOut_redirectsToLandingBase', async () => {
+    // AC-3 ("signing out still redirects to landingBase(), unchanged") has no assertion
+    // anywhere else in the suite: App.routeBoot.test.tsx and App.standIn.test.tsx exercise
+    // signOut with VITE_LANDING_URL unset (the in-app picker path), never the redirect
+    // itself. interceptHref() (above) is what makes this observable without breaking the
+    // real pathname reset this describe block depends on.
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await bootWorkspaceAt('/audit')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /audit must seed that view').toBe('audit')
+    const { hrefWrites } = interceptHref()
+
+    await act(async () => {
+      ctx.signOut()
+    })
+
+    // Two identical writes, not one: signOut's own tail navigates, then the front-door
+    // effect re-fires on the activeSession->null transition (Part 2 of this task's Stage 1
+    // notes) and navigates again since landingBase() is still configured -- captureDestination
+    // is refused but the unconditional `if (dest) window.location.href = dest` below it still
+    // runs. Harmless (same URL, a real browser only navigates once) but worth pinning exactly
+    // rather than asserting a single write that isn't what happens.
+    expect(hrefWrites.every((w) => w === 'https://landing.example'), 'every write must target landingBase()').toBe(
+      true,
+    )
+    expect(hrefWrites.length, 'signOut writes href twice: its own tail, then the front-door re-fire').toBe(2)
   })
 })

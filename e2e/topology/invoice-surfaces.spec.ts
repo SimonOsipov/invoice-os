@@ -822,8 +822,9 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // 1. Not yet validated -- the Draft node is `current` and nothing downstream is reached.
   await expect(page.getByTestId('not-validated')).toBeVisible()
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached' })
-  // A `current` node never renders an attribution, whatever the genesis row holds.
-  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
+  // A `current` node renders its own row's attribution -- here the genesis row, written by
+  // createInvoice's login(PERSONAS.A), the same subject this page signs in as.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
 
   // 2. First Re-validate: the bad fixture fires exactly BAD_INVOICE_KEYS
   //    (fixtures.ts) -- a blocking violation, so the invoice stays draft (no
@@ -955,14 +956,16 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'current' })
-  await expect(stripCaption(page, 'validated')).toHaveText('Waiting')
+  // The draft->validated row this click just wrote: ApplyValidation stamps the JWT caller
+  // (store.go actorFromContext), which is this page's persona.
+  await expect(stripCaption(page, 'validated')).toHaveText(/^\d\d:\d\d · Chinedu$/)
 
   // AUDIT-02-07 (AC-1/AC-4): the genesis row's subject is createInvoice's
   // login(PERSONAS.A), the same c0000000-...-0001 as this page's firm persona
   // (targets.ts:27, frontend/app/src/auth.ts:44), whom db/seed.dev.sql:41 names. Count
   // first: an empty locator satisfies every assertion after it.
   await expect(page.getByTestId('strip-actor')).toHaveCount(5)
-  // Only the Draft node carries an attribution here -- the `validated` node is `current`.
+  // Both reached nodes are attributed; this pins the Draft node's, on the genesis row.
   // ANCHORED, never toContainText: the APP_PERSONAS fall-through renders 'Chinedu Okafor ·
   // Okafor & Partners' (lib/actor.ts), which a substring match accepts, and the strip
   // first-names a resolved person (invoiceStrip.ts display()). This is what proves on the
@@ -1376,9 +1379,11 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   const badge = page.getByTestId('invoice-status-badge')
 
   await expect(badge).toContainText('SUBMITTED')
-  // Node 4 names the actual status: queued and submitted share the node (invoiceStrip.ts).
+  // Node 4 covers both queued and submitted (invoiceStrip.ts SOURCES) and captions the
+  // latest row's attribution, never the status name.
   await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
-  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  await expect(stripCaption(page, 'queued')).toHaveText(/^\d\d:\d\d/)
+  await expect(stripCaption(page, 'queued'), 'a re-added status arm would caption Submitted here').not.toHaveText('Submitted')
   const historyGetsAtSubmitted = historyGets.length
   expect(historyGetsAtSubmitted, 'the recorder matched the mount fetch, so the rise below is not vacuous').toBeGreaterThan(0)
 
@@ -1472,7 +1477,11 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   // and its relabel, and everything past Draft is unreached again.
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached', accepted: 'unreached' })
   await expect(stripNode(page, 'accepted')).toContainText('Accepted by FIRS')
-  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
+  // Shape only: the demotion row and the genesis row share this actor and can share this
+  // minute, so no caption here tells them apart. That discrimination is S-16 in
+  // frontend/app/src/lib/invoiceStrip.test.ts, whose fixture gives the two `-> draft` rows
+  // distinct times and distinct actors.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
   await expect(stripCaption(page, 'validated')).toHaveText('Not reached')
 
   // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
@@ -1483,8 +1492,8 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'current' })
-  // The SHAPE, never a value: this proves node 1 took its at/actor from the LATEST
-  // `-> draft` row (the demotion), not from the genesis row.
+  // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
+  // two `-> draft` rows it took is not observable here -- see the note above.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1870,7 +1879,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
 
   await expect(badge).toContainText('SUBMITTED')
   await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
-  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  await expect(stripCaption(page, 'queued')).toHaveText(/^\d\d:\d\d/)
   // The baseline for the live-refresh oracle below: node 5 has no row to read yet.
   await expect(stripCaption(page, 'accepted')).toHaveText('Not reached')
 
@@ -3435,8 +3444,8 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     // See the AC-2 CORRECTION in this block's header for why node 2 is `current`, not `done`.
     await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'current', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'draft', TICK_PATH), 'node 1 must carry the tick, not just the green tone').toHaveCount(1)
-    // Node 1 is the only attributed node here; without this the `done` above passes on a
-    // node that rendered no attribution at all.
+    // Node 2 is attributed too, being reached; this pins node 1 so the `done` above cannot
+    // pass on a node that rendered no attribution at all.
     await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · \S+/)
     await expect(stripCaption(page, 'approved'), 'an open run captions Waiting, never Not required').toHaveText('Waiting')
 

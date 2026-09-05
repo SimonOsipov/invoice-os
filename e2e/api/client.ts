@@ -315,19 +315,23 @@ export interface Invoice {
 }
 
 // InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
-// THREE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
+// FIVE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
 // on listItem only -- getResponse does not carry it, so a GET-detail consumer reading it
 // off Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
 // reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
-// can_approve/approve_blocked_reason (APPR-12-09) ride BOTH wires, from one approvalGate
-// call, and the reject pair stays detail-only (U5a).
-// All three are required, not optional: no omitempty on any Go field, so an invoice with
+// can_approve/approve_blocked_reason (APPR-12-09) and can_submit/submit_blocked_reason
+// (BUG-12) ride BOTH wires, each from one gate call; the reject pair stays detail-only
+// (U5a). GetInvoiceResult keeps its OWN copy of the submit pair rather than inheriting:
+// both interfaces extend the bare Invoice, so there is nothing to inherit through.
+// All five are required, not optional: no omitempty on any Go field, so an invoice with
 // no run emits an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
-// TestListItem_ApproveFlagsCarryNoOmitempty).
+// TestListItem_ApproveFlagsCarryNoOmitempty, TestListHandler_NoActionFlagKeys).
 export interface InvoiceListItem extends Invoice {
   approval: InvoiceApproval | null
   can_approve: boolean
   approve_blocked_reason: string | null
+  can_submit: boolean
+  submit_blocked_reason: string | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.

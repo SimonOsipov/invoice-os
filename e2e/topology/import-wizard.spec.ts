@@ -1182,7 +1182,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 
   // AC-2/[selectability]: CLEAN armed its run at import, VIOLATE only just now (the
   // revalidate above) -- this test holds only invoice NUMBERS, never ids, so recover both
-  // and close their runs before select-all, or isRowSelectable leaves them disabled. The
+  // and close their runs before select-all, or the server answers can_submit:false. The
   // rail-pill toggle below re-fetches the table server-side ([filters-are-server-side],
   // this file's own header), so no separate wait is needed to see the approvals land.
   await approveOpenRunsForEntity(token, entity.id)
@@ -1472,6 +1472,21 @@ test('INVCR-E2E-7 kept-as-is drops out of Needs a fix and stays present-but-disa
     violateRow.getByTestId('review-select'),
     'but it is disabled -- a kept row stays non-selectable (isRowSelectable)',
   ).toBeDisabled()
+
+  // The kept row's blocked reason lives in the checkbox title only -- no line of its own,
+  // no cell of its own. The toBeDisabled() above is this block's non-vacuity control. No
+  // height parity here: the KEPT badge stacks under the verdict pill, so this row's
+  // verdict cell is legitimately taller for a reason this story does not change.
+  const violateBox = violateRow.getByTestId('review-select')
+  const reviewTitle = (await violateBox.getAttribute('title')) ?? ''
+  expect(reviewTitle.length, 'a kept, non-validated row must carry a real reason in its title').toBeGreaterThanOrEqual(20)
+
+  const reviewHead = page.getByTestId('review-table').locator('.pf-list-head')
+  const reviewHeadCells = await reviewHead.locator('> *').count()
+  expect(reviewHeadCells, 'the review head never rendered -- the comparison below would be vacuous').toBeGreaterThan(1)
+  await expect(violateRow.locator('> *'), 'a blocked review row must add no cell of its own').toHaveCount(reviewHeadCells)
+
+  await expect(violateRow, 'the row must not print the sentence its title carries').not.toContainText(reviewTitle)
 
   // select-all excludes it (status stays non-validated even though kept) and still picks
   // up the still-eligible CLEAN row.

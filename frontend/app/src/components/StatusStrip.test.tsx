@@ -259,7 +259,7 @@ describe('StatusStrip: the five nodes', () => {
 })
 
 describe('StatusStrip: the rail and the step blocks (inline style props, not geometry)', () => {
-  it('the container is ViolationsTable pf-scroll-x recipe: focusable, grouped, scrolling', () => {
+  it('the container is the pf-scroll-x recipe: focusable, grouped, scrolling', () => {
     const strip = renderStrip(HUMAN_APPROVED_AT_QUEUED)
     expect(strip.className.split(' ')).toContain('pf-scroll-x')
     expect(strip.getAttribute('role')).toBe('group')

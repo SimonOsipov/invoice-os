@@ -91,7 +91,7 @@ export function InitialsChip({ initials, status, size = 30 }: { initials: string
 
 // One more tone map over the app's single pill idiom — a {bg, border, text} record drawn
 // as a 999-radius pill with a small solid dot in `text` (PolicyStatusPill,
-// WorkflowParts.tsx:171-186; also InvoicesList.tsx:416-424, ViolationsTable.tsx:55-56,
+// WorkflowParts.tsx:171-186; also InvoicesList.tsx:617-623, ViolationsTable.tsx:55-56,
 // RulesView.tsx:31-34). Three distinct tones, no treatment reused (AC#2).
 //
 // Active keeps a pill rather than an empty cell — `Status` is a column, and every other
@@ -560,7 +560,7 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
         aria-expanded={open}
         onClick={(e) => {
           // MEMB-01-07 gives the row itself a click that opens the drawer; the two must
-          // never fire together. Same rule, same reason as InvoicesList.tsx:400-407 and
+          // never fire together. Same rule, same reason as InvoicesList.tsx:599-603 and
           // RulesView.tsx:253-267.
           e.stopPropagation()
           if (open) onClose()

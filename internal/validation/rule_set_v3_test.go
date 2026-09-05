@@ -402,10 +402,10 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestV3ViolationOrderStableUnderPathSort (AC-7 hazard): topology/invoice-surfaces.spec.ts
-// reads `firstRow.locator('td').last()`, which ViolationsTable.tsx
-// (frontend/app/src/components/ViolationsTable.tsx) renders as the SAME `ruleSetVersion`
-// prop on every row -- not per-violation -- so which violation ends up "first" cannot
-// change what that assertion observes, regardless of path-based reordering.
+// reads the rule-set version off the Compliance card's `compliance-ruleset-version` chip,
+// which is per-invoice, so row order cannot change what that assertion observes. BUG-13-01
+// retired the per-row Rule-set version column this paragraph used to describe; the spec no
+// longer reads a `<td>` by ordinal for the version at all.
 //
 // More fundamentally, the engine's rule_key-then-path sort (Decision N16, engine.go)
 // can only ever reorder two violations that SHARE a rule_key -- and rules.key carries

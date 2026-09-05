@@ -58,7 +58,7 @@
 //     longer looking at and gets a 200 for it. (b) The results panel is a sibling gated
 //     on `results !== null` ALONE: nested under `selected.length > 0` a successful
 //     submit's own `setSelected([])` would unmount it the instant it should appear
-//     (InvoicesList.tsx:299-302 records hitting exactly that), and nested under the
+//     (InvoicesList.tsx:385-388 records hitting exactly that), and nested under the
 //     `shown != null` branch a later page error would destroy the receipt. (c) The
 //     confirmation is a second action INSIDE the bar, not a modal: this app has no
 //     confirm-modal precedent, WorkflowsView.tsx:124-126 refuses to invent one, and the
@@ -229,16 +229,16 @@ export function ReviewInvoicesTab({
   // so a fast double-click re-enters the handler before `disabled` re-renders. The
   // reducer's `submitting` identity arm is the structural half of the same guard; this
   // ref is the half that closes the window `disabled` alone loses
-  // (InvoicesList.tsx:160-166 / App.tsx's `reqInFlight`).
+  // (InvoicesList.tsx:225-229 / App.tsx's `reqInFlight`).
   const submitInFlight = useRef(false)
   // AC-6: an id that left the visible set leaves the selection — and under SERVER paging
   // "absent from `rows`" now means "on another page", which is what holds up the
-  // zero-margin 200-id batch-submit cap InvoicesList.tsx:217-227 rests on (selection
+  // zero-margin 200-id batch-submit cap InvoicesList.tsx:281-291 rests on (selection
   // never spans pages; page size stays 50, never 200).
   //
   // The updater MUST return the SAME `sel` instance when nothing changed: `rows` would
   // otherwise get a new `selected` on every render, re-triggering this effect, and React
-  // 19 hard-throws "Maximum update depth exceeded" (InvoicesList.tsx:143-148, shipped and
+  // 19 hard-throws "Maximum update depth exceeded" (InvoicesList.tsx:201-208, shipped and
   // hard-won).
   useEffect(() => {
     setSelected((sel) => {
@@ -271,7 +271,7 @@ export function ReviewInvoicesTab({
   // ANY selection change invalidates an armed confirmation, for the same reason the key
   // is minted late: arm 3 rows → untick them → tick 5 others would otherwise re-show the
   // bar already armed, one click away from sending a set the operator never armed. It
-  // also drops a stale error from the superseded selection (InvoicesList.tsx:203).
+  // also drops a stale error from the superseded selection (InvoicesList.tsx:266,605).
   function disarm() {
     setSubmitError(null)
     toPhase({ type: 'cancel' })
@@ -610,9 +610,10 @@ export function ReviewInvoicesTab({
 
           {/* Page-scoped and cause-free — it answers "why did select-all pick 12 of 50?",
               which is the only version of §7.3's split note this screen can honestly make:
-              a non-selectable row may be failing, mid-edit, already sent, or validated and
-              held by an open approval run. That last one's verdict pill reads VALIDATED,
-              so the pill does not distinguish it — which is why the note names no cause. */}
+              a non-selectable row may be failing, mid-edit, already sent, validated and
+              held by an open approval run, or refused because the viewer is a preparer.
+              Neither of the last two shows in the verdict pill — which is why the note
+              names no cause. */}
           {bar.note != null && (
             <p data-testid="review-bulk-note" style={{ fontSize: 11.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>
               {bar.note}

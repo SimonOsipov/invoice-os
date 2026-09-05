@@ -106,13 +106,23 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   )
   const state = invoicesViewState(base, list)
   // A plain boolean, not a re-compared `state === 'loading'`, at the two Pager call
-  // sites below: both sit inside a `state === 'ready'` branch, where TS narrows `state`
-  // to the literal 'ready' and rejects that comparison as unreachable.
+  // sites below: under `showRows` those branches render mid-refetch too, and `busy` has
+  // to freeze the pager for exactly that window.
   const loading = state === 'loading'
+  // Last envelope useAsync resolved, held across a refetch so the table swaps rows
+  // instead of unmounting -- useAsync's own contract (async-state.ts) is untouched.
+  const [held, setHeld] = useState<FetchedInvoiceList | null>(null)
+  useEffect(() => {
+    if (list.data != null) setHeld(list.data)
+  }, [list.data])
+
   // Both sides are `string | undefined` (in-house has no entity) -- `undefined ===
-  // undefined` correctly reads as fresh there. False whenever `list.data` is still
-  // null so this can be read safely ahead of the `list.data != null` render guards.
-  const fresh = list.data != null && list.data.fetchedEntityId === activeEntityId
+  // undefined` correctly reads as fresh there. Read off `view`, so a held envelope from
+  // the previous company can never reach a render branch.
+  const view = list.data ?? held
+  const fresh = view != null && view.fetchedEntityId === activeEntityId
+  const holding = state === 'loading' && fresh
+  const showRows = state === 'ready' || holding
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) — a poll tick never calls
   // list.run() (THE LOAD-BEARING TRAP: that dispatches useAsync's 'start' action, nulls
@@ -136,11 +146,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   }, [list.data])
 
   // The single row source for the whole component (replaces the old inline `(list.data
-  // ?? []).map`). MUST be memoized: `live ?? list.data ?? []` as a bare expression
+  // ?? []).map`). MUST be memoized: `live ?? view?.invoices ?? []` as a bare expression
   // allocates a fresh `[]` on every render even when neither input changed, which would
   // make the prune effect below re-run every render forever. `live` MUST be in the deps
-  // — the overlay tick never calls `list.run()`, so `list.data` alone would never change
-  // on a poll and the prune effect would never fire for a row that advances past
+  // — the overlay tick never calls `list.run()`, so `view` alone would never change on a
+  // poll and the prune effect would never fire for a row that advances past
   // `validated` between polls.
   //
   // [dashboard-scope-per-client]: the fetch itself is already entity-scoped
@@ -151,11 +161,11 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // Every downstream consumer (selection, the live-poll gate, the empty-state check
   // below) sees only this client's own rows; there is exactly one `rows` in this
   // component. `ctx.mode`/`ctx.active.entityId` join the dep list alongside
-  // `live`/`list.data` so that frame is covered immediately, without waiting on the
+  // `live`/`view` so that frame is covered immediately, without waiting on the
   // refetch.
   const rows = useMemo(
-    () => gateByActiveEntity(live ?? list.data?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
-    [live, list.data, ctx.mode, ctx.active.entityId],
+    () => gateByActiveEntity(live ?? view?.invoices ?? [], ctx.mode === 'inhouse', ctx.active.entityId),
+    [live, view, ctx.mode, ctx.active.entityId],
   )
 
   const [selected, setSelected] = useState<string[]>([])
@@ -208,9 +218,8 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
 
   // One result item plus the invoice number it resolves to, captured from `rows` at
   // submit time (see submitSelection) rather than looked up live at render time: the
-  // success path calls `list.run()` right after, which nulls `list.data` for the
-  // duration of the refetch, so a live `rows.find` would flicker every row to its raw
-  // UUID until the refetch lands.
+  // success path calls `list.run()` right after, and a live `rows.find` would print a
+  // raw UUID for any row that refetch drops.
   const [results, setResults] = useState<{ item: BatchSubmitResultItem; invoiceNumber: string }[] | null>(null)
   const [submitError, setSubmitError] = useState<ApiError | null>(null)
   // Ref guard mirrors App.tsx's `reqInFlight` (App.tsx:106-113): React batches state
@@ -222,7 +231,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   // M5-09-07 live-refresh poll ([poll-interval-2s]): gated on any row being in-flight
   // AND the tab being visible — both from the tested predicate, never re-derived inline.
   const visible = useDocumentVisible()
-  const active = shouldPollList(rows, visible)
+  const active = shouldPollList(rows, visible) && showRows
   // CodeRabbit fix cycle 2, finding 4: overlapping ticks. useLiveRefresh's interval fires
   // unconditionally, so a round-trip slower than LIVE_POLL_MS leaves two listInvoices()
   // calls in flight under the same `gen`; the older can resolve last and re-install stale
@@ -335,11 +344,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
   return (
     <div style={{ padding: '30px 36px 56px' }}>
       {/* No page-level "New invoice" here: the persistent header-bar CTA (Header.tsx) is
-          the single create affordance for the populated list. The empty state below keeps
-          its own button (standard zero-state pattern). The "Needs attention" toggle sits
+          the single create affordance for the populated list. The UNFILTERED empty state
+          below keeps its own button (standard zero-state pattern); the filtered one
+          offers a way out of the filter instead. The "Needs attention" toggle sits
           in the header row (not gated by async state) so it stays reachable even when the
           filtered result set is itself empty. */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: needsAttention ? 8 : 22 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
         <div>
           <div className="eyebrow" style={{ marginBottom: 10 }}>
             INVOICE REGISTER
@@ -372,12 +382,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </button>
       </div>
 
-      {/* The label alone doesn't say the filter now sweeps in approver send-backs. Its own
-          element, single text node — InvoicesList.test.tsx matches the sentence exactly. */}
-      {needsAttention && (
-        <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 22px', textAlign: 'right' }}>Includes invoices an approver sent back.</p>
-      )}
-
       {/* Rendered independent of both `selected.length > 0` (submit clears the
           selection, which would unmount a panel nested under that condition the instant
           it should appear) and `state === 'ready'` (list.run()'s refetch flips `state`
@@ -403,15 +407,38 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'loading' && <Loading label="Loading invoices…" />}
+      {state === 'loading' && !holding && <Loading label="Loading invoices…" />}
 
       {state === 'error' && list.error && <ErrorState error={list.error} onRetry={list.run} />}
 
       {/* `state` reflects the ENTITY-SCOPED fetch itself ([entity-id-restored]) -- a
           genuinely invoice-less entity resolves to 'empty' directly, server-side
-          (invoiceListIsEmpty reads `pagination.total`, never `rows.length`), so this rung
-          fires only on a genuine zero-total set. */}
-      {(state === 'idle' || state === 'empty') && (
+          (invoiceListIsEmpty reads `pagination.total`, never `rows.length`), so both rungs
+          fire only on a genuine zero-total set. Which of the two is chosen reads
+          `needsAttention`, never the response: asyncReducer nulls `data` off the ready
+          branch, so by render time the payload that would say so is gone. `idle` (no
+          gateway) is deliberately unqualified -- it keeps one copy in either filter state. */}
+      {state === 'empty' && needsAttention && (
+        <div data-testid="invoices-empty-filtered">
+          <EmptyState title="Nothing needs attention" message="No invoice in this register is waiting on you. Clear the filter to see the rest." />
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+            <button
+              onClick={() => {
+                setNeedsAttention(false)
+                setOffset(0)
+                setSelected([])
+                disarm()
+              }}
+              data-testid="clear-needs-attention"
+              className="v2-btn v2-btn-ghost pf-btn"
+            >
+              Show all invoices
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(state === 'idle' || (state === 'empty' && !needsAttention)) && (
         <div data-testid="invoices-empty">
           <EmptyState title="No invoices yet" message="Create or import an invoice to start tracking compliance." />
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
@@ -436,12 +463,12 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
           page or a poll tick that just emptied it. Both are trustworthy pagination
           now that the envelope is known to belong to this entity, so the Pager is
           mounted either way and the user can page back. */}
-      {state === 'ready' && list.data != null && fresh && rows.length === 0 && (
+      {showRows && view != null && fresh && rows.length === 0 && (
         <div data-testid="invoices-empty-page">
           <EmptyState title="No invoices on this page" message="Go back to see the rest of the register." />
           <div style={{ marginTop: 16 }}>
             <Pager
-              pagination={list.data.pagination}
+              pagination={view.pagination}
               busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)
@@ -455,7 +482,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {state === 'ready' && list.data != null && fresh && rows.length > 0 && (
+      {showRows && view != null && fresh && rows.length > 0 && (
         <>
           {/* Two stages in ONE bar, the confirm a borderTop-separated section inside it --
               never a modal ([no-modal]), mirroring ApprovalsView.tsx:231-310. The outer
@@ -547,9 +574,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               const st = invoiceStatusStyle(r.status)
               const errorCount = r.violations.filter((v) => v.severity === 'error').length
               const blockedReason = selectBlockedReason(r)
-              // Per-row, not a module const (ApprovalsView.tsx:361's precedent) -- every
-              // row's checkbox renders at once, and any number can be blocked.
-              const reasonId = `submit-blocked-reason-${r.id}`
               return (
                 // Click-only row (no keyboard affordance) predates this story --
                 // CodeRabbit fix cycle 2 flagged it alongside the checkbox aria-label gap,
@@ -569,7 +593,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     checked={selected.includes(r.id)}
                     disabled={!isRowSelectable(r)}
                     title={blockedReason ?? undefined}
-                    aria-describedby={blockedReason != null ? reasonId : undefined}
                     // Disabled-only: on an enabled control this would kill the legitimate
                     // hover affordance platform.css leaves unguarded.
                     style={blockedReason == null ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
@@ -609,21 +632,6 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       </span>
                     )}
                   </span>
-                  {/* Layer 3 of disabled-with-reason (ApprovalsView.tsx:407-414's
-                      precedent): the visible sibling a screenshot, a keyboard user and a
-                      text assertion can all reach. An implicit second grid row, so the
-                      six cells above keep their positions. The leading `{' '}` is a
-                      SIBLING text node, not part of the reason span's own textContent --
-                      it keeps the pre-existing "N ERROR(S)" `\b`-boundary regexes intact
-                      without adding a leading space to the reason string A06-5 pins. */}
-                  {blockedReason != null && (
-                    <>
-                      {' '}
-                      <span id={reasonId} data-testid="invoice-blocked-reason" style={{ gridColumn: '2 / -1', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-                        {blockedReason}
-                      </span>
-                    </>
-                  )}
                 </div>
               )
             })}
@@ -633,7 +641,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
               server clamps `limit`, and a client constant here would hide that clamp. */}
           <div style={{ marginTop: 16 }}>
             <Pager
-              pagination={list.data.pagination}
+              pagination={view.pagination}
               busy={loading || phase === 'submitting'}
               onGo={(o) => {
                 setOffset(o)

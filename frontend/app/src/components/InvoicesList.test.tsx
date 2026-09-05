@@ -15,7 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import { skipReasonLabel, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
+import { LIVE_POLL_MS, type InvoiceListResponse, type InvoiceRecord } from '../lib/invoices'
 import { BULK_COPY, bulkBarView } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
@@ -76,7 +76,7 @@ function listResponse(invoices: InvoiceRecord[], pagination: { limit: number; of
 }
 
 function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
-  return {
+  const built = {
     id: 'inv-x',
     entity_id: 'ent-1',
     import_batch_id: null,
@@ -106,8 +106,13 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    submit_blocked_reason: null,
     ...over,
-  }
+  } as InvoiceRecord
+  // Stands in for the server's answer on an unarmed tenant. Derived from status ONLY --
+  // deriving the approval half too would put the deleted client rule back in a fixture.
+  // Specs about the gate set can_submit explicitly.
+  return { ...built, can_submit: over.can_submit ?? built.status === 'validated' }
 }
 
 // InvoicesList reads exactly these ctx fields (grep-confirmed) — same narrowing idiom
@@ -816,12 +821,10 @@ describe('InvoicesList: resolved-failed marker', () => {
   })
 })
 
-// RED spec (APPR-08-09, task-500, Stage 2.5/Mode A) — the observable form of AC #3's
-// parity claim. An awaiting-approval row renders the SAME disabled checkbox a not-yet-
-// validated row already renders: present, disabled, unchecked, no title, no tooltip, no
-// new copy ([selectable-parity-not-new-copy]). It fails today because isRowSelectable's
-// body is still status-only (its `// stub` marker), so the open-run row's checkbox is
-// enabled and select-all sweeps it in.
+// APPR-08-09 AC #3's parity claim, in its observable form. An awaiting-approval row
+// renders the SAME disabled checkbox a not-yet-validated row already renders: present,
+// disabled, unchecked ([selectable-parity-not-new-copy]). Since BUG-12 the row is disabled
+// because the SERVER said so -- `can_submit: false` on the fixture, not a status rule here.
 describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-09)', () => {
   const openRun = {
     run_state: 'open',
@@ -834,8 +837,15 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
 
   it('AC-3 parity: an awaiting-approval row keeps a PRESENT, disabled, unchecked checkbox and select-all counts 1', async () => {
     const rows = [
-      row({ id: 'clear', invoice_number: 'INV-CLEAR', status: 'validated' }),
-      row({ id: 'awaiting', invoice_number: 'INV-AWAIT', status: 'validated', approval: openRun }),
+      gateRow({ id: 'clear', invoice_number: 'INV-CLEAR', status: 'validated', can_submit: true, submit_blocked_reason: null }),
+      gateRow({
+        id: 'awaiting',
+        invoice_number: 'INV-AWAIT',
+        status: 'validated',
+        approval: openRun,
+        can_submit: false,
+        submit_blocked_reason: SUBMIT_REASON.awaiting,
+      }),
     ]
     mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
 
@@ -857,12 +867,78 @@ describe('InvoicesList: an open approval run disables the row checkbox (APPR-08-
   })
 })
 
-// RED specs (APPR-12-06, task-531, Stage 2.5/Mode A) — a blocked checkbox today is
-// disabled and silent. GAP-2's four-layer contract (mirroring ApprovalsView's shipped
-// G-04-C): the real disabled attribute, a VISIBLE sibling node carrying the sentence, a
-// PER-ROW aria-describedby id (`submit-blocked-reason-${r.id}`), and title. The reason
-// text itself is skipReasonLabel's own copy (GAP-3), never an SPA-authored literal.
-describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all four layers (APPR-12-06, AC #1/#2/#5)", () => {
+// RED spec (Stage 2.5, Mode A) — the register renders the server's answer. The submit pair
+// is not on InvoiceRecord yet, so the override type names it and this stays a value test.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...row(), ...over } as InvoiceRecord
+}
+
+// submitGate's reachable sentences (internal/invoice/handlers.go). Every retargeted spec
+// below sets one on the row: the SPA authors none of them any more.
+const SUBMIT_REASON = {
+  role: 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.',
+  notValidated: 'Only validated invoices can be submitted — re-validate this invoice first.',
+  awaiting: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+} as const
+
+describe('InvoicesList: the register reads the wire submit gate (BUG-12)', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+  // submitGate's role rung (internal/invoice/handlers.go).
+  const SERVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+  it("B12-6: the register renders the server's enabled answer on an open run", async () => {
+    // Both polarities on one page, each contradicting the status/approval rule: a gate
+    // stuck open or stuck shut reds one of the two rows.
+    const rows = [
+      gateRow({
+        id: 'open-clear',
+        invoice_number: 'INV-OPEN-CLEAR',
+        status: 'validated',
+        approval: openRun,
+        can_submit: true,
+        submit_blocked_reason: null,
+      }),
+      gateRow({
+        id: 'wire-blocked',
+        invoice_number: 'INV-WIRE-BLOCKED',
+        status: 'validated',
+        approval: null,
+        can_submit: false,
+        submit_blocked_reason: SERVER_REASON,
+      }),
+    ]
+    mockFetchSequence([listResponse(rows, { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OPEN-CLEAR')
+
+    const clear = screen.getByLabelText('Select invoice INV-OPEN-CLEAR') as HTMLInputElement
+    const blocked = screen.getByLabelText('Select invoice INV-WIRE-BLOCKED') as HTMLInputElement
+
+    expect(clear.disabled, 'the server cleared this row while its newest run is still open').toBe(false)
+    expect(clear.getAttribute('title')).toBeNull()
+
+    expect(blocked.disabled, 'the server refused this row despite a clear status and no run').toBe(true)
+    expect(blocked.getAttribute('title')).toBe(SERVER_REASON)
+  })
+})
+
+// BUG-09 deleted the visible sibling and its per-row aria-describedby id -- a
+// full-width line of prose under every blocked row. The reason copy is still
+// skipReasonLabel's own (GAP-3), never an SPA-authored literal.
+describe("InvoicesList: a blocked checkbox is disabled, dimmed, and carries the SERVER's own reason in its title attribute (APPR-12-06, BUG-09)", () => {
   const openRun = {
     run_state: 'open',
     pending_ord: 1,
@@ -872,40 +948,46 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
     overdue: false,
   }
 
-  it('A06-5: the real disabled attribute, a visible sibling carrying the reason byte-identically, and a per-row aria-describedby id', async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
+  it("A06-5: a blocked checkbox is genuinely disabled and carries the server's reason in its title attribute", async () => {
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
     mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
 
     render(<InvoicesList ctx={listCtx()} />)
     await screen.findByText('INV-BLOCKED')
 
     const checkbox = screen.getByTestId('invoice-select') as HTMLInputElement
-    const reason = skipReasonLabel('not_validated')
+    const reason = SUBMIT_REASON.notValidated
 
-    // Layer 1: the real disabled attribute -- a keyboard user cannot reach it.
+    // The real disabled attribute -- a keyboard user cannot reach it.
     expect(checkbox.disabled).toBe(true)
     checkbox.focus()
     expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
 
-    // Layer 4: title.
-    expect(checkbox.getAttribute('title')).toBe(reason)
-
-    // Layer 3: a VISIBLE sibling node carrying the server's sentence byte-identically --
-    // the layer a screenshot, a keyboard user and a text assertion can all reach.
-    expect(screen.getByText(reason), "the SPA must render skipReasonLabel's own sentence, not a substitute").toBeTruthy()
-
-    // aria-describedby points at that node, by a PER-ROW unique id.
-    const describedbyId = checkbox.getAttribute('aria-describedby')
-    expect(describedbyId).toBe('submit-blocked-reason-inv-blocked')
-    expect(
-      document.getElementById(describedbyId as string)?.textContent,
-      'aria-describedby must point at the SAME text as the visible sentence',
-    ).toBe(reason)
+    expect(checkbox.getAttribute('title'), "the SPA must carry the server's own sentence, not a substitute").toBe(reason)
   })
 
-  it('A06-5b: two blocked rows on the same page get distinct per-row reason ids, each pointing at its own text', async () => {
-    const notValidated = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'draft' })
-    const awaitingApproval = row({ id: 'inv-b', invoice_number: 'INV-B', status: 'validated', approval: openRun })
+  it('A06-5b: two blocked rows on the same page each carry their OWN reason in their title', async () => {
+    const notValidated = gateRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const awaitingApproval = gateRow({
+      id: 'inv-b',
+      invoice_number: 'INV-B',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
     mockFetchSequence([listResponse([notValidated, awaitingApproval], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -913,21 +995,31 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
 
     const checkboxes = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
     expect(checkboxes).toHaveLength(2)
-    const ids = checkboxes.map((c) => c.getAttribute('aria-describedby'))
-    expect(ids[0]).not.toBeNull()
-    expect(ids[1]).not.toBeNull()
-    expect(ids[0], 'two blocked rows must not share one id').not.toBe(ids[1])
-
-    expect(document.getElementById(ids[0] as string)?.textContent).toBe(skipReasonLabel('not_validated'))
-    expect(document.getElementById(ids[1] as string)?.textContent).toBe(skipReasonLabel('awaiting_approval'))
+    const titles = checkboxes.map((c) => c.getAttribute('title'))
+    expect(titles[0]).toBe(SUBMIT_REASON.notValidated)
+    expect(titles[1]).toBe(SUBMIT_REASON.awaiting)
+    expect(titles[0], 'two blocked rows must not share one reason').not.toBe(titles[1])
   })
 
   // QA Mode B adversarial (task-531): A06-5 never asserted GAP-2's layer 2 (the
   // disabled-only style swap that outranks the unguarded :hover) -- stripping it
   // entirely left all 33 specs in this file green.
   it('QA-1: layer 2 -- the disabled-only cursor/opacity swap lands on a blocked checkbox and NOT on a selectable one', async () => {
-    const blocked = row({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', status: 'draft' })
-    const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const selectable = gateRow({
+      id: 'inv-ok',
+      invoice_number: 'INV-OK',
+      status: 'validated',
+      approval: null,
+      can_submit: true,
+      submit_blocked_reason: null,
+    })
     mockFetchSequence([listResponse([blocked, selectable], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
@@ -944,7 +1036,7 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
 
   // QA Mode B adversarial (task-531): every existing spec here starts from a BLOCKED
   // row -- none proves the inverse, that a selectable row renders nothing at all.
-  it('QA-2: a selectable row carries no reason -- no title, no aria-describedby, no visible reason node', async () => {
+  it('QA-2: a selectable row carries no reason -- no title', async () => {
     const selectable = row({ id: 'inv-ok', invoice_number: 'INV-OK', status: 'validated', approval: null })
     mockFetchSequence([listResponse([selectable], { limit: 50, offset: 0, total: 1 })])
 
@@ -954,16 +1046,11 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
     const checkbox = screen.getByTestId('invoice-select') as HTMLInputElement
     expect(checkbox.disabled).toBe(false)
     expect(checkbox.getAttribute('title')).toBeNull()
-    expect(checkbox.getAttribute('aria-describedby')).toBeNull()
-    expect(screen.queryByTestId('invoice-blocked-reason'), 'a selectable row must render no reason node at all').toBeNull()
   })
 
-  // Fix cycle 2 (QA-P1). QA-2 above proves the SELECTABLE row renders nothing; nothing
-  // proved it for the OTHER silent case. Ten deployed rows read "Not validated — validate
-  // it first" beside an ACCEPTED/FAILED/REJECTED pill, because every non-selectable row
-  // got a sentence whether or not one was true. A post-submission row is still
-  // un-tickable, but the pill is the reason -- so the node must be absent, not reworded.
-  it('A06-5c: a post-submission row keeps its disabled checkbox but renders NO reason node, no title and no aria-describedby', async () => {
+  // Ten deployed rows once read "Not validated — validate it first" beside an ACCEPTED
+  // pill: every non-selectable row got a sentence whether or not one was true.
+  it('A06-5c: a post-submission row keeps its disabled checkbox and carries no title', async () => {
     const rows = [
       row({ id: 'inv-acc', invoice_number: 'INV-ACC', status: 'accepted' }),
       row({ id: 'inv-fail', invoice_number: 'INV-FAIL', status: 'failed' }),
@@ -977,64 +1064,175 @@ describe("InvoicesList: a blocked checkbox states the SERVER's own why, in all f
     for (const label of ['Select invoice INV-ACC', 'Select invoice INV-FAIL', 'Select invoice INV-REJ']) {
       const checkbox = screen.getByLabelText(label) as HTMLInputElement
       expect(checkbox.disabled, `${label}: a filed invoice is not submittable`).toBe(true)
-      expect(checkbox.getAttribute('title'), `${label}: no title`).toBeNull()
-      expect(checkbox.getAttribute('aria-describedby'), `${label}: nothing to describe it by`).toBeNull()
+      expect(
+        checkbox.getAttribute('title'),
+        `${label}: telling the operator to validate an already-filed invoice is false`,
+      ).toBeNull()
     }
-
-    expect(screen.queryAllByTestId('invoice-blocked-reason'), 'no post-submission row may carry a reason node').toHaveLength(0)
-    expect(
-      screen.queryByText(skipReasonLabel('not_validated')),
-      'telling the operator to validate an already-filed invoice is false',
-    ).toBeNull()
-    expect(screen.queryByText(skipReasonLabel('awaiting_approval'))).toBeNull()
   })
 })
 
-// Mode A RED spec (AC-3). The toggle now sweeps in drafts an approver sent back; the label
-// alone ("Needs attention") does not say so.
-const TOGGLE_EXPLAINER = 'Includes invoices an approver sent back.'
+// Element children only: a text node is not a grid item.
+describe('BUG-09: a blocked register row costs no extra grid line', () => {
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
 
-describe('InvoicesList: the needs-attention toggle says what it now includes', () => {
-  it('the line is absent while the toggle is off, present while it is on, and gone again when it is off', async () => {
-    // Three responses: mount, the ON refetch, the OFF refetch (needsAttention is in `deps`).
-    mockFetchSequence([
-      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([row({ id: 'o2', invoice_number: 'INV-OFF-2' })], { limit: 50, offset: 0, total: 1 }),
-    ])
+  it("B09-1: a blocked register row renders exactly the head's grid children, and keeps its title", async () => {
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
 
     render(<InvoicesList ctx={listCtx()} />)
-    await screen.findByText('INV-OFF-1')
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the unfiltered register must not carry the line').toBeNull()
+    await screen.findByText('INV-BLOCKED')
 
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByText('INV-ON')
-    // Exact-text match: the copy is its own line, not a clause inside a longer paragraph.
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the ON filter must name what it sweeps in').not.toBeNull()
+    const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head')
+    expect(head, 'no list head -- the comparison below would be vacuous').not.toBeNull()
+    const rowEl = screen.getByTestId('invoice-row')
 
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByText('INV-OFF-2')
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'toggling back off must remove it').toBeNull()
+    // Non-vacuity: the row must really be blocked, or two equal counts prove nothing.
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
+    expect(rowEl.children.length).toBe((head as HTMLElement).children.length)
   })
 
-  // QA adversarial. The zero-row branch is the case the explainer matters most in — the
-  // register looks identical to a genuinely invoice-less one. The generic "No invoices yet"
-  // beside it is a KNOWN GAP with no owner: that empty state never consults the toggle.
-  // Deliberately unasserted here so fixing the copy does not have to delete this test.
-  it('the line survives a filtered result set that comes back empty', async () => {
-    mockFetchSequence([
-      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
-      listResponse([], { limit: 50, offset: 0, total: 0 }),
-    ])
+  it('B09-2: an awaiting-approval register row renders the same grid children as a selectable one', async () => {
+    const awaiting = gateRow({
+      id: 'inv-await',
+      invoice_number: 'INV-AWAIT',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
+    const selectable = gateRow({
+      id: 'inv-ok',
+      invoice_number: 'INV-OK',
+      status: 'validated',
+      approval: null,
+      can_submit: true,
+      submit_blocked_reason: null,
+    })
+    mockFetchSequence([listResponse([awaiting, selectable], { limit: 50, offset: 0, total: 2 })])
 
     render(<InvoicesList ctx={listCtx()} />)
-    await screen.findByText('INV-A1')
+    await screen.findByText('INV-OK')
 
-    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
-    await screen.findByTestId('invoices-empty')
+    const [awaitingRow, cleanRow] = screen.getAllByTestId('invoice-row')
+    const [awaitingBox, cleanBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
 
-    expect(screen.queryByText(TOGGLE_EXPLAINER), 'the explainer is not nested under the populated branch').not.toBeNull()
-    expect(screen.getByTestId('needs-attention-toggle'), 'and the toggle stays reachable to clear the filter').toBeDefined()
+    // Non-vacuity: one row really blocked, the other really selectable.
+    expect(awaitingBox.disabled).toBe(true)
+    expect(awaitingBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
+    expect(cleanBox.disabled).toBe(false)
+
+    expect(awaitingRow.children.length).toBe(cleanRow.children.length)
+  })
+})
+
+// QA Mode B adversarial (task-858). B09-1/B09-2 above are both RELATIVE: they compare a
+// row against the head or against a sibling row, so an edit that moves BOTH sides keeps
+// them green, and they count row-level children only, so a reason re-added INSIDE an
+// existing cell is invisible to them. These three close both holes.
+describe('BUG-09 QA: the deleted line cannot come back through a blind spot', () => {
+  const REGISTER_CELLS = 6
+  const openRun = {
+    run_state: 'open',
+    pending_ord: 1,
+    pending_role_title: 'Reviewer',
+    pending_holder_warn: false,
+    due_at: null,
+    overdue: false,
+  }
+
+  it('QA-B09-3: the head and a blocked row each render exactly SIX grid children, pinned as a literal', async () => {
+    const blocked = gateRow({
+      id: 'inv-blocked',
+      invoice_number: 'INV-BLOCKED',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head') as HTMLElement
+    expect(head).not.toBeNull()
+    // Non-vacuity: the row must really be blocked.
+    expect((screen.getByTestId('invoice-select') as HTMLInputElement).getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
+
+    expect(head.children.length, 'the head is the denominator B09-1 divides by').toBe(REGISTER_CELLS)
+    expect(screen.getByTestId('invoice-row').children.length, 'a blocked row is checkbox + five cells, nothing more').toBe(REGISTER_CELLS)
+  })
+
+  it('QA-B09-4: a blocked row prints its reason nowhere in its own text, at any nesting depth', async () => {
+    const notValidated = gateRow({
+      id: 'inv-a',
+      invoice_number: 'INV-A',
+      status: 'draft',
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.notValidated,
+    })
+    const awaiting = gateRow({
+      id: 'inv-b',
+      invoice_number: 'INV-B',
+      status: 'validated',
+      approval: openRun,
+      can_submit: false,
+      submit_blocked_reason: SUBMIT_REASON.awaiting,
+    })
+    mockFetchSequence([listResponse([notValidated, awaiting], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-B')
+
+    const [aRow, bRow] = screen.getAllByTestId('invoice-row')
+    // Non-vacuity: both rows really are blocked, and each really holds its own sentence
+    // in `title` -- so the strings below exist on the page, just never as rendered text.
+    const [aBox, bBox] = screen.getAllByTestId('invoice-select') as HTMLInputElement[]
+    expect(aBox.getAttribute('title')).toBe(SUBMIT_REASON.notValidated)
+    expect(bBox.getAttribute('title')).toBe(SUBMIT_REASON.awaiting)
+
+    expect(aRow.textContent, 'the reason is back on screen, nested somewhere the child count cannot see').not.toContain(SUBMIT_REASON.notValidated)
+    expect(bRow.textContent).not.toContain(SUBMIT_REASON.awaiting)
+  })
+
+  it('QA-B09-5: the ERROR chip and the RESOLVED marker nest inside the status cell, so the busiest row is still six wide', async () => {
+    const busiest = row({
+      id: 'inv-busy',
+      invoice_number: 'INV-BUSY',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Client accepted as-is',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([busiest], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-BUSY')
+
+    const rowEl = screen.getByTestId('invoice-row')
+    const statusCell = rowEl.children[REGISTER_CELLS - 1]
+    // Non-vacuity: this row really does carry both extras. No `\b` after ERROR -- the
+    // marker abuts the chip, so the row reads "1 ERRORRESOLVED".
+    expect(rowEl.textContent, 'the fixture must really raise an ERROR chip').toContain('1 ERROR')
+    const marker = screen.getByTestId('invoice-resolved-marker')
+
+    expect(statusCell.contains(marker), 'the RESOLVED marker must stay inside the status cell, not become a row-level child').toBe(true)
+    expect(statusCell.textContent, 'the ERROR chip must stay inside the status cell').toContain('1 ERROR')
+    expect(rowEl.children.length, 'two extras that both nest cannot widen the row').toBe(REGISTER_CELLS)
   })
 })
 
@@ -1586,5 +1784,602 @@ describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, AP
     const preamble = source.slice(Math.max(0, declIdx - 700), declIdx)
     expect(preamble, 'a comment must say WHY submitSelection takes no AbortSignal -- omission alone is not documentation').toMatch(/\bsignal\b/i)
     expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
+  })
+})
+
+// Rendering resultLabel (InvoicesList.tsx) from `r.reason` raw reds nothing else in the
+// suite, so the panel could show the operator the machine token. The sentence is spelled
+// here rather than read from skipReasonLabel -- a helper-derived oracle cannot catch the
+// label moving.
+describe('InvoicesList: the bulk-submit result panel speaks the server sentence', () => {
+  it('an awaiting_approval skip renders awaitingApprovalReason, never the wire token', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: false, reason: 'awaiting_approval' }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+
+    expect(panel.textContent, 'the panel must name the row it reports on').toContain('INV-A')
+    expect(panel.textContent).toContain(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
+    expect(panel.textContent, 'the machine token is not operator copy').not.toContain('awaiting_approval')
+  })
+
+  it('a queued row still reads Queued, so the skip arm is not the only reachable one', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    expect(panel.textContent).toContain('Queued')
+    expect(panel.textContent).not.toContain('waiting on approval')
+  })
+})
+
+// RED specs (BUG-10-01, task-864, Stage 2.5/Mode A). `held` does not exist yet: on the
+// toggle click asyncReducer nulls `data`, `state` flips to 'loading' and the populated
+// branch unmounts, so the AC-3 spec below fails on real assertions about the DOM.
+//
+// Manual promise control, not mockFetchSequence -- an auto-resolving mock flushes
+// straight through the in-flight window these specs exist to observe (same reason as
+// the pagination suite's own adversarial spec above).
+function pendingFetch(): { url: string; resolve: (r: MockResponse) => void }[] {
+  const calls: { url: string; resolve: (r: MockResponse) => void }[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => new Promise<MockResponse>((resolve) => calls.push({ url, resolve }))),
+  )
+  return calls
+}
+
+async function settle(fn: () => void): Promise<void> {
+  await act(async () => {
+    fn()
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+describe('InvoicesList: a filter refetch swaps the rows instead of rebuilding the table', () => {
+  it('the rows stay mounted and unspinnered while the needs-attention refetch is in flight', async () => {
+    const mounted = [
+      row({ id: 'inv-a', invoice_number: 'INV-A' }),
+      row({ id: 'inv-b', invoice_number: 'INV-B' }),
+      row({ id: 'inv-c', invoice_number: 'INV-C' }),
+    ]
+    const filtered = [row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 3 })))
+    await screen.findByText('INV-A')
+    expect(screen.getAllByTestId('invoice-row')).toHaveLength(3)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    // Non-vacuity: the refetch really fired and really carries the filter. Without this
+    // the in-flight assertions below could pass on a click that did nothing at all.
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention'), 'the second GET must be the filtered refetch').toBe('true')
+
+    // calls[1] is deliberately left unresolved: this IS the in-flight window.
+    expect(screen.queryByTestId('invoices-list'), 'the table must not unmount for the duration of the refetch').not.toBeNull()
+    expect(screen.getAllByTestId('invoice-row'), 'all three pre-filter rows stay mounted').toHaveLength(3)
+    for (const number of ['INV-A', 'INV-B', 'INV-C']) {
+      expect(screen.queryByText(number), `${number} must still be readable mid-refetch`).not.toBeNull()
+    }
+    expect(screen.queryByText('Loading invoices…'), 'a filter refetch must never raise the full-page spinner').toBeNull()
+
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 1 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(1))
+    expect(screen.queryByText('INV-B')).not.toBeNull()
+    expect(screen.queryByText('INV-A'), 'the filtered-out rows must be gone once the refetch lands').toBeNull()
+    expect(screen.queryByText('INV-C')).toBeNull()
+  })
+
+  it("a company switch discards the held payload rather than showing the previous client's page", async () => {
+    const ent1 = [row({ id: 'inv-e1', entity_id: 'ent-1', invoice_number: 'INV-ENT1' })]
+    const calls = pendingFetch()
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1')} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-ENT1')
+    expect(screen.getAllByTestId('invoice-row')).toHaveLength(1)
+    // The pager IS on screen before the switch, so its absence below has teeth.
+    expect(screen.queryByTestId('invoices-pager')).not.toBeNull()
+
+    rerender(<InvoicesList ctx={listCtx('ent-2')} />)
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('entity_id'), 'the switch must trigger a real entity-scoped refetch').toBe('ent-2')
+
+    // calls[1] left unresolved: the whole window in which a held ent-1 envelope could leak.
+    expect(screen.queryByText('Loading invoices…')).not.toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-empty-page')).toBeNull()
+    // gateByActiveEntity already empties the ROWS, so a rows-only assertion is vacuous
+    // here. The pager is what would still be printing ent-1's totals.
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would be printing ent-1's totals to an ent-2 viewer").toBeNull()
+  })
+
+  it('the first mount still shows the full-page spinner', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    expect(screen.queryByText('Loading invoices…'), 'nothing is held on a first mount, so the full-page spinner is correct').not.toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryAllByTestId('invoice-row')).toHaveLength(0)
+    expect(screen.queryByTestId('invoices-pager')).toBeNull()
+  })
+
+  it('a failed filter refetch shows the error state, not the held rows', async () => {
+    const mounted = [row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filter refetch failed' }) }))
+
+    expect(await screen.findByRole('button', { name: 'Retry' }), 'the retry control is the only way out of a failed refetch').toBeDefined()
+    expect(screen.queryByText('INV-MOUNTED'), 'a held row behind an ErrorState reads as live data that is not').toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+  })
+
+  it("the pager reads the refetched envelope's totals, never the held one's", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const filtered = [row({ id: 'inv-f1', invoice_number: 'INV-F1' }), row({ id: 'inv-f2', invoice_number: 'INV-F2' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(page1, { limit: 50, offset: 0, total: 60 })))
+    expect((await screen.findByTestId('invoices-pager')).textContent).toContain('OF 60')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 2 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(2))
+
+    const pager = screen.getByTestId('invoices-pager')
+    expect(pager.textContent, "the newest envelope's own pagination").toContain('OF 2')
+    expect(pager.textContent, 'the pre-filter total must not survive the refetch').not.toContain('OF 60')
+  })
+})
+
+// QA Stage 4 (BUG-10-01, task-864). The five specs above cover truth-table rows 4, 5, 6,
+// 10 and 17 (.ralph/SUBTASK-01-ARCH.md §2). These cover the reachable rows they left open
+// -- 7, 13/14 and the paging/company-switch paths D-3 widened -- plus the poll gate C-1,
+// which the architect found by reading and which no test in this repo could see.
+describe('QA BUG-10-01: the held envelope at its edges', () => {
+  it('QA-B10-1: the 2s poll stops behind an ErrorState -- a held page with a queued row must not re-request forever (C-1)', async () => {
+    const queued = [row({ id: 'inv-q', invoice_number: 'INV-QUEUED', status: 'queued' })]
+    const urls: string[] = []
+    // Every request resolves: an unresolved tick would leave `tickInFlight` latched and
+    // freeze the poll for a reason that has nothing to do with the gate under test.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        urls.push(url)
+        return urlParams(url).get('needs_attention') === 'true'
+          ? Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filtered refetch failed' }) })
+          : Promise.resolve(listResponse(queued, { limit: 50, offset: 0, total: 1 }))
+      }),
+    )
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-QUEUED')
+
+    // Non-vacuity: this fixture genuinely polls. Without that, the freeze below would
+    // hold for reasons unrelated to `showRows`.
+    await waitFor(() => expect(urls.length, 'a queued row must start the 2s poll').toBeGreaterThan(1), { timeout: LIVE_POLL_MS * 2, interval: 100 })
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByRole('button', { name: 'Retry' })
+
+    const behindTheError = urls.length
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, LIVE_POLL_MS * 2 + 500))
+    })
+    expect(urls.length, 'the held rows are off screen behind the ErrorState, so nothing may poll for them').toBe(behindTheError)
+  }, 20000)
+
+  it('QA-B10-2: a filter refetch that comes back total:0 renders the honest empty state, never the held rows (truth-table row 14)', async () => {
+    const mounted = [row({ id: 'inv-a', invoice_number: 'INV-A' }), row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 2 })))
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve(listResponse([], { limit: 50, offset: 0, total: 0 })))
+
+    expect(await screen.findByTestId('invoices-empty-filtered'), "total:0 classifies as 'empty'; with the filter on that is the filtered branch, which has no rows branch at all").toBeDefined()
+    for (const number of ['INV-A', 'INV-B']) {
+      expect(screen.queryByText(number), `${number} is held, not live -- it must not survive a zero-result filter`).toBeNull()
+    }
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would print the held envelope's totals over an empty result").toBeNull()
+  })
+
+  it('QA-B10-3: a held page whose own slice is empty keeps the page-empty state through a refetch, never a spinner (truth-table row 7)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(p1, { limit: 50, offset: 0, total: 110 })))
+    await screen.findByTestId('invoices-pager')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve(listResponse([], { limit: 50, offset: 50, total: 45 })))
+    expect((await screen.findByTestId('invoices-empty-page')).textContent).toContain('No invoices on this page')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('needs_attention'), 'the third GET must really be the filtered refetch').toBe('true')
+
+    // calls[2] deliberately unresolved: the in-flight window over an EMPTY held slice.
+    expect(screen.queryByTestId('invoices-empty-page'), 'the frame that was on screen when the refetch started stays on screen').not.toBeNull()
+    expect(screen.queryByText('Loading invoices…'), 'an empty held slice is still a hold, not a reason to blank the page').toBeNull()
+    expect(screen.getByTestId('invoices-pager').textContent, "the held envelope's own totals, unchanged mid-flight").toContain('OF 45')
+  })
+
+  it('QA-B10-4: the hold re-syncs on every success -- a second refetch holds the FILTERED envelope, not the first page (AC-5)', async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const filtered = [row({ id: 'inv-f1', invoice_number: 'INV-F1' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(page1, { limit: 50, offset: 0, total: 60 })))
+    expect((await screen.findByTestId('invoices-pager')).textContent).toContain('OF 60')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 1 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('needs_attention'), 'the toggle is off again, so the third GET carries no filter').toBeNull()
+
+    // calls[2] unresolved. This is the ONLY window that separates a re-syncing hold from
+    // a set-once one (`setHeld((h) => h ?? list.data)`); in any settled state the two are
+    // the same reference, which is why the AC-5 spec above cannot discriminate them.
+    expect(screen.getAllByTestId('invoice-row'), 'one row held, not the superseded fifty').toHaveLength(1)
+    expect(screen.queryByText('INV-F1')).not.toBeNull()
+    expect(screen.queryByText('INV-0'), 'the first page was superseded and must not come back under the hold').toBeNull()
+    expect(screen.getByTestId('invoices-pager').textContent, "the most recent envelope's totals").toContain('OF 1')
+  })
+
+  it('QA-B10-5: paging holds the previous page rather than blanking, and the pager stays frozen for the round trip (F-04)', async () => {
+    const p1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const p2 = [row({ id: 'inv-p2', invoice_number: 'INV-PAGE2' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(p1, { limit: 50, offset: 0, total: 51 })))
+    await screen.findByText('INV-0')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next →' }))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('offset'), 'the click must really be paging, not a no-op').toBe('50')
+
+    // D-3: the hold is per-refetch, not per-cause, so paging stops blanking too.
+    expect(screen.getAllByTestId('invoice-row'), 'page 1 stays readable while page 2 is fetched').toHaveLength(50)
+    expect(screen.queryByText('Loading invoices…')).toBeNull()
+    // `busy={loading || ...}` freezes BOTH directions, so the still-mounted pager opens
+    // no double-navigation path (A16-4g).
+    for (const name of ['← Previous', 'Next →']) {
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, `${name} must be frozen for the whole in-flight window`).toBe(true)
+    }
+
+    await settle(() => calls[1].resolve(listResponse(p2, { limit: 50, offset: 50, total: 51 })))
+    await screen.findByText('INV-PAGE2')
+    expect(screen.queryByText('INV-0'), 'the held page is discarded the instant page 2 lands').toBeNull()
+  })
+
+  it("QA-B10-6: a company switch mid-refetch discards the previous entity's envelope even when it resolves late", async () => {
+    const ent1 = [row({ id: 'inv-e1', entity_id: 'ent-1', invoice_number: 'INV-ENT1' })]
+    const calls = pendingFetch()
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1')} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-ENT1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+
+    rerender(<InvoicesList ctx={listCtx('ent-2')} />)
+    await waitFor(() => expect(calls).toHaveLength(3))
+    expect(urlParams(calls[2].url).get('entity_id'), 'the switch fires its own entity-scoped refetch').toBe('ent-2')
+
+    // The ent-1 refetch resolves AFTER the switch. useAsync's runId guard drops the
+    // dispatch; `fresh` drops the held ent-1 envelope. Either fence alone suffices --
+    // this asserts the pair, since the hold is what made the second one load-bearing.
+    await settle(() => calls[1].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+
+    expect(screen.queryByText('INV-ENT1'), "ent-1's rows must never reach an ent-2 viewer").toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would print ent-1's totals").toBeNull()
+    expect(screen.queryByText('Loading invoices…'), 'a company switch is a full-page spinner, never a hold').not.toBeNull()
+  })
+
+  it('QA-B10-7: both rows branches keep the fence jsdom cannot observe -- `fresh` per branch, and a `state` check in showRows', () => {
+    // Static, not runtime, and deliberately so: the frame this protects is the one
+    // committed render between a company switch and useAsync's passive `start` dispatch
+    // (truth-table row 9). The entity-switch spec above records the same limit in its
+    // own comment -- act() flushes straight through that commit. Dropping `fresh` from
+    // both branches leaves the whole 3746-test suite green, which is what this covers.
+    const source = readFileSync(path.join(process.cwd(), 'src/components/InvoicesList.tsx'), 'utf8')
+
+    const gates = source.split('\n').filter((l) => /rows\.length (===|>) 0 &&/.test(l) && l.includes('showRows'))
+    expect(gates, 'exactly two rows-render gates: the fresh-and-empty page and the populated list').toHaveLength(2)
+    for (const gate of gates) {
+      expect(gate, 'a rows branch without `fresh` paints the previous company page for one commit').toMatch(/&& fresh &&/)
+      expect(gate, 'and `view != null` must precede the dereference in the same chain').toMatch(/view != null/)
+    }
+
+    const showRowsDef = source.match(/const showRows = [^\n]+/)?.[0]
+    expect(showRowsDef, 'showRows must be defined').toBeDefined()
+    expect(showRowsDef, "showRows carries a `state` check, not a bare `view != null` -- 'empty' and 'error' own their own branches").toMatch(/state ===/)
+  })
+})
+
+// BUG-10-02 (task-865). Replaces the explainer's two specs, which assert
+// only that a string appears and disappears -- neither survives as an absence check, because
+// a spec asserting a string no code path can render passes forever. Those two die with the
+// source in the same commit.
+function aboveTable(container: HTMLElement): string[] {
+  const root = container.firstElementChild as HTMLElement
+  // The three ready-state children are the header block, the table and the pager wrapper.
+  // Only the table is identified: the other two both fingerprint as the bare `DIV||`.
+  return Array.from(root.children).map((el) => `${el.tagName}|${el.className}|${el.getAttribute('data-testid') ?? ''}`)
+}
+
+// Sibling-level only is not enough: a node re-added INSIDE the header block leaves the array
+// above untouched. Caught by 'no element is added or removed above the table at any depth'.
+function surfaceAboveTable(container: HTMLElement): string[] {
+  const root = container.firstElementChild as HTMLElement
+  const out: string[] = []
+  const walk = (el: Element, depth: number) => {
+    out.push(`${depth}|${el.tagName}|${el.getAttribute('class') ?? ''}|${el.getAttribute('data-testid') ?? ''}`)
+    for (const child of Array.from(el.children)) walk(child, depth + 1)
+  }
+  for (const child of Array.from(root.children)) {
+    if (child.getAttribute('data-testid') === 'invoices-list') break
+    walk(child, 0)
+  }
+  return out
+}
+
+describe('InvoicesList: the needs-attention filter changes the rows, and nothing else', () => {
+  it('nothing above the table mounts or unmounts when the filter is toggled', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { container } = render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    expect(screen.queryByTestId('invoices-list'), 'the OFF snapshot must be taken over a rendered table, never a blank screen').not.toBeNull()
+    const off = aboveTable(container)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    expect(screen.queryByTestId('invoices-list'), 'and so must the ON snapshot').not.toBeNull()
+
+    expect(aboveTable(container), 'the filter must not add or remove a sibling around the table').toEqual(off)
+  })
+
+  // QA adversarial. Tag/class/testid only, never inline style -- the chip's own active
+  // border/background/colour must stay free to change (AC-5).
+  it('QA: no element is added or removed above the table at any depth', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    const { container } = render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    const off = surfaceAboveTable(container)
+    expect(off.some((f) => f.endsWith('|needs-attention-toggle')), 'the walk must reach the toggle, or the equality below is vacuous').toBe(true)
+    expect(off.some((f) => f.includes('|H1|')), 'and the title, so it covers the block whose margin moved').toBe(true)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+    expect(screen.queryByTestId('invoices-list'), 'the ON snapshot must be taken over a rendered table').not.toBeNull()
+
+    expect(surfaceAboveTable(container), 'the filter must not mount a node anywhere above the table').toEqual(off)
+  })
+
+  it('the title block bottom margin does not change with the filter', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'o1', invoice_number: 'INV-OFF-1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([row({ id: 'n1', invoice_number: 'INV-ON' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-OFF-1')
+    const titleBlock = () => screen.getByTestId('needs-attention-toggle').parentElement as HTMLElement
+    const off = titleBlock().style.marginBottom
+    expect(off, 'an unset margin on both reads would make the equality below vacuous').not.toBe('')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByText('INV-ON')
+
+    // Equality between two measured states, never the literal 22: a later redesign may move
+    // this margin and must survive, as long as it moves in both states.
+    expect(titleBlock().style.marginBottom, 'the header must not slide when the filter flips').toBe(off)
+  })
+})
+
+// BUG-10-03 (task-866). Closes the gap the deleted explainer specs recorded as "a KNOWN GAP
+// with no owner": the generic empty state never consulted the toggle.
+describe('InvoicesList: an empty register says which kind of empty it is', () => {
+  it('a filtered result set that comes back empty says nothing needs attention', async () => {
+    mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const filtered = await screen.findByTestId('invoices-empty-filtered')
+    expect(filtered.textContent, 'the filtered empty state must say which kind of empty this is').toContain('Nothing needs attention')
+    expect(filtered.textContent, 'the System Design copy verbatim (.ralph/PLAN.md:498-502) -- this sentence IS the claim, so a reword is a new claim').toContain('No invoice in this register is waiting on you. Clear the filter to see the rest.')
+    expect(within(filtered).getByTestId('clear-needs-attention').textContent, 'the way back must say where it goes -- S2 clicks it by testid and would not notice a rename').toBe('Show all invoices')
+    expect(screen.queryByTestId('invoices-empty'), 'the generic copy must be REPLACED, not joined -- two empty states at once is the same lie twice').toBeNull()
+    expect(screen.queryByText('No invoices yet'), 'a workspace that has invoices must never be told it has none').toBeNull()
+    expect(screen.queryByText(/New invoice/), 'create is not the way out of a filter').toBeNull()
+  })
+
+  it('the filtered empty state offers the way back to the full register', async () => {
+    const fetchMock = mockFetchSequence([
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+      listResponse([], { limit: 50, offset: 0, total: 0 }),
+      listResponse([row({ id: 'a1', invoice_number: 'INV-A1' })], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A1')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await screen.findByTestId('invoices-empty-filtered')
+
+    fireEvent.click(screen.getByTestId('clear-needs-attention'))
+
+    await waitFor(() => expect(fetchMock.mock.calls, 'clearing the filter must go back to the wire, not just repaint').toHaveLength(3))
+    const [clearUrl] = fetchMock.mock.calls[2] as [string]
+    expect(urlParams(clearUrl).get('needs_attention'), 'the way back must DROP the filter, not re-send it').toBeNull()
+    expect(urlParams(clearUrl).get('offset'), 'and land on page 1').toBe('0')
+
+    expect(await screen.findByText('INV-A1'), 'the rest of the register must come back').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'the filtered empty state must not survive its own exit').toBeNull()
+  })
+
+  it('a genuinely invoice-less workspace still reads No invoices yet with New invoice', async () => {
+    mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+
+    const empty = await screen.findByTestId('invoices-empty')
+    expect(empty.textContent, 'the default filter-off zero-total workspace keeps the honest copy').toContain('No invoices yet')
+    expect(within(empty).getByText(/New invoice/), 'and keeps the create affordance -- here there is nothing to un-filter').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'nothing is filtered here, so the filtered copy must not over-branch onto it').toBeNull()
+  })
+
+  it('the no-gateway idle branch keeps the same copy even with the filter on', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<InvoicesList ctx={listCtx()} />)
+
+    // Before the click too: idle+filter-off is the DEFAULT no-gateway state, and the
+    // post-click assertion below cannot see it blanked.
+    expect(screen.getByTestId('invoices-empty').textContent, 'the unfiltered idle copy is the default, not a post-click state').toContain('No invoices yet')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    const empty = screen.getByTestId('invoices-empty')
+    expect(empty.textContent, 'idle is unqualified by the filter: one copy in either filter state').toContain('No invoices yet')
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'a build with no backend behind it may not claim nothing needs attention -- Out of Scope fence').toBeNull()
+    expect(fetchMock, 'no gateway means no request, whatever the toggle says').not.toHaveBeenCalled()
+  })
+})
+
+// QA BUG-10-03. The filtered copy asserts what the server answered. Only `state === 'empty'`
+// carries an answer; 'loading' and 'error' carry none, so neither may print the claim.
+describe('QA BUG-10-03: the filtered empty state claims nothing before the server has answered', () => {
+  it('the cold in-flight window shows the spinner, never the filtered copy (truth-table row 5)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention'), 'the filtered refetch really is in flight').toBe('true')
+
+    // calls[1] deliberately unresolved: nothing has answered, so nothing may be claimed.
+    expect(screen.queryByText('Loading invoices…'), 'with no envelope to hold, the cold window is the spinner').not.toBeNull()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'an unanswered request is not an empty result set').toBeNull()
+    expect(screen.queryByTestId('invoices-empty'), 'nor is it an empty workspace').toBeNull()
+  })
+
+  it('the held in-flight window shows the held rows, never the filtered copy (truth-table row 6)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse([row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })], { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+
+    expect(screen.queryByText('INV-MOUNTED'), 'the hold is what makes this row distinct from row 5').not.toBeNull()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'held rows and "nothing needs attention" are the same lie twice').toBeNull()
+  })
+
+  it('a failed filtered refetch shows the error, never the filtered copy (truth-table row 10)', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse([row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })], { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    await settle(() => calls[1].resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filtered refetch failed' }) }))
+
+    expect(await screen.findByRole('button', { name: 'Retry' }), 'the failure really did reach the screen').toBeDefined()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'a request that failed says nothing about what needs attention').toBeNull()
   })
 })

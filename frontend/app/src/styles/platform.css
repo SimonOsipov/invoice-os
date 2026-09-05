@@ -111,9 +111,9 @@ body {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
 }
-/* Keyboard-focus ring for the violations table's horizontal scroll wrapper (CodeRabbit,
-   PR #138) -- outline:none removes the UA default so only this box-shadow shows, and
-   only while focused; the unfocused (static) look is untouched either way. */
+/* Keyboard-focus ring for StatusStrip's horizontal scroll wrapper, the class's only
+   consumer (CodeRabbit, PR #138) -- outline:none removes the UA default so only this
+   box-shadow shows, and only while focused; the unfocused look is untouched either way. */
 .pf-scroll-x {
   outline: none;
 }

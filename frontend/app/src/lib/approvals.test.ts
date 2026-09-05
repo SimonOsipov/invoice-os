@@ -130,6 +130,8 @@ const baseRow: InvoiceRecord = {
   rule_set_version: 2,
   can_approve: true,
   approve_blocked_reason: null,
+  can_submit: false,
+  submit_blocked_reason: null,
 }
 
 function approvableRow(id: string): InvoiceRecord {
@@ -872,9 +874,12 @@ function goStructKeys(source: string, structName: string): string[] {
 }
 
 // Same brace-balanced trick for a TS interface body, works for both the multi-line style
-// (e2e/api/client.ts) and a hypothetical single-line style without two code paths.
+// (e2e/api/client.ts) and a hypothetical single-line style without two code paths. The
+// `extends` clause is optional in the pattern: without it an interface that extends
+// anything yields '' -- zero keys, which reads exactly like clean.
 function tsInterfaceKeys(source: string, interfaceName: string): string[] {
-  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const body =
+    new RegExp(`export interface\\s+${interfaceName}(?:\\s+extends\\s+[^{]*?)?\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
   const keys: string[] = []
   for (const rawSeg of body.split(/[\n;]/)) {
     const seg = rawSeg.trim()

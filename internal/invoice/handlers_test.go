@@ -4263,16 +4263,50 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
+// TestListHandler_SubmitFlagsOnEveryRow (BUG-12-01, AC-1): the submit pair ships on
+// EVERY row, exactly once each. The counts are what catch the two shapes a presence
+// check misses -- a key emitted only on the first row, and a key emitted twice.
+func TestListHandler_SubmitFlagsOnEveryRow(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{
+			{ID: uuid.NewString(), Status: StatusDraft},
+			{ID: uuid.NewString(), Status: StatusValidated},
+		}, 2, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	rows := listRowsRaw(t, rec)
+	if len(rows) != 2 {
+		t.Fatalf("len(invoices) = %d, want 2 -- the counts below are meaningless on any other page size", len(rows))
+	}
+
+	body := rec.Body.String()
+	for _, k := range []string{`"can_submit":`, `"submit_blocked_reason":`} {
+		if n := strings.Count(body, k); n != 2 {
+			t.Errorf("body carries %d %s, want exactly 2 -- one per row: %s", n, k, body)
+		}
+	}
+	for i, row := range rows {
+		submitFlagsOf(t, row, fmt.Sprintf("row %d", i))
+	}
+}
+
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of the action-flag keys
 // that are still detail-only, mirroring TestListHandler_NoRuleSetVersionKey -- they live
 // on GetHandler's getResponse wrapper, never on the domain Invoice nor on List's own
-// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve pair.
+// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve and
+// submit pairs.
 //
-// APPR-12-09 (A09-7) moves TWO of the former 13 literals from the absent half to the
-// PRESENT half: `can_approve` and `approve_blocked_reason` now ship per row, from the same
-// approvalGate the detail wire calls. `can_reject`/`reject_blocked_reason` stay ABSENT
-// (U5a). The remaining 11 must NOT be widened to exclude `approval` -- that would forbid
-// the very key APPR-08-08 ships.
+// APPR-12-09 (A09-7) moved TWO of the former 13 literals from the absent half to the
+// PRESENT half: `can_approve` and `approve_blocked_reason` ship per row, from the same
+// approvalGate the detail wire calls. BUG-12 moves TWO more the same way, for the same
+// reason: `can_submit` and `submit_blocked_reason` now come from the same submitGate
+// call. `can_reject`/`reject_blocked_reason` stay ABSENT (U5a). The remaining 9 must NOT
+// be widened to exclude `approval` -- that would forbid the very key APPR-08-08 ships.
 //
 // The present half is this guard's CONTROL NEEDLE: an absence-only assertion passes for
 // free against an empty page, a 500 body, or a row set that lost the wrapper entirely.
@@ -4297,7 +4331,7 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`,
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`,
 		// BUG-04-03 (task-399): the UBL gate is detail-only too.
 		`"can_view_ubl":`, `"ubl_blocked_reason":`,
 		// The resolve-outside pair was never in this guard -- a pre-existing
@@ -4322,6 +4356,14 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		}
 		if want := jsonOf(t, reasonNotAnApprover); gotReason != want {
 			t.Errorf("row %d approve_blocked_reason = %s, want %s -- rung 1 is the zero ListGateFacts' answer", i, gotReason, want)
+		}
+
+		gotCanSubmit, gotSubmitReason := submitFlagsOf(t, row, fmt.Sprintf("row %d", i))
+		if gotCanSubmit != "false" {
+			t.Errorf("row %d can_submit = %s, want false -- a page with no gate facts and no caller role must fail CLOSED", i, gotCanSubmit)
+		}
+		if want := jsonOf(t, notApproverTransmitReason); gotSubmitReason != want {
+			t.Errorf("row %d submit_blocked_reason = %s, want %s -- rung 1 is the zero ListGateFacts' answer", i, gotSubmitReason, want)
 		}
 	}
 }

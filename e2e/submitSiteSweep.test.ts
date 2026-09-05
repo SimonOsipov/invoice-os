@@ -416,7 +416,7 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
   [INVOICE_SURFACES, 'test:detail surface: a FIRS rejection redens the final node only', 'click:batch-submit-confirm', 1],
   // AUDIT-09-09's rail-order guard: the fiscal-record card only mounts on `accepted` with a
   // real IRN, and a raw transitionInvoice never creates a submission job -- so pinning the
-  // rail's four cards needs a real browser submit.
+  // rail's three cards needs a real browser submit.
   [INVOICE_SURFACES, 'test:detail surface: the untouched rail order is unchanged', 'click:batch-submit-confirm', 1],
 ]
 

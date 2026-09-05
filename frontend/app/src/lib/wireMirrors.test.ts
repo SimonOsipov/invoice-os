@@ -28,8 +28,11 @@ function goStructKeys(source: string, structName: string): string[] {
   return keys
 }
 
+// The `extends` clause is optional in the pattern: without it an interface that extends
+// anything yields '' -- zero keys, which reads exactly like clean.
 function tsInterfaceKeys(source: string, interfaceName: string): string[] {
-  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const body =
+    new RegExp(`export interface\\s+${interfaceName}(?:\\s+extends\\s+[^{]*?)?\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
   const keys: string[] = []
   for (const rawSeg of body.split(/[\n;]/)) {
     const seg = rawSeg.trim()
@@ -903,5 +906,59 @@ describe('wire mirror: Go batchResponse <-> lib/importApi.ts ImportBatch (EXTR-1
     expect(spaKeys, 'the SPA ImportBatch is missing document_id').toContain('document_id')
 
     expect(keySetDiff(goKeys, spaKeys), 'batchResponse vs the SPA ImportBatch').toEqual([])
+  })
+})
+
+// The submit pair rides BOTH wires from one submitGate call, so it is declared once on
+// InvoiceRecord and inherited. Nothing links the two interfaces at compile time --
+// InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'>, so a redeclaration compiles
+// clean and drifts silently.
+describe('the submit pair is declared once on the SPA invoice mirror (BUG-12)', () => {
+  const SPA = 'frontend/app/src/lib/invoices.ts'
+  const SUBMIT_PAIR = ['can_submit', 'submit_blocked_reason']
+
+  it('B12-9a: control needle + floor for the declared-once scan', () => {
+    const source = repoFile(SPA)
+    expect(source.length, `${SPA} was not read`).toBeGreaterThan(0)
+
+    const record = tsInterfaceKeys(source, 'InvoiceRecord')
+    const detail = tsInterfaceKeys(source, 'InvoiceDetailRecord')
+
+    // Anchors this story never moves: an extractor that broke would empty both sets and
+    // let the claim below pass on nothing.
+    expect(record.length, 'InvoiceRecord under its floor').toBeGreaterThanOrEqual(30)
+    expect(record).toContain('invoice_number')
+    expect(record).toContain('can_approve')
+
+    // InvoiceDetailRecord carries an `extends` clause: this row is what proves the
+    // extractor sees past one at all.
+    expect(detail.length, 'InvoiceDetailRecord under its floor').toBeGreaterThanOrEqual(11)
+    expect(detail).toContain('qr_png_base64')
+    expect(detail).toContain('can_reject')
+  })
+
+  it('B12-9b: the pair is declared once', () => {
+    const source = repoFile(SPA)
+    const record = tsInterfaceKeys(source, 'InvoiceRecord')
+    const detail = tsInterfaceKeys(source, 'InvoiceDetailRecord')
+
+    expect(SUBMIT_PAIR).toHaveLength(2)
+    // Absence first: the redeclaration is the hit the fixed extractor already finds in the
+    // tree, so this leg is what proves the scan bites before the floor can mask it.
+    for (const key of SUBMIT_PAIR) {
+      expect(detail, `${key} is redeclared on InvoiceDetailRecord instead of inherited`).not.toContain(key)
+      expect(record, `${key} must be declared on InvoiceRecord`).toContain(key)
+    }
+    expect(record.length, 'InvoiceRecord must carry the pair on top of its floor').toBeGreaterThanOrEqual(32)
+  })
+
+  it('B12-9c: planted positive — the extractor reads an extending interface and a plain one alike', () => {
+    const extending = 'export interface Fixture extends Base {\n  a: string\n  b: string | null\n}'
+    const plain = 'export interface Fixture {\n  a: string\n  b: string | null\n}'
+
+    expect(tsInterfaceKeys(extending, 'Fixture')).toEqual(['a', 'b'])
+    expect(tsInterfaceKeys(plain, 'Fixture')).toEqual(['a', 'b'])
+    // And it still reports a real absence rather than agreeing with everything.
+    expect(tsInterfaceKeys('export interface Fixture extends Base {\n  a: string\n}', 'Fixture')).not.toContain('b')
   })
 })

@@ -258,6 +258,64 @@ test('deployed app: a top-level path is a working deep link', async ({ page }) =
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// The ONLY oracle for this story's load-bearing premise: sessionStorage written on the APP
+// origin survives a same-tab hard navigation to the LANDING origin and back. sessionStorage is
+// keyed by (top-level browsing context, origin), so no unit test can observe it — jsdom never
+// leaves the origin. Decision [sessionstorage-survives-the-round-trip].
+//
+// Drives the REAL SignInModal rather than a constructed ?persona= URL: a constructed URL skips
+// the landing round trip, which IS the premise under test.
+//
+// No goBack()/goForward() here, deliberately. The journey makes three document navigations
+// (/audit -> landing -> the app hand-off) and two replaceState rewrites, so the entry behind
+// the arrival is the LANDING page, not /audit. The journey needs no history depth and must not
+// claim any.
+test('deployed app: a signed-out deep link returns to its destination after sign-in', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  // No response assertion: the front door navigates away during load. 'a visit with no session
+  // redirects to the landing page' above establishes that `goto` onto a bouncing app URL
+  // settles cleanly, and 'a top-level path is a working deep link' proves Caddy serves /audit.
+  await page.goto(`${APP_URL}/audit`)
+  await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+  // Same modal drive as the parametrised walk below. 'Explore the platform' renders TWICE on
+  // the landing page (header + hero), so the banner scope is required, not stylistic.
+  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
+
+  // Six separate fill() calls, for the same reason as the walk below: setDigit() moves DOM
+  // focus itself on every keystroke, which would race a keyboard-driven approach.
+  const digits = '481920'.split('')
+  for (let i = 0; i < digits.length; i++) {
+    await page.locator(`#si-otp-${i}`).fill(digits[i])
+  }
+  // verify() delays the navigation by 1100ms (SignInModal.tsx's redirectTimer). Absorbed by the
+  // auto-waiting assertions below — never add a fixed wait here.
+  await page.getByRole('button', { name: 'Verify & continue' }).click()
+
+  // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
+  // only have come from the restored destination.
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'the restored destination did not settle on /audit').toHaveURL(/\/audit$/)
+
+  // The dashboard's eyebrow div, not a heading — the dashboard's h1 is the dynamic client name.
+  // Non-vacuous: the two assertions above already gated on a MOUNTED workspace. Its positive
+  // control ships in this same file and run — "Back walks the workspace's own history" asserts
+  // this exact locator IS visible on the deployed dashboard.
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).not.toBeVisible()
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the restored deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 // This walk drives the REAL SignInModal (open -> pick a persona -> type the OTP -> Verify),
 // never e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
 // two sides can silently diverge:

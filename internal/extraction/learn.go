@@ -89,6 +89,15 @@ func LearnRule(field string, region Region, anchors []AnchorObservation) (Learne
 	return LearnedRule{Field: field, Anchor: best.AnchorObservation, Rule: rule, Body: body}, true
 }
 
+// LearnBoxlessRule derives one same_token rule from a typed correction on a document with no
+// geometry: for each page-1 token text and each lexicon matcher, the value is what the emitted
+// label leaves behind. Ambiguity is judged on the derived BODY, not the hit count.
+//
+// tokens is extraction_jobs.layout_tokens read back -- page-1 text only, no boxes.
+func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) {
+	return LearnedRule{}, false
+}
+
 // tier1Shape is the field gate and the shape lookup in one linear scan: tier1Specs' field set
 // equals HeaderFields, so a miss here is a field no rule can fill.
 func tier1Shape(field string) (Shape, bool) {

@@ -216,15 +216,19 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
     }
   })
 
-  it('S-4 (invoiceStrip_submittedSharesTheQueuedNode): submitted is current on node 4 and captions Submitted, not Waiting', () => {
+  it('S-4 (invoiceStrip_submittedSharesTheQueuedNode): submitted is current on node 4 and captions the queued row, exactly as queued does', () => {
     const nodes = strip(HISTORY_TO_QUEUED, null, 'submitted')
     expect(nodes[3].state).toBe('current')
-    expect(nodes[3].caption).toBe('Submitted')
+    const submittedCaption = nodes[3].caption
+    expect(submittedCaption).toBe('11:30 · Ada')
     expect(nodes[4].state).toBe('unreached')
     expect(nodes[4].caption).toBe('Not reached')
 
-    // The sibling status shares the node but not the caption (arch §3d, P-10).
-    expect(strip(HISTORY_TO_QUEUED, null, 'queued')[3].caption).toBe('Waiting')
+    // The sibling status shares the node AND the caption. The equality, not the two
+    // literals, is what proves no arm here reads `status`.
+    const queuedCaption = strip(HISTORY_TO_QUEUED, null, 'queued')[3].caption
+    expect(queuedCaption).toBe('11:30 · Ada')
+    expect(submittedCaption).toBe(queuedCaption)
   })
 
   it('S-5 (invoiceStrip_terminalRelabels): node 5 relabels and reddens on failed and on rejected', () => {
@@ -464,7 +468,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
 
   it('S-16 (invoiceStrip_loopKeepsFiveNodesAndLatestActor): the loop keeps five nodes and takes the latest row per node', () => {
     // AMENDED from the story (arch §7 row 5): assert the `at`/`actor` FIELDS. Node 2 is
-    // `current` at the end of this journey, so its caption is 'Waiting', not the time.
+    // `current` at the end of this journey, and still renders the row it holds.
     const nodes = strip(LOOP, mkRun('cancelled', { closed_at: '2026-07-01T10:30:00' }), 'validated')
 
     expect(nodes[0].state).toBe('done')
@@ -475,7 +479,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
     expect(nodes[1].state).toBe('current')
     expect(nodes[1].at).toBe('2026-07-01T11:45:00') // row 6, NOT the 09:30 first validation
     expect(nodes[1].actor?.text).toBe('Chidi Nwosu')
-    expect(nodes[1].caption).toBe('Waiting') // a current node never renders its time
+    expect(nodes[1].caption).toBe('11:45 · Chidi') // a current node renders its own row
 
     // Node 4 saw a queueing at 10:00 and node 5 a rejection at 10:30, but the cursor is
     // back at 2, so both are demoted with no residue (arch §6.8).
@@ -541,14 +545,14 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
     }
   })
 
-  it('S-20 (arch §6.10): a current node captions Waiting even when its history row is populated', () => {
+  it('S-20 (retargeted): a current node renders the populated history row it holds', () => {
     const nodes = strip([h('draft', T_DRAFT)], mkRun('rejected', { closed_at: T_CLOSED }), 'draft')
     expect(nodes[0].state).toBe('current')
     expect(nodes[0].at).toBe(T_DRAFT) // populated...
     expect(nodes[0].actor?.text).toBe('Ada Lovelace')
-    expect(nodes[0].caption).toBe('Waiting') // ...but not rendered
-    expect(nodes[0].caption).not.toContain('09:00')
-    expect(nodes[0].caption).not.toContain('Ada')
+    expect(nodes[0].caption).toBe('09:00 · Ada') // ...and rendered
+    expect(nodes[0].caption).toContain('09:00')
+    expect(nodes[0].caption).toContain('Ada')
   })
 
   it('S-21: an empty history leaves every reached node on the em-dash, with no throw', () => {
@@ -562,6 +566,189 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
     expect(nodes[4].state).toBe('done')
     expect(nodes[4].caption).toBe('—')
     expect(nodes[2].caption).toBe('Not required')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A reached node captions its attribution, whatever its state
+// ---------------------------------------------------------------------------
+
+describe('stripNodes: a reached node captions its attribution', () => {
+  it('S-35: the node under the cursor captions its own time and actor, on every status', () => {
+    // Cursor -> node index: draft 0, validated 1, queued and submitted 3.
+    const cases: Array<[InvoiceStatus, number, string]> = [
+      ['draft', 0, '09:00 · Ada'],
+      ['validated', 1, '10:15 · Ada'],
+      ['queued', 3, '11:30 · Ada'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+
+    for (const [status, idx, caption] of cases) {
+      const nodes = strip(HISTORY_TO_QUEUED, null, status)
+      expect(nodes[idx].state, status).toBe('current')
+      expect(nodes[idx].at, status).not.toBeNull()
+      expect(nodes[idx].caption, status).toBe(caption)
+    }
+
+    // Control: the `done` node beside the current one takes the SAME shape, so the
+    // assertions above cannot be passing on a caption only `done` nodes ever receive.
+    const atValidated = strip(HISTORY_TO_QUEUED, null, 'validated')
+    expect(atValidated[0].state).toBe('done')
+    expect(atValidated[0].caption).toBe('09:00 · Ada')
+
+    // submitted shares node 4 with queued, and now shares its caption too.
+    expect(strip(HISTORY_TO_QUEUED, null, 'submitted')[3].caption).toBe('11:30 · Ada')
+  })
+
+  it('S-36: with no row to show, the current node captions the em-dash', () => {
+    const nodes = strip([], null, 'draft')
+    expect(nodes[0].state).toBe('current')
+    expect(nodes[0].at).toBeNull()
+    expect(nodes[0].actor).toBeNull()
+    expect(nodes[0].caption).toBe('—')
+
+    // Control: the same cursor WITH a row captions the row, so the em-dash above is the
+    // missing row and not a mapper that captions '—' on every current node.
+    const withRow = strip([h('draft', T_DRAFT)], null, 'draft')
+    expect(withRow[0].state).toBe('current')
+    expect(withRow[0].caption).toBe('09:00 · Ada')
+    expect(withRow[0].caption).not.toBe('—')
+  })
+
+  it('S-37: current and done stay distinct by state alone, once their captions agree', () => {
+    // Both rows carry the same time and actor, so the captions are identical and `state`
+    // is the only thing left telling the two nodes apart.
+    const nodes = strip([h('draft', T_DRAFT), h('validated', T_DRAFT, { from_status: 'draft' })], null, 'validated')
+    expect(nodes[0].state).toBe('done')
+    expect(nodes[1].state).toBe('current')
+    expect(nodes[0].state).not.toBe(nodes[1].state)
+    expect(nodes[0].caption).toBe('09:00 · Ada')
+    expect(nodes[1].caption).toBe(nodes[0].caption)
+
+    // No sixth state was added to carry the difference the caption stopped carrying. The
+    // Record fails the typecheck if StripState gains or loses a member.
+    const STATES: Record<StripState, true> = {
+      done: true,
+      current: true,
+      failed: true,
+      unreached: true,
+      'not-required': true,
+    }
+    expect(Object.keys(STATES)).toHaveLength(5)
+    expect(Object.keys(STATES)).toContain(nodes[1].state)
+  })
+
+  it('S-38: node 5 and node 3 are outside the change', () => {
+    for (const status of ['draft', 'validated', 'queued', 'submitted'] as const) {
+      const node5 = strip(HISTORY_TO_QUEUED, null, status)[4]
+      expect(node5.state, status).toBe('unreached')
+      expect(node5.caption, status).toBe('Not reached')
+    }
+
+    // approvalNode owns its own captions; only the spine's `current` arm moves.
+    expect(strip(HISTORY_TO_QUEUED, mkRun('open'), 'validated')[2].caption).toBe('Waiting')
+    expect(strip(HISTORY_TO_QUEUED, null, 'queued')[2].caption).toBe('Not required')
+    expect(strip(HISTORY_TO_QUEUED, mkRun('cancelled', { closed_at: T_CLOSED }), 'draft')[2].caption).toBe(
+      'Approval voided',
+    )
+
+    // Anti-vacuity: 'Not reached' above proves nothing if every node captions it. Node 1
+    // sits at or behind every cursor, so it is reached on every run x status shape.
+    expect(ALL_RUNS).toHaveLength(11)
+    expect(ALL_STATUSES).toHaveLength(7)
+    let swept = 0
+    for (const [rName, run] of ALL_RUNS) {
+      for (const status of ALL_STATUSES) {
+        const node1 = strip(HISTORY_TO_QUEUED, run, status)[0]
+        expect(node1.state, `${rName}/${status}`).not.toBe('unreached')
+        expect(node1.caption, `${rName}/${status}`).not.toBe('Not reached')
+        swept += 1
+      }
+    }
+    expect(swept).toBe(ALL_RUNS.length * ALL_STATUSES.length)
+    expect(swept).toBe(77)
+  })
+
+  it('S-39: the two em-dash routes stay distinguishable on a current node', () => {
+    // '—' means no row; '— · Ada' means a row whose changed_at will not parse. Both reach
+    // the caption through the same cell, and only `current` is new here -- S-31 pins the
+    // `done` node.
+    const noRow = strip([], null, 'draft')[0]
+    expect(noRow.state).toBe('current')
+    expect(noRow.at).toBeNull()
+    expect(noRow.caption).toBe('—')
+
+    const badDate = strip([h('draft', 'not-a-date')], null, 'draft')[0]
+    expect(badDate.state).toBe('current')
+    expect(badDate.at).toBe('not-a-date') // reached: the string is present, just unrenderable
+    expect(badDate.actor?.text).toBe('Ada Lovelace')
+    expect(badDate.caption).toBe('— · Ada')
+    expect(badDate.caption).not.toContain('NaN')
+    expect(badDate.caption).not.toContain('Invalid')
+
+    expect(badDate.caption).not.toBe(noRow.caption)
+  })
+
+  it('S-42: a current node captions exactly what the SAME node captions once done', () => {
+    // The Core AC's "same shape a done node uses" as an equality, not a second literal:
+    // one history, two statuses, the node's caption must not move when the cursor passes.
+    const cases: Array<[number, InvoiceStatus, InvoiceStatus]> = [
+      [0, 'draft', 'validated'],
+      [1, 'validated', 'queued'],
+      [3, 'queued', 'accepted'],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+
+    for (const [idx, whileCurrent, whileDone] of cases) {
+      const where = `node${idx} ${whileCurrent}->${whileDone}`
+      const cur = strip(HISTORY_TO_QUEUED, null, whileCurrent)[idx]
+      const done = strip(HISTORY_TO_QUEUED, null, whileDone)[idx]
+      expect(cur.state, where).toBe('current')
+      expect(done.state, where).toBe('done')
+      expect(cur.caption, where).toBe(done.caption)
+      // Anti-vacuity: an equality over two placeholders would pass too.
+      expect(cur.caption, where).not.toBe('—')
+      expect(cur.caption, where).not.toBe('Not reached')
+      expect(cur.caption, where).toMatch(/^\d\d:\d\d · \S/)
+    }
+  })
+
+  it('S-43: on the spine `at` and `actor` are null together, so no caption dangles its separator', () => {
+    // S-27 sweeps actor => at over all five nodes and records that the converse is FALSE on
+    // node 3. Scoped to the spine the converse holds, and it is what keeps `HH:MM · ` off
+    // the screen now that a current node renders.
+    const histories: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+      ['badDate', [h('draft', 'not-a-date'), h('validated', T_VALIDATED, { from_status: 'draft' })]],
+    ]
+    expect(histories.length).toBeGreaterThan(0)
+
+    let checked = 0
+    let bothSet = 0
+    let bothNull = 0
+    for (const [hName, history] of histories) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          for (const idx of [0, 1, 3, 4]) {
+            const n = strip(history, run, status)[idx]
+            const where = `${hName}/${rName}/${status} ${n.key}`
+            expect(n.at === null, where).toBe(n.actor === null)
+            if (n.at === null) bothNull += 1
+            else bothSet += 1
+            expect(n.caption.endsWith(' · '), where).toBe(false)
+            expect(n.caption.trim(), where).not.toBe('')
+            checked += 1
+          }
+        }
+      }
+    }
+    expect(checked).toBe(histories.length * ALL_RUNS.length * ALL_STATUSES.length * 4)
+    expect(checked).toBe(1232)
+    // Anti-vacuity: both arms of the biconditional are actually reached.
+    expect(bothSet).toBeGreaterThan(0)
+    expect(bothNull).toBeGreaterThan(0)
   })
 })
 
@@ -802,6 +989,46 @@ describe('stripNodes: totality over malformed input', () => {
     // Control: the same helper DOES surface an actor name when the row is well-formed.
     expect(strip(history, null, 'draft')[0].actor?.text).toBe('Ada Lovelace')
   })
+
+  it('S-40: no spine node ever captions "Waiting", on any history x run x status', () => {
+    // The removed exception captioned a `current` spine node 'Waiting'. Node 3 (index 2) is
+    // approvalNode's and still owns the word, so it is excluded -- and the counters below
+    // prove the sweep reaches it anyway, so the prohibition discriminates.
+    const SWEEP: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+      ...MALFORMED.map(([name, history]) => [name, history] as [string, StatusChange[]]),
+    ]
+
+    let cases = 0
+    let node3Waiting = 0
+    let currentWithAttribution = 0
+    for (const [hName, history] of SWEEP) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          const where = `${hName}/${rName}/${status}`
+          const nodes = strip(history, run, status)
+          // Node 0 sits at or behind every cursor, so the sweep is never all-unreached.
+          expect(nodes[0].state, where).not.toBe('unreached')
+          for (const idx of [0, 1, 3, 4]) {
+            const n = nodes[idx]
+            expect(n.caption, `${where} ${n.key}`).not.toContain('Waiting')
+            if (n.state === 'current' && /^\d\d:\d\d/.test(n.caption)) currentWithAttribution += 1
+          }
+          if (nodes[2].caption === 'Waiting') node3Waiting += 1
+          cases += 1
+        }
+      }
+    }
+
+    expect(cases).toBe(SWEEP.length * ALL_RUNS.length * ALL_STATUSES.length)
+    expect(cases).toBeGreaterThanOrEqual(847) // floor: 11 histories x 11 runs x 7 statuses
+    // Anti-vacuity: node 3 does say the word (so the scan is live), and a `current` spine
+    // node does render an attribution (so the sweep reaches the state this story changed).
+    expect(node3Waiting).toBeGreaterThan(0)
+    expect(currentWithAttribution).toBeGreaterThan(0)
+  })
 })
 
 describe('stripNodes: the default branch captions a blank run state', () => {
@@ -857,5 +1084,70 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     // StatusStrip, which is a pure renderer and imports the types only.
     const ALLOWED = ['InvoiceDetail.tsx', 'StatusStrip.test.tsx', 'StatusStrip.tsx', 'invoiceStrip.test.ts']
     expect(importers.filter((f) => !ALLOWED.includes(f))).toEqual([])
+  })
+
+  it('S-41: spineNode carries no "Waiting" literal and no per-status caption branch', () => {
+    // Scoped to spineNode's body deliberately: approvalNode owns the word legitimately, so
+    // a whole-file grep would be satisfied by the wrong site and report a false pass.
+    const count = (s: string, needle: string) => s.split(needle).length - 1
+
+    // Brace-balanced body of a top-level function. '' when the name is gone -- the CONTAINS
+    // floors below turn that into a loud failure instead of a silent zero.
+    const fnBody = (s: string, name: string): string => {
+      const start = s.indexOf(`function ${name}(`)
+      const open = start < 0 ? -1 : s.indexOf('{', s.indexOf(')', start))
+      if (open < 0) return ''
+      let depth = 0
+      for (let i = open; i < s.length; i++) {
+        if (s[i] === '{') depth += 1
+        else if (s[i] === '}' && --depth === 0) return s.slice(open + 1, i)
+      }
+      return ''
+    }
+
+    const bare = stripComments(readFileSync(join(SRC_DIR, 'lib', 'invoiceStrip.ts'), 'utf8'))
+    const spine = fnBody(bare, 'spineNode')
+    const approval = fnBody(bare, 'approvalNode')
+    // The slice is real AND bounded: it holds what only spineNode has, and none of what
+    // only approvalNode has.
+    expect(spine).toContain("'Accepted by FIRS'")
+    expect(spine).toContain('latestInto(history')
+    expect(spine).not.toContain("'Approval voided'")
+    expect(approval).toContain("'Approval voided'")
+
+    // Planted hit: the same needle finds approvalNode's own literals, so a zero on the
+    // spine is an absence and not a dead search.
+    const approvalWaiting = count(approval, "'Waiting'")
+    expect(approvalWaiting).toBeGreaterThanOrEqual(2)
+    // Every 'Waiting' in the file is one of approvalNode's. Counted, not pinned: node 3 is
+    // free to grow another one.
+    expect(count(bare, "'Waiting'")).toBe(approvalWaiting)
+    expect(count(spine, "'Waiting'")).toBe(0)
+
+    // The caption is one expression with no per-status arm. The state and label ternaries
+    // above it keep their own `status ===` and sit outside the slice.
+    const capStart = spine.indexOf('const caption')
+    const capEnd = spine.indexOf('return', capStart)
+    expect(capStart).toBeGreaterThanOrEqual(0)
+    expect(capEnd).toBeGreaterThan(capStart)
+    const caption = spine.slice(capStart, capEnd)
+    expect(caption).toContain('attribution(at, actor)')
+    expect(caption).not.toContain('KEY_OF') // bounded: it stops before the return
+    expect(caption).not.toMatch(/status\s*===/)
+    expect(caption).not.toContain("'Waiting'")
+    // Control: the same regex DOES match the state ternary the slice excludes.
+    expect(spine.slice(0, capStart)).toMatch(/status\s*===/)
+
+    // Scoped, not over-broad: one more 'Waiting' planted in approvalNode leaves this green.
+    const planted = bare.replace(approval, () => `${approval}  const x = 'Waiting'\n`)
+    expect(count(fnBody(planted, 'approvalNode'), "'Waiting'")).toBe(approvalWaiting + 1)
+    expect(count(fnBody(planted, 'spineNode'), "'Waiting'")).toBe(0)
+    expect(fnBody(planted, 'spineNode')).toBe(spine)
+
+    // The comment strip is load-bearing: a comment inside spineNode that quotes the word is
+    // not a literal, and must not turn the guard red.
+    const mentioned = bare.replace(spine, () => `${spine}  // the old arm said 'Waiting'\n`)
+    expect(count(fnBody(mentioned, 'spineNode'), "'Waiting'")).toBe(1) // raw: the mention counts
+    expect(count(fnBody(stripComments(mentioned), 'spineNode'), "'Waiting'")).toBe(0)
   })
 })

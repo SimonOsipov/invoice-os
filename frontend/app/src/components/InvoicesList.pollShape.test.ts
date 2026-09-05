@@ -40,3 +40,54 @@ describe('the !fresh branch is keyed on identity alone, never row count', () => 
     expect(freshDef, 'must not fall back to a content-shape check').not.toMatch(/invoices\.length|rows\.length/)
   })
 })
+
+// BUG-10-02. Runs in CI on push, unlike any browser spec ([dev-env-skips-e2e-on-push]) --
+// the only mechanical fence against either half of the 23px jump coming back.
+describe('the needs-attention filter mounts nothing of its own above the table (BUG-10-02)', () => {
+  it('no element is gated on needsAttention alone, and no margin is keyed on it', () => {
+    // Control needle first: a rename, a moved file or an unreadable read would make the two
+    // negations below pass over an empty string, proving nothing.
+    expect(src, 'the toggle itself must still be in this file, or the negations below are vacuous').toContain('data-testid="needs-attention-toggle"')
+
+    expect(src, 'no element above the table may mount on the filter alone').not.toMatch(/\{needsAttention && \(/)
+    expect(src, 'the header margin must not move with the filter -- the other half of the 23px jump').not.toMatch(/marginBottom: needsAttention/)
+  })
+
+  // QA adversarial: the two negations above are construct-shaped, so a ternary form of the
+  // same copy nested one level deeper slips past both. This one is shaped on the copy.
+  it('the explainer sentence is in no code path (AC-1)', () => {
+    expect(src, 'the register may not explain the filter in a line of its own').not.toContain('Includes invoices an approver sent back.')
+  })
+})
+
+// BUG-10-03 (task-866). A source scan, not a runtime spec: the toggle click that reaches the
+// filtered-empty state has already zeroed the offset and cleared the selection, so no reachable
+// click sequence can observe those three calls from there -- a runtime assertion would pass
+// vacuously whether or not the clear handler makes them.
+describe('the clear control performs the same reset as the toggle (BUG-10-03)', () => {
+  // Both controls put onClick immediately before their data-testid, so slice back from the
+  // testid to the nearest preceding onClick.
+  function handlerFor(testid: string): string {
+    const at = src.indexOf(`data-testid="${testid}"`)
+    expect(at, `${testid} must exist in InvoicesList.tsx`).toBeGreaterThan(-1)
+    const before = src.slice(0, at)
+    const onClickAt = before.lastIndexOf('onClick=')
+    expect(onClickAt, `${testid} must carry an onClick handler`).toBeGreaterThan(-1)
+    return before.slice(onClickAt)
+  }
+
+  it('both handlers zero the offset, clear the selection and disarm', () => {
+    // Control needle: a rename, a moved file or an unreadable read would leave every slice
+    // below scanning an empty string, proving nothing.
+    expect(src, 'the toggle must still be in this file, or the scans below are vacuous').toContain('data-testid="needs-attention-toggle"')
+
+    for (const testid of ['needs-attention-toggle', 'clear-needs-attention']) {
+      const body = handlerFor(testid)
+      expect(body, `${testid} must zero the offset -- a stale offset pages past the end of the new set`).toContain('setOffset(0)')
+      expect(body, `${testid} must clear the selection -- it names rows that are no longer on screen`).toContain('setSelected([])')
+      expect(body, `${testid} must disarm the bulk bar`).toContain('disarm()')
+    }
+
+    expect(handlerFor('clear-needs-attention'), 'the clear control is a one-way exit, never a flip').toContain('setNeedsAttention(false)')
+  })
+})

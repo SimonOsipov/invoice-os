@@ -19,7 +19,7 @@
 // internal/invoice/payload.go's MBSPayload nests it again before the engine
 // evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
 // fixtures.ts's BAD_INVOICE_KEYS pins.
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
 import {
   login,
   createEntity,
@@ -255,6 +255,126 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
   return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
 }
 
+// listFetchOn(): the register's list GET, matched by its `needs_attention` search param --
+// the same predicate the list-surface test writes inline at :478-483/:490-495.
+// [waitForResponse-on-the-list-is-poll-ambiguous] does not bite here: shouldPollList needs a
+// row whose status isInFlight, and every fixture invoice below is draft or validated.
+async function listFetchOn(page: Page, want: boolean, action: () => Promise<void>): Promise<void> {
+  const settled = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('needs_attention') === (want ? 'true' : null),
+  )
+  await action()
+  await settled
+}
+
+async function toggleNeedsAttention(page: Page, want: boolean): Promise<void> {
+  await listFetchOn(page, want, () => page.getByTestId('needs-attention-toggle').click())
+}
+
+// installRowLatch()/readRowLatch(): the presence-over-time sampler, modelled on
+// demo-persona.spec.ts's installSwitchLatch. An OBSERVER, never a timer: a fixed-period
+// sampler straddles a flash shorter than its period, and a single post-toggle snapshot
+// cannot see a container that emptied and refilled inside the round trip.
+//
+// Its honest limit: MutationObserver callbacks fire at microtask checkpoints, so a state
+// existing only WITHIN one React commit is invisible to it. The defect this catches held a
+// spinner across a whole network round trip -- hundreds of checkpoints.
+type RowSample = { rows: number; list: boolean; spinner: boolean }
+type RowLatch = { samples: RowSample[] }
+
+async function installRowLatch(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    // textContent, not innerText: innerText forces a reflow on every mutation, and the
+    // spinner's label is real text either way (packages/api-client Loading has no testid).
+    const read = (): RowSample => ({
+      rows: document.querySelectorAll('[data-testid="invoice-row"]').length,
+      list: document.querySelector('[data-testid="invoices-list"]') !== null,
+      spinner: (document.body.textContent ?? '').includes('Loading invoices'),
+    })
+    const latch: RowLatch = { samples: [read()] }
+    const w = window as unknown as { __bug10RowLatch: RowLatch; __bug10RowObserver: MutationObserver }
+    w.__bug10RowLatch = latch
+    const observer = new MutationObserver(() => {
+      const now = read()
+      const last = latch.samples[latch.samples.length - 1]
+      // Consecutive-identical dedupe, so a viewport sweep cannot grow the array without
+      // changing any of the three facts. A distinct state is always recorded.
+      if (last.rows === now.rows && last.list === now.list && last.spinner === now.spinner) return
+      latch.samples.push(now)
+    })
+    w.__bug10RowObserver = observer
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
+  })
+}
+
+async function readRowLatch(page: Page): Promise<RowSample[]> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __bug10RowLatch?: RowLatch; __bug10RowObserver?: MutationObserver }
+    w.__bug10RowObserver?.disconnect()
+    return w.__bug10RowLatch?.samples ?? []
+  })
+}
+
+// settledY()/sweepY(): where the head and the first row STAND, read once the layout has
+// stopped moving. layout.ts's helpers compare two locators in ONE state; this compares one
+// locator across TWO states separated by a user action, a shape neither has, so the sweep
+// is inline here rather than added to layout.ts.
+//
+// Settled means two consecutive reads agree. A boundingBox() taken straight after
+// setViewportSize can report a transform mid-reflow rather than settled layout
+// ([drawer-animation-defeats-geometry-specs]). A null or zero-height box never settles, so
+// it fails the poll rather than passing as a match.
+type HeadRowY = { width: number; headY: number; rowY: number; headHeight: number }
+
+async function settledY(head: Locator, row: Locator, label: string): Promise<Omit<HeadRowY, 'width'>> {
+  let last: Omit<HeadRowY, 'width'> | null = null
+  const read = async (): Promise<Omit<HeadRowY, 'width'> | null> => {
+    const [headBox, rowBox] = await Promise.all([head.boundingBox(), row.boundingBox()])
+    if (!headBox || !rowBox) return null
+    if (headBox.height <= 0 || rowBox.height <= 0) return null
+    return { headY: headBox.y, rowY: rowBox.y, headHeight: headBox.height }
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const now = await read()
+        const stable = now != null && last != null && now.headY === last.headY && now.rowY === last.rowY
+        last = now
+        return stable
+      },
+      {
+        message: `${label}: the head and the first row never settled to a stable y (a never-settling read means one of them did not render, or rendered zero-height)`,
+        timeout: 10_000,
+      },
+    )
+    .toBe(true)
+
+  return last!
+}
+
+async function sweepY(page: Page, head: Locator, row: Locator, label: string): Promise<HeadRowY[]> {
+  const entry = page.viewportSize()
+  const measured: HeadRowY[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      // persona-surfaces.spec.ts:742's precedent -- prove the viewport really arrived
+      // before reading anything that depends on it.
+      await expect
+        .poll(() => page.evaluate(() => window.innerWidth), { message: `${label}: the viewport never reached ${width}px` })
+        .toBe(width)
+      measured.push({ width, ...(await settledY(head, row, `${label} at ${width}px`)) })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  return measured
+}
+
 // submitSelected(): arms via batch-submit, confirms via batch-submit-confirm, then waits
 // for the POST .../invoices/submissions response. Unlike a list GET, this URL is
 // unambiguous -- a poll tick never POSTs ([waitForResponse-on-the-list-is-poll-ambiguous]
@@ -488,6 +608,183 @@ test('register geometry: a blocked row costs no extra line and stands the same h
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Core AC-2 and AC-3. Neither claim can be made in vitest -- jsdom has no layout engine, so
+// "nothing above the rows moved" and "the rows never emptied for a round trip" are
+// browser-only (docs/e2e-convention.md, "Target surface").
+//
+// Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
+// container's first child (InvoicesList.tsx:553-554), so an in-container offset is 0 in both
+// filter states and the assertion would be vacuous. The defect moved the container itself.
+//
+// Two open story findings shape this fixture, which avoids both by construction:
+//   .ralph/STORY-FINDING-AC2.md -- a live selection mounts `batch-submit-summary` above the
+//   list (InvoicesList.tsx:491-495), and the toggle's own setSelected([]) unmounts it,
+//   moving the table by more than the offset under test. This fixture never clicks a
+//   checkbox and never calls select-all, so that bar is absent from both measurements.
+//   .ralph/STORY-FINDING-SEARCH.md -- the header search box's `q` rides the SAME request as
+//   `needs_attention`. This fixture never types in it, so the row set differs between the
+//   two states because of the filter alone.
+test('register geometry: toggling needs-attention moves nothing above the rows and never empties them', async ({ page }, testInfo) => {
+  // Two create+validate round trips, a sign-in, an entity switch, three toggle round trips
+  // and two four-width sweeps whose per-width settle poll is bounded at 10s each.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-10 toggle geometry ${stamp}`, tin: freshTin() })
+
+  // attn: the bad fixture fires one error-severity violation and stays `draft`, which is
+  // needs_attention. clean: zero violations promotes it to `validated`; the governed firm
+  // tenant arms a run on it, but an `open` run is not `rejected`, so it is not
+  // needs_attention -- the list-surface test at :435 records the same reasoning.
+  const attnNumber = `INV-BUG10-ATTN-${stamp}`
+  const attn = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(attnNumber) })
+  await validateInvoice(token, attn.id)
+
+  const cleanNumber = `INV-BUG10-CLEAN-${stamp}`
+  const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
+  await validateInvoice(token, clean.id)
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const attnRow = invoiceRowByNumber(page, attnNumber)
+  const cleanRow = invoiceRowByNumber(page, cleanNumber)
+  const head = page.getByTestId('invoices-list').locator('.pf-list-head')
+  // The first row SLOT, not a particular invoice: the two states legitimately put different
+  // invoices first, and where the first row starts is the claim.
+  const firstRow = page.getByTestId('invoice-row').first()
+
+  await expect(attnRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  const unfilteredCount = await page.getByTestId('invoice-row').count()
+
+  // The sampler goes in BEFORE the toggle it has to watch.
+  await installRowLatch(page)
+
+  await toggleNeedsAttention(page, true)
+  await expect(cleanRow, 'the clean invoice must leave the DOM, or the filter did nothing').toHaveCount(0)
+  await expect(attnRow).toBeVisible()
+
+  // Non-vacuity, before any geometry: the two states must really be two different tables.
+  const filteredCount = await page.getByTestId('invoice-row').count()
+  expect(filteredCount, 'the filtered register must still hold a row, or the geometry below measures an empty table').toBeGreaterThan(0)
+  expect(filteredCount, 'the filtered set must be strictly smaller than the unfiltered one, or the two states are the same table').toBeLessThan(unfilteredCount)
+
+  // Core AC-3, read off the sampler that watched the toggle above.
+  const samples = await readRowLatch(page)
+  expect(samples.length, 'the sampler recorded nothing -- it never installed, or the page never mutated').toBeGreaterThan(1)
+  const sampledRows = samples.map((s) => s.rows)
+  const lowWater = Math.min(...sampledRows)
+  const highWater = Math.max(...sampledRows)
+  // Non-vacuity for the three claims below: a sampler that only ever saw one state proves
+  // nothing about the window between them.
+  expect(highWater, 'the sampler never saw the row set change, so it did not span the toggle').toBeGreaterThan(lowWater)
+  expect(lowWater, 'the row container emptied at some point while the filter changed').toBeGreaterThan(0)
+  expect(samples.filter((s) => !s.list), 'invoices-list was unmounted at some point while the filter changed').toEqual([])
+  expect(samples.filter((s) => s.spinner), 'the full-page spinner appeared at some point while the filter changed').toEqual([])
+
+  await toggleNeedsAttention(page, false)
+  await expect(cleanRow).toBeVisible()
+
+  // Core AC-2. Sweep every width in the OFF state, toggle ONCE, sweep again in the ON state,
+  // then compare per width. The claim is state-dependent, not history-dependent, so
+  // interleaving a toggle inside the sweep would cost four round trips instead of one.
+  const unfiltered = await sweepY(page, head, firstRow, 'unfiltered')
+  await toggleNeedsAttention(page, true)
+  const filtered = await sweepY(page, head, firstRow, 'filtered')
+
+  for (const [label, sweep] of [
+    ['unfiltered', unfiltered],
+    ['filtered', filtered],
+  ] as const) {
+    // sweepY records a width only when its settle poll succeeded, so a sweep that measured
+    // nothing returns [] and every comparison below it passes.
+    expect(sweep.map((m) => m.width), `the ${label} sweep must have measured every WIDE_WIDTHS entry, in order`).toEqual([...WIDE_WIDTHS])
+  }
+
+  for (const [i, width] of WIDE_WIDTHS.entries()) {
+    // Relationships between the two states, never a dimension. The only literal is the 1px
+    // sub-pixel tolerance layout.ts's assertSameHeight already uses.
+    expect(unfiltered[i].headY, `the head must be on screen at ${width}px, or its position is not a position`).toBeGreaterThan(0)
+    expect(unfiltered[i].headHeight, `the head must have rendered at ${width}px`).toBeGreaterThan(0)
+    expect(
+      Math.abs(filtered[i].headY - unfiltered[i].headY),
+      `the column-header row moved when the filter changed at ${width}px (${unfiltered[i].headY} -> ${filtered[i].headY})`,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      Math.abs(filtered[i].rowY - unfiltered[i].rowY),
+      `the first invoice row moved when the filter changed at ${width}px (${unfiltered[i].rowY} -> ${filtered[i].rowY})`,
+    ).toBeLessThanOrEqual(1)
+  }
+
+  await testInfo.attach('toggle-position-parity.json', {
+    body: JSON.stringify({ entity: entity.name, attnNumber, cleanNumber, unfilteredCount, filteredCount, samples, unfiltered, filtered }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Core AC-6. The zero-result filtered state was unreachable on the seeded Honeywell
+// register, so it had never been observed on a deployed build. This entity holds ONLY clean
+// validated invoices, so needs_attention returns a genuine zero-total set.
+//
+// No search term is typed (.ralph/STORY-FINDING-SEARCH.md): `q` rides the same request as
+// `needs_attention`, so a search matching nothing would reach this SAME branch by a path
+// whose copy is false -- and this test would pass on the wrong path.
+test('register empty state: a filter that matches nothing says so, and offers the way back', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-10 zero result ${stamp}`, tin: freshTin() })
+
+  const numbers = [`INV-BUG10-ZERO-A-${stamp}`, `INV-BUG10-ZERO-B-${stamp}`]
+  for (const number of numbers) {
+    const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(number) })
+    await validateInvoice(token, created.id)
+  }
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const emptyFiltered = page.getByTestId('invoices-empty-filtered')
+
+  // Non-vacuity, both before the toggle: this entity really has rows, and the branch under
+  // test is not already on screen.
+  for (const number of numbers) {
+    await expect(invoiceRowByNumber(page, number), 'the register must really hold invoices, or the filtered empty state below is just an empty register').toBeVisible()
+  }
+  await expect(emptyFiltered, 'the filtered empty state must not be on screen before the filter is on').toHaveCount(0)
+
+  await toggleNeedsAttention(page, true)
+
+  await expect(emptyFiltered).toBeVisible()
+  await expect(emptyFiltered).toContainText('Nothing needs attention')
+  await expect(page.getByTestId('invoice-row'), 'a zero-result filter must render no rows at all').toHaveCount(0)
+  // The unfiltered zero-state must not be what rendered: it owns "No invoices yet" and its
+  // own page-level create button (InvoicesList.tsx:442-446), and neither is true here.
+  await expect(page.getByTestId('invoices-empty'), 'the unfiltered zero-state is false here -- this register is not empty').toHaveCount(0)
+  // Scoped, never page-wide: Header.tsx:136 renders a PERSISTENT create CTA on every screen,
+  // so a page-wide absence claim is false against correct product behaviour.
+  await expect(emptyFiltered).not.toContainText('New invoice')
+
+  // Core AC-6's way back.
+  await listFetchOn(page, false, () => page.getByTestId('clear-needs-attention').click())
+  for (const number of numbers) {
+    await expect(invoiceRowByNumber(page, number), 'Show all invoices must return the unfiltered register').toBeVisible()
+  }
+  await expect(emptyFiltered).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('detail surface: violations render against the rule-set version, the fix loop clears them, and status history records both the round trip and the not-a-draft regression', async ({
   page,
 }) => {
@@ -527,8 +824,9 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // 1. Not yet validated -- the Draft node is `current` and nothing downstream is reached.
   await expect(page.getByTestId('not-validated')).toBeVisible()
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached' })
-  // A `current` node never renders an attribution, whatever the genesis row holds.
-  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
+  // A `current` node renders its own row's attribution -- here the genesis row, written by
+  // createInvoice's login(PERSONAS.A), the same subject this page signs in as.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
 
   // 2. First Re-validate: the bad fixture fires exactly BAD_INVOICE_KEYS
   //    (fixtures.ts) -- a blocking violation, so the invoice stays draft (no
@@ -549,57 +847,14 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toBeVisible()
   await expect(page.getByTestId('not-validated')).toHaveCount(0)
   await expect(violationsTable).toContainText('vat-standard-rate')
-  await expect(violationsTable.locator('tbody tr').first().locator('td').last()).toHaveText(String(VALIDATION_EXPECTED.ruleSetVersion))
+  // Full text, not a substring: toContainText(String(n)) would also pass on "Rule-set v14".
+  await expect(page.getByTestId('compliance-ruleset-version')).toHaveText(`Rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   // INVCR-01-16 AC-9: discharges task-289's own deferred empirical check -- v3 fills
   // `target` on vat-standard-rate (blank under v2), so the Path column (ViolationsTable's
   // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not
   // the em-dash placeholder a blank target would leave.
   const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
   await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
-
-  // BUG-03-01: at the rail's width the table overflows its wrapper -- the fix makes that
-  // wrapper scroll instead of clip, so every column (not just the first three) stays
-  // reachable. scrollLeft = scrollWidth drives it fully right; the last header's bounding
-  // box must then sit inside the scroll container's, proving it scrolled INTO view rather
-  // than merely being present in the (clipped) DOM.
-  const scrollBox = page.getByTestId('violations-scroll')
-  const overflow = await scrollBox.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  expect(overflow.scrollWidth, 'the table must overflow its narrow rail wrapper').toBeGreaterThan(overflow.clientWidth)
-  await scrollBox.evaluate((el) => {
-    el.scrollLeft = el.scrollWidth
-  })
-  const containerBox = (await scrollBox.boundingBox())!
-  const lastHeaderBox = (await violationsTable.getByRole('columnheader', { name: 'Rule-set version' }).boundingBox())!
-  expect(lastHeaderBox.x, 'scrolled fully right, Rule-set version must be inside the scroll container').toBeGreaterThanOrEqual(containerBox.x)
-  expect(
-    lastHeaderBox.x + lastHeaderBox.width,
-    'scrolled fully right, Rule-set version must not overflow the scroll container',
-  ).toBeLessThanOrEqual(containerBox.x + containerBox.width + 1)
-
-  // CodeRabbit (PR #138): overflow alone doesn't make a container reachable -- browsers
-  // don't focus an overflowing div by default. Prove a keyboard user (not just script) can
-  // reach the far column: focus the wrapper directly (skips a brittle full-page Tab-order
-  // walk) and let the UA's native scrollable-region key handling do the rest.
-  await scrollBox.evaluate((el) => {
-    el.scrollLeft = 0
-  })
-  await scrollBox.focus()
-  await expect(scrollBox, 'wrapper must be keyboard-focusable, not just scriptable').toBeFocused()
-  // End targets scrollTop, not scrollLeft -- this wrapper overflows only horizontally
-  // (measured live on PR #138: End left scrollLeft at 0), so ArrowRight is the key that
-  // actually proves reachability here. Loop rather than assert an exact pixel increment,
-  // since the UA's per-press scroll step isn't a value this test should pin.
-  for (let i = 0; i < 20; i++) {
-    await page.keyboard.press('ArrowRight')
-  }
-  await expect(scrollBox, 'ArrowRight must not move focus off the wrapper').toBeFocused()
-  const scrollLeftAfterKeys = await scrollBox.evaluate((el) => el.scrollLeft)
-  expect(scrollLeftAfterKeys, 'ArrowRight on the focused wrapper must scroll it -- this is what keyboard reachability means').toBeGreaterThan(0)
-
-  // AC-4: Message (td index 1: Severity=0, Message=1, Rule key=2, Path=3, Rule-set
-  // version=4 -- same ordinal convention as the Path check above) must not be crushed.
-  const messageBox = (await violationsTable.locator('tbody tr').first().locator('td').nth(1).boundingBox())!
-  expect(messageBox.width, 'Message must not be crushed at the rail width').toBeGreaterThanOrEqual(160)
 
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expectStripStates(page, { draft: 'current', validated: 'unreached' })
@@ -660,14 +915,16 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'current' })
-  await expect(stripCaption(page, 'validated')).toHaveText('Waiting')
+  // The draft->validated row this click just wrote: ApplyValidation stamps the JWT caller
+  // (store.go actorFromContext), which is this page's persona.
+  await expect(stripCaption(page, 'validated')).toHaveText(/^\d\d:\d\d · Chinedu$/)
 
   // AUDIT-02-07 (AC-1/AC-4): the genesis row's subject is createInvoice's
   // login(PERSONAS.A), the same c0000000-...-0001 as this page's firm persona
   // (targets.ts:27, frontend/app/src/auth.ts:44), whom db/seed.dev.sql:41 names. Count
   // first: an empty locator satisfies every assertion after it.
   await expect(page.getByTestId('strip-actor')).toHaveCount(5)
-  // Only the Draft node carries an attribution here -- the `validated` node is `current`.
+  // Both reached nodes are attributed; this pins the Draft node's, on the genesis row.
   // ANCHORED, never toContainText: the APP_PERSONAS fall-through renders 'Chinedu Okafor ·
   // Okafor & Partners' (lib/actor.ts), which a substring match accepts, and the strip
   // first-names a resolved person (invoiceStrip.ts display()). This is what proves on the
@@ -1086,9 +1343,11 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
   const badge = page.getByTestId('invoice-status-badge')
 
   await expect(badge).toContainText('SUBMITTED')
-  // Node 4 names the actual status: queued and submitted share the node (invoiceStrip.ts).
+  // Node 4 covers both queued and submitted (invoiceStrip.ts SOURCES) and captions the
+  // latest row's attribution, never the status name.
   await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
-  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  await expect(stripCaption(page, 'queued')).toHaveText(/^\d\d:\d\d/)
+  await expect(stripCaption(page, 'queued'), 'a re-added status arm would caption Submitted here').not.toHaveText('Submitted')
   const historyGetsAtSubmitted = historyGets.length
   expect(historyGetsAtSubmitted, 'the recorder matched the mount fetch, so the rise below is not vacuous').toBeGreaterThan(0)
 
@@ -1182,7 +1441,11 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   // and its relabel, and everything past Draft is unreached again.
   await expectStripStates(page, { draft: 'current', validated: 'unreached', queued: 'unreached', accepted: 'unreached' })
   await expect(stripNode(page, 'accepted')).toContainText('Accepted by FIRS')
-  await expect(stripCaption(page, 'draft')).toHaveText('Waiting')
+  // Shape only: the demotion row and the genesis row share this actor and can share this
+  // minute, so no caption here tells them apart. That discrimination is S-16 in
+  // frontend/app/src/lib/invoiceStrip.test.ts, whose fixture gives the two `-> draft` rows
+  // distinct times and distinct actors.
+  await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
   await expect(stripCaption(page, 'validated')).toHaveText('Not reached')
 
   // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
@@ -1193,8 +1456,8 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
   await expectStripStates(page, { draft: 'done', validated: 'current' })
-  // The SHAPE, never a value: this proves node 1 took its at/actor from the LATEST
-  // `-> draft` row (the demotion), not from the genesis row.
+  // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
+  // two `-> draft` rows it took is not observable here -- see the note above.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1580,7 +1843,7 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
 
   await expect(badge).toContainText('SUBMITTED')
   await expectStripStates(page, { draft: 'done', validated: 'done', queued: 'current', accepted: 'unreached' })
-  await expect(stripCaption(page, 'queued')).toHaveText('Submitted')
+  await expect(stripCaption(page, 'queued')).toHaveText(/^\d\d:\d\d/)
   // The baseline for the live-refresh oracle below: node 5 has no row to read yet.
   await expect(stripCaption(page, 'accepted')).toHaveText('Not reached')
 
@@ -3003,6 +3266,371 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
   })
 })
 
+// BUG-13-03: the only layer that can observe this defect (jsdom performs no layout). Ten
+// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b -- from .ralph/bug-13-arch.md's
+// `## Layout assertion`; D6/D8 are deliberately absent (measured unreachable in Chromium
+// under table-layout:auto).
+//
+// R (real) = badInvoiceFields fires vat-standard-rate through createInvoice, a genuine,
+// short, natively-breaking violation -- see the fixture's own comment above. S (stubbed) =
+// the SAME invoice's detail response with only `violations` replaced via page.route, for
+// the wrap-under-an-unbreakable-token cases no seeded rule can reach (every real rule_key
+// is hyphenated, every real target short -- [e2e-fixture]). `Zenith compliance` sorts after
+// every seeded business_entity name, "Honeywell Group" included.
+test.describe.serial("detail surface: the compliance card's geometry", () => {
+  let entityName = ''
+  let invoiceNumber = ''
+
+  test.beforeAll(async () => {
+    const token = await login(PERSONAS.A)
+    entityName = `Zenith compliance ${Date.now()}`
+    const entity = await createEntity(token, { name: entityName, tin: freshTin() })
+    invoiceNumber = `INV-BUG1303-${Date.now()}`
+    const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(invoiceNumber) })
+    await validateInvoice(token, invoice.id)
+  })
+
+  // Same idiom as the sibling activity-card block above: window.innerWidth is the resize's
+  // own completion signal, not the setViewportSize promise.
+  async function resizeTo(page: Page, width: number) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+  }
+
+  async function openCompliance(page: Page): Promise<Locator> {
+    await signInFirm(page)
+    await selectEntity(page, entityName)
+    await goToInvoices(page)
+    await openInvoiceRow(page, invoiceNumber)
+    const card = page.getByTestId('compliance-card')
+    await expect(card).toBeVisible()
+    await expect(page.getByTestId('violations-table')).toBeVisible()
+    return card
+  }
+
+  // [fixture-lengths]: every character in [A-Za-z0-9_$] -- dots and brackets only USUALLY
+  // resist breaking under UAX #14 LB29/LB30, and this fixture's one job is to never break.
+  // All three long strings on ONE row: with overflowWrap:'anywhere' removed from only one
+  // <td> (the mutant D4b/D7 must catch), the OTHER two still wrap and collapse to their
+  // header-driven min-content regardless of their own long text, which is exactly what the
+  // arch doc's per-cell headroom arithmetic assumes.
+  const STUB_VIOLATION = {
+    severity: 'error',
+    message: 'total_arithmetic_violation_subtotal_plus_vat_must_equal_total_computed_1234567_declared_1234599_delta_32',
+    rule_key: 'total_arithmetic_subtotal_plus_vat_must_equal_total_recomputed_from_line_items',
+    path: '$_invoice_lines_3_line_total_computed_from_unit_price_times_quantity_plus_line_tax',
+  }
+
+  // The fetch-and-patch idiom, copied from the EXTR-09 source-document probe (:3640-3671):
+  // route.fetch() for the real body, a non-200 guard that throws rather than substituting
+  // into nothing, an interception counter, then fulfil with only the one field replaced.
+  async function openComplianceStubbed(page: Page): Promise<{ card: Locator; intercepted: () => number }> {
+    let intercepted = 0
+    await page.route('**/api/invoice/v1/invoices/*', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback()
+        return
+      }
+      const response = await route.fetch()
+      if (response.status() !== 200) {
+        throw new Error(`invoice detail answered ${response.status()}; the stub has no real response to substitute into`)
+      }
+      const real = (await response.json()) as Record<string, unknown>
+      if (!('violations' in real)) {
+        // The same single-segment glob also catches violation-summary (the list rollup) --
+        // it carries no `violations` key, so pass it through untouched.
+        await route.fulfill({ response })
+        return
+      }
+      intercepted++
+      await route.fulfill({ response, json: { ...real, violations: [STUB_VIOLATION] } })
+    })
+    const card = await openCompliance(page)
+    return { card, intercepted: () => intercepted }
+  }
+
+  // violations-scroll is retired (BUG-13-01) -- the wrapper is now anonymous, ViolationsTable's
+  // own returned <div>, the sole child of the `violations-table` testid div.
+  function wrapperOf(page: Page): Locator {
+    return page.getByTestId('violations-table').locator('> div')
+  }
+
+  const overflowOf = (el: Element) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })
+
+  // 1180 is the AC's own floor (610px main column, [premise-1180]); 1315 is where the
+  // column crosses the retired 720px TABLE_MIN_WIDTH ([premise-1315]). WIDE_WIDTHS itself
+  // stays unedited so no other spec sharing the constant is disturbed.
+  const COMPLIANCE_WIDTHS = [...WIDE_WIDTHS, 1315, 1180] as const
+
+  test('D1: the compliance card is the same width as the activity card', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const activity = page.getByTestId('invoice-activity')
+    await expect(activity).toBeVisible()
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [c, a] = await Promise.all([card.boundingBox(), activity.boundingBox()])
+        expect(c && a, `the compliance card and the activity card must both render at ${width}px`).toBeTruthy()
+        expect(
+          Math.abs(c!.width - a!.width),
+          `the two cards must share a width at ${width}px (${c!.width} vs ${a!.width})`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D2: the compliance card fills the main column', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const column = page.getByTestId('invoice-main-column')
+
+    // slackPx 1, not the helper's 24 default: a stretched flex item in a column-flex
+    // wrapper, same reasoning as the sibling block's C1.
+    const fits = await assertFillsColumn(page, card, column, 'compliance-card vs main column', 1)
+    expect(fits.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+
+    // The hole assertFillsColumn leaves (bug-13-03-arch-validation.md #2): it bounds
+    // max(left,right) <= slackPx, which a card overflowing its column on BOTH sides
+    // satisfies too, because both gaps go negative. This floor is the single-sided bound's
+    // blind spot.
+    for (const f of fits) {
+      expect(f.left, `the card must not start left of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+      expect(f.right, `the card must not extend right of its column at ${f.width}px`).toBeGreaterThanOrEqual(-1)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D3: the compliance card clears the right rail', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const rail = page.getByTestId('invoice-rail')
+
+    const entryViewport = page.viewportSize()
+    const shared: Array<{ width: number; height: number }> = []
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await resizeTo(page, width)
+        const [c, r] = await Promise.all([card.boundingBox(), rail.boundingBox()])
+        expect(c && r, `the card and the rail must both render at ${width}px`).toBeTruthy()
+        expect(c!.x + c!.width, `the card must end before the rail begins at ${width}px`).toBeLessThanOrEqual(r!.x + 1)
+        expect(
+          rectsOverlap(c!, r!),
+          `the card must not overlap the rail at ${width}px: ${JSON.stringify(overlapOf(c!, r!))}`,
+        ).toBe(false)
+        shared.push({ width, height: overlapOf(c!, r!).height })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // The floor rectsOverlap needs: both axes, so the x-only check above would pass on a
+    // card sitting squarely on the rail's left edge even if the two never share a y-band.
+    expect(
+      shared.filter((s) => s.height > 0),
+      `the card and the rail must share a y-band at some swept width, or rectsOverlap above proves nothing:\n${JSON.stringify(shared)}`,
+    ).not.toHaveLength(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D4a: the violations table never scrolls sideways', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const wrapper = wrapperOf(page)
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        expect(fit.clientWidth, `the wrapper must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        expect(
+          fit.scrollWidth - fit.clientWidth,
+          `the table must not scroll sideways at ${width}px: ${JSON.stringify(fit)}`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D4b: the violations table never scrolls sideways, with a rule key, path and message that cannot break at a space or a hyphen', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const wrapper = wrapperOf(page)
+
+    const entryViewport = page.viewportSize()
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        expect(fit.clientWidth, `the wrapper must have a laid-out box at ${width}px`).toBeGreaterThan(0)
+        expect(
+          fit.scrollWidth - fit.clientWidth,
+          `the table must not scroll sideways at ${width}px: ${JSON.stringify(fit)}`,
+        ).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // D4b's own non-vacuity floor (D10b covers the exact read-back separately): without
+    // this, a route glob that never matched would leave D4b proving D4a again on the short
+    // real value.
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D5: a fitting table fills its wrapper', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const wrapper = wrapperOf(page)
+    const table = page.getByTestId('violations-table').locator('table')
+
+    const entryViewport = page.viewportSize()
+    const checked: number[] = []
+    try {
+      for (const width of COMPLIANCE_WIDTHS) {
+        await resizeTo(page, width)
+        const fit = await wrapper.evaluate(overflowOf)
+        // Scoped to where D4a holds, per the plan: once the wrapper itself scrolls,
+        // clientWidth reads the viewport rather than the content and this comparison
+        // stops meaning anything. On the real fixture D4a holds at every swept width, so
+        // this never skips here -- the floor below is what proves that, not assumes it.
+        if (fit.scrollWidth - fit.clientWidth > 1) continue
+        const tableBox = await table.boundingBox()
+        expect(tableBox, `the table must render at ${width}px`).toBeTruthy()
+        expect(
+          tableBox!.width,
+          `a fitting table must fill its wrapper at ${width}px (${tableBox!.width} vs ${fit.clientWidth})`,
+        ).toBeGreaterThanOrEqual(fit.clientWidth - 1)
+        checked.push(width)
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+
+    // D5's own floor: the same shape as the sibling block's A4/A5. If D4a never held, the
+    // loop body above never ran and D5 proved nothing.
+    expect(checked.length, 'D5 must have run at least once, or D4a never held at any swept width').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D7: the same message occupies more height at 1180 than at 2560', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const messageCell = page.getByTestId('violations-table').locator('tbody tr').first().locator('td').nth(1)
+
+    await resizeTo(page, 2560)
+    const wide = await messageCell.boundingBox()
+    expect(wide, 'the message cell must render at 2560px').toBeTruthy()
+
+    await resizeTo(page, 1180)
+    const narrow = await messageCell.boundingBox()
+    expect(narrow, 'the message cell must render at 1180px').toBeTruthy()
+
+    // Same text, same font: more height at 1180 than 2560 only if the 104-char token
+    // actually broke into further lines, rather than the column silently widening instead.
+    expect(
+      narrow!.height,
+      `the message cell must stand taller at 1180 (${narrow!.height}px) than at 2560 (${wide!.height}px), or the 104-char token did not wrap`,
+    ).toBeGreaterThan(wide!.height)
+
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D9: the card sits between the record card and the activity card', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const card = await openCompliance(page)
+    const column = page.getByTestId('invoice-main-column')
+    const activity = page.getByTestId('invoice-activity')
+    await expect(activity).toBeVisible()
+
+    await resizeTo(page, 1280)
+    const record = column.locator('> div').first()
+    const recordTestId = await record.getAttribute('data-testid')
+    expect(recordTestId, 'the record card must come first in the main column, not the compliance card').not.toBe('compliance-card')
+    expect(recordTestId, 'the record card must come first in the main column, not the activity card').not.toBe('invoice-activity')
+    const [recordBox, cardBox, activityBox] = await Promise.all([record.boundingBox(), card.boundingBox(), activity.boundingBox()])
+    expect(recordBox && cardBox && activityBox, 'all three main-column cards must render at 1280px').toBeTruthy()
+    // The floor beneath the ordering: a collapsed record card would pass the inequalities
+    // below trivially.
+    expect(recordBox!.height, `the record card must be a real card (${recordBox!.height}px tall)`).toBeGreaterThan(100)
+    expect(
+      recordBox!.y + recordBox!.height,
+      `the record card must end before the compliance card begins (record ends ${recordBox!.y + recordBox!.height}, card starts ${cardBox!.y})`,
+    ).toBeLessThanOrEqual(cardBox!.y + 1)
+    expect(
+      cardBox!.y + cardBox!.height,
+      `the compliance card must end before the activity card begins (card ends ${cardBox!.y + cardBox!.height}, activity starts ${activityBox!.y})`,
+    ).toBeLessThanOrEqual(activityBox!.y + 1)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D10a: the real fixture renders at least one violation row', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    await openCompliance(page)
+    const rows = page.getByTestId('violations-table').locator('tbody tr')
+    await expect(rows.first()).toBeVisible()
+    const rowCount = await rows.count()
+    expect(
+      rowCount,
+      'D1/D2/D3/D9/D4a/D5 all measure this table -- an empty table would satisfy D4a/D5 vacuously',
+    ).toBeGreaterThanOrEqual(1)
+    const messageText = (await rows.first().locator('td').nth(1).textContent())?.trim() ?? ''
+    expect(messageText.length, 'the Message cell must carry real text, not an empty placeholder').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('D10b: the stub actually applied', async ({ page }) => {
+    test.setTimeout(90_000)
+    const errors = collectErrors(page)
+    const { intercepted } = await openComplianceStubbed(page)
+    const row = page.getByTestId('violations-table').locator('tbody tr').first()
+
+    // Without this, D4b and D7 would pass on the short real values, for the wrong reason.
+    await expect(row.locator('td').nth(1), 'the Message cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.message,
+    )
+    await expect(row.locator('td').nth(2), 'the Rule key cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.rule_key,
+    )
+    await expect(row.locator('td').nth(3), 'the Path cell must read back the substituted string exactly').toHaveText(
+      STUB_VIOLATION.path,
+    )
+    expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
 // AUDIT-09-08 (task-679): the deployed journey. ONE invoice walks create -> validate ->
 // approver-reject -> re-validate -> approve -> submit, and at every stop the state strip,
 // the Approval card and the Activity feed are read against EACH OTHER and against the
@@ -3147,8 +3775,8 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     // See the AC-2 CORRECTION in this block's header for why node 2 is `current`, not `done`.
     await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'current', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'draft', TICK_PATH), 'node 1 must carry the tick, not just the green tone').toHaveCount(1)
-    // Node 1 is the only attributed node here; without this the `done` above passes on a
-    // node that rendered no attribution at all.
+    // Node 2 is attributed too, being reached; this pins node 1 so the `done` above cannot
+    // pass on a node that rendered no attribution at all.
     await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · \S+/)
     await expect(stripCaption(page, 'approved'), 'an open run captions Waiting, never Not required').toHaveText('Waiting')
 
@@ -3433,14 +4061,18 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // AUDIT-09-06 swapped another one out, both by editing the same JSX block.
 //
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
-// mounts it only on `accepted` with a real IRN. Compliance carries no testid of its own, so
-// `violations-table` -- its only body once an invoice has a rule-set version -- stands for it.
-const RAIL_ORDER = ['fiscal-record-card', 'violations-table', 'approval-card', 'source-document-card']
+// mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
+// and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
+const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
 // absence and order are ONE assertion rather than two.
-const RAIL_WATCHED = [...RAIL_ORDER, 'status-history', 'failed-dead-end', 'rejection-reasons']
+//
+// compliance-card AND violations-table are both watched: the card is what BUG-13-02 moves
+// out, and violations-table is the only thing it exposed in the rail beforehand. Watching
+// just the new testid would make this pass on a build that never grew one.
+const RAIL_WATCHED = [...RAIL_ORDER, 'compliance-card', 'violations-table', 'status-history', 'failed-dead-end', 'rejection-reasons']
 
 test('detail surface: the untouched rail order is unchanged', async ({ page }) => {
   // Same budget as the sibling accept test above: one sign-in, one submit and one
@@ -3481,13 +4113,23 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
         .filter((id) => watched.includes(id)),
     RAIL_WATCHED,
   )
-  expect(order, "the rail's cards in document order: Fiscal record -> Compliance -> Approvals -> Source document").toEqual(RAIL_ORDER)
+  expect(
+    order,
+    "the rail's cards in document order: Fiscal record -> Approvals -> Source document, with Compliance no longer among them",
+  ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the
   // rail either. Preceded by a positive control on its replacement -- an absence read on an
   // unmounted tree passes for the wrong reason (F-F).
   await expect(page.getByTestId('status-strip')).toBeVisible()
   await expect(page.getByTestId('status-history')).toHaveCount(0)
+
+  // Moved, not deleted. The rail read above goes green either way -- a card that vanished
+  // from the page entirely reads identically to one that relocated -- so the presence half
+  // is asserted on the page before the absence half is asserted on the rail.
+  await expect(page.getByTestId('compliance-card')).toBeVisible()
+  await expect(rail.getByTestId('compliance-card')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-main-column').getByTestId('compliance-card')).toHaveCount(1)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

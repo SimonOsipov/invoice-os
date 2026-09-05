@@ -168,10 +168,12 @@ export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignI
                 background: 'var(--bg-1)',
               }}
             >
-              <span className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
+              {/* data-tally: stable selector for the failure-count test oracle */}
+              <span data-tally="failures" className="mono" style={{ fontSize: 11, color: 'var(--status-red-text)', fontWeight: 600 }}>
                 1 ERROR · 1 WARNING
               </span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+              {/* data-tally: stable selector for the passed-count test oracle */}
+              <span data-tally="passed" className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
                 14 / 16 CHECKS PASSED
               </span>
             </div>

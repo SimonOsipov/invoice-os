@@ -120,8 +120,8 @@ func TestExtractionFailureKind_MigrationFileIsOrderedAndComplete(t *testing.T) {
 		t.Fatalf("%s Up never names %s, so the assertions below are vacuous:\n%s", name, failureKindColumn, up)
 	}
 
-	// Set equality against the whole vocabulary, read out of the quoted literals: five values
-	// is satisfied by five values that are not the five audit.go declares.
+	// Set equality against failureKindVocabulary, read out of the quoted literals: a count of
+	// five is satisfied by five values that are not the five this file introduced.
 	seen := map[string]bool{}
 	var got []string
 	for _, m := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(up, -1) {

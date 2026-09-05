@@ -619,11 +619,12 @@ describe('the state ladder', () => {
     await flush()
 
     const text = root().textContent ?? ''
-    const six = allSentences()
-    // Floor: six DISTINCT sentences, or the count below cannot discriminate.
-    expect(new Set(six.map(([, s]) => s)).size, 'two kinds share one sentence — the count below is meaningless').toBe(6)
+    const sentences = allSentences()
+    // Floor: seven DISTINCT sentences -- the six kinds plus the unknown one -- or the count
+    // below cannot discriminate. A literal, so dropping a kind from KINDS reds here too.
+    expect(new Set(sentences.map(([, s]) => s)).size, 'two kinds share one sentence — the count below is meaningless').toBe(7)
 
-    const shown = six.filter(([, s]) => text.includes(s)).map(([k]) => k)
+    const shown = sentences.filter(([, s]) => text.includes(s)).map(([k]) => k)
     // A count, not a presence check: a screen stacking two kinds' sentences at once still
     // fails here, where a getByText on the right one would pass.
     expect(shown, `the screen showed ${shown.length} terminal sentences, not exactly one`).toEqual([kind ?? '<null>'])

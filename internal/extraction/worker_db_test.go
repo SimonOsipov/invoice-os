@@ -2203,15 +2203,14 @@ func TestExtractWorker_FailureKindPerStage(t *testing.T) {
 	// values that are not the six FailureKind declares.
 	//
 	// EXTR-19-03 widens this to six; EXTR-19-04 adds the lever that writes the sixth. Between
-	// those two commits both set-equality Fatalfs below are DELIBERATELY red. Literal, not the
-	// const, so this compiles before audit.go declares it.
+	// those two commits the len(written) Fatalf below is DELIBERATELY red.
 	want := map[extraction.FailureKind]bool{
-		extraction.FailureDocumentUnavailable:        true,
-		extraction.FailurePagesNotRendered:           true,
-		extraction.FailurePageRowsNotWritten:         true,
-		extraction.FailureExtractFailed:              true,
-		extraction.FailureTextNotRead:                true,
-		extraction.FailureKind("layout_not_written"): true,
+		extraction.FailureDocumentUnavailable: true,
+		extraction.FailurePagesNotRendered:    true,
+		extraction.FailurePageRowsNotWritten:  true,
+		extraction.FailureExtractFailed:       true,
+		extraction.FailureTextNotRead:         true,
+		extraction.FailureLayoutNotWritten:    true,
 	}
 	if len(written) != len(want) {
 		t.Fatalf("the levers wrote %d distinct failure_kind value(s) (%v), want %d", len(written), written, len(want))

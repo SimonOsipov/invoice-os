@@ -14,16 +14,13 @@ import (
 
 // auditKinds is the vocabulary under test. audit_internal_test.go owns the assertion that
 // these are the only six; here they are the seed for the near-miss set below.
-//
-// EXTR-19-03: the sixth is a literal so this file compiles before the const exists. Swap it for
-// extraction.FailureLayoutNotWritten once audit.go declares it.
 var auditKinds = []extraction.FailureKind{
 	extraction.FailureDocumentUnavailable,
 	extraction.FailurePagesNotRendered,
 	extraction.FailurePageRowsNotWritten,
 	extraction.FailureExtractFailed,
 	extraction.FailureTextNotRead,
-	extraction.FailureKind("layout_not_written"),
+	extraction.FailureLayoutNotWritten,
 }
 
 // auditNearMisses derives the spellings a hand-written caller or a hand-edited SQL filter

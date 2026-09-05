@@ -204,4 +204,53 @@ describe('seedFromPath', () => {
   it('seed_isTotalAndFallsBackToTheDashboardTripleOnAnUnparseablePath', () => {
     expect(seedFromPath('/nonsense')).toEqual({ view: 'dashboard', invoiceId: null, jobId: null })
   })
+
+  // Gap found in mutation testing: nothing above exercises the actual field mapping --
+  // forcing invoiceId to always be null still left every existing test green.
+  it('seed_extractsInvoiceIdFromADetailDrillDownAndLeavesJobIdNull', () => {
+    expect(seedFromPath('/invoices/abc')).toEqual({ view: 'detail', invoiceId: 'abc', jobId: null })
+  })
+
+  it('seed_extractsJobIdFromAnExtractionDrillDownAndLeavesInvoiceIdNull', () => {
+    expect(seedFromPath('/extraction/j1')).toEqual({ view: 'extraction', invoiceId: null, jobId: 'j1' })
+  })
+
+  it('seed_aPlainViewWithNoIdCarriesNeitherInvoiceIdNorJobId', () => {
+    expect(seedFromPath('/audit')).toEqual({ view: 'audit', invoiceId: null, jobId: null })
+  })
+
+  it('seed_toleratesTheEmptyStringAndAControlCharacterWithoutThrowing', () => {
+    expect(() => seedFromPath('')).not.toThrow()
+    expect(seedFromPath('')).toEqual({ view: 'dashboard', invoiceId: null, jobId: null })
+    expect(() => seedFromPath('/invoices/ ')).not.toThrow()
+  })
+})
+
+describe('parseRoute / routePath — adversarial ids', () => {
+  it('parse_aBareSlashIdRoundTripsThroughEncodingRatherThanBeingMistakenForASegmentBoundary', () => {
+    const path = routePath('detail', '/')
+    expect(path).toBe('/invoices/%2F')
+    expect(parseRoute(path)).toEqual({ view: 'detail', id: '/' })
+  })
+
+  it('parse_aWhitespaceOnlyIdSurvivesEncodeDecode', () => {
+    const path = routePath('extraction', '   ')
+    expect(parseRoute(path)).toEqual({ view: 'extraction', id: '   ' })
+  })
+
+  it('parse_aVeryLongIdSurvivesEncodeDecode', () => {
+    const longId = 'x'.repeat(2000)
+    const path = routePath('detail', longId)
+    expect(parseRoute(path)).toEqual({ view: 'detail', id: longId })
+  })
+
+  it('parse_anAlreadyPercentEncodedIdDoesNotDoubleEncodeOrDoubleDecode', () => {
+    // '%25' in the id is itself a percent-escape; a naive re-encode/decode pass would
+    // collapse '%2F' -> '/' a second time and split the id into extra segments.
+    const id = 'a%2Fb'
+    const path = routePath('detail', id)
+    expect(path).toBe('/invoices/a%252Fb')
+    expect(parseRoute(path)).toEqual({ view: 'detail', id })
+  })
+
 })

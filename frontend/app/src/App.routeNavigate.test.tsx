@@ -343,7 +343,8 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
       .filter(Boolean)
     // Floor: a broken walk (wrong cwd, a mangled grep pattern) returns zero files and
     // reads exactly like a repo with nothing left to fix.
-    expect(files, 'the walk must find exactly the nine App-rendering test files').toHaveLength(9)
+    // route-01-06 adds App.routeReviewHash.test.tsx as the tenth.
+    expect(files, 'the walk must find exactly the ten App-rendering test files').toHaveLength(10)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')

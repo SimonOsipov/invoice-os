@@ -112,20 +112,21 @@ describe('AC-1: no history write performed by the seam ever contains persona=', 
     // Vacuity floor: an unmounted Workspace or a spy installed too late leaves this array
     // empty, and the negative assertion below would pass on a completely broken feature.
     expect(calls.length, 'no history write was ever recorded -- the spy or the mount is broken').toBeGreaterThan(0)
+    // QA (route-01-06, closing out -05): a compound net, not two independent guarantees.
+    // Every seam writer is HARDCODED to `routePath(view) + hash` (never reads search), so
+    // this can only go red if BOTH the never-echo rule (guarded statically by
+    // routeWriterGuard.test.ts) AND the mount-ordering guarantee (guarded dynamically by
+    // ordering_workspaceDoesNotMountWhileThePersonaParamIsLive below) break at once --
+    // verified by mutation, single-cause breaks of either one leave this green. Kept as a
+    // cheap end-to-end net for that double-fault case; it is not, on its own, an ordering
+    // oracle. (A `navCall.searchAtCallTime` check used to sit here asserting nav('audit')
+    // pushes only after the strip ran -- deleted: nav() is called well after Workspace has
+    // fully mounted, by which point the strip has ALREADY settled in every reachable
+    // execution path, correct or broken, so that assertion could not fail and added no
+    // coverage over the checks already in this file.)
     expect(
       calls.some((c) => /persona=/.test(c.url)),
       'a history write carried the persona param forward',
-    ).toBe(false)
-
-    // Ordering check on searchAtCallTime: the strip effect's OWN write necessarily fires
-    // while persona= is still live (that is what stripping means), so asserting it never
-    // happens anywhere is wrong. What must hold is that OUR nav('audit') push -- the seam's
-    // write -- fires only after the strip has already run.
-    const navCall = calls.find((c) => c.url.startsWith('/audit'))
-    expect(navCall, "no history write for nav('audit') was recorded").toBeDefined()
-    expect(
-      navCall!.searchAtCallTime.includes('persona'),
-      "nav('audit') pushed before persona= was stripped from the live URL",
     ).toBe(false)
   })
 })
@@ -157,8 +158,24 @@ describe('AC-4: ?persona= does not survive the hand-off', () => {
   it('ordering_thePersonaParamDoesNotSurviveTheHandOff', async () => {
     window.history.replaceState(null, '', '/?persona=firm')
 
-    await mountApp()
+    // QA (route-01-06, closing out -05): checked in TWO places, not one. Asserting only
+    // after mountApp() settles is vacuous -- proven by mutation: with the strip effect
+    // (App.tsx:1637-1650) neutered outright, this still passed, because Workspace's own
+    // mount-alignment effect (App.tsx:514) rewrites the whole URL from `routePath(view) +
+    // hash` on every mount regardless, incidentally dropping search as a side effect. The
+    // check below runs BEFORE Workspace can mount -- render() is synchronous and RTL's
+    // implicit act() flushes the strip's effect (declared in App, no signIn to await) before
+    // returning, while doSignIn is still in flight -- so it is decoupled from that side
+    // effect and isolates the strip itself.
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(<App />)
+    expect(
+      new URLSearchParams(window.location.search).has('persona'),
+      'persona survived the FIRST synchronous render, before Workspace (and its mount-alignment writer) ever mounted',
+    ).toBe(false)
 
+    await waitFor(() => requireCtx())
     expect(new URLSearchParams(window.location.search).has('persona')).toBe(false)
   })
 })

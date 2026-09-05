@@ -1685,3 +1685,144 @@ describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, AP
     expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
   })
 })
+
+// RED specs (BUG-10-01, task-864, Stage 2.5/Mode A). `held` does not exist yet: on the
+// toggle click asyncReducer nulls `data`, `state` flips to 'loading' and the populated
+// branch unmounts, so the AC-3 spec below fails on real assertions about the DOM.
+//
+// Manual promise control, not mockFetchSequence -- an auto-resolving mock flushes
+// straight through the in-flight window these specs exist to observe (same reason as
+// the pagination suite's own adversarial spec above).
+function pendingFetch(): { url: string; resolve: (r: MockResponse) => void }[] {
+  const calls: { url: string; resolve: (r: MockResponse) => void }[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => new Promise<MockResponse>((resolve) => calls.push({ url, resolve }))),
+  )
+  return calls
+}
+
+async function settle(fn: () => void): Promise<void> {
+  await act(async () => {
+    fn()
+    await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
+describe('InvoicesList: a filter refetch swaps the rows instead of rebuilding the table', () => {
+  it('the rows stay mounted and unspinnered while the needs-attention refetch is in flight', async () => {
+    const mounted = [
+      row({ id: 'inv-a', invoice_number: 'INV-A' }),
+      row({ id: 'inv-b', invoice_number: 'INV-B' }),
+      row({ id: 'inv-c', invoice_number: 'INV-C' }),
+    ]
+    const filtered = [row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 3 })))
+    await screen.findByText('INV-A')
+    expect(screen.getAllByTestId('invoice-row')).toHaveLength(3)
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+
+    // Non-vacuity: the refetch really fired and really carries the filter. Without this
+    // the in-flight assertions below could pass on a click that did nothing at all.
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention'), 'the second GET must be the filtered refetch').toBe('true')
+
+    // calls[1] is deliberately left unresolved: this IS the in-flight window.
+    expect(screen.queryByTestId('invoices-list'), 'the table must not unmount for the duration of the refetch').not.toBeNull()
+    expect(screen.getAllByTestId('invoice-row'), 'all three pre-filter rows stay mounted').toHaveLength(3)
+    for (const number of ['INV-A', 'INV-B', 'INV-C']) {
+      expect(screen.queryByText(number), `${number} must still be readable mid-refetch`).not.toBeNull()
+    }
+    expect(screen.queryByText('Loading invoices…'), 'a filter refetch must never raise the full-page spinner').toBeNull()
+
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 1 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(1))
+    expect(screen.queryByText('INV-B')).not.toBeNull()
+    expect(screen.queryByText('INV-A'), 'the filtered-out rows must be gone once the refetch lands').toBeNull()
+    expect(screen.queryByText('INV-C')).toBeNull()
+  })
+
+  it("a company switch discards the held payload rather than showing the previous client's page", async () => {
+    const ent1 = [row({ id: 'inv-e1', entity_id: 'ent-1', invoice_number: 'INV-ENT1' })]
+    const calls = pendingFetch()
+
+    const { rerender } = render(<InvoicesList ctx={listCtx('ent-1')} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(ent1, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-ENT1')
+    expect(screen.getAllByTestId('invoice-row')).toHaveLength(1)
+    // The pager IS on screen before the switch, so its absence below has teeth.
+    expect(screen.queryByTestId('invoices-pager')).not.toBeNull()
+
+    rerender(<InvoicesList ctx={listCtx('ent-2')} />)
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('entity_id'), 'the switch must trigger a real entity-scoped refetch').toBe('ent-2')
+
+    // calls[1] left unresolved: the whole window in which a held ent-1 envelope could leak.
+    expect(screen.queryByText('Loading invoices…')).not.toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryByTestId('invoices-empty-page')).toBeNull()
+    // gateByActiveEntity already empties the ROWS, so a rows-only assertion is vacuous
+    // here. The pager is what would still be printing ent-1's totals.
+    expect(screen.queryByTestId('invoices-pager'), "a pager here would be printing ent-1's totals to an ent-2 viewer").toBeNull()
+  })
+
+  it('the first mount still shows the full-page spinner', async () => {
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+
+    expect(screen.queryByText('Loading invoices…'), 'nothing is held on a first mount, so the full-page spinner is correct').not.toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+    expect(screen.queryAllByTestId('invoice-row')).toHaveLength(0)
+    expect(screen.queryByTestId('invoices-pager')).toBeNull()
+  })
+
+  it('a failed filter refetch shows the error state, not the held rows', async () => {
+    const mounted = [row({ id: 'inv-m', invoice_number: 'INV-MOUNTED' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(mounted, { limit: 50, offset: 0, total: 1 })))
+    await screen.findByText('INV-MOUNTED')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'filter refetch failed' }) }))
+
+    expect(await screen.findByRole('button', { name: 'Retry' }), 'the retry control is the only way out of a failed refetch').toBeDefined()
+    expect(screen.queryByText('INV-MOUNTED'), 'a held row behind an ErrorState reads as live data that is not').toBeNull()
+    expect(screen.queryByTestId('invoices-list')).toBeNull()
+  })
+
+  it("the pager reads the refetched envelope's totals, never the held one's", async () => {
+    const page1 = Array.from({ length: 50 }, (_, i) => row({ id: `inv-${i}`, invoice_number: `INV-${i}` }))
+    const filtered = [row({ id: 'inv-f1', invoice_number: 'INV-F1' }), row({ id: 'inv-f2', invoice_number: 'INV-F2' })]
+    const calls = pendingFetch()
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    await settle(() => calls[0].resolve(listResponse(page1, { limit: 50, offset: 0, total: 60 })))
+    expect((await screen.findByTestId('invoices-pager')).textContent).toContain('OF 60')
+
+    fireEvent.click(screen.getByTestId('needs-attention-toggle'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(urlParams(calls[1].url).get('needs_attention')).toBe('true')
+
+    await settle(() => calls[1].resolve(listResponse(filtered, { limit: 50, offset: 0, total: 2 })))
+    await waitFor(() => expect(screen.getAllByTestId('invoice-row')).toHaveLength(2))
+
+    const pager = screen.getByTestId('invoices-pager')
+    expect(pager.textContent, "the newest envelope's own pagination").toContain('OF 2')
+    expect(pager.textContent, 'the pre-filter total must not survive the refetch').not.toContain('OF 60')
+  })
+})

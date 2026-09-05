@@ -519,3 +519,171 @@ func TestRLS_APdfJobNeverStoresLayoutTokens(t *testing.T) {
 		t.Errorf("the DOCX control stored layout_tokens NULL; without a non-NULL value in this column the PDF's NULL above is also what an unwritten column looks like")
 	}
 }
+
+// --- QA additions ------------------------------------------------------------------------
+
+// wtWirePages is wtWire for more than one page: pages is number -> that page's token texts, in
+// the order given. DoclingReader sorts by Number on the way in (docling.go:97), so slice order
+// here is the wire's, never the reader's.
+func wtWirePages(t *testing.T, pages []struct {
+	number int
+	texts  []string
+}) []byte {
+	t.Helper()
+	if len(pages) == 0 {
+		t.Fatalf("a zero-page wire response carries no text and never reaches the boxless branch")
+	}
+	out := make([]any, 0, len(pages))
+	for _, p := range pages {
+		tokens := make([]any, 0, len(p.texts))
+		for _, s := range p.texts {
+			tokens = append(tokens, map[string]any{"text": s})
+		}
+		out = append(out, map[string]any{
+			"number": p.number, "width_pt": 0.0, "height_pt": 0.0,
+			"tables": []any{}, "tokens": tokens,
+		})
+	}
+	b, err := json.Marshal(map[string]any{
+		"docling_version": "1.10.0", "reader": "docling", "version": "v1", "pages": out,
+	})
+	if err != nil {
+		t.Fatalf("build the multi-page docling wire response: %v", err)
+	}
+	return b
+}
+
+// LT-14 (AC-2 / AC-3, second guard on the ", " correction). LT-2 was its only guard: LT-3's
+// fixture is accepted by a naive len(json.Marshal) gate too, so it cannot see the metric. This
+// makes the metric an ORACLE-checked property instead of one fixture -- Postgres is offered the
+// RAW encoding, which is exactly what a naive gate would send it.
+// Must-fail mutation: gate on a bare len(b) > maxLayoutTokensJSON.
+func TestLayoutTokensGate_AgreesWithPostgresAcrossTheSizeBoundary(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	capBytes := extraction.MaxLayoutTokensJSONForTest
+
+	cases := []struct {
+		name    string
+		n       int
+		measure int
+	}{
+		{"500 tokens, one under the cap", 500, capBytes - 1},
+		{"500 tokens, exactly the cap", 500, capBytes},
+		{"500 tokens, one over the cap", 500, capBytes + 1},
+		{"500 tokens, two over the cap", 500, capBytes + 2},
+		// N=2 makes the correction one byte rather than 499: the two ends of its range.
+		{"2 tokens, exactly the cap", 2, capBytes},
+		{"2 tokens, one over the cap", 2, capBytes + 1},
+	}
+	if len(cases) != 6 {
+		t.Fatalf("the size corpus holds %d case(s), want 6", len(cases))
+	}
+
+	var accepted, refusedUnderTheNaiveCap []string
+	for _, c := range cases {
+		tokens := wtTokensMeasuring(t, c.n, c.measure)
+		raw, err := json.Marshal(tokens)
+		if err != nil {
+			t.Fatalf("%s: marshal the fixture: %v", c.name, err)
+		}
+		gateB, ok := extraction.LayoutTokensStorableForTest(tokens)
+		if got := wtInsertTokens(t, ctx, tenantID, documentID, string(raw)); got != ok {
+			t.Errorf("%s: the gate says storable=%v and Postgres says accepted=%v for the same bytes -- len(json.Marshal)+max(0,N-1) must equal char_length(jsonb::text)", c.name, ok, got)
+		}
+		if !ok {
+			// The whole point of the correction: every one of these is UNDER the cap by
+			// len(json.Marshal) alone, so a naive gate stores it and Postgres then refuses it
+			// inside writeLayoutTx's transaction -- dead-lettering a correct extraction.
+			if len(raw) <= capBytes {
+				refusedUnderTheNaiveCap = append(refusedUnderTheNaiveCap, c.name)
+			}
+			continue
+		}
+		accepted = append(accepted, c.name)
+		if !wtInsertTokens(t, ctx, tenantID, documentID, string(gateB)) {
+			t.Errorf("%s: the gate accepted its own bytes and Postgres refused them", c.name)
+		}
+	}
+
+	// Floors. Without the first an all-refusing gate agrees with a sweep that stored nothing;
+	// without the second the refusals could all be cases a naive gate refuses too, and the
+	// correction would be guarding nothing.
+	wtAssertRefusalSet(t, "the size sweep accepted", len(cases),
+		accepted, []string{"2 tokens, exactly the cap", "500 tokens, exactly the cap", "500 tokens, one under the cap"})
+	wtAssertRefusalSet(t, "the size sweep refused, under the naive cap,", len(cases),
+		refusedUnderTheNaiveCap, []string{"2 tokens, one over the cap", "500 tokens, one over the cap", "500 tokens, two over the cap"})
+}
+
+// LT-15 (AC-2 / AC-4). A refusal WRITES SQL NULL; it does not skip the write. Every other spec
+// starts from a row whose column is already NULL, so none of them can tell the two apart -- and
+// the difference is the retention claim itself: a refused second read must not leave the first
+// read's paragraph text in the database. Must-fail mutation: `if !ok { return nil }` in
+// worker.go's boxless closure.
+func TestRLS_ABoxlessJobClearsTokensAnEarlierAttemptStored(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	// ensureJobTx claims by (tenant_id, river_job_id) and a queued row is not terminal, so this
+	// is the row the run below re-enters -- a River retry whose second read differs.
+	const riverJobID = int64(915215)
+	const stale = `["Invoice No: ASC-2026-0919","Buyer: Honeywell Group","Total: NGN 4,300.00"]`
+	var jobID string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`INSERT INTO extraction_jobs (tenant_id, document_id, extractor, extractor_version, river_job_id, layout_tokens)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING id`,
+		tenantID, documentID, wkExtractorName, wkExtractorVersion, riverJobID, stale).Scan(&jobID); err != nil {
+		t.Fatalf("seed a job an earlier attempt left holding page-1 text: %v", err)
+	}
+	if raw := wtTokens(t, ctx, jobID); raw == nil {
+		t.Fatalf("precondition: the seeded row holds no layout_tokens, so the NULL below would prove nothing")
+	}
+
+	got := wtRun(t, ctx, wtBoxlessWorker(t, wtWire(t, []string{"Invoice No: ASC-2026-0919", "Total:\x00 300.00"})),
+		tenantID, documentID, riverJobID)
+	if got != jobID {
+		t.Fatalf("Work claimed extraction job %s, want the seeded row %s -- the retry did not re-enter it", got, jobID)
+	}
+	stAssertJobState(t, ctx, jobID, "succeeded")
+	if raw := wtTokens(t, ctx, jobID); raw != nil {
+		t.Errorf("a refused token set left the earlier attempt's page-1 text in place (%s); the refusal path must write SQL NULL, not skip the write", wkStr(raw))
+	}
+}
+
+// LT-16 (AC-1). Page 1 by Number, the rule BoxlessFingerprint follows -- not the first page in
+// the slice. DoclingReader sorts by Number, so a reordered wire response cannot discriminate the
+// two; a document carrying no page numbered 1 can, and it is also the only test of
+// pageOneTokenTexts' documented nil return. Must-fail mutation: drop the `page.Number != 1`
+// guard and take pages[0].
+func TestRLS_ABoxlessJobStoresPageOneByNumberNotBySlicePosition(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	pageTwo := []string{"Continued from page 1", "Total: 300.00"}
+	pageOne := []string{"Invoice No: ASC-2026-0002", "Buyer: Honeywell Group"}
+
+	// Control: with a page 1 present, that page's text is what lands.
+	both := wtRun(t, ctx, wtBoxlessWorker(t, wtWirePages(t, []struct {
+		number int
+		texts  []string
+	}{{2, pageTwo}, {1, pageOne}})), tenantID, documentID, 915216)
+	stAssertJobState(t, ctx, both, "succeeded")
+	if got := wtDecode(t, "a two-page boxless document", wtTokens(t, ctx, both)); !slices.Equal(got, pageOne) {
+		t.Errorf("a two-page boxless job stored %q, want page 1's own text %q", got, pageOne)
+	}
+
+	// No page numbered 1: pageOneTokenTexts returns nil, the gate normalises it to the empty
+	// array, and page 2's text must not be substituted for page 1's.
+	only := wtRun(t, ctx, wtBoxlessWorker(t, wtWirePages(t, []struct {
+		number int
+		texts  []string
+	}{{2, pageTwo}})), tenantID, documentID, 915217)
+	stAssertJobState(t, ctx, only, "succeeded")
+	if got := stJobFailureKind(t, ctx, only); got != nil {
+		t.Errorf("a page-2-only boxless job carries failure_kind %q, want SQL NULL", *got)
+	}
+	got := wtDecode(t, "a page-2-only boxless document", wtTokens(t, ctx, only))
+	if len(got) != 0 {
+		t.Errorf("a boxless document with no page numbered 1 stored %q, want the empty array -- page 1's text is the only thing this column holds", got)
+	}
+}

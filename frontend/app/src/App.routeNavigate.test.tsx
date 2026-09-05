@@ -61,14 +61,24 @@ function createMemoryStorage() {
   }
 }
 
-type RenderEntry = { view: View; prefilter: AuditPrefilter | null; jobId: string | null }
+type RenderEntry = {
+  view: View
+  prefilter: AuditPrefilter | null
+  jobId: string | null
+  importedInvoiceId: string | null
+}
 
 let capturedCtx: PlatformCtx | undefined
 const renders: RenderEntry[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
-    renders.push({ view: p.ctx.view, prefilter: p.ctx.auditPrefilter, jobId: p.ctx.extractionJobId })
+    renders.push({
+      view: p.ctx.view,
+      prefilter: p.ctx.auditPrefilter,
+      jobId: p.ctx.extractionJobId,
+      importedInvoiceId: p.ctx.importedInvoiceId,
+    })
     return null
   },
 }))
@@ -165,9 +175,25 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
       capturedCtx!.openImportedInvoice(INVOICE_ID)
     })
     const ctx = requireCtx()
-    expect(window.location.pathname, 'openImportedInvoice must push /invoice').toBe('/invoice')
+    expect(window.location.pathname, 'openImportedInvoice must push /invoices/<id>').toBe(`/invoices/${INVOICE_ID}`)
     expect(window.history.length, 'openImportedInvoice must add exactly one history entry').toBe(lengthBefore + 1)
     expect(ctx.importedInvoiceId, 'the selection atom must name the id it was handed').toBe(INVOICE_ID)
+  })
+
+  // N-3: the same one-handler invariant openAuditForInvoice/openExtraction already pin
+  // below, restated for the id navigate() now carries -- the FIRST render with
+  // view === 'detail' must already have importedInvoiceId, not a render later.
+  it('openImportedInvoice_theFirstDetailRenderAlreadyCarriesTheId', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    const detailRenders = renders.filter((r) => r.view === 'detail')
+    expect(detailRenders.length, 'the handler never navigated to detail').toBeGreaterThan(0)
+    expect(
+      detailRenders[0]!.importedInvoiceId,
+      'the first render that saw view === detail did not carry the id',
+    ).toBe(INVOICE_ID)
   })
 
   it('selectInvoice_pushesTheDetailPath', async () => {
@@ -205,10 +231,12 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
 
   it('openExtraction_pushesExtractionWithTheJobIdInTheSameRender', async () => {
     await bootAt('/')
+    const lengthBefore = window.history.length
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
     })
-    expect(window.location.pathname, 'openExtraction must push /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'openExtraction must push /extraction/<jobId>').toBe(`/extraction/${JOB_A}`)
+    expect(window.history.length, 'openExtraction must add exactly one history entry').toBe(lengthBefore + 1)
 
     const extractionRenders = renders.filter((r) => r.view === 'extraction')
     expect(extractionRenders.length, 'the handler never navigated to the review screen').toBeGreaterThan(0)

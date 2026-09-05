@@ -15,6 +15,7 @@ import type { PlatformCtx } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -261,6 +262,38 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
       extractionReviewMounts,
       'no ExtractionReview may render for a null job id -- App.tsx\'s view===extraction && extractionJobId!=null gate',
     ).toHaveLength(0)
+  })
+})
+
+describe('N-5: Back onto the bare list clears a stale invoice id', () => {
+  it('popstate_backFromDetailToInvoicesClearsTheImportedId', async () => {
+    await bootAt(`/invoices/${INVOICE_ID}`)
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /invoices/<id> must seed detail').toBe('detail')
+    expect(ctx.importedInvoiceId, 'sanity: the boot id must seed the selection').toBe(INVOICE_ID)
+
+    await popTo('/invoices')
+    ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the invoices list').toBe('invoices')
+    expect(ctx.importedInvoiceId, 'Back onto the bare list must clear the stale invoice id').toBeNull()
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe('/invoices')
+  })
+})
+
+describe('N-6: Back onto /extraction/<jobId> restores the job id together with the view', () => {
+  it('popstate_backOntoExtractionRestoresTheJobId', async () => {
+    await bootAt('/invoices')
+    const ctx0 = requireCtx()
+    expect(ctx0.view, 'sanity: booting at /invoices must seed the list').toBe('invoices')
+
+    await popTo(`/extraction/${JOB_A}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'Back must restore the extraction view').toBe('extraction')
+    expect(
+      ctx.extractionJobId,
+      'Back must restore the job id in the same commit as the view, not a render later',
+    ).toBe(JOB_A)
+    expect(window.location.pathname, 'the URL must agree with the restored view').toBe(`/extraction/${JOB_A}`)
   })
 })
 

@@ -9,6 +9,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
+import { parseRoute, routePath } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -315,7 +316,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // limitation: pasting a review hash into an already-open tab's address bar does not
   // navigate until reload.
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
-  const [view, setView] = useState<View>(initialView ?? (bootBatchIds.length > 0 ? 'create' : 'dashboard'))
+  // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
+  // reason as the block above.
+  const [view, setView] = useState<View>(
+    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(window.location.pathname) ?? 'dashboard')),
+  )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchIds.length > 0 ? 'review' : 'form')
   // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
@@ -504,6 +509,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setEntityId(active.entityId)
     }
   }, [createStep, entityId, active.entityId])
+  // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
+  // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  useEffect(() => {
+    window.history.replaceState(null, '', routePath(view) + window.location.hash)
+  }, [])
   // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
   //
   // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every

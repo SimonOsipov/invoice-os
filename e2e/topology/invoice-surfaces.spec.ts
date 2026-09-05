@@ -547,7 +547,8 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toBeVisible()
   await expect(page.getByTestId('not-validated')).toHaveCount(0)
   await expect(violationsTable).toContainText('vat-standard-rate')
-  await expect(page.getByTestId('compliance-ruleset-version')).toContainText(String(VALIDATION_EXPECTED.ruleSetVersion))
+  // Full text, not a substring: toContainText(String(n)) would also pass on "Rule-set v14".
+  await expect(page.getByTestId('compliance-ruleset-version')).toHaveText(`Rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   // INVCR-01-16 AC-9: discharges task-289's own deferred empirical check -- v3 fills
   // `target` on vat-standard-rate (blank under v2), so the Path column (ViolationsTable's
   // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not

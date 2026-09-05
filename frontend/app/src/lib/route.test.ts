@@ -104,3 +104,39 @@ describe('frontend/app/package.json', () => {
     ])
   })
 })
+
+describe('parseRoute — adversarial', () => {
+  // location.pathname never carries these in a real browser, but the function is exported
+  // and pure, so a caller passing a full href by mistake gets null, not a silent match.
+  it('parse_ignoresAPathnameArgumentCarryingAQueryStringOrHash', () => {
+    expect(parseRoute('/invoices?x=1')).toBeNull()
+    expect(parseRoute('/invoices#y')).toBeNull()
+  })
+
+  it('parse_rejectsLeadingOrTrailingWhitespace', () => {
+    expect(parseRoute(' /invoices')).toBeNull()
+    expect(parseRoute('/invoices ')).toBeNull()
+  })
+
+  it('parse_distinguishesAPathFromAnAdjacentRealPathThatPrefixesIt', () => {
+    // /invoice and /invoices are both real routes (detail, invoices) -- neither may degrade to the other.
+    expect(parseRoute('/invoice')).toBe('detail')
+    expect(parseRoute('/invoices')).toBe('invoices')
+    expect(parseRoute('/audi')).toBeNull() // prefix of /audit, not a route itself
+  })
+
+  it('parse_rejectsADoubleLeadingSlash', () => {
+    expect(parseRoute('//invoices')).toBeNull()
+  })
+
+  it('routePath_isInjectiveNotMerelyDistinctToday', () => {
+    expect(ALL_VIEWS.length).toBeGreaterThan(0)
+    for (let i = 0; i < ALL_VIEWS.length; i++) {
+      for (let j = i + 1; j < ALL_VIEWS.length; j++) {
+        const a = ALL_VIEWS[i]
+        const b = ALL_VIEWS[j]
+        expect(routePath(a), `${a} and ${b} must not share a path`).not.toBe(routePath(b))
+      }
+    }
+  })
+})

@@ -117,4 +117,24 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
     expect(document.querySelectorAll('button').length).toBe(buttonsBefore)
     expect(consoleError).not.toHaveBeenCalled()
   })
+
+  // QA addition: a one-shot handler (e.g. a stale-closure effect, or state that never
+  // resets) would satisfy every assertion above and still be broken for a returning
+  // visitor. Re-open after the first close and require the same dialog again.
+  it('F2-f: the control still opens the dialog after a prior open/close cycle', async () => {
+    await mountApp()
+    const header = document.querySelector('header')!
+
+    await clickByText(header, SIGN_IN_CTA)
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>(`${DIALOG} button[aria-label="Close"]`)!.click()
+    })
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+
+    await clickByText(header, SIGN_IN_CTA)
+    expect(document.querySelectorAll(DIALOG).length).toBe(1)
+    expect(document.querySelector(DIALOG)!.getAttribute('aria-label')).toBe('Sign in')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
 })

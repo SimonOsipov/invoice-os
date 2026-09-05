@@ -513,6 +513,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   useEffect(() => {
     window.history.replaceState(null, '', routePath(view) + window.location.hash)
   }, [])
+  // Back/Forward: the browser already moved the URL -- restore the view from it, no
+  // write. A write here would push a duplicate entry on every Back press.
+  useEffect(() => {
+    const onPopState = () => setView(parseRoute(window.location.pathname) ?? 'dashboard')
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
   // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
   //
   // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every

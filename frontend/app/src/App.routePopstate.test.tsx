@@ -68,10 +68,7 @@ async function bootAt(path: string) {
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
   vi.resetModules()
   const { default: App } = await import('./App')
-  // Split the JSX from render() so this file's own source text can't become a match for
-  // App.routeNavigate.test.tsx's guard_everyAppRenderingTestFileResetsTheJsdomUrl walk.
-  const app = <App />
-  return render(app)
+  return render(<App />)
 }
 
 function requireCtx(): PlatformCtx {

@@ -101,8 +101,7 @@ async function bootAt(path: string, opts: { demoMode?: boolean } = {}) {
   if (opts.demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: App } = await import('./App')
-  const app = <App />
-  return render(app)
+  return render(<App />)
 }
 
 // The control needle for guard_everyAppRenderingTestFileResetsTheJsdomUrl: renders with
@@ -111,8 +110,7 @@ async function renderWithoutUrlReset() {
   localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
   vi.resetModules()
   const { default: App } = await import('./App')
-  const app = <App />
-  return render(app)
+  return render(<App />)
 }
 
 function requireCtx(): PlatformCtx {
@@ -269,13 +267,14 @@ describe('AC-2: no bare setView( call site survives outside navigate()', () => {
   it('guard_appTsxHasNoSetViewCallOutsideNavigate', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
     const matches = src.match(/\bsetView\b/g) ?? []
-    // The 2 that must remain: the `[view, setView]` useState destructure, and navigate's
-    // own `setView(view)` call. Every one of the 8 pre-existing call sites becomes a
-    // `navigate(...)` call and so drops out of this count.
+    // The 3 that must remain: the `[view, setView]` useState destructure, navigate's own
+    // `setView(view)` call, and the popstate handler's (ROUTE-01-04) -- the one other
+    // caller allowed to bypass navigate(), since it must never push (AC-3). Every one of
+    // the 8 pre-existing call sites becomes a `navigate(...)` call and so drops out.
     expect(
       matches.length,
-      `App.tsx has ${matches.length} bare 'setView' references; navigate() must be the only caller`,
-    ).toBe(2)
+      `App.tsx has ${matches.length} bare 'setView' references; only navigate() and the popstate handler may call it`,
+    ).toBe(3)
   })
 })
 
@@ -332,17 +331,19 @@ describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', ()
 
 describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
   it('guard_everyAppRenderingTestFileResetsTheJsdomUrl', () => {
-    // Split so THIS file's own source text never contains the needle it greps for --
-    // otherwise this test would find itself as a 6th match and never read exactly 5.
-    const needle = ['render(<App', ' '].join('')
-    const out = execSync(`grep -rln "${needle}" src`, { cwd: process.cwd(), encoding: 'utf8' })
+    // Matches the JSX tag itself, not one call-site idiom -- a render(<App />) split
+    // across two lines (or App.routeBoot.test.tsx's ternary) still contains this needle,
+    // so a file can't opt out of the count by reshaping its own render call. Scoped to
+    // *.test.tsx so main.tsx (the real, non-jsdom entry point) is correctly excluded.
+    const needle = '<App( |/|>)'
+    const out = execSync(`grep -rlE "${needle}" --include="*.test.tsx" src`, { cwd: process.cwd(), encoding: 'utf8' })
     const files = out
       .trim()
       .split('\n')
       .filter(Boolean)
     // Floor: a broken walk (wrong cwd, a mangled grep pattern) returns zero files and
     // reads exactly like a repo with nothing left to fix.
-    expect(files, 'the walk must find exactly the five pre-existing App-rendering test files').toHaveLength(5)
+    expect(files, 'the walk must find exactly the eight App-rendering test files').toHaveLength(8)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')

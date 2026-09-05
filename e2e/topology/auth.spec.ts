@@ -1,12 +1,20 @@
 import { test, expect } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
+import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
 // BASE e2e/targets.ts, not this directory's ./targets: topology/targets.ts re-exports
 // only GATEWAY_URL/APP_URL/TENANTS/FIRM_PERSONA/VALIDATION_EXPECTED, so it has no
 // LANDING_URL. Pattern mirrors e2e/smoke/apps.ts:21 (Decision [signout-asserts-landing-redirect]).
 const LANDING_URL = resolveTarget('LANDING_URL')
+
+// The expected arrival base per persona, computed once at module scope — same idiom as
+// LANDING_URL above. This is the ONLY use of resolveTarget/DESTINATION_ENV in the walk below:
+// to compute what the navigation SHOULD land on, never to navigate there directly (AC #2).
+const EXPECTED_BASE: Record<PersonaId, string> = Object.fromEntries(
+  PERSONA_IDS.map((id) => [id, resolveTarget(DESTINATION_ENV[PERSONAS[id].destination])]),
+) as Record<PersonaId, string>
 
 // M2-14 deliverable (1): the live browser round trip. On the gateway-wired dev build,
 // picking a persona mints a JWT via the gateway (/auth/login) and reads GET
@@ -136,3 +144,60 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 
   expect(page.url(), `expected a redirect from ${APP_URL} to ${LANDING_URL}`).toContain(LANDING_URL)
 })
+
+// This walk drives the REAL SignInModal (open -> pick a persona -> type the OTP -> Verify),
+// never e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
+// two sides can silently diverge:
+//  (a) the persona->destination table is duplicated (frontend/landing/src/auth.ts's
+//      LandingPersona.target vs e2e/personas.ts#PERSONAS[id].destination) and nothing
+//      compares the two mappings;
+//  (b) the bases resolve from different variables at different times — landing bakes
+//      import.meta.env.VITE_*_URL into its build image, this suite reads process.env.*_URL
+//      at CI run time;
+//  (c) unset behaviour is opposite — destUrl() returns null and verify() silently no-ops,
+//      while signInUrl() throws.
+for (const id of PERSONA_IDS) {
+  const persona = PERSONAS[id]
+  test(`deployed ${persona.destination}: the ${id} persona reaches its destination through the sign-in modal`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text())
+    })
+    page.on('pageerror', (err) => {
+      errors.push(`pageerror: ${err.message}`)
+    })
+
+    await page.goto(LANDING_URL)
+    await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+    await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+
+    await page.locator(`[data-persona="${id}"]`).click()
+
+    // Six separate fill() calls, not pressSequentially/keyboard.type: setDigit() moves DOM
+    // focus to the next box itself on every keystroke, which would race a keyboard-driven
+    // approach. fill() re-resolves each box by id regardless of where focus currently sits.
+    const digits = '481920'.split('')
+    for (let i = 0; i < digits.length; i++) {
+      await page.locator(`#si-otp-${i}`).fill(digits[i])
+    }
+
+    // Every destination strips ?persona= on arrival (App.tsx:1615-1620), so the wire value
+    // is only observable on the outbound navigation request — armed BEFORE the click.
+    const base = EXPECTED_BASE[id]
+    const [navRequest] = await Promise.all([
+      page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(base)),
+      page.getByRole('button', { name: 'Verify & continue' }).click(),
+    ])
+    expect(new URL(navRequest.url()).searchParams.get('persona'), `navigation request did not carry ?persona=${id}`).toBe(id)
+
+    if (persona.destination === 'app') {
+      await expect(page.locator('aside.pf-sidebar')).toContainText(persona.tenantName!.toUpperCase())
+    } else if (persona.destination === 'ops') {
+      await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
+    } else {
+      await expect(page.getByRole('heading', { name: 'Submissions ops' })).toBeVisible()
+    }
+
+    expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
+  })
+}

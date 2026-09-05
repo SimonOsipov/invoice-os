@@ -17,7 +17,7 @@ const SRC = fileURLToPath(new URL('.', import.meta.url))
 const SELF = fileURLToPath(import.meta.url)
 
 // Re-declared, never imported from rowBlockedReasonRemoved.test.ts: importing from a
-// .test.ts re-registers that file's describes here (the toggleProofGuards.test.ts precedent).
+// .test.ts re-registers that file's describes here (e2e/topology/toggleProofGuards.test.ts:9-11).
 function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -47,7 +47,7 @@ function filesContaining(needle: string): string[] {
 const detailSource = (): string => readFileSync(join(SRC, 'components', 'InvoiceDetail.tsx'), 'utf8')
 
 // A legitimate new home must be DECLARED here by whoever adds it -- the same contract
-// InvoiceDetail.test.tsx:4423-4431 takes for UNTOUCHED_TESTIDS.
+// InvoiceDetail.test.tsx takes for UNTOUCHED_TESTIDS (declared :4395, enforced :4723-4727).
 const EXPECTED_HOMES: Record<string, string[]> = {
   'view-ubl-blocked-reason': [],
   'reject-blocked-reason': [],
@@ -78,9 +78,14 @@ describe('BUG-14: the scan population', () => {
     expect(PROD_FILES, 'the test exclusion failed -- this file is not production source').not.toContain(SELF)
   })
 
-  it('control: the six control testids are still found', () => {
+  // The DECLARATION form here, not the bare value: `revalidate` is a substring of
+  // `inv.can_revalidate`, so the bare needle could never fail for that control.
+  it('control: the six control testids are still declared', () => {
     for (const id of ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']) {
-      expect(filesContaining(id).length, `the control testid ${id} vanished -- the scanner finds nothing`).toBeGreaterThan(0)
+      expect(
+        filesContaining(`data-testid="${id}"`).length,
+        `the control testid ${id} vanished -- the scanner finds nothing`,
+      ).toBeGreaterThan(0)
     }
   })
 
@@ -163,15 +168,25 @@ describe('BUG-14: no control in the detail action cluster wires aria-describedby
     },
   ]
 
-  // Terminates on a line holding only `>`; the JSX arrow functions make a bare `>` unusable.
+  // Starts at the opening `<button`, not at data-testid: an aria-describedby placed ABOVE
+  // data-testid is still on the control. Terminates on a line holding only `>`; the JSX
+  // arrow functions make a bare `>` unusable.
   function attributeBlock(id: string): string | null {
-    return detailSource().match(new RegExp(`data-testid="${id}"[\\s\\S]*?\\n\\s*>\\n`))?.[0] ?? null
+    const src = detailSource()
+    const at = src.indexOf(`data-testid="${id}"`)
+    if (at === -1) return null
+    const open = src.lastIndexOf('<button', at)
+    if (open === -1) return null
+    const end = src.slice(open).match(/\n\s*>\n/)
+    if (end?.index == null) return null
+    return src.slice(open, open + end.index + end[0].length)
   }
 
   for (const c of CONTROLS) {
     it(`control: ${c.id}'s attribute block is extracted whole`, () => {
       const block = attributeBlock(c.id)
       expect(block, `${c.id}'s block no longer matches -- the absence check below is vacuous`).not.toBeNull()
+      expect(block, `the ${c.id} match starts below its opening tag`).toMatch(/^<button[\s>]/)
       expect(block, `the ${c.id} match stops short of its first attribute`).toContain(c.first)
       expect(block, `the ${c.id} match ends before its last attribute`).toContain(c.last)
     })

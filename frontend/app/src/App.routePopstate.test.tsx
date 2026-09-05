@@ -439,17 +439,19 @@ describe('Adversarial: Back into a view whose data was cleared elsewhere', () =>
   it('popstate_backToInvoiceAfterACompanySwitchRendersNoStaleSelection', async () => {
     await bootAt('/')
     await act(async () => {
-      capturedCtx!.selectInvoice('INV-001')
+      capturedCtx!.openImportedInvoice('dddddddd-1111-4111-8111-111111111111')
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: selectInvoice must push /invoice').toBe('/invoice')
-    expect(ctx.selectedId, 'sanity: the selection must be armed').toBe('INV-001')
+    expect(window.location.pathname, 'sanity: openImportedInvoice must push /invoices/<id>').toBe(
+      '/invoices/dddddddd-1111-4111-8111-111111111111',
+    )
+    expect(ctx.importedInvoiceId, 'sanity: the selection must be armed').toBe('dddddddd-1111-4111-8111-111111111111')
 
     await act(async () => {
       capturedCtx!.switchClient('other-entity-777')
     })
     ctx = requireCtx()
-    expect(ctx.selectedId, 'sanity: switchClient must already clear the selection').toBeNull()
+    expect(ctx.importedInvoiceId, 'sanity: switchClient must already clear the selection').toBeNull()
 
     await popTo('/invoice')
     ctx = requireCtx()
@@ -457,7 +459,6 @@ describe('Adversarial: Back into a view whose data was cleared elsewhere', () =>
     // Matches decision [route-01-limitations]: a cold /invoice has no selection and
     // InvoiceDetail renders its EmptyState -- a popstate-reached /invoice must be the
     // same, not the previous company's row.
-    expect(ctx.selectedId, 'a popstate-restored /invoice must not resurrect the old company\'s selection').toBeNull()
     expect(ctx.importedInvoiceId, 'a popstate-restored /invoice must not resurrect an imported-invoice target either').toBeNull()
   })
 })

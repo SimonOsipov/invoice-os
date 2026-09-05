@@ -196,16 +196,10 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
     ).toBe(INVOICE_ID)
   })
 
-  it('selectInvoice_pushesTheDetailPath', async () => {
+  it('ctx exposes no selectInvoice key (task-919, ROUTE-02-04, D-4)', async () => {
     await bootAt('/')
-    const lengthBefore = window.history.length
-    await act(async () => {
-      capturedCtx!.selectInvoice('INV-1')
-    })
     const ctx = requireCtx()
-    expect(window.location.pathname, 'selectInvoice must push /invoice').toBe('/invoice')
-    expect(window.history.length, 'selectInvoice must add exactly one history entry').toBe(lengthBefore + 1)
-    expect(ctx.selectedId, 'the mock selection atom must name the number it was handed').toBe('INV-1')
+    expect('selectInvoice' in ctx).toBe(false)
   })
 
   it('openAuditForInvoice_pushesAuditWithThePrefilterStillSetInTheSameRender', async () => {
@@ -266,10 +260,12 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
       capturedCtx!.openPolicy('policy-1')
     })
     await act(async () => {
-      capturedCtx!.selectInvoice('INV-9')
+      capturedCtx!.openImportedInvoice('99999999-1111-4111-8111-111111111111')
     })
     ctx = requireCtx()
-    expect(ctx.selectedId, 'sanity: selectInvoice must have armed selectedId').toBe('INV-9')
+    expect(ctx.importedInvoiceId, 'sanity: openImportedInvoice must have armed importedInvoiceId').toBe(
+      '99999999-1111-4111-8111-111111111111',
+    )
 
     const lengthBefore = window.history.length
     await act(async () => {
@@ -280,7 +276,6 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
     expect(window.location.pathname, 'switchClient must push the dashboard path').toBe('/')
     expect(window.history.length, 'switchClient must add exactly one history entry').toBe(lengthBefore + 1)
     expect(ctx.reviewBatchIds, 'reviewBatchIds must still be cleared').toEqual([])
-    expect(ctx.selectedId, 'selectedId must still be cleared').toBeNull()
     expect(ctx.importedInvoiceId, 'importedInvoiceId must still be cleared').toBeNull()
     expect(ctx.createStep, 'createStep must still reset to form').toBe('form')
     expect(ctx.openRuleKey, 'openRuleKey must still be cleared').toBeNull()

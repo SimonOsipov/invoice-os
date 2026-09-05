@@ -54,6 +54,10 @@
 //
 // Trap C (JSON-null coercion) is already closed upstream by normalizeReport
 // (IMPAPI-12) — deliberately no spec for it here, see importReport.ts's module doc.
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import type { ImportReport } from './importApi'
@@ -222,5 +226,63 @@ describe('reportSummary: an unrecognised non-"failed" status also fails safe (QA
     const s = reportSummary(processingReport)
 
     expect(s).toEqual({ kind: 'failed', id: 'batch-processing' })
+  })
+})
+
+// --- D-1 (task-919, ROUTE-02-04, Mode A) — static scan: the five deleted identifiers
+// stay dead. Same shape as rowBlockedReasonRemoved.test.ts: SELF is excluded from the
+// walk so this file's own needles (including the RPT-10/11/13 code above, pre-deletion)
+// never self-trip.
+const SRC = fileURLToPath(new URL('..', import.meta.url))
+const SELF = fileURLToPath(import.meta.url)
+
+function sourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue
+    const p = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...sourceFiles(p))
+    else if (/\.tsx?$/.test(entry.name) && p !== SELF) out.push(p)
+  }
+  return out
+}
+
+const FILES = sourceFiles(SRC)
+const CORPUS = FILES.map((path) => [path, readFileSync(path, 'utf8')] as const)
+
+function filesContaining(needle: string): string[] {
+  return CORPUS.filter(([, text]) => text.includes(needle)).map(([path]) => path)
+}
+
+describe('ROUTE-02-04 (task-919): DetailSelection / selectInvoice deletion sweep (D-1)', () => {
+  it('control: the scan reaches the SPA source tree', () => {
+    expect(
+      FILES.length,
+      'the scan drifted off frontend/app/src -- every absence check below would be vacuous',
+    ).toBeGreaterThanOrEqual(200)
+  })
+
+  it('control: importedInvoiceId is still found (the scan can see a match)', () => {
+    expect(filesContaining('importedInvoiceId').length).toBeGreaterThan(0)
+  })
+
+  it('selectInvoice appears in no file', () => {
+    expect(filesContaining('selectInvoice')).toEqual([])
+  })
+
+  it('selectMock appears in no file', () => {
+    expect(filesContaining('selectMock')).toEqual([])
+  })
+
+  it('detailTarget appears in no file', () => {
+    expect(filesContaining('detailTarget')).toEqual([])
+  })
+
+  it('DetailTarget appears in no file', () => {
+    expect(filesContaining('DetailTarget')).toEqual([])
+  })
+
+  it('DetailSelection appears in no file', () => {
+    expect(filesContaining('DetailSelection')).toEqual([])
   })
 })

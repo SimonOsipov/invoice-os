@@ -7,12 +7,15 @@ package extraction_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
@@ -851,5 +854,119 @@ func TestRLS_TheAnchorRuleWriteFollowsTheCorrectionRowAndTheCorrectionAudit(t *t
 	}
 	if rows := cxCorrectionAudit(t, ctx, f.tenantID); len(rows) != 1 {
 		t.Errorf("arm 2: %d %s audit row(s), want 1", len(rows), cxEvent)
+	}
+}
+
+// --- C-14 / EXTR-19-04 AC-9: a boxless layout teaches nothing ------------------------------
+
+const (
+	// A page-1 token of corpus_inline_labels.pdf, and the reading a reviewer posts over it.
+	clDateToken = "Invoice Date: 2026-03-04"
+	clDateValue = "2026-03-05"
+	clDateField = "issue_date"
+)
+
+// clLearnRecorder counts anchor.learned emits. The seam, not audit_log: cxServe's default
+// recorder writes nothing, so a table count could not tell "refused to learn" from "learned and
+// the adapter is not wired here".
+type clLearnRecorder struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (r *clLearnRecorder) record(_ context.Context, tx pgx.Tx, _ string, _ extraction.AnchorLearned) error {
+	if tx == nil {
+		return errors.New("the learning recorder was handed no transaction, so the row cannot share the rule's fate")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.n++
+	return nil
+}
+
+func (r *clLearnRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.n
+}
+
+// clSettle runs the real ExtractWorker once and returns the extraction job it settled, so the
+// correction below reads the layout PRODUCTION writes rather than one this test stamped.
+func clSettle(t *testing.T, ctx context.Context, tenantID, documentID string, riverJobID int64, ew *extraction.ExtractWorker) string {
+	t.Helper()
+	if err := ew.Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work over document %s (river job %d): %v", documentID, riverJobID, err)
+	}
+	jobID := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, jobID, "succeeded")
+	return jobID
+}
+
+// C-14. A DOCX job now carries a layout, so jobLayoutTx answers ok=true where it used to answer
+// false -- a path nothing on this route reached before EXTR-19-04. It still teaches nothing:
+// every boxless anchor carries the zero box and usableBox refuses it (resolve.go:277-291), so no
+// candidate qualifies.
+//
+// The PDF arm runs FIRST and posts the SAME body against a job settled the SAME way, so the only
+// variable between the two is which layout the job carries -- and so the control is proven even
+// on a run where the boxless arm below fails.
+func TestRLS_APointedCorrectionOnABoxlessJobLearnsNothing(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-04-C14")
+	wkCleanupInfra(t, f.tenantID)
+
+	// A real PDF token's box, posted unchanged on both arms. usableBox admits it, so a refusal
+	// on the DOCX arm is about the ANCHORS and not about the region.
+	pdfPages := rvCorpusPages(t, dcCorpusFixture)
+	region := clTokenRegion(t, pdfPages, clDateToken)
+	body := clPointedBody(clDateValue, region, "")
+
+	// PDF control.
+	pdfEW := wpWorker(t, wkOK(), wpCorpusOpener(t),
+		wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName)), wkNoRules, &wkAuditRecorder{})
+	pdfJobID := clSettle(t, ctx, f.tenantID, f.documentID, 915302, pdfEW)
+
+	pdfLearned := &clLearnRecorder{}
+	w := cxServe(t, f.reqCtx, pdfJobID, clDateField, body, cxApplier(false, nil), cxAuditor(nil), pdfLearned.record)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("control: status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("control: this body against a PDF layout left %d anchor rule(s), want 1 -- the boxless zero below proves nothing without it", len(rules))
+	}
+	if want := clJobFingerprint(t, ctx, pdfJobID); rules[0].fingerprint != want {
+		t.Errorf("control: the rule is keyed to %q, want the PDF job's own %q", rules[0].fingerprint, want)
+	}
+	if n := pdfLearned.count(); n != 1 {
+		t.Errorf("control: the PDF arm emitted %d anchor.learned event(s), want 1", n)
+	}
+
+	// DOCX arm, same tenant, same body. The counts below are deltas against the control's one
+	// rule: clRules is tenant-scoped, so an absolute zero is unavailable here.
+	docxEW := wkWorkerPages(t, wkOK(), wkDocxOpener(t), wkForbiddenPages(&wkForbiddenReader{}), &wkAuditRecorder{})
+	docxEW.Text = wpDoclingReader(t, dcReadNamedGolden(t, dxGolden))
+	docxEW.Rules = wkNoRules
+	docxJobID := clSettle(t, ctx, f.tenantID, f.documentID, 915301, docxEW)
+
+	if fp := clJobFingerprint(t, ctx, docxJobID); !strings.HasPrefix(fp, extraction.BoxlessFingerprintVersion+":") {
+		t.Fatalf("the settled DOCX job carries layout_fingerprint %q, want the %q namespace -- AC-9 is about a job that HAS a boxless layout, so without one this test asserts nothing new",
+			fp, extraction.BoxlessFingerprintVersion)
+	}
+
+	docxLearned := &clLearnRecorder{}
+	w2 := cxServe(t, f.reqCtx, docxJobID, clDateField, body, cxApplier(false, nil), cxAuditor(nil), docxLearned.record)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w2.Code, http.StatusCreated, w2.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("after a pointed correction on a BOXLESS layout the tenant holds %d anchor rule(s), want the 1 the control wrote -- a rule keyed to an anchor with no geometry can never resolve", n)
+	}
+	if n := docxLearned.count(); n != 0 {
+		t.Errorf("the boxless arm emitted %d anchor.learned event(s), want 0", n)
+	}
+	if n := cxCorrectionRows(t, ctx, docxJobID); n != 1 {
+		t.Errorf("%d correction row(s) on the DOCX job, want 1 -- the correction still commits", n)
 	}
 }

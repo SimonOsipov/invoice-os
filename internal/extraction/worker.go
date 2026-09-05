@@ -205,9 +205,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			}}
 		default:
 			var learned []AnchorRule
-			// No fingerprint, so Tier-1 anchors only rather than a bucket keyed on ""
-			// (TestRLS_ExtractWorkerLoadsNoLearnedRulesForABoxlessFormat). EXTR-19 gives these
-			// documents a layout identity.
+			// No fingerprint, so Tier-1 anchors only rather than a bucket keyed on "".
+			// EXTR-19-04 gives a boxless document an identity and lifts this gate onto it.
 			if RendersPageImages(doc.ContentType) {
 				// Not swallowed: a dropped rule set would read clean while the tenant's
 				// corrections were silently gone. extract_failed, because field extraction is

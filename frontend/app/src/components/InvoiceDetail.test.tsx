@@ -2077,6 +2077,50 @@ describe('stale violations beside a live-missing buyer TIN (disclosure, task-413
   })
 })
 
+// RED specs (BUG-13-01, Mode A). The header chip does not exist yet, so the first spec
+// fails on a null query and on the fifth <td> that still restates the version. The second
+// is green today only because nothing renders a chip at all -- after the fix it is the
+// only oracle for [chip-gating], which stops a never-validated invoice being told a
+// rule-set version it was never evaluated against.
+describe('InvoiceDetail Compliance panel: the rule-set version is stated once (BUG-13-01)', () => {
+  it('invoiceDetail_complianceHeaderStatesTheRuleSetVersionOnce', async () => {
+    mockDetailFetch(
+      detailRecord({
+        rule_set_version_id: 'rsv-4',
+        rule_set_version: 4,
+        violations: [{ rule_key: 'buyer-tin-required', severity: 'error', message: 'Buyer TIN is required.', path: 'buyer.tin' }],
+      }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    // Floor: an empty violations array renders the clean-pass block instead, and the
+    // last assertion would then hold over zero cells.
+    const cells = within(screen.getByTestId('violations-table')).getAllByRole('cell')
+    expect(cells.length).toBeGreaterThan(0)
+
+    const chip = screen.queryByTestId('compliance-ruleset-version')
+    expect(chip, 'the version chip must render beside the Compliance title').not.toBeNull()
+    expect(chip?.textContent).toBe('Rule-set v4')
+
+    expect(
+      cells.map((c) => c.textContent),
+      'no per-row cell restates the rule-set version',
+    ).not.toContain('4')
+  })
+
+  it('invoiceDetail_unvalidatedInvoiceStatesNoVersion', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: null, rule_set_version_id: null }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    expect(screen.getByTestId('not-validated')).toBeTruthy()
+    expect(screen.queryByTestId('compliance-ruleset-version')).toBeNull()
+  })
+})
+
 // The kept mark means "kept as-is" only on a draft; on a failed invoice it means
 // resolved outside the system, which is not this banner's claim.
 describe('InvoiceDetail Compliance panel: the kept banner is a draft-only concept, not resolved-failed', () => {
@@ -4261,8 +4305,6 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'source-document-range',
     'view-source-document',
     'why-no-source-document',
-    // ViolationsTable.tsx
-    'violations-scroll',
   ]
 
   // What AUDIT-09 put on this page. Listed so the closed-world check below can tell a
@@ -4280,8 +4322,12 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'invoice-activity-empty',
   ]
 
-  // Deleted by AUDIT-09-02 and AUDIT-09-06. A resurrection is as much a surface change as a
-  // deletion, and `git grep` cannot see one that arrives under a new component.
+  // What BUG-13 puts on this page. The chip ships in BUG-13-01 and lands in `seen` on
+  // every scenario that mounts a rule_set_version, so it must be declared here now.
+  const BUG_13_TESTIDS = ['compliance-ruleset-version']
+
+  // Deleted by AUDIT-09-02, AUDIT-09-06 and BUG-13-01. A resurrection is as much a surface
+  // change as a deletion, and `git grep` cannot see one that arrives under a new component.
   const RETIRED_TESTIDS = [
     'status-history',
     'status-history-row',
@@ -4294,6 +4340,8 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     'approval-trail-empty',
     'approval-trail-voided',
     'approval-trail-notify-note',
+    // BUG-13-01: retired with the scroll recipe the table no longer needs.
+    'violations-scroll',
   ]
 
   const A_DOCUMENT: MockResponse = {
@@ -4489,6 +4537,8 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     },
   ]
 
+  // Also carries BUG-13-01's `invoiceDetail_retiredScrollTestidIsDeclaredRetired`: the
+  // spec is two list edits above, not a second sweep of the same SCENARIOS.
   it('invoiceDetail_untouchedTestidsAreIntact', async () => {
     const seen = new Map<string, string>()
     for (const scenario of SCENARIOS) {
@@ -4518,11 +4568,11 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the two lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
-      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS or AUDIT_09_TESTIDS.`,
+      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS or BUG_13_TESTIDS.`,
     ).toEqual([])
   })
 

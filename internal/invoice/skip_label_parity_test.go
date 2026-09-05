@@ -19,7 +19,10 @@ const spaInvoicesTSPath = "../../frontend/app/src/lib/invoices.ts"
 const skipLabelMinRunes = 40
 
 var (
-	skipMapAnchorRE = regexp.MustCompile(`const SKIP_REASON_LABELS`)
+	// \b, not a bare substring: `const SKIP_REASON_LABELS_V2` would satisfy a substring anchor
+	// while the map this scan claims to read no longer exists.
+	skipMapAnchorRE = regexp.MustCompile(`\bconst SKIP_REASON_LABELS\b`)
+	skipMapEndRE    = regexp.MustCompile(`(?m)^}$`)
 	skipLabelRowRE  = regexp.MustCompile(`(?m)^\s*(not_validated|duplicate_request|awaiting_approval):\s*'([^']*)',$`)
 )
 
@@ -37,12 +40,22 @@ func readSPASkipLabels(t *testing.T) map[string]string {
 	}
 	src := string(b)
 
-	if n := len(skipMapAnchorRE.FindAllString(src, -1)); n != 1 {
-		t.Fatalf("%s has %d occurrences of the anchor `const SKIP_REASON_LABELS`, want exactly 1 -- the parity scan lost its anchor", spaInvoicesTSPath, n)
+	anchors := skipMapAnchorRE.FindAllStringIndex(src, -1)
+	if len(anchors) != 1 {
+		t.Fatalf("%s has %d occurrences of the anchor `const SKIP_REASON_LABELS`, want exactly 1 -- the parity scan lost its anchor", spaInvoicesTSPath, len(anchors))
 	}
 
+	// Scope the rows to the map body. File-wide, a decoy `awaiting_approval: '...'` line
+	// elsewhere in invoices.ts would be pinned instead of the one that renders.
+	body := src[anchors[0][1]:]
+	end := skipMapEndRE.FindStringIndex(body)
+	if end == nil {
+		t.Fatalf("%s: no closing `}` after the SKIP_REASON_LABELS anchor; the map body cannot be bounded", spaInvoicesTSPath)
+	}
+	body = body[:end[0]]
+
 	labels := make(map[string]string)
-	for _, m := range skipLabelRowRE.FindAllStringSubmatch(src, -1) {
+	for _, m := range skipLabelRowRE.FindAllStringSubmatch(body, -1) {
 		if prev, dup := labels[m[1]]; dup {
 			t.Fatalf("%s maps %q twice (%q then %q); the scan cannot say which one renders", spaInvoicesTSPath, m[1], prev, m[2])
 		}

@@ -3947,7 +3947,9 @@ describe('the [isfixable-deleted] export is gone (INVED-01-06)', () => {
 // [gates-on-the-wire]: the blocked-reason copy is the backend's, and the three wire mirrors
 // only carry it. A literal in a production source file is how that decision gets quietly
 // reversed -- the SPA starts answering "why is this disabled" itself and drifts from Go.
-describe('no production source under src/ authors a submit-blocked sentence (APPR-01 AC-4)', () => {
+// One sanctioned exception since BUG-12-02: lib/invoices.ts mirrors awaitingApprovalReason
+// verbatim under a two-sided byte guard, so it copies the backend rather than authoring.
+describe('no production source under src/ authors a submit-blocked sentence, bar the sanctioned mirror (APPR-01 AC-4)', () => {
   const srcRoot = fileURLToPath(new URL('..', import.meta.url))
   // Both spec files carry these sentences as FIXTURES, which is the point of them -- so the
   // scan is production-only. Dropping this filter turns the specs below red on their own

@@ -1685,3 +1685,54 @@ describe('A16-4i: submitSelection carries no AbortSignal, and says why (D-05, AP
     expect(preamble, 'the stated reason must be single request vs. a loop, not a vague deferral').toMatch(/\b(one|single)\s+request\b/i)
   })
 })
+
+// Rendering resultLabel (InvoicesList.tsx) from `r.reason` raw reds nothing else in the
+// suite, so the panel could show the operator the machine token. The sentence is spelled
+// here rather than read from skipReasonLabel -- a helper-derived oracle cannot catch the
+// label moving.
+describe('InvoicesList: the bulk-submit result panel speaks the server sentence', () => {
+  it('an awaiting_approval skip renders awaitingApprovalReason, never the wire token', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    const fetchMock = mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: false, reason: 'awaiting_approval' }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+
+    expect(panel.textContent, 'the panel must name the row it reports on').toContain('INV-A')
+    expect(panel.textContent).toContain(
+      'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+    )
+    expect(panel.textContent, 'the machine token is not operator copy').not.toContain('awaiting_approval')
+  })
+
+  it('a queued row still reads Queued, so the skip arm is not the only reachable one', async () => {
+    const a = row({ id: 'inv-a', invoice_number: 'INV-A', status: 'validated' })
+    mockFetchSequence([
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+      submitOkResponse([{ invoice_id: 'inv-a', enqueued: true }]),
+      listResponse([a], { limit: 50, offset: 0, total: 1 }),
+    ])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-A')
+
+    fireEvent.click(screen.getByTestId('invoice-select-all'))
+    fireEvent.click(screen.getByTestId('batch-submit'))
+    fireEvent.click(screen.getByTestId('batch-submit-confirm'))
+
+    const panel = await screen.findByTestId('batch-submit-results')
+    expect(panel.textContent).toContain('Queued')
+    expect(panel.textContent).not.toContain('waiting on approval')
+  })
+})

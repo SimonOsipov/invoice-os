@@ -64,7 +64,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
 import {
   login,
   apiBase,
@@ -6969,7 +6969,12 @@ async function runDocumentsIn(
   // Recorded INSIDE the POST route, EXTR10-E2E-02's own idiom: the handler completes before
   // the app can see the response, so no poll for this document can precede the assignment. A
   // page.on('response') listener cannot give that ordering.
-  await page.route('**/api/submission/v1/documents', async (route) => {
+  //
+  // Named and unrouted below, never an inline closure: this helper is called twice on one page
+  // by EXTR15-E2E-06, and a handler left installed by the first call still matches the second
+  // call's uploads while searching them for the FIRST call's filenames -- finding none, writing
+  // nothing, and fulfilling the request so the live handler never sees it.
+  const captureUpload = async (route: Route) => {
     if (route.request().method() !== 'POST') {
       await route.continue()
       return
@@ -6987,7 +6992,8 @@ async function runDocumentsIn(
       /* fulfil unchanged; the poll below fails loudly if the upload really broke */
     }
     await route.fulfill({ response: res, body: text })
-  })
+  }
+  await page.route('**/api/submission/v1/documents', captureUpload)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
@@ -6999,6 +7005,9 @@ async function runDocumentsIn(
       timeout: 120_000,
     })
     .toBe(files.length)
+  // Every upload is captured, so the handler has nothing left to do and must not outlive this
+  // call -- see captureUpload's own note.
+  await page.unroute('**/api/submission/v1/documents', captureUpload)
 
   const jobs: Record<string, ExtractionJob> = {}
   for (const f of files) {
@@ -7231,11 +7240,19 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   // routeAfterRun's business and no AC of this story's, but the invoice existing is the whole
   // basis of run 2. Listed by entity rather than searched by `q`, so nothing here depends on
   // the search predicate's matching rules.
-  const seeded = await listInvoices(token, { entity_id: entityId, limit: 50 })
-  expect(
-    seeded.invoices.map((i) => i.invoice_number),
-    'run 1 stored no invoice under the golden number -- run 2 has nothing to collide with',
-  ).toContain(GOLDEN_DOCX_NUMBER)
+  // POLLED, not read once: a settled extraction is not a filed invoice. The SPA calls the
+  // import endpoint AFTER the job reaches its terminal state, so a single read here races the
+  // write it is checking for and returns an empty register.
+  await expect
+    .poll(
+      async () => (await listInvoices(token, { entity_id: entityId, limit: 50 })).invoices.map((i) => i.invoice_number),
+      {
+        message: 'run 1 stored no invoice under the golden number -- run 2 has nothing to collide with',
+        timeout: 120_000,
+        intervals: [1_000],
+      },
+    )
+    .toContain(GOLDEN_DOCX_NUMBER)
 
   // --- run 2: the same document again, beside one that quarantines -----------------------
   const { jobs } = await runDocumentsIn(page, token, [

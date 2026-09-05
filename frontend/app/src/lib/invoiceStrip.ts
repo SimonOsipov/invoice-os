@@ -95,16 +95,9 @@ function spineNode(k: SpineNode, cursor: SpineNode, history: StatusChange[], sta
           ? 'Transmission failed'
           : 'Accepted by FIRS'
       : FIXED_LABEL[k]
-  // A `current` node never renders its time, even with a populated row (S-20). Node 4
-  // names the actual status, since queued and submitted share it.
-  const caption =
-    state === 'current'
-      ? k === 4 && status === 'submitted'
-        ? 'Submitted'
-        : 'Waiting'
-      : state === 'unreached'
-        ? 'Not reached'
-        : (attribution(at, actor) ?? '—')
+  // Every reached node renders its attribution, whatever its state; only an unreached one
+  // has nothing to show (S-35, S-41).
+  const caption = state === 'unreached' ? 'Not reached' : (attribution(at, actor) ?? '—')
   return { key: KEY_OF[k], label, state, at, actor, caption }
 }
 

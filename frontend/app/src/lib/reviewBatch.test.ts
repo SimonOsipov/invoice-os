@@ -31,6 +31,7 @@ import { describe, expect, it } from 'vitest'
 import {
   invoiceStatusStyle,
   pruneSelection,
+  selectableIds,
   skipReasonLabel,
   type BatchSubmitResultItem,
   type EditFieldKey,
@@ -1511,7 +1512,7 @@ describe('pagerNav: single-page boundary — a batch that fits in one page (PAGE
 // Local fixtures only — lib/invoices.test.ts's own `draftInvoice` is not imported or
 // reused (that file stays untouched by this subtask). Mirrors its shape.
 function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
-  return {
+  const built = {
     id,
     entity_id: 'e1',
     import_batch_id: 'batch-1',
@@ -1541,8 +1542,13 @@ function mkRow(id: string, status: InvoiceStatus, overrides: Partial<InvoiceReco
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    submit_blocked_reason: null,
     ...overrides,
-  }
+  } as InvoiceRecord
+  // Stands in for the server's answer on an unarmed tenant. Derived from status ONLY --
+  // deriving the approval half too would put the deleted client rule back in a fixture.
+  // Specs about the gate set can_submit explicitly.
+  return { ...built, can_submit: overrides.can_submit ?? built.status === 'validated' }
 }
 
 function buildRows(count: number, status: InvoiceStatus): InvoiceRecord[] {
@@ -1562,6 +1568,42 @@ function buildMixedReviewPage(): InvoiceRecord[] {
   const rejected = buildRows(4, 'rejected')
   return [...validated, ...draftWithError, ...draftClean, ...queued, ...rejected]
 }
+
+// RED spec (Stage 2.5, Mode A) — the bar's arithmetic follows the wire through
+// selectableIds/pruneSelection, with no edit to bulkBarView itself.
+//
+// The submit pair is not declared on InvoiceRecord yet, so the override type names it.
+type SubmitGateOver = Partial<InvoiceRecord> & {
+  can_submit?: boolean
+  submit_blocked_reason?: string | null
+}
+
+function gateRow(id: string, over: SubmitGateOver = {}): InvoiceRecord {
+  return { ...mkRow(id, 'draft'), ...over } as InvoiceRecord
+}
+
+describe('bulkBarView follows the server, not a status set (BUG-12)', () => {
+  it('B12-11: the bulk bar follows the server', () => {
+    // All three rows share one status ON PURPOSE. A validated/draft mix would score the
+    // same under the old status rule and prove nothing.
+    const rows = [
+      gateRow('a', { can_submit: true, submit_blocked_reason: null }),
+      gateRow('b', { can_submit: false, submit_blocked_reason: 'Only validated invoices can be submitted — re-validate this invoice first.' }),
+      gateRow('c', { can_submit: true, submit_blocked_reason: null }),
+    ]
+    // The arms really differ: 2 of 3, never 0 of 3 or 3 of 3.
+    expect(rows).toHaveLength(3)
+
+    expect(selectableIds(rows), 'the page-scoped count is the server answer').toEqual(['a', 'c'])
+
+    const view = bulkBarView(['a', 'b', 'c'], rows, 'idle', false)
+    expect(view.eligible, 'the blocked id must not reach the wire').toEqual(['a', 'c'])
+    // notReady is rows.length - pageEligible; bulkBarView exposes no pageEligible field.
+    expect(view.notReady).toBe(1)
+    expect(view.submitAllLabel).toBe('Submit all 2 on this page for transmission')
+    expect(view.canSubmitAll).toBe(true)
+  })
+})
 
 describe('bulkBarView: eligible IS pruneSelection, not the raw selection (BULK-1, AC-2)', () => {
   it('BULK-1: 5 selected ids, 2 of which left the page or are no longer validated, prune to the 3 survivors, in order', () => {
@@ -1666,7 +1708,7 @@ describe('bulkBarView: the note is absent at zero and names no cause, so it is t
     // on exactly this input -- both rows ARE validated, so it contradicted itself on
     // screen. OPEN_RUN is declared at module scope further down; it is initialized during
     // module evaluation, before any it() body runs.
-    const gated = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+    const gated = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN, can_submit: false })]
 
     expect(bulkBarView([], gated, 'idle', false).note).toBe('1 of the 2 rows on this page cannot be sent.')
   })
@@ -1809,9 +1851,10 @@ const OPEN_RUN: InvoiceApproval = {
   overdue: false,
 }
 
-describe('bulkBarView inherits the approval gate without reviewBatch.ts changing (APPR-08-09)', () => {
-  it('BULK-A1: an awaiting-approval row leaves eligible and counts into notReady', () => {
-    const rows = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN })]
+describe('bulkBarView inherits the submit gate without reviewBatch.ts changing (APPR-08-09, BUG-12)', () => {
+  it('BULK-A1: a row the server refused leaves eligible and counts into notReady', () => {
+    // Both rows are validated, so only the server's answer separates them.
+    const rows = [mkRow('a', 'validated'), mkRow('b', 'validated', { approval: OPEN_RUN, can_submit: false })]
 
     const view = bulkBarView(['a', 'b'], rows, 'idle', false)
 
@@ -1821,8 +1864,10 @@ describe('bulkBarView inherits the approval gate without reviewBatch.ts changing
     expect(view.canSubmitAll).toBe(true)
   })
 
-  it('BULK-A2: a page where every validated row has an open run disables submit-all entirely', () => {
-    const rows = Array.from({ length: 4 }, (_, i) => mkRow(`inv-${i}`, 'validated', { approval: OPEN_RUN }))
+  it('BULK-A2: a page the server refused entirely disables submit-all', () => {
+    const rows = Array.from({ length: 4 }, (_, i) =>
+      mkRow(`inv-${i}`, 'validated', { approval: OPEN_RUN, can_submit: false }),
+    )
 
     const view = bulkBarView([], rows, 'idle', false)
 

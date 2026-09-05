@@ -41,7 +41,7 @@ function submitErrorResponse(status: number, message: string): MockResponse {
 }
 
 function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
-  return {
+  const built = {
     id: 'inv-a',
     entity_id: 'ent-1',
     import_batch_id: 'b1',
@@ -71,8 +71,13 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     rule_set_version: null,
     can_approve: false,
     approve_blocked_reason: null,
+    submit_blocked_reason: null,
     ...over,
-  }
+  } as InvoiceRecord
+  // Stands in for the server's answer on an unarmed tenant. Derived from status ONLY --
+  // deriving the approval half too would put the deleted client rule back in a fixture.
+  // Specs about the gate set can_submit explicitly.
+  return { ...built, can_submit: over.can_submit ?? built.status === 'validated' }
 }
 
 function batch(over: Partial<ImportBatch> = {}): ImportBatch {

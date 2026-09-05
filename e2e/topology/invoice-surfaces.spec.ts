@@ -1177,8 +1177,8 @@ test('submission surface: batch-select and submit a validated invoice, badge adv
   })
   await validateInvoice(token, inv.id)
   // The firm tenant is governed (this file's own beforeAll) -- validating arms an open
-  // approval run, and isRowSelectable disables the checkbox on one. Close it over the side
-  // channel before the row is ever selected.
+  // approval run, and the SERVER then answers can_submit:false, which is what disables the
+  // checkbox (submitGate). Close the run over the side channel before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   await signInFirm(page)
@@ -1314,10 +1314,9 @@ test('submission surface: reject → fix → re-validate → resubmit → accept
 
   // AC-10: the transmit GATE is already clear here -- TransmitClearTx tests
   // EXISTS(state='approved') over ALL runs, and the first leg's approval above already
-  // satisfies that. This approval is for isRowSelectable instead, which reads only the
-  // LATEST run's state, and the revalidate above just cancelled that run and armed a fresh
-  // open one (revalidate.go/store.go demotion path). Without this, the checkbox below stays
-  // disabled even though the server would happily accept the resubmit.
+  // satisfies that. Since BUG-12 the checkbox reads that same verdict off can_submit, so
+  // this second approval is redundant; it is kept because approveUntilClosed is a no-op on
+  // a closed run and deleting it would widen this leg's scope.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 
   // Resubmit leg: back to the list -- this test still resubmits through the register's
@@ -1571,9 +1570,8 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
 
   const row = invoiceRowByNumber(page, invoiceNumber)
 
-  // AC-8: a failed row can never be batch-selected. isRowSelectable is `validated` AND no
-  // open approval run (APPR-08-09); a `failed` row fails the status half, so the second
-  // half never comes into it here.
+  // AC-8: a failed row can never be batch-selected. The checkbox reads can_submit, and
+  // submitGate refuses a `failed` row at its status rung, before approval is consulted.
   await expect(row.getByTestId('invoice-select')).toBeDisabled()
 
   await openInvoiceRow(page, invoiceNumber)
@@ -1861,6 +1859,66 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
   await expect(systemActor).not.toHaveClass(/mono/)
 
   await assertFiscalRecord(page, invoiceNumber)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The agreement invariant, in one browser session: the register row and that invoice's own
+// detail page give the SAME verdict and the SAME sentence, refused then permitted.
+// LIMIT: every PR environment runs APPROVALS_ENFORCED=true and production runs it off, and
+// pushes to main run zero browser specs -- so a green run here proves agreement, never the
+// reported production symptom. That symptom's evidence is an owed manual pass after merge.
+test('submit gate: the register row and its own detail page never disagree -- refused, then permitted', async ({ page }) => {
+  // Two nav round trips plus an approval walk on a possibly cold fleet; the sibling
+  // detail-submit spec budgets the same.
+  test.setTimeout(120_000)
+
+  const errors = collectErrors(page)
+
+  // Self-seeded: a CI retry gets a fresh worker and re-runs beforeAll only.
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `BUG12 agree ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-BUG12-AGREE-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+  const validated = await validateInvoice(token, inv.id)
+  expect(validated.status, 'the clean fixture must promote draft -> validated, arming the seeded firm run').toBe('validated')
+  const armed = await getInvoiceApproval(token, inv.id)
+  expect(armed.state, 'without an OPEN run both legs below collapse into one polarity').toBe('open')
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  // Leg 1 -- refused, on both surfaces.
+  const box = invoiceRowByNumber(page, invoiceNumber).getByTestId('invoice-select')
+  await expect(box).toBeDisabled()
+  const registerTitle = (await box.getAttribute('title')) ?? ''
+  expect(registerTitle.length, 'a blank title would let the cross-surface equality below pass on two empties').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, "the register must carry the server's own sentence, not one of its own").toBe(AWAITING_APPROVAL_REASON)
+
+  await openInvoiceRow(page, invoiceNumber)
+  const submitBtn = page.getByTestId('detail-submit')
+  await expect(submitBtn).toBeVisible()
+  await expect(submitBtn).toBeDisabled()
+  await expect(page.getByTestId('submit-blocked-reason')).toHaveText(AWAITING_APPROVAL_REASON)
+  const detailReason = ((await page.getByTestId('submit-blocked-reason').textContent()) ?? '').trim()
+  expect(detailReason.length, 'the same floor on the detail half').toBeGreaterThanOrEqual(20)
+  expect(registerTitle, 'the whole bug, as one assertion: the two surfaces must not disagree').toBe(detailReason)
+
+  // A validated invoice does not poll (shouldPollList needs queued/submitted), so this
+  // back-and-reopen round trip IS the refetch, not navigation garnish.
+  await approveUntilClosed(inv.id, await firmApproverTokens())
+  await page.getByRole('button', { name: '← All invoices' }).click()
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  // Leg 2 -- permitted, on both surfaces. The enabled reads are the control that the
+  // fixture really flipped; without them leg 1 could be two refused reads.
+  await expect(box).toBeEnabled()
+  expect(await box.getAttribute('title'), 'React drops title={undefined}, so the attribute is absent, not empty').toBeNull()
+
+  await openInvoiceRow(page, invoiceNumber)
+  await expect(submitBtn).toBeEnabled()
+  await expect(page.getByTestId('submit-blocked-reason'), 'the reason node unmounts when the reason is null').toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -4076,7 +4134,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   const invoiceNumber = `INV-AUDIT09-RAIL-${Date.now()}`
   const inv = await createInvoice(token, { entity_id: entity.id, ...submittableInvoiceFields(invoiceNumber, MOCK_TIN_ACCEPT) })
   await validateInvoice(token, inv.id)
-  // Validating arms the governed tenant's run, and isRowSelectable disables the checkbox
+  // Validating arms the governed tenant's run, and the server answers can_submit:false
   // while one is open -- close it before the row is selected.
   await approveUntilClosed(inv.id, await firmApproverTokens())
 

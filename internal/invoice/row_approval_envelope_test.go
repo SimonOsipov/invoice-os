@@ -263,7 +263,8 @@ func TestListHandler_ApprovalKeyPresentOnEveryRow(t *testing.T) {
 // comment states.
 //
 // A09-6 (APPR-12-09) widened the tail from one sibling to three: `approval`, then
-// `can_approve`, then `approve_blocked_reason`. The leading-keys check below is
+// `can_approve`, then `approve_blocked_reason`. BUG-12-01 widens it to five, appending
+// `can_submit` and `submit_blocked_reason`. The leading-keys check below is
 // deliberately byte-unchanged -- that half is what proves the widening is purely
 // additive rather than a reshuffle.
 func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
@@ -281,15 +282,15 @@ func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	bareKeys := jsonKeysInOrder(t, bare)
 	wrappedKeys := jsonKeysInOrder(t, wrapped)
 
-	if len(wrappedKeys) != len(bareKeys)+3 {
-		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly three (\"approval\", \"can_approve\", \"approve_blocked_reason\")",
+	if len(wrappedKeys) != len(bareKeys)+5 {
+		t.Fatalf("listItem has %d keys %v, want Invoice's %d %v plus exactly five (\"approval\", \"can_approve\", \"approve_blocked_reason\", \"can_submit\", \"submit_blocked_reason\")",
 			len(wrappedKeys), wrappedKeys, len(bareKeys), bareKeys)
 	}
 	if !reflect.DeepEqual(wrappedKeys[:len(bareKeys)], bareKeys) {
 		t.Errorf("listItem's leading keys = %v, want Invoice's own order %v -- embedding must not move or rename a key",
 			wrappedKeys[:len(bareKeys)], bareKeys)
 	}
-	wantTail := []string{"approval", "can_approve", "approve_blocked_reason"}
+	wantTail := []string{"approval", "can_approve", "approve_blocked_reason", "can_submit", "submit_blocked_reason"}
 	if tail := wrappedKeys[len(bareKeys):]; !reflect.DeepEqual(tail, wantTail) {
 		t.Errorf("listItem's trailing keys = %v, want %v -- the siblings are appended in declaration order, never interleaved", tail, wantTail)
 	}
@@ -345,6 +346,31 @@ func TestListItem_ApproveFlagsCarryNoOmitempty(t *testing.T) {
 		keys[k] = true
 	}
 	for _, k := range []string{"can_approve", "approve_blocked_reason"} {
+		if !keys[k] {
+			t.Errorf("a zero listItem has no %q key: %s", k, raw)
+		}
+	}
+}
+
+// TestListItem_SubmitFlagsCarryNoOmitempty (BUG-12-01, AC-6) is the sibling above's
+// twin for the submit pair, and the rule is the same one: `omitempty` on a false bool
+// and on a nil *string both drop the key, and an absent permission flag reads undefined
+// in the SPA and fails OPEN.
+func TestListItem_SubmitFlagsCarryNoOmitempty(t *testing.T) {
+	raw, err := json.Marshal(listItem{})
+	if err != nil {
+		t.Fatalf("marshal a zero listItem: %v", err)
+	}
+	for _, want := range []string{`"can_submit":false`, `"submit_blocked_reason":null`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("a zero listItem marshals to %s, want the literal %s -- neither field may carry omitempty", raw, want)
+		}
+	}
+	keys := map[string]bool{}
+	for _, k := range jsonKeysInOrder(t, raw) {
+		keys[k] = true
+	}
+	for _, k := range []string{"can_submit", "submit_blocked_reason"} {
 		if !keys[k] {
 			t.Errorf("a zero listItem has no %q key: %s", k, raw)
 		}

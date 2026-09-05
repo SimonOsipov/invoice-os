@@ -1626,6 +1626,10 @@ type ApprovalFacts struct {
 	CallerHoldsRole bool
 }
 
+// transmitClear folds APPROVALS_ENFORCED into a raw approval verdict. It is the
+// ONE expression both read paths (ApprovalFacts, RowFacts) fold the flag in.
+func (s *Store) transmitClear(raw bool) bool { return !s.approvalsEnforced || raw }
+
 // ApprovalFacts reads id's approval standing for the caller inside ONE
 // db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
 // read with no write needs no second transaction. The approval read runs
@@ -1642,7 +1646,7 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			return err
 		}
 		out = ApprovalFacts{
-			TransmitClear:   !s.approvalsEnforced || approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
+			TransmitClear:   s.transmitClear(approval.TransmitClear(f.PolicyActive, f.ApprovedRun)),
 			RunState:        f.RunState,
 			PendingStepOrd:  f.PendingStepOrd,
 			CallerHoldsRole: f.CallerHoldsRole,
@@ -1661,17 +1665,24 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 type ListGateFacts struct {
 	CallerRole       string
 	HoldsPendingRole map[string]bool
+	// TransmitClear is the page's submit verdict, already folded against
+	// APPROVALS_ENFORCED. An absent id reads false -- fail closed.
+	TransmitClear map[string]bool
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
-// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above it must NOT
-// consult s.approvalsEnforced: the flag gates enforcement, not visibility
-// (docs/approvals.md section 11, TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
+// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above, the map it
+// RETURNS must not be shaped by s.approvalsEnforced: the flag gates enforcement, not
+// visibility (docs/approvals.md section 11,
+// TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
 // RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
+// The returned map is the visibility half; ListGateFacts.TransmitClear is gate
+// INPUT, never wire copy, and folds the flag through s.transmitClear.
 //
-// The two gate reads are here rather than inside approval.RowFactsTx so that helper's
+// The three gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
-// both are set-shaped, so the whole request stays constant in page size.
+// all three are set-shaped, so the whole request stays constant in page size
+// (TestStoreRowFacts_TransmitClearIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
 	var gate ListGateFacts
@@ -1706,7 +1717,18 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 				holds[id] = true
 			}
 		}
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds}
+		clear, err := approval.TransmitClearTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		// Fold for every REQUESTED id, not only the ones the set read returned: an
+		// id it skipped must still read the flag-off answer the detail wire gives.
+		transmit := make(map[string]bool, len(ids))
+		for _, id := range ids {
+			transmit[id] = s.transmitClear(clear[id])
+		}
+
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit}
 		return nil
 	})
 	if err != nil {

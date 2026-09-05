@@ -1181,7 +1181,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 
   // AC-2/[selectability]: CLEAN armed its run at import, VIOLATE only just now (the
   // revalidate above) -- this test holds only invoice NUMBERS, never ids, so recover both
-  // and close their runs before select-all, or isRowSelectable leaves them disabled. The
+  // and close their runs before select-all, or the server answers can_submit:false. The
   // rail-pill toggle below re-fetches the table server-side ([filters-are-server-side],
   // this file's own header), so no separate wait is needed to see the approvals land.
   await approveOpenRunsForEntity(token, entity.id)

@@ -303,6 +303,28 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			}
 		}
 
+		// A boxless layout has no geometry to point at, so the derivation reads the page-1
+		// token text the job stored instead. Typed only -- D-23. It writes no anchorLabel:
+		// reader.go renders any non-empty label as corrected.where for any method
+		// (TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel).
+		if in.req.Method == MethodTyped {
+			layout, ok, err := jobLayoutTx(ctx, tx, in.caller.TenantID, in.jobID)
+			if err != nil {
+				return err
+			}
+			if ok && IsBoxlessFingerprint(layout.Fingerprint) {
+				tokens, ok, err := jobLayoutTokensTx(ctx, tx, in.caller.TenantID, in.jobID)
+				if err != nil {
+					return err
+				}
+				if ok {
+					if lr, derived := LearnBoxlessRule(in.field, in.value, tokens); derived {
+						learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
+					}
+				}
+			}
+		}
+
 		// The tx-taking half: this route cannot afford a second transaction of its own.
 		appended, err := appendCorrectionTx(ctx, tx, in.caller.TenantID, in.jobID, Correction{
 			FieldName:   in.field,

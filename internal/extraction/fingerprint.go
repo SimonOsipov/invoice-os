@@ -170,11 +170,13 @@ func Fingerprint(pages []TokenPage) string {
 // "v1:" value in the shared layout_fingerprint column.
 const BoxlessFingerprintVersion = "b1"
 
-// IsBoxlessFingerprint reports whether f is a key in the boxless namespace.
-//
-// EXTR-19-08 Mode A stub: refuses everything. The prefix predicate lands with the handler
-// branch that reads it.
-func IsBoxlessFingerprint(f string) bool { return false }
+// IsBoxlessFingerprint reports whether f is a key in the boxless namespace. A classifier, not
+// a validator: the two producers differ on byte 0, so the prefix is total over the column's
+// real range. The constant and its colon, never the literal -- the constant is the
+// invalidation lever (TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring).
+func IsBoxlessFingerprint(f string) bool {
+	return strings.HasPrefix(f, BoxlessFingerprintVersion+":")
+}
 
 // labelPlacement says where a lexicon match sits inside its own token: "w" whole, "l" leading,
 // "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i; the

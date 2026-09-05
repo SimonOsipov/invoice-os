@@ -337,19 +337,38 @@ tokens under it, `ShapeTIN` rejects the party name, and `buyer_tin` resolves to 
 as a `TierLearned` candidate with no alternatives —
 `TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN`.
 
-### Only a pointed correction produces a rule
+### Which correction produces a rule
 
-A correction carries a method. A **`typed`** correction — a reviewer retyping a value — writes
-the correction row and **zero rules**. An **`undone`** correction likewise writes **zero rules**.
-Only `pointed`, where the reviewer drew a box on the page, teaches anything: the handler's
-learning branch is gated on that box.
+A correction carries a method, and the job carries a layout. Two gates, and a correction that
+matches neither writes **zero rules**:
 
-A pointed correction that **anchors to nothing** — an empty corner of the page, a box no anchor
-observation stands in a relation to, a job that recorded no layout at all — still commits the
-correction and still teaches nothing. That is an **honest refusal**, not an error: the reviewer's
-edit is recorded and applied, and the system declines to generalise from a gesture it cannot
-interpret. `LearnRule` reports `ok=false` and the request answers `201` exactly as it otherwise
-would.
+| Method | Job's `layout_fingerprint` | Derivation | Extra input |
+|---|---|---|---|
+| `pointed`, with a region | any key, provided the job recorded a layout | `LearnRule` | the box, against `layout_anchors` |
+| `typed` | a `b1:` key — a **boxless** identity, written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
+| `chosen`, `undone` | either | none | — |
+
+The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a `v1:`
+key — writes **zero rules**: there was geometry to point at and the reviewer did not point at it.
+A `pointed` correction on a **DOCX** also writes zero rules, but for a different reason — every
+box it could anchor to is the zero box, so `LearnRule` finds no relation to record. The pointed
+gate reads the box, never the namespace: a job that took the boxless identity while carrying real
+geometry can still learn from a pointed correction
+(`TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors`). An `undone` correction writes
+**zero rules** either way.
+
+The boxless gate has a third conjunct: the job must have stored its page-1 tokens. A job
+extracted **before** the `layout_tokens` migration carries SQL NULL there and learns nothing, and
+so does one whose tokens were over the storage cap. The loop therefore closes only for documents
+extracted after that column started being written; an older DOCX teaches nothing however many
+times it is corrected.
+
+A correction that **anchors to nothing** — an empty corner of the page, a box no anchor
+observation stands in a relation to, a job that recorded no layout at all, a typed value no
+page-1 token carries under a lexicon label — still commits the correction and still teaches
+nothing. That is an **honest refusal**, not an error: the reviewer's edit is recorded and
+applied, and the system declines to generalise from an input it cannot interpret. `LearnRule` and
+`LearnBoxlessRule` report `ok=false` and the request answers `201` exactly as it otherwise would.
 
 ### Undo does not un-teach
 

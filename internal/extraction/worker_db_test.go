@@ -3454,8 +3454,9 @@ func TestRLS_ARetryableBoxlessLayoutWriteFailureStaysFailedAndEmitsNothing(t *te
 // declared_content_type docs/document-upload.md records a direct API caller can store against
 // real PDF bytes -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
 // geometry under a b1: identity and a pointed correction against it CAN learn a rule. AC-9's
-// "a boxless job learns nothing" is a property of a DOCX's zero boxes, not of the b1: namespace,
-// and this is the spec that says which.
+// "a POINTED correction on a boxless job learns nothing" is a property of a DOCX's zero boxes,
+// not of the b1: namespace, and this is the spec that says which. A TYPED correction on such a
+// job learns by a different route entirely -- TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule.
 func TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)

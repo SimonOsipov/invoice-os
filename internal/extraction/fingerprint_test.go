@@ -940,3 +940,34 @@ func TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures(t *testing.T) {
 		}
 	}
 }
+
+// §8's direct guard on the predicate the handler's namespace conjunct reads. The call sites
+// (AC-3, AC-8) guard the gate; this guards the classifier, including that it reads a PREFIX
+// and not a substring.
+func TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring(t *testing.T) {
+	hex64 := strings.Repeat("a", 64)
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"a boxless key", extraction.BoxlessFingerprintVersion + ":" + hex64, true},
+		{"a real BoxlessFingerprint", extraction.BoxlessFingerprint([]extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{bxZeroTok("Total: 1.00")}}}), true},
+		{"a geometric key", extraction.FingerprintVersion + ":" + hex64, false},
+		{"a real Fingerprint", extraction.Fingerprint([]extraction.TokenPage{{Number: 1, Tokens: headerTokens()}}), false},
+		{"the empty string", "", false},
+		{"the version with no colon", extraction.BoxlessFingerprintVersion, false},
+		{"a longer version sharing the prefix", "b10:" + hex64, false},
+		{"the version upper-cased", "B1:" + hex64, false},
+		{"the version anywhere but the front", extraction.FingerprintVersion + ":" + extraction.BoxlessFingerprintVersion + ":" + hex64, false},
+		{"the colon leading", ":" + extraction.BoxlessFingerprintVersion + hex64, false},
+	}
+	if len(cases) != 10 {
+		t.Fatalf("this table spans %d case(s), want 10", len(cases))
+	}
+	for _, c := range cases {
+		if got := extraction.IsBoxlessFingerprint(c.in); got != c.want {
+			t.Errorf("IsBoxlessFingerprint(%s = %q) = %v, want %v", c.name, c.in, got, c.want)
+		}
+	}
+}

@@ -452,9 +452,14 @@ var cldSubsections = []struct {
 		why: "a derivation nobody can reproduce is a rule nobody can predict",
 	},
 	{
-		heading: "Only a pointed correction produces a rule",
-		needles: []string{"typed", "undone", "zero rules", "anchors to nothing", "honest refusal"},
-		why:     "the gesture is the whole input; a reader who thinks any correction teaches will point at the wrong thing",
+		// The boxless needles are the ones that go false if that arm is ever dropped; the
+		// five shipped ones all survive a text saying only pointed teaches.
+		heading: "Which correction produces a rule",
+		needles: []string{
+			"typed", "undone", "zero rules", "anchors to nothing", "honest refusal",
+			"boxless", "b1:", "layout_tokens", "learnboxlessrule",
+		},
+		why: "the method and the layout namespace are both inputs; a reader who thinks only a gesture teaches will point at the wrong thing on a DOCX",
 	},
 	{
 		heading: "Undo does not un-teach",

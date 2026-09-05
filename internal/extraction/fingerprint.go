@@ -171,19 +171,49 @@ func Fingerprint(pages []TokenPage) string {
 const BoxlessFingerprintVersion = "b1"
 
 // labelPlacement says where a lexicon match sits inside its own token: "w" whole, "l" leading,
-// "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i.
-//
-// STUB -- EXTR-19-02 Stage 2.5. The body is Stage 3's.
-func labelPlacement(text string, loc []int) string { return "" }
+// "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i; the
+// l/i boundary is this scheme's own. A trailing separator alone makes a label lead a value,
+// which TestBoxlessFingerprint_SplitsWholeLeadingAndInlineLabels pins on "Invoice No:".
+func labelPlacement(text string, loc []int) string {
+	switch {
+	case loc[0] == 0 && loc[1] == len(text):
+		return "w"
+	case loc[0] == 0:
+		return "l"
+	default:
+		return "i"
+	}
+}
 
 // BoxlessFingerprint identifies a page-1 layout with no usable geometry -- every DOCX token
 // carries the zero box -- by which anchor labels appear, in document order, and how each
 // label sits inside its own token. Nothing sorts: the order IS the signal, which is what
 // separates it from Fingerprint. A page carrying no recognised label still fingerprints, to
 // sha256(""), matching Fingerprint's own documented behaviour.
-//
-// STUB -- EXTR-19-02 Stage 2.5. The body is Stage 3's.
-func BoxlessFingerprint(pages []TokenPage) string { return "" }
+// TestBoxlessFingerprint_ChangesWhenTheLabelParagraphsAreReordered is the only guard on the
+// no-sort rule: on every committed fixture alphabetical order coincides with document order.
+func BoxlessFingerprint(pages []TokenPage) string {
+	elems := make([]string, 0, 8)
+	for _, page := range pages {
+		// Page 1 by Number, not by slice position, as AnchorObservations selects it.
+		if page.Number != 1 {
+			continue
+		}
+		for _, tok := range page.Tokens {
+			for _, m := range anchorLabelMatchers {
+				if loc := m.RE.FindStringIndex(tok.Text); loc != nil {
+					elems = append(elems, m.ID+":"+labelPlacement(tok.Text, loc))
+				}
+			}
+		}
+		break
+	}
+
+	// A label id is [a-z_]+ and a placement is one letter, so neither separator can occur
+	// inside an element.
+	sum := sha256.Sum256([]byte(strings.Join(elems, "|")))
+	return BoxlessFingerprintVersion + ":" + hex.EncodeToString(sum[:])
+}
 
 // AnchorLabelText is the lexicon pattern's own matched substring for o.Label against tok,
 // capped at maxAnchorLabelBytes on a rune boundary. "" when o.Label names no lexicon entry or

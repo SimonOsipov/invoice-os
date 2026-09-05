@@ -2,6 +2,9 @@
 // ROUTE-05-02: the capture call inside the front-door effect (App.tsx:1685-1689), which
 // must run under the same activeSession/autoPersona guards as the bounce it precedes.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -705,5 +708,149 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
       true,
     )
     expect(hrefWrites.length, 'signOut writes href twice: its own tail, then the front-door re-fire').toBe(2)
+  })
+})
+
+// ROUTE-05-06, AC-3/AC-4. The destination travels in sessionStorage and NOWHERE else: no
+// `?next=`, no `#next=`, no param on any URL the app writes.
+
+// True when the URL carries neither a query string nor a fragment -- the two places AC-3
+// forbids a destination from appearing. Relative URLs resolve against a throwaway base.
+function urlCarriesNoDestination(u: string): boolean {
+  const parsed = new URL(u, 'http://localhost')
+  return parsed.search === '' && parsed.hash === ''
+}
+
+// The whole signed-out deep link, end to end, with the history spies live throughout.
+// Real jsdom navigation + interceptHref(), because the claim is about URLs written to
+// HISTORY: stubLocation() freezes pathname so history writes are invisible, and un-proxied
+// jsdom silently refuses the front door's cross-origin href write.
+//
+// Phase 2 is inlined rather than bootWorkspaceAt(): that helper navigates and renders in
+// one call, so its own replaceState would be counted as an app write and inflate the floor.
+//
+// Phase 1 boots at a path that CARRIES A QUERY, so "no recorded URL carries a query" is a
+// claim about a journey where a query really was in play -- and so a front door capturing
+// `pathname + search` breaks the restore too, killing that mutant a second way.
+async function runSignedOutDeepLinkJourney() {
+  vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+
+  window.history.replaceState(null, '', '/audit?foo=1')
+  const { hrefWrites } = interceptHref()
+  const pushSpy = vi.spyOn(window.history, 'pushState')
+  const replaceSpy = vi.spyOn(window.history, 'replaceState')
+  vi.resetModules()
+  const { default: BouncedApp } = await import('./App')
+  const first = render(<BouncedApp />)
+  const phase1Urls = [...pushSpy.mock.calls, ...replaceSpy.mock.calls].map((c) => String(c[2]))
+  const capturedAtBounce = readDestination()
+  first.unmount()
+
+  localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+  window.history.replaceState(null, '', '/')
+  pushSpy.mockClear()
+  replaceSpy.mockClear()
+  vi.resetModules()
+  const { default: RestoredApp } = await import('./App')
+  render(<RestoredApp />)
+  const ctx = requireCtx()
+
+  const historyUrls = () => [...pushSpy.mock.calls, ...replaceSpy.mock.calls].map((c) => String(c[2]))
+  const restore = () => {
+    pushSpy.mockRestore()
+    replaceSpy.mockRestore()
+  }
+  return { hrefWrites, phase1Urls, capturedAtBounce, ctx, historyUrls, restore }
+}
+
+describe('The destination never travels in a URL (ROUTE-05-06)', () => {
+  it('noUrl_theWholeJourneyWritesNoQueryAndNoHash', async () => {
+    const { phase1Urls, capturedAtBounce, ctx, historyUrls, restore } = await runSignedOutDeepLinkJourney()
+
+    expect(phase1Urls, 'the bounce redirects; it must add no history entry at all').toEqual([])
+    expect(capturedAtBounce, 'the boot query must not enter the captured destination').toBe('/audit')
+    expect(ctx.view, 'sanity: the return boot must restore the captured destination').toBe('audit')
+
+    await act(async () => {
+      ctx.nav('invoices')
+    })
+
+    const urls = historyUrls()
+    // Floor: an empty population passes every per-URL check below for free. Actual is 4
+    // (mount alignment, review-hash mirror, navigate, mirror re-fire); >= 3 rather than
+    // toBe(4) so a legitimate new writer is not a false alarm on an anti-vacuity guard.
+    expect(urls.length, 'no history write was recorded -- the spies observed nothing').toBeGreaterThanOrEqual(3)
+    for (const u of urls) {
+      expect(urlCarriesNoDestination(u), `history URL '${u}' carries a query or a fragment`).toBe(true)
+    }
+    restore()
+  })
+
+  it('noUrl_theBounceHrefIsExactlyTheLandingBase', async () => {
+    const { hrefWrites, restore } = await runSignedOutDeepLinkJourney()
+    // The stubbed literal, never landingBase(): asserting against the function makes both
+    // sides move together when it breaks.
+    expect(hrefWrites, 'the bounce must be the bare landing base -- no ?next=, no fragment').toEqual([
+      'https://landing.example',
+    ])
+    restore()
+  })
+
+  it('noUrl_theMatcherRejectsAKnownBadUrl', () => {
+    // Control for the two specs above: the same function object they call. A matcher that
+    // answers true for everything would pass their loop over any URL at all.
+    expect(urlCarriesNoDestination('/audit?next=%2Faudit'), 'a ?next= param must be rejected').toBe(false)
+    expect(urlCarriesNoDestination('/audit#next=/audit'), 'a #next= fragment must be rejected').toBe(false)
+    expect(urlCarriesNoDestination('/audit'), 'a bare path must be accepted').toBe(true)
+  })
+
+  it('noUrl_aQueryStringNeverEntersTheCapturedDestination', () => {
+    // Nothing else in this file pins the ARGUMENT the front door passes: mutating it to
+    // `pathname + search` leaves all 29 sibling specs green (measured, task-926 Stage 1).
+    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?foo=1' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    // Both oracles: the spy pins the call site, readDestination() pins what reached storage.
+    // A sanitiser inside captureDestination would keep the second green with the first wrong.
+    expect(captureDestinationSpy.mock.calls, 'the front door must capture the pathname alone').toEqual([['/audit']])
+    expect(readDestination(), 'the query must not reach storage').toBe('/audit')
+    expect(hrefWrites).toEqual(['https://landing.example'])
+  })
+
+  it('guard_noHistoryWriteSiteReferencesTheDeepLinkModule', () => {
+    // Named files only, no directory walk: a parallel worktree breaks directory walks
+    // locally (project memory: static scans walk sibling worktrees).
+    const appLines = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8').split('\n')
+    // No `g` flag: RegExp.prototype.test is stateful with one and would skip every other line.
+    const sites = appLines
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /window\.history\.(push|replace)State\(|window\.location\.href\s*=/.test(line))
+
+    expect(sites.length, 'the write-site scan ran over an empty population').toBeGreaterThanOrEqual(7)
+
+    // Control needle: the review-hash mirror is a write site whose argument carries a query
+    // string. Evaluated on the SITE line, never the window -- the ?persona= strip's own
+    // window contains a location.search read that is not a write site.
+    expect(
+      sites.filter(({ line }) => line.includes('window.location.search')).length,
+      'the extractor found no write site carrying location.search -- the regex is broken',
+    ).toBeGreaterThanOrEqual(1)
+
+    // captureDestination is deliberately absent from this list: it writes INTO storage
+    // beside the bounce. The shape AC-3 forbids is read-then-embed, which these four spell.
+    for (const { n } of sites) {
+      const near = appLines.slice(Math.max(0, n - 3), n).join('\n')
+      for (const token of ['readDestination', 'bootPath', 'DEEP_LINK_KEY', 'deepLink']) {
+        expect(near, `App.tsx:${n} or the two lines above it reads a stored destination (${token})`).not.toContain(
+          token,
+        )
+      }
+    }
+
+    const deepLinkSrc = readFileSync(path.join(process.cwd(), 'src/lib/deepLink.ts'), 'utf8')
+    // Read control: without it the two absence checks below pass over an empty string.
+    expect(deepLinkSrc, 'the scan did not actually read deepLink.ts').toContain('sessionStorage')
+    expect(deepLinkSrc, 'deepLink.ts must never touch window.history').not.toContain('window.history')
+    expect(deepLinkSrc, 'deepLink.ts must never touch window.location').not.toContain('window.location')
   })
 })

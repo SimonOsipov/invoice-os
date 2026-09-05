@@ -94,8 +94,79 @@ func LearnRule(field string, region Region, anchors []AnchorObservation) (Learne
 // label leaves behind. Ambiguity is judged on the derived BODY, not the hit count.
 //
 // tokens is extraction_jobs.layout_tokens read back -- page-1 text only, no boxes.
+//
+// A label whose value sits in a separate paragraph can never derive: same_token is the only
+// relation available without geometry, so a stacked DOCX layout is structurally underivable.
 func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) {
-	return LearnedRule{}, false
+	shape, ok := tier1Shape(field)
+	if !ok {
+		return LearnedRule{}, false
+	}
+
+	var (
+		body   string
+		anchor AnchorObservation
+		rule   Rule
+		found  bool
+	)
+	for _, text := range tokens {
+		for _, m := range anchorLabelMatchers {
+			mloc := m.RE.FindStringIndex(text)
+			if mloc == nil {
+				continue
+			}
+			matched := capAnchorLabelBytes(text[mloc[0]:mloc[1]])
+			label, ok := learnedLabel(matched)
+			if !ok {
+				continue
+			}
+			b := `{"label":` + jsonString(label) +
+				`,"relation":{"kind":` + jsonString(string(RelSameToken)) +
+				`,"max_distance":` + hundredthsJSON(0) +
+				`},"shape":` + jsonString(string(shape)) + `}`
+
+			// A body ParseRule rejects is a defect, not a stored row -- and the parsed rule is
+			// where the next line's loc comes from.
+			r, err := ParseRule([]byte(b))
+			if err != nil {
+				continue
+			}
+			// loc from the emitted label's own pattern, never the matcher's: learnedLabel caps
+			// and trims, either of which moves the match end
+			// (TestLearnBoxlessRule_TakesLocFromTheEmittedLabelNotTheMatcher).
+			loc := r.re.FindStringIndex(text)
+			if loc == nil {
+				continue
+			}
+			if !readsAs(shape, sameTokenValue(text, loc), value) {
+				continue
+			}
+			// Dedupe on the body: identical bodies are indistinguishable once stored, and two
+			// distinct ones are a choice this function refuses to guess at.
+			if found {
+				if b != body {
+					return LearnedRule{}, false
+				}
+				continue
+			}
+			body, rule, found = b, r, true
+			anchor = AnchorObservation{Label: m.ID, Text: matched, Page: 1}
+		}
+	}
+	if !found {
+		return LearnedRule{}, false
+	}
+	return LearnedRule{Field: field, Anchor: anchor, Rule: rule, Body: []byte(body)}, true
+}
+
+// readsAs reports whether some reading shape gives raw equals value.
+func readsAs(shape Shape, raw, value string) bool {
+	for _, v := range shape.Normalize(raw) {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 // tier1Shape is the field gate and the shape lookup in one linear scan: tier1Specs' field set

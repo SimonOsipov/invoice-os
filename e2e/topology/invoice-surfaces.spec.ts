@@ -37,7 +37,7 @@ import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
 import { approvalRun404Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
 // [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
@@ -411,6 +411,77 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
   // a re-derivation of needs_attention or a status arm.
   await expect(blockedRow).toContainText(/1 ERROR\b/)
   await expect(cleanRow).not.toContainText(/\d+ ERRORS?\b/)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The blocked checkbox's reason lives in its `title` and nowhere else. A `title` on a
+// disabled control draws no native tooltip in Chromium, so this asserts only what the
+// row does NOT print -- never that the sentence is visible somewhere else.
+test('register geometry: a blocked row costs no extra line and stands the same height as a clean one', async ({ page }, testInfo) => {
+  // Two create+validate round trips, an approval run driven to closed, sign-in, an entity
+  // switch and a four-width sweep on a possibly cold fleet.
+  test.setTimeout(90_000)
+
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-09 row geometry ${stamp}`, tin: freshTin() })
+
+  // Both fixtures fire zero violations, so neither status cell carries an `N ERROR` chip
+  // and the two cells hold the same shape -- which is what makes height parity a fair
+  // claim rather than a comparison of two differently-populated cells.
+  const blockedNumber = `INV-BUG09-BLOCKED-${stamp}`
+  const blocked = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(blockedNumber) })
+  await validateInvoice(token, blocked.id)
+
+  const cleanNumber = `INV-BUG09-CLEAN-${stamp}`
+  const clean = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(cleanNumber) })
+  await validateInvoice(token, clean.id)
+
+  // The firm tenant is governed (this file's beforeAll), so validating armed a run on
+  // BOTH. Closing exactly one is what makes the pair blocked-vs-clean.
+  await approveUntilClosed(clean.id, await firmApproverTokens())
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+
+  const blockedRow = invoiceRowByNumber(page, blockedNumber)
+  const cleanRow = invoiceRowByNumber(page, cleanNumber)
+  const head = page.getByTestId('invoices-list').locator('.pf-list-head')
+  const blockedBox = blockedRow.getByTestId('invoice-select')
+  const cleanBox = cleanRow.getByTestId('invoice-select')
+
+  await expect(blockedRow).toBeVisible()
+  await expect(cleanRow).toBeVisible()
+
+  // Non-vacuity controls, both before any geometry: the pair must really be one blocked
+  // row and one selectable one, carrying a real sentence, or everything below is empty.
+  await expect(blockedBox).toBeDisabled()
+  const title = (await blockedBox.getAttribute('title')) ?? ''
+  expect(title.length, 'the blocked checkbox must carry a real sentence, or every absence claim below is vacuous').toBeGreaterThanOrEqual(20)
+  await expect(cleanBox, 'the control row must really be selectable, or this compares two blocked rows').toBeEnabled()
+
+  // The relationship, never a literal count -- read the head at runtime and floor it.
+  const headCells = await head.locator('> *').count()
+  expect(headCells, 'the head never rendered its cells -- the comparisons below would be vacuous').toBeGreaterThan(1)
+  await expect(blockedRow.locator('> *'), 'a blocked row must add no cell of its own').toHaveCount(headCells)
+  await expect(cleanRow.locator('> *')).toHaveCount(headCells)
+
+  const heights = await assertSameHeight(page, blockedRow, cleanRow, 'blocked vs clean register row')
+  expect(
+    heights.map((h) => h.width),
+    'every WIDE_WIDTHS entry must have been measured, in order',
+  ).toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('register-row-height-parity.json', {
+    body: JSON.stringify({ entity: entity.name, blockedNumber, cleanNumber, heights }, null, 2),
+    contentType: 'application/json',
+  })
+
+  // The needle came out of the DOM above, so no copy of the sentence is authored here.
+  await expect(blockedRow, 'the row must not print the sentence its title carries').not.toContainText(title)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

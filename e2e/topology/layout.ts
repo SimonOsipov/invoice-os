@@ -27,6 +27,9 @@ export type Box = { x: number; width: number }
 /** What one width contributed to a fit sweep. Attach it; the numbers outlive the run. */
 export type ColumnFit = { width: number; left: number; right: number; outerWidth: number }
 
+/** What one width contributed to a height sweep. Attach it; the numbers outlive the run. */
+export type HeightPair = { width: number; a: number; b: number; delta: number }
+
 /**
  * The unused strip on each side of `inner` within `outer`, in CSS pixels.
  *
@@ -121,6 +124,56 @@ export async function assertFillsColumn(
 
       const fit = await read()
       if (fit) measured.push(fit)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  return measured
+}
+
+/**
+ * Asserts `a` and `b` stand the same height at every width in WIDE_WIDTHS, and
+ * returns what it measured so the caller can attach the numbers.
+ *
+ * A boundingBox() read straight after setViewportSize can report a transform
+ * mid-animation rather than settled layout, so the comparison goes through
+ * expect.poll and re-reads until the re-render settles. A null or zero-height
+ * box fails the matcher rather than passing as a match.
+ */
+export async function assertSameHeight(
+  page: Page,
+  a: Locator,
+  b: Locator,
+  label: string,
+  tolerancePx = 1,
+): Promise<HeightPair[]> {
+  const entry = page.viewportSize()
+  const measured: HeightPair[] = []
+
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async (): Promise<HeightPair | null> => {
+        const [aBox, bBox] = await Promise.all([a.boundingBox(), b.boundingBox()])
+        if (!aBox || !bBox) return null
+        if (aBox.height <= 0 || bBox.height <= 0) return null
+        return { width, a: aBox.height, b: bBox.height, delta: Math.abs(aBox.height - bBox.height) }
+      }
+
+      await expect
+        .poll(async () => {
+          const pair = await read()
+          return pair === null ? null : Math.round(pair.delta)
+        }, {
+          message: `${label} must stand the same height at ${width}px wide (a null here means one of the two never rendered, or rendered zero-height)`,
+          timeout: 10_000,
+        })
+        .toBeLessThanOrEqual(tolerancePx)
+
+      const pair = await read()
+      if (pair) measured.push(pair)
     }
   } finally {
     if (entry) await page.setViewportSize(entry)

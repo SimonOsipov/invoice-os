@@ -1535,6 +1535,9 @@ export default function App() {
     setSeat(null)
     setStandIn(null)
     setCarriedView(null)
+    // Since the boot seed, the URL carries `view` too. Clear it where carriedView is
+    // cleared, or the next sign-in boots onto the signed-out session's screen.
+    window.history.replaceState(null, '', '/' + window.location.hash)
     setToast(null)
     clearSession()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default

@@ -452,41 +452,16 @@ describe('InvoiceDetail failed-dead-end card (task-388, BUG-06-06, [failed-no-re
   })
 })
 
-// RED specs (Mode A): only Test B is red today -- the rejection card always renders
-// below Compliance regardless of status. A, C, D, E characterise properties already
-// true today; this story gives them their first oracle.
+// Every comparison in here is rail-internal. `violations-table` lives in the main column
+// from BUG-13-02 on, and invoice-main-column unconditionally precedes invoice-rail, so a
+// comparison straddling the two containers is true by DOM structure alone. Geometry is
+// the only honest oracle for that relationship -- see invoice-surfaces.spec.ts D3/D9.
 //
 // FIXTURE GOTCHA: detailRecord()'s default rule_set_version is null, which renders
 // `not-validated` instead of `violations-table` -- every positional test below overrides
 // it to a real number so violations-table exists to compare against.
 describe('InvoiceDetail terminal rail order', () => {
-  it('AC-1: on a failed invoice, failed-dead-end precedes violations-table', async () => {
-    mockDetailFetch(detailRecord({ status: 'failed', rule_set_version: 3 }))
-
-    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
-
-    const card = await screen.findByTestId('failed-dead-end')
-    const table = await screen.findByTestId('violations-table')
-    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
-  it('AC-2: on a rejected invoice, rejection-reasons precedes violations-table', async () => {
-    mockDetailFetch(
-      detailRecord({
-        status: 'rejected',
-        rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
-        rule_set_version: 3,
-      }),
-    )
-
-    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
-
-    const card = await screen.findByTestId('rejection-reasons')
-    const table = await screen.findByTestId('violations-table')
-    expect(card.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
-  it('AC-3: a historical rejection (demoted draft) titles "Last APP rejection" and stays below violations-table', async () => {
+  it('AC-3: a historical rejection (demoted draft) titles "Last APP rejection"', async () => {
     mockDetailFetch(
       detailRecord({
         status: 'draft',
@@ -499,8 +474,6 @@ describe('InvoiceDetail terminal rail order', () => {
 
     const card = await screen.findByTestId('rejection-reasons')
     expect(within(card).getByText('Last APP rejection')).toBeTruthy()
-    const table = screen.getByTestId('violations-table')
-    expect(table.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('AC-4: the rejection card renders at most once per page', async () => {
@@ -546,13 +519,13 @@ describe('InvoiceDetail terminal rail order', () => {
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
     const failedCard = await screen.findByTestId('failed-dead-end')
-    const table = await screen.findByTestId('violations-table')
     const rejectionCards = screen.getAllByTestId('rejection-reasons')
     expect(rejectionCards).toHaveLength(1)
-    const rejectionCard = rejectionCards[0]
+    const rejectionCard = rejectionCards[0]!
 
-    expect(failedCard.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(table.compareDocumentPosition(rejectionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Rail-internal, replacing two comparisons against violations-table: failed-dead-end is
+    // the rail's first member and a historical rejection its fifth.
+    expect(failedCard.compareDocumentPosition(rejectionCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(within(rejectionCard).getByText('Last APP rejection')).toBeTruthy()
   })
 
@@ -668,16 +641,14 @@ describe('InvoiceDetail approval state card', () => {
     expect(within(screen.getByTestId('approval-card')).queryByText(REASON)).toBeNull()
   })
 
-  it('the card sits below Compliance, and the state strip precedes the whole grid', async () => {
+  it('the card sits above Source document, and the state strip precedes the whole grid', async () => {
     mockDetailFetch(detailRecord({ rule_set_version: 3 }))
 
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 
-    const table = await screen.findByTestId('violations-table')
-    const approvalCard = screen.getByTestId('approval-card')
+    const approvalCard = await screen.findByTestId('approval-card')
     const doc = screen.getByTestId('source-document-card')
     const strip = await screen.findByTestId('status-strip')
-    expect(table.compareDocumentPosition(approvalCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(approvalCard.compareDocumentPosition(doc) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(strip.compareDocumentPosition(approvalCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -4156,25 +4127,39 @@ describe('InvoiceDetail mounts the activity card in the main column (AUDIT-09-04
     decisions: [],
   }
 
-  it('invoiceDetail_activityCardIsTheMainColumnsSecondChild', async () => {
-    mockDetailFetch(detailRecord({ id: ID }))
+  it('invoiceDetail_complianceCardIsTheMainColumnsSecondChild', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        rule_set_version: 3,
+        violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
+      }),
+    )
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
 
     const column = await screen.findByTestId('invoice-main-column')
     const rail = screen.getByTestId('invoice-rail')
-    const card = screen.getByTestId('invoice-activity')
+    const activity = screen.getByTestId('invoice-activity')
 
-    expect(column.contains(card), 'the card must live in the main column').toBe(true)
+    expect(column.contains(activity), 'the activity card must live in the main column').toBe(true)
     // Positive control for the absence: the rail renders and owns a card of its own, so a
     // rail that never mounted cannot be what makes the line below pass.
     expect(rail.contains(screen.getByTestId('source-document-card'))).toBe(true)
-    expect(rail.contains(card), 'the card must not be in the right rail').toBe(false)
+    expect(rail.contains(activity), 'the activity card must not be in the right rail').toBe(false)
 
-    // Order, not geometry: the record card is child 1, the activity card child 2.
+    const compliance = screen.queryByTestId('compliance-card')
+    expect(
+      compliance,
+      'no element carries data-testid="compliance-card" -- the Compliance card <div> in InvoiceDetail.tsx has no testid of its own',
+    ).not.toBeNull()
+
+    // Order, not geometry: record card, Compliance, activity.
     const children = Array.from(column.children)
-    expect(children).toHaveLength(2)
-    expect(children[1]).toBe(card)
+    expect(children, 'the main column must hold exactly three cards').toHaveLength(3)
     expect(children[0]!.contains(screen.getByTestId('buyer-tin')), 'child 1 must be the record card').toBe(true)
+    expect(children[1], 'child 2 must be the Compliance card').toBe(compliance)
+    expect(children[2], 'child 3 must be the activity card').toBe(activity)
   })
 
   it('invoiceDetail_mainColumnKeepsItsGridMinimumAtZero', async () => {
@@ -4238,6 +4223,118 @@ describe('InvoiceDetail mounts the activity card in the main column (AUDIT-09-04
     // ...and it comes back having asked the server for the log a second time.
     await screen.findByTestId('invoice-activity')
     await waitFor(() => expect(auditGets().length, 'the remounted card refetched /audit-log').toBeGreaterThanOrEqual(2))
+  })
+})
+
+// BUG-13-02. The Compliance card moves out of the rail and into the main column, and gains
+// `data-testid="compliance-card"` so it can be located in either body state (violations-table
+// or not-validated). Containment and child order only -- invoice-main-column unconditionally
+// precedes invoice-rail, so no compareDocumentPosition across the two proves anything here.
+describe('InvoiceDetail moves the Compliance card into the main column (BUG-13-02)', () => {
+  const ID = 'inv-compliance-move-1'
+
+  // Every spec below locates the card through this, so the red reads as the missing testid
+  // rather than as `expected null`.
+  function complianceCard(): HTMLElement {
+    const el = screen.queryByTestId('compliance-card')
+    expect(
+      el,
+      'no element carries data-testid="compliance-card" -- the Compliance card <div> in InvoiceDetail.tsx has no testid of its own',
+    ).not.toBeNull()
+    return el as HTMLElement
+  }
+
+  it('invoiceDetail_complianceCardIsNotInTheRail', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'accepted',
+        rule_set_version: 3,
+        violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const rail = await screen.findByTestId('invoice-rail')
+    const column = screen.getByTestId('invoice-main-column')
+    // Positive control for the absence: the rail mounted and owns a card of its own, so an
+    // unmounted rail cannot be what makes the line below pass.
+    expect(rail.contains(screen.getByTestId('source-document-card')), 'the rail must have rendered').toBe(true)
+
+    const card = complianceCard()
+    expect(rail.contains(card), 'the Compliance card must not be in the right rail').toBe(false)
+    expect(column.contains(card), 'the Compliance card must live in the main column').toBe(true)
+  })
+
+  it('invoiceDetail_complianceCardHasItsOwnTestidInBothBodyStates', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        rule_set_version: 3,
+        violations: [{ rule_key: 'vat_mismatch', severity: 'error', message: 'VAT does not match.' }],
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    await screen.findByTestId('violations-table')
+    const validated = complianceCard()
+    expect(within(validated).getByTestId('violations-table'), 'the validated body belongs to the card').toBeTruthy()
+    expect(within(validated).queryByTestId('not-validated')).toBeNull()
+
+    cleanup()
+
+    // The other body: rule_set_version null renders not-validated, and the card must still
+    // resolve -- a testid on the body rather than the card would only survive one of these.
+    mockDetailFetch(detailRecord({ id: ID, rule_set_version: null }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    await screen.findByTestId('not-validated')
+    const unvalidated = complianceCard()
+    expect(within(unvalidated).getByTestId('not-validated'), 'the unvalidated body belongs to the card').toBeTruthy()
+    expect(within(unvalidated).queryByTestId('violations-table')).toBeNull()
+  })
+
+  // A kept invoice is DB-constrained to status='draft' (invoices_kept_as_is_draft_only),
+  // which is also the demotedSinceValidation shape that renders stale-verdict -- so one
+  // fixture reaches both banners.
+  it('invoiceDetail_keptAndStaleBannersStayInsideTheMovedCard', async () => {
+    mockDetailFetch(
+      detailRecord({
+        id: ID,
+        status: 'draft',
+        rule_set_version: 3,
+        rule_set_version_id: 'rsv-1',
+        violations: [{ rule_key: 'vat_mismatch', severity: 'warning', message: 'VAT looks unusual.' }],
+        kept_as_is_at: '2026-07-31T00:00:00Z',
+        kept_as_is_by: APP_PERSONAS.firm.subject,
+        kept_as_is_reason: 'Buyer confirmed the discrepancy is intentional.',
+      }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const banner = await screen.findByTestId('detail-kept-banner')
+    const stale = screen.getByTestId('stale-verdict')
+    const table = screen.getByTestId('violations-table')
+
+    const card = complianceCard()
+    expect(card.contains(banner), 'the kept-as-is banner must stay inside the Compliance card').toBe(true)
+    expect(card.contains(stale), 'the stale-verdict banner must stay inside the Compliance card').toBe(true)
+    expect(card.contains(table), 'violations-table must stay inside the Compliance card').toBe(true)
+    // Card-internal, so it travels with the block and stays falsifiable after the move.
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('invoiceDetail_cleanPassBlockStaysInsideTheMovedCard', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'accepted', rule_set_version: 4, violations: [] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const table = await screen.findByTestId('violations-table')
+    const card = complianceCard()
+    expect(card.contains(table), 'the clean-pass block must stay inside the Compliance card').toBe(true)
+    expect(
+      within(table).getByText('Passes all rules — no violations. Evaluated against rule-set v4.'),
+      'the clean-pass sentence must read off the same rule-set version',
+    ).toBeTruthy()
   })
 })
 
@@ -4630,7 +4727,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     expect(resurrected, `retired testid(s) back on the page: ${resurrected.join(', ')}`).toEqual([])
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
-    // element on this page must be declared, in one of the two lists above, by whoever adds it.
+    // element on this page must be declared, in one of the three lists above, by whoever adds it.
     const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
@@ -4644,17 +4741,21 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // one second instead of only on the deploy gate. The e2e twin is still the one that runs
   // against the shipped bundle; this is the one that runs on every push.
   //
-  // A LIST, never four presence checks: four presence checks are satisfied by any
-  // permutation of the four cards, and reordering the rail's JSX is precisely what
+  // A LIST, never three presence checks: three presence checks are satisfied by any
+  // permutation of the three cards, and reordering the rail's JSX is precisely what
   // AUDIT-09-02 and AUDIT-09-06 both did.
-  const RAIL_ORDER = ['fiscal-record-card', 'violations-table', 'approval-card', 'source-document-card']
+  const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card']
   // Wider than RAIL_ORDER: `status-history` is the retired card, and failed-dead-end /
   // rejection-reasons are the two rail members an accepted invoice suppresses. Any of them
   // mounting lands in the read and breaks the equality, so absence and order are one
   // assertion rather than two.
-  const RAIL_WATCHED = [...RAIL_ORDER, 'status-history', 'failed-dead-end', 'rejection-reasons']
+  //
+  // compliance-card AND violations-table are both watched: the card is what BUG-13-02 moves
+  // out of the rail, and violations-table is the only thing it exposed there beforehand.
+  // Watching just the new testid would make this pass today for want of a testid.
+  const RAIL_WATCHED = [...RAIL_ORDER, 'compliance-card', 'violations-table', 'status-history', 'failed-dead-end', 'rejection-reasons']
 
-  it('invoiceDetail_railOrderIsUnchanged', async () => {
+  it('invoiceDetail_railOrderIsThreeCardsAndExcludesCompliance', async () => {
     mockDetailFetch(
       detailRecord({
         id: ID,
@@ -4677,6 +4778,9 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     const order = Array.from(rail.querySelectorAll('[data-testid]'))
       .map((n) => n.getAttribute('data-testid') ?? '')
       .filter((id) => RAIL_WATCHED.includes(id))
-    expect(order, "the rail's cards in document order: Fiscal record -> Compliance -> Approvals -> Source document").toEqual(RAIL_ORDER)
+    expect(
+      order,
+      "the rail's cards in document order: Fiscal record -> Approvals -> Source document, with Compliance no longer among them",
+    ).toEqual(RAIL_ORDER)
   })
 })

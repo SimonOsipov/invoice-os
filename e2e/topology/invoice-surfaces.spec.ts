@@ -3381,14 +3381,18 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // AUDIT-09-06 swapped another one out, both by editing the same JSX block.
 //
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
-// mounts it only on `accepted` with a real IRN. Compliance carries no testid of its own, so
-// `violations-table` -- its only body once an invoice has a rule-set version -- stands for it.
-const RAIL_ORDER = ['fiscal-record-card', 'violations-table', 'approval-card', 'source-document-card']
+// mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
+// and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
+const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
 // absence and order are ONE assertion rather than two.
-const RAIL_WATCHED = [...RAIL_ORDER, 'status-history', 'failed-dead-end', 'rejection-reasons']
+//
+// compliance-card AND violations-table are both watched: the card is what BUG-13-02 moves
+// out, and violations-table is the only thing it exposed in the rail beforehand. Watching
+// just the new testid would make this pass on a build that never grew one.
+const RAIL_WATCHED = [...RAIL_ORDER, 'compliance-card', 'violations-table', 'status-history', 'failed-dead-end', 'rejection-reasons']
 
 test('detail surface: the untouched rail order is unchanged', async ({ page }) => {
   // Same budget as the sibling accept test above: one sign-in, one submit and one
@@ -3429,13 +3433,23 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
         .filter((id) => watched.includes(id)),
     RAIL_WATCHED,
   )
-  expect(order, "the rail's cards in document order: Fiscal record -> Compliance -> Approvals -> Source document").toEqual(RAIL_ORDER)
+  expect(
+    order,
+    "the rail's cards in document order: Fiscal record -> Approvals -> Source document, with Compliance no longer among them",
+  ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the
   // rail either. Preceded by a positive control on its replacement -- an absence read on an
   // unmounted tree passes for the wrong reason (F-F).
   await expect(page.getByTestId('status-strip')).toBeVisible()
   await expect(page.getByTestId('status-history')).toHaveCount(0)
+
+  // Moved, not deleted. The rail read above goes green either way -- a card that vanished
+  // from the page entirely reads identically to one that relocated -- so the presence half
+  // is asserted on the page before the absence half is asserted on the rail.
+  await expect(page.getByTestId('compliance-card')).toBeVisible()
+  await expect(rail.getByTestId('compliance-card')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-main-column').getByTestId('compliance-card')).toHaveCount(1)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

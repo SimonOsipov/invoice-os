@@ -309,10 +309,18 @@ export interface UnreadableRowAll extends UnreadableRow {
   // Resolved filename, or "source not recorded" when the owning batch's filename is
   // null -- NEVER the raw null, NEVER the literal string 'null' (BULK-06-23).
   file: string
+  // The owning batch's source document, for the hand-off out of this tab. Null for a
+  // spreadsheet import. Required, not optional: vitest's toEqual cannot tell a missing
+  // key from an undefined one (BD-4b).
+  documentId: string | null
 }
 
-export function unreadableRowsAll(batches: Pick<ImportBatch, 'id' | 'filename' | 'errors'>[]): UnreadableRowAll[] {
-  return batches.flatMap((b) => unreadableRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename) })))
+export function unreadableRowsAll(
+  batches: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'>[],
+): UnreadableRowAll[] {
+  return batches.flatMap((b) =>
+    unreadableRows(b.errors).map((r) => ({ ...r, file: filenameLabel(b.filename), documentId: b.document_id })),
+  )
 }
 
 // The store-duplicate half of RowError[] -- the sibling channel unreadableRows no longer

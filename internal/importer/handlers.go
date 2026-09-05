@@ -477,7 +477,8 @@ func PreviewHandler(
 type batchResponse struct {
 	ID          string     `json:"id"`
 	EntityID    string     `json:"entity_id"`
-	Filename    *string    `json:"filename"` // NEW (BULK-01-01). NO omitempty -- an unrecorded filename must serialise as an explicit null, never an absent key.
+	Filename    *string    `json:"filename"`    // NEW (BULK-01-01). NO omitempty -- an unrecorded filename must serialise as an explicit null, never an absent key.
+	DocumentID  *string    `json:"document_id"` // Same no-omitempty rule: a spreadsheet batch sends an explicit null (TestBatchResponse_DocumentIDSerialisesAsExplicitNull).
 	Status      string     `json:"status"`
 	RowsTotal   int        `json:"rows_total"`
 	RowsValid   int        `json:"rows_valid"`
@@ -537,6 +538,7 @@ func GetHandler(get func(ctx context.Context, id string) (Batch, error), log *sl
 			ID:          batch.ID,
 			EntityID:    batch.EntityID,
 			Filename:    batch.Filename,
+			DocumentID:  batch.DocumentID,
 			Status:      batch.Status,
 			RowsTotal:   batch.RowsTotal,
 			RowsValid:   batch.RowsValid,

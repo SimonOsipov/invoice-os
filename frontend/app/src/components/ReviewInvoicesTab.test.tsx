@@ -80,6 +80,7 @@ function batch(over: Partial<ImportBatch> = {}): ImportBatch {
     id: 'b1',
     entity_id: 'ent-1',
     filename: 'june.csv',
+    document_id: null,
     status: 'completed',
     rows_total: 1,
     rows_valid: 1,

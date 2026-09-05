@@ -912,21 +912,24 @@ describe('isAlreadyImported: an empty-string rule_key (BUG08-QA-3, presence vs e
 
 describe('unreadableRowsAll / alreadyImportedRowsAll: mixed batches across a multi-file run (BUG08-QA-4)', () => {
   it('BUG08-QA-4: a duplicate-only file, a structural-only file, and a mixed file each contribute rows to the right channel under the right file label', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'f1.csv',
+      document_id: null,
       errors: [
         { rows: [1, 2], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-1', message: 'dup' },
       ],
     }
-    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b2',
       filename: 'f2.csv',
+      document_id: null,
       errors: [{ row: 5, message: 'bad row' }],
     }
-    const b3: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b3: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b3',
       filename: 'f3.csv',
+      document_id: null,
       errors: [
         { row: 9, message: 'bad row 2' },
         { rows: [10], rule_key: 'no-duplicate-invoice-number', invoice_id: 'inv-2', message: 'dup2' },
@@ -942,8 +945,8 @@ describe('unreadableRowsAll / alreadyImportedRowsAll: mixed batches across a mul
       { row: 10, invoiceId: 'inv-2', file: 'f3.csv' },
     ])
     expect(unreadable).toEqual([
-      { row: 5, column: '—', message: 'bad row', file: 'f2.csv' },
-      { row: 9, column: '—', message: 'bad row 2', file: 'f3.csv' },
+      { row: 5, column: '—', message: 'bad row', file: 'f2.csv', documentId: null },
+      { row: 9, column: '—', message: 'bad row 2', file: 'f3.csv', documentId: null },
     ])
   })
 })
@@ -1025,7 +1028,7 @@ describe('alreadyImportedCsvAll (AIMP-9, AC-3)', () => {
 
 describe('unreadableCsvAll: no longer carries duplicate rows (AIMP-10, AC-6)', () => {
   it('AIMP-10: the structural CSV is byte-unchanged and no longer contains duplicate rows', () => {
-    const csv = unreadableCsvAll(unreadableRowsAll([{ id: 'b1', filename: 'a.csv', errors: mixedErrors() }]), 'spreadsheet')
+    const csv = unreadableCsvAll(unreadableRowsAll([{ id: 'b1', filename: 'a.csv', document_id: null, errors: mixedErrors() }]), 'spreadsheet')
 
     expect(csv).toBe(
       [
@@ -2402,6 +2405,7 @@ function mkBatch(id: string, filename: string | null, overrides: Partial<ImportB
     id,
     entity_id: 'e1',
     filename,
+    document_id: null,
     status: 'completed',
     rows_total: 10,
     rows_valid: 10,
@@ -2591,14 +2595,16 @@ describe('reviewHeaderAll: states the files, sums the rows, never prints a null 
 
 describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7)', () => {
   it('BULK-06-13: a rows:[5,6] error in b1 and a row:2 in b2 yield THREE entries, each carrying its own filename', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ rows: [5, 6], message: 'quarantined: duplicate invoice_number' }],
     }
-    const b2: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b2: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b2',
       filename: 'b.csv',
+      document_id: null,
       errors: [{ row: 2, message: 'bad row' }],
     }
 
@@ -2610,21 +2616,25 @@ describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7
   })
 
   it('BULK-06-14: an error with neither row nor rows still yields ONE row:null entry, carrying its filename — the no-swallow rule survives widening', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ message: 'unreadable file structure' }],
     }
 
     const result = unreadableRowsAll([b1])
 
-    expect(result).toEqual([{ row: null, column: '—', message: 'unreadable file structure', file: 'a.csv' }])
+    expect(result).toEqual([
+      { row: null, column: '—', message: 'unreadable file structure', file: 'a.csv', documentId: null },
+    ])
   })
 
   it('BULK-06-23: an unreadable row belonging to a filename:null batch renders "source not recorded" in the File column and the CSV cell, never the literal null', () => {
-    const b1: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const b1: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'b1',
       filename: null,
+      document_id: null,
       errors: [{ row: 1, message: 'm1' }],
     }
 
@@ -2640,8 +2650,8 @@ describe('unreadableRowsAll: attributes each entry to its file (BULK-01-06, AC-7
 describe('unreadableCsvAll (BULK-01-06, AC-7): the CSV gains a File column', () => {
   it('BULK-06-15: header is File,Row,Field,Why it could not be read; a null row renders an empty cell; a comma-bearing filename is RFC-4180 quoted', () => {
     const rows: UnreadableRowAll[] = [
-      { row: 5, column: '—', message: 'bad row', file: 'a,b.csv' },
-      { row: null, column: '—', message: 'unreadable file structure', file: 'source not recorded' },
+      { row: 5, column: '—', message: 'bad row', file: 'a,b.csv', documentId: null },
+      { row: null, column: '—', message: 'unreadable file structure', file: 'source not recorded', documentId: null },
     ]
 
     const csv = unreadableCsvAll(rows, 'spreadsheet')
@@ -2850,22 +2860,24 @@ describe('QA-311-4: a batch known to `run` but absent from `batches` (in-flight 
 
 describe('QA-311-5: unreadableRowsAll across two files erroring on the SAME row number — both survive, each attributed to its own file', () => {
   it('row 3 in file A and row 3 in file B both appear, not deduped, not merged, each carrying its own file label', () => {
-    const fileA: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const fileA: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'bA',
       filename: 'a.csv',
+      document_id: null,
       errors: [{ row: 3, message: 'bad date in A' }],
     }
-    const fileB: Pick<ImportBatch, 'id' | 'filename' | 'errors'> = {
+    const fileB: Pick<ImportBatch, 'id' | 'filename' | 'document_id' | 'errors'> = {
       id: 'bB',
       filename: 'b.csv',
+      document_id: null,
       errors: [{ row: 3, message: 'bad date in B' }],
     }
 
     const result = unreadableRowsAll([fileA, fileB])
 
     expect(result).toHaveLength(2)
-    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in A', file: 'a.csv' })
-    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv' })
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in A', file: 'a.csv', documentId: null })
+    expect(result).toContainEqual({ row: 3, column: '—', message: 'bad date in B', file: 'b.csv', documentId: null })
   })
 })
 
@@ -3060,7 +3072,7 @@ describe('EXTR-15-09 SW-2 (AC-1/AC-2): the seven lib branches, spreadsheet half 
   it('SW-2 (GREEN since EXTR-15-09): each of the seven returns today’s string for spreadsheet and the document string for document', () => {
     const live = { allTotal: 7 }
     const unreadable = [{ row: 4, column: 'issue_date', message: CSV_MESSAGE }]
-    const unreadableAll = [{ file: 'june.csv', row: 4, column: 'issue_date', message: CSV_MESSAGE }]
+    const unreadableAll = [{ file: 'june.csv', row: 4, column: 'issue_date', message: CSV_MESSAGE, documentId: null }]
     const alreadyImported = [{ file: 'june.csv', row: 4, invoiceId: 'inv-1' }]
     const counts = { invoices: 7, unreadable: 2, alreadyImported: 1 }
     const wrong: string[] = []
@@ -3144,8 +3156,8 @@ describe('EXTR-15-09 SW-11 (D1/D3): the CSV cells follow the CSV header', () => 
   // the column count is asserted PER LINE against the header's own.
   it('SW-11 (GREEN since EXTR-15-09): every line of every branch has exactly as many cells as its header', () => {
     const unreadableAll = [
-      { file: 'june.pdf', row: null, column: 'issue_date', message: CSV_MESSAGE },
-      { file: 'july.pdf', row: null, column: '—', message: 'no invoice number' },
+      { file: 'june.pdf', row: null, column: 'issue_date', message: CSV_MESSAGE, documentId: null },
+      { file: 'july.pdf', row: null, column: '—', message: 'no invoice number', documentId: null },
     ]
     const alreadyImported = [
       { file: 'june.pdf', row: null, invoiceId: 'inv-1' },

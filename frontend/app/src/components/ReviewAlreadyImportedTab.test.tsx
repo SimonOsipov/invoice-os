@@ -354,7 +354,7 @@ describe('EXTR-15-09 SW-6 (AC-6): the branch changes copy, never layout', () => 
       const { container, unmount } = render(
         <>
           <AlreadyImportedTab rows={[{ file: 'f', row: null, invoiceId: 'inv-1' }]} rowsTotal={1} batchIds={['b1']} onOpenInvoice={vi.fn()} unit={unit} />
-          <UnreadableTab rows={[{ file: 'f', row: null, column: 'issue_date', message: 'unreadable' }]} rowsTotal={1} batchIds={['b1']} onImportCorrected={vi.fn()} unit={unit} />
+          <UnreadableTab rows={[{ file: 'f', row: null, column: 'issue_date', message: 'unreadable', documentId: null }]} rowsTotal={1} batchIds={['b1']} onImportCorrected={vi.fn()} unit={unit} />
         </>,
       )
       const labels = Array.from(container.querySelectorAll('.label')) as HTMLElement[]

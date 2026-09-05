@@ -860,22 +860,23 @@ whether anyone can **see** that a run is open.
 - `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
 - `can_submit` / `submit_blocked_reason` on both invoice wires — the detail body and every list row.
 
-**The two doors refuse in different registers**, and that is not a defect. `Store.Transition`
+**The two doors refuse in the same sentence, by different mechanisms.** `Store.Transition`
 answers `409` with `awaitingApprovalReason` (`internal/invoice/handlers.go`) — the same
-sentence `submit_blocked_reason` carries. `Submitter.BatchSubmit` has no sentence field:
-`BatchSubmitResultItem.Reason` carries the machine token `awaiting_approval`, and the SPA
-maps that token to its own label (`SKIP_REASON_LABELS`,
-`frontend/app/src/lib/invoices.ts`). The two state the same fact in different registers;
-they are not the same string, and no mirror test links them — TypeScript cannot import a
-Go const. Unifying the
-copy would mean putting a sentence on the batch wire, which no story has asked for.
-APPR-08's AC-3 asks literally for "the same sentence the batch door's skip label carries"
-and its `[one-refusal-sentence]` decision for "ONE `awaitingApprovalReason` const [to
-serve] the 409, the batch skip label's copy and `submit_blocked_reason`" — **neither is met
-as written**, because the batch wire carries only the machine token and the same story's §10
-separately requires the SPA label sit "in the terse register of its two siblings", which the
-409 sentence is not; the story contradicts itself and the implementation followed the more
-specific instruction.
+sentence `submit_blocked_reason` carries. `Submitter.BatchSubmit` still has no sentence
+field: `BatchSubmitResultItem.Reason` carries the machine token `awaiting_approval`, and
+the SPA maps that token to `awaitingApprovalReason`'s bytes verbatim
+(`SKIP_REASON_LABELS`, `frontend/app/src/lib/invoices.ts`). The pair is pinned two-sided —
+`TestAwaitingApprovalReason_MatchesTheSPASkipLabel` (`internal/invoice/skip_label_parity_test.go`)
+reads the SPA source and compares it to the Go const, and the SPA suite re-asserts the
+literal because CI's `go` path filter excludes `frontend/**`. So APPR-08's AC-3 and its
+`[one-refusal-sentence]` decision are now met without a batch-wire change. APPR-08 §10's
+requirement that the SPA label sit "in the terse register of its two siblings" is
+**superseded by BUG-12 Core AC 6**, which requires one sentence across all three doors.
+
+The other two skip labels stay SPA copy, deliberately: the server's not-validated sentence
+forks by status into three arms (`submitBlockedReason`) while the batch token does not, and
+`duplicate_request` has no server sentence at all — so neither has a byte-identical partner
+to mirror.
 
 **One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
 `TransmitClear` on its success path. When the read itself fails, it returns the zero

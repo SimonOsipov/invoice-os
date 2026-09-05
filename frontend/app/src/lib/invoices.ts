@@ -1079,10 +1079,13 @@ export function diffEditInput(original: Pick<InvoiceRecord, EditFieldKey>, form:
 // BatchSubmitResultItem.reason values (the batchSubmitReason* consts,
 // internal/invoice/batch_submit.go) -- anything else passes through verbatim rather than
 // being swallowed, so an unknown future reason still surfaces something to the operator.
+// awaiting_approval carries awaitingApprovalReason's bytes verbatim (internal/invoice/handlers.go),
+// pinned both ways. The other two stay SPA copy: the server's not-validated sentence forks by status
+// into three arms while the batch token does not, and duplicate_request has no server sentence at all.
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
-  awaiting_approval: 'Waiting on approval — an approver must approve it first',
+  awaiting_approval: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
 }
 
 export function skipReasonLabel(reason: string): string {

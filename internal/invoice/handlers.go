@@ -299,6 +299,8 @@ const notApproverTransmitReason = "Only an admin or a reviewer can submit an inv
 // body (statusForErr) and submit_blocked_reason (submitGate). The batch door has
 // no sentence field at all: BatchSubmitResultItem.Reason carries the machine token
 // awaiting_approval, which the SPA labels itself (docs/approvals.md §11).
+// The SPA maps that token straight back to these bytes, pinned both ways by
+// TestAwaitingApprovalReason_MatchesTheSPASkipLabel.
 // Distinguishable on purpose from internal/approval's "no longer awaiting
 // approval" 409, which means the inverse
 // (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).

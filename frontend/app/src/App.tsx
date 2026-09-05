@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { captureDestination } from './lib/deepLink'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -1685,7 +1686,11 @@ export default function App() {
   useEffect(() => {
     if (activeSession || autoPersona) return
     const dest = landingBase()
-    if (dest) window.location.href = dest
+    if (dest) {
+      // Same statement block as the navigation that destroys it — nothing can interleave.
+      captureDestination(window.location.pathname)
+      window.location.href = dest
+    }
   }, [activeSession, autoPersona])
 
   if (!activeSession) {

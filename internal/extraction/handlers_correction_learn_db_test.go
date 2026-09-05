@@ -7,9 +7,12 @@ package extraction_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -968,5 +971,512 @@ func TestRLS_APointedCorrectionOnABoxlessJobLearnsNothing(t *testing.T) {
 	}
 	if n := cxCorrectionRows(t, ctx, docxJobID); n != 1 {
 		t.Errorf("%d correction row(s) on the DOCX job, want 1 -- the correction still commits", n)
+	}
+}
+
+// --- EXTR-19-08: what a TYPED correction teaches on a boxless document ---------------------
+//
+// Mode A. Red until the writeCorrection branch, IsBoxlessFingerprint and jobLayoutTokensTx
+// land. Under the stubs the refusal arms below pass by construction -- the stub refuses every
+// job -- so in every spec here it is the CONTROL that carries the red.
+
+const (
+	// The corrected field, and the value A's own page-1 Total token carries.
+	//
+	// vat, never total: extraction_field_results has no tier column and no rule_id column, so a
+	// row can attribute to the learned rule only when the corrected field and the matched label
+	// are paired with DIFFERENT tier1Specs entries. Measured over the committed goldens: with
+	// the rule A-prime reads vat = 7150.00, without it vat is missing, and all ten other fields
+	// are byte-identical. Correcting total instead is vacuous -- tier-1 already resolves it at
+	// rank 0 with the same value.
+	blField = "vat"
+	blValue = "4300.00"
+
+	// A value no page-1 token of A carries under any lexicon label. Measured:
+	// LearnBoxlessRule refuses it.
+	blUnderivable = "999.99"
+)
+
+// blSettleDocx runs the real ExtractWorker over A's committed golden and returns the
+// extraction job it settled, so every spec below corrects the layout PRODUCTION wrote -- the
+// b1: fingerprint and the layout_tokens together.
+func blSettleDocx(t *testing.T, ctx context.Context, tenantID, documentID string, riverJobID int64) string {
+	t.Helper()
+	ew := wkBoxlessDocx(t, dcReadNamedGolden(t, dxGolden), wkNoRules, &wkAuditRecorder{})
+	return clSettle(t, ctx, tenantID, documentID, riverJobID, ew)
+}
+
+// blSettlePdf settles the corpus PDF the same way, for the v1: arm.
+func blSettlePdf(t *testing.T, ctx context.Context, tenantID, documentID string, riverJobID int64) string {
+	t.Helper()
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t),
+		wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName)), wkNoRules, &wkAuditRecorder{})
+	return clSettle(t, ctx, tenantID, documentID, riverJobID, ew)
+}
+
+// blTyped is one typed correction body, exactly the shape the SPA posts: no region, no label.
+func blTyped(value string) string { return corBody(value, "typed", "") }
+
+// blLearnRecorder captures the anchor.learned emits the seam receives. The seam, not
+// audit_log: cxServe's default recorder writes no row, so a table count could not tell a
+// refusal to learn from an adapter that is not wired here.
+type blLearnRecorder struct {
+	mu  sync.Mutex
+	got []extraction.AnchorLearned
+}
+
+func (r *blLearnRecorder) record(_ context.Context, tx pgx.Tx, _ string, ev extraction.AnchorLearned) error {
+	if tx == nil {
+		return errors.New("the learning recorder was handed no transaction, so the row cannot share the rule's fate")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, ev)
+	return nil
+}
+
+func (r *blLearnRecorder) events() []extraction.AnchorLearned {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.got)
+}
+
+// blBoxlessPremise asserts what makes every zero below attributable: the settled job really
+// carries a b1: identity and really stored its page-1 tokens. It returns both.
+func blBoxlessPremise(t *testing.T, ctx context.Context, jobID string) (string, []string) {
+	t.Helper()
+	fp := clJobFingerprint(t, ctx, jobID)
+	if !strings.HasPrefix(fp, extraction.BoxlessFingerprintVersion+":") {
+		t.Fatalf("the settled DOCX job carries layout_fingerprint %q, want the %q namespace -- every assertion below is about a job that HAS a boxless identity",
+			fp, extraction.BoxlessFingerprintVersion)
+	}
+	toks := wtDecode(t, "the settled DOCX job", wtTokens(t, ctx, jobID))
+	if len(toks) == 0 {
+		t.Fatalf("the settled DOCX job stored %d page-1 token(s), want more than 0 -- a derivation over an empty token list refuses for a reason no spec here is about", len(toks))
+	}
+	return fp, toks
+}
+
+// blDerived is the body LearnBoxlessRule produces for field/value over toks, and a fatal when
+// it refuses -- the premise every "one rule" control rests on.
+func blDerived(t *testing.T, field, value string, toks []string) extraction.LearnedRule {
+	t.Helper()
+	lr, ok := extraction.LearnBoxlessRule(field, value, toks)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule refused %s = %q over %v; this fixture cannot teach and the control below could never pass", field, value, toks)
+	}
+	return lr
+}
+
+// blSameRuleJSON compares a stored rule body against a derived one through their decoded
+// forms: Postgres re-renders jsonb with its own spacing, so the bytes never match.
+func blSameRuleJSON(t *testing.T, stored string, derived []byte) bool {
+	t.Helper()
+	var a, b any
+	if err := json.Unmarshal([]byte(stored), &a); err != nil {
+		t.Fatalf("decode the stored rule %s: %v", stored, err)
+	}
+	if err := json.Unmarshal(derived, &b); err != nil {
+		t.Fatalf("decode the derived rule %s: %v", derived, err)
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+// blSetTokens overwrites one job's layout_tokens as the SUPERUSER. nil is SQL NULL.
+func blSetTokens(t *testing.T, ctx context.Context, jobID string, raw *string) {
+	t.Helper()
+	var arg any
+	if raw != nil {
+		arg = *raw
+	}
+	if _, err := stRequire(t).super.Exec(ctx,
+		`UPDATE extraction_jobs SET layout_tokens = $1 WHERE id = $2`, arg, jobID); err != nil {
+		t.Fatalf("set layout_tokens on job %s: %v", jobID, err)
+	}
+}
+
+// blSetFingerprint overwrites ONE column and nothing else -- AC-8's whole point.
+func blSetFingerprint(t *testing.T, ctx context.Context, jobID, fingerprint string) {
+	t.Helper()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`UPDATE extraction_jobs SET layout_fingerprint = $1 WHERE id = $2`, fingerprint, jobID); err != nil {
+		t.Fatalf("set layout_fingerprint on job %s: %v", jobID, err)
+	}
+}
+
+// blJobRow is everything about a job that could change the branch's answer EXCEPT the
+// fingerprint, so AC-8 can prove the fingerprint is the only variable between its two arms.
+type blJobRow struct {
+	anchors, tokens string
+	state           string
+	documentID      string
+}
+
+// Comparable by value: a pointer pair reads as unequal on every re-read.
+func blJobExceptFingerprint(t *testing.T, ctx context.Context, jobID string) blJobRow {
+	t.Helper()
+	var anchors, tokens *string
+	var r blJobRow
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT layout_anchors::text, layout_tokens::text, state, document_id::text
+		   FROM extraction_jobs WHERE id = $1`, jobID).
+		Scan(&anchors, &tokens, &r.state, &r.documentID); err != nil {
+		t.Fatalf("read job %s: %v", jobID, err)
+	}
+	r.anchors, r.tokens = clShowLabel(anchors), clShowLabel(tokens)
+	return r
+}
+
+// --- AC-1: a typed correction on a boxless job learns one rule -----------------------------
+
+// Core AC-3 by the user's own path. The must-fail mutation stated for this spec -- gate on
+// jobLayoutTx's ok alone and drop the IsBoxlessFingerprint conjunct -- leaves it GREEN, because
+// this job is boxless in both senses. AC-3 and AC-8 are that mutation's real oracles; this
+// spec's job is the positive: one rule, keyed to the job's own value, with one emit beside it.
+func TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC1")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915801)
+	fp, toks := blBoxlessPremise(t, ctx, jobID)
+	want := blDerived(t, blField, blValue, toks)
+
+	learned := &blLearnRecorder{}
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue),
+		cxApplier(false, nil), cxAuditor(nil), learned.record)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("a typed correction on a boxless job left %d anchor rule(s), want exactly 1 -- this is the whole subtask", len(rules))
+	}
+	r := rules[0]
+	if r.fingerprint != fp {
+		t.Errorf("the rule is keyed to %q, want the job's own stored %q -- a rule under another key can never be read back for this layout", r.fingerprint, fp)
+	}
+	if !extraction.IsBoxlessFingerprint(r.fingerprint) {
+		t.Errorf("IsBoxlessFingerprint(%q) is false on the key the rule was written under", r.fingerprint)
+	}
+	if r.field != blField {
+		t.Errorf("the rule names field %q, want %q", r.field, blField)
+	}
+	if r.version != extraction.RuleSchemaVersion {
+		t.Errorf("the rule carries schema version %d, want %d -- AnchorRulesFor errors on any other", r.version, extraction.RuleSchemaVersion)
+	}
+	if !blSameRuleJSON(t, r.body, want.Body) {
+		t.Errorf("the stored rule is %s, want the derivation's own %s -- a body the handler invented is not what the next document will read", r.body, want.Body)
+	}
+
+	evs := learned.events()
+	if len(evs) != 1 {
+		t.Fatalf("the typed correction emitted %d anchor.learned event(s), want exactly 1", len(evs))
+	}
+	if evs[0].LayoutFingerprint != fp {
+		t.Errorf("the emit carries layout_fingerprint %q, want the job's own %q", evs[0].LayoutFingerprint, fp)
+	}
+	if evs[0].RuleID != r.id {
+		t.Errorf("the emit names rule %q, want the row that was written, %q", evs[0].RuleID, r.id)
+	}
+	if evs[0].FieldName != blField {
+		t.Errorf("the emit names field %q, want %q", evs[0].FieldName, blField)
+	}
+
+	// B-2. The boxless branch writes no provenance line: reader.go turns any non-empty
+	// anchor_label into corrected.where for ANY method, so writing one would put "Taken from
+	// Total" on every typed DOCX correction. AC-9 carries this claim with its control.
+	if label := clAnchorLabel(t, ctx, jobID, blField); label != nil && *label != "" {
+		t.Errorf("the stored anchor_label is %s, want absent -- the client sent none and the boxless branch derives none", clShowLabel(label))
+	}
+}
+
+// --- AC-3: a typed correction on a PDF job learns nothing ----------------------------------
+
+// The PDF arm runs FIRST, so its count is an absolute zero rather than a delta. It varies six
+// things at once against the control -- format, content type, tokens, anchors, fingerprint
+// namespace and layout_tokens presence -- which is exactly why AC-8 sits beside it and varies
+// one.
+func TestRLS_ATypedCorrectionOnAPdfJobLearnsNothing(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC3")
+	wkCleanupInfra(t, f.tenantID)
+
+	pdfJobID := blSettlePdf(t, ctx, f.tenantID, f.documentID, 915802)
+	pdfFP := clJobFingerprint(t, ctx, pdfJobID)
+	if !strings.HasPrefix(pdfFP, extraction.FingerprintVersion+":") {
+		t.Fatalf("the settled PDF job carries layout_fingerprint %q, want the %q namespace -- without a v1: key this spec asserts nothing about the namespace gate",
+			pdfFP, extraction.FingerprintVersion)
+	}
+
+	learned := &blLearnRecorder{}
+	w := cxServe(t, f.reqCtx, pdfJobID, blField, blTyped(blValue),
+		cxApplier(false, nil), cxAuditor(nil), learned.record)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("a typed correction on a PDF job left %d anchor rule(s), want 0 -- the boxless derivation reads token text with no geometry and owns only the b1: namespace", n)
+	}
+	if n := len(learned.events()); n != 0 {
+		t.Errorf("the PDF arm emitted %d anchor.learned event(s), want 0", n)
+	}
+	if n := cxCorrectionRows(t, ctx, pdfJobID); n != 1 {
+		t.Errorf("%d correction row(s) on the PDF job, want 1 -- the human action is still recorded", n)
+	}
+
+	// The control: the SAME tenant, the SAME body, the SAME field, on a boxless job.
+	docxJobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915803)
+	blBoxlessPremise(t, ctx, docxJobID)
+	w2 := cxServe(t, f.reqCtx, docxJobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: the boxless job answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: the identical POST against a boxless job left %d anchor rule(s), want 1 -- the zero above is otherwise only a handler that never learns", n)
+	}
+}
+
+// --- AC-4: an underivable typed correction records the correction only ---------------------
+
+// The control is the SAME job, the SAME field and the SAME method, differing only in the VALUE:
+// no page-1 token of A reads as 999.99 under any lexicon label, and every token that reads as
+// 4300.00 does. That single variable is what makes the zero a refusal by the derivation rather
+// than a branch that was never entered.
+func TestRLS_AnUnderivableTypedCorrectionRecordsTheCorrectionOnly(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC4")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915804)
+	_, toks := blBoxlessPremise(t, ctx, jobID)
+
+	if _, ok := extraction.LearnBoxlessRule(blField, blUnderivable, toks); ok {
+		t.Fatalf("LearnBoxlessRule DERIVES %s = %q over %v; this spec is about a value it refuses, and the zero below would be about something else", blField, blUnderivable, toks)
+	}
+
+	learned := &blLearnRecorder{}
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blUnderivable),
+		cxApplier(false, nil), cxAuditor(nil), learned.record)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d -- a value no token carries is an honest refusal to learn, not a refused request (body=%q)",
+			w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("an underivable typed correction left %d anchor rule(s), want 0", n)
+	}
+	if n := len(learned.events()); n != 0 {
+		t.Errorf("an underivable typed correction emitted %d anchor.learned event(s), want 0", n)
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 1 {
+		t.Errorf("%d correction row(s), want 1 -- the human action is still recorded", n)
+	}
+
+	blDerived(t, blField, blValue, toks)
+	w2 := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: the derivable value answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: the same job, the same field, the same method and a DERIVABLE value left %d anchor rule(s), want 1 -- the zero above is otherwise free", n)
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 2 {
+		t.Errorf("%d correction row(s) after both POSTs, want 2", n)
+	}
+}
+
+// --- AC-5: only a typed correction teaches a boxless layout --------------------------------
+
+// D-23. chosen and undone reach writeCorrection and must not enter the branch. The control is
+// the same job and the same derivable value posted as typed, so the two zeros are the method
+// gate and nothing else.
+func TestRLS_OnlyATypedCorrectionTeachesABoxlessLayout(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC5")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915805)
+	_, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+
+	learned := &blLearnRecorder{}
+	for _, method := range []string{"chosen", "undone"} {
+		w := cxServe(t, f.reqCtx, jobID, blField, corBody(blValue, method, ""),
+			cxApplier(false, nil), cxAuditor(nil), learned.record)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("a %q correction answered %d (body=%q), want 201", method, w.Code, w.Body.String())
+		}
+		if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+			t.Errorf("a %q correction carrying the derivable value left %d anchor rule(s), want 0 -- only a value a human TYPED says what the field reads", method, n)
+		}
+	}
+	if n := len(learned.events()); n != 0 {
+		t.Errorf("the chosen and undone arms emitted %d anchor.learned event(s), want 0", n)
+	}
+
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("control: the typed correction answered %d (body=%q), want 201", w.Code, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: the same job and the same value posted as typed left %d anchor rule(s), want 1 -- the two zeros above prove nothing without it", n)
+	}
+}
+
+// --- AC-6: a boxless job with no stored tokens learns nothing ------------------------------
+
+// Every job settled by this branch stores its tokens, so both refusal arms set the column
+// DIRECTLY, as a pre-migration row and an over-cap row respectively carry it. The control
+// RESTORES the job's own bytes and re-posts: one column moves between the arms and the control,
+// so the zeros are the reader and not the job.
+func TestRLS_ABoxlessJobWithNoStoredTokensLearnsNothing(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC6")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915806)
+	fp, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+	stored := wtTokens(t, ctx, jobID)
+
+	learned := &blLearnRecorder{}
+	for _, tc := range []struct {
+		name string
+		raw  *string
+	}{
+		{"layout_tokens SQL NULL", nil},
+		{"layout_tokens an empty array", stPtr("[]")},
+	} {
+		blSetTokens(t, ctx, jobID, tc.raw)
+		w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue),
+			cxApplier(false, nil), cxAuditor(nil), learned.record)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("%s: status = %d, want %d -- a job with nothing to derive from answers 201, never 500 (body=%q)",
+				tc.name, w.Code, http.StatusCreated, w.Body.String())
+		}
+		if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+			t.Errorf("%s: left %d anchor rule(s), want 0 -- there is no token text to read a value out of", tc.name, n)
+		}
+		if got := clJobFingerprint(t, ctx, jobID); got != fp {
+			t.Fatalf("%s: the job's fingerprint moved to %q from %q; the two arms would then differ in more than the token column", tc.name, got, fp)
+		}
+	}
+	if n := len(learned.events()); n != 0 {
+		t.Errorf("the tokenless arms emitted %d anchor.learned event(s), want 0", n)
+	}
+
+	blSetTokens(t, ctx, jobID, stored)
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("control: the job with its own tokens back answered %d (body=%q), want 201", w.Code, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: the same job, the same body, layout_tokens restored, left %d anchor rule(s), want 1 -- the two zeros above prove nothing without it", n)
+	}
+}
+
+// --- AC-8: a v1:-keyed boxless job learns nothing ------------------------------------------
+
+// B-3. The single-variable oracle for the namespace conjunct, which AC-3 cannot be: the two
+// arms differ in the 67 bytes of layout_fingerprint and in nothing else -- same job, same
+// tenant, same tokens, same anchors, same body, same method, same field. The needle is asserted
+// BEFORE the POST, so the zero is the namespace and not an empty-tokens accident.
+func TestRLS_ATypedCorrectionOnAV1KeyedBoxlessJobLearnsNothing(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC8")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915807)
+	boxlessFP, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+
+	v1FP := extraction.FingerprintVersion + ":" + strings.Repeat("a", 64)
+	if len(boxlessFP) != 67 || len(v1FP) != 67 {
+		t.Fatalf("the two keys are %d and %d bytes, want 67 each -- the claim below is that the arms differ in one column of one width",
+			len(boxlessFP), len(v1FP))
+	}
+	if boxlessFP == v1FP {
+		t.Fatalf("the two keys are the same string %q; there is no namespace delta left to read", v1FP)
+	}
+
+	before := blJobExceptFingerprint(t, ctx, jobID)
+	blSetFingerprint(t, ctx, jobID, v1FP)
+	if after := blJobExceptFingerprint(t, ctx, jobID); after != before {
+		t.Fatalf("re-keying the job also moved %+v to %+v; the arms would differ in more than the fingerprint", before, after)
+	}
+
+	learned := &blLearnRecorder{}
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue),
+		cxApplier(false, nil), cxAuditor(nil), learned.record)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("a typed correction on a job re-keyed into the %q namespace left %d anchor rule(s), want 0 -- the derivation owns the boxless namespace and only it",
+			extraction.FingerprintVersion, n)
+	}
+	if n := len(learned.events()); n != 0 {
+		t.Errorf("the v1:-keyed arm emitted %d anchor.learned event(s), want 0", n)
+	}
+
+	blSetFingerprint(t, ctx, jobID, boxlessFP)
+	if after := blJobExceptFingerprint(t, ctx, jobID); after != before {
+		t.Fatalf("restoring the key also moved %+v to %+v", before, after)
+	}
+	w2 := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: the job with its own key back answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("control: the same job with its own %q key left %d anchor rule(s), want 1 -- 67 bytes of one column is then not the variable", boxlessFP, len(rules))
+	}
+	if rules[0].fingerprint != boxlessFP {
+		t.Errorf("control: the rule is keyed to %q, want the job's own %q", rules[0].fingerprint, boxlessFP)
+	}
+}
+
+// --- AC-9: the boxless branch writes no anchor_label ---------------------------------------
+
+// B-2. The control runs FIRST and on the SAME tenant: a shipped pointed correction over the
+// corpus layout stores the server-derived label. Without it, "the boxless row carries no label"
+// is equally what a column nothing ever fills looks like.
+func TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC9")
+	wkCleanupInfra(t, f.tenantID)
+
+	// The control: the shipped pointed path on a v1: layout writes a NON-EMPTY label.
+	_, pages := clLayout(t, ctx, f.jobID)
+	region := clTokenRegion(t, pages, clTINToken)
+	ctrl := cxServe(t, f.reqCtx, f.jobID, clField, clPointedBody(clTINValue, region, ""),
+		cxApplier(false, nil), cxAuditor(nil))
+	if ctrl.Code != http.StatusCreated {
+		t.Fatalf("control: the pointed correction answered %d (body=%q), want 201", ctrl.Code, ctrl.Body.String())
+	}
+	if label := clAnchorLabel(t, ctx, f.jobID, clField); label == nil || *label != clTINAnchor {
+		t.Fatalf("control: the stored anchor_label is %s, want the server-derived %q -- the assertion below would otherwise be reading a column that is always empty",
+			clShowLabel(label), clTINAnchor)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Fatalf("control: the pointed correction left %d anchor rule(s), want 1", n)
+	}
+
+	// The boxless arm, in the same tenant. The rule count goes 1 -> 2, so a learned rule and an
+	// absent label are asserted together: an empty label on a row that taught nothing is free.
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915808)
+	fp, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 2 {
+		t.Fatalf("after the boxless correction the tenant holds %d anchor rule(s), want 2 -- the label assertion below only means something on a correction that DID teach", len(rules))
+	}
+	if rules[0].fingerprint != fp {
+		t.Errorf("the newest rule is keyed to %q, want the boxless job's own %q", rules[0].fingerprint, fp)
+	}
+	if label := clAnchorLabel(t, ctx, jobID, blField); label != nil && *label != "" {
+		t.Errorf("the boxless correction stored anchor_label %s, want absent -- reader.go renders any non-empty label as corrected.where for any method, so this would put a provenance line on every typed DOCX correction",
+			clShowLabel(label))
 	}
 }

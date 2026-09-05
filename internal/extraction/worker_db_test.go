@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"regexp"
 	"slices"
@@ -3905,4 +3906,105 @@ func TestRLS_ABoxlessRuleAtTheSharedEmptyIdentityStaysInsideItAndItsTenant(t *te
 		t.Errorf("the shared empty identity carried a rule across tenants: %v", arIDs(away.served))
 	}
 	wpAssertRankZero(t, away.rows, "buyer_name", nil, missing)
+}
+
+// --- EXTR-19-08 AC-2: the loop closes on the next document of that layout ------------------
+//
+// Mode A. Red until the writeCorrection branch lands. The correction goes through the REAL
+// HTTP route; only the second read is a worker run.
+//
+// The corrected field is vat and the matched label is Total. Crossing them is the whole
+// design: extraction_field_results has no tier column and no rule_id column, so a value tier-1
+// could also reach attributes to nothing. Measured over the committed goldens -- correcting
+// total instead leaves the two runs byte-identical in every column of every row.
+
+// wkRowKey names one field-result row for a set comparison.
+func wkRowKey(r wpRow) string { return fmt.Sprintf("%s#%d", r.name, r.rank) }
+
+// wkAssertOnlyFieldDiffers is AC-2's precision claim: the two runs agree on every row except
+// field, which must differ. Both sets must be non-empty and must carry the same keys, so a run
+// that wrote nothing cannot read as agreement.
+func wkAssertOnlyFieldDiffers(t *testing.T, taught, bare []wpRow, field string) {
+	t.Helper()
+	if len(taught) == 0 || len(bare) == 0 {
+		t.Fatalf("the two runs wrote %d and %d field-result row(s); an empty set agrees with anything", len(taught), len(bare))
+	}
+	b := map[string]wpRow{}
+	for _, r := range bare {
+		b[wkRowKey(r)] = r
+	}
+	seen, differed := 0, false
+	for _, r := range taught {
+		k := wkRowKey(r)
+		o, ok := b[k]
+		if !ok {
+			t.Errorf("the taught run wrote %s, which the untaught run did not", r)
+			continue
+		}
+		delete(b, k)
+		if r.name == field {
+			differed = r.String() != o.String()
+			continue
+		}
+		seen++
+		if r.String() != o.String() {
+			t.Errorf("%s reads %s with the rule and %s without it; the learned rule must move %s and nothing else", k, r, o, field)
+		}
+	}
+	for k, r := range b {
+		t.Errorf("the untaught run wrote %s (%s), which the taught run did not", k, r)
+	}
+	if !differed {
+		t.Errorf("%s reads the same with and without the rule, so this comparison cannot see the rule at all", field)
+	}
+	if seen < 2 {
+		t.Errorf("only %d row(s) besides %s were compared; the byte-identical claim is vacuous over a set that small", seen, field)
+	}
+}
+
+func TestRLS_ABoxlessCorrectionTeachesTheNextDocumentOfThatLayout(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-AC2")
+	wkCleanupInfra(t, f.tenantID)
+	bareID, bareDoc := wkFixture(t, ctx)
+
+	// 1. The reviewer types vat on A, through the route the SPA posts to.
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915811)
+	fpA, _ := blBoxlessPremise(t, ctx, jobID)
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("the typed correction answered %d (body=%q), want 201", w.Code, w.Body.String())
+	}
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("the typed correction left %d anchor rule(s), want exactly 1 -- nothing below can close a loop that was never opened", len(rules))
+	}
+	if rules[0].fingerprint != fpA {
+		t.Fatalf("the rule is keyed to %q, want A's own %q -- keyed elsewhere it can never be read back for this layout", rules[0].fingerprint, fpA)
+	}
+
+	// 2. A-prime: a DIFFERENT document of the SAME layout, its own documents row. A key derived
+	// from the document id would satisfy step 1 and fail only here.
+	golden := dcReadNamedGolden(t, bxInlineGolden)
+	primeDoc := wkSecondDocument(t, ctx, f.tenantID)
+	taught := wkRunBoxless(t, ctx, f.tenantID, primeDoc, 915812, golden)
+	if taught.asked != fpA {
+		t.Fatalf("the Rules seam was asked for %q over A-prime, want A's own %q -- these are then two layouts and there is no loop to close", taught.asked, fpA)
+	}
+	if len(taught.served) != 1 || taught.served[0].ID != rules[0].id {
+		t.Fatalf("the seam served %v over A-prime, want exactly the rule the correction wrote, %s", arIDs(taught.served), rules[0].id)
+	}
+
+	// 3. The same golden in a tenant that learned nothing. One variable: the stored rule.
+	bare := wkRunBoxless(t, ctx, bareID, bareDoc, 915813, golden)
+	if bare.asked != fpA {
+		t.Fatalf("the untaught run was asked for %q, want the same %q", bare.asked, fpA)
+	}
+	if len(bare.served) != 0 {
+		t.Fatalf("the untaught tenant was served %v, want none", arIDs(bare.served))
+	}
+
+	wpAssertRankZero(t, taught.rows, blField, stPtr("7150.00"), nil)
+	wpAssertRankZero(t, bare.rows, blField, nil, stPtr(string(extraction.ReasonMissing)))
+	wkAssertOnlyFieldDiffers(t, taught.rows, bare.rows, blField)
 }

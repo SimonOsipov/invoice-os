@@ -137,3 +137,11 @@ func jobLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLay
 	}
 	return JobLayout{Fingerprint: *fp, Anchors: obs}, true, nil
 }
+
+// jobLayoutTokensTx reads the page-1 token text a boxless job stored, the input a derivation
+// reads. Mirrors jobLayoutTx: no row and no tokens collapse to the same ok=false.
+//
+// EXTR-19-08 Mode A stub: answers absent for every job. The read lands with the handler branch.
+func jobLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]string, bool, error) {
+	return nil, false, nil
+}

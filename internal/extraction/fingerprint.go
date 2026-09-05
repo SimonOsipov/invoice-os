@@ -170,6 +170,12 @@ func Fingerprint(pages []TokenPage) string {
 // "v1:" value in the shared layout_fingerprint column.
 const BoxlessFingerprintVersion = "b1"
 
+// IsBoxlessFingerprint reports whether f is a key in the boxless namespace.
+//
+// EXTR-19-08 Mode A stub: refuses everything. The prefix predicate lands with the handler
+// branch that reads it.
+func IsBoxlessFingerprint(f string) bool { return false }
+
 // labelPlacement says where a lexicon match sits inside its own token: "w" whole, "l" leading,
 // "i" inline. Mirrors sameTokenValue (resolve.go:158-163), whose split is w versus l+i; the
 // l/i boundary is this scheme's own. A trailing separator alone makes a label lead a value,

@@ -28,8 +28,11 @@ function goStructKeys(source: string, structName: string): string[] {
   return keys
 }
 
+// The `extends` clause is optional in the pattern: without it an interface that extends
+// anything yields '' -- zero keys, which reads exactly like clean.
 function tsInterfaceKeys(source: string, interfaceName: string): string[] {
-  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const body =
+    new RegExp(`export interface\\s+${interfaceName}(?:\\s+extends\\s+[^{]*?)?\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
   const keys: string[] = []
   for (const rawSeg of body.split(/[\n;]/)) {
     const seg = rawSeg.trim()
@@ -109,6 +112,20 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export async function getExtractionDetail(',
     e2eAnchor: 'export function getExtractionDetail(',
+    // EXTR-15-01 AC-7/8: 6 -> 7 for failure_kind. The three-way equality is set-based and
+    // therefore blind to a key added to all three legs at once; the floor is what bites.
+    floor: 7,
+  },
+  // EXTR-15-01 AC-5. The jobs list feeds documentRun.ts's newestJob/pollVerdict, so the SPA
+  // does read it -- see jobsList_theStaleNoSpaCopyExclusionIsGone.
+  {
+    ts: 'ExtractionJob',
+    go: 'JobState',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func jobsForDocumentTx(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export function getExtractions(',
+    e2eAnchor: 'export function getExtractions(',
     floor: 6,
   },
   {
@@ -203,6 +220,19 @@ const WIRE_MIRRORS = [
     spaAnchor: 'export async function postLineItems(',
     e2eAnchor: 'export function postLineItems(',
     floor: 4,
+  },
+  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 13 is the shipped 12
+  // plus source_document_id: the three-way equality is set-based and so blind to a key added
+  // to all three legs at once, and the floor is what bites.
+  {
+    ts: 'InvoiceCreateInput',
+    go: 'createRequest',
+    goPath: 'internal/invoice/handlers.go',
+    goAnchor: 'func CreateHandler(',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function createInvoice(',
+    e2eAnchor: 'export function createInvoice(',
+    floor: 13,
   },
 ] as const
 
@@ -313,6 +343,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionCandidate',
       'ExtractionCorrected',
       'ExtractionDetail',
+      'ExtractionJob',
       'ExtractionDocument',
       'ExtractionPage',
       'ExtractionFieldState',
@@ -322,6 +353,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'LineItemInput',
       'LineItemsRequest',
       'LineItemsResponse',
+      'InvoiceCreateInput',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -380,6 +412,27 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(src, 'the scan read the wrong file').toContain('function goStructKeys')
     expect(src).toContain('wire mirror: Go read_model.go <-> lib/approvals.ts <-> e2e/api/client.ts')
     expect(src, 'ApprovalRun lost its row in WIRE_STRUCTS').toContain("{ go: 'Run', ts: 'ApprovalRun'")
+  })
+
+  // EXTR-15-06 AC-7, precondition for the InvoiceCreateInput row above. A WIRE_MIRRORS row
+  // carries ONE `ts` name and reads both TypeScript legs with it, and tsInterfaceKeys' body
+  // regex is `[^{}]*`. e2e/api/client.ts today names the type CreateInvoiceInput and inlines
+  // `line_items?: Array<{...}>`, so the row's third leg reads [] on both counts -- the floor
+  // row would then report a two-leg mirror as a three-leg one.
+  it('wireMirrors_theE2ECreateInputIsNamedAndFlatEnoughToRead', () => {
+    const e2e = repoFile(E2E_CLIENT)
+    expect(e2e, 'the scan read the wrong file').toContain('export function createInvoice(')
+
+    expect(
+      tsInterfaceKeys(e2e, 'InvoiceCreateInput').length,
+      'e2e/api/client.ts must export InvoiceCreateInput (not CreateInvoiceInput), with no nested object literal in its body -- tsInterfaceKeys reads [] otherwise',
+    ).toBeGreaterThan(0)
+
+    // Control needle: the extractor demonstrably reads THIS interface name out of the SPA
+    // file, so the zero above is the e2e declaration's own shape, not a broken scan.
+    expect(
+      tsInterfaceKeys(repoFile('frontend/app/src/lib/invoices.ts'), 'InvoiceCreateInput').length,
+    ).toBeGreaterThan(0)
   })
 })
 
@@ -753,8 +806,6 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // LOCKED_FIELDS (ExtractionFields.test.tsx) vs handlers_correction.go's lockedFields -- a Go
 //   map[string]string, not a slice; it needs a different extractor, and refuseField's 422 is
 //   already pinned by the correction e2e.
-// ExtractionJob / ExtractionJobsResponse (e2e/api/client.ts) -- no SPA copy exists, so a
-//   three-way row is impossible; the SPA does not read the jobs list.
 // CorrectionRequest's optionality asymmetry -- tsInterfaceKeys strips '?', so the SPA's
 //   all-required keys compare equal to client.ts's optional region/anchor_label. A live
 //   pre-existing defect, not this story's; the three line-items interfaces are non-optional on
@@ -768,3 +819,146 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // A field added to all three legs at once -- goStructKeys compares SETS, so the registry is
 //   blind by construction. Go's TestLineItemsWireTypes_HaveBraceFreeBodies pins 4/1/4 exactly,
 //   which catches an addition; a same-count swap and wrong semantics stay open.
+
+// EXTR-15-01 AC-6. The exclusion list above claimed the jobs list had no SPA copy and that the
+// SPA never read it. Both are false, and a stale exclusion is worse than no exclusion: it
+// documents a gap that has already closed. Needles are assembled from fragments so this file
+// does not match its own scan.
+describe('the jobs-list exclusion (AC-5, AC-6)', () => {
+  const SELF = 'frontend/app/src/lib/wireMirrors.test.ts'
+
+  it('jobsList_theStaleNoSpaCopyExclusionIsGone', () => {
+    const self = repoFile(SELF)
+
+    // Control needle first: an absence proved over a file that was not read reads clean.
+    const banner = ['copies this file deliberately does NOT', 'guard'].join(' ')
+    expect(self.split(banner).length - 1, 'the exclusion banner itself must still be there').toBe(1)
+
+    const stale = ['no SPA copy', 'exists'].join(' ')
+    expect(
+      self.includes(stale),
+      'the exclusion list still says the jobs list has no SPA copy; importApi.ts declares ExtractionJob and documentRun.ts consumes it',
+    ).toBe(false)
+  })
+
+  it('jobsList_theSpaReallyDoesReadIt', () => {
+    // The positive half: the deletion above is only correct while these hold.
+    const importApi = repoFile('frontend/app/src/lib/importApi.ts')
+    const documentRun = repoFile('frontend/app/src/lib/documentRun.ts')
+    expect(tsInterfaceKeys(importApi, 'ExtractionJob').length).toBeGreaterThanOrEqual(6)
+    expect(documentRun).toContain('ExtractionJob')
+    expect(documentRun).toContain('newestJob')
+  })
+})
+
+// EXTR-15-10 AC-3 — Go batchResponse <-> the SPA's ImportBatch. TWO legs, own guard.
+//
+// Deliberately NOT a WIRE_MIRRORS row. Every row's e2eAnchor is mandatory and is read out of
+// E2E_CLIENT, and e2e/api/client.ts declares no ImportBatch and no batch-fetching function --
+// a row would need e2e surface written only to satisfy this table. e2e/api/import.spec.ts's
+// ImportResponse is not it: a labelled SUBSET (so a set-equality row reds on sight) of a
+// DIFFERENT Go struct (importResponse), in a file E2E_CLIENT never reads.
+
+const IMPORT_BATCH_GO_PATH = 'internal/importer/handlers.go'
+const IMPORT_BATCH_GO_ANCHOR = 'func GetHandler('
+const IMPORT_BATCH_SPA_PATH = 'frontend/app/src/lib/importApi.ts'
+const IMPORT_BATCH_SPA_ANCHOR = 'export async function getImportBatch('
+
+// 10 shipped keys + document_id. The set equality below is blind to a key added to both legs
+// at once, and tsInterfaceKeys' body regex is `[^{}]*` -- a nested object literal on either
+// leg extracts ZERO, and [] agrees with []. The floor is what bites in both cases.
+const IMPORT_BATCH_FLOOR = 11
+
+describe('wire mirror: Go batchResponse <-> lib/importApi.ts ImportBatch (EXTR-15-10)', () => {
+  it('importBatchMirror_controlNeedleBothSourceFilesWereActuallyRead', () => {
+    expect(repoFile(IMPORT_BATCH_GO_PATH), `lost anchor on ${IMPORT_BATCH_GO_PATH}`).toContain(IMPORT_BATCH_GO_ANCHOR)
+    expect(repoFile(IMPORT_BATCH_SPA_PATH), `lost anchor on ${IMPORT_BATCH_SPA_PATH}`).toContain(
+      IMPORT_BATCH_SPA_ANCHOR,
+    )
+  })
+
+  it('importBatchMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
+    expect(
+      goStructKeys(repoFile(IMPORT_BATCH_GO_PATH), 'batchResponse').length,
+      'extracted no keys for Go batchResponse',
+    ).toBeGreaterThan(0)
+    expect(
+      tsInterfaceKeys(repoFile(IMPORT_BATCH_SPA_PATH), 'ImportBatch').length,
+      'extracted no keys for the SPA ImportBatch',
+    ).toBeGreaterThan(0)
+  })
+
+  it('importBatchMirror_bothLegsNameDocumentIdAndTheKeySetsAgree', () => {
+    const goKeys = goStructKeys(repoFile(IMPORT_BATCH_GO_PATH), 'batchResponse')
+    const spaKeys = tsInterfaceKeys(repoFile(IMPORT_BATCH_SPA_PATH), 'ImportBatch')
+
+    expect(goKeys.length, `Go batchResponse must clear its floor of ${IMPORT_BATCH_FLOOR}`).toBeGreaterThanOrEqual(
+      IMPORT_BATCH_FLOOR,
+    )
+    expect(spaKeys.length, `the SPA ImportBatch must clear its floor of ${IMPORT_BATCH_FLOOR}`).toBeGreaterThanOrEqual(
+      IMPORT_BATCH_FLOOR,
+    )
+
+    // goStructKeys splits ',' off the tag, so `document_id,omitempty` extracts as document_id
+    // and passes here while a spreadsheet batch sends no key at all. Go's
+    // TestBatchResponse_DocumentIDIsAPointerTaggedWithoutOmitempty is the oracle for that.
+    expect(goKeys, 'Go batchResponse is missing document_id').toContain('document_id')
+    expect(spaKeys, 'the SPA ImportBatch is missing document_id').toContain('document_id')
+
+    expect(keySetDiff(goKeys, spaKeys), 'batchResponse vs the SPA ImportBatch').toEqual([])
+  })
+})
+
+// The submit pair rides BOTH wires from one submitGate call, so it is declared once on
+// InvoiceRecord and inherited. Nothing links the two interfaces at compile time --
+// InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'>, so a redeclaration compiles
+// clean and drifts silently.
+describe('the submit pair is declared once on the SPA invoice mirror (BUG-12)', () => {
+  const SPA = 'frontend/app/src/lib/invoices.ts'
+  const SUBMIT_PAIR = ['can_submit', 'submit_blocked_reason']
+
+  it('B12-9a: control needle + floor for the declared-once scan', () => {
+    const source = repoFile(SPA)
+    expect(source.length, `${SPA} was not read`).toBeGreaterThan(0)
+
+    const record = tsInterfaceKeys(source, 'InvoiceRecord')
+    const detail = tsInterfaceKeys(source, 'InvoiceDetailRecord')
+
+    // Anchors this story never moves: an extractor that broke would empty both sets and
+    // let the claim below pass on nothing.
+    expect(record.length, 'InvoiceRecord under its floor').toBeGreaterThanOrEqual(30)
+    expect(record).toContain('invoice_number')
+    expect(record).toContain('can_approve')
+
+    // InvoiceDetailRecord carries an `extends` clause: this row is what proves the
+    // extractor sees past one at all.
+    expect(detail.length, 'InvoiceDetailRecord under its floor').toBeGreaterThanOrEqual(11)
+    expect(detail).toContain('qr_png_base64')
+    expect(detail).toContain('can_reject')
+  })
+
+  it('B12-9b: the pair is declared once', () => {
+    const source = repoFile(SPA)
+    const record = tsInterfaceKeys(source, 'InvoiceRecord')
+    const detail = tsInterfaceKeys(source, 'InvoiceDetailRecord')
+
+    expect(SUBMIT_PAIR).toHaveLength(2)
+    // Absence first: the redeclaration is the hit the fixed extractor already finds in the
+    // tree, so this leg is what proves the scan bites before the floor can mask it.
+    for (const key of SUBMIT_PAIR) {
+      expect(detail, `${key} is redeclared on InvoiceDetailRecord instead of inherited`).not.toContain(key)
+      expect(record, `${key} must be declared on InvoiceRecord`).toContain(key)
+    }
+    expect(record.length, 'InvoiceRecord must carry the pair on top of its floor').toBeGreaterThanOrEqual(32)
+  })
+
+  it('B12-9c: planted positive — the extractor reads an extending interface and a plain one alike', () => {
+    const extending = 'export interface Fixture extends Base {\n  a: string\n  b: string | null\n}'
+    const plain = 'export interface Fixture {\n  a: string\n  b: string | null\n}'
+
+    expect(tsInterfaceKeys(extending, 'Fixture')).toEqual(['a', 'b'])
+    expect(tsInterfaceKeys(plain, 'Fixture')).toEqual(['a', 'b'])
+    // And it still reports a real absence rather than agreeing with everything.
+    expect(tsInterfaceKeys('export interface Fixture extends Base {\n  a: string\n}', 'Fixture')).not.toContain('b')
+  })
+})

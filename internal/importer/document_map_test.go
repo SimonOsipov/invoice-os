@@ -259,6 +259,12 @@ func TestDocumentCreateInput_NullInvoiceNumberReturnsStructuralRowError(t *testi
 	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
 		t.Errorf("CreateInput = %+v, want the zero value", got)
 	}
+	// EXTR-15-05: TWO fields here, so this shape takes the read-document branch even though
+	// its unreadable reason sits on invoice_number.
+	if rowErr.Message != ac2Message(t) {
+		t.Errorf("rowErr.Message = %q, want the read-document message %q", rowErr.Message, ac2Message(t))
+	}
+	assertReadDocumentMessage(t, rowErr.Message)
 }
 
 // --- MAP-06: whitespace-only invoice_number treated as absent ---------------------------
@@ -813,5 +819,302 @@ func TestSettledExtraction_SaysWhyItIsNotCorrectionAware(t *testing.T) {
 			t.Errorf("SettledExtraction's doc comment does not say %q; AC-7 wants the one-write rule "+
 				"stated on the method, so the next reader does not make it correction-aware", needle)
 		}
+	}
+}
+
+// --- EXTR-15-05: the poor scan is the source's fault, and the server says so ---------------
+//
+// Spec-to-test map (EXTR-15-05 / task-831):
+//
+//	PS-1 TestDocumentCreateInput_PoorScanMessageBlamesTheScanAndAsksForTheSupplierPDF
+//	PS-2 TestDocumentCreateInput_ReadDocumentMessageSaysNoInvoiceNumberFound
+//	PS-3 TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch
+//	PS-4 TestDocumentCreateInput_IssueDateFailureWrapsTheParseErrorNamingTheValue
+//	PS-5 TestDocumentCreateInput_EveryQuarantineBranchKeepsItsMachineFieldKey
+//	PS-6 TestDocumentCreateInput_NoQuarantineMessageCarriesARuleKey
+//
+// The two sentences are the implementer's to write. These specs pin PROPERTIES, not prose:
+// the word anchors below are the minimum forced by the acceptance criteria's own wording.
+
+// poorScanFieldSet is AC-1's predicate, and it is a predicate over the WHOLE field set: one
+// entry, named document_text_layer, reason unreadable. That is the shape the extraction
+// worker writes when a document carries no text layer (worker.go, textRes.TextChars == 0).
+func poorScanFieldSet() SettledExtraction {
+	return SettledExtraction{
+		JobID: "job-extr-15-05-poor-scan",
+		Fields: []extractedField{
+			{Name: "document_text_layer", Value: nil, Reason: mpPtr("unreadable")},
+		},
+	}
+}
+
+// readDocumentNoNumberFieldSet is AC-2: ten fields read off a readable document, with
+// invoice_number blank among them.
+func readDocumentNoNumberFieldSet() SettledExtraction {
+	return SettledExtraction{
+		JobID: "job-extr-15-05-read-no-number",
+		Fields: []extractedField{
+			{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+			{Name: "issue_date", Value: mpPtr("2026-03-01")},
+			{Name: "supplier_tin", Value: mpPtr("12345678-0001")},
+			{Name: "supplier_name", Value: mpPtr("Read Supplier Ltd")},
+			{Name: "buyer_tin", Value: mpPtr("87654321-0001")},
+			{Name: "buyer_name", Value: mpPtr("Read Buyer Ltd")},
+			{Name: "currency", Value: mpPtr("NGN")},
+			{Name: "subtotal", Value: mpPtr("1000.00")},
+			{Name: "vat", Value: mpPtr("75.00")},
+			{Name: "total", Value: mpPtr("1075.00")},
+		},
+	}
+}
+
+// ac1Message and ac2Message read the two branch messages off the mapper itself, so no test
+// duplicates prose the implementer owns. PS-3 is what catches the two branches collapsing
+// back into one string; every caller of ac2Message also asserts the AC-2 properties, so a
+// regressed mapper cannot quietly redefine the expectation.
+func ac1Message(t *testing.T) string {
+	t.Helper()
+	_, rowErr := documentCreateInput("entity-1", "doc-1", poorScanFieldSet())
+	if rowErr == nil {
+		t.Fatal("documentCreateInput over the poor-scan field set returned no RowError; every expectation built on it is void")
+	}
+	return rowErr.Message
+}
+
+func ac2Message(t *testing.T) string {
+	t.Helper()
+	_, rowErr := documentCreateInput("entity-1", "doc-1", readDocumentNoNumberFieldSet())
+	if rowErr == nil {
+		t.Fatal("documentCreateInput over the read-but-no-number field set returned no RowError; every expectation built on it is void")
+	}
+	return rowErr.Message
+}
+
+// assertPoorScanMessage pins AC-1: the message blames the scan and carries the upstream fix.
+// scan / supplier / pdf are the three anchors AC-1 itself names; nothing else is pinned.
+func assertPoorScanMessage(t *testing.T, msg string) {
+	t.Helper()
+	low := strings.ToLower(msg)
+	for _, want := range []string{"scan", "supplier", "pdf"} {
+		if !strings.Contains(low, want) {
+			t.Errorf("poor-scan message %q does not mention %q; AC-1 wants it to blame the scan and ask whether the supplier can send the original PDF", msg, want)
+		}
+	}
+	if strings.Contains(msg, "invoice_number") {
+		t.Errorf("poor-scan message %q names the wire field invoice_number; the reader is a person, not the API", msg)
+	}
+	if strings.Contains(low, "blank") {
+		t.Errorf("poor-scan message %q calls the data blank; the scan was unreadable, which is a different accusation", msg)
+	}
+}
+
+// assertReadDocumentMessage pins AC-2: the document was read, no invoice number was found,
+// and it can be typed in. by hand / manual are accepted alternatives for the same offer.
+func assertReadDocumentMessage(t *testing.T, msg string) {
+	t.Helper()
+	low := strings.ToLower(msg)
+	if strings.Contains(msg, "invoice_number") {
+		t.Errorf("read-document message %q contains the substring invoice_number; AC-2 forbids it", msg)
+	}
+	if strings.Contains(low, "blank") {
+		t.Errorf("read-document message %q contains the word blank; AC-2 forbids it", msg)
+	}
+	if !strings.Contains(low, "invoice number") {
+		t.Errorf("read-document message %q does not say which thing was not found; AC-2 wants it to name the invoice number in words", msg)
+	}
+	if !strings.Contains(low, "by hand") && !strings.Contains(low, "manual") {
+		t.Errorf("read-document message %q offers no way forward; AC-2 wants it to say the invoice can be entered by hand", msg)
+	}
+}
+
+// --- PS-1 (AC-1) --------------------------------------------------------------------------
+
+func TestDocumentCreateInput_PoorScanMessageBlamesTheScanAndAsksForTheSupplierPDF(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", poorScanFieldSet())
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a structural RowError -- a poor scan yields no invoice number")
+	}
+	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
+		t.Errorf("CreateInput = %+v, want the zero value", got)
+	}
+	assertPoorScanMessage(t, rowErr.Message)
+}
+
+// --- PS-2 (AC-2) --------------------------------------------------------------------------
+
+func TestDocumentCreateInput_ReadDocumentMessageSaysNoInvoiceNumberFound(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", readDocumentNoNumberFieldSet())
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a structural RowError -- invoice_number is blank")
+	}
+	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
+		t.Errorf("CreateInput = %+v, want the zero value", got)
+	}
+	assertReadDocumentMessage(t, rowErr.Message)
+}
+
+// --- PS-3 (AC-1/AC-2 boundary) ------------------------------------------------------------
+
+// AC-1's predicate is the WHOLE field set, never any one field's reason code. Every shape
+// below carries an unreadable reason somewhere, or the text-layer field name, or both, and
+// every one of them still belongs in the AC-2 channel. The MAP-05 shape is the subtle one:
+// its unreadable reason sits on invoice_number itself.
+func TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch(t *testing.T) {
+	poor := ac1Message(t)
+	read := ac2Message(t)
+	if poor == read {
+		t.Fatalf("the poor-scan branch and the read-document branch return the same message %q -- a reader cannot tell a bad scan from a document with no number on it", poor)
+	}
+
+	cases := []struct {
+		name   string
+		fields []extractedField
+	}{
+		{
+			name:   "text layer field carrying an empty reason",
+			fields: []extractedField{{Name: "document_text_layer", Value: nil, Reason: mpPtr("")}},
+		},
+		{
+			name:   "text layer field carrying no reason at all",
+			fields: []extractedField{{Name: "document_text_layer", Value: nil, Reason: nil}},
+		},
+		{
+			// The clause QA found unpinned: a LONE unreadable field that is not the text-layer
+			// one. Without this case, dropping the name check from isPoorScan survives the suite.
+			name:   "one unreadable field that is not the text layer",
+			fields: []extractedField{{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")}},
+		},
+		{
+			name: "text layer field plus one other field",
+			fields: []extractedField{
+				{Name: "document_text_layer", Value: nil, Reason: mpPtr("unreadable")},
+				{Name: "total", Value: mpPtr("50.00")},
+			},
+		},
+		{
+			// The shipped MAP-05 shape, TestDocumentCreateInput_NullInvoiceNumberReturnsStructuralRowError.
+			name: "unreadable invoice_number plus one other field",
+			fields: []extractedField{
+				{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+				{Name: "total", Value: mpPtr("50.00")},
+			},
+		},
+		{
+			name:   "empty field set",
+			fields: []extractedField{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: tc.fields})
+			if rowErr == nil {
+				t.Fatal("rowErr = nil, want a structural RowError")
+			}
+			if rowErr.Message == poor {
+				t.Fatalf("Message = the poor-scan message %q; AC-1's predicate is the whole field set, not any one field's reason code", poor)
+			}
+			if rowErr.Message != read {
+				t.Errorf("Message = %q, want the read-document message %q", rowErr.Message, read)
+			}
+			assertReadDocumentMessage(t, rowErr.Message)
+		})
+	}
+}
+
+// --- PS-4 (AC-3) --------------------------------------------------------------------------
+
+// The raw text is read off parseIssueDate itself rather than pasted in, so this spec cannot
+// pass because the shared parser's wording drifted. parseIssueDate lives in service.go and
+// this subtask must not touch it: the wrapping belongs to documentCreateInput.
+func TestDocumentCreateInput_IssueDateFailureWrapsTheParseErrorNamingTheValue(t *testing.T) {
+	const bad = "13/02/2026"
+
+	_, parseErr := parseIssueDate(bad)
+	if parseErr == nil {
+		t.Fatalf("parseIssueDate(%q) returned no error -- the fixture no longer induces a parse failure, so the assertions below prove nothing", bad)
+	}
+	raw := parseErr.Error()
+
+	_, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{
+		Fields: []extractedField{
+			{Name: "invoice_number", Value: mpPtr("INV-EXTR-15-05")},
+			{Name: "issue_date", Value: mpPtr(bad)},
+		},
+	})
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a RowError on issue_date")
+	}
+	if rowErr.Message == raw {
+		t.Errorf("Message = %q, which is parseIssueDate's raw error text verbatim; AC-3 wants it wrapped in a sentence a person can act on", rowErr.Message)
+	}
+	if !strings.Contains(rowErr.Message, bad) {
+		t.Errorf("Message = %q, which never names the offending value %q; a date complaint that hides the date sends the reader hunting", rowErr.Message, bad)
+	}
+}
+
+// --- PS-5 (AC-4) --------------------------------------------------------------------------
+
+// The review screen keys its column off Field, so the key must not move when the message does.
+func TestDocumentCreateInput_EveryQuarantineBranchKeepsItsMachineFieldKey(t *testing.T) {
+	for _, tc := range quarantineBranches() {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rowErr := documentCreateInput("entity-1", "doc-1", tc.ex)
+			if rowErr == nil {
+				t.Fatal("rowErr = nil, want a RowError")
+			}
+			if rowErr.Field != tc.wantField {
+				t.Errorf("Field = %q, want %q", rowErr.Field, tc.wantField)
+			}
+		})
+	}
+}
+
+// --- PS-6 (AC-5) --------------------------------------------------------------------------
+
+// reviewBatch.ts isAlreadyImported keys on rule_key being present. A mapper message that
+// acquired one would render as an already-imported verdict instead of an unreadable row.
+func TestDocumentCreateInput_NoQuarantineMessageCarriesARuleKey(t *testing.T) {
+	for _, tc := range quarantineBranches() {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rowErr := documentCreateInput("entity-1", "doc-1", tc.ex)
+			if rowErr == nil {
+				t.Fatal("rowErr = nil, want a RowError")
+			}
+			if rowErr.RuleKey != "" {
+				t.Errorf("RuleKey = %q, want empty -- a non-empty rule key moves this row into the already-imported channel", rowErr.RuleKey)
+			}
+			if rowErr.Message == "" {
+				t.Error("Message is empty; the assertion above would hold for a RowError that says nothing")
+			}
+		})
+	}
+}
+
+type quarantineBranch struct {
+	name      string
+	ex        SettledExtraction
+	wantField string
+}
+
+// quarantineBranches enumerates every path documentCreateInput returns a RowError from.
+func quarantineBranches() []quarantineBranch {
+	return []quarantineBranch{
+		{name: "poor scan", ex: poorScanFieldSet(), wantField: "invoice_number"},
+		{name: "read document, no number", ex: readDocumentNoNumberFieldSet(), wantField: "invoice_number"},
+		{
+			name: "whitespace-only number",
+			ex: SettledExtraction{Fields: []extractedField{
+				{Name: "invoice_number", Value: mpPtr("   ")},
+			}},
+			wantField: "invoice_number",
+		},
+		{
+			name: "unparseable issue_date",
+			ex: SettledExtraction{Fields: []extractedField{
+				{Name: "invoice_number", Value: mpPtr("INV-EXTR-15-05")},
+				{Name: "issue_date", Value: mpPtr("13/02/2026")},
+			}},
+			wantField: "issue_date",
+		},
 	}
 }

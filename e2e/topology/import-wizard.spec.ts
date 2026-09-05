@@ -64,7 +64,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
 import {
   login,
   apiBase,
@@ -79,6 +79,7 @@ import {
   PERSONAS,
   type CorrectionResponse,
   type ExtractionDetail,
+  type ExtractionJob,
   type ExtractionJobsResponse,
   type ExtractionReason,
   type ExtractionRegion,
@@ -1181,7 +1182,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
 
   // AC-2/[selectability]: CLEAN armed its run at import, VIOLATE only just now (the
   // revalidate above) -- this test holds only invoice NUMBERS, never ids, so recover both
-  // and close their runs before select-all, or isRowSelectable leaves them disabled. The
+  // and close their runs before select-all, or the server answers can_submit:false. The
   // rail-pill toggle below re-fetches the table server-side ([filters-are-server-side],
   // this file's own header), so no separate wait is needed to see the approvals land.
   await approveOpenRunsForEntity(token, entity.id)
@@ -1959,6 +1960,43 @@ function uniqueGarbageBytes(): Buffer {
   return Buffer.concat([Buffer.from('not a pdf at all'), Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// The canonical DOCX type, on both sides of the wire: ACCEPTED_PICKED_TYPES (lib/importFlow.ts)
+// and acceptedDocumentTypes (internal/extraction/classify.go) carry this exact spelling.
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+// A byte-for-byte copy of internal/extraction/testdata/invoice.docx, the fixture the Go
+// golden pins (corpus_wired_db_test.go: ASC-2026-0919 / 2026-08-14 / 4300.00). That golden
+// was recorded through a LOCAL docling; EXTR15-E2E-03 is the first read of these bytes by
+// the DEPLOYED sidecar.
+const GOLDEN_INVOICE_DOCX = readFileSync(join(DOCUMENT_FIXTURES, 'golden_invoice.docx'))
+
+// Fresh bytes per pick, same permanent-enqueue-key reason as uniquePdfBytes() -- but a zip
+// cannot take a trailing comment the way a PDF can. What moves the content hash here is the
+// zip's OWN end-of-central-directory comment: the last 22 bytes are the EOCD record, its
+// comment-length field is the final two, and every reader finds the EOCD by scanning back for
+// its signature. The archive stays readable and every member's offset is untouched.
+// deployedProofGuards.test.ts unzips a freshened copy and reads the golden's number back out.
+function uniqueGoldenDocxBytes(): Buffer {
+  const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
+  const out = Buffer.concat([GOLDEN_INVOICE_DOCX, comment])
+  out.writeUInt16LE(comment.length, GOLDEN_INVOICE_DOCX.length - 2)
+  return out
+}
+
+// A well-formed but EMPTY zip named *.docx -- invoice-surfaces.spec.ts's extr09Docx recipe,
+// rebuilt here because importing it would re-register that file's own tests. 22 bytes of EOCD
+// (PK\x05\x06 then 16 zero bytes) plus a comment that carries the uniqueness. A DOCX is
+// boxless, so the worker skips the render entirely (EXTR-15-02) and this reaches the reader,
+// which cannot convert it: docling answers 422 and the job dead-letters at text_not_read.
+function uniqueEmptyDocxBytes(): Buffer {
+  const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
+  const out = Buffer.alloc(22 + comment.length)
+  out.set([0x50, 0x4b, 0x05, 0x06], 0)
+  out.writeUInt16LE(comment.length, 20)
+  out.set(comment, 22)
+  return out
+}
+
 // The step strip carries no testid, so it is anchored on the 'Import' chip label E2E-10
 // above established is unique here: label span -> chip div -> strip, one chip per direct
 // child div. Self-checking — a wrong ancestor resolves zero chips.
@@ -2018,8 +2056,8 @@ async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T>
   return read()
 }
 
-// The accepted-types line verbatim — the eight tokens this story grew it to.
-const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · PNG · JPG · JPEG · WEBP · DOCX'
+// The accepted-types line verbatim — the four types EXTR-15-03 narrowed it to.
+const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · DOCX'
 
 // kindRefusal() verbatim (lib/importRun.ts owns the copy), both directions — a run's kind
 // is whichever file landed first.
@@ -2273,7 +2311,7 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
   ])
 
   const acceptedLine = page.getByText(ACCEPTED_LINE, { exact: true })
-  await expect(acceptedLine, 'the accepted-types line states all eight types').toBeVisible()
+  await expect(acceptedLine, 'the accepted-types line states every accepted type').toBeVisible()
 
   // The ancestor chain, self-checked: the accepted line's parent is the card's padded
   // content div, whose parent is the card, whose grandparent is the wizard column
@@ -2550,6 +2588,24 @@ test('EXTR10-E2E-01: the document progress card samples a closed vocabulary and 
 // review-routing render, so the text this spec measures might never actually paint.
 // Holding the good pipeline open removes that race structurally: Promise.all cannot
 // resolve, so the card cannot unmount, until this spec explicitly releases it.
+// This upload is *.pdf bytes that are not a PDF, so pdfium fails to open it and the worker
+// dead-letters at pages_not_rendered (worker.go). EXTR-15-04 gives that kind its own sentence,
+// so the needle must be a fragment of THAT sentence and of no other kind's --
+// documentRun.test.ts's TS15-10b is this literal's only local oracle.
+const DEAD_LETTER_NEEDLE = 'it may be damaged, or protected by a password'
+
+// EXTR-15-12 (T1). The WHOLE pages_not_rendered sentence, copied from its sole owner,
+// documentRun.ts's deadLetterRefusal. deployedProofGuards.test.ts reads that function's
+// `case 'pages_not_rendered'` return and fails if this string is not byte-identical.
+const DEAD_LETTER_SENTENCE =
+  'This file is a PDF, and the reader could not open it — it may be damaged, or protected by a password. Enter this invoice manually to carry on.'
+
+// The opening of the kind-less sentence -- deadLetterRefusal's `default` arm, which is what
+// renders when failure_kind never reaches the wire, and the only arm that puts River's own
+// last_error in front of a person. Asserting its ABSENCE is what makes T1 a claim about the
+// kind and not merely about some long reason. Guarded against the same source.
+const GENERIC_FAILURE_OPENING = 'Reading this document failed'
+
 test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating the card', async ({ page }, testInfo) => {
   // Upload+enqueue, ~20-40s River backoff to dead-letter (attempt^4s: 1s then 16s), two
   // widest-first sweeps, then the held release -- matches EXTR09-E2E-01's cold-fleet budget.
@@ -2593,7 +2649,7 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
     if (goodDocId !== null && url.searchParams.get('document_id') === goodDocId) {
       await route.fulfill({
         json: {
-          jobs: [{ id: 'e2e-hold', document_id: goodDocId, state: 'extracting', created_at: new Date().toISOString(), last_error: null }],
+          jobs: [{ id: 'e2e-hold', document_id: goodDocId, state: 'extracting', created_at: new Date().toISOString(), last_error: null, failure_kind: null }],
         },
       })
       return
@@ -2671,9 +2727,20 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
     // The good pipeline is held open, so nothing can route the run away underneath this
     // wait -- the long reason is a stable state here, not a race.
     await expect(badRow, 'the dead-letter reason must render before the long-label sweep').toContainText(
-      'Extraction failed for this document',
+      DEAD_LETTER_NEEDLE,
       { timeout: 90_000 },
     )
+
+    // T1 (EXTR-15-12): the WHOLE sentence, not the fragment above -- a fragment cannot tell a
+    // truncated render from a complete one. And the kind-less sentence must be absent: it is
+    // the arm that renders when failure_kind is null, and the only one that would put River's
+    // raw pdfium error in front of a person.
+    await expect(badRow, 'the row must carry the whole pages_not_rendered sentence').toContainText(DEAD_LETTER_SENTENCE)
+    await expect(
+      badRow,
+      'the row fell back to the kind-less sentence -- failure_kind did not reach this render',
+    ).not.toContainText(GENERIC_FAILURE_OPENING)
+
     longSweep = await sweepWidths('long-label (dead-lettered)')
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
@@ -2940,9 +3007,15 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // It cannot live in e2e/api/extractions.spec.ts: that file creates no row, so it can never
   // hold a settled job (:29-32). This is the only DEPLOYED check of Go's `[]T` nil -> `null`
   // coercion, which no `omitempty`-free struct tag prevents.
+  // EXTR-15-01: failure_kind carries no omitempty, so a job that settled cleanly still sends
+  // the key with an explicit null -- the deployed proof that the tag was not written with one.
   expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
-    ['document', 'document_id', 'fields', 'id', 'pages', 'state'].sort(),
+    ['document', 'document_id', 'failure_kind', 'fields', 'id', 'pages', 'state'].sort(),
   )
+  expect(
+    (detail as unknown as Record<string, unknown>).failure_kind,
+    'a succeeded job must report a null failure_kind, not a value',
+  ).toBeNull()
   expect(Array.isArray(detail.pages), 'pages arrived as null, not []').toBe(true)
   expect(Array.isArray(detail.fields), 'fields arrived as null, not []').toBe(true)
   expect(detail.document, 'document arrived as null').not.toBeNull()
@@ -6449,6 +6522,967 @@ test('EXTR13-LAYOUT-04: the rightmost column is reachable inside the scroll exte
 
   await testInfo.attach('extraction-line-grid-reach.json', {
     body: JSON.stringify({ before, after }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-15-13 (task-857) · AC-1: the spreadsheet flow, untouched -----------------------
+//
+// EXTR-15-09 rewrote 31 copy sites behind a `unit` branch. Its hardest constraint is the one
+// no census can state: the SPREADSHEET arm still renders on the deployed build, byte for byte.
+// reviewCopy.census.test.ts pins BOTH literals of every site in SOURCE; only a browser can say
+// which branch a real CSV run takes.
+//
+// DELIBERATELY ABOVE the EXTR-15 deployed-proof marker below. That span requires every
+// `buffer:` argument inside it to be a fresh-per-call fixture helper, because a repeated
+// document collides on the permanent per-document enqueue key and settles on a previous run's
+// job. A CSV import enqueues no extraction at all, so the rule has nothing to protect here --
+// the span's own header gives that same reason for the file's other Buffer.from(...) probes.
+//
+// TWO imports, because the three literals never share a screen. `ROWS READ` (census R1/R2) is
+// the batch header and `Row` (U4) is the Unreadable tab's grid header, both on the batch
+// surface; `Rows stored` (B5) is a RejectedFile tile, which renders only when NO batch in the
+// run reached 'completed' (reviewShellStateAll, lib/reviewBatch.ts). A header-only file is the
+// one fixture that reaches it.
+//
+// Each literal is asserted WITH its document twin's absence. Presence alone still passes on a
+// screen rendering both branches, which is what a half-landed sweep looks like.
+
+/**
+ * The screen's rendered text, for byte-exact copy claims.
+ *
+ * NOT getByText(string), which is case-INSENSITIVE substring matching: it cannot state
+ * "byte-identical", and it reads the tab label `Already imported (1)` as the tile value
+ * `already imported`. innerText, never textContent -- textContent concatenates across element
+ * boundaries and would manufacture substrings that nothing renders.
+ */
+async function screenText(page: Page): Promise<string> {
+  return (await page.locator('body').innerText()).replace(/\u00a0/g, ' ')
+}
+
+// R1/R2's two arms minus the ${...} each interpolates, copied from the census table
+// (frontend/app/src/lib/reviewCopy.census.test.ts) rather than retyped off the component.
+const SPREADSHEET_READ_LINE = 'ROWS READ · SERVER VERDICT · RULE SET '
+const DOCUMENT_READ_LINE = 'DOCUMENTS READ · SERVER VERDICT · RULE SET '
+
+test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row', async ({ page }) => {
+  // Two full CSV imports through the wizard on a fleet that may be cold. Neither enqueues an
+  // extraction, so this is the cheapest of the EXTR-15 deployed cases.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-15-13 spreadsheet ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // --- import 1: the mixed fixture, whose rows quarantine structurally (E2E-04's own flow) --
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'extr15-sweep.csv', mimeType: 'text/csv', buffer: Buffer.from(buildMixedCsv(), 'utf8') })
+
+  const sweepPreview = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await sweepPreview
+
+  // subtotal has no ALIAS entry, so auto-recognize never places it -- E2E-04's own reasoning.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const sweepImport = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
+  await sweepImport
+
+  // (a) the batch header's counted noun (R1/R2), and the tab label's (R3).
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable rows \(\d+\)$/ })
+  await expect(unreadableTab, "the mixed fixture's structural failures must open this tab").toBeVisible({
+    timeout: 60_000,
+  })
+  await expect(
+    page.getByRole('button', { name: /^Unreadable documents \(/ }),
+    'the document tab label reached a spreadsheet run',
+  ).toHaveCount(0)
+
+  const batchScreen = await screenText(page)
+  expect(batchScreen, 'the batch header must keep the spreadsheet noun').toContain(SPREADSHEET_READ_LINE)
+  expect(batchScreen, 'the document branch reached a spreadsheet run').not.toContain(DOCUMENT_READ_LINE)
+
+  // (b) the Unreadable tab's grid header (U4). Resolved from a SIBLING cell rather than
+  // searched page-wide: an exact 'Row' is three characters and would match a cell elsewhere.
+  // The chain is self-checked by what the resolved row must also contain (EXTR09-E2E-04's idiom).
+  await unreadableTab.click()
+  const whyCell = page.getByText('Why it could not be read', { exact: true })
+  await expect(whyCell, "the unreadable grid's last header cell").toHaveCount(1)
+  const headerRow = whyCell.locator('xpath=..')
+  await expect(
+    headerRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(headerRow.getByText('Row', { exact: true }), 'the row-number column must still be headed Row').toHaveCount(1)
+  await expect(
+    headerRow.getByText('—', { exact: true }),
+    "the document arm's em-dash header reached a spreadsheet run",
+  ).toHaveCount(0)
+
+  // --- import 2: a header-only file, the one fixture reaching RejectedFile (INVCR-E2E-4's) --
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles({
+    name: 'extr15-header-only.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(buildHeaderOnlyCsv(), 'utf8'),
+  })
+
+  const rejectedPreview = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await rejectedPreview
+
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const rejectedImport = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Import 0 rows' }).click()
+  await rejectedImport
+
+  // (c) the RejectedFile tiles (B5/B6) and the sentence above them (B4).
+  await expect(page.getByText('Nothing was imported', { exact: true }), "§7.5's rejected-file surface").toBeVisible({
+    timeout: 60_000,
+  })
+  const rejectedScreen = await screenText(page)
+  expect(rejectedScreen, 'the stored tile must keep the spreadsheet noun').toContain('Rows stored')
+  expect(rejectedScreen, "B5's document arm reached a spreadsheet run").not.toContain('Documents stored')
+  expect(rejectedScreen, 'the quarantined tile must keep the spreadsheet noun').toContain('Rows quarantined')
+  expect(rejectedScreen, "B6's document arm reached a spreadsheet run").not.toContain('Documents quarantined')
+  expect(rejectedScreen, "B4's spreadsheet arm").toContain(
+    'it held no data rows — a spreadsheet with only a header row, for example.',
+  )
+  expect(rejectedScreen, "B4's document arm reached a spreadsheet run").not.toContain(
+    'nothing invoice-shaped could be found in it',
+  )
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// === EXTR-15 · the deployed proof: the terminal states and the hand-off =================
+//
+// GATE-ONLY, every test from here to the EXTR-18-07 marker below. Topology specs run only on
+// the deploy gate and this PR's environment does not exist while the PR is a draft, so none
+// of them has a local oracle beyond `typecheck` + `playwright test --list`.
+//
+// deployedProofGuards.test.ts scans exactly this span -- marker to marker -- and requires
+// every `buffer:` argument inside it to be one of the fresh-per-call fixture helpers. The
+// EXTR-18-07 block below carries the same rule under a narrower allowlist; this span is
+// separate because two of its documents are DOCX, which no unique*PdfBytes() helper mints.
+//
+// --- EXTR-15-07 (task-833) · the hand-off row's geometry --------------------------------
+//
+// AC-10, authored in Mode A and UNEXECUTED here: topology specs run only on the deploy
+// gate, and this PR's environment does not exist until it leaves draft. Subtask 13 is what
+// runs it. The local oracle at authoring time was `pnpm --filter @invoice-os/e2e typecheck`
+// plus `playwright test --list`.
+//
+// Placed ABOVE the EXTR-18-07 block deliberately: deployedProofGuards.test.ts scans that
+// block from its marker to EOF and requires every `buffer:` argument in it to be a
+// `unique*PdfBytes()` call. This test's fixture is uniqueGarbageBytes() — fresh per call for
+// the same enqueue-key reason, but not a PDF and not that helper family.
+//
+// Reached by a run whose ONLY file dead-letters: routeAfterRun answers `none`, applyRoute
+// calls markRunFailed, and CreateFlow renders the failures card on the 'documents' step.
+// A single-file run removes EXTR10-E2E-02's race entirely -- 'failed' is terminal, so the
+// card cannot be routed out from under the sweep and nothing needs holding open.
+//
+// Containment is measured with overlapOf (layout.ts:68-77), which returns a Rect. The
+// identity `overlapOf(inner, outer) === inner` is the only expression of "inner is wholly
+// inside outer"; rectsOverlap (layout.ts:55-58) returns a boolean and is true for a row
+// hanging half out of its card, so it cannot state this at all.
+//
+// NO ASSERTION STATES A PIXEL WIDTH. A width assertion passes on the very bug it should
+// catch (a row that fits at 2560 and overflows at 1280 has the same width at both). What
+// is asserted instead is a RELATIONSHIP that must hold at every width.
+function sameRect(a: Rect, b: Rect, slackPx = 1): boolean {
+  return (
+    Math.abs(a.x - b.x) <= slackPx &&
+    Math.abs(a.y - b.y) <= slackPx &&
+    Math.abs(a.width - b.width) <= slackPx &&
+    Math.abs(a.height - b.height) <= slackPx
+  )
+}
+
+test('EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutter holds at every width', async ({
+  page,
+}, testInfo) => {
+  // Upload + enqueue + River's attempt^4s backoff to dead-letter, four widths, then AC-5's
+  // hand-off journey (a filing plus an invoice-detail load) on the far side of all of it.
+  test.setTimeout(420_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `EXTR-15-07 handoff ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  // Registered before the pick, same reason as EXTR09-E2E-01's own waiter: the upload can
+  // resolve before an awaited setInputFiles returns. AC-5 below compares the filed invoice's
+  // source document against THIS id.
+  const documentPost = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/submission/v1/documents'),
+    { timeout: 120_000 },
+  )
+  // *.pdf bytes that are not a PDF: pdfium refuses it on all three attempts and the worker
+  // dead-letters deterministically (uniqueGarbageBytes' own doc comment).
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'handoff-dead-letter.pdf', mimeType: 'application/pdf', buffer: uniqueGarbageBytes() })
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  const handOffDocumentId = ((await (await documentPost).json()) as { document_id?: string }).document_id
+  expect(handOffDocumentId, 'the refused document must still be stored').toMatch(/^[0-9a-fA-F-]{36}$/)
+
+  const card = page.getByTestId('document-failures-card')
+  await expect(card, 'an all-failed document run must land on the failures card').toBeVisible({ timeout: 180_000 })
+
+  const rows = page.getByTestId('document-failure-row')
+  // Non-empty FIRST: an empty locator satisfies every containment check below vacuously.
+  await expect(rows, 'the failure must render as its own row').toHaveCount(1)
+  await expect(rows.first(), 'the row must name why the document was refused').toContainText(DEAD_LETTER_NEEDLE)
+
+  const button = rows.first().getByRole('button', { name: 'Enter it by hand' })
+  await expect(button, 'a stored document must offer the hand-off').toHaveCount(1)
+  const reason = rows.first().locator('span').filter({ hasText: DEAD_LETTER_NEEDLE }).first()
+  await expect(reason, 'the reason sentence must be measurable').toHaveCount(1)
+
+  type Sample = { width: number; clearance: number; rowWidth: number }
+  const samples: Sample[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first — WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the
+    // window gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [cardBox, rowBox, reasonBox, buttonBox, rowEdges] = await Promise.all([
+          card.boundingBox(),
+          rows.first().boundingBox(),
+          reason.boundingBox(),
+          button.boundingBox(),
+          rows.first().evaluate(edgesOf),
+        ])
+        return { cardBox, rowBox, reasonBox, buttonBox, rowEdges }
+      }
+      const m = await settledRead(read, `hand-off row at ${width}px`)
+      expect(
+        m.cardBox && m.rowBox && m.reasonBox && m.buttonBox,
+        `card, row, reason and button must all render at ${width}px`,
+      ).toBeTruthy()
+
+      // (a) the row is CONTAINED by the card — the intersection is the row's own rect.
+      expect(
+        sameRect(overlapOf(m.rowBox!, m.cardBox!), m.rowBox!),
+        `the row must sit wholly inside the card at ${width}px (row ${JSON.stringify(m.rowBox)}, card ${JSON.stringify(m.cardBox)})`,
+      ).toBe(true)
+
+      // (b) the reason and the control are both contained by their row, same identity.
+      expect(
+        sameRect(overlapOf(m.reasonBox!, m.rowBox!), m.reasonBox!),
+        `the reason must sit wholly inside its row at ${width}px (reason ${JSON.stringify(m.reasonBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+      expect(
+        sameRect(overlapOf(m.buttonBox!, m.rowBox!), m.buttonBox!),
+        `the control must sit wholly inside its row at ${width}px (button ${JSON.stringify(m.buttonBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+
+      // (c) the gutter between the control's right edge and the row's right CONTENT edge
+      // (edgesOf subtracts the row's own border and padding, so this is the gap the
+      // recipe's `padding: '10px 14px'` declares, not the border box).
+      samples.push({
+        width,
+        clearance: m.rowEdges.right - (m.buttonBox!.x + m.buttonBox!.width),
+        rowWidth: m.rowBox!.width,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(
+    samples.map((s) => s.width),
+    'every WIDE_WIDTHS entry must be measured, widest first',
+  ).toEqual([...WIDE_WIDTHS])
+
+  // The gutter is a RELATIONSHIP, compared against this run's own widest reading rather
+  // than a literal. A row that fits at 2560 and overflows at 1280 moves this number;
+  // a row whose width merely changes with the viewport does not.
+  const widest = samples[0].clearance
+  for (const s of samples) {
+    expect(
+      Math.abs(s.clearance - widest),
+      `the control's clearance from the row's right content edge must not change with the viewport (${s.width}px: ${s.clearance}, 2560px: ${widest})`,
+    ).toBeLessThanOrEqual(1)
+    expect(s.clearance, `the control must not overflow the row's right content edge at ${s.width}px`).toBeGreaterThanOrEqual(-0.5)
+  }
+
+  // --- AC-5 (EXTR-15-12): the single-document hand-off, end to end -----------------------
+  //
+  // The geometry above proved the control is THERE. This walks it: enabled under a persona
+  // whose entity is resolved, then the manual form, then a real filing, then the document
+  // reappearing on the invoice's own detail screen. Appended to this test rather than given
+  // its own so the ~3-minute dead-letter wait is paid once.
+  await expect(button, 'a resolved entity must arm the hand-off, not merely render it').toBeEnabled()
+  await button.click()
+
+  const handOffNumber = `EXTR15-HO-${Date.now()}`
+  const invoiceId = await fileHandOffDraft(page, handOffNumber)
+
+  // The affirmation is the server's own row, the same one every other filing path lands on.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(handOffNumber)
+
+  // Equality against the file that was uploaded, never "a card is present": the card renders
+  // for an invoice with NO document too, and says so.
+  const sourceCard = page.getByTestId('source-document-card')
+  await expect(sourceCard, "the hand-off's document must reach the invoice it produced").toContainText(
+    'handoff-dead-letter.pdf',
+  )
+  await expect(page.getByTestId('view-source-document'), 'the stored file must be openable from here').toHaveCount(1)
+  await expect(
+    page.getByTestId('why-no-source-document'),
+    'the card took its no-document arm -- source_document_id never crossed the create wire',
+  ).toHaveCount(0)
+
+  // And the wire behind it, read with this run's own token: the card renders a filename, and
+  // two documents in one tenant can share one.
+  const source = await readSourceDocument(token, invoiceId)
+  expect(source.document, 'the source-document read returned no document for a hand-off invoice').not.toBeNull()
+  expect(source.document!.id, "the invoice names a document that is not the one that failed").toBe(handOffDocumentId)
+
+  await testInfo.attach('handoff-row-geometry.json', {
+    body: JSON.stringify(samples, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-15-12 (task-836) · the pipeline, proved on the deployed build -----------------
+//
+// Three claims EXTR-15 makes that have no honest unit oracle, and can only be settled here:
+//   1. the DEPLOYED sidecar reads a real DOCX -- the Go golden was recorded through a LOCAL
+//      docling, and this project has already been burned by that once (a local canary read
+//      55 OCR tokens where Railway read zero);
+//   2. a hand-off from a MULTI-document run attaches the row's own document -- every other
+//      guard on this is a mocked fixture, and a mock cannot catch an id-mapping defect
+//      because the mock is where the id mapping is asserted;
+//   3. a boxless format that the reader cannot open dead-letters at text_not_read, the kind
+//      whose sentence EXTR-15-04 wrote.
+
+/** Fills the manual form the hand-off lands on, files it, and returns the new invoice's id. */
+async function fileHandOffDraft(page: Page, invoiceNumber: string): Promise<string> {
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn, 'the hand-off must land on the manual entry form').toBeVisible({ timeout: 60_000 })
+
+  // A fresh number per call: defaultDraft seeds a FIXED literal and
+  // (tenant_id, entity_id, invoice_number) is unique, so a Playwright retry would 409 on the
+  // row its own first attempt filed.
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  await expect(fileBtn, 'a resolved entity and a non-blank number must arm the primary').toBeEnabled()
+
+  const [res] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'),
+      { timeout: 60_000 },
+    ),
+    fileBtn.click(),
+  ])
+  expect(res.status(), 'the hand-off filing must be a 201').toBe(201)
+  const id = ((await res.json()) as { id?: string }).id
+  expect(id, 'the create response carried no invoice id').toMatch(/^[0-9a-fA-F-]{36}$/)
+
+  await expect(page.getByTestId('invoice-detail'), 'a filed hand-off must land on the real invoice detail').toBeVisible({
+    timeout: 60_000,
+  })
+  return id as string
+}
+
+// A narrow local type over GET /v1/invoices/{id}/source-document rather than a client.ts
+// helper: frontend/app already mirrors this body key-for-key under wireMirrors.test.ts, and a
+// second typed mirror here would be one more thing to keep in step for one assertion.
+interface SourceDocumentBody {
+  invoice_id: string
+  source_rows: number[] | null
+  document: { id: string; filename: string | null } | null
+}
+
+async function readSourceDocument(token: string, invoiceId: string): Promise<SourceDocumentBody> {
+  const res = await fetch(`${apiBase()}/api/invoice/v1/invoices/${invoiceId}/source-document`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(res.status, `GET /v1/invoices/${invoiceId}/source-document`).toBe(200)
+  return (await res.json()) as SourceDocumentBody
+}
+
+/**
+ * Runs N documents through the wizard in ONE run and returns each one's stored id and the job
+ * it settled on. Asserts NO landing: the three tests below each land somewhere different (the
+ * invoice detail, the review batch surface, the failures card), so a helper that picked one
+ * would be wrong for the other two — each states its own.
+ */
+async function runDocuments(
+  page: Page,
+  label: string,
+  files: { name: string; mimeType: string; buffer: Buffer }[],
+): Promise<{
+  token: string
+  entityId: string
+  documentIds: Record<string, string>
+  jobs: Record<string, ExtractionJob>
+}> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  return { token, entityId: entity.id, ...(await runDocumentsIn(page, token, files)) }
+}
+
+/**
+ * runDocuments' wizard half: pick, extract and settle N documents in the entity the page has
+ * ALREADY selected. Split out for EXTR15-E2E-06 (EXTR-15-13), which needs a SECOND run in the
+ * same entity — a cross-run collision is the only way the already-imported channel has a
+ * determined winner.
+ *
+ * The route handler is registered per call. Playwright matches the most recently added handler
+ * first, so an earlier run's `files` closure never sees this run's uploads.
+ */
+async function runDocumentsIn(
+  page: Page,
+  token: string,
+  files: { name: string; mimeType: string; buffer: Buffer }[],
+): Promise<{ documentIds: Record<string, string>; jobs: Record<string, ExtractionJob> }> {
+  const documentIds: Record<string, string> = {}
+  // Recorded INSIDE the POST route, EXTR10-E2E-02's own idiom: the handler completes before
+  // the app can see the response, so no poll for this document can precede the assignment. A
+  // page.on('response') listener cannot give that ordering.
+  //
+  // Named and unrouted below, never an inline closure: this helper is called twice on one page
+  // by EXTR15-E2E-06, and a handler left installed by the first call still matches the second
+  // call's uploads while searching them for the FIRST call's filenames -- finding none, writing
+  // nothing, and fulfilling the request so the live handler never sees it.
+  const captureUpload = async (route: Route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const body = requestBody(route.request())
+    const res = await route.fetch()
+    const text = await res.text()
+    try {
+      const parsed = JSON.parse(text) as { document_id?: string }
+      // The multipart body carries `filename="…"` in ASCII near its head, so this resolves
+      // even though the rest of it is binary.
+      const named = files.find((f) => body.includes(f.name))
+      if (named && typeof parsed.document_id === 'string') documentIds[named.name] = parsed.document_id
+    } catch {
+      /* fulfil unchanged; the poll below fails loudly if the upload really broke */
+    }
+    await route.fulfill({ response: res, body: text })
+  }
+  await page.route('**/api/submission/v1/documents', captureUpload)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
+  await page.getByRole('button', { name: 'Extract invoices' }).click()
+
+  await expect
+    .poll(() => Object.keys(documentIds).length, {
+      message: `not every document reached storage (${JSON.stringify(documentIds)})`,
+      timeout: 120_000,
+    })
+    .toBe(files.length)
+  // Every upload is captured, so the handler has nothing left to do and must not outlive this
+  // call -- see captureUpload's own note.
+  await page.unroute('**/api/submission/v1/documents', captureUpload)
+
+  const jobs: Record<string, ExtractionJob> = {}
+  for (const f of files) {
+    await expect
+      .poll(
+        async () => {
+          const { jobs: found } = await getExtractions(token, documentIds[f.name])
+          const job = found[0]
+          if (!job) return 'no job for this document yet'
+          jobs[f.name] = job
+          // 'failed' is NOT terminal — River retries it; only succeeded/dead_lettered end it.
+          return job.state === 'succeeded' || job.state === 'dead_lettered' ? 'terminal' : job.state
+        },
+        { message: `${f.name}'s extraction never reached a terminal state`, timeout: 240_000, intervals: [1_000] },
+      )
+      .toBe('terminal')
+  }
+  return { documentIds, jobs }
+}
+
+const GOLDEN_DOCX_NAME = 'golden_invoice.docx'
+const EMPTY_DOCX_NAME = 'empty_container.docx'
+
+test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling', async ({
+  page,
+}) => {
+  // Two documents through a cold sidecar, then a filing and a detail load.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  const scannedName = 'scanned_invoice.pdf'
+  const denseName = 'dense_invoice.pdf'
+  // Both quarantine, for DIFFERENT measured reasons, and neither needs a new artifact: the
+  // scan settles document_text_layer = unreadable with no number at all, and the dense page's
+  // label OCRs as "INV0ICE NO:" so its invoice_number settles missing (D-33). They carry
+  // different filenames and different document ids, so the two rows are genuinely
+  // distinguishable — a pair whose items are naturally equal proves nothing.
+  const { token, documentIds } = await runDocuments(page, 'EXTR-15-12 two documents', [
+    { name: scannedName, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+  ])
+
+  expect(
+    documentIds[scannedName],
+    'both files resolved to ONE stored document -- the pair cannot discriminate anything below',
+  ).not.toBe(documentIds[denseName])
+
+  // (a) routeAfterRun cannot take the 'single' arm on a two-file run (lib/importRun.ts), so
+  // the landing is the review surface carrying EVERY batch id. The hash is where that id list
+  // is observable: App.tsx mirrors reviewBatchIds into it, one id per batch.
+  await expect
+    .poll(() => new URL(page.url()).hash, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+
+  // (b) both documents reach the Unreadable tab, told apart by their own file labels. A
+  // tab-level scalar document id would pass a same-document pair; two labelled rows cannot.
+  // The tab is matched on its prefix, not on its count: the count is a second statement of
+  // what toHaveCount below already asserts, and matching it here would fail one step earlier
+  // with a locator error instead of a row count.
+  const unreadableTab = page.getByRole('button', { name: /^Unreadable documents \(/ })
+  await expect(unreadableTab, 'neither document quarantined -- there is no unreadable tab').toHaveCount(1)
+  await unreadableTab.click()
+
+  const unreadableRows = page.getByTestId('unreadable-row')
+  await expect(unreadableRows, 'both documents must render as their own rows').toHaveCount(2)
+  const rowLabels = await unreadableRows.evaluateAll((els) => els.map((el) => el.textContent ?? ''))
+  const scannedIdx = rowLabels.findIndex((t) => t.includes(scannedName))
+  const denseIdx = rowLabels.findIndex((t) => t.includes(denseName))
+  expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
+  expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+
+  // (c) the SCANNED row's own control, and the invoice it produces named by equality against
+  // the scanned document — never "is not null", which the dense document would satisfy too.
+  const scannedButton = unreadableRows.nth(scannedIdx).getByRole('button', { name: 'Enter it by hand' })
+  await expect(scannedButton, 'a resolved entity must arm the hand-off on this row').toBeEnabled()
+  await scannedButton.click()
+
+  const invoiceNumber = `EXTR15-MULTI-${Date.now()}`
+  const invoiceId = await fileHandOffDraft(page, invoiceNumber)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoiceNumber)
+
+  const source = await readSourceDocument(token, invoiceId)
+  expect(source.document, 'the filed invoice names no source document at all').not.toBeNull()
+  expect(source.document!.id, "the hand-off attached the wrong row's document").toBe(documentIds[scannedName])
+  expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[denseName])
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+/**
+ * Waits for a document run to come to REST and names the surface it stopped on. An
+ * OBSERVATION: the caller attaches the answer rather than asserting it, so a routing change
+ * moves a recorded string instead of reddening a case about extraction.
+ */
+async function settledRunSurface(page: Page): Promise<string> {
+  let seen = 'nothing yet'
+  await expect
+    .poll(
+      async () => {
+        if (await page.getByTestId('invoice-detail').isVisible()) seen = 'invoice detail'
+        else if (await page.getByTestId('review-table').isVisible()) seen = 'review batch surface'
+        else if (await page.getByText(/^BATCH /).first().isVisible()) seen = 'review batch surface'
+        else if (await page.getByTestId('document-failures-card').isVisible()) seen = 'the failures card'
+        else seen = 'nothing yet'
+        return seen !== 'nothing yet'
+      },
+      { message: 'the run never came to rest on any surface', timeout: 180_000 },
+    )
+    .toBe(true)
+  return seen
+}
+
+test('EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its printed fields', async ({ page }, testInfo) => {
+  // One DOCX on a fleet that may be cold, then the import and the detail landing.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  const { token, jobs } = await runDocuments(page, 'EXTR-15-12 docx', [
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  const job = jobs[GOLDEN_DOCX_NAME]
+  expect(
+    job.state,
+    `the DOCX did not settle succeeded (kind ${job.failure_kind ?? 'null'}, error ${job.last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  const detail = await getExtractionDetail(token, job.id)
+  // Zero pages is the CONTRACT, not an absence of evidence: pageImageFormats marks DOCX
+  // boxless (classify.go), so worker.go skips the render, the page rows and the layout.
+  expect(detail.pages, 'a boxless format must write no page rows').toEqual([])
+
+  // Equality on all three, never a negation: a reachable-but-EMPTY sidecar settles succeeded
+  // with every field absent, and `undefined !== 'MOCK-INV-0001'` passes on exactly that. Three
+  // fields, so one lucky read cannot carry the case. The values are the Go golden's
+  // (corpus_wired_db_test.go's TestRLS_DocxFixtureResolvesNamedFields), which was recorded
+  // through a local docling -- this is the first read of them by the deployed one.
+  const valueOf = (name: string) => {
+    const f = detail.fields.find((x) => x.name === name)
+    expect(f, `no ${name} field on the wire (fields: ${detail.fields.map((x) => x.name).join(', ') || 'none'})`).toBeTruthy()
+    return f!.value
+  }
+  expect(valueOf('invoice_number'), "the settled number is not the DOCX's printed number").toBe('ASC-2026-0919')
+  expect(valueOf('issue_date'), "the settled date is not the DOCX's printed date").toBe('2026-08-14')
+  expect(valueOf('total'), "the settled total is not the DOCX's printed total").toBe('4300.00')
+
+  // OBSERVED, not asserted. Which surface the run lands on is routeAfterRun's business and
+  // no AC of this story's; what this waits for is the run coming to REST, so the console gate
+  // below reads a finished journey rather than one mid-navigation.
+  const landing = await settledRunSurface(page)
+  await testInfo.attach('docx-run-landing.txt', { body: landing, contentType: 'text/plain' })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not_read', async ({ page }) => {
+  // Upload plus River's three attempts at attempt^4s backoff, each one a fast 422.
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const { jobs } = await runDocuments(page, 'EXTR-15-12 empty docx', [
+    { name: EMPTY_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueEmptyDocxBytes() },
+  ])
+  const job = jobs[EMPTY_DOCX_NAME]
+  expect(job.state, 'a DOCX the reader refuses must dead-letter, not succeed').toBe('dead_lettered')
+
+  // EQUALITY, never "not pages_not_rendered": four other kinds satisfy that negation, and the
+  // whole claim here is that the render stage never ran at all for a boxless format.
+  expect(
+    job.failure_kind,
+    `the kind was ${job.failure_kind ?? 'null'} (error ${job.last_error ?? 'none'})`,
+  ).toBe('text_not_read')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// --- EXTR-15-13 (task-857) · AC-2/AC-3: the document unit, rendered and contained --------
+//
+// AC-2 is EXTR15-E2E-05's mirror: the DOCUMENT arm of the same census sites, on the deployed
+// build. AC-3 is the containment sweep over what this story LENGTHENED -- the hand-off control
+// subtask 11 put in the Unreadable tab, and the two "Not imported" tiles whose text grew
+// ("already in the register" is six characters longer than "already imported").
+//
+// ONE test for both, because the journey is the expensive part: three extractions on a fleet
+// that may be cold. EXTR15-E2E-01 folds its AC-5 walk into its geometry sweep for the same
+// reason.
+//
+// TWO RUNS IN ONE ENTITY, and that ordering IS the oracle. The already-imported channel needs
+// the colliding invoice to exist BEFORE the second import runs. Two copies inside one run
+// would race -- startDocumentRun imports through Promise.all (lib/documentRun.ts) -- and while
+// the SHAPE would still hold (storeDuplicateRowError sets rule_key on both the up-front
+// precheck and the racing-INSERT backstop, and isAlreadyImported reads only that key), nothing
+// would say WHICH file landed in which channel, and this case names files.
+//
+// Run 2's second file is scanned_invoice.pdf, EXTR15-E2E-02's own choice and for its reason:
+// it settles SUCCEEDED with no readable number, so the import quarantines it into the
+// unreadable channel with its document id attached (EXTR-15-10) -- which is what puts a
+// hand-off control on the row at all. A file that dead-letters produces no batch and never
+// reaches this screen.
+//
+// NO LOCAL ORACLE, like every case in this span. If the deployed sidecar reads either fixture
+// differently from EXTR15-E2E-02/03's measurements, this reds on a job state or a tab count
+// with a message naming which.
+
+const REPEAT_DOCX_NAME = 'golden_invoice_again.docx'
+const QUARANTINED_PDF_NAME = 'scanned_invoice.pdf'
+// The golden's printed number, the same literal EXTR15-E2E-03 asserts off the wire.
+const GOLDEN_DOCX_NUMBER = 'ASC-2026-0919'
+
+test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width', async ({
+  page,
+}, testInfo) => {
+  // Three extractions across two runs on a fleet that may be cold, then a four-width sweep.
+  test.setTimeout(900_000)
+  const errors = collectErrors(page)
+
+  // --- run 1: one DOCX, whose invoice is what run 2 collides with ------------------------
+  const { token, entityId, jobs: seedJobs } = await runDocuments(page, 'EXTR-15-13 register', [
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  expect(
+    seedJobs[GOLDEN_DOCX_NAME].state,
+    `the seeding DOCX did not settle succeeded (kind ${seedJobs[GOLDEN_DOCX_NAME].failure_kind ?? 'null'}, error ${seedJobs[GOLDEN_DOCX_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  // The precondition read off the REGISTER, not off the landing: which surface run 1 ends on is
+  // routeAfterRun's business and no AC of this story's, but the invoice existing is the whole
+  // basis of run 2. Listed by entity rather than searched by `q`, so nothing here depends on
+  // the search predicate's matching rules.
+  // POLLED, not read once: a settled extraction is not a filed invoice. The SPA calls the
+  // import endpoint AFTER the job reaches its terminal state, so a single read here races the
+  // write it is checking for and returns an empty register.
+  await expect
+    .poll(
+      async () => (await listInvoices(token, { entity_id: entityId, limit: 50 })).invoices.map((i) => i.invoice_number),
+      {
+        message: 'run 1 stored no invoice under the golden number -- run 2 has nothing to collide with',
+        timeout: 120_000,
+        intervals: [1_000],
+      },
+    )
+    .toContain(GOLDEN_DOCX_NUMBER)
+
+  // --- run 2: the same document again, beside one that quarantines -----------------------
+  const { jobs } = await runDocumentsIn(page, token, [
+    { name: REPEAT_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+    { name: QUARANTINED_PDF_NAME, mimeType: 'application/pdf', buffer: uniqueScannedPdfBytes() },
+  ])
+  expect(jobs[REPEAT_DOCX_NAME].state, 'the repeat DOCX must read as well as the first one did').toBe('succeeded')
+  expect(
+    jobs[QUARANTINED_PDF_NAME].state,
+    `the scan settled ${jobs[QUARANTINED_PDF_NAME].state} (kind ${jobs[QUARANTINED_PDF_NAME].failure_kind ?? 'null'}) -- a dead-letter writes no batch and never reaches the review screen`,
+  ).toBe('succeeded')
+
+  // Two files cannot take routeAfterRun's 'single' arm, so the landing is the review surface
+  // carrying both batch ids -- EXTR15-E2E-02's own reading of the hash.
+  await expect
+    .poll(() => new URL(page.url()).hash, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+
+  // --- AC-2: the header, the tiles and both tab labels ----------------------------------
+  const registerTabName = 'Already imported (1)'
+  const unreadableTabName = 'Unreadable documents (1)'
+  await expect(
+    page.getByRole('button', { name: unreadableTabName }),
+    'the scan must quarantine into its own tab, labelled in documents',
+  ).toHaveCount(1)
+  await expect(
+    page.getByRole('button', { name: registerTabName }),
+    'the repeat DOCX must collide into the already-imported channel',
+  ).toHaveCount(1)
+  await expect(
+    page.getByRole('button', { name: /^Unreadable rows \(/ }),
+    'the spreadsheet tab label reached a document run',
+  ).toHaveCount(0)
+
+  const header = await screenText(page)
+  expect(header, 'the batch header must count documents (R1/R2)').toContain(`2 ${DOCUMENT_READ_LINE}`)
+  expect(header, 'the spreadsheet branch reached a document run').not.toContain(SPREADSHEET_READ_LINE)
+  expect(header, "B1's document arm").toContain('Built from 0 documents. Every one of these exists in the ledger')
+  expect(header, "B1's spreadsheet arm reached a document run").not.toContain(
+    'rows. Every one of these exists in the ledger',
+  )
+  expect(header, "B8's document arm -- the AC's own wording").toContain('1 already in the register')
+  expect(header, "B10's document arm").toContain('1 invoices already in the register. Nothing to fix.')
+  expect(header, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
+  expect(header, "B2's document arm").toContain('1 unreadable documents')
+  expect(header, "B2's spreadsheet arm reached a document run").not.toContain('1 unreadable rows')
+
+  // --- AC-2: the already-imported tab body ----------------------------------------------
+  await page.getByRole('button', { name: registerTabName }).click()
+  const register = await screenText(page)
+  expect(register, "A3's document arm").toContain('1 documents were already in the register')
+  expect(register, "A4's document arm").toContain(
+    'These documents are already in the register, so the import had nothing new to add. Nothing is wrong with them and there is nothing to correct.',
+  )
+  expect(register, "A7's document arm").toContain('1 of 2 documents were already in the register.')
+  expect(register, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
+
+  // A5/A6: the grid header, resolved from a sibling cell for the reason EXTR15-E2E-05 gives.
+  const registerVerdictCell = page.getByText('Invoice already in the register', { exact: true })
+  await expect(registerVerdictCell, "the already-imported grid's verdict header (A6)").toHaveCount(1)
+  const registerHeaderRow = registerVerdictCell.locator('xpath=..')
+  await expect(
+    registerHeaderRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(registerHeaderRow.getByText('—', { exact: true }), "A5's document arm").toHaveCount(1)
+  await expect(
+    registerHeaderRow.getByText('Row', { exact: true }),
+    "A5's spreadsheet arm reached a document run",
+  ).toHaveCount(0)
+
+  // --- AC-2: the unreadable tab body, and the row AC-3 then measures ---------------------
+  await page.getByRole('button', { name: unreadableTabName }).click()
+  const unreadable = await screenText(page)
+  expect(unreadable, "U2's document arm").toContain('1 documents never became invoices')
+  expect(unreadable, "U3's document arm").toContain(
+    'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.',
+  )
+  expect(unreadable, "U3's spreadsheet arm reached a document run").not.toContain('The importer could not read them')
+  expect(unreadable, "U5's document arm").toContain('1 of 2 documents. The invoices that did import are unaffected.')
+
+  const whyCell = page.getByText('Why it could not be read', { exact: true })
+  await expect(whyCell, "the unreadable grid's last header cell").toHaveCount(1)
+  const unreadableHeaderRow = whyCell.locator('xpath=..')
+  await expect(
+    unreadableHeaderRow.getByText('File', { exact: true }),
+    'the resolved element is the header row, not the card around it',
+  ).toHaveCount(1)
+  await expect(unreadableHeaderRow.getByText('—', { exact: true }), "U4's document arm").toHaveCount(1)
+  await expect(
+    unreadableHeaderRow.getByText('Row', { exact: true }),
+    "U4's spreadsheet arm reached a document run",
+  ).toHaveCount(0)
+
+  // --- AC-3: the containment sweep ------------------------------------------------------
+  //
+  // Non-empty FIRST, every time: an empty locator satisfies every containment check below
+  // vacuously, and on a broken deploy that is exactly how this sweep would go green.
+  const row = page.getByTestId('unreadable-row')
+  await expect(row, 'the scan must render as its own row').toHaveCount(1)
+  await expect(row.first(), 'the row must name the file it came from').toContainText(QUARANTINED_PDF_NAME)
+  const card = row.first().locator('xpath=..')
+  await expect(card, 'the resolved parent is the grid card, which also carries the header').toContainText(
+    'Why it could not be read',
+  )
+  const handOff = row.first().getByRole('button', { name: 'Enter it by hand' })
+  await expect(handOff, 'a stored document must offer the hand-off (EXTR-15-11)').toHaveCount(1)
+
+  // The two tiles this story lengthened, each resolved from its VALUE text up to the Tile root
+  // (ReviewBatch.tsx's Tile renders value and caption as the two children of one div). Each
+  // chain is self-checked by the caption its tile must also carry.
+  const registerTileValue = page.getByText('1 already in the register', { exact: true })
+  await expect(registerTileValue, "B8's tile value").toHaveCount(1)
+  const registerTile = registerTileValue.locator('xpath=..')
+  await expect(registerTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
+    'Nothing to fix.',
+  )
+  const unreadableTileValue = page.getByText('1 unreadable documents', { exact: true })
+  await expect(unreadableTileValue, "B2's tile value").toHaveCount(1)
+  const unreadableTile = unreadableTileValue.locator('xpath=..')
+  await expect(unreadableTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
+    'No invoice exists for them.',
+  )
+
+  type Fit = { width: number; rowSlack: number; handOffSlack: number; registerSlack: number; unreadableSlack: number }
+  const fits: Fit[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22): a cap strands only what the window
+    // gives it room to strand.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [cardBox, rowBox, handOffBox, rowEdges, registerText, registerBox, unreadableText, unreadableBox] =
+          await Promise.all([
+            card.boundingBox(),
+            row.first().boundingBox(),
+            handOff.boundingBox(),
+            row.first().evaluate(edgesOf),
+            registerTileValue.evaluate(edgesOf),
+            registerTile.evaluate(edgesOf),
+            unreadableTileValue.evaluate(edgesOf),
+            unreadableTile.evaluate(edgesOf),
+          ])
+        return { cardBox, rowBox, handOffBox, rowEdges, registerText, registerBox, unreadableText, unreadableBox }
+      }
+      const m = await settledRead(read, `document review screen at ${width}px`)
+      expect(m.cardBox && m.rowBox && m.handOffBox, `card, row and control must all render at ${width}px`).toBeTruthy()
+
+      // (a) the row is CONTAINED by its card -- the intersection is the row's own rect.
+      // rectsOverlap (layout.ts:55-58) is a boolean and is true for a row hanging half out, so
+      // it cannot state this at all; overlapOf returns the Rect that can.
+      expect(
+        sameRect(overlapOf(m.rowBox!, m.cardBox!), m.rowBox!),
+        `the row must sit wholly inside its card at ${width}px (row ${JSON.stringify(m.rowBox)}, card ${JSON.stringify(m.cardBox)})`,
+      ).toBe(true)
+
+      // (b) the hand-off control is contained by its row, the same identity. This is the
+      // subtask-11 control, and it lives inside the row's 1fr track -- the one track that can
+      // be squeezed to nothing.
+      expect(
+        sameRect(overlapOf(m.handOffBox!, m.rowBox!), m.handOffBox!),
+        `the hand-off control must sit wholly inside its row at ${width}px (button ${JSON.stringify(m.handOffBox)}, row ${JSON.stringify(m.rowBox)})`,
+      ).toBe(true)
+
+      // (c) the row's four grid tracks fit the box the card gave it. (a) cannot see this: a
+      // grid container keeps its own width while its tracks overflow, so the box stays inside
+      // the card while the cells hang out of it.
+      expect(
+        m.rowEdges.scrollWidth,
+        `the row's grid tracks overflow their own box at ${width}px (${m.rowEdges.scrollWidth} > ${m.rowEdges.clientWidth})`,
+      ).toBeLessThanOrEqual(m.rowEdges.clientWidth + 1)
+
+      // (d) each lengthened tile value stays inside its tile, and its TEXT fits the box it was
+      // given. Both, never one: a block child keeps its parent's content width while the text
+      // inside it overflows, so the edge check alone passes on the very defect this guards.
+      for (const [label, text, tile] of [
+        ['the already-in-the-register tile', m.registerText, m.registerBox],
+        ['the unreadable-documents tile', m.unreadableText, m.unreadableBox],
+      ] as const) {
+        expect(text.outerLeft, `${label}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
+          tile.left - 0.5,
+        )
+        expect(text.outerRight, `${label}'s value must end inside its tile at ${width}px`).toBeLessThanOrEqual(
+          tile.right + 0.5,
+        )
+        expect(
+          text.scrollWidth,
+          `${label}'s value text overflows its own box at ${width}px (${text.scrollWidth} > ${text.clientWidth})`,
+        ).toBeLessThanOrEqual(text.clientWidth + 1)
+      }
+
+      fits.push({
+        width,
+        rowSlack: m.rowEdges.clientWidth - m.rowEdges.scrollWidth,
+        handOffSlack: m.rowEdges.right - (m.handOffBox!.x + m.handOffBox!.width),
+        registerSlack: m.registerBox.right - m.registerText.outerRight,
+        unreadableSlack: m.unreadableBox.right - m.unreadableText.outerRight,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  // The sweep ran every width, in order -- a loop that measured fewer would otherwise pass on
+  // whatever it did reach.
+  expect(fits.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('document-review-containment.json', {
+    body: JSON.stringify(fits, null, 2),
     contentType: 'application/json',
   })
 

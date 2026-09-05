@@ -1021,7 +1021,7 @@ describe("filesStrip still reports a run-only failure after markRunRouted (BULK-
     // `batches: []` on purpose -- the whole point of a run-only failure is that no
     // batch was ever created for it, so the ONE row it can produce comes from `run`
     // alone, never from a batches array this spec would otherwise have to fabricate.
-    const rows = filesStrip([], routed)
+    const rows = filesStrip([], routed, 'spreadsheet')
 
     expect(rows).toEqual([{ id: 'f1', filename: 'rejected-before-batch.csv', reason: 'the gateway refused this upload' }])
   })
@@ -1456,5 +1456,119 @@ describe('a spreadsheet-only run is untouched by the document fork (AC-1)', () =
       total += hits
     }
     expect(total).toBeGreaterThanOrEqual(5)
+  })
+})
+
+// ============================================================================
+// RED specs (EXTR-15-07, task-833, Mode A) — the failed outcome carries its document.
+//
+// AC-1's type change and AC-7's "the hand-off does not consume the failure list".
+//
+// This file carries the story's ONLY deliberate typecheck reds, because AC-1 is its own:
+// HO-2 and HO-7's mixedRun construct the widened `failed` variant, so `pnpm -r typecheck`
+// fails until importRun.ts:179 gains `documentId?: string`. Every other spec in this story
+// reds on an assertion instead, casting rather than reading the field, so one missing
+// field does not scatter tsc errors across five files and bury the assertion reds.
+
+const HO2_DOCUMENT_ID = 'b1e8f0a4-6d1c-4b73-9a51-0c9d4e2f77a1'
+
+// Reads the field a shipped construction site never sets. Same cast documentRun.test.ts's
+// documentIdOf uses, and the reason is the same: keep the tsc red to the one site above.
+function failureDocumentId(failure: { name: string; message: string }): string | undefined {
+  return (failure as { documentId?: string }).documentId
+}
+
+describe('FileOutcome — failed carries an optional documentId (HO-2, AC-1)', () => {
+  it('HO-2: the widened variant type-checks, and routeAfterRun reads only kind/report', () => {
+    // The typecheck red. At RUNTIME this line is inert, so the assertions below are a
+    // green-by-design regression pin — "the type change alone breaks no test" (AC-1).
+    const carried: FileOutcome = { kind: 'failed', message: 'docling: no text layer', documentId: HO2_DOCUMENT_ID }
+    const bare: FileOutcome = { kind: 'failed', message: 'docling: no text layer' }
+
+    // routeAfterRun (importRun.ts:326-337) reads run.files.length, outcome.kind and
+    // outcome.report. A run of two failures routes 'none' whether or not the new field
+    // is present — the two runs differ ONLY by that field.
+    const withField: ImportRun = {
+      files: [mkRunFile('f1', 'a.pdf', carried), mkRunFile('f2', 'b.pdf', carried)],
+      cursor: 2,
+      status: 'finished',
+    }
+    const withoutField: ImportRun = {
+      files: [mkRunFile('f1', 'a.pdf', bare), mkRunFile('f2', 'b.pdf', bare)],
+      cursor: 2,
+      status: 'finished',
+    }
+
+    expect(routeAfterRun(withField, null)).toEqual(routeAfterRun(withoutField, null))
+    expect(routeAfterRun(withField, null)).toEqual({ kind: 'none' })
+    // Control: this pair really can produce a different route, so the equality above is
+    // not two calls to a function that answers 'none' for everything.
+    const routed: ImportRun = {
+      files: [mkRunFile('f1', 'a.pdf', { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } })],
+      cursor: 1,
+      status: 'finished',
+    }
+    expect(routeAfterRun(routed, 'inv-7')).toEqual({ kind: 'single', invoiceId: 'inv-7' })
+  })
+
+  it('HO-2b: every OTHER FileOutcome variant is untouched by the widening', () => {
+    // The "every shipped construction site compiles unchanged" half, as a value-level
+    // pin: all five shapes still build a run the three shipped views read correctly.
+    const files: RunFile[] = [
+      mkRunFile('f1', 'pending.pdf', { kind: 'pending' }),
+      mkRunFile('f2', 'uploading.pdf', { kind: 'uploading', phase: { kind: 'sending', loaded: 1, total: 2 } }),
+      mkRunFile('f3', 'imported.pdf', { kind: 'imported', batchId: 'b3', report: { ...BASE_RUN_REPORT, id: 'b3' } }),
+      mkRunFile('f4', 'bare.pdf', { kind: 'failed', message: 'no text layer' }),
+    ]
+    const run: ImportRun = { files, cursor: 4, status: 'finished' }
+
+    expect(runBatchIds(run)).toEqual(['b3'])
+    expect(runFailures(run)).toEqual([{ name: 'bare.pdf', message: 'no text layer' }])
+    expect(runFileRows(run).map((r) => r.name)).toEqual(['pending.pdf', 'uploading.pdf', 'imported.pdf', 'bare.pdf'])
+  })
+})
+
+describe('runFailures — the row names its document, and reading it consumes nothing (HO-7, AC-3/AC-4/AC-7)', () => {
+  // Two failures, one with a stored document and one whose upload never returned. The
+  // pair is the whole point: a runFailures that hard-codes an id, or drops it, fails on
+  // one leg or the other.
+  function mixedRun(): ImportRun {
+    let run = startRun([pendingFile('f1', 'stored.pdf'), pendingFile('f2', 'never-uploaded.pdf')])
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'failed', message: 'docling: no text layer', documentId: HO2_DOCUMENT_ID },
+    })
+    run = runReducer(run, { type: 'settled', outcome: { kind: 'failed', message: 'network: connection reset' } })
+    return markRunFailed(run)
+  }
+
+  it('HO-7: after markRunFailed the rows still carry name, reason and — where one exists — the document id', () => {
+    // markRunFailed is where an all-failed document run actually lands (App.tsx's
+    // applyRoute on a `none` route), so the id must survive THAT, not just the reducer.
+    const run = mixedRun()
+    expect(run.status).toBe('failed')
+
+    const failures = runFailures(run)
+    expect(failures).toHaveLength(2)
+    expect(failures.map((f) => f.name)).toEqual(['stored.pdf', 'never-uploaded.pdf'])
+    expect(failures.map((f) => f.message)).toEqual(['docling: no text layer', 'network: connection reset'])
+    expect(failures.map(failureDocumentId)).toEqual([HO2_DOCUMENT_ID, undefined])
+  })
+
+  it('HO-7b: handing one row off does not consume it — the list is a pure view, twice over', () => {
+    // AC-7 and AC-11 together: the button stays clickable after a filing, and backing out
+    // of the form returns the user to the same rows. Nothing here mutates the run, which
+    // is exactly the claim — a runFailures that spliced the handed-off row out, or an
+    // impl that memoised a drained array, fails the second read.
+    const run = mixedRun()
+    const first = runFailures(run)
+    const second = runFailures(run)
+
+    expect(second).toEqual(first)
+    expect(second.map(failureDocumentId)).toEqual([HO2_DOCUMENT_ID, undefined])
+    // The run itself is untouched by reading it.
+    expect(run.files).toHaveLength(2)
+    expect(run.files.map((f) => f.outcome.kind)).toEqual(['failed', 'failed'])
+    expect(run.status).toBe('failed')
   })
 })

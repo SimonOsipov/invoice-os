@@ -315,19 +315,23 @@ export interface Invoice {
 }
 
 // InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
-// THREE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
+// FIVE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
 // on listItem only -- getResponse does not carry it, so a GET-detail consumer reading it
 // off Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
 // reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
-// can_approve/approve_blocked_reason (APPR-12-09) ride BOTH wires, from one approvalGate
-// call, and the reject pair stays detail-only (U5a).
-// All three are required, not optional: no omitempty on any Go field, so an invoice with
+// can_approve/approve_blocked_reason (APPR-12-09) and can_submit/submit_blocked_reason
+// (BUG-12) ride BOTH wires, each from one gate call; the reject pair stays detail-only
+// (U5a). GetInvoiceResult keeps its OWN copy of the submit pair rather than inheriting:
+// both interfaces extend the bare Invoice, so there is nothing to inherit through.
+// All five are required, not optional: no omitempty on any Go field, so an invoice with
 // no run emits an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
-// TestListItem_ApproveFlagsCarryNoOmitempty).
+// TestListItem_ApproveFlagsCarryNoOmitempty, TestListHandler_NoActionFlagKeys).
 export interface InvoiceListItem extends Invoice {
   approval: InvoiceApproval | null
   can_approve: boolean
   approve_blocked_reason: string | null
+  can_submit: boolean
+  submit_blocked_reason: string | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
@@ -430,12 +434,12 @@ export interface InvoiceEditInput {
   vat?: string
   total?: string
   // line_items (INVED-01-08) mirrors editReq.LineItems, a POINTER to a slice on the Go side
-  // (handlers.go:94, editReq.LineItems *[]lineItemReq) -- three states over the wire: the
+  // (editReq.LineItems, `*[]lineItemReq`) -- three states over the wire: the
   // key ABSENT (or `undefined`, which JSON.stringify drops) leaves the stored lines
   // untouched; `[]` replaces the whole set with zero lines; a populated array replaces the
   // whole set, renumbered 1..N by array position. Shape copied verbatim from
-  // CreateInvoiceInput's own line_items (:416-422) rather than shared -- the two wire
-  // request types (createRequest/editReq) are themselves independent on the Go side.
+  // InvoiceCreateLineItem below rather than shared -- the two wire request types
+  // (createRequest/editReq) are themselves independent on the Go side.
   line_items?: Array<{
     description?: string
     quantity?: string
@@ -491,12 +495,27 @@ export function validateInvoice(token: string, id: string): Promise<ValidateInvo
   return apiFetch<ValidateInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
 }
 
-// CreateInvoiceInput mirrors internal/invoice/handlers.go's createRequest wire body
+// One line of InvoiceCreateInput's line_items. Named rather than inlined so
+// wireMirrors.test.ts's tsInterfaceKeys can read InvoiceCreateInput at all -- its body
+// regex is `[^{}]*`, and a nested object literal makes the whole interface extract to []
+// (wireMirrors_theE2ECreateInputIsNamedAndFlatEnoughToRead). Used by InvoiceCreateInput
+// only; InvoiceEditInput keeps its own copy, because createRequest and editReq are
+// independent on the Go side.
+export interface InvoiceCreateLineItem {
+  description?: string
+  quantity?: string
+  unit_price?: string
+  line_total?: string
+  line_tax?: string
+}
+
+// InvoiceCreateInput mirrors internal/invoice/handlers.go's createRequest wire body
 // (M4-07-05, task-159): entity_id/invoice_number are the only required fields
-// (handlers.go's pre-tx-guard non-blank check, handlers.go:118-124) -- everything
-// else is optional, so omitting all of it is exactly "missing required MBS content"
-// (the dashboard.spec.ts broken-draft fixture).
-export interface CreateInvoiceInput {
+// (CreateHandler's pre-tx non-blank guard) -- everything else is optional, so omitting
+// all of it is exactly "missing required MBS content" (the dashboard.spec.ts
+// broken-draft fixture). The name matches the SPA's own InvoiceCreateInput: a
+// WIRE_MIRRORS row carries ONE `ts` name and reads both TypeScript legs with it.
+export interface InvoiceCreateInput {
   entity_id: string
   invoice_number: string
   issue_date?: string
@@ -508,18 +527,15 @@ export interface CreateInvoiceInput {
   subtotal?: string
   vat?: string
   total?: string
-  line_items?: Array<{
-    description?: string
-    quantity?: string
-    unit_price?: string
-    line_total?: string
-    line_tax?: string
-  }>
+  line_items?: InvoiceCreateLineItem[]
+  // EXTR-15-06: the document a hand-off was started from; appended last, matching
+  // createRequest's own declaration order.
+  source_document_id?: string
 }
 
 // createInvoice(): POST /v1/invoices. Reuses the Invoice interface above -- same
 // domain type on read and on create.
-export function createInvoice(token: string, body: CreateInvoiceInput): Promise<Invoice> {
+export function createInvoice(token: string, body: InvoiceCreateInput): Promise<Invoice> {
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices`, { method: 'POST', body, token })
 }
 
@@ -1016,6 +1032,7 @@ export interface ExtractionJob {
   state: string
   created_at: string
   last_error: string | null
+  failure_kind: string | null
 }
 
 export interface ExtractionJobsResponse {
@@ -1082,6 +1099,7 @@ export interface ExtractionDetail {
   id: string
   document_id: string
   state: string
+  failure_kind: string | null
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

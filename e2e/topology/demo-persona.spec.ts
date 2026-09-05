@@ -440,6 +440,11 @@ const STAFFED_TO_STEP_REASON =
   "Only an approver staffed to this step's workflow role can approve or reject it — ask whoever holds that role."
 const ADMIN_OR_REVIEWER_REASON = 'Only an admin or a reviewer can approve or reject an invoice — ask an approver on your team.'
 
+// handlers.go's two submitGate sentences, transcribed verbatim. Distinct from the approve
+// pair above: these name the TRANSMIT door.
+const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+const NOT_APPROVER_TRANSMIT_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
 // copy.ts templates, transcribed (e2e/ has no dependency on frontend/app/src).
 const TOAST_TITLE = 'You are now {full name}'
 const TOAST_META = '{ROLE} · APPROVAL QUEUE AND PERMISSIONS RELOADED'
@@ -533,6 +538,12 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   await signInAs(page, 'firm')
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // The seat's register: refused on the approval rung, in the server's own words.
+  const seatBox = page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) }).getByTestId('invoice-select')
+  await expect(seatBox).toBeDisabled()
+  expect(await seatBox.getAttribute('title')).toBe(AWAITING_APPROVAL_REASON)
+
   await openInvoiceRow(page, invoiceNumber)
 
   const approveReason = page.getByTestId('approve-blocked-reason')
@@ -553,7 +564,18 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   // page; re-select the entity BEFORE the row can be re-opened.
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // The role rung fires ahead of the approval rung, so the SAME disabled checkbox now
+  // carries a DIFFERENT sentence -- that change is the oracle, not the disabled state,
+  // which never moved. Re-taken after the switch: carryView remounted the page.
+  const preparerBox = page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) }).getByTestId('invoice-select')
+  await expect(preparerBox).toBeDisabled()
+  expect(await preparerBox.getAttribute('title')).toBe(NOT_APPROVER_TRANSMIT_REASON)
+
   await openInvoiceRow(page, invoiceNumber)
+
+  await expect(page.getByTestId('detail-submit')).toBeDisabled()
+  await expect(page.getByTestId('submit-blocked-reason')).toHaveText(NOT_APPROVER_TRANSMIT_REASON)
 
   await expect(page.getByTestId('detail-approve')).toBeVisible()
   await expect(page.getByTestId('detail-approve')).toBeDisabled()

@@ -51,10 +51,12 @@ import {
   reviewQueryAll,
   reviewShellStateAll,
   reviewTabs,
+  runUnit,
   TILE_CAPTION_VALID,
   unreadableRowsAll,
   type FileStripRow,
   type ReviewTab,
+  type ReviewUnit,
 } from '../lib/reviewBatch'
 import { ReviewAlreadyImportedTab } from './ReviewAlreadyImportedTab'
 import { ReviewInvoicesTab } from './ReviewInvoicesTab'
@@ -203,6 +205,11 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 
   const { batches, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal } = shellData
 
+  // The ONE derivation of the review unit for this screen and everything under it. Both
+  // rejected surfaces and both tabs take it as a prop rather than re-deriving it; a second
+  // derivation is a second source of truth for one fact (SW-10, reviewCopy.census.test.ts).
+  const unit = runUnit(batches)
+
   // The SOLE owner of §7.5-vs-batch, keyed on the batch GETs alone — never on
   // routeAfterImport's `kind`, which answers a different question ("is there ONE invoice
   // to open") and legitimately says `rejected` for an all-quarantined batch that renders
@@ -220,17 +227,17 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
     // which names every file against filesStrip's own reason instead of silently
     // dropping every batch but the first.
     return batches.length === 1 ? (
-      <RejectedFile ctx={ctx} batch={batches[0]} allTotal={allTotal} />
+      <RejectedFile ctx={ctx} batch={batches[0]} allTotal={allTotal} unit={unit} />
     ) : (
-      <RejectedRun ctx={ctx} batches={batches} run={ctx.run} />
+      <RejectedRun ctx={ctx} batches={batches} run={ctx.run} unit={unit} />
     )
   }
 
   const rows = unreadableRowsAll(batches)
   const alreadyImportedRows = alreadyImportedRowsAll(batches)
   const tiles = channelTilesAll(batches, { cleanTotal, failingTotal })
-  const header = reviewHeaderAll(batches, { allTotal })
-  const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported })
+  const header = reviewHeaderAll(batches, { allTotal }, unit)
+  const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported }, unit)
   // The Unreadable tab can DISAPPEAR under a selected `tab` (a retry that now reports
   // zero structural errors), which would otherwise render a body with no tab above it.
   const activeTab = tabs.some((t) => t.id === tab) ? tab : 'invoices'
@@ -255,7 +262,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   // if that changes, a 2-file run (1 batch + 1 run-only failure) would correctly show
   // the strip (2 files) while ReviewRow correctly stays silent (only 1 batch's worth of
   // invoices exist, nothing to disambiguate between).
-  const files = filesStrip(batches, ctx.run)
+  const files = filesStrip(batches, ctx.run, unit)
   // Summed across every batch (was the single batch's own `rows_valid`) -- the footer
   // paragraph just below states how many rows the LIVE channel's tiles above it were
   // built from, and that is a run-wide fact once more than one file is in play.
@@ -300,7 +307,13 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
               />
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
-              Built from {rowsValidTotal} rows. Every one of these exists in the ledger — fixing and submitting is what is left.
+              {/* The clause branches, the shared tail does not — one copy to keep in step. */}
+              {unit === 'document' ? (
+                <>Built from {rowsValidTotal} documents. Every one of these exists in the ledger</>
+              ) : (
+                <>Built from {rowsValidTotal} rows. Every one of these exists in the ledger</>
+              )}
+              {' — fixing and submitting is what is left.'}
             </p>
           </div>
 
@@ -315,8 +328,16 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
               {/* Value counts rows, caption counts invoices — BUG08-BATCH-8 pins both.
                   No colour ternary: --status-muted-* is already the greyed value. */}
               <Tile
-                value={`${tiles.frozen.alreadyImported} already imported`}
-                caption={tiles.frozen.alreadyImportedAtZero ? 'Nothing in this file was already in your ledger.' : `${tiles.frozen.alreadyImportedInvoices} invoices already in your ledger. Nothing to fix.`}
+                value={unit === 'document' ? `${tiles.frozen.alreadyImported} already in the register` : `${tiles.frozen.alreadyImported} already imported`}
+                caption={
+                  tiles.frozen.alreadyImportedAtZero
+                    ? unit === 'document'
+                      ? 'Nothing in this import was already in the register.'
+                      : 'Nothing in this file was already in your ledger.'
+                    : unit === 'document'
+                      ? `${tiles.frozen.alreadyImportedInvoices} invoices already in the register. Nothing to fix.`
+                      : `${tiles.frozen.alreadyImportedInvoices} invoices already in your ledger. Nothing to fix.`
+                }
                 bg="var(--status-muted-bg)"
                 border="var(--status-muted-border)"
                 text="var(--status-muted-text)"
@@ -327,8 +348,14 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
                   omission, which is also why `atZero` is an explicit field on the
                   view-model rather than `count === 0` inferred here. */}
               <Tile
-                value={`${tiles.frozen.unreadable} unreadable rows`}
-                caption={tiles.atZero ? 'Every row in the file could be read.' : 'No invoice exists for them.'}
+                value={unit === 'document' ? `${tiles.frozen.unreadable} unreadable documents` : `${tiles.frozen.unreadable} unreadable rows`}
+                caption={
+                  tiles.atZero
+                    ? unit === 'document'
+                      ? 'Every document in this import could be read.'
+                      : 'Every row in the file could be read.'
+                    : 'No invoice exists for them.'
+                }
                 bg={tiles.atZero ? 'var(--bg-3)' : 'var(--status-amber-bg)'}
                 border={tiles.atZero ? 'var(--line-2)' : 'var(--status-amber-border)'}
                 text={tiles.atZero ? 'var(--fg-3)' : 'var(--status-amber-text)'}
@@ -387,10 +414,12 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 
       {activeTab === 'unreadable' && (
         <ReviewUnreadableTab
+          ctx={ctx}
           rows={rows}
           rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
           batchIds={batchIds}
           onImportCorrected={ctx.restartImport}
+          unit={unit}
         />
       )}
 
@@ -400,6 +429,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           rowsTotal={batches.reduce((sum, b) => sum + b.rows_total, 0)}
           batchIds={batchIds}
           onOpenInvoice={ctx.openImportedInvoice}
+          unit={unit}
         />
       )}
 
@@ -438,7 +468,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 // §7.5's parser narration ("read 11 columns, reached the end of the file at row 2") is
 // [brief-only] and is NOT built — no field on the wire carries it, and writing it here
 // would be the browser narrating a parse it never saw.
-function RejectedFile({ ctx, batch, allTotal }: { ctx: PlatformCtx; batch: ImportBatch; allTotal: number }) {
+function RejectedFile({ ctx, batch, allTotal, unit }: { ctx: PlatformCtx; batch: ImportBatch; allTotal: number; unit: ReviewUnit }) {
   return (
     <div style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
       <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
@@ -448,15 +478,29 @@ function RejectedFile({ ctx, batch, allTotal }: { ctx: PlatformCtx; batch: Impor
           no data rows" sitting above "Rows stored 40" is the same self-contradiction
           that got the teal STORED & VALIDATED pill dropped from the batch header. */}
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
-        The server rejected this file and created no invoices. This usually means it held no data rows — a spreadsheet with only a header row, for example.
+        The server rejected this file and created no invoices. This usually means{' '}
+        {unit === 'document'
+          ? 'nothing invoice-shaped could be found in it — a scan too poor to read, for example.'
+          : 'it held no data rows — a spreadsheet with only a header row, for example.'}
       </p>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
         <Tile value={String(allTotal)} caption="Invoices created" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
-        <Tile value={String(batch.rows_valid)} caption="Rows stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+        {/* Whole elements per arm, not one Tile with a `caption={...}` expression: the
+            copy census (reviewCopy.census.test.ts, B5/B6) needles each caption attribute
+            as written. */}
+        {unit === 'document' ? (
+          <Tile value={String(batch.rows_valid)} caption="Documents stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+        ) : (
+          <Tile value={String(batch.rows_valid)} caption="Rows stored" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" />
+        )}
         {/* Dashed, matching the not-imported channel on the batch surface: the same
             fact deserves the same visual language on both screens. */}
-        <Tile value={String(batch.rows_invalid)} caption="Rows quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" dashed />
+        {unit === 'document' ? (
+          <Tile value={String(batch.rows_invalid)} caption="Documents quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" dashed />
+        ) : (
+          <Tile value={String(batch.rows_invalid)} caption="Rows quarantined" bg="var(--bg-3)" border="var(--line-2)" text="var(--fg-2)" dashed />
+        )}
       </div>
 
       <div className="label" style={{ marginBottom: 4 }}>Batch id</div>
@@ -486,13 +530,16 @@ function RejectedFile({ ctx, batch, allTotal }: { ctx: PlatformCtx; batch: Impor
 // filesStrip(batches, run) is the SAME per-file report the successful surface's files
 // strip (FilesStripView, below) renders -- reused, not re-derived, so both branches
 // report a rejected file's reason from one source.
-function RejectedRun({ ctx, batches, run }: { ctx: PlatformCtx; batches: ImportBatch[]; run: ImportRun }) {
-  const files = filesStrip(batches, run)
+function RejectedRun({ ctx, batches, run, unit }: { ctx: PlatformCtx; batches: ImportBatch[]; run: ImportRun; unit: ReviewUnit }) {
+  const files = filesStrip(batches, run, unit)
   return (
     <div data-testid="review-rejected-run" style={{ background: 'var(--bg-2)', border: '1px solid var(--status-red-border)', borderRadius: 'var(--radius-md)', padding: '24px 22px', maxWidth: 720 }}>
       <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-red-text)', marginBottom: 8 }}>Nothing was imported</div>
       <p style={{ fontSize: 13.5, color: 'var(--fg-2)', margin: '0 0 18px', lineHeight: 1.6 }}>
-        The server rejected every file in this run and created no invoices. This usually means a file held no data rows — a spreadsheet with only a header row, for example.
+        The server rejected every file in this run and created no invoices. This usually means{' '}
+        {unit === 'document'
+          ? 'nothing invoice-shaped could be found in a file — a scan too poor to read, for example.'
+          : 'a file held no data rows — a spreadsheet with only a header row, for example.'}
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>

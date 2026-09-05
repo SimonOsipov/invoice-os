@@ -4,24 +4,28 @@
 // (the non-verdict one, MemberParts.tsx:100-104) is the correct family and no row is
 // asked to be corrected.
 
-import { alreadyImportedCsvAll, type AlreadyImportedRowAll } from '../lib/reviewBatch'
+import { alreadyImportedCsvAll, type AlreadyImportedRowAll, type ReviewUnit } from '../lib/reviewBatch'
 
 const ALREADY_IMPORTED_GRID = '150px 90px 1fr'
 
 // Rendered as visible text AND as `title`; a disabled button is out of the tab order, so
 // the visible sibling is the only layer a keyboard/SR user can reach.
 const UNRESOLVED_REASON = 'The matching invoice was not recorded for this row.'
+const UNRESOLVED_REASON_DOC = 'The matching invoice was not recorded for this document.'
 
 // Its own download, not extra rows on the unreadable export: that file's header would
 // file these rows under "Why it could not be read" (alreadyImportedCsvAll's own note).
-function downloadCsv(rows: AlreadyImportedRowAll[], batchIds: string[]): void {
+function downloadCsv(rows: AlreadyImportedRowAll[], batchIds: string[], unit: ReviewUnit): void {
   // BOM so Excel reads the em dash and non-ASCII supplier names as UTF-8, not the local
   // ANSI codepage — ReviewUnreadableTab.tsx:47's literal U+FEFF, byte-identical.
-  const blob = new Blob([`﻿${alreadyImportedCsvAll(rows)}`], { type: 'text/csv;charset=utf-8' })
+  const blob = new Blob([`﻿${alreadyImportedCsvAll(rows, unit)}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `already-imported-rows-${batchIds.join('-')}.csv`
+  a.download =
+    unit === 'document'
+      ? `already-imported-documents-${batchIds.join('-')}.csv`
+      : `already-imported-rows-${batchIds.join('-')}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -31,6 +35,7 @@ export function ReviewAlreadyImportedTab({
   rowsTotal,
   batchIds,
   onOpenInvoice,
+  unit,
 }: {
   rows: AlreadyImportedRowAll[]
   rowsTotal: number
@@ -38,21 +43,32 @@ export function ReviewAlreadyImportedTab({
   // There is no invoice-detail URL in this SPA — the route-out is a callback
   // (types.ts:454, App.tsx:941), so the control is a button, never an <a href>.
   onOpenInvoice: (id: string) => void
+  // Required and undefaulted: a caller that forgot it would ship a document run still
+  // saying "rows", and only the compiler can see that (SW-4a, ReviewUnreadableTab.test.tsx).
+  unit: ReviewUnit
 }) {
+  const unresolvedReason = unit === 'document' ? UNRESOLVED_REASON_DOC : UNRESOLVED_REASON
   return (
     <div data-testid="review-already-imported-tab" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-muted-bg)', border: '1px solid var(--status-muted-border)', color: 'var(--status-muted-text)' }}>
-        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>{rows.length} rows were already in your ledger</div>
+        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 5 }}>
+          {unit === 'document' ? <>{rows.length} documents were already in the register</> : <>{rows.length} rows were already in your ledger</>}
+        </div>
         <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
-          These rows match invoices this workspace already holds, so the import had nothing new to add. Nothing is wrong with them and there is nothing to correct.
+          {unit === 'document'
+            ? 'These documents are already in the register, so the import had nothing new to add. Nothing is wrong with them and there is nothing to correct.'
+            : 'These rows match invoices this workspace already holds, so the import had nothing new to add. Nothing is wrong with them and there is nothing to correct.'}
         </p>
       </div>
 
       <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         <div className="label" style={{ display: 'grid', gridTemplateColumns: ALREADY_IMPORTED_GRID, gap: 14, padding: '10px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <span>File</span>
-          <span>Row</span>
-          <span>Invoice already in your ledger</span>
+          {/* Two whole spans, not one span around a ternary — reviewCopy.census.test.ts
+              (A5) needles each header cell as written. The em dash is what the cells
+              below already render for a null row (SW-5, this file's test). */}
+          {unit === 'document' ? <span>—</span> : <span>Row</span>}
+          {unit === 'document' ? <span>Invoice already in the register</span> : <span>Invoice already in your ledger</span>}
         </div>
         {rows.map((r, i) => {
           // Per-row, not the module-const id every other disabled-with-reason site uses:
@@ -77,7 +93,7 @@ export function ReviewAlreadyImportedTab({
                 <button
                   onClick={invoiceId == null ? undefined : () => onOpenInvoice(invoiceId)}
                   disabled={invoiceId == null}
-                  title={invoiceId == null ? UNRESOLVED_REASON : undefined}
+                  title={invoiceId == null ? unresolvedReason : undefined}
                   aria-describedby={invoiceId == null ? reasonId : undefined}
                   className="v2-btn v2-btn-ghost pf-btn"
                   style={{
@@ -90,7 +106,7 @@ export function ReviewAlreadyImportedTab({
                   View invoice
                 </button>
                 {invoiceId == null && (
-                  <span id={reasonId} style={{ fontSize: 12, color: 'var(--fg-3)' }}>{UNRESOLVED_REASON}</span>
+                  <span id={reasonId} style={{ fontSize: 12, color: 'var(--fg-3)' }}>{unresolvedReason}</span>
                 )}
               </div>
             </div>
@@ -100,14 +116,18 @@ export function ReviewAlreadyImportedTab({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
-          onClick={() => downloadCsv(rows, batchIds)}
+          onClick={() => downloadCsv(rows, batchIds, unit)}
           className="v2-btn v2-btn-ghost pf-btn"
           style={{ height: 36, padding: '0 14px', fontSize: 13 }}
         >
           Download this list (CSV)
         </button>
         <span style={{ marginLeft: 'auto', fontSize: 12.5, color: 'var(--fg-3)' }}>
-          {rows.length} of {rowsTotal} rows were already in your ledger.
+          {unit === 'document' ? (
+            <>{rows.length} of {rowsTotal} documents were already in the register.</>
+          ) : (
+            <>{rows.length} of {rowsTotal} rows were already in your ledger.</>
+          )}
         </span>
       </div>
     </div>

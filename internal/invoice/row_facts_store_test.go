@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -281,5 +282,61 @@ func TestListHandler_ApprovalFactsIgnoreTheEnforcementFlag(t *testing.T) {
 
 	if string(rawOn) != string(rawOff) {
 		t.Errorf("the armed invoice's approval object differs by APPROVALS_ENFORCED:\n  on  = %s\n  off = %s", rawOn, rawOff)
+	}
+}
+
+// TestStoreRowFacts_TransmitClearIsConstantInPageSize (BUG-12-01, AC-5): the submit
+// gate's input is read ONCE per request, never once per row. The fixture tenant carries
+// an ACTIVE policy on purpose -- that is TransmitClearTx's two-statement path, its worst
+// case; a policy-free tenant short-circuits and would hide a per-row read.
+//
+// The controls run before the equality, because "the counts match" is satisfied for free
+// by a tracer that recorded nothing and by a read that never consulted the gate at all.
+func TestStoreRowFacts_TransmitClearIsConstantInPageSize(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	fx := seedApprovalFactsFixture(t, super, "BUG-12-01-COUNT", true)
+	fx.armInvoice(t, super, app, "bug-12-01-count")
+
+	ids := []string{fx.invID}
+	for i := 0; i < 29; i++ {
+		ids = append(ids, seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID,
+			fmt.Sprintf("bug-12-01-count-%02d", i), StatusValidated))
+	}
+
+	tracedApp, rec := tracedAppPool(t)
+	store := NewStore(tracedApp)
+
+	rec.reset()
+	one, _, err := store.RowFacts(fx.ctx, ids[:1])
+	if err != nil {
+		t.Fatalf("RowFacts (1 id): %v", err)
+	}
+	n1 := len(rec.mentioning(""))
+	sawRuns := len(rec.mentioning("approval_runs"))
+	sawPolicy := len(rec.mentioning("approval_policy_versions"))
+
+	rec.reset()
+	many, _, err := store.RowFacts(fx.ctx, ids)
+	if err != nil {
+		t.Fatalf("RowFacts (%d ids): %v", len(ids), err)
+	}
+	n30 := len(rec.mentioning(""))
+
+	if n1 < 3 || sawRuns == 0 {
+		t.Fatalf("the tracer recorded %d statements (%d mentioning approval_runs) for a 1-id read -- it is not seeing the store's own SQL, so the equality below would count nothing", n1, sawRuns)
+	}
+	if sawPolicy == 0 {
+		t.Fatalf("RowFacts issued no statement mentioning approval_policy_versions -- the submit gate's input is not read inside this transaction at all")
+	}
+	if _, ok := one[fx.invID]; !ok {
+		t.Fatalf("RowFacts (1 id) = %+v, want an entry for the armed invoice %s", one, fx.invID)
+	}
+	if _, ok := many[fx.invID]; !ok {
+		t.Fatalf("RowFacts (%d ids) = %+v, want an entry for the armed invoice %s", len(ids), many, fx.invID)
+	}
+
+	if n1 != n30 {
+		t.Errorf("RowFacts issued %d statements for 1 invoice and %d for %d -- every read must be set-shaped: no query may enter the row loop", n1, n30, len(ids))
 	}
 }

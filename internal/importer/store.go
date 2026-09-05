@@ -211,6 +211,7 @@ type Batch struct {
 	ID          string
 	EntityID    string
 	Filename    *string // NEW (BULK-01-01). nil = not recorded.
+	DocumentID  *string // nil = no source document (a spreadsheet import).
 	Status      string
 	RowsTotal   int
 	RowsValid   int
@@ -252,7 +253,7 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 
 	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT b.id, b.entity_id, b.filename, b.status,
+			`SELECT b.id, b.entity_id, b.filename, b.document_id, b.status,
 			        b.rows_total, b.rows_valid, b.rows_invalid,
 			        b.errors, b.created_at,
 			        (SELECT min(rsv.version)
@@ -262,7 +263,7 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 			   FROM import_batches b
 			  WHERE b.id = $1`, id,
 		).Scan(
-			&b.ID, &b.EntityID, &b.Filename, &b.Status,
+			&b.ID, &b.EntityID, &b.Filename, &b.DocumentID, &b.Status,
 			&b.RowsTotal, &b.RowsValid, &b.RowsInvalid,
 			&rawErrors, &b.CreatedAt, &b.RuleSetVersion,
 		)

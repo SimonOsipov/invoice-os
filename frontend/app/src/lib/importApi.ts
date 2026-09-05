@@ -131,7 +131,7 @@ export interface ImportReport {
 }
 
 // GET /v1/imports/{id} response (the import_batches row; 08/task-284 AC-2, per 07's own
-// R1/R2). Exactly 10 fields -- `filename` (BULK-01-01: the uploaded part's name, or null
+// R1/R2). Exactly 11 fields -- `filename` (BULK-01-01: the uploaded part's name, or null
 // when not recorded), no `ready_invoices`/`invoices_clean`/`invoices_with_violations` (07
 // R2 -- those are live off the list endpoint's own totals, never stored on the batch).
 //
@@ -149,6 +149,8 @@ export interface ImportBatch {
   id: string
   entity_id: string
   filename: string | null
+  // The source document the batch was imported from, or null for a spreadsheet import.
+  document_id: string | null
   status: 'pending' | 'processing' | 'completed' | 'failed'
   rows_total: number
   rows_valid: number
@@ -167,6 +169,8 @@ export interface ExtractionJob {
   state: string
   created_at: string
   last_error: string | null
+  // Never absent: the Go tag carries no omitempty, so a job that never failed sends null.
+  failure_kind: string | null
 }
 
 export interface ExtractionJobsResponse {

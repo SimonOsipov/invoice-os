@@ -250,7 +250,7 @@ describe('draftToCreateRequest: wire key order', () => {
     // apiFetch JSON.stringifies the returned object verbatim, so object-literal
     // insertion order IS what crosses the network -- the mapper's own header comment
     // (invoiceDraft.ts:111-113) states the return literal is deliberately ordered to
-    // match createRequest's declaration order (handlers.go:51-64). No other DRAFT-*
+    // match createRequest's declaration order (handlers.go's `type createRequest`). No other DRAFT-*
     // spec pins this: they all read named properties, which is order-independent.
     const draft: Draft = {
       ...baseDraft,
@@ -559,4 +559,143 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   })
   return { promise, resolve }
 }
+
+// EXTR-15-06, task-832 -- SD-8 / AC-8.
+//
+// The recorded document id is draftToCreateRequest's THIRD, optional parameter, so every
+// shipped call site and every DRAFT-* fixture above keeps compiling.
+//
+// `Draft` was deliberately narrowed (types.ts:79-81) to fields that have a column and a wire
+// key; a document id is recorded by the hand-off, not typed by the operator, so it does not
+// belong on that type. If EXTR-15-07 records it on `Draft` instead, this spec is what has to
+// change -- the decision is stated here rather than assumed.
+const SD8_DOCUMENT_ID = '7f1c2a90-1c4b-4f0e-9f2a-2c0f5f3a11bd'
+
+describe('draftToCreateRequest: source_document_id (EXTR-15-06)', () => {
+  it('SD-8 a recorded document id crosses the wire; none omits the key entirely', () => {
+    const withDocument = draftToCreateRequest(baseDraft, baseEntity, SD8_DOCUMENT_ID)
+    expect(withDocument.source_document_id).toBe(SD8_DOCUMENT_ID)
+
+    // Absent, not null: JSON.stringify drops `undefined`, so `in` is the only honest oracle
+    // for "the key never crossed".
+    const withoutDocument = draftToCreateRequest(baseDraft, baseEntity)
+    expect('source_document_id' in withoutDocument).toBe(false)
+
+    // Control: the mapper really ran in the second call. Without it the `in` check above
+    // would also pass on an empty object.
+    expect(withoutDocument.entity_id).toBe(baseEntity.id)
+    expect(withoutDocument.invoice_number).toBe(baseDraft.number)
+  })
+
+  it('SD-8 the key takes the LAST wire position, as invoiceDraft.ts:119-121 requires', () => {
+    // The header note pins the return literal to createRequest's declaration order, and an
+    // additive wire field is appended (handlers.go:235-240 states that convention for
+    // getResponse). DRAFT-10 above still pins the 12-key order when no document was recorded.
+    const result = draftToCreateRequest(baseDraft, baseEntity, SD8_DOCUMENT_ID)
+
+    expect(Object.keys(result)).toEqual([
+      'entity_id',
+      'invoice_number',
+      'issue_date',
+      'supplier_tin',
+      'supplier_name',
+      'buyer_tin',
+      'buyer_name',
+      'currency',
+      'subtotal',
+      'vat',
+      'total',
+      'line_items',
+      'source_document_id',
+    ])
+  })
+})
+
+// ============================================================================
+// RED spec (EXTR-15-07, task-833, Mode A) — HO-6 / AC-6.
+//
+// EXTR-15-06 gave draftToCreateRequest the id as a third parameter, but nothing calls it
+// that way: fileDraftInvoice (invoiceDraft.ts:217) still calls
+// `draftToCreateRequest(draft, entity)`, so a hand-typed invoice filed after a hand-off
+// crosses the wire with no provenance at all. The hand-off's recorded id has to reach
+// `create`.
+//
+// The id is a FOURTH, optional parameter on fileDraftInvoice, mirroring
+// draftToCreateRequest's own third — not a field on Draft (types.ts holds only what the
+// operator types) and not a member of FileDraftDeps (deps are the transport; this is a
+// value about the invoice). If EXTR-15-07 records it somewhere else, THIS spec is what
+// has to change; the decision is stated rather than assumed.
+//
+// Declared as a TYPE and assigned, never called four-arg against the shipped export: TS
+// accepts a 3-param function where a 4-param type is wanted, so this compiles against
+// both the shipped and the widened signature. The red is therefore an assertion red, not
+// a tsc red that would mask the one AC-1 owns in importRun.test.ts. Same idiom as
+// documentRun.test.ts's `Refuse` alias (EXTR-15-04).
+type FileDraft = (
+  draft: Draft,
+  entity: Pick<Entity, 'id' | 'name' | 'tin'>,
+  deps: FileDraftDeps,
+  sourceDocumentId?: string,
+) => Promise<void>
+const fileDraftWithDocument: FileDraft = fileDraftInvoice
+
+const HO6_DOCUMENT_ID = '3c2b9d18-5a44-4e21-8f0b-6d7e1a9c4b02'
+
+describe('fileDraftInvoice: the hand-off’s document reaches the create body (HO-6, AC-6)', () => {
+  function capture() {
+    const bodies: unknown[] = []
+    const deps: FileDraftDeps = {
+      create: async (input) => {
+        bodies.push(input)
+        return { id: 'inv-created-1' }
+      },
+      inFlight: { current: false },
+      onPending: () => {},
+      onError: () => {},
+      onCreated: () => {},
+    }
+    return { bodies, deps }
+  }
+
+  it('HO-6: a recorded document id crosses the wire as source_document_id', async () => {
+    const { bodies, deps } = capture()
+
+    await fileDraftWithDocument(baseDraft, baseEntity, deps, HO6_DOCUMENT_ID)
+
+    expect(bodies, 'create must have been called exactly once').toHaveLength(1)
+    const body = bodies[0] as Record<string, unknown>
+    // Control: the mapper really ran, so the key assertion below is not read off an
+    // empty object.
+    expect(body.entity_id).toBe(baseEntity.id)
+    expect(body.invoice_number).toBe(baseDraft.number)
+    expect(body.source_document_id).toBe(HO6_DOCUMENT_ID)
+  })
+
+  it('HO-6b: filing with no hand-off omits the key entirely — undefined, never null', async () => {
+    // The negative leg, paired with the positive above. `in` is the only honest oracle:
+    // JSON.stringify drops undefined, so a `toBeUndefined` would also pass on a body that
+    // explicitly sent `source_document_id: undefined` and on one that sent null.
+    const { bodies, deps } = capture()
+
+    await fileDraftWithDocument(baseDraft, baseEntity, deps)
+
+    expect(bodies).toHaveLength(1)
+    const body = bodies[0] as Record<string, unknown>
+    expect(body.entity_id).toBe(baseEntity.id)
+    expect('source_document_id' in body).toBe(false)
+  })
+
+  it('HO-6c: the id does not leak between two filings from the same module', async () => {
+    // Falsification: an impl that stashes the recorded id in module state instead of
+    // threading the parameter would keep sending it on the next, unrelated filing.
+    const { bodies, deps } = capture()
+
+    await fileDraftWithDocument(baseDraft, baseEntity, deps, HO6_DOCUMENT_ID)
+    await fileDraftWithDocument({ ...baseDraft, number: 'INV-2026-00483' }, baseEntity, deps)
+
+    expect(bodies).toHaveLength(2)
+    expect((bodies[0] as Record<string, unknown>).source_document_id).toBe(HO6_DOCUMENT_ID)
+    expect('source_document_id' in (bodies[1] as Record<string, unknown>)).toBe(false)
+  })
+})
 

@@ -118,10 +118,16 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
 
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
 // object-literal insertion order is what crosses the network. It follows createRequest's
-// own field order (handlers.go:51-64) and InvoiceCreateInput's declaration order.
+// own field order (handlers.go's `type createRequest`) and InvoiceCreateInput's
+// declaration order.
+//
+// sourceDocumentId (EXTR-15-06) is a third, OPTIONAL parameter rather than a field on
+// Draft: the id is recorded by the hand-off, never typed by the operator, and Draft holds
+// only what the operator types. Omitted => the key never crosses the wire (SD-8).
 export function draftToCreateRequest(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'>,
+  sourceDocumentId?: string,
 ): InvoiceCreateInput {
   const amounts = draft.items.map(lineAmount)
   const lineItems: LineItemCreateInput[] = draft.items.map((item, index) => {
@@ -156,6 +162,9 @@ export function draftToCreateRequest(
     vat: vat === null ? null : renderScaled(vat),
     total: total === null ? null : renderScaled(total),
     line_items: lineItems,
+    // Spread, not `source_document_id: sourceDocumentId`: an explicit `undefined` would
+    // still make the key PRESENT, and SD-8 reads presence with `in`, not the value.
+    ...(sourceDocumentId === undefined ? {} : { source_document_id: sourceDocumentId }),
   }
 }
 
@@ -195,17 +204,21 @@ export type FileDraftDeps = {
 // NEVER REJECTS: every failure lands on onError as an ApiError and the returned promise
 // still resolves (SUBMIT-2). The caller does `void fileDraftInvoice(...)`, so a rejection
 // would surface as an unhandled promise rejection and the user would see nothing at all.
+// sourceDocumentId (EXTR-15-07) is a FOURTH, optional parameter mirroring
+// draftToCreateRequest's third — threaded, never stashed in module state, so two filings
+// from one module cannot leak it into each other (HO-6c).
 export async function fileDraftInvoice(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'>,
   deps: FileDraftDeps,
+  sourceDocumentId?: string,
 ): Promise<void> {
   if (deps.inFlight.current) return
   deps.inFlight.current = true
   deps.onError(null)
   deps.onPending(true)
   try {
-    const created = await deps.create(draftToCreateRequest(draft, entity))
+    const created = await deps.create(draftToCreateRequest(draft, entity, sourceDocumentId))
     deps.onCreated(created.id)
   } catch (err: unknown) {
     // Raw, unmapped: ApiError.message already carries the gateway's own {"error":…}
@@ -235,11 +248,16 @@ export async function fileDraftInvoice(
 // it is the client-side half of the server's own 400 `invoice_number is required`. NO
 // trim: '' is the mapper's absent sentinel and neither layer rewrites an operator's
 // content ([no-trim-at-either-layer]).
+// Exported so surfaces that refuse on the SAME predicate before this gate is reachable --
+// ReviewUnreadableTab's hand-off, whose document produced no invoice -- render this gate's
+// own words rather than a copy of them.
+export const ENTITY_REQUIRED_REASON = 'Filing needs a linked entity'
+
 export function fileDraftGate(
   draft: Draft,
   entity: Pick<Entity, 'id' | 'name' | 'tin'> | null,
 ): { canFile: true } | { canFile: false; reason: string } {
-  if (entity === null) return { canFile: false, reason: 'Filing needs a linked entity' }
+  if (entity === null) return { canFile: false, reason: ENTITY_REQUIRED_REASON }
   if (draft.number === '') return { canFile: false, reason: 'Invoice number is required' }
   return { canFile: true }
 }

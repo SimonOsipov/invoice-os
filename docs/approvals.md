@@ -858,24 +858,25 @@ whether anyone can **see** that a run is open.
 
 - `Store.Transition` refusing a move into `queued` while a run is open.
 - `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
-- `can_submit` / `submit_blocked_reason` on the invoice wire.
+- `can_submit` / `submit_blocked_reason` on both invoice wires — the detail body and every list row.
 
-**The two doors refuse in different registers**, and that is not a defect. `Store.Transition`
+**The two doors refuse in the same sentence, by different mechanisms.** `Store.Transition`
 answers `409` with `awaitingApprovalReason` (`internal/invoice/handlers.go`) — the same
-sentence `submit_blocked_reason` carries. `Submitter.BatchSubmit` has no sentence field:
-`BatchSubmitResultItem.Reason` carries the machine token `awaiting_approval`, and the SPA
-maps that token to its own label (`SKIP_REASON_LABELS`,
-`frontend/app/src/lib/invoices.ts`). The two state the same fact in different registers;
-they are not the same string, and no mirror test links them — TypeScript cannot import a
-Go const. Unifying the
-copy would mean putting a sentence on the batch wire, which no story has asked for.
-APPR-08's AC-3 asks literally for "the same sentence the batch door's skip label carries"
-and its `[one-refusal-sentence]` decision for "ONE `awaitingApprovalReason` const [to
-serve] the 409, the batch skip label's copy and `submit_blocked_reason`" — **neither is met
-as written**, because the batch wire carries only the machine token and the same story's §10
-separately requires the SPA label sit "in the terse register of its two siblings", which the
-409 sentence is not; the story contradicts itself and the implementation followed the more
-specific instruction.
+sentence `submit_blocked_reason` carries. `Submitter.BatchSubmit` still has no sentence
+field: `BatchSubmitResultItem.Reason` carries the machine token `awaiting_approval`, and
+the SPA maps that token to `awaitingApprovalReason`'s bytes verbatim
+(`SKIP_REASON_LABELS`, `frontend/app/src/lib/invoices.ts`). The pair is pinned two-sided —
+`TestAwaitingApprovalReason_MatchesTheSPASkipLabel` (`internal/invoice/skip_label_parity_test.go`)
+reads the SPA source and compares it to the Go const, and the SPA suite re-asserts the
+literal because CI's `go` path filter excludes `frontend/**`. So APPR-08's AC-3 and its
+`[one-refusal-sentence]` decision are now met without a batch-wire change. APPR-08 §10's
+requirement that the SPA label sit "in the terse register of its two siblings" is
+**superseded by BUG-12 Core AC 6**, which requires one sentence across all three doors.
+
+The other two skip labels stay SPA copy, deliberately: the server's not-validated sentence
+forks by status into three arms (`submitBlockedReason`) while the batch token does not, and
+`duplicate_request` has no server sentence at all — so neither has a byte-identical partner
+to mirror.
 
 **One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
 `TransmitClear` on its success path. When the read itself fails, it returns the zero
@@ -902,11 +903,11 @@ off — still submits the same invoice. Pinned by
 - The invoice detail page's approve/reject controls and its approval card. Both
   render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1) and
   behave identically whether the flag is on or off.
-- The per-row `approval` facts on `GET /v1/invoices`. **With one consequence**: the SPA
-  reads `run_state` off these facts in `isRowSelectable`
-  (`frontend/app/src/lib/invoices.ts`) and refuses the checkbox, so an open run blocks
-  batch **selection** in the browser whatever the flag says. Visibility is ungated, but the
-  SPA turns it into a block.
+- The per-row `approval` facts on `GET /v1/invoices`. They are display copy only. Both row
+  checkboxes read `can_submit` / `submit_blocked_reason` instead (`isRowSelectable`,
+  `selectBlockedReason`, `frontend/app/src/lib/invoices.ts`), and that pair is gated above,
+  so with the flag off an open run no longer blocks batch **selection** in the browser.
+  BUG-12 removed the SPA-side re-derivation that used to make it do so.
 - The `awaiting_approval` list filter.
 - The `awaiting_approval` **count** on the dashboard rollup's `Bucket`
   (`internal/dashboard/store.go`, `GET /v1/rollup`). The Approvals nav badge
@@ -994,9 +995,12 @@ runs the one-tenant seeder until this branch merges and deploys:
    after the flip means a typo (`yes`, `on` and untrimmed whitespace are all rejected).
 6. **Reversible.** Set the same variable to `false` — prefer that to deleting the key:
    unset also means off, but delete is a second code path. The flag touches exactly one
-   field, `TransmitClear` (`internal/invoice/store.go:1532-1536`, pinned by
-   `internal/invoice/row_facts_store_test.go:115`); arming, runs, decisions and audit rows
-   are written identically either way, so nothing is lost flipping in either direction. The
+   verdict, `TransmitClear` — on `ApprovalFacts` for the detail wire and on
+   `ListGateFacts` for every list row, both folded by `Store.transmitClear`
+   (`internal/invoice/store.go`, pinned by
+   `TestStore_TransmitClearFoldIsTheOnlyReadPathFlagReader`); arming, runs, decisions and
+   audit rows are written identically either way, so nothing is lost flipping in either
+   direction. The
    redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it runs neither of
    the gateway's two boot-time destructive steps — `db.Reset`, gated off the persistent
    environment by `RAILWAY_ENVIRONMENT_NAME`, nor the DEMO-04 demo-tenant purge, which

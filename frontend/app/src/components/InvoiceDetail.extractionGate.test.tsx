@@ -35,7 +35,14 @@ const JOB_ID = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const HASH = '3f9a1c02b7d4e6108a5c93f21e0d47b6c8a2f5039e1b7d4c60a8f3e2d5a86560'
 
 const JOBS: ExtractionJob[] = [
-  { id: JOB_ID, document_id: DOCUMENT_ID, state: 'succeeded', created_at: '2026-06-12T12:00:00Z', last_error: null },
+  {
+    id: JOB_ID,
+    document_id: DOCUMENT_ID,
+    state: 'succeeded',
+    created_at: '2026-06-12T12:00:00Z',
+    last_error: null,
+    failure_kind: null,
+  },
 ]
 
 function sourceRecord(): SourceDocumentRecord {

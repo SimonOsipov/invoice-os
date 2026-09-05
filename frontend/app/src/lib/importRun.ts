@@ -176,7 +176,10 @@ export type FileOutcome =
   | { kind: 'pending' }
   | { kind: 'uploading'; phase: UploadPhase }
   | { kind: 'imported'; batchId: string; report: ImportReport }
-  | { kind: 'failed'; message: string }
+  // documentId (EXTR-15-07) is the stored source document the pipeline failed ON, absent
+  // only when the upload itself never returned. It is what CreateFlow's hand-off carries
+  // into manual entry — pinned by documentRun.test.ts's HO-1 table.
+  | { kind: 'failed'; message: string; documentId?: string }
 
 export interface RunFile {
   id: string
@@ -264,10 +267,11 @@ export function runBatchIds(run: ImportRun): string[] {
 // AC #4: `{name, message}` per 'failed' outcome, in run order. `name` is the RunFile's
 // own name (never re-derived from the request); `message` is the outcome's message
 // VERBATIM, never re-worded.
-export function runFailures(run: ImportRun): { name: string; message: string }[] {
-  const failures: { name: string; message: string }[] = []
+export function runFailures(run: ImportRun): { name: string; message: string; documentId?: string }[] {
+  const failures: { name: string; message: string; documentId?: string }[] = []
   for (const f of run.files) {
-    if (f.outcome.kind === 'failed') failures.push({ name: f.name, message: f.outcome.message })
+    if (f.outcome.kind === 'failed')
+      failures.push({ name: f.name, message: f.outcome.message, documentId: f.outcome.documentId })
   }
   return failures
 }

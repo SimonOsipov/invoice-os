@@ -4263,16 +4263,50 @@ func TestGetHandler_ActionFlagsAreDerivedNotHardcoded(t *testing.T) {
 	}
 }
 
+// TestListHandler_SubmitFlagsOnEveryRow (BUG-12-01, AC-1): the submit pair ships on
+// EVERY row, exactly once each. The counts are what catch the two shapes a presence
+// check misses -- a key emitted only on the first row, and a key emitted twice.
+func TestListHandler_SubmitFlagsOnEveryRow(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+		return []Invoice{
+			{ID: uuid.NewString(), Status: StatusDraft},
+			{ID: uuid.NewString(), Status: StatusValidated},
+		}, 2, nil
+	}
+	rec, _ := doInvoiceList(t, list, &id, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	rows := listRowsRaw(t, rec)
+	if len(rows) != 2 {
+		t.Fatalf("len(invoices) = %d, want 2 -- the counts below are meaningless on any other page size", len(rows))
+	}
+
+	body := rec.Body.String()
+	for _, k := range []string{`"can_submit":`, `"submit_blocked_reason":`} {
+		if n := strings.Count(body, k); n != 2 {
+			t.Errorf("body carries %d %s, want exactly 2 -- one per row: %s", n, k, body)
+		}
+	}
+	for i, row := range rows {
+		submitFlagsOf(t, row, fmt.Sprintf("row %d", i))
+	}
+}
+
 // TestListHandler_NoActionFlagKeys (T14): List must stay clean of the action-flag keys
 // that are still detail-only, mirroring TestListHandler_NoRuleSetVersionKey -- they live
 // on GetHandler's getResponse wrapper, never on the domain Invoice nor on List's own
-// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve pair.
+// listItem wrapper (APPR-08-08), whose siblings are `approval` plus the approve and
+// submit pairs.
 //
-// APPR-12-09 (A09-7) moves TWO of the former 13 literals from the absent half to the
-// PRESENT half: `can_approve` and `approve_blocked_reason` now ship per row, from the same
-// approvalGate the detail wire calls. `can_reject`/`reject_blocked_reason` stay ABSENT
-// (U5a). The remaining 11 must NOT be widened to exclude `approval` -- that would forbid
-// the very key APPR-08-08 ships.
+// APPR-12-09 (A09-7) moved TWO of the former 13 literals from the absent half to the
+// PRESENT half: `can_approve` and `approve_blocked_reason` ship per row, from the same
+// approvalGate the detail wire calls. BUG-12 moves TWO more the same way, for the same
+// reason: `can_submit` and `submit_blocked_reason` now come from the same submitGate
+// call. `can_reject`/`reject_blocked_reason` stay ABSENT (U5a). The remaining 9 must NOT
+// be widened to exclude `approval` -- that would forbid the very key APPR-08-08 ships.
 //
 // The present half is this guard's CONTROL NEEDLE: an absence-only assertion passes for
 // free against an empty page, a 500 body, or a row set that lost the wrapper entirely.
@@ -4297,7 +4331,7 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`, `"can_submit":`, `"submit_blocked_reason":`,
+	for _, k := range []string{`"can_edit":`, `"can_revalidate":`, `"revalidate_blocked_reason":`,
 		// BUG-04-03 (task-399): the UBL gate is detail-only too.
 		`"can_view_ubl":`, `"ubl_blocked_reason":`,
 		// The resolve-outside pair was never in this guard -- a pre-existing
@@ -4322,6 +4356,14 @@ func TestListHandler_NoActionFlagKeys(t *testing.T) {
 		}
 		if want := jsonOf(t, reasonNotAnApprover); gotReason != want {
 			t.Errorf("row %d approve_blocked_reason = %s, want %s -- rung 1 is the zero ListGateFacts' answer", i, gotReason, want)
+		}
+
+		gotCanSubmit, gotSubmitReason := submitFlagsOf(t, row, fmt.Sprintf("row %d", i))
+		if gotCanSubmit != "false" {
+			t.Errorf("row %d can_submit = %s, want false -- a page with no gate facts and no caller role must fail CLOSED", i, gotCanSubmit)
+		}
+		if want := jsonOf(t, notApproverTransmitReason); gotSubmitReason != want {
+			t.Errorf("row %d submit_blocked_reason = %s, want %s -- rung 1 is the zero ListGateFacts' answer", i, gotSubmitReason, want)
 		}
 	}
 }
@@ -5942,5 +5984,120 @@ func TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal(t *testing
 	}
 	if strings.EqualFold(awaitingApprovalReason, approvalPackage409) {
 		t.Errorf("awaitingApprovalReason is indistinguishable from internal/approval's ErrNotAwaitingApproval copy %q", approvalPackage409)
+	}
+}
+
+// --- source_document_id on the create wire (EXTR-15-06) --------------------
+
+// TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument (SD-1, AC-1): an
+// absent key and an explicit null both reach the store as a nil
+// SourceDocumentID. The third leg is the positive control -- without it the two
+// nil assertions pass vacuously against a handler that has no such wire key at
+// all, which is exactly today's handler.
+func TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	entityID := uuid.NewString()
+	documentID := uuid.NewString()
+
+	call := func(rawBody string) CreateInput {
+		t.Helper()
+		var gotIn CreateInput
+		create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+			gotIn = in
+			return Invoice{ID: uuid.NewString(), EntityID: entityID, InvoiceNumber: "SD1", Status: StatusDraft}, nil
+		}
+		rec, _ := doInvoiceCreate(t, create, &identity, rawBody)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+		}
+		return gotIn
+	}
+
+	absent := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1"}`, entityID))
+	if absent.SourceDocumentID != nil {
+		t.Errorf("absent key: SourceDocumentID = %q, want nil", *absent.SourceDocumentID)
+	}
+
+	explicitNull := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1","source_document_id":null}`, entityID))
+	if explicitNull.SourceDocumentID != nil {
+		t.Errorf("explicit null: SourceDocumentID = %q, want nil", *explicitNull.SourceDocumentID)
+	}
+
+	supplied := call(fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD1","source_document_id":%q}`, entityID, documentID))
+	if supplied.SourceDocumentID == nil {
+		t.Fatalf("a well-formed source_document_id was dropped: SourceDocumentID = nil, want %q", documentID)
+	}
+	if *supplied.SourceDocumentID != documentID {
+		t.Errorf("SourceDocumentID = %q, want %q", *supplied.SourceDocumentID, documentID)
+	}
+}
+
+// TestCreateHandler_MalformedSourceDocumentID400 (SD-3, AC-3): a malformed
+// source_document_id is refused by the handler's own uuid.Parse guard before
+// the store runs, with a body naming the field. The store's 22P02 mapping
+// yields the bare sentinel text, which names nothing -- reaching it would mean
+// the guard never ran.
+func TestCreateHandler_MalformedSourceDocumentID400(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when source_document_id is not a well-formed uuid")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD3","source_document_id":"not-a-uuid"}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want a message naming source_document_id", resp.Error)
+	}
+	if resp.Error == ErrValidation.Error() {
+		t.Errorf("error = %q -- that is the store's generic mapping, not the handler's uuid.Parse guard", resp.Error)
+	}
+	if strings.Contains(rec.Body.String(), "22P02") {
+		t.Errorf("body leaks the postgres code 22P02: %s", rec.Body.String())
+	}
+}
+
+// An empty string is not absent: it decodes to a non-nil *string, so it must reach the guard.
+// A guard rewritten as `!= nil && *v != ""` would drop it through to the store's 22P02
+// mapping, which SD-3 forbids, and nothing else would fail.
+func TestCreateHandler_EmptySourceDocumentIDIsRefusedByTheGuard(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when source_document_id is the empty string")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"SD3E","source_document_id":""}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want a message naming source_document_id", resp.Error)
+	}
+}
+
+// The guard is one arm of a sequential chain, so which error a doubly-invalid body gets is
+// positional. Pinned because a validation map would iterate in a random order and flip it.
+func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testing.T) {
+	identity := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Invoice, error) {
+		t.Fatal("create must not run when the body is invalid")
+		return Invoice{}, nil
+	}
+	body := fmt.Sprintf(`{"entity_id":%q,"invoice_number":"","source_document_id":"not-a-uuid"}`, uuid.NewString())
+	rec, resp := doInvoiceCreate(t, create, &identity, body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(resp.Error, "source_document_id") {
+		t.Errorf("error = %q, want the invoice_number refusal -- the non-blank checks run first", resp.Error)
+	}
+	if !strings.Contains(resp.Error, "invoice_number") {
+		t.Errorf("error = %q, want a message naming invoice_number", resp.Error)
 	}
 }

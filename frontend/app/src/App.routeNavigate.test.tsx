@@ -61,20 +61,15 @@ vi.mock('./components/Sidebar', () => ({
   },
 }))
 
-// Stubbed so a cold /extraction boot (no gateway) never tries to fetch or paint a canvas --
-// only whether it MOUNTS at all is under test in switchClient_clearsTheExtractionJob....
-const { reviewMounts } = vi.hoisted(() => ({ reviewMounts: [] as unknown[] }))
+// Stubbed so a cold /extraction boot (no gateway) never tries to fetch or paint a canvas.
+// Whether it mounts with a live job id is ROUTE-01-04's popstate row, not this file's.
 vi.mock('./components/ExtractionReview', () => ({
-  ExtractionReview: (p: unknown) => {
-    reviewMounts.push(p)
-    return null
-  },
+  ExtractionReview: () => null,
 }))
 
 beforeEach(() => {
   capturedCtx = undefined
   renders.length = 0
-  reviewMounts.length = 0
   // jsdom's environment is per FILE, not per test -- every test below sets its own path
   // through bootAt, but this is a defensive floor against ordering surprises.
   window.history.replaceState(null, '', '/')
@@ -345,7 +340,10 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
 })
 
 describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else', () => {
-  it('switchClient_clearsTheExtractionJobSoBackCannotReachTheCompanyJustLeft', async () => {
+  // The Back half (replaceState + dispatch popstate, asserting ctx.view restores) is
+  // ROUTE-01-04's -- popstate_backAfterACompanySwitchCannotReachTheCompanyJustLeft in
+  // App.routePopstate.test.tsx. This half is the whole Q6 fix and needs nothing from it.
+  it('switchClient_clearsTheExtractionJobAndLeavesTheOtherAtomsAlone', async () => {
     await bootAt('/')
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
@@ -357,18 +355,9 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
     await act(async () => {
       capturedCtx!.switchClient('other-entity-003')
     })
-
-    // Simulates pressing Back from the post-switch dashboard to the /extraction entry
-    // openExtraction pushed. The popstate LISTENER is ROUTE-01-04's, not this subtask's --
-    // until it lands, this row stays red on the view/pathname mismatch even once the
-    // extractionJobId clear below is wired.
-    window.history.replaceState(null, '', '/extraction')
-    window.dispatchEvent(new PopStateEvent('popstate'))
     ctx = requireCtx()
 
-    expect(ctx.view, 'Back must land on the extraction view').toBe('extraction')
     expect(ctx.extractionJobId, 'the job id must not survive the company switch').toBeNull()
-    expect(reviewMounts, 'no ExtractionReview must render with a null job id').toHaveLength(0)
 
     // The fence: exactly one atom clears. auditPrefilter was never armed (it never
     // survives a single commit, decision [company-switch-staleness]) and createStep's

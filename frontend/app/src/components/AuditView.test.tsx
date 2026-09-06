@@ -2667,15 +2667,61 @@ describe('AuditView pre-filter lifetime, adversarial (ROUTE-04-04 QA)', () => {
     )
   })
 
-  // REQUIRED CHECK FOR ROUTE-04-05, recorded not pinned. Reaching `/audit?invoice=<id>` by
-  // SEED sends no `from`; reaching the same URL by SYNC keeps whatever window was on screen,
-  // because the effect spreads `...s` and moves only the two invoice members. Measured: a
-  // default mount that then takes the atom sends `from` AND renders a `Last 30 days` pill,
-  // where a reload of that same URL sends neither. Back and reload would disagree, and an
-  // invoice older than a month reads as empty. Unreachable today -- App's popstate handler
-  // only calls setView, and openAuditForInvoice is reachable only from InvoiceActivityCard,
-  // which never renders here. ROUTE-04-05 makes it reachable and must decide it; pinning
-  // today's answer would only have to be deleted there.
+  // ROUTE-04-05. Reaching `/audit?invoice=<id>` by SEED sends no `from`; reaching the same URL
+  // by SYNC used to keep whatever window was already on screen (the effect spreads `...s` and
+  // moves only the two invoice members) -- Back and reload would disagree, and an invoice
+  // older than a month would read as empty on a Back. The decision: the sync path drops the
+  // window too, via a targeted merge, not a full re-seed (a re-seed would silently wipe `q`,
+  // `events`, `actorKind`, `actors` and `company` -- the second row below is that guard).
+  it('auditView_aMovedAtomDropsTheDefaultDateWindow', async () => {
+    const calls = recordCalls()
+    const { rerender } = render(<AuditView ctx={armedCtx(null)} />)
+    await waitFor(() => expect(calls.some(isMain)).toBe(true))
+    expect(
+      new URL(calls.find(isMain)!).searchParams.has('from'),
+      'vacuity floor: an unarmed mount DOES window by 30 days',
+    ).toBe(true)
+
+    rerender(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() =>
+      expect(calls.some((u) => u.includes(`invoice_id=${ARMED_ID}`)), 'a moved atom never reached the wire').toBe(
+        true,
+      ),
+    )
+
+    const moved = new URL(calls[calls.length - 1]!).searchParams
+    expect(moved.get('invoice_id'), 'the wire must carry the invoice that moved in').toBe(ARMED_ID)
+    expect(moved.has('from'), 'a moved atom must drop the default window -- the invoice may be older than it').toBe(
+      false,
+    )
+  })
+
+  it('auditView_aMovedAtomKeepsAnInScreenNonInvoiceFilter', async () => {
+    const calls = recordCalls()
+    const { rerender } = render(<AuditView ctx={armedCtx(null)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    const before = calls.length
+    rerender(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() =>
+      expect(calls.some((u) => u.includes(`invoice_id=${ARMED_ID}`)), 'a moved atom never reached the wire').toBe(
+        true,
+      ),
+    )
+
+    expect(calls.length - before, 'a moved atom must fire exactly one refetch').toBe(1)
+    const moved = new URL(calls[calls.length - 1]!).searchParams
+    expect(moved.get('invoice_id'), 'the wire must carry the invoice that moved in').toBe(ARMED_ID)
+    expect(
+      moved.get('q'),
+      "the card's own search text must survive a merge that only touches the invoice members and the range",
+    ).toBe('kept')
+  })
 
   it('auditView_aMovedAtomWithNoNumberReadsTheHonestFallback', async () => {
     // The sync path's own invoiceNumber write. The shipped moved-atom row moves between two

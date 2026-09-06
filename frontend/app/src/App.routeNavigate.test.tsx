@@ -857,7 +857,7 @@ describe('ROUTE-04-03: settingsTab and q are DURABLE, auditInvoice has screen li
 // AC-8. Call-site-only, never a bare token: a comment naming a setter is legitimate, and a
 // guard that cannot tell a call from a mention is over-broad. ROUTE-04-04 has taken the
 // auditPrefilter count from 4 to 3 by deleting the consume-once effect; ROUTE-04-05 takes it
-// back to 4 with the popstate restore (and 1 -> 2) -- each bump must be a deliberate edit.
+// back to 4 with the popstate restore -- each bump must be a deliberate edit.
 const countCalls = (src: string, name: string) => (src.match(new RegExp(`\\b${name}\\(`, 'g')) ?? []).length
 
 describe('AC-8: every owned-param write goes through a URL writer', () => {
@@ -868,8 +868,8 @@ describe('AC-8: every owned-param write goes through a URL writer', () => {
     expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
     expect(
       countCalls(src, 'setAuditPrefilter'),
-      "App.tsx may call setAuditPrefilter from exactly three sites: navigate's functional updater, openAuditForInvoice and setAuditInvoiceFilter. Each writes the URL in the same block; a fourth site is a write with no URL behind it",
-    ).toBe(3)
+      "App.tsx may call setAuditPrefilter from exactly four sites: navigate's functional updater, openAuditForInvoice, setAuditInvoiceFilter and the popstate restore. The first three write the URL in the same block; the popstate restore is the one exception -- it reads the URL instead",
+    ).toBe(4)
     // The useState destructure is `setAuditPrefilter]` -- a `]` sits between the name and
     // the paren, so it is correctly not a call site.
     expect(src, 'sanity: the destructure the count must NOT see').toContain('setAuditPrefilter] = useState')
@@ -1035,21 +1035,23 @@ describe('QA adversarial: a tab click made off the Settings screen', () => {
 // `setInvoiceQuery` names the URL-AWARE WRAPPER, so its count is 1 -- the declaration itself.
 // The raw useState setters are `setInvoiceQuery_` and `setSettingsTab_`, and a bare
 // `setInvoiceQuery_('')` planted anywhere in App.tsx left the whole suite green. ROUTE-04-05's
-// popstate restore bumps both counts to 3, deliberately.
+// popstate restore bumps both counts to 3, deliberately -- it calls the raw setters directly
+// (the wrapper `setInvoiceQuery` does its own replaceState, which AC-4 forbids the handler
+// from doing).
 describe('QA adversarial AC-8: the raw state setters are called only from the URL-aware verbs', () => {
   const appSrc = () => readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
 
-  it('guard_theRawQueryAndTabSettersHaveExactlyTwoCallSitesEach', () => {
+  it('guard_theRawQueryAndTabSettersHaveExactlyThreeCallSitesEach', () => {
     const src = appSrc()
     expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
     expect(
       countCalls(src, 'setInvoiceQuery_'),
-      'App.tsx may call setInvoiceQuery_ from exactly two sites: navigate and setInvoiceQuery',
-    ).toBe(2)
+      'App.tsx may call setInvoiceQuery_ from exactly three sites: navigate, setInvoiceQuery and the popstate restore',
+    ).toBe(3)
     expect(
       countCalls(src, 'setSettingsTab_'),
-      'App.tsx may call setSettingsTab_ from exactly two sites: navigate and setSettingsTab',
-    ).toBe(2)
+      'App.tsx may call setSettingsTab_ from exactly three sites: navigate, setSettingsTab and the popstate restore',
+    ).toBe(3)
     // The destructures are `setInvoiceQuery_]` and `setSettingsTab_]` -- correctly not call
     // sites, and present, so the counts above run over a real population.
     expect(src, 'sanity: the destructure the count must NOT see').toContain('setInvoiceQuery_] = useState')

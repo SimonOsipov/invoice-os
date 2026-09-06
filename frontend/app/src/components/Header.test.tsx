@@ -21,7 +21,7 @@ afterEach(cleanup)
 // nav is NOT called, which needs a real spy on a real field to be worth anything.
 type HeaderCtx = Pick<
   PlatformCtx,
-  'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav' | 'setInvoiceQuery' | 'searchInvoices'
+  'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav' | 'setInvoiceQuery' | 'searchInvoices' | 'invoiceQuery'
 > & {
   active: Pick<PlatformCtx['active'], 'initials'>
 }
@@ -32,6 +32,8 @@ function headerCtx(over: {
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
   searchInvoices?: (q: string) => void
+  // ROUTE-04-05: the committed term the box mirrors on a cold boot and on a Back restore.
+  invoiceQuery?: string
   // EXTR-11-08: the crumb rows below need a view other than the default.
   view?: View
 }) {
@@ -44,6 +46,7 @@ function headerCtx(over: {
     nav: over.nav ?? vi.fn(),
     setInvoiceQuery: over.setInvoiceQuery ?? vi.fn(),
     searchInvoices: over.searchInvoices ?? vi.fn(),
+    invoiceQuery: over.invoiceQuery ?? '',
   }
   return ctx as unknown as PlatformCtx
 }
@@ -178,6 +181,54 @@ describe('Header search field (BUG-01-05)', () => {
     expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
     expect(setInvoiceQuery).toHaveBeenCalledWith('')
     expect(searchInvoices, 'clearing replaces -- it must never push a committed search').not.toHaveBeenCalled()
+  })
+})
+
+// ROUTE-04-05 AC-5/AC-6: the box's local state ('') stopped tracking the committed term the
+// moment ROUTE-04-03 made it local -- a cold boot after a reload, or a Back landing on
+// /invoices?q=..., showed an empty box over a filtered list. The box now seeds from and
+// mirrors ctx.invoiceQuery.
+describe('AC-5: the search box shows and follows the committed invoice query', () => {
+  it('header_theBoxShowsTheCommittedQueryOnAColdBoot', () => {
+    render(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: 'acme' })} />)
+
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+    expect(input.value, 'a cold boot with a committed query must show it, not a blank box').toBe('acme')
+    expect(screen.queryByTestId('invoice-search-clear'), 'a non-empty box must render its clear control').not.toBeNull()
+  })
+
+  it('header_theBoxFollowsACommittedQueryThatChangesUnderIt', () => {
+    const { rerender } = render(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: 'acme' })} />)
+    expect((screen.getByTestId('invoice-search-input') as HTMLInputElement).value).toBe('acme')
+
+    rerender(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: '' })} />)
+
+    expect(
+      (screen.getByTestId('invoice-search-input') as HTMLInputElement).value,
+      'the box must follow a committed query that moved elsewhere (e.g. a popstate restore), not keep stale local state',
+    ).toBe('')
+  })
+})
+
+// Regression guard, not a new behaviour: typing has always been local-only until submit.
+// Green both before and after the ctx-sync effect lands -- it exists to catch a mirror
+// implementation that turns the box into an auto-committing controlled input.
+describe('AC-6: typing alone commits nothing', () => {
+  it('header_typingCommitsNothing', async () => {
+    const searchInvoices = vi.fn()
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input')
+
+    await userEvent.type(input, 'acm')
+
+    expect(searchInvoices, 'typing alone must never commit a search').not.toHaveBeenCalled()
+    expect(setInvoiceQuery, 'typing alone must never clear/commit through the URL writer either').not.toHaveBeenCalled()
+
+    await userEvent.type(input, '{Enter}')
+
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    expect(searchInvoices).toHaveBeenCalledWith('acm')
   })
 })
 

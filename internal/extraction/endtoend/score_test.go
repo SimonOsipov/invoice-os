@@ -25,8 +25,8 @@ const (
 	eeWrittenCells = 80
 	eeLayoutCount  = 10
 
-	// The cells the six layouts carry no value for. Pinned so an expectation cannot be
-	// silently emptied to dodge a miss.
+	// The cells the six corpus_ layouts carry no value for; every wild_ cell carries one. Pinned
+	// so an expectation cannot be silently emptied to dodge a miss.
 	eeAbsentCellCount = 12
 
 	// eeQuarantineLayout is image-only: zero text chars, so the import quarantines it and
@@ -311,7 +311,7 @@ func eeExpectedValues(c eeCell) []string {
 // renders 0/N rather than vanishing, because a field silently absent from the report reads as
 // tested.
 // A row of 0/0 reads exactly like a satisfied denominator, so when no scored layout carries a
-// table the report says so in words rather than leaving six confident-looking zeros.
+// table the report says so in words rather than leaving a column of confident-looking zeros.
 // TestEndToEnd_AnEmptyLineCorpusSaysSoInWords holds both directions.
 const eeNoLineSignalNote = "  NO LINE SIGNAL -- no scored layout carries a line-item table, so every line row above is 0/0 by construction and measures nothing"
 
@@ -489,8 +489,8 @@ func TestEndToEnd_TheEntityDerivedListIsPinnedAndNonEmpty(t *testing.T) {
 	}
 }
 
-// AC-3. The denominator, pinned to a hand-written constant. `> 0` survives deleting five of the
-// six rows; equality catches a deleted row, which would flatter the rate towards 1.0.
+// AC-3. The denominator, pinned to a hand-written constant. `> 0` survives deleting all but one
+// row; equality catches a deleted row, which would flatter the rate towards 1.0.
 func TestEndToEnd_DenominatorIsTheWrittenCellCount(t *testing.T) {
 	if len(expectByLayout) != eeLayoutCount {
 		t.Errorf("expectByLayout holds %d row(s), want %d", len(expectByLayout), eeLayoutCount)
@@ -630,9 +630,9 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 	}
 }
 
-// AC-3. The other direction of the requiredPDFs check: a seventh layout registered on disk but
-// never given an expectByLayout row is scored by nothing at all, and the pinned 48 stays green
-// while the corpus grew.
+// AC-3. The other direction of the requiredPDFs check: a layout registered on disk but never
+// given an expectByLayout row is scored by nothing at all, and eeWrittenCells stays green while
+// the corpus grew.
 func TestEndToEnd_TheScoredSetIsTheRequiredSet(t *testing.T) {
 	if len(requiredPDFs) != eeLayoutCount {
 		t.Fatalf("requiredPDFs holds %d layout(s), expectByLayout scores %d -- a layout on disk that the score never walks is unmeasured, and docs/extraction-corpus.md's \"Adding a layout\" list is short an edit", len(requiredPDFs), eeLayoutCount)

@@ -2,7 +2,7 @@
 // the spec that fails if the number could be satisfied by recall alone.
 //
 // The CUT drops every invoice_number Tier-1 rule. Every layout then quarantines and the score
-// falls to 0/48 while most values stay reachable, so one test holds both halves of the gap the
+// falls to 0 while most values stay reachable, so one test holds both halves of the gap the
 // number exists to show: "the rules still reach it" and "no invoice was written".
 //
 // The DECOY seeds a learned rule that out-ranks one layout's real total. The value is still

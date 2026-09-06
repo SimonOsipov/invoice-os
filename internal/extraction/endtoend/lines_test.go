@@ -361,7 +361,7 @@ func TestEndToEnd_AnEmptyLineCorpusSaysSoInWords(t *testing.T) {
 
 	empty := eeRenderReport(build(0))
 	if !strings.Contains(empty, eeNoLineSignalNote) {
-		t.Errorf("every layout scores its reached figure against a denominator of 0, and the report says nothing about it; six rows of 0/0 read as coverage:\n%s", empty)
+		t.Errorf("every layout scores its reached figure against a denominator of 0, and the report says nothing about it; a column of 0/0 reads as coverage:\n%s", empty)
 	}
 
 	// The other direction, or the note becomes boilerplate that survives the corpus growing a

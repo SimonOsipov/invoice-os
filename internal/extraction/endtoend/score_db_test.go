@@ -115,7 +115,7 @@ func eeRunLayout(t *testing.T, ctx context.Context, layout string, expect map[st
 	return out
 }
 
-// eeScoreCorpus walks the six layouts in table order.
+// eeScoreCorpus walks every scored layout in table order.
 func eeScoreCorpus(t *testing.T, ctx context.Context) eeScore {
 	t.Helper()
 	eeRequireFixtures(t, requiredPDFs)
@@ -160,7 +160,7 @@ func eeScoreCorpus(t *testing.T, ctx context.Context) eeScore {
 
 // --- the specs --------------------------------------------------------------
 
-// AC-4, AC-6. The six layouts run end to end and scored on what the invoices row holds.
+// AC-4, AC-6. Every scored layout runs end to end, graded on what the invoices row holds.
 func TestRLS_EndToEndScoresTheCorpus(t *testing.T) {
 	eeRequire(t)
 	ctx := t.Context()
@@ -276,7 +276,7 @@ func TestRLS_EndToEndScoresTheCorpus(t *testing.T) {
 	}
 
 	if s.hits != eeCorpusHits {
-		t.Errorf("the six layouts score %d / %d, pinned at %d / %d -- re-measure and update this constant; EXTR-21-09 owns the ratchet.\n%s",
+		t.Errorf("the corpus scores %d / %d, pinned at %d / %d -- re-measure and update this constant; EXTR-21-09 owns the ratchet.\n%s",
 			s.hits, s.total, eeCorpusHits, eeCorpusCells, report)
 	}
 }

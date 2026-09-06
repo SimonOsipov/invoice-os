@@ -302,7 +302,7 @@ Seven edits, no new test:
    `writtenFields` entry — an empty list where the layout prints nothing, plus its reason in
    `eeAbsentCells`. Move `eeLayoutCount`, `eeWrittenCells` and `eeCorpusHits` with it, and
    `eeCutReach` in `mutilation_db_test.go` — the mutilation cut's reach is taken over the same
-   48 cells, so a seventh layout moves it too.
+   cells, so a new layout moves it too.
    `TestEndToEnd_TheScoredSetIsTheRequiredSet` makes edit 5 without this one a red test, so a
    layout cannot be registered on disk and go unscored end to end.
 7. An `eeLinesExpected` row in `internal/extraction/endtoend/lines_test.go`, holding how many
@@ -326,7 +326,10 @@ prefix so that none of the seven edits above apply to it. Do not add a `corpusEx
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
 section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
 reason: a ruled table plus a deliberately inconsistent totals block, exercised by
-`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus.
+`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus. The four
+`wild_*.pdf` arrangements (EXTR-21-06) are the same category again: generated, byte-compared and
+scored by `expectByLayout`, but outside every `corpus_` ratchet, so edits 2, 3 and 4 above do not
+apply to them.
 
 ## Learned rules
 

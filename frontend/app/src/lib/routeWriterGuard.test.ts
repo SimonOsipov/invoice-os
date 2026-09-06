@@ -23,8 +23,8 @@ function containsLocationSearch(text: string): boolean {
 }
 
 // Brace-counting body extractor: a plain string search for the closing `}` would stop at
-// the first one, which is wrong the moment a body contains a nested block. Neither body
-// scanned below nests one today, but the extractor does not assume that.
+// the first one, which is wrong the moment a body contains a nested block. The
+// mount-alignment body nests routeUrl's params object (ROUTE-04-02).
 function bracedBodyFrom(src: string, openBraceIdx: number): string {
   let depth = 0
   let i = openBraceIdx

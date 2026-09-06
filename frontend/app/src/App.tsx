@@ -10,7 +10,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseRoute, routePath } from './lib/route'
+import { parseLocation, parseRoute, routePath, routeUrl } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -321,10 +321,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
   )
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
+  // One parse of the boot URL; the four seeds below read it, so path and query stay one
+  // fact. The query is taken only when bootPath IS the live pathname -- a restored
+  // destination stores no query, so a live `?q=` on the bare root must not attach to it.
+  const [seed] = useState(() =>
+    parseLocation(bootPath, bootPath === window.location.pathname ? window.location.search : ''),
+  )
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (parseRoute(bootPath) ?? 'dashboard')),
+    initialView ?? (bootBatchIds.length > 0 ? 'create' : (seed.view ?? 'dashboard')),
   )
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
@@ -358,20 +364,21 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
-  const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(null)
+  const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(() =>
+    seed.auditInvoice ? { invoiceId: seed.auditInvoice, invoiceNumber: null } : null,
+  )
   // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
   // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
   const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
-  const [invoiceQuery, setInvoiceQuery] = useState('')
+  const [invoiceQuery, setInvoiceQuery] = useState(() => seed.q)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   // Every deployment is a sandbox today, so this is a client-side constant, not a
   // posture value fetched from the server.
   const [sandbox, setSandbox] = useState(SANDBOX_DEFAULT)
-  // Settings opens on Members. This literal is the ONLY thing that decides which tab
-  // opens — SETTINGS_TABS' array order decides only which renders first — so the two
-  // have to be changed together.
-  const [settingsTab, setSettingsTab_] = useState<SettingsTab>('members')
+  // Settings opens on Members: parseLocation returns that tab for a URL that names none.
+  // SETTINGS_TABS' array order decides only which renders first.
+  const [settingsTab, setSettingsTab_] = useState<SettingsTab>(() => seed.settingsTab)
   const [connectors, setConnectors] = useState<ConnectorsState>(INITIAL_CONNECTORS)
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
@@ -521,8 +528,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // Also clears it unconditionally: a persona-switch remount must not inherit a stray one.
+  // Deps stay []: a mount alignment, not a mirror --
+  // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.
   useEffect(() => {
-    window.history.replaceState(null, '', routePath(view) + window.location.hash)
+    const url = routeUrl(view, {
+      settingsTab,
+      q: invoiceQuery,
+      auditInvoice: auditPrefilter?.invoiceId ?? null,
+    })
+    window.history.replaceState(null, '', url + window.location.hash)
     clearDestination()
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no

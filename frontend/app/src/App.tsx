@@ -10,7 +10,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseLocation, parseRoute, routePath, routeUrl } from './lib/route'
+import { parseLocation, parseRoute, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -371,7 +371,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
   const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
-  const [invoiceQuery, setInvoiceQuery] = useState(() => seed.q)
+  const [invoiceQuery, setInvoiceQuery_] = useState(() => seed.q)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   // Every deployment is a sandbox today, so this is a client-side constant, not a
   // posture value fetched from the server.
@@ -581,17 +581,46 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     if (view === 'audit' && auditPrefilter != null) setAuditPrefilter(null)
   }, [view, auditPrefilter])
 
-  // The one URL writer for real navigation, mirroring the mount-alignment effect above.
+  // One writer for a navigation: the view, the destination's owned params and the URL all
+  // come from the same `params` object, so state and the address bar cannot diverge.
   // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
   // to every pushed entry.
-  function navigate(view: View) {
+  function navigate(view: View, params?: RouteParams) {
+    // settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.
+    const tabNext = params?.settingsTab ?? settingsTab
+    const qNext = params?.q ?? invoiceQuery
+    // auditInvoice has SCREEN LIFETIME: the pill that edits it unmounts with /audit.
+    const auditNext = view === 'audit' ? (params?.auditInvoice ?? null) : null
     setView(view)
-    window.history.pushState(null, '', routePath(view) + window.location.hash)
+    if (params?.settingsTab != null) setSettingsTab_(params.settingsTab)
+    if (params?.q != null) setInvoiceQuery_(params.q)
+    // Functional, never a plain object: openAuditForInvoice knows the invoiceNumber and this
+    // does not, so a plain write would clobber it in the same batch.
+    setAuditPrefilter((prev) =>
+      auditNext == null
+        ? null
+        : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
+    )
+    const url = routeUrl(view, { settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
+    window.history.pushState(null, '', url + window.location.hash)
   }
 
-  function nav(id: View) {
-    navigate(id)
+  function nav(id: View, params?: RouteParams) {
+    navigate(id, params)
     setSwitcherOpen(false)
+  }
+
+  // A committed search: one pushed entry landing on /invoices with the term in the URL.
+  function searchInvoices(q: string) {
+    navigate('invoices', { q })
+  }
+
+  // The clearing verb. A correction of the URL on screen, so it replaces; `view` is the
+  // current one because the search box is global and can be cleared from any screen.
+  function setInvoiceQuery(q: string) {
+    setInvoiceQuery_(q)
+    const url = routeUrl(view, { settingsTab, q, auditInvoice: auditPrefilter?.invoiceId ?? null })
+    window.history.replaceState(null, '', url + window.location.hash)
   }
 
   function toggleSwitcher() {
@@ -1220,7 +1249,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // carries the atom -- AuditView reads it during THAT render, before any effect runs.
   function openAuditForInvoice(invoiceId: string, invoiceNumber: string | null) {
     setAuditPrefilter({ invoiceId, invoiceNumber })
-    navigate('audit')
+    navigate('audit', { auditInvoice: invoiceId })
+  }
+
+  // An in-screen edit of the filter already on Audit: it corrects the URL rather than
+  // moving to a new one, so it replaces.
+  function setAuditInvoiceFilter(invoiceId: string | null, invoiceNumber: string | null) {
+    setAuditPrefilter(invoiceId ? { invoiceId, invoiceNumber } : null)
+    const url = routeUrl(view, { settingsTab, q: invoiceQuery, auditInvoice: invoiceId })
+    window.history.replaceState(null, '', url + window.location.hash)
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
@@ -1229,8 +1266,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     navigate('extraction')
   }
 
+  // A tab click stays on the same screen, so it replaces.
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
+    const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
+    window.history.replaceState(null, '', url + window.location.hash)
   }
 
   function toggleConnector(id: ConnectorId) {
@@ -1438,6 +1478,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     extractionJobId,
     nav,
     setInvoiceQuery,
+    searchInvoices,
     toggleSwitcher,
     switchClient,
     openCreate,
@@ -1467,6 +1508,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     selectInvoice,
     openImportedInvoice,
     openAuditForInvoice,
+    setAuditInvoiceFilter,
     openExtraction,
     setSandbox,
     setSettingsTab,

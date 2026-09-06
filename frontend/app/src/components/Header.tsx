@@ -71,8 +71,7 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            ctx.setInvoiceQuery(clampFilterText(query))
-            ctx.nav('invoices')
+            ctx.searchInvoices(clampFilterText(query))
           }}
           className="pf-header-search"
           style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 12px', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', background: 'var(--bg-2)', width: 240 }}

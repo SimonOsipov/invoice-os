@@ -20,8 +20,10 @@ import { describe, expect, it } from 'vitest'
 
 const src = readFileSync(fileURLToPath(new URL('./Header.tsx', import.meta.url)), 'utf8')
 
+// Balanced to one nesting level: a `[^)]*` argument stops at the FIRST `)`, so it can never
+// return the whole of `ctx.searchInvoices(clampFilterText(query))` the assertions below pin.
 const callSites = (text: string, verb: string) =>
-  text.match(new RegExp(`ctx\\.${verb}\\([^)]*\\)`, 'g')) ?? []
+  text.match(new RegExp(`ctx\\.${verb}\\((?:[^()]|\\([^()]*\\))*\\)`, 'g')) ?? []
 
 describe('search call-shape guard (AC #7, [search-input-is-capped-client-side])', () => {
   it('exactly one committing call site, and it clamps', () => {

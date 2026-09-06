@@ -2713,7 +2713,7 @@ func TestExtractWorker_FailureKindOverwritesOnReplayAndClearsOnSuccess(t *testin
 
 // --- EXTR-15-02 / EXTR-19-04: a format that renders no page images ------------------------
 //
-// RendersPageImages(doc.ContentType) gates the render, the page rows and the v1 layout. It no
+// RendersPageImagesForDocument(doc) gates the render, the page rows and the v1 layout. It no
 // longer gates the rule lookup: EXTR-19-04 gives a boxless document a b1: identity of its own
 // off its text tokens, and the lookup is gated on that identity instead.
 
@@ -3452,10 +3452,10 @@ func TestRLS_ARetryableBoxlessLayoutWriteFailureStaysFailedAndEmitsNothing(t *te
 	}
 }
 
-// QA-3. The boxless branch is gated on the FORMAT, never on the geometry: RendersPageImages is a
-// strict allowlist over two content types, so anything else -- including the NULL
-// declared_content_type docs/document-upload.md records a direct API caller can store against
-// real PDF bytes -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
+// QA-3. The boxless branch is gated on the FORMAT, never on the geometry:
+// RendersPageImagesForDocument checks the declared type and a PDF byte sniff, so only content
+// that fails both -- a genuine non-PDF document, whatever real box geometry its own text tokens
+// happen to carry -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
 // geometry under a b1: identity and a pointed correction against it CAN learn a rule. AC-9's
 // "a POINTED correction on a boxless job learns nothing" is a property of a DOCX's zero boxes,
 // not of the b1: namespace, and this is the spec that says which. A TYPED correction on such a

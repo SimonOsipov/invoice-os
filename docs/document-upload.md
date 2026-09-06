@@ -64,10 +64,12 @@ extension and by canonical content type; an image renamed `.bin` and DECLARED
 deliberately not narrowed — `frontend/app/src/lib/sourceDocument.ts` keeps its image rows so a
 document stored before the change still renders.
 
-Rendering is gated on `documents.declared_content_type` (`RendersPageImages`,
-`internal/extraction/classify.go`), which makes that column load-bearing. `POST
-/v1/imports/preview` stores the client's raw part header before it judges the format
-(`internal/importer/handlers.go:401`), and `Upsert` is first-writer-wins on the content hash,
-so a PDF previewed there under a non-canonical type extracts from text alone ever after. Not
-reachable from the app -- the wizard refuses a document-kind file before the preview call
-(`frontend/app/src/App.tsx:681`) -- but a direct API caller can do it to their own bytes.
+Rendering is gated on `documents.declared_content_type` or a `%PDF-` byte sniff
+(`RendersPageImagesForDocument`, `internal/extraction/classify.go`), so the column alone is no
+longer load-bearing for PDFs. `POST /v1/imports/preview` stores the client's raw part header
+before it judges the format (`internal/importer/handlers.go:401`), and `Upsert` is
+first-writer-wins on the content hash, so a PDF previewed there under a non-canonical type still
+renders on the sniff, but a non-PDF format previewed under a wrong type still extracts from text
+alone ever after. Not reachable from the app -- the wizard refuses a document-kind file before
+the preview call (`frontend/app/src/App.tsx:722`) -- but a direct API caller can do it to their
+own bytes.

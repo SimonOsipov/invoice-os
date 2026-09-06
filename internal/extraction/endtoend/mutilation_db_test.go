@@ -37,15 +37,15 @@ const (
 	eeCutScore     = 0 // over eeCorpusCells: documentCreateInput rejects an empty number, so every layout quarantines
 
 	// eeCutReach is how many of the same 48 cells a value is still REACHABLE for under the
-	// cut -- Resolve's candidate list, no database. Held at 0 until Stage 3 measures it; the
-	// figure is what separates this number from a recall measure.
+	// cut -- Resolve's candidate list, no database. The gap between it and eeCutScore is what
+	// separates this number from a recall measure.
 	//
 	// Not to be confused with the 37/44 the story cites: that is acMutilatedHits over
 	// corpusExpect's 44 (layout, field) pairs across 10 vocabulary fields
 	// (internal/extraction/accuracy_test.go:52). This suite scores 48 cells over the 8 fields
 	// the mapper writes. Different denominator, different table -- pinning 37 here would be a
 	// false pin.
-	eeCutReach = 0
+	eeCutReach = 26
 )
 
 // The reach decoy. The two-branch alternation is load-bearing, not cosmetic: decideField keeps
@@ -61,9 +61,9 @@ const (
 	eeDecoyRank1  = "5375.00" // the layout's real total, still reached, one rank down
 	eeDecoyRows   = 2
 
-	// eeDecoyBaseHits is what eeDecoyLayout scores with no decoy, under BOTH reads. Held at 0
-	// until Stage 3 measures it.
-	eeDecoyBaseHits = 0
+	// eeDecoyBaseHits is what eeDecoyLayout scores with no decoy, under BOTH reads. The decoy
+	// run must score exactly one less.
+	eeDecoyBaseHits = 4
 )
 
 // --- the variants ------------------------------------------------------------------------

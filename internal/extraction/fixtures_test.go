@@ -716,8 +716,9 @@ func fxWildRuledRowText(baseline int, cells []string) []fxLine {
 	return lines
 }
 
-// fxBuildWildRuledLinesTotals is a ruled five-column line-item table whose last row's amount
-// (1,000.00) sits 24pt above the totals block, competing with the printed total. The totals
+// fxBuildWildRuledLinesTotals is a ruled five-column line-item table whose Total label continues
+// on the last data row's own baseline, the way a ruled invoice prints a continuing totals row.
+// t1.total.right therefore reaches that row's 1,000.00 and not the printed 8,600.00. The totals
 // corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
 // tell a corroborated pick from a positional one.
 //
@@ -742,7 +743,10 @@ func fxBuildWildRuledLinesTotals() []byte {
 	lines = append(lines,
 		fxLine{12, 380, 404, "Sub-total"}, fxLine{12, 500, 404, "8,000.00"},
 		fxLine{12, 380, 386, "VAT"}, fxLine{12, 500, 386, "600.00"},
-		fxLine{12, 380, 368, "Total"}, fxLine{12, 500, 368, "8,600.00"},
+		// The Total label continues on the last data row's own baseline, so t1.total.right
+		// reaches the line amount beside it and the printed 8,600.00 falls outside every
+		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
+		fxLine{12, 380, 428, "Total"}, fxLine{12, 500, 368, "8,600.00"},
 	)
 
 	// H before V, matching fxBuildTable's own loop shape.

@@ -747,8 +747,10 @@ func TestWildLayouts_TheTwoPartyFixtureCarriesTheBuyerHeadingAndFragments(t *tes
 const wildTotalsTol = 0.01
 
 // AC-13. subtotal + vat equals the printed total and does NOT equal the competing last-row line
-// amount. A fixture where both candidates balance cannot tell a corroborated pick from a
-// positional one, and EXTR-23's tie-break would be graded against an oracle that proves nothing.
+// amount, and that line amount is a total CANDIDATE. A fixture where both candidates balance
+// cannot tell a corroborated pick from a positional one, and one where the competitor is merely
+// printed somewhere on the page offers no pick at all -- either way EXTR-23's tie-break would be
+// graded against an oracle that proves nothing.
 func TestWildLayouts_TheRuledTableTotalsDiscriminate(t *testing.T) {
 	subtotal := wildAmount(t, wildOneValue(t, wildRuled, "subtotal"))
 	vat := wildAmount(t, wildOneValue(t, wildRuled, "vat"))
@@ -762,10 +764,20 @@ func TestWildLayouts_TheRuledTableTotalsDiscriminate(t *testing.T) {
 		t.Errorf("%s's last line amount %v also satisfies subtotal + vat; the fixture cannot discriminate a corroborated total from a positional one", wildRuled, line)
 	}
 
-	// The competing candidate must be on the page, or there is nothing for the totals to be
-	// picked over.
+	// Readable on the page is not competing: this clause passed while total had ONE candidate and
+	// there was no pick to grade. The competitor must be in Resolve's own candidate list for
+	// total.
 	if readings := eePageTokenReadings(t, wildRuled, "total"); !slices.Contains(readings, wildRuledLastLineAmount) {
 		t.Errorf("%s does not print the competing line amount %s; readings were %v", wildRuled, wildRuledLastLineAmount, readings)
+	}
+	var cands []string
+	for _, c := range extraction.Resolve(eeTokenPages(t, wildRuled), extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		if c.Field == "total" {
+			cands = append(cands, c.Value)
+		}
+	}
+	if !slices.Contains(cands, wildRuledLastLineAmount) {
+		t.Errorf("%s reaches total candidates %v, which do not include the competing line amount %s; an amount no total rule can pick is not something EXTR-23's tie-break can be graded against", wildRuled, cands, wildRuledLastLineAmount)
 	}
 }
 

@@ -4,6 +4,7 @@
 package endtoend
 
 import (
+	"cmp"
 	"os"
 	"slices"
 	"strings"
@@ -62,7 +63,7 @@ func TestWildLayouts_TheLayoutSetIsPinnedAndCarriedByEveryTable(t *testing.T) {
 	}
 }
 
-// --- the defects these arrangements do NOT reproduce ----------------------------------------
+// --- what these arrangements do and do not reproduce -----------------------------------------
 
 // wildResolved is every Tier-1 candidate value one layout produces for field, in rank order.
 // Resolve makes no decision, so this is the set a later tie-break would have to choose from.
@@ -80,35 +81,38 @@ func wildResolved(t *testing.T, layout, field string) []string {
 	return out
 }
 
-// TestWildLayouts_TheRuledTableDoesNotReproduceACompetingTotal records a measured non-result.
-// The story lists "a line-item figure chosen as the total" as this layout's Objective defect and
-// AC-13 assumes the totals must be picked OVER the last line amount. Measured: no total rule
-// reaches that amount, so total has exactly one candidate and there is no pick to make. EXTR-23
-// must supply its own oracle, or make this arrangement truer -- putting the competing amount on
-// the totals label's own baseline, which is what a `right` relation can see.
+// TestWildLayouts_TheRuledTableReproducesACompetingTotal is EXTR-23's oracle. The Total label
+// continues on the last data row's baseline, so t1.total.right reaches that row's amount and the
+// printed 8,600.00 falls outside every total relation: total resolves to the LINE figure, which
+// is the Objective defect "a line-item figure chosen as the total".
 //
-// Fails the moment the fixture starts reproducing the defect, which is the point: the day this
-// reds is the day EXTR-23 gets its oracle back.
-func TestWildLayouts_TheRuledTableDoesNotReproduceACompetingTotal(t *testing.T) {
+// The candidate list, not the page: an amount readable somewhere on the page is not an amount a
+// rule can pick, which is the reading that let this arrangement score 8/8 while reproducing
+// nothing.
+func TestWildLayouts_TheRuledTableReproducesACompetingTotal(t *testing.T) {
 	got := wildResolved(t, wildRuled, "total")
-	want := wildOneValue(t, wildRuled, "total")
+	printed := wildOneValue(t, wildRuled, "total")
 
-	if !slices.Equal(got, []string{want}) {
-		t.Errorf("%s now resolves total to %v, not the single uncontested %q this arrangement was measured at; re-read whether the competing line amount finally competes", wildRuled, got, want)
+	if !slices.Equal(got, []string{wildRuledLastLineAmount}) {
+		t.Errorf("%s resolves total to %v, want exactly [%s] -- the last line amount must be the only candidate, or EXTR-23 has no defect to fix", wildRuled, got, wildRuledLastLineAmount)
 	}
-	if slices.Contains(got, wildRuledLastLineAmount) {
-		t.Errorf("%s now reaches the last line amount %s as a total candidate; the defect IS reproduced and eeRealMisses must gain the cell", wildRuled, wildRuledLastLineAmount)
+	if slices.Contains(got, printed) {
+		t.Errorf("%s reaches the printed total %s as a candidate (%v); the defect is no longer reproduced and EXTR-23 loses its oracle", wildRuled, printed, got)
 	}
 }
 
-// TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect records the other two measured
-// non-results. The story lists three Objective defects for this arrangement; only the naira
-// yielding no currency is reproduced.
+// TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect records two measured
+// NON-reproductions: this corpus gives EXTR-22's Due-Date half and the RC-as-VAT half NO ORACLE,
+// and the owning story must supply its own. The story lists three Objective defects for this
+// arrangement; only the naira yielding no currency is reproduced.
 //
 //   - Due Date above Issue Date: BOTH dates reach issue_date, but the printed issue date wins on
 //     distance because "Issue Date " is the longer label. The confusion is reachable and never
 //     decided, so the fixture is one dial from being an oracle.
 //   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing.
+//
+// Fails the moment either starts reproducing, which is the point: the day this reds is the day
+// EXTR-22 gets an oracle here.
 func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T) {
 	dates := wildResolved(t, wildRCNaira, "issue_date")
 	issue := wildOneValue(t, wildRCNaira, "issue_date")
@@ -118,12 +122,12 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 		t.Errorf("%s no longer reaches the due date %s as an issue_date candidate; the arrangement stopped even being able to confuse the two", wildRCNaira, wildRCDueDate)
 	}
 	if len(dates) == 0 || dates[0] != issue {
-		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0, so the Due Date defect is NOT reproduced and EXTR-22 must supply its own oracle", wildRCNaira, dates, issue)
+		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for EXTR-22's Due-Date half -- this corpus does not reproduce it and EXTR-22 must supply its own", wildRCNaira, dates, issue)
 	}
 
 	vat := wildResolved(t, wildRCNaira, "vat")
 	if !slices.Equal(vat, []string{wildOneValue(t, wildRCNaira, "vat")}) {
-		t.Errorf("%s now resolves vat to %v; the RC line displaced nothing when this was measured, and eeRealMisses must gain the cell if it does now", wildRCNaira, vat)
+		t.Errorf("%s now resolves vat to %v; the RC line displaced nothing when this was measured. NO ORACLE HERE for the RC-as-VAT half -- if it displaces something now, eeRealMisses must gain the cell", wildRCNaira, vat)
 	}
 }
 
@@ -145,20 +149,42 @@ func TestWildLayouts_TheTwoPartyDefectsAreReproduced(t *testing.T) {
 
 // --- golden properties nothing else reads -----------------------------------------------------
 
+// wildCellTokens rebuilds one cell's text from the golden's own tokens: those whose centre sits
+// inside the cell's box, joined left to right. It also returns how many tokens that took. A cell
+// carrying no box rebuilds to "".
+func wildCellTokens(p extraction.Page, cell extraction.TableCell) (string, int) {
+	if cell.Region == nil {
+		return "", 0
+	}
+	var inside []extraction.Token
+	for _, tok := range p.Tokens {
+		cx, cy := (tok.Region.X0+tok.Region.X1)/2, (tok.Region.Y0+tok.Region.Y1)/2
+		if cx >= cell.Region.X0 && cx <= cell.Region.X1 && cy >= cell.Region.Y0 && cy <= cell.Region.Y1 {
+			inside = append(inside, tok)
+		}
+	}
+	slices.SortFunc(inside, func(a, b extraction.Token) int { return cmp.Compare(a.Region.X0, b.Region.X0) })
+
+	var parts []string
+	for _, tok := range inside {
+		parts = append(parts, strings.TrimSpace(tok.Text))
+	}
+	return strings.Join(parts, " "), len(inside)
+}
+
 // TestWildGoldens_TheRuledTableCellsAgreeWithItsOwnTokens closes the seam between the two golden
 // specs: AC-2 compares tokens against pdfium and AC-10b reads only the header row, so a
 // hand-edited body cell is caught by the container step in CI and by nothing in Go.
+//
+// A cell is rebuilt from the tokens its own box contains, not required to BE one token: docling
+// merges two tokens into one cell wherever a row prints two runs in the same column, which the
+// ruled table's totals row now does. An invented, altered or reordered word still fails.
 func TestWildGoldens_TheRuledTableCellsAgreeWithItsOwnTokens(t *testing.T) {
 	pages := eeGoldenPages(t, wildGolden(wildRuled))
 
-	var tokens []string
-	cells := 0
+	tokens, cells, merged := 0, 0, 0
 	for _, p := range pages {
-		for _, tok := range p.Tokens {
-			tokens = append(tokens, strings.TrimSpace(tok.Text))
-		}
-	}
-	for _, p := range pages {
+		tokens += len(p.Tokens)
 		for _, tbl := range p.Tables {
 			for _, cell := range tbl.Cells {
 				text := strings.TrimSpace(cell.Text)
@@ -166,14 +192,22 @@ func TestWildGoldens_TheRuledTableCellsAgreeWithItsOwnTokens(t *testing.T) {
 					continue
 				}
 				cells++
-				if !slices.Contains(tokens, text) {
-					t.Errorf("%s's table carries cell %q, which its own token list does not; the golden was hand-edited", wildGolden(wildRuled), text)
+				got, n := wildCellTokens(p, cell)
+				if n > 1 {
+					merged++
+				}
+				if got != text {
+					t.Errorf("%s's cell (%d,%d) reads %q, but the %d token(s) inside its own box read %q; the golden was hand-edited", wildGolden(wildRuled), cell.Row, cell.Col, text, n, got)
 				}
 			}
 		}
 	}
-	if cells == 0 || len(tokens) == 0 {
-		t.Fatalf("%s yielded %d table cell(s) and %d token(s); the comparison above held over nothing", wildGolden(wildRuled), cells, len(tokens))
+	if cells == 0 || tokens == 0 {
+		t.Fatalf("%s yielded %d table cell(s) and %d token(s); the comparison above held over nothing", wildGolden(wildRuled), cells, tokens)
+	}
+	// Floor: an all-single-token table would satisfy the rebuild for the weaker reason.
+	if merged == 0 {
+		t.Errorf("%s carries no multi-token cell; the rebuild above proves nothing a token-identity check did not", wildGolden(wildRuled))
 	}
 }
 

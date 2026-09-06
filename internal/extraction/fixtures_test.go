@@ -377,15 +377,61 @@ const fxNaira = `\244`
 // fxAmount is the amount every naira spec reads back, without its symbol.
 const fxAmount = "1,075.00"
 
+// fxNairaFont is fxHelvetica plus the two halves the sign needs: /Differences names the glyph
+// so it draws, /ToUnicode carries the Unicode so pdfium extracts U+20A6. toUnicode <= 0 omits
+// the CMap reference, which TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign
+// reads back as U+00A4.
+func fxNairaFont(toUnicode int) string {
+	dict := "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica" +
+		" /Encoding << /Type /Encoding /Differences [164 /naira] >>"
+	if toUnicode > 0 {
+		dict += fmt.Sprintf(" /ToUnicode %d 0 R", toUnicode)
+	}
+	return dict + " >>"
+}
+
+// fxNairaCMap maps the single code the font redefines. Constant body, so fxStream's /Length
+// and the assembled bytes stay deterministic.
+func fxNairaCMap() fxObject {
+	return fxStream([]byte(`/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Naira-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<A4> <20A6>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`))
+}
+
 // fxNairaTextPage is fxTextPage over a naira-capable font. withCMap is the control knob for
-// TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign.
-//
-// NOT IMPLEMENTED: it still emits the plain Helvetica page, so byte 0xA4 reads as whatever
-// the base font's built-in encoding says. The three TestFixtures_*Naira* specs are red until
-// the font dict carries /Differences [164 /naira] and a /ToUnicode stream.
+// TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign; fxAssemble numbers by slice
+// index, so the appended CMap is object 6.
 func fxNairaTextPage(withCMap bool, lines ...fxLine) []byte {
-	_ = withCMap
-	return fxTextPage(lines...)
+	const cmapObj = 6
+
+	toUnicode := 0
+	if withCMap {
+		toUnicode = cmapObj
+	}
+	objs := []fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(lines...)),
+		fxObject(fxNairaFont(toUnicode)),
+	}
+	if withCMap {
+		objs = append(objs, fxNairaCMap())
+	}
+	return fxAssemble(objs)
 }
 
 // fxNairaLines is the shared content the naira specs read back: "Total" and the amount as two

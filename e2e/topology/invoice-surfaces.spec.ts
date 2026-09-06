@@ -112,7 +112,9 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoice$/)
+  // Addressed form (ROUTE-02-03): a handler that renders the panel while leaving the
+  // address bar stale still fails this.
+  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
 }
 
 // The state strip (StatusStrip.tsx) replaced the status-history timeline: every scenario

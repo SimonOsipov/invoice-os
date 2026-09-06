@@ -2383,3 +2383,19 @@ describe('QA BUG-10-03: the filtered empty state claims nothing before the serve
     expect(screen.queryByTestId('invoices-empty-filtered'), 'a request that failed says nothing about what needs attention').toBeNull()
   })
 })
+
+// ROUTE-04-06 AC-6, task-937. invoices-empty-filtered is gated on needsAttention alone
+// (InvoicesList.tsx), never on q -- a q miss and a genuinely empty register render the SAME
+// generic testid, so the discriminating assertion is the wire's own q param, not the testid.
+describe('ROUTE-04-06 AC-6: a search term with no matches renders the honest miss', () => {
+  it('a q that matches nothing sends q on the wire and renders the generic empty state', async () => {
+    const fetchMock = mockFetchSequence([listResponse([], { limit: 50, offset: 0, total: 0 })])
+
+    render(<InvoicesList ctx={listCtx('ent-1', 'zzz')} />)
+
+    const empty = await screen.findByTestId('invoices-empty')
+    expect(urlParams(fetchMock.mock.calls[0]![0] as string).get('q'), 'the wire must carry the term that missed').toBe('zzz')
+    expect(empty, 'a q miss is not needs_attention -- it renders the generic empty state, not -filtered').toBeTruthy()
+    expect(screen.queryByTestId('invoices-empty-filtered'), 'needsAttention is off, so the filtered testid must not appear').toBeNull()
+  })
+})

@@ -84,9 +84,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function bootAt(path: string, opts: { demoMode?: boolean; strict?: boolean } = {}) {
+// persona defaults to SEAT_SESSION's (firm) -- ROUTE-04-06 AC-2 is the first spec in this
+// file to pass APP_PERSONAS.inhouse; every existing call site is unaffected.
+async function bootAt(path: string, opts: { demoMode?: boolean; strict?: boolean; persona?: Session['persona'] } = {}) {
   window.history.replaceState(null, '', path)
-  localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+  const session: Session = { ...SEAT_SESSION, persona: opts.persona ?? SEAT_SESSION.persona }
+  localStorage.setItem(SESSION_KEY, serializeSession(session))
   if (opts.demoMode) vi.stubEnv('VITE_DEMO_MODE', 'true')
   vi.resetModules()
   const { default: App } = await import('./App')
@@ -684,6 +687,70 @@ describe('QA adversarial coverage (ROUTE-02-02)', () => {
       differing,
       `every replaceState call under StrictMode must agree on the id-carrying URL: ${JSON.stringify(differing)}`,
     ).toHaveLength(0)
+  })
+})
+
+// ROUTE-04-06 AC-1/AC-2, task-937. `company` is a real SettingsTab (lib/route.ts), so
+// parseLocation resolves it for ANY mode -- the mode-aware refusal has to happen here, at
+// the settingsTab seed, since route.ts cannot see `mode`. AC-1 is the one RED spec this
+// subtask owns; AC-2 is the control needle proving the refusal is mode-scoped, not blanket.
+describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically to an unknown tab', () => {
+  // Filtered to the known settings-tab labels: MembersView unconditionally mounts
+  // MemberRoleMatrix's own `.pf-tab` disclosure toggle ("What can each role do?"), which
+  // would otherwise pollute a bare `.pf-tab` scan once the fallback lands on Members.
+  const SETTINGS_TAB_LABELS = new Set([
+    'Members',
+    'Roles',
+    'ERP connectors',
+    'API & webhooks',
+    'Signing & certificates',
+    'Company',
+  ])
+  function settingsStripLabels(): string[] {
+    return Array.from(document.querySelectorAll('.pf-tab'))
+      .map((el) => el.textContent ?? '')
+      .filter((t) => SETTINGS_TAB_LABELS.has(t))
+  }
+
+  async function resolvedSettingsBoot(path: string) {
+    await bootAt(path)
+    const ctx = requireCtx()
+    return {
+      view: ctx.view,
+      settingsTab: ctx.settingsTab,
+      alignedUrl: window.location.pathname,
+      stripLabels: settingsStripLabels(),
+    }
+  }
+
+  it('boot_firmSettingsCompanyFallsBackIdenticallyToAnUnknownTab', async () => {
+    const company = await resolvedSettingsBoot('/settings/company')
+    cleanup()
+    capturedCtx = undefined
+    const nonsense = await resolvedSettingsBoot('/settings/nonsense')
+
+    expect(company, 'the firm fallback must equal the unknown-tab fallback exactly').toEqual(nonsense)
+    // An equivalence alone is satisfiable by two identically-broken renders -- pin the
+    // literal shape too.
+    expect(company, 'and both must equal the literal expected shape, not just each other').toEqual({
+      view: 'settings',
+      settingsTab: 'members',
+      alignedUrl: '/settings',
+      stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
+    })
+  })
+})
+
+describe('ROUTE-04-06 AC-2: control needle -- an in-house workspace keeps the Company tab', () => {
+  it('boot_inhouseSettingsCompanyRendersTheCompanyPanel', async () => {
+    await bootAt('/settings/company', { persona: APP_PERSONAS.inhouse })
+    const ctx = requireCtx()
+
+    expect(ctx.settingsTab, 'in-house must not fall back -- company is a real tab for this mode').toBe('company')
+    expect(window.location.pathname, 'the URL must keep the tab segment for in-house').toBe('/settings/company')
+    // The panel itself, not just the state -- proves AC-1's fallback is a real refusal,
+    // not a tab that never had content in the first place.
+    expect(screen.getByText('Your company'), 'the Company panel must actually render').toBeTruthy()
   })
 })
 

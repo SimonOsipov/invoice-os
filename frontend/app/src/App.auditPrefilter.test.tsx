@@ -454,4 +454,22 @@ describe('the App -> AuditView seam', () => {
       expect(new URL(url).searchParams.get('invoice_id'), `a main request lost the filter: ${url}`).toBe(INVOICE_ID)
     }
   })
+
+  // ROUTE-04-06 AC-5, task-937. route.ts's INVOICE_ID regex already drops a malformed
+  // `?invoice=` before it ever reaches the atom (lib/route.test.ts) -- this is the wire-level
+  // regression guard proving that drop actually keeps the id off the Audit screen's own request.
+  it('platformCtx_aMalformedInvoiceQueryParamNeverReachesTheWire', async () => {
+    const calls: string[] = []
+    window.history.replaceState(null, '', '/audit?invoice=not-a-uuid')
+    await renderAppWithGateway(calls)
+    requireCtx()
+
+    await waitFor(() => expect(mainAuditCalls(calls).length, 'floor: the Audit screen never fetched').toBeGreaterThan(0))
+    for (const url of mainAuditCalls(calls)) {
+      const p = new URL(url).searchParams
+      expect(p.has('invoice_id'), `a malformed invoice param must never reach the wire: ${url}`).toBe(false)
+      expect(p.has('from'), `an unfiltered mount must still window by 30 days: ${url}`).toBe(true)
+    }
+    expect(screen.queryByTestId('audit-pill-invoice'), 'and the screen renders unfiltered').toBeNull()
+  })
 })

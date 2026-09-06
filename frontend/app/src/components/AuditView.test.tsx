@@ -2799,3 +2799,49 @@ describe('AuditView pre-filter lifetime, adversarial (ROUTE-04-04 QA)', () => {
   })
 })
 
+// ROUTE-04-06 AC-3/AC-4, task-937. A cold-seeded invoice filter (mirrors what a cold App
+// boot at /audit?invoice=<uuid> hands to ctx.auditPrefilter) with no matching events.
+describe('ROUTE-04-06 AC-3/AC-4: a cold-seeded invoice filter renders honestly and leaks nothing', () => {
+  const COLD_ID = 'cccccccc-0000-4000-8000-000000000003'
+
+  function coldSeededCtx(invoiceNumber: string | null): PlatformCtx {
+    return { ...auditCtx(), auditPrefilter: { invoiceId: COLD_ID, invoiceNumber } } as unknown as PlatformCtx
+  }
+
+  it('auditView_coldSeededMissRendersTheFilteredEmptyStateWithTheBarePill', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    render(<AuditView ctx={coldSeededCtx(null)} />)
+
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'the pill must still be on screen').not.toBeNull()
+    // Sourced from the function that owns the copy, never retyped, and pinned to the
+    // literal "One invoice" AC-3 names. .toContain, not .toBe: the pill also renders a
+    // trailing aria-hidden "x" remove glyph as a text sibling (AuditFilterCard.tsx).
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel(null))
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain('One invoice')
+  })
+
+  it('auditView_coldSeededMissLeaksTheInvoiceIdNowhereInTheDom', async () => {
+    // No row is ever clicked -- AuditRow.tsx only dumps payload keys (which can carry
+    // invoice_id) into the DOM once a row is EXPANDED, and this fixture has zero rows to
+    // click besides.
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    const { container } = render(<AuditView ctx={coldSeededCtx(null)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(container.innerHTML, 'the id must not leak anywhere in the rendered DOM').not.toContain(COLD_ID)
+    cleanup()
+
+    // Needle: proves the scan above can actually SEE a uuid, by forcing this exact string
+    // into the pill's own label. invoiceNumber is nullable free text, not validated as a
+    // real invoice number -- abusing it here is the only way to land a literal uuid in
+    // rendered markup without expanding a row.
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    const { container: needleContainer } = render(<AuditView ctx={coldSeededCtx(COLD_ID)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(
+      needleContainer.innerHTML,
+      'control: the scan must be able to see a uuid when one is actually there',
+    ).toContain(COLD_ID)
+  })
+})
+

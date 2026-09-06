@@ -15,15 +15,15 @@ import { Header } from './Header'
 
 afterEach(cleanup)
 
-// Header reads exactly five ctx fields. Typing them against the real PlatformCtx keeps a
-// rename breaking the typecheck; the cast then stands in for the ~90 fields it never reads.
-// `nav` is a real PlatformCtx field (App.tsx) so it joins the Pick; `setInvoiceQuery`
-// (task-331, BUG-01-05) doesn't exist on PlatformCtx yet, so it's added as its own
-// intersection member instead -- same idiom `active` below already uses -- which is what
-// lets this widen without touching types.ts.
-type HeaderCtx = Pick<PlatformCtx, 'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav'> & {
+// Every field Header reads, typed against the real PlatformCtx so a rename breaks the
+// typecheck; the cast then stands in for the ~90 fields it never reads. `nav` stays in the
+// Pick even though ROUTE-04-03 removed Header's last call to it -- the submit spec asserts
+// nav is NOT called, which needs a real spy on a real field to be worth anything.
+type HeaderCtx = Pick<
+  PlatformCtx,
+  'view' | 'sandbox' | 'setSandbox' | 'openCreate' | 'nav' | 'setInvoiceQuery' | 'searchInvoices' | 'invoiceQuery'
+> & {
   active: Pick<PlatformCtx['active'], 'initials'>
-  setInvoiceQuery: (q: string) => void
 }
 
 function headerCtx(over: {
@@ -31,6 +31,9 @@ function headerCtx(over: {
   setSandbox?: () => void
   nav?: PlatformCtx['nav']
   setInvoiceQuery?: (q: string) => void
+  searchInvoices?: (q: string) => void
+  // ROUTE-04-05: the committed term the box mirrors on a cold boot and on a Back restore.
+  invoiceQuery?: string
   // EXTR-11-08: the crumb rows below need a view other than the default.
   view?: View
 }) {
@@ -42,6 +45,8 @@ function headerCtx(over: {
     sandbox: over.sandbox,
     nav: over.nav ?? vi.fn(),
     setInvoiceQuery: over.setInvoiceQuery ?? vi.fn(),
+    searchInvoices: over.searchInvoices ?? vi.fn(),
+    invoiceQuery: over.invoiceQuery ?? '',
   }
   return ctx as unknown as PlatformCtx
 }
@@ -142,24 +147,28 @@ describe('Header search field (BUG-01-05)', () => {
     expect((inputs[0] as HTMLInputElement).maxLength).toBe(200)
   })
 
-  it('submitting the search sets the query and navigates to invoices', async () => {
+  // ROUTE-04-03: submit commits through searchInvoices, which sets the term, lands on
+  // /invoices and pushes ONE entry. A surviving nav() beside it would push a second.
+  it('submitting the search commits it through searchInvoices, which owns the navigation', async () => {
+    const searchInvoices = vi.fn()
     const setInvoiceQuery = vi.fn()
     const nav = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, nav, setInvoiceQuery })} />)
+    render(<Header ctx={headerCtx({ sandbox: true, nav, searchInvoices, setInvoiceQuery })} />)
 
     const input = screen.queryByTestId('invoice-search-input')
     expect(input).not.toBeNull()
     await userEvent.type(input!, 'INV-9001{Enter}')
 
-    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
-    expect(setInvoiceQuery).toHaveBeenCalledWith('INV-9001')
-    expect(nav).toHaveBeenCalledTimes(1)
-    expect(nav).toHaveBeenCalledWith('invoices')
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    expect(searchInvoices).toHaveBeenCalledWith('INV-9001')
+    expect(nav, 'searchInvoices owns the navigation -- a nav() beside it pushes a second entry').not.toHaveBeenCalled()
+    expect(setInvoiceQuery, 'the clearing verb replaces; it must never carry a committed search').not.toHaveBeenCalled()
   })
 
-  it('clicking clear emits an empty query', async () => {
+  it('clicking clear emits an empty query through the clearing verb, not the committing one', async () => {
     const setInvoiceQuery = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const searchInvoices = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery, searchInvoices })} />)
 
     const input = screen.queryByTestId('invoice-search-input')
     expect(input).not.toBeNull()
@@ -169,7 +178,57 @@ describe('Header search field (BUG-01-05)', () => {
     expect(clearBtn).not.toBeNull()
     await userEvent.click(clearBtn!)
 
+    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
     expect(setInvoiceQuery).toHaveBeenCalledWith('')
+    expect(searchInvoices, 'clearing replaces -- it must never push a committed search').not.toHaveBeenCalled()
+  })
+})
+
+// ROUTE-04-05 AC-5/AC-6: the box's local state ('') stopped tracking the committed term the
+// moment ROUTE-04-03 made it local -- a cold boot after a reload, or a Back landing on
+// /invoices?q=..., showed an empty box over a filtered list. The box now seeds from and
+// mirrors ctx.invoiceQuery.
+describe('AC-5: the search box shows and follows the committed invoice query', () => {
+  it('header_theBoxShowsTheCommittedQueryOnAColdBoot', () => {
+    render(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: 'acme' })} />)
+
+    const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
+    expect(input.value, 'a cold boot with a committed query must show it, not a blank box').toBe('acme')
+    expect(screen.queryByTestId('invoice-search-clear'), 'a non-empty box must render its clear control').not.toBeNull()
+  })
+
+  it('header_theBoxFollowsACommittedQueryThatChangesUnderIt', () => {
+    const { rerender } = render(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: 'acme' })} />)
+    expect((screen.getByTestId('invoice-search-input') as HTMLInputElement).value).toBe('acme')
+
+    rerender(<Header ctx={headerCtx({ sandbox: true, invoiceQuery: '' })} />)
+
+    expect(
+      (screen.getByTestId('invoice-search-input') as HTMLInputElement).value,
+      'the box must follow a committed query that moved elsewhere (e.g. a popstate restore), not keep stale local state',
+    ).toBe('')
+  })
+})
+
+// Regression guard, not a new behaviour: typing has always been local-only until submit.
+// Green both before and after the ctx-sync effect lands -- it exists to catch a mirror
+// implementation that turns the box into an auto-committing controlled input.
+describe('AC-6: typing alone commits nothing', () => {
+  it('header_typingCommitsNothing', async () => {
+    const searchInvoices = vi.fn()
+    const setInvoiceQuery = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices, setInvoiceQuery })} />)
+    const input = screen.getByTestId('invoice-search-input')
+
+    await userEvent.type(input, 'acm')
+
+    expect(searchInvoices, 'typing alone must never commit a search').not.toHaveBeenCalled()
+    expect(setInvoiceQuery, 'typing alone must never clear/commit through the URL writer either').not.toHaveBeenCalled()
+
+    await userEvent.type(input, '{Enter}')
+
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    expect(searchInvoices).toHaveBeenCalledWith('acm')
   })
 })
 
@@ -177,12 +236,12 @@ describe('Header search field (BUG-01-05)', () => {
 // is a browser CHARACTER cap (JS string length / UTF-16 code units); the server's cap is
 // 200 UTF-8 BYTES (see clampFilterText's own doc comment). 200 multi-byte characters pass
 // maxLength (200 chars) while serialising to well over 200 bytes -- these tests trace what
-// actually reaches setInvoiceQuery on that path, not just that clampFilterText itself is
+// actually reaches searchInvoices on that path, not just that clampFilterText itself is
 // byte-correct in isolation (already pinned in invoices.test.ts).
 describe('Header search field: paste vs maxLength vs the byte clamp (QA adversarial, AC #7)', () => {
   it('maxLength blocks typing past 200 characters, but 200 CJK characters (600 bytes) still clamp further on submit', async () => {
-    const setInvoiceQuery = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const searchInvoices = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices })} />)
     const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
 
     // A single fireEvent.paste-style change with 250 CJK chars, matching how a real paste
@@ -196,17 +255,17 @@ describe('Header search field: paste vs maxLength vs the byte clamp (QA adversar
 
     fireEvent.submit(input.closest('form')!)
 
-    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
-    const sent = setInvoiceQuery.mock.calls[0][0] as string
-    expect(new TextEncoder().encode(sent).length, 'the value that reaches setInvoiceQuery must never exceed 200 BYTES').toBeLessThanOrEqual(200)
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    const sent = searchInvoices.mock.calls[0][0] as string
+    expect(new TextEncoder().encode(sent).length, 'the value that reaches searchInvoices must never exceed 200 BYTES').toBeLessThanOrEqual(200)
     // Exact value: clampFilterText is independently pinned in invoices.test.ts; this
     // confirms Header actually calls it on the submitted value, not a re-derivation.
     expect(sent).toBe(clampFilterText(input.value))
   })
 
   it('clamp runs on submit, not on every keystroke: the DOM value stays the raw unclamped string until Enter', async () => {
-    const setInvoiceQuery = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const searchInvoices = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices })} />)
     const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
 
     // Bypasses the browser's own maxLength enforcement (fireEvent sets the DOM value
@@ -217,13 +276,13 @@ describe('Header search field: paste vs maxLength vs the byte clamp (QA adversar
     fireEvent.change(input, { target: { value: raw } })
 
     expect(input.value, 'no clamp on change -- the field still shows the raw value pre-submit').toBe(raw)
-    expect(setInvoiceQuery).not.toHaveBeenCalled()
+    expect(searchInvoices).not.toHaveBeenCalled()
 
     fireEvent.submit(input.closest('form')!)
 
-    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
-    expect(setInvoiceQuery).toHaveBeenCalledWith(clampFilterText(raw))
-    expect(new TextEncoder().encode(setInvoiceQuery.mock.calls[0][0] as string).length).toBeLessThanOrEqual(200)
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    expect(searchInvoices).toHaveBeenCalledWith(clampFilterText(raw))
+    expect(new TextEncoder().encode(searchInvoices.mock.calls[0][0] as string).length).toBeLessThanOrEqual(200)
   })
 
   it('typing 200 CJK characters via user-event is itself capped to 200 characters by maxLength (browser-enforced, not app code)', async () => {
@@ -239,8 +298,8 @@ describe('Header search field: paste vs maxLength vs the byte clamp (QA adversar
   })
 
   it('a REAL userEvent.paste() of 250 CJK characters is itself capped to 200 characters by maxLength, and the submitted value still clamps further to 200 bytes', async () => {
-    const setInvoiceQuery = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const searchInvoices = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices })} />)
     const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
     const user = userEvent.setup()
 
@@ -254,22 +313,22 @@ describe('Header search field: paste vs maxLength vs the byte clamp (QA adversar
 
     await user.keyboard('{Enter}')
 
-    expect(setInvoiceQuery).toHaveBeenCalledTimes(1)
-    const sent = setInvoiceQuery.mock.calls[0][0] as string
+    expect(searchInvoices).toHaveBeenCalledTimes(1)
+    const sent = searchInvoices.mock.calls[0][0] as string
     expect(new TextEncoder().encode(sent).length, 'maxLength alone (a char cap) is not enough -- the byte clamp on submit is what actually holds AC #7').toBeLessThanOrEqual(200)
     expect(sent).toBe(clampFilterText(input.value))
   })
 
   it('a plain ASCII value at exactly 200 characters (200 bytes) needs no further clamping on submit', async () => {
-    const setInvoiceQuery = vi.fn()
-    render(<Header ctx={headerCtx({ sandbox: true, setInvoiceQuery })} />)
+    const searchInvoices = vi.fn()
+    render(<Header ctx={headerCtx({ sandbox: true, searchInvoices })} />)
     const input = screen.getByTestId('invoice-search-input') as HTMLInputElement
     const exact200 = 'x'.repeat(200)
 
     fireEvent.change(input, { target: { value: exact200 } })
     fireEvent.submit(input.closest('form')!)
 
-    expect(setInvoiceQuery).toHaveBeenCalledWith(exact200)
+    expect(searchInvoices).toHaveBeenCalledWith(exact200)
   })
 })
 

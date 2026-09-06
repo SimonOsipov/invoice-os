@@ -10,7 +10,7 @@ const E2E_DIR = join(import.meta.dirname, 'topology')
 const read = (file: string) => readFileSync(join(E2E_DIR, file), 'utf-8')
 
 // Locates a named function's body by its `function <name>` anchor, then matches braces from
-// the opening `{` to its closing partner. None of the 8 bodies below contain a brace inside a
+// the opening `{` to its closing partner. None of the 9 bodies below contain a brace inside a
 // string/regex literal, so plain char counting is safe -- re-verify this if a body grows one.
 function extractFunctionBody(source: string, fnName: string): string | null {
   const anchor = new RegExp(`(?:async\\s+)?function\\s+${fnName}\\s*\\(`).exec(source)
@@ -28,7 +28,7 @@ function extractFunctionBody(source: string, fnName: string): string | null {
   return null
 }
 
-// The 8 named nav helpers every capability spec funnels through (decision
+// The 9 named nav helpers every capability spec funnels through (decision
 // [no-new-e2e-spec-files]). NOTE: demo-persona.spec.ts declares its OWN file-local
 // `goToInvoices`/`openInvoiceRow` (a different convention, same names) -- those are NOT in
 // this list. They're covered as inline sites below instead, per the story's own Files split.
@@ -41,14 +41,15 @@ const NAMED_HELPERS = [
   { file: 'invoice-surfaces.spec.ts', name: 'goToReports' },
   { file: 'audit.spec.ts', name: 'openAudit' },
   { file: 'portfolio.spec.ts', name: 'goToClients' },
+  { file: 'roles.spec.ts', name: 'openSettingsTab' },
 ]
 
 describe('guard: every named nav helper (AC-1, AC-2, AC-5)', () => {
   test('guard_theWalkFindsTheHelpersItClaimsToScan', () => {
     const bodies = NAMED_HELPERS.map(({ file, name }) => extractFunctionBody(read(file), name))
-    // Floor: a broken walk (renamed helper, moved file) must return fewer than 8, never a
+    // Floor: a broken walk (renamed helper, moved file) must return fewer than 9, never a
     // silent zero read as "clean".
-    expect(bodies.length).toBe(8)
+    expect(bodies.length).toBe(9)
     bodies.forEach((body, i) => {
       expect(body, `${NAMED_HELPERS[i].name} in ${NAMED_HELPERS[i].file} was not found`).toBeTruthy()
       expect(body!.length, `${NAMED_HELPERS[i].name}'s body read back empty`).toBeGreaterThan(20)
@@ -70,9 +71,29 @@ describe('guard: every named nav helper (AC-1, AC-2, AC-5)', () => {
       expect(body, `${name} (${file}) does not assert toHaveURL`).toMatch(/toHaveURL/)
     })
   })
+
+  // The helper above is only worth its floor if every tab click goes through it, and a sweep
+  // that converts four of five sites still reads clean by eye. NAMED_HELPERS counts helper
+  // FUNCTIONS, not call sites, so nothing else here can see the missed one.
+  test('guard_noBareSettingsTabClickSurvives', () => {
+    const source = read('roles.spec.ts')
+    const helper = extractFunctionBody(source, 'openSettingsTab')
+    expect(helper, 'openSettingsTab was not found in roles.spec.ts').toBeTruthy()
+    // Positive control: without it this passes on a file that deleted settingsTab outright,
+    // which is a different regression wearing the same green.
+    expect(helper, "openSettingsTab's body does not click a settingsTab locator").toMatch(
+      /settingsTab\(page, label\)[\s\S]*\.click\(\)/,
+    )
+    // Every remaining CALL SITE, not just a one-line `.click()`: the helper splits the
+    // locator over two lines to satisfy AC-5's grep, so a site copying that idiom would slip
+    // past a `.click()` pattern. Outside the helper only tabStrip's non-clicking call is legal.
+    const rest = source.replace(helper!, '')
+    const callSites = rest.match(/(?<!function )settingsTab\(page[,)]/g) ?? []
+    expect(callSites, `only tabStrip may call settingsTab outside openSettingsTab; found ${callSites.length}`).toHaveLength(1)
+  })
 })
 
-// The 8 in-app navigations no helper wraps (re-derived by an independent sweep of
+// The 10 in-app navigations no helper wraps (re-derived by an independent sweep of
 // `aside.pf-sidebar nav.pf-nav-list` and `getByRole('button', { name: /Overview|Invoices|...
 // /Settings/ })` across e2e/ -- NOT copied from the plan's line numbers, which have drifted
 // before). Located by exact source text + 1-based occurrence index, not by line number: the
@@ -103,6 +124,10 @@ const INLINE_SITES = [
     needle: "await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()",
     occurrence: 1,
   },
+  // The last two are not sidebar clicks: a committed search and the Open-in-Audit hand-off
+  // both push a URL of their own, so both owe the same assertion.
+  { file: 'invoice-surfaces.spec.ts', needle: "await page.getByTestId('invoice-search-input').press('Enter')", occurrence: 1 },
+  { file: 'invoice-surfaces.spec.ts', needle: "await page.getByTestId('activity-open-in-audit').click()", occurrence: 1 },
 ]
 
 function nthIndexOf(haystack: string, needle: string, n: number): number {
@@ -133,15 +158,15 @@ function windowAfter(source: string, anchorIndex: number, maxLines = 12): string
 describe('guard: every inline nav click no helper wraps (AC-3)', () => {
   test('guard_theWalkFindsTheInlineSitesItClaimsToScan', () => {
     const indices = INLINE_SITES.map(({ file, needle, occurrence }) => nthIndexOf(read(file), needle, occurrence))
-    // Floor: the independent sweep found exactly 8. A miss (renamed label, moved click) must
+    // Floor: the independent sweep found exactly 10. A miss (renamed label, moved click) must
     // read as -1 here, never as a silently-passing zero-hit walk.
-    expect(indices.length).toBe(8)
+    expect(indices.length).toBe(10)
     indices.forEach((idx, i) => {
       expect(idx, `inline site #${i} (${INLINE_SITES[i].file}, occurrence ${INLINE_SITES[i].occurrence}) not found`).toBeGreaterThanOrEqual(0)
     })
   })
 
-  // RED today: none of these 8 clicks is followed by a URL assertion yet.
+  // Each click pushes a URL of its own, so each owes the assertion that pins it.
   test('guard_everyInlineNavClickAssertsTheUrl', () => {
     INLINE_SITES.forEach(({ file, needle, occurrence }, i) => {
       const source = read(file)

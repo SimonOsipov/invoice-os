@@ -290,10 +290,9 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
                   Navigating away discards a file the user may have picked; nothing has
                   been uploaded at this point, so there is nothing to lose but the pick. */}
               <button
-                onClick={() => {
-                  if (mode === 'inhouse') ctx.setSettingsTab('company')
-                  ctx.nav(mode === 'inhouse' ? 'settings' : 'clients')
-                }}
+                onClick={() =>
+                  mode === 'inhouse' ? ctx.nav('settings', { settingsTab: 'company' }) : ctx.nav('clients')
+                }
                 className="pf-btn"
                 style={{ marginTop: 9, background: 'none', border: 0, padding: 0, fontFamily: 'var(--font-sans)', fontSize: 12.5, fontWeight: 600, color: 'var(--status-amber-text)', textDecoration: 'underline', cursor: 'pointer' }}
               >

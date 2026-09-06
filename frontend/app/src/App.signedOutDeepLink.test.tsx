@@ -180,7 +180,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     const { hrefWrites } = stubLocation({ pathname: '/audit' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(hrefWrites[hrefWrites.length - 1]).toBe('https://landing.example')
   })
 
@@ -234,6 +234,35 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     expect(hrefWrites).toEqual([])
     expect(screen.getByText('Choose an account')).toBeTruthy()
   })
+
+  // RED today: captureDestination still takes one argument, so the front door cannot yet
+  // pass the query it owns.
+  it('capture_storesThePathAndTheOwnedQuery', () => {
+    const { hrefWrites } = stubLocation({ pathname: '/audit', search: `?invoice=${INVOICE_ID}` })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    expect(
+      captureDestinationSpy.mock.calls,
+      'the front door must capture the path and the query it owns',
+    ).toEqual([['/audit', `?invoice=${INVOICE_ID}`]])
+    expect(readDestination()).toEqual({ path: '/audit', query: `?invoice=${INVOICE_ID}` })
+    expect(hrefWrites).toEqual(['https://landing.example'])
+  })
+
+  // shouldAutoSignIn('bogus') is false, so autoPersona stays null and the front door DOES
+  // capture (unlike capture_aLivePersonaParamStoresNothing's valid ?persona=firm below). The
+  // reachable proof of AC-3: an unowned param survives the early return but is still
+  // discarded by the codec at capture time, not merely refused before it.
+  it('capture_anUnownedPersonaParamIsDiscardedFromTheStoredQuery', () => {
+    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?persona=bogus' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    expect(
+      readDestination(),
+      'an unowned persona param must not survive into the stored query',
+    ).toEqual({ path: '/audit', query: '' })
+    expect(hrefWrites).toEqual(['https://landing.example'])
+  })
 })
 
 // QA adversarial coverage (Stage 4). A path+?persona= combination is already exercised
@@ -246,7 +275,7 @@ describe('front door: adversarial coverage (QA)', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit', hash: '#x' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(hrefWrites).toEqual(['https://landing.example'])
   })
 
@@ -256,13 +285,13 @@ describe('front door: adversarial coverage (QA)', () => {
     const first = stubLocation({ pathname: '/audit' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     const { unmount } = render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(first.hrefWrites).toEqual(['https://landing.example'])
     unmount()
 
     stubLocation({ pathname: '/reports' })
     render(<App />)
-    expect(readDestination()).toBe('/reports')
+    expect(readDestination()).toEqual({ path: '/reports', query: '' })
   })
 })
 
@@ -372,7 +401,7 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
   })
 
   it('restore_anExpiredDestinationFallsBackToDashboard', async () => {
-    captureDestination('/audit', Date.now() - (DEEP_LINK_TTL_MS + 1000))
+    captureDestination('/audit', '', Date.now() - (DEEP_LINK_TTL_MS + 1000))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // QA addition (ROUTE-05-04 AC-5): task-924's own Stage 1 validation recommended this
     // spy on this test specifically; it landed on the two new specs but not here.
@@ -501,7 +530,7 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const at = 1_700_000_000_000
     vi.setSystemTime(at)
-    captureDestination('/audit', at)
+    captureDestination('/audit', '', at)
     vi.setSystemTime(at + DEEP_LINK_TTL_MS)
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await bootWorkspaceAt('/')
@@ -617,7 +646,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     expect(
       captureDestinationSpy,
       "the front-door effect's dependency array is [activeSession, autoPersona] -- it must re-run on this transition and reach its capture call",
-    ).toHaveBeenCalledWith('/')
+    ).toHaveBeenCalledWith('/', '')
     expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
   })
 
@@ -632,7 +661,10 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     // Simulates a stray leftover written after this mount's own sweep (App.tsx:526) already
     // ran, so signOut is the only remaining thing that can clear it.
     captureDestination('/settings')
-    expect(readDestination(), 'sanity: the stray blob is present before signOut').toBe('/settings')
+    expect(readDestination(), 'sanity: the stray blob is present before signOut').toEqual({
+      path: '/settings',
+      query: '',
+    })
 
     await act(async () => {
       ctx.signOut()
@@ -741,10 +773,13 @@ function urlCarriesNoDestination(u: string): boolean {
 // Phase 1 boots at a path that CARRIES A QUERY, so "no recorded URL carries a query" is a
 // claim about a journey where a query really was in play -- and so a front door capturing
 // `pathname + search` breaks the restore too, killing that mutant a second way.
-async function runSignedOutDeepLinkJourney() {
+//
+// `bootUrl` (QA addition): the restore specs below reuse this same bounce-then-restore
+// harness with a view-owned query, rather than hand-writing a sessionStorage blob.
+async function runSignedOutDeepLinkJourney(bootUrl = '/audit?foo=1') {
   vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
 
-  window.history.replaceState(null, '', '/audit?foo=1')
+  window.history.replaceState(null, '', bootUrl)
   const { hrefWrites } = interceptHref()
   const pushSpy = vi.spyOn(window.history, 'pushState')
   const replaceSpy = vi.spyOn(window.history, 'replaceState')
@@ -777,7 +812,13 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     const { phase1Urls, capturedAtBounce, ctx, historyUrls, restore } = await runSignedOutDeepLinkJourney()
 
     expect(phase1Urls, 'the bounce redirects; it must add no history entry at all').toEqual([])
-    expect(capturedAtBounce, 'the boot query must not enter the captured destination').toBe('/audit')
+    // Retyped, not merely re-asserted: `foo` is unowned on /audit, so the stored query must
+    // be empty, not absent -- a return-type check, same as capturedAtBounce being a bare
+    // path string before this rewrite.
+    expect(capturedAtBounce, 'the boot query must not enter the captured destination').toEqual({
+      path: '/audit',
+      query: '',
+    })
     expect(ctx.view, 'sanity: the return boot must restore the captured destination').toBe('audit')
 
     await act(async () => {
@@ -813,17 +854,57 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     expect(urlCarriesNoDestination('/audit'), 'a bare path must be accepted').toBe(true)
   })
 
+  // Rewritten -- authorised at the Phase 0.6d gate, 2026-09-06: the prior assertion pinned
+  // captureDestination's one-argument call, which the codec is about to drop. This asserts
+  // the invariant that survives the rewrite instead: an unowned param is discarded, an owned
+  // one is kept -- both halves in one spec, so it can't pass by rejecting or accepting
+  // everything.
   it('noUrl_aQueryStringNeverEntersTheCapturedDestination', () => {
-    // Pins the ARGUMENT the front door passes. Before this spec and the journey spec above,
-    // `pathname + search` at that call site left every other spec in this file green.
-    const { hrefWrites } = stubLocation({ pathname: '/audit', search: '?foo=1' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+
+    const unowned = stubLocation({ pathname: '/audit', search: '?foo=1' })
+    const first = render(<App />)
+    expect(readDestination(), 'an unowned param must not reach the stored query').toEqual({
+      path: '/audit',
+      query: '',
+    })
+    expect(unowned.hrefWrites).toEqual(['https://landing.example'])
+    first.unmount()
+    sessionStorage.clear()
+
+    const owned = stubLocation({ pathname: '/audit', search: `?invoice=${INVOICE_ID}` })
     render(<App />)
-    // Both oracles: the spy pins the call site, readDestination() pins what reached storage.
-    // A sanitiser inside captureDestination would keep the second green with the first wrong.
-    expect(captureDestinationSpy.mock.calls, 'the front door must capture the pathname alone').toEqual([['/audit']])
-    expect(readDestination(), 'the query must not reach storage').toBe('/audit')
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    expect(readDestination(), 'an owned param must reach the stored query').toEqual({
+      path: '/audit',
+      query: `?invoice=${INVOICE_ID}`,
+    })
+    expect(owned.hrefWrites).toEqual(['https://landing.example'])
+  })
+
+  // AC-8 style restore: reuses the bounce-then-restore journey with a view-owned query, so
+  // both halves (capture AND restore) of the round trip are exercised, not a hand-written blob.
+  it('restore_theFilterComesBackWithTheScreen', async () => {
+    const { ctx, restore } = await runSignedOutDeepLinkJourney(`/audit?invoice=${INVOICE_ID}`)
+
+    expect(ctx.view, 'the restored destination must seed the audit view').toBe('audit')
+    expect(ctx.auditPrefilter?.invoiceId, 'the owned query must restore the audit prefilter').toBe(INVOICE_ID)
+    expect(
+      window.location.pathname + window.location.search,
+      'the aligned URL must carry the restored filter',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    restore()
+  })
+
+  it('restore_theSearchQueryComesBackWithTheList', async () => {
+    const { ctx, restore } = await runSignedOutDeepLinkJourney('/invoices?q=acme')
+
+    expect(ctx.view, 'the restored destination must seed the invoices view').toBe('invoices')
+    expect(ctx.invoiceQuery, 'the owned query must restore the invoice search filter').toBe('acme')
+    expect(
+      window.location.pathname + window.location.search,
+      'the aligned URL must carry the restored search',
+    ).toBe('/invoices?q=acme')
+    restore()
   })
 
   it('guard_noHistoryWriteSiteReferencesTheDeepLinkModule', () => {

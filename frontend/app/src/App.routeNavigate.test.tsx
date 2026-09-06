@@ -20,6 +20,7 @@ import type { AuditPrefilter, PlatformCtx, View } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
+const OTHER_INVOICE_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 
 const MEMBER: Member = {
@@ -440,20 +441,19 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
 
     expect(ctx.extractionJobId, 'the job id must not survive the company switch').toBeNull()
 
-    // The fence: exactly one atom clears. auditPrefilter was never armed (it never
-    // survives a single commit, decision [company-switch-staleness]) and createStep's
+    // The fence: exactly one atom clears. auditPrefilter was never armed on this journey
+    // (nothing on it reaches /audit, decision [company-switch-staleness]) and createStep's
     // reset to 'form' is switchClient's OWN pre-existing behaviour, unrelated to this fix.
     expect(ctx.auditPrefilter, 'auditPrefilter must behave exactly as it does on main').toBeNull()
     expect(ctx.createStep, 'createStep must behave exactly as it does on main').toBe('form')
   })
 
-  // Closes a gap QA found by mutation: auditPrefilter is never armed in the test above, so
-  // a switchClient that ALSO cleared it would pass unnoticed -- over-clearing is as much a
-  // Q6 violation as under-clearing. Both handlers fire inside ONE act() so React batches
-  // them into a single commit with view === 'dashboard', never 'audit' -- the consume-once
-  // effect (App.tsx:545-547) only fires when view === 'audit', so it cannot intervene and
-  // mask a switchClient regression here.
-  it('switchClient_leavesAuditPrefilterUntouchedEvenWhenArmedInTheSameCommit', async () => {
+  // REPOINTED by ROUTE-04-03, not relaxed. The original invariant -- switchClient must not
+  // grow a clearing line of its own, because over-clearing is as much a Q6 violation as
+  // under-clearing -- is now asserted on the source below. Its behavioural half moved:
+  // auditPrefilter has SCREEN LIFETIME, so switchClient's navigate('dashboard') clears it by
+  // construction and the settled value is null, not the armed pair.
+  it('switchClient_leavesTheClearingToNavigateAndNeverWritesTheAtomItself', async () => {
     await bootAt('/')
     await act(async () => {
       capturedCtx!.openAuditForInvoice(INVOICE_ID, 'INV-1')
@@ -461,10 +461,16 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
     })
     const ctx = requireCtx()
     expect(window.location.pathname, 'switchClient must still win the URL').toBe('/')
-    expect(ctx.auditPrefilter, 'switchClient must not clear an atom armed in the same commit').toEqual({
-      invoiceId: INVOICE_ID,
-      invoiceNumber: 'INV-1',
-    })
+    expect(ctx.auditPrefilter, 'a navigation off /audit clears the atom -- screen lifetime').toBeNull()
+
+    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    const start = src.indexOf('function switchClient(')
+    expect(start, 'switchClient not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const body = src.slice(start, src.indexOf('\n  }\n', start))
+    // Floor + sanity: an empty or mis-anchored slice makes the absence below vacuous.
+    expect(body.length, "switchClient's extracted body is empty -- the anchor is broken").toBeGreaterThan(0)
+    expect(body, 'sanity: the slice really is switchClient').toContain("navigate('dashboard')")
+    expect(body, 'switchClient must not grow a setAuditPrefilter line of its own').not.toContain('setAuditPrefilter')
   })
 })
 
@@ -588,6 +594,621 @@ describe('QA adversarial: navigating to the current view still pushes (documente
   })
 })
 
+// --- ROUTE-04-03: navigate(view, params) and the five URL-aware writers --------------
+//
+// The push/replace rule: navigate and searchInvoices PUSH; setInvoiceQuery, setSettingsTab
+// and setAuditInvoiceFilter REPLACE; the popstate handler writes nothing
+// (App.routePopstate.test.tsx's popstate_theHandlerWritesNoHistory).
+// Every history assertion below counts entries or reads the settled URL rather than merely
+// asking "did some replaceState write X" -- the review-hash mirror writes on these paths too
+// and has confounded three specs before.
+
+const recordedUrls = (spy: { mock: { calls: unknown[][] } }): string[] =>
+  spy.mock.calls.map((c) => c[2]).filter((u): u is string => typeof u === 'string')
+
+describe('AC-2: a committed search pushes one entry carrying the term', () => {
+  it('search_aCommittedQueryPushesOneEntryCarryingTheTerm', async () => {
+    await bootAt('/')
+    const ctx0 = requireCtx()
+    expect(typeof ctx0.searchInvoices, 'PlatformCtx must expose the searchInvoices verb').toBe('function')
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.searchInvoices('acme')
+    })
+    const ctx = requireCtx()
+
+    const pushed = recordedUrls(pushSpy)
+    expect(pushed.length, 'the push spy recorded nothing at all').toBeGreaterThan(0)
+    expect(
+      pushed.filter((u) => u.startsWith('/invoices')),
+      'a committed search must push exactly once, carrying the term',
+    ).toEqual(['/invoices?q=acme'])
+    expect(window.location.pathname + window.location.search).toBe('/invoices?q=acme')
+    expect(window.history.length, 'a committed search adds exactly one entry').toBe(lengthBefore + 1)
+    expect(ctx.invoiceQuery, 'the term must reach state too, not only the URL').toBe('acme')
+  })
+})
+
+describe('AC-3: clearing the search box replaces', () => {
+  it('search_clearingReplacesAndAddsNoEntry', async () => {
+    await bootAt('/invoices?q=acme')
+    const ctx0 = requireCtx()
+    // Sanity: ROUTE-04-02's boot seed. Without it this proves nothing about clearing.
+    expect(ctx0.invoiceQuery, 'sanity: the boot seed must carry the term').toBe('acme')
+    expect(window.location.search, 'sanity: the aligned URL must carry the term').toBe('?q=acme')
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setInvoiceQuery('')
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname + window.location.search, 'the URL must lose ?q=').toBe('/invoices')
+    expect(window.history.length, 'clearing must add no history entry').toBe(lengthBefore)
+    expect(pushSpy.mock.calls, 'clearing must never push').toHaveLength(0)
+    const replaced = recordedUrls(replaceSpy)
+    expect(replaced.length, 'the replace spy recorded nothing -- no URL write happened at all').toBeGreaterThan(0)
+    expect(replaced, 'the clearing verb must write the query-less URL itself').toContain('/invoices')
+    expect(ctx.invoiceQuery, 'state must clear too').toBe('')
+  })
+})
+
+describe('AC-4: a settings-tab click replaces', () => {
+  it('settings_aTabClickReplacesAndAddsNoEntry', async () => {
+    await bootAt('/settings')
+    expect(requireCtx().settingsTab, 'sanity: /settings opens on Members').toBe('members')
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname, 'the tab must appear as a path segment').toBe('/settings/roles')
+    expect(window.history.length, 'a tab click must add no history entry').toBe(lengthBefore)
+    expect(pushSpy.mock.calls, 'a tab click must never push').toHaveLength(0)
+    expect(ctx.settingsTab, 'state must move with the URL').toBe('roles')
+  })
+
+  // The default tab is OMITTED, so returning to Members must write bare /settings. Every
+  // other writer spec drives 'roles', and the two /settings pins in App.routeBoot.test.tsx
+  // cover the boot alignment, not this click -- so nothing else here sees the omit rule.
+  it('settings_returningToMembersWritesTheBarePath', async () => {
+    await bootAt('/settings/roles')
+    expect(requireCtx().settingsTab, 'sanity: the boot must open on Roles').toBe('roles')
+
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('members')
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname, 'the default tab must never appear as a segment').toBe('/settings')
+    expect(pushSpy.mock.calls, 'a tab click must never push').toHaveLength(0)
+    expect(ctx.settingsTab, 'state must move with the URL').toBe('members')
+  })
+})
+
+describe('AC-5: openAuditForInvoice pushes the filtered audit URL', () => {
+  it('openAuditForInvoice_pushesTheFilteredAuditUrl', async () => {
+    await bootAt('/invoice')
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.openAuditForInvoice(INVOICE_ID, 'INV-1')
+    })
+
+    const pushed = recordedUrls(pushSpy)
+    expect(pushed.length, 'the push spy recorded nothing at all').toBeGreaterThan(0)
+    expect(
+      pushed.filter((u) => u.startsWith('/audit')),
+      'the hand-off must push exactly one entry, carrying the invoice',
+    ).toEqual([`/audit?invoice=${INVOICE_ID}`])
+    expect(window.history.length, 'the hand-off adds exactly one entry').toBe(lengthBefore + 1)
+
+    // The render log, not ctx: the claim is that the FIRST Audit render already carries both
+    // fields, which a settled read cannot distinguish from a later write.
+    const auditRenders = renders.filter((r) => r.view === 'audit')
+    expect(auditRenders.length, 'the hand-off never navigated to Audit').toBeGreaterThan(0)
+    expect(auditRenders[0]!.prefilter, 'the first Audit render must carry BOTH fields').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: 'INV-1',
+    })
+  })
+})
+
+describe('AC-6: an in-screen audit filter edit replaces', () => {
+  it('auditFilter_anInScreenEditReplaces', async () => {
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    const ctx0 = requireCtx()
+    expect(typeof ctx0.setAuditInvoiceFilter, 'PlatformCtx must expose the setAuditInvoiceFilter verb').toBe('function')
+    expect(window.location.search, 'sanity: the boot alignment must keep the filter in the URL').toBe(
+      `?invoice=${INVOICE_ID}`,
+    )
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(null, null)
+    })
+
+    expect(window.location.pathname + window.location.search, 'removing the pill must clear the param').toBe('/audit')
+    expect(window.history.length, 'an in-screen edit must add no history entry').toBe(lengthBefore)
+    expect(pushSpy.mock.calls, 'an in-screen edit must never push').toHaveLength(0)
+    const replaced = recordedUrls(replaceSpy)
+    expect(replaced.length, 'the replace spy recorded nothing -- no URL write happened at all').toBeGreaterThan(0)
+    expect(replaced, 'the verb must write the bare audit URL itself').toContain('/audit')
+  })
+
+  // The positive half. Without it, a verb that only ever wrote `/audit` would pass above.
+  it('auditFilter_settingAnIdReplacesTheUrlWithThatId', async () => {
+    await bootAt('/audit')
+    expect(typeof requireCtx().setAuditInvoiceFilter, 'PlatformCtx must expose the setAuditInvoiceFilter verb').toBe(
+      'function',
+    )
+    expect(window.location.search, 'sanity: an unfiltered boot carries no param').toBe('')
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(OTHER_INVOICE_ID, 'INV-OTHER')
+    })
+
+    expect(window.location.pathname + window.location.search).toBe(`/audit?invoice=${OTHER_INVOICE_ID}`)
+    expect(window.history.length, 'an in-screen edit must add no history entry').toBe(lengthBefore)
+    expect(pushSpy.mock.calls, 'an in-screen edit must never push').toHaveLength(0)
+  })
+})
+
+describe('ROUTE-04-04 AC-8: another owned-param write must not drop the invoice', () => {
+  // setSettingsTab and setInvoiceQuery both rebuild the WHOLE url from state, so they read
+  // the atom for the invoice member. While the atom was consume-once it read null one commit
+  // after boot, and each of them silently dropped ?invoice= from a screen still rendering
+  // filtered. The boot URL survives on main only because the mount alignment is declared
+  // above the consume-once effect -- it is the NEXT write that loses the param.
+  it('auditFilter_anotherOwnedParamWriteMustNotDropTheInvoice', async () => {
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    requireCtx()
+    expect(
+      window.location.pathname + window.location.search,
+      'floor: the mount alignment must keep the invoice on the URL',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+    expect(
+      window.location.pathname + window.location.search,
+      'a settings-tab write on /audit must not drop the invoice param',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    expect(requireCtx().auditPrefilter, 'and must not have consumed the atom either').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: null,
+    })
+
+    // The second owned-param writer, same claim: the two share only the routeUrl call, so one
+    // of them can be fixed while the other still drops it.
+    await act(async () => {
+      capturedCtx!.setInvoiceQuery('')
+    })
+    expect(
+      window.location.pathname + window.location.search,
+      'a query-clear on /audit must not drop the invoice param either',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    expect(requireCtx().auditPrefilter, 'and must not have consumed the atom either').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: null,
+    })
+  })
+})
+
+describe("ROUTE-04-03 blocking fact: navigate's setAuditPrefilter updater must be FUNCTIONAL", () => {
+  // openAuditForInvoice knows the invoiceNumber; navigate knows only the id. A plain-object
+  // write inside navigate clobbers the number in the same batch, and ROUTE-04-04's AC-6 --
+  // the Audit pill reading "Invoice INV-1" after a hand-off -- would ship broken. These two
+  // rows are a pair: the first fails a plain-object write, the second fails a `(prev) => prev`
+  // that keeps a stale number forever.
+  it('navigate_keepsTheInvoiceNumberWhenTheParamNamesTheSameInvoice', async () => {
+    await bootAt('/invoices')
+    const ctx0 = requireCtx()
+    expect(typeof ctx0.setAuditInvoiceFilter, 'PlatformCtx must expose the setAuditInvoiceFilter verb').toBe('function')
+
+    // Arm off-screen so the navigation below is a genuine second commit, not one batch.
+    // setAuditInvoiceFilter can arm off /audit; the URL then carries no param, because only
+    // audit owns `invoice`. Recorded as a latent divergence, owned by ROUTE-04-05.
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(INVOICE_ID, 'INV-1')
+    })
+    expect(requireCtx().auditPrefilter, 'sanity: the atom must be armed with BOTH fields').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: 'INV-1',
+    })
+
+    const mark = renders.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.nav('audit', { auditInvoice: INVOICE_ID })
+    })
+
+    // nav must widen too: every component-facing call goes through it.
+    const pushed = recordedUrls(pushSpy)
+    expect(pushed.length, 'the push spy recorded nothing at all').toBeGreaterThan(0)
+    expect(
+      pushed.filter((u) => u.startsWith('/audit')),
+      'nav must forward its params to navigate',
+    ).toEqual([`/audit?invoice=${INVOICE_ID}`])
+
+    const auditRenders = renders.slice(mark).filter((r) => r.view === 'audit')
+    expect(auditRenders.length, 'the nav never reached Audit').toBeGreaterThan(0)
+    expect(
+      auditRenders[0]!.prefilter,
+      'a plain-object write in navigate clobbers the number the hand-off supplied',
+    ).toEqual({ invoiceId: INVOICE_ID, invoiceNumber: 'INV-1' })
+  })
+
+  it('navigate_dropsAStaleInvoiceNumberWhenTheParamNamesADifferentInvoice', async () => {
+    await bootAt('/invoices')
+    expect(typeof requireCtx().setAuditInvoiceFilter, 'PlatformCtx must expose the setAuditInvoiceFilter verb').toBe(
+      'function',
+    )
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(INVOICE_ID, 'INV-1')
+    })
+    expect(requireCtx().auditPrefilter, 'sanity: the atom must be armed with BOTH fields').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: 'INV-1',
+    })
+
+    const mark = renders.length
+    await act(async () => {
+      capturedCtx!.nav('audit', { auditInvoice: OTHER_INVOICE_ID })
+    })
+
+    const auditRenders = renders.slice(mark).filter((r) => r.view === 'audit')
+    expect(auditRenders.length, 'the nav never reached Audit').toBeGreaterThan(0)
+    expect(
+      auditRenders[0]!.prefilter,
+      'a number belongs to ONE id -- carrying INV-1 onto another invoice is a wrong label',
+    ).toEqual({ invoiceId: OTHER_INVOICE_ID, invoiceNumber: null })
+    expect(window.location.pathname + window.location.search).toBe(`/audit?invoice=${OTHER_INVOICE_ID}`)
+  })
+})
+
+describe('ROUTE-04-03: settingsTab and q are DURABLE, auditInvoice has screen lifetime', () => {
+  it('nav_aSettingsTabParamWinsOverTheCurrentState', async () => {
+    await bootAt('/workflows')
+    expect(requireCtx().settingsTab, 'sanity: nothing has moved the tab yet').toBe('members')
+
+    const lengthBefore = window.history.length
+    await act(async () => {
+      capturedCtx!.nav('settings', { settingsTab: 'roles' })
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname, 'the destination and its owned param arrive together').toBe('/settings/roles')
+    expect(window.history.length, 'a navigation adds exactly one entry').toBe(lengthBefore + 1)
+    expect(ctx.settingsTab, 'state must agree with the address bar').toBe('roles')
+  })
+
+  it('nav_theCommittedQueryIsDurableAcrossANavigationAway', async () => {
+    await bootAt('/')
+    expect(typeof requireCtx().searchInvoices, 'PlatformCtx must expose the searchInvoices verb').toBe('function')
+    await act(async () => {
+      capturedCtx!.searchInvoices('acme')
+    })
+    expect(window.location.pathname + window.location.search, 'sanity: the search landed').toBe('/invoices?q=acme')
+
+    await act(async () => {
+      capturedCtx!.nav('audit')
+    })
+    expect(window.location.pathname + window.location.search, 'audit owns no q, so it emits none').toBe('/audit')
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname + window.location.search, 'q is durable: coming back re-emits it').toBe(
+      '/invoices?q=acme',
+    )
+    expect(ctx.invoiceQuery, 'the term never left state either').toBe('acme')
+  })
+})
+
+// AC-8. Call-site-only, never a bare token: a comment naming a setter is legitimate, and a
+// guard that cannot tell a call from a mention is over-broad. ROUTE-04-04 has taken the
+// auditPrefilter count from 4 to 3 by deleting the consume-once effect; ROUTE-04-05 takes it
+// back to 4 with the popstate restore -- each bump must be a deliberate edit.
+const countCalls = (src: string, name: string) => (src.match(new RegExp(`\\b${name}\\(`, 'g')) ?? []).length
+
+describe('AC-8: every owned-param write goes through a URL writer', () => {
+  const appSrc = () => readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+
+  it('guard_everyAuditPrefilterWriteGoesThroughAUrlWriter', () => {
+    const src = appSrc()
+    expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
+    expect(
+      countCalls(src, 'setAuditPrefilter'),
+      "App.tsx may call setAuditPrefilter from exactly four sites: navigate's functional updater, openAuditForInvoice, setAuditInvoiceFilter and the popstate restore. The first three write the URL in the same block; the popstate restore is the one exception -- it reads the URL instead",
+    ).toBe(4)
+    // The useState destructure is `setAuditPrefilter]` -- a `]` sits between the name and
+    // the paren, so it is correctly not a call site.
+    expect(src, 'sanity: the destructure the count must NOT see').toContain('setAuditPrefilter] = useState')
+  })
+
+  it('guard_theAuditPrefilterCountIgnoresAMereMention', () => {
+    // Must-stay-green mutation, pure and in memory -- this test never writes a file. It
+    // fails if countCalls above is rewritten to the bare-token form.
+    const src = appSrc()
+    const planted = src + '\n// unlike setAuditPrefilter, this effect writes no URL\n'
+    expect(countCalls(planted, 'setAuditPrefilter'), 'a comment naming the setter must not move the count').toBe(
+      countCalls(src, 'setAuditPrefilter'),
+    )
+    // Negative control: without it, the assertion above proves nothing about the regex CHOICE.
+    const bareToken = (t: string) => (t.match(/\bsetAuditPrefilter\b/g) ?? []).length
+    expect(bareToken(src), 'sanity: the bare-token form sees something to begin with').toBeGreaterThan(0)
+    expect(bareToken(planted), 'the bare-token form DOES move on that comment -- which is why it is wrong').toBe(
+      bareToken(src) + 1,
+    )
+  })
+
+  it('guard_everyInvoiceQueryWriteGoesThroughAUrlWriter', () => {
+    const src = appSrc()
+    expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
+    expect(
+      countCalls(src, 'setInvoiceQuery'),
+      'App.tsx may call setInvoiceQuery from exactly one site: the wrapper declaration itself. The raw state setter is setInvoiceQuery_',
+    ).toBe(1)
+    expect(src, 'sanity: the raw setter the count must NOT see').toContain('setInvoiceQuery_')
+  })
+
+  it('guard_theInvoiceQueryCountIgnoresAMereMention', () => {
+    const src = appSrc()
+    const planted = src + '\n// setInvoiceQuery is the clearing verb; searchInvoices is the committing one\n'
+    expect(countCalls(planted, 'setInvoiceQuery'), 'a comment naming the setter must not move the count').toBe(
+      countCalls(src, 'setInvoiceQuery'),
+    )
+    const bareToken = (t: string) => (t.match(/\bsetInvoiceQuery\b/g) ?? []).length
+    expect(bareToken(src), 'sanity: the bare-token form sees something to begin with').toBeGreaterThan(0)
+    expect(bareToken(planted), 'the bare-token form DOES move on that comment -- which is why it is wrong').toBe(
+      bareToken(src) + 1,
+    )
+  })
+})
+
+// QA adversarial (ROUTE-04-03). Every row below is a mutation that survived the Mode A specs.
+
+describe('QA adversarial: settingsTab durability, the half of the asymmetry no spec pinned', () => {
+  // navigate resolves `params?.settingsTab ?? settingsTab`. Rewriting that fallback to a
+  // screen-lifetime resolution survived the whole suite:
+  // nav_aSettingsTabParamWinsOverTheCurrentState always passes a param, so it never reads the
+  // fallback. This row reads only the fallback.
+  it('nav_theSettingsTabIsDurableAcrossANavigationAway', async () => {
+    await bootAt('/settings')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+    expect(window.location.pathname, 'sanity: the tab is on the URL before we leave').toBe('/settings/roles')
+
+    await act(async () => {
+      capturedCtx!.nav('workflows')
+    })
+    expect(window.location.pathname, 'sanity: we actually left').toBe('/workflows')
+
+    await act(async () => {
+      capturedCtx!.nav('settings')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'durable: coming back with no param re-emits the tab').toBe('/settings/roles')
+    expect(ctx.settingsTab, 'state never lost it either').toBe('roles')
+  })
+})
+
+describe('QA adversarial: leaving Audit clears the filter atom on an ordinary nav', () => {
+  // Deleting navigate's clear-on-leave branch red only
+  // switchClient_leavesTheClearingToNavigateAndNeverWritesTheAtomItself. A plain sidebar nav
+  // away from an armed filter had no oracle.
+  it('nav_leavingAuditClearsTheFilterAtomAndEmitsNoParam', async () => {
+    await bootAt('/invoices')
+    // Armed off-screen: nothing on /invoices clears the atom, so the pair survives here and
+    // the nav below is the only candidate eraser.
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(INVOICE_ID, 'INV-1')
+    })
+    expect(requireCtx().auditPrefilter, 'sanity: the atom is armed').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: 'INV-1',
+    })
+
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.nav('workflows')
+    })
+
+    expect(requireCtx().auditPrefilter, 'a filter outlives nothing but its control').toBeNull()
+    expect(recordedUrls(pushSpy), 'the pushed URL carries no invoice param').toEqual(['/workflows'])
+  })
+})
+
+describe('QA adversarial: an empty committed search', () => {
+  // Submitting an empty box is a navigation to the unfiltered list, not a clear, so it
+  // pushes -- unlike setInvoiceQuery(''). The '' must not survive into the URL as `?q=`.
+  it('search_anEmptyCommittedSearchPushesAndEmitsNoQuery', async () => {
+    await bootAt('/invoices?q=acme')
+    expect(requireCtx().invoiceQuery, 'sanity: the boot seed carries the term').toBe('acme')
+
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.searchInvoices('')
+    })
+    const ctx = requireCtx()
+
+    expect(recordedUrls(pushSpy), 'an empty term must not serialise as ?q=').toEqual(['/invoices'])
+    expect(window.location.pathname + window.location.search).toBe('/invoices')
+    expect(window.history.length, 'a committed search is a navigation whatever the term').toBe(lengthBefore + 1)
+    expect(ctx.invoiceQuery, "'' overrides the durable term rather than falling back to it").toBe('')
+  })
+})
+
+describe('QA adversarial: two committed searches in a row', () => {
+  it('search_twoConsecutiveSearchesLeaveTwoDistinctEntries', async () => {
+    await bootAt('/')
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.searchInvoices('acme')
+    })
+    await act(async () => {
+      capturedCtx!.searchInvoices('zenith')
+    })
+
+    // Two entries, not one: a refined search must not replace the term it refined, or Back
+    // would skip it.
+    expect(recordedUrls(pushSpy)).toEqual(['/invoices?q=acme', '/invoices?q=zenith'])
+    expect(window.history.length).toBe(lengthBefore + 2)
+    expect(window.location.pathname + window.location.search).toBe('/invoices?q=zenith')
+  })
+})
+
+describe('QA adversarial: a tab click made off the Settings screen', () => {
+  // setSettingsTab replaces routeUrl for the CURRENT view. It must correct the URL it is on,
+  // never invent /settings/<tab> for a screen the user is not looking at.
+  it('settings_aTabClickOffTheSettingsScreenNeverWritesASettingsUrl', async () => {
+    await bootAt('/audit')
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname + window.location.search, 'the address bar is still Audit').toBe('/audit')
+    expect(recordedUrls(replaceSpy), 'no write may name a screen the user is not on').not.toContain('/settings/roles')
+    expect(pushSpy.mock.calls, 'a tab click never pushes').toHaveLength(0)
+    expect(window.history.length).toBe(lengthBefore)
+    expect(ctx.settingsTab, 'the tab still lands in state, ready for the next nav to Settings').toBe('roles')
+  })
+})
+
+// AC-8, extended. The shipped pair counts `setAuditPrefilter(` and `setInvoiceQuery(`, but
+// `setInvoiceQuery` names the URL-AWARE WRAPPER, so its count is 1 -- the declaration itself.
+// The raw useState setters are `setInvoiceQuery_` and `setSettingsTab_`, and a bare
+// `setInvoiceQuery_('')` planted anywhere in App.tsx left the whole suite green. ROUTE-04-05's
+// popstate restore bumps both counts to 3, deliberately -- it calls the raw setters directly
+// (the wrapper `setInvoiceQuery` does its own replaceState, which AC-4 forbids the handler
+// from doing).
+describe('QA adversarial AC-8: the raw state setters are called only from the URL-aware verbs', () => {
+  const appSrc = () => readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+
+  it('guard_theRawQueryAndTabSettersHaveExactlyThreeCallSitesEach', () => {
+    const src = appSrc()
+    expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
+    expect(
+      countCalls(src, 'setInvoiceQuery_'),
+      'App.tsx may call setInvoiceQuery_ from exactly three sites: navigate, setInvoiceQuery and the popstate restore',
+    ).toBe(3)
+    expect(
+      countCalls(src, 'setSettingsTab_'),
+      'App.tsx may call setSettingsTab_ from exactly three sites: navigate, setSettingsTab and the popstate restore',
+    ).toBe(3)
+    // The destructures are `setInvoiceQuery_]` and `setSettingsTab_]` -- correctly not call
+    // sites, and present, so the counts above run over a real population.
+    expect(src, 'sanity: the destructure the count must NOT see').toContain('setInvoiceQuery_] = useState')
+    expect(src, 'sanity: the destructure the count must NOT see').toContain('setSettingsTab_] = useState')
+  })
+
+  it('guard_theRawSetterCountsIgnoreAMereMention', () => {
+    const src = appSrc()
+    const planted = src + '\n// setInvoiceQuery_ and setSettingsTab_ are the raw atoms\n'
+    for (const name of ['setInvoiceQuery_', 'setSettingsTab_']) {
+      expect(countCalls(planted, name), `a comment naming ${name} must not move the count`).toBe(countCalls(src, name))
+      const bareToken = (t: string) => (t.match(new RegExp(`\\b${name}\\b`, 'g')) ?? []).length
+      expect(bareToken(src), `sanity: the bare-token form sees ${name} to begin with`).toBeGreaterThan(0)
+      expect(bareToken(planted), 'the bare-token form DOES move on that comment -- which is why it is wrong').toBe(
+        bareToken(src) + 1,
+      )
+    }
+  })
+})
+
+// AC-7, the runtime half. lib/routeWriterGuard.test.ts forbids the literal `location.search`
+// in these bodies, but a scan is evaded by spelling it `const loc = window.location; loc.search`
+// -- and an echoing setInvoiceQuery written that way passed all 4218 specs. Same shape as
+// nav_neverEchoesASearchStringThatAppearsAfterMount, which covers navigate and nothing else:
+// inject an UNOWNED param AFTER mount (the boot alignment strips one at boot, so a boot-time
+// `&injected=1` proves nothing) and pin the recorded argument exactly.
+const INJECTED = 'injected=1'
+
+describe('QA adversarial AC-7: the replace-class writers re-serialise, they never echo', () => {
+  it('setInvoiceQuery_neverEchoesAQueryStringInjectedAfterMount', async () => {
+    await bootAt('/invoices?q=acme')
+    window.history.replaceState(null, '', `/invoices?q=acme&${INJECTED}`)
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setInvoiceQuery('')
+    })
+
+    const replaced = recordedUrls(replaceSpy)
+    expect(replaced, 'no URL write happened at all').not.toHaveLength(0)
+    expect(replaced, 'the clearing verb rebuilds the URL from state').toContain('/invoices')
+    expect(replaced.filter((u) => u.includes(INJECTED)), 'an unowned param was echoed back').toEqual([])
+  })
+
+  it('settings_theTabWriteNeverEchoesAQueryStringInjectedAfterMount', async () => {
+    await bootAt('/settings')
+    window.history.replaceState(null, '', `/settings?${INJECTED}`)
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+
+    const replaced = recordedUrls(replaceSpy)
+    expect(replaced).toContain('/settings/roles')
+    expect(replaced.filter((u) => u.includes(INJECTED)), 'an unowned param was echoed back').toEqual([])
+    expect(window.location.search, 'the live URL lost it too').toBe('')
+  })
+
+  it('auditFilter_theInScreenWriteNeverEchoesAQueryStringInjectedAfterMount', async () => {
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    window.history.replaceState(null, '', `/audit?invoice=${INVOICE_ID}&${INJECTED}`)
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.setAuditInvoiceFilter(OTHER_INVOICE_ID, null)
+    })
+
+    const replaced = recordedUrls(replaceSpy)
+    // The exact argument, not a prefix: an echo that merely swapped the id would keep
+    // `&injected=1` trailing it.
+    expect(replaced, 'the verb rebuilds the whole URL from the id it was handed').toContain(
+      `/audit?invoice=${OTHER_INVOICE_ID}`,
+    )
+    expect(replaced.filter((u) => u.includes(INJECTED)), 'an unowned param was echoed back').toEqual([])
+  })
+
+  it('search_theCommittedSearchNeverEchoesAQueryStringInjectedAfterMount', async () => {
+    await bootAt('/invoices?q=acme')
+    window.history.replaceState(null, '', `/invoices?q=acme&${INJECTED}`)
+
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.searchInvoices('zenith')
+    })
+
+    // navigate's own never-echo spec pushes with NO params; this is the params path.
+    expect(recordedUrls(pushSpy)).toEqual(['/invoices?q=zenith'])
+  })
+})
+
 // QA Mode B adversarial (task-919, ROUTE-02-04): D-4 only proved `selectInvoice` is gone
 // from the REAL ctx. AC-2 also claims `selectedId` is gone, but nothing asserted that
 // against the real Workspace-built ctx (only against local test-double stubs, which
@@ -666,3 +1287,4 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
     expect(ctx.extractionJobId, 'the job id must still be cleared after two switches').toBeNull()
   })
 })
+

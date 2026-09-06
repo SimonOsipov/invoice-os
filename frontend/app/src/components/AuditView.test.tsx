@@ -69,6 +69,10 @@ function auditCtx(): PlatformCtx {
     user: { tenantName: 'Acme Co' },
     entities: [],
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    // ROUTE-04-03's in-screen filter verb. Present here so every filter row below keeps a
+    // callable seam once ROUTE-04-04 wires the pill to it; a missing member throws
+    // "is not a function" in ~10 rows at once and reads as a screen regression.
+    setAuditInvoiceFilter: vi.fn(),
   } as unknown as PlatformCtx
 }
 
@@ -1831,13 +1835,23 @@ describe('AuditExportToast testId prop (AUDIT-08-06)', () => {
 })
 
 // AUDIT-09-05 Mode A: the "Open in Audit ->" pre-filter hand-off. AuditView reads
-// ctx.auditPrefilter ONCE, in a lazy useState initializer, and seeds
-// {...AUDIT_FILTER_DEFAULT, range:{preset:'custom'}, invoiceId, invoiceNumber}. Workspace --
-// not this component -- clears the atom, in the effect phase of the commit that mounted it.
+// ctx.auditPrefilter ONCE, through a single hoisted binding, and seeds
+// {...AUDIT_FILTER_DEFAULT, range:{preset:'custom'}, invoiceId, invoiceNumber} from a lazy
+// initializer. ROUTE-04-04: the atom is now the /audit URL's ?invoice=, with screen lifetime.
+// One guarded effect SYNCS the screen to an atom that moved under it; it never seeds.
 describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
   const PREFILTER_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
   const PREFILTER_NUMBER = 'INV-1'
+  const MOVED_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
+  const MOVED_NUMBER = 'INV-2'
   const NO_FACETS = { event: [], actor: [], company: [] }
+
+  // The vi.fn() auditCtx() plants at the setAuditInvoiceFilter seam, typed for assertion.
+  function urlWriter(ctx: PlatformCtx) {
+    const fn = (ctx as unknown as { setAuditInvoiceFilter: ReturnType<typeof vi.fn> }).setAuditInvoiceFilter
+    expect(typeof fn, 'the ctx fake must carry a setAuditInvoiceFilter spy').toBe('function')
+    return fn
+  }
 
   function prefilteredCtx(pre: AuditPrefilter | null): PlatformCtx {
     return { ...auditCtx(), auditPrefilter: pre } as unknown as PlatformCtx
@@ -1937,7 +1951,8 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
 
   it('auditView_removingThePrefilterPillClearsBothFields', async () => {
     const calls = recordCalls(() => logResponse())
-    render(<AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />)
+    const ctx = prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })
+    render(<AuditView ctx={ctx} />)
     await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
     expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
     expect(calls.some((u) => u.includes('invoice_id=')), 'vacuity floor: the seed must have reached the wire').toBe(true)
@@ -1968,32 +1983,61 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     const next = invoicePill!.onRemove(seededState)
     expect(next.invoiceId, 'removal must clear the id').toBeNull()
     expect(next.invoiceNumber, 'removal must clear the number too').toBeNull()
+
+    // ROUTE-04-04. The URL is the other half of this one fact, so an in-screen removal has to
+    // write it too. Exact arguments, not a bare count: a call carrying the id it just removed
+    // would leave ?invoice= on an unfiltered screen.
+    expect(
+      urlWriter(ctx).mock.calls,
+      'removing the pill must call the URL writer exactly once, with both members cleared',
+    ).toEqual([[null, null]])
   })
 
-  it('auditView_prefilterIsConsumedOnce', async () => {
+  it('auditView_theRowAffordanceCallsTheUrlWriter', async () => {
+    // applyInvoiceFilter is driven by six rendered rows already; what none of them asserted is
+    // that the URL writer heard about it. AuditRow reads the id from the payload, so the
+    // arguments are the row's own, not this file's constants.
+    const calls = recordCalls(() => logResponse())
+    const ctx = prefilteredCtx(null)
+    render(<AuditView ctx={ctx} />)
+    await applyInvoiceFilter()
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the affordance never applied').not.toBeNull(),
+    )
+    expect(urlWriter(ctx).mock.calls, 'the row affordance must write the URL exactly once').toEqual([['inv-9', 'INV-9']])
+    await waitFor(() =>
+      expect(calls.some((u) => u.includes('invoice_id=inv-9')), 'and the wire must follow it').toBe(true),
+    )
+  })
+
+  it('auditView_aMountWithNoAtomLandsUnfiltered', async () => {
     const seeded = recordCalls(() => logResponse())
     render(<AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />)
     await waitFor(() => expect(seeded.some(isMainUrl)).toBe(true))
-    expect(mainParams(seeded).get('invoice_id'), 'vacuity floor: the first mount must consume the atom').toBe(PREFILTER_ID)
+    expect(mainParams(seeded).get('invoice_id'), 'vacuity floor: the first mount must read the atom').toBe(PREFILTER_ID)
     cleanup()
 
-    // Workspace has cleared the atom by now, so the NEXT mount sees null and must be an
-    // ordinary landing: no invoice, and the 30-day window restored.
+    // A fresh mount with no atom -- a manual nav to /audit -- must be an ordinary landing:
+    // no invoice, and the 30-day window restored.
     const later = recordCalls(() => logResponse())
     render(<AuditView ctx={prefilteredCtx(null)} />)
     await waitFor(() => expect(later.some(isMainUrl)).toBe(true))
 
     const params = mainParams(later)
-    expect(params.has('invoice_id'), 'a later mount must not re-consume the prefilter').toBe(false)
-    expect(params.has('from'), 'a later mount must restore the 30-day window').toBe(true)
+    expect(params.has('invoice_id'), 'a mount with no atom must send no invoice').toBe(false)
+    expect(params.has('from'), 'a mount with no atom must restore the 30-day window').toBe(true)
     expect(screen.queryByTestId('audit-pill-invoice'), 'and must show no invoice pill').toBeNull()
     expect(screen.getByTestId('audit-pill-range'), 'control: the 30-day pill is back').toBeTruthy()
   })
 
-  // THE HAZARD. filterState lives above every rung, so a refetch cannot destroy it -- provided
-  // the seed never runs again. Moving the seed into useEffect([ctx.auditPrefilter]) reds this
-  // immediately: the effect fires the instant Workspace clears the atom, and the user goes from
-  // the invoice's events to the whole workspace log with nothing on screen saying so.
+  // THE HAZARD, and the sync effect's sharpest fence. Every ctx fake that renders this screen
+  // omits the atom, so "the atom is null while the filter is armed" is the NORMAL state here,
+  // not an anomaly -- an effect that merely early-returns on equality clears the filter, drops
+  // the pill and refetches on the rerender below. A null atom must be ignored outright.
+  // Since the popstate restore landed, a Forward onto bare /audit also moves the atom to null
+  // for real. Nothing here can tell that from an omitted key, so the pill stays armed over a
+  // URL naming no invoice -- reachable, uncovered, and ROUTE-06's to close.
   it('auditView_aSeededFilterSurvivesARefetchAndTheClear', async () => {
     const CURSOR = 'seeded-page-2'
     const calls = recordCalls((url) =>
@@ -2007,13 +2051,12 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
     expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
 
-    // Workspace clears the atom in the effect phase of the very commit that mounted this
-    // component, which arrives here as a re-render with a null atom.
+    // An atom that reads null on a re-render: the shape every hand-built ctx hands down.
     const before = calls.length
     rerender(<AuditView ctx={prefilteredCtx(null)} />)
     await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
-    expect(screen.queryByTestId('audit-pill-invoice'), 'the clear must not drop the pill').not.toBeNull()
-    expect(calls.length, 'the clear must not trigger a refetch').toBe(before)
+    expect(screen.queryByTestId('audit-pill-invoice'), 'a null atom must not drop the pill').not.toBeNull()
+    expect(calls.length, 'a null atom must not trigger a refetch').toBe(before)
 
     fireEvent.click(screen.getByTestId('audit-pager-next'))
     await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
@@ -2022,6 +2065,126 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     expect(paged.get('invoice_id'), 'the filter must survive the refetch').toBe(PREFILTER_ID)
     expect(paged.has('from'), 'and must still apply no date window').toBe(false)
     expect(screen.queryByTestId('audit-pill-invoice'), 'and the pill must still be on screen').not.toBeNull()
+  })
+
+  // The inverse of the fence above, and the sync effect's only reason to exist: an atom that
+  // genuinely MOVES under the screen must be followed. That is the popstate contract
+  // (ROUTE-04-05); without this row the effect could be deleted and everything stays green.
+  it('auditView_theScreenFollowsAnAtomThatMovesUnderIt', async () => {
+    const calls = recordCalls(() => logResponse())
+    const { rerender } = render(
+      <AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />,
+    )
+    await waitFor(() => expect(calls.some(isMainUrl)).toBe(true))
+    expect(mainParams(calls).get('invoice_id'), 'vacuity floor: the seed must have reached the wire').toBe(PREFILTER_ID)
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).not.toBeNull())
+
+    const before = calls.length
+    rerender(<AuditView ctx={prefilteredCtx({ invoiceId: MOVED_ID, invoiceNumber: MOVED_NUMBER })} />)
+    await waitFor(() =>
+      expect(
+        calls.some((u) => u.includes(`invoice_id=${MOVED_ID}`)),
+        'an atom that moved under the screen never reached the wire',
+      ).toBe(true),
+    )
+
+    expect(calls.length - before, 'a moved atom must fire exactly one refetch').toBe(1)
+    const pill = screen.getByTestId('audit-pill-invoice').textContent ?? ''
+    expect(pill, 'the pill must follow the atom, number included').toContain(invoiceFilterPillLabel(MOVED_NUMBER))
+    expect(pill, 'and must not still be reading the invoice it left').not.toContain(PREFILTER_NUMBER)
+    const moved = new URL(calls[calls.length - 1]!).searchParams
+    expect(moved.get('invoice_id'), 'the wire must carry the new invoice').toBe(MOVED_ID)
+    expect(moved.has('from'), 'and must still apply no date window').toBe(false)
+  })
+
+  it('auditView_anAtomThatMovesResetsThePageAndTheExpansion', async () => {
+    // Both hand-written filter writers reset page and expandedId, because a cursor addresses a
+    // row boundary inside ONE filtered stream. The sync path is a third writer and had no
+    // coverage of either reset.
+    const calls = recordCalls((url) =>
+      url.includes('cursor=')
+        ? logResponse({ page: { limit: 25, has_more: false, next_cursor: null }, total: 2 })
+        : logResponse({ page: { limit: 25, has_more: true, next_cursor: 'seeded-page-2' }, total: 2 }),
+    )
+    const { rerender } = render(
+      <AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />,
+    )
+    await waitFor(() => expect(screen.getByTestId('audit-pager-next')).toHaveProperty('disabled', false))
+
+    fireEvent.click(screen.getByTestId('audit-pager-next'))
+    await waitFor(() => expect(calls.some((u) => u.includes('cursor='))).toBe(true))
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    // Two floors: without a live cursor and an open expansion there is nothing to reset.
+    expect(screen.queryByTestId('audit-expansion'), 'vacuity floor: the row never expanded').not.toBeNull()
+
+    const before = calls.length
+    rerender(<AuditView ctx={prefilteredCtx({ invoiceId: MOVED_ID, invoiceNumber: MOVED_NUMBER })} />)
+    await waitFor(() =>
+      expect(
+        calls.some((u) => u.includes(`invoice_id=${MOVED_ID}`)),
+        'an atom that moved under the screen never reached the wire',
+      ).toBe(true),
+    )
+
+    const next = calls.slice(before).find((u) => u.includes(`invoice_id=${MOVED_ID}`))!
+    expect(
+      new URL(next).searchParams.has('cursor'),
+      'a moved atom must restart pagination -- a cursor means nothing in another stream',
+    ).toBe(false)
+    await waitFor(() =>
+      expect(screen.queryByTestId('audit-expansion'), 'and must close the expansion it no longer describes').toBeNull(),
+    )
+  })
+
+  it('auditView_theSyncEffectDoesNotLoop', async () => {
+    // Idiom from auditFilter_dateWindowFrozenAcrossUnrelatedRerenders: count, wait 50ms,
+    // assert unchanged. Three shapes of atom, because the guard has to survive all of them --
+    // ABSENT (every hand-built ctx omits the key, so it reads undefined, not null), ARMED, and
+    // ARMED-then-MOVED. The last is the positive control: without it this spec is green on an
+    // effect nobody ever wrote, and it cannot tell a one-commit lag from the loop it exists to catch.
+    const settle = () => new Promise((r) => setTimeout(r, 50))
+
+    const absent = recordCalls(() => logResponse())
+    render(<AuditView ctx={auditCtx()} />)
+    await waitFor(() => expect(absent.some(isMainUrl)).toBe(true))
+    expect(absent.filter(isMainUrl).length, 'an atom-less mount fetches once').toBe(1)
+    await settle()
+    expect(absent.filter(isMainUrl).length, 'an absent atom must not re-fire the main request').toBe(1)
+    cleanup()
+
+    const armed = recordCalls(() => logResponse())
+    const { rerender } = render(
+      <AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />,
+    )
+    await waitFor(() => expect(armed.some(isMainUrl)).toBe(true))
+    expect(armed.filter(isMainUrl).length, 'a seeded mount fetches once -- the seed is not a sync').toBe(1)
+    await settle()
+    expect(armed.filter(isMainUrl).length, 'the sync effect must be a no-op at mount').toBe(1)
+
+    // Positive control on the same counter: the effect CAN fire, and settles in exactly one.
+    rerender(<AuditView ctx={prefilteredCtx({ invoiceId: MOVED_ID, invoiceNumber: MOVED_NUMBER })} />)
+    await waitFor(() =>
+      expect(
+        armed.some((u) => u.includes(`invoice_id=${MOVED_ID}`)),
+        'the positive control never fired -- there is no sync effect to bound',
+      ).toBe(true),
+    )
+    expect(armed.filter(isMainUrl).length, 'a moved atom must cost exactly one more main request').toBe(2)
+    await settle()
+    expect(armed.filter(isMainUrl).length, 'and must then settle, never spiral').toBe(2)
+    cleanup()
+
+    const strict = recordCalls(() => logResponse())
+    render(
+      <StrictMode>
+        <AuditView ctx={prefilteredCtx({ invoiceId: PREFILTER_ID, invoiceNumber: PREFILTER_NUMBER })} />
+      </StrictMode>,
+    )
+    await waitFor(() => expect(strict.some(isMainUrl)).toBe(true))
+    await settle()
+    // Control needle: StrictMode really did double-invoke, so the bound below means something.
+    expect(strict.filter(isMainUrl).length, 'StrictMode did not double the mount -- this half proves nothing').toBe(2)
   })
 
   // AC-6. "Renders identically" is false and unmeetable -- a prefiltered mount MUST differ in
@@ -2112,8 +2275,8 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     const main = calls.filter(isMainUrl)
     expect(main.length, 'StrictMode did not double the mount -- this spec proves nothing').toBeGreaterThanOrEqual(2)
 
-    // EVERY main request, not just the first: a consume-once atom read twice must produce the
-    // same seed both times.
+    // EVERY main request, not just the first: an atom read twice must produce the same seed
+    // both times.
     for (const url of main) {
       const p = new URL(url).searchParams
       expect(p.get('invoice_id'), `a main request lost the seed: ${url}`).toBe(PREFILTER_ID)
@@ -2136,12 +2299,39 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     expect(raw, 'control: the reference comment must exist to be stripped').toContain('The one DOM step in the export')
     expect(src, 'control: the stripper removed nothing').not.toContain('The one DOM step in the export')
 
+    // The invariant, unchanged: the atom is read ONCE, and that read is a RENDER read.
+    // ROUTE-04-04 moved the read from the initializer into a hoisted binding above it, so the
+    // seed and the sync effect share one fact instead of reading two.
     const hits = src.split('ctx.auditPrefilter').length - 1
-    expect(hits, 'the atom must be read exactly once -- a second read is an effect keyed on it').toBe(1)
+    expect(hits, 'the atom must be read exactly once -- one binding, one fact').toBe(1)
     const line = src.split('\n').find((l) => l.includes('ctx.auditPrefilter'))
-    expect(line, 'the one read must be the lazy useState initializer, never an effect').toContain(
-      'useState<AuditFilterState>(',
+    expect(line, 'the one read must be the single hoisted binding').toContain('const prefilter = ctx.auditPrefilter')
+
+    // Above every effect, so the one read cannot be an effect read.
+    const firstEffect = src.indexOf('useEffect(')
+    expect(firstEffect, 'control: an effect must exist for the binding to be above one').toBeGreaterThan(-1)
+    expect(src.indexOf('ctx.auditPrefilter'), 'the binding must sit above every useEffect').toBeLessThan(firstEffect)
+
+    // The seed is still a LAZY render-time initializer, never an effect install.
+    expect(src, 'the seed must stay the lazy useState initializer').toContain(
+      'useState<AuditFilterState>(() => seedFilterState(prefilter))',
     )
+
+    // The sync effect keys on the ID SCALAR. Object identity would re-fire on every parent
+    // render; adding filterState.invoiceId would re-arm the filter the user just removed.
+    const depsIdx = src.indexOf('}, [prefilter?.invoiceId])')
+    expect(depsIdx, 'the sync effect must key on the invoiceId scalar alone').toBeGreaterThan(-1)
+    const body = src.slice(src.lastIndexOf('useEffect(', depsIdx), depsIdx)
+    // Floor: the slice must really hold the effect body, not an empty span.
+    expect(body, 'the slice missed the sync effect body').toContain('setFilterState')
+    // Every ctx fake rendering this screen OMITS the key, so the atom reads `undefined`; a
+    // strict comparison against a null filterState is false on every one of those mounts.
+    expect(body, 'the guard must normalise an absent atom to null').toContain('?? null')
+    // The same two resets both hand-written filter writers do, and functionally -- the sync
+    // may batch with a card change in one commit.
+    expect(body, 'the sync write must use the functional setFilterState form').toContain('setFilterState((s) =>')
+    expect(body, 'a moved atom must restart pagination').toContain('setPage(')
+    expect(body, 'a moved atom must close the expansion it no longer describes').toContain('setExpandedId(null)')
   })
 })
 
@@ -2343,3 +2533,315 @@ describe('AuditView pre-filter: the rest of the screen (AUDIT-09-05 QA)', () => 
     )
   })
 })
+
+// ROUTE-04-04 QA. The subtask gave the atom screen lifetime, added one sync effect and made
+// both filter writers write the URL conditionally. Three of those constraints shipped with no
+// oracle at all: an unconditional write in either filter path, and a URL write from inside the
+// sync effect, each left the whole suite green. Every row below was authored against the
+// mutation that survived.
+describe('AuditView pre-filter lifetime, adversarial (ROUTE-04-04 QA)', () => {
+  const ARMED_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
+  const ARMED_NUMBER = 'INV-1'
+  const MOVED_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
+  const MOVED_NUMBER = 'INV-2'
+
+  function armedCtx(pre: AuditPrefilter | null): PlatformCtx {
+    return { ...auditCtx(), auditPrefilter: pre } as unknown as PlatformCtx
+  }
+
+  // Each armedCtx() builds its OWN vi.fn, so a spy read must name the ctx it came from.
+  function writerOf(ctx: PlatformCtx) {
+    const fn = (ctx as unknown as { setAuditInvoiceFilter: ReturnType<typeof vi.fn> }).setAuditInvoiceFilter
+    expect(typeof fn, 'the ctx fake must carry a setAuditInvoiceFilter spy').toBe('function')
+    return fn
+  }
+
+  function isMain(url: string): boolean {
+    return new URL(url).searchParams.get('limit') === '25'
+  }
+
+  function recordCalls(): string[] {
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        calls.push(url)
+        return Promise.resolve(logResponse())
+      }),
+    )
+    return calls
+  }
+
+  const settle = () => new Promise((r) => setTimeout(r, 50))
+
+  it('auditView_aNonInvoiceFilterChangeNeverWritesTheUrl', async () => {
+    // handleFilterChange is the one callback behind every control on the card -- date, actor,
+    // company, search, event. Only the invoice member is on the URL, so an unconditional write
+    // replaceStates on all of them; making it unconditional left all 4230 specs green.
+    const calls = recordCalls()
+    const ctx = armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })
+    render(<AuditView ctx={ctx} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    expect(writerOf(ctx).mock.calls, 'a search is not an invoice change and must write no URL').toEqual([])
+    expect(screen.queryByTestId('audit-pill-invoice'), 'and must leave the invoice filter alone').not.toBeNull()
+
+    // Positive control on the same spy: the invoice member DOES reach it, so the empty array
+    // above is a suppressed write and not a seam that was never wired.
+    fireEvent.click(screen.getByTestId('audit-pill-invoice'))
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).toBeNull())
+    expect(writerOf(ctx).mock.calls, 'control: the invoice member must reach the writer').toEqual([[null, null]])
+  })
+
+  it('auditView_theSyncEffectNeverWritesTheUrlBack', async () => {
+    // The atom follows the URL, so the sync effect is a READER. A ctx.setAuditInvoiceFilter
+    // inside it replaceStates over the entry a Back press just restored (ROUTE-04-05) -- and
+    // adding one left the whole suite green.
+    const calls = recordCalls()
+    const ctx0 = armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })
+    const { rerender } = render(<AuditView ctx={ctx0} />)
+    await waitFor(() => expect(calls.some(isMain)).toBe(true))
+
+    const ctx1 = armedCtx({ invoiceId: MOVED_ID, invoiceNumber: MOVED_NUMBER })
+    rerender(<AuditView ctx={ctx1} />)
+    await waitFor(() => expect(calls.some((u) => u.includes(`invoice_id=${MOVED_ID}`))).toBe(true))
+    // Floor: the sync really ran, so "never called" below is a suppressed write, not a no-op.
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel(MOVED_NUMBER))
+
+    expect(writerOf(ctx1).mock.calls, 'the sync effect must not write the URL that drove it').toEqual([])
+    expect(writerOf(ctx0).mock.calls, 'nor through the ctx it replaced').toEqual([])
+
+    // Positive control: the same seam, on the same screen, when the user drives it.
+    fireEvent.click(screen.getByTestId('audit-pill-invoice'))
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).toBeNull())
+    expect(writerOf(ctx1).mock.calls, 'control: an in-screen removal DOES reach the writer').toEqual([[null, null]])
+  })
+
+  it('auditView_aMovedAtomAlsoRetiresTheRowAffordance', async () => {
+    // AuditRow gets onFilterToInvoice only while `filtered` is false, so an armed screen offers
+    // no way to re-apply the invoice it already carries -- which is why applyInvoiceFilter can
+    // never write the same id twice. The shipped closed-set row proves that for the SEED path;
+    // the sync path reaches the same gate and had nothing on it.
+    const calls = recordCalls()
+    const ctx = armedCtx(null)
+    const { rerender } = render(<AuditView ctx={ctx} />)
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    expect(screen.queryByTestId('audit-invoice-affordance'), 'vacuity floor: an unfiltered row offers it').not.toBeNull()
+
+    rerender(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() => expect(calls.some((u) => u.includes(`invoice_id=${ARMED_ID}`))).toBe(true))
+    // The sync closes the expansion, so re-open one: the affordance lives inside it and would
+    // otherwise be absent for the wrong reason.
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    expect(screen.queryByTestId('audit-expansion'), 'floor: the row must be expanded again').not.toBeNull()
+    expect(screen.queryByTestId('audit-invoice-affordance'), 'a synced filter must retire the affordance').toBeNull()
+    expect(writerOf(ctx).mock.calls, 'and no URL write may have happened at all').toEqual([])
+  })
+
+  it('auditView_clearAllDropsTheInvoiceAndRestoresTheWindow', async () => {
+    const calls = recordCalls()
+    const ctx = armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })
+    render(<AuditView ctx={ctx} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+    expect(screen.queryByTestId('audit-clear-all'), 'vacuity floor: an armed invoice must offer Clear all').not.toBeNull()
+
+    const before = calls.length
+    fireEvent.click(screen.getByTestId('audit-clear-all'))
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).toBeNull())
+
+    // Clear all moves the range AND the invoice in one state write, so it stays ONE URL write,
+    // carrying both members cleared.
+    expect(writerOf(ctx).mock.calls, 'Clear all must clear the invoice on the URL exactly once').toEqual([[null, null]])
+    await waitFor(() => expect(calls.length).toBeGreaterThan(before))
+    const after = new URL(calls[calls.length - 1]!).searchParams
+    expect(after.has('invoice_id'), 'and take the invoice off the wire').toBe(false)
+    expect(after.has('from'), 'and bring the 30-day window back').toBe(true)
+    expect(screen.getByTestId('audit-pill-range').textContent, 'control: the default pill is back').toContain(
+      'Last 30 days',
+    )
+  })
+
+  // ROUTE-04-05. Reaching `/audit?invoice=<id>` by SEED sends no `from`; reaching the same URL
+  // by SYNC used to keep whatever window was already on screen (the effect spreads `...s` and
+  // moves only the two invoice members) -- Back and reload would disagree, and an invoice
+  // older than a month would read as empty on a Back. The decision: the sync path drops the
+  // window too, via a targeted merge, not a full re-seed (a re-seed would silently wipe `q`,
+  // `events`, `actorKind`, `actors` and `company` -- the second row below is that guard).
+  it('auditView_aMovedAtomDropsTheDefaultDateWindow', async () => {
+    const calls = recordCalls()
+    const { rerender } = render(<AuditView ctx={armedCtx(null)} />)
+    await waitFor(() => expect(calls.some(isMain)).toBe(true))
+    expect(
+      new URL(calls.find(isMain)!).searchParams.has('from'),
+      'vacuity floor: an unarmed mount DOES window by 30 days',
+    ).toBe(true)
+
+    rerender(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() =>
+      expect(calls.some((u) => u.includes(`invoice_id=${ARMED_ID}`)), 'a moved atom never reached the wire').toBe(
+        true,
+      ),
+    )
+
+    const moved = new URL(calls[calls.length - 1]!).searchParams
+    expect(moved.get('invoice_id'), 'the wire must carry the invoice that moved in').toBe(ARMED_ID)
+    expect(moved.has('from'), 'a moved atom must drop the default window -- the invoice may be older than it').toBe(
+      false,
+    )
+  })
+
+  it('auditView_aMovedAtomKeepsAnInScreenNonInvoiceFilter', async () => {
+    const calls = recordCalls()
+    const { rerender } = render(<AuditView ctx={armedCtx(null)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-filter-card')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('audit-search-trigger'))
+    fireEvent.change(screen.getByTestId('audit-search-input'), { target: { value: 'kept' } })
+    fireEvent.keyDown(screen.getByTestId('audit-search-input'), { key: 'Enter' })
+    await waitFor(() => expect(calls.some((u) => u.includes('q=kept'))).toBe(true))
+
+    const before = calls.length
+    rerender(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() =>
+      expect(calls.some((u) => u.includes(`invoice_id=${ARMED_ID}`)), 'a moved atom never reached the wire').toBe(
+        true,
+      ),
+    )
+
+    expect(calls.length - before, 'a moved atom must fire exactly one refetch').toBe(1)
+    const moved = new URL(calls[calls.length - 1]!).searchParams
+    expect(moved.get('invoice_id'), 'the wire must carry the invoice that moved in').toBe(ARMED_ID)
+    expect(
+      moved.get('q'),
+      "the card's own search text must survive a merge that only touches the invoice members and the range",
+    ).toBe('kept')
+  })
+
+  it('auditView_aMovedAtomWithNoNumberReadsTheHonestFallback', async () => {
+    // The sync path's own invoiceNumber write. The shipped moved-atom row moves between two
+    // NUMBERED invoices, so the null branch of the pill copy is reached only by the seed.
+    const calls = recordCalls()
+    const { rerender } = render(<AuditView ctx={armedCtx({ invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER })} />)
+    await waitFor(() => expect(calls.some(isMain)).toBe(true))
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel(ARMED_NUMBER))
+
+    rerender(<AuditView ctx={armedCtx({ invoiceId: MOVED_ID, invoiceNumber: null })} />)
+    await waitFor(() => expect(calls.some((u) => u.includes(`invoice_id=${MOVED_ID}`))).toBe(true))
+
+    const pill = screen.getByTestId('audit-pill-invoice').textContent ?? ''
+    expect(pill, 'a numberless atom must read the fallback copy').toContain(invoiceFilterPillLabel(null))
+    expect(pill, 'never the number it left').not.toContain(ARMED_NUMBER)
+    expect(pill, 'and never the raw id').not.toContain(MOVED_ID)
+  })
+
+  it('auditView_theAtomEchoingAnInScreenFilterDisturbsNothing', async () => {
+    // The guard's equality half, which nothing pinned. An in-screen filter writes BOTH halves:
+    // filterState here and the atom through ctx. When the atom's echo arrives as its own
+    // commit, the effect's dep really does move (null -> inv-9) while filterState already holds
+    // inv-9 -- and without the equality half that fire closes the row the user just opened.
+    const calls = recordCalls()
+    const ctx = armedCtx(null)
+    const { rerender } = render(<AuditView ctx={ctx} />)
+    await applyInvoiceFilter()
+    await waitFor(() => expect(calls.some((u) => u.includes('invoice_id=inv-9'))).toBe(true))
+    expect(writerOf(ctx).mock.calls, 'vacuity floor: the filter must have reached the writer').toEqual([
+      ['inv-9', 'INV-9'],
+    ])
+
+    await waitFor(() => expect(screen.getAllByTestId('audit-row').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByTestId('audit-row')[0]!)
+    expect(screen.queryByTestId('audit-expansion'), 'vacuity floor: the row never expanded').not.toBeNull()
+
+    const before = calls.length
+    rerender(<AuditView ctx={armedCtx({ invoiceId: 'inv-9', invoiceNumber: 'INV-9' })} />)
+    await settle()
+    expect(screen.queryByTestId('audit-expansion'), 'an echo of the filter already applied must not close the row').not.toBeNull()
+    expect(calls.length - before, 'nor cost a request').toBe(0)
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel('INV-9'))
+  })
+
+  it('auditView_theAtomReArmsTheScreenAfterAnInScreenRemoval', async () => {
+    // The full Back journey ROUTE-04-05 drives: arm, remove in-screen (App clears both halves),
+    // then Back restores ?invoice= and the atom returns to the SAME id. A sync effect that
+    // remembered which id it had already applied would refuse to re-arm.
+    const calls = recordCalls()
+    const armed = { invoiceId: ARMED_ID, invoiceNumber: ARMED_NUMBER }
+    const { rerender } = render(<AuditView ctx={armedCtx(armed)} />)
+    await waitFor(() => expect(calls.some(isMain)).toBe(true))
+    expect(screen.queryByTestId('audit-pill-invoice'), 'vacuity floor: the seed must have taken').not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('audit-pill-invoice'))
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).toBeNull())
+
+    // App's half of that removal: the atom follows the URL it just cleared.
+    rerender(<AuditView ctx={armedCtx(null)} />)
+    await settle()
+    expect(screen.queryByTestId('audit-pill-invoice'), 'a cleared atom must not resurrect the filter').toBeNull()
+
+    const before = calls.length
+    rerender(<AuditView ctx={armedCtx({ ...armed })} />)
+    await waitFor(() => expect(screen.queryByTestId('audit-pill-invoice')).not.toBeNull())
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel(ARMED_NUMBER))
+    await waitFor(() => expect(calls.length).toBeGreaterThan(before))
+    expect(
+      new URL(calls[calls.length - 1]!).searchParams.get('invoice_id'),
+      'and the wire must re-filter on the id that came back',
+    ).toBe(ARMED_ID)
+  })
+})
+
+// ROUTE-04-06 AC-3/AC-4, task-937. A cold-seeded invoice filter (mirrors what a cold App
+// boot at /audit?invoice=<uuid> hands to ctx.auditPrefilter) with no matching events.
+describe('ROUTE-04-06 AC-3/AC-4: a cold-seeded invoice filter renders honestly and leaks nothing', () => {
+  const COLD_ID = 'cccccccc-0000-4000-8000-000000000003'
+
+  function coldSeededCtx(invoiceNumber: string | null): PlatformCtx {
+    return { ...auditCtx(), auditPrefilter: { invoiceId: COLD_ID, invoiceNumber } } as unknown as PlatformCtx
+  }
+
+  it('auditView_coldSeededMissRendersTheFilteredEmptyStateWithTheBarePill', async () => {
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    render(<AuditView ctx={coldSeededCtx(null)} />)
+
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(screen.queryByTestId('audit-pill-invoice'), 'the pill must still be on screen').not.toBeNull()
+    // Sourced from the function that owns the copy, never retyped, and pinned to the
+    // literal "One invoice" AC-3 names. .toContain, not .toBe: the pill also renders a
+    // trailing aria-hidden "x" remove glyph as a text sibling (AuditFilterCard.tsx).
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain(invoiceFilterPillLabel(null))
+    expect(screen.getByTestId('audit-pill-invoice').textContent).toContain('One invoice')
+  })
+
+  it('auditView_coldSeededMissLeaksTheInvoiceIdNowhereInTheDom', async () => {
+    // No row is ever clicked -- AuditRow.tsx only dumps payload keys (which can carry
+    // invoice_id) into the DOM once a row is EXPANDED, and this fixture has zero rows to
+    // click besides.
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    const { container } = render(<AuditView ctx={coldSeededCtx(null)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(container.innerHTML, 'the id must not leak anywhere in the rendered DOM').not.toContain(COLD_ID)
+    cleanup()
+
+    // Needle: proves the scan above can actually SEE a uuid, by forcing this exact string
+    // into the pill's own label. invoiceNumber is nullable free text, not validated as a
+    // real invoice number -- abusing it here is the only way to land a literal uuid in
+    // rendered markup without expanding a row.
+    mockFetchSequence([logResponse({ events: [], total: 0, log_is_empty: false })])
+    const { container: needleContainer } = render(<AuditView ctx={coldSeededCtx(COLD_ID)} />)
+    await waitFor(() => expect(screen.getByTestId('audit-empty-by-filter')).toBeTruthy())
+    expect(
+      needleContainer.innerHTML,
+      'control: the scan must be able to see a uuid when one is actually there',
+    ).toContain(COLD_ID)
+  })
+})
+

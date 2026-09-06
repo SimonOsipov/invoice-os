@@ -1,9 +1,10 @@
 // `node` environment (vitest.config.ts default) -- a static source scan, no DOM needed.
 //
-// ROUTE-01-05 AC-3, decision [one-writer-rule]. The seam's two writers (route.ts, and
-// App.tsx's navigate() + the mount-alignment effect) must never read location.search --
-// that is what makes "never echo the query string" structural rather than remembered.
-// App.tsx:543's review-hash mirror is the deliberate, untouched counter-example: it DOES
+// ROUTE-01-05 AC-3, decision [one-writer-rule]. The seam's writers (route.ts, and App.tsx's
+// navigate(), mount alignment, setInvoiceQuery, searchInvoices, setAuditInvoiceFilter and
+// setSettingsTab) must never read location.search -- that is what makes "never echo the
+// query string" structural rather than remembered.
+// App.tsx:571's review-hash mirror is the deliberate, untouched counter-example: it DOES
 // read location.search, and this file uses it as the control needle proving the scan can
 // see a match at all (a typo'd regex reports a clean zero exactly like a real zero).
 
@@ -23,8 +24,8 @@ function containsLocationSearch(text: string): boolean {
 }
 
 // Brace-counting body extractor: a plain string search for the closing `}` would stop at
-// the first one, which is wrong the moment a body contains a nested block. Neither body
-// scanned below nests one today, but the extractor does not assume that.
+// the first one, which is wrong the moment a body contains a nested block. The
+// mount-alignment body nests routeUrl's params object (ROUTE-04-02).
 function bracedBodyFrom(src: string, openBraceIdx: number): string {
   let depth = 0
   let i = openBraceIdx
@@ -54,19 +55,33 @@ describe('AC-3: the seam writers never read location.search', () => {
     const routeSrc = readSrc('src/lib/route.ts')
     const appSrc = readSrc('src/App.tsx')
 
-    const navigateBody = findBody(appSrc, 'function navigate(view: View, id: string | null = null)')
+    // ROUTE-04-03: the anchor carries the comma, never the closing paren -- navigate now
+    // takes `params?: RouteParams`, and `'function navigate(view: View)'` would no longer
+    // be found. The comma also pins that a second parameter still exists.
+    const navigateBody = findBody(appSrc, 'function navigate(view: View,')
     const alignmentCommentIdx = appSrc.indexOf('Aligns a boot URL that named no path')
     expect(alignmentCommentIdx, 'mount-alignment anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const alignmentBody = findBody(appSrc, 'useEffect(() => {', alignmentCommentIdx)
 
     // Floor: a broken anchor search silently returning an empty population would make the
-    // loop below vacuously pass with nothing checked.
+    // loop below vacuously pass with nothing checked. setInvoiceQuery is in the population
+    // because it is the one new writer that builds its own replaceState URL, and "clear the
+    // query" is naturally written as "take the current URL and strip q=". switchClient is
+    // in the population because it is a writer (the leaving-view scrub) that reads
+    // location.hash, never location.search -- ROUTE-02.
     const writerBodies = [
       { name: 'lib/route.ts (whole file)', body: routeSrc },
       { name: "App.tsx's navigate()", body: navigateBody },
       { name: "App.tsx's mount-alignment effect", body: alignmentBody },
+      { name: "App.tsx's setInvoiceQuery()", body: findBody(appSrc, 'function setInvoiceQuery(q: string)') },
+      { name: "App.tsx's searchInvoices()", body: findBody(appSrc, 'function searchInvoices(q: string)') },
+      { name: "App.tsx's setAuditInvoiceFilter()", body: findBody(appSrc, 'function setAuditInvoiceFilter(') },
+      // Keeps the leading `function `: 'setSettingsTab' alone matches the ctx object
+      // literal first, and findBody would extract a slice of that object instead.
+      { name: "App.tsx's setSettingsTab()", body: findBody(appSrc, 'function setSettingsTab(t: SettingsTab)') },
+      { name: "App.tsx's switchClient()", body: findBody(appSrc, 'function switchClient(id: string)') },
     ]
-    expect(writerBodies.length, 'the writer population must not be empty').toBe(3)
+    expect(writerBodies.length, 'the writer population must not be empty').toBe(8)
     for (const { name, body } of writerBodies) {
       expect(body.length, `${name}'s extracted body is empty -- the anchor is broken`).toBeGreaterThan(0)
       expect(containsLocationSearch(body), `${name} must never read location.search`).toBe(false)
@@ -80,7 +95,7 @@ describe('AC-3: the seam writers never read location.search', () => {
     expect(reviewMirrorBody.length, 'review-mirror control body is empty -- the anchor is broken').toBeGreaterThan(0)
     expect(
       containsLocationSearch(reviewMirrorBody),
-      'control needle: App.tsx:543 must still read location.search, or the absence checks above prove nothing',
+      'control needle: App.tsx:571 must still read location.search, or the absence checks above prove nothing',
     ).toBe(true)
   })
 })

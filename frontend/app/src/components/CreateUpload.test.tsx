@@ -211,3 +211,67 @@ describe('CreateUpload — the picker no longer contradicts its own ACCEPTED cop
     expect(s.primaryDisabled).toBe(true)
   })
 })
+
+// QA (ROUTE-04-03). The no-entity button moved from the two-call idiom
+// (`ctx.setSettingsTab('company')` then `ctx.nav('settings')`) to one `ctx.nav('settings',
+// { settingsTab: 'company' })`, and nothing covered either branch of it.
+function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: () => void): PlatformCtx {
+  return {
+    active: { short: 'Lagos Freight', tin: '20184412-0001' },
+    pickedFiles: [],
+    filesRefusal: null,
+    importError: null,
+    // computeNoEntity: no active entity, the fetch settled, the roster is not catching up.
+    activeEntity: null,
+    entitiesState: 'ready',
+    entities: [],
+    clients: [],
+    mode,
+    runKind: null,
+    addPickedFiles: vi.fn(),
+    removePickedFile: () => {},
+    setSettingsTab,
+    nav,
+    readAllColumns: () => {},
+    skipUpload: () => {},
+  } as unknown as PlatformCtx
+}
+
+function linkEntityButton(container: HTMLElement): HTMLButtonElement {
+  const buttons = Array.from(container.querySelectorAll('button')).filter((b) =>
+    (b.textContent ?? '').startsWith('Link a business entity'),
+  )
+  expect(buttons, 'the no-entity panel did not render its button').toHaveLength(1)
+  return buttons[0] as HTMLButtonElement
+}
+
+describe('CreateUpload — the no-entity button names its destination tab in the nav call (ROUTE-04-03)', () => {
+  afterEach(cleanup)
+
+  it('theInHouseBranchNavigatesToSettingsCarryingTheCompanyTab', () => {
+    const nav = vi.fn()
+    const setSettingsTab = vi.fn()
+    const { container } = render(<CreateUpload ctx={noEntityCtx('inhouse', nav, setSettingsTab)} />)
+
+    fireEvent.click(linkEntityButton(container))
+
+    expect(nav.mock.calls, 'the tab must arrive with the destination, not before it').toEqual([
+      ['settings', { settingsTab: 'company' }],
+    ])
+    // The old idiom set the tab first and navigated after. Two writes cannot both be the
+    // URL, so the second one has to be gone.
+    expect(setSettingsTab, 'the separate tab write must be gone').not.toHaveBeenCalled()
+  })
+
+  it('theFirmBranchNavigatesToClientsAndNamesNoTab', () => {
+    const nav = vi.fn()
+    const setSettingsTab = vi.fn()
+    const { container } = render(<CreateUpload ctx={noEntityCtx('firm', nav, setSettingsTab)} />)
+
+    fireEvent.click(linkEntityButton(container))
+
+    // The asymmetry is the point: Clients owns no param, so the firm branch passes none.
+    expect(nav.mock.calls).toEqual([['clients']])
+    expect(setSettingsTab).not.toHaveBeenCalled()
+  })
+})

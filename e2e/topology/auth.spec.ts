@@ -347,6 +347,33 @@ test('deployed app: a top-level path is a working deep link', async ({ page }) =
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// The tab is a PATH SEGMENT (lib/route.ts's routeUrl), so it can travel in the same URL as
+// ?persona=: the strip rewrites to `pathname + hash` (App.tsx's autoPersona effect), which
+// keeps the path and would drop any query the destination owned.
+test('deployed app: a settings tab is a working deep link', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const url = `${APP_URL}/settings/roles?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('roles-grid'), 'the deep link must open the Roles tab').toBeVisible()
+  // The discriminator: SettingsView renders one panel at a time, so a boot that fell back to
+  // the default tab shows this instead of the grid above.
+  await expect(page.getByTestId('members-table'), 'the boot fell back to the default Members tab').toHaveCount(0)
+  await expect(page, 'the deep link did not settle on /settings/roles').toHaveURL(/\/settings\/roles$/)
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the settings deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The ONLY oracle for this story's load-bearing premise: sessionStorage written on the APP
 // origin survives a same-tab hard navigation to the LANDING origin and back. sessionStorage is
 // keyed by (top-level browsing context, origin), so no unit test can observe it — jsdom never
@@ -407,6 +434,58 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   await expect
     .poll(() => new URL(page.url()).searchParams.has('persona'), {
       message: `?persona= survived the restored deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The FILTER half of the journey above: same front door, same budgets, but the destination
+// owns a query. A well-formed UUID matching nothing needs no fixture and proves the restore
+// and the honest filtered-empty state in one pass.
+//
+// The empty-by-filter arm needs the firm tenant's own log to be non-empty (auditScreenState,
+// lib/auditView.ts); audit.spec.ts's audit_exportIsDisabledWhenNothingMatches pins the same
+// premise on the same tenant.
+test('deployed app: a signed-out deep link returns to its FILTER after sign-in', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const unknownInvoice = crypto.randomUUID()
+
+  // No response assertion, for the same reason as the journey above. This goto is also the
+  // tab's FIRST entry, which is why nothing below presses Back.
+  await page.goto(`${APP_URL}/audit?invoice=${unknownInvoice}`)
+  await page.waitForURL((url) => url.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+  await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
+  await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+  await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
+
+  const digits = '481920'.split('')
+  for (let i = 0; i < digits.length; i++) {
+    await page.locator(`#si-otp-${i}`).fill(digits[i])
+  }
+  await page.getByRole('button', { name: 'Verify & continue' }).click()
+
+  // 30s here for the same reason the journey above needs it.
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'the restored destination did not carry its ?invoice= filter back').toHaveURL(
+    new RegExp(`/audit\\?invoice=${unknownInvoice}$`),
+  )
+
+  // A URL boot resolves no invoice NUMBER (App.tsx seeds it null), so the pill reads the bare
+  // form -- which is also what tells a restored URL filter from an in-app hand-off.
+  await expect(page.getByTestId('audit-pill-invoice'), 'the restored filter must render as a pill').toHaveText(/^One invoice/)
+  await expect(
+    page.getByTestId('audit-empty-by-filter'),
+    'an unknown invoice id must land the filtered-empty state, not the new-workspace one',
+  ).toBeVisible()
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the restored filter at ${page.url()}`,
     })
     .toBe(false)
 

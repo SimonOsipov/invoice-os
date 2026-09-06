@@ -1,4 +1,6 @@
-import type { View } from '../types'
+import type { SettingsTab, View } from '../types'
+
+import { clampFilterText } from './invoices'
 
 // `dashboard` is the bare root, not `/dashboard`: the landing hand-off and the persona
 // strip (App.tsx:1618) both land on pathname `/`.
@@ -59,14 +61,94 @@ export function parseRoute(pathname: string): Route | null {
   }
 }
 
-// Boot's one total reader: an unparseable pathname must never throw out of a useState
-// initializer, so it falls back to the dashboard triple instead.
-export function seedFromPath(pathname: string): { view: View; invoiceId: string | null; jobId: string | null } {
-  const route = parseRoute(pathname)
-  if (route === null) return { view: 'dashboard', invoiceId: null, jobId: null }
-  return {
-    view: route.view,
-    invoiceId: route.view === 'detail' ? route.id : null,
-    jobId: route.view === 'extraction' ? route.id : null,
+// Owned params: `invoices` owns `q`, `audit` owns `invoice`, `settings` owns its tab as a
+// path segment, `detail`/`extraction` own `id` as a path segment. No other view owns
+// anything, so nothing else is ever emitted or read.
+const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
+  members: true,
+  roles: true,
+  connectors: true,
+  api: true,
+  signing: true,
+  company: true,
+}
+// The Record keeps this exhaustive; the Set (not `in`) keeps prototype keys out.
+const SETTINGS_TAB_IDS = new Set<string>(Object.keys(SETTINGS_TAB_TABLE))
+
+const INVOICE_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+export type RouteParams = {
+  id?: string | null
+  settingsTab?: SettingsTab
+  q?: string
+  auditInvoice?: string | null
+}
+
+// TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId are
+// non-null only when view is the matching drill-down (mirrors parseRoute's Route.id).
+export type ParsedLocation = {
+  view: View
+  invoiceId: string | null
+  jobId: string | null
+  settingsTab: SettingsTab
+  q: string
+  auditInvoice: string | null
+}
+
+// Path plus query, never a hash. Omit the default: the `members` tab, an empty `q` and an
+// absent id all serialise to nothing. The path half delegates to routePath so the
+// drill-down segment logic lives in exactly one place.
+export function routeUrl(view: View, params: RouteParams = {}): string {
+  const path = routePath(view, params.id)
+  if (view === 'settings') {
+    const tab = params.settingsTab
+    return tab && tab !== 'members' ? `${path}/${tab}` : path
   }
+  if (view === 'invoices' && params.q) {
+    return `${path}?${new URLSearchParams({ q: params.q }).toString()}`
+  }
+  if (view === 'audit' && params.auditInvoice) {
+    return `${path}?${new URLSearchParams({ invoice: params.auditInvoice }).toString()}`
+  }
+  return path
+}
+
+// The query half of routeUrl, for a caller that needs the params without the path (the
+// signed-out capture stores the two in separate fields). '' when the view owns none.
+export function routeQuery(view: View, params: RouteParams = {}): string {
+  const url = routeUrl(view, params)
+  const i = url.indexOf('?')
+  return i === -1 ? '' : url.slice(i)
+}
+
+// Total: every input yields a renderable result. `/settings/<seg>` is the only two-segment
+// path parseRoute doesn't own itself; everything else delegates to parseRoute and inherits
+// its strictness, with an unparseable path falling back to 'dashboard' rather than null.
+export function parseLocation(pathname: string, search: string): ParsedLocation {
+  const route = parseRoute(pathname)
+  let view: View = route?.view ?? 'dashboard'
+  const invoiceId = route?.view === 'detail' ? route.id : null
+  const jobId = route?.view === 'extraction' ? route.id : null
+  let settingsTab: SettingsTab = 'members'
+
+  if (route === null) {
+    const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+    if (normalized.startsWith('/settings/')) {
+      const seg = normalized.slice('/settings/'.length)
+      if (seg.length > 0 && !/[/?#]/.test(seg)) {
+        view = 'settings'
+        settingsTab = SETTINGS_TAB_IDS.has(seg) ? (seg as SettingsTab) : 'members'
+      }
+    }
+  }
+
+  // Read only the param the parsed view owns, so parse is the exact inverse of routeUrl.
+  const query = new URLSearchParams(search)
+  const q = view === 'invoices' ? clampFilterText(query.get('q') ?? '') : ''
+  const rawInvoice = view === 'audit' ? query.get('invoice') : null
+  // A malformed id is dropped rather than forwarded: the audit reader 400s on it, which
+  // renders an error state where the ordinary unfiltered list is correct.
+  const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
+
+  return { view, invoiceId, jobId, settingsTab, q, auditInvoice }
 }

@@ -524,10 +524,7 @@ export function WorkflowBuilder({ ctx, policy }: { ctx: PlatformCtx; policy: Pol
               delegates={delegateCandidates(ctx.members)}
               notifyOptions={notifyOptions}
               roleOptions={roleChoices}
-              onManageRoles={() => {
-                ctx.setSettingsTab('roles')
-                ctx.nav('settings')
-              }}
+              onManageRoles={() => ctx.nav('settings', { settingsTab: 'roles' })}
             />
           </fieldset>
           <WorkflowSimulator policy={working} roles={ctx.roles} sim={sim} onSim={setSim} resolve={line(resolve)} />

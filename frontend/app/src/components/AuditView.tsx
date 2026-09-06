@@ -59,11 +59,12 @@ function downloadAuditCsv(csv: string, filename: string): Blob {
   return blob
 }
 
-// Consume-once seed for the "Open in Audit ->" hand-off. Read from a LAZY useState
-// initializer below, NEVER from an effect -- an effect keyed on the atom fires the instant
-// Workspace clears it and drops the filter the user just arrived with. `{ preset: 'custom' }`
+// The MOUNT seed for the "Open in Audit ->" hand-off, read from a lazy useState initializer
+// below; the sync effect further down carries a later move of the atom. `{ preset: 'custom' }`
 // with no from/to is auditFilters' own "no date filter" (REMOVE_RANGE): the 30-day default is
-// a pre-applied window and would hide an older invoice's events.
+// a pre-applied window and would hide an older invoice's events. The sync effect below moves
+// only the two invoice members, so it does NOT drop that window -- a divergence between the
+// two paths that ROUTE-04-05 owns, once popstate can move the atom under a live screen.
 function seedFilterState(pre: AuditPrefilter | null): AuditFilterState {
   if (pre == null) return AUDIT_FILTER_DEFAULT
   return {
@@ -76,8 +77,11 @@ function seedFilterState(pre: AuditPrefilter | null): AuditFilterState {
 
 export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
+  // One read of the atom, hoisted above the seed so the initializer and the sync effect below
+  // share one fact instead of reading two.
+  const prefilter = ctx.auditPrefilter
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [filterState, setFilterState] = useState<AuditFilterState>(() => seedFilterState(ctx.auditPrefilter))
+  const [filterState, setFilterState] = useState<AuditFilterState>(() => seedFilterState(prefilter))
   const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
   // Written only from the unfiltered probe below, never from the main (filtered) request,
   // so this can never be mistaken for a windowed total.
@@ -150,15 +154,33 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     setLifetimeTotal(probe.data.total)
   }, [probe.data])
 
+  // The atom is the /audit URL's ?invoice=, so an atom that MOVES under the screen (popstate)
+  // has to move the screen with it. An absent atom is "no news", never "clear the filter":
+  // every hand-built ctx omits the key, so null beside an armed filter is the normal state.
+  useEffect(() => {
+    const id = prefilter?.invoiceId ?? null
+    if (id == null || id === filterState.invoiceId) return
+    // A moved atom means a DIFFERENT invoice's whole history, so the default date window
+    // (which could exclude that invoice entirely) must reset, not carry over.
+    setFilterState((s) => ({ ...s, range: { preset: 'custom' }, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
+    setPage(auditPageResize(page.limit))
+    setExpandedId(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefilter?.invoiceId])
+
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.
   const applyInvoiceFilter = (id: string, number: string | null) => {
+    if (id !== filterState.invoiceId) ctx.setAuditInvoiceFilter(id, number)
     setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: number }))
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
 
   const handleFilterChange = (next: AuditFilterState) => {
+    // Only the invoice member is on the URL; writing it on every date or actor tweak would
+    // replaceState 16 times over.
+    if (next.invoiceId !== filterState.invoiceId) ctx.setAuditInvoiceFilter(next.invoiceId, next.invoiceNumber)
     setFilterState(next)
     setPage(auditPageResize(page.limit))
     setExpandedId(null)

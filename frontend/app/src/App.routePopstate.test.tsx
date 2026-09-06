@@ -15,6 +15,7 @@ import type { PlatformCtx } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const AUDIT_INVOICE_ID = 'd1e2f3a4-b5c6-47d8-89ab-cdef01234567'
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
@@ -625,8 +626,10 @@ describe('Adversarial: the three URL writers on create with a live review hash',
     await popTo(`/create#review/${REVIEW_ID}`)
     ctx = requireCtx()
     // Writer order on this popstate: (1) the browser applies pathname+hash before the
-    // event fires, (2) the popstate handler calls setView('create') only, (3) the
-    // pre-existing review mirror re-runs because `view` changed and recomputes the hash
+    // event fires, (2) the popstate handler re-derives all four owned atoms from that URL
+    // (view lands on 'create'; the other three resolve to their bare-URL defaults, since
+    // /create owns none of them), (3) the pre-existing review mirror re-runs because
+    // `view` changed and recomputes the hash
     // from LIVE createStep/reviewBatchIds -- both still 'review'/[REVIEW_ID] because
     // nothing in this chain ever reset them, so the mirror's rewrite is idempotent with
     // what the browser already restored. Final URL: /create#review/<id>, matching both
@@ -653,4 +656,104 @@ describe('Adversarial: the three URL writers on create with a live review hash',
   // here for ROUTE-01-06 / ROUTE-03, not reproduced as a spec because forcing a second
   // real batch id requires driving the full CreateFlow pipeline, out of proportion for a
   // popstate-listener suite.
+})
+
+// --- ROUTE-04-05: the handler restores the other three owned atoms, not just view -------
+
+describe('ROUTE-04-05 AC-1: Back also restores the committed invoice search term', () => {
+  it('popstate_backRestoresTheInvoiceQuery', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.searchInvoices('acme')
+    })
+    expect(window.location.pathname + window.location.search, 'sanity: the term landed').toBe('/invoices?q=acme')
+
+    // "nav('invoices') with no term": submitting an empty box commits '' and leaves a bare
+    // /invoices entry -- a plain nav('invoices') is durable and cannot produce this (it
+    // re-emits whatever term is already in state), so this is the real production action
+    // that lands on invoices with no term. The earlier acme URL is what we restore below.
+    await act(async () => {
+      capturedCtx!.searchInvoices('')
+    })
+    expect(requireCtx().invoiceQuery, 'sanity: the term was actually cleared before the restore').toBe('')
+
+    await popTo('/invoices?q=acme')
+    expect(requireCtx().invoiceQuery, 'Back must restore the invoice search term from the URL').toBe('acme')
+  })
+})
+
+describe('ROUTE-04-05 AC-2: Back also restores the audit invoice filter', () => {
+  it('popstate_backRestoresTheAuditInvoiceFilter', async () => {
+    await bootAt('/audit')
+    expect(requireCtx().auditPrefilter, 'sanity: the filter starts cleared').toBeNull()
+
+    await popTo(`/audit?invoice=${AUDIT_INVOICE_ID}`)
+    expect(requireCtx().auditPrefilter, 'Back must restore the audit invoice filter from the URL').toEqual({
+      invoiceId: AUDIT_INVOICE_ID,
+      invoiceNumber: null,
+    })
+  })
+})
+
+describe('ROUTE-04-05 AC-3: Back and Forward also restore the settings tab', () => {
+  it('popstate_backRestoresTheSettingsTab', async () => {
+    await bootAt('/settings/roles')
+    expect(requireCtx().settingsTab, 'sanity: booting at /settings/roles must seed that tab').toBe('roles')
+
+    await popTo('/settings')
+    expect(requireCtx().settingsTab, 'Back must restore the members tab').toBe('members')
+  })
+
+  // The reverse of the row above -- proves the restore is derived from the URL on every
+  // dispatch, not a one-directional "reset to members" fallback that only looks correct here.
+  it('popstate_forwardReAppliesTheTab', async () => {
+    await bootAt('/settings')
+    expect(requireCtx().settingsTab, 'sanity: booting at /settings must seed the members tab').toBe('members')
+
+    await popTo('/settings/roles')
+    expect(requireCtx().settingsTab, 'Forward must re-apply the roles tab').toBe('roles')
+  })
+})
+
+describe('AC-4, extended: a filtered restore still writes no history entry', () => {
+  // Green-by-design (M11, .claude/handoff.yaml). The shipped popstate_theHandlerWritesNoHistory
+  // (:150) restores to an unfiltered URL, where a handler that wrongly routed an atom through
+  // its URL-writing WRAPPER (setInvoiceQuery, setAuditInvoiceFilter) instead of the raw setter
+  // would pass undetected: those wrappers close over view/settingsTab/invoiceQuery/auditPrefilter
+  // from the render the mount-only effect (deps []) captured them in, so on an unfiltered restore
+  // the stale URL they would rebuild happens to match. On a FILTERED restore it does not -- the
+  // wrapper rebuilds from stale state, disagreeing with the real pre-dispatch URL -- and this
+  // loop, not a static scan (routeWriterGuard's own evasion, subtask-03), is what catches it.
+  it('popstate_writesNoHistoryEntry', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.nav('audit')
+    })
+
+    for (const filteredUrl of ['/invoices?q=acme', `/audit?invoice=${AUDIT_INVOICE_ID}`]) {
+      window.history.replaceState(null, '', filteredUrl)
+      const pushSpy = vi.spyOn(window.history, 'pushState')
+      const replaceSpy = vi.spyOn(window.history, 'replaceState')
+      const lengthBefore = window.history.length
+      const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+
+      await act(async () => {
+        window.dispatchEvent(new PopStateEvent('popstate'))
+      })
+
+      expect(pushSpy, `${filteredUrl}: the popstate handler must never call pushState`).not.toHaveBeenCalled()
+      expect(window.history.length, `${filteredUrl}: a popstate restore must add no history entry`).toBe(lengthBefore)
+      for (const call of replaceSpy.mock.calls) {
+        expect(
+          call[2],
+          `${filteredUrl}: any replaceState after a popstate must rewrite the current URL -- a wrapper-setter mistake rebuilds it from stale mount-time state instead`,
+        ).toBe(urlBeforeDispatch)
+      }
+      pushSpy.mockRestore()
+      replaceSpy.mockRestore()
+    }
+  })
 })

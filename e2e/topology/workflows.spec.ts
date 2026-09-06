@@ -316,7 +316,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
 
   // --- 13. the reload IS the per-tenant proof ------------------------------------------------
   // `?persona=` is stripped at boot and lib/session.ts rehydrates from localStorage, so the
-  // session survives (roles.spec.ts:837 already relies on this). `view` and `editingPolicyId`
+  // session survives (roles.spec.ts:880 already relies on this). `view` and `editingPolicyId`
   // are NOT persisted, so the nav and the builder are re-driven by hand below.
   await page.reload()
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
@@ -419,7 +419,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Best-effort, idempotent on purpose — the shape roles.spec.ts:990-1023 and
+// Best-effort, idempotent on purpose — the shape roles.spec.ts:1043-1076 and
 // contract-approvals.spec.ts:410-425 already use. On the happy path the test above deleted its
 // own row, so the id delete 404s and the sweep finds nothing; this exists for the run that dies
 // mid-journey. Hooks replay on retry (retries: 1 in CI) and a second delete is 404, so a throw

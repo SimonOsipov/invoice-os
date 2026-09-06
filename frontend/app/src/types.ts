@@ -24,6 +24,9 @@ import type { CustomRule, Suggestion } from './lib/rules'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
 import type { Role } from './lib/roles'
+// Type-only, and benign for the reason the `Member` edge above spells out: `lib/route.ts`
+// type-imports `View`/`SettingsTab` from this file, so the loop is erased at compile.
+import type { RouteParams } from './lib/route'
 import type { Policy } from './lib/workflows'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
@@ -419,15 +422,19 @@ export type PlatformCtx = {
   // invoice. Non-null makes InvoiceDetail render its honest placeholder instead of
   // resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
-  // Set by openAuditForInvoice and consumed by the NEXT AuditView mount, which reads it in a
-  // lazy useState initializer. Workspace clears it; AuditView never does.
+  // This atom and the `invoice` param of the current /audit URL are the same fact: every
+  // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null
-  // The extraction job the review screen renders. Unlike auditPrefilter this is NOT
-  // consume-once -- the screen reads it on every render for as long as it is open.
+  // The extraction job the review screen renders, re-read on every render. Longer-lived than
+  // auditPrefilter: it is not a URL param, so navigate never moves it -- switchClient alone
+  // clears it, and /extraction stays reachable by Back.
   extractionJobId: string | null
 
-  nav: (id: View) => void
+  nav: (id: View, params?: RouteParams) => void
   setInvoiceQuery: (q: string) => void
+  // A COMMITTED search: sets the term, lands on /invoices and pushes ONE entry.
+  // setInvoiceQuery above is the clearing verb and replaces instead.
+  searchInvoices: (q: string) => void
   toggleSwitcher: () => void
   // [entity-picker] keystone: takes a real entity id, never an array index — the active
   // selection is never again "the mock array position the switcher happened to click".
@@ -494,6 +501,8 @@ export type PlatformCtx = {
   // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
   // one without the other.
   openAuditForInvoice: (invoiceId: string, invoiceNumber: string | null) => void
+  // An in-screen audit filter edit: a correction of the URL on screen, so it replaces.
+  setAuditInvoiceFilter: (invoiceId: string | null, invoiceNumber: string | null) => void
   // Sets extractionJobId and navigates to the review screen in ONE handler, same reason.
   openExtraction: (jobId: string) => void
   setSandbox: (v: boolean) => void

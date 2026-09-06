@@ -444,6 +444,16 @@ var cldSubsections = []struct {
 	why     string
 }{
 	{
+		// D-2's cost, and the vocabulary every subsection below borrows. Nothing else in the
+		// doc says what a b1: key is composed of.
+		heading: "The two layout identities",
+		needles: []string{
+			"v1:", "b1:", "boxlessfingerprintversion", "fingerprintversion",
+			"<label>:<placement>", "band", "only its own",
+		},
+		why: "an operator who bumps FingerprintVersion and expects every stored rule gone is wrong, and a reader who cannot compose a b1: key cannot predict which documents share one",
+	},
+	{
 		heading: "How a rule is derived",
 		needles: []string{
 			"learnrule", "betteranchor", "same_token", "below", "rounded up",
@@ -467,7 +477,7 @@ var cldSubsections = []struct {
 		heading: "Undo does not un-teach",
 		needles: []string{
 			"stays live", "append-only", "both rows remain", "ordering",
-			"TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes",
+			"TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes",
 		},
 		why: "D-17 is the sharp edge of this feature, and a caveat nobody wrote down is a support call",
 	},

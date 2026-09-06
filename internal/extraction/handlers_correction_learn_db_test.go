@@ -358,7 +358,7 @@ func TestRLS_AClientSuppliedAnchorLabelNeverBeatsTheServersOwn(t *testing.T) {
 // stamps a v1: key and leaves layout_tokens NULL, so two of the boxless branch's three
 // conjuncts are false. On a b1: job a typed correction DOES teach --
 // TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule.
-func TestRLS_OnlyAPointedCorrectionLearnsARule(t *testing.T) {
+func TestRLS_OnAV1LayoutOnlyAPointedCorrectionLearnsARule(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C0456")
 	_, pages := clLayout(t, ctx, f.jobID)
@@ -649,7 +649,7 @@ func TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit(t
 // prepend a superseding rule, so arm 2's non-supersession is a decision and not an inability of
 // the write path. R1 is the same_token/TIN rule because the below/Buyer rule resolves to zero
 // candidates on its own page, which would make arm 2's Resolve oracle vacuous.
-func TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes(t *testing.T) {
+func TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C13")
 	fingerprint, pages := clLayout(t, ctx, f.jobID)

@@ -433,33 +433,6 @@ describe('pagerLabels (AC-9)', () => {
   })
 })
 
-describe('parseReviewHash / formatReviewHash (AC-4)', () => {
-  // Updated in place for BULK-01-06's widening (formatReviewHash now takes an array,
-  // parseReviewHash now returns one) -- this spec's own target functions are exactly
-  // the two this subtask changes in place (unlike reviewQuery/channelTiles/reviewHeader,
-  // which get additive `...All` siblings instead because five OTHER call sites outside
-  // App.tsx would not compile). A single-id array still formats byte-identically to the
-  // shipped `#review/x` (AC-2), which is what keeps this a widening, not a break.
-  it('HASH-1: round-trips a uuid with case preserved verbatim (never lower-cased); a foreign hash and empty string are null', () => {
-    const id = 'A1B2C3D4-E5F6-47A8-89AB-CDEF01234567'
-
-    expect(formatReviewHash([id])).toBe(`#review/${id}`)
-    expect(parseReviewHash(formatReviewHash([id]))).toEqual([id])
-    expect(parseReviewHash('#somewhere-else')).toBeNull()
-    expect(parseReviewHash('')).toBeNull()
-  })
-
-  it('HASH-2 (widened beyond the shipped table): a malformed or non-uuid fragment is rejected — never a startsWith+slice that would accept a path-traversal-shaped tail', () => {
-    const id = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
-
-    expect(parseReviewHash('#review/../../etc')).toBeNull()
-    expect(parseReviewHash('#review/')).toBeNull()
-    expect(parseReviewHash(`#review/${id}/extra`)).toBeNull()
-    expect(parseReviewHash(`#review/${id}?x=1`)).toBeNull()
-    expect(parseReviewHash(`#REVIEW/${id}`)).toBeNull()
-  })
-})
-
 describe('unreadableRows (AC-4)', () => {
   it('UNREAD-1: the row/rows union reads through the shipped rowErrorRows reader, absent field renders —, message is verbatim; rows:[5,6] yields TWO entries', () => {
     const errors: RowError[] = [{ rows: [5, 6], message: 'quarantined: duplicate invoice_number' }]
@@ -600,23 +573,6 @@ describe('routeAfterImport (AC-9, task-285 Implementation Plan §3 — order is 
 
     expect(result).toEqual({ kind: 'rejected', batchId: 'batch-r9' })
     expect(result.kind).not.toBe('single')
-  })
-})
-
-describe('reviewHash (AC-1, HASH-3 — replaces SHELL-1, which cannot exist under environment:\'node\': no `location`, no React)', () => {
-  // Updated in place for BULK-01-06's widening: the third param is now every id in the
-  // run (App.tsx's `reviewBatchIds` state), not one -- a single-id array still writes
-  // byte-identically to the shipped `#review/u-1` (AC-2), and several ids join with a
-  // comma (HASH-3b, new).
-  it('HASH-3: the hash is written ONLY on view=create + createStep=review with a non-empty id array, and cleared on every other combination — including view=invoices (the Finish / ← Invoices exit, where a lingering hash would bounce a reload straight back into review)', () => {
-    expect(reviewHash('create', 'review', ['u-1'])).toBe('#review/u-1')
-    expect(reviewHash('invoices', 'review', ['u-1'])).toBeNull()
-    expect(reviewHash('create', 'form', ['u-1'])).toBeNull()
-    expect(reviewHash('create', 'review', [])).toBeNull()
-  })
-
-  it('HASH-3b (NEW — several ids in the run all round-trip through the mirror): a two-id array joins with a comma', () => {
-    expect(reviewHash('create', 'review', ['u-1', 'u-2'])).toBe('#review/u-1,u-2')
   })
 })
 
@@ -2484,56 +2440,6 @@ function mkReport(id: string, overrides: Partial<ImportReport> = {}): ImportRepo
     ...overrides,
   }
 }
-
-describe('parseReviewHash: widened to a run (BULK-01-06, AC-1)', () => {
-  it('BULK-06-1: a shipped single-uuid deep link still parses — parseReviewHash(\'#review/<uuid>\') is a one-element array', () => {
-    const id = mkUuid(1)
-
-    expect(parseReviewHash(`#review/${id}`)).toEqual([id])
-  })
-
-  it('BULK-06-2: several ids parse IN ORDER — #review/a,b,c -> [a,b,c]', () => {
-    const a = mkUuid(1)
-    const b = mkUuid(2)
-    const c = mkUuid(3)
-
-    expect(parseReviewHash(`#review/${a},${b},${c}`)).toEqual([a, b, c])
-  })
-
-  it('BULK-06-3: one bad segment poisons the WHOLE hash — #review/<uuid>,notauuid is null, never a partial [uuid]', () => {
-    const id = mkUuid(1)
-
-    expect(parseReviewHash(`#review/${id},notauuid`)).toBeNull()
-  })
-
-  it('BULK-06-4: traversal and suffixes stay refused', () => {
-    const id = mkUuid(1)
-
-    expect(parseReviewHash('#review/../../etc')).toBeNull()
-    expect(parseReviewHash(`#review/${id}/extra`)).toBeNull()
-    expect(parseReviewHash('#review/')).toBeNull()
-  })
-
-  it('BULK-06-5: the hash is bounded at REVIEW_HASH_MAX_IDS — six ids is null, never a truncated five', () => {
-    const ids = Array.from({ length: 6 }, (_, i) => mkUuid(i))
-
-    expect(parseReviewHash(`#review/${ids.join(',')}`)).toBeNull()
-  })
-
-  it("BULK-06-6: parseReviewHash(formatReviewHash([a,b])) round-trips; a single-id format stays byte-identical to today's #review/x", () => {
-    const a = mkUuid(1)
-    const b = mkUuid(2)
-
-    expect(formatReviewHash([a])).toBe(`#review/${a}`)
-    expect(parseReviewHash(formatReviewHash([a, b]))).toEqual([a, b])
-  })
-})
-
-describe('REVIEW_HASH_MAX_IDS: mirrors importRun.ts\'s MAX_RUN_FILES (drift guard, BULK-01-06 — NOT a runtime clamp, same idiom as BATCH_SUBMIT_MAX_IDS)', () => {
-  it('BULK-06-DRIFT: REVIEW_HASH_MAX_IDS equals MAX_RUN_FILES — a documented mirror, not an import, avoids the reviewBatch.ts <-> importRun.ts cycle importRun.ts:74 would otherwise create', () => {
-    expect(REVIEW_HASH_MAX_IDS).toBe(MAX_RUN_FILES)
-  })
-})
 
 describe('reviewQueryAll: the tenant-wide-leak argument survives widened to an array (BULK-01-06, AC-4)', () => {
   // QA Mode B (task-311): re-verified against the real implementation, not the Mode A

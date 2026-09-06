@@ -3,7 +3,18 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { clampFilterText } from './invoices'
-import { ROUTE_PATHS, routePath, parseRoute, parseLocation, routeUrl, reviewPath, parseReviewPath, reviewNavIds } from './route'
+import {
+  ROUTE_PATHS,
+  routePath,
+  parseRoute,
+  parseLocation,
+  routeUrl,
+  reviewPath,
+  parseReviewPath,
+  reviewNavIds,
+  REVIEW_PATH_MAX_IDS,
+} from './route'
+import { MAX_RUN_FILES } from './importRun'
 
 const ALL_VIEWS = [
   'dashboard',
@@ -686,5 +697,105 @@ describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
   it('review_aNonCreateViewIgnoresReviewBatchIds', () => {
     expect(routeUrl('invoices', { reviewBatchIds: [UUID], q: 'x' })).toBe('/invoices?q=x')
     expect(parseLocation('/invoices', '?q=x').reviewBatchIds).toEqual([])
+  })
+
+  // ROUTE-03-02: the shipped drift guard (reviewBatch.test.ts's BULK-06-DRIFT), re-pointed
+  // at the constant's real owner instead of removed.
+  it('guard_theRunCapIsOneConstant', () => {
+    expect(REVIEW_PATH_MAX_IDS).toBe(MAX_RUN_FILES)
+  })
+})
+
+// ROUTE-03-02: the three codec `describe` blocks below moved here from reviewBatch.test.ts,
+// retargeted from '#review/…' fragments to the '/imports/…/review' path. Spec ids kept for
+// traceability. Six of the eleven ported assertions duplicate specs already in the block
+// above (traceability only, not new coverage) — see task-951's Implementation Notes.
+
+describe('parseReviewHash / formatReviewHash (AC-4) — migrated to reviewPath/parseReviewPath (ROUTE-03-02, HASH-1/2)', () => {
+  // formatReviewHash([id])).toBe(`#review/${id}`) (reviewBatch.test.ts:446) is INVALIDATED,
+  // not ported: it pins the OLD '#review/' url ROUTE-00 Decision Log Q7 deliberately breaks.
+  // No path-form 'equivalent' invented — reviewPath's own byte shape is already pinned by
+  // review_theEmittedSegmentCarriesARawComma above.
+  it('HASH-1 (migrated): round-trips a uuid with case preserved verbatim (never lower-cased); an empty string and a foreign path are null', () => {
+    expect(parseReviewPath(reviewPath([UUID_UPPER]))).toEqual([UUID_UPPER])
+    // C1 (prefix check): defensive, unreachable in production — parseLocation gates the
+    // '/imports/' prefix before ever calling parseReviewPath.
+    expect(parseReviewPath('/somewhere-else')).toBeNull()
+    expect(parseReviewPath('')).toBeNull()
+  })
+
+  it('HASH-2 (migrated): a malformed or non-uuid fragment is rejected — never a startsWith+slice that would accept a path-traversal-shaped tail', () => {
+    expect(parseReviewPath('/imports/../../etc/review')).toBeNull()
+    expect(parseReviewPath('/imports//review')).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID}/extra/review`)).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID}?x=1/review`)).toBeNull()
+    // C1 (prefix check): defensive, unreachable in production — same reason as above.
+    expect(parseReviewPath(`/IMPORTS/${UUID}/review`)).toBeNull()
+  })
+})
+
+describe('reviewHash (AC-1, HASH-3) — migrated to reviewNavIds/reviewPath (ROUTE-03-02)', () => {
+  // HASH-3: duplicate of review_theGateIsThreeClauses above (AC-1 traceability, not new
+  // coverage) — the old reviewHash gate is now reviewNavIds.
+  it('HASH-3 (migrated): the run is passed through ONLY on view=create + createStep=review with a non-empty id array, and cleared ([]) on every other combination — including view=invoices (the Finish / ← Invoices exit, where a lingering hash would bounce a reload straight back into review)', () => {
+    expect(reviewNavIds('create', 'review', ['u-1'])).toEqual(['u-1'])
+    expect(reviewNavIds('invoices', 'review', ['u-1'])).toEqual([])
+    expect(reviewNavIds('create', 'form', ['u-1'])).toEqual([])
+    expect(reviewNavIds('create', 'review', [])).toEqual([])
+  })
+
+  // HASH-3b: duplicate of review_theEmittedSegmentCarriesARawComma above (AC-1 traceability,
+  // not new coverage) — the comma-join itself now belongs to reviewPath, not the gate.
+  it('HASH-3b (migrated): a two-id run joins with a comma', () => {
+    expect(reviewPath(['u-1', 'u-2'])).toBe('/imports/u-1,u-2/review')
+  })
+})
+
+describe('parseReviewHash: widened to a run (BULK-01-06, AC-1) — migrated to parseReviewPath/reviewPath (ROUTE-03-02)', () => {
+  // Six distinct canonical uuids, same corpus as REVIEW_UUIDS above.
+  const RUN_IDS = [
+    'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'b2c3d4e5-f6a7-48b9-9abc-def012345678',
+    'c3d4e5f6-a7b8-49ca-abcd-ef0123456789',
+    'd4e5f6a7-b8c9-4adb-bcde-f01234567890',
+    'e5f6a7b8-c9d0-4be1-cdef-012345678901',
+    'f6a7b8c9-d0e1-4cf2-defa-123456789012',
+  ]
+
+  // AC-3: the suite had no DIRECT parseReviewPath(single id) assertion before this — the
+  // existing round trip goes through routeUrl+parseLocation, and the cap-boundary spec only
+  // drives 5-vs-6. Real coverage, not a duplicate.
+  it('BULK-06-1 (migrated — the direct single-id case the suite lacked, AC-3): a one-element run parses to a one-element array', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]}/review`)).toEqual([RUN_IDS[0]])
+  })
+
+  // Duplicate of review_everyIdInARunRoundTripsNotJustTheFirst above (AC-1 traceability only).
+  it('BULK-06-2 (migrated): several ids parse IN ORDER', () => {
+    const [a, b, c] = RUN_IDS
+    expect(parseReviewPath(`/imports/${a},${b},${c}/review`)).toEqual([a, b, c])
+  })
+
+  // Duplicate of review_oneBadSegmentPoisonsTheWholeList above (AC-1 traceability only).
+  it('BULK-06-3 (migrated): one bad segment poisons the WHOLE path, never a partial array', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]},notauuid/review`)).toBeNull()
+  })
+
+  // Duplicate of review_traversalAndSuffixesAreRejected above (AC-1 traceability only).
+  it('BULK-06-4 (migrated): traversal and suffixes stay refused', () => {
+    expect(parseReviewPath('/imports/../../etc/review')).toBeNull()
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]}/extra/review`)).toBeNull()
+    expect(parseReviewPath('/imports//review')).toBeNull()
+  })
+
+  // Duplicate of review_theCapIsARejectionNotATruncation above (AC-1 traceability only).
+  it('BULK-06-5 (migrated): the run is bounded at REVIEW_PATH_MAX_IDS — six ids is null, never a truncated five', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS.join(',')}/review`)).toBeNull()
+  })
+
+  // formatReviewHash([a])).toBe(`#review/${a}`) (reviewBatch.test.ts:2527) is INVALIDATED,
+  // not ported: OLD '#review/' url byte-shape, broken by ROUTE-00 Decision Log Q7.
+  it('BULK-06-6 (migrated): parseReviewPath(reviewPath([a,b])) round-trips two ids', () => {
+    const [a, b] = RUN_IDS
+    expect(parseReviewPath(reviewPath([a, b]))).toEqual([a, b])
   })
 })

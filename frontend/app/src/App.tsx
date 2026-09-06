@@ -573,14 +573,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // render would otherwise re-run this effect on every render forever.
   }, [view, createStep, reviewBatchIds.join(',')])
 
-  // Consume-once. AuditView seeds its filter state during the RENDER of the commit that
-  // mounts it; this effect runs in that same commit's effect phase, strictly after.
-  // Clearing here keeps the atom single-owner and leaves AuditView with no mount effect for
-  // StrictMode to double-invoke. auditView_aSeededFilterSurvivesARefetchAndTheClear.
-  useEffect(() => {
-    if (view === 'audit' && auditPrefilter != null) setAuditPrefilter(null)
-  }, [view, auditPrefilter])
-
   // One writer for a navigation: the view, the destination's owned params and the URL all
   // come from the same `params` object, so state and the address bar cannot diverge.
   // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=

@@ -425,11 +425,11 @@ export type PlatformCtx = {
   // stale when the other is written. Non-null makes InvoiceDetail render its honest
   // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
-  // Set by openAuditForInvoice and consumed by the NEXT AuditView mount, which reads it in a
-  // lazy useState initializer. Workspace clears it; AuditView never does.
+  // This atom and the `invoice` param of the current /audit URL are the same fact: every
+  // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null
-  // The extraction job the review screen renders. Unlike auditPrefilter this is NOT
-  // consume-once -- the screen reads it on every render for as long as it is open.
+  // The extraction job the review screen renders. Like auditPrefilter it has screen lifetime
+  // -- the screen reads it on every render for as long as it is open.
   extractionJobId: string | null
 
   nav: (id: View, params?: RouteParams) => void

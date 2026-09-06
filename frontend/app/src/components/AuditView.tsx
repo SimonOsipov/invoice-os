@@ -76,8 +76,11 @@ function seedFilterState(pre: AuditPrefilter | null): AuditFilterState {
 
 export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
+  // One read of the atom, hoisted above the seed so the initializer and the sync effect below
+  // share one fact instead of reading two.
+  const prefilter = ctx.auditPrefilter
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [filterState, setFilterState] = useState<AuditFilterState>(() => seedFilterState(ctx.auditPrefilter))
+  const [filterState, setFilterState] = useState<AuditFilterState>(() => seedFilterState(prefilter))
   const [page, setPage] = useState<AuditPageState>(AUDIT_PAGE_INITIAL)
   // Written only from the unfiltered probe below, never from the main (filtered) request,
   // so this can never be mistaken for a windowed total.
@@ -150,15 +153,31 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
     setLifetimeTotal(probe.data.total)
   }, [probe.data])
 
+  // The atom is the /audit URL's ?invoice=, so an atom that MOVES under the screen (popstate)
+  // has to move the screen with it. An absent atom is "no news", never "clear the filter":
+  // every hand-built ctx omits the key, so null beside an armed filter is the normal state.
+  useEffect(() => {
+    const id = prefilter?.invoiceId ?? null
+    if (id == null || id === filterState.invoiceId) return
+    setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
+    setPage(auditPageResize(page.limit))
+    setExpandedId(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefilter?.invoiceId])
+
   // Every filter change restarts pagination: a cursor addresses a row boundary inside one
   // filtered stream and means nothing in another.
   const applyInvoiceFilter = (id: string, number: string | null) => {
+    if (id !== filterState.invoiceId) ctx.setAuditInvoiceFilter(id, number)
     setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: number }))
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
   }
 
   const handleFilterChange = (next: AuditFilterState) => {
+    // Only the invoice member is on the URL; writing it on every date or actor tweak would
+    // replaceState 16 times over.
+    if (next.invoiceId !== filterState.invoiceId) ctx.setAuditInvoiceFilter(next.invoiceId, next.invoiceNumber)
     setFilterState(next)
     setPage(auditPageResize(page.limit))
     setExpandedId(null)

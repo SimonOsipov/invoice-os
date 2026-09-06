@@ -282,7 +282,9 @@ Six edits, no new test:
    against what is committed, so a layout missing from them is a red test.
 6. An `expectByLayout` row in `internal/extraction/endtoend/score_test.go`, carrying one key per
    `writtenFields` entry — an empty list where the layout prints nothing, plus its reason in
-   `eeAbsentCells`. Move `eeLayoutCount`, `eeWrittenCells` and `eeCorpusHits` with it.
+   `eeAbsentCells`. Move `eeLayoutCount`, `eeWrittenCells` and `eeCorpusHits` with it, and
+   `eeCutReach` in `mutilation_db_test.go` — the mutilation cut's reach is taken over the same
+   48 cells, so a seventh layout moves it too.
    `TestEndToEnd_TheScoredSetIsTheRequiredSet` makes edit 5 without this one a red test, so a
    layout cannot be registered on disk and go unscored end to end.
 

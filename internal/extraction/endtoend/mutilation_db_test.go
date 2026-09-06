@@ -17,6 +17,10 @@ package endtoend
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -34,7 +38,10 @@ const (
 	eeCutRemoved   = 3                             // every invoice_number rule
 	eeCutRules     = eeShippedRules - eeCutRemoved // 29
 	eeCutField     = "invoice_number"
-	eeCutScore     = 0 // over eeCorpusCells: documentCreateInput rejects an empty number, so every layout quarantines
+	// Over eeCorpusCells. An empty invoice number is refused twice -- documentCreateInput
+	// (importer/document.go) and Store.Create (invoice/store.go:159) -- so this suite scores the
+	// outcome, no invoices row, and cannot say which guard answered.
+	eeCutScore = 0
 
 	// eeCutReach is how many of the same 48 cells a value is still REACHABLE for under the
 	// cut -- Resolve's candidate list, no database. The gap between it and eeCutScore is what
@@ -68,6 +75,21 @@ const (
 
 // --- the variants ------------------------------------------------------------------------
 
+// eeRulesWithout is the pure half of the cut: a fresh struct-copy slice minus every rule naming
+// field, plus the keys it dropped. Never a reslice of rules -- an aliased backing array turns a
+// filter into an in-place edit of the shipped set.
+func eeRulesWithout(rules []extraction.Tier1Rule, field string) (kept []extraction.Tier1Rule, removed []string) {
+	kept = make([]extraction.Tier1Rule, 0, len(rules))
+	for _, r := range rules {
+		if r.Field == field {
+			removed = append(removed, r.Key)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, removed
+}
+
 // eeCutRuleSet is the shipped set minus every eeCutField rule: a filtered struct copy, never a
 // mutation. It asserts all three pinned integers BEFORE returning, so an ambiguous needle
 // cannot patch a different site and still report a cut.
@@ -78,13 +100,7 @@ func eeCutRuleSet(t *testing.T) []extraction.Tier1Rule {
 		t.Fatalf("extraction.Tier1Rules holds %d rule(s), pinned at %d -- the cut below would be taken out of a set nobody measured", len(shipped), eeShippedRules)
 	}
 
-	cut := make([]extraction.Tier1Rule, 0, len(shipped))
-	for _, r := range shipped {
-		if r.Field == eeCutField {
-			continue
-		}
-		cut = append(cut, r)
-	}
+	cut, _ := eeRulesWithout(shipped, eeCutField)
 
 	if removed := len(shipped) - len(cut); removed != eeCutRemoved {
 		t.Fatalf("the cut removed %d rule(s) for %q, pinned at %d -- the lexicon changed and this cut is now mutilating something other than what it names", removed, eeCutField, eeCutRemoved)
@@ -186,15 +202,18 @@ func eeFingerprintOf(t *testing.T, ctx context.Context, layout string) string {
 // in package extraction's test build, so it is unreachable from here; the READ side still goes
 // through the production AnchorRulesFor. tenants.id cascades, so eeSeed's teardown reaches
 // this row.
-func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint string) string {
+func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint, body string) string {
 	t.Helper()
+	if body == "" {
+		t.Fatal("eeSeedDecoy was handed an empty rule body; a run against it measures the baseline")
+	}
 	var id string
 	if err := eeRequire(t).super.QueryRow(ctx,
 		`INSERT INTO extraction_anchor_rules
 		     (tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
-		tenantID, fingerprint, eeDecoyField, eeDecoyRule, extraction.RuleSchemaVersion).Scan(&id); err != nil {
+		tenantID, fingerprint, eeDecoyField, body, extraction.RuleSchemaVersion).Scan(&id); err != nil {
 		t.Fatalf("seed the rank-1 decoy for fingerprint %s: %v", fingerprint, err)
 	}
 	if id == "" {
@@ -217,13 +236,18 @@ type eeDecoyRun struct {
 // eeRunDecoyLayout drives ONE layout end to end. It exists because eeRunLayout gives no hook
 // between eeSeed and eeExtract, which is exactly where the rule must be written. Its own
 // subtest, like eeRunLayout, so eeExtract's Stop cleanup fires before the next run enqueues.
-func eeRunDecoyLayout(t *testing.T, ctx context.Context, seed bool) eeDecoyRun {
+// body is the learned rule to seed; "" is a baseline run with none.
+func eeRunDecoyLayout(t *testing.T, ctx context.Context, body string) eeDecoyRun {
 	t.Helper()
 	eeRequireFixtures(t, []string{eeDecoyLayout})
 
 	name := "baseline"
-	if seed {
+	switch body {
+	case "":
+	case eeDecoyRule:
 		name = "decoy"
+	default:
+		name = "inert-decoy"
 	}
 	var out eeDecoyRun
 	ok := t.Run(name, func(t *testing.T) {
@@ -231,8 +255,8 @@ func eeRunDecoyLayout(t *testing.T, ctx context.Context, seed bool) eeDecoyRun {
 		w := eeSeed(t, ctx, eeDecoyLayout)
 		out.wantFP = eeFingerprintOf(t, ctx, eeDecoyLayout)
 
-		if seed {
-			out.decoyID = eeSeedDecoy(t, ctx, w.tenantID, out.wantFP)
+		if body != "" {
+			out.decoyID = eeSeedDecoy(t, ctx, w.tenantID, out.wantFP, body)
 		}
 
 		// The production reader, not the insert, is what says the rule is servable.
@@ -404,7 +428,7 @@ func TestRLS_EndToEndARankOneDecoyMovesTheScore(t *testing.T) {
 	ctx := t.Context()
 	expect := eeDecoyExpect(t)
 
-	run := eeRunDecoyLayout(t, ctx, true)
+	run := eeRunDecoyLayout(t, ctx, eeDecoyRule)
 
 	// 1. The decoy exists as a row.
 	if run.decoyID == "" {
@@ -441,7 +465,7 @@ func TestRLS_EndToEndARankOneDecoyMovesTheScore(t *testing.T) {
 		t.Errorf("the invoices row holds %s = %q, want the decoy's %q", eeDecoyField, got, eeDecoyRank0)
 	}
 
-	base := eeRunDecoyLayout(t, ctx, false)
+	base := eeRunDecoyLayout(t, ctx, "")
 	if base.decoyID != "" || base.served != 0 {
 		t.Fatalf("the baseline run was served %d learned rule(s); it is not a baseline", base.served)
 	}
@@ -494,7 +518,7 @@ func TestRLS_EndToEndTheScoreIsNotARecallMeasure(t *testing.T) {
 
 	// The same-run baseline control FIRST: two reads that are secretly the same function, and
 	// a scorer that always adds one, both fail here before the decoy is ever seeded.
-	base := eeRunDecoyLayout(t, ctx, false)
+	base := eeRunDecoyLayout(t, ctx, "")
 	if base.invoice == nil {
 		t.Fatal("the baseline run quarantined; both reads below would be over nothing")
 	}
@@ -510,7 +534,7 @@ func TestRLS_EndToEndTheScoreIsNotARecallMeasure(t *testing.T) {
 		t.Errorf("%s scores %d / %d under both reads with no decoy, pinned at %d -- re-measure and update eeDecoyBaseHits", eeDecoyLayout, baseInvoice, len(writtenFields), eeDecoyBaseHits)
 	}
 
-	run := eeRunDecoyLayout(t, ctx, true)
+	run := eeRunDecoyLayout(t, ctx, eeDecoyRule)
 	if run.decoyID == "" || run.served != 1 {
 		t.Fatalf("the decoy run was served %d learned rule(s) (id %q), want 1; a run with no decoy cannot show the difference", run.served, run.decoyID)
 	}
@@ -530,6 +554,14 @@ func TestRLS_EndToEndTheScoreIsNotARecallMeasure(t *testing.T) {
 	}
 	if len(anyRankSaw) == 0 {
 		t.Fatal("the any-rank read saw no field at all")
+	}
+	// The loss is located on the invoice side alone: reach is unchanged by the decoy, so the
+	// difference below cannot come from BOTH reads falling and one falling further.
+	if anyRankHits != baseAnyRank {
+		t.Errorf("the any-rank read scores %d with the decoy and %d without; the decoy is supposed to move a RANK, not a value's presence", anyRankHits, baseAnyRank)
+	}
+	if invoiceHits != baseInvoice-1 {
+		t.Errorf("the invoice read scores %d with the decoy and %d without, want exactly one less", invoiceHits, baseInvoice)
 	}
 
 	// The difference is LOCATED, not counted: the real total is present at some rank and the
@@ -634,5 +666,163 @@ func TestEndToEnd_TheVariantsNeverMutateTheShippedRules(t *testing.T) {
 	}
 	if !slices.Equal(extraction.Tier1Rules, snapshot) {
 		t.Errorf("eeWithRuleSet did not restore extraction.Tier1Rules; the mutilation leaks into every later test")
+	}
+}
+
+// --- the adversarial half -------------------------------------------------------------------
+
+// eeInertDecoyRule is served by AnchorRulesFor and matches no token on the layout, so it writes
+// nothing. The control for "a decoy that wrote nothing must not pass as a moved number".
+const eeInertDecoyRule = `{"label":"^\\s*NO SUCH TOKEN\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
+
+// A filter that names a field no rule carries is a no-op, not a mutilation. eeCutRuleSet's
+// pinned integer is what rejects it; this spec is the positive control that the integer is
+// measuring a real removal and not an arithmetic identity.
+func TestEndToEnd_AFilterThatRemovesNothingIsNotAMutilation(t *testing.T) {
+	shipped := slices.Clone(extraction.Tier1Rules)
+	if len(shipped) != eeShippedRules {
+		t.Fatalf("extraction.Tier1Rules holds %d rule(s), pinned at %d", len(shipped), eeShippedRules)
+	}
+
+	inert, removed := eeRulesWithout(shipped, "no_such_field")
+	if len(removed) != 0 {
+		t.Errorf("filtering a field no rule carries dropped %v, want nothing", removed)
+	}
+	if !slices.Equal(inert, shipped) {
+		t.Errorf("the no-op filter did not return the shipped set")
+	}
+	// The integer is what makes that state loud: a cut equal to the shipped set fails the pin.
+	if len(shipped)-len(inert) == eeCutRemoved {
+		t.Errorf("a no-op filter removes as many rules as the cut is pinned at (%d); the pin cannot tell them apart", eeCutRemoved)
+	}
+
+	// And the real cut removes exactly the keys it names, not merely the right count.
+	cut, cutKeys := eeRulesWithout(shipped, eeCutField)
+	if len(cutKeys) != eeCutRemoved {
+		t.Fatalf("the cut dropped %v, want %d key(s)", cutKeys, eeCutRemoved)
+	}
+	for _, key := range cutKeys {
+		if !strings.HasPrefix(key, "t1."+eeCutField+".") {
+			t.Errorf("the cut dropped %s, which does not belong to %q", key, eeCutField)
+		}
+	}
+	if slices.Equal(cut, shipped) || !slices.Equal(extraction.Tier1Rules, shipped) {
+		t.Errorf("eeRulesWithout aliased or failed to filter the shipped set")
+	}
+}
+
+// The restore is not luck of test ordering: a t.Fatal inside the closure is a runtime.Goexit,
+// and a panic unwinds, and neither may leave a mutilated set installed for the next test.
+func TestEndToEnd_TheRuleSetSwapSurvivesAGoexitAndAPanic(t *testing.T) {
+	snapshot := slices.Clone(extraction.Tier1Rules)
+	cut := eeCutRuleSet(t)
+
+	// The panic arm, on this goroutine.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic arm never panicked; the restore below is asserted against nothing")
+			}
+		}()
+		eeWithRuleSet(t, cut, func() { panic("the closure died mid-run") })
+	}()
+	if !slices.Equal(extraction.Tier1Rules, snapshot) {
+		// Errorf, not Fatalf: the Goexit arm below is a separate claim and must still run.
+		t.Errorf("a panic inside the closure leaked the mutilated set into every later test")
+		extraction.Tier1Rules = slices.Clone(snapshot)
+	}
+
+	// The Goexit arm -- what t.Fatal does -- on its own goroutine, so this test survives it.
+	var installed bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		eeWithRuleSet(t, cut, func() {
+			installed = slices.Equal(extraction.Tier1Rules, cut)
+			runtime.Goexit()
+		})
+		t.Error("the Goexit arm returned normally; it never exercised the Fatal path")
+	}()
+	<-done
+	if !installed {
+		t.Fatal("the Goexit arm never saw the variant installed; the restore below is asserted against nothing")
+	}
+	if !slices.Equal(extraction.Tier1Rules, snapshot) {
+		t.Errorf("a Fatal inside the closure leaked the mutilated set into every later test")
+	}
+}
+
+// AC-4's negative half, as a run rather than an assertion: a decoy that is served and writes
+// nothing must read exactly like the baseline under both reads.
+func TestRLS_EndToEndADecoyThatWritesNothingIsNotAMovedNumber(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	expect := eeDecoyExpect(t)
+
+	run := eeRunDecoyLayout(t, ctx, eeInertDecoyRule)
+	if run.decoyID == "" {
+		t.Fatal("the inert decoy wrote no anchor rule; this run is a baseline by accident")
+	}
+	if run.served != 1 || !slices.Equal(run.servedFields, []string{eeDecoyField}) {
+		t.Fatalf("AnchorRulesFor served %d rule(s) %v, want exactly 1 for %q -- an unserved rule proves nothing about a rule that matched nothing", run.served, run.servedFields, eeDecoyField)
+	}
+	if run.fingerprint != run.wantFP {
+		t.Fatalf("the job stored layout_fingerprint %q, the seed used %q", run.fingerprint, run.wantFP)
+	}
+	if run.invoice == nil {
+		t.Fatal("the inert-decoy run quarantined; the reads below would be over nothing")
+	}
+
+	totals := eeDecoyFieldRows(run, eeDecoyField)
+	if len(totals) != 1 {
+		t.Errorf("the inert decoy left %d %q row(s), want 1 -- it matched a token it was written not to match", len(totals), eeDecoyField)
+	}
+	if got := run.invoice[eeDecoyField]; got != eeDecoyRank1 {
+		t.Errorf("the invoices row holds %s = %q, want the layout's real total %q", eeDecoyField, got, eeDecoyRank1)
+	}
+
+	invoiceHits, _ := eeInvoiceReadHits(run, expect)
+	anyRankHits, anyRankSaw := eeAnyRankHits(run, expect)
+	if len(anyRankSaw) == 0 {
+		t.Fatal("the inert-decoy run wrote no field-result row the any-rank read can see")
+	}
+	if invoiceHits != eeDecoyBaseHits || anyRankHits != eeDecoyBaseHits {
+		t.Errorf("the inert decoy scores %d by invoice and %d at any rank, want %d each -- a decoy that wrote nothing moved the number", invoiceHits, anyRankHits, eeDecoyBaseHits)
+	}
+}
+
+// The rule-set swap is process-global, so a parallel test in this package would race it. Both
+// needles are assembled from fragments so this file does not match its own scan.
+func TestEndToEndPackage_NoTestAsksToRunInParallel(t *testing.T) {
+	names, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob *_test.go: %v", err)
+	}
+	if len(names) < eeMinTestFiles {
+		t.Fatalf("read %d test file(s), want at least %d -- this scan asserts an ABSENCE and zero files read reports clean", len(names), eeMinTestFiles)
+	}
+
+	parallelCall := regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\.Par` + `allel\(`)
+	controlRE := regexp.MustCompile(`func eeWithRul` + `eSet\(`)
+
+	var control int
+	sites := map[string]int{}
+	for _, name := range names {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		src := string(raw)
+		control += len(controlRE.FindAllString(src, -1))
+		if n := len(parallelCall.FindAllString(src, -1)); n > 0 {
+			sites[name] = n
+		}
+	}
+	// Control needle: a scan that stopped matching anything reads clean too.
+	if control != 1 {
+		t.Fatalf("the scan found eeWithRuleSet declared %d time(s), want 1 -- it is not reading this package", control)
+	}
+	for name, n := range sites {
+		t.Errorf("%s makes %d parallel call(s); this package swaps the process-global extraction.Tier1Rules, so a parallel test reads whichever set won the race", name, n)
 	}
 }

@@ -205,6 +205,11 @@ type eeScore struct {
 	quarantined []string
 	byLayout    []eeScoreRow // one per expectByLayout row, table order
 	byField     []eeScoreRow // one per writtenFields entry, INCLUDING any at zero
+
+	// The line-item outcome, one row per layout each. Both ride eeScoreRow's two integers, so
+	// the renderer never divides: linesPriced at 0/0 is a slash between two counts, not NaN.
+	linesReached []eeScoreRow // hits = lines that reached the invoice, total = lines the document carries
+	linesPriced  []eeScoreRow // hits = lines carrying a unit price, total = lines that reached
 }
 
 // eeCountCells counts the denominator straight off the table, resolving nothing. A row missing

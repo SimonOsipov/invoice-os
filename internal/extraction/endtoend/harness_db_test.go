@@ -266,12 +266,16 @@ func eeAudit(ctx context.Context, tx pgx.Tx, ev extraction.ExtractionAudit) erro
 	return err
 }
 
+// eeOpt adjusts the worker one run uses. Additive: with no opts the worker is unchanged, so
+// every existing call site keeps the production wiring.
+type eeOpt func(*extraction.ExtractWorker)
+
 // eeWorker wires the production seams, not stubs: the real PDFium reader on both the render
 // and the text branch, and the tenant's own learned anchor rules.
-func eeWorker(t *testing.T, body []byte) *extraction.ExtractWorker {
+func eeWorker(t *testing.T, body []byte, opts ...eeOpt) *extraction.ExtractWorker {
 	t.Helper()
 	h := eeRequire(t)
-	return &extraction.ExtractWorker{
+	ew := &extraction.ExtractWorker{
 		Pool: h.app,
 		// Never reached on the Text branch: Work calls Name()/Version() only.
 		Extractor: extraction.NewPDFiumExtractor(),
@@ -286,6 +290,10 @@ func eeWorker(t *testing.T, body []byte) *extraction.ExtractWorker {
 		Text:  extraction.NewPDFiumReader(),
 		Rules: (&extraction.Store{Pool: h.app}).AnchorRulesFor,
 	}
+	for _, opt := range opts {
+		opt(ew)
+	}
+	return ew
 }
 
 // eeExtract drives stage 1: document bytes -> extraction_field_results. It returns the
@@ -293,12 +301,12 @@ func eeWorker(t *testing.T, body []byte) *extraction.ExtractWorker {
 //
 // The job goes through a real River client because ExtractWorker.Work cannot be called from
 // out here -- extractArgs is unexported -- and because that adds the fetch/execute hop.
-func eeExtract(t *testing.T, ctx context.Context, w eeWorld, layout string) string {
+func eeExtract(t *testing.T, ctx context.Context, w eeWorld, layout string, opts ...eeOpt) string {
 	t.Helper()
 	h := eeRequire(t)
 
 	bundle := river.NewWorkers()
-	extraction.AddTo(bundle, eeWorker(t, eeFixtureBytes(t, layout)))
+	extraction.AddTo(bundle, eeWorker(t, eeFixtureBytes(t, layout), opts...))
 	c, err := queue.New(h.app, queue.Config{
 		Queues:  map[string]river.QueueConfig{extraction.QueueName: {MaxWorkers: 1}},
 		Workers: bundle,

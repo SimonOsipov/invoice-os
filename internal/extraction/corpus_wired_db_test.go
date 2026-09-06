@@ -408,10 +408,11 @@ func TestRLS_WiredPathReadsTheSameThroughBothReaders(t *testing.T) {
 // count cannot tell "the same one gap" from "a new gap plus a new hit". Mirrors
 // TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps.
 //
-// The gap is corpus_two_column.pdf / buyer_tin, a Tier-1 REACH limit. FingerprintVersion is not
-// what gates it: that bump invalidates stored learned rules. The lexicon widening that WOULD
-// close it needs one (anchorLexicon is a Fingerprint input, fingerprint.go:55-62), which is a
-// claim about one candidate remedy and not about the gap.
+// The gap is corpus_two_column.pdf / buyer_tin, a Tier-1 REACH limit. A version bump is not what
+// gates it: a bump invalidates stored learned rules. The lexicon widening that WOULD close it
+// needs a FingerprintVersion AND a BoxlessFingerprintVersion bump since EXTR-19 --
+// anchorLabelMatchers feeds both producers (fingerprint.go:111, :211) -- which is a claim about
+// one candidate remedy and not about the gap.
 func TestRLS_WiredPathMissesExactlyTheRecordedGaps(t *testing.T) {
 	ctx := t.Context()
 

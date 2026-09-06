@@ -446,8 +446,11 @@ var cldSubsections = []struct {
 	{
 		// D-2's cost, and the vocabulary every subsection below borrows. Nothing else in the
 		// doc says what a b1: key is composed of.
-		heading: "The two layout identities",
+		heading: cldIdentitiesHeading,
 		needles: []string{
+			// "fingerprintversion" is a substring of "boxlessfingerprintversion" and so can
+			// never red on its own; arm 3 of TestCorpusDoc_NamesOneInvalidationRuleNotTwo
+			// masks the boxless spelling and is the guard that actually pins it.
 			"v1:", "b1:", "boxlessfingerprintversion", "fingerprintversion",
 			"<label>:<placement>", "band", "only its own",
 		},
@@ -577,16 +580,29 @@ const (
 	cldStalePreamble = "a single pointed correction"
 	// cldControlNeedle proves the scan read docs/extraction-corpus.md and not some other file.
 	cldControlNeedle = "## Learned rules"
+	// cldIdentitiesHeading is the subsection that owes the geometric lever by name.
+	cldIdentitiesHeading = "The two layout identities"
 )
 
-// cldParagraphs splits doc on blank lines. A markdown table has no blank line inside it, so a
-// table row's prose is scanned with the table it belongs to -- which is where :35 lives.
+// cldParagraphs splits doc on blank lines, then splits a markdown table into its own rows. A
+// table carries no blank line, so a whole-block unit lets one compliant row cover every other
+// row in the same table -- measured: adding a bare FingerprintVersion sentence to a sibling row
+// left this scan green. :35 lives in such a table, so the row is the unit that matters.
 func cldParagraphs(doc string) []string {
 	var out []string
 	for _, p := range strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n\n") {
-		if strings.TrimSpace(p) != "" {
-			out = append(out, p)
+		if strings.TrimSpace(p) == "" {
+			continue
 		}
+		if strings.HasPrefix(strings.TrimSpace(p), "|") {
+			for _, row := range strings.Split(p, "\n") {
+				if strings.TrimSpace(row) != "" {
+					out = append(out, row)
+				}
+			}
+			continue
+		}
+		out = append(out, p)
 	}
 	return out
 }
@@ -648,10 +664,21 @@ func TestCorpusDoc_NamesOneInvalidationRuleNotTwo(t *testing.T) {
 		t.Errorf("%s's %q preamble still says %q; since EXTR-19-08 a typed correction on a b1: layout also derives a rule:\n\n%s",
 			acDoc, cldSection, cldStalePreamble, preamble)
 	}
+	// Word-bounded, not Contains: "untyped" carries "typed" as a substring, so a plain
+	// Contains reports the method named by prose that denies it.
 	for _, method := range []string{"pointed", "typed"} {
-		if !strings.Contains(lower, method) {
+		if !regexp.MustCompile(`\b` + method + `\b`).MatchString(lower) {
 			t.Errorf("%s's %q preamble never names the %q method — the preamble is the first prose a reader meets and it owes both learning paths:\n\n%s",
 				acDoc, cldSection, method, preamble)
 		}
+	}
+
+	// Arm 3 -- the geometric lever, named in the subsection that owes it. The
+	// "fingerprintversion" needle in cldSubsections cannot assert this: it is a substring of
+	// "boxlessfingerprintversion", so the sibling needle satisfies it and it can never red.
+	identities := cldSubsection(t, acDocSectionText(t, doc, cldSection), cldIdentitiesHeading)
+	if !strings.Contains(strings.ToLower(strings.ReplaceAll(identities, cldBoxlessLever, cldLeverMask)), strings.ToLower(cldGeoLever)) {
+		t.Errorf("%s's %q subsection names %s only inside %s — the operator who bumps the geometric lever is the reader this subsection exists for:\n\n%s",
+			acDoc, cldIdentitiesHeading, cldGeoLever, cldBoxlessLever, identities)
 	}
 }

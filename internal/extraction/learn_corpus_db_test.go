@@ -278,7 +278,7 @@ func TestRLS_APointedCorrectionOnTheTwoPartyLayoutWritesOneRule(t *testing.T) {
 		t.Fatalf("control: the typed correction answered %d (body=%q), want 201", w.Code, w.Body.String())
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
-		t.Errorf("control: %d anchor rule(s) after a typed correction, want the same 1 -- only a POINTED correction teaches", n)
+		t.Errorf("control: %d anchor rule(s) after a typed correction, want the same 1 -- on a v1: layout only a POINTED correction teaches", n)
 	}
 }
 

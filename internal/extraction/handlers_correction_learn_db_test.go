@@ -1,4 +1,5 @@
-// handlers_correction_learn_db_test.go: what a POINTED correction teaches. Shares
+// handlers_correction_learn_db_test.go: what a correction teaches -- pointed on a v1: layout,
+// typed on a b1: one (EXTR-19-08, the block at "what a TYPED correction teaches"). Shares
 // handlers_correction_db_test.go's cx* harness and store_db_test.go's pools, so this file adds
 // no second skip site.
 //

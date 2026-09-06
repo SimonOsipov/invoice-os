@@ -2850,6 +2850,33 @@ async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
   return (await res.json()) as ExtractionDetail
 }
 
+// ROUTE-02-07 (X-4): the extraction cold boot. No API creates a job (nothing seeds
+// extraction_jobs), so the only route to a real jobId is driving the real pipeline, then a
+// FRESH page.goto -- a real browser navigation, not an SPA route push -- that discards all
+// in-memory React state and forces the boot-seed path to be the only thing that can
+// reopen the review screen.
+//
+// ~4-5 minutes: extractOneDocument's own 240s upload-to-invoice-detail wait, plus
+// openExtractionReview's 120s review-read wait, plus this second document load. No
+// cheaper fixture path exists.
+test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'ROUTE-02 cold boot')
+  const detail = await openExtractionReview(page)
+
+  const url = `${APP_URL}/extraction/${detail.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('extraction-review'), 'the cold boot must reopen the review screen').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 /** The first field the extractor pointed somewhere. The specs read its region off the wire. */
 function firstLocatedField(detail: ExtractionDetail) {
   const field = detail.fields.find((f) => f.region !== null)

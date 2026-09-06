@@ -969,6 +969,68 @@ test('detail surface: violations render against the rule-set version, the fix lo
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
+// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
+// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
+// try_files served the document; what actually renders is the real assertion.
+test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-02 cold boot ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
+    invoiceNumber,
+  )
+
+  await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-02-07 (X-3): the security-relevant assertion -- a cross-tenant invoice id and a
+// random UUID must render IDENTICAL text. Fixture created under PERSONAS.B (a different
+// tenant than the firm persona that views it) and never opened as firm before this.
+test('deployed app: a cross-tenant invoice id and a random UUID render the same detail text', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const tokenB = await login(PERSONAS.B)
+  const entityB = await createEntity(tokenB, { name: `ROUTE-02 cross-tenant ${Date.now()}`, tin: freshTin() })
+  const crossTenantInvoice = await createInvoice(tokenB, {
+    entity_id: entityB.id,
+    ...cleanInvoiceFields(`INV-ROUTE02-XT-${Date.now()}`),
+  })
+  const randomId = crypto.randomUUID()
+
+  // toContainText is only the settle signal -- innerText() is a one-shot read, not
+  // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
+  // string, so a future error-message change does not need this test rewritten.
+  async function renderedTextFor(id: string): Promise<string> {
+    await page.goto(`${APP_URL}/invoices/${id}?persona=${FIRM_PERSONA.param}`)
+    await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')
+    return page.getByTestId('invoice-detail').innerText()
+  }
+
+  const crossTenantText = await renderedTextFor(crossTenantInvoice.id)
+  const randomText = await renderedTextFor(randomId)
+  expect(crossTenantText, 'a cross-tenant id must render identically to an id that never existed').toBe(randomText)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // MixedImportResponse: the subset of POST /v1/imports's success body this test reads to
 // get a real invoice_id, mirroring import-wizard.spec.ts's own local (non-exported) type
 // of the same name byte-for-byte. NOT imported from that file -- both are *.spec.ts,

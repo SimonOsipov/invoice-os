@@ -9,8 +9,8 @@ import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
-import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseLocation, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
+import { reviewQuery } from './lib/reviewBatch'
+import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -330,7 +330,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     const restored = readDestination()
     return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
   })
-  const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // One parse of the boot URL; the seeds below all read it, so path and query stay one
   // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
   // arrives back at the bare root with the path in storage, and reading the live pathname
@@ -339,7 +338,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
-  const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : seed.view)
+  const bootView: View = initialView ?? seed.view
+  // Gated on the winning view, like invoiceId/jobId: seed.reviewBatchIds only applies
+  // when bootView actually settles on create.
+  const bootBatchIds = bootView === 'create' ? seed.reviewBatchIds : []
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
@@ -552,6 +554,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       settingsTab,
       q: invoiceQuery,
       auditInvoice: auditPrefilter?.invoiceId ?? null,
+      reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
     })
     window.history.replaceState(null, '', url + window.location.hash)
     clearDestination()
@@ -600,11 +603,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // At boot this rewrites the identical URL (the three initializers above already agree
   // with the hash it parses), so the first pass is a no-op rather than a navigation.
   useEffect(() => {
-    // BULK-01-06 widens the hash to carry every id in the run.
-    const h = reviewHash(view, createStep, reviewBatchIds)
-    window.history.replaceState(null, '', window.location.pathname + window.location.search + (h ?? ''))
-    // `reviewBatchIds.join(',')`, never the array reference itself: a fresh array every
-    // render would otherwise re-run this effect on every render forever.
+    // Owns the `create` path only. navigate() pushes before this runs and owns every
+    // other view, so the early return is what stops two writers fighting one URL.
+    if (view !== 'create') return
+    const ids = reviewNavIds(view, createStep, reviewBatchIds)
+    window.history.replaceState(null, '', routeUrl('create', { reviewBatchIds: ids }))
+    // `reviewBatchIds.join(',')`, never the array reference: a fresh array every render
+    // would re-run this effect forever.
   }, [view, createStep, reviewBatchIds.join(',')])
 
   // One writer for a navigation: the view, the destination's owned params and the URL all

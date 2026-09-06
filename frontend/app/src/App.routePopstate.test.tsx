@@ -171,11 +171,11 @@ describe('AC-3: the handler performs no history write', () => {
     })
 
     // AC-3's actual claim is "no duplicate history entry per Back press", not "zero
-    // history-API calls" -- the pre-existing review-hash mirror (App.tsx:540-546) also
-    // fires on this view change and calls replaceState, but only to rewrite the URL it
-    // already is (a no-op). Assert the handler pushes nothing, adds no entry, and any
-    // replaceState observed is that no-op rewrite -- a handler that wrote a *different*
-    // URL, or pushed, still fails.
+    // history-API calls" -- the review mirror is scoped to `view === 'create'` (ROUTE-03-03)
+    // and this transition is audit -> invoices, so it fires nothing here; on a transition
+    // that DID touch create it would still only rewrite the URL it already is (a no-op).
+    // Assert the handler pushes nothing, adds no entry, and any replaceState observed is
+    // that no-op rewrite -- a handler that wrote a *different* URL, or pushed, still fails.
     expect(pushSpy, 'the popstate handler must never call pushState').not.toHaveBeenCalled()
     expect(window.history.length, 'a popstate restore must add no history entry').toBe(lengthBefore)
     for (const call of replaceSpy.mock.calls) {
@@ -600,20 +600,21 @@ describe('Adversarial: the listener does not re-register on view change', () => 
   })
 })
 
-describe('Adversarial: the three URL writers on create with a live review hash', () => {
-  // Single continuous review session (the shape ROUTE-01-06 will pin): the mirror
-  // (App.tsx:540-546) and the popstate handler never disagree here, because reviewBatchIds
-  // and createStep are never reset in between -- only the view hops away and back.
+describe('Adversarial: the three URL writers on create with a live review path', () => {
+  // Single continuous review session (the shape ROUTE-03-04 will pin): the mirror and the
+  // popstate handler never disagree here, because reviewBatchIds and createStep are never
+  // reset in between -- only the view hops away and back.
   it('popstate_multiHopBackIntoALiveReviewHashComposesCorrectly', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+    const path = `/imports/${REVIEW_ID}/review`
+    await bootAt(path)
     let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the review hash boots straight into create').toBe('create')
-    expect(ctx.reviewBatchIds, 'sanity: the review hash must seed reviewBatchIds').toEqual([REVIEW_ID])
+    expect(ctx.view, 'sanity: the review path boots straight into create').toBe('create')
+    expect(ctx.reviewBatchIds, 'sanity: the review path must seed reviewBatchIds').toEqual([REVIEW_ID])
 
     await act(async () => {
       capturedCtx!.nav('invoices')
     })
-    expect(window.location.hash, 'nav away must clear the hash (the pre-existing mirror, out of scope here)').toBe('')
+    expect(window.location.pathname, 'nav away must land on invoices').toBe('/invoices')
 
     await act(async () => {
       capturedCtx!.nav('audit')
@@ -623,39 +624,36 @@ describe('Adversarial: the three URL writers on create with a live review hash',
     ctx = requireCtx()
     expect(ctx.view, 'first Back must land on invoices').toBe('invoices')
 
-    await popTo(`/create#review/${REVIEW_ID}`)
+    await popTo(path)
     ctx = requireCtx()
-    // Writer order on this popstate: (1) the browser applies pathname+hash before the
-    // event fires, (2) the popstate handler re-derives all four owned atoms from that URL
-    // (view lands on 'create'; the other three resolve to their bare-URL defaults, since
-    // /create owns none of them), (3) the pre-existing review mirror re-runs because
-    // `view` changed and recomputes the hash
-    // from LIVE createStep/reviewBatchIds -- both still 'review'/[REVIEW_ID] because
-    // nothing in this chain ever reset them, so the mirror's rewrite is idempotent with
-    // what the browser already restored. Final URL: /create#review/<id>, matching both
-    // the entry and the live state.
+    // Writer order on this popstate: (1) the browser applies the restored path before the
+    // event fires, (2) the popstate handler re-derives view from it (view lands on
+    // 'create' -- ROUTE-03-04 is what teaches it to also restore createStep/reviewBatchIds;
+    // until then this only pins that the composition does not corrupt the URL), (3) the
+    // review mirror re-runs because `view` changed and recomputes the path from LIVE
+    // createStep/reviewBatchIds -- both still 'review'/[REVIEW_ID] because nothing in this
+    // chain ever reset them, so the mirror's rewrite is idempotent with what the browser
+    // already restored.
     expect(ctx.view, 'second Back must land back on create').toBe('create')
-    expect(window.location.pathname, 'the pathname must be /create after the composed writers settle').toBe('/create')
-    expect(window.location.hash, 'the mirror must not have clobbered the hash with a different id').toBe(
-      `#review/${REVIEW_ID}`,
+    expect(window.location.pathname, 'the path must be the review path after the composed writers settle').toBe(
+      path,
     )
     expect(ctx.reviewBatchIds, 'reviewBatchIds must be exactly the one id throughout, never dropped or swapped').toEqual([
       REVIEW_ID,
     ])
   })
 
-  // NOT covered here or by ROUTE-01-06's planned specs: if a SECOND, distinct review batch
+  // NOT covered here or by ROUTE-03-04's planned specs: if a SECOND, distinct review batch
   // is opened after the first (Finish -> openCreate -> a new import to review), closeCreate
-  // (App.tsx:632-634) does not reset createStep/reviewBatchIds, so live state moves on to
-  // the second batch while the FIRST batch's history entry still reads
-  // /create#review/<firstId>. A popstate that changes `view` back to 'create' re-triggers
-  // the mirror (App.tsx:540-546), which rewrites that entry's hash from the LIVE (second)
-  // batch id -- overwriting the address bar the browser just restored with the wrong
-  // batch. This is decision [create-step-not-restored] (App.tsx, `.ralph/ROUTE-01-final.md`)
+  // does not reset createStep/reviewBatchIds, so live state moves on to the second batch
+  // while the FIRST batch's history entry still reads /imports/<firstId>/review. A popstate
+  // that changes `view` back to 'create' re-triggers the mirror, which rewrites that
+  // entry's path from the LIVE (second) batch id -- overwriting the address bar the
+  // browser just restored with the wrong batch. This is decision [create-step-not-restored]
   // extended from "shows the wrong step" to "shows and links the wrong batch"; recorded
-  // here for ROUTE-01-06 / ROUTE-03, not reproduced as a spec because forcing a second
-  // real batch id requires driving the full CreateFlow pipeline, out of proportion for a
-  // popstate-listener suite.
+  // here for ROUTE-03, not reproduced as a spec because forcing a second real batch id
+  // requires driving the full CreateFlow pipeline, out of proportion for a popstate-listener
+  // suite. Same symptom, new spelling: it wrote /create#review/<firstId> before this story.
 })
 
 // --- ROUTE-04-05: the handler restores the other three owned atoms, not just view -------

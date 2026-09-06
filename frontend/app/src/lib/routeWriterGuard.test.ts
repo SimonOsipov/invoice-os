@@ -1,12 +1,13 @@
 // `node` environment (vitest.config.ts default) -- a static source scan, no DOM needed.
 //
 // ROUTE-01-05 AC-3, decision [one-writer-rule]. The seam's writers (route.ts, and App.tsx's
-// navigate(), mount alignment, setInvoiceQuery, searchInvoices, setAuditInvoiceFilter and
-// setSettingsTab) must never read location.search -- that is what makes "never echo the
-// query string" structural rather than remembered.
-// App.tsx:571's review-hash mirror is the deliberate, untouched counter-example: it DOES
-// read location.search, and this file uses it as the control needle proving the scan can
-// see a match at all (a typo'd regex reports a clean zero exactly like a real zero).
+// navigate(), mount alignment, setInvoiceQuery, searchInvoices, setAuditInvoiceFilter,
+// setSettingsTab, switchClient and -- since ROUTE-03-03 scopes it to the create view --
+// the review-path mirror) must never read location.search -- that is what makes "never
+// echo the query string" structural rather than remembered.
+// App.tsx's `?persona=` strip is the deliberate, permanent counter-example: it DOES read
+// location.search, and this file uses it as the control needle proving the scan can see a
+// match at all (a typo'd regex reports a clean zero exactly like a real zero).
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -62,13 +63,18 @@ describe('AC-3: the seam writers never read location.search', () => {
     const alignmentCommentIdx = appSrc.indexOf('Aligns a boot URL that named no path')
     expect(alignmentCommentIdx, 'mount-alignment anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const alignmentBody = findBody(appSrc, 'useEffect(() => {', alignmentCommentIdx)
+    const mirrorAnchorIdx = appSrc.indexOf('the WRITE half')
+    expect(mirrorAnchorIdx, 'review mirror anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const mirrorBody = findBody(appSrc, 'useEffect(() => {', mirrorAnchorIdx)
 
     // Floor: a broken anchor search silently returning an empty population would make the
     // loop below vacuously pass with nothing checked. setInvoiceQuery is in the population
     // because it is the one new writer that builds its own replaceState URL, and "clear the
     // query" is naturally written as "take the current URL and strip q=". switchClient is
     // in the population because it is a writer (the leaving-view scrub) that reads
-    // location.hash, never location.search -- ROUTE-02.
+    // location.hash, never location.search -- ROUTE-02. The review mirror joins here too
+    // (ROUTE-03-03): scoped to `view === 'create'` only, it is no longer the deliberate
+    // counter-example -- the `?persona=` strip below takes over that role.
     const writerBodies = [
       { name: 'lib/route.ts (whole file)', body: routeSrc },
       { name: "App.tsx's navigate()", body: navigateBody },
@@ -80,22 +86,33 @@ describe('AC-3: the seam writers never read location.search', () => {
       // literal first, and findBody would extract a slice of that object instead.
       { name: "App.tsx's setSettingsTab()", body: findBody(appSrc, 'function setSettingsTab(t: SettingsTab)') },
       { name: "App.tsx's switchClient()", body: findBody(appSrc, 'function switchClient(id: string)') },
+      { name: "App.tsx's review-path mirror", body: mirrorBody },
     ]
-    expect(writerBodies.length, 'the writer population must not be empty').toBe(8)
+    expect(writerBodies.length, 'the writer population must not be empty').toBe(9)
     for (const { name, body } of writerBodies) {
       expect(body.length, `${name}'s extracted body is empty -- the anchor is broken`).toBeGreaterThan(0)
       expect(containsLocationSearch(body), `${name} must never read location.search`).toBe(false)
     }
 
-    // Control needle: the review-hash mirror is the deliberate, untouched counter-example
+    // Control needle: the `?persona=` strip is the deliberate, permanent counter-example
     // (decision [one-writer-rule]) that proves the scan is capable of seeing a match.
-    const reviewMirrorAnchorIdx = appSrc.indexOf('the WRITE half')
-    expect(reviewMirrorAnchorIdx, 'review-mirror anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
-    const reviewMirrorBody = findBody(appSrc, 'useEffect(() => {', reviewMirrorAnchorIdx)
-    expect(reviewMirrorBody.length, 'review-mirror control body is empty -- the anchor is broken').toBeGreaterThan(0)
+    // Anchored on its own comment, not on the `URLSearchParams(...)` call text itself --
+    // that same call also appears at the seat-token strip (App.tsx:1619), so anchoring on
+    // the call would risk extracting the wrong body if either effect moves.
+    const personaStripAnchorIdx = appSrc.indexOf('Drop the consumed ?persona= from the URL')
+    expect(personaStripAnchorIdx, 'persona-strip anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const personaStripBody = findBody(appSrc, 'useEffect(() => {', personaStripAnchorIdx)
+    expect(personaStripBody.length, 'persona-strip control body is empty -- the anchor is broken').toBeGreaterThan(0)
     expect(
-      containsLocationSearch(reviewMirrorBody),
-      'control needle: App.tsx:571 must still read location.search, or the absence checks above prove nothing',
+      containsLocationSearch(personaStripBody),
+      'control needle: the persona strip must still read location.search, or the absence checks above prove nothing',
+    ).toBe(true)
+    // A second, narrower assertion on the same body: subtask 05 removes this effect's own
+    // `+ window.location.hash` append, which must not be mistaken for removing the read
+    // this needle actually pins.
+    expect(
+      personaStripBody.includes('URLSearchParams(window.location.search)'),
+      'the needle pins the query READ, not the fragment append -- it must survive 05\'s removal',
     ).toBe(true)
   })
 })

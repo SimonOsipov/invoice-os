@@ -2,7 +2,7 @@
 // versioned-blob, warn-never-error conventions, scoped to a tab instead of the browser.
 
 export const DEEP_LINK_KEY = 'invoice-os.deepLink'
-export const DEEP_LINK_SCHEMA_VERSION = 1
+export const DEEP_LINK_SCHEMA_VERSION = 2
 export const DEEP_LINK_TTL_MS = 10 * 60_000
 
 // Shared by capture (what may be written) and read (what a stored path must still look
@@ -13,14 +13,14 @@ function isCapturablePath(path: string): boolean {
 
 // Silent no-op for a non-capturable path. try/catch guards real-browser failure modes —
 // quota exceeded, disabled storage in a sandboxed iframe, Safari private mode.
-export function captureDestination(pathname: string, now: number = Date.now()): void {
+export function captureDestination(pathname: string, query: string = '', now: number = Date.now()): void {
   if (!isCapturablePath(pathname)) {
     return
   }
   try {
     sessionStorage.setItem(
       DEEP_LINK_KEY,
-      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: pathname, at: now }),
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: pathname, query, at: now }),
     )
   } catch (e) {
     console.warn(`[deepLink] failed to store destination at "${DEEP_LINK_KEY}":`, e)
@@ -29,7 +29,7 @@ export function captureDestination(pathname: string, now: number = Date.now()): 
 
 // Pure read — never removes the key. Absent and expired are normal and warn nothing;
 // every other rejection (corrupt JSON, bad shape, a clock moved backwards) warns once.
-export function readDestination(now: number = Date.now()): string | null {
+export function readDestination(now: number = Date.now()): { path: string; query: string } | null {
   try {
     const raw = sessionStorage.getItem(DEEP_LINK_KEY)
     if (raw == null) {
@@ -41,6 +41,7 @@ export function readDestination(now: number = Date.now()): string | null {
       parsed.v === DEEP_LINK_SCHEMA_VERSION &&
       typeof parsed.path === 'string' &&
       isCapturablePath(parsed.path) &&
+      typeof parsed.query === 'string' &&
       typeof parsed.at === 'number' &&
       !Number.isNaN(parsed.at)
     ) {
@@ -48,7 +49,7 @@ export function readDestination(now: number = Date.now()): string | null {
         console.warn(`[deepLink] ignoring destination at "${DEEP_LINK_KEY}" with a future timestamp`)
         return null
       }
-      return now - parsed.at > DEEP_LINK_TTL_MS ? null : parsed.path
+      return now - parsed.at > DEEP_LINK_TTL_MS ? null : { path: parsed.path, query: parsed.query }
     }
     console.warn(`[deepLink] ignoring corrupt destination at "${DEEP_LINK_KEY}"`)
     return null

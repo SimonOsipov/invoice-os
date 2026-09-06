@@ -10,7 +10,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseLocation, routePath, routeUrl, type RouteParams } from './lib/route'
+import { parseLocation, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -321,20 +321,22 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // a review hash into an already-open tab's address bar does not navigate until reload.
   // A stored destination only applies to a boot that landed on the bare root — the landing
   // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
-  const [bootPath] = useState<string>(() =>
-    window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
-  )
+  // Path and query come from the SAME source in one shot, so a restored destination's own
+  // query (now captured alongside the path) can never be swapped for the live bare root's.
+  const [{ path: bootPath, search: bootSearch }] = useState(() => {
+    if (window.location.pathname !== '/') {
+      return { path: window.location.pathname, search: window.location.search }
+    }
+    const restored = readDestination()
+    return restored ? { path: restored.path, search: restored.query } : { path: '/', search: window.location.search }
+  })
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // One parse of the boot URL; the seeds below all read it, so path and query stay one
-  // fact. The query is taken only when bootPath IS the live pathname -- a restored
-  // destination stores no query, so a live `?q=` on the bare root must not attach to it.
-  // Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
+  // fact. Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
   // arrives back at the bare root with the path in storage, and reading the live pathname
   // would open the detail view with a null id. Covered by
-  // App.deepLinkDrillDown.test.tsx's restored-drill-down specs.
-  const [seed] = useState(() =>
-    parseLocation(bootPath, bootPath === window.location.pathname ? window.location.search : ''),
-  )
+  // App.signedOutDeepLink.test.tsx's restored-drill-down specs.
+  const [seed] = useState(() => parseLocation(bootPath, bootSearch))
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by the mount-alignment effect further down, so no memoization is needed.
   const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : seed.view)
@@ -1778,8 +1780,11 @@ export default function App() {
     if (activeSession || autoPersona) return
     const dest = landingBase()
     if (dest) {
+      // Store only the query the codec authored: parse the live location, re-serialise it,
+      // keep the query half. An unowned param is discarded here, before storage is touched.
+      const at = parseLocation(window.location.pathname, window.location.search)
       // Same statement block as the navigation that destroys it — nothing can interleave.
-      captureDestination(window.location.pathname)
+      captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
   }, [activeSession, autoPersona])

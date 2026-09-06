@@ -113,6 +113,14 @@ export function routeUrl(view: View, params: RouteParams = {}): string {
   return path
 }
 
+// The query half of routeUrl, for a caller that needs the params without the path (the
+// signed-out capture stores the two in separate fields). '' when the view owns none.
+export function routeQuery(view: View, params: RouteParams = {}): string {
+  const url = routeUrl(view, params)
+  const i = url.indexOf('?')
+  return i === -1 ? '' : url.slice(i)
+}
+
 // Total: every input yields a renderable result. `/settings/<seg>` is the only two-segment
 // path parseRoute doesn't own itself; everything else delegates to parseRoute and inherits
 // its strictness, with an unparseable path falling back to 'dashboard' rather than null.

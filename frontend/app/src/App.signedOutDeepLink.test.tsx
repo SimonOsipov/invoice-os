@@ -180,7 +180,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     const { hrefWrites } = stubLocation({ pathname: '/audit' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(hrefWrites[hrefWrites.length - 1]).toBe('https://landing.example')
   })
 
@@ -275,7 +275,7 @@ describe('front door: adversarial coverage (QA)', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit', hash: '#x' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(hrefWrites).toEqual(['https://landing.example'])
   })
 
@@ -285,13 +285,13 @@ describe('front door: adversarial coverage (QA)', () => {
     const first = stubLocation({ pathname: '/audit' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     const { unmount } = render(<App />)
-    expect(readDestination()).toBe('/audit')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
     expect(first.hrefWrites).toEqual(['https://landing.example'])
     unmount()
 
     stubLocation({ pathname: '/reports' })
     render(<App />)
-    expect(readDestination()).toBe('/reports')
+    expect(readDestination()).toEqual({ path: '/reports', query: '' })
   })
 })
 
@@ -401,7 +401,7 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
   })
 
   it('restore_anExpiredDestinationFallsBackToDashboard', async () => {
-    captureDestination('/audit', Date.now() - (DEEP_LINK_TTL_MS + 1000))
+    captureDestination('/audit', '', Date.now() - (DEEP_LINK_TTL_MS + 1000))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // QA addition (ROUTE-05-04 AC-5): task-924's own Stage 1 validation recommended this
     // spy on this test specifically; it landed on the two new specs but not here.
@@ -530,7 +530,7 @@ describe('Expiry and the abandoned attempt (ROUTE-05-04)', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const at = 1_700_000_000_000
     vi.setSystemTime(at)
-    captureDestination('/audit', at)
+    captureDestination('/audit', '', at)
     vi.setSystemTime(at + DEEP_LINK_TTL_MS)
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await bootWorkspaceAt('/')
@@ -646,7 +646,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     expect(
       captureDestinationSpy,
       "the front-door effect's dependency array is [activeSession, autoPersona] -- it must re-run on this transition and reach its capture call",
-    ).toHaveBeenCalledWith('/')
+    ).toHaveBeenCalledWith('/', '')
     expect(readDestination(), 'the rewritten root path is refused, so nothing is captured').toBeNull()
   })
 
@@ -661,7 +661,10 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
     // Simulates a stray leftover written after this mount's own sweep (App.tsx:526) already
     // ran, so signOut is the only remaining thing that can clear it.
     captureDestination('/settings')
-    expect(readDestination(), 'sanity: the stray blob is present before signOut').toBe('/settings')
+    expect(readDestination(), 'sanity: the stray blob is present before signOut').toEqual({
+      path: '/settings',
+      query: '',
+    })
 
     await act(async () => {
       ctx.signOut()

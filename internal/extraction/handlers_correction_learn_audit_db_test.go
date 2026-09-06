@@ -188,7 +188,7 @@ func TestRLS_ALearnedRuleWritesExactlyOneAnchorLearnedAuditRow(t *testing.T) {
 	}
 }
 
-// --- A-02 / AC-1: the four branches that learn nothing -------------------------------------
+// --- A-02 / AC-1: four branches that learn nothing -----------------------------------------
 
 // Each arm ends with the SAME request made learnable on the SAME fixture. Without that control
 // every zero below also holds on a handler that never emits at all.
@@ -199,7 +199,8 @@ func TestRLS_ACorrectionThatLearnsNothingWritesNoAnchorLearnedRow(t *testing.T) 
 		arrange func(t *testing.T, ctx context.Context, f clFixture) string
 	}{
 		{
-			// B1: any method but pointed.
+			// B1: not pointed, and clLayout's v1: key with layout_tokens NULL keeps it out of
+			// the boxless arm too.
 			name: "a typed correction on a layout-bearing job",
 			arrange: func(t *testing.T, ctx context.Context, f clFixture) string {
 				clLayout(t, ctx, f.jobID)

@@ -114,6 +114,13 @@ func JobLayoutForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (J
 	return jobLayoutTx(ctx, tx, tenantID, jobID)
 }
 
+// JobLayoutTokensForTest exposes the boxless derivation's own reader. The correction route can
+// never reach a foreign job -- the document lookup 404s first -- so its tenant predicate and its
+// error mapping have no oracle above this seam (TestJobLayoutTokens_*).
+func JobLayoutTokensForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]string, bool, error) {
+	return jobLayoutTokensTx(ctx, tx, tenantID, jobID)
+}
+
 // MaxLayoutTokensJSONForTest and LayoutTokensStorableForTest hand the external test package
 // EXTR-19-06's cap and gate: worker_db_test.go is package extraction_test and can name neither.
 const MaxLayoutTokensJSONForTest = maxLayoutTokensJSON

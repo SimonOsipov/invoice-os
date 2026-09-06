@@ -263,8 +263,10 @@ func TestRLS_PointedCorrectionWritesOneAnchorRuleKeyedToTheJobsFingerprint(t *te
 		t.Errorf("the rule carries schema version %d, want %d -- AnchorRulesFor errors on any other", r.version, extraction.RuleSchemaVersion)
 	}
 
-	// The control on the SAME job: a typed correction teaches nothing, so the count above is
-	// discriminating and not "this route writes a rule for every correction".
+	// The control on the SAME job: a typed correction teaches nothing HERE -- this job carries
+	// a v1: key and layout_tokens NULL, so the boxless branch refuses twice over -- and the
+	// count above is discriminating rather than "this route writes a rule for every
+	// correction". TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule is the b1: case.
 	w2 := cxServe(t, f.reqCtx, f.jobID, clField, corBody(clTINValue, "typed", ""),
 		cxApplier(false, nil), cxAuditor(nil))
 	if w2.Code != http.StatusCreated {
@@ -345,12 +347,17 @@ func TestRLS_AClientSuppliedAnchorLabelNeverBeatsTheServersOwn(t *testing.T) {
 	}
 }
 
-// --- C-04 / C-05 / C-06 / AC-2: only a pointed correction learns --------------------------
+// --- C-04 / C-05 / C-06 / AC-2: on a v1: layout, only a pointed correction learns ----------
 
 // One layout-bearing job, so a zero count is a refusal to learn rather than a job that could
 // never teach anything. The pointed control at the end is what makes the three zeros mean
 // something. Undo's full invoice semantics stay owned by
 // TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue.
+//
+// Since EXTR-19-08 the typed arm's zero is specific to this fixture, not general: clLayout
+// stamps a v1: key and leaves layout_tokens NULL, so two of the boxless branch's three
+// conjuncts are false. On a b1: job a typed correction DOES teach --
+// TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule.
 func TestRLS_OnlyAPointedCorrectionLearnsARule(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C0456")
@@ -1233,7 +1240,31 @@ func TestRLS_ATypedCorrectionOnAPdfJobLearnsNothing(t *testing.T) {
 		t.Fatalf("control: the boxless job answered %d (body=%q), want 201", w2.Code, w2.Body.String())
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
-		t.Errorf("control: the identical POST against a boxless job left %d anchor rule(s), want 1 -- the zero above is otherwise only a handler that never learns", n)
+		t.Fatalf("control: the identical POST against a boxless job left %d anchor rule(s), want 1 -- the zero above is otherwise only a handler that never learns", n)
+	}
+
+	// QA, Mode B. The zero above is over-determined: measured, the PDF job also stores
+	// layout_tokens SQL NULL, so dropping the IsBoxlessFingerprint conjunct leaves this spec
+	// green. This arm removes that determinant -- the PDF job is handed the DOCX job's own
+	// page-1 text, the text the control just taught from -- so only the v1: key is left to
+	// refuse, and dropping the conjunct reds here.
+	tokens := wtTokens(t, ctx, docxJobID)
+	if tokens == nil {
+		t.Fatalf("the boxless control job stored layout_tokens NULL, so the arm below would prove nothing")
+	}
+	if wtTokens(t, ctx, pdfJobID) != nil {
+		t.Fatalf("the PDF job already stores layout_tokens, so the zero above was never over-determined and this arm is reading a changed premise")
+	}
+	blSetTokens(t, ctx, pdfJobID, tokens)
+	if got := wtDecode(t, "the re-stamped PDF job", wtTokens(t, ctx, pdfJobID)); !slices.Equal(got, wtDecode(t, "the boxless control job", tokens)) {
+		t.Fatalf("the PDF job carries %#v after the stamp, want the DOCX job's own text", got)
+	}
+	w3 := cxServe(t, f.reqCtx, pdfJobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	if w3.Code != http.StatusCreated {
+		t.Fatalf("the PDF job carrying derivable tokens answered %d (body=%q), want 201", w3.Code, w3.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("a typed correction on a v1:-keyed job carrying the very tokens that just taught left %d anchor rule(s), want the control's 1 -- the namespace is then not what refuses", n)
 	}
 }
 
@@ -1478,5 +1509,126 @@ func TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel(t *testing.T) {
 	if label := clAnchorLabel(t, ctx, jobID, blField); label != nil && *label != "" {
 		t.Errorf("the boxless correction stored anchor_label %s, want absent -- reader.go renders any non-empty label as corrected.where for any method, so this would put a provenance line on every typed DOCX correction",
 			clShowLabel(label))
+	}
+}
+
+// --- EXTR-19-08 (QA, Mode B): the boxless branch's own transaction fate ---------------------
+
+// blFailingLearnRecorder counts and then refuses, so the failure happens INSIDE the handler's
+// transaction and after the rule row was written.
+type blFailingLearnRecorder struct {
+	calls int
+	fail  error
+}
+
+func (r *blFailingLearnRecorder) record(context.Context, pgx.Tx, string, extraction.AnchorLearned) error {
+	r.calls++
+	return r.fail
+}
+
+// One-transaction-one-fate, for the branch that has never been through it: every shipped
+// rollback spec posts a POINTED body, so the boxless arm's five writes shared a fate only by
+// construction. Here the emit fails after the rule row is in, and the correction, the invoice
+// edit and the field_corrected row must all go with it.
+func TestRLS_AFailedBoxlessAnchorLearnedEmitRollsBackTheCorrectionAndTheInvoice(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-QA-FATE")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915821)
+	_, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+
+	var seen cxSeamCall
+	rec := &blFailingLearnRecorder{fail: errors.New("forced boxless anchor.learned emit failure")}
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxClearingApplier(&seen), cxAuditor(nil), rec.record)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d -- a failed emit must take the request down with it (body=%q)",
+			w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if rec.calls != 1 {
+		t.Fatalf("the learning seam ran %d time(s), want 1 -- the branch never derived, so the zeros below are about a request that never learned", rec.calls)
+	}
+	if seen.calls != 1 {
+		t.Fatalf("the invoice seam ran %d time(s), want 1", seen.calls)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("%d anchor rule(s) survived a failed emit, want 0 -- a boxless rule no audit row explains", n)
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
+		t.Errorf("%d correction row(s) survived a failed emit, want 0", n)
+	}
+	if n := len(cxCorrectionAudit(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("%d %s row(s) survived a failed emit, want 0", n, cxEvent)
+	}
+	if got := cxBuyerTIN(t, ctx, f.invoiceID); got == nil || *got != clReadingTIN {
+		t.Errorf("invoices.buyer_tin = %s after a failed emit, want the unchanged %q", cxShowValue(got), clReadingTIN)
+	}
+
+	// The control: the identical request with a recorder that returns nil commits all five.
+	ok := &blFailingLearnRecorder{}
+	w2 := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxClearingApplier(&seen), cxAuditor(nil), ok.record)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: the same request with a working recorder answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: %d anchor rule(s), want 1 -- the four zeros above prove nothing without this", n)
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 1 {
+		t.Errorf("control: %d correction row(s), want 1", n)
+	}
+	if got := cxBuyerTIN(t, ctx, f.invoiceID); got == nil || *got != blValue {
+		t.Errorf("control: invoices.buyer_tin = %s, want the corrected %q -- the unchanged value above is otherwise a seam that never writes", cxShowValue(got), blValue)
+	}
+}
+
+// The branch's ONE new 500 surface, reached the only way it can be: the column CHECK admits any
+// jsonb array, so a hand-stamped [1,2] is a decode error inside the transaction. Nothing in
+// production writes such a row -- layoutTokensStorable marshals a []string -- so this is a guard
+// on the guard: it must abort the request rather than answer 201 over an unread column, and it
+// must leave nothing behind.
+func TestRLS_AnUndecodableLayoutTokensColumnAbortsTheCorrectionAndCommitsNothing(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR19-08-QA-500")
+	wkCleanupInfra(t, f.tenantID)
+	jobID := blSettleDocx(t, ctx, f.tenantID, f.documentID, 915822)
+	_, toks := blBoxlessPremise(t, ctx, jobID)
+	blDerived(t, blField, blValue, toks)
+	stored := wtTokens(t, ctx, jobID)
+
+	blSetTokens(t, ctx, jobID, stPtr(`[1,2]`))
+	var seen cxSeamCall
+	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxClearingApplier(&seen), cxAuditor(nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d -- a column the reader cannot decode is an error, never a silent absence (body=%q)",
+			w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
+		t.Errorf("%d correction row(s) survived the aborted request, want 0 -- the read happens before the correction row, so a surviving row means two transactions", n)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("%d anchor rule(s) survived the aborted request, want 0", n)
+	}
+	if n := len(cxCorrectionAudit(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("%d %s row(s) survived the aborted request, want 0", n, cxEvent)
+	}
+	if got := cxBuyerTIN(t, ctx, f.invoiceID); got == nil || *got != clReadingTIN {
+		t.Errorf("invoices.buyer_tin = %s after the aborted request, want the unchanged %q", cxShowValue(got), clReadingTIN)
+	}
+
+	// The control: the same job with its own bytes back answers 201 and commits all five, so
+	// the four zeros above are the undecodable column and not this fixture.
+	blSetTokens(t, ctx, jobID, stored)
+	w2 := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue), cxClearingApplier(&seen), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: the job with its own tokens back answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, jobID); n != 1 {
+		t.Errorf("control: %d correction row(s), want 1", n)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: %d anchor rule(s), want 1", n)
+	}
+	if got := cxBuyerTIN(t, ctx, f.invoiceID); got == nil || *got != blValue {
+		t.Errorf("control: invoices.buyer_tin = %s, want the corrected %q", cxShowValue(got), blValue)
 	}
 }

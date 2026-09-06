@@ -280,9 +280,9 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		// Only a pointed correction teaches, and only where the job recorded a layout the box
-		// can anchor to. Derived before the correction row because the label is one of its
-		// columns; the rule row itself is written last, below.
+		// The pointed arm: a box against the job's recorded layout, any namespace. The typed
+		// arm below is the other one that teaches. Derived before the correction row because
+		// the label is one of its columns; the rule row itself is written last.
 		region := regionFromWire(in.req.Region)
 		anchorLabel := strings.TrimSpace(in.req.AnchorLabel)
 		var (

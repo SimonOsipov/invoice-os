@@ -269,7 +269,8 @@ func TestRLS_APointedCorrectionOnTheTwoPartyLayoutWritesOneRule(t *testing.T) {
 	}
 	lcRuleBodyIs(t, ctx, r.id, lcBuyerRuleBody)
 
-	// The control on the SAME job: a typed correction teaches nothing, so the 1 above is the
+	// The control on the SAME job: a typed correction teaches nothing on a v1: layout (since
+	// EXTR-19-08 it does on a b1: one), so the 1 above is the
 	// pointed gesture and not "any correction writes a rule".
 	w := cxServe(t, f.reqCtx, f.jobID, lcField, corBody(lcBuyerTIN, "typed", ""),
 		cxApplier(false, nil), cxAuditor(nil))

@@ -378,8 +378,10 @@ A rule written by a correction that was later **undone stays live**. It keeps fi
 later document carrying that layout fingerprint. The undo revises what one field on one document
 says; it does not withdraw the claim about *where that field lives on this layout*.
 
-The only way to displace a live rule is a **second pointed correction** on the same field,
-pointing at a distinguishing label. Displacement is by **ordering**, never by deletion: the
+The only way to displace a live rule is a second correction that derives a different one for the
+same field — a **second pointed correction** on a `v1:` layout, pointing at a distinguishing
+label; a second `typed` correction on a `b1:` layout, retyping a value some other page-1 token
+carries. Displacement is by **ordering**, never by deletion: the
 `extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds `INSERT` and
 `SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows remain**,
 and `AnchorRulesFor` returns them newest-first. `Resolve` lets the first rule that produces

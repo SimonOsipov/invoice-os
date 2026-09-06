@@ -38,6 +38,16 @@ describe('search call-shape guard (AC #7, [search-input-is-capped-client-side])'
     expect(sites[0]).toBe("ctx.setInvoiceQuery('')")
   })
 
+  it('the box seeds from the committed query, never a blank string', () => {
+    // No runtime spec can discriminate this: render() flushes the mirror effect, so
+    // useState('') and useState(ctx.invoiceQuery) read identically by the first assertion.
+    // The seed is what stops a blank box painting for a frame on a cold /invoices?q= boot.
+    expect(src).toContain('useState(ctx.invoiceQuery)')
+    expect(src, 'the blank seed is the regression this pins').not.toContain("useState('')")
+    // Control needle: an absence assertion over a typo'd pattern reads like a clean absence.
+    expect("const [query, setQuery] = useState('')").toContain("useState('')")
+  })
+
   it('neither verb ever receives the raw, unclamped field value', () => {
     expect(src).not.toMatch(/ctx\.searchInvoices\(query\)/)
     expect(src).not.toMatch(/ctx\.setInvoiceQuery\(query\)/)

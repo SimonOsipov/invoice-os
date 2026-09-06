@@ -2035,6 +2035,9 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
   // omits the atom, so "the atom is null while the filter is armed" is the NORMAL state here,
   // not an anomaly -- an effect that merely early-returns on equality clears the filter, drops
   // the pill and refetches on the rerender below. A null atom must be ignored outright.
+  // Since the popstate restore landed, a Forward onto bare /audit also moves the atom to null
+  // for real. Nothing here can tell that from an omitted key, so the pill stays armed over a
+  // URL naming no invoice -- reachable, uncovered, and ROUTE-06's to close.
   it('auditView_aSeededFilterSurvivesARefetchAndTheClear', async () => {
     const CURSOR = 'seeded-page-2'
     const calls = recordCalls((url) =>

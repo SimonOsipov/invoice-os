@@ -564,7 +564,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setView(at.view)
       setDetailInvoiceId(at.invoiceId)
       setExtractionJobId(at.jobId)
-      setSettingsTab_(at.settingsTab)
+      // History is one stack across identities, so a Company entry from an earlier in-house
+      // session resurfaces here; `mode` is stable for this mount, so the [] closure holds.
+      // popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace
+      setSettingsTab_(availableSettingsTab(at.settingsTab, mode))
       setInvoiceQuery_(at.q)
       // Functional, matching navigate: a Back landing on an invoice already armed keeps
       // its number instead of flickering to "One invoice".

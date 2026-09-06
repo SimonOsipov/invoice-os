@@ -754,3 +754,79 @@ describe('ROUTE-04-06 AC-2: control needle -- an in-house workspace keeps the Co
   })
 })
 
+// ROUTE-04-06 AC-3: the mount-seed clamp (AC-1) only fixes a FRESH boot; browser history is
+// one shared stack across identity changes in the same tab, so an entry pushed while in-house
+// survives a sign-out and can resurface under a firm workspace via Back. Full repro: in-house
+// leaves a Company entry behind, buried by a later push; sign-out only replaceState's the
+// CURRENT entry; a fresh firm Workspace boots clean; Back lands popstate on the stale entry.
+describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier session is clamped on Back', () => {
+  it('popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace', async () => {
+    await bootAt('/', { persona: APP_PERSONAS.inhouse })
+    expect(requireCtx().mode, 'sanity: booting the in-house persona seeds in-house mode').toBe('inhouse')
+
+    await act(async () => {
+      capturedCtx!.nav('settings')
+    })
+    await act(async () => {
+      capturedCtx!.setSettingsTab('company')
+    })
+    expect(window.location.pathname, 'sanity: the Company tab is now the current entry').toBe('/settings/company')
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    expect(window.location.pathname, 'sanity: invoices pushed a new entry, burying the Company one behind it').toBe(
+      '/invoices',
+    )
+
+    // Sign out through the in-app picker (no VITE_LANDING_URL in tests) -- signOut only
+    // replaceState's the CURRENT entry to '/'; the buried /settings/company entry survives.
+    await act(async () => {
+      capturedCtx!.signOut()
+    })
+    expect(screen.getByText('Choose an account'), 'the in-app picker must render after sign-out').toBeTruthy()
+
+    capturedCtx = undefined
+    const firmButton = screen.getByText(APP_PERSONAS.firm.name).closest('button')
+    expect(firmButton, 'the firm persona button was not found in the picker').toBeTruthy()
+    await act(async () => {
+      fireEvent.click(firmButton as HTMLButtonElement)
+    })
+    let ctx = requireCtx()
+    expect(ctx.mode, 'sanity: the fresh sign-in is the firm workspace').toBe('firm')
+    expect(ctx.settingsTab, 'sanity: a clean firm boot never seeds company').not.toBe('company')
+
+    // jsdom keeps no real back()/forward() stack (App.routePopstate.test.tsx's popTo) --
+    // move the URL the way Back would and fire the event the browser fires.
+    window.history.replaceState(null, '', '/settings/company')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    ctx = requireCtx()
+    // Floor: proves the popstate handler actually ran against the stale path -- a fresh
+    // firm boot never seeds 'settings', so this can only flip via the dispatched event.
+    expect(ctx.view, 'floor: the popstate handler must have parsed the stale path and switched views').toBe(
+      'settings',
+    )
+    expect(ctx.mode, 'sanity: still the firm workspace').toBe('firm')
+    expect(
+      ctx.settingsTab,
+      'a stale Company entry from an earlier in-house session must be clamped for the firm workspace it resurfaces under',
+    ).toBe('members')
+
+    const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
+    const stripTabs = Array.from(document.querySelectorAll('.pf-tab')).filter((el) =>
+      FIRM_TAB_LABELS.includes(el.textContent ?? ''),
+    )
+    expect(stripTabs.map((el) => el.textContent), 'every firm settings tab must render, none unmatched').toEqual(
+      FIRM_TAB_LABELS,
+    )
+    const underlined = stripTabs.filter((el) => (el as HTMLElement).style.fontWeight === '600')
+    expect(
+      underlined.map((el) => el.textContent),
+      'exactly the Members tab may be underlined -- the empty-strip symptom is no tab matching',
+    ).toEqual(['Members'])
+  })
+})
+

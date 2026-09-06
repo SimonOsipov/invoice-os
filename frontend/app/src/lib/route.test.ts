@@ -644,7 +644,10 @@ describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
 
   it('review_parseLocationStaysTotalAndParseRouteIsUnchanged', () => {
     const path = reviewPath([UUID])
-    expect(parseRoute(path)).toBeNull() // three segments: parseRoute's strictness is unchanged
+    expect(parseRoute(path)).toBeNull() // 'imports' is not a drill-down segment
+    // Discriminating: 'invoices' IS one, so the segment count is the only thing that can
+    // reject this — widening parseRoute past two segments fails here.
+    expect(parseRoute(`/invoices/${UUID}/review`)).toBeNull()
     const [pathname, search] = splitUrl(path)
     expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
   })

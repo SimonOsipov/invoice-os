@@ -62,8 +62,8 @@ export function parseRoute(pathname: string): Route | null {
 }
 
 // Owned params: `invoices` owns `q`, `audit` owns `invoice`, `settings` owns its tab as a
-// path segment, `detail`/`extraction` own `id` as a path segment. No other view owns
-// anything, so nothing else is ever emitted or read.
+// path segment, `detail`/`extraction` own `id` as a path segment, `create` owns
+// `reviewBatchIds` as the whole path via reviewPath. No other view owns anything.
 const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   members: true,
   roles: true,

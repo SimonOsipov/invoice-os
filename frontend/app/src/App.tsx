@@ -10,7 +10,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseLocation, parseRoute, routeUrl, type RouteParams } from './lib/route'
+import { parseLocation, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -541,10 +541,22 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     window.history.replaceState(null, '', url + window.location.hash)
     clearDestination()
   }, [])
-  // Back/Forward: the browser already moved the URL -- restore the view from it, no
+  // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
   // write. A write here would push a duplicate entry on every Back press.
   useEffect(() => {
-    const onPopState = () => setView(parseRoute(window.location.pathname) ?? 'dashboard')
+    const onPopState = () => {
+      const at = parseLocation(window.location.pathname, window.location.search)
+      setView(at.view ?? 'dashboard')
+      setSettingsTab_(at.settingsTab)
+      setInvoiceQuery_(at.q)
+      // Functional, matching navigate: a Back landing on an invoice already armed keeps
+      // its number instead of flickering to "One invoice".
+      setAuditPrefilter((prev) =>
+        at.auditInvoice == null
+          ? null
+          : { invoiceId: at.auditInvoice, invoiceNumber: prev?.invoiceId === at.auditInvoice ? prev.invoiceNumber : null },
+      )
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])

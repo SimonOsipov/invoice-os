@@ -4,7 +4,7 @@
 // deliberately adopted here in place of the prototype's single toggling pill so
 // both consoles state the environment the same way.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { crossGlyph, plusGlyph, searchGlyph } from '../glyphs'
 import { clampFilterText } from '../lib/invoices'
@@ -56,7 +56,10 @@ export function Header({ ctx }: { ctx: PlatformCtx }) {
   const { active, view, sandbox } = ctx
   const crumb = CRUMB_MAP[view] || 'Overview'
   const sbx = segStyle(sandbox, 'sandbox')
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(ctx.invoiceQuery)
+  // Mirrors the committed term only (nav, popstate) -- keyed on invoiceQuery so a
+  // keystroke, which never touches it, cannot re-fire this and clobber the box.
+  useEffect(() => setQuery(ctx.invoiceQuery), [ctx.invoiceQuery])
 
   return (
     <header style={{ flex: 'none', height: 56, borderBottom: '1px solid var(--line-1)', background: 'oklch(98.5% .008 85 / .82)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 24px' }}>

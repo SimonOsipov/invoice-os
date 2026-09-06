@@ -160,7 +160,9 @@ export function AuditView({ ctx }: { ctx: PlatformCtx }) {
   useEffect(() => {
     const id = prefilter?.invoiceId ?? null
     if (id == null || id === filterState.invoiceId) return
-    setFilterState((s) => ({ ...s, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
+    // A moved atom means a DIFFERENT invoice's whole history, so the default date window
+    // (which could exclude that invoice entirely) must reset, not carry over.
+    setFilterState((s) => ({ ...s, range: { preset: 'custom' }, invoiceId: id, invoiceNumber: prefilter?.invoiceNumber ?? null }))
     setPage(auditPageResize(page.limit))
     setExpandedId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps

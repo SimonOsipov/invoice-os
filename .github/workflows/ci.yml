@@ -711,7 +711,8 @@ jobs:
         # EXTR-01: this package's first DB-backed tests. -count=1 disables the test cache; no
         # -run filter, so later tests are picked up with no workflow edit. Needs DATABASE_URL
         # (app) and DATABASE_SUPERUSER_URL (fixtures), both already in this job's env.
-        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/extraction/...
+        # -p 1: the glob now names two DB-backed packages sharing one Postgres.
+        run: scripts/ci/rls-test-gate.sh -p 1 -count=1 ./internal/extraction/...
       - name: Report the wired-path decision rate
         run: |
           # The gated step above drops a passing test's buffered log, so the wired report
@@ -723,6 +724,15 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run 'TestRLS_WiredPath' ./internal/extraction/ | tee wired-corpus.txt
           grep -q 'tier-1 decision rate through the wired worker path' wired-corpus.txt
+      - name: Report the end-to-end field accuracy
+        run: |
+          # The gated step above drops a passing test's buffered log, so this suite's number
+          # reaches CI only from here. pipefail because run: is `bash -e` and tee would
+          # otherwise mask a failed go test. The filter is a PREFIX: every DB-backed renderer
+          # in the package must match it (TestEndToEnd_TheReportStepsRunFilterNamesARealTest).
+          set -o pipefail
+          go test -count=1 -v -run 'TestRLS_EndToEnd' ./internal/extraction/endtoend/ | tee endtoend-corpus.txt
+          grep -q 'end-to-end field accuracy, document in to invoice row out' endtoend-corpus.txt
 
   # M2-10 audit suite: proves audit_log rows are append-only (UPDATE/DELETE/TRUNCATE rejected
   # for the app by the missing grant and for the table owner by the append-only trigger) and

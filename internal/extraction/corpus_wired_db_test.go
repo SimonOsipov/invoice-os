@@ -37,6 +37,10 @@ const cwReportMarker = "tier-1 decision rate through the wired worker path"
 // the report.
 const cwReportRunFilter = "TestRLS_WiredPathScoresTheCorpus"
 
+// cwGatedStepRE locates ci.yml's gated extraction step. Flag-tolerant: EXTR-21-08 added -p 1,
+// which is pinned by TestEndToEnd_TheGatedStepCarriesOnePackageAtATime, not here.
+var cwGatedStepRE = regexp.MustCompile(`(?m)^ *run: .*rls-test-gate\.sh .*\./internal/extraction(/\.\.\.)?$`)
+
 // The doc section the number is recorded under, and the fraction it must state.
 const cwDocSection = "## Wired-path decision rate"
 
@@ -666,14 +670,15 @@ func TestCorpusGoldens_TheCanaryJobCoversEveryLayout(t *testing.T) {
 
 // AC-13. rls-test-gate.sh pipes `go test -json` to a file (rls-test-gate.sh:8) and rlsgate
 // deletes a passing test's buffered output (internal/tools/rlsgate/rlsgate.go:66), so the wired
-// report never reaches CI output from the gated step that runs this package (ci.yml:641, the
-// queue job -- the rls job runs no extraction step).
+// report never reaches CI output from the gated step that runs this package (the queue job's
+// rls-test-gate.sh step -- the rls job runs no extraction step).
 // Mirrors TestTier1Accuracy_CIPrintsTheReport.
 func TestRLS_WiredPathCIPrintsTheReport(t *testing.T) {
 	yaml := acRepoFile(t, ".github/workflows/ci.yml")
 
-	// Control needle: a scan reading the wrong file finds no step either.
-	if !strings.Contains(yaml, "rls-test-gate.sh -count=1 ./internal/extraction/...") {
+	// Control needle: a scan reading the wrong file finds no step either. Flag-tolerant, so a
+	// flag change on the gated step reds its own spec rather than misreporting a bad read here.
+	if cwGatedStepRE.FindStringIndex(yaml) == nil {
 		t.Fatalf("ci.yml never runs ./internal/extraction/... through rls-test-gate.sh; this scan is reading the wrong file and would report a missing step that is there")
 	}
 
@@ -968,11 +973,12 @@ func TestRLS_WiredPathTheReportStepActuallyRuns(t *testing.T) {
 
 	// Same job as the gated run, so it inherits this job's DATABASE_* env. Without them every
 	// TestRLS_* self-skips, the report never renders and the grep fails for the wrong reason.
-	gated := strings.Index(yaml, "rls-test-gate.sh -count=1 ./internal/extraction/...")
+	loc := cwGatedStepRE.FindStringIndex(yaml)
 	report := strings.Index(yaml, step)
-	if gated < 0 || report < 0 {
-		t.Fatalf("could not locate both steps in ci.yml (gated %d, report %d); this scan is reading the wrong file", gated, report)
+	if loc == nil || report < 0 {
+		t.Fatalf("could not locate both steps in ci.yml (gated %v, report %d); this scan is reading the wrong file", loc, report)
 	}
+	gated := loc[0]
 	if between := regexp.MustCompile(`(?m)^  [A-Za-z][\w-]*:$`).FindString(yaml[gated:report]); between != "" {
 		t.Errorf("a new job (%q) starts between the gated extraction run and the report step; the report step would not inherit the DATABASE_* env and every TestRLS_* would self-skip", strings.TrimSpace(between))
 	}

@@ -36,7 +36,7 @@ import {
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
-import { approvalRun404Dropper } from './consoleGate'
+import { approvalRun404Dropper, type Dropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
@@ -56,12 +56,12 @@ test.beforeAll(async () => {
 // sign-in idiom topology.spec.ts and import-wizard.spec.ts each inline (no
 // spec file in this package exports its own helpers today, so this is a third
 // copy, not a new seam).
-function collectErrors(page: Page): string[] {
+function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
-  const dropApprovalRun404 = approvalRun404Dropper(page)
+  const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return
-    if (dropApprovalRun404(msg.text(), msg.location().url)) return
+    if (droppers.some((drop) => drop(msg.text(), msg.location().url))) return
     errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
@@ -1005,8 +1005,6 @@ test('deployed app: /invoices/<uuid> is a working deep link, and the persona par
 // random UUID must render IDENTICAL text. Fixture created under PERSONAS.B (a different
 // tenant than the firm persona that views it) and never opened as firm before this.
 test('deployed app: a cross-tenant invoice id and a random UUID render the same detail text', async ({ page }) => {
-  const errors = collectErrors(page)
-
   const tokenB = await login(PERSONAS.B)
   const entityB = await createEntity(tokenB, { name: `ROUTE-02 cross-tenant ${Date.now()}`, tin: freshTin() })
   const crossTenantInvoice = await createInvoice(tokenB, {
@@ -1014,6 +1012,11 @@ test('deployed app: a cross-tenant invoice id and a random UUID render the same 
     ...cleanInvoiceFields(`INV-ROUTE02-XT-${Date.now()}`),
   })
   const randomId = crypto.randomUUID()
+
+  // The fixtures come first because the gate is scoped to THESE two ids: a 404 on either
+  // is this test's premise, a 404 on anything else is still a failure. See
+  // consoleGate.ts's notFoundIdDropper for why one 404 is really four.
+  const errors = collectErrors(page, notFoundIdDropper(page, [crossTenantInvoice.id, randomId]))
 
   // toContainText is only the settle signal -- innerText() is a one-shot read, not
   // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy

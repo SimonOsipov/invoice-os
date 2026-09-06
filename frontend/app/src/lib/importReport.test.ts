@@ -267,7 +267,16 @@ describe('ROUTE-02-04 (task-919): App.routeNavigate.test.tsx names no deleted id
   it.each(['selectInvoice', 'selectMock', 'detailTarget', 'DetailTarget', 'DetailSelection'])(
     '%s appears in no declaration/binding form',
     (name) => {
-      for (const shape of [`function ${name}`, `${name}:`, `${name} =`, `const ${name}`]) {
+      for (const shape of [
+        `function ${name}`,
+        `${name}:`,
+        `${name} =`,
+        `const ${name}`,
+        `let ${name}`,
+        `interface ${name}`,
+        `export { ${name}`,
+        `as ${name}`,
+      ]) {
         expect(routeNavigateSrc, `found declaration-shape "${shape}"`).not.toContain(shape)
       }
     },

@@ -422,7 +422,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
+test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -542,8 +542,8 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   //     (InvoicesList.tsx, the N=1 route below) but is no longer what a review-row click
   //     does. Proven on the deployed run by subtask 16's own INVCR-E2E-1 (the row-switch
   //     expand/fix/re-validate loop) above.
-  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
-  //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
+  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice seam this
+  //     exercised (import a one-invoice file -> land on the real InvoiceDetail,
   //     never the review shell), which is the highest-value uncovered path in 09 --
   //     INVCR-E2E-2 above.
   // Deleting rather than leaving a weakened version is deliberate: a spec that asserts
@@ -560,7 +560,7 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
 
-  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): leave the review
+  // E2E-09 (the click-through regression guard): leave the review
   // screen for Invoices and open one of this batch's invoices -- the live detail must
   // render THAT invoice's own content. The live surface is proven by `invoice-detail`
   // plus `status-strip`; "Audit trail" (the retired mock detail's panel title, and the

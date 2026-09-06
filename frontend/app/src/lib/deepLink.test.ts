@@ -187,6 +187,18 @@ describe('readDestination', () => {
     expect(warn, 'both rejections warn once each').toHaveBeenCalledTimes(2)
   })
 
+  // Isolates the query-type gate from the version gate: v matches current and path is
+  // valid, so only a missing `query` decides the outcome. read_aPreDeployV1BlobIsRejected
+  // above writes the same query-less shape but is rejected by its `v: 1` mismatch first --
+  // it cannot tell a strict query check from a lenient `?? ''` one. This can.
+  it('read_aQueryLessBlobAtTheCurrentVersionIsRejected', () => {
+    const { warn } = spyOnConsole()
+    sessionStorage.setItem(DEEP_LINK_KEY, JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', at: 1000 }))
+
+    expect(readDestination(1000)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
   it('read_aNonPathStoredValueIsRejected', () => {
     const { warn } = spyOnConsole()
     sessionStorage.setItem(DEEP_LINK_KEY, JSON.stringify({ v: 2, path: '//evil.test', query: '', at: 1000 }))

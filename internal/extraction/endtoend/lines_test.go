@@ -40,15 +40,19 @@ const eeLineRichGolden = "rich_invoice.docling.json"
 // denominator of the reached figure. Never hand-trusted: the spec below re-derives every entry
 // from that layout's committed docling golden.
 //
-// Measured 0 on all six: no fxBuildCorpus* generator prints an item row, so none of these
-// documents carries a table at all.
+// Measured: only wild_ruled_lines_totals.pdf prints an item table; no other scored layout
+// carries one, so every other denominator is 0.
 var eeLinesExpected = map[string]int{
-	"corpus_inline_labels.pdf":  0,
-	"corpus_split_labels.pdf":   0,
-	"corpus_stacked_labels.pdf": 0,
-	"corpus_two_column.pdf":     0,
-	"corpus_ambiguous_date.pdf": 0,
-	"corpus_totals_block.pdf":   0,
+	"corpus_inline_labels.pdf":    0,
+	"corpus_split_labels.pdf":     0,
+	"corpus_stacked_labels.pdf":   0,
+	"corpus_two_column.pdf":       0,
+	"corpus_ambiguous_date.pdf":   0,
+	"corpus_totals_block.pdf":     0,
+	"wild_two_party_bare_tin.pdf": 0,
+	"wild_ruled_lines_totals.pdf": 3,
+	"wild_rc_due_naira.pdf":       0,
+	"wild_stacked_borderless.pdf": 0,
 }
 
 // eeGoldenReader replays one committed docling golden through the real DoclingReader. The

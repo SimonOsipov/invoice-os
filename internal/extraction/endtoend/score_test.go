@@ -20,10 +20,10 @@ import (
 const eeReportMarker = "end-to-end field accuracy, document in to invoice row out"
 
 const (
-	// eeWrittenCells is hand-written: 6 layouts x 8 written fields. A deleted expectByLayout
+	// eeWrittenCells is hand-written: 10 layouts x 8 written fields. A deleted expectByLayout
 	// row must fail here rather than flatter the rate by shrinking the denominator.
-	eeWrittenCells = 48
-	eeLayoutCount  = 6
+	eeWrittenCells = 80
+	eeLayoutCount  = 10
 
 	// The cells the six layouts carry no value for. Pinned so an expectation cannot be
 	// silently emptied to dodge a miss.
@@ -34,14 +34,13 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the six-layout figure, measured 2026-09-06 and pinned. Equality, not a
-// floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet, once the wild
-// layouts land.
+// eeCorpusHits is the ten-layout figure, measured 2026-09-06 and pinned. Equality, not a
+// floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 16 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 26 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 const (
-	eeCorpusHits  = 32
+	eeCorpusHits  = 54
 	eeCorpusCells = eeWrittenCells
 )
 
@@ -155,6 +154,61 @@ var expectByLayout = []struct {
 			"total":          {"5375.00"},
 		},
 	},
+	// The four wild_ arrangements: production layouts reproduced by arrangement only. Every
+	// cell carries a value on its page, so a miss here is a real miss, never an absent cell.
+	{
+		file: "wild_two_party_bare_tin.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2101"},
+			"issue_date":     {"2026-06-11"},
+			"buyer_tin":      {"99999999-0802"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1200.00"},
+			"vat":            {"90.00"},
+			"total":          {"1290.00"},
+		},
+	},
+	{
+		file: "wild_ruled_lines_totals.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2102"},
+			"issue_date":     {"2026-06-24"},
+			"buyer_tin":      {"99999999-0902"},
+			"buyer_name":     {"Honeywell Group"},
+			// From the explicit Currency: NGN label, never from the Amount header's naira.
+			"currency": {"NGN"},
+			"subtotal": {"8000.00"},
+			"vat":      {"600.00"},
+			"total":    {"8600.00"},
+		},
+	},
+	{
+		file: "wild_rc_due_naira.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2103"},
+			"issue_date":     {"2026-07-08"},
+			"buyer_tin":      {"99999999-1002"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"2500.00"},
+			"vat":            {"187.50"},
+			"total":          {"2687.50"},
+		},
+	},
+	{
+		file: "wild_stacked_borderless.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2104"},
+			"issue_date":     {"2026-07-30"},
+			"buyer_tin":      {"99999999-1102"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1500.00"},
+			"vat":            {"112.50"},
+			"total":          {"1612.50"},
+		},
+	},
 }
 
 // eeAbsentCells names every cell the bytes carry no value for, with the reason. A shape-level
@@ -184,6 +238,19 @@ var eeRealMisses = map[string]string{
 	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_ambiguous_date.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_two_column.pdf/buyer_tin":    "the bare TIN label matches supplier_tin only; docs/extraction-corpus.md records it as t1aGaps",
+
+	"wild_two_party_bare_tin.pdf/buyer_tin":  "both party blocks end in a bare TIN: token and compareRegions hands the field to the supplier",
+	"wild_two_party_bare_tin.pdf/buyer_name": "the Customer No. fragment wins the name; the invoice row holds \"No.\"",
+
+	"wild_rc_due_naira.pdf/currency": "the naira marks the amounts but anchors no currency label, so the invoice row carries none",
+
+	"wild_stacked_borderless.pdf/issue_date": "the value is offset 8pt below its label in a second column, so neither same_token, right nor below binds",
+	"wild_stacked_borderless.pdf/buyer_tin":  "the value is offset from its label, and the label carries no colon",
+	"wild_stacked_borderless.pdf/buyer_name": "the value is offset from its label, and the label carries no colon",
+	"wild_stacked_borderless.pdf/currency":   "the value is offset from its label, and the label carries no colon",
+	"wild_stacked_borderless.pdf/subtotal":   "the value is offset from its label, and the label carries no colon",
+	"wild_stacked_borderless.pdf/vat":        "the value is offset from its label, and the label carries no colon",
+	"wild_stacked_borderless.pdf/total":      "the value is offset from its label, and the label carries no colon",
 }
 
 // eeCell is one (layout, field) cell -- the unit the rate counts.

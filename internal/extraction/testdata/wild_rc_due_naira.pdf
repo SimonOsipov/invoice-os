@@ -1,0 +1,140 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 794 >>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(INVOICE) Tj
+ET
+BT
+/F1 12 Tf
+72 690 Td
+(Invoice No: INV-2103) Tj
+ET
+BT
+/F1 12 Tf
+72 666 Td
+(Due Date) Tj
+ET
+BT
+/F1 12 Tf
+220 666 Td
+(2026-08-07) Tj
+ET
+BT
+/F1 12 Tf
+72 648 Td
+(Issue Date) Tj
+ET
+BT
+/F1 12 Tf
+220 648 Td
+(2026-07-08) Tj
+ET
+BT
+/F1 12 Tf
+72 624 Td
+(Supplier TIN: 99999999-1001) Tj
+ET
+BT
+/F1 12 Tf
+72 606 Td
+(Supplier: Adeyemi Trading Limited) Tj
+ET
+BT
+/F1 12 Tf
+72 588 Td
+(Buyer TIN: 99999999-1002) Tj
+ET
+BT
+/F1 12 Tf
+72 570 Td
+(Buyer: Honeywell Group) Tj
+ET
+BT
+/F1 12 Tf
+72 258 Td
+(Sub-total) Tj
+ET
+BT
+/F1 12 Tf
+220 258 Td
+(\244 2,500.00) Tj
+ET
+BT
+/F1 12 Tf
+72 240 Td
+(RC NUMBER: RC-000142) Tj
+ET
+BT
+/F1 12 Tf
+72 222 Td
+(VAT) Tj
+ET
+BT
+/F1 12 Tf
+220 222 Td
+(\244 187.50) Tj
+ET
+BT
+/F1 12 Tf
+72 204 Td
+(Total) Tj
+ET
+BT
+/F1 12 Tf
+220 204 Td
+(\244 2,687.50) Tj
+ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [164 /naira] >> /ToUnicode 6 0 R >>
+endobj
+6 0 obj
+<< /Length 323 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Naira-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<A4> <20A6>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000001092 00000 n 
+0000001237 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1611
+%%EOF

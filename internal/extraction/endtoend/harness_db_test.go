@@ -65,6 +65,10 @@ var requiredPDFs = []string{
 	"corpus_two_column.pdf",
 	"corpus_ambiguous_date.pdf",
 	"corpus_totals_block.pdf",
+	"wild_two_party_bare_tin.pdf",
+	"wild_ruled_lines_totals.pdf",
+	"wild_rc_due_naira.pdf",
+	"wild_stacked_borderless.pdf",
 }
 
 var requiredGoldens = []string{
@@ -74,6 +78,10 @@ var requiredGoldens = []string{
 	"corpus_two_column.docling.json",
 	"corpus_ambiguous_date.docling.json",
 	"corpus_totals_block.docling.json",
+	"wild_two_party_bare_tin.docling.json",
+	"wild_ruled_lines_totals.docling.json",
+	"wild_rc_due_naira.docling.json",
+	"wild_stacked_borderless.docling.json",
 }
 
 var (

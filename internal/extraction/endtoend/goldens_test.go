@@ -54,9 +54,9 @@ const wildRCNumber = "RC-000142"
 var wildHeaders = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", "RATE (N)", "Amount ₦"}
 
 // wildLabels are the buyer-block heading and the two fragment-bearing labels. The apostrophe is
-// U+2019: fxHelvetica declares no /Encoding, so pdfium reads byte 0x27 under StandardEncoding
-// as quoteright.
-var wildLabels = []string{"Invoice to", "Customer No.", "Buyer’s Signature"}
+// U+0027: pdfium reads byte 0x27 under StandardEncoding as quoteright (U+2019) and docling
+// normalises that to ASCII, so the builder carries a /ToUnicode CMap settling both on U+0027.
+var wildLabels = []string{"Invoice to", "Customer No.", "Buyer's Signature"}
 
 var wildCast = []string{"Adeyemi Trading Limited", "Honeywell Group"}
 
@@ -441,10 +441,10 @@ func TestWildLayouts_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
 // wildTokenFloor is the token count each wild layout read at when it was committed. A floor,
 // not an equality. MEASURE these off the committed fixtures; 0 is unpinned and fails below.
 var wildTokenFloor = map[string]int{
-	wildTwoParty: 0,
-	wildRuled:    0,
-	wildRCNaira:  0,
-	wildStacked:  0,
+	wildTwoParty: 19,
+	wildRuled:    34,
+	wildRCNaira:  17,
+	wildStacked:  21,
 }
 
 // wildMinTokenFloor is the smallest committed corpus floor (corpus_ambiguous_date.pdf, 6). A
@@ -731,7 +731,7 @@ func TestWildLayouts_TheTwoPartyFixtureCarriesTheBuyerHeadingAndFragments(t *tes
 
 	above, okA := wildTokenContaining(pages, "Customer No.")
 	name, okN := wildTokenContaining(pages, "Honeywell Group")
-	below, okB := wildTokenContaining(pages, "Buyer’s Signature")
+	below, okB := wildTokenContaining(pages, "Buyer's Signature")
 	if !okA || !okN || !okB {
 		t.Fatalf("%s: Customer No.=%v buyer name=%v Buyer's Signature=%v; the ordering below cannot be asserted", wildTwoParty, okA, okN, okB)
 	}

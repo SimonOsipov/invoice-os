@@ -1,0 +1,150 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 831 >>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(INVOICE) Tj
+ET
+BT
+/F1 12 Tf
+72 690 Td
+(Invoice No: INV-2101) Tj
+ET
+BT
+/F1 12 Tf
+72 672 Td
+(Invoice Date: 2026-06-11) Tj
+ET
+BT
+/F1 12 Tf
+72 630 Td
+(Adeyemi Trading Limited) Tj
+ET
+BT
+/F1 12 Tf
+72 614 Td
+(TIN:) Tj
+ET
+BT
+/F1 12 Tf
+160 614 Td
+(99999999-0801) Tj
+ET
+BT
+/F1 12 Tf
+360 646 Td
+(Invoice to) Tj
+ET
+BT
+/F1 12 Tf
+360 630 Td
+(Customer No.) Tj
+ET
+BT
+/F1 12 Tf
+360 614 Td
+(Honeywell Group) Tj
+ET
+BT
+/F1 12 Tf
+360 598 Td
+(TIN:) Tj
+ET
+BT
+/F1 12 Tf
+448 598 Td
+(99999999-0802) Tj
+ET
+BT
+/F1 12 Tf
+360 560 Td
+(Buyer's Signature) Tj
+ET
+BT
+/F1 12 Tf
+72 582 Td
+(Currency: NGN) Tj
+ET
+BT
+/F1 12 Tf
+72 240 Td
+(Sub-total) Tj
+ET
+BT
+/F1 12 Tf
+220 240 Td
+(1,200.00) Tj
+ET
+BT
+/F1 12 Tf
+72 222 Td
+(VAT) Tj
+ET
+BT
+/F1 12 Tf
+220 222 Td
+(90.00) Tj
+ET
+BT
+/F1 12 Tf
+72 204 Td
+(Total) Tj
+ET
+BT
+/F1 12 Tf
+220 204 Td
+(1,290.00) Tj
+ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>
+endobj
+6 0 obj
+<< /Length 323 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Quote-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<27> <0027>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000001129 00000 n 
+0000001216 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1590
+%%EOF

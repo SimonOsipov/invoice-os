@@ -69,6 +69,12 @@ var fxCorpus = []struct {
 	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
 	// Not corpus_-prefixed on purpose: EXTR-18-01's rich fixture, outside every corpus_ ratchet.
 	{fxRich, fxBuildRichInvoice},
+	// Not corpus_-prefixed on purpose: EXTR-21-06's four production arrangements. Byte-compared
+	// like the rest, outside every corpus_ ratchet.
+	{fxWildTwoParty, fxBuildWildTwoPartyBareTIN},
+	{fxWildRuled, fxBuildWildRuledLinesTotals},
+	{fxWildRCNaira, fxBuildWildRCDueNaira},
+	{fxWildStacked, fxBuildWildStackedBorderless},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -391,25 +397,34 @@ func fxNairaFont(toUnicode int) string {
 	return dict + " >>"
 }
 
-// fxNairaCMap maps the single code the font redefines. Constant body, so fxStream's /Length
-// and the assembled bytes stay deterministic.
-func fxNairaCMap() fxObject {
-	return fxStream([]byte(`/CIDInit /ProcSet findresource begin
+// fxUCS2CMap is a /ToUnicode CMap over single-byte codes: each pair is a hex code and the hex
+// UTF-16 it reads back as. Constant body, so fxStream's /Length and the assembled bytes stay
+// deterministic.
+func fxUCS2CMap(name string, codes [][2]string) fxObject {
+	var chars bytes.Buffer
+	for _, c := range codes {
+		fmt.Fprintf(&chars, "<%s> <%s>\n", c[0], c[1])
+	}
+	return fxStream(fmt.Appendf(nil, `/CIDInit /ProcSet findresource begin
 12 dict begin
 begincmap
-/CMapName /Naira-UCS2 def
+/CMapName /%s-UCS2 def
 /CMapType 2 def
 /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
 1 begincodespacerange
 <00> <FF>
 endcodespacerange
-1 beginbfchar
-<A4> <20A6>
-endbfchar
+%d beginbfchar
+%sendbfchar
 endcmap
 CMapName currentdict /CMap defineresource pop
 end
-end`))
+end`, name, len(codes), chars.String()))
+}
+
+// fxNairaCMap maps the single code the naira font redefines.
+func fxNairaCMap() fxObject {
+	return fxUCS2CMap("Naira", [][2]string{{"A4", "20A6"}})
 }
 
 // fxNairaTextPage is fxTextPage over a naira-capable font. withCMap is the control knob for
@@ -581,6 +596,221 @@ func fxBuildLearnedTwoParty() []byte {
 		fxLine{12, 72, 524, "Honeywell Group"},
 		fxLine{12, 72, 508, "99999999-0702"},
 		fxLine{12, 72, 240, "Total: NGN 3,225.00"},
+	)
+}
+
+// --- the wild arrangements (NOT corpus layouts) -----------------------------
+
+// Four production layouts reproduced by arrangement only -- which labels appear, where, and at
+// what token granularity. No bytes are copied. Scrubbed per docs/extraction-corpus.md
+// "Scrubbing an anonymised real document" by Claude Opus 5 on 2026-09-06; step 7's second-person
+// confirmation is recorded on the pull request, not here.
+//
+// Deliberately outside corpusPrefix: they gain no corpusExpect, corpusLayouts, corpusTokenFloor
+// or t1aGaps entry, so no Tier-1 number moves. internal/extraction/endtoend scores them.
+const (
+	fxWildTwoParty = "wild_two_party_bare_tin.pdf"
+	fxWildRuled    = "wild_ruled_lines_totals.pdf"
+	fxWildRCNaira  = "wild_rc_due_naira.pdf"
+	fxWildStacked  = "wild_stacked_borderless.pdf"
+)
+
+// The pinned synthetic identifier table. Every literal is freshly minted, never observed; the
+// TINs continue the free reserved block past 99999999-0702 and avoid -0001..-0009. The same
+// table is declared in endtoend/goldens_test.go, which holds the two copies together.
+const (
+	fxWildTINSupplierTwoParty = "99999999-0801"
+	fxWildTINBuyerTwoParty    = "99999999-0802"
+	fxWildTINSupplierRuled    = "99999999-0901"
+	fxWildTINBuyerRuled       = "99999999-0902"
+	fxWildTINSupplierRCNaira  = "99999999-1001"
+	fxWildTINBuyerRCNaira     = "99999999-1002"
+	fxWildTINSupplierStacked  = "99999999-1101"
+	fxWildTINBuyerStacked     = "99999999-1102"
+
+	fxWildInvTwoParty = "INV-2101"
+	fxWildInvRuled    = "INV-2102"
+	fxWildInvRCNaira  = "INV-2103"
+	fxWildInvStacked  = "INV-2104"
+
+	// An RC (Corporate Affairs Commission registration) number is an "other identifier" under
+	// step 3 of the scrubbing procedure and is replaced like a TIN.
+	fxWildRCNumber = "RC-000142"
+
+	fxWildSupplier = "Adeyemi Trading Limited"
+	fxWildBuyer    = "Honeywell Group"
+)
+
+// fxQuoteFont is fxHelvetica plus a /ToUnicode CMap for byte 0x27. Under StandardEncoding
+// pdfium reads quoteright (U+2019) there and docling reads the ASCII apostrophe; the CMap
+// settles both readers on U+0027, which TestWildGoldens_DescribeTheirPDF holds them to.
+//
+// ceiling: docling 1.10.0 normalises U+2018/U+2019 to ASCII whatever the PDF says -- measured
+// over five encodings, including /ToUnicode <27> <2019>. Revisit on a sidecar bump.
+func fxQuoteFont(toUnicode int) string {
+	return fmt.Sprintf("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode %d 0 R >>", toUnicode)
+}
+
+// fxQuoteTextPage is fxTextPage over that font. fxAssemble numbers by slice index, so the
+// appended CMap is object 6.
+func fxQuoteTextPage(lines ...fxLine) []byte {
+	const cmapObj = 6
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(lines...)),
+		fxObject(fxQuoteFont(cmapObj)),
+		fxUCS2CMap("Quote", [][2]string{{"27", "0027"}}),
+	})
+}
+
+// fxBuildWildTwoPartyBareTIN puts the supplier and buyer blocks side by side, each ending in a
+// bare "TIN:" label whose value is a separate Tj. The buyer block is headed "Invoice to" and
+// carries a fragment-bearing label above ("Customer No.") and below ("Buyer's Signature") its
+// name. The apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
+func fxBuildWildTwoPartyBareTIN() []byte {
+	return fxQuoteTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: " + fxWildInvTwoParty},
+		fxLine{12, 72, 672, "Invoice Date: 2026-06-11"},
+		fxLine{12, 72, 630, fxWildSupplier},
+		fxLine{12, 72, 614, "TIN:"}, fxLine{12, 160, 614, fxWildTINSupplierTwoParty},
+		fxLine{12, 360, 646, "Invoice to"},
+		fxLine{12, 360, 630, "Customer No."},
+		fxLine{12, 360, 614, fxWildBuyer},
+		fxLine{12, 360, 598, "TIN:"}, fxLine{12, 448, 598, fxWildTINBuyerTwoParty},
+		fxLine{12, 360, 560, "Buyer's Signature"},
+		fxLine{12, 72, 582, "Currency: NGN"},
+		fxLine{12, 72, 240, "Sub-total"}, fxLine{12, 220, 240, "1,200.00"},
+		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, "90.00"},
+		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, "1,290.00"},
+	)
+}
+
+// fxWildRuledColXs are the five-column table's vertical rule positions (6 boundaries).
+// fxWildRuledRowYs are its horizontal rules: header top, header/row1, row1/row2, row2/row3,
+// bottom. Separate arrays from fxTableColXs/fxRichTableRowYs -- resizing those would change
+// table_invoice.pdf's and rich_invoice.pdf's committed bytes.
+var (
+	fxWildRuledColXs = [6]int{72, 116, 290, 340, 430, 540}
+	fxWildRuledRowYs = [5]int{512, 488, 464, 440, 416}
+
+	// The decoration real Nigerian invoices print. "RATE (N)" is escaped so the balanced
+	// parens in the PDF string literal are explicit; "Amount " + fxNaira must stay one Tj,
+	// because a lone \244 Tj emits no token at all.
+	fxWildRuledHeader = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", `RATE \(N\)`, "Amount " + fxNaira}
+	fxWildRuledBody   = [][]string{
+		{"1", "Steel Rods", "4", "1,000.00", "4,000.00"},
+		{"2", "Cement Bags", "6", "500.00", "3,000.00"},
+		{"3", "Roofing Sheets", "2", "500.00", "1,000.00"},
+	}
+)
+
+// fxWildRuledRowText lays one five-column row on a baseline, 4pt into each column.
+func fxWildRuledRowText(baseline int, cells []string) []fxLine {
+	lines := make([]fxLine, len(cells))
+	for i, text := range cells {
+		lines[i] = fxLine{10, fxWildRuledColXs[i] + 4, baseline, text}
+	}
+	return lines
+}
+
+// fxBuildWildRuledLinesTotals is a ruled five-column line-item table whose last row's amount
+// (1,000.00) sits 24pt above the totals block, competing with the printed total. The totals
+// corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
+// tell a corroborated pick from a positional one.
+//
+// The naira here is decoration glued to a column header; the currency comes from the explicit
+// "Currency: NGN" label. Neither fxTextPage nor fxNairaTextPage builds a naira font AND rules,
+// so the objects are assembled directly: fxAssemble numbers by slice index, so the CMap is 6.
+func fxBuildWildRuledLinesTotals() []byte {
+	lines := []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Invoice No: " + fxWildInvRuled},
+		{12, 72, 672, "Invoice Date: 2026-06-24"},
+		{12, 72, 654, "Supplier TIN: " + fxWildTINSupplierRuled},
+		{12, 72, 636, "Supplier: " + fxWildSupplier},
+		{12, 72, 618, "Buyer TIN: " + fxWildTINBuyerRuled},
+		{12, 72, 600, "Buyer: " + fxWildBuyer},
+		{12, 72, 582, "Currency: NGN"},
+	}
+	lines = append(lines, fxWildRuledRowText(500, fxWildRuledHeader)...)
+	lines = append(lines, fxWildRuledRowText(476, fxWildRuledBody[0])...)
+	lines = append(lines, fxWildRuledRowText(452, fxWildRuledBody[1])...)
+	lines = append(lines, fxWildRuledRowText(428, fxWildRuledBody[2])...)
+	lines = append(lines,
+		fxLine{12, 380, 404, "Sub-total"}, fxLine{12, 500, 404, "8,000.00"},
+		fxLine{12, 380, 386, "VAT"}, fxLine{12, 500, 386, "600.00"},
+		fxLine{12, 380, 368, "Total"}, fxLine{12, 500, 368, "8,600.00"},
+	)
+
+	// H before V, matching fxBuildTable's own loop shape.
+	var rules bytes.Buffer
+	for _, y := range fxWildRuledRowYs {
+		rules.WriteString(fxRuleH(y, fxWildRuledColXs[0], fxWildRuledColXs[len(fxWildRuledColXs)-1]))
+	}
+	for _, x := range fxWildRuledColXs {
+		rules.WriteString(fxRuleV(x, fxWildRuledRowYs[len(fxWildRuledRowYs)-1], fxWildRuledRowYs[0]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	const cmapObj = 6
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxNairaFont(cmapObj)),
+		fxNairaCMap(),
+	})
+}
+
+// fxBuildWildRCDueNaira prints an RC number between the VAT label and its amount, "Due Date"
+// above "Issue Date", and every amount prefixed with a naira. There is no "Currency:" label at
+// all: the naira is the only currency marker here, which is what keeps the two naira roles
+// apart from fxBuildWildRuledLinesTotals'. Symbol and amount stay in ONE Tj -- a lone \244 Tj
+// emits no token, and a split pair drops the symbol.
+func fxBuildWildRCDueNaira() []byte {
+	return fxNairaTextPage(true,
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: " + fxWildInvRCNaira},
+		fxLine{12, 72, 666, "Due Date"}, fxLine{12, 220, 666, "2026-08-07"},
+		fxLine{12, 72, 648, "Issue Date"}, fxLine{12, 220, 648, "2026-07-08"},
+		fxLine{12, 72, 624, "Supplier TIN: " + fxWildTINSupplierRCNaira},
+		fxLine{12, 72, 606, "Supplier: " + fxWildSupplier},
+		fxLine{12, 72, 588, "Buyer TIN: " + fxWildTINBuyerRCNaira},
+		fxLine{12, 72, 570, "Buyer: " + fxWildBuyer},
+		fxLine{12, 72, 258, "Sub-total"}, fxLine{12, 220, 258, fxNaira + " 2,500.00"},
+		fxLine{12, 72, 240, "RC NUMBER: " + fxWildRCNumber},
+		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, fxNaira + " 187.50"},
+		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, fxNaira + " 2,687.50"},
+	)
+}
+
+// fxBuildWildStackedBorderless stacks labels and values with no rules and no "Label:"
+// punctuation, and offsets every value 8pt below its label in a second column so neither
+// same_token, right nor below binds.
+//
+// One field stays readable on purpose: "Invoice No" over its value at the same x, the aligned
+// stack fxBuildCorpusStackedLabels proves. A layout that quarantines is never line-scored, and
+// lines_db_test.go's linesScored == eeLayoutCount would red on it.
+func fxBuildWildStackedBorderless() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No"},
+		fxLine{12, 72, 674, fxWildInvStacked},
+		fxLine{12, 72, 620, "Issue Date"}, fxLine{12, 300, 612, "2026-07-30"},
+		fxLine{12, 72, 596, "Buyer"}, fxLine{12, 300, 588, fxWildBuyer},
+		fxLine{12, 72, 572, "Buyer TIN"}, fxLine{12, 300, 564, fxWildTINBuyerStacked},
+		fxLine{12, 72, 548, "Supplier"}, fxLine{12, 300, 540, fxWildSupplier},
+		fxLine{12, 72, 524, "Supplier TIN"}, fxLine{12, 300, 516, fxWildTINSupplierStacked},
+		fxLine{12, 72, 500, "Currency"}, fxLine{12, 300, 492, "NGN"},
+		fxLine{12, 72, 260, "Sub total"}, fxLine{12, 300, 252, "1,500.00"},
+		fxLine{12, 72, 236, "VAT"}, fxLine{12, 300, 228, "112.50"},
+		fxLine{12, 72, 212, "Total"}, fxLine{12, 300, 204, "1,612.50"},
 	)
 }
 

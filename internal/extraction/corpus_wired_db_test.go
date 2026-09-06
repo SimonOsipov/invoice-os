@@ -1265,8 +1265,8 @@ func TestRLS_ScannedFixturePagesStillRender(t *testing.T) {
 
 // invoice.docx has no page image PDFium (or any renderer) can produce, so the wired run swaps
 // PageStore.Reader for a stub yielding one synthetic page. It stays on the PDF path -- wkOpener
-// defaults ContentType to application/pdf -- so EXTR-15-02's RendersPageImages gate does not
-// apply to it. The boxless path is TestRLS_ExtractWorkerWritesBoxlessFieldRowsForADocx
+// defaults ContentType to application/pdf -- so the render gate (RendersPageImagesForDocument)
+// does not skip it. The boxless path is TestRLS_ExtractWorkerWritesBoxlessFieldRowsForADocx
 // (worker_db_test.go), and TestExtractWorker_PagesNotRenderedGateIsScopedToRenderableFormats
 // pins where that gate sits.
 const (

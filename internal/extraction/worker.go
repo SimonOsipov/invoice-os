@@ -147,16 +147,17 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err != nil {
 		kind = FailureDocumentUnavailable
 	}
-	// A format with no page images skips the render and the page rows. Its layout is the b1
-	// write below, not this one (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
-	if err == nil && RendersPageImages(doc.ContentType) {
+	// A format with no page images skips the render and the page rows, unless its bytes sniff
+	// as PDF (RendersPageImagesForDocument). Otherwise its layout is the b1 write below, not
+	// this one (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
+	if err == nil && RendersPageImagesForDocument(doc) {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
 		if images, tokenPages, _, err = w.Pages.Ingest(ctx, args.TenantID, doc); err != nil {
 			kind = FailurePagesNotRendered
 		}
 	}
-	if err == nil && RendersPageImages(doc.ContentType) {
+	if err == nil && RendersPageImagesForDocument(doc) {
 		// Hoisted out of the closure below: the layout row and the rule lookup must read one
 		// Fingerprint over the same PDFium tokens.
 		fingerprint = Fingerprint(tokenPages)
@@ -190,7 +191,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	// A boxless format has no page images, so its identity comes off the tokens its own text
 	// read produced. Its own transaction, ahead of the switch, so a write failure reaches the
 	// classification block below (TestExtractWorker_FailureKindPerStage's boxless arm).
-	if err == nil && !RendersPageImages(doc.ContentType) && textRes.TextChars > 0 {
+	if err == nil && !RendersPageImagesForDocument(doc) && textRes.TextChars > 0 {
 		fingerprint = BoxlessFingerprint(textTokens)
 		if err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
 			anchors, err := MarshalAnchorObservations(AnchorObservations(textTokens))

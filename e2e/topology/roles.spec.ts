@@ -353,6 +353,23 @@ function tabStrip(page: Page) {
   return settingsTab(page, 'Members').locator('xpath=..')
 }
 
+// Each tab's own URL. `members` is the default and routeUrl omits it, so Members is bare
+// /settings — never /settings/members.
+const SETTINGS_TAB_URL: Record<string, RegExp> = {
+  Members: /\/settings$/,
+  Roles: /\/settings\/roles$/,
+}
+
+/** Opens a Settings tab and asserts the URL it must produce — the in-app half of the deep link. */
+async function openSettingsTab(page: Page, label: string): Promise<void> {
+  const url = SETTINGS_TAB_URL[label]
+  expect(url, `openSettingsTab has no URL for '${label}' — add it to SETTINGS_TAB_URL`).toBeTruthy()
+  // Locator and click on separate lines so AC-5's bare-click sweep reads 0 in this file.
+  const tab = settingsTab(page, label)
+  await tab.click()
+  await expect(page, `openSettingsTab(${label}) did not update the URL`).toHaveURL(url)
+}
+
 /**
  * A role card by its EXACT title. Substring matching would make `Preparer` select in-house's
  * card and firm's `Invoice Preparer` alike, which is the assertion this file most needs to
@@ -614,7 +631,7 @@ test('firm Settings: the live member directory, the live role grid, and every co
 
   // --- the Roles tab ------------------------------------------------------------------------
   const token = await login(PERSONAS.A)
-  await settingsTab(page, 'Roles').click()
+  await openSettingsTab(page, 'Roles')
   await expect(page.getByTestId('roles-grid')).toBeVisible()
   await expectLiveGridCount(page, token)
   for (const role of SEED_FIRM_ROLE_CARDS) {
@@ -728,7 +745,7 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
 
   // --- the Roles tab --------------------------------------------------------------------------
   const token = await login(PERSONAS.B)
-  await settingsTab(page, 'Roles').click()
+  await openSettingsTab(page, 'Roles')
   await expect(page.getByTestId('roles-grid')).toBeVisible()
   await expectLiveGridCount(page, token)
   for (const role of SEED_INHOUSE_ROLE_CARDS) {
@@ -825,7 +842,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   await expect(page.getByTestId('members-table')).toBeVisible()
   await expectRosterCell(page, { member: holder, text: heldSeat, tooltip: heldSeat })
 
-  await settingsTab(page, 'Roles').click()
+  await openSettingsTab(page, 'Roles')
   await expect(page.getByTestId('roles-grid')).toBeVisible()
 
   // --- create, and staff in the same commit -----------------------------------------------
@@ -858,12 +875,12 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   // --- AC-8: the round trip is real ---------------------------------------------------------
   // Role definitions and staffing are server rows now, so a reload re-fetches rather than
   // wiping them — the one assertion the deleted MOCK-era spec could structurally never make.
-  // `view`/the open Settings tab are plain useState (no hash route for Settings), so both are
-  // re-driven after the reload; the SESSION survives it untouched (lib/session.ts).
+  // The open tab is in the URL now, so the reload restores it instead of needing to be
+  // re-driven; the SESSION survives it untouched (lib/session.ts).
   await page.reload()
   await expect(sidebar(page)).toContainText(INHOUSE_PERSONA.tenantName.toUpperCase())
-  await goTo(page, 'Settings')
-  await settingsTab(page, 'Roles').click()
+  await expect(page, 'the reload must restore the Roles tab from the URL').toHaveURL(/\/settings\/roles$/)
+  await openSettingsTab(page, 'Roles')
   await expect(page.getByTestId('roles-grid')).toBeVisible()
   const survived = roleCard(page, title)
   await expect(survived, 'the created seat survives a reload').toHaveCount(1)
@@ -875,7 +892,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   // The AFTER half. `addRole` appends and `rolesOfMember` iterates in array order (and the
   // reload above re-fetched in the server's own `created_at` order, which is the same thing),
   // so the seat he already held still renders first and the new one lives in the `+1`.
-  await settingsTab(page, 'Members').click()
+  await openSettingsTab(page, 'Members')
   await expectRosterCell(page, { member: holder, text: `${heldSeat} +1`, tooltip: `${heldSeat}\n${title}` })
 
   // --- build the policy whose step will name that seat --------------------------------------

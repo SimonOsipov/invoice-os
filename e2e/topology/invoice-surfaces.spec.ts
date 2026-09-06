@@ -2366,6 +2366,7 @@ test('register-search: a term matching only a row past page 1 is found, and the 
   )
   await page.getByTestId('invoice-search-input').fill(searchTin)
   await page.getByTestId('invoice-search-input').press('Enter')
+  await expect(page, 'a committed search must put the term in the URL').toHaveURL(new RegExp(`/invoices\\?q=${searchTin}$`))
   const resp = await searchResp
   const body = (await resp.json()) as { pagination: { total: number } }
 
@@ -2375,6 +2376,60 @@ test('register-search: a term matching only a row past page 1 is found, and the 
   expect(body.pagination.total, 'the unique buyer TIN must match exactly the anchor row').toBe(1)
   await expect(page.getByTestId('invoice-row').filter({ hasText: anchorNumber }), 'search must surface the row even though it starts past page 1').toBeVisible()
   await expect(page.getByTestId('invoices-pager')).toContainText(`OF ${body.pagination.total}`)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The cold-boot half of the search URL above. A boot resolves the register to `clients[0]`
+// (activeEntityId seeds null, App.tsx; resolveActiveClient falls to the first row of the same
+// `name ASC, id ASC` list this read returns), so the fixture is built on THAT entity rather
+// than a fresh one of its own: switchClient replaceStates the ?q= away, so selecting an entity
+// after the boot is not a workaround.
+test('register: a search query is a working deep link', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  // Row 0 exactly as the server returned it, never re-sorted here -- localeCompare is not
+  // Postgres's collation.
+  const { entities } = await listEntities(token)
+  expect(entities.length, 'the firm tenant owns no entity, so no register can boot').toBeGreaterThan(0)
+  const boot = entities[0]
+
+  const searchTin = freshTin()
+  const stamp = Date.now()
+  const anchorNumber = `INV-DEEPQ-A-${stamp}`
+  const decoyNumber = `INV-DEEPQ-D-${stamp}`
+  // The decoy keeps cleanInvoiceFields' fixed buyer TIN, so it shares the register and can
+  // only leave the filtered list by being filtered OUT -- without it, "one row on screen"
+  // would also be true of a register that never narrowed.
+  await createInvoice(token, { entity_id: boot.id, ...cleanInvoiceFields(anchorNumber), buyer_tin: searchTin })
+  await createInvoice(token, { entity_id: boot.id, ...cleanInvoiceFields(decoyNumber) })
+
+  const filtered = await listInvoices(token, { entity_id: boot.id, q: searchTin, limit: 1 })
+  const unfiltered = await listInvoices(token, { entity_id: boot.id, limit: 1 })
+  expect(filtered.pagination.total, 'the unique buyer TIN must match exactly the anchor').toBe(1)
+  expect(
+    unfiltered.pagination.total,
+    'the decoy must leave the register holding more than the filter admits',
+  ).toBeGreaterThan(filtered.pagination.total)
+
+  // TWO navigations, not one: ?persona= cannot carry ?q=. The strip rewrites the URL to
+  // `pathname + hash` (App.tsx) before Workspace mounts, so the query is gone before anything
+  // can read it. The session is in localStorage and rehydrates with no network, so this second
+  // goto is a real signed-in cold boot.
+  await signInFirm(page)
+  const url = `${APP_URL}/invoices?q=${searchTin}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'the deep link did not settle on /invoices?q=<tin>').toHaveURL(new RegExp(`/invoices\\?q=${searchTin}$`))
+  await expect(page.getByTestId('invoice-search-input'), 'the boot must fill the search box from the URL').toHaveValue(searchTin)
+  await expect(invoiceRowByNumber(page, anchorNumber), 'the matching row must be on screen').toBeVisible()
+  await expect(invoiceRowByNumber(page, decoyNumber), 'the non-matching row must not be').toHaveCount(0)
+  await expect(page.getByTestId('invoices-pager')).toContainText(`OF ${filtered.pagination.total}`)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -4474,11 +4529,53 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await expect(activity(page).getByTestId('audit-row')).toHaveCount(server.total)
 
     await page.getByTestId('activity-open-in-audit').click()
+    await expect(page, 'the hand-off must carry the filter into the URL').toHaveURL(new RegExp(`/audit\\?invoice=${invoiceId}$`))
 
     await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
     await expect(page.getByTestId('audit-pill-invoice')).toContainText(`Invoice ${invoiceNumber}`)
     await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
     await expect(page.getByTestId('audit-row')).toHaveCount(server.total)
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  // Leg 7 -- the URL half of leg 6's hand-off. The same filter, reached by a cold boot instead
+  // of a click, read against the same live server total.
+  test('detail surface: an audit filter is a working deep link', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = collectErrors(page)
+
+    const server = await getAuditLog(journeyToken, { invoice_id: invoiceId, limit: 100 })
+    expect(server.total, `this invoice's audit log holds ${server.total} events, below the journey floor`).toBeGreaterThanOrEqual(JOURNEY_EVENT_FLOOR)
+    expect(
+      server.total,
+      `this invoice now holds ${server.total} events, past the Audit screen's ${AUDIT_FIRST_PAGE}-row first page -- page the screen before comparing row counts.`,
+    ).toBeLessThanOrEqual(AUDIT_FIRST_PAGE)
+
+    // Leg 6's non-vacuity control, repeated: without it, "the screen shows exactly this
+    // invoice's rows" is equally true of a screen that never filtered at all.
+    const wholeLog = await getAuditLog(journeyToken, { limit: 1 })
+    expect(
+      wholeLog.total,
+      `the workspace log holds ${wholeLog.total} events and this invoice ${server.total} -- with nothing else in the log, a dropped filter would be indistinguishable from a live one`,
+    ).toBeGreaterThan(server.total)
+
+    // TWO navigations: ?persona= cannot carry ?invoice=. The strip rewrites the URL to
+    // `pathname + hash` (App.tsx) before Workspace mounts. The session rehydrates from
+    // localStorage with no network, so the second goto is a real signed-in cold boot.
+    await signInFirm(page)
+    const url = `${APP_URL}/audit?invoice=${invoiceId}`
+    const res = await page.goto(url)
+    expect(res, `no response from ${url}`).toBeTruthy()
+    expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+    await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+    await expect(page, 'the deep link did not settle on /audit?invoice=<id>').toHaveURL(new RegExp(`/audit\\?invoice=${invoiceId}$`))
+    // Bare `One invoice`, never `Invoice <number>`: a URL boot resolves no number (App.tsx
+    // seeds invoiceNumber null), which is what tells this arrival apart from leg 6's.
+    await expect(page.getByTestId('audit-pill-invoice'), 'the URL filter must render as a pill').toHaveText(/^One invoice/)
+    await expect(page.getByTestId('audit-row').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('audit-row'), 'the booted screen must show exactly this invoice\'s events').toHaveCount(server.total)
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
@@ -4571,7 +4668,7 @@ import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { apiBase, getExtractions, listInvoices, type ExtractionJob } from '../api/client'
+import { apiBase, getExtractions, listEntities, listInvoices, type ExtractionJob } from '../api/client'
 
 // --- EXTR09-E2E-06 (EXTR-09-09) · the previewer's newly-reachable branches --------------
 //

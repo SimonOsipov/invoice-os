@@ -561,8 +561,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
   // write. A write here would push a duplicate entry on every Back press.
-  // All six setters run in this one handler so the id lands in the same commit as
-  // the view, matching openImportedInvoice/openExtraction's one-handler invariant.
+  // All setters run in this one handler so the id lands in the same commit as the view,
+  // matching openImportedInvoice/openExtraction's one-handler invariant. `create` owns
+  // reviewBatchIds as its whole path (lib/route.ts), so that arm is gated on ids present,
+  // not on view === 'create' -- a bare /create also parses to 'create' but with no ids.
   useEffect(() => {
     const onPopState = () => {
       const at = parseLocation(window.location.pathname, window.location.search)
@@ -581,6 +583,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           ? null
           : { invoiceId: at.auditInvoice, invoiceNumber: prev?.invoiceId === at.auditInvoice ? prev.invoiceNumber : null },
       )
+      if (at.reviewBatchIds.length > 0) {
+        setReviewBatchIds(at.reviewBatchIds)
+        setCreateStep('review')
+      }
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)

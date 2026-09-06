@@ -4056,3 +4056,84 @@ func ltNullable(p *string) string {
 	}
 	return *p
 }
+
+// --- EXTR-19-09 / AC-1: the boxless namespace fits this column too --------------------------
+
+const ejFingerprintCheck = "extraction_jobs_layout_fingerprint_check"
+
+// EXTR-19-09 / AC-1. Core AC-4's storage half on the jobs table. The worker writes this column
+// by UPDATE after the read, so the spec exercises an UPDATE and not an INSERT. Both CHECK
+// controls are asserted BY CONSTRAINT NAME. The NULL arm asserts the ASYMMETRY positively:
+// this column is nullable and extraction_anchor_rules.layout_fingerprint is not, so the two
+// tables' NULL fates must not be assumed to match.
+func TestRLS_ExtractionJobsAcceptsABoxlessLayoutFingerprint(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	fp := earBoxlessFingerprint(t)
+
+	docA, cleanupDoc := seedDocument(t, h.tenantA, "EXTR-19-09/boxless.docx")
+	defer cleanupDoc()
+	jobID, cleanupJob := seedExtractionJob(t, h.tenantA, docA)
+	defer cleanupJob()
+
+	setFingerprint := func(v any) error {
+		return db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `UPDATE extraction_jobs SET layout_fingerprint = $2 WHERE id = $1`, jobID, v)
+			return e
+		})
+	}
+	readFingerprint := func() (string, bool) {
+		var got *string
+		if err := h.super.QueryRow(ctx,
+			`SELECT layout_fingerprint FROM extraction_jobs WHERE id = $1`, jobID).Scan(&got); err != nil {
+			t.Fatalf("read back extraction_jobs.layout_fingerprint: %v", err)
+		}
+		if got == nil {
+			return "", false
+		}
+		return *got, true
+	}
+
+	if err := setFingerprint(fp); err != nil {
+		if failIfUndefinedExtractionJobs(t, "UPDATE with a real b1: fingerprint", err) {
+			return
+		}
+		t.Fatalf("UPDATE with the 67-character b1: fingerprint %q: want success, got: %v", fp, err)
+	}
+	if got, ok := readFingerprint(); !ok || got != fp {
+		t.Errorf("layout_fingerprint read back as (%q, present=%v), want (%q, true)", got, ok, fp)
+	}
+
+	// char_length counts CHARACTERS: the over-ceiling control is 129 characters, not bytes.
+	for _, c := range []struct{ what, fingerprint string }{
+		{"an empty layout_fingerprint", ""},
+		{"a 129-character layout_fingerprint", strings.Repeat("a", 129)},
+	} {
+		err := setFingerprint(c.fingerprint)
+		if err == nil {
+			t.Errorf("UPDATE with %s succeeded, want a CHECK violation", c.what)
+			continue
+		}
+		if code := pgCode(err); code != "23514" {
+			t.Errorf("UPDATE with %s: SQLSTATE = %q, want 23514: %v", c.what, code, err)
+			continue
+		}
+		if got := pgConstraint(err); got != ejFingerprintCheck {
+			t.Errorf("UPDATE with %s tripped constraint %q, want %q — an unnamed rejection proves only that something refused", c.what, got, ejFingerprintCheck)
+		}
+		// The refused UPDATE must leave the stored value alone, or the arms below read a
+		// column this test itself emptied.
+		if got, ok := readFingerprint(); !ok || got != fp {
+			t.Errorf("after the refused %s the stored value is (%q, present=%v), want the untouched (%q, true)", c.what, got, ok, fp)
+		}
+	}
+
+	// The asymmetry arm, asserted and not assumed: NULL is legal here.
+	if err := setFingerprint(nil); err != nil {
+		t.Fatalf("UPDATE with a NULL layout_fingerprint: want success (this column is nullable, unlike extraction_anchor_rules'), got: %v", err)
+	}
+	if got, ok := readFingerprint(); ok {
+		t.Errorf("layout_fingerprint read back as %q after a NULL UPDATE, want SQL NULL", got)
+	}
+}

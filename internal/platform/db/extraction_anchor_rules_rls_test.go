@@ -14,6 +14,7 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"reflect"
@@ -23,7 +24,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
@@ -1256,5 +1259,120 @@ func TestRLS_ExtractionAnchorRulesRolledBackInsertNeverRecyclesItsSeq(t *testing
 		t.Fatalf("seq of the row after the rollback = %d, want > %d — a recycled seq would let a "+
 			"rolled-back insert's slot silently go to a later row, breaking the seq DESC recency read",
 			seqAfter, seqRolledBack)
+	}
+}
+
+// --- EXTR-19-09 / AC-1: the boxless namespace fits this column ------------------------------
+
+const (
+	earFingerprintCheck   = "extraction_anchor_rules_layout_fingerprint_check"
+	earFingerprintNotNull = "extraction_anchor_rules_layout_fingerprint_not_null"
+)
+
+// earBoxlessFingerprint is a real BoxlessFingerprint output over a page 1 whose tokens carry no
+// box -- the DOCX shape. Not a hand-typed "b1:"+hex: what has to fit the column is what the
+// producer emits. The 67-character floor is asserted before anything else, so a fixture that
+// stopped being a b1: key cannot read as a clean pass.
+func earBoxlessFingerprint(t *testing.T) string {
+	t.Helper()
+	fp := extraction.BoxlessFingerprint([]extraction.TokenPage{{
+		Number: 1,
+		Tokens: []extraction.Token{
+			{Text: "Invoice No"}, {Text: "Issue Date"}, {Text: "Total"},
+		},
+	}})
+	if !strings.HasPrefix(fp, extraction.BoxlessFingerprintVersion+":") {
+		t.Fatalf("BoxlessFingerprint over a boxless page 1 returned %q, want the %q namespace", fp, extraction.BoxlessFingerprintVersion+":")
+	}
+	if n := len([]rune(fp)); n != 67 {
+		t.Fatalf("BoxlessFingerprint over a boxless page 1 returned %q (%d characters), want 67 — the fixture is not a real b1: key, so every assertion below is about something else", fp, n)
+	}
+	return fp
+}
+
+// earColumnName extracts the COLUMN NAME from err. PostgreSQL 18 reports a not-null violation
+// with schema, table and column and NO constraint name, so the column is the only handle the
+// wire error gives; the constraint is named from pg_constraint instead.
+func earColumnName(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.ColumnName
+	}
+	return ""
+}
+
+// EXTR-19-09 / AC-1. Core AC-4's storage half on the rules table, closed explicitly rather than
+// by inference from the v1: cases. Both CHECK controls are asserted BY CONSTRAINT NAME: an
+// unnamed rejection proves only that something refused. The NULL arm is deliberately NOT
+// symmetric with extraction_jobs -- here the column is NOT NULL, and a different constraint
+// refuses it (TestRLS_ExtractionJobsAcceptsABoxlessLayoutFingerprint asserts the other fate).
+func TestRLS_ExtractionAnchorRulesAcceptsABoxlessFingerprint(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	fp := earBoxlessFingerprint(t)
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_anchor_rules WHERE id = ANY($1)`, probes)
+	}()
+
+	okID := uuid.NewString()
+	probes = append(probes, okID)
+	if err := earAsSuper(t, earInsert, okID, h.tenantA, fp, earField, earRuleBody, 1); err != nil {
+		if failIfUndefinedAnchorRules(t, "INSERT with a real b1: fingerprint", err) {
+			return
+		}
+		t.Fatalf("INSERT with the 67-character b1: fingerprint %q: want success, got: %v", fp, err)
+	}
+	var stored string
+	if err := h.super.QueryRow(ctx,
+		`SELECT layout_fingerprint FROM extraction_anchor_rules WHERE id = $1`, okID).Scan(&stored); err != nil {
+		t.Fatalf("read back the stored fingerprint: %v", err)
+	}
+	if stored != fp {
+		t.Errorf("layout_fingerprint read back as %q, want %q — the column must store a b1: key byte-identical", stored, fp)
+	}
+
+	// char_length counts CHARACTERS, so the over-ceiling control is 129 characters. A
+	// 129-BYTE multi-byte value would satisfy the CHECK and prove nothing.
+	over := strings.Repeat("a", 129)
+	for _, c := range []struct{ what, fingerprint string }{
+		{"an empty layout_fingerprint", ""},
+		{"a 129-character layout_fingerprint", over},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := earAsSuper(t, earInsert, id, h.tenantA, c.fingerprint, earField, earRuleBody, 1)
+		earAssertPGCode(t, err, "23514", earFingerprintCheck, "a row with "+c.what)
+		if n := earRowCount(t, id); n != 0 {
+			t.Errorf("rows after the refused %s = %d, want 0", c.what, n)
+		}
+	}
+
+	// The asymmetry arm. A NULL here is refused by the NOT NULL constraint, never by the
+	// CHECK, and the two tables' NULL fates differ.
+	nullID := uuid.NewString()
+	probes = append(probes, nullID)
+	nullErr := earAsSuper(t, earInsert, nullID, h.tenantA, nil, earField, earRuleBody, 1)
+	if failIfUndefinedAnchorRules(t, "INSERT with a NULL layout_fingerprint", nullErr) {
+		return
+	}
+	if got := pgCode(nullErr); got != "23502" {
+		t.Fatalf("INSERT with a NULL layout_fingerprint returned SQLSTATE %q (%v), want 23502 — on this table the column is NOT NULL", got, nullErr)
+	}
+	if got := pgConstraint(nullErr); got == earFingerprintCheck {
+		t.Errorf("a NULL layout_fingerprint tripped %q; the CHECK admits NULL by three-valued logic and is not what refuses it here", got)
+	}
+	if got := earColumnName(nullErr); got != "layout_fingerprint" {
+		t.Errorf("the not-null violation names column %q, want layout_fingerprint — a NULL in some other column would report 23502 too", got)
+	}
+	if n := mustCount(t, h.super,
+		`SELECT count(*) FROM pg_constraint WHERE conname = $1 AND contype = 'n'`, earFingerprintNotNull); n != 1 {
+		t.Errorf("pg_constraint holds %d not-null constraint(s) named %q, want 1 — this is the constraint the 23502 above comes from, and the wire error does not name it",
+			n, earFingerprintNotNull)
+	}
+	if n := earRowCount(t, nullID); n != 0 {
+		t.Errorf("rows after the refused NULL layout_fingerprint = %d, want 0", n)
 	}
 }

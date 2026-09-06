@@ -458,8 +458,10 @@ var cldSubsections = []struct {
 		needles: []string{
 			"typed", "undone", "zero rules", "anchors to nothing", "honest refusal",
 			"boxless", "b1:", "layout_tokens", "learnboxlessrule",
+			// What the boxless path derives, and the refusal that is not the no-hit one.
+			"same_token", "ambiguous",
 		},
-		why: "the method and the layout namespace are both inputs; a reader who thinks only a gesture teaches will point at the wrong thing on a DOCX",
+		why: "the method and the layout namespace are both inputs; a reader who thinks only a gesture teaches will point at the wrong thing on a DOCX, and a reader who never learns which relation the boxless path derives cannot predict what it will do",
 	},
 	{
 		heading: "Undo does not un-teach",
@@ -548,5 +550,98 @@ func TestCorpusDoc_RecordsHowALearnedRuleIsDerivedAndWhatUndoDoesNot(t *testing.
 	adding := strings.ToLower(acDocSectionText(t, doc, cldAdding))
 	if !strings.Contains(adding, fxLearnedTwoParty) {
 		t.Errorf("%s's %q section never names %s -- the next author adds a corpusExpect row for it by reflex", acDoc, cldAdding, fxLearnedTwoParty)
+	}
+}
+
+// --- EXTR-19-09 / AC-6: the doc's two self-contradictions, in the scan's blind spot ---------
+
+const (
+	// cldBoxlessLever is the string FingerprintVersion is a substring of; it must be masked
+	// before any FingerprintVersion scan, or every masked paragraph reads as a hit.
+	cldBoxlessLever = "BoxlessFingerprintVersion"
+	cldGeoLever     = "FingerprintVersion"
+	cldLeverMask    = "\x00BOXLESS_LEVER\x00"
+	cldLeverFloor   = 3
+	cldPreambleMin  = 200
+	// cldStalePreamble is the sentence that went false when EXTR-19-08's handler landed.
+	cldStalePreamble = "a single pointed correction"
+	// cldControlNeedle proves the scan read docs/extraction-corpus.md and not some other file.
+	cldControlNeedle = "## Learned rules"
+)
+
+// cldParagraphs splits doc on blank lines. A markdown table has no blank line inside it, so a
+// table row's prose is scanned with the table it belongs to -- which is where :35 lives.
+func cldParagraphs(doc string) []string {
+	var out []string
+	for _, p := range strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n\n") {
+		if strings.TrimSpace(p) != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// cldLearnedRulesPreamble is the text between "## Learned rules" and its first "### ". No
+// needle can reach it: cldSubsection only reads under a "### " heading.
+func cldLearnedRulesPreamble(t *testing.T, doc string) string {
+	t.Helper()
+
+	body := acDocSectionText(t, doc, cldSection)
+	if i := strings.Index(body, "\n### "); i >= 0 {
+		body = body[:i]
+	}
+	return strings.TrimSpace(cldWhitespaceRun.ReplaceAllString(body, " "))
+}
+
+// EXTR-19-09 / AC-6. Two sentences say a FingerprintVersion bump alone invalidates every
+// stored rule, contradicting the section that names both levers; and the "## Learned rules"
+// preamble still says a rule comes from a pointed correction, false since EXTR-19-08. Both
+// sit outside every "### " subsection, so cldSubsection cannot reach either -- this reads the
+// RAW file instead.
+func TestCorpusDoc_NamesOneInvalidationRuleNotTwo(t *testing.T) {
+	doc := acRepoFile(t, acDoc)
+
+	// The found-needle control: prove the scan is reading the right file before asserting
+	// anything about what the file does not say.
+	if !strings.Contains(doc, cldControlNeedle) {
+		t.Fatalf("%s carries no %q heading, so this scan is reading the wrong file and every absence below is an artefact", acDoc, cldControlNeedle)
+	}
+
+	// Arm 1 -- one invalidation rule, not two. Mask the longer lever first: it contains the
+	// shorter one as a substring.
+	masked := strings.ReplaceAll(doc, cldBoxlessLever, cldLeverMask)
+	var named int
+	for _, p := range cldParagraphs(masked) {
+		if !strings.Contains(p, cldGeoLever) {
+			continue
+		}
+		named++
+		if strings.Contains(p, cldLeverMask) {
+			continue
+		}
+		t.Errorf("%s names %s as an invalidation lever without %s:\n\n%s\n\nSince EXTR-19-02 the same anchorLabelMatchers feed both fingerprints, so a lexicon change needs both bumps; a paragraph naming one lever tells the reader a stale half-truth",
+			acDoc, cldGeoLever, cldBoxlessLever, strings.TrimSpace(p))
+	}
+	if named < cldLeverFloor {
+		t.Fatalf("%s names %s in %d paragraph(s), want at least %d — a scan finding nothing reports a clean file",
+			acDoc, cldGeoLever, named, cldLeverFloor)
+	}
+
+	// Arm 2 -- the preamble, which no needle list can reach.
+	preamble := cldLearnedRulesPreamble(t, doc)
+	if n := len([]rune(preamble)); n < cldPreambleMin {
+		t.Fatalf("%s's %q preamble carries %d rune(s), want at least %d — an absence check over an emptied preamble always passes",
+			acDoc, cldSection, n, cldPreambleMin)
+	}
+	lower := strings.ToLower(preamble)
+	if strings.Contains(lower, cldStalePreamble) {
+		t.Errorf("%s's %q preamble still says %q; since EXTR-19-08 a typed correction on a b1: layout also derives a rule:\n\n%s",
+			acDoc, cldSection, cldStalePreamble, preamble)
+	}
+	for _, method := range []string{"pointed", "typed"} {
+		if !strings.Contains(lower, method) {
+			t.Errorf("%s's %q preamble never names the %q method — the preamble is the first prose a reader meets and it owes both learning paths:\n\n%s",
+				acDoc, cldSection, method, preamble)
+		}
 	}
 }

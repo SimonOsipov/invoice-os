@@ -13,6 +13,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
+import { DEEP_LINK_KEY, DEEP_LINK_SCHEMA_VERSION } from './lib/deepLink'
 import { ROUTE_PATHS } from './lib/route'
 import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
@@ -20,6 +21,7 @@ import type { PlatformCtx, View } from './types'
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const INVOICE_ID = 'b7c1d2e3-4f5a-4b6c-8d9e-0f1a2b3c4d5e'
 
 const MEMBER: Member = {
   id: 'm-boot-001',
@@ -49,15 +51,24 @@ function createMemoryStorage() {
 }
 
 let capturedCtx: PlatformCtx | undefined
+// Additive render log beside capturedCtx, which keeps only the LAST render. Sidebar is not
+// memoized and takes a freshly built ctx object every render, so this log is complete.
+const ctxRenders: PlatformCtx[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
+    ctxRenders.push(p.ctx)
     return null
   },
 }))
 
 beforeEach(() => {
   capturedCtx = undefined
+  // ctxRenders is reset HERE ONLY. The two mid-test `capturedCtx = undefined` resets
+  // (boot_everyNonDefaultPathSeedsItsOwnView, signOut_thePathnameDoesNotSurvive...) sit in
+  // specs that never read this log; the specs that do read it slice it instead of clearing.
+  ctxRenders.length = 0
+  sessionStorage.clear()
   // jsdom's environment is per FILE, not per test -- without this, one test's boot URL
   // seeds the next test's boot.
   window.history.replaceState(null, '', '/')
@@ -319,6 +330,128 @@ describe('QA adversarial coverage', () => {
     expect(ctx.view, 'the review hash must win over a completely unrelated path').toBe('create')
     expect(window.location.pathname, 'the alignment must correct the path to /create').toBe('/create')
     expect(window.location.hash, 'the alignment must carry the hash along').toBe(hash)
+  })
+})
+
+// ROUTE-04-02: the boot seeds the three owned params and the mount alignment re-emits them.
+describe('ROUTE-04-02 AC-1: the settings tab seeds from the path segment', () => {
+  it('boot_settingsTabSeedsFromThePathSegment', async () => {
+    await bootAt('/settings/roles')
+    const ctx = requireCtx()
+    expect(ctx.view, `booting at /settings/roles should seed view 'settings', got '${ctx.view}'`).toBe('settings')
+    expect(ctx.settingsTab, `the path segment must seed settingsTab, got '${ctx.settingsTab}'`).toBe('roles')
+    expect(window.location.pathname, 'the alignment must keep the tab segment in the URL').toBe('/settings/roles')
+  })
+})
+
+describe('ROUTE-04-02 AC-2: the invoice query seeds, and survives the alignment', () => {
+  it('boot_theInvoiceQuerySeedsFromTheUrl', async () => {
+    await bootAt('/invoices?q=acme')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: /invoices must still seed the invoices view').toBe('invoices')
+    expect(ctx.invoiceQuery, `the owned q param must seed invoiceQuery, got '${ctx.invoiceQuery}'`).toBe('acme')
+  })
+
+  it('boot_theAlignedUrlKeepsTheOwnedQuery', async () => {
+    await bootAt('/invoices?q=acme')
+    requireCtx()
+    expect(
+      window.location.pathname + window.location.search,
+      'the alignment must re-emit the owned q param rather than drop it',
+    ).toBe('/invoices?q=acme')
+  })
+})
+
+describe('ROUTE-04-02 AC-3: the audit invoice filter seeds from the url', () => {
+  it('boot_theAuditInvoiceFilterSeedsFromTheUrl', async () => {
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    requireCtx()
+    // The MOUNT render, not requireCtx(): App.tsx's consume-once effect nulls the atom in
+    // the same commit that seeds it. ROUTE-04-04 deletes that effect and tightens this.
+    expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
+    expect(ctxRenders[0].view, 'floor: the first logged render must be the mount render').toBe('audit')
+    expect(
+      ctxRenders[0].auditPrefilter,
+      'the owned invoice param must seed the whole prefilter atom, invoiceNumber included',
+    ).toEqual({ invoiceId: INVOICE_ID, invoiceNumber: null })
+    expect(
+      window.location.pathname + window.location.search,
+      'the alignment must re-emit the owned invoice param',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+  })
+})
+
+describe('ROUTE-04-02 AC-4: an unowned param is dropped, an owned one is not', () => {
+  // Positive control for the shipped boot_neverEchoesAnExistingQueryStringIntoTheAlignedUrl:
+  // that spec alone stays green on an alignment that emits no query string at all.
+  it('boot_dropsTheUnownedParamWhileKeepingTheOwnedOne', async () => {
+    await bootAt(`/audit?foo=bar&invoice=${INVOICE_ID}`)
+    requireCtx()
+    expect(window.location.pathname, 'the view still seeds from the path').toBe('/audit')
+    expect(window.location.search, 'the owned param survives the alignment and the unowned one does not').toBe(
+      `?invoice=${INVOICE_ID}`,
+    )
+  })
+})
+
+describe('ROUTE-04-02 AC-5: a restored destination ignores a live query string', () => {
+  it('boot_aRestoredDestinationIgnoresALiveQueryString', async () => {
+    sessionStorage.setItem(
+      DEEP_LINK_KEY,
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', at: Date.now() }),
+    )
+    await bootAt(`/?invoice=${INVOICE_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'the restored destination must still decide the view').toBe('audit')
+    expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
+    expect(
+      ctxRenders[0].auditPrefilter,
+      'a query string sitting on the bare root must never attach to a restored path',
+    ).toBeNull()
+    expect(window.location.search, 'the restored path carries no query').toBe('')
+
+    // Control needle: the same param on a LIVE /audit URL must still seed. Without it this
+    // spec stays green on an implementation that never reads the query at all. The log is
+    // sliced rather than reset, so the beforeEach-only reset strategy above still holds.
+    const beforeControl = ctxRenders.length
+    cleanup()
+    sessionStorage.clear()
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    const controlRenders = ctxRenders.slice(beforeControl)
+    expect(controlRenders.length, 'the control boot logged no render').toBeGreaterThan(0)
+    expect(controlRenders[0].auditPrefilter, 'control: a live /audit query must still seed the atom').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: null,
+    })
+  })
+})
+
+describe('ROUTE-04-02 AC-6: the review-hash boot path is unchanged', () => {
+  it('boot_theReviewHashPathIsUnchanged', async () => {
+    const hash = `#review/${REVIEW_ID}`
+    // `q` is unowned on the bare root, so an alignment that appended the live search would
+    // carry it onto /create. A bare `/#review/...` boot cannot tell those two apart.
+    await bootAt(`/?q=acme${hash}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'the review hash must still win the boot').toBe('create')
+    expect(ctx.createStep, 'the review step must still be active').toBe('review')
+    expect(window.location.pathname, 'the alignment must still correct the path to /create').toBe('/create')
+    expect(window.location.hash, 'the alignment must still preserve the hash verbatim').toBe(hash)
+    expect(window.location.search, 'create owns no param, so the aligned URL carries no query').toBe('')
+  })
+})
+
+describe('ROUTE-04-02 AC-7: under StrictMode every boot write names one url', () => {
+  it('boot_underStrictModeTheUrlConvergesOnOneWrite', async () => {
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt('/settings/roles', { strict: true })
+    requireCtx()
+    // A call COUNT is the wrong invariant: StrictMode double-invokes both the alignment and
+    // the review-hash mirror, so a correct boot records four writes of its own here.
+    // bootAt writes the URL as its first statement, so call 0 is the harness's own setup.
+    const writes = replaceSpy.mock.calls.slice(1).map((call) => call[2])
+    expect(writes.length, 'the boot recorded no write of its own').toBeGreaterThanOrEqual(2)
+    expect([...new Set(writes)], 'every boot write must name the same aligned URL').toEqual(['/settings/roles'])
   })
 })
 

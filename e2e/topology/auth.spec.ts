@@ -288,6 +288,14 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
 
+  // Invoices is a CLIENT-scoped surface: the list is filtered to ctx.active.entityId,
+  // which signing in leaves at whatever clients[0] resolves to (portfolio's ORDER BY name
+  // ASC) -- never this fresh entity. Without this the row click below times out.
+  // Same two locators invoice-surfaces.spec.ts's selectEntity uses; not imported, because
+  // pulling one spec's module graph into another registers its tests twice.
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entity.name }).click()
+
   const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
   await nav.getByRole('button', { name: /Invoices/ }).click()
   await expect(page, 'nav to Invoices did not update the URL').toHaveURL(/\/invoices$/)

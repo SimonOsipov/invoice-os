@@ -2,8 +2,6 @@
 // the seam neither internal/extraction nor internal/importer may cross, so the suite lives in
 // its own test-only package and imports both.
 //
-// eeExtract and eeImport are stubs at this stage; the three specs below are RED against them.
-//
 // Local run (two DB-backed packages under one glob share one Postgres, hence -p 1):
 //
 //	DATABASE_URL="postgres://invoice_app:app@localhost:5433/invoice_os?sslmode=disable" \
@@ -13,6 +11,7 @@ package endtoend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,11 +19,19 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/importer"
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
 const (
@@ -40,8 +47,13 @@ const (
 	// eeMinRequiredFixtures: a shrunken require-list scores fewer layouts while still passing.
 	eeMinRequiredFixtures = 6
 
-	// eeNotImplemented marks a harness seam Stage 3 still owes.
-	eeNotImplemented = "end-to-end harness seam not implemented"
+	eeContentType = "application/pdf"
+
+	// Upper bounds, not sleeps: the poll returns the moment the row is terminal. The extract
+	// budget is under ExtractWorker.Timeout (10m) and over a cold PDFium render.
+	eeExtractBudget = 3 * time.Minute
+	eePollEvery     = 100 * time.Millisecond
+	eeStopBudget    = 5 * time.Second
 )
 
 // requiredPDFs and requiredGoldens are hard-coded, never a directory walk: a walk cannot see a
@@ -228,27 +240,161 @@ func eeFixtureBytes(t *testing.T, name string) []byte {
 	return b
 }
 
+// eeAudit is the worker's audit port. It writes on the tx it was handed, so the row shares the
+// worker's transaction; a nil tx is the contract violation, not a no-op.
+func eeAudit(ctx context.Context, tx pgx.Tx, ev extraction.ExtractionAudit) error {
+	if tx == nil {
+		return errors.New("the audit port was handed a nil tx; the row cannot share the worker's transaction")
+	}
+	event := "extraction.failed"
+	if ev.Succeeded {
+		event = "extraction.succeeded"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"document_id":       ev.DocumentID,
+		"extraction_job_id": ev.ExtractionJobID,
+		"extractor":         ev.Extractor,
+		"extractor_version": ev.ExtractorVersion,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO audit_log (actor, event, payload) VALUES ($1, $2, $3)`,
+		"system", event, string(payload))
+	return err
+}
+
+// eeWorker wires the production seams, not stubs: the real PDFium reader on both the render
+// and the text branch, and the tenant's own learned anchor rules.
+func eeWorker(t *testing.T, body []byte) *extraction.ExtractWorker {
+	t.Helper()
+	h := eeRequire(t)
+	return &extraction.ExtractWorker{
+		Pool: h.app,
+		// Never reached on the Text branch: Work calls Name()/Version() only.
+		Extractor: extraction.NewPDFiumExtractor(),
+		Open: func(context.Context, string) (extraction.Document, error) {
+			return extraction.Document{Bytes: body, ContentType: eeContentType}, nil
+		},
+		Pages: &extraction.PageStore{
+			Reader: extraction.NewPDFiumReader(),
+			Sink:   func(context.Context, string, []byte) error { return nil },
+		},
+		Audit: eeAudit,
+		Text:  extraction.NewPDFiumReader(),
+		Rules: (&extraction.Store{Pool: h.app}).AnchorRulesFor,
+	}
+}
+
 // eeExtract drives stage 1: document bytes -> extraction_field_results. It returns the
 // extraction_jobs id so a caller can read rank-0 rows BEFORE the import hop.
 //
-// Stub: Stage 3 wires ExtractWorker through a real River client (extraction.AddTo -> queue.New
-// -> extraction.EnqueueExtraction -> Start -> poll extraction_jobs.state). ExtractWorker.Work
-// cannot be called directly -- extractArgs is unexported.
+// The job goes through a real River client because ExtractWorker.Work cannot be called from
+// out here -- extractArgs is unexported -- and because that adds the fetch/execute hop.
 func eeExtract(t *testing.T, ctx context.Context, w eeWorld, layout string) string {
 	t.Helper()
-	t.Logf("eeExtract(%s): %s", layout, eeNotImplemented)
-	return uuid.NewString()
+	h := eeRequire(t)
+
+	bundle := river.NewWorkers()
+	extraction.AddTo(bundle, eeWorker(t, eeFixtureBytes(t, layout)))
+	c, err := queue.New(h.app, queue.Config{
+		Queues:  map[string]river.QueueConfig{extraction.QueueName: {MaxWorkers: 1}},
+		Workers: bundle,
+	})
+	if err != nil {
+		t.Fatalf("build extraction worker client: %v", err)
+	}
+
+	if err := db.WithinTenantTx(ctx, h.app, w.tenantID, func(tx pgx.Tx) error {
+		skipped, e := extraction.EnqueueExtraction(ctx, tx, c, w.tenantID, w.documentID)
+		if e != nil {
+			return e
+		}
+		if skipped {
+			return errors.New("EnqueueExtraction reported skipped for a fresh document")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("enqueue extraction for document %s: %v", w.documentID, err)
+	}
+
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("start extraction worker pool: %v", err)
+	}
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), eeStopBudget)
+		defer cancel()
+		if err := c.Stop(stopCtx); err == nil {
+			return
+		}
+		hardCtx, hardCancel := context.WithTimeout(context.Background(), eeStopBudget)
+		defer hardCancel()
+		if err := c.River().StopAndCancel(hardCtx); err != nil {
+			t.Errorf("stop extraction worker pool: %v", err)
+		}
+	})
+
+	return eeAwaitSucceeded(t, ctx, w, layout)
+}
+
+// eeAwaitSucceeded polls extraction_jobs until the row is terminal. "failed" is an attempt
+// with retries left, not an outcome, so only succeeded and dead_lettered end the wait.
+func eeAwaitSucceeded(t *testing.T, ctx context.Context, w eeWorld, layout string) string {
+	t.Helper()
+	h := eeRequire(t)
+	deadline := time.Now().Add(eeExtractBudget)
+	var id, state, lastErr string
+	for {
+		err := h.super.QueryRow(ctx,
+			`SELECT id, state, coalesce(last_error, '')
+			   FROM extraction_jobs WHERE tenant_id = $1 AND document_id = $2`,
+			w.tenantID, w.documentID).Scan(&id, &state, &lastErr)
+		switch {
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			t.Fatalf("read the extraction_jobs row for document %s: %v", w.documentID, err)
+		case err == nil && state == "succeeded":
+			return id
+		case err == nil && state == "dead_lettered":
+			t.Fatalf("extraction of %s dead-lettered: %s", layout, lastErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("extraction of %s is %q after %v (last_error %q), want succeeded",
+				layout, state, eeExtractBudget, lastErr)
+		}
+		time.Sleep(eePollEvery)
+	}
+}
+
+// eeGate stands in for the validate gate. ImportDocument never consults it, so a call is a
+// regression this harness should surface rather than absorb.
+type eeGate struct{}
+
+var eeErrGateCalled = errors.New("ImportDocument must not consult the gate")
+
+func (eeGate) Evaluate(context.Context, []invoice.EvalItem) (invoice.EvalResult, error) {
+	return invoice.EvalResult{}, eeErrGateCalled
+}
+
+func (eeGate) ValidateBatch(context.Context, []invoice.Invoice) (invoice.BatchOutcome, error) {
+	return invoice.BatchOutcome{}, eeErrGateCalled
 }
 
 // eeImport drives stage 2: the missing hop, run as the seeded member in the request-tenant
 // posture.
-//
-// Stub: Stage 3 wires importer.NewService(importer.NewStore, invoice.NewStore, eeGate) and
-// calls ImportDocument on a ctx carrying auth.WithIdentity.
 func eeImport(t *testing.T, ctx context.Context, w eeWorld) importer.BatchResult {
 	t.Helper()
-	t.Logf("eeImport: %s", eeNotImplemented)
-	return importer.BatchResult{}
+	h := eeRequire(t)
+
+	svc := importer.NewService(importer.NewStore(h.app), invoice.NewStore(h.app), eeGate{})
+	rctx := auth.WithIdentity(ctx, auth.Identity{
+		Subject: w.subject, Role: "authenticated", TenantID: w.tenantID,
+	})
+	res, err := svc.ImportDocument(rctx, w.entityID, w.documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument(%s, %s): %v", w.entityID, w.documentID, err)
+	}
+	return res
 }
 
 type eeRow struct {
@@ -324,11 +470,19 @@ type eeFataler interface {
 
 // eeRequireFixtures fails naming EVERY absent file. A first-miss abort would hide the rest,
 // and a skip would green-light a suite that measured nothing.
-//
-// Stub: Stage 3 stats each name under eeFxDir and reports the shortfall.
 func eeRequireFixtures(t eeFataler, names []string) {
 	t.Helper()
-	_ = names
+	var missing []string
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(eeFxDir, name)); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	t.Fatalf("%d fixture(s) absent under %s/: %s -- regenerate with `go test ./internal/extraction/ -run TestFixtures_MatchTheirGenerator -update`",
+		len(missing), eeFxDir, strings.Join(missing, ", "))
 }
 
 // eeFixtureRecorder observes eeRequireFixtures without ending the test.

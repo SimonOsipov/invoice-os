@@ -210,6 +210,10 @@ type eeScore struct {
 	// the renderer never divides: linesPriced at 0/0 is a slash between two counts, not NaN.
 	linesReached []eeScoreRow // hits = lines that reached the invoice, total = lines the document carries
 	linesPriced  []eeScoreRow // hits = lines carrying a unit price, total = lines that reached
+
+	// linesScored is how many layouts had their rows actually read off an invoice.
+	// TestRLS_EndToEndScoresLineItemOutcome holds it to eeLayoutCount.
+	linesScored int
 }
 
 // eeCountCells counts the denominator straight off the table, resolving nothing. A row missing
@@ -239,6 +243,23 @@ func eeExpectedValues(c eeCell) []string {
 // eeRenderReport is the block CI reads. Both loops are unconditional: a field standing at 0/N
 // renders 0/N rather than vanishing, because a field silently absent from the report reads as
 // tested.
+// A row of 0/0 reads exactly like a satisfied denominator, so when no scored layout carries a
+// table the report says so in words rather than leaving six confident-looking zeros.
+// TestEndToEnd_AnEmptyLineCorpusSaysSoInWords holds both directions.
+const eeNoLineSignalNote = "  NO LINE SIGNAL -- no scored layout carries a line-item table, so every line row above is 0/0 by construction and measures nothing"
+
+func eeNoLineSignal(s eeScore) bool {
+	if len(s.linesReached) == 0 {
+		return false
+	}
+	for _, r := range s.linesReached {
+		if r.total != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func eeRenderReport(s eeScore) string {
 	var b strings.Builder
 
@@ -260,6 +281,9 @@ func eeRenderReport(s eeScore) string {
 	b.WriteString(eeLinesPricedHeading + "\n")
 	for _, r := range s.linesPriced {
 		fmt.Fprintf(&b, "    %-28s %d/%d\n", r.name, r.hits, r.total)
+	}
+	if eeNoLineSignal(s) {
+		b.WriteString(eeNoLineSignalNote + "\n")
 	}
 	for _, layout := range s.quarantined {
 		fmt.Fprintf(&b, "  QUARANTINED %s -- no invoices row; all %d cells count as misses\n", layout, len(writtenFields))

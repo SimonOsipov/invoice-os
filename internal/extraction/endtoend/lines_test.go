@@ -190,6 +190,10 @@ func TestEndToEnd_TheExpectedLineCountIsTakenOffTheGoldens(t *testing.T) {
 		t.Errorf("%s yields %d line(s), pinned at %d -- re-measure and set eeLineRichLines", eeLineRichGolden, rich, eeLineRichLines)
 	}
 
+	if len(expectByLayout) == 0 {
+		t.Fatal("expectByLayout is empty; every per-layout check below walks nothing")
+	}
+
 	// One key per scored layout, no extras: an entry for a layout nobody scores is a
 	// denominator nothing checks.
 	if len(eeLinesExpected) != len(expectByLayout) {
@@ -331,5 +335,40 @@ func TestEndToEnd_AZeroReachedLineRowStillRenders(t *testing.T) {
 		if strings.Contains(report, poison) {
 			t.Errorf("the report carries %q; the line figures are being divided rather than printed as two counts:\n%s", poison, report)
 		}
+	}
+}
+
+// The corpus carries no table at all, so both line sections render 0/0 on every row -- which
+// reads exactly like a denominator that was satisfied. The report has to say so in words, and
+// stop saying it the moment a table-bearing layout joins the scored set (EXTR-21-06).
+func TestEndToEnd_AnEmptyLineCorpusSaysSoInWords(t *testing.T) {
+	build := func(expected int) eeScore {
+		var s eeScore
+		s.hits, s.total = 32, eeWrittenCells
+		for _, want := range expectByLayout {
+			s.linesReached = append(s.linesReached, eeScoreRow{name: want.file, hits: 0, total: expected})
+			s.linesPriced = append(s.linesPriced, eeScoreRow{name: want.file, hits: 0, total: 0})
+		}
+		return s
+	}
+	if len(expectByLayout) == 0 {
+		t.Fatal("expectByLayout is empty, so neither render below carries a line row")
+	}
+
+	empty := eeRenderReport(build(0))
+	if !strings.Contains(empty, eeNoLineSignalNote) {
+		t.Errorf("every layout scores its reached figure against a denominator of 0, and the report says nothing about it; six rows of 0/0 read as coverage:\n%s", empty)
+	}
+
+	// The other direction, or the note becomes boilerplate that survives the corpus growing a
+	// table and goes on calling a real measurement no signal.
+	withTable := eeRenderReport(build(2))
+	if strings.Contains(withTable, eeNoLineSignalNote) {
+		t.Errorf("a layout carrying 2 expected line(s) still renders the no-signal note; the note is unconditional:\n%s", withTable)
+	}
+
+	// A nil-line score is the quarantine-only render, which carries no line rows to explain.
+	if got := eeRenderReport(eeScore{}); strings.Contains(got, eeNoLineSignalNote) {
+		t.Errorf("a score with no line rows at all renders the no-signal note:\n%s", got)
 	}
 }

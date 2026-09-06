@@ -146,6 +146,9 @@ func eeScoreCorpus(t *testing.T, ctx context.Context) eeScore {
 		// never a re-derived one.
 		s.linesReached = append(s.linesReached, eeScoreRow{name: want.file, hits: r.lines.reached, total: eeLinesExpected[want.file]})
 		s.linesPriced = append(s.linesPriced, eeScoreRow{name: want.file, hits: r.lines.priced, total: r.lines.reached})
+		if r.lines.read {
+			s.linesScored++
+		}
 	}
 
 	// Indexed by writtenFields, not by the map, so a field that never resolves renders 0/N.

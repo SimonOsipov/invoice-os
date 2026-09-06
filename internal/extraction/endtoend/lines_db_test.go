@@ -50,8 +50,13 @@ const (
 	eeLineControlPriced  = 1
 )
 
-// eeLineOutcome is one invoice's line reality: rows that reached it, and how many carry a price.
-type eeLineOutcome struct{ reached, priced int }
+// eeLineOutcome is one invoice's line reality: rows that reached it, and how many carry a
+// price. read is set only by eeScoreLines, so a walk that stops calling the scorer is
+// distinguishable from one that reads a genuine zero -- both report reached=0.
+type eeLineOutcome struct {
+	reached, priced int
+	read            bool
+}
 
 // count(unit_price) counts non-NULL only, so "priced" is a column fact rather than a parse.
 const eeLineCountSQL = `SELECT count(*), count(unit_price) FROM line_items WHERE invoice_id = $1`
@@ -67,6 +72,7 @@ func eeScoreLines(t *testing.T, ctx context.Context, invoiceID string) eeLineOut
 		Scan(&out.reached, &out.priced); err != nil {
 		t.Fatalf("count the line_items rows for invoice %s: %v", invoiceID, err)
 	}
+	out.read = true
 	return out
 }
 
@@ -106,15 +112,20 @@ func eeLineControl() []invoice.LineItemInput {
 // eeCreateInvoice writes one invoice directly through invoice.Store.Create, as the seeded
 // member. This is the write path the importer does NOT take, which is what makes it a control
 // on the scorer rather than on the mapper.
-func eeCreateInvoice(t *testing.T, ctx context.Context, w eeWorld, number string, lines []invoice.LineItemInput) string {
+func eeTryCreateInvoice(t *testing.T, ctx context.Context, w eeWorld, number string, lines []invoice.LineItemInput) (invoice.Invoice, error) {
 	t.Helper()
 	store := invoice.NewStore(eeRequire(t).app)
 	rctx := auth.WithIdentity(ctx, auth.Identity{
 		Subject: w.subject, Role: "authenticated", TenantID: w.tenantID,
 	})
-	inv, err := store.Create(rctx, invoice.CreateInput{
+	return store.Create(rctx, invoice.CreateInput{
 		EntityID: w.entityID, InvoiceNumber: number, LineItems: lines,
 	})
+}
+
+func eeCreateInvoice(t *testing.T, ctx context.Context, w eeWorld, number string, lines []invoice.LineItemInput) string {
+	t.Helper()
+	inv, err := eeTryCreateInvoice(t, ctx, w, number, lines)
 	if err != nil {
 		t.Fatalf("Store.Create(%s) with %d line input(s): %v", number, len(lines), err)
 	}
@@ -153,6 +164,13 @@ func TestRLS_EndToEndScoresLineItemOutcome(t *testing.T) {
 	if len(s.linesReached) != eeLayoutCount || len(s.linesPriced) != eeLayoutCount {
 		t.Fatalf("the walk reported %d reached row(s) and %d priced row(s), want %d each -- the line outcome is not being scored at all",
 			len(s.linesReached), len(s.linesPriced), eeLayoutCount)
+	}
+
+	// A walk that never calls the scorer reports these same zeros, so it has to prove it read
+	// them.
+	if s.linesScored != eeLayoutCount {
+		t.Fatalf("the walk read line rows off %d of %d layout invoices; a walk that never scores reports the same zeros",
+			s.linesScored, eeLayoutCount)
 	}
 
 	for i, want := range expectByLayout {
@@ -355,6 +373,22 @@ func TestRLS_EndToEndTheLineScoreIsNotARecallMeasure(t *testing.T) {
 		t.Errorf("job %s wrote %d distinct line_items[N] index(es) at any rank, pinned at %d -- re-measure and set eeLineIdxMeasured", jobID, len(anyRank), eeLineIdxMeasured)
 	}
 
+	// The divergence is invoice-vs-extraction, not rank-vs-rank: this fixture writes the same
+	// index set at rank 0 as at any rank, so "any rank" is not smuggling in extra rows.
+	rankZero := map[int]bool{}
+	for _, r := range eeFieldResults(t, ctx, jobID) {
+		if r.rank != 0 {
+			continue
+		}
+		if idx, _, ok := extraction.ParseLineFieldName(r.name); ok {
+			rankZero[idx] = true
+		}
+	}
+	if len(rankZero) != len(anyRank) {
+		t.Errorf("rank 0 carries %d index(es) and any rank %d; the divergence asserted below would rest on rank, which is not what this spec claims",
+			len(rankZero), len(anyRank))
+	}
+
 	eeImport(t, ctx, w)
 	id, ok := eeInvoiceIDForDocument(t, ctx, w.documentID)
 	if !ok {
@@ -372,4 +406,47 @@ func TestRLS_EndToEndTheLineScoreIsNotARecallMeasure(t *testing.T) {
 
 	// The divergence is between a real number and a zero, not between two unread zeros.
 	eeAssertControl(t, ctx, w, "EE-LINES-CONTROL-5")
+}
+
+// "Priced" is count(unit_price): a column fact, not a judgement about the value. The three
+// states a unit price can be in have to land on different sides of that count, or a figure
+// named "priced" quietly means something else.
+func TestRLS_EndToEndPricedCountsTheColumnNotTheValue(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	w := eeSeed(t, ctx, eeLayout)
+	sp := func(s string) *string { return &s }
+
+	// A zero price is still a price. If this ever read 0, "priced" would be silently measuring
+	// non-zero amounts and the control's 1-of-2 would hold for the wrong reason.
+	zero := []invoice.LineItemInput{
+		{Description: sp("Freebie"), UnitPrice: sp("0.00"), LineTotal: sp("0.00")},
+		{Description: sp("Also free"), UnitPrice: sp("0"), LineTotal: sp("0.00")},
+	}
+	if got := eeScoreLines(t, ctx, eeCreateInvoice(t, ctx, w, "EE-LINES-ZERO", zero)); got.reached != 2 || got.priced != 2 {
+		t.Errorf("two lines priced at zero score %d reached / %d priced, want 2 / 2 -- priced counts a present unit_price, not a non-zero one", got.reached, got.priced)
+	}
+
+	// A nil price is the only thing that leaves the column NULL, and it is the contrast that
+	// makes the zero case above mean something.
+	nilPriced := eeLineControl()
+	for i := range nilPriced {
+		nilPriced[i].UnitPrice = nil
+	}
+	if got := eeScoreLines(t, ctx, eeCreateInvoice(t, ctx, w, "EE-LINES-NULL", nilPriced)); got.reached != 2 || got.priced != 0 {
+		t.Errorf("two lines with no unit price score %d reached / %d priced, want 2 / 0", got.reached, got.priced)
+	}
+
+	// An empty string is neither: unit_price is written through ::text::numeric
+	// (internal/invoice/store.go:250-252), so "" must be rejected outright rather than land as
+	// a NULL that deflates priced without anyone asking for it.
+	blank := eeLineControl()
+	blank[0].UnitPrice = sp("")
+	inv, err := eeTryCreateInvoice(t, ctx, w, "EE-LINES-BLANK", blank)
+	if err == nil {
+		got := eeScoreLines(t, ctx, inv.ID)
+		t.Errorf("an empty-string unit price was accepted and scores %d reached / %d priced; a blank must not become a silent NULL", got.reached, got.priced)
+	}
+
+	eeAssertControl(t, ctx, w, "EE-LINES-CONTROL-6")
 }

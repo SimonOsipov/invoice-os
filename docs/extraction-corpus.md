@@ -213,6 +213,24 @@ counted as a field. And every layout's tenant is served **zero** learned rules o
 run, with a seeded run beside it as the positive control — a rule store that served nothing to
 anyone would satisfy the zero half alone.
 
+**The line-item figures.** The report carries `line items reached / expected` and
+`line items priced / reached` beside the header number, as two raw counts and a slash — never a
+computed ratio. Both read **0 on every layout**, and will for as long as
+`documentCreateInput` names no `LineItems` key (`internal/importer/document.go:173-185`): the
+extraction worker writes `line_items[N].<role>` rows and `invoice.Store.Create` writes
+`line_items` rows, but nothing connects the two. EXTR-24 owns connecting them.
+
+Because no `corpus_*` layout carries a table, both denominators are 0 too, so every row renders
+`0/0` — which is indistinguishable from a satisfied denominator. The report therefore prints a
+`NO LINE SIGNAL` line whenever every reached row has a zero denominator, and stops printing it
+the moment a table-bearing layout joins the scored set.
+`TestEndToEnd_AnEmptyLineCorpusSaysSoInWords` holds both directions. Read the zeros as "not
+measured here", never as coverage.
+
+`TestRLS_EndToEndTheLineScoreIsNotARecallMeasure` is what keeps the figure honest: the same run
+scored off the invoice's own `line_items` rows reads 0 while the any-rank
+`line_items[N]` read of `extraction_field_results` reads 4, and the spec asserts they disagree.
+
 **The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 43 of 44, so
 the shipped number alone cannot tell a decision measure from a candidate-containment one. That is
 the EXTR-16 defect, and `TestRLS_WiredPathRankingDecoyMovesTheRate` is what stops it recurring
@@ -264,7 +282,7 @@ at registration, before any test runs.
 
 ## Adding a layout
 
-Six edits, no new test:
+Seven edits, no new test:
 
 1. A builder plus an `fxCorpus` entry in `fixtures_test.go`. The files go **flat** in
    `testdata/` with a `corpus_` prefix — `TestFixtures_MatchTheirGenerator` counts
@@ -287,6 +305,11 @@ Six edits, no new test:
    48 cells, so a seventh layout moves it too.
    `TestEndToEnd_TheScoredSetIsTheRequiredSet` makes edit 5 without this one a red test, so a
    layout cannot be registered on disk and go unscored end to end.
+7. An `eeLinesExpected` row in `internal/extraction/endtoend/lines_test.go`, holding how many
+   line rows the layout's golden carries. The map must hold exactly one key per `expectByLayout`
+   row, and `TestEndToEnd_TheExpectedLineCountIsTakenOffTheGoldens` re-derives every value from
+   that layout's own golden, so a hand-guessed count is a red test. A layout that carries a
+   table also clears the `NO LINE SIGNAL` note off the report — see **The line-item figures**.
 
 Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
 in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there
@@ -299,7 +322,7 @@ field's shape and fails on a row naming a value the bytes do not carry.
 
 **Not every committed fixture is a layout.** `learned_two_party.pdf` is generated and
 byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
-prefix so that none of the six edits above apply to it. Do not add a `corpusExpect` row, a
+prefix so that none of the seven edits above apply to it. Do not add a `corpusExpect` row, a
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
 section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
 reason: a ruled table plus a deliberately inconsistent totals block, exercised by

@@ -3,9 +3,9 @@
 // TestFixtures_MatchTheirGenerator regenerates and byte-compares, so neither side can drift
 // alone. Regenerate a deliberate change with -update and read the diff before committing.
 //
-// Stdlib only. deps_test.go scan B walks test imports, and any in-module import outside
-// internal/platform/* fails it; a third-party writer would also make AC-3's determinism
-// someone else's property.
+// No third-party PDF writer: the generator is stdlib plus the package under test, which
+// deps_test.go's assertFenced allows by name. A third-party writer would also make the
+// determinism TestFixtures_GeneratorIsDeterministic pins someone else's property.
 package extraction_test
 
 import (
@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 var fxUpdate = flag.Bool("update", false, "rewrite the PDF fixtures under testdata/ from their generators instead of comparing against them")
@@ -365,6 +367,36 @@ func fxTextPage(lines ...fxLine) []byte {
 		fxStream(fxText(lines...)),
 		fxObject(fxHelvetica),
 	})
+}
+
+// fxNaira is the naira in a PDF string literal: octal for byte 0xA4, the code both
+// /Differences and the /ToUnicode CMap key on. An octal escape ends at three digits, so a
+// digit may follow it unseparated.
+const fxNaira = `\244`
+
+// fxAmount is the amount every naira spec reads back, without its symbol.
+const fxAmount = "1,075.00"
+
+// fxNairaTextPage is fxTextPage over a naira-capable font. withCMap is the control knob for
+// TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign.
+//
+// NOT IMPLEMENTED: it still emits the plain Helvetica page, so byte 0xA4 reads as whatever
+// the base font's built-in encoding says. The three TestFixtures_*Naira* specs are red until
+// the font dict carries /Differences [164 /naira] and a /ToUnicode stream.
+func fxNairaTextPage(withCMap bool, lines ...fxLine) []byte {
+	_ = withCMap
+	return fxTextPage(lines...)
+}
+
+// fxNairaLines is the shared content the naira specs read back: "Total" and the amount as two
+// Tj on one baseline, the fxBuildCorpusSplitLabels shape. One Tj would give pdfium a single
+// "Total: N1,075.00" token, which reAmount's anchors reject for the label, not the symbol.
+func fxNairaLines() []fxLine {
+	return []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Total"},
+		{12, 220, 690, fxNaira + fxAmount},
+	}
 }
 
 // fxBuildCorpusInlineLabels puts every "Label: value" in one Tj, so all ten fields resolve by
@@ -1264,5 +1296,205 @@ func TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals(t *testing.T) {
 func TestFixtures_E2EExemptionListStaysSingular(t *testing.T) {
 	if len(fxE2EExempt) != 1 {
 		t.Errorf("fxE2EExempt has %d entries, want exactly 1: %v -- each new exemption defeats the completeness scan for one more file", len(fxE2EExempt), fxE2EExempt)
+	}
+}
+
+// --- the naira builder variant ----------------------------------------------
+
+var (
+	fxFontResRe   = regexp.MustCompile(`/Font\s*<<\s*/F1\s+(\d+)\s+0\s+R`)
+	fxToUnicodeRe = regexp.MustCompile(`/ToUnicode\s+(\d+)\s+0\s+R`)
+)
+
+// fxFontObj resolves the page's /F1 through /Resources rather than scanning the whole file:
+// a whole-file match would pass on a font object no page references.
+func fxFontObj(t *testing.T, objs map[int][]byte, page []byte) []byte {
+	t.Helper()
+
+	m := fxFontResRe.FindSubmatch(page)
+	if m == nil {
+		t.Fatalf("page object carries no /Font << /F1 n 0 R >> resource: %q", page)
+	}
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("page names a non-numeric /F1 object %q", m[1])
+	}
+	obj, ok := objs[num]
+	if !ok {
+		t.Fatalf("/F1 names object %d, which the parse did not find", num)
+	}
+	return obj
+}
+
+// fxTokens reads an in-memory PDF through the real reader. Built bytes, not a committed
+// fixture: this variant commits none.
+func fxTokens(t *testing.T, raw []byte) []extraction.Token {
+	t.Helper()
+
+	var pages []extraction.TokenPage
+	if _, err := extraction.NewPDFiumReader().Read(t.Context(),
+		extraction.Document{Bytes: raw, ContentType: "application/pdf"},
+		extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("Read the built page: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("read %d page(s) from the built PDF, want 1", len(pages))
+	}
+	return pages[0].Tokens
+}
+
+func fxTexts(toks []extraction.Token) []string {
+	out := make([]string, 0, len(toks))
+	for _, tok := range toks {
+		out = append(out, tok.Text)
+	}
+	return out
+}
+
+// fxAmountToken finds the token carrying the amount, having first proved the read worked at
+// all: without the "Total" needle a reader that returned one garbage token would look like a
+// reader that returned the amount wrongly encoded.
+func fxAmountToken(t *testing.T, toks []extraction.Token) extraction.Token {
+	t.Helper()
+
+	if len(toks) < 3 {
+		t.Fatalf("read %d token(s) from the built page, want at least 3: %q", len(toks), fxTexts(toks))
+	}
+	seenLabel := false
+	for _, tok := range toks {
+		if strings.TrimSpace(tok.Text) == "Total" {
+			seenLabel = true
+			break
+		}
+	}
+	if !seenLabel {
+		t.Fatalf("no token reads %q; the read did not find the page's text at all: %q", "Total", fxTexts(toks))
+	}
+	for _, tok := range toks {
+		if strings.Contains(tok.Text, fxAmount) {
+			return tok
+		}
+	}
+	t.Fatalf("no token carries %q: %q", fxAmount, fxTexts(toks))
+	return extraction.Token{}
+}
+
+// AC-1.
+func TestFixtures_TheNairaBuilderEmitsBothObjects(t *testing.T) {
+	raw := fxNairaTextPage(true, fxNairaLines()...)
+	fxAssertWellFormed(t, "naira variant", raw)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) != 1 {
+		t.Fatalf("the variant emitted %d page(s), want 1", len(pages))
+	}
+
+	// The control needle: fxContent fatals on an unresolvable or empty stream, and the escape
+	// proves the assertions below are about a page that actually draws a naira.
+	body := fxContent(t, objs, pages[0])
+	if !bytes.Contains(body, []byte(fxNaira)) {
+		t.Fatalf("the content stream carries no %s escape, so the font assertions below would be about a page with no naira on it: %q", fxNaira, body)
+	}
+
+	font := fxFontObj(t, objs, pages[0])
+
+	if !bytes.Contains(font, []byte("/Differences [164 /naira]")) {
+		t.Errorf("the font dict carries no /Differences [164 /naira]; without it the drawn glyph is a currency sign: %q", font)
+	}
+
+	m := fxToUnicodeRe.FindSubmatch(font)
+	if m == nil {
+		t.Fatalf("the font dict carries no /ToUnicode reference: %q", font)
+	}
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("the font dict names a non-numeric /ToUnicode object %q", m[1])
+	}
+	cmap, ok := objs[num]
+	if !ok {
+		t.Fatalf("/ToUnicode names object %d, which the parse did not find -- the CMap is orphaned", num)
+	}
+	for _, want := range []string{"beginbfchar", "<A4> <20A6>", "endbfchar"} {
+		if !bytes.Contains(cmap, []byte(want)) {
+			t.Errorf("the /ToUnicode stream (object %d) carries no %q: %q", num, want, cmap)
+		}
+	}
+}
+
+// AC-2.
+func TestFixtures_TheNairaBuilderPrintsARealNairaSign(t *testing.T) {
+	tok := fxAmountToken(t, fxTokens(t, fxNairaTextPage(true, fxNairaLines()...)))
+
+	want := append([]byte{0xE2, 0x82, 0xA6}, fxAmount...)
+	if !bytes.Equal([]byte(tok.Text), want) {
+		t.Errorf("the amount token reads %q (% x), want %q (% x)", tok.Text, tok.Text, want, want)
+	}
+
+	got := extraction.ShapeAmount.Normalize(tok.Text)
+	if len(got) != 1 || got[0] != "1075.00" {
+		t.Errorf("ShapeAmount.Normalize(%q) = %v, want [1075.00]", tok.Text, got)
+	}
+}
+
+// AC-3: the control that stops AC-2 holding for some reason other than the CMap.
+func TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign(t *testing.T) {
+	raw := fxNairaTextPage(false, fxNairaLines()...)
+	if bytes.Contains(raw, []byte("/ToUnicode")) {
+		t.Fatalf("the withCMap=false build still carries a /ToUnicode; this spec would not be measuring its removal")
+	}
+
+	tok := fxAmountToken(t, fxTokens(t, raw))
+
+	if !strings.ContainsRune(tok.Text, '¤') {
+		t.Errorf("without the CMap the amount token reads %q (% x), want a U+00A4 currency sign -- the /Differences glyph name alone does not carry Unicode", tok.Text, tok.Text)
+	}
+	if strings.ContainsRune(tok.Text, '₦') {
+		t.Errorf("the amount token reads U+20A6 with no /ToUnicode object: %q -- the CMap is not what makes the naira extractable, so AC-2 proves nothing", tok.Text)
+	}
+}
+
+// AC-5: a second flag.Bool("update", ...) panics the test binary at registration, before any
+// test runs. The needle is assembled from fragments so this scan does not match itself, and
+// comment lines are skipped so a prose mention of the flag is not counted as one.
+func TestFixtures_TheNairaVariantAddsNoSecondUpdateFlag(t *testing.T) {
+	names, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob *_test.go: %v", err)
+	}
+	// The floor first: this scan asserts an ABSENCE, and zero files read reports clean.
+	if len(names) < 50 {
+		t.Fatalf("read %d test file(s) in internal/extraction, want at least 50 (93 measured)", len(names))
+	}
+
+	registration := regexp.MustCompile(`flag\.Bo` + `ol\("upd` + `ate"`)
+
+	sites := map[string][]int{}
+	total := 0
+	for _, name := range names {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			if registration.MatchString(line) {
+				sites[name] = append(sites[name], i+1)
+				total++
+			}
+		}
+	}
+
+	// The control: a needle that matches nothing reports a clean repo forever.
+	if total == 0 {
+		t.Fatalf("found zero flag registrations across %d test file(s); the needle no longer matches the real one in fixtures_test.go", len(names))
+	}
+	if total != 1 {
+		t.Errorf("found %d -update registrations, want exactly 1: %v", total, sites)
+	}
+	if len(sites["fixtures_test.go"]) != 1 {
+		t.Errorf("the -update flag is registered at %v, want exactly one site in fixtures_test.go", sites)
 	}
 }

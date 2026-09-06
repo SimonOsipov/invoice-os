@@ -309,3 +309,131 @@ describe('parseLocation — the inverse of routeUrl', () => {
     }
   })
 })
+
+describe('the codec — adversarial', () => {
+  it('routeUrl_treatsAnAbsentAndAnExplicitlyUndefinedParamAlike', () => {
+    expect(routeUrl('invoices', undefined)).toBe('/invoices')
+    expect(routeUrl('invoices', {})).toBe('/invoices')
+    expect(routeUrl('invoices', { q: undefined })).toBe('/invoices')
+    expect(routeUrl('audit', { auditInvoice: undefined })).toBe('/audit')
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings')
+    // Control needle: the emitter is not simply ignoring its second argument.
+    expect(routeUrl('invoices', { q: 'acme' })).toBe('/invoices?q=acme')
+  })
+
+  it('roundTrip_aSearchTermThatIsItselfAQueryStringStaysData', () => {
+    const q = `?invoice=${UUID}&foo=1`
+    const url = routeUrl('invoices', { q })
+    // Exact form: the embedded separators travel encoded, so the URL carries one param.
+    expect(url).toBe(`/invoices?q=%3Finvoice%3D${UUID}%26foo%3D1`)
+    const [pathname, search] = splitUrl(url)
+    expect(parseLocation(pathname, search).q).toBe(q)
+    // The embedded `invoice=` never becomes structure: the same search read under the view
+    // that DOES own `invoice` still finds none.
+    expect(parseLocation('/audit', search).auditInvoice).toBeNull()
+    // Control needle: a genuine invoice param under /audit is found.
+    expect(parseLocation('/audit', `?invoice=${UUID}`).auditInvoice).toBe(UUID)
+  })
+
+  it('roundTrip_survivesCharactersUrlSearchParamsEncodesSpecially', () => {
+    const terms = ['%41', '100%', 'a\nb', 'a\tb', 'a&b', 'a=b', '?', '#', ' ', '+', '='] as const
+    expect(terms.length).toBe(11)
+    for (const q of terms) {
+      const label = JSON.stringify(q)
+      const url = routeUrl('invoices', { q })
+      expect(url.indexOf('?'), `${label} must produce exactly one separator`).toBe(url.lastIndexOf('?'))
+      expect(url.includes('#'), `${label} must not emit a raw hash`).toBe(false)
+      const [pathname, search] = splitUrl(url)
+      expect(parseLocation(pathname, search).q, label).toBe(q)
+    }
+    // A percent sign is encoded once, not passed through: a double decode would yield 'A'.
+    expect(routeUrl('invoices', { q: '%41' })).toBe('/invoices?q=%2541')
+  })
+
+  it('parseLocation_refusesAPathnameThatIsAWholeUrlOrProtocolRelative', () => {
+    const hostile = [
+      'https://evil.example/audit',
+      '//evil.example/audit',
+      'http://evil.example/settings/roles',
+      '//settings/roles',
+      '//invoices',
+    ] as const
+    expect(hostile.length).toBe(5)
+    // The same searches that DO resolve under a real path, so an empty result is the gate
+    // working rather than the fixture proving nothing.
+    const searches = [`?invoice=${UUID}`, '?q=acme'] as const
+    expect(searches.length).toBe(2)
+    for (const pathname of hostile) {
+      for (const search of searches) {
+        const label = `${pathname} ${search}`
+        const parsed = parseLocation(pathname, search)
+        expect(parsed.view, label).toBeNull()
+        expect(parsed.settingsTab, label).toBe('members')
+        expect(parsed.q, label).toBe('')
+        expect(parsed.auditInvoice, label).toBeNull()
+      }
+    }
+    // Control needles: both searches carry a value on the path that owns them.
+    expect(parseLocation('/audit', searches[0]).auditInvoice).toBe(UUID)
+    expect(parseLocation('/invoices', searches[1]).q).toBe('acme')
+  })
+
+  it('parseLocation_matchesParamAndSegmentNamesCaseSensitively', () => {
+    expect(parseLocation('/invoices', '?Q=acme').q).toBe('')
+    expect(parseLocation('/audit', `?INVOICE=${UUID}`).auditInvoice).toBeNull()
+    expect(parseLocation('/settings/ROLES', '').settingsTab).toBe('members')
+    // Control needles: the lower-case forms all resolve.
+    expect(parseLocation('/invoices', '?q=acme').q).toBe('acme')
+    expect(parseLocation('/audit', `?invoice=${UUID}`).auditInvoice).toBe(UUID)
+    expect(parseLocation('/settings/roles', '').settingsTab).toBe('roles')
+  })
+
+  it('parseLocation_acceptsAnInvoiceIdByShapeNotByRfcVariant', () => {
+    // The audit reader parses ids with Go's uuid.Parse, which is shape-only too; tightening
+    // to a version/variant check here would drop ids the server happily serves.
+    const shaped = ['00000000-0000-0000-0000-000000000000', 'a1b2c3d4-e5f6-97a8-f9ab-cdef01234567'] as const
+    expect(shaped.length).toBe(2)
+    for (const id of shaped) {
+      expect(parseLocation('/audit', `?invoice=${id}`).auditInvoice, id).toBe(id)
+    }
+    // Control needle: one hex digit short is still refused, so the check is not a no-op.
+    expect(parseLocation('/audit', '?invoice=a1b2c3d4-e5f6-47a8-89ab-cdef0123456').auditInvoice).toBeNull()
+  })
+
+  it('parseLocation_readsASearchStringWithOrWithoutItsLeadingQuestionMark', () => {
+    expect(parseLocation('/invoices', '?q=acme').q).toBe('acme')
+    expect(parseLocation('/invoices', 'q=acme').q).toBe('acme')
+    // A doubled prefix degrades to nothing rather than to a wrong value.
+    expect(parseLocation('/invoices', '??q=acme').q).toBe('')
+  })
+
+  it('roundTrip_aTermAtTheByteCapSurvivesAndOneByteOverIsClamped', () => {
+    const atCap = 'é'.repeat(100) // exactly 200 UTF-8 bytes
+    expect(new TextEncoder().encode(atCap).length).toBe(200)
+    const [p1, s1] = splitUrl(routeUrl('invoices', { q: atCap }))
+    expect(parseLocation(p1, s1).q).toBe(atCap)
+
+    // One ASCII byte over: the clamp lands exactly on the cap and drops only the extra.
+    const [p2, s2] = splitUrl(routeUrl('invoices', { q: `${atCap}x` }))
+    expect(parseLocation(p2, s2).q).toBe(atCap)
+
+    // One multi-byte character over: the clamp retreats to the character boundary, so the
+    // result is still atCap and carries no replacement character.
+    const [p3, s3] = splitUrl(routeUrl('invoices', { q: 'é'.repeat(101) }))
+    const parsed = parseLocation(p3, s3)
+    expect(parsed.q).toBe(atCap)
+    expect(parsed.q.includes('�')).toBe(false)
+  })
+
+  it('routeUrl_escapesAnUnvalidatedAuditIdRatherThanValidatingIt', () => {
+    // Serialise trusts its caller; parse is the validating half. Anything injected is data.
+    expect(routeUrl('audit', { auditInvoice: 'x&q=y' })).toBe('/audit?invoice=x%26q%3Dy')
+    const [pathname, search] = splitUrl(routeUrl('audit', { auditInvoice: 'x&q=y' }))
+    const parsed = parseLocation(pathname, search)
+    expect(parsed.auditInvoice).toBeNull()
+    expect(parsed.q).toBe('')
+    // Control needle: a well-formed id makes the same round trip intact.
+    const [p, s] = splitUrl(routeUrl('audit', { auditInvoice: UUID }))
+    expect(parseLocation(p, s).auditInvoice).toBe(UUID)
+  })
+})

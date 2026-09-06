@@ -34,13 +34,15 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the six-layout figure, pinned. Equality, not a floor: an unrecorded
-// improvement must red too. EXTR-21-09 owns the ratchet, once the wild layouts land.
+// eeCorpusHits is the six-layout figure, measured 2026-09-06 and pinned. Equality, not a
+// floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet, once the wild
+// layouts land.
 //
-// Measured 2026-09-06 on this branch: 32 / 48. Held at 0 so the spec starts red; set it to the
-// figure TestRLS_EndToEndScoresTheCorpus prints.
+// The 16 misses are 12 eeAbsentCells -- fields these layouts never print, which score as misses
+// by design -- plus 4 real ones: stacked/currency, two_column/buyer_tin, two_column/currency,
+// ambiguous_date/currency. EXTR-22..28 own those four; this story only measures them.
 const (
-	eeCorpusHits  = 0
+	eeCorpusHits  = 32
 	eeCorpusCells = eeWrittenCells
 )
 

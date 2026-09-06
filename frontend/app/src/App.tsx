@@ -591,6 +591,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   function switchClient(id: string) {
     setActiveEntityId(id)
+    // The entry being left names a drill-down of the company being left. Scrub its id
+    // through the same collapse a persona switch uses, so Back cannot return to it.
+    window.history.replaceState(null, '', routePath(carryView(view)) + window.location.hash)
     navigate('dashboard')
     setDetailInvoiceId(null)
     setSwitcherOpen(false)

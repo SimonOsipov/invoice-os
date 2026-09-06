@@ -235,30 +235,45 @@ describe('Core AC 4: the sessions first screen pushed nothing to go back to', ()
 })
 
 describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the company just left', () => {
+  // A hardcoded popTo target can't test this: it never consults what switchClient actually
+  // wrote to history, so the assertion holds regardless of whether the scrub ran (route-02-06
+  // Stage 1 finding). Instead capture the real write: replaceState calls fired BEFORE
+  // switchClient's own pushState land on the entry being left; anything after targets the
+  // entry just pushed to, not the one Back returns to. If none fired before the push, the
+  // scrub didn't run and the left-behind entry is still the pre-switch URL.
   it('popstate_backAfterACompanySwitchCannotReachTheCompanyJustLeft', async () => {
     await bootAt('/')
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: openExtraction must push /extraction/<jobId>').toBe(
-      `/extraction/${JOB_A}`,
-    )
+    const preSwitchUrl = window.location.pathname
+    expect(preSwitchUrl, 'sanity: openExtraction must push /extraction/<jobId>').toBe(`/extraction/${JOB_A}`)
     expect(ctx.extractionJobId, 'sanity: the job id must be set').toBe(JOB_A)
 
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
     await act(async () => {
       capturedCtx!.switchClient('other-entity-999')
     })
     ctx = requireCtx()
     expect(ctx.extractionJobId, 'sanity: switchClient (ROUTE-01-03) must already clear the job').toBeNull()
 
+    const firstPushOrder = pushSpy.mock.invocationCallOrder[0]
+    expect(firstPushOrder, 'sanity: switchClient must push the dashboard entry').toBeDefined()
+    const preNavReplaces = replaceSpy.mock.calls.filter(
+      (_, i) => replaceSpy.mock.invocationCallOrder[i]! < firstPushOrder!,
+    )
+    const leftBehindUrl =
+      preNavReplaces.length > 0 ? (preNavReplaces[preNavReplaces.length - 1]![2] as string) : preSwitchUrl
+
     // The spy is push-only and openExtraction already recorded one mount above -- reset so
     // the assertion below measures only the window after Back, not that earlier mount.
     extractionReviewMounts.length = 0
 
-    await popTo('/extraction')
+    await popTo(leftBehindUrl)
     ctx = requireCtx()
-    expect(ctx.view, 'Back must restore the extraction view').toBe('extraction')
+    expect(ctx.view, 'Back must restore whatever the scrub actually left behind, not extraction').toBe('invoices')
     expect(ctx.extractionJobId, 'the cleared job must not come back on a popstate restore').toBeNull()
     expect(
       extractionReviewMounts,

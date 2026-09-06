@@ -268,6 +268,9 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
     )
 
     const lengthBefore = window.history.length
+    // route-02-06, V-5: count pushState calls directly -- the scrub is a replaceState, and
+    // a second push here would mean it regressed into a second navigation.
+    const pushSpy = vi.spyOn(window.history, 'pushState')
     await act(async () => {
       capturedCtx!.switchClient('other-entity-002')
     })
@@ -275,6 +278,7 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
 
     expect(window.location.pathname, 'switchClient must push the dashboard path').toBe('/')
     expect(window.history.length, 'switchClient must add exactly one history entry').toBe(lengthBefore + 1)
+    expect(pushSpy.mock.calls, 'switchClient must call pushState exactly once, not once per atom or writer').toHaveLength(1)
     expect(ctx.reviewBatchIds, 'reviewBatchIds must still be cleared').toEqual([])
     expect(ctx.importedInvoiceId, 'importedInvoiceId must still be cleared').toBeNull()
     expect(ctx.createStep, 'createStep must still reset to form').toBe('form')
@@ -349,6 +353,24 @@ describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', ()
     expect(window.location.pathname, 'a persona switch must land the URL on the carried view').toBe('/invoices')
     expect(window.history.length, 'a persona switch must add no history entry').toBe(lengthBefore)
     expect(ctx.view, 'the carried view must be invoices, not extraction').toBe('invoices')
+  })
+
+  // route-02-06, V-1: the detail-drill-down mirror of the extraction case above. Assertion
+  // only -- the collapse and the id-null boot seeding both come from ROUTE-02-01..05.
+  it('personaSwitch_fromInvoiceDetailLandsOnInvoicesWithNoImportedId', async () => {
+    await bootAt(`/invoices/${INVOICE_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /invoices/<id> should seed detail').toBe('detail')
+    expect(ctx.importedInvoiceId, 'sanity: the boot id must seed the selection').toBe(INVOICE_ID)
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'detail')
+    })
+    ctx = requireCtx()
+
+    expect(window.location.pathname, 'a persona switch must land the URL on invoices').toBe('/invoices')
+    expect(ctx.view, 'the carried view must be invoices, not detail').toBe('invoices')
+    expect(ctx.importedInvoiceId, 'the drill-down id must not survive the collapse').toBeNull()
   })
 })
 

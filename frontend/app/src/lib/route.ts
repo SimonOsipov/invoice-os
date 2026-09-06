@@ -24,20 +24,46 @@ const PATH_TO_VIEW = new Map<string, View>(
   (Object.entries(ROUTE_PATHS) as [View, string][]).map(([view, path]) => [path, view]),
 )
 
-export function routePath(view: View): string {
+export interface Route {
+  view: View
+  id: string | null
+}
+
+// Keyed by the drill-down's own first segment, which is not always the target view's
+// bare-path segment: `/invoices/<id>` -> `detail`, not the `invoices` list view.
+const DRILLDOWN_SEGMENT: Record<string, View> = {
+  invoices: 'detail',
+  extraction: 'extraction',
+}
+
+export function routePath(view: View, id?: string | null): string {
+  if (id != null && view === 'detail') return `/invoices/${encodeURIComponent(id)}`
+  if (id != null && view === 'extraction') return `/extraction/${encodeURIComponent(id)}`
   return ROUTE_PATHS[view]
 }
 
 // Strict: exact match, case-sensitive, at most one trailing slash. Anything else — an
-// unknown path, a drill-down like `/invoices/<uuid>`, wrong case — returns null rather
-// than degrading to a nearby view.
-export function parseRoute(pathname: string): View | null {
+// unknown path, wrong case, a third segment — returns null rather than degrading to a
+// nearby view.
+export function parseRoute(pathname: string): Route | null {
   const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
-  return PATH_TO_VIEW.get(normalized) ?? null
+  const singleMatch = PATH_TO_VIEW.get(normalized)
+  if (singleMatch !== undefined) return { view: singleMatch, id: null }
+
+  const segments = normalized.split('/').filter((s) => s.length > 0)
+  if (segments.length !== 2) return null
+  const view = DRILLDOWN_SEGMENT[segments[0]]
+  if (view === undefined) return null
+  try {
+    return { view, id: decodeURIComponent(segments[1]) }
+  } catch {
+    return null // malformed percent escape, e.g. /invoices/%zz
+  }
 }
 
 // Owned params: `invoices` owns `q`, `audit` owns `invoice`, `settings` owns its tab as a
-// path segment. No other view owns anything, so nothing else is ever emitted or read.
+// path segment, `detail`/`extraction` own `id` as a path segment. No other view owns
+// anything, so nothing else is ever emitted or read.
 const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   members: true,
   roles: true,
@@ -51,19 +77,29 @@ const SETTINGS_TAB_IDS = new Set<string>(Object.keys(SETTINGS_TAB_TABLE))
 
 const INVOICE_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
-export type RouteParams = { settingsTab?: SettingsTab; q?: string; auditInvoice?: string | null }
+export type RouteParams = {
+  id?: string | null
+  settingsTab?: SettingsTab
+  q?: string
+  auditInvoice?: string | null
+}
 
+// TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId are
+// non-null only when view is the matching drill-down (mirrors parseRoute's Route.id).
 export type ParsedLocation = {
-  view: View | null
+  view: View
+  invoiceId: string | null
+  jobId: string | null
   settingsTab: SettingsTab
   q: string
   auditInvoice: string | null
 }
 
 // Path plus query, never a hash. Omit the default: the `members` tab, an empty `q` and an
-// absent id all serialise to nothing.
+// absent id all serialise to nothing. The path half delegates to routePath so the
+// drill-down segment logic lives in exactly one place.
 export function routeUrl(view: View, params: RouteParams = {}): string {
-  const path = ROUTE_PATHS[view]
+  const path = routePath(view, params.id)
   if (view === 'settings') {
     const tab = params.settingsTab
     return tab && tab !== 'members' ? `${path}/${tab}` : path
@@ -78,16 +114,23 @@ export function routeUrl(view: View, params: RouteParams = {}): string {
 }
 
 // Total: every input yields a renderable result. `/settings/<seg>` is the only two-segment
-// path; everything else delegates to parseRoute and inherits its strictness.
+// path parseRoute doesn't own itself; everything else delegates to parseRoute and inherits
+// its strictness, with an unparseable path falling back to 'dashboard' rather than null.
 export function parseLocation(pathname: string, search: string): ParsedLocation {
-  let view = parseRoute(pathname)
+  const route = parseRoute(pathname)
+  let view: View = route?.view ?? 'dashboard'
+  const invoiceId = route?.view === 'detail' ? route.id : null
+  const jobId = route?.view === 'extraction' ? route.id : null
   let settingsTab: SettingsTab = 'members'
-  const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
-  if (view === null && normalized.startsWith('/settings/')) {
-    const seg = normalized.slice('/settings/'.length)
-    if (seg.length > 0 && !/[/?#]/.test(seg)) {
-      view = 'settings'
-      settingsTab = SETTINGS_TAB_IDS.has(seg) ? (seg as SettingsTab) : 'members'
+
+  if (route === null) {
+    const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+    if (normalized.startsWith('/settings/')) {
+      const seg = normalized.slice('/settings/'.length)
+      if (seg.length > 0 && !/[/?#]/.test(seg)) {
+        view = 'settings'
+        settingsTab = SETTINGS_TAB_IDS.has(seg) ? (seg as SettingsTab) : 'members'
+      }
     }
   }
 
@@ -99,5 +142,5 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   // renders an error state where the ordinary unfiltered list is correct.
   const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
 
-  return { view, settingsTab, q, auditInvoice }
+  return { view, invoiceId, jobId, settingsTab, q, auditInvoice }
 }

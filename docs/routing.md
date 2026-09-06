@@ -24,10 +24,25 @@ Read from `lib/route.ts`'s `ROUTE_PATHS`, not retyped by hand:
 | `create` | `/create` |
 | `detail` | `/invoice` |
 | `extraction` | `/extraction` |
+| `detail` (drill-down) | `/invoices/:id` |
+| `extraction` (drill-down) | `/extraction/:jobId` |
 
 Two surprises: `dashboard` is the bare root `/`, not `/dashboard` — the landing hand-off
-and the persona strip both land on that pathname. `detail` is `/invoice`, singular —
-`/invoices/:id` is reserved for ROUTE-02's drill-down.
+and the persona strip both land on that pathname. `detail` is `/invoice`, singular, not
+`/invoices` — segment count is what tells the two-segment drill-down form apart (below).
+
+The last two rows aren't a 14th/15th `View`: `ROUTE_PATHS` stays a 13-row table, total over
+`View` (`[route-grammar-extends]`). `/invoices/<id>` and `/invoices` can't collide because
+segment count discriminates them — one segment reads the list, two reads the drill-down.
+
+## The widened codec (ROUTE-02)
+
+`parseRoute(pathname): Route | null` returns `{ view: View; id: string | null }` now, not a
+bare `View` — one codec widened, not a second `parseDrillId` (`[one-codec]`). `routePath(view,
+id?)` is the inverse: pass an id for `detail`/`extraction` to get the two-segment form, omit
+it for every other view. `seedFromPath(pathname)` is boot's total reader — returns
+`{ view, invoiceId, jobId }`, never throwing on an unparseable path, falling back to
+`dashboard` instead.
 
 ## The one-rule URL writer
 
@@ -57,9 +72,17 @@ against. It's what makes the one-rule writer above actually hold, and it's pinne
 
 `initialView` (DEMO-06 persona-switch carry) → review hash (`#review/<uuid>`) → path →
 `dashboard`. See the `view` lazy initializer in `Workspace`. The path tier reads
-`bootPath` (`App.tsx:320-322`), not `window.location.pathname` directly — ROUTE-05-03
+`bootPath` (`App.tsx:319-321`), not `window.location.pathname` directly — ROUTE-05-03
 substitutes a restored deep-link destination there when the live path is the bare root;
 it is not a new precedence tier. See the section below.
+
+Both drill-down ids gate on the *winning* view, `bootView` (`App.tsx:330`), never
+`bootSeed.view` directly (`[ids-gate-on-the-winning-view]`) — `initialView` or a review hash
+can outrank the path, and a `create` boot must never inherit an invoice id from a URL that
+lost. The mount-alignment effect (`App.tsx:531-538`) then serialises that same boot id back
+into the URL (`[alignment-must-carry-the-id]`): without it, a correct deep link renders right
+and then silently rewrites its own address bar to the bare list path one tick later — right
+panel, wrong link to copy.
 
 ## The signed-out deep link (ROUTE-05)
 
@@ -88,10 +111,19 @@ The round trip crosses two origins, so nothing below the browser can observe it.
 oracle is `e2e/topology/auth.spec.ts`'s `a signed-out deep link returns to its destination
 after sign-in`.
 
+**The merged shape (ROUTE-02 merge).** `bootPath` (`App.tsx:319-321`) resolves the
+destination first; `bootSeed` (`seedFromPath(bootPath)`, `App.tsx:326`) then decodes it into
+`{ view, invoiceId, jobId }`. A signed-out visit to `/invoices/<id>` is captured, restored
+after sign-in, and seeds both the detail view and its id — not just the view. Pinned by
+`App.signedOutDeepLink.test.tsx`'s `Workspace boot: a restored destination carries its
+drill-down id too (ROUTE-02 merge)` block.
+
 ## The ROUTE-02..06 boundary
 
-- **ROUTE-02** — drill-down ids (`/invoices/:id`, `/extraction/:jobId`), and cold-boot
-  seeding for `/invoice` and `/extraction` (see Limitations below).
+- **ROUTE-02** — **shipped.** Drill-down ids (`/invoices/:id`, `/extraction/:jobId`) and
+  cold-boot seeding for both. `carryView` (`App.tsx:195`) collapses `detail`/`extraction`
+  back to `invoices` on a persona switch, id included: a remounted identity cannot resume a
+  selection it may not be entitled to (`[carryview-drops-the-id]`).
 - **ROUTE-03** — migrates `#review/<uuid>` into the path (`/imports/:batchId/review`,
   epic Q7). Also inherits a known defect: Back into an older review batch after opening
   a second one in the same tab relinks the wrong batch onto that history entry. An
@@ -102,20 +134,13 @@ after sign-in`.
   which never ships — `.ralph/` is gitignored.
 - **ROUTE-04** — filters and sub-tabs in the URL.
 - **ROUTE-05** — **shipped.** A signed-out visit to a real path returns there after sign-in;
-  the destination rides `sessionStorage`, not the URL (section above). ROUTE-02 inherits it
-  for free: `bootPath` carries the captured path as a raw string, so a widened `parseRoute`
-  is all a restored `/invoices/:id` needs to resolve. ROUTE-02 will separately need the
-  mount-alignment write to stop collapsing `/invoices/<id>` to `routePath('invoices')`.
-- **ROUTE-06** — the stale-state sweep. ROUTE-01 closed exactly one atom
-  (`extractionJobId`, cleared in `switchClient`) as a prerequisite; everything else is
+  the destination rides `sessionStorage`, not the URL (section above). ROUTE-02 inherited it
+  for free: `bootPath` carries the captured path as a raw string, so the widened `parseRoute`
+  is all a restored `/invoices/:id` needs to resolve — see the merged shape above.
+- **ROUTE-06** — the stale-state sweep. ROUTE-01 closed one atom (`extractionJobId`,
+  cleared in `switchClient`); ROUTE-02 additionally scrubs the drill-down id off the URL on
+  that same call (`[switchclient-scrub]`, `App.tsx:610`). Everything else is still
   ROUTE-06's.
-
-## Limitations ROUTE-01 leaves open
-
-- `/invoice` cold-booted has no selection — `InvoiceDetail` renders its `EmptyState`.
-- `/extraction` cold-booted has no `extractionJobId` — nothing renders.
-
-Both are ROUTE-02's cold-boot seeding to close.
 
 ## Two things that cost time here
 
@@ -129,5 +154,5 @@ second writer firing in the same commit.
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot
 seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. A
 static guard in `App.routeNavigate.test.tsx`
-(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 14 files
+(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 15 files
 that render `<App />`.

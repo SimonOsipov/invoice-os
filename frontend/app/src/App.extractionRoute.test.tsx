@@ -190,6 +190,30 @@ describe("AC-2: carryView collapses 'extraction' to 'invoices'", () => {
     expect(capturedCtx!.view, 'the view must collapse').toBe('invoices')
     expect(capturedCtx!.extractionJobId, 'the job id outlived the view it belonged to').toBeNull()
   })
+
+  // route-02-06, V-2: same drop, through returnToSeat instead of becomePersona. Stands in
+  // first so the job is opened and dropped under the stand-in, isolating returnToSeat's own
+  // collapse from becomePersona's (which already clears the job on its own way in).
+  it('returnToSeat_fromExtractionCollapsesToInvoicesAndDropsTheJobId', async () => {
+    await renderAppWithSeat(true)
+
+    await act(async () => {
+      await capturedCtx!.becomePersona!(MEMBER, 'dashboard')
+    })
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_ID)
+    })
+    expect(window.location.pathname, 'sanity: openExtraction must push the job path').toBe(`/extraction/${JOB_ID}`)
+    expect(capturedCtx!.extractionJobId, 'sanity: the job id must be armed').toBe(JOB_ID)
+
+    await act(async () => {
+      await capturedCtx!.returnToSeat!(EXTRACTION, SEAT_AS_MEMBER)
+    })
+
+    expect(window.location.pathname, 'returnToSeat must land the URL on invoices').toBe('/invoices')
+    expect(capturedCtx!.view, 'the screen must agree with the address bar').toBe('invoices')
+    expect(capturedCtx!.extractionJobId, 'the job id must not survive the return').toBeNull()
+  })
 })
 
 describe('AC-3: openExtraction writes the job id and navigates in one commit', () => {

@@ -280,7 +280,6 @@ export type PlatformCtx = {
   mapping: Mapping | null
   armedField: string | null
   dragField: string | null
-  selectedId: string | null
   // The header search box's committed term (BUG-01-05) -- set on submit, read by
   // InvoicesList as the `q` server-side filter. `''` means unfiltered.
   invoiceQuery: string
@@ -420,10 +419,8 @@ export type PlatformCtx = {
   // replaced. An id is all any consumer needs; nothing may resurrect the payload.
   reviewBatchIds: string[]
   // Set by openImportedInvoice (M4-08-05) when the user clicks through to a real
-  // invoice. Mutually exclusive with `selectedId` by construction — both are members
-  // of one DetailSelection atom in App.tsx (lib/importReport.ts), so neither can be left
-  // stale when the other is written. Non-null makes InvoiceDetail render its honest
-  // placeholder instead of resolving a mock invoice; M4-09 swaps that for a real fetch.
+  // invoice. Non-null makes InvoiceDetail render its honest placeholder instead of
+  // resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
   // This atom and the `invoice` param of the current /audit URL are the same fact: every
   // writer moves both, and navigating off Audit clears both.
@@ -500,7 +497,6 @@ export type PlatformCtx = {
   // navigation to the real invoice detail. There is deliberately no companion
   // "approve"/"back to results" pair, because there is no step to go back from.
   fileDraft: () => void
-  selectInvoice: (number: string) => void
   openImportedInvoice: (id: string) => void
   // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
   // one without the other.

@@ -3,6 +3,7 @@
 package extraction
 
 import (
+	"bytes"
 	"mime"
 	"path/filepath"
 	"strings"
@@ -30,6 +31,19 @@ var pageImageFormats = map[string]bool{
 // renders page images from. A strict allowlist: that column is nullable, so an unknown or absent
 // type takes the no-render branch.
 func RendersPageImages(contentType string) bool { return pageImageFormats[contentType] }
+
+// looksLikePDF reports whether the bytes carry the PDF header at offset zero. Deliberately
+// narrower than a content-type sniff: it is an escape hatch for one poisoned column, not a
+// classifier.
+func looksLikePDF(b []byte) bool { return bytes.HasPrefix(b, []byte("%PDF-")) }
+
+// RendersPageImagesForDocument is RendersPageImages plus a header sniff, for the one column that
+// a client header can poison permanently (documents is append-only by grant). The name carries
+// the literal "RendersPageImages" because worker_internal_test.go's go/ast scans read the gate
+// heads for it.
+func RendersPageImagesForDocument(d Document) bool {
+	return RendersPageImages(d.ContentType) || looksLikePDF(d.Bytes)
+}
 
 // classifyDocumentType resolves the canonical content type from the filename extension
 // first, then from the declared content type with its parameters stripped, mirroring

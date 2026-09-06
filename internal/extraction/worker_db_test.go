@@ -152,6 +152,9 @@ type wkOpener struct {
 	// contentType is what the served Document declares. Empty means wkDefaultContentType, so
 	// every spec written before EXTR-15-02's gate keeps the PDF path byte for byte.
 	contentType string
+	// blankContentType suppresses the "" -> wkDefaultContentType substitution, for a spec that
+	// needs a literally empty ContentType rather than the PDF stand-in.
+	blankContentType bool
 }
 
 func (o *wkOpener) open(ctx context.Context, documentID string) (extraction.Document, error) {
@@ -163,7 +166,7 @@ func (o *wkOpener) open(ctx context.Context, documentID string) (extraction.Docu
 		return extraction.Document{}, o.err
 	}
 	ct := o.contentType
-	if ct == "" {
+	if ct == "" && !o.blankContentType {
 		ct = wkDefaultContentType
 	}
 	return extraction.Document{Bytes: o.body, ContentType: ct}, nil
@@ -2710,7 +2713,7 @@ func TestExtractWorker_FailureKindOverwritesOnReplayAndClearsOnSuccess(t *testin
 
 // --- EXTR-15-02 / EXTR-19-04: a format that renders no page images ------------------------
 //
-// RendersPageImages(doc.ContentType) gates the render, the page rows and the v1 layout. It no
+// RendersPageImagesForDocument(doc) gates the render, the page rows and the v1 layout. It no
 // longer gates the rule lookup: EXTR-19-04 gives a boxless document a b1: identity of its own
 // off its text tokens, and the lookup is gated on that identity instead.
 
@@ -3449,10 +3452,10 @@ func TestRLS_ARetryableBoxlessLayoutWriteFailureStaysFailedAndEmitsNothing(t *te
 	}
 }
 
-// QA-3. The boxless branch is gated on the FORMAT, never on the geometry: RendersPageImages is a
-// strict allowlist over two content types, so anything else -- including the NULL
-// declared_content_type docs/document-upload.md records a direct API caller can store against
-// real PDF bytes -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
+// QA-3. The boxless branch is gated on the FORMAT, never on the geometry:
+// RendersPageImagesForDocument checks the declared type and a PDF byte sniff, so only content
+// that fails both -- a genuine non-PDF document, whatever real box geometry its own text tokens
+// happen to carry -- takes it. Such a job's tokens carry REAL boxes, so it stores usable anchor
 // geometry under a b1: identity and a pointed correction against it CAN learn a rule. AC-9's
 // "a POINTED correction on a boxless job learns nothing" is a property of a DOCX's zero boxes,
 // not of the b1: namespace, and this is the spec that says which. A TYPED correction on such a
@@ -4008,4 +4011,92 @@ func TestRLS_ABoxlessCorrectionTeachesTheNextDocumentOfThatLayout(t *testing.T) 
 	wpAssertRankZero(t, taught.rows, blField, stPtr("7150.00"), nil)
 	wpAssertRankZero(t, bare.rows, blField, nil, stPtr(string(extraction.ReasonMissing)))
 	wkAssertOnlyFieldDiffers(t, taught.rows, bare.rows, blField)
+}
+
+// --- a poisoned content type must not silence the render, and the sniff must not widen the gate ---
+
+// A document served under a poisoned declared type ("application/octet-stream") whose bytes are
+// a real PDF must still render page images, and the layout it writes must carry the v1: PDFium
+// fingerprint -- never the b1: boxless one. writeLayoutTx is a bare UPDATE, so a fix applied to
+// only the render and page-row gates (not the boxless gate too) would let a poisoned PDF take
+// both branches and have the b1: write silently overwrite the v1: one.
+func TestRLS_ExtractWorkerRendersAPDFStoredUnderAPoisonedType(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	raw := fxRead(t, dcCorpusFixture)
+	op := &wkOpener{body: raw, contentType: "application/octet-stream"}
+	sink := &wkPageSink{}
+	ew := wkWorkerPages(t, wkOK(), op, wkPDFiumPages(sink), &wkAuditRecorder{})
+	// Keeps textRes.TextChars > 0 so the boxless branch is reachable -- without this the
+	// v1:/not-b1: assertion below is vacuous, and a two-of-three gate fix would still pass it.
+	ew.Text = wpDoclingReader(t, dcReadNamedGolden(t, dcCorpusGoldenName))
+	ew.Rules = wpStoreRules(t).load
+
+	const riverJobID = int64(920001)
+	if err := ew.Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	keys, _, puts := sink.snapshot()
+	if puts == 0 {
+		t.Fatalf("the sink saw 0 PUT(s); a poisoned PDF must still render, or every assertion below is vacuous")
+	}
+	want := wkPageKeys(tenantID, raw, puts)
+	if !slices.Equal(keys, want) {
+		t.Errorf("the worker PUT\n  %v\nwant\n  %v", keys, want)
+	}
+
+	rows := stPageRows(t, ctx, documentID)
+	if len(rows) != puts {
+		t.Fatalf("the document holds %d extraction_page_images row(s), want %d -- one per PUT", len(rows), puts)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	row := stJobLayout(t, ctx, xid)
+	if row.Fingerprint == nil {
+		t.Fatalf("layout_fingerprint is NULL; the poisoned type skipped the render entirely")
+	}
+	if !strings.HasPrefix(*row.Fingerprint, extraction.FingerprintVersion+":") {
+		t.Errorf("layout_fingerprint is %q, want the %q namespace", *row.Fingerprint, extraction.FingerprintVersion)
+	}
+	if strings.HasPrefix(*row.Fingerprint, extraction.BoxlessFingerprintVersion+":") {
+		t.Errorf("layout_fingerprint is %q, in the boxless %q namespace -- the boxless write overwrote the PDFium layout the render just wrote",
+			*row.Fingerprint, extraction.BoxlessFingerprintVersion)
+	}
+}
+
+// The anti-widening guard: a DOCX served with a literally empty ContentType must still write
+// zero page rows. Confirms the sniff reads bytes, not the absence of a declared type.
+func TestRLS_ExtractWorkerWritesNoPagesForAnEmptyContentType(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	op := &wkOpener{body: fxRead(t, dxFixture), blankContentType: true}
+	reader := &wkForbiddenReader{}
+	const riverJobID = int64(920002)
+	err := wkWorkerPages(t, wkOK(), op, wkForbiddenPages(reader), &wkAuditRecorder{}).Work(ctx,
+		extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+
+	if n := reader.count(); n != 0 {
+		t.Errorf("PageStore.Reader ran %d time(s) for an empty content type, want 0", n)
+	}
+	if err != nil {
+		t.Fatalf("Work returned %v, want nil", err)
+	}
+	// Control needle: without this, "zero page rows" is also what a worker that never opened
+	// the document looks like.
+	if !op.first(t).ok {
+		t.Error("OpenDocument saw no identity; the zero-rows assertion below proves nothing")
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if ids := wkPageRowIDs(t, ctx, documentID); len(ids) != 0 {
+		t.Errorf("wrote %d extraction_page_images row(s) (%v), want 0", len(ids), ids)
+	}
 }

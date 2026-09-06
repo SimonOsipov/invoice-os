@@ -18,7 +18,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import { draftToCreateRequest, fileDraftGate, fileDraftInvoice, type FileDraftDeps } from './invoiceDraft'
-import { detailTarget, selectImported } from './importReport'
 import type { Entity } from './portfolio'
 import type { Draft } from '../types'
 
@@ -327,7 +326,6 @@ describe('fileDraftInvoice: ordering (SUBMIT-1)', () => {
     await call
 
     expect(log).toEqual(['error:null', 'pending:true', 'created:u-1', 'pending:false'])
-    expect(detailTarget(selectImported('u-1'))).toEqual({ kind: 'imported', invoiceId: 'u-1' })
   })
 })
 

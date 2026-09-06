@@ -422,7 +422,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
+test('E2E-04/09 (INVCR-01-09): the mixed fixture separates the two channels by TAB, the structural message is reachable only through Unreadable rows, and Finish leads to a live invoice detail', async ({
   page,
 }) => {
   const errors = collectErrors(page)
@@ -542,8 +542,8 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   //     (InvoicesList.tsx, the N=1 route below) but is no longer what a review-row click
   //     does. Proven on the deployed run by subtask 16's own INVCR-E2E-1 (the row-switch
   //     expand/fix/re-validate loop) above.
-  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice/detailTarget
-  //     seam this exercised (import a one-invoice file -> land on the real InvoiceDetail,
+  //   - subtask 16 owns the N=1 route through the SAME openImportedInvoice seam this
+  //     exercised (import a one-invoice file -> land on the real InvoiceDetail,
   //     never the review shell), which is the highest-value uncovered path in 09 --
   //     INVCR-E2E-2 above.
   // Deleting rather than leaving a weakened version is deliberate: a spec that asserts
@@ -560,7 +560,7 @@ test('E2E-04/09 ([detail-target-exclusive]/F6, INVCR-01-09): the mixed fixture s
   expect(violateEntry!.violations.map((v) => v.rule_key)).toEqual(['vat-standard-rate'])
   expect(violateEntry!.invoice_id, 'invoice_violations[].invoice_id must be populated on a REAL import').toBeTruthy()
 
-  // E2E-09 (the F6 regression guard, [detail-target-exclusive]): leave the review
+  // E2E-09 (the click-through regression guard): leave the review
   // screen for Invoices and open one of this batch's invoices -- the live detail must
   // render THAT invoice's own content. The live surface is proven by `invoice-detail`
   // plus `status-strip`; "Audit trail" (the retired mock detail's panel title, and the
@@ -2849,6 +2849,33 @@ async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
   })
   return (await res.json()) as ExtractionDetail
 }
+
+// ROUTE-02-07 (X-4): the extraction cold boot. No API creates a job (nothing seeds
+// extraction_jobs), so the only route to a real jobId is driving the real pipeline, then a
+// FRESH page.goto -- a real browser navigation, not an SPA route push -- that discards all
+// in-memory React state and forces the boot-seed path to be the only thing that can
+// reopen the review screen.
+//
+// ~4-5 minutes: extractOneDocument's own 240s upload-to-invoice-detail wait, plus
+// openExtractionReview's 120s review-read wait, plus this second document load. No
+// cheaper fixture path exists.
+test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'ROUTE-02 cold boot')
+  const detail = await openExtractionReview(page)
+
+  const url = `${APP_URL}/extraction/${detail.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('extraction-review'), 'the cold boot must reopen the review screen').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 
 /** The first field the extractor pointed somewhere. The specs read its region off the wire. */
 function firstLocatedField(detail: ExtractionDetail) {

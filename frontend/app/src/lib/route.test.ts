@@ -66,7 +66,7 @@ describe('routePath / parseRoute round trip', () => {
   it('roundTrip_everyViewSerialisesAndParsesBackToItself', () => {
     expect(ALL_VIEWS.length).toBe(13)
     for (const v of ALL_VIEWS) {
-      expect(parseRoute(routePath(v))).toBe(v)
+      expect(parseRoute(routePath(v))).toEqual({ view: v, id: null })
     }
   })
 
@@ -76,10 +76,6 @@ describe('routePath / parseRoute round trip', () => {
 })
 
 describe('parseRoute — strict, case-sensitive, exact', () => {
-  it('parse_refusesADrillDownPathRatherThanDegradingToTheList', () => {
-    expect(parseRoute('/invoices/a1b2c3d4-e5f6-47a8-89ab-cdef01234567')).toBeNull()
-  })
-
   it('parse_refusesAnUnknownPathAndTheEmptyString', () => {
     expect(parseRoute('/nonsense')).toBeNull()
     expect(parseRoute('')).toBeNull()
@@ -89,11 +85,11 @@ describe('parseRoute — strict, case-sensitive, exact', () => {
   it('parse_isCaseSensitive', () => {
     expect(parseRoute('/Invoices')).toBeNull()
     expect(parseRoute('/AUDIT')).toBeNull()
-    expect(parseRoute('/invoices')).toBe('invoices') // control needle: the lowercase form must still resolve
+    expect(parseRoute('/invoices')).toEqual({ view: 'invoices', id: null }) // control needle: the lowercase form must still resolve
   })
 
   it('parse_toleratesExactlyOneTrailingSlash', () => {
-    expect(parseRoute('/invoices/')).toBe('invoices')
+    expect(parseRoute('/invoices/')).toEqual({ view: 'invoices', id: null })
     expect(parseRoute('/invoices//')).toBeNull()
   })
 })
@@ -140,8 +136,8 @@ describe('parseRoute — adversarial', () => {
 
   it('parse_distinguishesAPathFromAnAdjacentRealPathThatPrefixesIt', () => {
     // /invoice and /invoices are both real routes (detail, invoices) -- neither may degrade to the other.
-    expect(parseRoute('/invoice')).toBe('detail')
-    expect(parseRoute('/invoices')).toBe('invoices')
+    expect(parseRoute('/invoice')).toEqual({ view: 'detail', id: null })
+    expect(parseRoute('/invoices')).toEqual({ view: 'invoices', id: null })
     expect(parseRoute('/audi')).toBeNull() // prefix of /audit, not a route itself
   })
 
@@ -247,15 +243,21 @@ describe('parseLocation — the inverse of routeUrl', () => {
     expect(parseLocation('/invoices', '?q=acme').q).toBe('acme')
   })
 
-  it('parseLocation_refusesADrillDownExactlyAsParseRouteDoes', () => {
-    expect(parseLocation('/invoices/a1b2c3d4-e5f6-47a8-89ab-cdef01234567', '').view).toBeNull()
-    expect(parseLocation('/invoices/x/y', '').view).toBeNull()
-    expect(parseLocation('/settings/roles/extra', '').view).toBeNull()
-    expect(parseLocation('/settings//', '').view).toBeNull()
-    expect(parseLocation('/nonsense', '').view).toBeNull()
-    // Control needles: one segment still resolves, and /settings is the only path taking two.
+  it('parseLocation_totalityFallsBackToDashboardOnAnythingParseRouteRefuses', () => {
+    // parseRoute itself still refuses these; totality (D1) means the view that comes
+    // out the other side is 'dashboard', never null.
+    expect(parseLocation('/invoices/x/y', '').view).toBe('dashboard')
+    expect(parseLocation('/settings/roles/extra', '').view).toBe('dashboard')
+    expect(parseLocation('/settings//', '').view).toBe('dashboard')
+    expect(parseLocation('/nonsense', '').view).toBe('dashboard')
+    // Control needles: one segment still resolves, /settings is the only path taking
+    // two, and a drill-down is no longer refused -- it is a legal `detail` route (ROUTE-02).
     expect(parseLocation('/invoices', '').view).toBe('invoices')
     expect(parseLocation('/settings/roles', '').view).toBe('settings')
+    expect(parseLocation('/invoices/a1b2c3d4-e5f6-47a8-89ab-cdef01234567', '')).toMatchObject({
+      view: 'detail',
+      invoiceId: 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    })
   })
 
   it('parseLocation_clampsAnOversizedQueryAtAByteBoundary', () => {
@@ -367,7 +369,7 @@ describe('the codec — adversarial', () => {
       for (const search of searches) {
         const label = `${pathname} ${search}`
         const parsed = parseLocation(pathname, search)
-        expect(parsed.view, label).toBeNull()
+        expect(parsed.view, label).toBe('dashboard')
         expect(parsed.settingsTab, label).toBe('members')
         expect(parsed.q, label).toBe('')
         expect(parsed.auditInvoice, label).toBeNull()
@@ -436,4 +438,121 @@ describe('the codec — adversarial', () => {
     const [p, s] = splitUrl(routeUrl('audit', { auditInvoice: UUID }))
     expect(parseLocation(p, s).auditInvoice).toBe(UUID)
   })
+})
+describe('parseRoute — drill-down (detail, extraction)', () => {
+  const UUID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+
+  it('parse_invoicesDrillDownParsesToDetailWithId', () => {
+    expect(parseRoute(`/invoices/${UUID}`)).toEqual({ view: 'detail', id: UUID })
+  })
+
+  it('parse_extractionDrillDownParsesToExtractionWithId', () => {
+    expect(parseRoute('/extraction/j1')).toEqual({ view: 'extraction', id: 'j1' })
+  })
+
+  it('parse_invoicesListStaysTheListNotADetail', () => {
+    expect(parseRoute('/invoices')).toEqual({ view: 'invoices', id: null })
+  })
+
+  it('parse_refusesAThreeSegmentDrillDownPath', () => {
+    // over-matching floor: a two-segment arm must not also swallow a third segment
+    expect(parseRoute(`/invoices/${UUID}/edit`)).toBeNull()
+  })
+
+  it('parse_malformedPercentEscapeReturnsNullRatherThanThrowing', () => {
+    expect(() => parseRoute('/invoices/%zz')).not.toThrow()
+    expect(parseRoute('/invoices/%zz')).toBeNull()
+  })
+})
+
+describe('routePath — drill-down id parameter', () => {
+  const UUID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+
+  it('serialize_detailEncodesTheIdOrFallsBackToTheBareFloor', () => {
+    expect(routePath('detail', UUID)).toBe(`/invoices/${encodeURIComponent(UUID)}`)
+    expect(routePath('detail', null)).toBe('/invoice')
+  })
+
+  it('serialize_idIsIgnoredForTheElevenViewsThatDoNotTakeOne', () => {
+    expect(routePath('settings', 'x')).toBe('/settings')
+  })
+})
+
+describe('routePath / parseRoute round trip — id corpus', () => {
+  // UUID, URN-prefixed UUID, space, slash, '#', plain string
+  const ID_CORPUS = [
+    'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'urn:uuid:a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'has space',
+    'a/b',
+    'tag#1',
+    'plain-string',
+  ]
+  const ID_TAKING_VIEWS = new Set(['detail', 'extraction'])
+
+  it('roundTrip_idCorpusSurvivesForEveryViewAcrossAllIds', () => {
+    expect(ALL_VIEWS.length).toBe(13)
+    expect(ID_CORPUS.length).toBe(6)
+    for (const v of ALL_VIEWS) {
+      for (const id of ID_CORPUS) {
+        const expected = { view: v, id: ID_TAKING_VIEWS.has(v) ? id : null }
+        expect(parseRoute(routePath(v, id)), `${v} with id ${id}`).toEqual(expected)
+      }
+    }
+  })
+})
+
+describe('parseLocation — invoiceId / jobId field mapping', () => {
+  it('parseLocation_isTotalAndFallsBackToTheDashboardTripleOnAnUnparseablePath', () => {
+    expect(parseLocation('/nonsense', '')).toMatchObject({ view: 'dashboard', invoiceId: null, jobId: null })
+  })
+
+  // Gap found in mutation testing: nothing above exercises the actual field mapping --
+  // forcing invoiceId to always be null still left every existing test green.
+  it('parseLocation_extractsInvoiceIdFromADetailDrillDownAndLeavesJobIdNull', () => {
+    expect(parseLocation('/invoices/abc', '')).toMatchObject({ view: 'detail', invoiceId: 'abc', jobId: null })
+  })
+
+  it('parseLocation_extractsJobIdFromAnExtractionDrillDownAndLeavesInvoiceIdNull', () => {
+    expect(parseLocation('/extraction/j1', '')).toMatchObject({ view: 'extraction', invoiceId: null, jobId: 'j1' })
+  })
+
+  it('parseLocation_aPlainViewWithNoIdCarriesNeitherInvoiceIdNorJobId', () => {
+    expect(parseLocation('/audit', '')).toMatchObject({ view: 'audit', invoiceId: null, jobId: null })
+  })
+
+  it('parseLocation_toleratesTheEmptyStringAndAControlCharacterWithoutThrowing', () => {
+    expect(() => parseLocation('', '')).not.toThrow()
+    expect(parseLocation('', '')).toMatchObject({ view: 'dashboard', invoiceId: null, jobId: null })
+    expect(() => parseLocation('/invoices/ ', '')).not.toThrow()
+  })
+})
+
+describe('parseRoute / routePath — adversarial ids', () => {
+  it('parse_aBareSlashIdRoundTripsThroughEncodingRatherThanBeingMistakenForASegmentBoundary', () => {
+    const path = routePath('detail', '/')
+    expect(path).toBe('/invoices/%2F')
+    expect(parseRoute(path)).toEqual({ view: 'detail', id: '/' })
+  })
+
+  it('parse_aWhitespaceOnlyIdSurvivesEncodeDecode', () => {
+    const path = routePath('extraction', '   ')
+    expect(parseRoute(path)).toEqual({ view: 'extraction', id: '   ' })
+  })
+
+  it('parse_aVeryLongIdSurvivesEncodeDecode', () => {
+    const longId = 'x'.repeat(2000)
+    const path = routePath('detail', longId)
+    expect(parseRoute(path)).toEqual({ view: 'detail', id: longId })
+  })
+
+  it('parse_anAlreadyPercentEncodedIdDoesNotDoubleEncodeOrDoubleDecode', () => {
+    // '%25' in the id is itself a percent-escape; a naive re-encode/decode pass would
+    // collapse '%2F' -> '/' a second time and split the id into extra segments.
+    const id = 'a%2Fb'
+    const path = routePath('detail', id)
+    expect(path).toBe('/invoices/a%252Fb')
+    expect(parseRoute(path)).toEqual({ view: 'detail', id })
+  })
+
 })

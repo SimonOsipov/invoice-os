@@ -78,6 +78,8 @@ function workspaceIsRendered(): boolean {
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const INVOICE_ID = 'd4c3b2a1-6f5e-4a78-9bcd-1234567890ab'
+const EXTRACTION_JOB_ID = 'e5f6a7b8-9012-4c3d-9e4f-0987654321ba'
 
 const MEMBER: Member = {
   id: 'm-restore-001',
@@ -859,5 +861,43 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     expect(deepLinkSrc, 'the scan did not actually read deepLink.ts').toContain('sessionStorage')
     expect(deepLinkSrc, 'deepLink.ts must never touch window.history').not.toContain('window.history')
     expect(deepLinkSrc, 'deepLink.ts must never touch window.location').not.toContain('window.location')
+  })
+})
+
+// ROUTE-02 x ROUTE-05 merge defect. Every restore spec above only ever stores a view-level
+// path (`/audit`, `/reports`) -- none exercises the id half of bootSeed, so a regression that
+// reads window.location.pathname instead of bootPath (App.tsx:326) would land a signed-out
+// /invoices/<id> visitor on the detail view with a null id and nothing here would catch it.
+describe('Workspace boot: a restored destination carries its drill-down id too (ROUTE-02 merge)', () => {
+  it('restore_aStoredInvoiceDrillDownSeedsTheDetailViewAndItsId', async () => {
+    captureDestination(`/invoices/${INVOICE_ID}`)
+    await bootWorkspaceAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'a stored /invoices/<id> destination must seed the detail view').toBe('detail')
+    expect(ctx.importedInvoiceId, 'the id must reach the detail surface, not come back null').toBe(INVOICE_ID)
+  })
+
+  it('restore_aStoredExtractionDrillDownSeedsTheExtractionViewAndItsJobId', async () => {
+    captureDestination(`/extraction/${EXTRACTION_JOB_ID}`)
+    await bootWorkspaceAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'a stored /extraction/<id> destination must seed the extraction view').toBe('extraction')
+    expect(ctx.extractionJobId, 'the job id must reach the review surface, not come back null').toBe(
+      EXTRACTION_JOB_ID,
+    )
+  })
+
+  // Separate from the two specs above: those pin STATE (ctx.view/id); this pins the URL the
+  // mount-alignment effect writes via bootHref, ROUTE-02's id-carrying call. Kept apart so a
+  // bootHref-only regression (id dropped from the rewrite, state unaffected) fails this spec
+  // alone, not the other two.
+  it('restore_theAddressBarSettlesOnTheAddressedInvoiceNotTheCollapsedListPath', async () => {
+    captureDestination(`/invoices/${INVOICE_ID}`)
+    await bootWorkspaceAt('/')
+    requireCtx()
+    expect(
+      window.location.pathname,
+      'the URL must settle on the addressed detail path, not a view collapsed back to /invoices',
+    ).toBe(`/invoices/${INVOICE_ID}`)
   })
 })

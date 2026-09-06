@@ -147,7 +147,7 @@ describe('AC-4: a review deep link ends with both the path and the hash correct'
     // Re-parse the FULL url from scratch, decoupled from ctx/App's own state -- this is
     // the invariant import-wizard.spec.ts:1369 guards on the deployed build: a reload must
     // re-derive the identical screen.
-    expect(parseRoute(window.location.pathname), 'the pathname alone must parse back to create').toBe('create')
+    expect(parseRoute(window.location.pathname)?.view, 'the pathname alone must parse back to create').toBe('create')
     const ids = parseReviewHash(window.location.hash)
     expect(ids, 'the hash must re-parse to the same batch id').toEqual([REVIEW_ID])
     expect(

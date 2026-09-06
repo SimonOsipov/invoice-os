@@ -10,7 +10,7 @@ import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from
 import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { parseReviewHash, reviewHash, reviewQuery } from './lib/reviewBatch'
-import { parseLocation, routeUrl, type RouteParams } from './lib/route'
+import { parseLocation, routePath, routeUrl, type RouteParams } from './lib/route'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import {
   addFiles,
@@ -31,7 +31,6 @@ import {
 import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
 import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
-import { clearSelection, selectImported, selectMock, type DetailSelection } from './lib/importReport'
 import {
   createImport,
   getExtractions,
@@ -321,17 +320,22 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
   )
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
-  // One parse of the boot URL; the four seeds below read it, so path and query stay one
+  // One parse of the boot URL; the seeds below all read it, so path and query stay one
   // fact. The query is taken only when bootPath IS the live pathname -- a restored
   // destination stores no query, so a live `?q=` on the bare root must not attach to it.
+  // Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
+  // arrives back at the bare root with the path in storage, and reading the live pathname
+  // would open the detail view with a null id. Covered by
+  // App.deepLinkDrillDown.test.tsx's restored-drill-down specs.
   const [seed] = useState(() =>
     parseLocation(bootPath, bootPath === window.location.pathname ? window.location.search : ''),
   )
+  // Plain const, not a useState: read by the lazy initializers below (all run once at
+  // mount) and by the mount-alignment effect further down, so no memoization is needed.
+  const bootView: View = initialView ?? (bootBatchIds.length > 0 ? 'create' : seed.view)
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
-  const [view, setView] = useState<View>(
-    initialView ?? (bootBatchIds.length > 0 ? 'create' : (seed.view ?? 'dashboard')),
-  )
+  const [view, setView] = useState<View>(bootView)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
   // The document a dead-lettered extraction left behind, recorded by enterByHand so the
   // invoice typed instead keeps its provenance. Cleared wherever `draft` is reseeded --
@@ -353,23 +357,21 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [groupIndex, setGroupIndex] = useState(0)
   const [armedField, setArmedField] = useState<string | null>(null)
   const [dragField, setDragField] = useState<string | null>(null)
-  // ONE atom for what the detail view renders, never two loose fields
-  // ([detail-target-exclusive], debate F6). Written ONLY through the three total
-  // constructors below, so every write sets both members and "forgot to clear the
-  // counterpart" is a type error rather than a discipline. Two independent fields would
-  // mean one click-through hijacks the detail view for the rest of the session: every
-  // later InvoicesList click would set selectedId while a stale importedInvoiceId kept
-  // the placeholder on screen. Do NOT reintroduce a `setSelectedId`, and do NOT write
-  // this state with an inline object literal — go through a constructor.
-  const [detailSel, setDetailSel] = useState<DetailSelection>(clearSelection())
+  // The invoice the detail view renders. One real UUID or nothing -- the mock branch it
+  // used to share this slot with was deleted in M5-09-04.
+  const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(
+    bootView === 'detail' ? seed.invoiceId : null,
+  )
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(() =>
     seed.auditInvoice ? { invoiceId: seed.auditInvoice, invoiceNumber: null } : null,
   )
-  // The review screen's job, re-read every render. Longer-lived than auditPrefilter above: it
-  // is not a URL param, so navigate never moves it and switchClient alone clears it.
-  const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
+  // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
+  // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
+  const [extractionJobId, setExtractionJobId] = useState<string | null>(
+    bootView === 'extraction' ? seed.jobId : null,
+  )
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery_] = useState(() => seed.q)
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -528,12 +530,18 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // It also normalises a URL that DID name a path: unowned params are dropped and the
-  // three owned ones re-emitted from state.
-  // Also clears it unconditionally: a persona-switch remount must not inherit a stray one.
+  // owned ones re-emitted from state.
+  // Reads bootView/seed rather than the live atoms -- at mount they agree, and seed is
+  // what the URL actually carried. A restored deep link therefore lands in the address
+  // bar addressed, not collapsed to /invoices.
+  // Also clears the stored destination unconditionally: a persona-switch remount must not
+  // inherit a stray one.
   // Deps stay []: a mount alignment, not a mirror --
   // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.
   useEffect(() => {
-    const url = routeUrl(view, {
+    const id = bootView === 'detail' ? seed.invoiceId : bootView === 'extraction' ? seed.jobId : null
+    const url = routeUrl(bootView, {
+      id,
       settingsTab,
       q: invoiceQuery,
       auditInvoice: auditPrefilter?.invoiceId ?? null,
@@ -543,10 +551,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
   // write. A write here would push a duplicate entry on every Back press.
+  // All six setters run in this one handler so the id lands in the same commit as
+  // the view, matching openImportedInvoice/openExtraction's one-handler invariant.
   useEffect(() => {
     const onPopState = () => {
       const at = parseLocation(window.location.pathname, window.location.search)
-      setView(at.view ?? 'dashboard')
+      setView(at.view)
+      setDetailInvoiceId(at.invoiceId)
+      setExtractionJobId(at.jobId)
       setSettingsTab_(at.settingsTab)
       setInvoiceQuery_(at.q)
       // Functional, matching navigate: a Back landing on an invoice already armed keeps
@@ -589,6 +601,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // come from the same `params` object, so state and the address bar cannot diverge.
   // Never reads location.search (AC-3): echoing it would re-attach a consumed ?persona=
   // to every pushed entry.
+  // `id` is a parameter, never a state read: openImportedInvoice/openExtraction call this
+  // BEFORE their own setState commits, so reading detailInvoiceId/extractionJobId here
+  // would serialise the PREVIOUS id.
   function navigate(view: View, params?: RouteParams) {
     // settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.
     const tabNext = params?.settingsTab ?? settingsTab
@@ -605,7 +620,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         ? null
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
-    const url = routeUrl(view, { settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
+    const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
     window.history.pushState(null, '', url + window.location.hash)
   }
 
@@ -633,8 +648,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   function switchClient(id: string) {
     setActiveEntityId(id)
+    // The entry being left names a drill-down of the company being left. Scrub its id
+    // through the same collapse a persona switch uses, so Back cannot return to it.
+    window.history.replaceState(null, '', routePath(carryView(view)) + window.location.hash)
     navigate('dashboard')
-    setDetailSel(clearSelection())
+    setDetailInvoiceId(null)
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
@@ -1232,11 +1250,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     )
   }
 
-  function selectInvoice(number: string) {
-    navigate('detail')
-    setDetailSel(selectMock(number))
-  }
-
   // Click-through from a rule-violation row in the import report (Core AC4), from a row in
   // the invoices list, and — since INVCR-01-03 — the landing point of a successful manual
   // filing. `id` is always a real invoice UUID, never a mock invoice number, so InvoiceDetail
@@ -1245,8 +1258,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // server's own row" IS the whole affirmation that a filing succeeded, and a second route
   // into it is a second thing that can be wrong.
   function openImportedInvoice(id: string) {
-    navigate('detail')
-    setDetailSel(selectImported(id))
+    navigate('detail', { id })
+    setDetailInvoiceId(id)
   }
 
   // Both setters in one handler, so the first render that sees view === 'audit' already
@@ -1267,7 +1280,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Same one-handler shape as openAuditForInvoice above, same reason.
   function openExtraction(jobId: string) {
     setExtractionJobId(jobId)
-    navigate('extraction')
+    navigate('extraction', { id: jobId })
   }
 
   // A tab click stays on the same screen, so it replaces.
@@ -1440,7 +1453,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     mapping,
     armedField,
     dragField,
-    selectedId: detailSel.selectedId,
     invoiceQuery,
     switcherOpen,
     sandbox,
@@ -1477,7 +1489,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     documentStages,
     importError,
     reviewBatchIds,
-    importedInvoiceId: detailSel.importedInvoiceId,
+    importedInvoiceId: detailInvoiceId,
     auditPrefilter,
     extractionJobId,
     nav,
@@ -1509,7 +1521,6 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     skipUpload,
     enterByHand,
     fileDraft,
-    selectInvoice,
     openImportedInvoice,
     openAuditForInvoice,
     setAuditInvoiceFilter,

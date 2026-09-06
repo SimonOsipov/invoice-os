@@ -66,7 +66,9 @@ describe('AC-3: the seam writers never read location.search', () => {
     // Floor: a broken anchor search silently returning an empty population would make the
     // loop below vacuously pass with nothing checked. setInvoiceQuery is in the population
     // because it is the one new writer that builds its own replaceState URL, and "clear the
-    // query" is naturally written as "take the current URL and strip q=".
+    // query" is naturally written as "take the current URL and strip q=". switchClient is
+    // in the population because it is a writer (the leaving-view scrub) that reads
+    // location.hash, never location.search -- ROUTE-02.
     const writerBodies = [
       { name: 'lib/route.ts (whole file)', body: routeSrc },
       { name: "App.tsx's navigate()", body: navigateBody },
@@ -77,8 +79,9 @@ describe('AC-3: the seam writers never read location.search', () => {
       // Keeps the leading `function `: 'setSettingsTab' alone matches the ctx object
       // literal first, and findBody would extract a slice of that object instead.
       { name: "App.tsx's setSettingsTab()", body: findBody(appSrc, 'function setSettingsTab(t: SettingsTab)') },
+      { name: "App.tsx's switchClient()", body: findBody(appSrc, 'function switchClient(id: string)') },
     ]
-    expect(writerBodies.length, 'the writer population must not be empty').toBe(7)
+    expect(writerBodies.length, 'the writer population must not be empty').toBe(8)
     for (const { name, body } of writerBodies) {
       expect(body.length, `${name}'s extracted body is empty -- the anchor is broken`).toBeGreaterThan(0)
       expect(containsLocationSearch(body), `${name} must never read location.search`).toBe(false)

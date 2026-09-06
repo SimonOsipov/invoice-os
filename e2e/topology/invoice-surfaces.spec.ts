@@ -37,7 +37,7 @@ import {
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
-import { approvalRun404Dropper } from './consoleGate'
+import { approvalRun404Dropper, type Dropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
@@ -57,12 +57,12 @@ test.beforeAll(async () => {
 // sign-in idiom topology.spec.ts and import-wizard.spec.ts each inline (no
 // spec file in this package exports its own helpers today, so this is a third
 // copy, not a new seam).
-function collectErrors(page: Page): string[] {
+function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
-  const dropApprovalRun404 = approvalRun404Dropper(page)
+  const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return
-    if (dropApprovalRun404(msg.text(), msg.location().url)) return
+    if (droppers.some((drop) => drop(msg.text(), msg.location().url))) return
     errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
@@ -113,7 +113,9 @@ async function goToInvoices(page: Page): Promise<void> {
 async function openInvoiceRow(page: Page, invoiceNumber: string): Promise<void> {
   await page.getByTestId('invoices-list').getByText(invoiceNumber, { exact: true }).click()
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
-  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoice$/)
+  // Addressed form (ROUTE-02-03): a handler that renders the panel while leaving the
+  // address bar stale still fails this.
+  await expect(page, 'openInvoiceRow did not update the URL').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
 }
 
 // The state strip (StatusStrip.tsx) replaced the status-history timeline: every scenario
@@ -1005,6 +1007,71 @@ test('detail surface: violations render against the rule-set version, the fix lo
   expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
   await expectStripStates(page, { draft: 'done', validated: 'current' })
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-02-07 (X-1/X-2): a top-level /invoices/<uuid> deep link cold-boots the detail
+// panel directly, no prior sign-in ([deep-link-uses-persona-handoff] -- copies
+// auth.spec.ts's own top-level-path test verbatim). res.ok() only proves Caddy's
+// try_files served the document; what actually renders is the real assertion.
+test('deployed app: /invoices/<uuid> is a working deep link, and the persona param strips', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-02 cold boot ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-ROUTE02-CB-${Date.now()}`
+  const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  const url = `${APP_URL}/invoices/${inv.id}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByTestId('invoice-detail'), 'the cold boot must render this invoice, not the empty state').toContainText(
+    invoiceNumber,
+  )
+
+  await expect(page, 'the deep link did not settle on /invoices/<uuid>').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-02-07 (X-3): the security-relevant assertion -- a cross-tenant invoice id and a
+// random UUID must render IDENTICAL text. Fixture created under PERSONAS.B (a different
+// tenant than the firm persona that views it) and never opened as firm before this.
+test('deployed app: a cross-tenant invoice id and a random UUID render the same detail text', async ({ page }) => {
+  const tokenB = await login(PERSONAS.B)
+  const entityB = await createEntity(tokenB, { name: `ROUTE-02 cross-tenant ${Date.now()}`, tin: freshTin() })
+  const crossTenantInvoice = await createInvoice(tokenB, {
+    entity_id: entityB.id,
+    ...cleanInvoiceFields(`INV-ROUTE02-XT-${Date.now()}`),
+  })
+  const randomId = crypto.randomUUID()
+
+  // The fixtures come first because the gate is scoped to THESE two ids: a 404 on either
+  // is this test's premise, a 404 on anything else is still a failure. See
+  // consoleGate.ts's notFoundIdDropper for why one 404 is really four.
+  const errors = collectErrors(page, notFoundIdDropper(page, [crossTenantInvoice.id, randomId]))
+
+  // toContainText is only the settle signal -- innerText() is a one-shot read, not
+  // auto-retrying. The assertion is the equality below; nothing here hardcodes a copy
+  // string, so a future error-message change does not need this test rewritten.
+  async function renderedTextFor(id: string): Promise<string> {
+    await page.goto(`${APP_URL}/invoices/${id}?persona=${FIRM_PERSONA.param}`)
+    await expect(page.getByTestId('invoice-detail')).toContainText('HTTP 404')
+    return page.getByTestId('invoice-detail').innerText()
+  }
+
+  const crossTenantText = await renderedTextFor(crossTenantInvoice.id)
+  const randomText = await renderedTextFor(randomId)
+  expect(crossTenantText, 'a cross-tenant id must render identically to an id that never existed').toBe(randomText)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

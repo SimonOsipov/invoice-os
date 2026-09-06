@@ -32,7 +32,7 @@ compare trimmed.
 | `corpus_inline_labels.pdf` | `same_token` for all ten fields — every `Label: value` is one token. Carries no bare-TIN token, so the format-only sweeps deliberately cannot fire here. | 11 | 1117 |
 | `corpus_split_labels.pdf` | `right` — label and value on one baseline as two tokens, ~0.15 normalised apart. Its buyer TIN sits at `Y0` 0.53, in the lower half the buyer sweep needs. Its date, `15/04/2026`, has a day above 12 and is deliberately unambiguous. | 21 | 1429 |
 | `corpus_stacked_labels.pdf` | `below` — the only layout where *every* label's value sits under it, 16pt down at the same `x`, invoice number and date and total included. Every value `corpusExpect` requires from a `below` rule here sits at most 0.009111 normalised under its label, and the next group's label is no closer than 0.087010, so a `below` rule anchored on a label cannot span two groups. Since EXTR-16 a bare label is not a value, so what bounds the dial is the next group's *value*: 0.107212 down, an 11.77x window, with the buyer's name 0.321571 down behind it. (The widest *intra-group* gap is 0.026631, a party block's TIN line that no expectation requires; `TestCorpus_StackedValuesSitBelowTheirLabels` asserts that one and the 0.087010 separation, and `TestTier1_DialsStayInsideTheirMeasuredWindow` asserts the window.) `corpus_two_column.pdf` stacks its two party blocks the same way, so `below` reaches the name fields there too; what is unique here is that nothing else in this layout is inline. Its bare TINs are not unique either — `corpus_split_labels.pdf` carries one in each page half as well. | 13 | 1109 |
-| `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so neither format-only sweep can fire and neither is separated by page half. Under Tier-1 they are not separated by label either: the `supplier_tin` pattern's party word is optional, so a bare `TIN` label matches it and `supplier_tin` collects **both**, while `buyer_tin` — whose party word is required — is unreachable on this layout. That is a Tier-1 accuracy defect, not a corpus defect. EXTR-04-09 measured it and carried it forward rather than closing it: widening the lexicon would change every stored document's fingerprint, so the fix needs a `FingerprintVersion` bump. | 10 | 1031 |
+| `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so neither format-only sweep can fire and neither is separated by page half. Under Tier-1 they are not separated by label either: the `supplier_tin` pattern's party word is optional, so a bare `TIN` label matches it and `supplier_tin` collects **both**, while `buyer_tin` — whose party word is required — is unreachable on this layout. That is a Tier-1 accuracy defect, not a corpus defect. EXTR-04-09 measured it and carried it forward rather than closing it: widening the lexicon would change every stored document's fingerprint under **both** layout identities, so the fix needs a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. | 10 | 1031 |
 | `corpus_ambiguous_date.pdf` | `12/03/2026` — both components at most 12 and no month name, so `ShapeDate` returns both readings and `issue_date` keeps two candidates. The one layout whose expectation row carries two values. | 6 | 873 |
 | `corpus_totals_block.pdf` | The lexicon overlap: `Sub-total` matches both `subtotal` and `\btotal\b`, because `-` is a non-word character. The `subtotal` entry claims the wider span of that token, so since EXTR-16 the `total` rule does not anchor there and the overlap mints one candidate, not two. Right-aligned split totals. The VAT label carries no percentage — a `7.5%` remainder would mint a spurious amount candidate. | 9 | 938 |
 
@@ -235,9 +235,9 @@ its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTe
 step's `-run` filter from rotting into one that matches nothing.
 
 The remaining miss is a Tier-1 **reach** limit, not a storage or a ranking one. Closing it by
-widening the anchor lexicon needs a `FingerprintVersion` bump, because the lexicon is an input to
-the fingerprint; closing it by another route — a pointed correction on a distinguishing label —
-needs none.
+widening the anchor lexicon needs a `FingerprintVersion` **and** a `BoxlessFingerprintVersion`
+bump, because the lexicon is an input to both layout identities; closing it by another route — a
+pointed correction on a distinguishing label — needs none.
 
 ## Regenerating
 
@@ -295,8 +295,36 @@ reason: a ruled table plus a deliberately inconsistent totals block, exercised b
 ## Learned rules
 
 A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
-derived from a single pointed correction, stored against the layout's fingerprint, and read back
-on every later document of that layout. It is the tenant-specific tier; Tier-1 stays generic.
+derived from one correction — a **pointed** one on a document that has geometry, a **typed** one
+on a document that has none — stored against the layout's fingerprint, and read back on every
+later document of that layout. It is the tenant-specific tier; Tier-1 stays generic.
+
+### The two layout identities
+
+A rule is keyed by a layout **fingerprint**, and two producers make one, in two disjoint
+namespaces. Which one a job takes is decided when it is extracted, by whether the format returns
+usable geometry.
+
+* **`v1:` — the geometric identity.** `Fingerprint` hashes `<label>:<band>` elements: which
+  anchor labels page 1 carries, and which vertical third — left, middle or right — each one's
+  box centres in. They are hashed in reading order, top edge then left edge. This is what a PDF
+  gets.
+* **`b1:` — the boxless identity.** `BoxlessFingerprint` hashes `<label>:<placement>` elements,
+  where placement is `w` when the lexicon match is the whole token, `l` when it leads the token,
+  and `i` when it sits inside one. It is what a DOCX gets: every token a DOCX read returns
+  carries the zero box, so no `band` can be computed and no reading order can be recovered from
+  geometry. The elements are hashed in the order the tokens arrive — nothing sorts, and that
+  order is the whole signal.
+
+The two can never collide: they differ on byte 0, so one `layout_fingerprint` column holds both
+and `IsBoxlessFingerprint` tells them apart by prefix.
+
+Each namespace carries its **own** invalidation lever, and bumping one clears **only its own**
+class. Bumping `FingerprintVersion` retires every `v1:` rule and leaves every `b1:` rule readable
+under its unchanged key; bumping `BoxlessFingerprintVersion` does the reverse. So
+`FingerprintVersion` is no longer the single lever it was before EXTR-19 — an operator who bumps
+it and expects every stored rule gone is wrong. A change to the shared anchor lexicon is the one
+case that needs **both**, because `anchorLabelMatchers` is an input to both producers.
 
 ### How a rule is derived
 
@@ -337,19 +365,52 @@ tokens under it, `ShapeTIN` rejects the party name, and `buyer_tin` resolves to 
 as a `TierLearned` candidate with no alternatives —
 `TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN`.
 
-### Only a pointed correction produces a rule
+### Which correction produces a rule
 
-A correction carries a method. A **`typed`** correction — a reviewer retyping a value — writes
-the correction row and **zero rules**. An **`undone`** correction likewise writes **zero rules**.
-Only `pointed`, where the reviewer drew a box on the page, teaches anything, because only a box
-carries the geometry a rule is derived from.
+A correction carries a method, and the job carries a layout. Two gates, and a correction that
+matches neither writes **zero rules**:
 
-A pointed correction that **anchors to nothing** — an empty corner of the page, a box no anchor
-observation stands in a relation to, a job that recorded no layout at all — still commits the
-correction and still teaches nothing. That is an **honest refusal**, not an error: the reviewer's
-edit is recorded and applied, and the system declines to generalise from a gesture it cannot
-interpret. `LearnRule` reports `ok=false` and the request answers `201` exactly as it otherwise
-would.
+| Method | Job's `layout_fingerprint` | Derivation | Extra input |
+|---|---|---|---|
+| `pointed`, with a region | any key, provided the job recorded a layout | `LearnRule` | the box, against `layout_anchors` |
+| `typed` | a `b1:` key — a **boxless** identity, written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
+| `chosen`, `undone` | either | none | — |
+
+The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a `v1:`
+key — writes **zero rules**: there was geometry to point at and the reviewer did not point at it.
+A `pointed` correction on a **DOCX** also writes zero rules, but for a different reason — every
+box it could anchor to is the zero box, so `LearnRule` finds no relation to record. The pointed
+gate reads the box, never the namespace: a job that took the boxless identity while carrying real
+geometry can still learn from a pointed correction
+(`TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors`). An `undone` correction writes
+**zero rules** either way.
+
+What the boxless path derives is always a **`same_token`** rule. `same_token` is the only
+relation available without geometry — there is no box to stand `right` of or `below` — so a DOCX
+layout that puts a value in a paragraph of its own is structurally underivable, however many
+times it is corrected. For each page-1 token and each lexicon matcher that hits it,
+`LearnBoxlessRule` builds the rule body that hit would produce and keeps it only when the label's
+own token, read back under the field's shape, gives the typed value.
+
+The second refusal is the **ambiguous** derivation, and it is judged on the derived *body*, never
+on the hit count. The bodies are deduplicated: when exactly one distinct body survives the rule
+is written, and when two survive the function refuses rather than guess which the reviewer meant.
+A total printed twice identically therefore derives — both hits spell the same body — while
+`Total: 300.00` and `Amount Due: 300.00` on one page do not, because they anchor on two different
+labels.
+
+The boxless gate has a third conjunct: the job must have stored its page-1 tokens. A job
+extracted **before** the `layout_tokens` migration carries SQL NULL there and learns nothing, and
+so does one whose tokens were over the storage cap. The loop therefore closes only for documents
+extracted after that column started being written; an older DOCX teaches nothing however many
+times it is corrected.
+
+A correction that **anchors to nothing** — an empty corner of the page, a box no anchor
+observation stands in a relation to, a job that recorded no layout at all, a typed value no
+page-1 token carries under a lexicon label — still commits the correction and still teaches
+nothing. That is an **honest refusal**, not an error: the reviewer's edit is recorded and
+applied, and the system declines to generalise from an input it cannot interpret. `LearnRule` and
+`LearnBoxlessRule` report `ok=false` and the request answers `201` exactly as it otherwise would.
 
 ### Undo does not un-teach
 
@@ -359,15 +420,17 @@ A rule written by a correction that was later **undone stays live**. It keeps fi
 later document carrying that layout fingerprint. The undo revises what one field on one document
 says; it does not withdraw the claim about *where that field lives on this layout*.
 
-The only way to displace a live rule is a **second pointed correction** on the same field,
-pointing at a distinguishing label. Displacement is by **ordering**, never by deletion: the
+The only way to displace a live rule is a second correction that derives a different one for the
+same field — a **second pointed correction** on a `v1:` layout, pointing at a distinguishing
+label; a second `typed` correction on a `b1:` layout, retyping a value some other page-1 token
+carries. Displacement is by **ordering**, never by deletion: the
 `extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds `INSERT` and
 `SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows remain**,
 and `AnchorRulesFor` returns them newest-first. `Resolve` lets the first rule that produces
 anything for a field claim it; an older rule is outranked, never erased.
 
 Two tests hold this:
-`TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes` proves the undo leaves the rule
+`TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes` proves the undo leaves the rule
 both present and *firing*, and that a later pointed correction prepends a superseding row;
 `TestRLS_ASecondPointedCorrectionSupersedesTheFirstOnTheThirdDocument` proves that when **both**
 rules are live and resolve **different** values, the newer one decides — with the reversed
@@ -394,6 +457,14 @@ control that makes its zero mean something. Neither one can see row-level securi
 off, though: measured, both still pass with the policy disabled, because the store's own
 `tenant_id` predicate filters the row. The oracle for the mechanism is
 `TestRLS_ExtractionAnchorRulesCrossTenantSelectRefused`, which reds when the policy is dropped.
+
+Both oracles read the `v1:` namespace, and the layout one says in its own comment that its
+cross-layout zero would survive the fingerprint gate being removed. The `b1:` boxless equivalents
+do not have that weakness — `TestRLS_ABoxlessLearnedRuleDoesNotReachAnotherLayout` and
+`TestRLS_ABoxlessRuleAtTheSharedEmptyIdentityStaysInsideItAndItsTenant` put the same token on
+both layouts, so each zero reds when `AND layout_fingerprint = $2` is dropped. Their tenant halves
+inherit the same blindness to the policy: measured, they pass with either the predicate or the
+policy removed, and red only when both are.
 
 ### When a learned rule misfires
 
@@ -425,9 +496,10 @@ broken in `compareRegions`: the two tokens share a baseline, so their `Y0` is bi
 
 The remedy today is a **second pointed correction** on a distinguishing label — a token whose
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
-so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to the
-fingerprint, so changing it invalidates every stored rule for every tenant and requires a
-`FingerprintVersion` bump.
+so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to **both**
+fingerprints, so changing it invalidates every stored rule for every tenant and requires a
+`FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the same
+`anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every `b1:` key too.
 
 ### learned_two_party.pdf is not a corpus layout
 

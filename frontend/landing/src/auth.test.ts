@@ -4,7 +4,7 @@
 // documented no-gateway path (return null) rather than pointing at `development`.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { destUrl, LANDING_PERSONAS } from './auth'
+import { destUrl, LANDING_PERSONAS, type LandingPersona } from './auth'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -15,6 +15,23 @@ describe('destUrl', () => {
     // Every persona, so a newly added target can never quietly skip the null contract.
     for (const p of LANDING_PERSONAS) {
       expect(destUrl(p), `persona ${p.id}`).toBeNull()
+    }
+  })
+
+  it('destUrl_carriesOnlyThePersonaParam', () => {
+    // ROUTE-05 adds NOTHING to the landing -> app contract. The spec above only pins the
+    // null arm, so a `&next=` appended to the configured arm would ship green.
+    vi.stubEnv('VITE_APP_URL', 'https://app.example')
+    vi.stubEnv('VITE_OPS_URL', 'https://ops.example')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.example')
+    const base: Record<LandingPersona['target'], string> = {
+      app: 'https://app.example',
+      ops: 'https://ops.example',
+      support: 'https://support.example',
+    }
+    // toBe on the whole string: any extra param, path segment or reordering is red.
+    for (const p of LANDING_PERSONAS) {
+      expect(destUrl(p), `persona ${p.id}`).toBe(`${base[p.target]}?persona=${p.id}`)
     }
   })
 })

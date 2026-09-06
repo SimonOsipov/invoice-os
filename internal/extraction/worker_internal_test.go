@@ -681,3 +681,169 @@ func TestExtractWorker_PagesNotRenderedGateIsScopedToRenderableFormats(t *testin
 		t.Errorf("worker.go calls RendersPageImages in %d branch(es), none of which encloses the w.Pages.Ingest guard; the render, the page rows and the layout must all sit inside that branch", gates)
 	}
 }
+
+// --- EXTR-19-04: where the boxless identity is computed, and what gates the rule lookup -----
+
+// wgWorkerSource parses worker.go once and returns its bytes alongside the parse. Every scan
+// below reads both: an offset comes from the source text, the branch it sits in from the AST.
+func wgWorkerSource(t *testing.T) (string, *ast.File, *token.FileSet) {
+	t.Helper()
+	raw, err := os.ReadFile("worker.go")
+	if err != nil {
+		t.Fatalf("read worker.go: %v", err)
+	}
+	// Control needle: prove the scan reads the right file, or every absence below reads as a
+	// clean pass over a moved or renamed Work method.
+	if !strings.Contains(string(raw), "func (w *ExtractWorker) Work(") {
+		t.Fatalf("worker.go carries no Work method; this scan is reading the wrong file")
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "worker.go", raw, 0)
+	if err != nil {
+		t.Fatalf("parse worker.go: %v", err)
+	}
+	return string(raw), f, fset
+}
+
+// wgIfHead is one enclosing if statement and the text of its head.
+type wgIfHead struct {
+	stmt *ast.IfStmt
+	head string
+}
+
+// wgEnclosingIfs is every if statement whose BODY spans off, innermost first. Ordered, not
+// first-match: the rule lookup sits inside `if err == nil` inside a switch case, and the
+// layout-write guard sits inside the boxless branch, so the two scans want different ancestors.
+func wgEnclosingIfs(src string, f *ast.File, fset *token.FileSet, off int) []wgIfHead {
+	var out []wgIfHead
+	ast.Inspect(f, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		lo := fset.Position(ifs.Body.Pos()).Offset
+		hi := fset.Position(ifs.Body.End()).Offset
+		if off < lo || off >= hi {
+			return true
+		}
+		out = append(out, wgIfHead{stmt: ifs, head: src[fset.Position(ifs.Pos()).Offset:lo]})
+		return true
+	})
+	slices.SortFunc(out, func(a, b wgIfHead) int {
+		return fset.Position(b.stmt.Body.Pos()).Offset - fset.Position(a.stmt.Body.Pos()).Offset
+	})
+	return out
+}
+
+// wgSoleOffset is the offset of needle, which must occur exactly once. The count is the guard: a
+// second occurrence -- including one in a comment -- makes "the call sits in this branch"
+// ambiguous, and a scan taking the first hit would report whichever came earlier in the file.
+func wgSoleOffset(t *testing.T, src, needle string) int {
+	t.Helper()
+	if n := strings.Count(src, needle); n != 1 {
+		t.Fatalf("worker.go names %q %d time(s), want exactly 1 (comments count -- do not repeat it in one)", needle, n)
+	}
+	return strings.Index(src, needle)
+}
+
+// wgBoxlessBranch is the one enclosing branch whose head negates RendersPageImages.
+func wgBoxlessBranch(t *testing.T, src string, f *ast.File, fset *token.FileSet, off int, what string) wgIfHead {
+	t.Helper()
+	var found []wgIfHead
+	for _, e := range wgEnclosingIfs(src, f, fset, off) {
+		if strings.Contains(e.head, "!RendersPageImages") {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		var heads []string
+		for _, e := range wgEnclosingIfs(src, f, fset, off) {
+			heads = append(heads, strings.TrimSpace(e.head))
+		}
+		t.Fatalf("%s sits in %d branch(es) negating RendersPageImages, want exactly 1; its enclosing heads are %q", what, len(found), heads)
+	}
+	return found[0]
+}
+
+// EXTR-19-04 AC-7. The identity is computed once, on the boxless branch. A BoxlessFingerprint
+// reachable by a renderable format would overwrite the v1 layout a PDF's learned rules key on.
+func TestExtractWorker_TheBoxlessIdentityIsComputedOnlyOffTheBoxlessBranch(t *testing.T) {
+	src, f, fset := wgWorkerSource(t)
+
+	off := wgSoleOffset(t, src, "BoxlessFingerprint(")
+	wgBoxlessBranch(t, src, f, fset, off, "BoxlessFingerprint")
+
+	// Three sites: the Pages.Ingest gate, the page-row/v1-layout gate, and the boxless branch.
+	// The predicate has to be spelled at each rather than hidden behind a helper, or a
+	// collapsed gate is invisible to this scan.
+	if n := strings.Count(src, "RendersPageImages"); n < 3 {
+		t.Errorf("worker.go names RendersPageImages %d time(s), want at least 3 -- the render gate, the page-row gate and the boxless branch", n)
+	}
+}
+
+// EXTR-19-04 AC-7. The lookup is gated on the identity, not the format. Gated on the format, a
+// boxless document keeps no learned rules however good its identity is.
+func TestExtractWorker_TheRuleLookupIsGatedOnTheIdentityNotTheFormat(t *testing.T) {
+	src, f, fset := wgWorkerSource(t)
+
+	off := wgSoleOffset(t, src, "w.Rules(ctx, args.TenantID, fingerprint)")
+	enclosing := wgEnclosingIfs(src, f, fset, off)
+	if len(enclosing) == 0 {
+		t.Fatalf("the rule lookup sits in no if branch at all; it must run only for a job that has an identity")
+	}
+	head := strings.TrimSpace(enclosing[0].head)
+	if !strings.Contains(head, `fingerprint != ""`) {
+		t.Errorf("the rule lookup is gated by `%s`, want a head testing `fingerprint != \"\"`", head)
+	}
+	if strings.Contains(head, "RendersPageImages") {
+		t.Errorf("the rule lookup is still gated by `%s`; a boxless document with an identity of its own must reach it", head)
+	}
+}
+
+// EXTR-19-04. The two spellings the layout write depends on that no behavioural spec names on
+// its own. The `err :=` half is ALSO covered behaviourally -- a shadowed error means the switch
+// runs and the job SUCCEEDS with no layout, which TestExtractWorker_FailureKindPerStage's
+// boxless arm reds on -- so this is the cheaper second oracle, not the only one.
+func TestExtractWorker_TheBoxlessLayoutWriteReportsItsFailureToTheClassifier(t *testing.T) {
+	src, f, fset := wgWorkerSource(t)
+
+	off := wgSoleOffset(t, src, "FailureLayoutNotWritten")
+	branch := wgBoxlessBranch(t, src, f, fset, off, "kind = FailureLayoutNotWritten")
+
+	// Every other stage guard in Work leads with err == nil, so an upstream failure skips this
+	// one instead of running over a zero Document.
+	if !strings.Contains(branch.head, "err == nil") {
+		t.Errorf("the boxless branch is guarded by `%s`, want a head leading with `err == nil` as the render, page-row and readText guards do", strings.TrimSpace(branch.head))
+	}
+
+	// A `:=` on the transaction call declares a NEW err, the classification block never sees the
+	// failure, and the job succeeds with no layout. FuncLit bodies are skipped: inside the
+	// transaction closure `err :=` is correct and necessary.
+	var shadows []string
+	scan := func(n ast.Node) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == nil {
+				return false
+			}
+			if _, isLit := m.(*ast.FuncLit); isLit {
+				return false
+			}
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE {
+				return true
+			}
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == "err" {
+					shadows = append(shadows, src[fset.Position(as.Pos()).Offset:fset.Position(as.End()).Offset])
+				}
+			}
+			return true
+		})
+	}
+	for _, stmt := range branch.stmt.Body.List {
+		scan(stmt)
+	}
+	if len(shadows) != 0 {
+		t.Errorf("the boxless branch declares a new err with `:=` (%q); use `=` so the classification block sees the failure and the job does not succeed with no layout", shadows)
+	}
+}

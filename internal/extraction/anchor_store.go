@@ -4,6 +4,7 @@ package extraction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -136,4 +137,33 @@ func jobLayoutTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (JobLay
 		return JobLayout{}, false, fmt.Errorf("extraction: read layout for job %s: %w", jobID, err)
 	}
 	return JobLayout{Fingerprint: *fp, Anchors: obs}, true, nil
+}
+
+// jobLayoutTokensTx reads the page-1 token text a boxless job stored, the input a derivation
+// reads. Mirrors jobLayoutTx: no row and no tokens collapse to the same ok=false, since the
+// caller's fate is identical either way. An empty array is ok=true with an empty slice --
+// layoutTokensStorable normalises nil to [], so that is what a page-less boxless job carries.
+func jobLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]string, bool, error) {
+	var raw []byte
+	err := tx.QueryRow(ctx,
+		`SELECT layout_tokens
+		   FROM extraction_jobs
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID).Scan(&raw)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("extraction: read layout tokens for job %s: %w", jobID, err)
+	}
+	if raw == nil {
+		return nil, false, nil
+	}
+	// The column CHECK admits any jsonb array, so a hand-stamped [1,2] decodes to an error
+	// rather than a silent empty list -- jobLayoutTx treats a bad layout_anchors the same way.
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, false, fmt.Errorf("extraction: read layout tokens for job %s: %w", jobID, err)
+	}
+	return out, true, nil
 }

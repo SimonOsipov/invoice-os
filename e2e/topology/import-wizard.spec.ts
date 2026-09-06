@@ -4732,7 +4732,7 @@ const CARRIED_DEVIATIONS = [
   'AA-21: AC-5\'s "rendered reason" on a disabled Save is UNMET by decision. `disabled` and `filter: none` are met (ExtractionReview.tsx:261-263); the reason clause is not, because the only disabling condition is "nothing settled yet" and both shipped precedents disable without one.',
   'AA-24 / Z-5: NOT met. The retired READ ONLY badge\'s five rows were replaced by rows measuring a CHIP in the fields pane; the document toolbar slot has no fidelity coverage at all. The chip supersedes the read-only CLAIM, not the toolbar ELEMENT.',
   'CC-2: POINT_ARMED is corrected copy, not the artboard\'s. "Waiting — drag a box around it on the document" replaces `:662`\'s "Waiting — click the words on the document", because this build\'s gesture is a drag and under the 24x12 floor a click returns nothing.',
-  'CC-3 / BB-3: Core AC-3\'s "the value is read from there" is UNMET and unbuildable. No migration persists token text or geometry, so no seam can read a value out of a box. The box records WHERE and the person types WHAT.',
+  'CC-3 / BB-3: Core AC-3\'s "the value is read from there" is UNMET. Still unbuildable on the geometric path: the box records WHERE and the person types WHAT. The "no migration persists token text" reason no longer holds -- EXTR-19 added extraction_jobs.layout_tokens, but it stores page-1 text for BOXLESS jobs only and no seam reads a value out of a box.',
   'W-1: Save batches everything -- chips, typing and undos -- through one shared draft, where the artboard drafts picks in `S.picked` and this subtask\'s own Test Specs said one POST per click.',
   "AA-17: the artboard's `f.was || value` fallback (`:634`) is deliberately not copied. A null reading would leave the typed value on screen while the server writes SQL NULL. A drafted undo resets to `corrected.was`, and to '' where that is null.",
   'DD-1: a transform reading the frame\'s BORDER box instead of its padding box is unfalsifiable -- the error is (2u − W)/(W+2), under one pixel everywhere at every zoom -- so it satisfies AC-2 as written and no row in this story catches it. Also stated in-file at EXTR12-E2E-05.',
@@ -7183,7 +7183,8 @@ test('EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its print
 
   const detail = await getExtractionDetail(token, job.id)
   // Zero pages is the CONTRACT, not an absence of evidence: pageImageFormats marks DOCX
-  // boxless (classify.go), so worker.go skips the render, the page rows and the layout.
+  // boxless (classify.go), so worker.go skips the render and the page rows. Since EXTR-19-04 it
+  // does write a b1 layout -- a column on the job, never a page row.
   expect(detail.pages, 'a boxless format must write no page rows').toEqual([])
 
   // Equality on all three, never a negation: a reachable-but-EMPTY sidecar settles succeeded
@@ -7220,7 +7221,7 @@ test('EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not
   const job = jobs[EMPTY_DOCX_NAME]
   expect(job.state, 'a DOCX the reader refuses must dead-letter, not succeed').toBe('dead_lettered')
 
-  // EQUALITY, never "not pages_not_rendered": four other kinds satisfy that negation, and the
+  // EQUALITY, never "not pages_not_rendered": five other kinds satisfy that negation, and the
   // whole claim here is that the render stage never ran at all for a boxless format.
   expect(
     job.failure_kind,

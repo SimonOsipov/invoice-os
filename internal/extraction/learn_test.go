@@ -401,3 +401,89 @@ func TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve(t *testing.T) {
 		})
 	}
 }
+
+// --- EXTR-19-07: LearnBoxlessRule, a correction becomes a rule without geometry ---------
+//
+// Every spec here pairs its refusal with a control that must DERIVE: a lone `ok == false`
+// assertion passes against a function that refuses everything, which is exactly what the
+// pre-implementation stub does.
+
+// lbxTotalBody is the byte-exact body a total correction must emit -- 97 bytes, carrying no
+// token index, no hit count and no position, which is what makes AC-5's identity sound.
+const lbxTotalBody = `{"label":"(?i)\\bTotal\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"amount"}`
+
+// lbxPage wraps token texts as page-1 tokens at the zero box -- the shape every DOCX token has,
+// and the reason no relation but same_token can fire.
+func lbxPage(texts []string) []extraction.TokenPage {
+	toks := make([]extraction.Token, len(texts))
+	for i, s := range texts {
+		toks[i] = bxZeroTok(s)
+	}
+	return []extraction.TokenPage{{Number: 1, Tokens: toks}}
+}
+
+// AC-1: a token carrying a lexicon label whose remainder normalises to the corrected value
+// derives a same_token rule for that field.
+func TestLearnBoxlessRule_DerivesASameTokenRuleFromATypedCorrection(t *testing.T) {
+	if len(dxParagraphs) == 0 {
+		t.Fatal("dxParagraphs is empty; every assertion below would be vacuous")
+	}
+
+	lr, ok := extraction.LearnBoxlessRule("total", "4300.00", dxParagraphs)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(total, %q, dxParagraphs) ok = false, want true", "4300.00")
+	}
+	if string(lr.Body) != lbxTotalBody {
+		t.Errorf("LearnBoxlessRule(total) body = %s, want %s", lr.Body, lbxTotalBody)
+	}
+	if lr.Field != "total" {
+		t.Errorf("LearnBoxlessRule(total) field = %q, want %q", lr.Field, "total")
+	}
+	if lr.Rule.Relation.Kind != extraction.RelSameToken {
+		t.Errorf("LearnBoxlessRule(total) relation kind = %q, want %q", lr.Rule.Relation.Kind, extraction.RelSameToken)
+	}
+	if lr.Rule.Relation.MaxDistance != 0 {
+		t.Errorf("LearnBoxlessRule(total) max_distance = %v, want 0", lr.Rule.Relation.MaxDistance)
+	}
+	if lr.Rule.Shape != extraction.ShapeAmount {
+		t.Errorf("LearnBoxlessRule(total) shape = %q, want %q", lr.Rule.Shape, extraction.ShapeAmount)
+	}
+	// The anchor reaches the correction row's anchor_label, so it is asserted, not assumed.
+	want := extraction.AnchorObservation{Label: "total", Text: "Total", Page: 1}
+	if lr.Anchor != want {
+		t.Errorf("LearnBoxlessRule(total) anchor = %+v, want %+v", lr.Anchor, want)
+	}
+}
+
+// AC-2: the derived rule, run back through Resolve over the same tokens, reproduces the
+// corrected value. Must-fail mutation: emit RelRight instead of RelSameToken -- relatedTokens
+// refuses every zero box and the candidate disappears.
+func TestLearnBoxlessRule_RoundTripsThroughResolve(t *testing.T) {
+	lr, ok := extraction.LearnBoxlessRule("total", "4300.00", dxParagraphs)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(total, %q, dxParagraphs) ok = false, want true", "4300.00")
+	}
+
+	pages := lbxPage(dxParagraphs)
+	if len(pages[0].Tokens) == 0 {
+		t.Fatal("the fixture page carries no tokens; Resolve below would be vacuous")
+	}
+	for _, tok := range pages[0].Tokens {
+		if tok.Region != (extraction.Region{Page: 1}) {
+			t.Fatalf("token %q carries a box %+v; this page must be boxless or the round trip proves nothing", tok.Text, tok.Region)
+		}
+	}
+
+	got := extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{
+		{ID: "learned-boxless", Field: "total", Rule: lr.Rule},
+	}})
+	found := false
+	for _, c := range got {
+		if c.Field == "total" && c.Value == "4300.00" && c.Tier == extraction.TierLearned {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Resolve(boxless dxParagraphs, the derived rule) = %+v, want a TierLearned candidate for total with value %q", got, "4300.00")
+	}
+}

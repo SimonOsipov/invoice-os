@@ -1,7 +1,9 @@
-// learn.go: one correction becomes one rule. The geometry here is the inverse of relatedTokens
-// (resolve.go), so a derived rule fires on the page it was derived from
-// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve). Pure -- no clock, no database, no
-// network, no goroutine, and no map on the path (resolve_internal_test.go scans for each).
+// learn.go: one correction becomes one rule. LearnRule inverts relatedTokens (resolve.go) from a
+// pointed box; LearnBoxlessRule inverts the RelSameToken arm from token text alone, with no
+// geometry at all. Either way a derived rule fires on the page it was derived from
+// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
+// TestLearnBoxlessRule_RoundTripsThroughResolve). Pure -- no clock, no database, no network, no
+// goroutine, and no map on the path (resolve_internal_test.go scans for each).
 package extraction
 
 import (
@@ -87,6 +89,89 @@ func LearnRule(field string, region Region, anchors []AnchorObservation) (Learne
 		return LearnedRule{}, false
 	}
 	return LearnedRule{Field: field, Anchor: best.AnchorObservation, Rule: rule, Body: body}, true
+}
+
+// LearnBoxlessRule derives one same_token rule from a typed correction on a document with no
+// geometry: for each page-1 token text and each lexicon matcher, the value is what the emitted
+// label leaves behind. Ambiguity is judged on the derived BODY, not the hit count.
+//
+// tokens is extraction_jobs.layout_tokens read back -- page-1 text only, no boxes.
+//
+// A label whose value sits in a separate paragraph can never derive: same_token is the only
+// relation available without geometry, so a stacked DOCX layout is structurally underivable.
+func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) {
+	shape, ok := tier1Shape(field)
+	if !ok {
+		return LearnedRule{}, false
+	}
+
+	var (
+		body   string
+		anchor AnchorObservation
+		rule   Rule
+		found  bool
+	)
+	for _, text := range tokens {
+		for _, m := range anchorLabelMatchers {
+			mloc := m.RE.FindStringIndex(text)
+			if mloc == nil {
+				continue
+			}
+			matched := capAnchorLabelBytes(text[mloc[0]:mloc[1]])
+			label, ok := learnedLabel(matched)
+			if !ok {
+				continue
+			}
+			b := `{"label":` + jsonString(label) +
+				`,"relation":{"kind":` + jsonString(string(RelSameToken)) +
+				`,"max_distance":` + hundredthsJSON(0) +
+				`},"shape":` + jsonString(string(shape)) + `}`
+
+			// Reachable, not defensive: a raw tab or newline inside the label spells invalid
+			// JSON (TestLearnBoxlessRule_RefusesALabelJSONCannotSpell). r is also where the
+			// loc below comes from.
+			r, err := ParseRule([]byte(b))
+			if err != nil {
+				continue
+			}
+			// loc from the emitted label's own pattern, never the matcher's: learnedLabel caps
+			// and trims, either of which moves the match end
+			// (TestLearnBoxlessRule_TakesLocFromTheEmittedLabelNotTheMatcher).
+			loc := r.re.FindStringIndex(text)
+			// Reachable: the byte cap can split the label's trailing word, leaving a \b that
+			// cannot hold (TestLearnBoxlessRule_ACappedLabelThatCannotRefindIsDropped).
+			if loc == nil {
+				continue
+			}
+			if !readsAs(shape, sameTokenValue(text, loc), value) {
+				continue
+			}
+			// Dedupe on the body: identical bodies are indistinguishable once stored, and two
+			// distinct ones are a choice this function refuses to guess at.
+			if found {
+				if b != body {
+					return LearnedRule{}, false
+				}
+				continue
+			}
+			body, rule, found = b, r, true
+			anchor = AnchorObservation{Label: m.ID, Text: matched, Page: 1}
+		}
+	}
+	if !found {
+		return LearnedRule{}, false
+	}
+	return LearnedRule{Field: field, Anchor: anchor, Rule: rule, Body: []byte(body)}, true
+}
+
+// readsAs reports whether some reading shape gives raw equals value.
+func readsAs(shape Shape, raw, value string) bool {
+	for _, v := range shape.Normalize(raw) {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 // tier1Shape is the field gate and the shape lookup in one linear scan: tier1Specs' field set

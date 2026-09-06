@@ -49,7 +49,7 @@ caller's transaction. The key is per **document**, so:
   never re-enqueued through this seam
   (`TestRLS_EnqueueExtractionRefusesEvenAfterTheJobDeadLetters`). Re-extraction is EXTR-17's.
 - A dead-letter is therefore terminal for the user too, and since EXTR-15-04 it says so by name:
-  the job's `failure_kind` reaches the client, which renders one of six sentences off it
+  the job's `failure_kind` reaches the client, which renders one of seven sentences off it
   (`deadLetterRefusal`, `frontend/app/src/lib/documentRun.ts`) and offers manual entry as the way
   out. Nothing here retries.
 

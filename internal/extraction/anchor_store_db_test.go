@@ -1059,3 +1059,342 @@ func TestResolve_ConvergesOnTheNewestStoredRuleAndStillOutranksGeneric(t *testin
 		t.Errorf("the two stored rules left no generic buyer_tin candidate, but the Tier-1-only control produced %d; the convergence loop must not reach the Tier-1 loop", len(ctl))
 	}
 }
+
+// --- EXTR-19-08 (QA, Mode B): jobLayoutTokensTx, the boxless derivation's own reader ---------
+//
+// The correction route cannot reach a foreign job -- the document lookup answers 404 first -- so
+// the WHERE tenant_id = $1 predicate the new reader carries has no oracle above this seam. Its
+// sibling jobLayoutTx has five; this had none.
+
+// arTokensAs opens the session as sessionTenant and passes paramTenant to jobLayoutTokensTx,
+// the same split arLayoutAs makes: only in the mismatched arm can RLS alone hide the row.
+func arTokensAs(t *testing.T, ctx context.Context, sessionTenant, paramTenant, jobID string) ([]string, bool, error) {
+	t.Helper()
+	var (
+		out []string
+		ok  bool
+	)
+	err := db.WithinTenantTx(ctx, stRequire(t).app, sessionTenant, func(tx pgx.Tx) error {
+		var e error
+		out, ok, e = extraction.JobLayoutTokensForTest(ctx, tx, paramTenant, jobID)
+		return e
+	})
+	return out, ok, err
+}
+
+func arTokens(t *testing.T, ctx context.Context, tenantID, jobID string) ([]string, bool, error) {
+	t.Helper()
+	return arTokensAs(t, ctx, tenantID, tenantID, jobID)
+}
+
+// The three states the column really holds, in one test so each is read against the others. The
+// ok = false arm also pins the contract the handler's gate rests on -- an absent read yields no
+// tokens, which is why passing them on unguarded would change nothing.
+func TestJobLayoutTokens_AbsentAStoredListAndAnEmptyArrayAreThreeDistinctReads(t *testing.T) {
+	ctx := t.Context()
+	tenantID, jobID := csJob(t, ctx)
+
+	got, ok, err := arTokens(t, ctx, tenantID, jobID)
+	if err != nil {
+		t.Fatalf("jobLayoutTokensTx over a job with layout_tokens NULL returned error %v, want none", err)
+	}
+	if ok {
+		t.Errorf("jobLayoutTokensTx reported ok = true for a job with layout_tokens NULL: %#v", got)
+	}
+	if len(got) != 0 {
+		t.Errorf("jobLayoutTokensTx returned %#v alongside ok = false; the handler passes this slice to LearnBoxlessRule unguarded on the absent path, so a non-empty one would derive from a row that has nothing", got)
+	}
+
+	want := []string{"Invoice No: ASC-2026-0919", "Total: NGN 4,300.00"}
+	blSetTokens(t, ctx, jobID, stPtr(`["Invoice No: ASC-2026-0919","Total: NGN 4,300.00"]`))
+	got, ok, err = arTokens(t, ctx, tenantID, jobID)
+	if err != nil {
+		t.Fatalf("jobLayoutTokensTx over the same job with its tokens set: %v", err)
+	}
+	if !ok {
+		t.Fatalf("jobLayoutTokensTx reported ok = false for a job whose layout_tokens are set")
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("jobLayoutTokensTx returned %#v, want the stored %#v", got, want)
+	}
+
+	// The empty array is PRESENT and empty, not absent: layoutTokensStorable normalises nil to
+	// [], so a boxless job with no page numbered 1 stores this rather than NULL.
+	blSetTokens(t, ctx, jobID, stPtr(`[]`))
+	got, ok, err = arTokens(t, ctx, tenantID, jobID)
+	if err != nil {
+		t.Fatalf("jobLayoutTokensTx over a job whose layout_tokens are []: %v", err)
+	}
+	if !ok {
+		t.Errorf("jobLayoutTokensTx reported ok = false for layout_tokens [], which is a stored value and not an absence")
+	}
+	if len(got) != 0 {
+		t.Errorf("jobLayoutTokensTx returned %#v for layout_tokens [], want an empty list", got)
+	}
+}
+
+// Tenant A's job is seeded with its tokens SET and read back by its owner FIRST: with the column
+// NULL every arm below would answer absent whether RLS hid the row or the row simply had none.
+func TestJobLayoutTokens_AnotherTenantsStoredTokensReadAsAbsentNotAsAnError(t *testing.T) {
+	ctx := t.Context()
+	tenantA, jobA := csJob(t, ctx)
+	tenantB, _ := csJob(t, ctx)
+
+	want := []string{"Total: NGN 4,300.00"}
+	blSetTokens(t, ctx, jobA, stPtr(`["Total: NGN 4,300.00"]`))
+
+	got, ok, err := arTokens(t, ctx, tenantA, jobA)
+	if err != nil {
+		t.Fatalf("jobLayoutTokensTx as the owning tenant: %v", err)
+	}
+	if !ok || !slices.Equal(got, want) {
+		t.Fatalf("jobLayoutTokensTx as the owning tenant returned ok = %v, %#v, want true and %#v -- the zeros below would then be a missing fixture", ok, got, want)
+	}
+
+	got, ok, err = arTokens(t, ctx, tenantB, jobA)
+	if err != nil {
+		t.Errorf("jobLayoutTokensTx as tenant B returned error %v, want none -- another tenant's job is absent, not an error", err)
+	}
+	if ok || len(got) != 0 {
+		t.Errorf("jobLayoutTokensTx as tenant B read tenant A's page-1 text: ok = %v, %#v", ok, got)
+	}
+
+	// One discriminator per mechanism. Tenant B's session naming tenant A: the predicate
+	// matches the row, so only RLS can remove it.
+	got, ok, err = arTokensAs(t, ctx, tenantB, tenantA, jobA)
+	if err != nil {
+		t.Errorf("jobLayoutTokensTx in tenant B's session naming tenant A returned error %v, want none", err)
+	}
+	if ok || len(got) != 0 {
+		t.Errorf("jobLayoutTokensTx in tenant B's session read tenant A's page-1 text: ok = %v, %#v", ok, got)
+	}
+
+	// The other direction, which the three arms above cannot see: tenant A's session, so RLS
+	// admits the row, and tenant B in the parameter, so only `tenant_id = $1` can remove it.
+	// Measured -- without this arm, dropping that predicate survives every spec in this file's
+	// tokens set (the sibling's A-02 makes the same point for jobLayoutTx).
+	got, ok, err = arTokensAs(t, ctx, tenantA, tenantB, jobA)
+	if err != nil {
+		t.Errorf("jobLayoutTokensTx naming the wrong tenant returned error %v, want none", err)
+	}
+	if ok || len(got) != 0 {
+		t.Errorf("jobLayoutTokensTx handed tenant A's page-1 text to a caller that named tenant B: ok = %v, %#v", ok, got)
+	}
+}
+
+// Only pgx.ErrNoRows becomes ok = false. This is the branch's one new 500 surface, and a blanket
+// err != nil -> ok = false would answer 201 over a dead connection.
+//
+// The error is read from the reader's OWN return, never through db.WithinTenantTx: the wrapper
+// also reports the COMMIT the 22P02 aborted, so a read through it stays green on a reader that
+// maps every error to ok = false -- measured, exactly as it does for the sibling (A-01).
+func TestJobLayoutTokens_AMalformedJobIdIsAnErrorNotAnAbsence(t *testing.T) {
+	ctx := t.Context()
+	tenantID, jobID := csJob(t, ctx)
+	blSetTokens(t, ctx, jobID, stPtr(`["Total: NGN 4,300.00"]`))
+
+	var (
+		inner error
+		ok    bool
+		got   []string
+	)
+	read := func(id string) {
+		t.Helper()
+		got, ok, inner = nil, false, nil
+		_ = db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+			got, ok, inner = extraction.JobLayoutTokensForTest(ctx, tx, tenantID, id)
+			return nil
+		})
+	}
+
+	read(jobID)
+	if inner != nil || !ok || len(got) != 1 {
+		t.Fatalf("the control read returned ok = %v, %#v, inner error %v, want true, one token and nil", ok, got, inner)
+	}
+
+	read("not-a-uuid")
+	if inner == nil {
+		t.Fatalf("jobLayoutTokensTx itself returned no error for a malformed job id (ok = %v); the 22P02 became an absence and the route answers 201 over an unread column", ok)
+	}
+	if errors.Is(inner, pgx.ErrNoRows) {
+		t.Errorf("jobLayoutTokensTx surfaced a malformed job id as pgx.ErrNoRows: %v", inner)
+	}
+	if ok {
+		t.Errorf("jobLayoutTokensTx reported ok = true alongside its error %v", inner)
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(inner, &pgErr) || pgErr.Code != "22P02" {
+		t.Errorf("jobLayoutTokensTx returned %v, want SQLSTATE 22P02 (invalid_text_representation)", inner)
+	}
+}
+
+// --- EXTR-19-09: Core AC-4, the index and the two-namespace invalidation rule ---------------
+
+// arBoxlessGolden is the one page 1 both identity functions are run over here, so a v1: key
+// and a b1: key describe the same document.
+func arBoxlessGolden() []extraction.TokenPage {
+	return []extraction.TokenPage{{Number: 1, Tokens: headerTokens()}}
+}
+
+// arIndexCondLines returns the plan's "Index Cond:" lines. The assertion is about that line,
+// not about the plan text: a fingerprint re-checked as a Filter above the scan still prints
+// the word layout_fingerprint somewhere in the plan.
+func arIndexCondLines(plan string) []string {
+	var out []string
+	for _, line := range strings.Split(plan, "\n") {
+		if strings.Contains(line, "Index Cond:") {
+			out = append(out, strings.TrimSpace(line))
+		}
+	}
+	return out
+}
+
+// arExplain runs EXPLAIN (COSTS OFF) over anchorRulesForTx's own SELECT, as the app role,
+// behind both GUCs. Measured: without the GUC pair the planner answers Sort -> Seq Scan even
+// at 30 analysed rows, so the pair -- not the row count -- is what carries the assertion.
+func arExplain(t *testing.T, ctx context.Context, tenantID, fingerprint string) string {
+	t.Helper()
+
+	var plan strings.Builder
+	if err := db.WithinTenantTx(ctx, stRequire(t).app, tenantID, func(tx pgx.Tx) error {
+		for _, guc := range []string{`SET LOCAL enable_seqscan = off`, `SET LOCAL enable_bitmapscan = off`} {
+			if _, err := tx.Exec(ctx, guc); err != nil {
+				return err
+			}
+		}
+		rows, err := tx.Query(ctx, "EXPLAIN (COSTS OFF) "+arAnchorRulesSQL(t), tenantID, fingerprint)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan.WriteString(line + "\n")
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("explain the anchor-rule read on %s: %v", fingerprint, err)
+	}
+	return plan.String()
+}
+
+// EXTR-19-09 / AC-2. The b1: half of Core AC-4. TestAnchorRulesFor_OrdersFromTheIndexWithoutASort
+// is the v1: sibling; this adds the assertion that one lacks -- the Index Cond must name
+// layout_fingerprint, because a plan reaching the index on tenant_id alone and re-checking the
+// fingerprint above it prints the same "Index Scan using ..." line.
+func TestAnchorRulesFor_ABoxlessKeyOrdersFromTheIndexWithoutASort(t *testing.T) {
+	ctx := t.Context()
+	tenantID, _ := stTenant(t, ctx)
+	h := stRequire(t)
+
+	fp := extraction.BoxlessFingerprint(arBoxlessGolden())
+	if !extraction.IsBoxlessFingerprint(fp) {
+		t.Fatalf("the fixture key %q is not in the boxless namespace, so this test is the v1: sibling under another name", fp)
+	}
+
+	arAppendAll(t, ctx, tenantID, fp,
+		arLearn(t, "total", "Total"),
+		arLearn(t, "subtotal", "Sub-total"),
+		arLearn(t, "vat", "VAT"),
+	)
+	for i := range 27 {
+		stSeedAnchorRule(t, ctx, tenantID, fmt.Sprintf("%s-%d", fp, i%3), "total_amount",
+			stAnchorRuleValid, extraction.RuleSchemaVersion)
+	}
+	if _, err := h.super.Exec(ctx, `ANALYZE extraction_anchor_rules`); err != nil {
+		t.Fatalf("analyze extraction_anchor_rules: %v", err)
+	}
+
+	plan := arExplain(t, ctx, tenantID, fp)
+
+	// (a) the floor: a query that failed to run must not read as a pass.
+	if strings.TrimSpace(plan) == "" || !strings.Contains(plan, "extraction_anchor_rules") {
+		t.Fatalf("the plan is empty or names no relation, so every assertion below examines nothing:\n%s", plan)
+	}
+	// (b) the index, asserted before "no Sort", or "no Sort" also passes on a plan that
+	// reached neither node.
+	if !strings.Contains(plan, "Index Scan using "+arIndex) {
+		t.Fatalf("the plan does not scan %s on a b1: key:\n%s", arIndex, plan)
+	}
+	// (c) the assertion the v1: sibling lacks.
+	conds := arIndexCondLines(plan)
+	if len(conds) == 0 {
+		t.Fatalf("the plan carries no Index Cond line, so the index was reached without either column bounding it:\n%s", plan)
+	}
+	joined := strings.Join(conds, " ")
+	for _, col := range []string{"tenant_id", "layout_fingerprint"} {
+		if !strings.Contains(joined, col) {
+			t.Errorf("the Index Cond %q does not name %s, so that column is re-checked above the scan rather than bounding it:\n%s", joined, col, plan)
+		}
+	}
+	// (d) no Sort: the index answers ORDER BY seq DESC on its own.
+	if strings.Contains(plan, "Sort") {
+		t.Errorf("the plan sorts, so %s no longer answers ORDER BY seq DESC on its own for a b1: key:\n%s", arIndex, plan)
+	}
+}
+
+// EXTR-19-09 / AC-3. The cost the second namespace buys, asserted where it is paid: the store.
+// A version bump is a prefix change over the same digest, so a bumped class must read zero
+// while the untouched class re-reads ITS OWN row, non-empty. The re-read is the control:
+// without it a reader that returns nothing for every key passes both bump arms.
+// TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint owns the literal-level claim.
+func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, _ := stTenant(t, ctx)
+
+	pages := arBoxlessGolden()
+	v1Key := extraction.Fingerprint(pages)
+	b1Key := extraction.BoxlessFingerprint(pages)
+	v2Key := "v2:" + strings.TrimPrefix(v1Key, extraction.FingerprintVersion+":")
+	b2Key := "b2:" + strings.TrimPrefix(b1Key, extraction.BoxlessFingerprintVersion+":")
+
+	keys := []string{v1Key, b1Key, v2Key, b2Key}
+	for i, a := range keys {
+		for j, b := range keys {
+			if i < j && a == b {
+				t.Fatalf("keys %d and %d are both %q; four distinct keys are this test's whole premise", i, j, a)
+			}
+		}
+	}
+
+	geoID := stSeedAnchorRule(t, ctx, tenantID, v1Key, "invoice_number", stAnchorRuleValid, extraction.RuleSchemaVersion)
+	boxID := stSeedAnchorRule(t, ctx, tenantID, b1Key, "total_amount", stAnchorRuleValid, extraction.RuleSchemaVersion)
+
+	readOne := func(what, key, wantID string) {
+		t.Helper()
+		out, err := s.AnchorRulesFor(ctx, tenantID, key)
+		if err != nil {
+			t.Fatalf("%s: AnchorRulesFor(%q): %v", what, key, err)
+		}
+		if len(out) != 1 {
+			t.Fatalf("%s: AnchorRulesFor(%q) returned %d row(s), want exactly 1 — a class that reads empty here makes every bump arm below vacuous", what, key, len(out))
+		}
+		if out[0].ID != wantID {
+			t.Errorf("%s: AnchorRulesFor(%q) returned rule %s, want %s", what, key, out[0].ID, wantID)
+		}
+	}
+	readNone := func(what, key string) {
+		t.Helper()
+		out, err := s.AnchorRulesFor(ctx, tenantID, key)
+		if err != nil {
+			t.Fatalf("%s: AnchorRulesFor(%q): %v", what, key, err)
+		}
+		if len(out) != 0 {
+			t.Errorf("%s: AnchorRulesFor(%q) returned %d row(s), want 0 — a bumped version must invalidate its own class", what, key, len(out))
+		}
+	}
+
+	// The non-vacuity floor: both classes must be readable before a bump can mean anything.
+	readOne("before any bump", v1Key, geoID)
+	readOne("before any bump", b1Key, boxID)
+
+	readNone("after a FingerprintVersion bump", v2Key)
+	readOne("with the FingerprintVersion bumped, the boxless class", b1Key, boxID)
+
+	readNone("after a BoxlessFingerprintVersion bump", b2Key)
+	readOne("with the BoxlessFingerprintVersion bumped, the geometric class", v1Key, geoID)
+}

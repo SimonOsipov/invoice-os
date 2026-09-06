@@ -76,7 +76,7 @@ export const REVIEW_GRID_COLUMNS = '26px 122px minmax(120px,1fr) 92px 114px 124p
 export const REVIEW_GRID_GAP = 9
 
 // `aria-describedby` target for the disabled Re-validate button's reason text. A module
-// const, matching InvoiceDetail.tsx's own REVALIDATE_REASON_ID precedent — safe because
+// const (InvoiceDetail's own copy was retired with the reason nodes in BUG-14-02) — safe because
 // at most one row is ever expanded at a time (ReviewInvoicesTab.tsx's `expandedId`), so
 // this id cannot collide with itself in one document.
 const REVALIDATE_REASON_ID = 'review-row-revalidate-blocked-reason-text'

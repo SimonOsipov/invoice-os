@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
+import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -313,7 +314,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
   // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
   // a review hash into an already-open tab's address bar does not navigate until reload.
-  const [bootSeed] = useState(() => seedFromPath(window.location.pathname))
+  // A stored destination only applies to a boot that landed on the bare root — the landing
+  // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
+  const [bootPath] = useState<string>(() =>
+    window.location.pathname === '/' ? (readDestination() ?? '/') : window.location.pathname,
+  )
+  // Seeded from bootPath, never window.location.pathname: a signed-out /invoices/<id>
+  // arrives back at the bare root with the path in storage, and reading the live pathname
+  // would open the detail view with a null id. Covered by
+  // App.deepLinkDrillDown.test.tsx's restored-drill-down specs.
+  const [bootSeed] = useState(() => seedFromPath(bootPath))
   const [bootBatchIds] = useState<string[]>(() => parseReviewHash(window.location.hash) ?? [])
   // Plain const, not a useState: read by the lazy initializers below (all run once at
   // mount) and by bootHref further down, so no memoization is needed.
@@ -514,13 +524,17 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // Reads bootSeed rather than the live atoms -- at mount they agree, and bootSeed is
-  // what the URL actually carried.
+  // what the URL actually carried. A restored deep link therefore lands in the address
+  // bar addressed, not collapsed to /invoices.
+  // Also clears the stored destination unconditionally: a persona-switch remount must not
+  // inherit a stray one.
   const bootHref = routePath(
     bootView,
     bootView === 'detail' ? bootSeed.invoiceId : bootView === 'extraction' ? bootSeed.jobId : null,
   )
   useEffect(() => {
     window.history.replaceState(null, '', bootHref + window.location.hash)
+    clearDestination()
   }, [])
   // Back/Forward: the browser already moved the URL -- restore the view from it, no
   // write. A write here would push a duplicate entry on every Back press.
@@ -1592,6 +1606,9 @@ export default function App() {
     window.history.replaceState(null, '', '/' + window.location.hash)
     setToast(null)
     clearSession()
+    // Wipes a destination captured before this session — the pathname reset above only
+    // stops a NEW one being captured on the way out.
+    clearDestination()
     // landingBase() is null when VITE_LANDING_URL isn't configured (e.g. the default
     // standalone showcase build) — never navigate to `null` (stringifies to "null").
     // With it unset we now land on the app's own persona-picker, which is a front door;
@@ -1696,7 +1713,11 @@ export default function App() {
   useEffect(() => {
     if (activeSession || autoPersona) return
     const dest = landingBase()
-    if (dest) window.location.href = dest
+    if (dest) {
+      // Same statement block as the navigation that destroys it — nothing can interleave.
+      captureDestination(window.location.pathname)
+      window.location.href = dest
+    }
   }, [activeSession, autoPersona])
 
   if (!activeSession) {

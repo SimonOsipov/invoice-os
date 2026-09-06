@@ -49,8 +49,8 @@ const DELEGATION_BLOCKED = 'Delegation is switched off — the server has nowher
 const NOTIFY_NOT_DELIVERED = 'The target and channel are saved with the policy, but no message is sent yet.'
 
 // ONE reason node, TWO `aria-describedby` pointers: the toggle and the picker share it. A
-// deliberate deviation from INVED-02, where every disabled control gets its own id
-// (InvoiceDetail.tsx:150-159) — there the causes differ per control, here one cause shuts both,
+// deliberate deviation from MemberDrawer.tsx:343/389, where every disabled control gets its
+// own id — there the causes differ per control, here one cause shuts both,
 // and a second copy of the sentence would put two matches under one `getAllByText`.
 const DELEGATION_BLOCKED_ID = 'delegation-blocked-reason-text'
 

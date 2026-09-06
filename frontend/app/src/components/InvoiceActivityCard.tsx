@@ -27,7 +27,7 @@ import type { PlatformCtx } from '../types'
 import { AuditRow } from './AuditRow'
 import { AuditTable } from './AuditTable'
 
-// One id per disabled control (InvoiceDetail.tsx:155-176's idiom): a title= on a disabled
+// One id per disabled control (ReviewRow.tsx:78's idiom): a title= on a disabled
 // button never fires in Chromium, so the reason has to be a text node the control names.
 const DOCUMENTS_REASON_ID = 'activity-chip-documents-reason'
 const EMPTY_CHIP_REASON_ID = 'activity-chip-empty-reason'

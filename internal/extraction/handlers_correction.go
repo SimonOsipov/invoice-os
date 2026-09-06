@@ -280,9 +280,9 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			return err
 		}
 
-		// Only a pointed correction teaches, and only where the job recorded a layout the box
-		// can anchor to. Derived before the correction row because the label is one of its
-		// columns; the rule row itself is written last, below.
+		// The pointed arm: a box against the job's recorded layout, any namespace. The typed
+		// arm below is the other one that teaches. Derived before the correction row because
+		// the label is one of its columns; the rule row itself is written last.
 		region := regionFromWire(in.req.Region)
 		anchorLabel := strings.TrimSpace(in.req.AnchorLabel)
 		var (
@@ -299,6 +299,28 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 				if lr, derived := LearnRule(in.field, *region, layout.Anchors); derived {
 					learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
 					anchorLabel = strings.TrimSpace(lr.Anchor.Text)
+				}
+			}
+		}
+
+		// A boxless layout has no geometry to point at, so the derivation reads the page-1
+		// token text the job stored instead. Typed only -- D-23. It writes no anchorLabel:
+		// reader.go renders any non-empty label as corrected.where for any method
+		// (TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel).
+		if in.req.Method == MethodTyped {
+			layout, ok, err := jobLayoutTx(ctx, tx, in.caller.TenantID, in.jobID)
+			if err != nil {
+				return err
+			}
+			if ok && IsBoxlessFingerprint(layout.Fingerprint) {
+				tokens, ok, err := jobLayoutTokensTx(ctx, tx, in.caller.TenantID, in.jobID)
+				if err != nil {
+					return err
+				}
+				if ok {
+					if lr, derived := LearnBoxlessRule(in.field, in.value, tokens); derived {
+						learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
+					}
 				}
 			}
 		}

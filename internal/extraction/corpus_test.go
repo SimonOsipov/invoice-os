@@ -444,6 +444,19 @@ var cldSubsections = []struct {
 	why     string
 }{
 	{
+		// D-2's cost, and the vocabulary every subsection below borrows. Nothing else in the
+		// doc says what a b1: key is composed of.
+		heading: cldIdentitiesHeading,
+		needles: []string{
+			// "fingerprintversion" is a substring of "boxlessfingerprintversion" and so can
+			// never red on its own; arm 3 of TestCorpusDoc_NamesOneInvalidationRuleNotTwo
+			// masks the boxless spelling and is the guard that actually pins it.
+			"v1:", "b1:", "boxlessfingerprintversion", "fingerprintversion",
+			"<label>:<placement>", "band", "only its own",
+		},
+		why: "an operator who bumps FingerprintVersion and expects every stored rule gone is wrong, and a reader who cannot compose a b1: key cannot predict which documents share one",
+	},
+	{
 		heading: "How a rule is derived",
 		needles: []string{
 			"learnrule", "betteranchor", "same_token", "below", "rounded up",
@@ -452,15 +465,22 @@ var cldSubsections = []struct {
 		why: "a derivation nobody can reproduce is a rule nobody can predict",
 	},
 	{
-		heading: "Only a pointed correction produces a rule",
-		needles: []string{"typed", "undone", "zero rules", "anchors to nothing", "honest refusal"},
-		why:     "the gesture is the whole input; a reader who thinks any correction teaches will point at the wrong thing",
+		// The boxless needles are the ones that go false if that arm is ever dropped; the
+		// five shipped ones all survive a text saying only pointed teaches.
+		heading: "Which correction produces a rule",
+		needles: []string{
+			"typed", "undone", "zero rules", "anchors to nothing", "honest refusal",
+			"boxless", "b1:", "layout_tokens", "learnboxlessrule",
+			// What the boxless path derives, and the refusal that is not the no-hit one.
+			"same_token", "ambiguous",
+		},
+		why: "the method and the layout namespace are both inputs; a reader who thinks only a gesture teaches will point at the wrong thing on a DOCX, and a reader who never learns which relation the boxless path derives cannot predict what it will do",
 	},
 	{
 		heading: "Undo does not un-teach",
 		needles: []string{
 			"stays live", "append-only", "both rows remain", "ordering",
-			"TestRLS_AnUndoDoesNotUnteachAndOnlyAPointedCorrectionSupersedes",
+			"TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes",
 		},
 		why: "D-17 is the sharp edge of this feature, and a caveat nobody wrote down is a support call",
 	},
@@ -543,5 +563,122 @@ func TestCorpusDoc_RecordsHowALearnedRuleIsDerivedAndWhatUndoDoesNot(t *testing.
 	adding := strings.ToLower(acDocSectionText(t, doc, cldAdding))
 	if !strings.Contains(adding, fxLearnedTwoParty) {
 		t.Errorf("%s's %q section never names %s -- the next author adds a corpusExpect row for it by reflex", acDoc, cldAdding, fxLearnedTwoParty)
+	}
+}
+
+// --- EXTR-19-09 / AC-6: the doc's two self-contradictions, in the scan's blind spot ---------
+
+const (
+	// cldBoxlessLever is the string FingerprintVersion is a substring of; it must be masked
+	// before any FingerprintVersion scan, or every masked paragraph reads as a hit.
+	cldBoxlessLever = "BoxlessFingerprintVersion"
+	cldGeoLever     = "FingerprintVersion"
+	cldLeverMask    = "\x00BOXLESS_LEVER\x00"
+	cldLeverFloor   = 3
+	cldPreambleMin  = 200
+	// cldStalePreamble is the sentence that went false when EXTR-19-08's handler landed.
+	cldStalePreamble = "a single pointed correction"
+	// cldControlNeedle proves the scan read docs/extraction-corpus.md and not some other file.
+	cldControlNeedle = "## Learned rules"
+	// cldIdentitiesHeading is the subsection that owes the geometric lever by name.
+	cldIdentitiesHeading = "The two layout identities"
+)
+
+// cldParagraphs splits doc on blank lines, then splits a markdown table into its own rows. A
+// table carries no blank line, so a whole-block unit lets one compliant row cover every other
+// row in the same table -- measured: adding a bare FingerprintVersion sentence to a sibling row
+// left this scan green. :35 lives in such a table, so the row is the unit that matters.
+func cldParagraphs(doc string) []string {
+	var out []string
+	for _, p := range strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n\n") {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(p), "|") {
+			for _, row := range strings.Split(p, "\n") {
+				if strings.TrimSpace(row) != "" {
+					out = append(out, row)
+				}
+			}
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// cldLearnedRulesPreamble is the text between "## Learned rules" and its first "### ". No
+// needle can reach it: cldSubsection only reads under a "### " heading.
+func cldLearnedRulesPreamble(t *testing.T, doc string) string {
+	t.Helper()
+
+	body := acDocSectionText(t, doc, cldSection)
+	if i := strings.Index(body, "\n### "); i >= 0 {
+		body = body[:i]
+	}
+	return strings.TrimSpace(cldWhitespaceRun.ReplaceAllString(body, " "))
+}
+
+// EXTR-19-09 / AC-6. Two sentences say a FingerprintVersion bump alone invalidates every
+// stored rule, contradicting the section that names both levers; and the "## Learned rules"
+// preamble still says a rule comes from a pointed correction, false since EXTR-19-08. Both
+// sit outside every "### " subsection, so cldSubsection cannot reach either -- this reads the
+// RAW file instead.
+func TestCorpusDoc_NamesOneInvalidationRuleNotTwo(t *testing.T) {
+	doc := acRepoFile(t, acDoc)
+
+	// The found-needle control: prove the scan is reading the right file before asserting
+	// anything about what the file does not say.
+	if !strings.Contains(doc, cldControlNeedle) {
+		t.Fatalf("%s carries no %q heading, so this scan is reading the wrong file and every absence below is an artefact", acDoc, cldControlNeedle)
+	}
+
+	// Arm 1 -- one invalidation rule, not two. Mask the longer lever first: it contains the
+	// shorter one as a substring.
+	masked := strings.ReplaceAll(doc, cldBoxlessLever, cldLeverMask)
+	var named int
+	for _, p := range cldParagraphs(masked) {
+		if !strings.Contains(p, cldGeoLever) {
+			continue
+		}
+		named++
+		if strings.Contains(p, cldLeverMask) {
+			continue
+		}
+		t.Errorf("%s names %s as an invalidation lever without %s:\n\n%s\n\nSince EXTR-19-02 the same anchorLabelMatchers feed both fingerprints, so a lexicon change needs both bumps; a paragraph naming one lever tells the reader a stale half-truth",
+			acDoc, cldGeoLever, cldBoxlessLever, strings.TrimSpace(p))
+	}
+	if named < cldLeverFloor {
+		t.Fatalf("%s names %s in %d paragraph(s), want at least %d — a scan finding nothing reports a clean file",
+			acDoc, cldGeoLever, named, cldLeverFloor)
+	}
+
+	// Arm 2 -- the preamble, which no needle list can reach.
+	preamble := cldLearnedRulesPreamble(t, doc)
+	if n := len([]rune(preamble)); n < cldPreambleMin {
+		t.Fatalf("%s's %q preamble carries %d rune(s), want at least %d — an absence check over an emptied preamble always passes",
+			acDoc, cldSection, n, cldPreambleMin)
+	}
+	lower := strings.ToLower(preamble)
+	if strings.Contains(lower, cldStalePreamble) {
+		t.Errorf("%s's %q preamble still says %q; since EXTR-19-08 a typed correction on a b1: layout also derives a rule:\n\n%s",
+			acDoc, cldSection, cldStalePreamble, preamble)
+	}
+	// Word-bounded, not Contains: "untyped" carries "typed" as a substring, so a plain
+	// Contains reports the method named by prose that denies it.
+	for _, method := range []string{"pointed", "typed"} {
+		if !regexp.MustCompile(`\b` + method + `\b`).MatchString(lower) {
+			t.Errorf("%s's %q preamble never names the %q method — the preamble is the first prose a reader meets and it owes both learning paths:\n\n%s",
+				acDoc, cldSection, method, preamble)
+		}
+	}
+
+	// Arm 3 -- the geometric lever, named in the subsection that owes it. The
+	// "fingerprintversion" needle in cldSubsections cannot assert this: it is a substring of
+	// "boxlessfingerprintversion", so the sibling needle satisfies it and it can never red.
+	identities := cldSubsection(t, acDocSectionText(t, doc, cldSection), cldIdentitiesHeading)
+	if !strings.Contains(strings.ToLower(strings.ReplaceAll(identities, cldBoxlessLever, cldLeverMask)), strings.ToLower(cldGeoLever)) {
+		t.Errorf("%s's %q subsection names %s only inside %s — the operator who bumps the geometric lever is the reader this subsection exists for:\n\n%s",
+			acDoc, cldIdentitiesHeading, cldGeoLever, cldBoxlessLever, identities)
 	}
 }

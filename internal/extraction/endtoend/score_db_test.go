@@ -65,6 +65,7 @@ type eeLayoutResult struct {
 	saw         map[eeCell]string
 	quarantined bool
 	imported    int // QuarantinedInvoices
+	lines       eeLineOutcome
 }
 
 // eeRunLayout drives one layout end to end and scores every written field against expect. A
@@ -101,6 +102,12 @@ func eeRunLayout(t *testing.T, ctx context.Context, layout string, expect map[st
 			}
 			out.missed = append(out.missed, cell)
 		}
+
+		// Read inside the subtest: eeSeed registers its cleanup on this t, so the invoice is
+		// gone by the time eeRunLayout returns. A quarantined layout has no row and stays 0/0.
+		if id, ok := eeInvoiceIDForDocument(t, ctx, w.documentID); ok {
+			out.lines = eeScoreLines(t, ctx, id)
+		}
 	})
 	if !ok {
 		t.Fatalf("the end-to-end run for %s failed; anything scored from here measures the harness", layout)
@@ -135,6 +142,10 @@ func eeScoreCorpus(t *testing.T, ctx context.Context) eeScore {
 		if r.quarantined {
 			s.quarantined = append(s.quarantined, want.file)
 		}
+		// priced counts a subset of reached, so reached IS its denominator -- two raw counts,
+		// never a re-derived one.
+		s.linesReached = append(s.linesReached, eeScoreRow{name: want.file, hits: r.lines.reached, total: eeLinesExpected[want.file]})
+		s.linesPriced = append(s.linesPriced, eeScoreRow{name: want.file, hits: r.lines.priced, total: r.lines.reached})
 	}
 
 	// Indexed by writtenFields, not by the map, so a field that never resolves renders 0/N.

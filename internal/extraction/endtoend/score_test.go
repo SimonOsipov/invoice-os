@@ -252,6 +252,15 @@ func eeRenderReport(s eeScore) string {
 	for _, r := range s.byField {
 		fmt.Fprintf(&b, "    %-28s %d/%d\n", r.name, r.hits, r.total)
 	}
+	// The same two-integer format, so neither line figure can become a computed ratio.
+	b.WriteString(eeLinesReachedHeading + "\n")
+	for _, r := range s.linesReached {
+		fmt.Fprintf(&b, "    %-28s %d/%d\n", r.name, r.hits, r.total)
+	}
+	b.WriteString(eeLinesPricedHeading + "\n")
+	for _, r := range s.linesPriced {
+		fmt.Fprintf(&b, "    %-28s %d/%d\n", r.name, r.hits, r.total)
+	}
 	for _, layout := range s.quarantined {
 		fmt.Fprintf(&b, "  QUARANTINED %s -- no invoices row; all %d cells count as misses\n", layout, len(writtenFields))
 	}

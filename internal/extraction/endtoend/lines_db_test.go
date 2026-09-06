@@ -37,11 +37,8 @@ const (
 )
 
 // eeLineIdxMeasured is how many distinct line_items[N] indices the rich fixture writes into
-// extraction_field_results -- the same count at rank 0 and at any rank.
-//
-// Measured 4 on this branch (one 5x4 table). Held at 0 so both specs start red; set it to the
-// figure they print.
-const eeLineIdxMeasured = 0
+// extraction_field_results -- measured the same at rank 0 and at any rank (one 5x4 table).
+const eeLineIdxMeasured = 4
 
 // The control invoice's own numbers. NOT held at a placeholder: these are fixed by the control's
 // inputs -- two LineItemInput entries, one carrying a UnitPrice -- and a zero here would be
@@ -61,15 +58,16 @@ const eeLineCountSQL = `SELECT count(*), count(unit_price) FROM line_items WHERE
 
 // eeScoreLines reads the invoice's OWN rows -- never extraction_field_results. That distinction
 // is the whole point of AC-8: the two disagree on a table-bearing document.
-//
-// NOT IMPLEMENTED. Stage 3 owns the read; eeLineCountSQL above is the statement it runs. The
-// zero returned here is a stub, not a measurement, which is why every spec below pins the
-// control's non-zero figures rather than asserting the headline zero alone.
 func eeScoreLines(t *testing.T, ctx context.Context, invoiceID string) eeLineOutcome {
 	t.Helper()
-	_ = ctx
-	_ = invoiceID
-	return eeLineOutcome{}
+	var out eeLineOutcome
+	// count(*) over a WHERE always returns one row, so an invoice with no lines reads 0/0
+	// rather than pgx.ErrNoRows.
+	if err := eeRequire(t).super.QueryRow(ctx, eeLineCountSQL, invoiceID).
+		Scan(&out.reached, &out.priced); err != nil {
+		t.Fatalf("count the line_items rows for invoice %s: %v", invoiceID, err)
+	}
+	return out
 }
 
 // eeInvoiceIDForDocument is the invoices row one document produced. A false return is "no row

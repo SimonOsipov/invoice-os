@@ -28,11 +28,8 @@ const eeLineBlockName = "line_items"
 
 // eeLineRichLines is how many DocLines rich_invoice.docling.json yields -- the positive control
 // on the oracle below, which would otherwise be satisfied by a reader that always returns none.
-//
-// Measured 4 on this branch (one 5x4 table: Widget, Gadget, Delivery, Handling). Held at 0 so
-// TestEndToEnd_TheExpectedLineCountIsTakenOffTheGoldens starts red; set it to the figure that
-// spec prints.
-const eeLineRichLines = 0
+// Measured: one 5x4 table (Widget, Gadget, Delivery, Handling).
+const eeLineRichLines = 4
 
 // eeLineRichGolden is the only committed golden carrying a table. It is deliberately NOT in
 // requiredGoldens: TestEndToEnd_TheScoredSetIsTheRequiredSet fatals unless requiredPDFs holds
@@ -43,15 +40,15 @@ const eeLineRichGolden = "rich_invoice.docling.json"
 // denominator of the reached figure. Never hand-trusted: the spec below re-derives every entry
 // from that layout's committed docling golden.
 //
-// Measured 0 on all six (no fxBuildCorpus* generator prints an item row). Held at 1 so the
-// spec starts red; set each entry to what it prints.
+// Measured 0 on all six: no fxBuildCorpus* generator prints an item row, so none of these
+// documents carries a table at all.
 var eeLinesExpected = map[string]int{
-	"corpus_inline_labels.pdf":  1,
-	"corpus_split_labels.pdf":   1,
-	"corpus_stacked_labels.pdf": 1,
-	"corpus_two_column.pdf":     1,
-	"corpus_ambiguous_date.pdf": 1,
-	"corpus_totals_block.pdf":   1,
+	"corpus_inline_labels.pdf":  0,
+	"corpus_split_labels.pdf":   0,
+	"corpus_stacked_labels.pdf": 0,
+	"corpus_two_column.pdf":     0,
+	"corpus_ambiguous_date.pdf": 0,
+	"corpus_totals_block.pdf":   0,
 }
 
 // eeGoldenReader replays one committed docling golden through the real DoclingReader. The

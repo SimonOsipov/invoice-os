@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { clampFilterText } from './invoices'
-import { ROUTE_PATHS, routePath, parseRoute, parseLocation, routeUrl } from './route'
+import { ROUTE_PATHS, routePath, parseRoute, parseLocation, routeUrl, reviewPath, parseReviewPath, reviewNavIds } from './route'
 
 const ALL_VIEWS = [
   'dashboard',
@@ -555,4 +555,97 @@ describe('parseRoute / routePath — adversarial ids', () => {
     expect(parseRoute(path)).toEqual({ view: 'detail', id })
   })
 
+})
+
+describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
+  // Six distinct canonical uuids: the first five are the cap, all six is one over it.
+  const REVIEW_UUIDS = [
+    'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'b2c3d4e5-f6a7-48b9-9abc-def012345678',
+    'c3d4e5f6-a7b8-49ca-abcd-ef0123456789',
+    'd4e5f6a7-b8c9-4adb-bcde-f01234567890',
+    'e5f6a7b8-c9d0-4be1-cdef-012345678901',
+    'f6a7b8c9-d0e1-4cf2-defa-123456789012',
+  ]
+
+  it('review_theSingleIdFormRoundTrips', () => {
+    const [pathname, search] = splitUrl(routeUrl('create', { reviewBatchIds: [UUID] }))
+    expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
+
+  it('review_everyIdInARunRoundTripsNotJustTheFirst', () => {
+    const ids = REVIEW_UUIDS.slice(0, 5) // the cap
+    expect(ids.length).toBe(5)
+    const [pathname, search] = splitUrl(routeUrl('create', { reviewBatchIds: ids }))
+    expect(parseLocation(pathname, search).reviewBatchIds).toEqual(ids)
+  })
+
+  it('review_theEmittedSegmentCarriesARawComma', () => {
+    const [a, b] = REVIEW_UUIDS
+    const path = reviewPath([a, b])
+    expect(path).toBe(`/imports/${a},${b}/review`)
+    expect(path).not.toContain('%2C')
+  })
+
+  it('review_theOmittedBranchIsThePlainCreatePath', () => {
+    // Drives both the empty-array and the fully-absent forms of the omitted branch.
+    expect(routeUrl('create', { reviewBatchIds: [] })).toBe('/create')
+    expect(routeUrl('create', {})).toBe('/create')
+    expect(routeUrl('create')).toBe('/create')
+    const parsed = parseLocation('/create', '')
+    expect(parsed.view).toBe('create')
+    expect(parsed.reviewBatchIds).toEqual([])
+    // Control needle: a non-empty list does NOT take this branch.
+    expect(routeUrl('create', { reviewBatchIds: [UUID] })).not.toBe('/create')
+  })
+
+  it('review_oneBadSegmentPoisonsTheWholeList', () => {
+    const result = parseReviewPath(`/imports/${UUID},notauuid/review`)
+    expect(result).toBeNull() // never a one-element array carrying just the good id
+  })
+
+  it('review_theCapIsARejectionNotATruncation', () => {
+    expect(REVIEW_UUIDS.length).toBe(6) // one over the cap
+    const result = parseReviewPath(`/imports/${REVIEW_UUIDS.join(',')}/review`)
+    expect(result).toBeNull() // never a truncated five-element array
+  })
+
+  it('review_traversalAndSuffixesAreRejected', () => {
+    const cases = [
+      // Reachable only as a direct function call: a browser resolves '..' before the
+      // address bar, pushState/replaceState, or the sessionStorage bootPath ever see it.
+      // Never promote this case to a deep-link or e2e spec -- it would test nothing there.
+      '/imports/../../etc/review',
+      `/imports/${UUID}/extra/review`,
+      '/imports//review',
+      `/imports/${UUID}/Review`,
+      // Non-discriminating: null whether or not '%2C' is decoded first. The raw-comma
+      // rule is pinned by review_theEmittedSegmentCarriesARawComma and the round trips.
+      '/imports/%2C/review',
+    ]
+    expect(cases.length).toBe(5)
+    for (const pathname of cases) {
+      expect(parseReviewPath(pathname), pathname).toBeNull()
+    }
+  })
+
+  it('review_idCaseIsPreservedNotNormalised', () => {
+    const result = parseReviewPath(`/imports/${UUID_UPPER}/review`)
+    expect(result).toEqual([UUID_UPPER])
+    expect(result?.[0]).not.toBe(UUID_UPPER.toLowerCase())
+  })
+
+  it('review_theGateIsThreeClauses', () => {
+    expect(reviewNavIds('create', 'review', [UUID])).toEqual([UUID])
+    expect(reviewNavIds('invoices', 'review', [UUID])).toEqual([])
+    expect(reviewNavIds('create', 'form', [UUID])).toEqual([])
+    expect(reviewNavIds('create', 'review', [])).toEqual([])
+  })
+
+  it('review_parseLocationStaysTotalAndParseRouteIsUnchanged', () => {
+    const path = reviewPath([UUID])
+    expect(parseRoute(path)).toBeNull() // three segments: parseRoute's strictness is unchanged
+    const [pathname, search] = splitUrl(path)
+    expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
 })

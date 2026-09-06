@@ -648,4 +648,40 @@ describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
     const [pathname, search] = splitUrl(path)
     expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
   })
+
+  it('review_aTrailingSlashIsStrippedLikeEveryOtherRoute', () => {
+    expect(parseReviewPath(`/imports/${UUID}/review/`)).toEqual([UUID])
+    const parsed = parseLocation(`/imports/${UUID}/review/`, '')
+    expect(parsed).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
+
+  it('review_capBoundaryBothSides', () => {
+    expect(REVIEW_UUIDS.length).toBe(6)
+    expect(parseReviewPath(`/imports/${REVIEW_UUIDS.slice(0, 5).join(',')}/review`)).toEqual(REVIEW_UUIDS.slice(0, 5))
+    expect(parseReviewPath(`/imports/${REVIEW_UUIDS.join(',')}/review`)).toBeNull()
+  })
+
+  it('review_duplicateIdsAreAcceptedIndividually', () => {
+    // No uniqueness rule in the spec: each segment is validated on its own.
+    expect(parseReviewPath(`/imports/${UUID},${UUID}/review`)).toEqual([UUID, UUID])
+  })
+
+  it('review_aWhitespaceOrEncodedSegmentIsRejected', () => {
+    expect(parseReviewPath(`/imports/ /review`)).toBeNull()
+    expect(parseReviewPath(`/imports/%20${UUID}/review`)).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID} /review`)).toBeNull() // trailing space inside the segment
+  })
+
+  it('review_composedWithAnOwnedQueryStringIsUnreachableByConstruction', () => {
+    // routeUrl's arms are sequential `if`s keyed on view: once 'create' matches and returns,
+    // the 'invoices'-owned `q` branch below it can never run for the same call.
+    const url = routeUrl('create', { reviewBatchIds: [UUID], q: 'anything' })
+    expect(url).toBe(`/imports/${UUID}/review`)
+    expect(url).not.toContain('?')
+  })
+
+  it('review_aNonCreateViewIgnoresReviewBatchIds', () => {
+    expect(routeUrl('invoices', { reviewBatchIds: [UUID], q: 'x' })).toBe('/invoices?q=x')
+    expect(parseLocation('/invoices', '?q=x').reviewBatchIds).toEqual([])
+  })
 })

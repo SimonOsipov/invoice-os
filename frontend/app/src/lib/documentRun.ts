@@ -52,6 +52,8 @@ export function deadLetterRefusal(failureKind: string | null, lastError: string 
       return 'This file was stored, but it could not be opened again for reading. Enter this invoice manually to carry on.'
     case 'page_rows_not_written':
       return 'This document was read, but the result could not be stored. Enter this invoice manually to carry on.'
+    case 'layout_not_written':
+      return 'This document was read, but its layout could not be stored. Enter this invoice manually to carry on.'
     case 'extract_failed':
       // A subordinate clause, never the sentence — TS15-4 swaps the fallback for the reason
       // and demands the same sentence back.

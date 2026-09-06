@@ -92,14 +92,16 @@ const UNSETTLED = ['queued', 'extracting', 'failed'] as const
 type Refuse = (failureKind: string | null, lastError: string | null) => string
 const refuse: Refuse = deadLetterRefusal
 
-// migrations/20260904154655_extraction_jobs_failure_kind.sql's CHECK set. Floored against
-// that migration in documentRun.test.ts's TS15-1; this file consumes the list.
+// extraction_jobs.failure_kind's CHECK set. Floored against the LAST migration that declares it
+// in documentRun.test.ts's TS15-1; this file consumes the list. The review screen is the second
+// surface deadLetterRefusal serves, so a kind missing here is a kind nothing renders.
 const KINDS = [
   'document_unavailable',
   'pages_not_rendered',
   'page_rows_not_written',
   'extract_failed',
   'text_not_read',
+  'layout_not_written',
 ] as const
 
 // ExtractionDetail carries failure_kind but NO last_error (extractionReview.ts:74-82), so this
@@ -108,7 +110,7 @@ function sentenceFor(kind: string | null): string {
   return refuse(kind, null)
 }
 
-/** The six sentences the screen may render, keyed by the kind that produces each. */
+/** The seven sentences the screen may render, keyed by the kind that produces each. */
 function allSentences(): [string, string][] {
   return [...KINDS.map((k): [string, string] => [k, sentenceFor(k)]), ['<null>', sentenceFor(null)]]
 }
@@ -617,11 +619,12 @@ describe('the state ladder', () => {
     await flush()
 
     const text = root().textContent ?? ''
-    const six = allSentences()
-    // Floor: six DISTINCT sentences, or the count below cannot discriminate.
-    expect(new Set(six.map(([, s]) => s)).size, 'two kinds share one sentence — the count below is meaningless').toBe(6)
+    const sentences = allSentences()
+    // Floor: seven DISTINCT sentences -- the six kinds plus the unknown one -- or the count
+    // below cannot discriminate. A literal, so dropping a kind from KINDS reds here too.
+    expect(new Set(sentences.map(([, s]) => s)).size, 'two kinds share one sentence — the count below is meaningless').toBe(7)
 
-    const shown = six.filter(([, s]) => text.includes(s)).map(([k]) => k)
+    const shown = sentences.filter(([, s]) => text.includes(s)).map(([k]) => k)
     // A count, not a presence check: a screen stacking two kinds' sentences at once still
     // fails here, where a getByText on the right one would pass.
     expect(shown, `the screen showed ${shown.length} terminal sentences, not exactly one`).toEqual([kind ?? '<null>'])
@@ -673,7 +676,7 @@ describe('the state ladder', () => {
     expect(screen.queryByText(STILL_READING), 'a settled job claimed to be still reading').toBeNull()
     expect(screen.queryByText(COULD_NOT_READ), 'a settled job claimed it could not be read').toBeNull()
     // Retargeted with the branch (EXTR-15-04): once COULD_NOT_READ is gone from the shell the
-    // row above can only ever pass, so the absence is re-floored on the six live sentences.
+    // row above can only ever pass, so the absence is re-floored on the seven live sentences.
     const settledText = root().textContent ?? ''
     expect(
       allSentences().filter(([, s]) => settledText.includes(s)).map(([k]) => k),

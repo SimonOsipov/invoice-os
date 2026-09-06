@@ -147,9 +147,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	if err != nil {
 		kind = FailureDocumentUnavailable
 	}
-	// Boxless formats skip the render, the page rows and the layout: a fingerprint over boxless
-	// tokens would hand one document's learned rules to unrelated ones
-	// (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
+	// A format with no page images skips the render and the page rows. Its layout is the b1
+	// write below, not this one (TestRLS_ExtractWorkerSkipsTheRenderForABoxlessFormat).
 	if err == nil && RendersPageImages(doc.ContentType) {
 		// ctx, not octx: the sink's credentials come from config, so it is fenced from a tenant
 		// identity the way the extractor is (TestRLS_ExtractWorkerWritesPageImagesThroughTheSink).
@@ -188,6 +187,33 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			kind = FailureTextNotRead
 		}
 	}
+	// A boxless format has no page images, so its identity comes off the tokens its own text
+	// read produced. Its own transaction, ahead of the switch, so a write failure reaches the
+	// classification block below (TestExtractWorker_FailureKindPerStage's boxless arm).
+	if err == nil && !RendersPageImages(doc.ContentType) && textRes.TextChars > 0 {
+		fingerprint = BoxlessFingerprint(textTokens)
+		if err = db.WithinTenantTx(ctx, w.Pool, args.TenantID, func(tx pgx.Tx) error {
+			anchors, err := MarshalAnchorObservations(AnchorObservations(textTokens))
+			if err != nil {
+				return err
+			}
+			if err := writeLayoutTx(ctx, tx, args.TenantID, row.ID, fingerprint, anchors); err != nil {
+				return err
+			}
+			// One gate, one degradation path: a refused token set stores SQL NULL and leaves
+			// the job succeeded, because an error escaping this transaction would dead-letter
+			// a document whose extraction is correct.
+			tokens, ok := layoutTokensStorable(pageOneTokenTexts(textTokens))
+			if !ok {
+				tokens = nil
+			}
+			return writeLayoutTokensTx(ctx, tx, args.TenantID, row.ID, tokens)
+		}); err != nil {
+			// Cleared so the rule lookup below stays shut for a job that stored no layout.
+			fingerprint = ""
+			kind = FailureLayoutNotWritten
+		}
+	}
 	if err == nil {
 		switch {
 		case w.Text == nil:
@@ -205,10 +231,9 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			}}
 		default:
 			var learned []AnchorRule
-			// No fingerprint, so Tier-1 anchors only rather than a bucket keyed on ""
-			// (TestRLS_ExtractWorkerLoadsNoLearnedRulesForABoxlessFormat). EXTR-19 gives these
-			// documents a layout identity.
-			if RendersPageImages(doc.ContentType) {
+			// Gated on the identity, not the format: with no stored layout the lookup would
+			// key a bucket on "", so Tier-1 anchors only.
+			if fingerprint != "" {
 				// Not swallowed: a dropped rule set would read clean while the tenant's
 				// corrections were silently gone. extract_failed, because field extraction is
 				// the stage that failed and text_not_read names the read.

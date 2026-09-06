@@ -11,7 +11,7 @@
 // `new Error('not implemented — …')` before returning anything; each message spells the
 // expected shape. That IS the correct RED reason (assertion / not-implemented), never an
 // import or collection error — same precedent as importRun.test.ts's own BULK-03 header.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { describe, expect, it, vi } from 'vitest'
@@ -1100,25 +1100,26 @@ describe('newestJob — a created_at tie is broken by first occurrence, not last
 })
 
 // ==========================================================================================
-// EXTR-15-04 (task-830) — RED specs, Mode A. Six terminal sentences that say what was tried
+// EXTR-15-04 (task-830) — RED specs, Mode A. Seven terminal sentences that say what was tried
 // and what to do next. Written BEFORE deadLetterRefusal/pollBudgetRefusal are widened; every
 // row here fails on its own assertion against the shipped one-sentence-fits-all bodies.
 // ==========================================================================================
 
-// The CHECK set of migrations/20260904154655_extraction_jobs_failure_kind.sql, in the order
-// internal/extraction/audit.go declares it. Floored against that migration in TS15-1, so the
-// list cannot drift from the column.
+// The live CHECK set of extraction_jobs.failure_kind, in the order internal/extraction/audit.go
+// declares it. Floored in TS15-1 against the LAST migration that declares the vocabulary — not a
+// named one — so a later widening cannot slip past this list.
 const KINDS = [
   'document_unavailable',
   'pages_not_rendered',
   'page_rows_not_written',
   'extract_failed',
   'text_not_read',
+  'layout_not_written',
 ] as const
 
 const NO_KIND = '<null>'
 
-/** The six sentences, keyed by the kind that produced each. `null` is the sixth. */
+/** The seven sentences, keyed by the kind that produced each. `null` is the seventh. */
 function terminalSentences(): Record<string, string> {
   const out: Record<string, string> = {}
   for (const k of KINDS) out[k] = refuse(k, null)
@@ -1126,7 +1127,7 @@ function terminalSentences(): Record<string, string> {
   return out
 }
 
-/** The seven strings AC-2 and AC-3 range over: the six plus the budget refusal. */
+/** The eight strings AC-2 and AC-3 range over: the seven plus the budget refusal. */
 function allRefusals(): Record<string, string> {
   return { ...terminalSentences(), '<budget>': pollBudgetRefusal() }
 }
@@ -1138,6 +1139,45 @@ const MANUAL = /\bmanual(?:ly)?\b/i
 const ENTRY = /\b(?:enter|enters|entered|entering|entry|type|typing|keying|by hand)\b/i
 
 const DEAD_PROMISE = 'open it again later'
+
+// EXTR-19-03 AC-3/AC-4. The guard used to read ONE migration by filename, so every later
+// migration was invisible to it. These three read the whole directory instead.
+const MIGRATIONS_DIR = path.join(process.cwd(), '../../migrations')
+
+/** The `-- +goose Up` section of a migration body, or '' when the markers are missing. */
+function gooseUpSection(sql: string): string {
+  const up = sql.indexOf('-- +goose Up')
+  if (up < 0) return ''
+  const down = sql.indexOf('-- +goose Down', up)
+  return down < 0 ? sql.slice(up) : sql.slice(up, down)
+}
+
+/**
+ * The extraction_jobs failure_kind vocabulary a migration's Up declares, or null.
+ * Anchored on the TABLE as well as the column: 20260805075045_invoices_failure_kind.sql carries
+ * the identical `failure_kind IN (...)` shape for internal/submission's vocabulary on invoices,
+ * and would pin the wrong list the day an invoices widening sorts last.
+ */
+function kindsDeclaredBy(sql: string): string[] | null {
+  const up = gooseUpSection(sql)
+  if (!up.includes('extraction_jobs')) return null
+  const m = /failure_kind\s+IN\s*\(([^)]*)\)/i.exec(up)
+  if (m === null) return null
+  return Array.from(m[1].matchAll(/'([^']*)'/g), (x) => x[1])
+}
+
+/** The lexicographically last declaration: filenames lead with the goose stamp, so lexical
+ *  order is apply order and the last one is what the column actually carries. */
+function latestKindDeclaration(
+  files: readonly { name: string; sql: string }[],
+): { name: string; kinds: string[] } | null {
+  let out: { name: string; kinds: string[] } | null = null
+  for (const f of [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    const kinds = kindsDeclaredBy(f.sql)
+    if (kinds !== null) out = { name: f.name, kinds }
+  }
+  return out
+}
 
 function readRepoFile(rel: string, needle: string): string {
   const src = readFileSync(path.join(process.cwd(), rel), 'utf8')
@@ -1181,16 +1221,32 @@ describe('deadLetterRefusal — one sentence per failure kind (TS15-1, AC-1)', (
     expect(deadLetterRefusal.length, 'deadLetterRefusal still takes one argument').toBe(2)
   })
 
-  it('TS15-1: the kind list is the migration’s CHECK set, and it yields six distinct sentences that echo no identifier', () => {
+  it('TS15-1: the kind list is the LAST migration’s CHECK set, and it yields seven distinct sentences that echo no identifier', () => {
     // Floor first: an empty or drifted kind list would make every row below vacuous.
-    const sql = readRepoFile('../../migrations/20260904154655_extraction_jobs_failure_kind.sql', 'ADD COLUMN failure_kind')
-    const declared = Array.from(sql.matchAll(/'([a-z_]+)'/g), (m) => m[1])
+    const names = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
+    // Population floor: a mis-resolved path returning [] would report all-clear. 59 shipped.
+    expect(names.length, 'the migrations scan read nothing').toBeGreaterThan(50)
+    const bodies = names.map((name) => ({ name, sql: readFileSync(path.join(MIGRATIONS_DIR, name), 'utf8') }))
+
+    const candidates = bodies.filter((b) => kindsDeclaredBy(b.sql) !== null).map((b) => b.name)
+    // Found-file control: the anchor matches real shipped SQL, not only the fixtures below.
+    expect(candidates, 'the anchor no longer matches the migration the column came from')
+      .toContain('20260904154655_extraction_jobs_failure_kind.sql')
+
+    const latest = latestKindDeclaration(bodies)
+    expect(latest, 'no migration Up declares an extraction_jobs failure_kind IN-list').not.toBeNull()
+    const declared = (latest as { name: string; kinds: string[] }).kinds
+    // Found-needle control: in the CHECK since the column existed. A scan that read nothing
+    // fails here rather than matching an empty list against an empty list.
+    expect(declared, 'the scan read something that is not this CHECK').toContain('extract_failed')
+    // Anti-control: internal/submission's vocabulary lives on invoices.failure_kind.
+    expect(declared, 'the scan selected the invoices CHECK').not.toContain('payload_not_built')
     expect(declared.length, 'the migration’s CHECK named no kind').toBe(KINDS.length)
     expect([...declared].sort(), 'the kind list has drifted from the column’s CHECK set').toEqual([...KINDS].sort())
 
     const all = terminalSentences()
-    expect(Object.keys(all), 'six sentences: five kinds plus the unknown/absent one').toHaveLength(6)
-    expect(new Set(Object.values(all)).size, 'two kinds share one sentence').toBe(6)
+    expect(Object.keys(all), 'seven sentences: six kinds plus the unknown/absent one').toHaveLength(7)
+    expect(new Set(Object.values(all)).size, 'two kinds share one sentence').toBe(7)
 
     for (const [key, sentence] of Object.entries(all)) {
       expect(sentence.length, `${key} returned nothing`).toBeGreaterThan(40)
@@ -1201,6 +1257,86 @@ describe('deadLetterRefusal — one sentence per failure kind (TS15-1, AC-1)', (
         expect(sentence.includes(k), `${key}: the sentence names the raw kind ${k}`).toBe(false)
       }
     }
+  })
+})
+
+describe('the sixth kind gets its own sentence, and the scan can see its migration (TS19-1, AC-2/AC-4)', () => {
+  it('TS19-1: layout_not_written says the document WAS read and its layout was not stored', () => {
+    // The default arm says "Reading this document failed", which is wrong twice over here: the
+    // document was read, and the reason is known. Modelled on the page_rows_not_written sibling.
+    expect(refuse('layout_not_written', null)).toBe(
+      'This document was read, but its layout could not be stored. Enter this invoice manually to carry on.',
+    )
+  })
+
+  it('TS19-1: the sentence is distinct from the one the unknown kind gets', () => {
+    // Without this a body that never grew a case would still satisfy the row above the day the
+    // default template happened to match.
+    expect(refuse('layout_not_written', null)).not.toBe(refuse(null, null))
+  })
+
+  it('TS19-2: the scan reads the Up section, so a Down that re-states the old list cannot win', () => {
+    const sixUpFiveDown = [
+      '-- +goose Up',
+      "ALTER TABLE extraction_jobs ADD CONSTRAINT c CHECK (failure_kind IS NULL OR failure_kind IN (",
+      "    'document_unavailable', 'pages_not_rendered', 'page_rows_not_written',",
+      "    'extract_failed', 'text_not_read', 'layout_not_written'));",
+      '',
+      '-- +goose Down',
+      "ALTER TABLE extraction_jobs ADD CONSTRAINT c CHECK (failure_kind IS NULL OR failure_kind IN (",
+      "    'document_unavailable', 'pages_not_rendered', 'page_rows_not_written',",
+      "    'extract_failed', 'text_not_read'));",
+    ].join('\n')
+
+    const up = kindsDeclaredBy(sixUpFiveDown)
+    expect(up, 'the fixture declares a vocabulary').not.toBeNull()
+    expect(up).toHaveLength(6)
+    expect(up).toContain('layout_not_written')
+    // Non-vacuity: the fixture really does carry two different lists.
+    expect(gooseUpSection(sixUpFiveDown), 'the splitter kept the Down section').not.toContain('-- +goose Down')
+  })
+
+  it('TS19-2: the invoices CHECK is never selected, however late it sorts', () => {
+    const invoices = [
+      '-- +goose Up',
+      'ALTER TABLE invoices ADD COLUMN failure_kind text',
+      "    CHECK (failure_kind IS NULL OR failure_kind IN",
+      "           ('payload_not_built', 'never_acknowledged', 'acknowledged_no_verdict'));",
+      '',
+      '-- +goose Down',
+      'ALTER TABLE invoices DROP COLUMN failure_kind;',
+    ].join('\n')
+    expect(kindsDeclaredBy(invoices), 'an invoices widening would pin internal/submission’s vocabulary').toBeNull()
+
+    // The control that keeps the assertion above honest: the same shape on the right table IS read.
+    expect(kindsDeclaredBy(invoices.replace(/invoices/g, 'extraction_jobs'))).toHaveLength(3)
+  })
+
+  it('TS19-2: two declarations, and the later stamp is the one that counts', () => {
+    const five = [
+      '-- +goose Up',
+      'ALTER TABLE extraction_jobs ADD COLUMN failure_kind text CHECK (failure_kind IS NULL OR failure_kind IN (',
+      "    'document_unavailable', 'pages_not_rendered', 'page_rows_not_written',",
+      "    'extract_failed', 'text_not_read'));",
+      '',
+      '-- +goose Down',
+      'ALTER TABLE extraction_jobs DROP COLUMN failure_kind;',
+    ].join('\n')
+    const six = five.replace("'extract_failed', 'text_not_read'))", "'extract_failed', 'text_not_read', 'layout_not_written'))")
+
+    const files = [
+      { name: '20260905120000_b.sql', sql: six },
+      { name: '20260904154655_a.sql', sql: five },
+      { name: '20260101000000_unrelated.sql', sql: '-- +goose Up\nSELECT 1;\n-- +goose Down\nSELECT 1;' },
+    ]
+    // Array order is not stamp order here, so a scan that took the last ENTRY rather than the
+    // last STAMP would still read six and pass — hence the name assertion.
+    const latest = latestKindDeclaration(files)
+    expect(latest?.name).toBe('20260905120000_b.sql')
+    expect(latest?.kinds).toHaveLength(6)
+
+    expect(latestKindDeclaration([files[2]]), 'a directory with no declaration reads as none').toBeNull()
+    expect(latestKindDeclaration([]), 'an empty scan reads as none, never as a clean match').toBeNull()
   })
 })
 
@@ -1331,13 +1467,13 @@ describe('pollVerdict passes the newest job’s failure_kind through (TS15-6, AC
     expect(verdict).toEqual({ kind: 'failed', reason: refuse(kind, 'boom') })
   })
 
-  it('TS15-6: the five kinds settle into five different reasons, and the newest job’s kind is the one used', () => {
+  it('TS15-6: the six kinds settle into six different reasons, and the newest job’s kind is the one used', () => {
     const reasons = KINDS.map((k) => {
       const v = pollVerdict([job({ state: 'dead_lettered', failure_kind: k, last_error: 'boom' })], 0)
       if (v.kind !== 'failed') throw new Error(`kind ${k} did not settle as failed`)
       return v.reason
     })
-    // The whole point of AC-6: a reducer that drops the kind returns one string five times.
+    // The whole point of AC-6: a reducer that drops the kind returns one string six times.
     expect(new Set(reasons).size, 'pollVerdict returns the same reason for every failure kind').toBe(KINDS.length)
 
     // newestJob picks by created_at, not array order — so the kind must travel with THAT job.
@@ -1361,7 +1497,7 @@ describe('the deployed dead-letter assertion tracks the shipped sentence (TS15-1
     const all = terminalSentences()
     expect(all['pages_not_rendered'], 'the deployed spec pins text the pages_not_rendered sentence does not contain').toContain(needle)
     const others = Object.entries(all).filter(([k]) => k !== 'pages_not_rendered')
-    expect(others.length, 'nothing to discriminate against').toBe(5)
+    expect(others.length, 'nothing to discriminate against').toBe(6)
     for (const [k, sentence] of others) {
       expect(sentence.includes(needle), `the needle also matches ${k} — it does not identify the kind`).toBe(false)
     }

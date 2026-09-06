@@ -1,0 +1,27 @@
+{
+  "docling_version": "1.10.0",
+  "pages": [
+    {
+      "height_pt": 0.0,
+      "number": 1,
+      "tables": [],
+      "tokens": [
+        {
+          "text": "Invoice No: ASC-2026-0921"
+        },
+        {
+          "text": "Issue Date: 03 Sep 2026"
+        },
+        {
+          "text": "Widget x 2 NGN 1,000.00"
+        },
+        {
+          "text": "Total: NGN 7,150.00"
+        }
+      ],
+      "width_pt": 0.0
+    }
+  ],
+  "reader": "docling",
+  "version": "v1"
+}

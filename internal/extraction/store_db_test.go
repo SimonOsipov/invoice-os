@@ -1527,18 +1527,18 @@ func stFailureKindConstsFromSource(t *testing.T) []string {
 		}
 	}
 	// The floor: a walk that read nothing would make every set comparison below vacuous.
-	if len(out) < 5 {
-		t.Fatalf("audit.go declares %d FailureKind const(s) (%v), want at least 5", len(out), out)
+	if len(out) < 6 {
+		t.Fatalf("audit.go declares %d FailureKind const(s) (%v), want at least 6", len(out), out)
 	}
 	slices.Sort(out)
 	return out
 }
 
-// FK-1 (AC-1). The CHECK admits NULL and exactly the five kinds FailureKind.Valid() accepts.
+// FK-1 (AC-1). The CHECK admits NULL and exactly the six kinds FailureKind.Valid() accepts.
 // The SQL empty string is in the refused set because an empty kind must bind to NULL, so a row
 // carrying it could only come from a writer that lost that binding; payload_not_built is in it
 // because internal/submission ships a different FailureKind under the same wire key.
-func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *testing.T) {
+func TestExtractionJobs_FailureKindCheckAdmitsTheSixKindsAndNothingElse(t *testing.T) {
 	ctx := t.Context()
 	stRequireFailureKind(t, ctx)
 
@@ -1565,7 +1565,9 @@ func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *test
 		t.Errorf("the CHECK refused a NULL failure_kind: %v", err)
 	}
 
-	for _, kind := range []string{"", "nonsense", "Document_Unavailable", "payload_not_built"} {
+	// layout_not_writen is EXTR-19-03's own near miss: one letter from the sixth kind, and the
+	// spelling a hand-edited SQL filter lands on.
+	for _, kind := range []string{"", "nonsense", "Document_Unavailable", "payload_not_built", "layout_not_writen"} {
 		err := insert(kind)
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
@@ -1575,8 +1577,8 @@ func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *test
 
 	// Non-vacuity: the accepted loop proves nothing over an empty set, and a CHECK that
 	// silently dropped the value would leave fewer rows than probes.
-	if len(accepted) < 5 {
-		t.Fatalf("probed %d accepted value(s), want at least 5", len(accepted))
+	if len(accepted) < 6 {
+		t.Fatalf("probed %d accepted value(s), want at least 6", len(accepted))
 	}
 	var rows int
 	if err := h.super.QueryRow(ctx,
@@ -1589,8 +1591,8 @@ func TestExtractionJobs_FailureKindCheckAdmitsTheFiveKindsAndNothingElse(t *test
 	}
 }
 
-// FK-2 (AC-1, five not four). The CHECK's IN-list is set-equal to the FailureKind consts read
-// out of audit.go source, so a sixth kind added to the vocabulary reds here rather than in
+// FK-2 (AC-1, six not five). The CHECK's IN-list is set-equal to the FailureKind consts read
+// out of audit.go source, so a seventh kind added to the vocabulary reds here rather than in
 // production. reflect cannot enumerate a Go const block; source is the only oracle.
 func TestExtractionJobs_FailureKindCheckMirrorsTheConsts(t *testing.T) {
 	ctx := t.Context()

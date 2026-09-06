@@ -310,7 +310,7 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
   // documentRun.ts's deadLetterRefusal owns every terminal sentence (EXTR-15-04). The e2e spec
   // cannot import it -- e2e/ has no dependency on frontend/app -- so it pins two literals and
   // this reads them back out of the owner. documentRun.test.ts's TS15-10b covers the shorter
-  // DEAD_LETTER_NEEDLE the same way, and discriminates it against all six kinds.
+  // DEAD_LETTER_NEEDLE the same way, and discriminates it against the other six sentences.
   const OWNER = join(REPO_ROOT, 'frontend/app/src/lib/documentRun.ts')
   const owner = readFileSync(OWNER, 'utf8')
 
@@ -333,9 +333,9 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
     expect((fallback as RegExpExecArray)[1].startsWith(opening), 'the default arm no longer opens with this text').toBe(true)
 
     // Discrimination: asserting its ABSENCE proves the kind reached the render only if no
-    // OTHER arm contains it. Five named arms, matched over the whole switch.
+    // OTHER arm contains it. Six named arms, matched over the whole switch.
     const arms = [...owner.matchAll(/case '(\w+)':[\s\S]*?return [`']([^`']+)[`']/g)]
-    expect(arms.length, 'the named arms of deadLetterRefusal are no longer readable').toBe(5)
+    expect(arms.length, 'the named arms of deadLetterRefusal are no longer readable').toBe(6)
     const also = arms.filter(([, , sentence]) => sentence.includes(opening)).map(([, kind]) => kind)
     expect(also, `the opening also appears in: ${also.join(', ')}`).toEqual([])
   })

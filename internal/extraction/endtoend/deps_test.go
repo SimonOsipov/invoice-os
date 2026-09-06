@@ -22,8 +22,8 @@ const (
 
 	// A truncated or empty `go list -deps` output must not read as a clean scan.
 	eeMinDepsFloor = 20
-	// Two test files today; a scan that reads fewer is reading the wrong directory.
-	eeMinTestFiles = 2
+	// A scan that reads fewer files than this is reading the wrong directory.
+	eeMinTestFiles = 3
 	// One package before this subtask, two after.
 	eeMinExtractionPkgs = 2
 )
@@ -147,7 +147,8 @@ func TestEndToEndPackage_HasExactlyOneSkipSite(t *testing.T) {
 		t.Fatalf("read %d test file(s) in internal/extraction/endtoend, want at least %d", len(names), eeMinTestFiles)
 	}
 
-	skipCall := regexp.MustCompile(`\bt\.Sk` + `ip(f|Now)?\(`)
+	// Any receiver, not just one named t: a skip through tb.Skip is still a skip.
+	skipCall := regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\.Sk` + `ip(f|Now)?\(`)
 	declRE := regexp.MustCompile(`func eeReq` + `uire\(`)
 
 	skipSites := map[string]int{}

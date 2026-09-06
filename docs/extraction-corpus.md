@@ -263,7 +263,7 @@ at registration, before any test runs.
 
 ## Adding a layout
 
-Four edits, no new test:
+Five edits, no new test:
 
 1. A builder plus an `fxCorpus` entry in `fixtures_test.go`. The files go **flat** in
    `testdata/` with a `corpus_` prefix — `TestFixtures_MatchTheirGenerator` counts
@@ -274,6 +274,11 @@ Four edits, no new test:
    missing layout; update its expected count with it.
 4. The layout's token count in `corpusTokenFloor`, in `corpus_adversarial_test.go`. That table
    must name every layout, so a new one without an entry fails rather than going unmeasured.
+5. The `.pdf` name in `requiredPDFs` and the matching `.docling.json` in `requiredGoldens`, in
+   `internal/extraction/endtoend/harness_db_test.go`. Those two lists are that package's own —
+   `corpusLayouts` is an unexported identifier in a `_test.go` file of a different package and
+   is unreachable from there. `TestEndToEnd_AbsentFixtureFatalsRatherThanSkips` compares them
+   against what is committed, so a layout missing from them is a red test.
 
 Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
 in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there

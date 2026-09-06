@@ -126,9 +126,10 @@ func eeSetup(ctx context.Context) (*eeHarness, error) {
 		}
 		*c.dst = pool
 	}
-	// A DSN that is set but unreachable or unmigrated is an error, not a skip.
+	// A DSN that is set but unreachable is an error, not a skip. Ping cannot see an
+	// unmigrated database; that surfaces as a per-test failure, still never a skip.
 	if err := h.super.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("ping superuser (is the DB up and migrated?): %w", err)
+		return nil, fmt.Errorf("ping superuser (is the DB up?): %w", err)
 	}
 	return h, nil
 }

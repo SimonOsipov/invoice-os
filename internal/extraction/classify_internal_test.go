@@ -4,6 +4,8 @@
 package extraction
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -69,5 +71,96 @@ func TestRendersPageImages_TableIsExhaustiveOverAcceptedTypes(t *testing.T) {
 		if _, ok := pageImageFormats[ct]; !ok {
 			t.Errorf("acceptedDocumentTypes[%q] = %q has no entry in pageImageFormats; decide whether that format renders page images rather than letting a missing key decide it", ext, ct)
 		}
+	}
+}
+
+// --- looksLikePDF and RendersPageImagesForDocument --------------------------------------
+
+// cxRead reads a fixture directly: fxRead and its fixture-name constants live in package
+// extraction_test, which package extraction (this file, for the unexported looksLikePDF) cannot import.
+func cxRead(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return raw
+}
+
+func TestLooksLikePDF_AcceptsOnlyTheHeaderAtOffsetZero(t *testing.T) {
+	docxBytes := cxRead(t, "invoice.docx")
+
+	tests := []struct {
+		name string
+		in   []byte
+		want bool
+	}{
+		{"PDF header at offset zero", []byte("%PDF-1.4\n%rest"), true},
+		{"truncated to four bytes", []byte("%PDF"), false},
+		{"header present but not at offset zero", []byte("\n%PDF-1.4"), false},
+		{"lowercase header", []byte("%pdf-1.4"), false},
+		{"DOCX magic (PK\\x03\\x04), read off the real invoice.docx fixture", docxBytes, false},
+		{"nil", nil, false},
+		{"empty", []byte(""), false},
+	}
+	if len(tests) == 0 {
+		t.Fatalf("tests is empty; the loop below would assert nothing")
+	}
+
+	for _, tc := range tests {
+		if got := looksLikePDF(tc.in); got != tc.want {
+			t.Errorf("looksLikePDF(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRendersPageImagesForDocument_SniffsWhenTheDeclaredTypeRefuses(t *testing.T) {
+	pdfBytes := cxRead(t, "native_3page.pdf")
+
+	tests := []struct {
+		name string
+		doc  Document
+	}{
+		{"declared type refuses, bytes are a real PDF", Document{Bytes: pdfBytes, ContentType: "application/octet-stream"}},
+		{"declared type empty, bytes are a real PDF", Document{Bytes: pdfBytes, ContentType: ""}},
+	}
+	if len(tests) == 0 {
+		t.Fatalf("tests is empty; the loop below would assert nothing")
+	}
+
+	for _, tc := range tests {
+		if !RendersPageImagesForDocument(tc.doc) {
+			t.Errorf("RendersPageImagesForDocument(%s) = false, want true", tc.name)
+		}
+	}
+}
+
+func TestRendersPageImagesForDocument_DoesNotWidenTheGateForANonPDF(t *testing.T) {
+	docxBytes := cxRead(t, "invoice.docx")
+
+	tests := []struct {
+		name string
+		doc  Document
+	}{
+		{"DOCX bytes, empty declared type", Document{Bytes: docxBytes, ContentType: ""}},
+		{"CSV bytes, declared text/csv", Document{Bytes: []byte("id,amount\n1,2"), ContentType: "text/csv"}},
+	}
+	if len(tests) == 0 {
+		t.Fatalf("tests is empty; the loop below would assert nothing")
+	}
+
+	for _, tc := range tests {
+		if RendersPageImagesForDocument(tc.doc) {
+			t.Errorf("RendersPageImagesForDocument(%s) = true, want false", tc.name)
+		}
+	}
+}
+
+// The control: without this case, a predicate that ignored ContentType entirely and sniffed
+// only bytes would still pass the three tests above.
+func TestRendersPageImagesForDocument_KeepsTheDeclaredTypeAuthoritativeOnItsOwn(t *testing.T) {
+	doc := Document{Bytes: nil, ContentType: "application/pdf"}
+	if !RendersPageImagesForDocument(doc) {
+		t.Errorf("RendersPageImagesForDocument(%+v) = false, want true", doc)
 	}
 }

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
 import { DEEP_LINK_KEY, DEEP_LINK_SCHEMA_VERSION } from './lib/deepLink'
+import { clampFilterText } from './lib/invoices'
 import { ROUTE_PATHS } from './lib/route'
 import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
@@ -401,9 +402,13 @@ describe('ROUTE-04-02 AC-4: an unowned param is dropped, an owned one is not', (
 
 describe('ROUTE-04-02 AC-5: a restored destination ignores a live query string', () => {
   it('boot_aRestoredDestinationIgnoresALiveQueryString', async () => {
+    // query: '' (ROUTE-04-07): under the strict reader a blob missing `query` is rejected
+    // outright, which would fall this boot back to '/' and fail below for an unrelated
+    // reason. Adding it strengthens the spec -- a stored empty query still beats the live
+    // ?invoice= on the bare root.
     sessionStorage.setItem(
       DEEP_LINK_KEY,
-      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', at: Date.now() }),
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', query: '', at: Date.now() }),
     )
     await bootAt(`/?invoice=${INVOICE_ID}`)
     const ctx = requireCtx()
@@ -429,6 +434,36 @@ describe('ROUTE-04-02 AC-5: a restored destination ignores a live query string',
       invoiceId: INVOICE_ID,
       invoiceNumber: null,
     })
+  })
+})
+
+// QA adversarial coverage (ROUTE-04-07): hostile values inside a restored query, hand-written
+// straight into sessionStorage -- the two shapes a bypass of captureDestination could produce.
+describe('ROUTE-04-07 QA adversarial coverage: hostile restored query values', () => {
+  it('boot_aRestoredMalformedInvoiceIdIsIgnored', async () => {
+    sessionStorage.setItem(
+      DEEP_LINK_KEY,
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/audit', query: '?invoice=not-a-uuid', at: Date.now() }),
+    )
+    await bootAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'the restored path still seeds the audit view').toBe('audit')
+    expect(ctx.auditPrefilter, 'a malformed invoice id must be dropped, not seeded').toBeNull()
+  })
+
+  // Deliberately /invoices, not /audit: parseLocation only reads `q` when view is
+  // 'invoices' -- on /audit it drops q outright, which would fail this spec for the wrong
+  // reason (never reached the clamp, not a clamp that didn't fire).
+  it('boot_aRestoredOversizedSearchQueryIsClamped', async () => {
+    const longQ = 'a'.repeat(300)
+    sessionStorage.setItem(
+      DEEP_LINK_KEY,
+      JSON.stringify({ v: DEEP_LINK_SCHEMA_VERSION, path: '/invoices', query: `?q=${longQ}`, at: Date.now() }),
+    )
+    await bootAt('/')
+    const ctx = requireCtx()
+    expect(ctx.view, 'the restored path still seeds the invoices view').toBe('invoices')
+    expect(ctx.invoiceQuery, 'an oversized restored q must be clamped like a live one').toBe(clampFilterText(longQ))
   })
 })
 

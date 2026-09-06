@@ -909,6 +909,22 @@ describe('APPR-10-04 QA (R14): the approval panel enumerates its controls', () =
       ['SELECT', 'Delegate to'],
     ])
   })
+
+  // QA (ROUTE-04-03). The enumeration above pins that the control EXISTS; nothing pinned
+  // where it goes. onManageRoles moved from the two-call idiom (`ctx.setSettingsTab('roles')`
+  // then `ctx.nav('settings')`) to one `ctx.nav('settings', { settingsTab: 'roles' })`.
+  it('Manage roles navigates to Settings carrying the roles tab, in one call', () => {
+    const ctx = builderCtx({ roles: FIRM_ROLES })
+    render(<WorkflowBuilder ctx={ctx} policy={policyWith('fin_mgr')} />)
+    fireEvent.click(screen.getByText('Engagement Manager must approve'))
+
+    fireEvent.click(screen.getByText('Manage roles'))
+
+    expect((ctx.nav as ReturnType<typeof vi.fn>).mock.calls, 'the tab must arrive with the destination').toEqual([
+      ['settings', { settingsTab: 'roles' }],
+    ])
+    expect(ctx.setSettingsTab, 'the separate tab write must be gone').not.toHaveBeenCalled()
+  })
 })
 
 describe('APPR-10-04 QA (R15): the disabled paint is CONDITIONAL', () => {

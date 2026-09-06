@@ -40,8 +40,8 @@ const eeLineRichGolden = "rich_invoice.docling.json"
 // denominator of the reached figure. Never hand-trusted: the spec below re-derives every entry
 // from that layout's committed docling golden.
 //
-// Measured: only wild_ruled_lines_totals.pdf prints an item table; no other scored layout
-// carries one, so every other denominator is 0.
+// Measured: only wild_ruled_lines_totals.pdf yields item rows; no other scored layout does, so
+// every other denominator is 0.
 var eeLinesExpected = map[string]int{
 	"corpus_inline_labels.pdf":    0,
 	"corpus_split_labels.pdf":     0,
@@ -53,6 +53,8 @@ var eeLinesExpected = map[string]int{
 	"wild_ruled_lines_totals.pdf": 3,
 	"wild_rc_due_naira.pdf":       0,
 	"wild_stacked_borderless.pdf": 0,
+	// Its golden carries a totals table, but LineItems reads no item row off it -- measured.
+	"wild_scanned_no_number.pdf": 0,
 }
 
 // eeGoldenReader replays one committed docling golden through the real DoclingReader. The

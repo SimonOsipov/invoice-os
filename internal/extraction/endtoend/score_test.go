@@ -20,24 +20,25 @@ import (
 const eeReportMarker = "end-to-end field accuracy, document in to invoice row out"
 
 const (
-	// eeWrittenCells is hand-written: 10 layouts x 8 written fields. A deleted expectByLayout
+	// eeWrittenCells is hand-written: 11 layouts x 8 written fields. A deleted expectByLayout
 	// row must fail here rather than flatter the rate by shrinking the denominator.
-	eeWrittenCells = 80
-	eeLayoutCount  = 10
+	eeWrittenCells = 88
+	eeLayoutCount  = 11
 
-	// The cells the six corpus_ layouts carry no value for; every wild_ cell carries one. Pinned
-	// so an expectation cannot be silently emptied to dodge a miss.
-	eeAbsentCellCount = 12
+	// The cells the six corpus_ layouts carry no value for, plus the one the image-only
+	// arrangement deliberately omits. Pinned so an expectation cannot be silently emptied to
+	// dodge a miss.
+	eeAbsentCellCount = 13
 
 	// eeQuarantineLayout is image-only: zero text chars, so the import quarantines it and
 	// writes no invoices row.
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the ten-layout figure, measured 2026-09-06 and pinned. Equality, not a
+// eeCorpusHits is the eleven-layout figure, measured 2026-09-07 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 27 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 35 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 const (
 	eeCorpusHits  = 53
@@ -209,6 +210,22 @@ var expectByLayout = []struct {
 			"total":          {"1612.50"},
 		},
 	},
+	// The image-only arrangement. Its values are drawn as raster ink and read by OCR off the
+	// committed golden, never by pdfium; the uppercase cast is the raster font's, which has no
+	// lowercase. invoice_number is empty because the page prints none -- the quarantine cause.
+	{
+		file: "wild_scanned_no_number.pdf",
+		fields: map[string][]string{
+			"invoice_number": {},
+			"issue_date":     {"2026-08-14"},
+			"buyer_tin":      {"99999999-1202"},
+			"buyer_name":     {"HONEYWELL GROUP"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1800.00"},
+			"vat":            {"135.00"},
+			"total":          {"1935.00"},
+		},
+	},
 }
 
 // eeAbsentCells names every cell the bytes carry no value for, with the reason. A shape-level
@@ -227,6 +244,8 @@ var eeAbsentCells = map[string]string{
 	"corpus_totals_block.pdf/buyer_tin":    "the totals block carries no buyer",
 	"corpus_totals_block.pdf/buyer_name":   "the totals block carries no buyer",
 	"corpus_totals_block.pdf/currency":     "every amount is bare, with no currency token",
+
+	"wild_scanned_no_number.pdf/invoice_number": "the page prints no invoice number at all; the absence is the arrangement, and it is what quarantines the document",
 }
 
 // eeRealMisses are the cells the bytes DO carry and the invoices row does not. Pinned beside
@@ -253,6 +272,16 @@ var eeRealMisses = map[string]string{
 	"wild_stacked_borderless.pdf/subtotal":   "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/vat":        "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/total":      "the value is offset from its label, and the label carries no colon",
+
+	// Seven cells the raster page carries in ink and OCR reads cleanly, lost together: with no
+	// invoice number the import quarantines the document and writes no invoices row at all.
+	"wild_scanned_no_number.pdf/issue_date": "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/buyer_tin":  "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/buyer_name": "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/currency":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/subtotal":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/vat":        "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	"wild_scanned_no_number.pdf/total":      "the document quarantines for the missing invoice number, so no invoices row carries this value",
 }
 
 // eeCell is one (layout, field) cell -- the unit the rate counts.
@@ -280,9 +309,32 @@ type eeScore struct {
 	linesReached []eeScoreRow // hits = lines that reached the invoice, total = lines the document carries
 	linesPriced  []eeScoreRow // hits = lines carrying a unit price, total = lines that reached
 
-	// linesScored is how many layouts had their rows actually read off an invoice.
-	// TestRLS_EndToEndScoresLineItemOutcome holds it to eeLayoutCount.
+	// linesScored is how many layouts had their rows actually read off an invoice. A
+	// quarantined layout has no invoice to read, so eeLinesScoredComplete is what
+	// TestRLS_EndToEndScoresLineItemOutcome holds it to.
 	linesScored int
+}
+
+// eeQuarantinedLayouts is every layout the walk must quarantine, in expectByLayout order. An
+// identity, not a count: a walk that quarantined the wrong layout sums the same.
+var eeQuarantinedLayouts = []string{"wild_scanned_no_number.pdf"}
+
+// eeLinesScoredComplete is the walk's line-scoring completeness rule. Pure, so the shape can be
+// falsified without a database.
+//
+// The two addends are independent DB observations -- linesScored comes from the line_items
+// count, s.quarantined from a separate invoices read -- so the sum is not true by construction.
+// The identity clause is first: without it the quarantine term absorbs any deficit. It also
+// makes a `linesScored > 0` floor unreachable, so there is not one.
+func eeLinesScoredComplete(s eeScore) error {
+	if !slices.Equal(s.quarantined, eeQuarantinedLayouts) {
+		return fmt.Errorf("the walk quarantined %v, want exactly %v -- the quarantine term is what the scored count is measured against", s.quarantined, eeQuarantinedLayouts)
+	}
+	if s.linesScored+len(s.quarantined) != eeLayoutCount {
+		return fmt.Errorf("the walk read line rows off %d layout invoice(s) and quarantined %d, which is %d of %d; a walk that never scores reports the same zeros",
+			s.linesScored, len(s.quarantined), s.linesScored+len(s.quarantined), eeLayoutCount)
+	}
+	return nil
 }
 
 // eeCountCells counts the denominator straight off the table, resolving nothing. A row missing
@@ -590,14 +642,25 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 	asserted := 0
 	absent := map[string]bool{}
 	for _, want := range expectByLayout {
-		// Control: the layout's text layer must yield SOMETHING, or every containment check
-		// below passes on an empty union.
-		if got := eePageTokenReadings(t, want.file, "invoice_number"); len(got) == 0 {
+		// The byte oracle, branched explicitly rather than routed: an eeOCRLayouts member must
+		// read EXACTLY zero pdfium tokens, which is what makes its membership falsifiable here.
+		// A text-layer layout dropped into that map fails on this clause.
+		readingsOf := func(field string) []string { return eePageTokenReadings(t, want.file, field) }
+		if eeOCRLayouts[want.file] {
+			if got := eePageTokenReadings(t, want.file, "invoice_number"); len(got) != 0 {
+				t.Fatalf("%s is in eeOCRLayouts but pdfium reads %v off its own bytes; a layout with a text layer must be scored against its PDF, not against a golden", want.file, got)
+			}
+			readingsOf = func(field string) []string { return eeGoldenTokenReadings(t, want.file, field) }
+		}
+
+		// Control: the layout's oracle must yield SOMETHING, or every containment check below
+		// passes on an empty union.
+		if got := readingsOf("invoice_number"); len(got) == 0 {
 			t.Fatalf("%s yields no invoice-number reading at all; the read is broken, so the checks below prove nothing", want.file)
 		}
 		// Negative control: a value the layout does not carry must NOT be reachable.
 		const control = "INV-9999"
-		if slices.Contains(eePageTokenReadings(t, want.file, "invoice_number"), control) {
+		if slices.Contains(readingsOf("invoice_number"), control) {
 			t.Errorf("%s reports %s as reachable; the union is too wide to discriminate", want.file, control)
 		}
 
@@ -611,7 +674,7 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 				}
 				continue
 			}
-			readings := eePageTokenReadings(t, want.file, field)
+			readings := readingsOf(field)
 			for _, v := range values {
 				asserted++
 				if !slices.Contains(readings, v) {
@@ -700,6 +763,12 @@ func TestEndToEnd_TheReportPrintsEachRowsOwnNumbers(t *testing.T) {
 	if len(s.byLayout) == 0 || len(s.byField) == 0 {
 		t.Fatal("the synthetic score carries no rows, so the checks below assert nothing")
 	}
+	// The quarantine line rides the same report and names a layout the flat parser below also
+	// keys on. Nothing else asserts the two do not collide.
+	if len(eeQuarantinedLayouts) == 0 {
+		t.Fatal("eeQuarantinedLayouts is empty, so the collision checked below cannot occur")
+	}
+	s.quarantined = []string{eeQuarantinedLayouts[0]}
 
 	// Read the rendered line back by name and compare its trailing ratio, so the check is
 	// independent of the column width the renderer chooses.
@@ -720,6 +789,22 @@ func TestEndToEnd_TheReportPrintsEachRowsOwnNumbers(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("the report prints %s for %s, want %s -- the row is rendering numbers that are not its own", got, r.name, want)
+		}
+	}
+
+	// The quarantined layout's ratio above is its byLayout row, not something the quarantine
+	// line overwrote, and that line stays wide enough for the two-field parser to step over it.
+	out := eeRenderReport(s)
+	q := s.quarantined[0]
+	if n := strings.Count(out, "QUARANTINED "+q); n != 1 {
+		t.Errorf("the report names %s on %d QUARANTINED line(s), want exactly 1:\n%s", q, n, out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "QUARANTINED ") {
+			continue
+		}
+		if n := len(strings.Fields(line)); n <= 2 {
+			t.Errorf("the QUARANTINED line %q carries %d whitespace-separated field(s); at two it collides with the name -> ratio parser above", line, n)
 		}
 	}
 }
@@ -747,5 +832,56 @@ func TestEndToEnd_TheKnownMissesArePinnedAndWinnable(t *testing.T) {
 		if len(eeExpectedValues(eeCell{layout: layout, field: field})) == 0 {
 			t.Errorf("%s is pinned as a real miss but the table expects nothing there; it is an absent cell, not a defect", key)
 		}
+	}
+}
+
+// AC-3. The line-scored rule is widened to let a quarantined layout out of the count, and a
+// naive widening -- a second term that grows whenever the first shrinks -- passes for every
+// input. Falsified here without a database, so the DB spec is not its own oracle.
+func TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer(t *testing.T) {
+	if len(eeQuarantinedLayouts) == 0 {
+		t.Fatal("eeQuarantinedLayouts is empty; slices.Equal against the walk's append order would assert nothing")
+	}
+	var order []string
+	for _, want := range expectByLayout {
+		if slices.Contains(eeQuarantinedLayouts, want.file) {
+			order = append(order, want.file)
+		}
+	}
+	if !slices.Equal(order, eeQuarantinedLayouts) {
+		t.Fatalf("eeQuarantinedLayouts is %v; expectByLayout names those layouts in the order %v, and the walk appends in table order", eeQuarantinedLayouts, order)
+	}
+
+	var everyLayout []string
+	for _, want := range expectByLayout {
+		everyLayout = append(everyLayout, want.file)
+	}
+	q := eeQuarantinedLayouts[0]
+
+	cases := []struct {
+		name        string
+		linesScored int
+		quarantined []string
+		wantErr     bool
+	}{
+		{"the shipped shape", eeLayoutCount - 1, []string{q}, false},
+		{"the scorer call was silently deleted", 0, []string{q}, true},
+		{"one layout stopped being scored", eeLayoutCount - 2, []string{q}, true},
+		{"the quarantine term absorbs the deficit", 0, everyLayout, true},
+		{"nothing quarantined", eeLayoutCount, nil, true},
+		{"the wrong layout quarantined", eeLayoutCount - 1, []string{wildRuled}, true},
+		{"the same layout quarantined twice", eeLayoutCount - 1, []string{q, q}, true},
+		{"an empty walk", 0, nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := eeLinesScoredComplete(eeScore{linesScored: c.linesScored, quarantined: c.quarantined})
+			if c.wantErr && err == nil {
+				t.Errorf("linesScored=%d quarantined=%v is accepted as a complete walk", c.linesScored, c.quarantined)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("linesScored=%d quarantined=%v is rejected as incomplete: %v -- the rule refuses the shipped shape", c.linesScored, c.quarantined, err)
+			}
+		})
 	}
 }

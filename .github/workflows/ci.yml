@@ -107,6 +107,8 @@ jobs:
               - 'internal/extraction/testdata/wild_rc_due_naira.docling.json'
               - 'internal/extraction/testdata/wild_stacked_borderless.pdf'
               - 'internal/extraction/testdata/wild_stacked_borderless.docling.json'
+              - 'internal/extraction/testdata/wild_scanned_no_number.pdf'
+              - 'internal/extraction/testdata/wild_scanned_no_number.docling.json'
               - 'internal/extraction/testdata/rich_invoice.pdf'
               - 'internal/extraction/testdata/rich_invoice.docling.json'
               - 'internal/extraction/testdata/scanned_invoice.pdf'
@@ -313,6 +315,11 @@ jobs:
           scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
             internal/extraction/testdata/wild_stacked_borderless.pdf \
             internal/extraction/testdata/wild_stacked_borderless.docling.json
+      - name: T-05-18 — wild_scanned_no_number golden still matches the built image
+        run: |
+          scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \
+            internal/extraction/testdata/wild_scanned_no_number.pdf \
+            internal/extraction/testdata/wild_scanned_no_number.docling.json
       - name: T-05-18 — rich_invoice golden still matches the built image
         run: |
           scripts/ci/docling-canary.sh golden "$GITHUB_SHA" \

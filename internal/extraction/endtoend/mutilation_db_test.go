@@ -406,8 +406,10 @@ func TestRLS_EndToEndAMutilatedRuleSetTakesTheScoreToZero(t *testing.T) {
 	if shippedScore.total != eeCorpusCells {
 		t.Fatalf("the shipped walk is taken over %d cell(s), want %d", shippedScore.total, eeCorpusCells)
 	}
-	if len(shippedScore.quarantined) != 0 {
-		t.Errorf("the shipped set quarantined %v; the harness itself is broken, so the zero above proves nothing:\n%s", shippedScore.quarantined, shippedReport)
+	// By identity: the shipped set quarantines exactly the layout that prints no invoice
+	// number, and nothing else. A count would let the cut's quarantines leak into this half.
+	if !slices.Equal(shippedScore.quarantined, eeQuarantinedLayouts) {
+		t.Errorf("the shipped set quarantined %v, want exactly %v; the harness itself is broken, so the zero above proves nothing:\n%s", shippedScore.quarantined, eeQuarantinedLayouts, shippedReport)
 	}
 	if shippedScore.hits != eeCorpusHits {
 		t.Errorf("the shipped set scores %d / %d, pinned at %d / %d -- the sandwich's green half moved:\n%s", shippedScore.hits, shippedScore.total, eeCorpusHits, eeCorpusCells, shippedReport)

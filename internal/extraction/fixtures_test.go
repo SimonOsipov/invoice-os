@@ -75,6 +75,8 @@ var fxCorpus = []struct {
 	{fxWildRuled, fxBuildWildRuledLinesTotals},
 	{fxWildRCNaira, fxBuildWildRCDueNaira},
 	{fxWildStacked, fxBuildWildStackedBorderless},
+	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
+	{fxWildScanned, fxBuildWildScannedNoNumber},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -601,10 +603,11 @@ func fxBuildLearnedTwoParty() []byte {
 
 // --- the wild arrangements (NOT corpus layouts) -----------------------------
 
-// Four production layouts reproduced by arrangement only -- which labels appear, where, and at
+// Five production layouts reproduced by arrangement only -- which labels appear, where, and at
 // what token granularity. No bytes are copied. Scrubbed per docs/extraction-corpus.md
-// "Scrubbing an anonymised real document" by Claude Opus 5 on 2026-09-06; step 7's second-person
-// confirmation is recorded on the pull request, not here.
+// "Scrubbing an anonymised real document" by Claude Opus 5 on 2026-09-06 (the four text layers)
+// and 2026-09-07 (the image-only one); step 7's second-person confirmation is recorded on the
+// pull request, not here.
 //
 // Deliberately outside corpusPrefix: they gain no corpusExpect, corpusLayouts, corpusTokenFloor
 // or t1aGaps entry, so no Tier-1 number moves. internal/extraction/endtoend scores them.
@@ -613,6 +616,7 @@ const (
 	fxWildRuled    = "wild_ruled_lines_totals.pdf"
 	fxWildRCNaira  = "wild_rc_due_naira.pdf"
 	fxWildStacked  = "wild_stacked_borderless.pdf"
+	fxWildScanned  = "wild_scanned_no_number.pdf"
 )
 
 // The pinned synthetic identifier table. Every literal is freshly minted, never observed; the
@@ -627,6 +631,8 @@ const (
 	fxWildTINBuyerRCNaira     = "99999999-1002"
 	fxWildTINSupplierStacked  = "99999999-1101"
 	fxWildTINBuyerStacked     = "99999999-1102"
+	fxWildTINSupplierScanned  = "99999999-1201"
+	fxWildTINBuyerScanned     = "99999999-1202"
 
 	fxWildInvTwoParty = "INV-2101"
 	fxWildInvRuled    = "INV-2102"
@@ -639,6 +645,11 @@ const (
 
 	fxWildSupplier = "Adeyemi Trading Limited"
 	fxWildBuyer    = "Honeywell Group"
+
+	// The raster font is uppercase-only (fxGlyphs), and normalizeName preserves case, so the
+	// scanned arrangement's cast is scored in these forms.
+	fxWildSupplierUpper = "ADEYEMI TRADING LIMITED"
+	fxWildBuyerUpper    = "HONEYWELL GROUP"
 )
 
 // fxQuoteFont is fxHelvetica plus a /ToUnicode CMap for byte 0x27. Under StandardEncoding
@@ -1089,6 +1100,63 @@ func fxBuildDense() []byte {
 	})
 }
 
+// --- the image-only wild arrangement ----------------------------------------
+
+// The values wild_scanned_no_number.pdf draws as ink. Declared here so the endtoend expectation
+// table can be checked against what was DRAWN as well as against what OCR returned; a table
+// copied out of the golden and a golden regenerated from a corrupt page agree with each other.
+const (
+	fxWildScannedIssueDate = "2026-08-14"
+	fxWildScannedCurrency  = "NGN"
+	fxWildScannedSubtotal  = "1,800.00"
+	fxWildScannedVAT       = "135.00"
+	fxWildScannedTotal     = "1,935.00"
+)
+
+// fxBuildWildScannedNoNumber is the scanned arrangement whose read is discarded for a missing
+// invoice number: real raster ink OCR can read, and no INVOICE NO line anywhere. It reuses
+// fxBuildDense's canvas so the page lands on pdfium's exact 150-DPI US-Letter grid.
+//
+// Three geometry rules, each measured against a probe that broke it: no two drawn strings share
+// a y (two columns on one baseline merge into one token), one glyph scale for all body text
+// (mixing scales split a name across two tokens), and no % character (VAT 7.5% OCR'd as %S2).
+func fxBuildWildScannedNoNumber() []byte {
+	c := fxNewCanvas(fxRasterW, fxRasterH)
+
+	c.draw("INVOICE", 45, 55, 8)
+	c.fill(45, 130, 1235, 136)
+
+	c.draw(fxWildSupplierUpper, 45, 165, fxDenseBody)
+	c.draw("14 MARINA STREET", 45, 203, fxDenseBody)
+	c.draw("LAGOS ISLAND, LAGOS STATE", 45, 241, fxDenseBody)
+	c.draw("TIN: "+fxWildTINSupplierScanned, 45, 279, fxDenseBody)
+
+	// The right column is staggered between the left column's rows, never level with one.
+	c.draw("ISSUE DATE: "+fxWildScannedIssueDate, 635, 317, fxDenseBody)
+	c.draw("CURRENCY: "+fxWildScannedCurrency, 635, 355, fxDenseBody)
+
+	c.draw("BILL TO:", 45, 430, fxDenseBody)
+	c.draw(fxWildBuyerUpper, 45, 468, fxDenseBody)
+	c.draw("7 AWOLOWO ROAD, IKOYI", 45, 506, fxDenseBody)
+	c.draw("TIN: "+fxWildTINBuyerScanned, 45, 544, fxDenseBody)
+
+	c.drawRight("SUBTOTAL", 900, 700, fxDenseBody)
+	c.drawRight(fxWildScannedSubtotal, 1225, 700, fxDenseBody)
+	c.drawRight("VAT", 900, 742, fxDenseBody)
+	c.drawRight(fxWildScannedVAT, 1225, 742, fxDenseBody)
+	c.fill(700, 782, 1235, 784)
+	c.drawRight("TOTAL DUE", 900, 798, fxDenseBody)
+	c.drawRight(fxWildScannedTotal, 1225, 798, fxDenseBody)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxImageRes(5), 4),
+		fxStream([]byte(fxImageDraw)),
+		fxImageObjectRLE(fxRasterW, fxRasterH, c.pack()),
+	})
+}
+
 // --- reading a fixture back -------------------------------------------------
 
 var (
@@ -1283,32 +1351,63 @@ func TestFixtures_GeneratorIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestFixtures_ScannedHasNoTextLayer(t *testing.T) {
-	raw := fxRead(t, fxScanned)
+// fxImageResRe resolves a page's /Im0 through /Resources. A whole-file scan for
+// "/Subtype /Image" would pass on an image object no page references, and on a page whose ink
+// is drawn by a stream the page never names.
+var fxImageResRe = regexp.MustCompile(`/XObject\s*<<\s*/Im0\s+(\d+)\s+0\s+R`)
 
-	// Positive control: without an image, "carries no text" is true of a blank page too.
-	if !bytes.Contains(raw, []byte("/Subtype /Image")) {
-		t.Fatalf("%s carries no image XObject; it is not the image-only document AC-6 needs, so the absence checks below prove nothing", fxScanned)
-	}
-	if bytes.Contains(raw, []byte("/Font")) {
-		t.Errorf("%s declares a /Font resource; a scan carries no text layer at all", fxScanned)
-	}
+func fxImageObjFor(t *testing.T, objs map[int][]byte, page []byte) []byte {
+	t.Helper()
 
-	objs := fxObjects(raw)
-	pages := fxPages(t, objs)
-	if len(pages) < 1 {
-		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxScanned)
+	m := fxImageResRe.FindSubmatch(page)
+	if m == nil {
+		t.Fatalf("page object carries no /XObject << /Im0 n 0 R >> resource: %q", page)
 	}
-	for i, page := range pages {
-		body := fxContent(t, objs, page)
-		if !bytes.Contains(body, []byte("Do")) {
-			t.Errorf("%s page %d draws no XObject; an empty page is not a scan", fxScanned, i+1)
-		}
-		for _, op := range []string{"BT", "Tj"} {
-			if bytes.Contains(body, []byte(op)) {
-				t.Errorf("%s page %d content stream carries the %s operator; pdfium would report a text layer and AC-6 would not fire", fxScanned, i+1, op)
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("page names a non-numeric /Im0 object %q", m[1])
+	}
+	obj, ok := objs[num]
+	if !ok {
+		t.Fatalf("/Im0 names object %d, which the parse did not find", num)
+	}
+	return obj
+}
+
+// TestFixtures_TheScannedWildFixtureHasNoTextLayer covers both image-only fixtures: the 4x4
+// checkerboard AC-6 needs and the raster-ink page OCR can actually read. The image control runs
+// first and fatals -- every absence below is equally true of a blank page.
+func TestFixtures_TheScannedWildFixtureHasNoTextLayer(t *testing.T) {
+	for _, name := range []string{fxScanned, fxWildScanned} {
+		t.Run(name, func(t *testing.T) {
+			raw := fxRead(t, name)
+			objs := fxObjects(raw)
+			pages := fxPages(t, objs)
+			if len(pages) < 1 {
+				t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), name)
 			}
-		}
+
+			for i, page := range pages {
+				if !bytes.Contains(fxImageObjFor(t, objs, page), []byte("/Subtype /Image")) {
+					t.Fatalf("%s page %d's /Im0 is not an image XObject; it is not an image-only document, so the absences below prove nothing", name, i+1)
+				}
+				if fxFontResRe.Match(page) {
+					t.Errorf("%s page %d declares a /Font resource; a scan carries no text layer at all", name, i+1)
+				}
+
+				body := fxContent(t, objs, page)
+				if !bytes.Contains(body, []byte("Do")) {
+					t.Errorf("%s page %d draws no XObject; an empty page is not a scan", name, i+1)
+				}
+				// Two assertions, not one: a combined check cannot say which absence failed.
+				if bytes.Contains(body, []byte("BT")) {
+					t.Errorf("%s page %d content stream carries the BT operator; pdfium would report a text layer", name, i+1)
+				}
+				if bytes.Contains(body, []byte("Tj")) {
+					t.Errorf("%s page %d content stream carries the Tj operator; pdfium would report a text layer", name, i+1)
+				}
+			}
+		})
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 // eeWrittenColumns is the read order of eeWrittenRowSQL. Zipped against writtenFields at run
@@ -66,6 +68,24 @@ type eeLayoutResult struct {
 	quarantined bool
 	imported    int // QuarantinedInvoices
 	lines       eeLineOutcome
+	// fields is every extraction_field_results row the run wrote, read INSIDE the subtest:
+	// eeSeed's teardown deletes the tenant on that t. Precedent: eeDecoyRun.rows.
+	fields []eeRow
+}
+
+// eeOCRLayouts are the layouts whose text seam is their committed docling golden rather than
+// pdfium. An image-only page reads zero pdfium tokens, so worker.go's no-text-layer branch would
+// collapse it to one unreadable field -- a free 0/8 instead of an earned one.
+var eeOCRLayouts = map[string]bool{"wild_scanned_no_number.pdf": true}
+
+// eeOptsFor is the ONE site that routes a layout's text seam. A second hand-written site drifts,
+// and the drifted one silently tests pdfium while claiming to test the golden.
+func eeOptsFor(t *testing.T, layout string) []eeOpt {
+	t.Helper()
+	if !eeOCRLayouts[layout] {
+		return nil
+	}
+	return []eeOpt{eeWithText(eeGoldenReader(t, wildGolden(layout)))}
 }
 
 // eeRunLayout drives one layout end to end and scores every written field against expect. A
@@ -80,7 +100,8 @@ func eeRunLayout(t *testing.T, ctx context.Context, layout string, expect map[st
 	var out eeLayoutResult
 	ok := t.Run(layout, func(t *testing.T) {
 		w := eeSeed(t, ctx, layout)
-		eeExtract(t, ctx, w, layout)
+		jobID := eeExtract(t, ctx, w, layout, eeOptsFor(t, layout)...)
+		fields := eeFieldResults(t, ctx, jobID)
 		res := eeImport(t, ctx, w)
 
 		got := eeWrittenRow(t, ctx, w.documentID)
@@ -89,6 +110,7 @@ func eeRunLayout(t *testing.T, ctx context.Context, layout string, expect map[st
 			saw:         map[eeCell]string{},
 			quarantined: got == nil,
 			imported:    res.QuarantinedInvoices,
+			fields:      fields,
 		}
 		for _, field := range writtenFields {
 			cell := eeCell{layout: layout, field: field}
@@ -338,6 +360,78 @@ func TestRLS_EndToEndAQuarantinedLayoutScoresZeroNotAbsent(t *testing.T) {
 	for _, needle := range []string{"QUARANTINED", eeQuarantineLayout, "0/8"} {
 		if !strings.Contains(rendered, needle) {
 			t.Errorf("the report does not name %q for a quarantined layout:\n%s", needle, rendered)
+		}
+	}
+}
+
+// eeScannedFieldFloor is how many of the seven non-invoice_number written fields the image-only
+// layout resolves to a rank-0 value, measured 2026-09-07 off its committed golden. A floor: the
+// point is that the read succeeded, not that it succeeded on exactly these six.
+const eeScannedFieldFloor = 6
+
+// AC-3. The image-only arrangement reaches no invoices row and costs a full 0/8.
+func TestRLS_EndToEndTheScannedLayoutWritesNoInvoice(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	layout := eeQuarantinedLayouts[0]
+	r := eeRunLayout(t, ctx, layout, wildExpectRow(t, layout))
+
+	if !r.quarantined {
+		t.Fatalf("%s produced an invoices row; it prints no invoice number and must quarantine", layout)
+	}
+	if r.imported != 1 {
+		t.Errorf("ImportDocument reported QuarantinedInvoices = %d for %s, want 1", r.imported, layout)
+	}
+	if r.row.total != len(writtenFields) {
+		t.Errorf("%s contributes a denominator of %d, want %d -- a quarantined layout is scored, not omitted", layout, r.row.total, len(writtenFields))
+	}
+	if r.row.hits != 0 {
+		t.Errorf("%s scored %d hit(s) with no invoices row at all", layout, r.row.hits)
+	}
+	if len(r.missed) != len(writtenFields) {
+		t.Errorf("%s recorded %d miss(es), want %d -- every written cell", layout, len(r.missed), len(writtenFields))
+	}
+}
+
+// AC-3. The same run's extraction rows: the quarantine is the missing invoice number, not an
+// unreadable document. Without this the 0/8 above is score_test.go:527's banned free zero.
+func TestRLS_EndToEndTheScannedLayoutStillReadFields(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	layout := eeQuarantinedLayouts[0]
+	r := eeRunLayout(t, ctx, layout, wildExpectRow(t, layout))
+
+	if len(r.fields) == 0 {
+		t.Fatalf("%s wrote no extraction_field_results row at all; every clause below would hold over nothing", layout)
+	}
+	for _, row := range r.fields {
+		if row.reason != nil && *row.reason == string(extraction.ReasonUnreadable) {
+			t.Errorf("%s wrote %s with reason %q; the run took the no-text-layer branch, so its 0/8 is free and not earned", layout, row.name, *row.reason)
+		}
+	}
+
+	valued := 0
+	for _, field := range writtenFields {
+		if field == "invoice_number" {
+			continue
+		}
+		for _, row := range r.fields {
+			if row.name == field && row.rank == 0 && row.value != nil && *row.value != "" {
+				valued++
+				break
+			}
+		}
+	}
+	if valued < eeScannedFieldFloor {
+		t.Errorf("%s resolved %d of the %d non-invoice_number written fields to a rank-0 value, want at least %d -- OCR read the page, so a lower figure is a read that stopped working",
+			layout, valued, len(writtenFields)-1, eeScannedFieldFloor)
+	}
+
+	for _, row := range r.fields {
+		if row.name == "invoice_number" && row.rank == 0 && row.value != nil && *row.value != "" {
+			t.Errorf("%s resolved invoice_number to %q at rank 0; the page prints none, so the quarantine would not be the missing number", layout, *row.value)
 		}
 	}
 }

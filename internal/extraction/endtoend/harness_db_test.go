@@ -69,6 +69,7 @@ var requiredPDFs = []string{
 	"wild_ruled_lines_totals.pdf",
 	"wild_rc_due_naira.pdf",
 	"wild_stacked_borderless.pdf",
+	"wild_scanned_no_number.pdf",
 }
 
 var requiredGoldens = []string{
@@ -82,6 +83,7 @@ var requiredGoldens = []string{
 	"wild_ruled_lines_totals.docling.json",
 	"wild_rc_due_naira.docling.json",
 	"wild_stacked_borderless.docling.json",
+	"wild_scanned_no_number.docling.json",
 }
 
 var (

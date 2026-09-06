@@ -167,10 +167,11 @@ func TestRLS_EndToEndScoresLineItemOutcome(t *testing.T) {
 	}
 
 	// A walk that never calls the scorer reports these same zeros, so it has to prove it read
-	// them.
-	if s.linesScored != eeLayoutCount {
-		t.Fatalf("the walk read line rows off %d of %d layout invoices; a walk that never scores reports the same zeros",
-			s.linesScored, eeLayoutCount)
+	// them. A quarantined layout has no invoice to read, so the rule is the two independent
+	// counts together -- TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer
+	// falsifies the rule itself.
+	if err := eeLinesScoredComplete(s); err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	for i, want := range expectByLayout {

@@ -26,11 +26,17 @@ const (
 	wildRuled    = "wild_ruled_lines_totals.pdf"
 	wildRCNaira  = "wild_rc_due_naira.pdf"
 	wildStacked  = "wild_stacked_borderless.pdf"
+	wildScanned  = "wild_scanned_no_number.pdf"
 )
+
+// wildTextLayouts carry a real text layer, so pdfium reads them. wildScanned is image-only and
+// reads zero pdfium tokens by construction, which fatals at wildPages -- every pdfium-sourced
+// spec loops this slice and gains a golden-sourced twin for the scanned layout.
+var wildTextLayouts = []string{wildTwoParty, wildRuled, wildRCNaira, wildStacked}
 
 // wildLayouts is hard-coded, never a directory walk: a walk cannot see a fixture that is
 // missing, which is the failure Core AC 7 exists to catch.
-var wildLayouts = []string{wildTwoParty, wildRuled, wildRCNaira, wildStacked}
+var wildLayouts = append(append([]string{}, wildTextLayouts...), wildScanned)
 
 // --- the pinned synthetic identifier table ------------------------------------------------
 //
@@ -43,6 +49,7 @@ var wildTINs = []string{
 	"99999999-0901", "99999999-0902", // ruled_lines_totals
 	"99999999-1001", "99999999-1002", // rc_due_naira
 	"99999999-1101", "99999999-1102", // stacked_borderless
+	"99999999-1201", "99999999-1202", // scanned_no_number
 }
 
 var wildInvNums = []string{"INV-2101", "INV-2102", "INV-2103", "INV-2104"}
@@ -58,7 +65,12 @@ var wildHeaders = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", "RATE (N)", "Am
 // normalises that to ASCII, so the builder carries a /ToUnicode CMap settling both on U+0027.
 var wildLabels = []string{"Invoice to", "Customer No.", "Buyer's Signature"}
 
-var wildCast = []string{"Adeyemi Trading Limited", "Honeywell Group"}
+// The scanned arrangement is drawn in a raster font with no lowercase, and normalizeName
+// preserves case, so its cast is scored in the uppercase forms.
+var wildCast = []string{
+	"Adeyemi Trading Limited", "Honeywell Group",
+	"ADEYEMI TRADING LIMITED", "HONEYWELL GROUP",
+}
 
 // wildRuledLastLineAmount is the ruled table's last row amount -- the positional candidate
 // AC-13 requires the totals identity to reject.
@@ -85,9 +97,9 @@ func wildReadFile(t *testing.T, rel string) string {
 	return string(raw)
 }
 
-// wildPages reads one committed fixture with the production PDFium reader. Zero tokens is a
-// fatal: every assertion taken off the page would hold vacuously.
-func wildPages(t *testing.T, layout string) []extraction.Page {
+// wildPDFiumPages reads one committed fixture with the production PDFium reader, however many
+// tokens it yields. The image-only layout reads zero, and that zero is an assertion.
+func wildPDFiumPages(t *testing.T, layout string) []extraction.Page {
 	t.Helper()
 	eeRequireFixtures(t, []string{layout})
 
@@ -101,10 +113,44 @@ func wildPages(t *testing.T, layout string) []extraction.Page {
 	if _, err := extraction.NewPDFiumReader().Read(t.Context(), doc, onPage); err != nil {
 		t.Fatalf("read %s with the PDFium reader: %v", layout, err)
 	}
+	return pages
+}
+
+// wildPages is the text-layer read. Zero tokens is a fatal: every assertion taken off the page
+// would hold vacuously.
+func wildPages(t *testing.T, layout string) []extraction.Page {
+	t.Helper()
+	pages := wildPDFiumPages(t, layout)
 	if wildTokenCount(pages) == 0 {
 		t.Fatalf("%s read 0 token(s); every assertion over its text would hold vacuously", layout)
 	}
 	return pages
+}
+
+// eeGoldenTokenReadings is eePageTokenReadings' golden-sourced twin: every reading of one
+// layout's committed golden under one field's shape. Same n-gram body, a different oracle.
+func eeGoldenTokenReadings(t *testing.T, layout, field string) []string {
+	t.Helper()
+	shape, ok := eeShapeOf[field]
+	if !ok {
+		t.Fatalf("no shape for field %q; eeShapeOf must carry one key per writtenFields entry", field)
+	}
+	var readings []string
+	for _, p := range eeGoldenPages(t, wildGolden(layout)) {
+		for _, tok := range p.Tokens {
+			for _, gram := range eeNGrams(tok.Text) {
+				readings = append(readings, shape.Normalize(gram)...)
+			}
+		}
+	}
+	slices.Sort(readings)
+	return slices.Compact(readings)
+}
+
+// wildGoldenTokenTexts is wildTokenTexts over the golden rather than over pdfium.
+func wildGoldenTokenTexts(t *testing.T, layout string) []string {
+	t.Helper()
+	return wildTokenTexts(eeGoldenPages(t, wildGolden(layout)))
 }
 
 func wildTokenCount(pages []extraction.Page) int {
@@ -221,7 +267,7 @@ const wildGeometryTol = 0.02
 // golden replayed from a different document. A golden that no longer describes its PDF is a
 // replay of nothing.
 func TestWildGoldens_DescribeTheirPDF(t *testing.T) {
-	for _, layout := range wildLayouts {
+	for _, layout := range wildTextLayouts {
 		t.Run(layout, func(t *testing.T) {
 			golden := eeGoldenPages(t, wildGolden(layout))
 			pdfium := wildPages(t, layout)
@@ -277,7 +323,7 @@ const (
 
 	// wildCIPathFloor is the changes-filter's committed literal path count. This scan asserts
 	// an ABSENCE, so a ci.yml that stopped naming testdata at all must fail here first.
-	wildCIPathFloor = 20
+	wildCIPathFloor = 22
 )
 
 // AC-3. An unwired fixture skips docling-canary, and the roll-up job counts a skipped job as a
@@ -383,7 +429,7 @@ var wildScriptedTINs = []string{"0001", "0002", "0003", "0004", "0005", "0006", 
 // over from a production document, or one that collides with a scripted submission outcome,
 // fails here rather than shipping.
 func TestWildLayouts_UseOnlyFreeReservedTINs(t *testing.T) {
-	for _, layout := range wildLayouts {
+	for _, layout := range wildTextLayouts {
 		t.Run(layout, func(t *testing.T) {
 			var hits []string
 			for _, text := range wildTokenTexts(wildPages(t, layout)) {
@@ -414,7 +460,7 @@ func TestWildLayouts_UseOnlyFreeReservedTINs(t *testing.T) {
 // produced by the field's own shape from the layout's own bytes. A row naming a value the bytes
 // do not carry would be a miss extraction can never win.
 func TestWildLayouts_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
-	for _, layout := range wildLayouts {
+	for _, layout := range wildTextLayouts {
 		t.Run(layout, func(t *testing.T) {
 			fields := wildExpectRow(t, layout)
 			for _, field := range writtenFields {
@@ -445,6 +491,8 @@ var wildTokenFloor = map[string]int{
 	wildRuled:    34,
 	wildRCNaira:  17,
 	wildStacked:  21,
+	// The GOLDEN's count: this layout reads zero pdfium tokens.
+	wildScanned: 17,
 }
 
 // wildMinTokenFloor is the smallest committed corpus floor (corpus_ambiguous_date.pdf, 6). A
@@ -470,7 +518,9 @@ func TestWildLayouts_HaveATokenFloor(t *testing.T) {
 		}
 	}
 
-	for _, layout := range wildLayouts {
+	// The pdfium half only: wildScanned's floor is a claim about its GOLDEN, held by
+	// TestWildGoldens_TheScannedLayoutHasAGoldenTokenFloor.
+	for _, layout := range wildTextLayouts {
 		t.Run(layout, func(t *testing.T) {
 			if got := wildTokenCount(wildPages(t, layout)); got < wildTokenFloor[layout] {
 				t.Errorf("%s reads %d token(s), below its committed floor of %d", layout, got, wildTokenFloor[layout])
@@ -520,7 +570,7 @@ func TestWildLayouts_UseOnlySynthesizedIdentifiers(t *testing.T) {
 	}
 
 	var rcHits, mintedHits int
-	for _, layout := range wildLayouts {
+	for _, layout := range wildTextLayouts {
 		t.Run(layout, func(t *testing.T) {
 			for _, text := range wildTokenTexts(wildPages(t, layout)) {
 				for _, word := range strings.Fields(text) {
@@ -556,7 +606,7 @@ func TestWildLayouts_UseOnlySynthesizedIdentifiers(t *testing.T) {
 // wildRequireListPin is the layout count the two require-lists must name once the wild layouts
 // land. Hard-coded, not derived from eeLayoutCount: a list and a denominator that shrink
 // together pass every ratio they feed.
-const wildRequireListPin = 10
+const wildRequireListPin = 11
 
 // AC-8. A fixture the require-list does not name cannot fatal when absent, which is how the
 // suite silently stops scoring a layout. The list can see a missing file; the tree walk sees a
@@ -830,5 +880,304 @@ func TestWildLayouts_TheNairaRolesStaySeparate(t *testing.T) {
 	}
 	if readings := eePageTokenReadings(t, wildRCNaira, "currency"); !slices.Contains(readings, "NGN") {
 		t.Errorf("%s does not reach NGN under ShapeCurrency; the miss would be an absent cell rather than a real one, readings were %v", wildRCNaira, readings)
+	}
+}
+
+// --- the image-only arrangement: the golden is its oracle --------------------------------------
+
+// wildScannedDrawn is what the builder draws as ink, per written field. The third and
+// independent point of the identity below: expectByLayout's scanned row is written FROM the
+// golden, so a golden regenerated from a corrupt page and a table re-copied out of that golden
+// agree with each other perfectly.
+var wildScannedDrawn = map[string]string{
+	"issue_date": "2026-08-14",
+	"buyer_tin":  "99999999-1202",
+	"buyer_name": "HONEYWELL GROUP",
+	"currency":   "NGN",
+	"subtotal":   "1,800.00",
+	"vat":        "135.00",
+	"total":      "1,935.00",
+}
+
+// AC-2. The golden carries a real OCR read. Restated here rather than delegated to
+// AreMachineGenerated: an EMPTY tokens array round-trips through that spec perfectly and would
+// report a golden with no recoverable text clean.
+func TestWildGoldens_TheScannedGoldenCarriesOCRTokens(t *testing.T) {
+	golden := wildGolden(wildScanned)
+	floor := wildTokenFloor[wildScanned]
+	if floor < wildMinTokenFloor {
+		t.Fatalf("wildTokenFloor[%s] = %d, want at least %d -- measure it off the committed golden", wildScanned, floor, wildMinTokenFloor)
+	}
+
+	pages := eeGoldenPages(t, golden)
+	if got := wildTokenCount(pages); got < floor {
+		t.Errorf("%s carries %d token(s), below its committed floor of %d -- OCR read less than it did when this was committed", golden, got, floor)
+	}
+	nonBlank := 0
+	for _, text := range wildTokenTexts(pages) {
+		if strings.TrimSpace(text) != "" {
+			nonBlank++
+		}
+	}
+	if nonBlank == 0 {
+		t.Errorf("%s carries no token with any non-whitespace text; a count of blanks is not a read", golden)
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(eeFixtureBytes(t, golden), &obj); err != nil {
+		t.Fatalf("decode %s: %v", golden, err)
+	}
+	if version, _ := obj["docling_version"].(string); version == "" || version == "stub" {
+		t.Errorf("%s reports docling_version %q; it was generated by a stub image, not the pinned sidecar", golden, version)
+	}
+}
+
+// AC-1. DescribeTheirPDF's twin. The asymmetry IS the claim: token-by-token geometry is
+// meaningless when one side has no tokens at all.
+func TestWildGoldens_TheScannedGoldenDescribesAnImageOnlyPDF(t *testing.T) {
+	golden := eeGoldenPages(t, wildGolden(wildScanned))
+	if len(golden) == 0 {
+		t.Fatalf("%s replayed no page; every comparison below would hold over nothing", wildGolden(wildScanned))
+	}
+	pdfium := wildPDFiumPages(t, wildScanned)
+
+	if len(golden) != len(pdfium) {
+		t.Fatalf("%s describes %d page(s) and %s reads %d", wildGolden(wildScanned), len(golden), wildScanned, len(pdfium))
+	}
+	for i := range golden {
+		g, p := golden[i], pdfium[i]
+		if math.Abs(g.WidthPt-p.WidthPt) > wildGeometryTol || math.Abs(g.HeightPt-p.HeightPt) > wildGeometryTol {
+			t.Errorf("page %d is %vx%v pt in the golden and %vx%v pt in the PDF", i+1, g.WidthPt, g.HeightPt, p.WidthPt, p.HeightPt)
+		}
+	}
+	if got := wildTokenCount(pdfium); got != 0 {
+		t.Errorf("%s reads %d pdfium token(s), want exactly 0 -- it is drawn as raster ink and declares no text layer", wildScanned, got)
+	}
+	if got := wildTokenCount(golden); got < wildTokenFloor[wildScanned] {
+		t.Errorf("%s carries %d golden token(s), below its floor of %d", wildScanned, got, wildTokenFloor[wildScanned])
+	}
+}
+
+// AC-2. HaveATokenFloor's twin. The pdfium zero is asserted beside it so the floor is
+// unambiguously a claim about the golden.
+func TestWildGoldens_TheScannedLayoutHasAGoldenTokenFloor(t *testing.T) {
+	floor, ok := wildTokenFloor[wildScanned]
+	if !ok {
+		t.Fatalf("wildTokenFloor names no floor for %s; an emptied golden would read clean", wildScanned)
+	}
+	if floor < wildMinTokenFloor {
+		t.Errorf("wildTokenFloor[%s] = %d, want at least %d", wildScanned, floor, wildMinTokenFloor)
+	}
+	if got := wildTokenCount(eeGoldenPages(t, wildGolden(wildScanned))); got < floor {
+		t.Errorf("%s's golden carries %d token(s), below its committed floor of %d", wildScanned, got, floor)
+	}
+	if got := wildTokenCount(wildPDFiumPages(t, wildScanned)); got != 0 {
+		t.Errorf("%s reads %d pdfium token(s), want exactly 0 -- the floor above would then be ambiguous about which reader it pins", wildScanned, got)
+	}
+}
+
+// AC-5. UseOnlyFreeReservedTINs' twin: the two new TINs proven on the page as OCR read it, not
+// merely declared in the pinned table.
+func TestWildLayouts_TheScannedLayoutUsesOnlyFreeReservedTINs(t *testing.T) {
+	var hits []string
+	for _, text := range wildGoldenTokenTexts(t, wildScanned) {
+		hits = append(hits, wildTINRE.FindAllString(text, -1)...)
+	}
+	if len(hits) == 0 {
+		t.Fatalf("%s's golden carries no TIN-shaped run; this scan asserts an absence and found nothing to assert over", wildScanned)
+	}
+	for _, tin := range hits {
+		if !strings.HasPrefix(tin, wildFreeTINPrefix) {
+			t.Errorf("%s carries TIN %q, outside the free reserved block %s", wildScanned, tin, wildFreeTINPrefix)
+			continue
+		}
+		if suffix := strings.TrimPrefix(tin, wildFreeTINPrefix); slices.Contains(wildScriptedTINs, suffix) {
+			t.Errorf("%s carries TIN %q; -0001..-0009 are the submission mock's scripted and never-allocate suffixes", wildScanned, tin)
+		}
+		if !slices.Contains(wildTINs, tin) {
+			t.Errorf("%s carries TIN %q, which the pinned synthetic table does not name", wildScanned, tin)
+		}
+	}
+}
+
+// AC-7. UseOnlySynthesizedIdentifiers' twin, plus the layout-defining negative: this page mints
+// no invoice number at all. The TIN clause is the paired positive control, so the negative is
+// not the negative of an empty read.
+func TestWildLayouts_TheScannedLayoutUsesOnlySynthesizedIdentifiers(t *testing.T) {
+	pinned := append([]string{wildRCNumber}, wildInvNums...)
+	pinned = append(pinned, wildTINs...)
+	pinned = append(pinned, wildCast...)
+
+	words, tinHits, rcHits, mintedHits := 0, 0, 0, 0
+	for _, text := range wildGoldenTokenTexts(t, wildScanned) {
+		tinHits += len(wildTINRE.FindAllString(text, -1))
+		for _, word := range strings.Fields(text) {
+			words++
+			word = strings.TrimSuffix(word, ":")
+			switch {
+			case wildRCRE.MatchString(word):
+				rcHits++
+			case wildMintedRE.MatchString(word):
+				mintedHits++
+			default:
+				continue
+			}
+			if !slices.Contains(pinned, word) {
+				t.Errorf("%s carries identifier %q, which the pinned synthetic table does not name", wildScanned, word)
+			}
+		}
+	}
+	if words == 0 || tinHits == 0 {
+		t.Fatalf("%s's golden yielded %d word(s) and %d TIN-shaped run(s); the absences below would be the absences of an empty read", wildScanned, words, tinHits)
+	}
+	if mintedHits != 0 {
+		t.Errorf("%s carries %d minted identifier(s); the arrangement IS the missing invoice number, so a page that mints one is no longer it", wildScanned, mintedHits)
+	}
+	if rcHits != 0 {
+		t.Errorf("%s carries %d RC-shaped identifier(s); an OCR misread of one would red the identifier scan for the wrong reason", wildScanned, rcHits)
+	}
+}
+
+// AC-6. EveryExpectedValueAppearsInItsFixture's twin. Three points per field, not two: the
+// expectation is derived from what the builder DREW, and OCR is shown to have read it. Clause 1
+// is what stops the golden being compared against a transcript of itself.
+func TestWildLayouts_TheScannedLayoutsExpectedValuesAppearInItsGolden(t *testing.T) {
+	fields := wildExpectRow(t, wildScanned)
+	src := wildReadFile(t, wildFixturesFile)
+
+	asserted := 0
+	for _, field := range writtenFields {
+		vals, ok := fields[field]
+		if !ok {
+			t.Errorf("expectByLayout[%s] has no %s key; a missing key drops the cell from the denominator", wildScanned, field)
+			continue
+		}
+		if field == "invoice_number" {
+			if len(vals) != 0 {
+				t.Errorf("expectByLayout[%s].invoice_number is %v; the page prints none, and an expectation there would be a miss no extraction can win", wildScanned, vals)
+			}
+			if _, ok := eeAbsentCells[wildScanned+"/invoice_number"]; !ok {
+				t.Errorf("eeAbsentCells carries no reason for %s/invoice_number; the empty expectation reads as an expectation dodged", wildScanned)
+			}
+			continue
+		}
+		if len(vals) != 1 {
+			t.Errorf("expectByLayout[%s].%s holds %d value(s) %v, want exactly 1", wildScanned, field, len(vals), vals)
+			continue
+		}
+		want := vals[0]
+
+		drawn, ok := wildScannedDrawn[field]
+		if !ok {
+			t.Errorf("wildScannedDrawn names no drawn literal for %s; the expectation would rest on the golden alone", field)
+			continue
+		}
+		if got := eeShapeOf[field].Normalize(drawn); !slices.Contains(got, want) {
+			t.Errorf("the builder draws %q for %s, which normalises to %v and not to the expected %q -- the table is not derived from what was drawn", drawn, field, got, want)
+		}
+		if !strings.Contains(src, drawn) {
+			t.Errorf("%s does not name the drawn literal %q; the copy here and the builder's have drifted apart", wildFixturesFile, drawn)
+		}
+		if readings := eeGoldenTokenReadings(t, wildScanned, field); !slices.Contains(readings, want) {
+			t.Errorf("expectByLayout[%s].%s wants %q, which the golden's own tokens do not produce under its shape; readings were %v", wildScanned, field, want, readings)
+		}
+		asserted++
+	}
+
+	// Negative controls: a reading union wide enough to contain anything discriminates nothing.
+	if got := eeGoldenTokenReadings(t, wildScanned, "total"); slices.Contains(got, "9999.00") {
+		t.Errorf("%s reports 9999.00 as reachable under ShapeAmount; the union is too wide to discriminate", wildScanned)
+	}
+	if got := eeGoldenTokenReadings(t, wildScanned, "invoice_number"); slices.Contains(got, "INV-9999") {
+		t.Errorf("%s reports INV-9999 as reachable under ShapeInvoiceNumber; the union is too wide to discriminate", wildScanned)
+	}
+
+	if asserted < len(writtenFields)-1 {
+		t.Errorf("the walk asserted %d value(s), want %d -- one per written field except invoice_number", asserted, len(writtenFields)-1)
+	}
+}
+
+// AC-3. The golden seam covers this layout and nothing else. A golden on every seam would stop
+// testing pdfium, and the zero-pdfium-token clause is what makes the membership falsifiable
+// rather than a naming convention.
+func TestEndToEnd_TheOCRSeamCoversOnlyTheImageOnlyLayout(t *testing.T) {
+	if len(eeOCRLayouts) != 1 {
+		t.Fatalf("eeOCRLayouts names %d layout(s) %v, want exactly 1 -- a golden on every text seam stops testing pdfium", len(eeOCRLayouts), eeOCRLayouts)
+	}
+	for member := range eeOCRLayouts {
+		if member != wildScanned {
+			t.Errorf("eeOCRLayouts names %s, want %s", member, wildScanned)
+		}
+		if !slices.ContainsFunc(expectByLayout, func(r struct {
+			file   string
+			fields map[string][]string
+		}) bool {
+			return r.file == member
+		}) {
+			t.Errorf("eeOCRLayouts names %s, which expectByLayout does not score", member)
+		}
+		if got := wildTokenCount(wildPDFiumPages(t, member)); got != 0 {
+			t.Errorf("%s reads %d pdfium token(s), want exactly 0 -- a layout with a text layer must be read by pdfium, not replayed from a golden", member, got)
+		}
+		if got := wildTokenCount(eeGoldenPages(t, wildGolden(member))); got < wildTokenFloor[member] {
+			t.Errorf("%s's golden carries %d token(s), below its floor of %d; the seam replays a golden that read nothing", member, got, wildTokenFloor[member])
+		}
+	}
+
+	// Negative control: every text layout stays on pdfium and reads something.
+	for _, layout := range wildTextLayouts {
+		if eeOCRLayouts[layout] {
+			t.Errorf("eeOCRLayouts names the text layout %s; its seam would stop being pdfium", layout)
+		}
+		if got := wildTokenCount(wildPDFiumPages(t, layout)); got == 0 {
+			t.Errorf("%s reads 0 pdfium token(s); it is in wildTextLayouts and would fatal every spec that loops it", layout)
+		}
+	}
+	if eeOCRLayouts[eeQuarantineLayout] {
+		t.Errorf("eeOCRLayouts names %s; the quarantine vehicle must keep taking its pdfium path, or its 0/8 stops being the no-text-layer branch answering", eeQuarantineLayout)
+	}
+}
+
+// --- AC-5: the OCR path is unedited -------------------------------------------------------------
+
+const (
+	wildWorkerFile    = "../worker.go"
+	wildExtractorFile = "../extractor.go"
+
+	wildTextLayerBranch = "case textRes.TextChars == 0:"
+	wildUnreadableField = "Field{Name: doclingTextLayerField, Reason: ReasonUnreadable}"
+)
+
+// Regexp, not a literal: the const block's spacing is gofmt's, not the pin's.
+var wildUnreadableConstRE = regexp.MustCompile(`ReasonUnreadable\s+Reason\s*=\s*"unreadable"`)
+
+// AC-5. A fixture that only READS cannot have moved the branch that classifies a document with
+// no text layer. A git-diff guard is not usable here: the queue job checks out at depth 1 and
+// has no origin/main.
+func TestEndToEnd_TheOCRPathWasNotEdited(t *testing.T) {
+	worker := wildReadFile(t, wildWorkerFile)
+	extractor := wildReadFile(t, wildExtractorFile)
+
+	// Control needles: a renamed or moved file must fail loudly rather than read clean.
+	if !strings.Contains(worker, "func (w *ExtractWorker) Work(") {
+		t.Fatalf("%s declares no ExtractWorker.Work; the scan is not reading the worker", wildWorkerFile)
+	}
+	if !strings.Contains(extractor, "type Reason") {
+		t.Fatalf("%s declares no Reason type; the scan is not reading the extractor", wildExtractorFile)
+	}
+
+	branch := strings.Index(worker, wildTextLayerBranch)
+	field := strings.Index(worker, wildUnreadableField)
+	if branch < 0 {
+		t.Errorf("%s no longer carries %q; the no-text-layer branch head moved", wildWorkerFile, wildTextLayerBranch)
+	}
+	if field < 0 {
+		t.Errorf("%s no longer carries %q; the unreadable verdict moved", wildWorkerFile, wildUnreadableField)
+	}
+	if branch >= 0 && field >= 0 && branch >= field {
+		t.Errorf("%s carries the unreadable verdict at byte %d and its branch head at %d; the literal must sit INSIDE that branch, not merely somewhere in the file", wildWorkerFile, field, branch)
+	}
+	if !wildUnreadableConstRE.MatchString(extractor) {
+		t.Errorf("%s no longer declares %s; the reason this fixture is NOT classified under was edited", wildExtractorFile, wildUnreadableConstRE)
 	}
 }

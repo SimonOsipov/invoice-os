@@ -69,6 +69,10 @@ function auditCtx(): PlatformCtx {
     user: { tenantName: 'Acme Co' },
     entities: [],
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    // ROUTE-04-03's in-screen filter verb. Present here so every filter row below keeps a
+    // callable seam once ROUTE-04-04 wires the pill to it; a missing member throws
+    // "is not a function" in ~10 rows at once and reads as a screen regression.
+    setAuditInvoiceFilter: vi.fn(),
   } as unknown as PlatformCtx
 }
 

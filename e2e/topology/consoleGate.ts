@@ -24,20 +24,40 @@ import type { Page } from '@playwright/test'
 const APPROVAL_RUN_URL = /\/api\/invoice\/v1\/invoices\/[^/]+\/approval$/
 const RESOURCE_404 = 'status of 404'
 
-export function approvalRun404Dropper(page: Page): (text: string, url: string | undefined) => boolean {
+export type Dropper = (text: string, url: string | undefined) => boolean
+
+// The two-signal mechanism above, parameterised by which URLs are allowed to 404.
+// `urlPattern` is the whole narrowing: a 404 from anywhere else still fails the gate.
+export function expected404Dropper(page: Page, urlPattern: RegExp): Dropper {
   let budget = 0
   page.on('response', (res) => {
-    if (res.status() === 404 && APPROVAL_RUN_URL.test(res.url())) budget += 1
+    if (res.status() === 404 && urlPattern.test(res.url())) budget += 1
   })
 
   return (text, url) => {
     if (!text.includes(RESOURCE_404)) return false
     // A line that names its resource is judged on that alone, so a 404 from anywhere
-    // else is never masked just because an approval 404 happened to occur too.
-    if (url != null && url !== '') return APPROVAL_RUN_URL.test(url)
+    // else is never masked just because an expected 404 happened to occur too.
+    if (url != null && url !== '') return urlPattern.test(url)
     // Nameless line: fall back to the response count, and spend it.
     if (budget === 0) return false
     budget -= 1
     return true
   }
+}
+
+export function approvalRun404Dropper(page: Page): Dropper {
+  return expected404Dropper(page, APPROVAL_RUN_URL)
+}
+
+// ROUTE-02-07 (X-3): a deep link to an id that does not exist for the viewer 404s FOUR
+// times, not once -- LiveInvoiceDetail fires getInvoice, getInvoiceHistory,
+// getSourceDocument and getInvoiceApprovalRun unconditionally on mount
+// (InvoiceDetail.tsx:170-211), and under FORCE RLS all four answer 404 alike for a
+// cross-tenant or absent id. Those 404s ARE that test's premise, so the gate must expect
+// them; scoping the pattern to the ids the test itself deep-links keeps every other 404
+// -- including one on a real invoice -- a failure.
+export function notFoundIdDropper(page: Page, ids: string[]): Dropper {
+  const alternation = ids.map((id) => id.replace(/[^a-zA-Z0-9-]/g, '')).join('|')
+  return expected404Dropper(page, new RegExp(`/api/invoice/v1/invoices/(?:${alternation})(?:[/?]|$)`))
 }

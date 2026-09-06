@@ -5,7 +5,7 @@
 // is arithmetic, and lives here.
 import { describe, expect, it } from 'vitest'
 
-import { approvalRun404Dropper } from './consoleGate'
+import { approvalRun404Dropper, notFoundIdDropper } from './consoleGate'
 
 const APPROVAL_404 = 'Failed to load resource: the server responded with a status of 404 ()'
 const APPROVAL_URL = 'https://gw.test/api/invoice/v1/invoices/9f1c7e2a-0000-0000-0000-000000000001/approval'
@@ -66,5 +66,68 @@ describe('approvalRun404Dropper (AUDIT-09-06 AC-6)', () => {
     expect(dropper(APPROVAL_404, '')).toBe(true)
     expect(dropper(APPROVAL_404, undefined)).toBe(true)
     expect(dropper(APPROVAL_404, undefined), 'the budget is exactly two, not unlimited').toBe(false)
+  })
+})
+
+// The same "still narrow" arithmetic for the ROUTE-02-07 dropper. The property that
+// matters is the second test: an id the spec never deep-linked is never masked, so a
+// regression that 404s a REAL invoice still fails the gate.
+function fakeIdPage(ids: string[]) {
+  const listeners: ResponseListener[] = []
+  const page = { on: (event: string, fn: ResponseListener) => { if (event === 'response') listeners.push(fn) } }
+  return {
+    dropper: notFoundIdDropper(page as unknown as Parameters<typeof notFoundIdDropper>[0], ids),
+    respond(status: number, url: string) {
+      for (const fn of listeners) fn({ status: () => status, url: () => url })
+    },
+  }
+}
+
+const XT_ID = '9f1c7e2a-0000-0000-0000-0000000000aa'
+const RANDOM_ID = '9f1c7e2a-0000-0000-0000-0000000000bb'
+const OTHER_ID = '9f1c7e2a-0000-0000-0000-0000000000cc'
+const NOT_FOUND_404 = 'Failed to load resource: the server responded with a status of 404 ()'
+const INVOICES = 'https://gw.test/api/invoice/v1/invoices'
+
+describe('notFoundIdDropper (ROUTE-02-07 AC-5)', () => {
+  it('drops every one of a deep-linked id own four 404s', () => {
+    const { dropper } = fakeIdPage([XT_ID, RANDOM_ID])
+    for (const id of [XT_ID, RANDOM_ID]) {
+      for (const suffix of ['', '/history', '/source-document', '/approval']) {
+        const url = `${INVOICES}/${id}${suffix}`
+        expect(dropper(NOT_FOUND_404, url), url).toBe(true)
+      }
+    }
+  })
+
+  it('never drops a 404 for an id the spec did not deep-link', () => {
+    const { dropper, respond } = fakeIdPage([XT_ID, RANDOM_ID])
+    respond(404, `${INVOICES}/${XT_ID}`)
+    expect(dropper(NOT_FOUND_404, `${INVOICES}/${XT_ID}`), 'positive control: the budget is live').toBe(true)
+
+    for (const url of [
+      `${INVOICES}/${OTHER_ID}`,
+      `${INVOICES}/${OTHER_ID}/history`,
+      'https://gw.test/api/invoice/v1/entities',
+      'https://gw.test/api/audit/v1/audit-log',
+    ]) {
+      expect(dropper(NOT_FOUND_404, url), url).toBe(false)
+    }
+  })
+
+  it('does not mask a non-404 console line from a listed id', () => {
+    const { dropper } = fakeIdPage([XT_ID])
+    expect(dropper('Uncaught TypeError: x is not a function', `${INVOICES}/${XT_ID}`)).toBe(false)
+  })
+
+  it('spends a nameless 404 only against observed 404s on the listed ids', () => {
+    const { dropper, respond } = fakeIdPage([XT_ID])
+    expect(dropper(NOT_FOUND_404, undefined), 'nothing observed, nothing to spend').toBe(false)
+    respond(404, `${INVOICES}/${OTHER_ID}`)
+    expect(dropper(NOT_FOUND_404, undefined), 'an unlisted 404 is not budget').toBe(false)
+
+    respond(404, `${INVOICES}/${XT_ID}/history`)
+    expect(dropper(NOT_FOUND_404, '')).toBe(true)
+    expect(dropper(NOT_FOUND_404, undefined), 'the budget is exactly one').toBe(false)
   })
 })

@@ -61,14 +61,24 @@ function createMemoryStorage() {
   }
 }
 
-type RenderEntry = { view: View; prefilter: AuditPrefilter | null; jobId: string | null }
+type RenderEntry = {
+  view: View
+  prefilter: AuditPrefilter | null
+  jobId: string | null
+  importedInvoiceId: string | null
+}
 
 let capturedCtx: PlatformCtx | undefined
 const renders: RenderEntry[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
-    renders.push({ view: p.ctx.view, prefilter: p.ctx.auditPrefilter, jobId: p.ctx.extractionJobId })
+    renders.push({
+      view: p.ctx.view,
+      prefilter: p.ctx.auditPrefilter,
+      jobId: p.ctx.extractionJobId,
+      importedInvoiceId: p.ctx.importedInvoiceId,
+    })
     return null
   },
 }))
@@ -165,21 +175,31 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
       capturedCtx!.openImportedInvoice(INVOICE_ID)
     })
     const ctx = requireCtx()
-    expect(window.location.pathname, 'openImportedInvoice must push /invoice').toBe('/invoice')
+    expect(window.location.pathname, 'openImportedInvoice must push /invoices/<id>').toBe(`/invoices/${INVOICE_ID}`)
     expect(window.history.length, 'openImportedInvoice must add exactly one history entry').toBe(lengthBefore + 1)
     expect(ctx.importedInvoiceId, 'the selection atom must name the id it was handed').toBe(INVOICE_ID)
   })
 
-  it('selectInvoice_pushesTheDetailPath', async () => {
+  // N-3: the same one-handler invariant openAuditForInvoice/openExtraction already pin
+  // below, restated for the id navigate() now carries -- the FIRST render with
+  // view === 'detail' must already have importedInvoiceId, not a render later.
+  it('openImportedInvoice_theFirstDetailRenderAlreadyCarriesTheId', async () => {
     await bootAt('/')
-    const lengthBefore = window.history.length
     await act(async () => {
-      capturedCtx!.selectInvoice('INV-1')
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
     })
+    const detailRenders = renders.filter((r) => r.view === 'detail')
+    expect(detailRenders.length, 'the handler never navigated to detail').toBeGreaterThan(0)
+    expect(
+      detailRenders[0]!.importedInvoiceId,
+      'the first render that saw view === detail did not carry the id',
+    ).toBe(INVOICE_ID)
+  })
+
+  it('ctx exposes no selectInvoice key (task-919, ROUTE-02-04, D-4)', async () => {
+    await bootAt('/')
     const ctx = requireCtx()
-    expect(window.location.pathname, 'selectInvoice must push /invoice').toBe('/invoice')
-    expect(window.history.length, 'selectInvoice must add exactly one history entry').toBe(lengthBefore + 1)
-    expect(ctx.selectedId, 'the mock selection atom must name the number it was handed').toBe('INV-1')
+    expect('selectInvoice' in ctx).toBe(false)
   })
 
   it('openAuditForInvoice_pushesAuditWithThePrefilterStillSetInTheSameRender', async () => {
@@ -205,10 +225,12 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
 
   it('openExtraction_pushesExtractionWithTheJobIdInTheSameRender', async () => {
     await bootAt('/')
+    const lengthBefore = window.history.length
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
     })
-    expect(window.location.pathname, 'openExtraction must push /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'openExtraction must push /extraction/<jobId>').toBe(`/extraction/${JOB_A}`)
+    expect(window.history.length, 'openExtraction must add exactly one history entry').toBe(lengthBefore + 1)
 
     const extractionRenders = renders.filter((r) => r.view === 'extraction')
     expect(extractionRenders.length, 'the handler never navigated to the review screen').toBeGreaterThan(0)
@@ -238,12 +260,17 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
       capturedCtx!.openPolicy('policy-1')
     })
     await act(async () => {
-      capturedCtx!.selectInvoice('INV-9')
+      capturedCtx!.openImportedInvoice('99999999-1111-4111-8111-111111111111')
     })
     ctx = requireCtx()
-    expect(ctx.selectedId, 'sanity: selectInvoice must have armed selectedId').toBe('INV-9')
+    expect(ctx.importedInvoiceId, 'sanity: openImportedInvoice must have armed importedInvoiceId').toBe(
+      '99999999-1111-4111-8111-111111111111',
+    )
 
     const lengthBefore = window.history.length
+    // route-02-06, V-5: count pushState calls directly -- the scrub is a replaceState, and
+    // a second push here would mean it regressed into a second navigation.
+    const pushSpy = vi.spyOn(window.history, 'pushState')
     await act(async () => {
       capturedCtx!.switchClient('other-entity-002')
     })
@@ -251,8 +278,8 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
 
     expect(window.location.pathname, 'switchClient must push the dashboard path').toBe('/')
     expect(window.history.length, 'switchClient must add exactly one history entry').toBe(lengthBefore + 1)
+    expect(pushSpy.mock.calls, 'switchClient must call pushState exactly once, not once per atom or writer').toHaveLength(1)
     expect(ctx.reviewBatchIds, 'reviewBatchIds must still be cleared').toEqual([])
-    expect(ctx.selectedId, 'selectedId must still be cleared').toBeNull()
     expect(ctx.importedInvoiceId, 'importedInvoiceId must still be cleared').toBeNull()
     expect(ctx.createStep, 'createStep must still reset to form').toBe('form')
     expect(ctx.openRuleKey, 'openRuleKey must still be cleared').toBeNull()
@@ -327,6 +354,24 @@ describe('AC-5: a DEMO-06 persona switch corrects the URL and adds no entry', ()
     expect(window.history.length, 'a persona switch must add no history entry').toBe(lengthBefore)
     expect(ctx.view, 'the carried view must be invoices, not extraction').toBe('invoices')
   })
+
+  // route-02-06, V-1: the detail-drill-down mirror of the extraction case above. Assertion
+  // only -- the collapse and the id-null boot seeding both come from ROUTE-02-01..05.
+  it('personaSwitch_fromInvoiceDetailLandsOnInvoicesWithNoImportedId', async () => {
+    await bootAt(`/invoices/${INVOICE_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: booting at /invoices/<id> should seed detail').toBe('detail')
+    expect(ctx.importedInvoiceId, 'sanity: the boot id must seed the selection').toBe(INVOICE_ID)
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'detail')
+    })
+    ctx = requireCtx()
+
+    expect(window.location.pathname, 'a persona switch must land the URL on invoices').toBe('/invoices')
+    expect(ctx.view, 'the carried view must be invoices, not detail').toBe('invoices')
+    expect(ctx.importedInvoiceId, 'the drill-down id must not survive the collapse').toBeNull()
+  })
 })
 
 describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
@@ -344,8 +389,9 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
     // Floor: a broken walk (wrong cwd, a mangled grep pattern) returns zero files and
     // reads exactly like a repo with nothing left to fix.
     // TEST-02 merge adds App.frontDoor/App.handOff/App.offlineFallback.test.tsx, the 11th-13th.
-    // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx, the 14th.
-    expect(files, 'the walk must find exactly the fourteen App-rendering test files').toHaveLength(14)
+    // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx and ROUTE-02-05 adds
+    // App.routeDrillDown.test.tsx, the 14th and 15th.
+    expect(files, 'the walk must find exactly the fifteen App-rendering test files').toHaveLength(15)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')
@@ -382,7 +428,9 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
       capturedCtx!.openExtraction(JOB_A)
     })
     let ctx = requireCtx()
-    expect(window.location.pathname, 'sanity: openExtraction must have pushed /extraction').toBe('/extraction')
+    expect(window.location.pathname, 'sanity: openExtraction must have pushed /extraction/<jobId>').toBe(
+      `/extraction/${JOB_A}`,
+    )
     expect(ctx.extractionJobId, 'sanity: the job id was never written').toBe(JOB_A)
 
     await act(async () => {
@@ -475,7 +523,7 @@ describe('QA adversarial: switchClient from /extraction, the combined path+atom 
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
     })
-    expect(window.location.pathname, 'sanity').toBe('/extraction')
+    expect(window.location.pathname, 'sanity').toBe(`/extraction/${JOB_A}`)
     const lengthBefore = window.history.length
 
     await act(async () => {
@@ -537,5 +585,84 @@ describe('QA adversarial: navigating to the current view still pushes (documente
     })
     expect(window.location.pathname).toBe('/invoices')
     expect(window.history.length, 'current behaviour: a same-view nav still adds an entry').toBe(lengthBefore + 1)
+  })
+})
+
+// QA Mode B adversarial (task-919, ROUTE-02-04): D-4 only proved `selectInvoice` is gone
+// from the REAL ctx. AC-2 also claims `selectedId` is gone, but nothing asserted that
+// against the real Workspace-built ctx (only against local test-double stubs, which
+// trivially lack a field never listed in their own literal). Assert it here instead.
+describe('QA adversarial: ctx.selectedId is gone from the real ctx, not just test stubs (task-919)', () => {
+  it('ctx exposes no selectedId key', async () => {
+    await bootAt('/')
+    const ctx = requireCtx()
+    expect('selectedId' in ctx).toBe(false)
+  })
+})
+
+// QA adversarial (route-02-06): the scrub reads window.location.hash at call time, same
+// as every other writer in this seam (routePath(view) + hash) -- a live fragment on the
+// entry being left (e.g. a stale #review hash not yet cleared) must ride along, not drop.
+describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash on the entry being left', () => {
+  it('switchClient_scrubPreservesALiveHashOnTheEntryBeingLeft', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    window.history.replaceState(null, '', window.location.pathname + '#stale-fragment')
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-777')
+    })
+
+    expect(replaceSpy.mock.calls[0]?.[2], 'the scrub is the FIRST replaceState this switch performs').toBe(
+      '/invoices#stale-fragment',
+    )
+  })
+})
+
+// QA adversarial (route-02-06): the scrub fires unconditionally in switchClient, even when
+// `view` carries no id at all -- carryView('invoices') is a no-op collapse, and the scrub
+// must not crash or write something nonsensical for that case.
+describe('QA adversarial (route-02-06): switchClient from an id-less view still runs a sane scrub', () => {
+  it('switchClient_fromAnIdLessViewWritesTheSameSanePathBeforePushingDashboard', async () => {
+    await bootAt('/invoices')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-555')
+    })
+    expect(
+      replaceSpy.mock.calls[0]?.[2],
+      'a view with no drill-down id to scrub still runs the collapse; carryView(invoices) is a no-op',
+    ).toBe('/invoices')
+    expect(window.location.pathname, 'switchClient must still land on the dashboard path').toBe('/')
+  })
+})
+
+// QA adversarial (route-02-06): a second switchClient call reads `view` from the render
+// committed after the first call (not a stale closure from before it), and each call's
+// scrub only touches the entry IT is leaving, not the first switch's already-scrubbed one.
+describe('QA adversarial (route-02-06): two switchClient calls in a row each scrub their own leaving entry', () => {
+  it('switchClient_calledTwiceInARowAddsExactlyTwoEntries', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      capturedCtx!.switchClient('entity-A')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient('entity-B')
+    })
+
+    const ctx = requireCtx()
+    expect(window.history.length, 'two switches must add exactly two entries, not more or fewer').toBe(
+      lengthBefore + 2,
+    )
+    expect(window.location.pathname, 'the second switch must still land on the dashboard path').toBe('/')
+    expect(ctx.extractionJobId, 'the job id must still be cleared after two switches').toBeNull()
   })
 })

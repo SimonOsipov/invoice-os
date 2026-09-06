@@ -54,7 +54,7 @@ describe('AC-3: the seam writers never read location.search', () => {
     const routeSrc = readSrc('src/lib/route.ts')
     const appSrc = readSrc('src/App.tsx')
 
-    const navigateBody = findBody(appSrc, 'function navigate(view: View)')
+    const navigateBody = findBody(appSrc, 'function navigate(view: View, id: string | null = null)')
     const alignmentCommentIdx = appSrc.indexOf('Aligns a boot URL that named no path')
     expect(alignmentCommentIdx, 'mount-alignment anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const alignmentBody = findBody(appSrc, 'useEffect(() => {', alignmentCommentIdx)

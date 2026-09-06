@@ -3,6 +3,9 @@ import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 import { collectErrors } from '../personaSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
+import { login, createEntity, createInvoice, PERSONAS as API_PERSONAS } from '../api/client'
+import { freshTin } from '../api/fixtures'
+import { approvalRun404Dropper } from './consoleGate'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
 // BASE e2e/targets.ts, not this directory's ./targets: topology/targets.ts re-exports
@@ -232,6 +235,91 @@ test("deployed app: Back from the session's first screen leaves for the landing 
   // proves boot replaced that entry rather than pushing a new one.
   await page.goBack()
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-02-08: a Back journey through a REAL invoice detail. The journey's first history
+// entry must be the landing page itself (Decision [back-lives-in-auth-spec]) -- a walk
+// starting at page.goto(APP_URL) would already BE entry one and prove nothing about Back
+// leaving the workspace, the exact trap ROUTE-01's own deploy-gate red hit on this AC shape.
+//
+// Local console gate, not the shared collectErrors() above: opening a real invoice detail
+// fires getInvoiceApprovalRun on mount, which 404s for an invoice with no approval run yet
+// (consoleGate.ts). The three pre-existing Back/Forward tests never open a detail page, so
+// their shared collectErrors() is left untouched.
+test("deployed app: Back from an invoice detail returns to the list, not the landing page", async ({ page }) => {
+  const errors: string[] = []
+  const drop = approvalRun404Dropper(page)
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (drop(msg.text(), msg.location().url)) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+
+  // Fixtures FIRST, before any navigation: the workspace reads its portfolio once at
+  // mount, so an entity created after boot never reaches the company switcher. These are
+  // pure API calls that never touch `page`, so landing stays history entry one.
+  const token = await login(API_PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-02 back journey ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-ROUTE02-BACK-${Date.now()}`
+  await createInvoice(token, {
+    entity_id: entity.id,
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  })
+
+  const landingRes = await page.goto(LANDING_URL)
+  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
+  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  await page.goto(url)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  // Invoices is a CLIENT-scoped surface: the list is filtered to ctx.active.entityId,
+  // which signing in leaves at whatever clients[0] resolves to (portfolio's ORDER BY name
+  // ASC) -- never this fresh entity. Without this the row click below times out.
+  // Same two locators invoice-surfaces.spec.ts's selectEntity uses; not imported, because
+  // pulling one spec's module graph into another registers its tests twice.
+  await page.getByTestId('company-switcher').click()
+  await page.getByTestId('company-switcher-option').filter({ hasText: entity.name }).click()
+
+  const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
+  await nav.getByRole('button', { name: /Invoices/ }).click()
+  await expect(page, 'nav to Invoices did not update the URL').toHaveURL(/\/invoices$/)
+
+  const list = page.getByTestId('invoices-list')
+  await expect(list).toBeVisible()
+  await list.getByText(invoiceNumber, { exact: true }).click()
+  await expect(page, 'the row click did not settle on /invoices/<uuid>').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+  await page.goBack()
+  await expect(page, 'Back from the detail did not restore /invoices').toHaveURL(/\/invoices$/)
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+  // Proves Back stayed IN the workspace rather than walking past this entry to the landing
+  // page -- the URL regex above alone can't distinguish "restored /invoices" from
+  // "coincidentally matches /invoices on some other origin".
+  expect(page.url().startsWith(APP_URL), `expected ${page.url()} to stay on ${APP_URL}`).toBe(true)
+
+  await page.goBack()
+  // dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that
+  // would pass on any trailing-slash path (mirrors the third-Back assertion above).
+  await expect(page, 'second Back did not restore /').toHaveURL(new URL('/', APP_URL).href)
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

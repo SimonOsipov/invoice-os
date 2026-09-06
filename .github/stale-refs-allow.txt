@@ -49,3 +49,12 @@ Credit notes & adjustments
 # Literal and not `file:`: invoice-surfaces.spec.ts carries dozens of live
 # assertions a file-level suppression would blind.
 status-history
+
+# --- route path placeholders ---------------------------------------------
+# `<uuid>` is human placeholder notation, never a runtime string: routePath
+# builds `/invoices/${encodeURIComponent(id)}`, so the producer is an expression
+# and no literal can exist for the scan to find.
+# The one that DID exist was a comment in route.ts describing a drill-down
+# parseRoute REJECTED. ROUTE-02 made the route real and rewrote that comment,
+# so the scan reads the route's arrival as its removal.
+/invoices/<uuid>

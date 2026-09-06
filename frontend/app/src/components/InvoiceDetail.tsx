@@ -28,7 +28,6 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
-import { detailTarget } from '../lib/importReport'
 import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
@@ -82,25 +81,13 @@ import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
 
 export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
-  const { selectedId } = ctx
-
-  // Click-through from the import report (M4-08-05, AC7). This MUST return before the
-  // "no invoice selected" EmptyState below: an imported invoice is a real server UUID,
-  // and rendering the empty state instead would silently drop a valid click-through.
-  // ([click-through-honest-placeholder])
-  // M4-09-05: this branch mounts the live detail surface (LiveInvoiceDetail, below).
-  // M5-09-04: the mock detail branch that used to render beneath this check (fabricated
-  // fiscal record, "Transmit to FIRS", synthesized audit trail) is deleted — selecting no
-  // invoice now renders an honest EmptyState instead of a fabricated one
-  // ([mock-branch-fully-removed]).
-  const target = detailTarget({ selectedId, importedInvoiceId: ctx.importedInvoiceId })
-  if (target.kind === 'imported') {
-    // key={invoiceId}: forces a full remount on invoice SWITCH so the previous invoice's
-    // local state (edit-form field values, staleSinceEdit, revalidateError) doesn't leak
-    // into the next one. The key stays stable while invoiceId is unchanged, so the
-    // in-place history/detail refresh after edit/re-validate within one invoice is
-    // unaffected — only switching invoices remounts.
-    return <LiveInvoiceDetail key={target.invoiceId} ctx={ctx} invoiceId={target.invoiceId} />
+  // key={invoiceId}: forces a full remount on invoice SWITCH so the previous invoice's
+  // local state (edit-form field values, staleSinceEdit, revalidateError) doesn't leak
+  // into the next one. The key stays stable while invoiceId is unchanged, so the
+  // in-place history/detail refresh after edit/re-validate within one invoice is
+  // unaffected — only switching invoices remounts.
+  if (ctx.importedInvoiceId !== null) {
+    return <LiveInvoiceDetail key={ctx.importedInvoiceId} ctx={ctx} invoiceId={ctx.importedInvoiceId} />
   }
 
   return (

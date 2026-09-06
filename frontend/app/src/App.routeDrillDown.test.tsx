@@ -75,7 +75,7 @@ async function bootAt(path: string, opts: { strict?: boolean } = {}) {
   ))
 }
 
-type StubResponse = { ok: boolean; status: number; json: () => Promise<unknown> }
+type StubResponse = { ok: boolean; status: number; statusText?: string; json: () => Promise<unknown> }
 
 // URL-substring dispatch (App.auditPrefilter.test.tsx's routeFetch idiom): the invoice/
 // extraction endpoint under test gets `resp`, everything else (list/dashboard bootstrap
@@ -180,5 +180,71 @@ describe('E-6: a malformed URL segment boots the dashboard, not a crash', () => 
     } finally {
       window.removeEventListener('error', onError)
     }
+  })
+})
+
+// QA adversarial coverage (not in the story's E-1..E-6 table): a 500, a 404 body with no
+// `error` field, and a network-layer rejection -- none of these carry an id either, so the
+// same identical-text and no-stuck-spinner properties must hold for them too.
+describe('E-7: a 500 carries no id either, and parity holds there too', () => {
+  it('drillDown_serverErrorRendersErrorStateAndParityHolds', async () => {
+    const serverError500: StubResponse = {
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: 'internal error' }),
+    }
+    stubFetch('/api/invoice/v1/invoices/', serverError500)
+    await bootAt('/invoices/' + ABSENT_INVOICE_ID)
+    await waitFor(() => screen.getByText('HTTP 500'))
+    const absentText = document.body.textContent ?? ''
+    cleanup()
+
+    stubFetch('/api/invoice/v1/invoices/', serverError500)
+    await bootAt('/invoices/' + TENANT_B_INVOICE_ID)
+    await waitFor(() => screen.getByText('HTTP 500'))
+    const tenantBText = document.body.textContent ?? ''
+
+    expect(absentText, 'a 500 must not leak which id was requested either').toBe(tenantBText)
+    expect(screen.queryByText('Loading invoice…'), 'no spinner should survive a settled 500').toBeNull()
+  })
+})
+
+describe('E-8: a 404 with no error field falls back to statusText, and parity still holds', () => {
+  it('drillDown_missingErrorFieldFallsBackToStatusTextAndStillMatches', async () => {
+    const bareNotFound: StubResponse = { ok: false, status: 404, statusText: 'Not Found', json: () => Promise.resolve({}) }
+    stubFetch('/api/invoice/v1/invoices/', bareNotFound)
+    await bootAt('/invoices/' + ABSENT_INVOICE_ID)
+    await waitFor(() => screen.getByText('HTTP 404'))
+    const absentText = document.body.textContent ?? ''
+    cleanup()
+
+    stubFetch('/api/invoice/v1/invoices/', bareNotFound)
+    await bootAt('/invoices/' + TENANT_B_INVOICE_ID)
+    await waitFor(() => screen.getByText('HTTP 404'))
+    const tenantBText = document.body.textContent ?? ''
+
+    expect(absentText, 'a bare 404 (no error field) must still render identical text for both ids').toBe(tenantBText)
+    expect(absentText, 'must fall back to statusText when the body carries no error field').toContain('Not Found')
+  })
+})
+
+describe('E-9: a network-level rejection settles into ErrorState, not a crash or a stuck spinner', () => {
+  it('drillDown_networkRejectionRendersErrorStateNoCrash', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.includes('/api/invoice/v1/invoices/')) return Promise.reject(new TypeError('Failed to fetch'))
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ entities: [], policies: [], members: [], roles: [], invoices: [], total: 0 }),
+        })
+      }),
+    )
+    await bootAt('/invoices/' + ABSENT_INVOICE_ID)
+    await waitFor(() => screen.getByText('Something went wrong'))
+    expect(screen.queryByText('Loading invoice…'), 'no spinner should survive a settled network rejection').toBeNull()
+    expect(document.querySelector('.apic-loading-spin'), 'no spinner node should survive a settled network rejection').toBeNull()
   })
 })

@@ -59,11 +59,12 @@ function downloadAuditCsv(csv: string, filename: string): Blob {
   return blob
 }
 
-// Consume-once seed for the "Open in Audit ->" hand-off. Read from a LAZY useState
-// initializer below, NEVER from an effect -- an effect keyed on the atom fires the instant
-// Workspace clears it and drops the filter the user just arrived with. `{ preset: 'custom' }`
+// The MOUNT seed for the "Open in Audit ->" hand-off, read from a lazy useState initializer
+// below; the sync effect further down carries a later move of the atom. `{ preset: 'custom' }`
 // with no from/to is auditFilters' own "no date filter" (REMOVE_RANGE): the 30-day default is
-// a pre-applied window and would hide an older invoice's events.
+// a pre-applied window and would hide an older invoice's events. The sync effect below moves
+// only the two invoice members, so it does NOT drop that window -- a divergence between the
+// two paths that ROUTE-04-05 owns, once popstate can move the atom under a live screen.
 function seedFilterState(pre: AuditPrefilter | null): AuditFilterState {
   if (pre == null) return AUDIT_FILTER_DEFAULT
   return {

@@ -274,6 +274,50 @@ describe('the PlatformCtx contract', () => {
   })
 })
 
+// ROUTE-04-04 QA. Every shipped row arms the atom ONCE. Now that it survives the arrival, a
+// second hand-off lands on a screen that is already armed -- a state the consume-once effect
+// made unreachable, and which nothing covered.
+describe('ROUTE-04-04 QA: a second hand-off onto an already-armed Audit', () => {
+  const SECOND_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
+  const SECOND_NUMBER = 'INV-2'
+
+  it('platformCtx_aSecondHandOffCarriesItsOwnInvoiceAndNumber', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+
+    await act(async () => {
+      ctx.openAuditForInvoice(INVOICE_ID, INVOICE_NUMBER)
+    })
+    const mark = renders.length
+    await act(async () => {
+      capturedCtx!.openAuditForInvoice(SECOND_ID, SECOND_NUMBER)
+    })
+
+    const after = renders.slice(mark)
+    expect(after.length, 'vacuity floor: the second hand-off never committed a render').toBeGreaterThan(0)
+    expect(renders[renders.length - 1]!.prefilter, 'the atom must carry the SECOND invoice, number included').toEqual({
+      invoiceId: SECOND_ID,
+      invoiceNumber: SECOND_NUMBER,
+    })
+    // The hazard: navigate's updater keeps prev.invoiceNumber when the param names the same
+    // invoice. A second hand-off names a DIFFERENT one, so a kept number is the first's, and
+    // the Audit pill would read `Invoice INV-1` over invoice INV-2's events.
+    const mixed = after.filter((r) => r.prefilter != null && r.prefilter.invoiceNumber === INVOICE_NUMBER)
+    expect(mixed, `a render paired the new invoice with the old number: ${JSON.stringify(mixed)}`).toHaveLength(0)
+
+    // Each hand-off is a destination of its own, so each is its own history entry.
+    const pushed = pushSpy.mock.calls.map((c) => String(c[2]))
+    expect(pushed.filter((u) => u.startsWith('/audit')), 'two hand-offs, two entries, in order').toEqual([
+      `/audit?invoice=${INVOICE_ID}`,
+      `/audit?invoice=${SECOND_ID}`,
+    ])
+    expect(window.location.pathname + window.location.search, 'and the URL ends on the second').toBe(
+      `/audit?invoice=${SECOND_ID}`,
+    )
+  })
+})
+
 // AUDIT-09-05 QA. The two suites above stop at the seam: this file watched ctx and never the
 // screen, and AuditView.test.tsx renders AuditView with a hand-built ctx object. Nothing
 // asserted that App.tsx's own mount hands the LIVE atom to AuditView at all.
@@ -375,11 +419,11 @@ describe('the App -> AuditView seam', () => {
     expect(screen.queryByTestId('audit-pill-invoice'), 'and must show no invoice pill').toBeNull()
   })
 
-  // AC-8. Measured on this branch: the consume-once effect nulls the atom at mount, so the
-  // NEXT owned-param write rebuilds the URL with auditInvoice: null and silently drops
-  // ?invoice= while the screen keeps rendering filtered. The boot URL survives only because
-  // the mount alignment is declared ABOVE the deleted effect. This is the RENDERED half --
-  // the wire-and-URL half is auditFilter_anotherOwnedParamWriteMustNotDropTheInvoice.
+  // AC-8. The atom has screen lifetime now, so every owned-param write rebuilds the URL from a
+  // still-armed atom and ?invoice= survives. Restoring the deleted clear-on-mount effect reds
+  // this row: that effect nulled the atom at mount, and the NEXT owned-param write then
+  // rebuilt the URL with auditInvoice: null while the screen kept rendering filtered. The
+  // RENDERED half -- the wire half is auditFilter_anotherOwnedParamWriteMustNotDropTheInvoice.
   it('platformCtx_theUrlKeepsMatchingWhatTheAuditScreenRenders', async () => {
     const calls: string[] = []
     window.history.replaceState(null, '', `/audit?invoice=${INVOICE_ID}`)

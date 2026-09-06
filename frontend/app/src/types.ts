@@ -428,8 +428,9 @@ export type PlatformCtx = {
   // This atom and the `invoice` param of the current /audit URL are the same fact: every
   // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null
-  // The extraction job the review screen renders. Like auditPrefilter it has screen lifetime
-  // -- the screen reads it on every render for as long as it is open.
+  // The extraction job the review screen renders, re-read on every render. Longer-lived than
+  // auditPrefilter: it is not a URL param, so navigate never moves it -- switchClient alone
+  // clears it, and /extraction stays reachable by Back.
   extractionJobId: string | null
 
   nav: (id: View, params?: RouteParams) => void

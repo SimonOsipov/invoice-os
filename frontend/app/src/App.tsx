@@ -367,8 +367,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(() =>
     seed.auditInvoice ? { invoiceId: seed.auditInvoice, invoiceNumber: null } : null,
   )
-  // The review screen's job. Deliberately NOT cleared on arrival like auditPrefilter above:
-  // ExtractionReview re-reads it every render, so a consume-once atom strands the screen.
+  // The review screen's job, re-read every render. Longer-lived than auditPrefilter above: it
+  // is not a URL param, so navigate never moves it and switchClient alone clears it.
   const [extractionJobId, setExtractionJobId] = useState<string | null>(null)
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery_] = useState(() => seed.q)

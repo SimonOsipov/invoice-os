@@ -260,16 +260,9 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     errors.push(`pageerror: ${err.message}`)
   })
 
-  const landingRes = await page.goto(LANDING_URL)
-  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
-  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
-
-  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
-  await page.goto(url)
-  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
-
-  // Own entity + invoice per test, over the API, before touching the UI -- same discipline
-  // invoice-surfaces.spec.ts and ROUTE-02-07's cold-boot specs already use.
+  // Fixtures FIRST, before any navigation: the workspace reads its portfolio once at
+  // mount, so an entity created after boot never reaches the company switcher. These are
+  // pure API calls that never touch `page`, so landing stays history entry one.
   const token = await login(API_PERSONAS.A)
   const entity = await createEntity(token, { name: `ROUTE-02 back journey ${Date.now()}`, tin: freshTin() })
   const invoiceNumber = `INV-ROUTE02-BACK-${Date.now()}`
@@ -287,6 +280,14 @@ test("deployed app: Back from an invoice detail returns to the list, not the lan
     total: '1075',
     line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
   })
+
+  const landingRes = await page.goto(LANDING_URL)
+  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
+  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  await page.goto(url)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
 
   // Invoices is a CLIENT-scoped surface: the list is filtered to ctx.active.entityId,
   // which signing in leaves at whatever clients[0] resolves to (portfolio's ORDER BY name

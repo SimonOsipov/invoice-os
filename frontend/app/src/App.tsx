@@ -527,6 +527,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [createStep, entityId, active.entityId])
   // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
+  // It also normalises a URL that DID name a path: unowned params are dropped and the
+  // three owned ones re-emitted from state.
   // Also clears it unconditionally: a persona-switch remount must not inherit a stray one.
   // Deps stay []: a mount alignment, not a mirror --
   // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.

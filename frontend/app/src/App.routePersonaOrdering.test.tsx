@@ -113,7 +113,7 @@ describe('AC-1: no history write performed by the seam ever contains persona=', 
     // empty, and the negative assertion below would pass on a completely broken feature.
     expect(calls.length, 'no history write was ever recorded -- the spy or the mount is broken').toBeGreaterThan(0)
     // QA (route-01-06, closing out -05): a compound net, not two independent guarantees.
-    // Every seam writer is HARDCODED to `routePath(view) + hash` (never reads search), so
+    // Every seam writer builds its URL from `view` plus state, never from search, so
     // this can only go red if BOTH the never-echo rule (guarded statically by
     // routeWriterGuard.test.ts) AND the mount-ordering guarantee (guarded dynamically by
     // ordering_workspaceDoesNotMountWhileThePersonaParamIsLive below) break at once --
@@ -161,8 +161,8 @@ describe('AC-4: ?persona= does not survive the hand-off', () => {
     // QA (route-01-06, closing out -05): checked in TWO places, not one. Asserting only
     // after mountApp() settles is vacuous -- proven by mutation: with the strip effect
     // (App.tsx:1637-1650) neutered outright, this still passed, because Workspace's own
-    // mount-alignment effect (App.tsx:514) rewrites the whole URL from `routePath(view) +
-    // hash` on every mount regardless, incidentally dropping search as a side effect. The
+    // mount-alignment effect (App.tsx:535-543) rewrites the whole URL from the view and the
+    // params that view owns, incidentally dropping an unowned search as a side effect. The
     // check below runs BEFORE Workspace can mount -- render() is synchronous and RTL's
     // implicit act() flushes the strip's effect (declared in App, no signIn to await) before
     // returning, while doSignIn is still in flight -- so it is decoupled from that side

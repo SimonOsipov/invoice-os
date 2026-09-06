@@ -455,4 +455,70 @@ describe('ROUTE-04-02 AC-7: under StrictMode every boot write names one url', ()
   })
 })
 
+describe('ROUTE-04-02 QA adversarial coverage', () => {
+  it('boot_anEmptyOwnedParamIsOmittedRatherThanReEmitted', async () => {
+    await bootAt('/invoices?q=')
+    const ctx = requireCtx()
+    expect(ctx.invoiceQuery, 'an empty q seeds the empty string, not undefined').toBe('')
+    expect(
+      window.location.pathname + window.location.search,
+      'omit-the-default: an empty owned param must produce no query string, not a bare `?q=`',
+    ).toBe('/invoices')
+  })
+
+  it('boot_theDefaultSettingsTabIsOmittedFromTheAlignedUrl', async () => {
+    // Six e2e assertions are `$`-anchored on `/settings` exactly and start depending on
+    // omit-the-default once ROUTE-04-03 repoints navigate at routeUrl.
+    await bootAt('/settings/members')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: /settings/members must seed the settings view').toBe('settings')
+    expect(ctx.settingsTab, 'the explicit default segment still seeds members').toBe('members')
+    expect(window.location.pathname, 'the default tab must be omitted from the aligned path').toBe('/settings')
+    expect(window.location.search, 'the tab is a path segment, never a query param').toBe('')
+  })
+
+  it('boot_aMalformedInvoiceIdNeverReachesTheAtomOrTheAlignedUrl', async () => {
+    await bootAt('/audit?invoice=not-a-uuid')
+    requireCtx()
+    expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
+    expect(ctxRenders[0].view, 'floor: the first logged render must be the mount render').toBe('audit')
+    expect(
+      ctxRenders[0].auditPrefilter,
+      'the codec drops a malformed id, so the atom must never see it',
+    ).toBeNull()
+    expect(
+      window.location.pathname + window.location.search,
+      'a dropped id must not be re-emitted -- the aligned URL is bare /audit',
+    ).toBe('/audit')
+  })
+
+  it('boot_theReviewHashBeatsAnOwnedParamAndTheAlignedUrlCarriesNeither', async () => {
+    const hash = `#review/${REVIEW_ID}`
+    await bootAt(`/invoices?q=acme${hash}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'the review hash must beat the path that owns the param').toBe('create')
+    expect(ctx.createStep, 'the review step must be active').toBe('review')
+    // The term still seeds from the boot path, so leaving review returns to a filtered list;
+    // `create` owns no param, so it cannot appear in the URL while review is on screen.
+    expect(ctx.invoiceQuery, 'the seed reads the boot path, which the hash only overrides for `view`').toBe('acme')
+    expect(window.location.pathname, 'the alignment must correct the path to /create').toBe('/create')
+    expect(window.location.hash, 'the hash must survive the alignment verbatim').toBe(hash)
+    expect(window.location.search, "create owns nothing, so the term must not follow it into the URL").toBe('')
+  })
+
+  it('boot_underStrictModeEveryWriteDropsTheUnownedParamAndKeepsTheOwnedOne', async () => {
+    // AC-7's own fixture (/settings/roles) carries no query, so it cannot see a write that
+    // re-emits `location.search` -- only the alignment runs before the review-hash mirror
+    // keeps the two agreeing here.
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt(`/audit?foo=bar&invoice=${INVOICE_ID}`, { strict: true })
+    requireCtx()
+    const writes = replaceSpy.mock.calls.slice(1).map((call) => call[2])
+    expect(writes.length, 'the boot recorded no write of its own').toBeGreaterThanOrEqual(2)
+    expect([...new Set(writes)], 'every boot write must name the same cleaned URL').toEqual([
+      `/audit?invoice=${INVOICE_ID}`,
+    ])
+  })
+})
+
 

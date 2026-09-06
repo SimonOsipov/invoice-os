@@ -365,13 +365,13 @@ describe('ROUTE-04-02 AC-2: the invoice query seeds, and survives the alignment'
 describe('ROUTE-04-02 AC-3: the audit invoice filter seeds from the url', () => {
   it('boot_theAuditInvoiceFilterSeedsFromTheUrl', async () => {
     await bootAt(`/audit?invoice=${INVOICE_ID}`)
-    requireCtx()
-    // The MOUNT render, not requireCtx(): App.tsx's consume-once effect nulls the atom in
-    // the same commit that seeds it. ROUTE-04-04 deletes that effect and tightens this.
+    // The SETTLED ctx, not ctxRenders[0] (ROUTE-04-04 tightening): the atom now has screen
+    // lifetime, so it must still be armed after the effect phase, not just during the mount
+    // render. The log floor stays as a not-empty sanity on the harness.
     expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
     expect(ctxRenders[0].view, 'floor: the first logged render must be the mount render').toBe('audit')
     expect(
-      ctxRenders[0].auditPrefilter,
+      requireCtx().auditPrefilter,
       'the owned invoice param must seed the whole prefilter atom, invoiceNumber included',
     ).toEqual({ invoiceId: INVOICE_ID, invoiceNumber: null })
     expect(
@@ -404,8 +404,10 @@ describe('ROUTE-04-02 AC-5: a restored destination ignores a live query string',
     const ctx = requireCtx()
     expect(ctx.view, 'the restored destination must still decide the view').toBe('audit')
     expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
+    // The SETTLED ctx on both halves (ROUTE-04-04 tightening). The atom has screen lifetime
+    // now, so "never attached" means never at all, not merely absent by the effect phase.
     expect(
-      ctxRenders[0].auditPrefilter,
+      ctx.auditPrefilter,
       'a query string sitting on the bare root must never attach to a restored path',
     ).toBeNull()
     expect(window.location.search, 'the restored path carries no query').toBe('')
@@ -417,9 +419,8 @@ describe('ROUTE-04-02 AC-5: a restored destination ignores a live query string',
     cleanup()
     sessionStorage.clear()
     await bootAt(`/audit?invoice=${INVOICE_ID}`)
-    const controlRenders = ctxRenders.slice(beforeControl)
-    expect(controlRenders.length, 'the control boot logged no render').toBeGreaterThan(0)
-    expect(controlRenders[0].auditPrefilter, 'control: a live /audit query must still seed the atom').toEqual({
+    expect(ctxRenders.slice(beforeControl).length, 'the control boot logged no render').toBeGreaterThan(0)
+    expect(requireCtx().auditPrefilter, 'control: a live /audit query must still seed the atom').toEqual({
       invoiceId: INVOICE_ID,
       invoiceNumber: null,
     })

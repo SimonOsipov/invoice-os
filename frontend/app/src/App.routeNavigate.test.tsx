@@ -393,8 +393,8 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
 
     expect(ctx.extractionJobId, 'the job id must not survive the company switch').toBeNull()
 
-    // The fence: exactly one atom clears. auditPrefilter was never armed (it never
-    // survives a single commit, decision [company-switch-staleness]) and createStep's
+    // The fence: exactly one atom clears. auditPrefilter was never armed on this journey
+    // (nothing on it reaches /audit, decision [company-switch-staleness]) and createStep's
     // reset to 'form' is switchClient's OWN pre-existing behaviour, unrelated to this fix.
     expect(ctx.auditPrefilter, 'auditPrefilter must behave exactly as it does on main').toBeNull()
     expect(ctx.createStep, 'createStep must behave exactly as it does on main').toBe('form')
@@ -645,8 +645,8 @@ describe('AC-5: openAuditForInvoice pushes the filtered audit URL', () => {
     ).toEqual([`/audit?invoice=${INVOICE_ID}`])
     expect(window.history.length, 'the hand-off adds exactly one entry').toBe(lengthBefore + 1)
 
-    // ctx.auditPrefilter is NOT the oracle here: the consume-once effect (still present
-    // until ROUTE-04-04) nulls the atom in the same commit. Read the render log instead.
+    // The render log, not ctx: the claim is that the FIRST Audit render already carries both
+    // fields, which a settled read cannot distinguish from a later write.
     const auditRenders = renders.filter((r) => r.view === 'audit')
     expect(auditRenders.length, 'the hand-off never navigated to Audit').toBeGreaterThan(0)
     expect(auditRenders[0]!.prefilter, 'the first Audit render must carry BOTH fields').toEqual({
@@ -700,6 +700,48 @@ describe('AC-6: an in-screen audit filter edit replaces', () => {
   })
 })
 
+describe('ROUTE-04-04 AC-8: another owned-param write must not drop the invoice', () => {
+  // setSettingsTab and setInvoiceQuery both rebuild the WHOLE url from state, so they read
+  // the atom for the invoice member. While the atom was consume-once it read null one commit
+  // after boot, and each of them silently dropped ?invoice= from a screen still rendering
+  // filtered. The boot URL survives on main only because the mount alignment is declared
+  // above the consume-once effect -- it is the NEXT write that loses the param.
+  it('auditFilter_anotherOwnedParamWriteMustNotDropTheInvoice', async () => {
+    await bootAt(`/audit?invoice=${INVOICE_ID}`)
+    requireCtx()
+    expect(
+      window.location.pathname + window.location.search,
+      'floor: the mount alignment must keep the invoice on the URL',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+    expect(
+      window.location.pathname + window.location.search,
+      'a settings-tab write on /audit must not drop the invoice param',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    expect(requireCtx().auditPrefilter, 'and must not have consumed the atom either').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: null,
+    })
+
+    // The second owned-param writer, same claim: the two share only the routeUrl call, so one
+    // of them can be fixed while the other still drops it.
+    await act(async () => {
+      capturedCtx!.setInvoiceQuery('')
+    })
+    expect(
+      window.location.pathname + window.location.search,
+      'a query-clear on /audit must not drop the invoice param either',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    expect(requireCtx().auditPrefilter, 'and must not have consumed the atom either').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: null,
+    })
+  })
+})
+
 describe("ROUTE-04-03 blocking fact: navigate's setAuditPrefilter updater must be FUNCTIONAL", () => {
   // openAuditForInvoice knows the invoiceNumber; navigate knows only the id. A plain-object
   // write inside navigate clobbers the number in the same batch, and ROUTE-04-04's AC-6 --
@@ -711,8 +753,9 @@ describe("ROUTE-04-03 blocking fact: navigate's setAuditPrefilter updater must b
     const ctx0 = requireCtx()
     expect(typeof ctx0.setAuditInvoiceFilter, 'PlatformCtx must expose the setAuditInvoiceFilter verb').toBe('function')
 
-    // Arm off-screen: the consume-once effect only fires when view === 'audit', so the pair
-    // survives here and the navigation below is a genuine second commit, not one batch.
+    // Arm off-screen so the navigation below is a genuine second commit, not one batch.
+    // setAuditInvoiceFilter can arm off /audit; the URL then carries no param, because only
+    // audit owns `invoice`. Recorded as a latent divergence, owned by ROUTE-04-05.
     await act(async () => {
       capturedCtx!.setAuditInvoiceFilter(INVOICE_ID, 'INV-1')
     })
@@ -812,9 +855,9 @@ describe('ROUTE-04-03: settingsTab and q are DURABLE, auditInvoice has screen li
 })
 
 // AC-8. Call-site-only, never a bare token: a comment naming a setter is legitimate, and a
-// guard that cannot tell a call from a mention is over-broad. Both counts move again later
-// in this story -- ROUTE-04-04 deletes the consume-once effect (4 -> 3) and ROUTE-04-05 adds
-// the popstate restore (3 -> 4, and 1 -> 2) -- so each bump must be a deliberate edit.
+// guard that cannot tell a call from a mention is over-broad. ROUTE-04-04 has taken the
+// auditPrefilter count from 4 to 3 by deleting the consume-once effect; ROUTE-04-05 takes it
+// back to 4 with the popstate restore (and 1 -> 2) -- each bump must be a deliberate edit.
 const countCalls = (src: string, name: string) => (src.match(new RegExp(`\\b${name}\\(`, 'g')) ?? []).length
 
 describe('AC-8: every owned-param write goes through a URL writer', () => {
@@ -825,8 +868,8 @@ describe('AC-8: every owned-param write goes through a URL writer', () => {
     expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
     expect(
       countCalls(src, 'setAuditPrefilter'),
-      "App.tsx may call setAuditPrefilter from exactly four sites: navigate's functional updater, openAuditForInvoice, setAuditInvoiceFilter and the consume-once effect",
-    ).toBe(4)
+      "App.tsx may call setAuditPrefilter from exactly three sites: navigate's functional updater, openAuditForInvoice and setAuditInvoiceFilter. Each writes the URL in the same block; a fourth site is a write with no URL behind it",
+    ).toBe(3)
     // The useState destructure is `setAuditPrefilter]` -- a `]` sits between the name and
     // the paren, so it is correctly not a call site.
     expect(src, 'sanity: the destructure the count must NOT see').toContain('setAuditPrefilter] = useState')
@@ -906,8 +949,8 @@ describe('QA adversarial: leaving Audit clears the filter atom on an ordinary na
   // away from an armed filter had no oracle.
   it('nav_leavingAuditClearsTheFilterAtomAndEmitsNoParam', async () => {
     await bootAt('/invoices')
-    // Armed off-screen: the consume-once effect (still present until ROUTE-04-04) only fires
-    // on view === 'audit', so the pair survives here.
+    // Armed off-screen: nothing on /invoices clears the atom, so the pair survives here and
+    // the nav below is the only candidate eraser.
     await act(async () => {
       capturedCtx!.setAuditInvoiceFilter(INVOICE_ID, 'INV-1')
     })

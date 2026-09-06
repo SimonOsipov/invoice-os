@@ -5,9 +5,9 @@
 // localStorage, and ctx captured through a mocked Sidebar. VITE_GATEWAY_URL stays unstubbed,
 // so gatewayBase() is null and nothing on any screen fetches.
 //
-// AC-1 is asserted on a RENDER LOG, never on a post-act() read of ctx.auditPrefilter: AuditView
-// mounts in the same commit as the nav and Workspace clears the atom in that commit's effect
-// phase, which act() flushes -- so the post-act read is always null, even when correct.
+// ROUTE-04-04: the atom has SCREEN lifetime -- nothing clears it behind /audit any more, and
+// `navigate` off Audit is its only eraser. AC-1 still reads the RENDER LOG rather than a
+// post-act() ctx read, because its claim is about the FIRST Audit render, not the settled one.
 
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -151,17 +151,17 @@ describe('AC-1: openAuditForInvoice writes the atom and navigates in one commit'
   })
 })
 
-describe('AC-4: the atom is consumed once', () => {
-  it('platformCtx_auditPrefilterIsClearedOnceAuditMounts', async () => {
+describe('AC-4: the atom lives exactly as long as the /audit URL', () => {
+  // Repointed from platformCtx_auditPrefilterIsClearedOnceAuditMounts. Only the MECHANISM
+  // claim (a waitFor that the atom becomes null on arrival) is gone; the behavioural claim it
+  // guarded -- a manual nav to Audit lands unfiltered -- is asserted verbatim below.
+  it('platformCtx_aManualNavToAuditCarriesNoAtom', async () => {
     await renderApp()
     const ctx = requireCtx()
 
     await act(async () => {
       ctx.openAuditForInvoice(INVOICE_ID, INVOICE_NUMBER)
     })
-    await waitFor(() =>
-      expect(capturedCtx!.auditPrefilter, 'the atom must be cleared once Audit has mounted').toBeNull(),
-    )
 
     const mark = renders.length
     await act(async () => {
@@ -201,15 +201,56 @@ describe('AC-4: the atom is consumed once', () => {
     await act(async () => {
       ctx.openAuditForInvoice(INVOICE_ID, INVOICE_NUMBER)
     })
-    await waitFor(() => expect(capturedCtx!.auditPrefilter).toBeNull())
 
-    // Consume-once: armed exactly once, cleared exactly once. A doubled clearing effect that
-    // re-armed, or a seed that wrote the atom again, breaks this and nothing else catches it.
+    // Armed exactly once and never cleared while /audit is the URL. A doubled write, or a
+    // clearing effect that came back, moves one of these two counts.
     const { armed, cleared } = transitions(renders)
     expect(armed, 'the atom must be armed exactly once').toBe(1)
-    expect(cleared, 'the atom must be cleared exactly once').toBe(1)
-    expect(renders[renders.length - 1]!.prefilter, 'the atom must end cleared').toBeNull()
+    expect(cleared, 'nothing may clear the atom while /audit is on screen').toBe(0)
+    expect(renders[renders.length - 1]!.prefilter, 'the atom must still be armed on the last render').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: INVOICE_NUMBER,
+    })
     expect(renders.filter((r) => r.prefilter != null && r.view !== 'audit'), 'no stale atom off the Audit screen').toHaveLength(0)
+  })
+
+  it('platformCtx_theAtomSurvivesARerenderOnAudit', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+
+    await act(async () => {
+      ctx.openAuditForInvoice(INVOICE_ID, INVOICE_NUMBER)
+    })
+
+    // toggleSwitcher is the one ctx verb that commits state without navigating and without
+    // writing the URL, so these are re-renders of the SAME /audit screen, not three arrivals.
+    const mark = renders.length
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        capturedCtx!.toggleSwitcher()
+      })
+    }
+
+    const after = renders.slice(mark)
+    // Floor: without real re-renders the last-render read below is the arrival render again.
+    expect(after.length, 'vacuity floor: the three re-renders never committed').toBeGreaterThanOrEqual(3)
+    expect(after.every((r) => r.view === 'audit'), 'the re-renders must not have navigated').toBe(true)
+    expect(renders[renders.length - 1]!.prefilter, 'a re-render on /audit must not consume the atom').toEqual({
+      invoiceId: INVOICE_ID,
+      invoiceNumber: INVOICE_NUMBER,
+    })
+  })
+
+  it('guard_theConsumeOnceEffectIsGone', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'App.tsx'), 'utf8')
+    expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
+    // Control needle: a surviving setAuditPrefilter call site proves the scan can match at all.
+    expect(src, 'control: the scan must be able to find a setAuditPrefilter write').toContain(
+      'setAuditPrefilter((prev)',
+    )
+    expect(src, 'the consume-once effect must be deleted, not disabled').not.toContain(
+      "if (view === 'audit' && auditPrefilter != null)",
+    )
   })
 })
 
@@ -235,9 +276,9 @@ describe('the PlatformCtx contract', () => {
 
 // AUDIT-09-05 QA. The two suites above stop at the seam: this file watched ctx and never the
 // screen, and AuditView.test.tsx renders AuditView with a hand-built ctx object. Nothing
-// asserted that App.tsx's own mount hands the LIVE atom to AuditView before the clear lands.
+// asserted that App.tsx's own mount hands the LIVE atom to AuditView at all.
 // Mutation-verified: `<AuditView ctx={{...ctx, auditPrefilter: null}} />` and a `key` that
-// remounts AuditView on the clear each left the whole app suite green.
+// remounts AuditView on an atom change each left the whole app suite green.
 describe('the App -> AuditView seam', () => {
   const GATEWAY = 'https://gw.test'
 
@@ -296,8 +337,8 @@ describe('the App -> AuditView seam', () => {
     })
     await waitFor(() => expect(mainAuditCalls(calls).length, 'the Audit screen never fetched').toBeGreaterThan(0))
 
-    // EVERY main request, not just the first: a remount on the clear would issue a second one
-    // carrying the default filter, and asserting only the first would miss it.
+    // EVERY main request, not just the first: a remount would issue a second one carrying the
+    // default filter, and asserting only the first would miss it.
     for (const url of mainAuditCalls(calls)) {
       const p = new URL(url).searchParams
       expect(p.get('invoice_id'), `the Audit screen was not filtered by the hand-off: ${url}`).toBe(INVOICE_ID)
@@ -332,5 +373,41 @@ describe('the App -> AuditView seam', () => {
       expect(screen.queryByTestId('audit-pill-range'), 'control: the pills row rendered').not.toBeNull(),
     )
     expect(screen.queryByTestId('audit-pill-invoice'), 'and must show no invoice pill').toBeNull()
+  })
+
+  // AC-8. Measured on this branch: the consume-once effect nulls the atom at mount, so the
+  // NEXT owned-param write rebuilds the URL with auditInvoice: null and silently drops
+  // ?invoice= while the screen keeps rendering filtered. The boot URL survives only because
+  // the mount alignment is declared ABOVE the deleted effect. This is the RENDERED half --
+  // the wire-and-URL half is auditFilter_anotherOwnedParamWriteMustNotDropTheInvoice.
+  it('platformCtx_theUrlKeepsMatchingWhatTheAuditScreenRenders', async () => {
+    const calls: string[] = []
+    window.history.replaceState(null, '', `/audit?invoice=${INVOICE_ID}`)
+    await renderAppWithGateway(calls)
+    requireCtx()
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('audit-pill-invoice'), 'floor: the boot must land the screen filtered').not.toBeNull(),
+    )
+    expect(
+      window.location.pathname + window.location.search,
+      'floor: the mount alignment must keep the invoice on the URL',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+
+    await act(async () => {
+      capturedCtx!.setSettingsTab('roles')
+    })
+
+    expect(
+      window.location.pathname + window.location.search,
+      'a settings-tab write must not drop the invoice the screen is still showing',
+    ).toBe(`/audit?invoice=${INVOICE_ID}`)
+    expect(screen.queryByTestId('audit-pill-invoice'), 'and the screen is still showing it').not.toBeNull()
+    // Every main request, so a remount that silently widened the log cannot hide here.
+    const main = mainAuditCalls(calls)
+    expect(main.length, 'the Audit screen never fetched').toBeGreaterThan(0)
+    for (const url of main) {
+      expect(new URL(url).searchParams.get('invoice_id'), `a main request lost the filter: ${url}`).toBe(INVOICE_ID)
+    }
   })
 })

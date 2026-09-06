@@ -4,6 +4,7 @@
 package extraction
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,12 +97,15 @@ func TestLooksLikePDF_AcceptsOnlyTheHeaderAtOffsetZero(t *testing.T) {
 		want bool
 	}{
 		{"PDF header at offset zero", []byte("%PDF-1.4\n%rest"), true},
+		{"exactly the five-byte header, nothing trailing", []byte("%PDF-"), true},
 		{"truncated to four bytes", []byte("%PDF"), false},
 		{"header present but not at offset zero", []byte("\n%PDF-1.4"), false},
+		{"header at offset one, minimal", []byte("_%PDF-"), false},
 		{"lowercase header", []byte("%pdf-1.4"), false},
 		{"DOCX magic (PK\\x03\\x04), read off the real invoice.docx fixture", docxBytes, false},
 		{"nil", nil, false},
 		{"empty", []byte(""), false},
+		{"one byte", []byte("%"), false},
 	}
 	if len(tests) == 0 {
 		t.Fatalf("tests is empty; the loop below would assert nothing")
@@ -111,6 +115,14 @@ func TestLooksLikePDF_AcceptsOnlyTheHeaderAtOffsetZero(t *testing.T) {
 		if got := looksLikePDF(tc.in); got != tc.want {
 			t.Errorf("looksLikePDF(%s) = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A five-byte prefix check has no reason to scan past the header; this pins that it doesn't.
+func TestLooksLikePDF_DoesNotScanPastTheHeaderOnALargeBuffer(t *testing.T) {
+	large := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte("x"), 1<<20)...)
+	if !looksLikePDF(large) {
+		t.Errorf("looksLikePDF(1MB buffer with a valid header) = false, want true")
 	}
 }
 

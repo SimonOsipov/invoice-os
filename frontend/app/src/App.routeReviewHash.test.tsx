@@ -169,6 +169,18 @@ describe('AC-1: the two existing history writers are unchanged', () => {
     expect(personaIdx, 'the persona-strip mirror line was not found verbatim -- it may have changed').toBeGreaterThan(-1)
     expect(reviewIdx, 'the two writers must not resolve to the same location').not.toBe(personaIdx)
   })
+
+  // Static, not behavioural: reviewBatchIds is a plain useState value, so its reference is
+  // stable across renders that don't call its setter, and every setter always writes
+  // genuinely new content -- no reachable scenario discriminates `.join(',')` from the bare
+  // array in the dep list. This guard exists to stop a future "simplification" that reruns
+  // that same experiment, sees green, and removes the join.
+  it('guard_theMirrorsDepArrayStillJoinsTheIds', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    const depArray = "}, [view, createStep, reviewBatchIds.join(',')])"
+    const count = src.split(depArray).length - 1
+    expect(count, 'the exact dep-array text must occur exactly once').toBe(1)
+  })
 })
 
 describe('AC-4: entering review from a run rewrites the entry, never pushes', () => {
@@ -335,6 +347,66 @@ describe('AC-3 (omitted branch): leaving review within create falls back to the 
     expect(window.location.pathname, 'leaving review within create must fall back to the bare create path').toBe(
       '/create',
     )
+  })
+})
+
+describe('AC-5: closeCreate, skipUpload and enterByHand leave no review path in the address bar', () => {
+  it('closeCreate_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.closeCreate()
+    })
+
+    expect(requireCtx().view, 'proof of stimulus: closeCreate must actually leave the create view').toBe('invoices')
+    expect(window.location.pathname, 'closeCreate must leave no review path in the address bar').toBe('/invoices')
+  })
+
+  // The only App-level coverage of reviewNavIds's createStep === 'review' clause: skipUpload
+  // never clears reviewBatchIds, so it stays non-empty while createStep moves off 'review' --
+  // unlike restartImport, whose resetImport() clears the ids in the same call and hides a
+  // mutant that drops the clause.
+  it('skipUpload_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.skipUpload()
+    })
+
+    const after = requireCtx()
+    expect(after.createStep, 'proof of stimulus: skipUpload must actually move off the review step').toBe('form')
+    expect(after.reviewBatchIds, 'control: skipUpload must not itself clear the ids').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'skipUpload must leave no review path in the address bar').toBe('/create')
+  })
+
+  // Same discriminator as skipUpload: enterByHand never clears reviewBatchIds either, so
+  // this is the other exit that actually exercises the createStep clause at the App level.
+  it('enterByHand_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.enterByHand(DOCUMENT_ID)
+    })
+
+    const after = requireCtx()
+    expect(after.createStep, 'proof of stimulus: enterByHand must actually move off the review step').toBe('form')
+    expect(after.reviewBatchIds, 'control: enterByHand must not itself clear the ids').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'enterByHand must leave no review path in the address bar').toBe('/create')
   })
 })
 

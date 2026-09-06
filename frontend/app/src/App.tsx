@@ -585,23 +585,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
-  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the WRITE half ---------
-  //
-  // ONE writer, mirroring state to the URL, rather than a `location.hash = …` at every
-  // exit from review. Every one of Finish, `← Invoices`, `Choose another file`, `Enter
-  // one invoice instead`, sidebar nav, switchClient and openCreate would otherwise each
-  // have to remember to clear the hash — and `closeCreate` in particular does not, so a
-  // reload after Finish would bounce straight back into the review screen. Mirroring the
-  // state makes "clear it" structural instead of remembered; it is the same idiom as
-  // App's session mirror below.
-  //
-  // `replaceState`, never `location.hash = …`: assigning adds a history entry the back
-  // button bounces off, and assigning `''` leaves a bare `#` in the URL. The rebuilt URL
-  // keeps `search` — App's `?persona=` strip is the one writer that removes it, and it
-  // preserves the hash in turn, so the two effects compose in either order.
-  //
-  // At boot this rewrites the identical URL (the three initializers above already agree
-  // with the hash it parses), so the first pass is a no-op rather than a navigation.
+  // --- review path — the WRITE half of create's URL ----------------------------------
+  // One writer mirrors state to the URL so no review exit has to remember to clear it.
+  // `replaceState`, not `location.hash = …`, so Back doesn't bounce off a stray entry.
   useEffect(() => {
     // Owns the `create` path only. navigate() pushes before this runs and owns every
     // other view, so the early return is what stops two writers fighting one URL.

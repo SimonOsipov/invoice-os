@@ -276,8 +276,12 @@ var eeRealMisses = map[string]string{
 	// Seven cells the raster page carries in ink and OCR reads cleanly, lost together: with no
 	// invoice number the import quarantines the document and writes no invoices row at all.
 	"wild_scanned_no_number.pdf/issue_date": "the document quarantines for the missing invoice number, so no invoices row carries this value",
-	"wild_scanned_no_number.pdf/buyer_tin":  "the document quarantines for the missing invoice number, so no invoices row carries this value",
-	"wild_scanned_no_number.pdf/buyer_name": "the document quarantines for the missing invoice number, so no invoices row carries this value",
+	// Measured: buyer_tin resolves to nothing at all -- both printed TINs bind to supplier_tin
+	// (rank 0 ambiguous, rank 1) -- so this cell misses on its own, quarantine or not.
+	"wild_scanned_no_number.pdf/buyer_tin": "both printed TINs bind to supplier_tin, so buyer_tin resolves to nothing; the quarantine costs it a second time",
+	// Measured: buyer_name resolves to the address line under BILL TO:, not the name, so this
+	// cell misses on its own too.
+	"wild_scanned_no_number.pdf/buyer_name": "buyer_name resolves to the address line under BILL TO: rather than the name; the quarantine costs it a second time",
 	"wild_scanned_no_number.pdf/currency":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/subtotal":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/vat":        "the document quarantines for the missing invoice number, so no invoices row carries this value",
@@ -644,11 +648,12 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 	for _, want := range expectByLayout {
 		// The byte oracle, branched explicitly rather than routed: an eeOCRLayouts member must
 		// read EXACTLY zero pdfium tokens, which is what makes its membership falsifiable here.
-		// A text-layer layout dropped into that map fails on this clause.
+		// The token count, not its invoice-number readings: a text layout whose number is not
+		// ShapeInvoiceNumber-shaped yields zero readings and would pass the weaker proxy.
 		readingsOf := func(field string) []string { return eePageTokenReadings(t, want.file, field) }
 		if eeOCRLayouts[want.file] {
-			if got := eePageTokenReadings(t, want.file, "invoice_number"); len(got) != 0 {
-				t.Fatalf("%s is in eeOCRLayouts but pdfium reads %v off its own bytes; a layout with a text layer must be scored against its PDF, not against a golden", want.file, got)
+			if got := wildTokenCount(wildPDFiumPages(t, want.file)); got != 0 {
+				t.Fatalf("%s is in eeOCRLayouts but pdfium reads %d token(s) off its own bytes; a layout with a text layer must be scored against its PDF, not against a golden", want.file, got)
 			}
 			readingsOf = func(field string) []string { return eeGoldenTokenReadings(t, want.file, field) }
 		}

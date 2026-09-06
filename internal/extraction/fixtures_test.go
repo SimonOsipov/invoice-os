@@ -3,9 +3,10 @@
 // TestFixtures_MatchTheirGenerator regenerates and byte-compares, so neither side can drift
 // alone. Regenerate a deliberate change with -update and read the diff before committing.
 //
-// No third-party PDF writer: the generator is stdlib plus the package under test, which
-// deps_test.go's assertFenced allows by name. A third-party writer would also make the
-// determinism TestFixtures_GeneratorIsDeterministic pins someone else's property.
+// No third-party PDF writer -- a convention, not a fence: assertFenced allows the extraction
+// import by name and ignores non-module deps entirely, so nothing here reds on one. The reason
+// is that a third-party writer makes TestFixtures_GeneratorIsDeterministic someone else's
+// property. The imports today are stdlib plus the package under test.
 package extraction_test
 
 import (
@@ -1542,5 +1543,91 @@ func TestFixtures_TheNairaVariantAddsNoSecondUpdateFlag(t *testing.T) {
 	}
 	if len(sites["fixtures_test.go"]) != 1 {
 		t.Errorf("the -update flag is registered at %v, want exactly one site in fixtures_test.go", sites)
+	}
+}
+
+// The variant commits no fixture, so TestFixtures_GeneratorIsDeterministic -- which iterates
+// fxCorpus -- never reaches it. Two in-process builds close that gap without committing one.
+func TestFixtures_TheNairaVariantIsByteDeterministic(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		withCMap bool
+	}{
+		{"with the CMap", true},
+		{"without the CMap", false},
+	} {
+		first := fxNairaTextPage(tc.withCMap, fxNairaLines()...)
+		fxAssertWellFormed(t, "naira variant "+tc.name, first)
+		if second := fxNairaTextPage(tc.withCMap, fxNairaLines()...); !bytes.Equal(first, second) {
+			t.Errorf("the naira variant %s built %d and %d byte(s) on two calls; the builder is not deterministic", tc.name, len(first), len(second))
+		}
+	}
+
+	// The control: equal-to-itself holds just as well on a builder that ignores withCMap.
+	if bytes.Equal(fxNairaTextPage(true, fxNairaLines()...), fxNairaTextPage(false, fxNairaLines()...)) {
+		t.Errorf("withCMap true and false built identical bytes; the determinism clauses above hold over a knob that does nothing")
+	}
+}
+
+// The control build drops an object from the slice, and fxAssemble numbers by slice index, so
+// a shrunken slice is where an off-by-one xref or a dangling reference would land.
+func TestFixtures_TheNairaVariantNumbersObjectsByItsSliceLength(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		withCMap bool
+		objects  int
+	}{
+		{"with the CMap", true, 6},
+		{"without the CMap", false, 5},
+	} {
+		raw := fxNairaTextPage(tc.withCMap, fxNairaLines()...)
+		fxAssertWellFormed(t, "naira variant "+tc.name, raw)
+
+		objs := fxObjects(raw)
+		if len(objs) != tc.objects {
+			t.Errorf("the naira variant %s emitted %d object(s), want %d", tc.name, len(objs), tc.objects)
+		}
+		if !bytes.Contains(raw, []byte(fmt.Sprintf("trailer\n<< /Size %d /Root 1 0 R >>", tc.objects+1))) {
+			t.Errorf("the naira variant %s emitted %d object(s) but its trailer does not declare /Size %d", tc.name, tc.objects, tc.objects+1)
+		}
+
+		// Every n 0 R in the file has to name a parsed object, in both builds: withCMap=false
+		// removes the CMap, and a font dict still naming it would dangle.
+		for _, ref := range fxRefRe.FindAllSubmatch(raw, -1) {
+			num, err := strconv.Atoi(string(ref[1]))
+			if err != nil {
+				continue
+			}
+			if _, ok := objs[num]; !ok {
+				t.Errorf("the naira variant %s references object %d, which it never wrote", tc.name, num)
+			}
+		}
+
+		pages := fxPages(t, objs)
+		if len(pages) != 1 {
+			t.Fatalf("the naira variant %s emitted %d page(s), want 1", tc.name, len(pages))
+		}
+		// Both builds share fxPage(fxFontRes(5), 4), so /F1 resolves to object 5 either way.
+		font := fxFontObj(t, objs, pages[0])
+		if !bytes.Contains(font, []byte("/BaseFont /Helvetica")) {
+			t.Errorf("the naira variant %s resolved /F1 to a non-font object: %q", tc.name, font)
+		}
+		if !bytes.Contains(fxContent(t, objs, pages[0]), []byte(fxNaira)) {
+			t.Errorf("the naira variant %s draws no %s; its render and token clauses would be about a page with no naira on it", tc.name, fxNaira)
+		}
+
+		m := fxToUnicodeRe.FindSubmatch(font)
+		if !tc.withCMap {
+			if m != nil {
+				t.Errorf("the naira variant %s still names a /ToUnicode object: %q", tc.name, font)
+			}
+			continue
+		}
+		if m == nil {
+			t.Fatalf("the naira variant %s names no /ToUnicode object: %q", tc.name, font)
+		}
+		if got := string(m[1]); got != strconv.Itoa(tc.objects) {
+			t.Errorf("the font dict names /ToUnicode %s 0 R, want the last object %d -- fxAssemble numbers by slice index, so the appended CMap is object %d", got, tc.objects, tc.objects)
+		}
 	}
 }

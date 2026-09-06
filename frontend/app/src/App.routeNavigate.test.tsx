@@ -674,6 +674,24 @@ describe('AC-4: a settings-tab click replaces', () => {
     expect(pushSpy.mock.calls, 'a tab click must never push').toHaveLength(0)
     expect(ctx.settingsTab, 'state must move with the URL').toBe('roles')
   })
+
+  // The default tab is OMITTED, so returning to Members must write bare /settings. Every
+  // other writer spec drives 'roles', and the two /settings pins in App.routeBoot.test.tsx
+  // cover the boot alignment, not this click -- so nothing else here sees the omit rule.
+  it('settings_returningToMembersWritesTheBarePath', async () => {
+    await bootAt('/settings/roles')
+    expect(requireCtx().settingsTab, 'sanity: the boot must open on Roles').toBe('roles')
+
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.setSettingsTab('members')
+    })
+    const ctx = requireCtx()
+
+    expect(window.location.pathname, 'the default tab must never appear as a segment').toBe('/settings')
+    expect(pushSpy.mock.calls, 'a tab click must never push').toHaveLength(0)
+    expect(ctx.settingsTab, 'state must move with the URL').toBe('members')
+  })
 })
 
 describe('AC-5: openAuditForInvoice pushes the filtered audit URL', () => {

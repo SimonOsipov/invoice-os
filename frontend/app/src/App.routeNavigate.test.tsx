@@ -598,3 +598,70 @@ describe('QA adversarial: ctx.selectedId is gone from the real ctx, not just tes
     expect('selectedId' in ctx).toBe(false)
   })
 })
+
+// QA adversarial (route-02-06): the scrub reads window.location.hash at call time, same
+// as every other writer in this seam (routePath(view) + hash) -- a live fragment on the
+// entry being left (e.g. a stale #review hash not yet cleared) must ride along, not drop.
+describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash on the entry being left', () => {
+  it('switchClient_scrubPreservesALiveHashOnTheEntryBeingLeft', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    window.history.replaceState(null, '', window.location.pathname + '#stale-fragment')
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-777')
+    })
+
+    expect(replaceSpy.mock.calls[0]?.[2], 'the scrub is the FIRST replaceState this switch performs').toBe(
+      '/invoices#stale-fragment',
+    )
+  })
+})
+
+// QA adversarial (route-02-06): the scrub fires unconditionally in switchClient, even when
+// `view` carries no id at all -- carryView('invoices') is a no-op collapse, and the scrub
+// must not crash or write something nonsensical for that case.
+describe('QA adversarial (route-02-06): switchClient from an id-less view still runs a sane scrub', () => {
+  it('switchClient_fromAnIdLessViewWritesTheSameSanePathBeforePushingDashboard', async () => {
+    await bootAt('/invoices')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-555')
+    })
+    expect(
+      replaceSpy.mock.calls[0]?.[2],
+      'a view with no drill-down id to scrub still runs the collapse; carryView(invoices) is a no-op',
+    ).toBe('/invoices')
+    expect(window.location.pathname, 'switchClient must still land on the dashboard path').toBe('/')
+  })
+})
+
+// QA adversarial (route-02-06): a second switchClient call reads `view` from the render
+// committed after the first call (not a stale closure from before it), and each call's
+// scrub only touches the entry IT is leaving, not the first switch's already-scrubbed one.
+describe('QA adversarial (route-02-06): two switchClient calls in a row each scrub their own leaving entry', () => {
+  it('switchClient_calledTwiceInARowAddsExactlyTwoEntries', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      capturedCtx!.switchClient('entity-A')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient('entity-B')
+    })
+
+    const ctx = requireCtx()
+    expect(window.history.length, 'two switches must add exactly two entries, not more or fewer').toBe(
+      lengthBefore + 2,
+    )
+    expect(window.location.pathname, 'the second switch must still land on the dashboard path').toBe('/')
+    expect(ctx.extractionJobId, 'the job id must still be cleared after two switches').toBeNull()
+  })
+})

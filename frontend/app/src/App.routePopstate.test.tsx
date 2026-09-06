@@ -282,6 +282,45 @@ describe('AC-6 (Q6 Back half): Back after a company switch cannot reach the comp
   })
 })
 
+// QA (route-02-06): the detail mirror of AC-6 above. AC-4 names this exact scenario, but
+// the only pre-existing detail-side test (popstate_backToInvoiceAfterACompanySwitchRendersNoStaleSelection,
+// below) hardcodes popTo('/invoice') -- the same vacuous pattern Stage 1 found for the
+// extraction case: deleting the scrub still leaves it green, since it never consults what
+// switchClient actually wrote. Same spy-and-capture fix as V-4, applied to the detail path.
+describe('QA adversarial (route-02-06, AC-4): Back after a company switch from /invoices/<id> cannot reach the company just left', () => {
+  it('popstate_backAfterACompanySwitchFromDetailCannotReachTheCompanyJustLeft', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    let ctx = requireCtx()
+    const preSwitchUrl = window.location.pathname
+    expect(preSwitchUrl, 'sanity: openImportedInvoice must push /invoices/<id>').toBe(`/invoices/${INVOICE_ID}`)
+    expect(ctx.importedInvoiceId, 'sanity: the selection must be armed').toBe(INVOICE_ID)
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-444')
+    })
+    ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'sanity: switchClient must already clear the selection').toBeNull()
+
+    const firstPushOrder = pushSpy.mock.invocationCallOrder[0]
+    expect(firstPushOrder, 'sanity: switchClient must push the dashboard entry').toBeDefined()
+    const preNavReplaces = replaceSpy.mock.calls.filter(
+      (_, i) => replaceSpy.mock.invocationCallOrder[i]! < firstPushOrder!,
+    )
+    const leftBehindUrl =
+      preNavReplaces.length > 0 ? (preNavReplaces[preNavReplaces.length - 1]![2] as string) : preSwitchUrl
+
+    await popTo(leftBehindUrl)
+    ctx = requireCtx()
+    expect(ctx.view, 'Back must restore whatever the scrub actually left behind, not detail').toBe('invoices')
+    expect(ctx.importedInvoiceId, 'the cleared selection must not come back on a popstate restore').toBeNull()
+  })
+})
+
 describe('N-5: Back onto the bare list clears a stale invoice id', () => {
   it('popstate_backFromDetailToInvoicesClearsTheImportedId', async () => {
     await bootAt(`/invoices/${INVOICE_ID}`)

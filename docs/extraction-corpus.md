@@ -263,7 +263,7 @@ at registration, before any test runs.
 
 ## Adding a layout
 
-Five edits, no new test:
+Six edits, no new test:
 
 1. A builder plus an `fxCorpus` entry in `fixtures_test.go`. The files go **flat** in
    `testdata/` with a `corpus_` prefix — `TestFixtures_MatchTheirGenerator` counts
@@ -279,6 +279,11 @@ Five edits, no new test:
    `corpusLayouts` is an unexported identifier in a `_test.go` file of a different package and
    is unreachable from there. `TestEndToEnd_AbsentFixtureFatalsRatherThanSkips` compares them
    against what is committed, so a layout missing from them is a red test.
+6. An `expectByLayout` row in `internal/extraction/endtoend/score_test.go`, carrying one key per
+   `writtenFields` entry — an empty list where the layout prints nothing, plus its reason in
+   `eeAbsentCells`. Move `eeLayoutCount`, `eeWrittenCells` and `eeCorpusHits` with it.
+   `TestEndToEnd_TheScoredSetIsTheRequiredSet` makes edit 5 without this one a red test, so a
+   layout cannot be registered on disk and go unscored end to end.
 
 Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
 in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there
@@ -291,7 +296,7 @@ field's shape and fails on a row naming a value the bytes do not carry.
 
 **Not every committed fixture is a layout.** `learned_two_party.pdf` is generated and
 byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
-prefix so that none of the four edits above apply to it. Do not add a `corpusExpect` row, a
+prefix so that none of the six edits above apply to it. Do not add a `corpusExpect` row, a
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
 section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
 reason: a ruled table plus a deliberately inconsistent totals block, exercised by

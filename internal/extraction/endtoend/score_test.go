@@ -38,9 +38,8 @@ const (
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet, once the wild
 // layouts land.
 //
-// The 16 misses are 12 eeAbsentCells -- fields these layouts never print, which score as misses
-// by design -- plus 4 real ones: stacked/currency, two_column/buyer_tin, two_column/currency,
-// ambiguous_date/currency. EXTR-22..28 own those four; this story only measures them.
+// The 16 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 const (
 	eeCorpusHits  = 32
 	eeCorpusCells = eeWrittenCells
@@ -174,6 +173,17 @@ var eeAbsentCells = map[string]string{
 	"corpus_totals_block.pdf/buyer_tin":    "the totals block carries no buyer",
 	"corpus_totals_block.pdf/buyer_name":   "the totals block carries no buyer",
 	"corpus_totals_block.pdf/currency":     "every amount is bare, with no currency token",
+}
+
+// eeRealMisses are the cells the bytes DO carry and the invoices row does not. Pinned beside
+// eeAbsentCells so the miss set splits into what the corpus can never win and what extraction
+// owes: the hit count alone holds at 32 while one absent cell resolves and one real hit breaks.
+// EXTR-22..28 close these; do not close them here.
+var eeRealMisses = map[string]string{
+	"corpus_stacked_labels.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
+	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
+	"corpus_ambiguous_date.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
+	"corpus_two_column.pdf/buyer_tin":    "the bare TIN label matches supplier_tin only; docs/extraction-corpus.md records it as t1aGaps",
 }
 
 // eeCell is one (layout, field) cell -- the unit the rate counts.
@@ -511,6 +521,124 @@ func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 	for key := range eeAbsentCells {
 		if !absent[key] {
 			t.Errorf("eeAbsentCells names %s, but the table expects a value there -- the reason list has drifted from the table", key)
+		}
+	}
+}
+
+// AC-3. The other direction of the requiredPDFs check: a seventh layout registered on disk but
+// never given an expectByLayout row is scored by nothing at all, and the pinned 48 stays green
+// while the corpus grew.
+func TestEndToEnd_TheScoredSetIsTheRequiredSet(t *testing.T) {
+	if len(requiredPDFs) != eeLayoutCount {
+		t.Fatalf("requiredPDFs holds %d layout(s), expectByLayout scores %d -- a layout on disk that the score never walks is unmeasured, and docs/extraction-corpus.md's \"Adding a layout\" list is short an edit", len(requiredPDFs), eeLayoutCount)
+	}
+	scored := map[string]int{}
+	for _, want := range expectByLayout {
+		scored[want.file]++
+	}
+	for _, file := range requiredPDFs {
+		if scored[file] != 1 {
+			t.Errorf("%s is a required fixture but carries %d expectByLayout row(s), want 1", file, scored[file])
+		}
+	}
+
+	// A blank expected value can never equal a column and would read as a silent always-miss.
+	for _, want := range expectByLayout {
+		for _, field := range writtenFields {
+			for _, v := range want.fields[field] {
+				if strings.TrimSpace(v) == "" {
+					t.Errorf("%s / %s expects a blank value; an empty string is not an expectation, it is a permanent miss", want.file, field)
+				}
+			}
+		}
+	}
+}
+
+// AC-1. eeShapeOf decides what "the page carries this value" means, so a field compared under
+// the wrong normaliser widens or narrows the byte oracle silently. Pinned against the shipped
+// rules rather than a second hand-written list.
+func TestEndToEnd_ShapesAreTheOnesTheShippedRulesUse(t *testing.T) {
+	shipped := map[string]extraction.Shape{}
+	for _, r := range extraction.Tier1Rules {
+		if have, ok := shipped[r.Field]; ok && have != r.Rule.Shape {
+			t.Fatalf("the shipped rules give %q two shapes (%s and %s); there is no single normaliser to pin against", r.Field, have, r.Rule.Shape)
+		}
+		shipped[r.Field] = r.Rule.Shape
+	}
+	// Floor: an empty rule set would satisfy every comparison below.
+	for _, field := range writtenFields {
+		if _, ok := shipped[field]; !ok {
+			t.Fatalf("extraction.Tier1Rules names no rule for %q, so the comparison below proves nothing", field)
+		}
+	}
+	for _, field := range writtenFields {
+		if eeShapeOf[field] != shipped[field] {
+			t.Errorf("eeShapeOf[%q] = %s, but the shipped rules resolve that field under %s", field, eeShapeOf[field], shipped[field])
+		}
+	}
+}
+
+// AC-4. Naming a row is not printing it: the per-field loop can render its numbers the wrong
+// way round and every name-and-marker check still passes, so currency reads 6/2 instead of 2/6
+// to whoever picks the next defect off this report.
+func TestEndToEnd_TheReportPrintsEachRowsOwnNumbers(t *testing.T) {
+	var s eeScore
+	// Every row gets a distinct, asymmetric hits/total, so no row can borrow another's numbers.
+	for i, want := range expectByLayout {
+		s.byLayout = append(s.byLayout, eeScoreRow{name: want.file, hits: i, total: i + 10})
+	}
+	for i, field := range writtenFields {
+		s.byField = append(s.byField, eeScoreRow{name: field, hits: i + 1, total: i + 20})
+	}
+	if len(s.byLayout) == 0 || len(s.byField) == 0 {
+		t.Fatal("the synthetic score carries no rows, so the checks below assert nothing")
+	}
+
+	// Read the rendered line back by name and compare its trailing ratio, so the check is
+	// independent of the column width the renderer chooses.
+	printed := map[string]string{}
+	for _, line := range strings.Split(eeRenderReport(s), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		printed[parts[0]] = parts[1]
+	}
+	for _, r := range slices.Concat(s.byLayout, s.byField) {
+		want := fmt.Sprintf("%d/%d", r.hits, r.total)
+		got, ok := printed[r.name]
+		if !ok {
+			t.Errorf("the report prints no ratio for %s", r.name)
+			continue
+		}
+		if got != want {
+			t.Errorf("the report prints %s for %s, want %s -- the row is rendering numbers that are not its own", got, r.name, want)
+		}
+	}
+}
+
+// AC-6. The two pinned miss lists must partition the misses: overlapping or empty, they stop
+// discriminating an unwinnable cell from an extraction defect.
+func TestEndToEnd_TheKnownMissesArePinnedAndWinnable(t *testing.T) {
+	if len(eeRealMisses) == 0 {
+		t.Fatal("eeRealMisses is empty -- with nothing pinned, any real miss can be absorbed into eeAbsentCells")
+	}
+	if len(eeAbsentCells)+len(eeRealMisses) != eeCorpusCells-eeCorpusHits {
+		t.Errorf("%d absent + %d real = %d pinned miss(es), but the score pins %d",
+			len(eeAbsentCells), len(eeRealMisses), len(eeAbsentCells)+len(eeRealMisses), eeCorpusCells-eeCorpusHits)
+	}
+	for key := range eeRealMisses {
+		if _, ok := eeAbsentCells[key]; ok {
+			t.Errorf("%s is pinned as both absent and a real miss", key)
+		}
+		layout, field, ok := strings.Cut(key, "/")
+		if !ok || !slices.Contains(writtenFields, field) {
+			t.Errorf("%q is not a layout/field cell over the written fields", key)
+			continue
+		}
+		// A real miss is one the bytes can win. An empty expectation belongs in eeAbsentCells.
+		if len(eeExpectedValues(eeCell{layout: layout, field: field})) == 0 {
+			t.Errorf("%s is pinned as a real miss but the table expects nothing there; it is an absent cell, not a defect", key)
 		}
 	}
 }

@@ -231,6 +231,36 @@ func TestRLS_EndToEndScoresTheCorpus(t *testing.T) {
 		}
 	}
 
+	// Which cells miss, not just how many: 32 survives one absent cell resolving while one real
+	// hit breaks, and that trade would retire an EXTR-22..28 defect without anyone noticing.
+	wantMiss := map[string]string{}
+	for key, why := range eeAbsentCells {
+		wantMiss[key] = why
+	}
+	for key, why := range eeRealMisses {
+		wantMiss[key] = why
+	}
+	if len(wantMiss) == 0 {
+		t.Fatal("no miss is pinned, so the comparison below asserts nothing")
+	}
+	gotMiss := map[string]bool{}
+	for _, c := range s.missed {
+		if gotMiss[c.key()] {
+			t.Errorf("%s is counted as a miss twice", c.key())
+		}
+		gotMiss[c.key()] = true
+	}
+	for key := range wantMiss {
+		if !gotMiss[key] {
+			t.Errorf("%s is pinned as a miss and now scores a hit -- re-measure and move it out of eeAbsentCells/eeRealMisses; EXTR-21-09 owns the ratchet.\n%s", key, report)
+		}
+	}
+	for key := range gotMiss {
+		if _, ok := wantMiss[key]; !ok {
+			t.Errorf("%s missed but is pinned as neither an absent cell nor a known extraction defect:\n%s", key, report)
+		}
+	}
+
 	if s.hits != eeCorpusHits {
 		t.Errorf("the six layouts score %d / %d, pinned at %d / %d -- re-measure and update this constant; EXTR-21-09 owns the ratchet.\n%s",
 			s.hits, s.total, eeCorpusHits, eeCorpusCells, report)

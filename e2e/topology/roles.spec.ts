@@ -77,7 +77,7 @@ import {
   UNBACKED,
   type SeededMember,
 } from './settingsFixtures'
-import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // ---------------------------------------------------------------------------------------
 // SEED role cards — derived BY HAND against db/seed.dev.sql's workflow_roles +
@@ -323,8 +323,24 @@ function sidebar(page: Page) {
   return page.locator('aside.pf-sidebar')
 }
 
+// dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that would
+// pass on any trailing-slash path.
+const NAV_URL: Record<string, string | RegExp> = {
+  Overview: new URL('/', APP_URL).href,
+  Invoices: /\/invoices$/,
+  Approvals: /\/approvals$/,
+  Rules: /\/rules$/,
+  Customers: /\/customers$/,
+  Reports: /\/reports$/,
+  Workflows: /\/workflows$/,
+  Clients: /\/clients$/,
+  Audit: /\/audit$/,
+  Settings: /\/settings$/,
+}
+
 async function goTo(page: Page, label: string): Promise<void> {
   await sidebar(page).getByRole('button', { name: label }).click()
+  await expect(page, `goTo(${label}) did not update the URL`).toHaveURL(NAV_URL[label])
 }
 
 /** A Settings tab by its exact label — never a substring, or `Roles` would catch nothing else. */

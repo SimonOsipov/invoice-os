@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
+import { collectErrors } from '../personaSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
@@ -145,6 +146,118 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
   expect(page.url(), `expected a redirect from ${APP_URL} to ${LANDING_URL}`).toContain(LANDING_URL)
 })
 
+// ROUTE-01-08: the only spec that presses Back/Forward. Lives in the sign-in capability
+// file it depends on (docs/e2e-convention.md: organize by capability, not by date).
+//
+// goBack() alone would only prove Chromium reused a bfcached page, not that the router
+// restored the view -- the same trap the strip test above (:111-113) already records for
+// a query param. So every step asserts the URL AND the rendered panel, never one alone.
+test("deployed app: Back walks the workspace's own history instead of leaving it", async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+
+  const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
+  await nav.getByRole('button', { name: 'Invoices' }).click()
+  await expect(page, 'nav to Invoices did not update the URL').toHaveURL(/\/invoices$/)
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  await nav.getByRole('button', { name: 'Audit' }).click()
+  await expect(page, 'nav to Audit did not update the URL').toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+
+  await nav.getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'nav to Settings did not update the URL').toHaveURL(/\/settings$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
+
+  await page.goBack()
+  await expect(page, 'first Back did not restore /audit').toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+
+  await page.goBack()
+  await expect(page, 'second Back did not restore /invoices').toHaveURL(/\/invoices$/)
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  await page.goBack()
+  // dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that
+  // would pass on any trailing-slash path.
+  await expect(page, 'third Back did not restore /').toHaveURL(new URL('/', APP_URL).href)
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: Forward re-applies the view Back left', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  await page.goto(url)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
+  await nav.getByRole('button', { name: 'Invoices' }).click()
+  await expect(page).toHaveURL(/\/invoices$/)
+
+  await nav.getByRole('button', { name: 'Audit' }).click()
+  await expect(page).toHaveURL(/\/audit$/)
+
+  await page.goBack()
+  await expect(page, 'Back did not restore /invoices').toHaveURL(/\/invoices$/)
+  await expect(page.getByTestId('invoices-list')).toBeVisible()
+
+  await page.goForward()
+  await expect(page, 'Forward did not re-apply /audit').toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("deployed app: Back from the session's first screen leaves for the landing page", async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const landingRes = await page.goto(LANDING_URL)
+  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
+  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  await page.goto(url)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  // Landing is the only history entry before the workspace, so a Back landing there
+  // proves boot replaced that entry rather than pushing a new one.
+  await page.goBack()
+  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The Caddyfile:20-24 try_files fallback has served this since M1-06; nothing in the
+// suite has ever cold-booted a top-level path until now.
+test('deployed app: a top-level path is a working deep link', async ({ page }) => {
+  const errors = collectErrors(page)
+
+  const url = `${APP_URL}/audit?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'the deep link did not settle on /audit').toHaveURL(/\/audit$/)
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has('persona'), {
+      message: `?persona= survived the deep link at ${page.url()}`,
+    })
+    .toBe(false)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 // This walk drives the REAL SignInModal (open -> pick a persona -> type the OTP -> Verify),
 // never e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
 // two sides can silently diverge:

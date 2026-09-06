@@ -86,6 +86,7 @@ vi.mock('./components/Sidebar', () => ({
 beforeEach(() => {
   capturedCtx = undefined
   FakeXhr.instances = []
+  window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
   vi.stubGlobal('XMLHttpRequest', FakeXhr)
 })

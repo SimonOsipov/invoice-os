@@ -76,7 +76,7 @@ export const REVIEW_GRID_COLUMNS = '26px 122px minmax(120px,1fr) 92px 114px 124p
 export const REVIEW_GRID_GAP = 9
 
 // `aria-describedby` target for the disabled Re-validate button's reason text. A module
-// const, matching InvoiceDetail.tsx's own REVALIDATE_REASON_ID precedent — safe because
+// const (InvoiceDetail's own copy was retired with the reason nodes in BUG-14-02) — safe because
 // at most one row is ever expanded at a time (ReviewInvoicesTab.tsx's `expandedId`), so
 // this id cannot collide with itself in one document.
 const REVALIDATE_REASON_ID = 'review-row-revalidate-blocked-reason-text'
@@ -135,7 +135,7 @@ export function Row({
   // (task-286) row already followed. Keyboard activation (role/tabIndex/onKeyDown) for
   // BOTH row surfaces is task-302 — no AC of this subtask covers it, and adding it only
   // here would preempt that ticket's own scope rather than close it; a fake `<a href>`
-  // is not an option either way, since this SPA has no router.
+  // is not an option either way, since the URL carries no ids yet.
   return (
     <>
       <div

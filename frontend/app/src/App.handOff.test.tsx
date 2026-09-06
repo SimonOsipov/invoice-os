@@ -98,6 +98,7 @@ beforeEach(() => {
   FakeXhr.instances = []
   vi.stubGlobal('localStorage', createMemoryStorage())
   vi.stubGlobal('XMLHttpRequest', FakeXhr)
+  window.history.replaceState(null, '', '/')
 })
 
 afterEach(() => {

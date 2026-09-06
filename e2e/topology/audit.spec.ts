@@ -32,6 +32,7 @@ const SCROLL_WIDTH = 900
 async function openAudit(page: Page): Promise<void> {
   await page.getByRole('navigation').getByText('Audit', { exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+  await expect(page, 'openAudit did not update the URL').toHaveURL(/\/audit$/)
 }
 
 // The card's own scroll container: AuditTable.tsx's outer div, the element carrying

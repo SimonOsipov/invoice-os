@@ -13,7 +13,7 @@
 // a seeded row suspended with no reset before this file runs (Stage 2 correction S2-5).
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
-import { login, memberships, PERSONAS, createEntity, createInvoice, validateInvoice } from '../api/client'
+import { login, memberships, PERSONAS, createEntity, createInvoice, getInvoice, validateInvoice } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
@@ -407,6 +407,7 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 async function goToInvoices(page: Page): Promise<void> {
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
   await expect(page.getByTestId('invoices-list')).toBeVisible()
+  await expect(page, 'goToInvoices did not update the URL').toHaveURL(/\/invoices$/)
 }
 
 // Scoped to invoices-list so a batch-submit results panel showing the same number
@@ -443,6 +444,18 @@ const ADMIN_OR_REVIEWER_REASON = 'Only an admin or a reviewer can approve or rej
 // pair above: these name the TRANSMIT door.
 const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
 const NOT_APPROVER_TRANSMIT_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+// BUG-14: the six blocked-reason nodes are gone and every control in the cluster now
+// renders at every status and for every role, disabled rather than absent. Folake's subject
+// is db/seed.dev.sql:42 -- her own token is what makes the wire read below HER refusal
+// rather than the seat's ([gates-on-the-wire]).
+const CLUSTER_CONTROLS = ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
+const FOLAKE_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
+
+/** The right-aligned action column: view-ubl, detail-decision-actions and invoice-actions. */
+function actionCluster(page: Page): Locator {
+  return page.getByTestId('invoice-actions').locator('xpath=..')
+}
 
 // copy.ts templates, transcribed (e2e/ has no dependency on frontend/app/src).
 const TOAST_TITLE = 'You are now {full name}'
@@ -545,8 +558,16 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
 
   await openInvoiceRow(page, invoiceNumber)
 
-  const approveReason = page.getByTestId('approve-blocked-reason')
-  await expect(approveReason).toHaveText(STAFFED_TO_STEP_REASON)
+  // BUG-14-04: the seat's refusal, read off the WIRE and asserted against the control's
+  // `title` -- BUG-14-02 deleted approve-blocked-reason, so nothing prints it any more
+  // ([reason-text-disappears]) and the disabled state is the whole message.
+  const seatWire = await getInvoice(token, invoice.id)
+  expect(seatWire.approve_blocked_reason, "the seat's own refusal is the AXIS-2 sentence").toBe(STAFFED_TO_STEP_REASON)
+  await expect(page.getByTestId('detail-approve')).toBeDisabled()
+  await expect(page.getByTestId('detail-approve')).toHaveAttribute('title', seatWire.approve_blocked_reason!)
+  await expect(actionCluster(page), 'the cluster must not print the sentence its title carries').not.toContainText(
+    seatWire.approve_blocked_reason!,
+  )
   expect(
     await page.getByTestId('persona-blocked-note').count(),
     'persona-blocked-note should not render for the seat -- the access-role rung already passed',
@@ -574,11 +595,40 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
   await openInvoiceRow(page, invoiceNumber)
 
   await expect(page.getByTestId('detail-submit')).toBeDisabled()
-  await expect(page.getByTestId('submit-blocked-reason')).toHaveText(NOT_APPROVER_TRANSMIT_REASON)
+  // BUG-14-04: the detail half moved from a rendered node to the control's own `title`
+  // (BUG-14-02 deleted submit-blocked-reason). The cross-surface parity claim above is
+  // unchanged -- both surfaces still carry the same sentence, and it is still the
+  // preparer's, not the seat's.
+  await expect(page.getByTestId('detail-submit')).toHaveAttribute('title', NOT_APPROVER_TRANSMIT_REASON)
 
   await expect(page.getByTestId('detail-approve')).toBeVisible()
-  await expect(page.getByTestId('detail-approve')).toBeDisabled()
-  await expect(approveReason).toHaveText(ADMIN_OR_REVIEWER_REASON)
+
+  // BUG-14-04, R1b (AC-3/AC-6): the ROLE axis of the story's stable-control-set claim,
+  // which the geometry block in invoice-surfaces.spec.ts cannot make -- that block only
+  // ever holds the admin seat. The cluster is the SAME six controls for a preparer as for
+  // the seat; what changes is which ones answer.
+  for (const testid of CLUSTER_CONTROLS) {
+    await expect(page.getByTestId(testid), `${testid} must still resolve for a preparer`).toHaveCount(1)
+  }
+  // The role-gated controls, and only those: approvalGate and submitGate are the two gates
+  // in the cluster that read the caller's role, so a role switch can only move these three
+  // (detail-submit is asserted disabled with its own sentence above). can_edit and
+  // can_view_ubl are status- and content-derived (handlers.go, ubl.Missing) and are
+  // deliberately NOT asserted disabled here -- a preparer may legitimately edit a validated
+  // invoice and read a complete one's UBL, and claiming otherwise would red on correct code.
+  for (const testid of ['detail-approve', 'detail-reject'] as const) {
+    await expect(page.getByTestId(testid), `${testid} must be disabled for a preparer`).toBeDisabled()
+  }
+
+  // Folake's OWN token, not the seat's: the wire read must be the refusal SHE gets. The
+  // sentence is on the wire and in `title` and nowhere on screen (BUG-14-02).
+  const preparerWire = await getInvoice(await login({ ...PERSONAS.A, subject: FOLAKE_SUBJECT }), invoice.id)
+  expect(preparerWire.approve_blocked_reason, "the preparer's own refusal is the access-role sentence").toBe(ADMIN_OR_REVIEWER_REASON)
+  await expect(page.getByTestId('detail-approve')).toHaveAttribute('title', preparerWire.approve_blocked_reason!)
+  await expect(actionCluster(page), 'the cluster must not print the preparer refusal either').not.toContainText(
+    preparerWire.approve_blocked_reason!,
+  )
+
   await expect(page.getByTestId('persona-blocked-note')).toHaveText(
     'Signed in as Folake Adesina — a Preparer. Switch to a Reviewer to act on this step.',
   )
@@ -596,6 +646,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await signInAs(page, 'firm')
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
 
   const membersTable = page.getByTestId('members-table')
@@ -612,6 +663,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await page.getByTestId('persona-toast-dismiss').click()
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(membersTable).toBeVisible()
   await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)

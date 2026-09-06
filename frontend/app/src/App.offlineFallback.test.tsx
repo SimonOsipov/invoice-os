@@ -50,6 +50,7 @@ beforeEach(() => {
   capturedCtx = undefined
   vi.stubGlobal('localStorage', createMemoryStorage())
   signInMock.mockClear()
+  window.history.replaceState(null, '', '/')
   // App.tsx strips ?persona= from the URL via replaceState once consumed (App.tsx:1615-
   // 1620), and jsdom's window persists across tests in this file -- restore it every time
   // or only the first test would ever see the deep-link param.

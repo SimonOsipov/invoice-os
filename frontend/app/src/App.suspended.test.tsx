@@ -83,6 +83,7 @@ beforeEach(() => {
   capturedCtx = undefined
   capturedOnSuspended = undefined
   capturedOnSignOut = undefined
+  window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
 })
 

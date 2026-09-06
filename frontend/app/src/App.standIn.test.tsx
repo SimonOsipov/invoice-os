@@ -91,6 +91,7 @@ function createMemoryStorage() {
 
 beforeEach(() => {
   capturedCtx = undefined
+  window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
   signInMock.mockClear()
 })

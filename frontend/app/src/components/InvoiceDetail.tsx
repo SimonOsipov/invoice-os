@@ -3,7 +3,8 @@
 // rejection reasons, the Edit / Re-validate actions bar + inline edit mode, failed dead
 // end, the five-node state strip) fetched from the gateway; otherwise renders an honest
 // EmptyState ("No invoice selected"). INVED-01-07 split the former fused "Fix & re-validate" card
-// into two independently-gated actions ([actions-visibility], [edit-ux]). The
+// into two independently-gated actions ([edit-ux]); the bar holding them is always present,
+// each control disabled off its own wire flag ([actions-visibility]). The
 // Platform.dc.html-ported mock detail branch — fabricated fiscal record (IRN/CSID/QR),
 // the "Transmit to FIRS" affordance, synthesized audit trail, and mock validation/totals
 // — was removed in M5-09-04 ([mock-branch-fully-removed]); the real fiscal record and APP
@@ -155,26 +156,6 @@ function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[]
     line_tax: it.line_tax ?? '',
   }))
 }
-
-// `aria-describedby` target for the disabled Re-validate button's reason text. A module
-// const rather than useId(): InvoiceDetail renders exactly one LiveInvoiceDetail at a time
-// (it returns a single element), so this id cannot collide with itself in one document.
-const REVALIDATE_REASON_ID = 'revalidate-blocked-reason-text'
-
-// Same rationale as REVALIDATE_REASON_ID above; a distinct id so the two disabled buttons'
-// aria-describedby targets never collide on a rejected invoice, where both render together.
-const SUBMIT_REASON_ID = 'submit-blocked-reason-text'
-
-// Same rationale again; a third distinct id, so no two disabled controls'
-// aria-describedby targets collide when they render together.
-const VIEW_UBL_REASON_ID = 'view-ubl-blocked-reason-text'
-
-// Same rationale again; a fourth distinct id, for the resolve-outside button.
-const RESOLVE_OUTSIDE_REASON_ID = 'resolve-outside-blocked-reason-text'
-
-// Same rationale again; a fifth and sixth distinct id, for the Approve/Reject pair.
-const APPROVE_REASON_ID = 'approve-blocked-reason-text'
-const REJECT_REASON_ID = 'reject-blocked-reason-text'
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
   const base = gatewayBase()
@@ -633,69 +614,41 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>{inv.buyer_name ?? '—'} · {fmtDate(inv.issue_date ?? inv.created_at)}</p>
           </div>
 
-          {/* The actions bar ([actions-visibility], INVED-01-07). `inv.can_edit` is the
-              ONE and ONLY gate on it, read straight off the wire ([gates-on-the-wire]) --
-              this component holds no status list of its own for these two actions, which
-              is the whole point of the story: the backend derives both flags from
-              legalTransitions (canEdit/canRevalidate, store.go:919-960), so a lifecycle
-              change can never leave the SPA showing an action the machine refuses. On
-              queued/submitted/accepted/failed can_edit is false and nothing here renders,
-              leaving the failed dead-end card as the whole story on a failed invoice.
-              `!editing` hides the bar while the inline editor owns the screen; it returns
-              on Save or Cancel ([D-actions-hidden-while-editing]).
-
-              Why `can_edit` ALONE and not `can_edit || can_revalidate`: canRevalidate is
-              draft-only and canEdit yields {draft, validated, rejected} (store.go:940/960),
-              so `can_revalidate` IMPLIES `can_edit` -- the `||` arm is unreachable today,
-              and adding it would erase AC #7's intent that NEITHER action renders past the
-              editable states. Widening the gate is a deliberate human decision, guarded on
-              the backend by TestCanRevalidate_AgreesWithThePromotionEdge; it must not be
-              pre-empted here by a defensive `||`. Submit nests inside this same gate too,
-              independently controlled by `inv.can_submit` -- see TestCanSubmit_ImpliesCanEdit. */}
-          {/* Outer column wraps the can_edit-gated bar AND the submit skip/error banners
-              together, so both stay in one right-aligned flex item ([D-actions-column]).
-              The banners live OUTSIDE the `invoice-actions` gate on purpose: a submit that
-              lands can flip can_edit to false on refetch (e.g. a duplicate_request skip on
-              an invoice a PRIOR request already queued), and the banner describing that
-              outcome must still render -- [never-report-success-on-a-skip] is not allowed
-              to depend on the record still being editable afterward. */}
+          {/* Always present ([actions-visibility]); each control disables off its own wire flag
+              ([gates-on-the-wire]); `!editing` hides it ([D-actions-hidden-while-editing]). canEdit/canRevalidate: store.go:1536-1538 / :1558. */}
+          {/* Outer column wraps the actions bar AND the submit skip/error banners together,
+              so both stay in one right-aligned flex item ([D-actions-column]). The banners
+              live OUTSIDE the `invoice-actions` gate on purpose: the bar unmounts while the
+              inline editor owns the screen, and the banner describing a skipped submit must
+              still render -- [never-report-success-on-a-skip] is not allowed to depend on
+              the bar being mounted. */}
           {(!editing || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
-              {/* The canonical document, always offered -- NOT behind `can_edit` like the bar
-                  below ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
-                  completeness, not lifecycle, and a compliance user needs the document most on
-                  queued/submitted/accepted/failed, where that bar is gone. Same four disabled
-                  layers as :523-542, minus `filter: 'none'` -- that neutralises
-                  .v2-btn-primary's brightening :hover (app-layer.css:213); .v2-btn-ghost's
-                  :hover (:215) sets no filter. Hidden while `editing`
-                  ([ubl-hidden-while-editing]): the form is dirty and the server would render
-                  the STORED record. A fragment, never a wrapping div -- a wrapper would fuse
-                  button and reason into one flex item of this column. */}
+              {/* The canonical document, always offered -- and OUTSIDE the bar below
+                  ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
+                  completeness, not lifecycle, so it does not follow the bar's flags on
+                  queued/submitted/accepted/failed, where every action in that bar is
+                  disabled. Same two disabled layers as Re-validate below, minus
+                  `filter: 'none'` -- `.v2-btn-ghost`'s :hover (app-layer.css:215) sets no
+                  filter. Hidden while `editing` ([ubl-hidden-while-editing]): the form is
+                  dirty and the server would render the STORED record. */}
               {!editing && (
-                <>
-                  <button
-                    type="button"
-                    data-testid="view-ubl"
-                    onClick={() => setUblOpen(true)}
-                    disabled={!inv.can_view_ubl}
-                    title={inv.ubl_blocked_reason ?? undefined}
-                    aria-describedby={inv.ubl_blocked_reason != null ? VIEW_UBL_REASON_ID : undefined}
-                    className="v2-btn v2-btn-ghost pf-btn"
-                    style={{
-                      height: 32,
-                      padding: '0 14px',
-                      fontSize: 13,
-                      ...(!inv.can_view_ubl ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                    }}
-                  >
-                    <span style={{ display: 'inline-flex' }}>{docGlyph2}</span> View UBL/XML
-                  </button>
-                  {inv.ubl_blocked_reason != null && (
-                    <div id={VIEW_UBL_REASON_ID} data-testid="view-ubl-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {inv.ubl_blocked_reason}
-                    </div>
-                  )}
-                </>
+                <button
+                  type="button"
+                  data-testid="view-ubl"
+                  onClick={() => setUblOpen(true)}
+                  disabled={!inv.can_view_ubl}
+                  title={!inv.can_view_ubl ? (inv.ubl_blocked_reason ?? undefined) : undefined}
+                  className="v2-btn v2-btn-ghost pf-btn"
+                  style={{
+                    height: 32,
+                    padding: '0 14px',
+                    fontSize: 13,
+                    ...(!inv.can_view_ubl ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
+                  }}
+                >
+                  <span style={{ display: 'inline-flex' }}>{docGlyph2}</span> View UBL/XML
+                </button>
               )}
               {/* The decision pair, gated on `!editing` alone like View UBL above -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
@@ -705,9 +658,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   two buttons side by side need a flex row, same pattern as
                   `invoice-actions`'s own inner row below -- but the wrapper itself sits
                   outside `invoice-actions`, never inside it, so it survives that div's
-                  disappearance. Same four disabled layers as View UBL/Re-validate/Submit
-                  above; Approve additionally needs `filter: 'none'` (`.v2-btn-primary`),
-                  Reject (ghost) does not. */}
+                  disappearance. Same two disabled layers as View UBL/Re-validate/Submit;
+                  Approve additionally needs `filter: 'none'` (`.v2-btn-primary`), Reject
+                  (ghost) does not. */}
               {!editing && (
                 <>
                   <div data-testid="detail-decision-actions" style={{ display: 'flex', gap: 8 }}>
@@ -721,8 +674,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         data-testid="detail-approve"
                         onClick={() => toApprovePhase({ type: 'arm' })}
                         disabled={!inv.can_approve}
-                        title={inv.approve_blocked_reason ?? undefined}
-                        aria-describedby={inv.approve_blocked_reason != null ? APPROVE_REASON_ID : undefined}
+                        title={!inv.can_approve ? (inv.approve_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-primary pf-btn"
                         style={{
                           height: 32,
@@ -774,14 +726,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       data-testid="detail-reject"
                       onClick={() => setRejectOpen(true)}
                       disabled={!inv.can_reject || rejectOpen}
-                      title={inv.reject_blocked_reason ?? undefined}
-                      aria-describedby={
-                        inv.reject_blocked_reason == null
-                          ? undefined
-                          : inv.reject_blocked_reason === inv.approve_blocked_reason
-                            ? APPROVE_REASON_ID
-                            : REJECT_REASON_ID
-                      }
+                      title={!inv.can_reject ? (inv.reject_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
                         height: 32,
@@ -793,17 +738,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       {DETAIL_DECISION_COPY.reject}
                     </button>
                   </div>
-                  {inv.approve_blocked_reason != null && (
-                    <div id={APPROVE_REASON_ID} data-testid="approve-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {inv.approve_blocked_reason}
-                    </div>
-                  )}
                   {demoBlockedMember != null && <BlockedByRoleNote member={demoBlockedMember} />}
-                  {inv.reject_blocked_reason != null && inv.reject_blocked_reason !== inv.approve_blocked_reason && (
-                    <div id={REJECT_REASON_ID} data-testid="reject-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {inv.reject_blocked_reason}
-                    </div>
-                  )}
                   {/* Founder-pinned copy, verbatim (DETAIL_DECISION_COPY) -- same placement
                       and styling as detail-submit-confirm-prompt below. */}
                   {approvePhase !== 'idle' && (
@@ -872,46 +807,50 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   )}
                 </>
               )}
-              {inv.can_edit && !editing && (
+              {!editing && (
                 <div data-testid="invoice-actions" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button
                       type="button"
                       data-testid="edit-toggle"
-                      onClick={() => setEditing(true)}
+                      // Second line of defence, like handleSubmit's own gate: since the bar
+                      // mounts at every status, `disabled` is otherwise the only barrier.
+                      onClick={() => {
+                        if (inv.can_edit) setEditing(true)
+                      }}
+                      disabled={!inv.can_edit}
                       className="v2-btn v2-btn-primary pf-btn"
-                      style={{ height: 32, padding: '0 14px', fontSize: 13 }}
+                      style={{
+                        height: 32,
+                        padding: '0 14px',
+                        fontSize: 13,
+                        ...(!inv.can_edit ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed', filter: 'none' } : null),
+                      }}
                     >
                       Edit
                     </button>
-                    {/* Disabled-with-reason rather than hidden ([revalidate-visibility]) --
-                        hiding it makes the edit -> demote -> re-validate loop undiscoverable.
-                        FOUR layers, all load-bearing, because a disabled button gets NO styling
-                        for free in this codebase: packages/design-tokens/*.css contains zero
-                        `:disabled` rules, and `.v2-btn-ghost` (app-layer.css:214) sets
-                        background/color explicitly with a :hover rule (:215) that is NOT guarded
-                        by `:not(:disabled)`.
+                    {/* Disabled rather than hidden ([revalidate-visibility]) -- hiding it makes
+                        the edit -> demote -> re-validate loop undiscoverable. TWO layers, the
+                        recipe every control in this cluster follows, because a disabled button
+                        gets NO styling for free here: packages/design-tokens/*.css has zero
+                        `:disabled` rules and `.v2-btn-ghost` (app-layer.css:214) carries a
+                        :hover (:215) that is NOT guarded by `:not(:disabled)`.
                         (1) the real HTML `disabled` attribute -- genuinely unclickable;
-                        (2) the inline background/color/cursor swap below, which both mutes the
-                            button and, being inline, outranks that unguarded :hover rule so a
-                            disabled button stops reacting to the pointer. Treatment copied from
-                            CreateUpload.tsx:277-284 (layers (1)+(2) only there -- no reason text,
-                            no aria), the repo's shipped PERSISTENT disabled gating; deliberately
-                            NOT InvoicesList.tsx:347's `opacity`, which is a sub-second in-flight
-                            state and provably does not suppress the hover swap (Surface Conflicts
-                            -- one precedent picked, not blended);
-                        (3) the visible sibling text below, carrying the backend's reason
-                            verbatim -- the only layer a keyboard/screen-reader user and a
-                            Playwright text assertion can both reach, since a disabled button is
-                            out of the tab order;
-                        (4) title + aria-describedby, as ADDITIONS to (3), never the sole carrier. */}
+                        (2) the inline background/color/cursor swap below, which mutes the button
+                            and, being inline, outranks that unguarded :hover so a disabled button
+                            stops reacting to the pointer. Copied from CreateUpload.tsx:277-284,
+                            the repo's shipped PERSISTENT disabled gating; deliberately NOT
+                            InvoicesList.tsx:347's `opacity`, a sub-second in-flight state that
+                            does not suppress the hover swap (Surface Conflicts -- one precedent
+                            picked, not blended).
+                        `title` rides along ([title-survives]) but only while the WIRE says blocked,
+                        never on an enabled control and never on a transient in-flight disable. */}
                     <button
                       type="button"
                       data-testid="revalidate"
                       onClick={handleRevalidate}
                       disabled={revalidateDisabled}
-                      title={inv.revalidate_blocked_reason ?? undefined}
-                      aria-describedby={inv.revalidate_blocked_reason != null ? REVALIDATE_REASON_ID : undefined}
+                      title={!inv.can_revalidate ? (inv.revalidate_blocked_reason ?? undefined) : undefined}
                       className="v2-btn v2-btn-ghost pf-btn"
                       style={{
                         height: 32,
@@ -926,9 +865,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     </button>
                     {/* Inline arm -> confirm, not a modal ([no-modal], ReviewInvoicesTab.tsx file
                         header) -- the second stage renders below, in this same actions column.
-                        Always rendered, disabled-with-reason rather than hidden when
+                        Always rendered, disabled rather than hidden when
                         `!inv.can_submit` ([revalidate-visibility], same convention as Re-validate
-                        above) -- the same four layers, plus `filter: 'none'`: Submit is
+                        above) -- the same two layers, plus `filter: 'none'`: Submit is
                         `.v2-btn-primary`, whose unguarded `:hover` (app-layer.css:213) also sets
                         `filter: brightness(1.22)`, which the ghost recipe above never had to
                         neutralise. A disabled button emits no click, so the arm/confirm flow
@@ -940,8 +879,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           data-testid="detail-submit"
                           onClick={() => toSubmitPhase({ type: 'arm' })}
                           disabled={!inv.can_submit}
-                          title={inv.submit_blocked_reason ?? undefined}
-                          aria-describedby={inv.submit_blocked_reason != null ? SUBMIT_REASON_ID : undefined}
+                          title={!inv.can_submit ? (inv.submit_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
                             height: 32,
@@ -987,25 +925,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         </>
                       )}
                   </div>
-                  {/* The backend's copy, verbatim ([revalidate-reason-from-backend]). The wire
-                      guarantees it is non-null exactly when can_edit && !can_revalidate
-                      (lib/invoices.ts:217-218); if it is somehow null we render NOTHING rather
-                      than invent a fallback string the SPA has no authority to author. */}
-                  {inv.revalidate_blocked_reason != null && (
-                    <div id={REVALIDATE_REASON_ID} data-testid="revalidate-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {inv.revalidate_blocked_reason}
-                    </div>
-                  )}
-                  {/* Same convention, for Submit ([gates-on-the-wire]). The wire guarantees
-                      submit_blocked_reason != null implies !can_submit; the converse does NOT
-                      hold, so key off the reason alone. Reachability is still the bar's
-                      can_edit gate above: a non-approver's sentence arrives on queued too and
-                      deliberately renders nowhere, there being no Submit button to explain. */}
-                  {inv.submit_blocked_reason != null && (
-                    <div id={SUBMIT_REASON_ID} data-testid="submit-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5, textAlign: 'right' }}>
-                      {inv.submit_blocked_reason}
-                    </div>
-                  )}
                   {/* Genuine-failure surface, moved here from the deleted fused card. Style
                       unchanged; only the card-relative `margin` is dropped, since the column's
                       own `gap: 8` now does that spacing. */}
@@ -1217,17 +1136,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       </div>
                       {/* Re-resolving is legal (the wire's can_resolve_outside does not go
                           false once resolved), so Undo reads the same flag as the mark
-                          button below rather than a separate one. Same reason wiring as
-                          `resolve-outside` below (Core AC #4, disabled-with-reason, never
-                          hidden) -- reusing RESOLVE_OUTSIDE_REASON_ID/its testid is safe
-                          because resolved and unresolved never render at once. */}
+                          button below rather than a separate one. Disabled, never hidden
+                          (Core AC #4). */}
                       <button
                         type="button"
                         data-testid="resolve-outside-undo"
                         onClick={() => void handleUndoResolveOutside()}
                         disabled={!inv.can_resolve_outside || undoing}
-                        title={inv.resolve_outside_blocked_reason ?? undefined}
-                        aria-describedby={inv.resolve_outside_blocked_reason != null ? RESOLVE_OUTSIDE_REASON_ID : undefined}
+                        title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
                         className="v2-btn v2-btn-ghost pf-btn"
                         style={{
                           height: 32,
@@ -1239,11 +1155,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                       >
                         {RESOLVE_OUTSIDE_COPY.undoLabel}
                       </button>
-                      {inv.resolve_outside_blocked_reason != null && (
-                        <div id={RESOLVE_OUTSIDE_REASON_ID} data-testid="resolve-outside-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-                          {inv.resolve_outside_blocked_reason}
-                        </div>
-                      )}
                     </>
                   ) : (
                     <>
@@ -1261,16 +1172,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           className="pf-input"
                           style={{ flex: '1 1 220px', minWidth: 160, height: 32, fontSize: 12.5 }}
                         />
-                        {/* Same four-layer disabled recipe as Submit (:573-590) -- `filter:
-                            'none'` is mandatory: this is `.v2-btn-primary`, whose unguarded
-                            `:hover` (app-layer.css:213) sets `filter: brightness(1.22)`. */}
+                        {/* Same two-layer disabled recipe as Submit -- `filter: 'none'` is
+                            mandatory: this is `.v2-btn-primary`, whose unguarded `:hover`
+                            (app-layer.css:213) sets `filter: brightness(1.22)`. */}
                         <button
                           type="button"
                           data-testid="resolve-outside"
                           onClick={() => void handleResolveOutside()}
                           disabled={resolveOutsideDisabled}
-                          title={inv.resolve_outside_blocked_reason ?? undefined}
-                          aria-describedby={inv.resolve_outside_blocked_reason != null ? RESOLVE_OUTSIDE_REASON_ID : undefined}
+                          title={!inv.can_resolve_outside ? (inv.resolve_outside_blocked_reason ?? undefined) : undefined}
                           className="v2-btn v2-btn-primary pf-btn"
                           style={{
                             height: 32,
@@ -1285,12 +1195,6 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           {RESOLVE_OUTSIDE_COPY.label}
                         </button>
                       </div>
-                      {/* The backend's copy, verbatim -- never an SPA-authored fallback. */}
-                      {inv.resolve_outside_blocked_reason != null && (
-                        <div id={RESOLVE_OUTSIDE_REASON_ID} data-testid="resolve-outside-blocked-reason" style={{ fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-                          {inv.resolve_outside_blocked_reason}
-                        </div>
-                      )}
                     </>
                   )}
                   {/* Outside the resolved/unresolved ternary on purpose: a failed

@@ -70,6 +70,7 @@ function createMemoryStorage() {
 beforeEach(() => {
   capturedCtx = undefined
   renders.length = 0
+  window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
 })
 

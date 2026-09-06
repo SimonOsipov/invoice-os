@@ -6008,6 +6008,7 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
   // count -- this entity was created for this run and the list is narrowed to it server-side --
   // so a second row fails here rather than opening some other invoice.
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()
+  await expect(page, 'inline nav to Invoices did not update the URL').toHaveURL(/\/invoices$/)
   await expect(page.getByTestId('invoices-list'), 'the sidebar nav did not land on the invoices list').toBeVisible({
     timeout: 60_000,
   })

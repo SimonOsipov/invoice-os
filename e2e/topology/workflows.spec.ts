@@ -100,7 +100,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { deleteApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'
 import { assertFillsColumn, WIDE_WIDTHS } from './layout'
-import { FIRM_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA } from './targets'
 
 // Per-run-unique, and shaped so the sweep below can recognise it without the id.
 const POLICY_NAME = `APPR09 ${Date.now()}`
@@ -126,8 +126,24 @@ function navButton(page: Page, label: string) {
   return sidebar(page).getByRole('button', { name: label })
 }
 
+// dashboard serialises to bare `/`; an exact-href match, not a loose /\/$/ regex that would
+// pass on any trailing-slash path.
+const NAV_URL: Record<string, string | RegExp> = {
+  Overview: new URL('/', APP_URL).href,
+  Invoices: /\/invoices$/,
+  Approvals: /\/approvals$/,
+  Rules: /\/rules$/,
+  Customers: /\/customers$/,
+  Reports: /\/reports$/,
+  Workflows: /\/workflows$/,
+  Clients: /\/clients$/,
+  Audit: /\/audit$/,
+  Settings: /\/settings$/,
+}
+
 async function goTo(page: Page, label: string): Promise<void> {
   await navButton(page, label).click()
+  await expect(page, `goTo(${label}) did not update the URL`).toHaveURL(NAV_URL[label])
 }
 
 // By the description line, not the name: a chip's accessible name is two spans concatenated,

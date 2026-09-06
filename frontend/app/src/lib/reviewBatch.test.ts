@@ -20,7 +20,7 @@
 //   CHANNEL-1  the not-imported channel renders at zero, not omitted         (AC-6)
 //   CHANNEL-2  left-channel numbers are the supplied totals, not the page    (AC-6)
 //   PAGER-1..4 pager label arithmetic, incl. the limit<1 guard               (AC-9)
-//   HASH-1/2   parseReviewHash/formatReviewHash round-trip + rejection       (AC-4)
+//   HASH-1/2   migrated to route.test.ts's path codec (ROUTE-03-02)          (AC-4)
 //   UNREAD-1/2 row/rows union reader, incl. the rowless-error trap           (AC-4)
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
@@ -42,7 +42,7 @@ import {
 } from './invoices'
 import { severityStyle, type Violation } from './validationApi'
 import type { ImportBatch, ImportReport, RowError } from './importApi'
-import { MAX_RUN_FILES, type ImportRun } from './importRun'
+import type { ImportRun } from './importRun'
 import { fmtDateTime } from './format'
 import {
   ALREADY_IMPORTED_CSV_HEADER_ALL,
@@ -61,17 +61,13 @@ import {
   filterToQuery,
   fixCard,
   fixEditPatch,
-  formatReviewHash,
   initialReviewFilter,
   isAlreadyImported,
   pagerLabels,
   pagerNav,
-  parseReviewHash,
   railPills,
-  REVIEW_HASH_MAX_IDS,
   reviewFilterReducer,
   reviewFooterSummary,
-  reviewHash,
   reviewHeader,
   reviewHeaderAll,
   reviewPageQuery,
@@ -454,11 +450,12 @@ describe('unreadableRows (AC-4)', () => {
   })
 })
 
-// --- INVCR-01-09 (task-285, Stage 2.5/Mode A) — RED specs for the six new exports
-// (routeAfterImport, reviewShellState, reviewHeader, reviewTabs, reviewHash,
-// unreadableCsv), added by 09 on top of the exports 08 already shipped above. Every one
-// of the six throws `new Error('not implemented')` (see reviewBatch.ts's "09 STUB"
-// comment), so specs against them fail on that throw — the correct RED reason.
+// --- INVCR-01-09 (task-285, Stage 2.5/Mode A) — RED specs for five of the six new
+// exports (routeAfterImport, reviewShellState, reviewHeader, reviewTabs, unreadableCsv);
+// the sixth, reviewHash, moved to route.test.ts as reviewNavIds (ROUTE-03-02). Added by
+// 09 on top of the exports 08 already shipped above. Every one of the five throws
+// `new Error('not implemented')` (see reviewBatch.ts's "09 STUB" comment), so specs
+// against them fail on that throw — the correct RED reason.
 //
 // Two specs below are GREEN-BEFORE, not RED, and are labelled as such at their own
 // describe block: SHELL-4 and SHELL-7 per task-285's own audit — both exercise
@@ -472,7 +469,7 @@ describe('unreadableRows (AC-4)', () => {
 // unreadableRows, and is genuinely RED until the classifier ships.
 //
 // task-285's own table retired SHELL-1 (unimplementable under environment:'node' — no
-// `location`, no React; replaced by HASH-3 below), SHELL-2 (green-before AND a literal
+// `location`, no React; replaced by HASH-3, now in route.test.ts), SHELL-2 (green-before AND a literal
 // duplicate of CHANNEL-2, already above), and SHELL-3 (would smuggle a styling literal —
 // `dashed`/`muted` as constants — into a data structure); none of the three are
 // re-authored here. See this task's QA report for the reasoning on each.
@@ -2368,9 +2365,9 @@ describe('channelTilesAll: atZero ignores alreadyImported even at the Objective\
 // derivations. Every function marked STUB in reviewBatch.ts throws `new Error('not
 // implemented')`, so specs against them fail on that throw — the correct RED reason.
 // parseReviewHash/formatReviewHash/reviewHash are widened IN PLACE (their only consumer
-// is App.tsx's boot/mirror, updated in the same commit; HASH-1/HASH-3 above were
-// updated to the new array signature for exactly this reason). reviewQuery/
-// reviewPageQuery/channelTiles/reviewHeader/reviewShellState/unreadableRows/
+// is App.tsx's boot/mirror, updated in the same commit); their specs — HASH-1/2, HASH-3
+// and BULK-06-1..5 — now live in route.test.ts against the path codec (ROUTE-03-02).
+// reviewQuery/reviewPageQuery/channelTiles/reviewHeader/reviewShellState/unreadableRows/
 // unreadableCsv/UNREADABLE_CSV_HEADER stay UNTOUCHED and exported — five component call
 // sites (ReviewBatch.tsx x4 counting channelTiles/reviewHeader, ReviewInvoicesTab.tsx
 // x1) plus ReviewUnreadableTab.tsx's unreadableCsv call would not compile if widened in
@@ -2389,14 +2386,6 @@ describe('channelTilesAll: atZero ignores alreadyImported even at the Objective\
 // would be the one widened export in this subtask with zero RED coverage. Named "12b"
 // to sit next to the header spec it neighbours in the AC list, not because it derives
 // from BULK-06-12's own assertion.
-
-// 00000000-0000-4000-8000-00000000000<n> — a valid REVIEW_UUID shape, parameterised so
-// hash specs needing several distinct ids never hand-roll one and risk a regex-invalid
-// typo (a stray non-hex char would make the "poisons the whole hash" specs pass for the
-// wrong reason: rejected because malformed, not because of the multi-id policy).
-function mkUuid(n: number): string {
-  return `00000000-0000-4000-8000-00000000000${n}`
-}
 
 // Local fixture — mirrors mkRow's convention above (own copy, lib/invoices.test.ts's
 // draftInvoice is not reused). Defaults to a clean, fully-recorded batch; every BULK-06
@@ -2711,7 +2700,7 @@ describe('sourceFileLabel / showsSourceFile: per-row source attribution (BULK-01
   })
 })
 
-// QA Mode B adversarial coverage (task-311). BULK-06-1..23 above are the architect's own
+// QA Mode B adversarial coverage (task-311). BULK-06-10..23 above are the architect's own
 // Test Specs table (authored RED in Mode A, now re-verified green); everything below is
 // QA-authored edge/negative/ordering coverage the table did not ask for.
 describe('QA-311-1: filesStrip over the zero-row early-"failed" batch (service.go:787 — no spec constructs this fixture)', () => {

@@ -54,11 +54,10 @@ import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
 import type { StatusStyle, View, CreateStep } from '../types'
+import { REVIEW_PATH_MAX_IDS } from './route'
 // Type-only: importRun.ts:74 already imports routeAfterImport FROM this file, so a
 // runtime import back would be this codebase's first reviewBatch.ts <-> importRun.ts
-// cycle. `import type` is fully erased (verbatimModuleSyntax), so no such cycle exists
-// here -- see REVIEW_HASH_MAX_IDS above for why the one genuinely runtime-valued
-// constant this file needs (MAX_RUN_FILES) is a documented mirror instead.
+// cycle. `import type` is fully erased (verbatimModuleSyntax), so no such cycle exists.
 import type { ImportRun } from './importRun'
 
 export interface VerdictInput {
@@ -412,14 +411,9 @@ const REVIEW_HASH_PREFIX = '#review/'
 // list. Case is accepted in both directions because uuid.Parse is (server side).
 const REVIEW_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
-// [five-file-cap] mirror -- importRun.ts:15 owns the real MAX_RUN_FILES, and that module
-// already imports routeAfterImport FROM this file (importRun.ts:74), so importing the
-// constant back would be this codebase's first reviewBatch.ts <-> importRun.ts cycle.
-// Documented mirror + drift guard, NOT a runtime clamp -- the same idiom
-// BATCH_SUBMIT_MAX_IDS uses below for handlers.go's server-side cap. The test file may
-// import both MAX_RUN_FILES and this constant freely; only the two SOURCE modules must
-// stay acyclic.
-export const REVIEW_HASH_MAX_IDS = 5 // importRun.ts:15's MAX_RUN_FILES
+// The value lives in route.ts's REVIEW_PATH_MAX_IDS, which mirrors importRun.ts's
+// MAX_RUN_FILES; route.test.ts's guard_theRunCapIsOneConstant fails if they diverge.
+export const REVIEW_HASH_MAX_IDS = REVIEW_PATH_MAX_IDS // one cap, retired in ROUTE-03-05
 
 // Returns null -- NEVER '' -- for anything that is not one-to-REVIEW_HASH_MAX_IDS comma-
 // separated `#review/<uuid>[,<uuid>...]` segments, EVERY one of which must match

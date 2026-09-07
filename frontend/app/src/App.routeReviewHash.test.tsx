@@ -493,3 +493,86 @@ describe('AC-5: an externally-held review link is not damaged by anything this s
     ).toBe(false)
   })
 })
+
+// ROUTE-06-04. [stale-review-ids-on-a-bare-create-entry] (docs/routing.md). The popstate
+// arm only writes when the restored path carries ids; a restored BARE create entry left
+// reviewBatchIds/createStep armed, and the mirror above then rewrote the just-restored
+// entry back to the review path. No two-entity roster: this journey has no company
+// switch, and the gateway-less bootAt leaves the entity-id ref null throughout, so the
+// popstate clamp's `stale` is false for every spec here, defect and control alike.
+describe('ROUTE-06-04: a restored bare create entry cannot regrow a stale review batch', () => {
+  it('popstate_aRestoredBareCreateEntryDoesNotGrowAStaleBatchPath', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+
+    await act(async () => {
+      ctx.nav('invoices')
+    })
+
+    window.history.replaceState(null, '', '/create')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(window.location.pathname, 'the mirror must not regrow the review path on a bare restore').toBe('/create')
+    expect(requireCtx().reviewBatchIds, 'the stale batch must be cleared, not carried across the restore').toEqual([])
+  })
+
+  it('popstate_aRestoredBareCreateEntryLeavesNoEmptyReviewScreen', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+
+    await act(async () => {
+      ctx.nav('invoices')
+    })
+    reviewBatchMounts.length = 0
+
+    window.history.replaceState(null, '', '/create')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(requireCtx().createStep, 'a stale review step must not survive the restore').toBe('upload')
+    expect(
+      reviewBatchMounts.some((ids) => ids.includes(REVIEW_ID)),
+      'ReviewBatch must not mount with the stale batch after a bare-create restore',
+    ).toBe(false)
+  })
+
+  // Control: green before the fix -- the ordinary path, ids present in the restored URL,
+  // still arms its own batch.
+  it('popstate_aRestoredReviewEntryStillArmsItsOwnBatch', async () => {
+    await bootAt('/invoices')
+    window.history.replaceState(null, '', `/imports/${REVIEW_ID}/review`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'a restored review entry must still arm its own batch').toEqual([REVIEW_ID])
+    expect(ctx.createStep, 'a restored review entry must still land on the review step').toBe('review')
+  })
+
+  // Control: green before the fix -- pins the new arm's `at.view === 'create'` scope. A
+  // Back onto a non-create, ids-empty entry must never clear or demote a still-valid
+  // review state.
+  it('popstate_aBackOntoANonCreateEntryLeavesTheReviewStateIntact', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+
+    await act(async () => {
+      ctx.nav('invoices')
+    })
+
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    const after = requireCtx()
+    expect(after.createStep, 'a non-create restore must leave the review step intact').toBe('review')
+    expect(after.reviewBatchIds, 'a non-create restore must leave the batch ids intact').toEqual([REVIEW_ID])
+  })
+})

@@ -12,9 +12,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -273,6 +275,133 @@ func TestResolve_ComparatorIsTotal(t *testing.T) {
 			if (ij > 0) != (ji < 0) || (ij < 0) != (ji > 0) {
 				t.Errorf("compareCandidates is not antisymmetric on (%s, %s): got %d and %d", set[i].name, set[j].name, ij, ji)
 			}
+		}
+	}
+}
+
+// rvTopLevelNames is every name f declares at package scope.
+func rvTopLevelNames(f *ast.File) []string {
+	var out []string
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				out = append(out, d.Name.Name)
+			}
+		case *ast.GenDecl:
+			for _, s := range d.Specs {
+				switch s := s.(type) {
+				case *ast.TypeSpec:
+					out = append(out, s.Name.Name)
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						out = append(out, n.Name)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// rvCalledNames is every function f calls by bare name. Calls only, never every identifier: a
+// struct field key and a local variable are idents too, and either collides with a package-scope
+// name in an unrelated file.
+func rvCalledNames(f *ast.File) []string {
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+// rvPackageFiles is every non-test .go file in this directory.
+func rvPackageFiles(t *testing.T) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// Both file lists are hand-maintained, and a file missing from one is scanned by nothing at all
+// -- an absence scan over a list that never names the file reports clean, and adding the file to
+// the resolution path fails nothing. This derives the files resolve.go calls into and requires
+// both lists to name each one.
+//
+// party.go is the case this exists for: the moment Resolve calls partyOrder, both scans stop
+// covering the file that just joined the path.
+//
+// Vacuous today by measurement -- resolve.go calls no function declared in another file, which
+// is why the needle below carries the proof that the derivation can see one.
+func TestResolve_ThePurityScansCoverEveryFileResolveCallsInto(t *testing.T) {
+	// The needle: a caller and a callee in two sources. Without it the empty derivation below
+	// reads exactly like a scan that never worked.
+	const caller = `package p
+
+func Resolve() int { return helper() }
+`
+	const callee = `package p
+
+func helper() int { return 1 }
+`
+	called := rvCalledNames(rvParse(t, "caller.go", caller))
+	if !slices.Contains(called, "helper") {
+		t.Fatalf("the needle caller calls helper and the scan found %v; the empty result below proves nothing", called)
+	}
+	if !slices.Contains(rvTopLevelNames(rvParse(t, "callee.go", callee)), "helper") {
+		t.Fatal("the needle callee declares helper and the declaration scan missed it; the empty result below proves nothing")
+	}
+	if slices.Contains(rvCalledNames(rvParse(t, "control.go", callee)), "helper") {
+		t.Error("the control source only DECLARES helper and the call scan reported a call; the scan is not specific")
+	}
+
+	self := rvParse(t, "resolve.go", nil)
+	own := rvTopLevelNames(self)
+	if len(own) == 0 {
+		t.Fatal("resolve.go declares no package-scope name; every call below would be credited to another file")
+	}
+	calls := rvCalledNames(self)
+	if len(calls) == 0 {
+		t.Fatal("resolve.go calls nothing by bare name; the derivation below would be empty for the wrong reason")
+	}
+
+	files := rvPackageFiles(t)
+	if len(files) < len(rvMapScanFiles) {
+		t.Fatalf("the package directory holds %d non-test .go file(s) against rvMapScanFiles' %d; the derivation is reading the wrong directory", len(files), len(rvMapScanFiles))
+	}
+	for _, name := range files {
+		if name == "resolve.go" {
+			continue
+		}
+		for _, decl := range rvTopLevelNames(rvParse(t, name, nil)) {
+			if slices.Contains(own, decl) || !slices.Contains(calls, decl) {
+				continue
+			}
+			if !slices.Contains(rvMapScanFiles, name) {
+				t.Errorf("Resolve's path calls %s, declared in %s, which rvMapScanFiles does not list; the map scan reports clean over a file it never opens", decl, name)
+			}
+			if !slices.Contains(rvPureFiles, name) {
+				t.Errorf("Resolve's path calls %s, declared in %s, which rvPureFiles does not list; the file shares Resolve's fences and nothing holds it to them", decl, name)
+			}
+			break
 		}
 	}
 }

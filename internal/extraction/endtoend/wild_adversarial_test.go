@@ -286,3 +286,62 @@ func TestWildGoldens_CarryRawUTF8AndNeverAnEscape(t *testing.T) {
 		t.Errorf("no committed golden carries a non-ASCII byte; the naira arrangements are gone and this scan proves nothing about ensure_ascii=False")
 	}
 }
+
+// --- the party block over the wild arrangements ----------------------------------------------
+
+// Each party's TIN reaches its own field. Rewrites the TIN half of
+// TestWildLayouts_TheTwoPartyDefectsAreReproduced, which pinned the cross-party reading as
+// unfixed; the buyer_name half of that spec is EXTR-22-03's and stays where it is.
+func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+
+	supplier := wildResolved(t, wildTwoParty, "supplier_tin")
+	if !slices.Contains(supplier, supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; the label before the buyer heading falls back to the supplier", wildTwoParty, supplier, supplierTIN)
+	}
+	if slices.Contains(supplier, buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v and still holds the buyer's %s; a bare TIN under \"Invoice to\" is not the supplier's", wildTwoParty, supplier, buyerTIN)
+	}
+
+	buyer := wildResolved(t, wildTwoParty, "buyer_tin")
+	if !slices.Contains(buyer, buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s", wildTwoParty, buyer, buyerTIN)
+	}
+	if slices.Contains(buyer, supplierTIN) {
+		t.Errorf("%s: buyer_tin = %v and holds the supplier's %s; the heading owns only what follows it", wildTwoParty, buyer, supplierTIN)
+	}
+}
+
+// The scanned layout has no text layer, so its tokens come from the committed golden. The
+// Tier-1 binding is fixed here even though the cell still misses end to end -- the document
+// quarantines and writes no invoices row.
+func TestRLS_EndToEndTheScannedLayoutBindsTheBuyerTIN(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[8], wildTINs[9]
+
+	var pages []extraction.TokenPage
+	r := eeGoldenReader(t, wildGolden(wildScanned))
+	if _, err := r.Read(t.Context(), extraction.Document{ContentType: eeContentType}, extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("replay the %s golden: %v", wildScanned, err)
+	}
+	if len(pages) == 0 {
+		t.Fatalf("the %s golden replayed 0 page(s); everything resolved below is resolved from nothing", wildScanned)
+	}
+
+	got := map[string][]string{}
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		got[c.Field] = append(got[c.Field], c.Value)
+	}
+	if len(got) == 0 {
+		t.Fatalf("the %s golden's tokens produced no candidate at all; every assertion below would hold over nothing", wildScanned)
+	}
+
+	if !slices.Contains(got["buyer_tin"], buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s; the bare TIN follows the BILL TO: heading", wildScanned, got["buyer_tin"], buyerTIN)
+	}
+	if slices.Contains(got["supplier_tin"], buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v and still holds the buyer's %s", wildScanned, got["supplier_tin"], buyerTIN)
+	}
+	if !slices.Contains(got["supplier_tin"], supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; without it the exclusion above holds against a field nothing reaches", wildScanned, got["supplier_tin"], supplierTIN)
+	}
+}

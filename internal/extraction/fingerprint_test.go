@@ -851,11 +851,13 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 // is the prefix pair -- each function stamps its own version and the two versions differ -- so
 // this test fails if either constant moves or one is ever derived from the other.
 func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
-	if extraction.BoxlessFingerprintVersion != "b1" {
-		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b1")
+	// The lexicon reshape moves every stored digest, so both namespaces step to their second
+	// generation together: one bump clears only its own producer's rules.
+	if extraction.BoxlessFingerprintVersion != "b2" {
+		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b2")
 	}
-	if extraction.FingerprintVersion != "v1" {
-		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v1")
+	if extraction.FingerprintVersion != "v2" {
+		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v2")
 	}
 	if extraction.BoxlessFingerprintVersion == extraction.FingerprintVersion {
 		t.Fatalf("both versions are %q; the two namespaces have merged and every assertion below is meaningless", extraction.FingerprintVersion)

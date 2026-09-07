@@ -332,3 +332,126 @@ func TestTier1_ShippedOrderPutsBuyerTinBeforeSupplierName(t *testing.T) {
 		t.Errorf("HeaderFields orders %v; the vocabulary puts supplier_name before buyer_tin, and that inversion is the whole divergence", extraction.HeaderFields)
 	}
 }
+
+// --- the party block, where the page half used to be -------------------------
+
+// t1aHeading is a party heading token, boxed for the page it sits on. Sibling of t1aTIN: rvTok
+// hard-codes page 1 and cannot carry a page-2 heading.
+func t1aHeading(page int, text string, y0, y1 float64) extraction.Token {
+	return extraction.Token{Text: text, Region: extraction.Region{Page: page, X0: 0.10, Y0: y0, X1: 0.30, Y1: y1}}
+}
+
+// Two bare TINs in ONE page half, which the retired sweeps could never tell apart. Replaces
+// TestTier1_TheSweepCannotSeparateTwoTINsInOnePageHalf, whose whole claim was that this is
+// unfixed.
+func TestTier1_TwoBareTINsInOnePageHalfSeparateByPartyBlock(t *testing.T) {
+	t1Floor(t)
+
+	const supplierTIN, buyerTIN = "99999999-0401", "99999999-0402"
+	headed := []extraction.TokenPage{t1aPage(1,
+		t1aHeading(1, "Supplier", 0.10, 0.13),
+		t1aTIN(1, supplierTIN, 0.15, 0.18),
+		t1aHeading(1, "Buyer", 0.22, 0.25),
+		t1aTIN(1, buyerTIN, 0.27, 0.30),
+	)}
+
+	got := extraction.Resolve(headed, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvFloor(t, got, "two headed bare TINs in the top half under the shipped set")
+	if v := rvValues(rvFor(got, "supplier_tin")); !slices.Equal(v, []string{supplierTIN}) {
+		t.Errorf("supplier_tin = %v, want exactly [%s]; the Buyer heading owns the second TIN and the page half no longer decides", v, supplierTIN)
+	}
+	if v := rvValues(rvFor(got, "buyer_tin")); !slices.Equal(v, []string{buyerTIN}) {
+		t.Errorf("buyer_tin = %v, want exactly [%s]", v, buyerTIN)
+	}
+
+	// The paired control: the same two TINs, same boxes, both headings dropped. Both fall to
+	// the supplier by PartyUnknown fallback, so the split above is the headings' doing and not
+	// the geometry's.
+	headless := []extraction.TokenPage{t1aPage(1,
+		t1aTIN(1, supplierTIN, 0.15, 0.18),
+		t1aTIN(1, buyerTIN, 0.27, 0.30),
+	)}
+	ctl := extraction.Resolve(headless, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvControl(t, ctl, "the same two TINs with both headings dropped")
+	if v := rvValues(rvFor(ctl, "supplier_tin")); !slices.Equal(v, []string{supplierTIN, buyerTIN}) {
+		t.Errorf("with no heading supplier_tin = %v, want both TINs; PartyUnknown falls back to the supplier", v)
+	}
+	if v := rvValues(rvFor(ctl, "buyer_tin")); len(v) != 0 {
+		t.Errorf("with no heading buyer_tin = %v, want none; no heading claims either token", v)
+	}
+}
+
+// A bare "TIN:" label carries no party of its own, so the heading before it decides which field
+// it fills -- and with no heading before it, the supplier's.
+func TestTier1_ABareTINLabelBindsToTheHeadingBeforeIt(t *testing.T) {
+	t1Floor(t)
+
+	const supplierTIN, buyerTIN = "99999999-0801", "99999999-0802"
+	pages := []extraction.TokenPage{t1aPage(1,
+		rvTok("TIN:", 0.10, 0.10, 0.20, 0.13),
+		rvTok(supplierTIN, 0.25, 0.10, 0.45, 0.13),
+		t1aHeading(1, "Invoice to", 0.20, 0.23),
+		rvTok("TIN:", 0.10, 0.25, 0.20, 0.28),
+		rvTok(buyerTIN, 0.25, 0.25, 0.45, 0.28),
+	)}
+
+	got := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvFloor(t, got, "two bare TIN labels either side of a buyer heading")
+
+	supplier := rvValues(rvFor(got, "supplier_tin"))
+	buyer := rvValues(rvFor(got, "buyer_tin"))
+	if len(supplier) == 0 || len(buyer) == 0 {
+		t.Fatalf("supplier_tin = %v, buyer_tin = %v; each exclusion below needs its own field to hold something first", supplier, buyer)
+	}
+	if !slices.Contains(supplier, supplierTIN) || slices.Contains(supplier, buyerTIN) {
+		t.Errorf("supplier_tin = %v, want it to hold %s and not %s; the label before the heading belongs to no party and falls back to the supplier", supplier, supplierTIN, buyerTIN)
+	}
+	if !slices.Contains(buyer, buyerTIN) || slices.Contains(buyer, supplierTIN) {
+		t.Errorf("buyer_tin = %v, want it to hold %s and not %s; the label after \"Invoice to\" is the buyer's", buyer, buyerTIN, supplierTIN)
+	}
+}
+
+// A heading owns nothing on the next page: partyOrder takes one TokenPage, which is what the
+// retired page-1 banding used to guarantee. Replaces TestTier1_ABandedSweepIgnoresALaterPage.
+func TestTier1_APartyHeadingOnPageOneClaimsNothingOnPageTwo(t *testing.T) {
+	t1Floor(t)
+
+	const p1Supplier, p1Buyer = "99999999-0301", "99999999-0302"
+	const p2First, p2Second = "99999999-0303", "99999999-0304"
+	page1 := t1aPage(1,
+		t1aHeading(1, "Supplier", 0.10, 0.13),
+		t1aTIN(1, p1Supplier, 0.15, 0.18),
+		t1aHeading(1, "Buyer", 0.22, 0.25),
+		t1aTIN(1, p1Buyer, 0.27, 0.30),
+	)
+	page2 := t1aPage(2, t1aTIN(2, p2First, 0.20, 0.23), t1aTIN(2, p2Second, 0.60, 0.63))
+
+	got := extraction.Resolve([]extraction.TokenPage{page1, page2}, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvFloor(t, got, "a headed page 1 followed by a headingless page 2 under the shipped set")
+
+	supplier := rvValues(rvFor(got, "supplier_tin"))
+	for _, want := range []string{p1Supplier, p2First, p2Second} {
+		if !slices.Contains(supplier, want) {
+			t.Errorf("supplier_tin = %v, want it to hold %s; page 2 carries no heading, so both its TINs fall back to the supplier", supplier, want)
+		}
+	}
+	if v := rvValues(rvFor(got, "buyer_tin")); !slices.Equal(v, []string{p1Buyer}) {
+		t.Errorf("buyer_tin = %v, want exactly [%s]; page 1's Buyer heading reaches nothing on page 2", v, p1Buyer)
+	}
+
+	// The paired control: prepend a Buyer heading to page 2 and its two TINs move. Without it
+	// the exclusion above holds equally against a page 2 nothing reads.
+	page2Headed := t1aPage(2,
+		t1aHeading(2, "Buyer", 0.10, 0.13),
+		t1aTIN(2, p2First, 0.20, 0.23),
+		t1aTIN(2, p2Second, 0.60, 0.63),
+	)
+	ctl := extraction.Resolve([]extraction.TokenPage{page1, page2Headed}, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvControl(t, ctl, "the same two pages with a Buyer heading on page 2")
+	ctlBuyer := rvValues(rvFor(ctl, "buyer_tin"))
+	for _, want := range []string{p2First, p2Second} {
+		if !slices.Contains(ctlBuyer, want) {
+			t.Errorf("with a Buyer heading on page 2, buyer_tin = %v, want it to hold %s; page 2's tokens are readable and only the page bound withheld them", ctlBuyer, want)
+		}
+	}
+}

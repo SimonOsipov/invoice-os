@@ -225,6 +225,66 @@ func TestLearnedTwoParty_Tier1AloneReachesNoBuyerTIN(t *testing.T) {
 	}
 }
 
+// The re-founded "before". Tier-1 now reaches the buyer's TIN on this layout unaided, so the
+// learned rule has to BEAT a real generic candidate instead of filling a void. Rank 0 is
+// asserted on Tier and RuleID and never on Value: Tier-1 produces the same value here, so a
+// Value-only assertion passes whether the learned rule fired or not.
+//
+// Mutation it uniquely catches: a learned rule that silently stops firing -- the value stays
+// right and the tier goes wrong.
+func TestLearnedTwoParty_Tier1BindsTheBuyerTINAndTheLearnedRuleStillOutranksIt(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "EXTR22-02-L01")
+	fp, pages := lcLayout(t, ctx, f.jobID, fxLearnedTwoParty)
+
+	// Arm 1, Tier-1 alone. No database. PartyScoped reroutes an existing candidate's Field, so
+	// the count is unmoved.
+	t1 := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	if len(t1) != lcTier1Candidates {
+		t.Errorf("Tier-1 alone produced %d candidate(s) over %s, want %d -- the party partition reroutes a candidate's field, it mints none",
+			len(t1), fxLearnedTwoParty, lcTier1Candidates)
+	}
+	before := extraction.Reconcile(extraction.Input{Candidates: t1})
+	buyer := lcDecided(t, before, lcField)
+	if lcValue(buyer) != lcBuyerTIN || buyer.Reason != extraction.ReasonNone {
+		t.Errorf("Tier-1 alone decided %s = %s reason %q, want %q and %q -- the bare TIN below the Buyer heading is the buyer's",
+			lcField, lcValue(buyer), buyer.Reason, lcBuyerTIN, extraction.ReasonNone)
+	}
+	supplier := lcDecided(t, before, "supplier_tin")
+	if lcValue(supplier) != lcSupplierTIN || supplier.Reason != extraction.ReasonNone {
+		t.Errorf("Tier-1 alone decided supplier_tin = %s reason %q, want %q and %q -- the sweep no longer claims both TINs",
+			lcValue(supplier), supplier.Reason, lcSupplierTIN, extraction.ReasonNone)
+	}
+	if alts := lcAltValues(supplier); len(alts) != 0 {
+		t.Errorf("Tier-1 alone kept %d supplier_tin alternative(s) %v, want none", len(alts), alts)
+	}
+
+	// Arm 2: the pointed correction's rule still ranks first over the same layout.
+	lcPost(t, f, "job 1", lcField, lcBuyerTIN, clTokenRegion(t, pages, lcBuyerTIN))
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("job 1 left %d anchor rule(s), want exactly 1 -- job 2 below would read against nothing", len(rules))
+	}
+
+	job2 := cxJobIn(t, ctx, f.tenantID, f.documentID)
+	fp2, pages2 := lcLayout(t, ctx, job2, fxLearnedTwoParty)
+	if fp2 != fp {
+		t.Fatalf("job 2's fingerprint %q differs from job 1's %q over the same bytes; the rule could never be loaded for it", fp2, fp)
+	}
+
+	got := lcResolve(t, ctx, f.tenantID, fp2, lcField, pages2)
+	if len(got.cands) == 0 {
+		t.Fatalf("job 2 resolved no %s candidate at all; the rank asserted below would hold over nothing", lcField)
+	}
+	if got.cands[0].Tier != extraction.TierLearned || got.cands[0].RuleID != rules[0].id {
+		t.Errorf("job 2's rank-0 %s candidate is tier %v from rule %q, want TierLearned from the stored %q -- Tier-1 reaches this value too, so the tier is the only thing that says the learned rule fired",
+			lcField, got.cands[0].Tier, got.cands[0].RuleID, rules[0].id)
+	}
+	if lcValue(got.decided) != lcBuyerTIN || got.decided.Reason != extraction.ReasonNone {
+		t.Errorf("job 2 decided %s = %s reason %q, want %q and %q", lcField, lcValue(got.decided), got.decided.Reason, lcBuyerTIN, extraction.ReasonNone)
+	}
+}
+
 // --- E-02 / AC #2: one pointed correction, one rule, keyed to the job's fingerprint --------
 
 func TestRLS_APointedCorrectionOnTheTwoPartyLayoutWritesOneRule(t *testing.T) {

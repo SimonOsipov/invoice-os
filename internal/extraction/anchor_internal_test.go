@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -274,5 +275,93 @@ func TestAnchorLexicon_IDsAreSeparatorSafe(t *testing.T) {
 			t.Errorf("anchorLexicon ID %q is not [a-z_]+; a %q or %q inside an id makes the joined element string ambiguous",
 				entry.ID, ":", "|")
 		}
+	}
+}
+
+// --- the party-scoped TIN's lexicon shape ------------------------------------
+
+// alIDs is every anchorLexicon id whose pattern matches text, in lexicon order.
+func alIDs(text string) []string {
+	var out []string
+	for _, m := range anchorLabelMatchers {
+		if m.RE.MatchString(text) {
+			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
+// alSpan is the span id claims on text, or nil when it does not match.
+func alSpan(text, id string) []int {
+	for _, m := range anchorLabelMatchers {
+		if m.ID == id {
+			return m.RE.FindStringIndex(text)
+		}
+	}
+	return nil
+}
+
+// "Invoice to" and "Deliver to" head the buyer's block AND label the buyer's fields. The
+// control keeps the widening off the invoice number, which shares the word "Invoice".
+func TestAnchorLexicon_TheBuyerVocabularyCarriesInvoiceToAndDeliverTo(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+
+	for _, text := range []string{"Invoice to", "Deliver to", "INVOICE TO", "Deliver To:"} {
+		ids := alIDs(text)
+		for _, want := range []string{"buyer_name", "buyer_tin"} {
+			if !slices.Contains(ids, want) {
+				t.Errorf("%q matches %v, want it to name %q; the buyer vocabulary carries the two shipping phrases", text, ids, want)
+			}
+		}
+	}
+
+	const control = "Invoice No: INV-1001"
+	ids := alIDs(control)
+	if !slices.Contains(ids, "invoice_no") {
+		t.Errorf("%q matches %v, want it to name invoice_no; the control is not exercising the overlap it exists for", control, ids)
+	}
+	if slices.Contains(ids, "buyer_name") {
+		t.Errorf("%q matches %v and now names buyer_name; the phrase is \"invoice to\", not the word \"invoice\"", control, ids)
+	}
+}
+
+// bare_tin is the party-LESS TIN label. On a party-bearing token the party entry claims the
+// strictly wider span, so anchorOutranked suppresses bare_tin there -- the same mechanism that
+// already suppresses supplier_name inside "Supplier TIN:".
+func TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne(t *testing.T) {
+	const bare = "bare_tin"
+
+	if !slices.ContainsFunc(anchorLexicon, func(e struct{ ID, Pattern string }) bool { return e.ID == bare }) {
+		t.Fatalf("anchorLexicon holds no %q entry; the party-less TIN label has no id of its own and supplier_tin still claims it", bare)
+	}
+
+	for _, c := range []struct{ text, owner string }{
+		{"Supplier TIN: 99999999-0101", "supplier_tin"},
+		{"Buyer TIN ", "buyer_tin"},
+	} {
+		inner, outer := alSpan(c.text, bare), alSpan(c.text, c.owner)
+		if inner == nil || outer == nil {
+			t.Errorf("%q: %s span %v, %s span %v; both must match or the containment below compares nothing", c.text, bare, inner, c.owner, outer)
+			continue
+		}
+		if !(outer[0] <= inner[0] && outer[1] >= inner[1] && outer[1]-outer[0] > inner[1]-inner[0]) {
+			t.Errorf("%q: %s claims %v and %s claims %v; the party entry must claim the STRICTLY wider span or anchorOutranked leaves the bare label anchoring", c.text, bare, inner, c.owner, outer)
+		}
+		if !anchorOutranked(c.text, inner) {
+			t.Errorf("%q: anchorOutranked left the %s span %v standing; the bare label would anchor a rule on a token a party owns", c.text, bare, inner)
+		}
+	}
+
+	// The party-less token, where bare_tin is the whole point.
+	const partyless = "TIN: "
+	ids := alIDs(partyless)
+	if !slices.Equal(ids, []string{bare}) {
+		t.Errorf("%q matches %v, want exactly [%s]; supplier_tin's party word is required now, so a bare label belongs to no party", partyless, ids, bare)
+	}
+	loc := alSpan(partyless, bare)
+	if loc == nil || anchorOutranked(partyless, loc) {
+		t.Errorf("%q: %s span %v; nothing wider claims this token and the bare label must anchor its rules", partyless, bare, loc)
 	}
 }

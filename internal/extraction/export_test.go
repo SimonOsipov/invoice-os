@@ -88,6 +88,12 @@ func AnchorLabelPlacementsForTest(text string) []string {
 	return out
 }
 
+// PartyOrderForTest hands the external test package the party partition. The corpus specs read
+// a real fixture, and only an external test may do that: reading one builds the pdfium pool,
+// which TestPDFiumPool_NotBuiltOnACancelledContext fatals on if an internal test gets there
+// first.
+func PartyOrderForTest(page TokenPage) []Party { return partyOrder(page) }
+
 // MaxCandidatesPerFieldForTest exposes the per-field cap so V-13 asserts the production
 // constant rather than a copy of it.
 const MaxCandidatesPerFieldForTest = maxCandidatesPerField

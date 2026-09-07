@@ -13,6 +13,10 @@ type Tier1Rule struct {
 	Field string
 	Rule  Rule
 	Band  PageBand // BandAnywhere unless the rule matches by format alone
+
+	// PartyScoped routes the candidate to the field the token's own party owns, instead of
+	// Field. Set only on the rules a party-LESS TIN label reaches.
+	PartyScoped bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon

@@ -393,6 +393,61 @@ func wildVarBody(t *testing.T, src, decl, file string) string {
 	return rest[:j]
 }
 
+// wildVarBody bounds five declarations, so its span rule is driven by a test rather than by
+// hope. A declaration whose own line closes the literal has no column-0 closing brace to stop
+// at, and gofmt writes both an EMPTY composite literal and a short non-empty one that way.
+//
+// Mutation it uniquely catches: the \n}\n search running past a self-closing declaration and
+// swallowing the code that follows it.
+func TestWildVarBody_BoundsADeclarationInEveryLiteralForm(t *testing.T) {
+	const decoy = "wild_decoy"
+	const tail = "\n\nfunc after() string {\n\treturn \"" + decoy + "\"\n}\n"
+
+	cases := []struct {
+		name, src, decl, needle string
+	}{
+		{
+			"a collapsed empty literal, which is what gofmt writes for an emptied collection",
+			"package p\n\nvar t1aGaps = []struct{ file, field string }{}" + tail,
+			"var t1aGaps = ",
+			"field string",
+		},
+		{
+			"a single-line non-empty literal, which gofmt also keeps on one line",
+			"package p\n\nvar corpusLayouts = []string{\"corpus_two_column.pdf\"}" + tail,
+			"var corpusLayouts = ",
+			"corpus_two_column.pdf",
+		},
+		{
+			"a multi-line literal, which ends at its own column-0 closing brace",
+			"package p\n\nvar t1aGaps = []struct{ file, field string }{\n\t{\"corpus_two_column.pdf\", \"buyer_tin\"},\n}" + tail,
+			"var t1aGaps = ",
+			"corpus_two_column.pdf",
+		},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the loop below would check nothing")
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The control under the absence asserted below: the decoy IS in the source, so
+			// its absence from the span is the span's doing and not the fixture's.
+			if !strings.Contains(c.src, decoy) {
+				t.Fatalf("the fixture source carries no %q; the absence asserted below would hold over a source that never had one", decoy)
+			}
+
+			body := wildVarBody(t, c.src, c.decl, "a synthetic source")
+			if !strings.Contains(body, c.needle) {
+				t.Errorf("the span for %q is %q, which does not carry %q; a span that stopped short reads clean over a collection it never reached", c.decl, body, c.needle)
+			}
+			if strings.Contains(body, decoy) {
+				t.Errorf("the span for %q is %q and ran into the function that follows the declaration; an absence scan over it reports on the wrong code", c.decl, body)
+			}
+		})
+	}
+}
+
 // AC-4. The wild layouts are scored by expectByLayout and by nothing in internal/extraction:
 // a wild_ entry in any of the four ratchets moves a pinned Tier-1 number silently.
 func TestWildLayouts_DoNotEnterTheCorpusRatchets(t *testing.T) {

@@ -967,3 +967,46 @@ describe('ROUTE-03-07 AC-4: the routing doc names the shipped form', () => {
     expect(src.includes(':batchIds'), 'docs/routing.md no longer names the shipped batchIds segment').toBe(true)
   })
 })
+
+// ROUTE-07-07 AC-8/AC-11: the two guards below are a PAIR by design, the same rule as the
+// ROUTE-03-07 pair above. An absence guard alone would pass on a doc that DELETED the route
+// table, the R2 rule and the /settings/:tab section instead of correcting them -- the
+// presence guard is what rules that out. Four retired claims, four replacements.
+const RETIRED_FIELD_COUNT = 'seven fields'
+const RETIRED_MEMBERS_DEFAULT = '`members` is the default, so R2 omits it'
+const RETIRED_TWO_DRILLDOWN_ROWS = "The last two rows aren't a 14th/15th `View`"
+const RETIRED_MEMBERS_PIN = 'settings_returningToMembersWritesTheBarePath'
+// The whole route-table row, pipes included -- NOT the bare '/workflows/:id'. The owned-param
+// table below it names that path too, so the bare form would read green on a route table that
+// never grew the row.
+const WORKFLOWS_ROUTE_ROW = '| `workflows` (drill-down) | `/workflows/:id` |'
+
+describe('ROUTE-07-07 AC-8: the routing doc states no retired rule', () => {
+  it('guard_theRoutingDocNamesNoRetiredRule', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    // Floor: a broken path reads back '', which would make every absence check below pass on
+    // nothing read rather than on a corrected doc -- M4-04 burned five instruments this way.
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    // Needle: proves .includes() can see a match on this file at all, so the four absence
+    // checks below aren't vacuous.
+    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
+    expect(src.includes(RETIRED_FIELD_COUNT), 'docs/routing.md still says parseLocation returns seven fields').toBe(false)
+    expect(src.includes(RETIRED_MEMBERS_DEFAULT), 'docs/routing.md still states that R2 omits the members tab').toBe(false)
+    expect(src.includes(RETIRED_TWO_DRILLDOWN_ROWS), 'docs/routing.md still says only two route-table rows are drill-down forms').toBe(false)
+    expect(src.includes(RETIRED_MEMBERS_PIN), 'docs/routing.md still names the retired Members writer pin').toBe(false)
+  })
+})
+
+describe('ROUTE-07-07 AC-11: the routing doc names both new forms', () => {
+  it('guard_theRoutingDocNamesBothNewForms', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    expect(src.includes('eight fields'), 'docs/routing.md no longer states parseLocation eight-field result').toBe(true)
+    // Floor, not a discriminator: '/settings/members' already occurred once in the doc before
+    // this story -- inside the very paragraph that denied it. Its presence proves the section
+    // survived; only the absence guard above proves the claim was corrected.
+    expect(src.includes('/settings/members'), 'docs/routing.md no longer names the canonical Members path').toBe(true)
+    expect(src.includes(WORKFLOWS_ROUTE_ROW), 'docs/routing.md route table has no /workflows/:id row').toBe(true)
+    expect(src.includes('settings_returningToMembersWritesTheCanonicalPath'), 'docs/routing.md no longer names the Members writer pin').toBe(true)
+  })
+})

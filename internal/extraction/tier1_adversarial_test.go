@@ -8,6 +8,7 @@ package extraction_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -383,5 +384,56 @@ func TestTier1_APartyHeadingOnPageOneClaimsNothingOnPageTwo(t *testing.T) {
 		if !slices.Contains(ctlBuyer, want) {
 			t.Errorf("with a Buyer heading on page 2, buyer_tin = %v, want it to hold %s; page 2's tokens are readable and only the page bound withheld them", ctlBuyer, want)
 		}
+	}
+}
+
+// --- the owning phrase, where the party word used to anchor --------------------
+
+// t1aOwningPage is a party block laid out on wild_two_party_bare_tin.pdf's own vertical
+// spacing: heading, owning phrase, name, signature. The phrase sits NEARER the name than the
+// heading does, so a resolver that still reads it wins on distance.
+func t1aOwningPage(heading, phrase, name, signature string) []extraction.TokenPage {
+	return []extraction.TokenPage{t1aPage(1,
+		rvTok(heading, 0.590020, 0.173465, 0.671471, 0.184556),
+		rvTok(phrase, 0.589098, 0.193379, 0.707471, 0.204818),
+		rvTok(name, 0.589745, 0.213581, 0.737843, 0.227975),
+		rvTok(signature, 0.589686, 0.281763, 0.742196, 0.296247),
+	)}
+}
+
+// "Customer No." and "Buyer's Signature" carry a party word but name no party: the whole phrase
+// is the label. Neither the phrase nor the fragment the party word leaves behind may become a
+// name, and the real name below the heading must rank first.
+func TestTier1_ALabelFragmentIsNeverAPartyName(t *testing.T) {
+	t1Floor(t)
+
+	for _, arm := range []struct{ field, heading, phrase, name, signature string }{
+		{"buyer_name", "Invoice to", "Customer No.", "Honeywell Group", "Buyer's Signature"},
+		{"supplier_name", "Supplier", "Supplier No.", "Adeyemi Trading Limited", "Supplier's Signature"},
+	} {
+		got := extraction.Resolve(t1aOwningPage(arm.heading, arm.phrase, arm.name, arm.signature),
+			extraction.RuleSet{Tier1: extraction.Tier1Rules})
+		rvFloor(t, got, arm.field+" over a heading, an owning phrase, a name and a signature")
+
+		vals := rvValues(rvFor(got, arm.field))
+		if len(vals) == 0 || vals[0] != arm.name {
+			t.Errorf("%s = %v, want %q at rank 0; the phrases around the name must not outrank it", arm.field, vals, arm.name)
+		}
+		for _, v := range vals {
+			if strings.Contains(v, "No.") || strings.Contains(v, "Signature") {
+				t.Errorf("%s reaches %q (%v); a fragment of an owning phrase is a label, never a name", arm.field, v, vals)
+			}
+		}
+	}
+
+	// The paired control: the same heading and name with both phrases dropped. Without it the
+	// two absences above hold equally against a page shape nothing reads.
+	ctl := extraction.Resolve([]extraction.TokenPage{t1aPage(1,
+		rvTok("Invoice to", 0.590020, 0.173465, 0.671471, 0.184556),
+		rvTok("Honeywell Group", 0.589745, 0.213581, 0.737843, 0.227975),
+	)}, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	rvControl(t, ctl, "the same heading and name with both owning phrases dropped")
+	if v := rvValues(rvFor(ctl, "buyer_name")); !slices.Contains(v, "Honeywell Group") {
+		t.Errorf("with both phrases dropped buyer_name = %v, want it to hold the name; the geometry alone never reached it", v)
 	}
 }

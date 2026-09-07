@@ -365,3 +365,46 @@ func TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne(t *testing.T) 
 		t.Errorf("%q: %s span %v; nothing wider claims this token and the bare label must anchor its rules", partyless, bare, loc)
 	}
 }
+
+// party_ref and signature are OWNING PHRASES: the whole phrase is the label, so the party word
+// inside it must not anchor a value of its own. Same mechanism as bare_tin above, one layer out.
+func TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+
+	for _, c := range []struct{ text, owner, narrow string }{
+		{"Customer No.", "party_ref", "buyer_name"},
+		{"Buyer's Signature", "signature", "buyer_name"},
+		{"Supplier's Signature", "signature", "supplier_name"},
+	} {
+		inner := alSpan(c.text, c.narrow)
+		if inner == nil {
+			t.Errorf("%q: %s does not match at all; the suppression below has nothing to suppress", c.text, c.narrow)
+			continue
+		}
+		if !anchorOutranked(c.text, inner) {
+			t.Errorf("%q: anchorOutranked left the %s span %v standing; the party word inside an owning phrase would anchor a rule on a token that names no party", c.text, c.narrow, inner)
+		}
+
+		outer := alSpan(c.text, c.owner)
+		if outer == nil {
+			t.Errorf("%q: anchorLexicon holds no %s span; nothing claims the phrase whole", c.text, c.owner)
+			continue
+		}
+		if !(outer[0] <= inner[0] && outer[1] >= inner[1] && outer[1]-outer[0] > inner[1]-inner[0]) {
+			t.Errorf("%q: %s claims %v and %s claims %v; the phrase must claim the STRICTLY wider span or anchorOutranked leaves the party word anchoring", c.text, c.narrow, inner, c.owner, outer)
+		}
+	}
+
+	// The control: a bare party word, where nothing wider claims the token and the party entry
+	// must still anchor its rules.
+	const control = "Buyer "
+	if ids := alIDs(control); !slices.Contains(ids, "buyer_name") {
+		t.Errorf("%q matches %v, want it to name buyer_name; the control is not exercising the entry the cases above suppress", control, ids)
+	}
+	ctl := alSpan(control, "buyer_name")
+	if ctl == nil || anchorOutranked(control, ctl) {
+		t.Errorf("%q: buyer_name span %v was outranked; an owning phrase must not suppress the party word on a token it does not appear on", control, ctl)
+	}
+}

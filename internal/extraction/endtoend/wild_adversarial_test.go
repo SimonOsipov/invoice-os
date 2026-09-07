@@ -312,6 +312,137 @@ func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
 	}
 }
 
+const wildTwoPartyBuyerName = "Honeywell Group"
+
+// The buyer's name on the two-party arrangement is the printed name, not the "Customer No." or
+// "Buyer's Signature" fragment that used to outrank it. Replaces the buyer_name half of
+// TestWildLayouts_TheTwoPartyDefectsAreReproduced.
+//
+// The list is not asserted to hold one value: "TIN:" survives at rank 1 as a pre-existing
+// residue, and bare_tin matches it at [0,3] rather than whole, so nothing refuses it.
+func TestWildLayouts_TheTwoPartyBuyerNameIsTheName(t *testing.T) {
+	names := wildResolved(t, wildTwoParty, "buyer_name")
+
+	if names[0] != wildTwoPartyBuyerName {
+		t.Errorf("%s ranks buyer_name %v, want %q at rank 0; the label fragment still outranks the printed name", wildTwoParty, names, wildTwoPartyBuyerName)
+	}
+	for _, v := range names {
+		if strings.Contains(v, "No.") || strings.Contains(v, "Signature") {
+			t.Errorf("%s reaches %q as a buyer_name candidate (%v); a fragment of an owning phrase is a label, never a name", wildTwoParty, v, names)
+		}
+	}
+
+	// The control: the two party TINs on the same page. Without it the absence above holds
+	// equally against a Resolve that stopped producing anything on this layout.
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+	if v := wildResolved(t, wildTwoParty, "supplier_tin"); !slices.Contains(v, supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; the page still reads its other fields", wildTwoParty, v, supplierTIN)
+	}
+	if v := wildResolved(t, wildTwoParty, "buyer_tin"); !slices.Contains(v, buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s; the page still reads its other fields", wildTwoParty, v, buyerTIN)
+	}
+}
+
+// --- AC-4: no layout loses a party name it already read ---------------------------------------
+
+// wildPartyNameFields are the two fields the walk below compares. supplier_name has no key in
+// expectByLayout at all -- it is an entityDerivedField and is excluded from the end-to-end
+// score -- so the pinned table is the only oracle the supplier half has.
+var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
+
+// wildPartyNames is the party name each layout reads at rank 0, measured through PDFium before
+// the owning-phrase entries. A field a layout is not listed under read no name and is not
+// compared: wild_two_party_bare_tin.pdf/buyer_name is absent on purpose (the baseline reads the
+// "No." fragment, and replacing it is the point), corpus_totals_block.pdf and
+// wild_stacked_borderless.pdf read no name at all, and wild_scanned_no_number.pdf yields no
+// pdfium token -- its docling golden carries neither owning phrase.
+var wildPartyNames = map[string]map[string]string{
+	"corpus_inline_labels.pdf":    {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_split_labels.pdf":     {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_stacked_labels.pdf":   {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_two_column.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_ambiguous_date.pdf":   {"supplier_name": "Adeyemi Trading Limited"},
+	"wild_ruled_lines_totals.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_rc_due_naira.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+}
+
+const (
+	wildPartyNameCells   = 13
+	wildPartyNameLayouts = 11
+)
+
+// wildRank0Names is each field's rank-0 value over one layout under rules, or "" where the
+// field produced no candidate.
+func wildRank0Names(t *testing.T, layout string, rules []extraction.Tier1Rule) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, c := range extraction.Resolve(eeTokenPages(t, layout), extraction.RuleSet{Tier1: rules}) {
+		if _, seen := out[c.Field]; !seen {
+			out[c.Field] = c.Value
+		}
+	}
+	return out
+}
+
+// wildPartyNameLosses counts the pinned cells rules fails to reproduce.
+func wildPartyNameLosses(t *testing.T, rules []extraction.Tier1Rule) (losses, compared int, report []string) {
+	t.Helper()
+	for _, want := range expectByLayout {
+		got := wildRank0Names(t, want.file, rules)
+		for _, field := range wildPartyNameFields {
+			pinned, ok := wildPartyNames[want.file][field]
+			if !ok {
+				continue
+			}
+			compared++
+			if got[field] != pinned {
+				losses++
+				report = append(report, want.file+"/"+field+" reads "+got[field]+", want "+pinned)
+			}
+		}
+	}
+	return losses, compared, report
+}
+
+func TestPartyNames_NoLayoutLosesAPartyNameItAlreadyRead(t *testing.T) {
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus than the table was measured on", len(expectByLayout), wildPartyNameLayouts)
+	}
+	for layout := range wildPartyNames {
+		if !slices.ContainsFunc(expectByLayout, func(r struct {
+			file   string
+			fields map[string][]string
+		}) bool {
+			return r.file == layout
+		}) {
+			t.Fatalf("wildPartyNames pins %s, which expectByLayout does not name; the walk would skip that row in silence", layout)
+		}
+	}
+
+	losses, compared, report := wildPartyNameLosses(t, extraction.Tier1Rules)
+	if compared != wildPartyNameCells {
+		t.Fatalf("compared %d party-name cell(s), want %d; the table shrank and the assertion below covers that much less", compared, wildPartyNameCells)
+	}
+	for _, line := range report {
+		t.Errorf("%s; a layout lost a party name the baseline already read", line)
+	}
+
+	// The control needle: the same walk with every buyer_name rule dropped must LOSE cells, or
+	// the comparison above would report clean against a Resolve that reads no name at all.
+	var cut []extraction.Tier1Rule
+	for _, r := range extraction.Tier1Rules {
+		if r.Field != "buyer_name" {
+			cut = append(cut, r)
+		}
+	}
+	if len(cut) == len(extraction.Tier1Rules) {
+		t.Fatal("the control cut dropped no rule; it is not the needle it claims to be")
+	}
+	if cutLosses, _, _ := wildPartyNameLosses(t, cut); cutLosses == 0 {
+		t.Errorf("dropping every buyer_name rule cost %d pinned cell(s) and the shipped set cost %d; the comparison is inert", cutLosses, losses)
+	}
+}
+
 // The scanned layout has no text layer, so its tokens come from the committed golden. The
 // Tier-1 binding is fixed here even though the cell still misses end to end -- the document
 // quarantines and writes no invoices row.

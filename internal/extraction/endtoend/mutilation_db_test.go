@@ -43,13 +43,13 @@ const (
 	// outcome, no invoices row, and cannot say which guard answered.
 	eeCutScore = 0
 
-	// eeCutReach is how many of the same 80 cells a value is still REACHABLE for under the
-	// cut -- Resolve's candidate list, no database. The gap between it and eeCutScore is what
+	// eeCutReach is how many of the same eeCorpusCells cells a value is still REACHABLE for under
+	// the cut -- Resolve's candidate list, no database. The gap between it and eeCutScore is what
 	// separates this number from a recall measure.
 	//
 	// Not to be confused with the 37/44 the story cites: that is acMutilatedHits over
 	// corpusExpect's 44 (layout, field) pairs across 10 vocabulary fields
-	// (internal/extraction/accuracy_test.go:52). This suite scores 80 cells over the 8 fields
+	// (internal/extraction/accuracy_test.go:52). This suite scores eeCorpusCells cells over the 8 fields
 	// the mapper writes. Different denominator, different table -- pinning 37 here would be a
 	// false pin.
 	eeCutReach = 44

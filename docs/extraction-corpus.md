@@ -258,6 +258,158 @@ widening the anchor lexicon needs a `FingerprintVersion` **and** a `BoxlessFinge
 bump, because the lexicon is an input to both layout identities; closing it by another route — a
 pointed correction on a distinguishing label — needs none.
 
+## End-to-end field accuracy
+
+Measured 2026-09-07 on `feature/extr-21-a-number-that-moves-when-the-read-is-wrong`: a document
+goes in at the extraction worker and an `invoices` row comes out the other side, and that row
+carries the value the page prints on **53 of 88** cells — **0.6023**. Eleven layouts, eight
+written fields each. This is the first number on this page measured **end to end**: not what
+Tier-1 can reach, not what the pipeline decides, but what a user would find in the database.
+
+The three rates above it are all in the high nineties. This one is not, and the gap is the
+point. Recall (`## Tier-1 recall and the floor`) scores the candidate list; the decision rate
+(`## Tier-1 decision rate`) scores rank 0; the wired-path rate (`## Wired-path decision rate`)
+scores `extraction_field_results`. None of them reads the `invoices` row, and none of them scores
+the five arrangements added by EXTR-21 — so all three stayed at 43/44 while eleven observed
+defects sat between the decision and the row.
+
+**This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
+EXTR-22…EXTR-28 are graded against. Every one of the 35 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (22 cells
+the page does carry and the row does not). Nothing is hidden behind the green.
+
+### Per layout
+
+| Layout | Hits | Cells |
+|---|---|---|
+| `corpus_inline_labels.pdf` | 8 | 8 |
+| `corpus_split_labels.pdf` | 8 | 8 |
+| `corpus_stacked_labels.pdf` | 5 | 8 |
+| `corpus_two_column.pdf` | 4 | 8 |
+| `corpus_ambiguous_date.pdf` | 3 | 8 |
+| `corpus_totals_block.pdf` | 4 | 8 |
+| `wild_two_party_bare_tin.pdf` | 6 | 8 |
+| `wild_ruled_lines_totals.pdf` | 7 | 8 |
+| `wild_rc_due_naira.pdf` | 7 | 8 |
+| `wild_stacked_borderless.pdf` | 1 | 8 |
+| `wild_scanned_no_number.pdf` | 0 | 8 |
+
+`wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
+so the import quarantines the document and writes no `invoices` row — and seven cells OCR reads
+cleanly off its committed golden are lost with it. A quarantined layout stays in the denominator;
+dropping it would flatter the rate by the exact amount the defect costs.
+
+### Per field
+
+| Field | Hits | Cells |
+|---|---|---|
+| `invoice_number` | 10 | 11 |
+| `issue_date` | 8 | 11 |
+| `buyer_tin` | 5 | 11 |
+| `buyer_name` | 6 | 11 |
+| `currency` | 4 | 11 |
+| `subtotal` | 6 | 11 |
+| `vat` | 6 | 11 |
+| `total` | 8 | 11 |
+
+`currency` at 4 of 11 is the worst field on the corpus: five layouts print the value inside the
+total or as a naira mark with no label to anchor it. `buyer_tin` at 5 of 11 is the two-party
+defect the tier-1 table already records as `t1aGaps`, now measured on four more arrangements.
+
+### Moving the figure
+
+The number lives in `internal/extraction/endtoend/score_test.go` as two pinned integers,
+`eeCorpusHits` and `eeCorpusCells`; `eeCorpusFloor` is their quotient and never a decimal literal
+beside them.
+
+1. Re-measure: `go test -p 1 -count=1 -v -run TestRLS_EndToEnd ./internal/extraction/endtoend/`.
+   The report prints all three tables on this page. CI prints it too, from the
+   `Report the end-to-end field accuracy` step — the gated step runs this package through
+   `rlsgate`, which deletes a passing test's output.
+2. Edit `eeCorpusHits` to the measured value. `eeCorpusCells` moves only when a layout or a
+   written field is added.
+3. Move every cell that changed between `eeRealMisses` and the hits, with a written reason per
+   cell. `TestRLS_EndToEndScoresTheCorpus` compares the measured miss set against
+   `eeAbsentCells ∪ eeRealMisses` in **both** directions, so a cell that now hits reds by name
+   and so does a cell pinned as neither.
+4. Update all three tables on this page **in the same commit**, or
+   `TestRLS_EndToEndDocRecordsTheMeasuredTables` fails: it parses every row and compares it
+   against a live walk, so a table that sums correctly with the numbers in the wrong rows is
+   still red, and `TestCorpusDoc_RecordsTheEndToEndProcedure` fails on the headline and the rate.
+
+### Why the number may only go up
+
+`TestRLS_EndToEndMeetsTheFloor` admits less than one cell of slack in either direction: the pin
+must be neither below nor above what the walk measured. An unrecorded **improvement** is
+therefore as red as a regression — deliberately, because an improvement that ships without its
+number being recorded is the exact failure this measurement exists to close. The pin is set to
+what was measured, never to a target, and it may **only go up**.
+
+Lowering it is not impossible, only loud. It takes four edits in one commit — the constant,
+`eeRealMisses` with a reason per cell, the per-layout table and the per-field table — and the
+live walk must then agree that those cells really do miss. What no test can catch is an author
+who lands all four with plausible reasons, having actually broken extraction. That is a
+regression accepted in review, not one accepted in silence, and this paragraph is what a
+reviewer is pointed at.
+
+### What this number cannot see
+
+Like the recall rate, it is **monotone** in both distance dials: widening a dial only adds
+candidates, so a sloppier rule set can only raise it. The dial window itself is guarded
+elsewhere (`TestTier1_DialsStayInsideTheirMeasuredWindow`), and this figure's non-vacuity rests
+on the mutilation controls instead — `eeCutScore` is what the same corpus scores with every
+`invoice_number` rule removed, and `eeDecoyBaseHits` is the ranking decoy's base. Read the
+distance dial guarantees off those, never off this rate.
+
+It also cannot see a defect that lives only in a real document. The corpus is eleven **synthetic
+arrangements** — six `corpus_*` layouts plus the five `wild_*` reproductions — not the five real
+anonymised PDFs. A production read that fails on paper texture, a scanner's skew or a vendor's
+unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
+reproducible in this repo and never will be.
+
+**Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
+the 22 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+to the walk — a second copy would be a competing source of truth. The cause of the permanent
+line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
+pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live
+measurement.
+
+## Line-item outcome
+
+Measured in the same walk. `reached` is how many `line_items` rows the layout's document produced
+on the invoice; `expected` is how many its committed golden carries; `priced` is how many of the
+reached rows hold a unit price.
+
+| Layout | Reached | Expected | Priced |
+|---|---|---|---|
+| `corpus_inline_labels.pdf` | 0 | 0 | 0 |
+| `corpus_split_labels.pdf` | 0 | 0 | 0 |
+| `corpus_stacked_labels.pdf` | 0 | 0 | 0 |
+| `corpus_two_column.pdf` | 0 | 0 | 0 |
+| `corpus_ambiguous_date.pdf` | 0 | 0 | 0 |
+| `corpus_totals_block.pdf` | 0 | 0 | 0 |
+| `wild_two_party_bare_tin.pdf` | 0 | 0 | 0 |
+| `wild_ruled_lines_totals.pdf` | 0 | 3 | 0 |
+| `wild_rc_due_naira.pdf` | 0 | 0 | 0 |
+| `wild_stacked_borderless.pdf` | 0 | 0 | 0 |
+| `wild_scanned_no_number.pdf` | 0 | 0 | 0 |
+
+**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. This is
+a permanent zero for the life of this story, and it is a wiring gap rather than an extraction
+one: `documentCreateInput` names no `LineItems` key (`internal/importer/document.go`), while
+`invoice.Store.Create` does write one `line_items` row per `LineItemInput` and the extraction
+worker does write `line_items[N].<role>` rows. The two ends are simply not connected. EXTR-24
+owns connecting them.
+
+Every other row reads `0 / 0`, which is indistinguishable from a satisfied denominator, so the
+report prints a `NO LINE SIGNAL` line whenever every reached row has a zero denominator. Read
+those zeros as "not measured here", never as coverage.
+
+The zeros also read the same for a scorer that cannot see `line_items` at all, so the same run
+scores a control invoice built from two `LineItemInput` entries, one of them priced: it reads
+**2 / 1**. `TestRLS_EndToEndTheLineScorerReadsLinesWhenTheyExist` re-derives both numbers off the
+control itself, so a control cut down to one entry cannot leave the pins asserting nothing.
+
 ## Regenerating
 
 ```
@@ -282,7 +434,7 @@ at registration, before any test runs.
 
 ## Adding a layout
 
-Seven edits, no new test:
+Eight edits, no new test:
 
 1. A builder plus an `fxCorpus` entry in `fixtures_test.go`. The files go **flat** in
    `testdata/` with a `corpus_` prefix — `TestFixtures_MatchTheirGenerator` counts
@@ -310,6 +462,12 @@ Seven edits, no new test:
    row, and `TestEndToEnd_TheExpectedLineCountIsTakenOffTheGoldens` re-derives every value from
    that layout's own golden, so a hand-guessed count is a red test. A layout that carries a
    table also clears the `NO LINE SIGNAL` note off the report — see **The line-item figures**.
+8. A row in **each** of the three tables above — the per-layout and per-field tables under
+   **End-to-end field accuracy**, and the table under **Line-item outcome** — plus the
+   re-measured `eeCorpusHits`. `TestRLS_EndToEndDocRecordsTheMeasuredTables` compares every row
+   against a live walk and both accuracy tables against `eeCorpusHits`/`eeCorpusCells`, so a
+   table left short a row, or summing right with the numbers in the wrong rows, is a red test.
+   Follow **Moving the figure** in that section; the number may only go up.
 
 Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
 in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there
@@ -322,12 +480,12 @@ field's shape and fails on a row naming a value the bytes do not carry.
 
 **Not every committed fixture is a layout.** `learned_two_party.pdf` is generated and
 byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
-prefix so that none of the seven edits above apply to it. Do not add a `corpusExpect` row, a
+prefix so that none of the eight edits above apply to it. Do not add a `corpusExpect` row, a
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
 section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
 reason: a ruled table plus a deliberately inconsistent totals block, exercised by
-`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus. The four
-`wild_*.pdf` arrangements (EXTR-21-06) are the same category again: generated, byte-compared and
+`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus. The five
+`wild_*.pdf` arrangements (EXTR-21-06, EXTR-21-07) are the same category again: generated, byte-compared and
 scored by `expectByLayout`, but outside every `corpus_` ratchet, so edits 2, 3 and 4 above do not
 apply to them.
 

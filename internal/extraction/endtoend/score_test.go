@@ -40,9 +40,13 @@ const (
 //
 // The 35 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
+//
+// eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
+// quotient so the float compared at run time is bit-identical to the measurement.
 const (
 	eeCorpusHits  = 53
 	eeCorpusCells = eeWrittenCells
+	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
 
 // writtenFields is what documentCreateInput actually puts in the invoices row, in
@@ -250,8 +254,8 @@ var eeAbsentCells = map[string]string{
 
 // eeRealMisses are the cells the bytes DO carry and the invoices row does not. Pinned beside
 // eeAbsentCells so the miss set splits into what the corpus can never win and what extraction
-// owes: the hit count alone holds at 32 while one absent cell resolves and one real hit breaks.
-// EXTR-22..28 close these; do not close them here.
+// owes: the hit count alone holds at eeCorpusHits while one absent cell resolves and one real
+// hit breaks. EXTR-22..28 close these; do not close them here.
 var eeRealMisses = map[string]string{
 	"corpus_stacked_labels.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
@@ -635,7 +639,7 @@ func TestEndToEnd_AZeroTotalFieldStillRenders(t *testing.T) {
 
 // AC-3, AC-6. The table is only worth measuring against if the fixture bytes really carry it.
 // Every non-empty expectation must be reachable from the layout's own text layer, and the
-// empty cells must be exactly the pinned twelve.
+// empty cells must be exactly the eeAbsentCellCount pinned ones.
 func TestEndToEnd_EveryExpectationIsCarriedByTheFixtureBytes(t *testing.T) {
 	eeRequireFixtures(t, requiredPDFs)
 
@@ -888,5 +892,23 @@ func TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer(t *testing.
 				t.Errorf("linesScored=%d quarantined=%v is rejected as incomplete: %v -- the rule refuses the shipped shape", c.linesScored, c.quarantined, err)
 			}
 		})
+	}
+}
+
+// AC-1. eeCorpusFloor is a view of the two pinned integers, not a second number beside them.
+// Every clause but the first is a tautology while the derived definition stands; their whole
+// value is that they red against a decimal LITERAL, which the go job would otherwise never see.
+func TestEndToEnd_TheFloorIsAQuotientOfThePinnedIntegers(t *testing.T) {
+	if eeCorpusHits <= 0 || eeCorpusHits > eeCorpusCells {
+		t.Fatalf("eeCorpusHits is %d over %d cell(s); the quotient below is not a rate", eeCorpusHits, eeCorpusCells)
+	}
+	if eeCorpusCells != eeWrittenCells {
+		t.Errorf("eeCorpusCells is %d but the hand-written cell count is %d; the rate would be taken over a denominator nothing counted", eeCorpusCells, eeWrittenCells)
+	}
+	if want := float64(eeCorpusHits) / float64(eeCorpusCells); eeCorpusFloor != want {
+		t.Errorf("eeCorpusFloor is %v, want %v -- write it as the quotient of the two pinned integers, never as a decimal literal that can drift from them", eeCorpusFloor, want)
+	}
+	if eeCorpusFloor <= 0 || eeCorpusFloor > 1 {
+		t.Errorf("eeCorpusFloor is %v, outside (0, 1]; no rate can be compared against it meaningfully", eeCorpusFloor)
 	}
 }

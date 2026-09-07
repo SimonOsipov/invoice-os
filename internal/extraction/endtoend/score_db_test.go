@@ -254,7 +254,7 @@ func TestRLS_EndToEndScoresTheCorpus(t *testing.T) {
 	}
 	for _, field := range writtenFields {
 		if !strings.Contains(report, field) {
-			t.Errorf("the report names no row for field %s; a field at 0/6 must still render:\n%s", field, report)
+			t.Errorf("the report names no row for field %s; a field at 0/eeLayoutCount must still render:\n%s", field, report)
 		}
 	}
 	if got := strings.Count(report, "MISS "); got != len(s.missed) {
@@ -267,8 +267,8 @@ func TestRLS_EndToEndScoresTheCorpus(t *testing.T) {
 		}
 	}
 
-	// Which cells miss, not just how many: 32 survives one absent cell resolving while one real
-	// hit breaks, and that trade would retire an EXTR-22..28 defect without anyone noticing.
+	// Which cells miss, not just how many: eeCorpusHits survives one absent cell resolving while
+	// one real hit breaks, and that trade would retire an EXTR-22..28 defect unnoticed.
 	wantMiss := map[string]string{}
 	for key, why := range eeAbsentCells {
 		wantMiss[key] = why
@@ -433,5 +433,58 @@ func TestRLS_EndToEndTheScannedLayoutStillReadFields(t *testing.T) {
 		if row.name == "invoice_number" && row.rank == 0 && row.value != nil && *row.value != "" {
 			t.Errorf("%s resolved invoice_number to %q at rank 0; the page prints none, so the quarantine would not be the missing number", layout, *row.value)
 		}
+	}
+}
+
+// AC-2. The published rate, its non-vacuity, and the instruction that a ratchet only goes up.
+//
+// Both clause groups together reduce to s.hits == eeCorpusHits, which is the equality pin in
+// TestRLS_EndToEndScoresTheCorpus above. They restate it in the floor's vocabulary and become
+// load-bearing only if that pin is ever weakened to an inequality. The two clause groups read
+// ONE walk: per the equality they cannot fail independently, so a second walk buys no oracle.
+//
+// The integer clauses decide the one-cell boundary exactly; the float pair is what a reader
+// publishes, and at exactly one cell IEEE-754 does not guarantee it reds.
+func TestRLS_EndToEndMeetsTheFloor(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	s := eeScoreCorpus(t, ctx)
+	report := eeRenderReport(s)
+
+	// Floors first: an empty walk satisfies every comparison below.
+	if len(s.byLayout) != eeLayoutCount {
+		t.Fatalf("the walk scored %d layout(s), want %d -- the rate below would be taken over nothing", len(s.byLayout), eeLayoutCount)
+	}
+	if s.total != eeCorpusCells {
+		t.Fatalf("the walk scored %d cell(s), want %d -- one cell of slack would be the wrong size", s.total, eeCorpusCells)
+	}
+	if s.hits == 0 {
+		t.Fatalf("the walk scored 0 hit(s) over %d cell(s); the rate below measures the harness and not the extraction:\n%s", s.total, report)
+	}
+
+	rate := float64(s.hits) / float64(s.total)
+	if rate < eeCorpusFloor {
+		t.Errorf("the corpus reaches %d / %d = %v, below the floor %v. The floor is a ratchet: fix the extraction, never lower it (docs/extraction-corpus.md)\n%s",
+			s.hits, s.total, rate, eeCorpusFloor, report)
+	}
+
+	// Not below the measurement by a whole cell: an improvement must be recorded, not absorbed.
+	if eeCorpusHits < s.hits {
+		t.Errorf("the corpus reaches %d / %d and the floor is pinned at %d. Raise eeCorpusHits to %d (a ratchet only goes up) and update docs/extraction-corpus.md in the same commit\n%s",
+			s.hits, s.total, eeCorpusHits, s.hits, report)
+	}
+	if oneCell := 1.0 / float64(s.total); eeCorpusFloor <= rate-oneCell {
+		t.Errorf("the corpus reaches %v and the floor is %v, a slack of %v -- a whole cell could regress unnoticed. Raise eeCorpusHits to %d (a ratchet only goes up) and update docs/extraction-corpus.md in the same commit",
+			rate, eeCorpusFloor, rate-eeCorpusFloor, s.hits)
+	}
+
+	// Not above it either: a floor above the measurement is a prediction, not a ratchet.
+	if eeCorpusHits > s.hits {
+		t.Errorf("the floor is pinned at %d but the corpus reaches only %d / %d; the pin is a target, and the rate check above can never pass\n%s",
+			eeCorpusHits, s.hits, s.total, report)
+	}
+	if eeCorpusFloor > rate {
+		t.Errorf("the floor %v is above the measured rate %v; it is a prediction, not a ratchet", eeCorpusFloor, rate)
 	}
 }

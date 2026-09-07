@@ -999,7 +999,15 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   // --- the step it pointed at now blocks -----------------------------------------------------
   // No policy was rewritten by the delete: the saved draft still names the key, and the step
   // renders the truth rather than a raw id.
+  // The sidebar lands on the LIST: `Manage roles` navigated off /workflows, and `navigate`
+  // clears `editingPolicyId` on any other destination (D12). Reopen from the row, the idiom
+  // topology/workflows.spec.ts uses — the builder has its own address now.
   await goTo(page, 'Workflows')
+  await page.getByText(policyName, { exact: true }).click()
+  await expect(page, 'the reopened builder has the policy in its URL').toHaveURL(
+    new RegExp(`/workflows/${createdPolicyId}$`),
+  )
+  await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(policyName)
   await expect(page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true })).toBeVisible()
   await page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
   await expect(page.getByText(DELETED_ROLE_LINE, { exact: true })).toBeVisible()

@@ -16,13 +16,9 @@ import (
 // --- harness ----------------------------------------------------------------
 
 // t1aGaps are the corpusExpect pairs Tier-1 cannot reach. Asserted STILL missing, so closing one
-// is a deliberate diff rather than a silent pass. buyer_tin's party word is
-// required (anchor.go:128) while supplier_tin's is optional (:127), and corpus_two_column.pdf
-// puts both TINs in the same page half, so neither the label path nor the banded sweep reaches
-// the buyer's.
-var t1aGaps = []struct{ file, field string }{
-	{"corpus_two_column.pdf", "buyer_tin"},
-}
+// is a deliberate diff rather than a silent pass. Empty since EXTR-22-02 bound each party's TIN
+// to its own heading; TestWildLayouts_DoNotEnterTheCorpusRatchets still bounds the declaration.
+var t1aGaps = []struct{ file, field string }{}
 
 func t1aIsGap(file, field string) bool {
 	for _, g := range t1aGaps {
@@ -45,24 +41,13 @@ func t1aWithoutRelation(kind extraction.RelationKind) []extraction.Tier1Rule {
 	return out
 }
 
-// t1aTIN is a bare TIN token: the sweep pattern matches it whole, so the band is read off the
-// token's own box.
+// t1aTIN is a bare TIN token: the sweep pattern matches it whole, so the label IS the value.
 func t1aTIN(page int, text string, y0, y1 float64) extraction.Token {
 	return extraction.Token{Text: text, Region: extraction.Region{Page: page, X0: 0.10, Y0: y0, X1: 0.30, Y1: y1}}
 }
 
 func t1aPage(number int, tokens ...extraction.Token) extraction.TokenPage {
 	return extraction.TokenPage{Number: number, WidthPt: 612, HeightPt: 792, Tokens: tokens}
-}
-
-// t1aUnbanded is the shipped set with every band cleared -- the paired control for a spec whose
-// point is that a band withheld something.
-func t1aUnbanded() []extraction.Tier1Rule {
-	out := slices.Clone(extraction.Tier1Rules)
-	for i := range out {
-		out[i].Band = extraction.BandAnywhere
-	}
-	return out
 }
 
 // --- the specs --------------------------------------------------------------
@@ -175,73 +160,11 @@ func TestTier1_EveryRelationIsLoadBearing(t *testing.T) {
 	}
 }
 
-// Banding is defined on page 1 only. G-15 says so over one-page documents; a real invoice runs to
-// several, and inBand reads TokenPage.Number rather than a loop index.
-func TestTier1_ABandedSweepIgnoresALaterPage(t *testing.T) {
-	t1Floor(t)
-
-	pages := []extraction.TokenPage{
-		t1aPage(1, t1aTIN(1, "99999999-0301", 0.20, 0.27), t1aTIN(1, "99999999-0302", 0.60, 0.67)),
-		t1aPage(2, t1aTIN(2, "99999999-0303", 0.20, 0.27), t1aTIN(2, "99999999-0304", 0.60, 0.67)),
-	}
-
-	got := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-	rvFloor(t, got, "two pages of bare TIN tokens under the shipped set")
-	if v := rvValues(rvFor(got, "supplier_tin")); !slices.Equal(v, []string{"99999999-0301"}) {
-		t.Errorf("supplier_tin = %v, want exactly [99999999-0301]; page 2's top TIN is outside BandPage1Top", v)
-	}
-	if v := rvValues(rvFor(got, "buyer_tin")); !slices.Equal(v, []string{"99999999-0302"}) {
-		t.Errorf("buyer_tin = %v, want exactly [99999999-0302]; page 2's lower TIN is outside BandPage1Bottom", v)
-	}
-
-	// Paired control: the same four tokens with every band cleared. Without it the two zeros
-	// above hold equally against a sweep that reads nothing on page 2 for some other reason.
-	ctl := extraction.Resolve(pages, extraction.RuleSet{Tier1: t1aUnbanded()})
-	rvControl(t, ctl, "the same four tokens with every band cleared")
-	for _, v := range []string{"99999999-0303", "99999999-0304"} {
-		if !slices.Contains(rvValues(rvFor(ctl, "supplier_tin")), v) {
-			t.Errorf("unbanded, supplier_tin = %v, want it to contain %q; the page-2 tokens are readable and only the band withheld them", rvValues(rvFor(ctl, "supplier_tin")), v)
-		}
-	}
-}
-
-// The page-half split is the sweeps' ONLY discriminator, so a layout that puts both TINs in one
-// half gives both to one field and none to the other. corpus_two_column.pdf is the real
-// instance; this is the mechanism. Unfixed: the fix is a lexicon change, and anchorLexicon is
-// Fingerprint input.
-func TestTier1_TheSweepCannotSeparateTwoTINsInOnePageHalf(t *testing.T) {
-	t1Floor(t)
-
-	sameHalf := []extraction.TokenPage{t1aPage(1,
-		t1aTIN(1, "99999999-0401", 0.20, 0.27),
-		t1aTIN(1, "99999999-0402", 0.30, 0.37),
-	)}
-
-	got := extraction.Resolve(sameHalf, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-	rvFloor(t, got, "two bare TINs in the top half under the shipped set")
-	if v := rvValues(rvFor(got, "supplier_tin")); !slices.Equal(v, []string{"99999999-0401", "99999999-0402"}) {
-		t.Errorf("supplier_tin = %v, want both TINs; the top sweep takes every bare TIN above the split", v)
-	}
-	if v := rvValues(rvFor(got, "buyer_tin")); len(v) != 0 {
-		t.Errorf("buyer_tin = %v, want none; nothing sits below the split", v)
-	}
-
-	// Positive control, and the fix's shape: the same two TINs, one per half, separate cleanly.
-	split := []extraction.TokenPage{t1aPage(1,
-		t1aTIN(1, "99999999-0401", 0.20, 0.27),
-		t1aTIN(1, "99999999-0402", 0.60, 0.67),
-	)}
-	ctl := extraction.Resolve(split, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-	rvControl(t, ctl, "the same two TINs, one per page half")
-	if v := rvValues(rvFor(ctl, "buyer_tin")); !slices.Equal(v, []string{"99999999-0402"}) {
-		t.Errorf("with one TIN per half, buyer_tin = %v, want [99999999-0402]", v)
-	}
-}
-
 // t1aSweepVsLabel is one page carrying both paths to supplier_tin and making them disagree: a
-// bare TIN in the top half for the banded sweep, and a labelled one in the bottom half for the
-// label path. Synthetic because the corpus lost this control -- the disagreement there WAS the
-// cross-party reading TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin now closes.
+// bare TIN the sweep takes, and a labelled one for the label path. The page carries no party
+// heading is the supplier's, so every candidate on it routes to supplier_tin. Synthetic
+// because the corpus lost this control -- the disagreement there WAS the cross-party reading
+// TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin now closes.
 func t1aSweepVsLabel() []extraction.TokenPage {
 	return []extraction.TokenPage{t1aPage(1,
 		t1aTIN(1, "99999999-0501", 0.20, 0.27),
@@ -259,8 +182,8 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	if len(got) < 2 {
 		t.Fatalf("supplier_tin carries %d candidate(s) %v; the disagreement needs at least two", len(got), rvValues(got))
 	}
-	if got[0].RuleID != "t1.supplier_tin.sweep" || got[0].Value != "99999999-0201" {
-		t.Errorf("supplier_tin[0] = %q from %q, want 99999999-0201 from t1.supplier_tin.sweep at distance 0", got[0].Value, got[0].RuleID)
+	if got[0].RuleID != "t1.tin.sweep" || got[0].Value != "99999999-0201" {
+		t.Errorf("supplier_tin[0] = %q from %q, want 99999999-0201 from t1.tin.sweep at distance 0", got[0].Value, got[0].RuleID)
 	}
 	for _, c := range got {
 		if c.RuleID == "" {
@@ -272,24 +195,31 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	synth := rvFor(extraction.Resolve(t1aSweepVsLabel(), extraction.RuleSet{Tier1: extraction.Tier1Rules}), "supplier_tin")
 	rvFloor(t, synth, "supplier_tin on the sweep-versus-label page")
 
-	byRule := make(map[string]string, len(synth))
+	// A slice per rule, not one value: the sweep is page-wide since EXTR-22-02 and reaches the
+	// labelled row's value token as well as the bare one.
+	byRule := make(map[string][]string, len(synth))
 	for _, c := range synth {
 		if c.RuleID == "" {
 			t.Errorf("a supplier_tin candidate %q carries no RuleID; the surviving pair is indistinguishable downstream", c.Value)
 		}
-		byRule[c.RuleID] = c.Value
+		byRule[c.RuleID] = append(byRule[c.RuleID], c.Value)
 	}
 	for _, want := range []struct{ ruleID, value string }{
-		{"t1.supplier_tin.sweep", "99999999-0501"},
+		{"t1.tin.sweep", "99999999-0501"},
 		{"t1.supplier_tin.right", "99999999-0502"},
 	} {
-		if byRule[want.ruleID] != want.value {
-			t.Errorf("%s contributed %q, want %q; without both paths this spec pins no disagreement", want.ruleID, byRule[want.ruleID], want.value)
+		if !slices.Contains(byRule[want.ruleID], want.value) {
+			t.Errorf("%s contributed %v, want it to hold %q; without both paths this spec pins no disagreement", want.ruleID, byRule[want.ruleID], want.value)
 		}
+	}
+	// The label path reaches the bare TIN through no rule at all, so the two paths still
+	// disagree about which token is the supplier's.
+	if slices.Contains(byRule["t1.supplier_tin.right"], "99999999-0501") {
+		t.Errorf("t1.supplier_tin.right contributed %v and reached the bare token too; the two paths no longer disagree", byRule["t1.supplier_tin.right"])
 	}
 }
 
-// The supplier pattern's party word is optional (anchor.go:127), so before EXTR-16 the supplier
+// The supplier pattern's party word was optional before EXTR-22, so before EXTR-16 the supplier
 // label read across the party split and collected the buyer's TIN. Closed by anchor specificity:
 // on corpus_split_labels.pdf the buyer's own label claims the wider span of that token.
 func TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin(t *testing.T) {

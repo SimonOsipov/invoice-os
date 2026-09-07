@@ -175,10 +175,10 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 // TestWildLayouts_TheTwoPartyDefectsAreReproduced is the positive control for the two above: the
 // same candidate read, on the arrangement that DOES reproduce its Objective defects. Without it
 // a Resolve that stopped producing candidates at all would read as two clean non-results.
+//
+// Its TIN half moved to TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty, which asserts the
+// binding rather than the defect. The buyer_name half below is EXTR-22-03's oracle and stays.
 func TestWildLayouts_TheTwoPartyDefectsAreReproduced(t *testing.T) {
-	if got := wildResolved(t, wildTwoParty, "supplier_tin"); !slices.Contains(got, wildTINs[1]) {
-		t.Errorf("%s no longer binds the buyer TIN %s to supplier_tin (%v); EXTR-22's oracle is gone", wildTwoParty, wildTINs[1], got)
-	}
 	names := wildResolved(t, wildTwoParty, "buyer_name")
 	if len(names) == 0 || names[0] == "Honeywell Group" {
 		t.Errorf("%s ranks buyer_name %v with the real name first; the label fragment no longer wins and EXTR-22's oracle is gone", wildTwoParty, names)

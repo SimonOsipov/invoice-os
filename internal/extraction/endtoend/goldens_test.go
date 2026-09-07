@@ -352,17 +352,19 @@ func TestWildGoldens_EveryNewFixtureIsWiredIntoTheCanaryJob(t *testing.T) {
 
 // --- AC-4: the corpus ratchets stay closed ---------------------------------------------------
 
-// wildRatchets are the four collections a wild_ layout may never enter, each with the number of
-// corpus_ entries it carries today. The floor is the control needle: a scan that stopped
-// finding the collection reads clean.
+// wildRatchets are the four collections a wild_ layout may never enter, each with a needle the
+// declaration must still carry. The floor is the control needle: a scan that stopped finding
+// the collection reads clean. t1aGaps is empty, so its needle is its own type text rather than
+// a row -- present in every literal form wildVarBody bounds.
 var wildRatchets = []struct {
 	file, decl string
-	minCorpus  int
+	needle     string
+	min        int
 }{
-	{"../corpus_test.go", "var corpusLayouts = ", 6},
-	{"../corpus_test.go", "var corpusExpect = ", 6},
-	{"../corpus_adversarial_test.go", "var corpusTokenFloor = ", 6},
-	{"../tier1_adversarial_test.go", "var t1aGaps = ", 1},
+	{"../corpus_test.go", "var corpusLayouts = ", "corpus_", 6},
+	{"../corpus_test.go", "var corpusExpect = ", "corpus_", 6},
+	{"../corpus_adversarial_test.go", "var corpusTokenFloor = ", "corpus_", 6},
+	{"../tier1_adversarial_test.go", "var t1aGaps = ", "field string", 1},
 }
 
 // wildTier1Pins are the Tier-1 numbers a fifth corpus layout would move. Regexes, not literals:
@@ -386,6 +388,14 @@ func wildVarBody(t *testing.T, src, decl, file string) string {
 		t.Fatalf("%s declares no %q; this scan asserts an absence and would report clean on a collection it never found", file, decl)
 	}
 	rest := src[i:]
+	// The declaration's own line closes the literal when its braces balance there: gofmt writes
+	// an EMPTY composite literal that way, and a short non-empty one too. Neither leaves a
+	// column-0 closing brace for the search below
+	// (TestWildVarBody_BoundsADeclarationInEveryLiteralForm).
+	if line, _, ok := strings.Cut(rest, "\n"); ok &&
+		strings.Count(line, "{") > 0 && strings.Count(line, "{") == strings.Count(line, "}") {
+		return line
+	}
 	j := strings.Index(rest, "\n}\n")
 	if j < 0 {
 		t.Fatalf("%s's %q has no closing brace at column 0; the body below would run to end of file", file, decl)
@@ -453,8 +463,8 @@ func TestWildVarBody_BoundsADeclarationInEveryLiteralForm(t *testing.T) {
 func TestWildLayouts_DoNotEnterTheCorpusRatchets(t *testing.T) {
 	for _, r := range wildRatchets {
 		body := wildVarBody(t, wildReadFile(t, r.file), r.decl, r.file)
-		if n := strings.Count(body, "corpus_"); n < r.minCorpus {
-			t.Fatalf("%s's %q names %d corpus_ entr(ies), want at least %d; the scan is not reading the collection", r.file, r.decl, n, r.minCorpus)
+		if n := strings.Count(body, r.needle); n < r.min {
+			t.Fatalf("%s's %q names %d %q entr(ies), want at least %d; the scan is not reading the collection", r.file, r.decl, n, r.needle, r.min)
 		}
 		if strings.Contains(body, "wild_") {
 			t.Errorf("%s's %q names a wild_ layout; a wild layout in a corpus ratchet moves the Tier-1 denominators", r.file, r.decl)

@@ -124,10 +124,14 @@ func ParseRule(raw []byte) (Rule, error) {
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
-	{"supplier_tin", `(?i)\b(supplier|seller|vendor)?\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
-	{"buyer_tin", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\s*\.?\s*(tin|tax\s*id)\b`},
+	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
+	{"buyer_tin", `(?i)\b((buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\s*\.?\s*(tin|tax\s*id)|invoice\s*to|deliver\s*to)\b`},
+	// bare_tin is the party-LESS TIN label. It sits after both party entries so anchorOutranked
+	// suppresses it on every party-bearing token
+	// (TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne).
+	{"bare_tin", `(?i)\b\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
 	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
-	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\b`},
+	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
 	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
 	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},

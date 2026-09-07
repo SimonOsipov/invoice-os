@@ -26,12 +26,14 @@ import (
 var rvMapScanFiles = []string{
 	"resolve.go", "tier1.go", "vocabulary.go", "anchor.go",
 	"shapes.go", "fingerprint.go", "extractor.go", "pagereader.go", "learn.go",
+	"party.go",
 }
 
-// rvPureFiles are the three files Resolve's purity is asserted over. shapes.go is out: it
+// rvPureFiles are the four files Resolve's purity is asserted over. shapes.go is out: it
 // legitimately imports time for a fixed-layout time.Parse, which reads no clock. learn.go
-// (EXTR-14-04) is in: LearnRule shares resolve.go's own purity fences.
-var rvPureFiles = []string{"resolve.go", "tier1.go", "learn.go"}
+// (EXTR-14-04) is in: LearnRule shares resolve.go's own purity fences. party.go (EXTR-22-02) is
+// in: Resolve calls partyOrder, so it is on the path and shares the same fences.
+var rvPureFiles = []string{"resolve.go", "tier1.go", "learn.go", "party.go"}
 
 // rvAllowedImports excludes time, math/rand, net/*, database/sql and pgx by omission.
 var rvAllowedImports = []string{"math", "regexp", "slices", "strings", "unicode"}

@@ -1390,7 +1390,7 @@ func TestRLS_ExtractWorkerFailsTheJobWhenThePageSinkFails(t *testing.T) {
 
 // --- EXTR-14-03: the worker records the layout it just read ---------------------------
 
-// W-01, W-02: a succeeded job carries the v1: fingerprint and the anchor list its own page
+// W-01, W-02: a succeeded job carries the geometric fingerprint and the anchor list its own page
 // read observed, computed independently here so the test is not echoing the worker's own
 // arithmetic back at itself.
 func TestRLS_ExtractWorkerRecordsLayoutOnSuccess(t *testing.T) {
@@ -1412,8 +1412,8 @@ func TestRLS_ExtractWorkerRecordsLayoutOnSuccess(t *testing.T) {
 		t.Fatalf("the independent computation over %s found %d anchor observation(s), want 7; the fixture drifted and every assertion below would compare against the wrong number", fxCorpusTwoColumn, len(wantObs))
 	}
 	wantFingerprint := extraction.Fingerprint(pages)
-	if !strings.HasPrefix(wantFingerprint, "v1:") {
-		t.Fatalf("the independent Fingerprint computation is %q, which does not start with v1:; FingerprintVersion or the fixture drifted", wantFingerprint)
+	if !strings.HasPrefix(wantFingerprint, "v2:") {
+		t.Fatalf("the independent Fingerprint computation is %q, which does not start with v2:; FingerprintVersion or the fixture drifted", wantFingerprint)
 	}
 
 	row := stJobLayout(t, ctx, xid)
@@ -1423,8 +1423,8 @@ func TestRLS_ExtractWorkerRecordsLayoutOnSuccess(t *testing.T) {
 	if *row.Fingerprint != wantFingerprint {
 		t.Errorf("job %s carries layout_fingerprint %q, want %q (computed independently over the same pages)", xid, *row.Fingerprint, wantFingerprint)
 	}
-	if !strings.HasPrefix(*row.Fingerprint, "v1:") {
-		t.Errorf("layout_fingerprint %q does not start with v1:", *row.Fingerprint)
+	if !strings.HasPrefix(*row.Fingerprint, "v2:") {
+		t.Errorf("layout_fingerprint %q does not start with v2:", *row.Fingerprint)
 	}
 
 	if row.Anchors == nil {

@@ -10,6 +10,16 @@ const (
 	PartyBuyer
 )
 
+// partyField is the TIN field p owns. PartyUnknown falls back to the supplier because that is
+// what a party-less TIN label filled before the partition existed, which is what makes the
+// change monotone (TestTier1_ABareTINLabelBindsToTheHeadingBeforeIt).
+func partyField(p Party) string {
+	if p == PartyBuyer {
+		return "buyer_tin"
+	}
+	return "supplier_tin"
+}
+
 // partyHeadings pairs a party with the anchorLexicon id that names it. Read by id, never
 // re-spelled: a forked pattern drifts from the fingerprint silently (anchorPattern's own rule).
 var partyHeadings = []struct {

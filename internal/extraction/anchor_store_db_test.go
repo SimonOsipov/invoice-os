@@ -1349,10 +1349,13 @@ func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	pages := arBoxlessGolden()
 	v1Key := extraction.Fingerprint(pages)
 	b1Key := extraction.BoxlessFingerprint(pages)
-	v2Key := "v2:" + strings.TrimPrefix(v1Key, extraction.FingerprintVersion+":")
-	b2Key := "b2:" + strings.TrimPrefix(b1Key, extraction.BoxlessFingerprintVersion+":")
+	// A bumped prefix, DERIVED from the shipped constant rather than spelled as the next
+	// literal: this spec said "v2:" until EXTR-22-02 shipped that very version and the two keys
+	// collided.
+	vNextKey := extraction.FingerprintVersion + "next:" + strings.TrimPrefix(v1Key, extraction.FingerprintVersion+":")
+	bNextKey := extraction.BoxlessFingerprintVersion + "next:" + strings.TrimPrefix(b1Key, extraction.BoxlessFingerprintVersion+":")
 
-	keys := []string{v1Key, b1Key, v2Key, b2Key}
+	keys := []string{v1Key, b1Key, vNextKey, bNextKey}
 	for i, a := range keys {
 		for j, b := range keys {
 			if i < j && a == b {
@@ -1392,9 +1395,9 @@ func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	readOne("before any bump", v1Key, geoID)
 	readOne("before any bump", b1Key, boxID)
 
-	readNone("after a FingerprintVersion bump", v2Key)
+	readNone("after a FingerprintVersion bump", vNextKey)
 	readOne("with the FingerprintVersion bumped, the boxless class", b1Key, boxID)
 
-	readNone("after a BoxlessFingerprintVersion bump", b2Key)
+	readNone("after a BoxlessFingerprintVersion bump", bNextKey)
 	readOne("with the BoxlessFingerprintVersion bumped, the geometric class", v1Key, geoID)
 }

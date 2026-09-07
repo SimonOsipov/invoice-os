@@ -412,22 +412,20 @@ func TestRLS_WiredPathReadsTheSameThroughBothReaders(t *testing.T) {
 // count cannot tell "the same one gap" from "a new gap plus a new hit". Mirrors
 // TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps.
 //
-// The gap is corpus_two_column.pdf / buyer_tin, a Tier-1 REACH limit. A version bump is not what
-// gates it: a bump invalidates stored learned rules. The lexicon widening that WOULD close it
-// needs a FingerprintVersion AND a BoxlessFingerprintVersion bump since EXTR-19 --
-// anchorLabelMatchers feeds both producers (fingerprint.go:111, :211) -- which is a claim about
-// one candidate remedy and not about the gap.
+// t1aGaps is empty since EXTR-22-02, so the anti-vacuity floor sits on the DENOMINATOR instead:
+// the walk must score every pair, and with no recorded gap the hits assertion below is the
+// strong claim that it reaches all of them.
 func TestRLS_WiredPathMissesExactlyTheRecordedGaps(t *testing.T) {
 	ctx := t.Context()
 
 	s := cwScoreWired(t, ctx, "the shipped Tier-1 set", 918500, cwDocling, cwRankZeroOnly, nil)
 	cwRequireWalk(t, s, "the shipped Tier-1 set")
 
-	if len(t1aGaps) == 0 {
-		t.Fatal("t1aGaps is empty; both comparisons below would hold over nothing")
+	if s.total != tier1DecisionPairs {
+		t.Fatalf("the wired walk scored %d pair(s), want %d; a walk that lost pairs flatters every comparison below", s.total, tier1DecisionPairs)
 	}
-	if len(s.missed) == 0 {
-		t.Fatalf("the wired walk missed no pair while t1aGaps records %d; the walk is not scoring the decision", len(t1aGaps))
+	if len(s.missed) != len(t1aGaps) {
+		t.Errorf("the wired walk missed %d pair(s) while t1aGaps records %d", len(s.missed), len(t1aGaps))
 	}
 
 	missed, recorded := cwMissedSet(s), cwGapSet()

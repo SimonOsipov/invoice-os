@@ -48,6 +48,11 @@ const maxCandidatesPerField = 8
 // permutation-invariant, and a second ordering mechanism would mask a gap in the comparator.
 func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 	var all []Candidate
+	// One partition per page, read by every party-scoped rule below and computed once.
+	parties := make([][]Party, len(pages))
+	for i, p := range pages {
+		parties[i] = partyOrder(p)
+	}
 	// Learned arrives seq DESC, so the first rule that produces anything for a field is the newest
 	// one reaching this page and supersedes the rest. A rule producing nothing claims nothing --
 	// resolve_converge_test.go and TestResolve_ANewerRuleThatProducesNothingDoesNotSuppressTheOlderOne.
@@ -57,13 +62,15 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 			continue
 		}
 		before := len(all)
-		all = appendRuleCandidates(all, pages, r.Rule, BandAnywhere, r.Field, r.ID, TierLearned)
+		// A learned rule is never party-scoped: re-routing one by heading would overrule the
+		// reviewer who pointed at the field.
+		all = appendRuleCandidates(all, pages, parties, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
 		}
 	}
 	for _, r := range rules.Tier1 {
-		all = appendRuleCandidates(all, pages, r.Rule, r.Band, r.Field, r.Key, TierGeneric)
+		all = appendRuleCandidates(all, pages, parties, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, TierGeneric)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -85,12 +92,16 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 // order, skipping any anchor outside band. A Rule built as a composite literal has no compiled
 // matcher and yields nothing rather than panicking; ParseRule is the only constructor that sets
 // one.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band PageBand, field, ruleID string, tier Tier) []Candidate {
+//
+// scoped routes the candidate to the field the ANCHOR's party owns rather than to field. The
+// anchor, never the value: on a below relation the value can sit past a block boundary, and
+// reading its party there would let it steal the other party's field.
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier) []Candidate {
 	if rule.re == nil {
 		return dst
 	}
-	for _, page := range pages {
-		for _, tok := range page.Tokens {
+	for pi, page := range pages {
+		for ti, tok := range page.Tokens {
 			loc := rule.re.FindStringIndex(tok.Text)
 			if loc == nil {
 				continue
@@ -101,15 +112,19 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band Pa
 			if !inBand(band, page.Number, tok.Region) {
 				continue
 			}
+			outField := field
+			if scoped {
+				outField = partyField(parties[pi][ti])
+			}
 			switch rule.Relation.Kind {
 			case RelSameToken:
 				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
-					usableRegion(tok.Region), field, ruleID, tier, 0)
+					usableRegion(tok.Region), outField, ruleID, tier, 0)
 			case RelRight, RelBelow:
 				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
 					value := page.Tokens[rel.index]
 					dst = appendReadings(dst, rule.Shape, value.Text,
-						usableRegion(value.Region), field, ruleID, tier, rel.distance)
+						usableRegion(value.Region), outField, ruleID, tier, rel.distance)
 				}
 			}
 		}

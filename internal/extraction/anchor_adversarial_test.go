@@ -232,8 +232,10 @@ func TestParseRule_NonASCIILabelAndCaseFolding(t *testing.T) {
 // anchorLexicon's iteration order is fingerprint input, so the order is pinned, not just the
 // slice-ness A-08 asserts.
 func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
+	// bare_tin sits AFTER both party entries: this is the only mechanical guarantee that
+	// anchorOutranked suppresses it on a party-bearing token.
 	want := []string{
-		"invoice_no", "issue_date", "supplier_tin", "buyer_tin", "supplier_name",
+		"invoice_no", "issue_date", "supplier_tin", "buyer_tin", "bare_tin", "supplier_name",
 		"buyer_name", "currency", "subtotal", "vat", "total",
 	}
 
@@ -257,6 +259,7 @@ func TestAnchorLexicon_EveryEntryMatchesAndRejects(t *testing.T) {
 		"issue_date":    {"Invoice Date", "Dated"},
 		"supplier_tin":  {"Supplier TIN", "Supplier Name"},
 		"buyer_tin":     {"Buyer TIN", "Supplier TIN"},
+		"bare_tin":      {"TIN:", "Tinned Goods"},
 		"supplier_name": {"Supplier", "Buyer"},
 		"buyer_name":    {"Bill To", "Supplier"},
 		"currency":      {"Currency", "Concurrency"},

@@ -77,8 +77,8 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 
 // G-14
 func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
-	if len(anchorLexicon) != 10 {
-		t.Fatalf("anchorLexicon holds %d entry/entries, want 10; the coverage assertion below would run over the wrong table", len(anchorLexicon))
+	if len(anchorLexicon) != 11 {
+		t.Fatalf("anchorLexicon holds %d entry/entries, want 11; the coverage assertion below would run over the wrong table", len(anchorLexicon))
 	}
 	if len(Tier1Rules) != tier1RuleCount {
 		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)
@@ -111,8 +111,8 @@ func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 		used[i]++
 	}
 
-	if labelRules != 30 || sweepRules != 2 {
-		t.Errorf("the set splits %d label rule(s) and %d non-lexicon rule(s), want 30 and 2", labelRules, sweepRules)
+	if labelRules != 33 || sweepRules != 1 {
+		t.Errorf("the set splits %d label rule(s) and %d non-lexicon rule(s), want 33 and 1", labelRules, sweepRules)
 	}
 	for i, n := range used {
 		if n == 0 {
@@ -146,8 +146,8 @@ func TestTier1_TheTINSweepMatchesOnlyABareToken(t *testing.T) {
 			t.Errorf("Tier1Rules[%q] matched inside %q at %v; the sweep must recognise a bare token only", r.Key, "TIN: 99999999-0301", loc)
 		}
 	}
-	if sweeps != 2 {
-		t.Fatalf("found %d rule(s) carrying tier1TINSweepLabel, want 2; the assertions above ran over the wrong rules", sweeps)
+	if sweeps != 1 {
+		t.Fatalf("found %d rule(s) carrying tier1TINSweepLabel, want 1; the assertions above ran over the wrong rules", sweeps)
 	}
 }
 

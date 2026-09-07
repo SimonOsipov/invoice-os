@@ -121,15 +121,11 @@ var corpusPinned = []struct {
 		fields: []corpusFieldPin{
 			{"invoice_number", rcStr("INV-1004"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-05-06"), extraction.ReasonNone, nil},
-			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
-			// lexicon. The bare "TIN" label's optional party word also matches the buyer's TIN,
-			// so a clean field reads ambiguous.
-			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonAmbiguous, []string{"99999999-0402"}},
+			// Each party's TIN follows its own heading since EXTR-22-02, so neither reads
+			// ambiguous and neither absorbs the other.
+			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
-			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
-			// lexicon. The buyer's own TIN (99999999-0402) is real but never reaches this field:
-			// it is entirely absorbed as supplier_tin's alternative above.
-			{"buyer_tin", nil, extraction.ReasonMissing, nil},
+			{"buyer_tin", rcStr("99999999-0402"), extraction.ReasonNone, nil},
 			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", nil, extraction.ReasonMissing, nil},
@@ -392,13 +388,13 @@ func TestReconcileCorpus_AmbiguousDateKeepsBothReadings(t *testing.T) {
 
 // corpusMissingExpect is AC-3's own expectation table: the exact set of ReasonMissing fields
 // per layout. line_items belongs to every row (AC-7); the rest follows which fields each
-// layout's generator omits (docs/extraction-corpus.md) plus the one omission the pipeline
-// itself introduces -- corpus_two_column.pdf's buyer_tin, the KNOWN GAP pinned above.
+// layout's generator omits (docs/extraction-corpus.md). The pipeline itself introduces no
+// omission since EXTR-22-02.
 var corpusMissingExpect = map[string][]string{
 	"corpus_inline_labels.pdf":  {"line_items"},
 	"corpus_split_labels.pdf":   {"line_items"},
 	"corpus_stacked_labels.pdf": {"currency", "subtotal", "vat", "line_items"},
-	"corpus_two_column.pdf":     {"buyer_tin", "currency", "subtotal", "vat", "line_items"},
+	"corpus_two_column.pdf":     {"currency", "subtotal", "vat", "line_items"},
 	"corpus_ambiguous_date.pdf": {"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "line_items"},
 	"corpus_totals_block.pdf":   {"issue_date", "supplier_name", "buyer_tin", "buyer_name", "currency", "line_items"},
 }

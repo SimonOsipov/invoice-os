@@ -34,9 +34,9 @@ import (
 // number of rules must fail here, naming the cut, rather than mutilate a different field
 // silently.
 const (
-	eeShippedRules = 32                            // extraction.Tier1Rules: 10 specs x 3 relations + 2 banded TIN sweeps
+	eeShippedRules = 34                            // extraction.Tier1Rules: 10 specs x 3 relations + bare_tin's 3 + 1 party-scoped TIN sweep
 	eeCutRemoved   = 3                             // every invoice_number rule
-	eeCutRules     = eeShippedRules - eeCutRemoved // 29
+	eeCutRules     = eeShippedRules - eeCutRemoved // 31
 	eeCutField     = "invoice_number"
 	// Over eeCorpusCells. An empty invoice number is refused twice -- documentCreateInput
 	// (importer/document.go) and Store.Create (invoice/store.go:159) -- so this suite scores the

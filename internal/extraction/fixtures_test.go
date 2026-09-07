@@ -579,13 +579,13 @@ func fxBuildCorpusTotalsBlock() []byte {
 const fxLearnedTwoParty = "learned_two_party.pdf"
 
 // fxBuildLearnedTwoParty stacks both party blocks (label / name / BARE TIN) in page 1's top
-// half. That is the whole trick: t1.buyer_tin.sweep is banded BandPage1Bottom so it cannot
-// reach the buyer's TIN, and the buyer_tin lexicon needs a party word beside a TIN word, which
-// a bare number does not carry -- so Tier-1 alone returns ZERO buyer_tin candidates.
+// half. The bytes are unchanged since EXTR-14; what they mean changed at EXTR-22-02. The page
+// half no longer scopes the sweep, so each bare TIN follows its own heading and Tier-1 alone
+// now decides both supplier_tin and buyer_tin here.
 //
-// supplier_tin therefore reads "ambiguous" here: t1.supplier_tin.sweep is top-banded and claims
-// both bare TINs. That is the cost of the arrangement, not a defect to fix -- it is invisible to
-// every accuracy number because this is not a corpus layout.
+// The chain the fixture exists for is unaffected and stronger: a pointed correction's learned
+// rule must now BEAT a real generic candidate rather than fill a void
+// (TestLearnedTwoParty_Tier1BindsTheBuyerTINAndTheLearnedRuleStillOutranksIt).
 func fxBuildLearnedTwoParty() []byte {
 	return fxTextPage(
 		fxLine{24, 72, 720, "INVOICE"},

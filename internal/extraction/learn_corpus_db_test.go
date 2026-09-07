@@ -33,8 +33,8 @@ const (
 	lcTwoCol = "corpus_two_column.pdf"
 	lcField  = "buyer_tin"
 
-	// The two bare TIN tokens on learned_two_party.pdf. Measured: Tier-1 alone reaches
-	// NEITHER as a buyer_tin, and the buyer's is what a reviewer points at.
+	// The two bare TIN tokens on learned_two_party.pdf. Since EXTR-22-02 Tier-1 alone reaches
+	// each as its own party's field; the buyer's is what a reviewer points at.
 	lcBuyerTIN    = "99999999-0702"
 	lcSupplierTIN = "99999999-0701"
 
@@ -57,15 +57,16 @@ var lcTier1Decided = []struct {
 }{
 	{"invoice_number", "INV-1007", extraction.ReasonNone},
 	{"issue_date", "2026-04-22", extraction.ReasonNone},
-	{"supplier_tin", "99999999-0701", extraction.ReasonAmbiguous},
+	{"supplier_tin", "99999999-0701", extraction.ReasonNone},
 	{"supplier_name", "Adeyemi Trading Limited", extraction.ReasonNone},
+	{"buyer_tin", "99999999-0702", extraction.ReasonNone},
 	{"buyer_name", "Honeywell Group", extraction.ReasonNone},
 	{"total", "3225.00", extraction.ReasonNone},
 }
 
-// lcTier1Candidates is what Resolve returns over the whole page under Tier1Rules alone. The
-// floor under E-01's zero: nine is not zero, so "no buyer_tin" is a gap in the rule set and not
-// a page the reader failed on.
+// lcTier1Candidates is what Resolve returns over the whole page under Tier1Rules alone.
+// Unmoved by EXTR-22-02: a party-scoped rule reroutes an existing candidate's Field, it mints
+// none.
 const lcTier1Candidates = 9
 
 // --- harness ----------------------------------------------------------------
@@ -189,41 +190,7 @@ func lcPost(t *testing.T, f clFixture, arm, field, value string, region extracti
 	}
 }
 
-// --- E-01 / AC #1: Tier-1 alone reaches nothing -------------------------------------------
-
-// The "before". No database: this is the shipped rule set over the committed bytes, and the
-// paired positive control is in the same read -- six other fields DO decide, so the zero below
-// is a gap in Tier-1 and not a page nothing was read from.
-func TestLearnedTwoParty_Tier1AloneReachesNoBuyerTIN(t *testing.T) {
-	pages := rvCorpusPages(t, fxLearnedTwoParty)
-
-	all := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-	rvFloor(t, all, "the shipped Tier-1 set over "+fxLearnedTwoParty)
-	if len(all) != lcTier1Candidates {
-		t.Errorf("Tier-1 alone produced %d candidate(s) over %s, want %d -- the zero asserted below only means something against a page the reader DID read",
-			len(all), fxLearnedTwoParty, lcTier1Candidates)
-	}
-	if got := rvFor(all, lcField); len(got) != 0 {
-		t.Errorf("Tier-1 alone produced %d %s candidate(s) %v, want 0 -- the buyer sweep is banded to page 1's BOTTOM half and both TINs sit in the top",
-			len(got), lcField, rvValues(got))
-	}
-
-	results := extraction.Reconcile(extraction.Input{Candidates: all})
-	buyer := lcDecided(t, results, lcField)
-	if buyer.Value != nil || buyer.Reason != extraction.ReasonMissing {
-		t.Errorf("Tier-1 alone decided %s = %s reason %q, want <nil> and %q",
-			lcField, lcValue(buyer), buyer.Reason, extraction.ReasonMissing)
-	}
-
-	// The positive control, on the SAME read: every other measured field still lands.
-	for _, want := range lcTier1Decided {
-		got := lcDecided(t, results, want.field)
-		if lcValue(got) != want.value || got.Reason != want.reason {
-			t.Errorf("Tier-1 alone decided %s = %s reason %q, want %q reason %q -- without these the missing buyer_tin above is indistinguishable from an unread page",
-				want.field, lcValue(got), got.Reason, want.value, want.reason)
-		}
-	}
-}
+// --- E-01 / AC #1: Tier-1 reaches the buyer TIN and the learned rule still outranks it ----
 
 // The re-founded "before". Tier-1 now reaches the buyer's TIN on this layout unaided, so the
 // learned rule has to BEAT a real generic candidate instead of filling a void. Rank 0 is
@@ -371,8 +338,10 @@ func TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN(t *testi
 	if len(got.rules) != 1 || got.rules[0].ID != rules[0].id {
 		t.Fatalf("AnchorRulesFor returned %d rule(s) for job 2's fingerprint, want the 1 job 1 wrote (%s)", len(got.rules), rules[0].id)
 	}
-	if len(got.cands) != 1 {
-		t.Fatalf("job 2 resolved %d %s candidate(s) %v, want exactly 1 -- the rule matches one label and ShapeTIN rejects the party name below it",
+	// Two: the learned one and Tier-1's own, which reaches the same value since EXTR-22-02.
+	// Rank 0 is what says the learned rule fired -- both carry the same Value.
+	if len(got.cands) != 2 {
+		t.Fatalf("job 2 resolved %d %s candidate(s) %v, want exactly 2 -- the learned rule and Tier-1's party-scoped reading",
 			len(got.cands), lcField, rvValues(got.cands))
 	}
 	c := got.cands[0]
@@ -402,6 +371,9 @@ func TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN(t *testi
 	if got.all != lcTier1Candidates+1 {
 		t.Errorf("job 2 produced %d candidate(s) overall, want %d -- the learned rule adds ONE candidate and displaces none", got.all, lcTier1Candidates+1)
 	}
+	if got.cands[1].Tier != extraction.TierGeneric {
+		t.Errorf("the second %s candidate is at tier %v, want TierGeneric -- it is Tier-1's own reading, ranked below the learned one", lcField, got.cands[1].Tier)
+	}
 }
 
 // --- E-04 / AC #6: the negative control ---------------------------------------------------
@@ -419,9 +391,9 @@ func TestRLS_DeletingTheLearnedRuleRedsTheSecondDocumentAssertion(t *testing.T) 
 	_, pages2 := lcLayout(t, ctx, job2, fxLearnedTwoParty)
 
 	before := lcResolve(t, ctx, f.tenantID, fp, lcField, pages2)
-	if len(before.rules) != 1 || len(before.cands) != 1 || lcValue(before.decided) != lcBuyerTIN {
-		t.Fatalf("before the delete: %d rule(s), %d candidate(s), decided %s -- want 1, 1 and %q, or the zeros below hold against a suite that never wrote anything",
-			len(before.rules), len(before.cands), lcValue(before.decided), lcBuyerTIN)
+	if len(before.rules) != 1 || len(before.cands) != 2 || before.cands[0].Tier != extraction.TierLearned {
+		t.Fatalf("before the delete: %d rule(s), %d candidate(s), rank 0 at tier %v -- want 1, 2 and TierLearned, or the assertions below hold against a suite that never wrote anything",
+			len(before.rules), len(before.cands), rvFirstTier(before.cands))
 	}
 
 	lcDeleteRule(t, ctx, before.rules[0].ID)
@@ -430,14 +402,30 @@ func TestRLS_DeletingTheLearnedRuleRedsTheSecondDocumentAssertion(t *testing.T) 
 	if len(after.rules) != 0 {
 		t.Errorf("AnchorRulesFor returned %d rule(s) after the row was deleted, want 0", len(after.rules))
 	}
-	if len(after.cands) != 0 {
-		t.Errorf("the identical read produced %d %s candidate(s) %v after the rule was deleted, want 0 -- E-03 would then be reading something other than the stored row",
+	// Tier-1's own reading stands, so the delete is asserted on the TIER: no candidate is
+	// learned any more. A zero here would be Tier-1 going silent, not the rule going away.
+	if len(after.cands) != 1 {
+		t.Errorf("the identical read produced %d %s candidate(s) %v after the rule was deleted, want the 1 Tier-1 reaches on its own",
 			len(after.cands), lcField, rvValues(after.cands))
 	}
-	if after.decided.Value != nil || after.decided.Reason != extraction.ReasonMissing {
-		t.Errorf("the identical read decided %s = %s reason %q after the delete, want <nil> and %q",
-			lcField, lcValue(after.decided), after.decided.Reason, extraction.ReasonMissing)
+	for _, c := range after.cands {
+		if c.Tier == extraction.TierLearned {
+			t.Errorf("a %s candidate %q is still at TierLearned from rule %q after the row was deleted; E-03 would then be reading something other than the stored row",
+				lcField, c.Value, c.RuleID)
+		}
 	}
+	if lcValue(after.decided) != lcBuyerTIN || after.decided.Reason != extraction.ReasonNone {
+		t.Errorf("the identical read decided %s = %s reason %q after the delete, want %q and %q -- Tier-1 alone reaches this value",
+			lcField, lcValue(after.decided), after.decided.Reason, lcBuyerTIN, extraction.ReasonNone)
+	}
+}
+
+// rvFirstTier is the rank-0 candidate's tier, for a failure message over a possibly empty set.
+func rvFirstTier(cands []extraction.Candidate) extraction.Tier {
+	if len(cands) == 0 {
+		return extraction.TierGeneric
+	}
+	return cands[0].Tier
 }
 
 // --- E-05 / AC #4: the rule does not leave its tenant --------------------------------------
@@ -466,8 +454,14 @@ func TestRLS_TheLearnedRuleDoesNotLeaveItsTenant(t *testing.T) {
 	if len(gotA.rules) != 1 {
 		t.Fatalf("tenant A holds %d rule(s) for %q, want 1 -- tenant B's zero proves nothing without it", len(gotA.rules), fpA)
 	}
-	if len(gotA.cands) != 1 || gotA.cands[0].Value != lcBuyerTIN {
-		t.Fatalf("tenant A resolved %d %s candidate(s) %v, want exactly 1 valued %q", len(gotA.cands), lcField, rvValues(gotA.cands), lcBuyerTIN)
+	// Tier-1 reaches this value too since EXTR-22-02, so tenant A's control is the TIER at
+	// rank 0 -- a Value-only check passes whether the learned rule fired or not.
+	if len(gotA.cands) == 0 {
+		t.Fatalf("tenant A resolved no %s candidate at all; the rank asserted below would hold over nothing", lcField)
+	}
+	if gotA.cands[0].Tier != extraction.TierLearned || gotA.cands[0].RuleID != gotA.rules[0].ID {
+		t.Fatalf("tenant A's rank-0 %s candidate is tier %v from rule %q, want TierLearned from the stored %q",
+			lcField, gotA.cands[0].Tier, gotA.cands[0].RuleID, gotA.rules[0].ID)
 	}
 
 	// Tenant B: the same fingerprint, the same bytes, nothing learned.
@@ -475,12 +469,14 @@ func TestRLS_TheLearnedRuleDoesNotLeaveItsTenant(t *testing.T) {
 	if len(gotB.rules) != 0 {
 		t.Errorf("tenant B holds %d rule(s) for the same fingerprint, want 0 -- a learned rule is one tenant's, and RLS is what keeps it there", len(gotB.rules))
 	}
-	if len(gotB.cands) != 0 {
-		t.Errorf("tenant B resolved %d %s candidate(s) %v, want 0", len(gotB.cands), lcField, rvValues(gotB.cands))
+	for _, c := range gotB.cands {
+		if c.Tier == extraction.TierLearned {
+			t.Errorf("tenant B resolved a TierLearned %s candidate %q from rule %q, want none", lcField, c.Value, c.RuleID)
+		}
 	}
-	if gotB.decided.Value != nil || gotB.decided.Reason != extraction.ReasonMissing {
-		t.Errorf("tenant B decided %s = %s reason %q, want <nil> and %q -- its document reads exactly as it did before tenant A pointed at anything",
-			lcField, lcValue(gotB.decided), gotB.decided.Reason, extraction.ReasonMissing)
+	if lcValue(gotB.decided) != lcBuyerTIN || gotB.decided.Reason != extraction.ReasonNone {
+		t.Errorf("tenant B decided %s = %s reason %q, want %q and %q -- its document reads exactly as it did before tenant A pointed at anything",
+			lcField, lcValue(gotB.decided), gotB.decided.Reason, lcBuyerTIN, extraction.ReasonNone)
 	}
 
 	// Counted by tenant id as the superuser, so RLS cannot be what makes the zero above.
@@ -542,8 +538,10 @@ func TestRLS_ASecondPointedCorrectionSupersedesTheFirstOnTheThirdDocument(t *tes
 	if len(got.rules) != 2 || got.rules[0].ID != r2.id {
 		t.Fatalf("AnchorRulesFor returned %d rule(s) with %s first, want 2 with R2 %s first", len(got.rules), rvFirstRuleID(got.rules), r2.id)
 	}
-	if len(got.cands) != 1 {
-		t.Fatalf("document 3 resolved %d %s candidate(s) %v, want exactly 1 -- the first rule to produce anything claims the field",
+	// Two: R2's, and Tier-1's own reading of the buyer block. R1 produces nothing -- the first
+	// LEARNED rule to produce anything claims the field.
+	if len(got.cands) != 2 {
+		t.Fatalf("document 3 resolved %d %s candidate(s) %v, want exactly 2 -- R2's and Tier-1's",
 			len(got.cands), lcField, rvValues(got.cands))
 	}
 	if got.cands[0].RuleID != r2.id {
@@ -571,8 +569,8 @@ func TestRLS_ASecondPointedCorrectionSupersedesTheFirstOnTheThirdDocument(t *tes
 		t.Errorf("with R1 ahead of R2 the same page decides %s = %s, want %q -- if BOTH orders answered the same, ordering would not be what supersedes",
 			lcField, lcValue(rev), lcBuyerTIN)
 	}
-	if revCands := rvFor(reversed, lcField); len(revCands) != 1 || revCands[0].RuleID != r1.id {
-		t.Errorf("with R1 ahead of R2 the candidate came from %v, want exactly one from R1 %s", rvValues(revCands), r1.id)
+	if revCands := rvFor(reversed, lcField); len(revCands) != 2 || revCands[0].RuleID != r1.id {
+		t.Errorf("with R1 ahead of R2 the candidates came from %v, want two with R1 %s at rank 0", rvValues(revCands), r1.id)
 	}
 }
 
@@ -697,15 +695,17 @@ func TestRLS_ALearnedRuleIsNeverLoadedUnderAnotherLayoutsFingerprint(t *testing.
 
 // --- E-12: the two-column regression, asserted rather than avoided --------------------------
 
-// This is a regression this feature CAUSES. It is recorded in D-18 and in
-// docs/extraction-corpus.md ("## Learned rules", "When a learned rule misfires"), and it is
-// asserted here rather than left as a comment. corpus_two_column.pdf goes from one honest
-// "missing" to a confidently decided WRONG value with one alternative, and the wrong value is
-// the SUPPLIER's TIN. Both candidates come from the SAME rule, so newest-rule-wins cannot
-// rescue it.
+// This is a regression this feature CAUSES, and EXTR-22-02 made it strictly MORE visible: the
+// layout now reads buyer_tin correctly before any correction, so a reviewer who points at an
+// already-correct field is what makes it wrong. D-17 says an undo does not un-teach.
+//
+// The mechanism is unchanged and deliberately out of scope: the derived TIN label matches BOTH
+// party blocks, one rule mints two TierLearned candidates at distance 0, and compareRegions
+// hands rank 0 to the supplier's. Party-scoping a LEARNED rule would overrule the reviewer who
+// pointed at it, so it is another story's decision.
 //
 // A failure here means the documented regression CHANGED -- not that buyer_tin is wrong.
-func TestRLS_TheTwoColumnLayoutGetsWorseBeforeItGetsBetter(t *testing.T) {
+func TestRLS_TheTwoColumnLayoutRegressesFromACorrectReadingToAWrongOne(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-09-E12")
 	fp, pages := lcLayout(t, ctx, f.jobID, lcTwoCol)
@@ -722,21 +722,22 @@ func TestRLS_TheTwoColumnLayoutGetsWorseBeforeItGetsBetter(t *testing.T) {
 	)
 
 	// Arm 1, before. The floor: the same read decides total and invoice_number, so an unread
-	// page cannot pass as "buyer_tin is missing".
+	// page cannot pass as a reading of this one.
 	t1 := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
 	rvFloor(t, t1, "the shipped Tier-1 set over "+lcTwoCol)
-	if got := rvFor(t1, lcField); len(got) != 0 {
-		t.Fatalf("before: Tier-1 produced %d %s candidate(s) %v on %s, want 0 -- the regression below is a change FROM missing",
+	if got := rvFor(t1, lcField); len(got) != 1 {
+		t.Fatalf("before: Tier-1 produced %d %s candidate(s) %v on %s, want exactly 1 -- the buyer heading owns its own TIN",
 			len(got), lcField, rvValues(got), lcTwoCol)
 	}
 	beforeAll := extraction.Reconcile(extraction.Input{Candidates: t1})
 	beforeBuyer := lcDecided(t, beforeAll, lcField)
-	if beforeBuyer.Value != nil || beforeBuyer.Reason != extraction.ReasonMissing {
-		t.Fatalf("before: %s = %s reason %q, want <nil> and %q", lcField, lcValue(beforeBuyer), beforeBuyer.Reason, extraction.ReasonMissing)
+	if lcValue(beforeBuyer) != buyerValue || beforeBuyer.Reason != extraction.ReasonNone {
+		t.Fatalf("before: %s = %s reason %q, want %q and %q -- the regression below is a change FROM correct",
+			lcField, lcValue(beforeBuyer), beforeBuyer.Reason, buyerValue, extraction.ReasonNone)
 	}
 	for _, want := range []struct{ field, value string }{{"total", twoColTotal}, {"invoice_number", twoColNumber}} {
 		if got := lcDecided(t, beforeAll, want.field); lcValue(got) != want.value {
-			t.Fatalf("before: %s = %s, want %q -- the missing buyer_tin above is otherwise indistinguishable from an unread page",
+			t.Fatalf("before: %s = %s, want %q -- the correct buyer_tin above is otherwise indistinguishable from an unread page",
 				want.field, lcValue(got), want.value)
 		}
 	}
@@ -749,20 +750,29 @@ func TestRLS_TheTwoColumnLayoutGetsWorseBeforeItGetsBetter(t *testing.T) {
 	}
 	lcRuleBodyIs(t, ctx, rules[0].id, tinRuleBody)
 
-	// Arm 3, after. TWO candidates from ONE rule, and the one that wins is the supplier's.
+	// Arm 3, after. TWO TierLearned candidates from ONE rule, beside Tier-1's own reading of
+	// the buyer's, and the one that wins is the supplier's.
 	got := lcResolve(t, ctx, f.tenantID, fp, lcField, pages)
-	if len(got.cands) != 2 {
-		t.Fatalf("after: %d %s candidate(s) %v, want exactly 2 -- the derived label matches both party blocks",
+	if len(got.cands) != 3 {
+		t.Fatalf("after: %d %s candidate(s) %v, want exactly 3 -- the derived label matches both party blocks, and Tier-1 reaches the buyer's on its own",
 			len(got.cands), lcField, rvValues(got.cands))
 	}
+	learned := 0
 	for _, c := range got.cands {
+		if c.Tier != extraction.TierLearned {
+			continue
+		}
+		learned++
 		if c.RuleID != rules[0].id {
-			t.Errorf("after: a candidate came from rule %q, want the ONE stored rule %q -- two rules would mean newest-rule-wins could resolve this",
+			t.Errorf("after: a learned candidate came from rule %q, want the ONE stored rule %q -- two rules would mean newest-rule-wins could resolve this",
 				c.RuleID, rules[0].id)
 		}
-		if c.Tier != extraction.TierLearned || c.Distance != 0 {
-			t.Errorf("after: a candidate is at tier %v distance %v, want TierLearned at 0 (same_token has no gap)", c.Tier, c.Distance)
+		if c.Distance != 0 {
+			t.Errorf("after: a learned candidate is at distance %v, want 0 (same_token has no gap)", c.Distance)
 		}
+	}
+	if learned != 2 {
+		t.Errorf("after: %d of the %s candidates are TierLearned, want 2 -- both come from the one rule and that is why nothing can rescue this", learned, lcField)
 	}
 	if lcValue(got.decided) != supplierVal {
 		t.Errorf("after: %s decided as %s, want the SUPPLIER's %q -- this layout is documented as getting worse, and a different winner means the documented regression changed",

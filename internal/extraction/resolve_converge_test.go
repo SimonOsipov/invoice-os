@@ -151,6 +151,9 @@ var cvGoldenLayouts = []string{
 
 const cvGoldenFile = "tier1_only_candidates.golden.txt"
 
+// cvGoldenLines is the rendered line count: six layout headers and 55 candidates.
+const cvGoldenLines = 61
+
 // cvRenderTier1 is the golden's format: one "layout \t count" line per layout, then one line
 // per candidate. Every float is %.6f so the text is stable across runs.
 func cvRenderTier1(t *testing.T) string {
@@ -179,12 +182,14 @@ func cvRenderTier1(t *testing.T) string {
 	return b.String()
 }
 
-// V-06. The golden was generated BEFORE any edit to resolve.go, so it is the no-collateral-
-// damage control on the generic path: a convergence loop that also changed what Tier-1 emits,
-// or what order it emits it in, moves these bytes.
+// V-06. The golden is the no-collateral-damage control on the generic path: a change that also
+// moved what Tier-1 emits, or the order it emits it in, moves these bytes. Re-baselined at
+// EXTR-22-02, whose own diff is four RuleID renames and one field re-route over six lines.
 //
 // Unlike the accuracy floor this is not monotone in the distance dials -- it pins every value,
-// rule id, distance and box, so widening a dial adds a line and fails.
+// rule id, distance and box, so widening a dial adds a line and fails. cvGoldenLines is the
+// floor under a regeneration: a re-baseline that silently DROPPED candidates would otherwise
+// just become the new truth.
 func TestResolve_Tier1OnlyOutputIsUnchanged(t *testing.T) {
 	corpusRequireCommitted(t)
 	if len(cvGoldenLayouts) != len(corpusLayouts) {
@@ -206,6 +211,9 @@ func TestResolve_Tier1OnlyOutputIsUnchanged(t *testing.T) {
 	}
 
 	got := cvRenderTier1(t)
+	if n := strings.Count(got, "\n"); n != cvGoldenLines {
+		t.Errorf("the Tier-1 render is %d line(s), want %d; a regeneration that lost candidates reads as a clean re-baseline", n, cvGoldenLines)
+	}
 	if got == string(want) {
 		return
 	}

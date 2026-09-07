@@ -138,7 +138,7 @@ const NAV_URL: Record<string, string | RegExp> = {
   Workflows: /\/workflows$/,
   Clients: /\/clients$/,
   Audit: /\/audit$/,
-  Settings: /\/settings$/,
+  Settings: /\/settings\/members$/,
 }
 
 async function goTo(page: Page, label: string): Promise<void> {

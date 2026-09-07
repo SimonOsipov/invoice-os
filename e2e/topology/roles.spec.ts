@@ -335,7 +335,7 @@ const NAV_URL: Record<string, string | RegExp> = {
   Workflows: /\/workflows$/,
   Clients: /\/clients$/,
   Audit: /\/audit$/,
-  Settings: /\/settings$/,
+  Settings: /\/settings\/members$/,
 }
 
 async function goTo(page: Page, label: string): Promise<void> {
@@ -353,10 +353,10 @@ function tabStrip(page: Page) {
   return settingsTab(page, 'Members').locator('xpath=..')
 }
 
-// Each tab's own URL. `members` is the default and routeUrl omits it, so Members is bare
-// /settings — never /settings/members.
+// Each tab's own URL. Every tab is explicit in the path, `members` included — pinned by
+// route.test.ts routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault.
 const SETTINGS_TAB_URL: Record<string, RegExp> = {
-  Members: /\/settings$/,
+  Members: /\/settings\/members$/,
   Roles: /\/settings\/roles$/,
 }
 

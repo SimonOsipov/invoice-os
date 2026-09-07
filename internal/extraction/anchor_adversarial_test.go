@@ -232,11 +232,14 @@ func TestParseRule_NonASCIILabelAndCaseFolding(t *testing.T) {
 // anchorLexicon's iteration order is fingerprint input, so the order is pinned, not just the
 // slice-ness A-08 asserts.
 func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
-	// bare_tin sits AFTER both party entries: this is the only mechanical guarantee that
-	// anchorOutranked suppresses it on a party-bearing token.
+	// The table reads widest-first: bare_tin sits AFTER the party-bearing TIN labels that
+	// contain it, and the owning phrases sit BEFORE the party names they contain. Suppression
+	// does not read this order -- anchorOutranked scans every matcher -- but betterAnchor's
+	// lexiconIndex tiebreak does, and it must agree with suppression.
 	want := []string{
-		"invoice_no", "issue_date", "supplier_tin", "buyer_tin", "bare_tin", "supplier_name",
-		"buyer_name", "currency", "subtotal", "vat", "total",
+		"invoice_no", "issue_date", "supplier_tin", "buyer_tin", "bare_tin",
+		"party_ref", "signature",
+		"supplier_name", "buyer_name", "currency", "subtotal", "vat", "total",
 	}
 
 	got := make([]string, 0, len(anchorLexicon))
@@ -255,11 +258,15 @@ func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
 // a pattern matching everything or nothing.
 func TestAnchorLexicon_EveryEntryMatchesAndRejects(t *testing.T) {
 	cases := map[string]struct{ match, reject string }{
-		"invoice_no":    {"Invoice No:", "Invoice Date"},
-		"issue_date":    {"Invoice Date", "Dated"},
-		"supplier_tin":  {"Supplier TIN", "Supplier Name"},
-		"buyer_tin":     {"Buyer TIN", "Supplier TIN"},
-		"bare_tin":      {"TIN:", "Tinned Goods"},
+		"invoice_no":   {"Invoice No:", "Invoice Date"},
+		"issue_date":   {"Invoice Date", "Dated"},
+		"supplier_tin": {"Supplier TIN", "Supplier Name"},
+		"buyer_tin":    {"Buyer TIN", "Supplier TIN"},
+		"bare_tin":     {"TIN:", "Tinned Goods"},
+		// The rejects are the near-misses the entry's own \b exists for: "Nominee" continues
+		// past "No", and "Authorised" carries no party word.
+		"party_ref":     {"Customer No.", "Customer Nominee"},
+		"signature":     {"Buyer's Signature", "Authorised Signature"},
 		"supplier_name": {"Supplier", "Buyer"},
 		"buyer_name":    {"Bill To", "Supplier"},
 		"currency":      {"Currency", "Concurrency"},

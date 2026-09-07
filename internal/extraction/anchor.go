@@ -130,6 +130,12 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	// suppresses it on every party-bearing token
 	// (TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne).
 	{"bare_tin", `(?i)\b\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
+	// party_ref and signature are OWNING PHRASES: the whole phrase is the label, so they carry no
+	// Tier-1 rule of their own. They sit BEFORE the party-name entries they contain, which is
+	// where betterAnchor's lexiconIndex tiebreak needs them
+	// (TestTier1_ReusesTheAnchorLexiconPatterns, TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord).
+	{"party_ref", `(?i)\b(customer|client|buyer|account|supplier|vendor)\s*\.?\s*(no|num(ber)?|ref(erence)?|code)\b\.?`},
+	{"signature", `(?i)\b(buyer|customer|client|supplier|seller|vendor)(['’]s)?\s+signature\b`},
 	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
 	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},

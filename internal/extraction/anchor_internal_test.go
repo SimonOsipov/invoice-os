@@ -166,8 +166,8 @@ func TestAnchorLexicon_IsOrderedAndUnique(t *testing.T) {
 	if got := reflect.TypeOf(anchorLexicon).Kind(); got != reflect.Slice {
 		t.Fatalf("anchorLexicon is a %s, want a slice", got)
 	}
-	if len(anchorLexicon) != 11 {
-		t.Fatalf("len(anchorLexicon) = %d, want 11: the shipped generic label set", len(anchorLexicon))
+	if len(anchorLexicon) != 13 {
+		t.Fatalf("len(anchorLexicon) = %d, want 13: the shipped generic label set", len(anchorLexicon))
 	}
 
 	seen := make(map[string]bool, len(anchorLexicon))

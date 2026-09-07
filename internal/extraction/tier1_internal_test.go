@@ -75,10 +75,16 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 	}
 }
 
+// t1OwningPhraseIDs are the anchorLexicon entries that carry NO Tier-1 rule: the whole phrase is
+// the label, so they exist only to let anchorOutranked suppress the narrower party word inside
+// them and isBareAnchorLabel refuse the phrase as a value. Declared here so an entry resolving
+// nothing must SAY so, and so one that later gains rules stops being exempt.
+var t1OwningPhraseIDs = []string{"party_ref", "signature"}
+
 // G-14
 func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
-	if len(anchorLexicon) != 11 {
-		t.Fatalf("anchorLexicon holds %d entry/entries, want 11; the coverage assertion below would run over the wrong table", len(anchorLexicon))
+	if len(anchorLexicon) != 13 {
+		t.Fatalf("anchorLexicon holds %d entry/entries, want 13; the coverage assertion below would run over the wrong table", len(anchorLexicon))
 	}
 	if len(Tier1Rules) != tier1RuleCount {
 		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)
@@ -89,6 +95,20 @@ func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 	for i, l := range anchorLexicon {
 		patterns[i] = l.Pattern
 		ids[i] = l.ID
+	}
+
+	// wantOrder is the lexicon minus the owning phrases: the ids the label rules must reach,
+	// in the order they must reach them.
+	var wantOrder []string
+	for _, id := range ids {
+		if !slices.Contains(t1OwningPhraseIDs, id) {
+			wantOrder = append(wantOrder, id)
+		}
+	}
+	for _, id := range t1OwningPhraseIDs {
+		if !slices.Contains(ids, id) {
+			t.Fatalf("t1OwningPhraseIDs names %q, which anchorLexicon does not; a stale exemption excuses nothing and hides whatever entry it was written for", id)
+		}
 	}
 
 	used := make([]int, len(anchorLexicon))
@@ -115,12 +135,16 @@ func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 		t.Errorf("the set splits %d label rule(s) and %d non-lexicon rule(s), want 33 and 1", labelRules, sweepRules)
 	}
 	for i, n := range used {
-		if n == 0 {
-			t.Errorf("anchorLexicon %q is used by no Tier-1 rule; its label ships in the fingerprint but resolves nothing", ids[i])
+		owning := slices.Contains(t1OwningPhraseIDs, ids[i])
+		switch {
+		case n == 0 && !owning:
+			t.Errorf("anchorLexicon %q is used by no Tier-1 rule; its label ships in the fingerprint but resolves nothing. An entry that deliberately resolves nothing belongs in t1OwningPhraseIDs", ids[i])
+		case n > 0 && owning:
+			t.Errorf("anchorLexicon %q is declared an owning phrase yet %d Tier-1 rule(s) carry its pattern; an entry that fills a field is not exempt from the order below", ids[i], n)
 		}
 	}
-	if !slices.Equal(order, ids) {
-		t.Errorf("the label rules reach the lexicon in the order %v, want %v; the shipped set follows anchorLexicon, which is what makes TestResolve_ReturnsFieldsInVocabularyOrder tell rule order from vocabulary order", order, ids)
+	if !slices.Equal(order, wantOrder) {
+		t.Errorf("the label rules reach the lexicon in the order %v, want %v; the shipped set follows anchorLexicon, which is what makes TestResolve_ReturnsFieldsInVocabularyOrder tell rule order from vocabulary order", order, wantOrder)
 	}
 }
 

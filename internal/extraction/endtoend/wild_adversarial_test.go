@@ -172,21 +172,9 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 	}
 }
 
-// TestWildLayouts_TheTwoPartyDefectsAreReproduced is the positive control for the two above: the
-// same candidate read, on the arrangement that DOES reproduce its Objective defects. Without it
-// a Resolve that stopped producing candidates at all would read as two clean non-results.
-//
-// Its TIN half moved to TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty, which asserts the
-// binding rather than the defect. The buyer_name half below is EXTR-22-03's oracle and stays.
-func TestWildLayouts_TheTwoPartyDefectsAreReproduced(t *testing.T) {
-	names := wildResolved(t, wildTwoParty, "buyer_name")
-	if len(names) == 0 || names[0] == "Honeywell Group" {
-		t.Errorf("%s ranks buyer_name %v with the real name first; the label fragment no longer wins and EXTR-22's oracle is gone", wildTwoParty, names)
-	}
-	if !slices.ContainsFunc(names, func(s string) bool { return strings.Contains(s, "No.") || strings.Contains(s, "Signature") }) {
-		t.Errorf("%s reaches no label fragment for buyer_name (%v)", wildTwoParty, names)
-	}
-}
+// The two specs above assert absences, so their positive control is now
+// TestWildLayouts_TheTwoPartyBuyerNameIsTheName and TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty:
+// both read a value at rank 0 on wild_two_party_bare_tin.pdf.
 
 // --- golden properties nothing else reads -----------------------------------------------------
 
@@ -289,9 +277,8 @@ func TestWildGoldens_CarryRawUTF8AndNeverAnEscape(t *testing.T) {
 
 // --- the party block over the wild arrangements ----------------------------------------------
 
-// Each party's TIN reaches its own field. Rewrites the TIN half of
-// TestWildLayouts_TheTwoPartyDefectsAreReproduced, which pinned the cross-party reading as
-// unfixed; the buyer_name half of that spec is EXTR-22-03's and stays where it is.
+// Each party's TIN reaches its own field. This and TestWildLayouts_TheTwoPartyBuyerNameIsTheName
+// together replaced the spec that pinned both readings as unfixed.
 func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
 	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
 
@@ -315,8 +302,7 @@ func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
 const wildTwoPartyBuyerName = "Honeywell Group"
 
 // The buyer's name on the two-party arrangement is the printed name, not the "Customer No." or
-// "Buyer's Signature" fragment that used to outrank it. Replaces the buyer_name half of
-// TestWildLayouts_TheTwoPartyDefectsAreReproduced.
+// "Buyer's Signature" fragment that used to outrank it.
 //
 // The list is not asserted to hold one value: "TIN:" survives at rank 1 as a pre-existing
 // residue, and bare_tin matches it at [0,3] rather than whole, so nothing refuses it.

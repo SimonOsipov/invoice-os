@@ -1307,3 +1307,28 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
   })
 })
 
+
+// ROUTE-06-02 AC-7. A source scan, not a behavioural one: an unstamped Workspace writer
+// mints an entry naming no company, and an entry naming no company can never be clamped.
+// Nine sites, counted after the fix: the seven that ship today plus the boot-entry stamp
+// backfill and the popstate clamp's own replaceState. Both new writers live inside
+// Workspace, so they are inside this slice by construction.
+// Out of the slice on purpose: signOut and the persona strip both live in App.
+describe('ROUTE-06-02 AC-7: every Workspace history write carries the company stamp', () => {
+  it('guard_everyWorkspaceHistoryWriteCarriesTheStamp', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    const startIdx = src.indexOf('function Workspace({ session,')
+    const endIdx = src.indexOf('export default function App()')
+    // Anchors first: a mis-anchored slice must fail naming the anchor, never fail the
+    // count below for the wrong reason.
+    expect(startIdx, 'the `function Workspace({ session,` anchor moved -- re-anchor, do not relax').toBeGreaterThan(-1)
+    expect(endIdx, 'the `export default function App()` anchor moved -- re-anchor, do not relax').toBeGreaterThan(-1)
+    expect(startIdx, 'the slice anchors are inverted').toBeLessThan(endIdx)
+    const slice = src.slice(startIdx, endIdx)
+
+    const sites = slice.match(/window\.history\.(?:push|replace)State\(/g) ?? []
+    expect(sites, 'nine Workspace history writes are expected -- fewer means a mis-anchored slice or a lost writer').toHaveLength(9)
+    const unstamped = slice.match(/window\.history\.(?:push|replace)State\(\s*null\s*,/g) ?? []
+    expect(unstamped, 'zero Workspace history writes may still pass a literal null first argument').toEqual([])
+  })
+})

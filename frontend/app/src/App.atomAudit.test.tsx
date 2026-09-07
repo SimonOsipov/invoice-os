@@ -129,6 +129,10 @@ describe('AC-4: every Workspace atom has an audit row', () => {
     expect(missing, `setter-less atoms missing from the extracted set: ${missing.join(' | ')}`).toEqual([])
   })
 
+  // ROUTE-06-02 rider. This asserted only that the cited line IS a comment, so a
+  // content-swap at App.tsx:662 kept it green -- a guard that could not fail for the reason
+  // its name claims. It now pins the comment's CONTENT: the decision itself, and the
+  // in-flight reason for it.
   it('guard_filingIsAuditedAsDeliberate', () => {
     const audited = requireAudited()
     const entry = audited.find((a) => a.name === 'filing')
@@ -145,8 +149,24 @@ describe('AC-4: every Workspace atom has an audit row', () => {
     const citationLine = entry!.citationLine ?? -1
     expect(citationLine, 'filing\'s row needs a citationLine inside switchClient').toBeGreaterThanOrEqual(bodyStartLine)
     expect(citationLine, 'filing\'s citationLine must fall before switchClient\'s close').toBeLessThanOrEqual(bodyEndLine)
-    const citedText = appSrc.split('\n')[citationLine - 1] ?? ''
+    const lines = appSrc.split('\n')
+    const citedText = lines[citationLine - 1] ?? ''
     expect(citedText.trim().startsWith('//'), `citationLine ${citationLine} is not a comment line`).toBe(true)
+    expect(
+      citedText,
+      `citationLine ${citationLine} must state the decision itself, not merely be a comment`,
+    ).toContain('deliberately NOT')
+    // The contiguous comment block the citation opens -- the reason lives a line or two
+    // below the decision.
+    const block: string[] = []
+    for (let i = citationLine - 1; i < lines.length && (lines[i] ?? '').trim().startsWith('//'); i++) {
+      block.push(lines[i] as string)
+    }
+    expect(block.length, 'floor: the cited comment block must not be empty').toBeGreaterThan(0)
+    expect(
+      block.join('\n'),
+      'the cited block must give the in-flight reason, which is what makes the non-clearing deliberate',
+    ).toContain('still in flight')
   })
 })
 

@@ -3,9 +3,10 @@
 // TestFixtures_MatchTheirGenerator regenerates and byte-compares, so neither side can drift
 // alone. Regenerate a deliberate change with -update and read the diff before committing.
 //
-// Stdlib only. deps_test.go scan B walks test imports, and any in-module import outside
-// internal/platform/* fails it; a third-party writer would also make AC-3's determinism
-// someone else's property.
+// No third-party PDF writer -- a convention, not a fence: assertFenced allows the extraction
+// import by name and ignores non-module deps entirely, so nothing here reds on one. The reason
+// is that a third-party writer makes TestFixtures_GeneratorIsDeterministic someone else's
+// property. The imports today are stdlib plus the package under test.
 package extraction_test
 
 import (
@@ -18,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 var fxUpdate = flag.Bool("update", false, "rewrite the PDF fixtures under testdata/ from their generators instead of comparing against them")
@@ -66,6 +69,14 @@ var fxCorpus = []struct {
 	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
 	// Not corpus_-prefixed on purpose: EXTR-18-01's rich fixture, outside every corpus_ ratchet.
 	{fxRich, fxBuildRichInvoice},
+	// Not corpus_-prefixed on purpose: EXTR-21-06's four production arrangements. Byte-compared
+	// like the rest, outside every corpus_ ratchet.
+	{fxWildTwoParty, fxBuildWildTwoPartyBareTIN},
+	{fxWildRuled, fxBuildWildRuledLinesTotals},
+	{fxWildRCNaira, fxBuildWildRCDueNaira},
+	{fxWildStacked, fxBuildWildStackedBorderless},
+	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
+	{fxWildScanned, fxBuildWildScannedNoNumber},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -367,6 +378,91 @@ func fxTextPage(lines ...fxLine) []byte {
 	})
 }
 
+// fxNaira is the naira in a PDF string literal: octal for byte 0xA4, the code both
+// /Differences and the /ToUnicode CMap key on. An octal escape ends at three digits, so a
+// digit may follow it unseparated.
+const fxNaira = `\244`
+
+// fxAmount is the amount every naira spec reads back, without its symbol.
+const fxAmount = "1,075.00"
+
+// fxNairaFont is fxHelvetica plus the two halves the sign needs: /Differences names the glyph
+// so it draws, /ToUnicode carries the Unicode so pdfium extracts U+20A6. toUnicode <= 0 omits
+// the CMap reference, which TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign
+// reads back as U+00A4.
+func fxNairaFont(toUnicode int) string {
+	dict := "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica" +
+		" /Encoding << /Type /Encoding /Differences [164 /naira] >>"
+	if toUnicode > 0 {
+		dict += fmt.Sprintf(" /ToUnicode %d 0 R", toUnicode)
+	}
+	return dict + " >>"
+}
+
+// fxUCS2CMap is a /ToUnicode CMap over single-byte codes: each pair is a hex code and the hex
+// UTF-16 it reads back as. Constant body, so fxStream's /Length and the assembled bytes stay
+// deterministic.
+func fxUCS2CMap(name string, codes [][2]string) fxObject {
+	var chars bytes.Buffer
+	for _, c := range codes {
+		fmt.Fprintf(&chars, "<%s> <%s>\n", c[0], c[1])
+	}
+	return fxStream(fmt.Appendf(nil, `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /%s-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+%d beginbfchar
+%sendbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`, name, len(codes), chars.String()))
+}
+
+// fxNairaCMap maps the single code the naira font redefines.
+func fxNairaCMap() fxObject {
+	return fxUCS2CMap("Naira", [][2]string{{"A4", "20A6"}})
+}
+
+// fxNairaTextPage is fxTextPage over a naira-capable font. withCMap is the control knob for
+// TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign; fxAssemble numbers by slice
+// index, so the appended CMap is object 6.
+func fxNairaTextPage(withCMap bool, lines ...fxLine) []byte {
+	const cmapObj = 6
+
+	toUnicode := 0
+	if withCMap {
+		toUnicode = cmapObj
+	}
+	objs := []fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(lines...)),
+		fxObject(fxNairaFont(toUnicode)),
+	}
+	if withCMap {
+		objs = append(objs, fxNairaCMap())
+	}
+	return fxAssemble(objs)
+}
+
+// fxNairaLines is the shared content the naira specs read back: "Total" and the amount as two
+// Tj on one baseline, the fxBuildCorpusSplitLabels shape. One Tj would give pdfium a single
+// "Total: N1,075.00" token, which reAmount's anchors reject for the label, not the symbol.
+func fxNairaLines() []fxLine {
+	return []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Total"},
+		{12, 220, 690, fxNaira + fxAmount},
+	}
+}
+
 // fxBuildCorpusInlineLabels puts every "Label: value" in one Tj, so all ten fields resolve by
 // same_token. No token is a bare TIN, so the format-only sweeps cannot fire here.
 func fxBuildCorpusInlineLabels() []byte {
@@ -502,6 +598,234 @@ func fxBuildLearnedTwoParty() []byte {
 		fxLine{12, 72, 524, "Honeywell Group"},
 		fxLine{12, 72, 508, "99999999-0702"},
 		fxLine{12, 72, 240, "Total: NGN 3,225.00"},
+	)
+}
+
+// --- the wild arrangements (NOT corpus layouts) -----------------------------
+
+// Five production layouts reproduced by arrangement only -- which labels appear, where, and at
+// what token granularity. No bytes are copied. Scrubbed per docs/extraction-corpus.md
+// "Scrubbing an anonymised real document" by Claude Opus 5 on 2026-09-06 (the four text layers)
+// and 2026-09-07 (the image-only one); step 7's second-person confirmation is recorded on the
+// pull request, not here.
+//
+// Deliberately outside corpusPrefix: they gain no corpusExpect, corpusLayouts, corpusTokenFloor
+// or t1aGaps entry, so no Tier-1 number moves. internal/extraction/endtoend scores them.
+const (
+	fxWildTwoParty = "wild_two_party_bare_tin.pdf"
+	fxWildRuled    = "wild_ruled_lines_totals.pdf"
+	fxWildRCNaira  = "wild_rc_due_naira.pdf"
+	fxWildStacked  = "wild_stacked_borderless.pdf"
+	fxWildScanned  = "wild_scanned_no_number.pdf"
+)
+
+// The pinned synthetic identifier table. Every literal is freshly minted, never observed; the
+// TINs continue the free reserved block past 99999999-0702 and avoid -0001..-0009. The same
+// table is declared in endtoend/goldens_test.go, which holds the two copies together.
+const (
+	fxWildTINSupplierTwoParty = "99999999-0801"
+	fxWildTINBuyerTwoParty    = "99999999-0802"
+	fxWildTINSupplierRuled    = "99999999-0901"
+	fxWildTINBuyerRuled       = "99999999-0902"
+	fxWildTINSupplierRCNaira  = "99999999-1001"
+	fxWildTINBuyerRCNaira     = "99999999-1002"
+	fxWildTINSupplierStacked  = "99999999-1101"
+	fxWildTINBuyerStacked     = "99999999-1102"
+	fxWildTINSupplierScanned  = "99999999-1201"
+	fxWildTINBuyerScanned     = "99999999-1202"
+
+	fxWildInvTwoParty = "INV-2101"
+	fxWildInvRuled    = "INV-2102"
+	fxWildInvRCNaira  = "INV-2103"
+	fxWildInvStacked  = "INV-2104"
+
+	// An RC (Corporate Affairs Commission registration) number is an "other identifier" under
+	// step 3 of the scrubbing procedure and is replaced like a TIN.
+	fxWildRCNumber = "RC-000142"
+
+	fxWildSupplier = "Adeyemi Trading Limited"
+	fxWildBuyer    = "Honeywell Group"
+
+	// The raster font is uppercase-only (fxGlyphs), and normalizeName preserves case, so the
+	// scanned arrangement's cast is scored in these forms.
+	fxWildSupplierUpper = "ADEYEMI TRADING LIMITED"
+	fxWildBuyerUpper    = "HONEYWELL GROUP"
+)
+
+// fxQuoteFont is fxHelvetica plus a /ToUnicode CMap for byte 0x27. Under StandardEncoding
+// pdfium reads quoteright (U+2019) there and docling reads the ASCII apostrophe; the CMap
+// settles both readers on U+0027, which TestWildGoldens_DescribeTheirPDF holds them to.
+//
+// ceiling: docling 1.10.0 normalises U+2018/U+2019 to ASCII whatever the PDF says -- measured
+// over five encodings, including /ToUnicode <27> <2019>. Revisit on a sidecar bump.
+func fxQuoteFont(toUnicode int) string {
+	return fmt.Sprintf("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode %d 0 R >>", toUnicode)
+}
+
+// fxQuoteTextPage is fxTextPage over that font. fxAssemble numbers by slice index, so the
+// appended CMap is object 6.
+func fxQuoteTextPage(lines ...fxLine) []byte {
+	const cmapObj = 6
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(lines...)),
+		fxObject(fxQuoteFont(cmapObj)),
+		fxUCS2CMap("Quote", [][2]string{{"27", "0027"}}),
+	})
+}
+
+// fxBuildWildTwoPartyBareTIN puts the supplier and buyer blocks side by side, each ending in a
+// bare "TIN:" label whose value is a separate Tj. The buyer block is headed "Invoice to" and
+// carries a fragment-bearing label above ("Customer No.") and below ("Buyer's Signature") its
+// name. The apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
+func fxBuildWildTwoPartyBareTIN() []byte {
+	return fxQuoteTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: " + fxWildInvTwoParty},
+		fxLine{12, 72, 672, "Invoice Date: 2026-06-11"},
+		fxLine{12, 72, 630, fxWildSupplier},
+		fxLine{12, 72, 614, "TIN:"}, fxLine{12, 160, 614, fxWildTINSupplierTwoParty},
+		fxLine{12, 360, 646, "Invoice to"},
+		fxLine{12, 360, 630, "Customer No."},
+		fxLine{12, 360, 614, fxWildBuyer},
+		fxLine{12, 360, 598, "TIN:"}, fxLine{12, 448, 598, fxWildTINBuyerTwoParty},
+		fxLine{12, 360, 560, "Buyer's Signature"},
+		fxLine{12, 72, 582, "Currency: NGN"},
+		fxLine{12, 72, 240, "Sub-total"}, fxLine{12, 220, 240, "1,200.00"},
+		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, "90.00"},
+		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, "1,290.00"},
+	)
+}
+
+// fxWildRuledColXs are the five-column table's vertical rule positions (6 boundaries).
+// fxWildRuledRowYs are its horizontal rules: header top, header/row1, row1/row2, row2/row3,
+// bottom. Separate arrays from fxTableColXs/fxRichTableRowYs -- resizing those would change
+// table_invoice.pdf's and rich_invoice.pdf's committed bytes.
+var (
+	fxWildRuledColXs = [6]int{72, 116, 290, 340, 430, 540}
+	fxWildRuledRowYs = [5]int{512, 488, 464, 440, 416}
+
+	// The decoration real Nigerian invoices print. "RATE (N)" is escaped so the balanced
+	// parens in the PDF string literal are explicit; "Amount " + fxNaira must stay one Tj,
+	// because a lone \244 Tj emits no token at all.
+	fxWildRuledHeader = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", `RATE \(N\)`, "Amount " + fxNaira}
+	fxWildRuledBody   = [][]string{
+		{"1", "Steel Rods", "4", "1,000.00", "4,000.00"},
+		{"2", "Cement Bags", "6", "500.00", "3,000.00"},
+		{"3", "Roofing Sheets", "2", "500.00", "1,000.00"},
+	}
+)
+
+// fxWildRuledRowText lays one five-column row on a baseline, 4pt into each column.
+func fxWildRuledRowText(baseline int, cells []string) []fxLine {
+	lines := make([]fxLine, len(cells))
+	for i, text := range cells {
+		lines[i] = fxLine{10, fxWildRuledColXs[i] + 4, baseline, text}
+	}
+	return lines
+}
+
+// fxBuildWildRuledLinesTotals is a ruled five-column line-item table whose Total label continues
+// on the last data row's own baseline, the way a ruled invoice prints a continuing totals row.
+// t1.total.right therefore reaches that row's 1,000.00 and not the printed 8,600.00. The totals
+// corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
+// tell a corroborated pick from a positional one.
+//
+// The naira here is decoration glued to a column header; the currency comes from the explicit
+// "Currency: NGN" label. Neither fxTextPage nor fxNairaTextPage builds a naira font AND rules,
+// so the objects are assembled directly: fxAssemble numbers by slice index, so the CMap is 6.
+func fxBuildWildRuledLinesTotals() []byte {
+	lines := []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Invoice No: " + fxWildInvRuled},
+		{12, 72, 672, "Invoice Date: 2026-06-24"},
+		{12, 72, 654, "Supplier TIN: " + fxWildTINSupplierRuled},
+		{12, 72, 636, "Supplier: " + fxWildSupplier},
+		{12, 72, 618, "Buyer TIN: " + fxWildTINBuyerRuled},
+		{12, 72, 600, "Buyer: " + fxWildBuyer},
+		{12, 72, 582, "Currency: NGN"},
+	}
+	lines = append(lines, fxWildRuledRowText(500, fxWildRuledHeader)...)
+	lines = append(lines, fxWildRuledRowText(476, fxWildRuledBody[0])...)
+	lines = append(lines, fxWildRuledRowText(452, fxWildRuledBody[1])...)
+	lines = append(lines, fxWildRuledRowText(428, fxWildRuledBody[2])...)
+	lines = append(lines,
+		fxLine{12, 380, 404, "Sub-total"}, fxLine{12, 500, 404, "8,000.00"},
+		fxLine{12, 380, 386, "VAT"}, fxLine{12, 500, 386, "600.00"},
+		// The Total label continues on the last data row's own baseline, so t1.total.right
+		// reaches the line amount beside it and the printed 8,600.00 falls outside every
+		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
+		fxLine{12, 380, 428, "Total"}, fxLine{12, 500, 368, "8,600.00"},
+	)
+
+	// H before V, matching fxBuildTable's own loop shape.
+	var rules bytes.Buffer
+	for _, y := range fxWildRuledRowYs {
+		rules.WriteString(fxRuleH(y, fxWildRuledColXs[0], fxWildRuledColXs[len(fxWildRuledColXs)-1]))
+	}
+	for _, x := range fxWildRuledColXs {
+		rules.WriteString(fxRuleV(x, fxWildRuledRowYs[len(fxWildRuledRowYs)-1], fxWildRuledRowYs[0]))
+	}
+
+	content := fxText(lines...)
+	content = append(content, rules.Bytes()...)
+
+	const cmapObj = 6
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxNairaFont(cmapObj)),
+		fxNairaCMap(),
+	})
+}
+
+// fxBuildWildRCDueNaira prints an RC number between the VAT label and its amount, "Due Date"
+// above "Issue Date", and every amount prefixed with a naira. There is no "Currency:" label at
+// all: the naira is the only currency marker here, which is what keeps the two naira roles
+// apart from fxBuildWildRuledLinesTotals'. Symbol and amount stay in ONE Tj -- a lone \244 Tj
+// emits no token, and a split pair drops the symbol.
+func fxBuildWildRCDueNaira() []byte {
+	return fxNairaTextPage(true,
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No: " + fxWildInvRCNaira},
+		fxLine{12, 72, 666, "Due Date"}, fxLine{12, 220, 666, "2026-08-07"},
+		fxLine{12, 72, 648, "Issue Date"}, fxLine{12, 220, 648, "2026-07-08"},
+		fxLine{12, 72, 624, "Supplier TIN: " + fxWildTINSupplierRCNaira},
+		fxLine{12, 72, 606, "Supplier: " + fxWildSupplier},
+		fxLine{12, 72, 588, "Buyer TIN: " + fxWildTINBuyerRCNaira},
+		fxLine{12, 72, 570, "Buyer: " + fxWildBuyer},
+		fxLine{12, 72, 258, "Sub-total"}, fxLine{12, 220, 258, fxNaira + " 2,500.00"},
+		fxLine{12, 72, 240, "RC NUMBER: " + fxWildRCNumber},
+		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, fxNaira + " 187.50"},
+		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, fxNaira + " 2,687.50"},
+	)
+}
+
+// fxBuildWildStackedBorderless stacks labels and values with no rules and no "Label:"
+// punctuation, and offsets every value 8pt below its label in a second column so neither
+// same_token, right nor below binds.
+//
+// One field stays readable on purpose: "Invoice No" over its value at the same x, the aligned
+// stack fxBuildCorpusStackedLabels proves. A layout that quarantines is never line-scored, and
+// lines_db_test.go's linesScored == eeLayoutCount would red on it.
+func fxBuildWildStackedBorderless() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "INVOICE"},
+		fxLine{12, 72, 690, "Invoice No"},
+		fxLine{12, 72, 674, fxWildInvStacked},
+		fxLine{12, 72, 620, "Issue Date"}, fxLine{12, 300, 612, "2026-07-30"},
+		fxLine{12, 72, 596, "Buyer"}, fxLine{12, 300, 588, fxWildBuyer},
+		fxLine{12, 72, 572, "Buyer TIN"}, fxLine{12, 300, 564, fxWildTINBuyerStacked},
+		fxLine{12, 72, 548, "Supplier"}, fxLine{12, 300, 540, fxWildSupplier},
+		fxLine{12, 72, 524, "Supplier TIN"}, fxLine{12, 300, 516, fxWildTINSupplierStacked},
+		fxLine{12, 72, 500, "Currency"}, fxLine{12, 300, 492, "NGN"},
+		fxLine{12, 72, 260, "Sub total"}, fxLine{12, 300, 252, "1,500.00"},
+		fxLine{12, 72, 236, "VAT"}, fxLine{12, 300, 228, "112.50"},
+		fxLine{12, 72, 212, "Total"}, fxLine{12, 300, 204, "1,612.50"},
 	)
 }
 
@@ -776,6 +1100,63 @@ func fxBuildDense() []byte {
 	})
 }
 
+// --- the image-only wild arrangement ----------------------------------------
+
+// The values wild_scanned_no_number.pdf draws as ink. Declared here so the endtoend expectation
+// table can be checked against what was DRAWN as well as against what OCR returned; a table
+// copied out of the golden and a golden regenerated from a corrupt page agree with each other.
+const (
+	fxWildScannedIssueDate = "2026-08-14"
+	fxWildScannedCurrency  = "NGN"
+	fxWildScannedSubtotal  = "1,800.00"
+	fxWildScannedVAT       = "135.00"
+	fxWildScannedTotal     = "1,935.00"
+)
+
+// fxBuildWildScannedNoNumber is the scanned arrangement whose read is discarded for a missing
+// invoice number: real raster ink OCR can read, and no INVOICE NO line anywhere. It reuses
+// fxBuildDense's canvas so the page lands on pdfium's exact 150-DPI US-Letter grid.
+//
+// Three geometry rules, each measured against a probe that broke it: no two drawn strings share
+// a y (two columns on one baseline merge into one token), one glyph scale for all body text
+// (mixing scales split a name across two tokens), and no % character (VAT 7.5% OCR'd as %S2).
+func fxBuildWildScannedNoNumber() []byte {
+	c := fxNewCanvas(fxRasterW, fxRasterH)
+
+	c.draw("INVOICE", 45, 55, 8)
+	c.fill(45, 130, 1235, 136)
+
+	c.draw(fxWildSupplierUpper, 45, 165, fxDenseBody)
+	c.draw("14 MARINA STREET", 45, 203, fxDenseBody)
+	c.draw("LAGOS ISLAND, LAGOS STATE", 45, 241, fxDenseBody)
+	c.draw("TIN: "+fxWildTINSupplierScanned, 45, 279, fxDenseBody)
+
+	// The right column is staggered between the left column's rows, never level with one.
+	c.draw("ISSUE DATE: "+fxWildScannedIssueDate, 635, 317, fxDenseBody)
+	c.draw("CURRENCY: "+fxWildScannedCurrency, 635, 355, fxDenseBody)
+
+	c.draw("BILL TO:", 45, 430, fxDenseBody)
+	c.draw(fxWildBuyerUpper, 45, 468, fxDenseBody)
+	c.draw("7 AWOLOWO ROAD, IKOYI", 45, 506, fxDenseBody)
+	c.draw("TIN: "+fxWildTINBuyerScanned, 45, 544, fxDenseBody)
+
+	c.drawRight("SUBTOTAL", 900, 700, fxDenseBody)
+	c.drawRight(fxWildScannedSubtotal, 1225, 700, fxDenseBody)
+	c.drawRight("VAT", 900, 742, fxDenseBody)
+	c.drawRight(fxWildScannedVAT, 1225, 742, fxDenseBody)
+	c.fill(700, 782, 1235, 784)
+	c.drawRight("TOTAL DUE", 900, 798, fxDenseBody)
+	c.drawRight(fxWildScannedTotal, 1225, 798, fxDenseBody)
+
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxImageRes(5), 4),
+		fxStream([]byte(fxImageDraw)),
+		fxImageObjectRLE(fxRasterW, fxRasterH, c.pack()),
+	})
+}
+
 // --- reading a fixture back -------------------------------------------------
 
 var (
@@ -970,32 +1351,63 @@ func TestFixtures_GeneratorIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestFixtures_ScannedHasNoTextLayer(t *testing.T) {
-	raw := fxRead(t, fxScanned)
+// fxImageResRe resolves a page's /Im0 through /Resources. A whole-file scan for
+// "/Subtype /Image" would pass on an image object no page references, and on a page whose ink
+// is drawn by a stream the page never names.
+var fxImageResRe = regexp.MustCompile(`/XObject\s*<<\s*/Im0\s+(\d+)\s+0\s+R`)
 
-	// Positive control: without an image, "carries no text" is true of a blank page too.
-	if !bytes.Contains(raw, []byte("/Subtype /Image")) {
-		t.Fatalf("%s carries no image XObject; it is not the image-only document AC-6 needs, so the absence checks below prove nothing", fxScanned)
-	}
-	if bytes.Contains(raw, []byte("/Font")) {
-		t.Errorf("%s declares a /Font resource; a scan carries no text layer at all", fxScanned)
-	}
+func fxImageObjFor(t *testing.T, objs map[int][]byte, page []byte) []byte {
+	t.Helper()
 
-	objs := fxObjects(raw)
-	pages := fxPages(t, objs)
-	if len(pages) < 1 {
-		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxScanned)
+	m := fxImageResRe.FindSubmatch(page)
+	if m == nil {
+		t.Fatalf("page object carries no /XObject << /Im0 n 0 R >> resource: %q", page)
 	}
-	for i, page := range pages {
-		body := fxContent(t, objs, page)
-		if !bytes.Contains(body, []byte("Do")) {
-			t.Errorf("%s page %d draws no XObject; an empty page is not a scan", fxScanned, i+1)
-		}
-		for _, op := range []string{"BT", "Tj"} {
-			if bytes.Contains(body, []byte(op)) {
-				t.Errorf("%s page %d content stream carries the %s operator; pdfium would report a text layer and AC-6 would not fire", fxScanned, i+1, op)
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("page names a non-numeric /Im0 object %q", m[1])
+	}
+	obj, ok := objs[num]
+	if !ok {
+		t.Fatalf("/Im0 names object %d, which the parse did not find", num)
+	}
+	return obj
+}
+
+// TestFixtures_TheScannedWildFixtureHasNoTextLayer covers both image-only fixtures: the 4x4
+// checkerboard AC-6 needs and the raster-ink page OCR can actually read. The image control runs
+// first and fatals -- every absence below is equally true of a blank page.
+func TestFixtures_TheScannedWildFixtureHasNoTextLayer(t *testing.T) {
+	for _, name := range []string{fxScanned, fxWildScanned} {
+		t.Run(name, func(t *testing.T) {
+			raw := fxRead(t, name)
+			objs := fxObjects(raw)
+			pages := fxPages(t, objs)
+			if len(pages) < 1 {
+				t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), name)
 			}
-		}
+
+			for i, page := range pages {
+				if !bytes.Contains(fxImageObjFor(t, objs, page), []byte("/Subtype /Image")) {
+					t.Fatalf("%s page %d's /Im0 is not an image XObject; it is not an image-only document, so the absences below prove nothing", name, i+1)
+				}
+				if fxFontResRe.Match(page) {
+					t.Errorf("%s page %d declares a /Font resource; a scan carries no text layer at all", name, i+1)
+				}
+
+				body := fxContent(t, objs, page)
+				if !bytes.Contains(body, []byte("Do")) {
+					t.Errorf("%s page %d draws no XObject; an empty page is not a scan", name, i+1)
+				}
+				// Two assertions, not one: a combined check cannot say which absence failed.
+				if bytes.Contains(body, []byte("BT")) {
+					t.Errorf("%s page %d content stream carries the BT operator; pdfium would report a text layer", name, i+1)
+				}
+				if bytes.Contains(body, []byte("Tj")) {
+					t.Errorf("%s page %d content stream carries the Tj operator; pdfium would report a text layer", name, i+1)
+				}
+			}
+		})
 	}
 }
 
@@ -1264,5 +1676,291 @@ func TestFixtures_E2ECopiesMatchTheirGoInvoiceOriginals(t *testing.T) {
 func TestFixtures_E2EExemptionListStaysSingular(t *testing.T) {
 	if len(fxE2EExempt) != 1 {
 		t.Errorf("fxE2EExempt has %d entries, want exactly 1: %v -- each new exemption defeats the completeness scan for one more file", len(fxE2EExempt), fxE2EExempt)
+	}
+}
+
+// --- the naira builder variant ----------------------------------------------
+
+var (
+	fxFontResRe   = regexp.MustCompile(`/Font\s*<<\s*/F1\s+(\d+)\s+0\s+R`)
+	fxToUnicodeRe = regexp.MustCompile(`/ToUnicode\s+(\d+)\s+0\s+R`)
+)
+
+// fxFontObj resolves the page's /F1 through /Resources rather than scanning the whole file:
+// a whole-file match would pass on a font object no page references.
+func fxFontObj(t *testing.T, objs map[int][]byte, page []byte) []byte {
+	t.Helper()
+
+	m := fxFontResRe.FindSubmatch(page)
+	if m == nil {
+		t.Fatalf("page object carries no /Font << /F1 n 0 R >> resource: %q", page)
+	}
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("page names a non-numeric /F1 object %q", m[1])
+	}
+	obj, ok := objs[num]
+	if !ok {
+		t.Fatalf("/F1 names object %d, which the parse did not find", num)
+	}
+	return obj
+}
+
+// fxTokens reads an in-memory PDF through the real reader. Built bytes, not a committed
+// fixture: this variant commits none.
+func fxTokens(t *testing.T, raw []byte) []extraction.Token {
+	t.Helper()
+
+	var pages []extraction.TokenPage
+	if _, err := extraction.NewPDFiumReader().Read(t.Context(),
+		extraction.Document{Bytes: raw, ContentType: "application/pdf"},
+		extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("Read the built page: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("read %d page(s) from the built PDF, want 1", len(pages))
+	}
+	return pages[0].Tokens
+}
+
+func fxTexts(toks []extraction.Token) []string {
+	out := make([]string, 0, len(toks))
+	for _, tok := range toks {
+		out = append(out, tok.Text)
+	}
+	return out
+}
+
+// fxAmountToken finds the token carrying the amount, having first proved the read worked at
+// all: without the "Total" needle a reader that returned one garbage token would look like a
+// reader that returned the amount wrongly encoded.
+func fxAmountToken(t *testing.T, toks []extraction.Token) extraction.Token {
+	t.Helper()
+
+	if len(toks) < 3 {
+		t.Fatalf("read %d token(s) from the built page, want at least 3: %q", len(toks), fxTexts(toks))
+	}
+	seenLabel := false
+	for _, tok := range toks {
+		if strings.TrimSpace(tok.Text) == "Total" {
+			seenLabel = true
+			break
+		}
+	}
+	if !seenLabel {
+		t.Fatalf("no token reads %q; the read did not find the page's text at all: %q", "Total", fxTexts(toks))
+	}
+	for _, tok := range toks {
+		if strings.Contains(tok.Text, fxAmount) {
+			return tok
+		}
+	}
+	t.Fatalf("no token carries %q: %q", fxAmount, fxTexts(toks))
+	return extraction.Token{}
+}
+
+// AC-1.
+func TestFixtures_TheNairaBuilderEmitsBothObjects(t *testing.T) {
+	raw := fxNairaTextPage(true, fxNairaLines()...)
+	fxAssertWellFormed(t, "naira variant", raw)
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) != 1 {
+		t.Fatalf("the variant emitted %d page(s), want 1", len(pages))
+	}
+
+	// The control needle: fxContent fatals on an unresolvable or empty stream, and the escape
+	// proves the assertions below are about a page that actually draws a naira.
+	body := fxContent(t, objs, pages[0])
+	if !bytes.Contains(body, []byte(fxNaira)) {
+		t.Fatalf("the content stream carries no %s escape, so the font assertions below would be about a page with no naira on it: %q", fxNaira, body)
+	}
+
+	font := fxFontObj(t, objs, pages[0])
+
+	if !bytes.Contains(font, []byte("/Differences [164 /naira]")) {
+		t.Errorf("the font dict carries no /Differences [164 /naira]; without it the drawn glyph is a currency sign: %q", font)
+	}
+
+	m := fxToUnicodeRe.FindSubmatch(font)
+	if m == nil {
+		t.Fatalf("the font dict carries no /ToUnicode reference: %q", font)
+	}
+	num, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("the font dict names a non-numeric /ToUnicode object %q", m[1])
+	}
+	cmap, ok := objs[num]
+	if !ok {
+		t.Fatalf("/ToUnicode names object %d, which the parse did not find -- the CMap is orphaned", num)
+	}
+	for _, want := range []string{"beginbfchar", "<A4> <20A6>", "endbfchar"} {
+		if !bytes.Contains(cmap, []byte(want)) {
+			t.Errorf("the /ToUnicode stream (object %d) carries no %q: %q", num, want, cmap)
+		}
+	}
+}
+
+// AC-2.
+func TestFixtures_TheNairaBuilderPrintsARealNairaSign(t *testing.T) {
+	tok := fxAmountToken(t, fxTokens(t, fxNairaTextPage(true, fxNairaLines()...)))
+
+	want := append([]byte{0xE2, 0x82, 0xA6}, fxAmount...)
+	if !bytes.Equal([]byte(tok.Text), want) {
+		t.Errorf("the amount token reads %q (% x), want %q (% x)", tok.Text, tok.Text, want, want)
+	}
+
+	got := extraction.ShapeAmount.Normalize(tok.Text)
+	if len(got) != 1 || got[0] != "1075.00" {
+		t.Errorf("ShapeAmount.Normalize(%q) = %v, want [1075.00]", tok.Text, got)
+	}
+}
+
+// AC-3: the control that stops AC-2 holding for some reason other than the CMap.
+func TestFixtures_WithoutTheToUnicodeCMapTheGlyphReadsAsCurrencySign(t *testing.T) {
+	raw := fxNairaTextPage(false, fxNairaLines()...)
+	if bytes.Contains(raw, []byte("/ToUnicode")) {
+		t.Fatalf("the withCMap=false build still carries a /ToUnicode; this spec would not be measuring its removal")
+	}
+
+	tok := fxAmountToken(t, fxTokens(t, raw))
+
+	if !strings.ContainsRune(tok.Text, '¤') {
+		t.Errorf("without the CMap the amount token reads %q (% x), want a U+00A4 currency sign -- the /Differences glyph name alone does not carry Unicode", tok.Text, tok.Text)
+	}
+	if strings.ContainsRune(tok.Text, '₦') {
+		t.Errorf("the amount token reads U+20A6 with no /ToUnicode object: %q -- the CMap is not what makes the naira extractable, so AC-2 proves nothing", tok.Text)
+	}
+}
+
+// AC-5: a second flag.Bool("update", ...) panics the test binary at registration, before any
+// test runs. The needle is assembled from fragments so this scan does not match itself, and
+// comment lines are skipped so a prose mention of the flag is not counted as one.
+func TestFixtures_TheNairaVariantAddsNoSecondUpdateFlag(t *testing.T) {
+	names, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob *_test.go: %v", err)
+	}
+	// The floor first: this scan asserts an ABSENCE, and zero files read reports clean.
+	if len(names) < 50 {
+		t.Fatalf("read %d test file(s) in internal/extraction, want at least 50 (93 measured)", len(names))
+	}
+
+	registration := regexp.MustCompile(`flag\.Bo` + `ol\("upd` + `ate"`)
+
+	sites := map[string][]int{}
+	total := 0
+	for _, name := range names {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
+			}
+			if registration.MatchString(line) {
+				sites[name] = append(sites[name], i+1)
+				total++
+			}
+		}
+	}
+
+	// The control: a needle that matches nothing reports a clean repo forever.
+	if total == 0 {
+		t.Fatalf("found zero flag registrations across %d test file(s); the needle no longer matches the real one in fixtures_test.go", len(names))
+	}
+	if total != 1 {
+		t.Errorf("found %d -update registrations, want exactly 1: %v", total, sites)
+	}
+	if len(sites["fixtures_test.go"]) != 1 {
+		t.Errorf("the -update flag is registered at %v, want exactly one site in fixtures_test.go", sites)
+	}
+}
+
+// The variant commits no fixture, so TestFixtures_GeneratorIsDeterministic -- which iterates
+// fxCorpus -- never reaches it. Two in-process builds close that gap without committing one.
+func TestFixtures_TheNairaVariantIsByteDeterministic(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		withCMap bool
+	}{
+		{"with the CMap", true},
+		{"without the CMap", false},
+	} {
+		first := fxNairaTextPage(tc.withCMap, fxNairaLines()...)
+		fxAssertWellFormed(t, "naira variant "+tc.name, first)
+		if second := fxNairaTextPage(tc.withCMap, fxNairaLines()...); !bytes.Equal(first, second) {
+			t.Errorf("the naira variant %s built %d and %d byte(s) on two calls; the builder is not deterministic", tc.name, len(first), len(second))
+		}
+	}
+
+	// The control: equal-to-itself holds just as well on a builder that ignores withCMap.
+	if bytes.Equal(fxNairaTextPage(true, fxNairaLines()...), fxNairaTextPage(false, fxNairaLines()...)) {
+		t.Errorf("withCMap true and false built identical bytes; the determinism clauses above hold over a knob that does nothing")
+	}
+}
+
+// The control build drops an object from the slice, and fxAssemble numbers by slice index, so
+// a shrunken slice is where an off-by-one xref or a dangling reference would land.
+func TestFixtures_TheNairaVariantNumbersObjectsByItsSliceLength(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		withCMap bool
+		objects  int
+	}{
+		{"with the CMap", true, 6},
+		{"without the CMap", false, 5},
+	} {
+		raw := fxNairaTextPage(tc.withCMap, fxNairaLines()...)
+		fxAssertWellFormed(t, "naira variant "+tc.name, raw)
+
+		objs := fxObjects(raw)
+		if len(objs) != tc.objects {
+			t.Errorf("the naira variant %s emitted %d object(s), want %d", tc.name, len(objs), tc.objects)
+		}
+		if !bytes.Contains(raw, []byte(fmt.Sprintf("trailer\n<< /Size %d /Root 1 0 R >>", tc.objects+1))) {
+			t.Errorf("the naira variant %s emitted %d object(s) but its trailer does not declare /Size %d", tc.name, tc.objects, tc.objects+1)
+		}
+
+		// Every n 0 R in the file has to name a parsed object, in both builds: withCMap=false
+		// removes the CMap, and a font dict still naming it would dangle.
+		for _, ref := range fxRefRe.FindAllSubmatch(raw, -1) {
+			num, err := strconv.Atoi(string(ref[1]))
+			if err != nil {
+				continue
+			}
+			if _, ok := objs[num]; !ok {
+				t.Errorf("the naira variant %s references object %d, which it never wrote", tc.name, num)
+			}
+		}
+
+		pages := fxPages(t, objs)
+		if len(pages) != 1 {
+			t.Fatalf("the naira variant %s emitted %d page(s), want 1", tc.name, len(pages))
+		}
+		// Both builds share fxPage(fxFontRes(5), 4), so /F1 resolves to object 5 either way.
+		font := fxFontObj(t, objs, pages[0])
+		if !bytes.Contains(font, []byte("/BaseFont /Helvetica")) {
+			t.Errorf("the naira variant %s resolved /F1 to a non-font object: %q", tc.name, font)
+		}
+		if !bytes.Contains(fxContent(t, objs, pages[0]), []byte(fxNaira)) {
+			t.Errorf("the naira variant %s draws no %s; its render and token clauses would be about a page with no naira on it", tc.name, fxNaira)
+		}
+
+		m := fxToUnicodeRe.FindSubmatch(font)
+		if !tc.withCMap {
+			if m != nil {
+				t.Errorf("the naira variant %s still names a /ToUnicode object: %q", tc.name, font)
+			}
+			continue
+		}
+		if m == nil {
+			t.Fatalf("the naira variant %s names no /ToUnicode object: %q", tc.name, font)
+		}
+		if got := string(m[1]); got != strconv.Itoa(tc.objects) {
+			t.Errorf("the font dict names /ToUnicode %s 0 R, want the last object %d -- fxAssemble numbers by slice index, so the appended CMap is object %d", got, tc.objects, tc.objects)
+		}
 	}
 }

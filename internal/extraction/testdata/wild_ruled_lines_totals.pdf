@@ -1,0 +1,258 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1686 >>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(INVOICE) Tj
+ET
+BT
+/F1 12 Tf
+72 690 Td
+(Invoice No: INV-2102) Tj
+ET
+BT
+/F1 12 Tf
+72 672 Td
+(Invoice Date: 2026-06-24) Tj
+ET
+BT
+/F1 12 Tf
+72 654 Td
+(Supplier TIN: 99999999-0901) Tj
+ET
+BT
+/F1 12 Tf
+72 636 Td
+(Supplier: Adeyemi Trading Limited) Tj
+ET
+BT
+/F1 12 Tf
+72 618 Td
+(Buyer TIN: 99999999-0902) Tj
+ET
+BT
+/F1 12 Tf
+72 600 Td
+(Buyer: Honeywell Group) Tj
+ET
+BT
+/F1 12 Tf
+72 582 Td
+(Currency: NGN) Tj
+ET
+BT
+/F1 10 Tf
+76 500 Td
+(S/N) Tj
+ET
+BT
+/F1 10 Tf
+120 500 Td
+(DESCRIPTION OF GOODS) Tj
+ET
+BT
+/F1 10 Tf
+294 500 Td
+(QTY) Tj
+ET
+BT
+/F1 10 Tf
+344 500 Td
+(RATE \(N\)) Tj
+ET
+BT
+/F1 10 Tf
+434 500 Td
+(Amount \244) Tj
+ET
+BT
+/F1 10 Tf
+76 476 Td
+(1) Tj
+ET
+BT
+/F1 10 Tf
+120 476 Td
+(Steel Rods) Tj
+ET
+BT
+/F1 10 Tf
+294 476 Td
+(4) Tj
+ET
+BT
+/F1 10 Tf
+344 476 Td
+(1,000.00) Tj
+ET
+BT
+/F1 10 Tf
+434 476 Td
+(4,000.00) Tj
+ET
+BT
+/F1 10 Tf
+76 452 Td
+(2) Tj
+ET
+BT
+/F1 10 Tf
+120 452 Td
+(Cement Bags) Tj
+ET
+BT
+/F1 10 Tf
+294 452 Td
+(6) Tj
+ET
+BT
+/F1 10 Tf
+344 452 Td
+(500.00) Tj
+ET
+BT
+/F1 10 Tf
+434 452 Td
+(3,000.00) Tj
+ET
+BT
+/F1 10 Tf
+76 428 Td
+(3) Tj
+ET
+BT
+/F1 10 Tf
+120 428 Td
+(Roofing Sheets) Tj
+ET
+BT
+/F1 10 Tf
+294 428 Td
+(2) Tj
+ET
+BT
+/F1 10 Tf
+344 428 Td
+(500.00) Tj
+ET
+BT
+/F1 10 Tf
+434 428 Td
+(1,000.00) Tj
+ET
+BT
+/F1 12 Tf
+380 404 Td
+(Sub-total) Tj
+ET
+BT
+/F1 12 Tf
+500 404 Td
+(8,000.00) Tj
+ET
+BT
+/F1 12 Tf
+380 386 Td
+(VAT) Tj
+ET
+BT
+/F1 12 Tf
+500 386 Td
+(600.00) Tj
+ET
+BT
+/F1 12 Tf
+380 428 Td
+(Total) Tj
+ET
+BT
+/F1 12 Tf
+500 368 Td
+(8,600.00) Tj
+ET
+72 512 m
+540 512 l
+S
+72 488 m
+540 488 l
+S
+72 464 m
+540 464 l
+S
+72 440 m
+540 440 l
+S
+72 416 m
+540 416 l
+S
+72 416 m
+72 512 l
+S
+116 416 m
+116 512 l
+S
+290 416 m
+290 512 l
+S
+340 416 m
+340 512 l
+S
+430 416 m
+430 512 l
+S
+540 416 m
+540 512 l
+S
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [164 /naira] >> /ToUnicode 6 0 R >>
+endobj
+6 0 obj
+<< /Length 323 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Naira-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<A4> <20A6>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000001985 00000 n 
+0000002130 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+2504
+%%EOF

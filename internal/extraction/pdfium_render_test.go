@@ -486,3 +486,65 @@ func TestPDFiumReader_ScannedAndDenseDifferInInk(t *testing.T) {
 		t.Errorf("%s ImagePNG is %d byte(s), %s is %d (ratio %.2fx); want dense at least 2x scanned's size -- ink is what tells a real document from a blank scan", fxDense, dBytes, fxScanned, sBytes, float64(dBytes)/float64(sBytes))
 	}
 }
+
+// prRenderBuilt renders one in-memory page, so a builder variant that commits no fixture can
+// still be measured as ink.
+func prRenderBuilt(t *testing.T, name string, raw []byte) (extraction.Page, *image.Gray) {
+	t.Helper()
+
+	var pages []extraction.Page
+	_, err := extraction.NewPDFiumReaderAtDPIForTest(prDefaultDPI).Read(t.Context(),
+		extraction.Document{Bytes: raw, ContentType: "application/pdf"},
+		func(p extraction.Page) error {
+			p.ImagePNG = bytes.Clone(p.ImagePNG)
+			pages = append(pages, p)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Read(%s): %v", name, err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("Read(%s) rendered %d page(s), want 1", name, len(pages))
+	}
+	g := prGray(t, name, pages[0])
+	prAssertWhiteGround(t, name, pages[0], g)
+	if ink, _ := prInk(g, prRect{0, 0, g.Bounds().Dx() - 1, g.Bounds().Dy() - 1}); ink < prMinInk {
+		t.Fatalf("%s rendered %d dark pixel(s), want at least %d; the comparison below would be between two blank pages", name, ink, prMinInk)
+	}
+	return pages[0], g
+}
+
+// prNairaCMapOnly is fxNairaTextPage's font with the /Differences half removed. It lives here
+// rather than in the builder: the shipped variant always emits both halves, and this is the
+// only place that needs the one-legged font to compare against.
+func prNairaCMapOnly() []byte {
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(fxText(fxNairaLines()...)),
+		fxObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>"),
+		fxNairaCMap(),
+	})
+}
+
+// The token specs cannot see /Differences at all -- the CMap carries every extracted byte --
+// so without this clause the glyph-name half of the font dict is unfalsifiable.
+func TestPDFiumReader_TheDifferencesArrayChangesTheDrawnNaira(t *testing.T) {
+	both := fxNairaTextPage(true, fxNairaLines()...)
+	cmapOnly := prNairaCMapOnly()
+
+	// First the reason a render clause is needed: the two fonts extract identically.
+	bothText := fxAmountToken(t, fxTokens(t, both)).Text
+	onlyText := fxAmountToken(t, fxTokens(t, cmapOnly)).Text
+	if bothText != onlyText {
+		t.Fatalf("the two fonts extract differently (%q vs %q); a token spec already separates them and this clause is measuring something else", bothText, onlyText)
+	}
+
+	pBoth, _ := prRenderBuilt(t, "naira /Differences + /ToUnicode", both)
+	pOnly, _ := prRenderBuilt(t, "naira /ToUnicode only", cmapOnly)
+
+	if bytes.Equal(pBoth.ImagePNG, pOnly.ImagePNG) {
+		t.Errorf("the two renders are byte-identical over %d byte(s): /Differences [164 /naira] changes nothing that is drawn, so nothing in this package tells the naira glyph from what StandardEncoding puts at code 164", len(pBoth.ImagePNG))
+	}
+}

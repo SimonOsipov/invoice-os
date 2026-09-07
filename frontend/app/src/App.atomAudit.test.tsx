@@ -220,3 +220,32 @@ describe('AC-1: switchClient still clears extractionJobId (already shipped, not 
     )
   })
 })
+
+// ROUTE-06-08 AC-4. docs/routing.md carries its own copy of the atom table -- a PR body is
+// not a durable location -- so this pins the copy to AUDITED_ATOMS instead of trusting a
+// human to keep both in sync. Compares name + verdict + switchClient-reset only: Routes
+// renders as a shorthand ("all 13") in the doc and would be a brittle needle for no benefit.
+describe('ROUTE-06-08 AC-4: the docs table matches AUDITED_ATOMS', () => {
+  it('guard_theDocsTableMatchesTheAuditedAtoms', () => {
+    const audited = requireAudited()
+    const docSrc = readSrc('../../docs/routing.md')
+    const rowRe = /^\|\s*`([^`]+)`\s*\|\s*(yes|no)\s*\|[^|]*\|\s*`([a-z-]+)`\s*\|$/gm
+    const docRows = new Map<string, { reset: boolean; verdict: string }>()
+    let m: RegExpExecArray | null
+    while ((m = rowRe.exec(docSrc))) docRows.set(m[1], { reset: m[2] === 'yes', verdict: m[3] })
+    expect(docRows.size, 'the doc table extraction found no rows -- the row shape moved').toBeGreaterThan(30)
+
+    const missing = audited.filter((a) => !docRows.has(a.name)).map((a) => a.name)
+    const phantom = [...docRows.keys()].filter((n) => !audited.some((a) => a.name === n))
+    expect(missing, `atoms in AUDITED_ATOMS with no docs/routing.md row: ${missing.join(' | ')}`).toEqual([])
+    expect(phantom, `docs/routing.md rows naming no AUDITED_ATOMS atom: ${phantom.join(' | ')}`).toEqual([])
+
+    const mismatched = audited
+      .filter((a) => {
+        const row = docRows.get(a.name)
+        return row !== undefined && (row.verdict !== a.verdict || row.reset !== a.resetBySwitchClient)
+      })
+      .map((a) => a.name)
+    expect(mismatched, `docs/routing.md disagrees with AUDITED_ATOMS on: ${mismatched.join(' | ')}`).toEqual([])
+  })
+})

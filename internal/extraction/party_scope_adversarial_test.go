@@ -64,9 +64,6 @@ func TestResolve_APartyScopedRelationRoutesByTheAnchorNotTheValue(t *testing.T) 
 
 // A learned rule is never party-scoped: re-routing one by heading would overrule the reviewer
 // who pointed at the field. resolve.go states this and nothing asserted it.
-//
-// Mutation it uniquely catches: passing r.PartyScoped, or a bare true, at Resolve's LEARNED
-// call site.
 func TestResolve_ALearnedRuleKeepsItsFieldInsideTheOtherPartysBlock(t *testing.T) {
 	const body = `{"label":"(?i)\\btin\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
 	rule, err := extraction.ParseRule([]byte(body))

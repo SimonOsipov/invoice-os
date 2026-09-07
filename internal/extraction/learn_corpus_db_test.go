@@ -192,13 +192,10 @@ func lcPost(t *testing.T, f clFixture, arm, field, value string, region extracti
 
 // --- E-01 / AC #1: Tier-1 reaches the buyer TIN and the learned rule still outranks it ----
 
-// The re-founded "before". Tier-1 now reaches the buyer's TIN on this layout unaided, so the
-// learned rule has to BEAT a real generic candidate instead of filling a void. Rank 0 is
-// asserted on Tier and RuleID and never on Value: Tier-1 produces the same value here, so a
-// Value-only assertion passes whether the learned rule fired or not.
-//
-// Mutation it uniquely catches: a learned rule that silently stops firing -- the value stays
-// right and the tier goes wrong.
+// Tier-1 reaches the buyer's TIN on this layout unaided, so the learned rule has to BEAT a real
+// generic candidate instead of filling a void. Rank 0 is asserted on Tier and RuleID and never
+// on Value: Tier-1 produces the same value here, so a Value-only assertion passes whether the
+// learned rule fired or not.
 func TestLearnedTwoParty_Tier1BindsTheBuyerTINAndTheLearnedRuleStillOutranksIt(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR22-02-L01")

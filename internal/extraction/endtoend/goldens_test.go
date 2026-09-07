@@ -406,9 +406,6 @@ func wildVarBody(t *testing.T, src, decl, file string) string {
 // wildVarBody bounds five declarations, so its span rule is driven by a test rather than by
 // hope. A declaration whose own line closes the literal has no column-0 closing brace to stop
 // at, and gofmt writes both an EMPTY composite literal and a short non-empty one that way.
-//
-// Mutation it uniquely catches: the \n}\n search running past a self-closing declaration and
-// swallowing the code that follows it.
 func TestWildVarBody_BoundsADeclarationInEveryLiteralForm(t *testing.T) {
 	const decoy = "wild_decoy"
 	const tail = "\n\nfunc after() string {\n\treturn \"" + decoy + "\"\n}\n"

@@ -904,11 +904,6 @@ func TestLearnBoxlessRule_TakesLocFromTheEmittedLabelNotTheMatcher(t *testing.T)
 
 	// Must-stay-green: when the cap does not move the match end, the same field and value
 	// derive -- so the refusal above is about the moved end, not about the fixture family.
-	//
-	// ceiling: the party-bearing spelling "supplier tin: ..." can no longer serve as this
-	// control. Since EXTR-22-02 bare_tin derives a SECOND, distinct body from the same token
-	// and LearnBoxlessRule refuses the pair, so a boxless pointed correction on an inline party
-	// TIN teaches nothing. Revisit when the learn path applies anchorOutranked as Resolve does.
 	plain := []string{"tin: 12345678-0001"}
 	lr, ok := extraction.LearnBoxlessRule("supplier_tin", "12345678-0001", plain)
 	if !ok {

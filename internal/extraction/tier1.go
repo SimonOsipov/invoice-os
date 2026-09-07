@@ -42,8 +42,8 @@ const (
 )
 
 // tier1TINSweepLabel matches a bare TIN token whole, so the label IS the value
-// (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped rather than banded: the
-// party block the token sits in tells the supplier's TIN from the buyer's, and reads no box
+// (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped: the party block the token
+// sits in tells the supplier's TIN from the buyer's, and reads no box
 // (TestTier1_ABoxlessPageStillBindsABareTINByParty).
 const tier1TINSweepLabel = `^\s*[0-9]{8}-[0-9]{4}\s*$`
 

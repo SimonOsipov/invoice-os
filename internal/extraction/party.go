@@ -10,9 +10,8 @@ const (
 	PartyBuyer
 )
 
-// partyField is the TIN field p owns. PartyUnknown falls back to the supplier because that is
-// what a party-less TIN label filled before the partition existed, which is what makes the
-// change monotone (TestTier1_ABareTINLabelBindsToTheHeadingBeforeIt).
+// partyField is the TIN field p owns. PartyUnknown falls back to supplier, so a page with no
+// heading reads as it always did (TestTier1_ABareTINLabelBindsToTheHeadingBeforeIt).
 func partyField(p Party) string {
 	if p == PartyBuyer {
 		return "buyer_tin"

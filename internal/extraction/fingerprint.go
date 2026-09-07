@@ -44,7 +44,6 @@ func CollectTokens(dst *[]TokenPage) func(Page) error {
 
 // FingerprintVersion prefixes only Fingerprint's geometric hash. Bumping it invalidates every
 // stored rule in that namespace; BoxlessFingerprintVersion is the separate lever for the other.
-// v2: EXTR-22 reshaped anchorLexicon, which is this hash's input.
 const FingerprintVersion = "v2"
 
 // anchorMatcher is one anchorLexicon pattern, compiled.
@@ -168,8 +167,8 @@ func Fingerprint(pages []TokenPage) string {
 
 // BoxlessFingerprintVersion prefixes every boxless fingerprint. Disjoint from
 // FingerprintVersion on byte 0, which is what makes a "b2:" value unable to collide with any
-// "v2:" value in the shared layout_fingerprint column. Both producers read anchorLexicon, so
-// EXTR-22's reshape steps both namespaces together.
+// "v2:" value in the shared layout_fingerprint column. Both producers read anchorLexicon, so a
+// reshape of it steps both namespaces together.
 const BoxlessFingerprintVersion = "b2"
 
 // IsBoxlessFingerprint reports whether f is a key in the boxless namespace. A classifier, not

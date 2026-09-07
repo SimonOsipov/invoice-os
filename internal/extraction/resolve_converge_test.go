@@ -183,8 +183,7 @@ func cvRenderTier1(t *testing.T) string {
 }
 
 // V-06. The golden is the no-collateral-damage control on the generic path: a change that also
-// moved what Tier-1 emits, or the order it emits it in, moves these bytes. Re-baselined at
-// EXTR-22-02, whose own diff is four RuleID renames and one field re-route over six lines.
+// moved what Tier-1 emits, or the order it emits it in, moves these bytes.
 //
 // Unlike the accuracy floor this is not monotone in the distance dials -- it pins every value,
 // rule id, distance and box, so widening a dial adds a line and fails. cvGoldenLines is the

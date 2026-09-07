@@ -99,6 +99,9 @@ func LearnRule(field string, region Region, anchors []AnchorObservation) (Learne
 //
 // A label whose value sits in a separate paragraph can never derive: same_token is the only
 // relation available without geometry, so a stacked DOCX layout is structurally underivable.
+//
+// ceiling: an inline party-bearing TIN ("supplier tin: N") derives a second, distinct body via
+// bare_tin and the pair is refused. Revisit when this path applies anchorOutranked as Resolve does.
 func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
 	if !ok {

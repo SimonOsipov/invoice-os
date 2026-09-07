@@ -3,7 +3,7 @@ import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 import { collectErrors } from '../personaSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
-import { login, createEntity, createInvoice, PERSONAS as API_PERSONAS } from '../api/client'
+import { login, createEntity, createInvoice, createImportBatch, PERSONAS as API_PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
 
@@ -548,3 +548,72 @@ for (const id of PERSONA_IDS) {
     expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
   })
 }
+
+// ROUTE-06-06 AC-1: the plain top-level views ROUTE-06-05's popstate sweep leaves with no
+// coverage (dashboard/audit/settings/extraction/detail already have their own deep-link
+// specs above). One test looping all 8 paths in-process — docs/e2e-convention.md forbids
+// a test() per screen.
+test('deployed app: every top-level path cold-boots to its own screen', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const paths: { path: string; heading: string | null }[] = [
+    { path: '/invoices', heading: 'Invoices' },
+    { path: '/approvals', heading: 'Approvals' },
+    { path: '/rules', heading: 'Rules' },
+    { path: '/customers', heading: 'Customers & vendors' },
+    { path: '/reports', heading: 'Reports & analytics' },
+    { path: '/workflows', heading: 'Approval policies' },
+    { path: '/clients', heading: 'Client portfolio' },
+    { path: '/create', heading: null }, // no h1/testid — the text check below stands in
+  ]
+
+  for (const { path, heading } of paths) {
+    const url = `${APP_URL}${path}?persona=${FIRM_PERSONA.param}`
+    const res = await page.goto(url)
+    expect(res, `no response from ${url}`).toBeTruthy()
+    expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+    // URL alone would pass on a Chromium bfcache reuse -- the trap :155-157 already
+    // records -- so every path asserts both the URL AND a landmark from that screen's DOM.
+    await expect(page, `${path} did not settle on its own path`).toHaveURL(new RegExp(`${path}$`))
+
+    if (heading != null) {
+      await expect(
+        page.getByRole('heading', { level: 1, name: heading, exact: true }),
+        `${path} did not render its "${heading}" landmark`,
+      ).toBeVisible()
+    } else {
+      // CreateForm's own title span reads "New invoice · <client>" (a middle dot); the
+      // header bar's persistent CTA button is bare "New invoice" with no dot, so this
+      // substring is discriminating between the two.
+      await expect(page.getByText('New invoice ·'), `${path} did not render its CreateForm title`).toBeVisible()
+    }
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-06-06 AC-2: the review path, using a batch id minted through
+// createImportBatch (e2e/api/client.ts) in this test -- never predicted (the "an id is
+// only ever learned, never predicted" rule). No e2e/api/client.ts export minted a batch
+// before this subtask; the shape is the same two multipart POSTs contract-import.spec.ts
+// and import.spec.ts already drive locally.
+test('deployed app: a review path cold-boots to the review surface', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(API_PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-06 review cold-boot ${Date.now()}`, tin: freshTin() })
+  const batchId = await createImportBatch(token, entity.id, `INV-ROUTE06-REVIEW-${Date.now()}`)
+
+  const url = `${APP_URL}/imports/${batchId}/review?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page, 'the review deep link did not keep its batch id').toHaveURL(new RegExp(`/imports/${batchId}/review$`))
+  await expect(page.getByText(`BATCH ${batchId}`), 'the review surface did not render its batch header').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

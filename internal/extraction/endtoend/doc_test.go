@@ -84,6 +84,18 @@ func TestCorpusDoc_RecordsTheEndToEndProcedure(t *testing.T) {
 	if headline := fmt.Sprintf("%d of %d", eeCorpusHits, eeCorpusCells); !strings.Contains(section, headline) {
 		t.Errorf("%s's %q section does not carry the headline %q", eeDocFile, eeDocAccSection, headline)
 	}
+	// Presence alone lets the right headline sit beside a wrong one. eeCorpusCells is this
+	// section's only denominator, so every numerator over it must be the pinned hit count.
+	overCells := regexp.MustCompile(fmt.Sprintf(`([0-9]+) of %d\b`, eeCorpusCells))
+	found := overCells.FindAllStringSubmatch(section, -1)
+	if len(found) == 0 {
+		t.Errorf("the headline scan reads no %q phrase in %q; it would report clean on any number", fmt.Sprintf("N of %d", eeCorpusCells), eeDocAccSection)
+	}
+	for _, m := range found {
+		if m[1] != strconv.Itoa(eeCorpusHits) {
+			t.Errorf("%s's %q section publishes %q; eeCorpusHits is %d", eeDocFile, eeDocAccSection, m[0], eeCorpusHits)
+		}
+	}
 	if rate := strconv.FormatFloat(eeCorpusFloor, 'f', 4, 64); !strings.Contains(section, rate) {
 		t.Errorf("%s's %q section does not carry the rate %s", eeDocFile, eeDocAccSection, rate)
 	}

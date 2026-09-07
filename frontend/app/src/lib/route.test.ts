@@ -55,6 +55,7 @@ const APP_TSX = fileURLToPath(new URL('../App.tsx', import.meta.url))
 const ROUTE_TS = fileURLToPath(new URL('./route.ts', import.meta.url))
 const PACKAGE_JSON = fileURLToPath(new URL('../../package.json', import.meta.url))
 const ROUTING_DOC = fileURLToPath(new URL('../../../../docs/routing.md', import.meta.url))
+const TYPES_TS = fileURLToPath(new URL('../types.ts', import.meta.url))
 
 // Both DOM-scan tests below call this -- a typo'd pattern would report a clean zero on
 // route.ts exactly like a real zero, so the control needle over App.tsx must use it too.
@@ -219,6 +220,23 @@ describe('routeUrl — serialise', () => {
     // Floor: the six are not five defaults plus members -- members is one of the six.
     const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
     expect(nonDefault.length).toBe(5)
+  })
+
+  // ALL_SETTINGS_TABS is a local literal, so the `.length === 6` floor above asserts it
+  // against itself: a seventh tab added to types.ts would leave every tab loop in this file
+  // one short and silent. ROUTE_PATHS has such an anchor already
+  // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
+  it('settingsTabs_theTestTableIsAnchoredToTheShippedUnion', () => {
+    const src = readFileSync(TYPES_TS, 'utf8')
+    expect(src.length, 'types.ts read back empty -- the path is broken').toBeGreaterThan(0)
+    const line = src.split('\n').find((l) => l.startsWith('export type SettingsTab ='))
+    expect(line, 'types.ts no longer declares `export type SettingsTab =` on one line').toBeTruthy()
+    const shipped = (line ?? '').match(/'[a-z]+'/g)?.map((m) => m.slice(1, -1)) ?? []
+    // Needle: a regex that matched nothing would make the set comparison below vacuous.
+    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(6)
+    expect(shipped.sort(), 'the shipped union and this file\'s table must name the same tabs').toEqual(
+      [...ALL_SETTINGS_TABS].sort(),
+    )
   })
 })
 

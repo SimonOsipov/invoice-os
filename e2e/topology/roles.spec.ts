@@ -335,7 +335,7 @@ const NAV_URL: Record<string, string | RegExp> = {
   Workflows: /\/workflows$/,
   Clients: /\/clients$/,
   Audit: /\/audit$/,
-  Settings: /\/settings$/,
+  Settings: /\/settings\/members$/,
 }
 
 async function goTo(page: Page, label: string): Promise<void> {
@@ -353,10 +353,10 @@ function tabStrip(page: Page) {
   return settingsTab(page, 'Members').locator('xpath=..')
 }
 
-// Each tab's own URL. `members` is the default and routeUrl omits it, so Members is bare
-// /settings — never /settings/members.
+// Each tab's own URL. Every tab is explicit in the path, `members` included — pinned by
+// route.test.ts routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault.
 const SETTINGS_TAB_URL: Record<string, RegExp> = {
-  Members: /\/settings$/,
+  Members: /\/settings\/members$/,
   Roles: /\/settings\/roles$/,
 }
 
@@ -982,6 +982,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   ).toBeVisible()
   await page.getByRole('button', { name: 'Manage roles', exact: true }).click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
+  await expect(page, 'Manage roles carries the roles tab into the URL').toHaveURL(/\/settings\/roles$/)
   // The usage line moved the moment the step was repointed: one step, one policy.
   await expect(roleCard(page, title).getByText('1 approval step · 1 policy')).toBeVisible()
   await roleCard(page, title).getByTestId('role-card-edit').click()
@@ -999,7 +1000,15 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   // --- the step it pointed at now blocks -----------------------------------------------------
   // No policy was rewritten by the delete: the saved draft still names the key, and the step
   // renders the truth rather than a raw id.
+  // The sidebar lands on the LIST: `Manage roles` navigated off /workflows, and `navigate`
+  // clears `editingPolicyId` on any other destination (D12). Reopen from the row, the idiom
+  // topology/workflows.spec.ts uses — the builder has its own address now.
   await goTo(page, 'Workflows')
+  await page.getByText(policyName, { exact: true }).click()
+  await expect(page, 'the reopened builder has the policy in its URL').toHaveURL(
+    new RegExp(`/workflows/${createdPolicyId}$`),
+  )
+  await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(policyName)
   await expect(page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true })).toBeVisible()
   await page.getByText(`${DELETED_ROLE_OPTION} must approve`, { exact: true }).click()
   await expect(page.getByText(DELETED_ROLE_LINE, { exact: true })).toBeVisible()

@@ -27,14 +27,21 @@ Read from `lib/route.ts`'s `ROUTE_PATHS`, not retyped by hand:
 | `extraction` | `/extraction` |
 | `detail` (drill-down) | `/invoices/:id` |
 | `extraction` (drill-down) | `/extraction/:jobId` |
+| `workflows` (drill-down) | `/workflows/:id` |
 
 Two surprises: `dashboard` is the bare root `/`, not `/dashboard` — the landing hand-off
 and the persona strip both land on that pathname. `detail` is `/invoice`, singular, not
 `/invoices` — segment count is what tells the two-segment drill-down form apart (below).
 
-The last two rows aren't a 14th/15th `View`: `ROUTE_PATHS` stays a 13-row table, total over
-`View` (`[route-grammar-extends]`). `/invoices/<id>` and `/invoices` can't collide because
+The last three rows aren't a 14th/15th/16th `View`: `ROUTE_PATHS` stays a 13-row table, total
+over `View` (`[route-grammar-extends]`). `/invoices/<id>` and `/invoices` can't collide because
 segment count discriminates them — one segment reads the list, two reads the drill-down.
+
+`workflows` is the first form whose list and its drill-down share one `View`. `/workflows` and
+`/workflows/<id>` both parse to `workflows`; the id is what tells the policy list apart from
+the open builder, so here segment count is not merely how two rows avoid colliding — it is the
+only thing that distinguishes the two screens (pinned by `lib/route.test.ts`'s
+`parse_theListAndTheBuilderAreTwoAddresses`).
 
 ## The codec
 
@@ -48,9 +55,11 @@ through `reviewPath` to `/imports/<ids>/review`, the same shape `routePath` alre
 `detail`/`extraction`. `routeQuery(view, params)` returns only the query half, for the one
 caller that stores path and query in separate fields (the signed-out capture, below).
 
-`parseLocation(pathname, search)` is boot's total reader. It returns seven fields —
-`{ view, invoiceId, jobId, settingsTab, q, auditInvoice, reviewBatchIds }` — with `view`
-never null, falling back to `dashboard` rather than throwing on an unparseable path.
+`parseLocation(pathname, search)` is boot's total reader. It returns eight fields —
+`{ view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }` — with
+`view` never null, falling back to `dashboard` rather than throwing on an unparseable path.
+`policyId` is the field ROUTE-07 added; like `invoiceId` and `jobId` it is non-null only when
+`view` is the matching drill-down, so a `/workflows` list boot reads it as `null`.
 
 ## Owned params
 
@@ -60,6 +69,7 @@ never null, falling back to `dashboard` rather than throwing on an unparseable p
 | `audit` | `invoice` (query) | `/audit?invoice=<uuid>` |
 | `settings` | its tab (path segment) | `/settings/<tab>` |
 | `detail`, `extraction` | its id (path segment) | `/invoices/:id`, `/extraction/:jobId` |
+| `workflows` | its policy id (path segment) | `/workflows/:id` |
 | `create` (review) | its batch ids (path segment) | `/imports/:batchIds/review` |
 
 Every other view owns nothing, so nothing else is ever emitted or read. The review ids are a
@@ -73,8 +83,14 @@ built from its arguments; it never reads `window.location.search`. This is ROUTE
 `[one-writer-rule]` unrelaxed — the fence was always "never echo the live query string", not
 "no query string". `?foo=1` is owned by nobody, so it is dropped rather than carried.
 
-**R2 — Omit the default.** `q=''`, `invoice=null` and the `members` tab serialise to nothing
-at all: `/invoices`, `/audit`, `/settings`. It is `dashboard → /` applied one level down.
+**R2 — The query params omit their defaults; the settings tab is always explicit.** `q=''` and
+`invoice=null` still serialise to nothing at all: `/invoices`, `/audit`. That half is
+`dashboard → /` applied one level down. The settings tab is the deliberate exception — ROUTE-07
+gave Members its own address, so `routeUrl('settings', …)` always names the tab, `members`
+included (pinned by `lib/route.test.ts`'s
+`routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault`). The rule is non-uniform on purpose and
+is written down here rather than left as a silent exception, which is how the next reader files
+a bug against correct behaviour: what omits is a defaulted *query* param, never the tab segment.
 
 **R3 — The parse is total and never produces an unrenderable state.** An unknown settings
 tab resolves to `members` in `parseLocation`; an unavailable one (`company` outside an
@@ -99,10 +115,16 @@ strip shows `company` only when `mode === 'inhouse'`, so the addressable set and
 available set differ by one member in a firm workspace; an unavailable tab is an unknown tab
 (R3).
 
-`members` is the default, so R2 omits it: Members is bare `/settings`, never
-`/settings/members`. Both halves of that omission are pinned —
-`App.routeNavigate.test.tsx`'s `settings_returningToMembersWritesTheBarePath` for the
-writer, and the `SETTINGS_TAB_URL` map inside `e2e/topology/roles.spec.ts`'s
+Every tab names itself in the path, `members` included: Members is `/settings/members`, never
+bare `/settings`. Bare `/settings` stays an **accepted alias** — links to it are already shared,
+so it must keep parsing — and it resolves to Members, then gets canonicalised to
+`/settings/members` by the mount alignment's `replaceState`. `replaceState`, never `pushState`:
+a push would leave a phantom `/settings` entry sitting behind `/settings/members`, and one Back
+press would look like it did nothing. A Back press onto a typed bare `/settings` keeps that form
+in the address bar — the `popstate` handler corrects the tab state and writes no URL (R4), which
+is what ROUTE-04's unknown-tab correction already did. Both halves of the canonical form are
+pinned — `App.routeNavigate.test.tsx`'s `settings_returningToMembersWritesTheCanonicalPath` for
+the writer, and the `SETTINGS_TAB_URL` map inside `e2e/topology/roles.spec.ts`'s
 `openSettingsTab` for the browser.
 
 ## The URL writer
@@ -210,7 +232,7 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `customRuleStore` | no | /rules | `correctly-reset` |
 | `openRuleKey` | yes | /rules | `correctly-reset` |
 | `policies` | no | /workflows, /settings/<tab> | `correctly-reset` |
-| `editingPolicyId` | yes | /workflows | `correctly-reset` |
+| `editingPolicyId` | yes | /workflows, /workflows/<id> | `stale-and-reachable` |
 | `members` | no | /workflows, /settings/<tab>, /invoice, /invoices/<id> | `correctly-reset` |
 | `roles` | no | /workflows, /settings/<tab> | `correctly-reset` |
 | `entityId` | yes | /create | `correctly-reset` |
@@ -256,10 +278,10 @@ below. A booted review path seeds `createStep`/`reviewBatchIds` the same way, of
 rather than the live pathname, so a signed-out `/imports/<ids>/review` visit round-trips
 through the signed-out deep link below for free.
 
-Both drill-down ids — and the review batch ids — gate on the *winning* view, `bootView`,
+All three drill-down ids — and the review batch ids — gate on the *winning* view, `bootView`,
 never `seed.view` directly (`[ids-gate-on-the-winning-view]`) — only `initialView` can
-outrank the path now, and a `create` boot must never inherit a review batch, an invoice id
-or a job id from a URL that lost. The mount-alignment effect then serialises that same boot
+outrank the path now, and a `create` boot must never inherit a review batch, an invoice id,
+a job id or a policy id from a URL that lost. The mount-alignment effect then serialises that same boot
 state back into the URL
 (`[alignment-must-carry-the-id]`): without it, a correct deep link renders right and then
 silently rewrites its own address bar one tick later — right panel, wrong link to copy. The
@@ -343,12 +365,12 @@ link returns to its FILTER after sign-in` (the query — the only spec anywhere 
 a restored query end to end).
 
 **The merged shape (ROUTE-02 merge).** The `{ path, search }` seed resolves the destination
-first; `parseLocation` then decodes it into the seven fields. A signed-out visit to
+first; `parseLocation` then decodes it into the eight fields. A signed-out visit to
 `/invoices/<id>` is captured, restored after sign-in, and seeds both the detail view and its
 id — not just the view. Pinned by `App.signedOutDeepLink.test.tsx`'s `Workspace boot: a
 restored destination carries its drill-down id too (ROUTE-02 merge)` block.
 
-## The ROUTE-02..06 boundary
+## The ROUTE-02..07 boundary
 
 - **ROUTE-02** — **shipped.** Drill-down ids (`/invoices/:id`, `/extraction/:jobId`) and
   cold-boot seeding for both. `carryView` collapses `detail`/`extraction`
@@ -412,6 +434,64 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   by code reading rather than fixed here: `switchClient` already cleared `extractionJobId`
   (`App.tsx:721`) and `signOut` already cleared the URL and the stored deep-link destination
   (`App.tsx:1707`, `:1712`).
+
+- **ROUTE-07** — **shipped.** The two addresses the epic left out: `/settings/members` (every
+  tab names itself now) and the open policy builder (`/workflows/<id>`). Six decisions are
+  worth carrying forward, and one inheritance that looks like new work and is not.
+
+  **R2 stopped being uniform, and the doc says so.** The defaulted query params still omit;
+  the settings tab never does. The R2 paragraph above states the exception inside the rule
+  rather than beside it, because an exception nobody wrote down is how the next reader files
+  a bug against correct behaviour.
+
+  **A policy id that names nothing renders the list and leaves the URL alone.**
+  `/workflows/<unknown>` — an id that never existed, or one belonging to another company —
+  renders the policy list, which is exactly what `WorkflowsView` already does when its
+  `policies.find(...)` misses. No redirect, no rewrite of the address bar, no error screen,
+  and no request that names the id: `lib/policies.ts` exposes `listApprovalPolicies` and no
+  single-policy read, so there is nothing to 404 against. The *mechanism* matches ROUTE-02
+  exactly (a not-found never rewrites the address); the *outcome* differs — the list, not an
+  `ErrorState` — for that reason alone. **Rejected: a post-fetch `replaceState` back to
+  `/workflows`.** It reads better, and it is what the settings half does, but it cannot run at
+  the mount alignment: the policy list has not arrived there yet, so it would strip *valid*
+  deep-link ids. Gating it on `policiesState === 'ready'` would mean a tenth history write.
+
+  **No canonicalising write was added to the `popstate` handler.** A Back press onto a typed
+  bare `/settings` keeps that spelling in the address bar; only the tab state is corrected.
+  That is what "match ROUTE-04" resolves to — ROUTE-04 corrects the unknown tab's *state* on
+  popstate and never its URL — and it keeps R4's "the handler writes nothing on the ordinary
+  path" true, its one write still being the ROUTE-06 identity clamp.
+
+  **No tenth `window.history` write site exists.** Every policy URL move routes through
+  `navigate`, so the nine-site count above is unchanged and was a constraint on the design
+  rather than a result of it. Accepted consequence: closing the builder **pushes** rather than
+  replaces. Closing is a navigation under R4, and it is the shipped ROUTE-02 precedent —
+  `InvoiceDetail.tsx:95`'s back-to-list button calls `ctx.nav('invoices')`, which pushes.
+
+  **Two writers still emit bare `/settings`, deliberately.** The ROUTE-06 identity clamp and
+  `switchClient` both build their path as `routePath(carryView(view))` — one argument, on
+  purpose — and `carryView` is the identity for `settings`, so both land on `/settings` while
+  `navigate`, a tab click and the mount alignment all emit `/settings/members`. One logical
+  state, two URL shapes. Left alone: the alias parses (the `/settings/:tab` section above), the
+  next mount alignment canonicalises it, and rewriting either site through `routeUrl` would put
+  the clamp's own behaviour at risk for no functional gain. An asymmetry, recorded here so the
+  next reader does not rediscover it as a defect.
+
+  **`navigate` clears `editingPolicyId` on every destination that is not `workflows`.** The
+  list and the builder share one `View`, so the absence of an id *is* the list — the
+  screen-lifetime idiom borrowed from `auditPrefilter`. That has a journey consequence:
+  `Manage roles` navs to `/settings/roles` and no longer round-trips back into the open
+  builder. It was never a round trip in substance — `WorkflowBuilder` holds its working copy
+  in local `useState`, so that nav already unmounted the builder and discarded every unsaved
+  edit — but the *selection* is newly dropped. Back now restores it, which did not work at all
+  before, because `/settings/roles` had no `/workflows/<id>` entry behind it to return to.
+
+  Finally, the id drop on a persona switch and on the identity clamp is **inherited, not
+  added**. Both sites call `routePath` with no id argument and `carryView('workflows')` is
+  `workflows`, so a stale `/workflows/<id>` entry collapses to the bare list by construction;
+  no code was written for it, only specs. `carryView` was deliberately *not* taught about
+  `workflows` — that would collapse the whole view to `/invoices`, and the policy list is a
+  perfectly good place for a remounted identity to land.
 
 ## Two things that cost time here
 

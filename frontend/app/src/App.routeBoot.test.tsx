@@ -9,10 +9,11 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { StrictMode } from 'react'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
+import { EMPTY_BUCKET } from './lib/dashboard'
 import { DEEP_LINK_KEY, DEEP_LINK_SCHEMA_VERSION } from './lib/deepLink'
 import { clampFilterText } from './lib/invoices'
 import { ROUTE_PATHS } from './lib/route'
@@ -533,15 +534,37 @@ describe('ROUTE-04-02 QA adversarial coverage', () => {
     ).toBe('/invoices')
   })
 
-  it('boot_theDefaultSettingsTabIsOmittedFromTheAlignedUrl', async () => {
-    // Six e2e assertions are `$`-anchored on `/settings` exactly and start depending on
-    // omit-the-default once ROUTE-04-03 repoints navigate at routeUrl.
+  it('boot_theDefaultSettingsTabIsExplicitInTheAlignedUrl', async () => {
+    // Seven e2e assertions are `$`-anchored on the settings address (ROUTE-07-02).
     await bootAt('/settings/members')
     const ctx = requireCtx()
     expect(ctx.view, 'sanity: /settings/members must seed the settings view').toBe('settings')
     expect(ctx.settingsTab, 'the explicit default segment still seeds members').toBe('members')
-    expect(window.location.pathname, 'the default tab must be omitted from the aligned path').toBe('/settings')
+    expect(window.location.pathname, 'the default tab must survive the alignment').toBe('/settings/members')
     expect(window.location.search, 'the tab is a path segment, never a query param').toBe('')
+  })
+
+  it('boot_bareSettingsCanonicalisesWithReplaceNotPush', async () => {
+    // The settled URL alone cannot tell a replace from a push -- both leave the address bar
+    // reading /settings/members. The spies name the clause.
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt('/settings')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: bare /settings must seed the settings view').toBe('settings')
+    expect(ctx.settingsTab, 'sanity: bare /settings still parses to members').toBe('members')
+    expect(window.location.pathname, 'a bare /settings boot canonicalises to the members tab').toBe(
+      '/settings/members',
+    )
+    expect(window.location.search, 'the tab is a path segment, never a query param').toBe('')
+
+    const replaced = replaceSpy.mock.calls.map((c) => c[2])
+    expect(replaced, 'the canonical URL must be WRITTEN by replaceState, not merely settled into').toContain(
+      '/settings/members',
+    )
+    expect(pushSpy.mock.calls, 'the mount alignment must never push').toHaveLength(0)
+    expect(window.history.length, 'canonicalising must add no history entry').toBe(lengthBefore)
   })
 
   it('boot_aMalformedInvoiceIdNeverReachesTheAtomOrTheAlignedUrl', async () => {
@@ -702,7 +725,9 @@ describe('QA adversarial coverage (ROUTE-02-02)', () => {
     ctx = requireCtx()
     expect(ctx.view, 'initialView must beat the path').toBe('settings')
     expect(ctx.extractionJobId, "the path's job id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on /settings').toBe('/settings')
+    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
+      '/settings/members',
+    )
   })
 
   it('boot_theIdSurvivesRepeatedStrictModeRemounts', async () => {
@@ -769,7 +794,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
     expect(company, 'and both must equal the literal expected shape, not just each other').toEqual({
       view: 'settings',
       settingsTab: 'members',
-      alignedUrl: '/settings',
+      alignedUrl: '/settings/members',
       stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
     })
   })
@@ -864,3 +889,193 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
   })
 })
 
+
+// --- ROUTE-07-04: a policy has an address -------------------------------------------
+//
+// A real gateway, unlike every spec above: the policy list only fetches when
+// `base != null`, so D5's "no request names the id" claim is vacuous on a build that
+// fetches nothing at all. Idiom: App.routePopstate.test.tsx:976-1037.
+
+const GATEWAY = 'https://gateway.test'
+const ENTITY_A = 'e1111111-1111-4111-8111-111111111111'
+const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
+const UNKNOWN_POLICY_ID = 'ffffffff-1111-4111-8111-00000000dead'
+
+function policyWire(id: string, name: string) {
+  return { id, name, scope: 'All invoices', status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
+}
+
+function okJson(body: unknown) {
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+}
+
+// One fallback wide enough that no screen this boot passes through throws.
+const WIDE_BODY = {
+  access_token: 'test-token',
+  tenant: { id: 't-policy', name: 'Policy Tenant' },
+  entities: [],
+  policies: [],
+  members: [],
+  roles: [],
+  invoices: [],
+  clients: [],
+  totals: EMPTY_BUCKET,
+  events: [],
+  facets: { events: [], actors: [], companies: [] },
+  page: { limit: 50, has_more: false, next_cursor: null },
+  log_is_empty: true,
+  rejection_reasons: [],
+  total: 0,
+  pagination: { limit: 50, offset: 0, total: 0 },
+}
+
+// `defer` holds the LIST response open so the late-arrival spec can observe the loading
+// arm; `calls` is what the not-found spec reads to show no request ever named the id.
+function stubPolicyGateway(opts: { policies: ReturnType<typeof policyWire>[]; defer?: boolean }) {
+  const calls: string[] = []
+  let release = () => {}
+  const gate = opts.defer ? new Promise<void>((resolve) => { release = resolve }) : Promise.resolve()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      calls.push(url)
+      if (url.includes('/portfolio/v1/entities')) {
+        return okJson({
+          entities: [
+            {
+              id: ENTITY_A,
+              name: 'Policy Co A',
+              tin: '12345678-0001',
+              registration: null,
+              sector: null,
+              address: null,
+              status: 'active',
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+          pagination: { limit: 200, offset: 0, total: 1 },
+        })
+      }
+      if (url.includes('/approval-policies')) {
+        await gate
+        return okJson({ approval_policies: opts.policies })
+      }
+      // Its own envelope, and its own arm: WorkflowBuilder:173-174 renders ErrorState
+      // instead of the form when the roles fetch fails, so the fallback below would make
+      // boot_aValidPolicyIdSurvivesTheListArrivingLate unpassable rather than red.
+      if (url.includes('/workflow-roles')) return okJson({ workflow_roles: [] })
+      return okJson(WIDE_BODY)
+    }),
+  )
+  return { calls, releasePolicies: () => release() }
+}
+
+async function bootAtWithPolicies(path: string) {
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  return bootAt(path)
+}
+
+describe('ROUTE-07-04 AC-1: a policy path seeds the builder it names', () => {
+  it('boot_workflowsPathSeedsThePolicyIdOnTheFirstCommittedRender', async () => {
+    await bootAt(`/workflows/${POLICY_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, `booting at /workflows/${POLICY_ID} should seed 'workflows', got '${ctx.view}'`).toBe('workflows')
+    expect(ctxRenders.length, 'the render log is empty -- Sidebar never rendered').toBeGreaterThan(0)
+    expect(ctxRenders[0].view, 'floor: the first logged render must be the mount render').toBe('workflows')
+    // The FIRST committed render, not the settled ctx: a seed moved into a useEffect
+    // still settles correctly and would pass a `requireCtx()` assertion.
+    expect(
+      ctxRenders[0].editingPolicyId,
+      'the first committed render must already carry the policy id -- a useEffect seed carries null here',
+    ).toBe(POLICY_ID)
+  })
+
+  // The story's highest-risk line. The spy, not the pathname, is what names the clause:
+  // an alignment that never runs at all ALSO leaves the pathname as typed, so a
+  // pathname-only assertion cannot tell a correct alignment from a deleted one.
+  it('boot_theAlignmentCarriesThePolicyIdItself', async () => {
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt(`/workflows/${POLICY_ID}`)
+    requireCtx()
+    // calls[0] is bootAt's own boot-setup replaceState (:632's trap), not the app's.
+    const appCalls = replaceSpy.mock.calls.slice(1)
+    expect(appCalls.length, 'floor: the mount alignment never wrote, so the spy discriminates nothing').toBeGreaterThan(
+      0,
+    )
+    expect(appCalls[0]?.[2], "the alignment's own replaceState call must carry the policy id").toBe(
+      `/workflows/${POLICY_ID}`,
+    )
+    const droppingId = appCalls.filter((call) => call[2] === '/workflows')
+    expect(droppingId, 'no app replaceState call may drop the id back to the bare /workflows path').toHaveLength(0)
+    expect(window.location.pathname, 'the address bar must still read the id-carrying path after mount').toBe(
+      `/workflows/${POLICY_ID}`,
+    )
+  })
+})
+
+describe('ROUTE-07-04 AC-6: an unknown policy id renders the list and keeps its address (D5)', () => {
+  it('boot_anUnknownPolicyIdLandsOnTheListAndKeepsItsAddress', async () => {
+    const gw = stubPolicyGateway({ policies: [policyWire(POLICY_ID, 'Standard approval policy')] })
+    await bootAtWithPolicies(`/workflows/${UNKNOWN_POLICY_ID}`)
+    await waitFor(() => expect(screen.queryByTestId('policies-list'), 'the policy list never arrived').toBeTruthy())
+
+    expect(screen.getByText('Approval policies'), 'an unknown id must render the policy list').toBeTruthy()
+    expect(screen.queryByLabelText('Policy name'), 'an unknown id must not open a builder').toBeNull()
+    expect(window.location.pathname, 'D5: a not-found never rewrites the address the user typed').toBe(
+      `/workflows/${UNKNOWN_POLICY_ID}`,
+    )
+    // Floor before the absence claim: zero requests altogether would satisfy the filter
+    // below without proving anything.
+    expect(gw.calls.length, 'floor: the gateway was never called, so the absence claim is vacuous').toBeGreaterThan(0)
+    expect(
+      gw.calls.filter((url) => url.includes(UNKNOWN_POLICY_ID)),
+      'no request may name the unknown policy id -- there is no single-policy read to 404 against',
+    ).toEqual([])
+  })
+
+  // The positive control for the spec above: without it, "an unknown id renders the list"
+  // also passes on a build that never resolves ANY id.
+  it('boot_aValidPolicyIdSurvivesTheListArrivingLate', async () => {
+    const gw = stubPolicyGateway({ policies: [policyWire(POLICY_ID, 'Standard approval policy')], defer: true })
+    await bootAtWithPolicies(`/workflows/${POLICY_ID}`)
+
+    expect(screen.queryByText('Loading approval policies…'), 'the deferred list must still be loading').toBeTruthy()
+    expect(screen.queryByLabelText('Policy name'), 'the builder cannot open before the list arrives').toBeNull()
+    expect(window.location.pathname, 'the address must carry the id while the list is still in flight').toBe(
+      `/workflows/${POLICY_ID}`,
+    )
+
+    await act(async () => {
+      gw.releasePolicies()
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText('Policy name'),
+        'once the list lands the builder must open on the deep-linked policy',
+      ).toBeTruthy(),
+    )
+    expect(window.location.pathname, 'the address must be unchanged across the swap').toBe(`/workflows/${POLICY_ID}`)
+  })
+})
+
+// The seed's OTHER guard. boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId pins this
+// for jobId; nothing pinned it for policyId, and dropping `bootView === 'workflows'` from
+// the initializer survives the whole suite.
+describe('ROUTE-07-04 QA: the boot seed is gated on the WINNING view, not on seed.view', () => {
+  it('boot_thePolicyIdMustNotSurviveWhenInitialViewWins', async () => {
+    await bootAt(`/workflows/${POLICY_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the first mount seeds workflows from the path').toBe('workflows')
+    expect(ctx.editingPolicyId, 'sanity: the first mount opened the builder on the path id').toBe(POLICY_ID)
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'settings')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, 'initialView must beat the path').toBe('settings')
+    expect(ctx.editingPolicyId, "the path's policy id must not survive when initialView wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
+      '/settings/members',
+    )
+  })
+})

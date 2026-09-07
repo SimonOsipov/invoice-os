@@ -34,11 +34,15 @@ export interface Route {
 const DRILLDOWN_SEGMENT: Record<string, View> = {
   invoices: 'detail',
   extraction: 'extraction',
+  // Shares its View with the list, so segment count is the discriminator:
+  // parse_theListAndTheBuilderAreTwoAddresses.
+  workflows: 'workflows',
 }
 
 export function routePath(view: View, id?: string | null): string {
   if (id != null && view === 'detail') return `/invoices/${encodeURIComponent(id)}`
   if (id != null && view === 'extraction') return `/extraction/${encodeURIComponent(id)}`
+  if (id != null && view === 'workflows') return `/workflows/${encodeURIComponent(id)}`
   return ROUTE_PATHS[view]
 }
 
@@ -117,26 +121,27 @@ export type RouteParams = {
   reviewBatchIds?: string[]
 }
 
-// TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId are
-// non-null only when view is the matching drill-down (mirrors parseRoute's Route.id).
+// TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId/policyId
+// are non-null only when view is the matching drill-down (mirrors parseRoute's Route.id).
 export type ParsedLocation = {
   view: View
   invoiceId: string | null
   jobId: string | null
+  policyId: string | null
   settingsTab: SettingsTab
   q: string
   auditInvoice: string | null
   reviewBatchIds: string[]
 }
 
-// Path plus query, never a hash. Omit the default: the `members` tab, an empty `q` and an
-// absent id all serialise to nothing. The path half delegates to routePath so the
-// drill-down segment logic lives in exactly one place.
+// Path plus query, never a hash. Every settings tab is named including `members`, so each tab has
+// an address (routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault). An empty `q` and an absent
+// id still serialise to nothing. The path half delegates to routePath so the drill-down segment
+// logic lives in exactly one place.
 export function routeUrl(view: View, params: RouteParams = {}): string {
   const path = routePath(view, params.id)
   if (view === 'settings') {
-    const tab = params.settingsTab
-    return tab && tab !== 'members' ? `${path}/${tab}` : path
+    return `${path}/${params.settingsTab ?? 'members'}`
   }
   if (view === 'create') {
     const ids = params.reviewBatchIds
@@ -167,6 +172,7 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   let view: View = route?.view ?? 'dashboard'
   const invoiceId = route?.view === 'detail' ? route.id : null
   const jobId = route?.view === 'extraction' ? route.id : null
+  const policyId = route?.view === 'workflows' ? route.id : null
   let settingsTab: SettingsTab = 'members'
   let reviewBatchIds: string[] = []
 
@@ -195,5 +201,5 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   // renders an error state where the ordinary unfiltered list is correct.
   const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
 
-  return { view, invoiceId, jobId, settingsTab, q, auditInvoice, reviewBatchIds }
+  return { view, invoiceId, jobId, policyId, settingsTab, q, auditInvoice, reviewBatchIds }
 }

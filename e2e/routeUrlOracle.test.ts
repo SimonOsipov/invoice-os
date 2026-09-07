@@ -93,7 +93,7 @@ describe('guard: every named nav helper (AC-1, AC-2, AC-5)', () => {
   })
 })
 
-// The 10 in-app navigations no helper wraps (re-derived by an independent sweep of
+// The 12 in-app navigations no helper wraps (re-derived by an independent sweep of
 // `aside.pf-sidebar nav.pf-nav-list` and `getByRole('button', { name: /Overview|Invoices|...
 // /Settings/ })` across e2e/ -- NOT copied from the plan's line numbers, which have drifted
 // before). Located by exact source text + 1-based occurrence index, not by line number: the
@@ -124,10 +124,18 @@ const INLINE_SITES = [
     needle: "await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: /Invoices/ }).click()",
     occurrence: 1,
   },
-  // The last two are not sidebar clicks: a committed search and the Open-in-Audit hand-off
+  // These two are not sidebar clicks: a committed search and the Open-in-Audit hand-off
   // both push a URL of their own, so both owe the same assertion.
   { file: 'invoice-surfaces.spec.ts', needle: "await page.getByTestId('invoice-search-input').press('Enter')", occurrence: 1 },
   { file: 'invoice-surfaces.spec.ts', needle: "await page.getByTestId('activity-open-in-audit').click()", occurrence: 1 },
+  // ROUTE-07's two: the builder now has its own address, so opening a policy row and the
+  // inspector's Manage roles hand-off each push a path no helper wraps.
+  { file: 'workflows.spec.ts', needle: "await page.getByText(POLICY_NAME, { exact: true }).click()", occurrence: 1 },
+  {
+    file: 'roles.spec.ts',
+    needle: "await page.getByRole('button', { name: 'Manage roles', exact: true }).click()",
+    occurrence: 1,
+  },
 ]
 
 function nthIndexOf(haystack: string, needle: string, n: number): number {
@@ -158,9 +166,9 @@ function windowAfter(source: string, anchorIndex: number, maxLines = 12): string
 describe('guard: every inline nav click no helper wraps (AC-3)', () => {
   test('guard_theWalkFindsTheInlineSitesItClaimsToScan', () => {
     const indices = INLINE_SITES.map(({ file, needle, occurrence }) => nthIndexOf(read(file), needle, occurrence))
-    // Floor: the independent sweep found exactly 10. A miss (renamed label, moved click) must
+    // Floor: the independent sweep found exactly 12. A miss (renamed label, moved click) must
     // read as -1 here, never as a silently-passing zero-hit walk.
-    expect(indices.length).toBe(10)
+    expect(indices.length).toBe(12)
     indices.forEach((idx, i) => {
       expect(idx, `inline site #${i} (${INLINE_SITES[i].file}, occurrence ${INLINE_SITES[i].occurrence}) not found`).toBeGreaterThanOrEqual(0)
     })

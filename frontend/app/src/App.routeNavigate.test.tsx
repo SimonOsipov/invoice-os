@@ -1470,8 +1470,14 @@ describe('ROUTE-06-03 AC-2: switchClient seeds the import target with the incomi
   })
 })
 
-// GREEN before the fix -- the control that a widened resetImport's default parameter
-// leaves openCreate's existing bare call exactly as it behaves today.
+// Pins AC-3's literal outcome (entityId ends at active.entityId), NOT the default
+// parameter's value: openCreate() always lands createStep at 'upload' in the same
+// commit as its bare resetImport() call, so a null default is healed to
+// active.entityId by the untouched re-seed effect (:529-533) before this test's
+// act() returns -- verified empirically, RTL's act() flushes passive effects
+// whether sync or async. restartImport shares the same shape. No caller can
+// observe the default's value through ctx today, so mutating the default to
+// `null` leaves this spec GREEN by design, not by gap -- see App.tsx:737.
 describe('ROUTE-06-03 AC-3 control: openCreate still seeds from active with no argument', () => {
   it('openCreate_stillSeedsFromActiveWithNoArgument', async () => {
     await bootAtWithGateway('/')

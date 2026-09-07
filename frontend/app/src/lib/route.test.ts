@@ -54,6 +54,7 @@ function searchOf(params: Record<string, string>): string {
 const APP_TSX = fileURLToPath(new URL('../App.tsx', import.meta.url))
 const ROUTE_TS = fileURLToPath(new URL('./route.ts', import.meta.url))
 const PACKAGE_JSON = fileURLToPath(new URL('../../package.json', import.meta.url))
+const ROUTING_DOC = fileURLToPath(new URL('../../../../docs/routing.md', import.meta.url))
 
 // Both DOM-scan tests below call this -- a typo'd pattern would report a clean zero on
 // route.ts exactly like a real zero, so the control needle over App.tsx must use it too.
@@ -826,5 +827,34 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
       expect(src.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
       expect(src.includes(LOCATION_HASH), `${name} still reads or writes the url fragment`).toBe(false)
     }
+  })
+})
+
+// ROUTE-03-07 AC-3/AC-4: the two guards below are a PAIR by design. An absence guard alone
+// would pass on a doc that deleted the review section instead of updating it -- the positive
+// guard is what rules that out.
+const PATHNAME_SEARCH_HASH = 'pathname + search' + ' + hash'
+
+describe('ROUTE-03-07 AC-3: the routing doc names no retired scheme', () => {
+  it('guard_theRoutingDocNamesNoRetiredScheme', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    // Floor: a broken path reads back '', which would make the absence checks below pass on
+    // nothing read rather than a clean doc -- M4-04 burned five instruments this way.
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    // Needle: proves .includes() can see a match on this file at all, so the absence checks
+    // below aren't vacuous.
+    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
+    expect(src.includes(REVIEW_FRAGMENT), 'docs/routing.md still mentions the retired review-hash fragment').toBe(false)
+    expect(src.includes(LOCATION_HASH), 'docs/routing.md still reads or writes the url fragment').toBe(false)
+    expect(src.includes(PATHNAME_SEARCH_HASH), 'docs/routing.md still describes the retired pathname+search+hash rebuild').toBe(false)
+  })
+})
+
+describe('ROUTE-03-07 AC-4: the routing doc names the shipped form', () => {
+  it('guard_theRoutingDocNamesTheShippedForm', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    expect(src.includes('/imports/'), 'docs/routing.md no longer names the shipped review path').toBe(true)
+    expect(src.includes(':batchIds'), 'docs/routing.md no longer names the shipped batchIds segment').toBe(true)
   })
 })

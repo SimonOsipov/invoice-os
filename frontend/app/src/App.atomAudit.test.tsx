@@ -3,9 +3,7 @@
 // every file in that family renders the app component and needs a jsdom URL reset this
 // file does not, since it never mounts anything.
 //
-// AUDITED_ATOMS (App.atomAudit.data.ts) is the audit table's data -- not authored yet.
-// Every spec below asserts it is defined before using it, so all five fail today for one
-// honest reason: the export does not exist. The executor adds it next.
+// AUDITED_ATOMS (App.atomAudit.data.ts) is the audit table's data.
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -116,16 +114,19 @@ describe('AC-4: every Workspace atom has an audit row', () => {
     expect(names.length, 'a mis-anchored slice must fail loudly, not pass by finding nothing').toBeGreaterThanOrEqual(30)
   })
 
-  // Regression control for the extraction rule above: an `[x, setX]` pair regex passes
-  // every other spec in this file and fails only this one.
+  // Regression control on the EXTRACTION RULE, not on AUDITED_ATOMS: re-extracts from
+  // App.tsx and checks the two setter-less bindings survive. An `[x, setX]` pair regex
+  // drops both -- this fails it (and, via the phantom half, guard_everyWorkspaceAtomHasAnAuditRow too).
   it('guard_theTwoSetterLessAtomsAreInThePopulation', () => {
-    const audited = requireAudited()
-    const auditedBindings = new Set(audited.map((a) => a.binding))
-    expect(
-      auditedBindings.has('{ path: bootPath, search: bootSearch }'),
-      'the boot-snapshot atom (App.tsx:317) is missing its AUDITED_ATOMS row',
-    ).toBe(true)
-    expect(auditedBindings.has('seed'), '`seed` (App.tsx:329) is missing its AUDITED_ATOMS row').toBe(true)
+    const appSrc = readSrc('src/App.tsx')
+    const startIdx = appSrc.indexOf(WORKSPACE_START)
+    const endIdx = appSrc.indexOf(APP_START)
+    const slice = appSrc.slice(startIdx, endIdx)
+    const extracted = new Set(extractStateBindings(slice))
+
+    const required = ['{ path: bootPath, search: bootSearch }', 'seed']
+    const missing = required.filter((b) => !extracted.has(b))
+    expect(missing, `setter-less atoms missing from the extracted set: ${missing.join(' | ')}`).toEqual([])
   })
 
   it('guard_filingIsAuditedAsDeliberate', () => {

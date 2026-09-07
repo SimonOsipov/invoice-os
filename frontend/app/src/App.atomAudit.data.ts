@@ -366,8 +366,8 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
-    verdict: 'stale-but-unreachable',
-    note: "Read by CreateUpload ('upload') and CreateMapping ('mapping'), neither reachable after a switch. ROUTE-06-03 resets it via resetImport.",
+    verdict: 'stale-and-reachable',
+    note: "VERDICT CORRECTED by this audit: not gated behind a createStep. It reaches ctx as runKind (App.tsx:1481, runKindOf(pickedFiles)), and CreateFlow.tsx:37-38 feeds that to wizardHeader, whose strip renders unconditionally at CreateFlow.tsx:62-92 -- at every createStep, including the 'form' switchClient sets (App.tsx:657). Back onto /create therefore draws the previous company's wizard path. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
   },
   {
     binding: 'filesRefusal, setFilesRefusal',
@@ -407,8 +407,8 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
-    verdict: 'stale-and-reachable',
-    note: "VERDICT CORRECTED by this audit: not gated behind a createStep. It reaches ctx as runKind (App.tsx:1481, runKindOf(pickedFiles)), and CreateFlow.tsx:37-38 feeds that to wizardHeader, whose strip renders unconditionally at CreateFlow.tsx:62-92 -- at every createStep, including the 'form' switchClient sets (App.tsx:657). Back onto /create therefore draws the previous company's wizard path. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
+    verdict: 'stale-but-unreachable',
+    note: "Read by CreateUpload ('upload') and CreateMapping ('mapping') only (ctx.importError), neither reachable after a switch. ROUTE-06-03 resets it via resetImport.",
   },
   {
     binding: 'filing, setFiling',

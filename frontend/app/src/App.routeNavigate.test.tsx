@@ -69,6 +69,7 @@ type RenderEntry = {
   prefilter: AuditPrefilter | null
   jobId: string | null
   importedInvoiceId: string | null
+  editingPolicyId: string | null
 }
 
 let capturedCtx: PlatformCtx | undefined
@@ -81,6 +82,7 @@ vi.mock('./components/Sidebar', () => ({
       prefilter: p.ctx.auditPrefilter,
       jobId: p.ctx.extractionJobId,
       importedInvoiceId: p.ctx.importedInvoiceId,
+      editingPolicyId: p.ctx.editingPolicyId,
     })
     return null
   },
@@ -1563,5 +1565,167 @@ describe('ROUTE-06-03 AC-4 control: the null-to-resolved reseed effect is untouc
         ENTITY_A,
       ),
     )
+  })
+})
+
+// --- ROUTE-07-04: a policy has an address -------------------------------------------
+//
+// The list and the builder share one View, so the address is the only thing that tells
+// them apart. Five verbs move between them; `nav('workflows')` is the sixth.
+
+const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
+const CREATED_POLICY_ID = 'd8e90123-4567-4abc-9def-0123456789ac'
+
+function policyWire(id: string, name: string) {
+  return { id, name, scope: 'All invoices', status: 'draft', version: 1, sealed: false, steps: [], versions: [] }
+}
+
+function okJson(body: unknown) {
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+}
+
+// A separate stub rather than an arm on routeFetch above: that fallback answers the policy
+// list with an envelope-less body, and every ROUTE-06-03 spec depends on it unchanged.
+function stubPolicyGateway(list: ReturnType<typeof policyWire>[]) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (url.includes('/portfolio/v1/entities')) {
+        return okJson({
+          entities: [entityRow(ENTITY_A, 'Policy Co A', '12345678-0001')],
+          pagination: { limit: 200, offset: 0, total: 1 },
+        })
+      }
+      if (url.includes('/approval-policies')) {
+        if (method === 'POST') return okJson(policyWire(CREATED_POLICY_ID, 'Untitled policy'))
+        if (method === 'DELETE') return okJson({})
+        return okJson({ approval_policies: list })
+      }
+      if (url.includes('/workflow-roles')) return okJson({ workflow_roles: [] })
+      return okJson({
+        access_token: 'test-token',
+        tenant: { id: 't-policy', name: 'Policy Tenant' },
+        entities: [],
+        policies: [],
+        members: [],
+        roles: [],
+        invoices: [],
+        clients: [],
+        totals: EMPTY_BUCKET,
+        events: [],
+        facets: { events: [], actors: [], companies: [] },
+        page: { limit: 50, has_more: false, next_cursor: null },
+        log_is_empty: true,
+        rejection_reasons: [],
+        total: 0,
+        pagination: { limit: 50, offset: 0, total: 0 },
+      })
+    }),
+  )
+}
+
+async function bootAtWithPolicies(path: string, list: ReturnType<typeof policyWire>[]) {
+  stubPolicyGateway(list)
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  const rendered = await bootAt(path)
+  await waitFor(() =>
+    expect(requireCtx().active.entityId, 'the roster never resolved -- the policy verbs below would be vacuous').toBe(
+      ENTITY_A,
+    ),
+  )
+  return rendered
+}
+
+describe('ROUTE-07-04 AC-2/AC-3: both openers give the builder an address', () => {
+  it('openPolicy_pushesTheWorkflowsPathAndKeepsTheSelection', async () => {
+    await bootAt('/')
+    const lengthBefore = window.history.length
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'openPolicy must push /workflows/<id>').toBe(`/workflows/${POLICY_ID}`)
+    expect(window.history.length, 'openPolicy must add exactly one history entry').toBe(lengthBefore + 1)
+    expect(ctx.editingPolicyId, 'the selection atom must name the id it was handed').toBe(POLICY_ID)
+    expect(ctx.view, 'openPolicy must land on the workflows view').toBe('workflows')
+
+    // openImportedInvoice's one-handler invariant (:196), restated for the policy seam.
+    const workflowsRenders = renders.filter((r) => r.view === 'workflows')
+    expect(workflowsRenders.length, 'the handler never navigated to workflows').toBeGreaterThan(0)
+    expect(
+      workflowsRenders[0]!.editingPolicyId,
+      'the first render that saw view === workflows did not carry the policy id',
+    ).toBe(POLICY_ID)
+  })
+
+  // The second opener the story never named: createPolicy opens the builder on the row it
+  // just made, so that row needs an address too.
+  it('createPolicy_pushesTheNewPolicysPath', async () => {
+    await bootAtWithPolicies('/workflows', [])
+    const lengthBefore = window.history.length
+    await act(async () => {
+      await capturedCtx!.createPolicy()
+    })
+    const ctx = requireCtx()
+    expect(ctx.editingPolicyId, 'sanity: the create must have opened the builder on the created row').toBe(
+      CREATED_POLICY_ID,
+    )
+    expect(window.location.pathname, 'createPolicy must push /workflows/<newId>').toBe(
+      `/workflows/${CREATED_POLICY_ID}`,
+    )
+    expect(window.history.length, 'createPolicy must add exactly one history entry').toBe(lengthBefore + 1)
+  })
+})
+
+describe('ROUTE-07-04 AC-4/AC-5: three ways back to the list, all of them addressed', () => {
+  it('closePolicy_returnsTheAddressToTheList', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    expect(requireCtx().editingPolicyId, 'sanity: the builder must be open before the close').toBe(POLICY_ID)
+
+    await act(async () => {
+      capturedCtx!.closePolicy()
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, 'closePolicy must return the address to the bare list path').toBe('/workflows')
+    // Both claims: the URL alone cannot tell a close from a navigate that forgot to clear.
+    expect(ctx.editingPolicyId, 'closePolicy must clear the selection').toBeNull()
+    expect(ctx.view, 'closePolicy must stay on the workflows view').toBe('workflows')
+  })
+
+  // The one address/screen divergence the shared-View design creates: Core AC-2 forbids
+  // one address showing hidden state, so the sidebar click must close the builder too.
+  it('nav_theSidebarClosesAnOpenBuilder', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    expect(requireCtx().editingPolicyId, 'sanity: the builder must be open before the sidebar click').toBe(POLICY_ID)
+
+    await act(async () => {
+      capturedCtx!.nav('workflows')
+    })
+    const ctx = requireCtx()
+    expect(window.location.pathname, "the sidebar's Workflows click must land on the bare list path").toBe('/workflows')
+    expect(ctx.editingPolicyId, 'a bare nav must close the builder -- no address may show hidden state').toBeNull()
+  })
+
+  // Must-stay-green (D9): deletePolicy is a list-side write, not a navigation, and this
+  // spec is the guard that it stays one.
+  it('deletePolicy_fromTheListLeavesTheAddressOnTheList', async () => {
+    await bootAtWithPolicies('/workflows', [policyWire(POLICY_ID, 'Standard approval policy')])
+    await waitFor(() =>
+      expect(requireCtx().policies.map((p) => p.id), 'the policy list never arrived').toEqual([POLICY_ID]),
+    )
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      await capturedCtx!.deletePolicy(POLICY_ID)
+    })
+    expect(window.location.pathname, 'deleting from the list must leave the address on the list').toBe('/workflows')
+    expect(window.history.length, 'deletePolicy is not a navigation and must add no history entry').toBe(lengthBefore)
   })
 })

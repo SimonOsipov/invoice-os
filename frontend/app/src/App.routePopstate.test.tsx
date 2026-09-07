@@ -1394,3 +1394,38 @@ describe('ROUTE-06-02 QA: the other two shapes the no-stamp fold collapses', () 
     expect(ctx.view, 'it must still restore its own view').toBe('detail')
   })
 })
+
+// --- ROUTE-07-04: Back onto a policy entry ------------------------------------------
+//
+// The same-company control for ROUTE-07-05's stale-entry clamp spec. The two differ in
+// one byte -- the stamp -- so a mutation that reddens both proves nothing about the clamp.
+
+const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
+
+describe('ROUTE-07-04 AC-7: a same-company Back onto a policy entry restores the builder', () => {
+  it('popstate_backOntoAPolicyEntryRestoresTheBuilder', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.nav('workflows')
+    })
+    expect(requireCtx().editingPolicyId, 'floor: nothing may be open before the Back press').toBeNull()
+
+    // Move the URL the way Back would BEFORE installing the spies (:172's discipline) --
+    // this harness's own move must not be counted as the handler's.
+    const state = { e: ENTITY_A }
+    window.history.replaceState(state, '', `/workflows/${POLICY_ID}`)
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+
+    const ctx = requireCtx()
+    expect(ctx.view, 'the restored entry must still name the workflows view').toBe('workflows')
+    expect(ctx.editingPolicyId, 'a same-company Back onto /workflows/<id> must reopen that builder').toBe(POLICY_ID)
+    // R4: the unclamped popstate path writes nothing at all (docs/routing.md:87-93).
+    expect(pushSpy, 'an unclamped restore must never push').not.toHaveBeenCalled()
+    expect(replaceSpy.mock.calls, 'an unclamped restore must write nothing at all').toEqual([])
+  })
+})

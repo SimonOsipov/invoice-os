@@ -982,6 +982,7 @@ test('in-house: a created role survives a reload, is selectable on a step this t
   ).toBeVisible()
   await page.getByRole('button', { name: 'Manage roles', exact: true }).click()
   await expect(page.getByTestId('roles-grid')).toBeVisible()
+  await expect(page, 'Manage roles carries the roles tab into the URL').toHaveURL(/\/settings\/roles$/)
   // The usage line moved the moment the step was repointed: one step, one policy.
   await expect(roleCard(page, title).getByText('1 approval step · 1 policy')).toBeVisible()
   await roleCard(page, title).getByTestId('role-card-edit').click()

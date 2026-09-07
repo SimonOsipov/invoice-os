@@ -86,8 +86,9 @@ renderable result, including the empty one.
 
 **R4 — Push on a navigation, replace on a correction.** `navigate` pushes. The boot
 alignment, a settings-tab click, a search-box clear and an in-screen audit filter edit all
-replace. The `popstate` handler writes nothing — the browser already moved the URL, and a
-write there would push a duplicate entry on every Back press. A *committed* search pushes
+replace. The `popstate` handler writes nothing on the ordinary path — the browser already
+moved the URL, and a write there would push a duplicate entry on every Back press. Its one
+write is the ROUTE-06 identity clamp below, and that is a `replaceState`. A *committed* search pushes
 exactly one entry; the header box is a `<form onSubmit>`, so there is no per-keystroke write
 path and therefore no debounce and no settle timer.
 
@@ -120,13 +121,108 @@ no view.
 Two writers sit outside `navigate` and are pinned rather than folded in. The review-path
 mirror in `Workspace` (the `replaceState` keyed on `[view, createStep,
 reviewBatchIds.join(',')]`) rebuilds only `create`'s own path from state and never reads
-`location.search` — it joined the nine writer bodies `lib/routeWriterGuard.test.ts` proves
+`location.search` — it joined the ten writer bodies `lib/routeWriterGuard.test.ts` proves
 clean, rather than staying that guard's one deliberate exception. The persona-strip clear
 (the effect commented *"Drop the consumed `?persona=` from the URL"*) is now that guard's
 sole reader of `search`, and its `new URLSearchParams(window.location.search)` is the control
-needle proving the other nine assertions can see a match at all. Both writers' own write
+needle proving the other ten assertions can see a match at all. Both writers' own write
 lines are still pinned byte-identical by `App.routeReviewHash.test.tsx`'s
 `guard_theTwoExistingHistoryWritersAreUnchanged`.
+
+## The company stamp on a history entry
+
+Every `Workspace` history write carries `{ e: <entityId> }` as its state — nine sites, and
+`App.routeNavigate.test.tsx`'s `guard_everyWorkspaceHistoryWriteCarriesTheStamp` allows zero
+still passing a literal `null`. The value is `active.entityId` — the memo that resolves
+`null` to `clients[0]` — never the raw `activeEntityId` atom: that atom stays `null` until
+`switchClient`'s own write, so stamping it directly would mark every pre-first-switch entry
+unknown and the clamp could never fire. `switchClient` stamps its `id` **parameter** instead
+of either state read: `setActiveEntityId(id)` one line above has not committed. `signOut` and
+the persona strip stay `null`-stamped; both live in `App`, outside the slice that guard
+counts.
+
+Two of the nine are new machinery. The **stamp backfill** fills the boot entry once the
+portfolio resolves — the mount alignment runs before the entities fetch lands, so without it
+a cold deep link would stamp `null` forever and be permanently unclampable. It also mirrors
+`active.entityId` into a ref, because the `popstate` effect's deps are `[]` and a closure
+read there freezes at mount, when `clients` is still `[]`. It copies the null-gated
+fill-only idiom already in this file — the import-target re-seed effect at `App.tsx:529-533`,
+which only ever fills a stale `null` and never overwrites a resolved value — applied here to
+the stamp instead of the import target.
+
+The **clamp** is the second. `popstate` reads the restored entry's stamp; when both sides are
+known and differ, it re-derives the path through `carryView` at the TOP of the handler, so
+every setter below reads the clamped path. A tail rewrite would leave each atom armed for a
+frame and force an enumeration of the atoms to clear — and that enumeration is what missed
+`auditPrefilter`. The view is carried; only the selection is dropped. An entry naming no
+company (state `null`, or state with no `e`) is unknown, never stale, and never clamps.
+
+### Sign-out closes the same leak, and RLS is the backstop underneath it
+
+`signOut` also scrubs only the current entry (`window.history.replaceState(null, '', '/')`,
+`App.tsx:1707`; `clearDestination()`, `App.tsx:1712`), so a buried `/invoices/<id>` entry
+survives into the next session. Both shipped personas are different tenants (`auth.ts:45`,
+`auth.ts:58`), so a re-sign-in resolves a different `clients[0]` and the stamp differs — the
+clamp above fires with no code written for it.
+
+That is a consequence, not the safety net: the real backstop is RLS, and it only covers the
+cross-tenant case. `invoices` is `ENABLE` + `FORCE ROW LEVEL SECURITY`
+(`migrations/20260714103137_invoices.sql:68-69`) under a policy with no `TO` clause, so it
+binds every role (`:76`). Its `USING` scopes by `tenant_id` alone (`:77`) — there is no
+`business_entities`-row check — so a same-tenant company switch, the case this story fixes,
+is invisible to the database: two entities under one firm share a tenant, and RLS lets either
+row through. The clamp above is what stops a Back press from leaking the previous company's
+data within one tenant; RLS cannot do that job.
+
+## The per-atom audit
+
+Every `Workspace` atom is audited against the routes that can reach a screen reading it, now
+that ROUTE-01..05 made previously-unreachable state reachable by URL. Full reasoning and
+citations live in `frontend/app/src/App.atomAudit.data.ts`, not retyped here — this table is
+kept honest by `App.atomAudit.test.tsx`'s `guard_theDocsTableMatchesTheAuditedAtoms`, which
+fails if a name, its `switchClient` reset, or its verdict disagrees with the module.
+
+| Atom | Reset by `switchClient`? | Routes | Verdict |
+|---|---|---|---|
+| `suspended` | no | all 13 | `correctly-reset` |
+| `clients` | no | all 13 | `correctly-reset` |
+| `activeEntityId` | yes | all 13 | `correctly-reset` |
+| `bootPath/bootSearch` | no | none | `correctly-reset` |
+| `seed` | no | none | `correctly-reset` |
+| `view` | yes | all 13 | `correctly-reset` |
+| `draft` | yes | /create | `correctly-reset` |
+| `handOffDocumentId` | yes | none | `correctly-reset` |
+| `createStep` | yes | /create, /imports/<ids>/review | `stale-and-reachable` |
+| `reviewBatchIds` | yes | /create, /imports/<ids>/review | `stale-and-reachable` |
+| `groups` | yes | /create | `correctly-reset` |
+| `groupIndex` | yes | /create | `correctly-reset` |
+| `armedField` | no | /create | `stale-but-unreachable` |
+| `dragField` | no | /create | `stale-but-unreachable` |
+| `detailInvoiceId` | yes | /invoice, /invoices/<id> | `stale-and-reachable` |
+| `auditPrefilter` | yes | /audit, /audit?invoice=<id> | `stale-and-reachable` |
+| `extractionJobId` | yes | /extraction, /extraction/<jobId> | `stale-and-reachable` |
+| `invoiceQuery` | no | all 13, /invoices?q=<text> | `deliberate` |
+| `switcherOpen` | yes | all 13 | `correctly-reset` |
+| `sandbox` | no | all 13, /settings/<tab> | `correctly-reset` |
+| `settingsTab` | no | /settings, /settings/<tab> | `deliberate` |
+| `connectors` | no | /settings, /settings/<tab> | `correctly-reset` |
+| `connectorMappings` | no | /settings, /settings/<tab> | `correctly-reset` |
+| `customRuleStore` | no | /rules | `correctly-reset` |
+| `openRuleKey` | yes | /rules | `correctly-reset` |
+| `policies` | no | /workflows, /settings/<tab> | `correctly-reset` |
+| `editingPolicyId` | yes | /workflows | `correctly-reset` |
+| `members` | no | /workflows, /settings/<tab>, /invoice, /invoices/<id> | `correctly-reset` |
+| `roles` | no | /workflows, /settings/<tab> | `correctly-reset` |
+| `entityId` | yes | /create | `correctly-reset` |
+| `pickedFiles` | yes | /create | `correctly-reset` |
+| `filesRefusal` | yes | /create | `correctly-reset` |
+| `run` | yes | /create, /imports/<ids>/review | `correctly-reset` |
+| `documentStages` | no | /create, /imports/<ids>/review | `stale-but-unreachable` |
+| `importError` | yes | /create | `correctly-reset` |
+| `filing` | no | /create | `deliberate` |
+| `filingError` | yes | /create | `correctly-reset` |
+| `activeEntityIdRef` | no | none | `correctly-reset` |
+| `reqInFlight` | no | none | `deliberate` |
 
 ## Why `Workspace` can't mount while `?persona=` is live
 
@@ -275,7 +371,10 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   for free: the boot seed carries the captured path as a raw string, so the widened
   `parseRoute` is all a restored `/invoices/:id` needs to resolve. The captured query now
   rides beside it and is re-validated through the same `parseLocation` a live URL gets.
-- **ROUTE-06** — the stale-state sweep. ROUTE-01 closed one atom (`extractionJobId`,
+- **ROUTE-06** — **shipped.** Every `Workspace` history write now stamps the company that
+  minted it, and a mismatched stamp clamps the entry on `popstate` (the company-stamp
+  section above) — the general fix for the same shape one level up from ROUTE-01/02's two
+  special cases. ROUTE-01 closed one atom (`extractionJobId`,
   cleared in `switchClient`); ROUTE-02 additionally scrubs the drill-down id off the URL on
   that same call (`[switchclient-scrub]`). The general case is still ROUTE-06's, and its
   shape is **stale Back**: a history entry outlives the identity or the screen state that
@@ -297,14 +396,22 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   `applyRoute`); three Back presses land on the first entry, still bare `/create` in the
   browser's own history — but `reviewBatchIds` in memory still names the second batch, and
   the mirror rewrites the just-restored entry with that stale batch's path. This **predates
-  this story**: the identical walk today writes the retired hash form — `/create` with the
+  this story**: the identical walk once wrote the retired hash form — `/create` with the
   batch named in the fragment, not the path — over the restored entry instead of
   `/imports/<id>/review`; same defect, new spelling, because the mirror always rebuilt its
-  output from whatever `reviewBatchIds` held, hash or path. ROUTE-06 AC-2 and
-  AC-4 own the remedy: AC-2 already covers a related race on the same
-  `openCreate`/`resetImport` path (an entity snapshot taken before the entities fetch
-  resolves), and AC-4 audits every atom `switchClient` touches, `reviewBatchIds` among them,
-  as a per-atom table.
+  output from whatever `reviewBatchIds` held, hash or path. **Closed in ROUTE-06-04**: the
+  `popstate` handler's `else if (at.view === 'create')` arm, next to the existing
+  ids-present arm, clears `reviewBatchIds` and demotes `createStep` off `'review'`
+  (functional setter, never a plain write — the handler's `[]` deps make a closure read of
+  `createStep` freeze at mount) whenever the restored path is bare `/create`, so the mirror's
+  next write reproduces the bare path instead of re-attaching the stale batch. Pinned by
+  `App.routeReviewHash.test.tsx`'s `popstate_aRestoredBareCreateEntryDoesNotGrowAStaleBatchPath`
+  and `popstate_aRestoredBareCreateEntryLeavesNoEmptyReviewScreen`.
+
+  Two of this story's own planning premises were already shipped before it began, confirmed
+  by code reading rather than fixed here: `switchClient` already cleared `extractionJobId`
+  (`App.tsx:721`) and `signOut` already cleared the URL and the stored deep-link destination
+  (`App.tsx:1707`, `:1712`).
 
 ## Two things that cost time here
 
@@ -325,5 +432,5 @@ landing on a review path — must still account for this writer firing in the sa
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot
 seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. A
 static guard in `App.routeNavigate.test.tsx`
-(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 15 files
+(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 16 files
 that render `<App />`.

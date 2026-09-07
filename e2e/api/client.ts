@@ -539,6 +539,57 @@ export function createInvoice(token: string, body: InvoiceCreateInput): Promise<
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/invoices`, { method: 'POST', body, token })
 }
 
+// createImportBatch(): mints a batch id the only way one exists -- two multipart POSTs
+// ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch --
+// apiFetch always JSON-serializes its body, which cannot carry a multipart file (mirrors
+// contract-import.spec.ts's own local previewFetch/importFetch pair).
+export async function createImportBatch(token: string, entityId: string, invoiceNumber: string): Promise<string> {
+  const csvHeader = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
+  const row = [invoiceNumber, '2026-01-15', '87654321-0002', 'Batch Buyer Ltd', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00'].join(
+    ',',
+  )
+  const mapping: Record<string, string> = {
+    invoice_number: 'Invoice No',
+    issue_date: 'Issue Date',
+    buyer_tin: 'Buyer TIN',
+    buyer_name: 'Buyer',
+    currency: 'Currency',
+    subtotal: 'Subtotal',
+    vat: 'VAT',
+    total: 'Total',
+    line_description: 'Item',
+    line_quantity: 'Qty',
+    line_unit_price: 'Unit Price',
+  }
+
+  const previewForm = new FormData()
+  previewForm.set('file', new Blob([`${csvHeader}\n${row}`], { type: 'text/csv' }), 'import.csv')
+  const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: previewForm,
+  })
+  const previewBody = (await preview.json()) as { document_id?: string }
+  if (!preview.ok || typeof previewBody.document_id !== 'string') {
+    throw new Error(`createImportBatch: preview failed (status ${preview.status})`)
+  }
+
+  const form = new FormData()
+  form.set('entity_id', entityId)
+  form.set('mapping', JSON.stringify(mapping))
+  form.set('document_id', previewBody.document_id)
+  const res = await fetch(`${apiBase()}/api/invoice/v1/imports`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  })
+  const body = (await res.json()) as { id?: string }
+  if (!res.ok || typeof body.id !== 'string') {
+    throw new Error(`createImportBatch: import failed (status ${res.status})`)
+  }
+  return body.id
+}
+
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
 // The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
 // earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.

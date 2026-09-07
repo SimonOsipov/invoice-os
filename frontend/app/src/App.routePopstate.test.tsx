@@ -5,10 +5,11 @@
 // session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 
 import { StrictMode } from 'react'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
+import { EMPTY_BUCKET } from './lib/dashboard'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
 
@@ -55,6 +56,17 @@ vi.mock('./components/ExtractionReview', () => ({
   },
 }))
 
+// Same recorder for the detail screen (ROUTE-06-02): AC-1 asks that NO InvoiceDetail render
+// for the previous company's invoice, which ctx.importedInvoiceId alone cannot show. The real
+// screen also needs a live gateway fixture the roster harness below does not model.
+const { invoiceDetailMounts } = vi.hoisted(() => ({ invoiceDetailMounts: [] as unknown[] }))
+vi.mock('./components/InvoiceDetail', () => ({
+  InvoiceDetail: (p: { ctx: { importedInvoiceId: unknown } }) => {
+    invoiceDetailMounts.push(p.ctx.importedInvoiceId)
+    return null
+  },
+}))
+
 // AC-3's mid-wizard spec needs a real createStep: 'mapping' -- previewImport is the one
 // network call that gates it, mocked here so reaching it needs no XHR/FakeXhr at all.
 vi.mock('./lib/importApi', async (importOriginal) => {
@@ -76,6 +88,7 @@ vi.mock('./lib/importApi', async (importOriginal) => {
 beforeEach(() => {
   capturedCtx = undefined
   extractionReviewMounts.length = 0
+  invoiceDetailMounts.length = 0
   window.history.replaceState(null, '', '/')
   vi.stubGlobal('localStorage', createMemoryStorage())
 })
@@ -948,5 +961,436 @@ describe('AC-4, extended: a filtered restore still writes no history entry', () 
       pushSpy.mockRestore()
       replaceSpy.mockRestore()
     }
+  })
+})
+
+// --- ROUTE-06-02: the company-identity clamp ----------------------------------------
+//
+// Everything above this line boots with NO gateway, so `clients` stays [] and
+// `active.entityId` is null before AND after switchClient -- the clamp compares two entity
+// ids and with both null it can never fire. Every spec below therefore needs a REAL
+// two-entity roster; roster_theTwoEntityRosterActuallyMovesTheActiveCompany is the floor
+// that proves it, and nothing else in this block is meaningful without it.
+// Idiom: App.routeReviewHash.test.tsx:118-152, widened to two rows (App.handOff.test.tsx).
+
+const GATEWAY = 'https://gateway.test'
+const ENTITY_A = 'e1111111-1111-4111-8111-111111111111'
+const ENTITY_B = 'e2222222-2222-4222-8222-222222222222'
+
+function entityRow(id: string, name: string, tin: string) {
+  return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+}
+
+function routeFetch() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      if (url.includes('/portfolio/v1/entities')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              entities: [entityRow(ENTITY_A, 'Clamp Co A', '12345678-0001'), entityRow(ENTITY_B, 'Clamp Co B', '12345678-0002')],
+              pagination: { limit: 200, offset: 0, total: 2 },
+            }),
+        })
+      }
+      // One fallback wide enough that no screen a clamp journey passes through throws.
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            access_token: 'test-token',
+            // `me` for signIn's /tenancy/v1/me leg -- App.tsx:1430 reads me.tenant.name.
+            tenant: { id: 't-clamp', name: 'Clamp Tenant' },
+            entities: [],
+            policies: [],
+            members: [],
+            roles: [],
+            invoices: [],
+            clients: [],
+            // The in-house dashboard reads rollup.totals directly (lib/dashboard.ts:242).
+            totals: EMPTY_BUCKET,
+            events: [],
+            facets: { events: [], actors: [], companies: [] },
+            page: { limit: 50, has_more: false, next_cursor: null },
+            log_is_empty: true,
+            rejection_reasons: [],
+            total: 0,
+            pagination: { limit: 50, offset: 0, total: 0 },
+          }),
+      })
+    }),
+  )
+}
+
+async function bootAtWithGateway(path: string) {
+  routeFetch()
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  const rendered = await bootAt(path)
+  await waitFor(() =>
+    expect(requireCtx().active.entityId, 'the roster never resolved -- every clamp spec below would be vacuous').toBe(
+      ENTITY_A,
+    ),
+  )
+  return rendered
+}
+
+// What the browser would restore for the entry currently on screen: its url and the
+// company stamp the writer put on it. Never hardcoded -- a hardcoded stamp would pass even
+// if no production writer ever stamped, which is exactly the vacuity AC-7 exists to stop.
+function currentEntry(): { url: string; e: string | null } {
+  return {
+    url: window.location.pathname + window.location.search,
+    e: (window.history.state as { e?: string | null } | null)?.e ?? null,
+  }
+}
+
+// Sibling of popTo (:105) for a STAMPED entry. popTo itself is untouched -- its 35 call
+// sites depend on the bare, state-less event. `{ e: null }` and a bare null state are the
+// same "no company named" to the handler's `?? null` fold, so replaying a pre-fix entry
+// through this helper is faithful.
+async function popToStamped(path: string, e: string | null) {
+  const state = { e }
+  window.history.replaceState(state, '', path)
+  await act(async () => {
+    window.dispatchEvent(new PopStateEvent('popstate', { state }))
+  })
+}
+
+describe('ROUTE-06-02 harness floor: the two-entity roster', () => {
+  it('roster_theTwoEntityRosterActuallyMovesTheActiveCompany', async () => {
+    await bootAtWithGateway('/')
+    expect(requireCtx().active.entityId, 'before the switch the active company must be entity A').toBe(ENTITY_A)
+
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'after the switch the active company must be entity B').toBe(ENTITY_B)
+  })
+})
+
+// The four stale-entry specs. All RED until the clamp lands: today no production writer
+// stamps, so currentEntry().e is null on every recorded entry, the replay names no company
+// and the handler re-derives the previous company's selection straight off the URL.
+describe('ROUTE-06-02 AC-1: an older entry from another company does not resume its selection', () => {
+  it('popstate_anOlderDetailEntryFromAnotherCompanyDoesNotResumeItsInvoice', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    const stale = currentEntry()
+    expect(stale.url, 'sanity: openImportedInvoice must push /invoices/<id>').toBe(`/invoices/${INVOICE_ID}`)
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+
+    // openImportedInvoice already recorded one mount above -- reset so the count below
+    // measures only the window after Back.
+    invoiceDetailMounts.length = 0
+
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, "Back onto entity A's invoice under entity B must not resume that selection").toBeNull()
+    expect(invoiceDetailMounts, "no InvoiceDetail may render for the previous company's invoice").toHaveLength(0)
+    expect(ctx.view, 'the view is carried, collapsed to the list the selection belonged to').toBe('invoices')
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
+  })
+
+  it('popstate_anOlderExtractionEntryFromAnotherCompanyDoesNotResumeItsJob', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    const stale = currentEntry()
+    expect(stale.url, 'sanity: openExtraction must push /extraction/<jobId>').toBe(`/extraction/${JOB_A}`)
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+
+    // openExtraction already recorded one mount above -- reset so the count below measures
+    // only the window after Back.
+    extractionReviewMounts.length = 0
+
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(ctx.extractionJobId, "Back onto entity A's job under entity B must not resume it").toBeNull()
+    expect(extractionReviewMounts, 'no ExtractionReview may render for the previous company job').toHaveLength(0)
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
+  })
+
+  it('popstate_anOlderReviewEntryFromAnotherCompanyDoesNotResumeItsBatch', async () => {
+    await bootAtWithGateway(`/imports/${REVIEW_ID}/review`)
+    expect(requireCtx().reviewBatchIds, 'sanity: the review path must seed the batch').toEqual([REVIEW_ID])
+    const stale = currentEntry()
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+
+    // switchClient (App.tsx:661) already cleared reviewBatchIds; the oracle here is that
+    // popstate must not RE-ARM it from the restored path.
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, "Back must not re-arm entity A's batch under entity B").toEqual([])
+    expect(ctx.createStep, 'a clamped entry must not drop the wizard back into review').not.toBe('review')
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
+  })
+
+  // AC-2's fourth atom. The ctx.auditPrefilter assertion is the SOLE discriminator between
+  // the top-of-handler clamp and a tail replaceState that enumerates the three ids: a tail
+  // mutant cleans the URL but leaves this atom armed, because setAuditPrefilter has already
+  // run against the live ?invoice=. Never trade it for the URL half.
+  it('popstate_anOlderAuditEntryFromAnotherCompanyDoesNotResumeItsInvoiceFilter', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openAuditForInvoice(AUDIT_INVOICE_ID, 'INV-2026-00001')
+    })
+    const stale = currentEntry()
+    expect(stale.url, 'sanity: openAuditForInvoice must push /audit?invoice=<id>').toBe(
+      `/audit?invoice=${AUDIT_INVOICE_ID}`,
+    )
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(ctx.auditPrefilter, "Back must not re-arm entity A's invoice filter under entity B").toBeNull()
+    expect(window.location.search, 'the clamped entry must drop the query, not just the state').toBe('')
+    expect(window.location.pathname, 'audit carries through carryView -- only the filter is dropped').toBe('/audit')
+  })
+})
+
+// CONTROL. Green BEFORE the fix and it must stay green after -- do not contort it into a
+// red. It is what stops the clamp becoming a blanket disable (mutation 2 turns it red).
+// Pre-fix it passes because nothing clamps at all; post-fix it passes because both sides
+// name entity A. Its discriminating power arrives with the fix.
+describe('ROUTE-06-02 AC-5 (control): an entry from the same company still restores its id', () => {
+  it('popstate_anEntryFromTheSameCompanyStillRestoresItsId', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    const entry = currentEntry()
+    expect(entry.url, 'sanity: openImportedInvoice must push /invoices/<id>').toBe(`/invoices/${INVOICE_ID}`)
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    // No switch: the company that minted the entry is still the active one.
+    await popToStamped(entry.url, entry.e)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'a same-company entry must still restore its selection').toBe(INVOICE_ID)
+    expect(ctx.view, 'a same-company entry must still restore the detail view').toBe('detail')
+    expect(invoiceDetailMounts, 'the detail screen must really render for its own company').toContain(INVOICE_ID)
+    expect(window.location.pathname, 'a same-company entry must keep its own URL').toBe(`/invoices/${INVOICE_ID}`)
+  })
+})
+
+// CONTROL. Green BEFORE the fix and it must stay green after. An entry that names no
+// company is unknown, never stale: this is the shape all 35 popTo() call sites produce, so
+// dropping the `?? null` fold (mutation 3) reddens this spec AND the 36-spec popTo
+// population with it. The switch above the replay is load-bearing -- without it `here` is
+// also null and the spec could not tell a fold from a crash.
+describe('ROUTE-06-02 AC-6 (control): an entry with no stamp never clamps', () => {
+  it('popstate_anUnstampedEntryDoesNotClamp', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known, or nothing is being folded').toBe(
+      ENTITY_B,
+    )
+
+    // popTo writes a null state and fires a bare PopStateEvent -- an entry minted before
+    // the stamp shipped.
+    await popTo(`/invoices/${INVOICE_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'an unstamped entry names no company and must restore normally').toBe(INVOICE_ID)
+    expect(ctx.view, 'an unstamped entry must still restore its own view').toBe('detail')
+  })
+})
+
+describe('ROUTE-06-02 AC-4/AC-12: the clamp replaces and never pushes', () => {
+  it('popstate_theClampReplacesAndNeverPushes', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    const stale = currentEntry()
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+
+    // Move the URL the way Back would BEFORE installing the spies (:172's discipline) --
+    // this harness's own move must not be counted as the handler's.
+    const state = { e: stale.e }
+    window.history.replaceState(state, '', stale.url)
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const lengthBefore = window.history.length
+
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+
+    expect(pushSpy, 'the clamp must never push a history entry').not.toHaveBeenCalled()
+    expect(window.history.length, 'a clamped restore must add no history entry').toBe(lengthBefore)
+    // Floor before indexing: zero recorded writes means the clamp never fired, which must
+    // fail loudly rather than pass a vacuous loop over an empty call list.
+    expect(replaceSpy.mock.calls, 'the clamp must rewrite the restored entry exactly once').toHaveLength(1)
+    expect(replaceSpy.mock.calls[0]![2], 'the clamp must rewrite to the collapsed path').toBe('/invoices')
+  })
+})
+
+describe('ROUTE-06-02 AC-7: the boot entry is backfilled once the entities resolve', () => {
+  it('boot_theStampBackfillFillsTheBootEntryOnceTheEntitiesResolve', async () => {
+    // Spy installed before the render: the mount alignment runs before the fetch resolves
+    // and stamps null, so only the backfill can write a stamp naming entity A.
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAtWithGateway(`/invoices/${INVOICE_ID}`)
+
+    await waitFor(() =>
+      expect(currentEntry().e, 'the boot entry must carry the resolved company, not the null it minted with').toBe(
+        ENTITY_A,
+      ),
+    )
+    expect(window.location.pathname, 'the backfill must not move the entry it stamps').toBe(`/invoices/${INVOICE_ID}`)
+    const backfills = replaceSpy.mock.calls.filter((c) => (c[0] as { e?: string | null } | null)?.e === ENTITY_A)
+    expect(backfills, 'the backfill is gated on a null stamp: it fills once, it does not re-run').toHaveLength(1)
+  })
+
+  it('popstate_aColdBootDeepLinkEntryClampsAfterASwitch', async () => {
+    await bootAtWithGateway(`/invoices/${INVOICE_ID}`)
+    expect(requireCtx().importedInvoiceId, 'sanity: the deep link must seed the selection').toBe(INVOICE_ID)
+    const stale = currentEntry()
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(
+      ctx.importedInvoiceId,
+      'an unbackfilled boot entry is permanently unclampable -- this is the entry a cold deep link lands on',
+    ).toBeNull()
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
+  })
+})
+
+// Pins a CONSEQUENCE of the stamp, drives no code of its own: browser history is one stack
+// across identities in the same tab, so an entry buried by the previous session resurfaces
+// under the next one. Same repro shape as App.routeBoot.test.tsx:797.
+describe('ROUTE-06-02 AC-1, cross-session: a buried entry from the previous session does not resume its invoice', () => {
+  it('signOut_aBuriedEntryFromThePreviousSessionDoesNotResumeItsInvoice', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID)
+    })
+    const stale = currentEntry()
+    expect(stale.url, 'sanity: the firm session must push /invoices/<id> under entity B').toBe(
+      `/invoices/${INVOICE_ID}`,
+    )
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.signOut()
+    })
+    expect(screen.getByText('Choose an account'), 'the in-app picker must render after sign-out').toBeTruthy()
+
+    capturedCtx = undefined
+    const inhouseButton = screen.getByText(APP_PERSONAS.inhouse.name).closest('button')
+    expect(inhouseButton, 'the in-house persona button was not found in the picker').toBeTruthy()
+    await act(async () => {
+      fireEvent.click(inhouseButton as HTMLButtonElement)
+    })
+    await waitFor(() =>
+      expect(requireCtx().active.entityId, 'the next session must resolve its own active company').toBe(ENTITY_A),
+    )
+
+    await popToStamped(stale.url, stale.e)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, "a previous session's buried selection must not resume here").toBeNull()
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
+  })
+})
+
+// QA adversarial (ROUTE-06-02). The `?? null` fold claims to collapse THREE no-stamp
+// shapes; popstate_anUnstampedEntryDoesNotClamp pins only the first (a bare null state).
+// Both specs below run on the resolved roster with `here` non-null, so the fold is the only
+// thing standing between them and a clamp -- dropping `?? null` reddens all three.
+describe('ROUTE-06-02 QA: the other two shapes the no-stamp fold collapses', () => {
+  // A state object that carries no `e` at all -- what any OTHER writer's state looks like
+  // to this handler.
+  it('popstate_anEntryWhoseStateCarriesNoCompanyKeyDoesNotClamp', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known, or nothing is being folded').toBe(
+      ENTITY_B,
+    )
+
+    const state = { scroll: 0 }
+    window.history.replaceState(state, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'a state object with no `e` names no company and must restore normally').toBe(
+      INVOICE_ID,
+    )
+    expect(ctx.view, 'it must still restore its own view').toBe('detail')
+  })
+
+  // `{ e: null }` -- the shape the mount alignment mints before the portfolio resolves, and
+  // the one a cold boot really carries until the backfill fills it.
+  it('popstate_anEntryStampedNullDoesNotClamp', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known').toBe(ENTITY_B)
+
+    await popToStamped(`/invoices/${INVOICE_ID}`, null)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'an explicitly null stamp names no company and must restore normally').toBe(
+      INVOICE_ID,
+    )
+    expect(ctx.view, 'it must still restore its own view').toBe('detail')
   })
 })

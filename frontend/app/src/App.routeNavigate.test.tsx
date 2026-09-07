@@ -8,10 +8,12 @@ import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
+import { EMPTY_BUCKET } from './lib/dashboard'
+import { MAX_RUN_FILES } from './lib/importRun'
 import { ROUTE_PATHS } from './lib/route'
 import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
@@ -416,8 +418,9 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
     // reads exactly like a repo with nothing left to fix.
     // TEST-02 merge adds App.frontDoor/App.handOff/App.offlineFallback.test.tsx, the 11th-13th.
     // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx and ROUTE-02-05 adds
-    // App.routeDrillDown.test.tsx, the 14th and 15th.
-    expect(files, 'the walk must find exactly the fifteen App-rendering test files').toHaveLength(15)
+    // App.routeDrillDown.test.tsx, the 14th and 15th. ROUTE-06-05 adds
+    // App.routeSweep.test.tsx, the 16th.
+    expect(files, 'the walk must find exactly the sixteen App-rendering test files').toHaveLength(16)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')
@@ -616,8 +619,9 @@ describe('QA adversarial: navigating to the current view still pushes (documente
 // --- ROUTE-04-03: navigate(view, params) and the five URL-aware writers --------------
 //
 // The push/replace rule: navigate and searchInvoices PUSH; setInvoiceQuery, setSettingsTab
-// and setAuditInvoiceFilter REPLACE; the popstate handler writes nothing
-// (App.routePopstate.test.tsx's popstate_theHandlerWritesNoHistory).
+// and setAuditInvoiceFilter REPLACE; the popstate handler writes nothing on the unclamped
+// path (App.routePopstate.test.tsx's popstate_theHandlerWritesNoHistory), and its one write
+// -- the ROUTE-06-02 identity clamp -- also replaces (popstate_theClampReplacesAndNeverPushes).
 // Every history assertion below counts entries or reads the settled URL rather than merely
 // asking "did some replaceState write X" -- the review-hash mirror writes on these paths too
 // and has confounded three specs before.
@@ -1307,3 +1311,250 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
   })
 })
 
+
+// ROUTE-06-02 AC-7. A source scan, not a behavioural one: an unstamped Workspace writer
+// mints an entry naming no company, and an entry naming no company can never be clamped.
+// Nine sites, counted after the fix: the seven that ship today plus the boot-entry stamp
+// backfill and the popstate clamp's own replaceState. Both new writers live inside
+// Workspace, so they are inside this slice by construction.
+// Out of the slice on purpose: signOut and the persona strip both live in App.
+describe('ROUTE-06-02 AC-7: every Workspace history write carries the company stamp', () => {
+  it('guard_everyWorkspaceHistoryWriteCarriesTheStamp', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    const startIdx = src.indexOf('function Workspace({ session,')
+    const endIdx = src.indexOf('export default function App()')
+    // Anchors first: a mis-anchored slice must fail naming the anchor, never fail the
+    // count below for the wrong reason.
+    expect(startIdx, 'the `function Workspace({ session,` anchor moved -- re-anchor, do not relax').toBeGreaterThan(-1)
+    expect(endIdx, 'the `export default function App()` anchor moved -- re-anchor, do not relax').toBeGreaterThan(-1)
+    expect(startIdx, 'the slice anchors are inverted').toBeLessThan(endIdx)
+    const slice = src.slice(startIdx, endIdx)
+
+    const sites = slice.match(/window\.history\.(?:push|replace)State\(/g) ?? []
+    expect(sites, 'nine Workspace history writes are expected -- fewer means a mis-anchored slice or a lost writer').toHaveLength(9)
+    const unstamped = slice.match(/window\.history\.(?:push|replace)State\(\s*null\s*,/g) ?? []
+    expect(unstamped, 'zero Workspace history writes may still pass a literal null first argument').toEqual([])
+  })
+})
+
+// --- ROUTE-06-03: import state does not survive a company switch --------------------
+//
+// Same vacuity as the ROUTE-06-02 block above: this file boots with no gateway, so
+// active.entityId is null before AND after switchClient, and every spec below would
+// compare null to null. Ported idiom: App.routePopstate.test.tsx:972-1075.
+
+const GATEWAY = 'https://gateway.test'
+const ENTITY_A = 'e1111111-1111-4111-8111-111111111111'
+const ENTITY_B = 'e2222222-2222-4222-8222-222222222222'
+
+function entityRow(id: string, name: string, tin: string) {
+  return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+}
+
+function routeFetch() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      if (url.includes('/portfolio/v1/entities')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              entities: [entityRow(ENTITY_A, 'Reset Co A', '12345678-0001'), entityRow(ENTITY_B, 'Reset Co B', '12345678-0002')],
+              pagination: { limit: 200, offset: 0, total: 2 },
+            }),
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            access_token: 'test-token',
+            tenant: { id: 't-reset', name: 'Reset Tenant' },
+            entities: [],
+            policies: [],
+            members: [],
+            roles: [],
+            invoices: [],
+            clients: [],
+            totals: EMPTY_BUCKET,
+            events: [],
+            facets: { events: [], actors: [], companies: [] },
+            page: { limit: 50, has_more: false, next_cursor: null },
+            log_is_empty: true,
+            rejection_reasons: [],
+            total: 0,
+            pagination: { limit: 50, offset: 0, total: 0 },
+          }),
+      })
+    }),
+  )
+}
+
+async function bootAtWithGateway(path: string) {
+  routeFetch()
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  const rendered = await bootAt(path)
+  await waitFor(() =>
+    expect(requireCtx().active.entityId, 'the roster never resolved -- every spec below would be vacuous').toBe(
+      ENTITY_A,
+    ),
+  )
+  return rendered
+}
+
+describe('ROUTE-06-03 harness floor: the two-entity roster', () => {
+  it('roster_theTwoEntityRosterActuallyMovesTheActiveCompany', async () => {
+    await bootAtWithGateway('/')
+    expect(requireCtx().active.entityId, 'before the switch the active company must be entity A').toBe(ENTITY_A)
+
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'after the switch the active company must be entity B').toBe(ENTITY_B)
+  })
+})
+
+describe('ROUTE-06-03 AC-1: switchClient clears every import atom', () => {
+  it('switchClient_clearsEveryImportAtom', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openCreate()
+    })
+    const overCap = Array.from(
+      { length: MAX_RUN_FILES + 1 },
+      (_, i) => new File(['invoice_number,total\nINV-1,100'], `invoice-${i}.csv`, { type: 'text/csv' }),
+    )
+    await act(async () => {
+      capturedCtx!.addPickedFiles(overCap)
+    })
+    let ctx = requireCtx()
+    // Genuinely armed, not already empty: an over-cap set trips addFiles' refusal.
+    expect(ctx.pickedFiles.length, 'sanity: the run must have picked files before the switch').toBeGreaterThan(0)
+    expect(ctx.filesRefusal, 'sanity: the over-cap set must have tripped a refusal').not.toBeNull()
+
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    ctx = requireCtx()
+    expect(ctx.pickedFiles, 'pickedFiles must not survive a company switch').toEqual([])
+    expect(ctx.filesRefusal, 'filesRefusal must not survive a company switch').toBeNull()
+
+    // groups/groupIndex/run/importError cannot be armed in this harness -- no preview or
+    // run gateway exists to arm them. Resting-value pins only (file's own idiom, :288-290),
+    // not coverage that switchClient clears them.
+    expect(ctx.groups, 'resting-value pin, not coverage: never armed in this harness').toEqual([])
+    expect(ctx.groupIndex, 'resting-value pin, not coverage: never armed in this harness').toBe(0)
+    expect(ctx.run, 'resting-value pin, not coverage: never armed in this harness').toEqual({
+      files: [],
+      cursor: 0,
+      status: 'idle',
+    })
+    expect(ctx.importError, 'resting-value pin, not coverage: never armed in this harness').toBeNull()
+  })
+})
+
+describe('ROUTE-06-03 AC-2: switchClient seeds the import target with the incoming company', () => {
+  it('switchClient_seedsTheImportTargetWithTheINCOMINGCompany', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openCreate()
+    })
+    expect(requireCtx().entityId, 'sanity: openCreate seeds entityId from the active company').toBe(ENTITY_A)
+
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().entityId, 'entityId after switchClient(B) must be B -- never A, never null').toBe(ENTITY_B)
+  })
+})
+
+// Pins AC-3's literal outcome (entityId ends at active.entityId), NOT the default
+// parameter's value: openCreate() always lands createStep at 'upload' in the same
+// commit as its bare resetImport() call, so a null default is healed to
+// active.entityId by the untouched re-seed effect (:529-533) before this test's
+// act() returns -- verified empirically, RTL's act() flushes passive effects
+// whether sync or async. restartImport shares the same shape. No caller can
+// observe the default's value through ctx today, so mutating the default to
+// `null` leaves this spec GREEN by design, not by gap -- see App.tsx:737.
+describe('ROUTE-06-03 AC-3 control: openCreate still seeds from active with no argument', () => {
+  it('openCreate_stillSeedsFromActiveWithNoArgument', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openCreate()
+    })
+    expect(requireCtx().entityId, 'openCreate with no argument must still seed from active.entityId').toBe(ENTITY_A)
+  })
+})
+
+// GREEN before the fix -- the re-seed effect (App.tsx:529-533) is untouched by this
+// subtask. A deferred entities fetch reproduces the real race (App.tsx:502-528): the
+// snapshot lands null while the entity is still pending, then the effect fills it once
+// active resolves.
+describe('ROUTE-06-03 AC-4 control: the null-to-resolved reseed effect is untouched', () => {
+  it('reseed_theNullToResolvedEffectStillFillsAStaleNullSnapshot', async () => {
+    let resolveEntities: () => void = () => {}
+    const entitiesGate = new Promise<void>((resolve) => {
+      resolveEntities = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.includes('/portfolio/v1/entities')) {
+          return entitiesGate.then(() => ({
+            ok: true,
+            status: 200,
+            json: () =>
+              Promise.resolve({
+                entities: [entityRow(ENTITY_A, 'Reset Co A', '12345678-0001')],
+                pagination: { limit: 200, offset: 0, total: 1 },
+              }),
+          }))
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              access_token: 'test-token',
+              tenant: { id: 't-reset', name: 'Reset Tenant' },
+              entities: [],
+              policies: [],
+              members: [],
+              roles: [],
+              invoices: [],
+              clients: [],
+              totals: EMPTY_BUCKET,
+              events: [],
+              facets: { events: [], actors: [], companies: [] },
+              page: { limit: 50, has_more: false, next_cursor: null },
+              log_is_empty: true,
+              rejection_reasons: [],
+              total: 0,
+              pagination: { limit: 50, offset: 0, total: 0 },
+            }),
+        })
+      }),
+    )
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    await bootAt('/')
+
+    await act(async () => {
+      capturedCtx!.openCreate()
+    })
+    const ctx = requireCtx()
+    expect(ctx.createStep, 'sanity: openCreate opens on the upload step').toBe('upload')
+    expect(ctx.entityId, 'sanity: the snapshot raced the pending entities fetch and landed null').toBeNull()
+
+    await act(async () => {
+      resolveEntities()
+    })
+    await waitFor(() =>
+      expect(requireCtx().entityId, 'the re-seed effect must fill the stale null once active resolves').toBe(
+        ENTITY_A,
+      ),
+    )
+  })
+})

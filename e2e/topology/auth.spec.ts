@@ -3,7 +3,7 @@ import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { resolveTarget } from '../targets'
 import { collectErrors } from '../personaSession'
 import { PERSONAS, PERSONA_IDS, DESTINATION_ENV, type PersonaId } from '../personas'
-import { login, createEntity, createInvoice, PERSONAS as API_PERSONAS } from '../api/client'
+import { login, createEntity, createInvoice, createImportBatch, listEntities, PERSONAS as API_PERSONAS } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper } from './consoleGate'
 
@@ -548,3 +548,195 @@ for (const id of PERSONA_IDS) {
     expect(errors, `console errors on the ${persona.destination} arrival:\n${errors.join('\n')}`).toEqual([])
   })
 }
+
+// ROUTE-06-06 AC-1: the plain top-level views ROUTE-06-05's popstate sweep leaves with no
+// coverage (dashboard/audit/settings/extraction/detail already have their own deep-link
+// specs above). One test looping all 8 paths in-process — docs/e2e-convention.md forbids
+// a test() per screen.
+test('deployed app: every top-level path cold-boots to its own screen', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const paths: { path: string; heading: string | null }[] = [
+    { path: '/invoices', heading: 'Invoices' },
+    { path: '/approvals', heading: 'Approvals' },
+    { path: '/rules', heading: 'Rules' },
+    { path: '/customers', heading: 'Customers & vendors' },
+    { path: '/reports', heading: 'Reports & analytics' },
+    { path: '/workflows', heading: 'Approval policies' },
+    { path: '/clients', heading: 'Client portfolio' },
+    { path: '/create', heading: null }, // no h1/testid — the text check below stands in
+  ]
+
+  for (const { path, heading } of paths) {
+    const url = `${APP_URL}${path}?persona=${FIRM_PERSONA.param}`
+    const res = await page.goto(url)
+    expect(res, `no response from ${url}`).toBeTruthy()
+    expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+    // URL alone would pass on a Chromium bfcache reuse -- the trap :155-157 already
+    // records -- so every path asserts both the URL AND a landmark from that screen's DOM.
+    await expect(page, `${path} did not settle on its own path`).toHaveURL(new RegExp(`${path}$`))
+
+    if (heading != null) {
+      await expect(
+        page.getByRole('heading', { level: 1, name: heading, exact: true }),
+        `${path} did not render its "${heading}" landmark`,
+      ).toBeVisible()
+    } else {
+      // CreateForm's own title span reads "New invoice · <client>" (a middle dot); the
+      // header bar's persistent CTA button is bare "New invoice" with no dot, so this
+      // substring is discriminating between the two.
+      await expect(page.getByText('New invoice ·'), `${path} did not render its CreateForm title`).toBeVisible()
+    }
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-06-06 AC-2: the review path, using a batch id minted through
+// createImportBatch (e2e/api/client.ts) in this test -- never predicted (the "an id is
+// only ever learned, never predicted" rule). No e2e/api/client.ts export minted a batch
+// before this subtask; the shape is the same two multipart POSTs contract-import.spec.ts
+// and import.spec.ts already drive locally.
+test('deployed app: a review path cold-boots to the review surface', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(API_PERSONAS.A)
+  const entity = await createEntity(token, { name: `ROUTE-06 review cold-boot ${Date.now()}`, tin: freshTin() })
+  const batchId = await createImportBatch(token, entity.id, `INV-ROUTE06-REVIEW-${Date.now()}`)
+
+  const url = `${APP_URL}/imports/${batchId}/review?persona=${FIRM_PERSONA.param}`
+  const res = await page.goto(url)
+  expect(res, `no response from ${url}`).toBeTruthy()
+  expect(res!.ok(), `${url} returned HTTP ${res!.status()}`).toBeTruthy()
+
+  await expect(page, 'the review deep link did not keep its batch id').toHaveURL(new RegExp(`/imports/${batchId}/review$`))
+  await expect(page.getByText(`BATCH ${batchId}`), 'the review surface did not render its batch header').toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ROUTE-06-07: the deployed proof for the popstate clamp (App.tsx:588-593). A company
+// switch replaces the CURRENT history entry with the new identity but leaves older entries
+// stamped with the old one, so Back walking PAST the switch must scrub the stale drill-down
+// rather than resurface the previous company's invoice.
+//
+// Landing-first, per Decision [back-lives-in-auth-spec] (:243-246) -- starting at
+// page.goto(APP_URL) would already be history entry one and prove nothing about Back. The
+// row click is by TEXT (:306), never index: a positional click can fire before
+// ctx.active.entityId resolves, which would stamp the entry with a null id and leave the
+// clamp permanently unable to fire. Navigates to Audit (not back to Invoices) before the
+// switch, so the later Forward assertion lands on a screen the clamp's own Back could not
+// have produced by coincidence.
+//
+// Reuses the invoice-detail 404 gate (:251-261, not the shared collectErrors above): this
+// journey also opens a fresh invoice's detail page, which fires the same unavoidable
+// approval-run 404 on mount.
+test("deployed app: Back past a company switch cannot resume the previous company's invoice", async ({ page }) => {
+  const errors: string[] = []
+  const drop = approvalRun404Dropper(page)
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (drop(msg.text(), msg.location().url)) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+
+  // Fixtures first, before any navigation, so landing stays history entry one. Filed under
+  // the PORTFOLIO's own first-sorted active entity (ORDER BY name ASC) -- the same one
+  // sign-in leaves ctx.active on -- rather than a freshly created entity, which is not
+  // guaranteed to sort first and would never reach the invoices list.
+  const token = await login(API_PERSONAS.A)
+  const { entities } = await listEntities(token, { status: 'active' })
+  expect(entities.length, 'the firm seed must have at least one active entity to file under').toBeGreaterThan(0)
+  const entity = entities[0]
+  const invoiceNumber = `INV-ROUTE06-SWITCHBACK-${Date.now()}`
+  await createInvoice(token, {
+    entity_id: entity.id,
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  })
+
+  const landingRes = await page.goto(LANDING_URL)
+  expect(landingRes, `no response from ${LANDING_URL}`).toBeTruthy()
+  expect(landingRes!.ok(), `${LANDING_URL} returned HTTP ${landingRes!.status()}`).toBeTruthy()
+
+  const url = `${APP_URL}?persona=${FIRM_PERSONA.param}`
+  await page.goto(url)
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+
+  const nav = page.locator('aside.pf-sidebar nav.pf-nav-list')
+  await nav.getByRole('button', { name: 'Invoices' }).click()
+  await expect(page, 'nav to Invoices did not update the URL').toHaveURL(/\/invoices$/)
+
+  const list = page.getByTestId('invoices-list')
+  await expect(list).toBeVisible()
+  await list.getByText(invoiceNumber, { exact: true }).click()
+  await expect(page, 'the row click did not settle on /invoices/<uuid>').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+
+  await nav.getByRole('button', { name: 'Audit' }).click()
+  await expect(page, 'nav to Audit did not update the URL').toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
+
+  // The switch, verbatim idiom from workflows.spec.ts:365-399: positional target, identity
+  // asserted on the TIN line. beforeTin is captured so a no-op nth(1) -- picking the
+  // already-active client -- fails loudly here instead of silently defeating the clamp below.
+  const switcher = page.getByTestId('company-switcher')
+  const switcherName = switcher.locator('span > span:not(.mono)')
+  const switcherTin = switcher.locator('span.mono')
+  await expect(switcherTin, 'the switcher must be on a REAL client before the baseline is taken').toHaveText(/^TIN \d/)
+  const beforeTin = (await switcherTin.innerText()).trim()
+
+  await switcher.click()
+  const options = page.getByTestId('company-switcher-option')
+  await expect(options.first()).toBeVisible()
+  expect(
+    await options.count(),
+    'the firm seed must offer >=2 active clients to switch between (db/seed.dev.sql seeds 8)',
+  ).toBeGreaterThanOrEqual(2)
+
+  const target = options.nth(1)
+  const targetName = (await target.locator('span > span:not(.mono)').innerText()).trim()
+  await target.click()
+  await expect(switcherName, 'the switcher must now show the client that was clicked').toHaveText(targetName)
+  await expect(switcherTin, 'the switch was a no-op -- the TIN line did not move off the previous client').not.toHaveText(beforeTin)
+
+  await page.goBack()
+  // Same client the switch landed on -- this entry was restamped in place, not scrubbed --
+  // so no clamp fires here.
+  await expect(page, 'first Back did not restore /audit').toHaveURL(/\/audit$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true }), 'first Back did not rebuild the Audit screen').toBeVisible()
+
+  await page.goBack()
+  // The older drill-down entry still carries the PREVIOUS client's id; live identity has
+  // moved on, so the clamp (App.tsx:588-593) must fire and collapse it to the list.
+  await expect(page, 'second Back did not collapse the stale drill-down to /invoices').toHaveURL(/\/invoices$/)
+  await expect(list, 'the invoices list must render, not a blank panel, after the clamp').toBeVisible()
+  await expect(
+    page.getByText(invoiceNumber, { exact: true }),
+    "the previous client's invoice must not be on screen after the clamp",
+  ).not.toBeVisible()
+
+  await page.goForward()
+  await expect(page, 'Forward did not re-apply /audit').toHaveURL(/\/audit$/)
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Audit log', exact: true }),
+    'Forward did not rebuild the Audit screen',
+  ).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

@@ -282,6 +282,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     [clients, activeEntityId],
   )
 
+  // Latest-value mirror of active.entityId for the popstate handler, whose deps are [] --
+  // a closure read there freezes at mount, when clients is still [].
+  const activeEntityIdRef = useRef<string | null>(null)
+
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
   // resolved object and not `active.entityId`:
@@ -547,18 +551,47 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       auditInvoice: auditPrefilter?.invoiceId ?? null,
       reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
     })
-    window.history.replaceState(null, '', url)
+    window.history.replaceState({ e: active.entityId }, '', url)
     clearDestination()
   }, [])
+  // Backfills the boot entry's stamp once the portfolio resolves, and keeps the popstate
+  // handler's view of the active company current. The alignment above runs before the
+  // entities fetch lands, so it stamps null and a cold deep link would be permanently
+  // unclampable. Gated on null so it can only FILL, never overwrite switchClient's stamp.
+  // Third argument is the live href: a two-arg call records call[2] as undefined and would
+  // fail the three popstate no-history specs if it ever fired under a gateway.
+  useEffect(() => {
+    activeEntityIdRef.current = active.entityId
+    if (active.entityId === null) return
+    const minted = (window.history.state as { e?: string | null } | null)?.e ?? null
+    if (minted === null) window.history.replaceState({ e: active.entityId }, '', window.location.href)
+  }, [active.entityId])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
-  // write. A write here would push a duplicate entry on every Back press.
+  // write on the unclamped path. A push here would duplicate an entry on every Back press;
+  // the identity clamp below is the one write, and it replaces.
   // All setters run in this one handler so the id lands in the same commit as the view,
   // matching openImportedInvoice/openExtraction's one-handler invariant. `create` owns
   // reviewBatchIds as its whole path (lib/route.ts), so that arm is gated on ids present,
   // not on view === 'create' -- a bare /create also parses to 'create' but with no ids.
   useEffect(() => {
-    const onPopState = () => {
-      const at = parseLocation(window.location.pathname, window.location.search)
+    const onPopState = (event: PopStateEvent) => {
+      // The restored entry carries the company that minted it. Clamp at the TOP so every
+      // setter below reads the clamped path: a tail rewrite leaves each atom armed for a
+      // frame and has to enumerate them.
+      // popstate_anOlderAuditEntryFromAnotherCompanyDoesNotResumeItsInvoiceFilter
+      const minted = (event.state as { e?: string | null } | null)?.e ?? null
+      const here = activeEntityIdRef.current
+      // `?? null` folds every no-stamp shape into "names no company, never clamp".
+      // popstate_anUnstampedEntryDoesNotClamp
+      const stale = minted !== null && here !== null && minted !== here
+      const path = stale
+        ? routePath(carryView(parseLocation(window.location.pathname, '').view))
+        : window.location.pathname
+      // '' when stale: re-parsing the live search would re-arm auditPrefilter from
+      // ?invoice= even though the URL was just cleaned.
+      const search = stale ? '' : window.location.search
+      if (stale) window.history.replaceState({ e: here }, '', path)
+      const at = parseLocation(path, search)
       setView(at.view)
       setDetailInvoiceId(at.invoiceId)
       setExtractionJobId(at.jobId)
@@ -577,6 +610,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       if (at.reviewBatchIds.length > 0) {
         setReviewBatchIds(at.reviewBatchIds)
         setCreateStep('review')
+      } else if (at.view === 'create') {
+        // A restored bare /create names no batch, so the live one is stale; the mirror
+        // below would otherwise regrow it onto this entry. Functional setter -- this
+        // handler's deps are [] (see activeEntityIdRef, :285, for the same trap).
+        setReviewBatchIds([])
+        setCreateStep((prev) => (prev === 'review' ? 'upload' : prev))
       }
     }
     window.addEventListener('popstate', onPopState)
@@ -590,7 +629,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // other view, so the early return is what stops two writers fighting one URL.
     if (view !== 'create') return
     const ids = reviewNavIds(view, createStep, reviewBatchIds)
-    window.history.replaceState(null, '', routeUrl('create', { reviewBatchIds: ids }))
+    window.history.replaceState({ e: active.entityId }, '', routeUrl('create', { reviewBatchIds: ids }))
     // `reviewBatchIds.join(',')`, never the array reference: a fresh array every render
     // would re-run this effect forever.
   }, [view, createStep, reviewBatchIds.join(',')])
@@ -619,7 +658,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
-    window.history.pushState(null, '', url)
+    window.history.pushState({ e: active.entityId }, '', url)
   }
 
   function nav(id: View, params?: RouteParams) {
@@ -637,7 +676,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setInvoiceQuery(q: string) {
     setInvoiceQuery_(q)
     const url = routeUrl(view, { settingsTab, q, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState(null, '', url)
+    window.history.replaceState({ e: active.entityId }, '', url)
   }
 
   function toggleSwitcher() {
@@ -648,13 +687,19 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setActiveEntityId(id)
     // The entry being left names a drill-down of the company being left. Scrub its id
     // through the same collapse a persona switch uses, so Back cannot return to it.
-    window.history.replaceState(null, '', routePath(carryView(view)))
+    // `id`, never a state read: setActiveEntityId(id) above has not committed, so
+    // active.entityId here still names the company being LEFT. Same discipline as
+    // navigate's own `id` comment.
+    window.history.replaceState({ e: id }, '', routePath(carryView(view)))
+    // Stamps the outgoing company for the same reason; benign, /'s clamp is a no-op.
     navigate('dashboard')
     setDetailInvoiceId(null)
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
     setCreateStep('form')
+    // Same `id`-not-`active` discipline as the scrub above.
+    resetImport(id)
     // A batch belongs to ONE entity. Leaving this set would keep the review screen's
     // deep-link id pointing at the company just left — and the mirror effect above would
     // keep writing its path into the URL from the incoming company's dashboard.
@@ -693,8 +738,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from it, but the reseed still matters: every open takes the CURRENT
   // `active`, so switching company between two runs cannot leave the second run filing
   // under the first run's entity.
-  function resetImport() {
-    setEntityId(active.entityId)
+  // `target` is a parameter, never a state read: switchClient's setActiveEntityId has not
+  // committed, so `active` there still names the company being LEFT (:502-528's race).
+  function resetImport(target: string | null = active.entityId) {
+    setEntityId(target)
     setPickedFiles([])
     setFilesRefusal(null)
     setGroups([])
@@ -1272,7 +1319,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setAuditInvoiceFilter(invoiceId: string | null, invoiceNumber: string | null) {
     setAuditPrefilter(invoiceId ? { invoiceId, invoiceNumber } : null)
     const url = routeUrl(view, { settingsTab, q: invoiceQuery, auditInvoice: invoiceId })
-    window.history.replaceState(null, '', url)
+    window.history.replaceState({ e: active.entityId }, '', url)
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
@@ -1285,7 +1332,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState(null, '', url)
+    window.history.replaceState({ e: active.entityId }, '', url)
   }
 
   function toggleConnector(id: ConnectorId) {

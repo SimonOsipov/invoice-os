@@ -370,7 +370,7 @@ first; `parseLocation` then decodes it into the eight fields. A signed-out visit
 id — not just the view. Pinned by `App.signedOutDeepLink.test.tsx`'s `Workspace boot: a
 restored destination carries its drill-down id too (ROUTE-02 merge)` block.
 
-## The ROUTE-02..06 boundary
+## The ROUTE-02..07 boundary
 
 - **ROUTE-02** — **shipped.** Drill-down ids (`/invoices/:id`, `/extraction/:jobId`) and
   cold-boot seeding for both. `carryView` collapses `detail`/`extraction`

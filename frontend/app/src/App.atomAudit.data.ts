@@ -142,7 +142,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     routes: ['/create', '/imports/<ids>/review'],
     verdict: 'stale-and-reachable',
     citation: { in: 'const onPopState = (event: PopStateEvent) =>', text: 'setCreateStep(\'review\')' },
-    note: "Reset to 'form' at App.tsx#switchClient, but popstate re-arms it to 'review' at App.tsx#onPopState from an older entry. Fixed by ROUTE-06-02 (clamp) and pinned by ROUTE-06-04.",
+    note: "Reset to 'form' at App.tsx#switchClient, but popstate re-arms it to 'review' at App.tsx#onPopState from an older entry. Cross-company case unreachable since ROUTE-06-02 (clamp collapses view off 'create'); same-company bare-/create case fixed by ROUTE-06-04's else-if arm.",
   },
   {
     binding: 'reviewBatchIds, setReviewBatchIds',
@@ -152,7 +152,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     routes: ['/create', '/imports/<ids>/review'],
     verdict: 'stale-and-reachable',
     citation: { text: 'setReviewBatchIds(at.reviewBatchIds)' },
-    note: 'Cleared at App.tsx#switchClient, but popstate re-reads the ids out of an older review path at App.tsx#onPopState. Fixed by ROUTE-06-02, pinned by ROUTE-06-04.',
+    note: "Cleared at App.tsx#switchClient, but popstate re-reads the ids out of an older review path at App.tsx#onPopState. Cross-company case unreachable since ROUTE-06-02 (clamp collapses view off 'create'); same-company bare-/create case fixed by ROUTE-06-04's else-if arm.",
   },
   {
     binding: 'groups, setGroups',

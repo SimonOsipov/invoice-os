@@ -402,7 +402,7 @@ export async function importDocument(
 // normalizeReport pass -- see ImportBatch's own comment.
 export async function getImportBatch(authedFetch: AuthedFetch, base: string, id: string): Promise<ImportBatch> {
   // `id` is encoded even though it is a uuid by the time it gets here (the route is
-  // `#review/<uuid>` and parseReviewHash rejects anything else): it is still a path segment
+  // `/imports/<uuid>/review` and parseReviewPath rejects anything else): it is still a path segment
   // built from a caller-supplied string, and the encode costs nothing. NOTE this differs
   // from getInvoice/getInvoiceHistory/editInvoice, which interpolate their `id` raw --
   // flagged rather than silently "fixed" across all four, which is not this subtask's call.

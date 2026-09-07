@@ -1,27 +1,29 @@
 // @vitest-environment jsdom
 // vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// ROUTE-01-06. Out of Scope fences App.tsx:317 and :524-530 (the review hash) to work
-// exactly as they do today; this pins that with an oracle now that the router seam's two
-// writers (navigate, the mount alignment) share the URL with the pre-existing review-hash
-// mirror and persona strip. Harness is App.routePopstate.test.tsx's: the real <App/>, a
+// ROUTE-03-03. The review-hash mirror is now a review-PATH mirror, scoped to the `create`
+// view only: it and `navigate` share the URL, and the mirror must stay inert off `create`
+// so the two never contend. Harness is App.routePopstate.test.tsx's: the real <App/>, a
 // session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
-import { parseReviewHash, reviewHash } from './lib/reviewBatch'
-import { parseRoute } from './lib/route'
+import { parseLocation } from './lib/route'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
 const REVIEW_ID_2 = 'b2c3d4e5-f6a7-48b9-9abc-def012345678'
+const GATEWAY = 'https://gw.test'
+const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
+const DOCUMENT_ID = 'dddddddd-0000-4000-8000-00000000000d'
+const BATCH_ID = 'bbbbbbbb-1111-4111-8111-111111111111'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -85,11 +87,82 @@ function requireCtx(): PlatformCtx {
   return capturedCtx!
 }
 
+// Only what previewImport/createImport's shared xhrJson transport (importApi.ts) touches
+// for a happy-path multipart round trip -- App.handOff.test.tsx's FakeXhr, extended with a
+// success reply (that file only ever drives onerror).
+class FakeXhr {
+  static instances: FakeXhr[] = []
+  status = 0
+  responseText = ''
+  upload: { onprogress: (() => void) | null; onload: (() => void) | null } = { onprogress: null, onload: null }
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  ontimeout: (() => void) | null = null
+
+  constructor() {
+    FakeXhr.instances.push(this)
+  }
+
+  open(): void {}
+  setRequestHeader(): void {}
+  send(): void {}
+
+  respond(status: number, body: unknown): void {
+    this.status = status
+    this.responseText = JSON.stringify(body)
+    this.onload?.()
+  }
+}
+
+function entityRow(id: string, name: string, tin: string) {
+  return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+}
+
+// One real entity so switchClient/openCreate has somewhere to resolve `activeEntity`;
+// every other endpoint answers well enough not to crash a mounting Workspace
+// (App.handOff.test.tsx's routeFetch, same fallback shape).
+function routeFetch() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      if (url.includes('/portfolio/v1/entities')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              entities: [entityRow(ENTITY_A, 'Mirror Co', '12345678-0001')],
+              pagination: { limit: 200, offset: 0, total: 1 },
+            }),
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ entities: [], policies: [], members: [], roles: [], invoices: [], total: 0 }),
+      })
+    }),
+  )
+}
+
+// bootAt plus the gateway/XHR wiring the run-driven mirror spec needs; every other spec in
+// this file keeps using the plain bootAt above (no gateway, no network).
+async function bootAtWithGateway(path: string) {
+  routeFetch()
+  vi.stubGlobal('XMLHttpRequest', FakeXhr)
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  return bootAt(path)
+}
+
 describe('AC-1: the two existing history writers are unchanged', () => {
   it('guard_theTwoExistingHistoryWritersAreUnchanged', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
-    const reviewMirrorWrite = "window.location.pathname + window.location.search + (h ?? '')"
-    const personaStripWrite = 'window.location.pathname + window.location.hash'
+    const reviewMirrorWrite = "routeUrl('create', { reviewBatchIds: ids })"
+    // Subtask 05 drops this writer's own fragment append -- re-pointed at the resulting
+    // full statement, not a bare substring: `window.location.pathname` alone also occurs
+    // at three other, unrelated call sites in this file.
+    const personaStripWrite = "window.history.replaceState(null, '', window.location.pathname)"
 
     const reviewIdx = src.indexOf(reviewMirrorWrite)
     const personaIdx = src.indexOf(personaStripWrite)
@@ -99,12 +172,114 @@ describe('AC-1: the two existing history writers are unchanged', () => {
     expect(personaIdx, 'the persona-strip mirror line was not found verbatim -- it may have changed').toBeGreaterThan(-1)
     expect(reviewIdx, 'the two writers must not resolve to the same location').not.toBe(personaIdx)
   })
+
+  // Static, not behavioural: reviewBatchIds is a plain useState value, so its reference is
+  // stable across renders that don't call its setter, and every setter always writes
+  // genuinely new content -- no reachable scenario discriminates `.join(',')` from the bare
+  // array in the dep list. This guard exists to stop a future "simplification" that reruns
+  // that same experiment, sees green, and removes the join.
+  it('guard_theMirrorsDepArrayStillJoinsTheIds', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
+    const depArray = "}, [view, createStep, reviewBatchIds.join(',')])"
+    const count = src.split(depArray).length - 1
+    expect(count, 'the exact dep-array text must occur exactly once').toBe(1)
+  })
 })
 
-describe('AC-2: navigating off review clears the hash in exactly one entry', () => {
-  it('compose_navigatingOffReviewClearsTheHashInOneEntry', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+describe('AC-4: entering review from a run rewrites the entry, never pushes', () => {
+  // Drives applyRoute indirectly (it is not on ctx): ctx.continueMapping() -> startRun()
+  // -> applyRoute, the actual transition AC-4 names ("entering review FROM A RUN").
+  // restartImport tests LEAVING review within create instead, a different journey.
+  it('mirror_enteringReviewRewritesTheEntryItDoesNotPushOne', async () => {
+    FakeXhr.instances = []
+    await bootAtWithGateway('/')
+
+    act(() => {
+      requireCtx().openCreate()
+    })
+    await waitFor(() =>
+      expect(requireCtx().activeEntity?.id, 'activeEntity never resolved from the entity list').toBe(ENTITY_A),
+    )
+
+    const file = new File(['invoice_number,total\nINV-1,100'], 'invoices.csv', { type: 'text/csv' })
+    act(() => {
+      requireCtx().addPickedFiles([file])
+    })
+
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    expect(FakeXhr.instances, 'control: the preview never reached the upload transport').toHaveLength(1)
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, {
+        document_id: DOCUMENT_ID,
+        format: 'csv',
+        delimiter: ',',
+        encoding: 'utf-8',
+        columns: ['invoice_number', 'total'],
+        sample_rows: [['INV-1', '100']],
+        rows_total: 1,
+      })
+    })
+    await waitFor(() => expect(requireCtx().createStep, 'preview never landed on the mapping step').toBe('mapping'))
+
+    // invoice_number is never auto-mapped (ALIAS excludes it) -- arm and click it by hand,
+    // same as the Map step's own click handler.
+    act(() => {
+      requireCtx().armField('invoice_number')
+    })
+    act(() => {
+      requireCtx().clickCol('invoice_number')
+    })
+    expect(
+      requireCtx().groups[0]?.mapping.invoice_number,
+      'sanity: the click must map invoice_number',
+    ).toBe('invoice_number')
+
+    const lengthBefore = window.history.length
+    act(() => {
+      requireCtx().continueMapping()
+    })
+    expect(FakeXhr.instances, 'control: the run never reached the createImport transport').toHaveLength(2)
+    act(() => {
+      // ready_invoices: 0 keeps routeAfterImport off the 'single' branch (BULK-05-8's
+      // run-size gate is for a DIFFERENT case), so a one-file run still lands on review.
+      FakeXhr.instances[1]!.respond(200, {
+        id: BATCH_ID,
+        status: 'completed',
+        format: 'csv',
+        delimiter: ',',
+        encoding: 'utf-8',
+        rows_total: 1,
+        rows_valid: 1,
+        rows_invalid: 0,
+        ready_invoices: 0,
+        quarantined_invoices: 1,
+        errors: [],
+        rule_set_version: null,
+        invoices_clean: 0,
+        invoices_with_violations: 0,
+        invoice_violations: [],
+      })
+    })
+
+    await waitFor(() => expect(requireCtx().createStep, 'the run never landed on review').toBe('review'))
+    expect(requireCtx().reviewBatchIds, 'entering review must seed the batch id the run created').toEqual([BATCH_ID])
+    expect(window.location.pathname, 'entering review must rewrite the URL to the review path').toBe(
+      `/imports/${BATCH_ID}/review`,
+    )
+    expect(
+      window.history.length,
+      'entering review from a run must rewrite the CURRENT entry, never push a new one',
+    ).toBe(lengthBefore)
+  })
+})
+
+describe('AC-2: navigating off review clears the path in exactly one entry', () => {
+  it('mirror_navigatingOffReviewClearsThePathInOneEntry', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
     const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
     const lengthBefore = window.history.length
 
     await act(async () => {
@@ -112,7 +287,6 @@ describe('AC-2: navigating off review clears the hash in exactly one entry', () 
     })
 
     expect(window.location.pathname, 'the final pathname must be /invoices').toBe('/invoices')
-    expect(window.location.hash, 'the hash must be cleared').toBe('')
     expect(
       window.history.length,
       'exactly one new entry -- the mirrors rewrite of the SAME entry must not add a second',
@@ -121,9 +295,10 @@ describe('AC-2: navigating off review clears the hash in exactly one entry', () 
 })
 
 describe('AC-3: the mirror cannot strand the old pathname', () => {
-  it('compose_theMirrorCannotStrandTheOldPathname', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+  it('mirror_theMirrorCannotStrandTheOldPathname', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
     const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
 
     await act(async () => {
       ctx.nav('audit')
@@ -134,32 +309,130 @@ describe('AC-3: the mirror cannot strand the old pathname', () => {
       'a mirror that ran BEFORE the push would leave /create behind instead of moving to /audit',
     ).toBe('/audit')
   })
+
+  // The early return's primary falsifier: force a reviewBatchIds change WHILE view stays
+  // off create (restartImport clears the ids without touching view), and prove the mirror
+  // does nothing at all -- not even a same-URL no-op.
+  it('mirror_theMirrorIsInertOffTheCreateView', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    let ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+
+    await act(async () => {
+      ctx.nav('audit')
+    })
+    expect(window.location.pathname, 'sanity: nav must land on /audit first').toBe('/audit')
+    const fullUrlBefore = window.location.pathname + window.location.search
+
+    await act(async () => {
+      requireCtx().restartImport()
+    })
+    ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: restartImport must actually change reviewBatchIds').toEqual([])
+
+    expect(
+      window.location.pathname + window.location.search,
+      'the mirror must write nothing for a reviewBatchIds change off the create view',
+    ).toBe(fullUrlBefore)
+  })
 })
 
-describe('AC-4: a review deep link ends with both the path and the hash correct', () => {
-  it('compose_aReviewDeepLinkEndsWithBothThePathAndTheHash', async () => {
-    await bootAt(`/#review/${REVIEW_ID}`)
+describe('AC-3 (omitted branch): leaving review within create falls back to the bare create path', () => {
+  it('mirror_leavingReviewWithinCreateFallsBackToTheBareCreatePath', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+
+    await act(async () => {
+      ctx.restartImport()
+    })
+
+    expect(window.location.pathname, 'leaving review within create must fall back to the bare create path').toBe(
+      '/create',
+    )
+  })
+})
+
+describe('AC-5: closeCreate, skipUpload and enterByHand leave no review path in the address bar', () => {
+  it('closeCreate_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.closeCreate()
+    })
+
+    expect(requireCtx().view, 'proof of stimulus: closeCreate must actually leave the create view').toBe('invoices')
+    expect(window.location.pathname, 'closeCreate must leave no review path in the address bar').toBe('/invoices')
+  })
+
+  // The only App-level coverage of reviewNavIds's createStep === 'review' clause: skipUpload
+  // never clears reviewBatchIds, so it stays non-empty while createStep moves off 'review' --
+  // unlike restartImport, whose resetImport() clears the ids in the same call and hides a
+  // mutant that drops the clause.
+  it('skipUpload_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.skipUpload()
+    })
+
+    const after = requireCtx()
+    expect(after.createStep, 'proof of stimulus: skipUpload must actually move off the review step').toBe('form')
+    expect(after.reviewBatchIds, 'control: skipUpload must not itself clear the ids').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'skipUpload must leave no review path in the address bar').toBe('/create')
+  })
+
+  // Same discriminator as skipUpload: enterByHand never clears reviewBatchIds either, so
+  // this is the other exit that actually exercises the createStep clause at the App level.
+  it('enterByHand_fromReviewLeavesNoReviewPathInTheAddressBar', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting the review path must actually seed the batch').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'sanity: the boot must actually land on the review path').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+
+    await act(async () => {
+      ctx.enterByHand(DOCUMENT_ID)
+    })
+
+    const after = requireCtx()
+    expect(after.createStep, 'proof of stimulus: enterByHand must actually move off the review step').toBe('form')
+    expect(after.reviewBatchIds, 'control: enterByHand must not itself clear the ids').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'enterByHand must leave no review path in the address bar').toBe('/create')
+  })
+})
+
+describe('AC-4: a review path re-derives the identical screen on reload', () => {
+  it('link_aReviewPathReDerivesTheIdenticalScreenOnReload', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
+    await bootAt(path)
     requireCtx()
 
-    expect(window.location.pathname, 'the mount alignment must correct the pathname to /create').toBe('/create')
-    expect(window.location.hash, 'the hash must survive the alignment verbatim').toBe(`#review/${REVIEW_ID}`)
+    expect(window.location.pathname, 'the URL must be byte-identical to the boot URL').toBe(path)
 
     // Re-parse the FULL url from scratch, decoupled from ctx/App's own state -- this is
-    // the invariant import-wizard.spec.ts:1369 guards on the deployed build: a reload must
-    // re-derive the identical screen.
-    expect(parseRoute(window.location.pathname)?.view, 'the pathname alone must parse back to create').toBe('create')
-    const ids = parseReviewHash(window.location.hash)
-    expect(ids, 'the hash must re-parse to the same batch id').toEqual([REVIEW_ID])
-    expect(
-      reviewHash('create', 'review', ids!),
-      'reviewHash only round-trips to the SAME string when step is review -- proving step survives too, not just view',
-    ).toBe(window.location.hash)
+    // the invariant import-wizard.spec.ts's reload assertion guards on the deployed build:
+    // a reload must re-derive the identical screen.
+    const at = parseLocation(window.location.pathname, window.location.search)
+    expect(at.view, 'the pathname alone must parse back to create').toBe('create')
+    expect(at.reviewBatchIds, 'the path must re-parse to the same batch id').toEqual([REVIEW_ID])
   })
 })
 
 describe('AC-3: Back from Invoices returns to the review screen', () => {
   it('compose_backFromInvoicesReturnsToTheReviewScreen', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+    await bootAt(`/imports/${REVIEW_ID}/review`)
     let ctx = requireCtx()
     expect(reviewBatchMounts.length, 'sanity: booting straight into review must render ReviewBatch').toBeGreaterThan(0)
 
@@ -168,7 +441,7 @@ describe('AC-3: Back from Invoices returns to the review screen', () => {
     })
     reviewBatchMounts.length = 0
 
-    window.history.replaceState(null, '', `/create#review/${REVIEW_ID}`)
+    window.history.replaceState(null, '', `/imports/${REVIEW_ID}/review`)
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
@@ -185,15 +458,17 @@ describe('AC-3: Back from Invoices returns to the review screen', () => {
 
 describe('AC-5: an externally-held review link is not damaged by anything this session does', () => {
   it('link_anExternallyHeldReviewLinkStillColdLoadsItsOwnBatch', async () => {
-    // Session A: ends with reviewBatchIds === [id2] and the CURRENT entry's hash rewritten
-    // to #review/<id2> -- the end state decision [second-batch-relinks-an-older-entry]
+    // Session A: ends with reviewBatchIds === [id2] and the CURRENT entry rewritten to the
+    // /imports/<id2>/review path -- the end state decision [second-batch-relinks-an-older-entry]
     // describes. Booting straight into it is an equivalent, cheaper way to reach that state
     // than driving the real closeCreate-then-reimport sequence, which that decision itself
     // calls out of proportion for a unit suite.
-    const sessionA = await bootAt(`/create#review/${REVIEW_ID_2}`)
+    const sessionA = await bootAt(`/imports/${REVIEW_ID_2}/review`)
     const ctxA = requireCtx()
     expect(ctxA.reviewBatchIds, 'sanity: session A must be sitting on batch 2').toEqual([REVIEW_ID_2])
-    expect(window.location.hash, "sanity: session A's own entry must read batch 2").toBe(`#review/${REVIEW_ID_2}`)
+    expect(window.location.pathname, "sanity: session A's own entry must read batch 2").toBe(
+      `/imports/${REVIEW_ID_2}/review`,
+    )
     sessionA.unmount()
 
     // A SEPARATE app instance, at a link a user copied or bookmarked earlier -- unaffected
@@ -201,7 +476,7 @@ describe('AC-5: an externally-held review link is not damaged by anything this s
     // and cannot reach a link held anywhere else.
     capturedCtx = undefined
     reviewBatchMounts.length = 0
-    await bootAt(`/create#review/${REVIEW_ID}`)
+    await bootAt(`/imports/${REVIEW_ID}/review`)
     const ctxB = requireCtx()
 
     expect(

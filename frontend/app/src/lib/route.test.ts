@@ -3,7 +3,18 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { clampFilterText } from './invoices'
-import { ROUTE_PATHS, routePath, parseRoute, parseLocation, routeUrl } from './route'
+import {
+  ROUTE_PATHS,
+  routePath,
+  parseRoute,
+  parseLocation,
+  routeUrl,
+  reviewPath,
+  parseReviewPath,
+  reviewNavIds,
+  REVIEW_PATH_MAX_IDS,
+} from './route'
+import { MAX_RUN_FILES } from './importRun'
 
 const ALL_VIEWS = [
   'dashboard',
@@ -43,6 +54,7 @@ function searchOf(params: Record<string, string>): string {
 const APP_TSX = fileURLToPath(new URL('../App.tsx', import.meta.url))
 const ROUTE_TS = fileURLToPath(new URL('./route.ts', import.meta.url))
 const PACKAGE_JSON = fileURLToPath(new URL('../../package.json', import.meta.url))
+const ROUTING_DOC = fileURLToPath(new URL('../../../../docs/routing.md', import.meta.url))
 
 // Both DOM-scan tests below call this -- a typo'd pattern would report a clean zero on
 // route.ts exactly like a real zero, so the control needle over App.tsx must use it too.
@@ -555,4 +567,294 @@ describe('parseRoute / routePath — adversarial ids', () => {
     expect(parseRoute(path)).toEqual({ view: 'detail', id })
   })
 
+})
+
+describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
+  // Six distinct canonical uuids: the first five are the cap, all six is one over it.
+  const REVIEW_UUIDS = [
+    'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'b2c3d4e5-f6a7-48b9-9abc-def012345678',
+    'c3d4e5f6-a7b8-49ca-abcd-ef0123456789',
+    'd4e5f6a7-b8c9-4adb-bcde-f01234567890',
+    'e5f6a7b8-c9d0-4be1-cdef-012345678901',
+    'f6a7b8c9-d0e1-4cf2-defa-123456789012',
+  ]
+
+  it('review_theSingleIdFormRoundTrips', () => {
+    const [pathname, search] = splitUrl(routeUrl('create', { reviewBatchIds: [UUID] }))
+    expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
+
+  it('review_everyIdInARunRoundTripsNotJustTheFirst', () => {
+    const ids = REVIEW_UUIDS.slice(0, 5) // the cap
+    expect(ids.length).toBe(5)
+    const [pathname, search] = splitUrl(routeUrl('create', { reviewBatchIds: ids }))
+    expect(parseLocation(pathname, search).reviewBatchIds).toEqual(ids)
+  })
+
+  it('review_theEmittedSegmentCarriesARawComma', () => {
+    const [a, b] = REVIEW_UUIDS
+    const path = reviewPath([a, b])
+    expect(path).toBe(`/imports/${a},${b}/review`)
+    expect(path).not.toContain('%2C')
+  })
+
+  it('review_theOmittedBranchIsThePlainCreatePath', () => {
+    // Drives both the empty-array and the fully-absent forms of the omitted branch.
+    expect(routeUrl('create', { reviewBatchIds: [] })).toBe('/create')
+    expect(routeUrl('create', {})).toBe('/create')
+    expect(routeUrl('create')).toBe('/create')
+    const parsed = parseLocation('/create', '')
+    expect(parsed.view).toBe('create')
+    expect(parsed.reviewBatchIds).toEqual([])
+    // Control needle: a non-empty list does NOT take this branch.
+    expect(routeUrl('create', { reviewBatchIds: [UUID] })).not.toBe('/create')
+  })
+
+  it('review_oneBadSegmentPoisonsTheWholeList', () => {
+    const result = parseReviewPath(`/imports/${UUID},notauuid/review`)
+    expect(result).toBeNull() // never a one-element array carrying just the good id
+  })
+
+  it('review_theCapIsARejectionNotATruncation', () => {
+    expect(REVIEW_UUIDS.length).toBe(6) // one over the cap
+    const result = parseReviewPath(`/imports/${REVIEW_UUIDS.join(',')}/review`)
+    expect(result).toBeNull() // never a truncated five-element array
+  })
+
+  it('review_traversalAndSuffixesAreRejected', () => {
+    const cases = [
+      // Reachable only as a direct function call: a browser resolves '..' before the
+      // address bar, pushState/replaceState, or the sessionStorage bootPath ever see it.
+      // Never promote this case to a deep-link or e2e spec -- it would test nothing there.
+      '/imports/../../etc/review',
+      `/imports/${UUID}/extra/review`,
+      '/imports//review',
+      `/imports/${UUID}/Review`,
+      // Non-discriminating: null whether or not '%2C' is decoded first. The raw-comma
+      // rule is pinned by review_theEmittedSegmentCarriesARawComma and the round trips.
+      '/imports/%2C/review',
+    ]
+    expect(cases.length).toBe(5)
+    for (const pathname of cases) {
+      expect(parseReviewPath(pathname), pathname).toBeNull()
+    }
+  })
+
+  it('review_idCaseIsPreservedNotNormalised', () => {
+    const result = parseReviewPath(`/imports/${UUID_UPPER}/review`)
+    expect(result).toEqual([UUID_UPPER])
+    expect(result?.[0]).not.toBe(UUID_UPPER.toLowerCase())
+  })
+
+  it('review_theGateIsThreeClauses', () => {
+    expect(reviewNavIds('create', 'review', [UUID])).toEqual([UUID])
+    expect(reviewNavIds('invoices', 'review', [UUID])).toEqual([])
+    expect(reviewNavIds('create', 'form', [UUID])).toEqual([])
+    expect(reviewNavIds('create', 'review', [])).toEqual([])
+  })
+
+  it('review_parseLocationStaysTotalAndParseRouteIsUnchanged', () => {
+    const path = reviewPath([UUID])
+    expect(parseRoute(path)).toBeNull() // 'imports' is not a drill-down segment
+    // Discriminating: 'invoices' IS one, so the segment count is the only thing that can
+    // reject this — widening parseRoute past two segments fails here.
+    expect(parseRoute(`/invoices/${UUID}/review`)).toBeNull()
+    const [pathname, search] = splitUrl(path)
+    expect(parseLocation(pathname, search)).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
+
+  it('review_aTrailingSlashIsStrippedLikeEveryOtherRoute', () => {
+    expect(parseReviewPath(`/imports/${UUID}/review/`)).toEqual([UUID])
+    const parsed = parseLocation(`/imports/${UUID}/review/`, '')
+    expect(parsed).toMatchObject({ view: 'create', reviewBatchIds: [UUID] })
+  })
+
+  it('review_capBoundaryBothSides', () => {
+    expect(REVIEW_UUIDS.length).toBe(6)
+    expect(parseReviewPath(`/imports/${REVIEW_UUIDS.slice(0, 5).join(',')}/review`)).toEqual(REVIEW_UUIDS.slice(0, 5))
+    expect(parseReviewPath(`/imports/${REVIEW_UUIDS.join(',')}/review`)).toBeNull()
+  })
+
+  it('review_duplicateIdsAreAcceptedIndividually', () => {
+    // No uniqueness rule in the spec: each segment is validated on its own.
+    expect(parseReviewPath(`/imports/${UUID},${UUID}/review`)).toEqual([UUID, UUID])
+  })
+
+  it('review_aWhitespaceOrEncodedSegmentIsRejected', () => {
+    expect(parseReviewPath(`/imports/ /review`)).toBeNull()
+    expect(parseReviewPath(`/imports/%20${UUID}/review`)).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID} /review`)).toBeNull() // trailing space inside the segment
+  })
+
+  it('review_composedWithAnOwnedQueryStringIsUnreachableByConstruction', () => {
+    // routeUrl's arms are sequential `if`s keyed on view: once 'create' matches and returns,
+    // the 'invoices'-owned `q` branch below it can never run for the same call.
+    const url = routeUrl('create', { reviewBatchIds: [UUID], q: 'anything' })
+    expect(url).toBe(`/imports/${UUID}/review`)
+    expect(url).not.toContain('?')
+  })
+
+  it('review_aNonCreateViewIgnoresReviewBatchIds', () => {
+    expect(routeUrl('invoices', { reviewBatchIds: [UUID], q: 'x' })).toBe('/invoices?q=x')
+    expect(parseLocation('/invoices', '?q=x').reviewBatchIds).toEqual([])
+  })
+
+  // ROUTE-03-02: the shipped drift guard (reviewBatch.test.ts's BULK-06-DRIFT), re-pointed
+  // at the constant's real owner instead of removed.
+  it('guard_theRunCapIsOneConstant', () => {
+    expect(REVIEW_PATH_MAX_IDS).toBe(MAX_RUN_FILES)
+  })
+})
+
+// ROUTE-03-02: the three codec `describe` blocks below moved here from reviewBatch.test.ts,
+// retargeted from the retired hash-fragment form to the '/imports/…/review' path. Spec ids
+// kept for traceability. Six of the eleven ported assertions duplicate specs already in the
+// block above (traceability only, not new coverage) — see task-951's Implementation Notes.
+
+describe('parseReviewHash / formatReviewHash (AC-4) — migrated to reviewPath/parseReviewPath (ROUTE-03-02, HASH-1/2)', () => {
+  // formatReviewHash([id]) resolving to the old hash-fragment url (reviewBatch.test.ts:446)
+  // is INVALIDATED, not ported: it pins the retired url shape ROUTE-00 Decision Log Q7
+  // deliberately breaks. No path-form 'equivalent' invented — reviewPath's own byte shape is
+  // already pinned by review_theEmittedSegmentCarriesARawComma above.
+  it('HASH-1 (migrated): round-trips a uuid with case preserved verbatim (never lower-cased); an empty string and a foreign path are null', () => {
+    expect(parseReviewPath(reviewPath([UUID_UPPER]))).toEqual([UUID_UPPER])
+    // C1 (prefix check): defensive, unreachable in production — parseLocation gates the
+    // '/imports/' prefix before ever calling parseReviewPath.
+    expect(parseReviewPath('/somewhere-else')).toBeNull()
+    expect(parseReviewPath('')).toBeNull()
+  })
+
+  it('HASH-2 (migrated): a malformed or non-uuid fragment is rejected — never a startsWith+slice that would accept a path-traversal-shaped tail', () => {
+    expect(parseReviewPath('/imports/../../etc/review')).toBeNull()
+    expect(parseReviewPath('/imports//review')).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID}/extra/review`)).toBeNull()
+    expect(parseReviewPath(`/imports/${UUID}?x=1/review`)).toBeNull()
+    // C1 (prefix check): defensive, unreachable in production — same reason as above.
+    expect(parseReviewPath(`/IMPORTS/${UUID}/review`)).toBeNull()
+  })
+})
+
+describe('reviewHash (AC-1, HASH-3) — migrated to reviewNavIds/reviewPath (ROUTE-03-02)', () => {
+  // HASH-3: duplicate of review_theGateIsThreeClauses above (AC-1 traceability, not new
+  // coverage) — the old reviewHash gate is now reviewNavIds.
+  it('HASH-3 (migrated): the run is passed through ONLY on view=create + createStep=review with a non-empty id array, and cleared ([]) on every other combination — including view=invoices (the Finish / ← Invoices exit, where a lingering hash would bounce a reload straight back into review)', () => {
+    expect(reviewNavIds('create', 'review', ['u-1'])).toEqual(['u-1'])
+    expect(reviewNavIds('invoices', 'review', ['u-1'])).toEqual([])
+    expect(reviewNavIds('create', 'form', ['u-1'])).toEqual([])
+    expect(reviewNavIds('create', 'review', [])).toEqual([])
+  })
+
+  // HASH-3b: duplicate of review_theEmittedSegmentCarriesARawComma above (AC-1 traceability,
+  // not new coverage) — the comma-join itself now belongs to reviewPath, not the gate.
+  it('HASH-3b (migrated): a two-id run joins with a comma', () => {
+    expect(reviewPath(['u-1', 'u-2'])).toBe('/imports/u-1,u-2/review')
+  })
+})
+
+describe('parseReviewHash: widened to a run (BULK-01-06, AC-1) — migrated to parseReviewPath/reviewPath (ROUTE-03-02)', () => {
+  // Six distinct canonical uuids, same corpus as REVIEW_UUIDS above.
+  const RUN_IDS = [
+    'a1b2c3d4-e5f6-47a8-89ab-cdef01234567',
+    'b2c3d4e5-f6a7-48b9-9abc-def012345678',
+    'c3d4e5f6-a7b8-49ca-abcd-ef0123456789',
+    'd4e5f6a7-b8c9-4adb-bcde-f01234567890',
+    'e5f6a7b8-c9d0-4be1-cdef-012345678901',
+    'f6a7b8c9-d0e1-4cf2-defa-123456789012',
+  ]
+
+  // AC-3: the suite had no DIRECT parseReviewPath(single id) assertion before this — the
+  // existing round trip goes through routeUrl+parseLocation, and the cap-boundary spec only
+  // drives 5-vs-6. Real coverage, not a duplicate.
+  it('BULK-06-1 (migrated — the direct single-id case the suite lacked, AC-3): a one-element run parses to a one-element array', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]}/review`)).toEqual([RUN_IDS[0]])
+  })
+
+  // Duplicate of review_everyIdInARunRoundTripsNotJustTheFirst above (AC-1 traceability only).
+  it('BULK-06-2 (migrated): several ids parse IN ORDER', () => {
+    const [a, b, c] = RUN_IDS
+    expect(parseReviewPath(`/imports/${a},${b},${c}/review`)).toEqual([a, b, c])
+  })
+
+  // Duplicate of review_oneBadSegmentPoisonsTheWholeList above (AC-1 traceability only).
+  it('BULK-06-3 (migrated): one bad segment poisons the WHOLE path, never a partial array', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]},notauuid/review`)).toBeNull()
+  })
+
+  // Duplicate of review_traversalAndSuffixesAreRejected above (AC-1 traceability only).
+  it('BULK-06-4 (migrated): traversal and suffixes stay refused', () => {
+    expect(parseReviewPath('/imports/../../etc/review')).toBeNull()
+    expect(parseReviewPath(`/imports/${RUN_IDS[0]}/extra/review`)).toBeNull()
+    expect(parseReviewPath('/imports//review')).toBeNull()
+  })
+
+  // Duplicate of review_theCapIsARejectionNotATruncation above (AC-1 traceability only).
+  it('BULK-06-5 (migrated): the run is bounded at REVIEW_PATH_MAX_IDS — six ids is null, never a truncated five', () => {
+    expect(parseReviewPath(`/imports/${RUN_IDS.join(',')}/review`)).toBeNull()
+  })
+
+  // formatReviewHash([a]) resolving to the old hash-fragment url (reviewBatch.test.ts:2527)
+  // is INVALIDATED, not ported: retired url byte-shape, broken by ROUTE-00 Decision Log Q7.
+  it('BULK-06-6 (migrated): parseReviewPath(reviewPath([a,b])) round-trips two ids', () => {
+    const [a, b] = RUN_IDS
+    expect(parseReviewPath(reviewPath([a, b]))).toEqual([a, b])
+  })
+})
+
+// ROUTE-03-05 AC-1/AC-2: the whole-tree grep this AC runs by hand can't see route.test.ts
+// itself (a literal NUL byte a few hundred lines below makes plain grep classify the file as
+// binary and skip it) -- this in-process scan is what actually covers the six source files.
+// Built concatenated, not as a literal: a literal would make this scanner's own source
+// match itself, so the shell AC-1 grep could never return a true zero.
+const REVIEW_FRAGMENT = '#' + 'review'
+const LOCATION_HASH = 'location' + '.hash'
+
+describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
+  it('guard_noReviewHashSurvivesInTheApp', () => {
+    const files = [
+      { name: 'App.tsx', path: APP_TSX },
+      { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)) },
+      { name: 'lib/route.ts', path: ROUTE_TS },
+      { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)) },
+      { name: 'components/ReviewBatch.tsx', path: fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url)) },
+      { name: 'lib/importApi.ts', path: fileURLToPath(new URL('./importApi.ts', import.meta.url)) },
+    ]
+    for (const { name, path } of files) {
+      const src = readFileSync(path, 'utf8')
+      // Floor: a broken path reads back '', which would make the absence checks below pass
+      // on nothing read rather than a clean file -- M4-04 burned five instruments this way.
+      expect(src.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
+      expect(src.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
+      expect(src.includes(LOCATION_HASH), `${name} still reads or writes the url fragment`).toBe(false)
+    }
+  })
+})
+
+// ROUTE-03-07 AC-3/AC-4: the two guards below are a PAIR by design. An absence guard alone
+// would pass on a doc that deleted the review section instead of updating it -- the positive
+// guard is what rules that out.
+const PATHNAME_SEARCH_HASH = 'pathname + search' + ' + hash'
+
+describe('ROUTE-03-07 AC-3: the routing doc names no retired scheme', () => {
+  it('guard_theRoutingDocNamesNoRetiredScheme', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    // Floor: a broken path reads back '', which would make the absence checks below pass on
+    // nothing read rather than a clean doc -- M4-04 burned five instruments this way.
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    // Needle: proves .includes() can see a match on this file at all, so the absence checks
+    // below aren't vacuous.
+    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
+    expect(src.includes(REVIEW_FRAGMENT), 'docs/routing.md still mentions the retired review-hash fragment').toBe(false)
+    expect(src.includes(LOCATION_HASH), 'docs/routing.md still reads or writes the url fragment').toBe(false)
+    expect(src.includes(PATHNAME_SEARCH_HASH), 'docs/routing.md still describes the retired pathname+search+hash rebuild').toBe(false)
+  })
+})
+
+describe('ROUTE-03-07 AC-4: the routing doc names the shipped form', () => {
+  it('guard_theRoutingDocNamesTheShippedForm', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    expect(src.includes('/imports/'), 'docs/routing.md no longer names the shipped review path').toBe(true)
+    expect(src.includes(':batchIds'), 'docs/routing.md no longer names the shipped batchIds segment').toBe(true)
+  })
 })

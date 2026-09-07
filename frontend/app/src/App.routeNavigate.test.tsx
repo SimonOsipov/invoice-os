@@ -248,11 +248,11 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
 
 describe('AC-1, AC-4: switchClient still pushes and still clears every pre-existing atom', () => {
   it('switchClient_pushesDashboardAndStillClearsEveryAtom', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+    await bootAt(`/imports/${REVIEW_ID}/review`)
     let ctx = requireCtx()
-    // Sanity: the review hash seeds reviewBatchIds -- this is the atom switchClient must
+    // Sanity: the review path seeds reviewBatchIds -- this is the atom switchClient must
     // still clear, unrelated to any URL work this subtask does.
-    expect(ctx.reviewBatchIds, 'sanity: the review hash must seed reviewBatchIds').toEqual([REVIEW_ID])
+    expect(ctx.reviewBatchIds, 'sanity: the review path must seed reviewBatchIds').toEqual([REVIEW_ID])
 
     await act(async () => {
       capturedCtx!.openRule('late-fee')
@@ -288,6 +288,31 @@ describe('AC-1, AC-4: switchClient still pushes and still clears every pre-exist
     // filingError cannot be armed in this harness (no gateway to reject against) -- this
     // pins that switchClient leaves it at its resting value, not a fresh dirtying.
     expect(ctx.filingError, 'filingError must stay null').toBeNull()
+  })
+})
+
+// Core AC 7: the settled URL alone can't prove the batch never rode ANY intermediate
+// write -- switchClient writes twice (the leaving-entry scrub, then the dashboard push).
+// Scan every recorded argument, not just where the dust settles.
+describe('Core AC 7: switchClient scrubs the batch from every URL it writes', () => {
+  it('switchClient_leavingReviewScrubsTheBatchFromEveryUrlItWrites', async () => {
+    await bootAt(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'sanity: booting a review path must seed reviewBatchIds').toEqual([REVIEW_ID])
+
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      ctx.switchClient('other-entity-777')
+    })
+
+    const written = [...pushSpy.mock.calls, ...replaceSpy.mock.calls].map((c) => String(c[2]))
+    expect(written.length, 'switchClient recorded no history write at all').toBeGreaterThan(0)
+    expect(
+      written.some((u) => u.includes('/imports/')),
+      `switchClient must scrub the batch from every URL it writes, got: ${JSON.stringify(written)}`,
+    ).toBe(false)
+    expect(requireCtx().reviewBatchIds, 'reviewBatchIds must be cleared').toEqual([])
   })
 })
 
@@ -474,25 +499,19 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
   })
 })
 
-describe('QA adversarial: navigate() carries the hash even though the review mirror clears it after', () => {
-  it('nav_thePushCallCarriesWhateverHashWasLiveAtCallTime', async () => {
-    // A real review hash, not an arbitrary fragment: an unrecognised fragment is stripped
-    // by the PRE-EXISTING review mirror (App.tsx:533-539) on the very first mount, which
-    // would confound this test before navigate() ever runs.
-    await bootAt(`/create#review/${REVIEW_ID}`)
+describe('QA adversarial: navigate() no longer carries a fragment forward', () => {
+  it('nav_thePushCallNoLongerCarriesAnyLiveFragment', async () => {
+    // Subtask 05 deletes navigate()'s own fragment-append expression -- a fragment live
+    // at call time no longer rides along; the pushed url is exactly routeUrl's output.
+    await bootAt('/audit')
+    window.history.replaceState(null, '', '/audit#frag')
     const pushSpy = vi.spyOn(window.history, 'pushState')
     await act(async () => {
-      capturedCtx!.nav('audit')
+      capturedCtx!.nav('invoices')
     })
-    const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/audit'))
-    expect(call, 'no pushState call to /audit was recorded').toBeDefined()
-    // Read the SPY's recorded argument, not the settled DOM: the review mirror clears the
-    // hash in the very next effect once view leaves 'create' (ROUTE-01-06's own AC), which
-    // would mask a navigate() that dropped the hash on its own push.
-    expect(
-      call![2],
-      "navigate() must carry forward whatever hash was live at call time, per decision [one-writer-rule]",
-    ).toBe(`/audit#review/${REVIEW_ID}`)
+    const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/invoices'))
+    expect(call, 'no pushState call to /invoices was recorded').toBeDefined()
+    expect(call![2], 'navigate() must no longer carry a fragment forward').toBe('/invoices')
   })
 })
 
@@ -1221,11 +1240,11 @@ describe('QA adversarial: ctx.selectedId is gone from the real ctx, not just tes
   })
 })
 
-// QA adversarial (route-02-06): the scrub reads window.location.hash at call time, same
-// as every other writer in this seam (routePath(view) + hash) -- a live fragment on the
-// entry being left (e.g. a stale #review hash not yet cleared) must ride along, not drop.
-describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash on the entry being left', () => {
-  it('switchClient_scrubPreservesALiveHashOnTheEntryBeingLeft', async () => {
+// QA adversarial (route-02-06): subtask 05 deletes the scrub's fragment echo -- a live
+// fragment on the entry being left no longer rides along; the scrub writes the plain
+// scrubbed path only.
+describe('QA adversarial (route-02-06): switchClient scrub no longer carries a live fragment on the entry being left', () => {
+  it('switchClient_scrubDropsAnyLiveFragmentOnTheEntryBeingLeft', async () => {
     await bootAt('/')
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
@@ -1238,7 +1257,7 @@ describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash
     })
 
     expect(replaceSpy.mock.calls[0]?.[2], 'the scrub is the FIRST replaceState this switch performs').toBe(
-      '/invoices#stale-fragment',
+      '/invoices',
     )
   })
 })

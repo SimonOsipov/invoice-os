@@ -5,7 +5,7 @@
 // session in a stubbed localStorage, ctx captured through a mocked Sidebar.
 
 import { StrictMode } from 'react'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
@@ -15,6 +15,8 @@ import type { PlatformCtx } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const REVIEW_ID_2 = 'b2c3d4e5-f6a7-48b9-9abc-def012345678'
+const REVIEW_ID_3 = 'c1c2c3c4-c5c6-47c7-89c8-c9cacbcccdce'
 const AUDIT_INVOICE_ID = 'd1e2f3a4-b5c6-47d8-89ab-cdef01234567'
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 
@@ -52,6 +54,24 @@ vi.mock('./components/ExtractionReview', () => ({
     return null
   },
 }))
+
+// AC-3's mid-wizard spec needs a real createStep: 'mapping' -- previewImport is the one
+// network call that gates it, mocked here so reaching it needs no XHR/FakeXhr at all.
+vi.mock('./lib/importApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/importApi')>()
+  return {
+    ...actual,
+    previewImport: vi.fn().mockResolvedValue({
+      document_id: 'doc-mid-wizard-mapping',
+      format: 'csv',
+      delimiter: ',',
+      encoding: 'utf-8',
+      columns: ['invoice_number', 'total'],
+      sample_rows: [['INV-1', '100']],
+      rows_total: 1,
+    }),
+  }
+})
 
 beforeEach(() => {
   capturedCtx = undefined
@@ -164,18 +184,20 @@ describe('AC-3: the handler performs no history write', () => {
     const pushSpy = vi.spyOn(window.history, 'pushState')
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     const lengthBefore = window.history.length
-    const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+    // No fragment component -- subtask 05 removes the last writer that could have put one
+    // on the url, so this comparison is pathname+search only from here on.
+    const urlBeforeDispatch = window.location.pathname + window.location.search
 
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
     })
 
     // AC-3's actual claim is "no duplicate history entry per Back press", not "zero
-    // history-API calls" -- the pre-existing review-hash mirror (App.tsx:540-546) also
-    // fires on this view change and calls replaceState, but only to rewrite the URL it
-    // already is (a no-op). Assert the handler pushes nothing, adds no entry, and any
-    // replaceState observed is that no-op rewrite -- a handler that wrote a *different*
-    // URL, or pushed, still fails.
+    // history-API calls" -- the review mirror is scoped to `view === 'create'` (ROUTE-03-03)
+    // and this transition is audit -> invoices, so it fires nothing here; on a transition
+    // that DID touch create it would still only rewrite the URL it already is (a no-op).
+    // Assert the handler pushes nothing, adds no entry, and any replaceState observed is
+    // that no-op rewrite -- a handler that wrote a *different* URL, or pushed, still fails.
     expect(pushSpy, 'the popstate handler must never call pushState').not.toHaveBeenCalled()
     expect(window.history.length, 'a popstate restore must add no history entry').toBe(lengthBefore)
     for (const call of replaceSpy.mock.calls) {
@@ -600,20 +622,21 @@ describe('Adversarial: the listener does not re-register on view change', () => 
   })
 })
 
-describe('Adversarial: the three URL writers on create with a live review hash', () => {
-  // Single continuous review session (the shape ROUTE-01-06 will pin): the mirror
-  // (App.tsx:540-546) and the popstate handler never disagree here, because reviewBatchIds
-  // and createStep are never reset in between -- only the view hops away and back.
+describe('Adversarial: the three URL writers on create with a live review path', () => {
+  // Single continuous review session (the shape ROUTE-03-04 will pin): the mirror and the
+  // popstate handler never disagree here, because reviewBatchIds and createStep are never
+  // reset in between -- only the view hops away and back.
   it('popstate_multiHopBackIntoALiveReviewHashComposesCorrectly', async () => {
-    await bootAt(`/create#review/${REVIEW_ID}`)
+    const path = `/imports/${REVIEW_ID}/review`
+    await bootAt(path)
     let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the review hash boots straight into create').toBe('create')
-    expect(ctx.reviewBatchIds, 'sanity: the review hash must seed reviewBatchIds').toEqual([REVIEW_ID])
+    expect(ctx.view, 'sanity: the review path boots straight into create').toBe('create')
+    expect(ctx.reviewBatchIds, 'sanity: the review path must seed reviewBatchIds').toEqual([REVIEW_ID])
 
     await act(async () => {
       capturedCtx!.nav('invoices')
     })
-    expect(window.location.hash, 'nav away must clear the hash (the pre-existing mirror, out of scope here)').toBe('')
+    expect(window.location.pathname, 'nav away must land on invoices').toBe('/invoices')
 
     await act(async () => {
       capturedCtx!.nav('audit')
@@ -623,39 +646,209 @@ describe('Adversarial: the three URL writers on create with a live review hash',
     ctx = requireCtx()
     expect(ctx.view, 'first Back must land on invoices').toBe('invoices')
 
-    await popTo(`/create#review/${REVIEW_ID}`)
+    await popTo(path)
     ctx = requireCtx()
-    // Writer order on this popstate: (1) the browser applies pathname+hash before the
-    // event fires, (2) the popstate handler re-derives all four owned atoms from that URL
-    // (view lands on 'create'; the other three resolve to their bare-URL defaults, since
-    // /create owns none of them), (3) the pre-existing review mirror re-runs because
-    // `view` changed and recomputes the hash
-    // from LIVE createStep/reviewBatchIds -- both still 'review'/[REVIEW_ID] because
-    // nothing in this chain ever reset them, so the mirror's rewrite is idempotent with
-    // what the browser already restored. Final URL: /create#review/<id>, matching both
-    // the entry and the live state.
+    // Writer order on this popstate: (1) the browser applies the restored path, (2) the
+    // popstate handler re-derives view AND (this story's arm) createStep/reviewBatchIds
+    // from that same path, (3) the mirror re-runs on the view change and recomputes from
+    // those just-restored values -- idempotent with the URL the browser already set.
+    // Passes for the real reason now, not by omission.
     expect(ctx.view, 'second Back must land back on create').toBe('create')
-    expect(window.location.pathname, 'the pathname must be /create after the composed writers settle').toBe('/create')
-    expect(window.location.hash, 'the mirror must not have clobbered the hash with a different id').toBe(
-      `#review/${REVIEW_ID}`,
+    expect(window.location.pathname, 'the path must be the review path after the composed writers settle').toBe(
+      path,
     )
     expect(ctx.reviewBatchIds, 'reviewBatchIds must be exactly the one id throughout, never dropped or swapped').toEqual([
       REVIEW_ID,
     ])
   })
 
-  // NOT covered here or by ROUTE-01-06's planned specs: if a SECOND, distinct review batch
-  // is opened after the first (Finish -> openCreate -> a new import to review), closeCreate
-  // (App.tsx:632-634) does not reset createStep/reviewBatchIds, so live state moves on to
-  // the second batch while the FIRST batch's history entry still reads
-  // /create#review/<firstId>. A popstate that changes `view` back to 'create' re-triggers
-  // the mirror (App.tsx:540-546), which rewrites that entry's hash from the LIVE (second)
-  // batch id -- overwriting the address bar the browser just restored with the wrong
-  // batch. This is decision [create-step-not-restored] (App.tsx, `.ralph/ROUTE-01-final.md`)
-  // extended from "shows the wrong step" to "shows and links the wrong batch"; recorded
-  // here for ROUTE-01-06 / ROUTE-03, not reproduced as a spec because forcing a second
-  // real batch id requires driving the full CreateFlow pipeline, out of proportion for a
-  // popstate-listener suite.
+  // The cross-view sibling: `view` actually leaves 'create' in between, so the mirror DOES
+  // re-run on the way back in and recomputes from whatever createStep/reviewBatchIds hold
+  // live -- not from the URL the browser just restored. Retires decision
+  // [create-step-not-restored]'s "not reproduced" note: reaching a second live batch needs
+  // no CreateFlow, the same bootAt-onto-a-review-path shortcut
+  // link_anExternallyHeldReviewLinkStillColdLoadsItsOwnBatch already uses.
+  it('popstate_crossViewBackOntoAReviewEntryIsNotRelinkedByTheMirror', async () => {
+    await bootAt(`/imports/${REVIEW_ID_2}/review`)
+    expect(requireCtx().reviewBatchIds, 'sanity: live memory starts on the second batch').toEqual([REVIEW_ID_2])
+
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    expect(requireCtx().view, 'sanity: nav must actually leave create').toBe('invoices')
+
+    await popTo(`/imports/${REVIEW_ID}/review`)
+    const ctx = requireCtx()
+    // Proof of stimulus: view must actually be back on create for the mirror's recompute
+    // to even be in play here.
+    expect(ctx.view, 'the popstate must land back on create').toBe('create')
+    expect(ctx.reviewBatchIds, "the restored entry's id must win, not the live second batch").toEqual([REVIEW_ID])
+    expect(
+      window.location.pathname,
+      'the mirror must not overwrite the address bar the browser just restored',
+    ).toBe(`/imports/${REVIEW_ID}/review`)
+  })
+})
+
+describe("ROUTE-03-04 AC-1: Back onto a review entry restores that entry's ids, not the live ones", () => {
+  it('popstate_backOntoAReviewEntryRestoresThatBatchNotTheLiveOne', async () => {
+    await bootAt(`/imports/${REVIEW_ID_2}/review`)
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the review path boots straight into create').toBe('create')
+    expect(ctx.reviewBatchIds, 'sanity: live memory starts on the second batch').toEqual([REVIEW_ID_2])
+
+    await popTo(`/imports/${REVIEW_ID}/review`)
+    ctx = requireCtx()
+    // `view` alone reads 'create' with or without the fix -- it cannot discriminate the bug.
+    expect(ctx.view, 'sanity: a same-view Back never leaves create').toBe('create')
+    expect(ctx.reviewBatchIds, "Back must restore the RESTORED entry's ids, not the ones left in memory").toEqual([
+      REVIEW_ID,
+    ])
+    expect(ctx.createStep, 'Back onto a review path must land on the review step').toBe('review')
+    expect(window.location.pathname, 'the URL must be the entry the browser actually restored').toBe(
+      `/imports/${REVIEW_ID}/review`,
+    )
+  })
+})
+
+describe('ROUTE-03-04 AC-2: Forward re-applies the review route symmetrically', () => {
+  it('popstate_forwardReAppliesTheReviewRoute', async () => {
+    await bootAt(`/imports/${REVIEW_ID_2}/review`)
+    await popTo(`/imports/${REVIEW_ID}/review`)
+    // Floor: Forward is meaningless to assert unless Back actually moved off the second
+    // batch first.
+    expect(requireCtx().reviewBatchIds, 'the Back above must actually land on the first batch').toEqual([REVIEW_ID])
+
+    await popTo(`/imports/${REVIEW_ID_2}/review`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'proof of stimulus: forward must still resolve to create').toBe('create')
+    expect(ctx.reviewBatchIds, 'Forward must restore the LATER batch, not stay on the entry Back just left').toEqual([
+      REVIEW_ID_2,
+    ])
+    expect(ctx.createStep, 'Forward onto a review path must land on the review step').toBe('review')
+    expect(window.location.pathname, 'the URL must be the forward entry the browser restored').toBe(
+      `/imports/${REVIEW_ID_2}/review`,
+    )
+  })
+})
+
+describe('ROUTE-03-04: every id in a run survives a Back press', () => {
+  it('popstate_everyIdInARunSurvivesABackPress', async () => {
+    const ids = [REVIEW_ID, REVIEW_ID_2, REVIEW_ID_3]
+    await bootAt('/invoices')
+    expect(requireCtx().reviewBatchIds, 'sanity: booting elsewhere seeds no batch ids').toEqual([])
+
+    await popTo(`/imports/${ids.join(',')}/review`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'proof of stimulus: the popstate must land on create').toBe('create')
+    expect(ctx.reviewBatchIds, 'every id in the run must survive the Back, in order').toEqual(ids)
+    expect(ctx.createStep, 'a multi-id review path must land on the review step too').toBe('review')
+    expect(window.location.pathname, 'the URL must carry all three ids').toBe(`/imports/${ids.join(',')}/review`)
+  })
+})
+
+// Shared by both AC-3 specs below: reaches createStep 'mapping' with one picked file and
+// its column mapping resolved, via the mocked previewImport -- no XHR, no real gateway.
+async function driveToMidWizardMapping() {
+  // The entities/members/etc. fetches also fire once VITE_GATEWAY_URL is set -- a generic
+  // safe stub, not the real network, same idiom as App.routeReviewHash.test.tsx's routeFetch.
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            entities: [],
+            policies: [],
+            members: [],
+            roles: [],
+            invoices: [],
+            pagination: { limit: 0, offset: 0, total: 0 },
+          }),
+      }),
+    ),
+  )
+  await bootAt('/')
+  await act(async () => {
+    capturedCtx!.openCreate()
+  })
+  const file = new File(['invoice_number,total\nINV-1,100'], 'invoices.csv', { type: 'text/csv' })
+  await act(async () => {
+    capturedCtx!.addPickedFiles([file])
+  })
+  await act(async () => {
+    capturedCtx!.readAllColumns()
+  })
+  await waitFor(() => expect(requireCtx().createStep, 'setup must actually reach mapping').toBe('mapping'))
+}
+
+describe('ROUTE-03-04 AC-3: a popstate onto a non-review path never resets the wizard', () => {
+  it('popstate_aNonReviewEntryNeverResetsTheWizard', async () => {
+    await driveToMidWizardMapping()
+    expect(requireCtx().reviewBatchIds, 'sanity: mid-wizard carries no batch ids').toEqual([])
+
+    await popTo('/invoices')
+    const ctx = requireCtx()
+    // Proof of stimulus: the handler DID run -- a passing atoms-untouched assertion below
+    // is not a no-op default.
+    expect(ctx.view, 'the popstate must actually have been processed').toBe('invoices')
+    expect(ctx.createStep, 'a non-review Back must never reset the wizard mid-flow').toBe('mapping')
+    expect(ctx.reviewBatchIds, 'a non-review Back must not touch reviewBatchIds either').toEqual([])
+  })
+})
+
+describe('ROUTE-03-04 AC-3: a popstate onto a BARE /create entry leaves the wizard exactly as it was', () => {
+  it('popstate_aBareCreateEntryLeavesTheWizardExactlyAsItWas', async () => {
+    await driveToMidWizardMapping()
+    expect(requireCtx().reviewBatchIds, 'sanity: mid-wizard carries no batch ids').toEqual([])
+    expect(requireCtx().pickedFiles, 'sanity: the picked file is there before the pop').toHaveLength(1)
+    expect(requireCtx().mapping, 'sanity: the resolved mapping is there before the pop').not.toBeNull()
+
+    await popTo('/create')
+    // Proof of stimulus: the pop actually landed on the bare path -- not a no-op driver.
+    expect(window.location.pathname, 'the popstate must actually have moved to /create').toBe('/create')
+
+    const ctx = requireCtx()
+    // Pins the arm's gate: ids present, not view === 'create' -- a bare /create also
+    // parses to 'create' but with no ids, and must never jump the wizard to review.
+    expect(ctx.createStep, 'a bare /create Back must not reset the wizard step').toBe('mapping')
+    expect(ctx.reviewBatchIds, 'a bare /create Back must not touch reviewBatchIds').toEqual([])
+    expect(ctx.pickedFiles, 'the picked file must survive a bare /create Back').toHaveLength(1)
+    expect(ctx.mapping, 'the resolved mapping must survive a bare /create Back').not.toBeNull()
+  })
+})
+
+describe('ROUTE-03-04 AC-4: a popstate onto a review path still writes no history entry', () => {
+  it('popstate_theHandlerWritesNoHistoryEntry', async () => {
+    await bootAt('/invoices')
+    // Move the URL the way a Back press would, before installing the spies.
+    window.history.replaceState(null, '', `/imports/${REVIEW_ID}/review`)
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    const lengthBefore = window.history.length
+    const urlBeforeDispatch = window.location.pathname + window.location.search
+
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    const ctx = requireCtx()
+    // Proof of stimulus: the arm must actually have restored the ids for this to be a
+    // meaningful "no extra history" check.
+    expect(ctx.reviewBatchIds, 'the arm must actually have run').toEqual([REVIEW_ID])
+    expect(pushSpy, 'the popstate handler must never call pushState').not.toHaveBeenCalled()
+    expect(window.history.length, 'a popstate restore onto a review path must add no history entry').toBe(
+      lengthBefore,
+    )
+    for (const call of replaceSpy.mock.calls) {
+      expect(call[2], 'any replaceState after this popstate must rewrite the current URL, not a different one').toBe(
+        urlBeforeDispatch,
+      )
+    }
+  })
 })
 
 // --- ROUTE-04-05: the handler restores the other three owned atoms, not just view -------
@@ -738,7 +931,7 @@ describe('AC-4, extended: a filtered restore still writes no history entry', () 
       const pushSpy = vi.spyOn(window.history, 'pushState')
       const replaceSpy = vi.spyOn(window.history, 'replaceState')
       const lengthBefore = window.history.length
-      const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+      const urlBeforeDispatch = window.location.pathname + window.location.search
 
       await act(async () => {
         window.dispatchEvent(new PopStateEvent('popstate'))

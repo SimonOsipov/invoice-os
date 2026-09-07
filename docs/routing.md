@@ -43,12 +43,14 @@ drill-downs, not a second `parseDrillId` (`[one-codec]`). `routePath(view, id?)`
 inverse for the path alone.
 
 `routeUrl(view, params)` is the writer's inverse: path plus the owned query, never a hash.
-`routeQuery(view, params)` returns only the query half, for the one caller that stores path
-and query in separate fields (the signed-out capture, below).
+`create`'s owned "query" is a whole path segment instead: `params.reviewBatchIds` serialises
+through `reviewPath` to `/imports/<ids>/review`, the same shape `routePath` already has for
+`detail`/`extraction`. `routeQuery(view, params)` returns only the query half, for the one
+caller that stores path and query in separate fields (the signed-out capture, below).
 
-`parseLocation(pathname, search)` is boot's total reader. It returns six fields —
-`{ view, invoiceId, jobId, settingsTab, q, auditInvoice }` — with `view` never null, falling
-back to `dashboard` rather than throwing on an unparseable path.
+`parseLocation(pathname, search)` is boot's total reader. It returns seven fields —
+`{ view, invoiceId, jobId, settingsTab, q, auditInvoice, reviewBatchIds }` — with `view`
+never null, falling back to `dashboard` rather than throwing on an unparseable path.
 
 ## Owned params
 
@@ -58,8 +60,13 @@ back to `dashboard` rather than throwing on an unparseable path.
 | `audit` | `invoice` (query) | `/audit?invoice=<uuid>` |
 | `settings` | its tab (path segment) | `/settings/<tab>` |
 | `detail`, `extraction` | its id (path segment) | `/invoices/:id`, `/extraction/:jobId` |
+| `create` (review) | its batch ids (path segment) | `/imports/:batchIds/review` |
 
-Every other view owns nothing, so nothing else is ever emitted or read.
+Every other view owns nothing, so nothing else is ever emitted or read. The review ids are a
+single comma-joined path segment (`/imports/<a>,<b>/review`), capped at
+`REVIEW_PATH_MAX_IDS` (5, mirroring `importRun.ts`'s `MAX_RUN_FILES`). `parseReviewPath` is
+all-or-nothing: one bad segment rejects the whole list, and the cap is a rejection, never a
+truncation — a run of six ids parses to `null`, not a silently truncated five.
 
 **R1 — Owned params only.** `routeUrl` emits only what the view it is serialising owns,
 built from its arguments; it never reads `window.location.search`. This is ROUTE-01's
@@ -100,8 +107,8 @@ writer, and the `SETTINGS_TAB_URL` map inside `e2e/topology/roles.spec.ts`'s
 ## The URL writer
 
 One writer per navigation: `navigate(view, params?)` sets the view and the destination's
-owned params from the same `params` object, then writes `routeUrl(...) + window.location.hash`.
-State and the address bar come from one object, so they cannot diverge.
+owned params from the same `params` object, then pushes `routeUrl(...)` — path plus owned
+query, never a hash. State and the address bar come from one object, so they cannot diverge.
 
 No path writer reads `window.location.search`. This is a security fence, not a style choice:
 `App.tsx` once left `?persona=` in the URL after sign-in, which turned it into a
@@ -110,11 +117,16 @@ with no OTP. R1 keeps that fence intact now that URLs carry a query: the writer 
 the live search, it re-serialises only the params the codec owns, and `persona` is owned by
 no view.
 
-The two pre-existing history writers — the review-hash mirror in `Workspace` (the
-`replaceState` that rebuilds `pathname + search + hash`, the one writer that does echo
-`search`) and the persona-strip clear (the effect commented *"Drop the consumed
-`?persona=` from the URL"*) — are deliberately left alone and pinned byte-identical by
-`App.routeReviewHash.test.tsx`.
+Two writers sit outside `navigate` and are pinned rather than folded in. The review-path
+mirror in `Workspace` (the `replaceState` keyed on `[view, createStep,
+reviewBatchIds.join(',')]`) rebuilds only `create`'s own path from state and never reads
+`location.search` — it joined the nine writer bodies `lib/routeWriterGuard.test.ts` proves
+clean, rather than staying that guard's one deliberate exception. The persona-strip clear
+(the effect commented *"Drop the consumed `?persona=` from the URL"*) is now that guard's
+sole reader of `search`, and its `new URLSearchParams(window.location.search)` is the control
+needle proving the other nine assertions can see a match at all. Both writers' own write
+lines are still pinned byte-identical by `App.routeReviewHash.test.tsx`'s
+`guard_theTwoExistingHistoryWritersAreUnchanged`.
 
 ## Why `Workspace` can't mount while `?persona=` is live
 
@@ -127,24 +139,32 @@ against. It's what makes the writer rule above actually hold, and it's pinned by
 `App.routePersonaOrdering.test.tsx`, not by comment.
 
 **A path segment survives the strip; a query does not.** The strip rebuilds the URL as
-`pathname + hash`, discarding the whole search string, and it runs at `App`'s mount while
+`pathname` alone, discarding the whole search string, and it runs at `App`'s mount while
 `<SignInLoading>` renders — before `Workspace`, which owns the boot seed, exists. So
 `?persona=` cannot coexist with an owned query param, and the deployed `?q=` and `?invoice=`
 deep-link specs in `e2e/topology/invoice-surfaces.spec.ts` sign in first and navigate
-second, never in one goto.
+second, never in one goto. The review batch ids are the second worked example: they live in
+`pathname` too (`/imports/<ids>/review`), so a `?persona=firm` visit to a review link loses
+only the query, never the ids — the same guarantee `/invoices/:id` gets, extended to
+`create`.
 
 ## Boot precedence
 
-`initialView` (DEMO-06 persona-switch carry) → review hash (`#review/<uuid>`) → path →
-`dashboard`. See the `view` lazy initializer in `Workspace`. The path tier reads the
-`{ path, search }` boot seed, not `window.location.pathname` directly — ROUTE-05
-substitutes a restored deep-link destination there when the live path is the bare root; it
-is not a new precedence tier. See the section below.
+`initialView` (DEMO-06 persona-switch carry) → path → `dashboard`. See the `view` lazy
+initializer in `Workspace`. Three tiers, not four: the review hash was its own tier only
+because it was a second carrier the path tier couldn't see, and now that review is a path,
+`seed.view` resolves it directly. The path tier reads the `{ path, search }` boot seed, not
+`window.location.pathname` directly — ROUTE-05 substitutes a restored deep-link destination
+there when the live path is the bare root; it is not a new precedence tier. See the section
+below. A booted review path seeds `createStep`/`reviewBatchIds` the same way, off `bootPath`
+rather than the live pathname, so a signed-out `/imports/<ids>/review` visit round-trips
+through the signed-out deep link below for free.
 
-Both drill-down ids gate on the *winning* view, `bootView`, never `seed.view` directly
-(`[ids-gate-on-the-winning-view]`) — `initialView` or a review hash can outrank the path,
-and a `create` boot must never inherit an invoice id from a URL that lost. The
-mount-alignment effect then serialises that same boot state back into the URL
+Both drill-down ids — and the review batch ids — gate on the *winning* view, `bootView`,
+never `seed.view` directly (`[ids-gate-on-the-winning-view]`) — only `initialView` can
+outrank the path now, and a `create` boot must never inherit a review batch, an invoice id
+or a job id from a URL that lost. The mount-alignment effect then serialises that same boot
+state back into the URL
 (`[alignment-must-carry-the-id]`): without it, a correct deep link renders right and then
 silently rewrites its own address bar one tick later — right panel, wrong link to copy. The
 alignment re-emits the owned params from state and drops the unowned ones, which is where
@@ -227,7 +247,7 @@ link returns to its FILTER after sign-in` (the query — the only spec anywhere 
 a restored query end to end).
 
 **The merged shape (ROUTE-02 merge).** The `{ path, search }` seed resolves the destination
-first; `parseLocation` then decodes it into the six fields. A signed-out visit to
+first; `parseLocation` then decodes it into the seven fields. A signed-out visit to
 `/invoices/<id>` is captured, restored after sign-in, and seeds both the detail view and its
 id — not just the view. Pinned by `App.signedOutDeepLink.test.tsx`'s `Workspace boot: a
 restored destination carries its drill-down id too (ROUTE-02 merge)` block.
@@ -238,9 +258,10 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   cold-boot seeding for both. `carryView` collapses `detail`/`extraction`
   back to `invoices` on a persona switch, id included: a remounted identity cannot resume a
   selection it may not be entitled to (`[carryview-drops-the-id]`).
-- **ROUTE-03** — migrates `#review/<uuid>` into the path (`/imports/:batchId/review`,
-  epic Q7). Also inherits a known defect: Back into an older review batch after opening
-  a second one in the same tab relinks the wrong batch onto that history entry. An
+- **ROUTE-03** — **shipped.** Migrated the retired hash form into the path
+  (`/imports/:batchIds/review`, epic Q7): one URL scheme, not two, with no back-compat for a
+  bookmarked hash. Also inherits a known defect: Back into an older review batch after
+  opening a second one in the same tab relinks the wrong batch onto that history entry. An
   externally-held link (copied, bookmarked) is unaffected — it still cold-loads its own
   batch. That second half is pinned by `App.routeReviewHash.test.tsx`'s
   `link_anExternallyHeldReviewLinkStillColdLoadsItsOwnBatch`, which names `decision
@@ -267,13 +288,38 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   `popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace`). Reachability here is tested, not
   argued.
 
+  ROUTE-03 adds a third instance of the same shape: `[stale-review-ids-on-a-bare-create-entry]`.
+  The walk: `openCreate` pushes a bare `/create` entry with `reviewBatchIds` cleared; a `nav`
+  away leaves it behind; a second `openCreate` pushes another bare `/create` entry; an import
+  finishes there and `applyRoute` sets `reviewBatchIds` to the new batch, which the mirror
+  above writes onto that second entry; a `nav` away leaves those ids live too, because
+  `navigate` is not one of `setReviewBatchIds`'s three callers (`switchClient`, `resetImport`,
+  `applyRoute`); three Back presses land on the first entry, still bare `/create` in the
+  browser's own history — but `reviewBatchIds` in memory still names the second batch, and
+  the mirror rewrites the just-restored entry with that stale batch's path. This **predates
+  this story**: the identical walk today writes the retired hash form — `/create` with the
+  batch named in the fragment, not the path — over the restored entry instead of
+  `/imports/<id>/review`; same defect, new spelling, because the mirror always rebuilt its
+  output from whatever `reviewBatchIds` held, hash or path. ROUTE-06 AC-2 and
+  AC-4 own the remedy: AC-2 already covers a related race on the same
+  `openCreate`/`resetImport` path (an entity snapshot taken before the entities fetch
+  resolves), and AC-4 audits every atom `switchClient` touches, `reviewBatchIds` among them,
+  as a per-atom table.
+
 ## Two things that cost time here
 
-**The review-hash mirror fires on every view change, not just review exits.** The
-review-hash mirror effect is keyed on `[view, createStep, reviewBatchIds.join(',')]` and
-runs on *any* of the three changing — including a plain sidebar nav that has nothing to
-do with review. Any test asserting on history writes around a nav must account for this
-second writer firing in the same commit.
+**The review-path mirror only ever writes while `view === 'create'`.** The effect is keyed
+on the same `[view, createStep, reviewBatchIds.join(',')]` triple as before and still runs on
+every commit where any of the three changes — including a nav that leaves `create` — but its
+first line is `if (view !== 'create') return`, so a nav to any other view hits that return
+and writes nothing (pinned by `App.routeReviewHash.test.tsx`'s
+`mirror_theMirrorIsInertOffTheCreateView`). `navigate` owns every view but `create`'s own
+path, and the early return is what stops the two from fighting over the same URL; it is also
+what lets the `reviewBatchIds` in `[stale-review-ids-on-a-bare-create-entry]` above go stale
+instead of self-correcting on a plain nav away. Any test asserting on history writes *on*
+`create` itself — leaving review via `restartImport`/`skipUpload`/`enterByHand`, or a Back
+landing on a review path — must still account for this writer firing in the same commit as
+`setView`/`setCreateStep`.
 
 **jsdom's environment is per test file, not per test.** `window.history` survives across
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot

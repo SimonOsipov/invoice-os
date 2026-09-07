@@ -1,4 +1,4 @@
-import type { SettingsTab, View } from '../types'
+import type { CreateStep, SettingsTab, View } from '../types'
 
 import { clampFilterText } from './invoices'
 
@@ -62,8 +62,8 @@ export function parseRoute(pathname: string): Route | null {
 }
 
 // Owned params: `invoices` owns `q`, `audit` owns `invoice`, `settings` owns its tab as a
-// path segment, `detail`/`extraction` own `id` as a path segment. No other view owns
-// anything, so nothing else is ever emitted or read.
+// path segment, `detail`/`extraction` own `id` as a path segment, `create` owns
+// `reviewBatchIds` as the whole path via reviewPath. No other view owns anything.
 const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   members: true,
   roles: true,
@@ -77,11 +77,44 @@ const SETTINGS_TAB_IDS = new Set<string>(Object.keys(SETTINGS_TAB_TABLE))
 
 const INVOICE_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
+const REVIEW_PATH_PREFIX = '/imports/'
+const REVIEW_PATH_SUFFIX = '/review'
+export const REVIEW_PATH_MAX_IDS = 5 // importRun.ts's MAX_RUN_FILES
+
+// Anchored at both ends: a prefix+slice parser would hand back '../../etc' or a
+// '<uuid>/extra' suffix as a batch id, and an id whose empty form widens the review query
+// to the whole tenant. Case is accepted both ways because uuid.Parse is, server side.
+const REVIEW_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+// Raw comma, never %2C: `,` is a legal RFC-3986 sub-delim and the ids are canonical uuids.
+// No cap check here — the cap is the parser's, mirroring formatReviewHash.
+export function reviewPath(ids: string[]): string {
+  return `${REVIEW_PATH_PREFIX}${ids.join(',')}${REVIEW_PATH_SUFFIX}`
+}
+
+// Null — never [] — for anything that is not 1..REVIEW_PATH_MAX_IDS comma-separated
+// canonical uuids. All-or-nothing: one bad segment poisons the whole list, and the cap is
+// a rejection, never a truncation. Each id's own case is preserved verbatim.
+export function parseReviewPath(pathname: string): string[] | null {
+  const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+  if (!normalized.startsWith(REVIEW_PATH_PREFIX) || !normalized.endsWith(REVIEW_PATH_SUFFIX)) return null
+  const inner = normalized.slice(REVIEW_PATH_PREFIX.length, normalized.length - REVIEW_PATH_SUFFIX.length)
+  const segments = inner.split(',')
+  if (segments.length > REVIEW_PATH_MAX_IDS) return null
+  return segments.every((s) => REVIEW_UUID.test(s)) ? segments : null
+}
+
+// The URL half of reviewBatch.ts's reviewHash gate, clause for clause.
+export function reviewNavIds(view: View, createStep: CreateStep, reviewBatchIds: string[]): string[] {
+  return view === 'create' && createStep === 'review' && reviewBatchIds.length > 0 ? reviewBatchIds : []
+}
+
 export type RouteParams = {
   id?: string | null
   settingsTab?: SettingsTab
   q?: string
   auditInvoice?: string | null
+  reviewBatchIds?: string[]
 }
 
 // TOTAL: view never null, unknown paths fall back to 'dashboard'. invoiceId/jobId are
@@ -93,6 +126,7 @@ export type ParsedLocation = {
   settingsTab: SettingsTab
   q: string
   auditInvoice: string | null
+  reviewBatchIds: string[]
 }
 
 // Path plus query, never a hash. Omit the default: the `members` tab, an empty `q` and an
@@ -103,6 +137,10 @@ export function routeUrl(view: View, params: RouteParams = {}): string {
   if (view === 'settings') {
     const tab = params.settingsTab
     return tab && tab !== 'members' ? `${path}/${tab}` : path
+  }
+  if (view === 'create') {
+    const ids = params.reviewBatchIds
+    return ids && ids.length > 0 ? reviewPath(ids) : path
   }
   if (view === 'invoices' && params.q) {
     return `${path}?${new URLSearchParams({ q: params.q }).toString()}`
@@ -130,9 +168,16 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   const invoiceId = route?.view === 'detail' ? route.id : null
   const jobId = route?.view === 'extraction' ? route.id : null
   let settingsTab: SettingsTab = 'members'
+  let reviewBatchIds: string[] = []
 
   if (route === null) {
     const normalized = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
+    // Disjoint prefixes, so this branch and the /settings/ one below can never both fire.
+    const ids = normalized.startsWith(REVIEW_PATH_PREFIX) ? parseReviewPath(normalized) : null
+    if (ids !== null) {
+      view = 'create'
+      reviewBatchIds = ids
+    }
     if (normalized.startsWith('/settings/')) {
       const seg = normalized.slice('/settings/'.length)
       if (seg.length > 0 && !/[/?#]/.test(seg)) {
@@ -150,5 +195,5 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
   // renders an error state where the ordinary unfiltered list is correct.
   const auditInvoice = rawInvoice !== null && INVOICE_ID.test(rawInvoice) ? rawInvoice : null
 
-  return { view, invoiceId, jobId, settingsTab, q, auditInvoice }
+  return { view, invoiceId, jobId, settingsTab, q, auditInvoice, reviewBatchIds }
 }

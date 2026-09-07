@@ -1331,8 +1331,8 @@ test('INVCR-E2E-4 firm: a header-only file is refused honestly, with no Map-step
 })
 
 // AC-6: the review screen is addressable and REVISITABLE (D4) -- a reload on
-// `#review/<batchId>` restores it with BOTH channels re-derived from a fresh GET, never
-// from memory the tab already held.
+// `/imports/<batchId>/review` restores it with BOTH channels re-derived from a fresh GET,
+// never from memory the tab already held.
 test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derives both channels', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -1367,7 +1367,7 @@ test('INVCR-E2E-6 the review screen survives a reload -- the deep link re-derive
   await importResp
 
   await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
-  await expect(page).toHaveURL(/#review\//)
+  await expect(page).toHaveURL(/\/imports\/[0-9a-fA-F-]{36}\/review$/)
 
   // Registered BEFORE reload: D4's whole point is that a revisit re-derives from the
   // server rather than reading a frozen import-time payload, so a genuine GET must fire
@@ -7099,14 +7099,14 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   ).not.toBe(documentIds[denseName])
 
   // (a) routeAfterRun cannot take the 'single' arm on a two-file run (lib/importRun.ts), so
-  // the landing is the review surface carrying EVERY batch id. The hash is where that id list
+  // the landing is the review surface carrying EVERY batch id. The path is where that id list
   // is observable: App.tsx mirrors reviewBatchIds into it, one id per batch.
   await expect
-    .poll(() => new URL(page.url()).hash, {
+    .poll(() => new URL(page.url()).pathname, {
       message: 'a two-document run must land on the review batch surface with both batch ids',
       timeout: 180_000,
     })
-    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
 
   // (b) both documents reach the Unreadable tab, told apart by their own file labels. A
   // tab-level scalar document id would pass a same-document pair; two labelled rows cannot.
@@ -7310,13 +7310,13 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   ).toBe('succeeded')
 
   // Two files cannot take routeAfterRun's 'single' arm, so the landing is the review surface
-  // carrying both batch ids -- EXTR15-E2E-02's own reading of the hash.
+  // carrying both batch ids -- EXTR15-E2E-02's own reading of the path.
   await expect
-    .poll(() => new URL(page.url()).hash, {
+    .poll(() => new URL(page.url()).pathname, {
       message: 'a two-document run must land on the review batch surface with both batch ids',
       timeout: 180_000,
     })
-    .toMatch(/^#review\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}$/)
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
 
   // --- AC-2: the header, the tiles and both tab labels ----------------------------------
   const registerTabName = 'Already imported (1)'

@@ -370,14 +370,22 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     expect(readDestination(), 'the mount effect clears the destination unconditionally, even when unused').toBeNull()
   })
 
-  it('restore_theReviewHashStillWins', async () => {
-    captureDestination('/audit')
-    await bootWorkspaceAt(`/#review/${REVIEW_ID}`)
+  // ROUTE-03-03, AC-7: a review path is now a REAL captured destination -- isCapturablePath
+  // (lib/deepLink.ts) accepts it, so a signed-out review link round-trips through
+  // sessionStorage the same way /invoices/<id> already does. A fragment never could: this
+  // is a new capability, not a rename. Reuses the shipped harness rather than touching web
+  // storage directly -- CI's Node 22 has no native sessionStorage, local Node 25 does; this
+  // file's jsdom environment supplies its own either way.
+  it('signedOut_aReviewDeepLinkReturnsAfterSignIn', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
+    captureDestination(path)
+    await bootWorkspaceAt('/')
     const ctx = requireCtx()
-    expect(ctx.view, 'a live review hash must still win over a stored destination').toBe('create')
+    expect(ctx.view, 'a restored review path must win over the bare root').toBe('create')
     expect(ctx.createStep, 'the review step must be active').toBe('review')
-    expect(window.location.hash, 'the hash must survive the alignment verbatim').toBe(`#review/${REVIEW_ID}`)
-    expect(readDestination(), 'the destination is still consumed even though the hash won').toBeNull()
+    expect(ctx.reviewBatchIds, 'the restored id must seed reviewBatchIds').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'the alignment must land on the restored review path').toBe(path)
+    expect(readDestination(), 'the destination is still consumed even though it won').toBeNull()
   })
 
   it('restore_anUnparseablePathFallsBackToDashboard', async () => {
@@ -826,10 +834,11 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     })
 
     const urls = historyUrls()
-    // Floor: an empty population passes every per-URL check below for free. Actual is 4
-    // (mount alignment, review-hash mirror, navigate, mirror re-fire); >= 3 rather than
-    // toBe(4) so a legitimate new writer is not a false alarm on an anti-vacuity guard.
-    expect(urls.length, 'no history write was recorded -- the spies observed nothing').toBeGreaterThanOrEqual(3)
+    // Floor: an empty population passes every per-URL check below for free. Actual is 2
+    // (mount alignment, navigate) -- neither /audit nor /invoices is the create view, so the
+    // mirror early-returns both times. >= 2 rather than toBe(2) so a legitimate new writer is
+    // not a false alarm on an anti-vacuity guard.
+    expect(urls.length, 'no history write was recorded -- the spies observed nothing').toBeGreaterThanOrEqual(2)
     for (const u of urls) {
       expect(urlCarriesNoDestination(u), `history URL '${u}' carries a query or a fragment`).toBe(true)
     }
@@ -918,12 +927,16 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
 
     expect(sites.length, 'the write-site scan ran over an empty population').toBeGreaterThanOrEqual(7)
 
-    // Control needle: the review-hash mirror is a write site whose argument carries a query
-    // string. Evaluated on the SITE line, never the window -- the ?persona= strip's own
-    // window contains a location.search read that is not a write site.
+    // Control needle: proves the extractor produced real write-site argument text, not an
+    // empty or truncated line. window.location.search no longer appears on any write site --
+    // the mirror is now barred from reading it (routeWriterGuard's
+    // guard_theSeamsWriterNeverReadsLocationSearch) -- so this pins window.location.pathname
+    // instead, carried by the persona strip's own write. Evaluated on the SITE line, never
+    // the window -- the strip's `URLSearchParams(window.location.search)` READ sits on a
+    // different line than its write, so the needle could never resolve there.
     expect(
-      sites.filter(({ line }) => line.includes('window.location.search')).length,
-      'the extractor found no write site carrying location.search -- the regex is broken',
+      sites.filter(({ line }) => line.includes('window.location.pathname')).length,
+      'the extractor found no write site carrying location.pathname -- the regex is broken',
     ).toBeGreaterThanOrEqual(1)
 
     // captureDestination is deliberately absent from this list: it writes INTO storage

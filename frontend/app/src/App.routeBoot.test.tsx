@@ -22,6 +22,8 @@ import type { PlatformCtx, View } from './types'
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
+const REVIEW_ID_B = 'b2c3d4e5-f6a7-48b9-9abc-def012345678'
+const REVIEW_ID_C = 'c3d4e5f6-a7b8-49ca-abcd-ef0123456789'
 const INVOICE_ID = 'b7c1d2e3-4f5a-4b6c-8d9e-0f1a2b3c4d5e'
 const DETAIL_ID = 'd1e2a3b4-c5d6-47e8-89fa-bc0123456789'
 const JOB_ID = 'f1e2a3b4-c5d6-47e8-89fa-bc0123456790'
@@ -155,35 +157,43 @@ describe('AC-3: initialView still beats the path', () => {
   })
 })
 
-describe('AC-4: the review hash still beats the path', () => {
-  it('boot_theReviewHashStillBeatsThePath', async () => {
-    await bootAt(`/audit#review/${REVIEW_ID}`)
+describe('ROUTE-03-03 AC-1: a review path seeds the review screen and survives the alignment', () => {
+  it('boot_aReviewPathSeedsTheScreenAndSurvivesTheAlignment', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
+    await bootAt(path)
     const ctx = requireCtx()
-    expect(ctx.view, `a live review hash must still win over the path, got '${ctx.view}'`).toBe('create')
+    expect(ctx.view, `a review path must seed the create view, got '${ctx.view}'`).toBe('create')
     expect(ctx.createStep, 'the review step must be active').toBe('review')
+    expect(ctx.reviewBatchIds, 'the id must seed reviewBatchIds').toEqual([REVIEW_ID])
+    expect(window.location.pathname, 'the URL must be byte-identical to the boot URL').toBe(path)
+  })
+
+  it('boot_everyIdInARunSurvivesTheBoot', async () => {
+    const ids = [REVIEW_ID, REVIEW_ID_B, REVIEW_ID_C]
+    const path = `/imports/${ids.join(',')}/review`
+    await bootAt(path)
+    const ctx = requireCtx()
+    expect(ctx.reviewBatchIds, 'every id in the run must survive the boot, in order').toEqual(ids)
+    expect(window.location.pathname, 'the URL must be unchanged').toBe(path)
   })
 })
 
-describe('AC-5: the alignment preserves the hash', () => {
-  it('boot_theAlignmentPreservesTheHash', async () => {
-    const hash = `#review/${REVIEW_ID}`
+describe('ROUTE-03-03 AC-1: the alignment carries the review ids itself', () => {
+  it('boot_theAlignmentCarriesTheReviewIdsItself', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
-    await bootAt(`/${hash}`)
+    await bootAt(path)
     requireCtx()
-    expect(window.location.pathname, 'the alignment must rewrite the path to /create').toBe('/create')
-    expect(window.location.hash, 'the alignment must preserve the review hash verbatim').toBe(hash)
+    expect(window.location.pathname, 'the settled URL must be the review path').toBe(path)
 
-    // The final `window.location.hash` above is a WEAK oracle for the alignment's own
-    // line: App.tsx's pre-existing, untouched review-hash mirror (the effect declared
-    // right after the alignment, App.tsx:524-530) recomputes and re-writes the identical
-    // hash on this same commit whenever createStep is 'review', independent of what the
-    // alignment wrote. A `replaceState` call that drops the hash from the alignment would
-    // still leave `window.location.hash` correct, repaired by that unrelated effect. The
-    // alignment's OWN write -- its first recorded call after the test's own boot-setup
-    // call -- must therefore be checked directly.
-    const own = replaceSpy.mock.calls.find((call) => typeof call[2] === 'string' && call[2].startsWith('/create'))
-    expect(own, 'no replaceState call to /create was recorded').toBeDefined()
-    expect(own![2], "the alignment's own replaceState call must itself carry the hash").toBe(`/create${hash}`)
+    // WEAK ORACLE TRAP: the settled pathname above cannot tell "the alignment carried the
+    // ids itself" from "the alignment wrote /create and the mirror repaired it one effect
+    // later" -- both leave the identical final URL. calls[0] is bootAt's own harness-setup
+    // write; the alignment's effect runs before the mirror's on the first commit (declared
+    // earlier in App.tsx), so calls[1] is its own write -- checked directly, same technique
+    // boot_theAlignmentWritesTheIdCarryingUrlOnceAndNeverPushState (B-4) already uses.
+    const appCalls = replaceSpy.mock.calls.slice(1)
+    expect(appCalls[0]?.[2], "the alignment's own replaceState call must itself carry the review path").toBe(path)
   })
 })
 
@@ -213,13 +223,11 @@ describe('AC-6: the alignment writes no history entry, and is idempotent', () =>
     ).toHaveLength(0)
   })
 
-  // No AC test pins the alignment's own dependency array. Since ROUTE-01-03, `ctx.nav`
-  // calls navigate(), which pushState's straight to the new path -- so the pre-existing
-  // review-hash mirror (App.tsx:533-539, untouched, out of scope), keyed on `view`, now
-  // legitimately replaceState's that same path back on every nav. That makes "did some
-  // replaceState call name /invoices" unusable as a discriminator: the mirror produces
-  // exactly that call on a correct build. Count calls instead -- the mirror contributes
-  // exactly one; a widened mount alignment would contribute a second.
+  // No AC test pins the alignment's own dependency array. Since ROUTE-03-03 scopes the
+  // review mirror to `view === 'create'` only, a nav between two non-create views (audit
+  // -> invoices, neither is create) makes the mirror return early and write nothing --
+  // so a correct build now records ZERO replaceState calls after this nav, not one. A
+  // widened mount alignment would still contribute at least one.
   it('boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount', async () => {
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     await bootAt('/audit')
@@ -230,14 +238,15 @@ describe('AC-6: the alignment writes no history entry, and is idempotent', () =>
       ctx.nav('invoices')
     })
 
+    expect(requireCtx().view, 'sanity: the nav must actually land on invoices').toBe('invoices')
     expect(
       replaceSpy.mock.calls.length - callsBeforeNav,
-      'exactly one replaceState is expected after a view change (the review-hash mirror, App.tsx:533-539); a second would mean the mount-only alignment effect re-ran',
-    ).toBe(1)
+      'no replaceState is expected after a view change between two non-create views; any would mean the mount-only alignment effect re-ran',
+    ).toBe(0)
   })
 })
 
-describe('AC-7: signOut resets the pathname to /, and preserves the hash', () => {
+describe('AC-7: signOut resets the pathname to /, and no longer carries a fragment', () => {
   it('signOut_thePathnameDoesNotSurviveIntoTheNextSignIn', async () => {
     // ctx.nav() does not touch the URL until navigate()/pushState land (ROUTE-01-03) --
     // booting straight at /invoices is what dirties the pathname today, via the mount
@@ -263,21 +272,41 @@ describe('AC-7: signOut resets the pathname to /, and preserves the hash', () =>
     expect(ctx.view, 'a fresh sign-in must never inherit the previous session\'s view').toBe('dashboard')
   })
 
-  it('signOut_preservesTheHashAndEveryOtherReset', async () => {
-    const hash = `#review/${REVIEW_ID}`
+  it('signOut_dropsAnyLiveFragmentAlongWithEveryOtherReset', async () => {
+    // Subtask 05 deletes this writer's own fragment-append expression -- a live fragment
+    // no longer rides along; replaceState('/') resets the whole url, fragment included.
+    const hash = `#frag`
     await bootAt(`/invoices${hash}`)
     const ctx = requireCtx()
-    // sanity: the review hash beats the path (AC-4), so this boots onto /create.
-    expect(window.location.pathname, 'sanity: the review hash must beat the path').toBe('/create')
+    expect(ctx.view, 'sanity: the path alone must seed the view').toBe('invoices')
 
     await act(async () => {
       ctx.signOut()
     })
 
-    expect(window.location.hash, 'signOut must preserve the hash verbatim').toBe(hash)
+    expect(window.location.href.includes('#'), 'signOut must no longer preserve a live fragment').toBe(false)
     expect(window.location.pathname, 'signOut must still reset the pathname').toBe('/')
     expect(localStorage.getItem(SESSION_KEY), 'the persisted session must be cleared').toBeNull()
     expect(screen.queryByTestId('persona-toast'), 'no toast must be mounted after sign-out').toBeNull()
+  })
+})
+
+// ROUTE-03-05 AC-3, AC-5: the successor of the "preserve the hash verbatim" assertion --
+// nothing produces a fragment any more, so the alignment's own job is re-emitting the
+// owned query, and a fragment live at boot must no longer survive the rewrite.
+describe('ROUTE-03-05: the alignment re-emits the owned query, and drops any live fragment', () => {
+  it('alignment_preservesTheOwnedQueryNotAFragment', async () => {
+    await bootAt('/invoices?q=acme#frag')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: the path must seed invoices').toBe('invoices')
+    expect(
+      window.location.pathname + window.location.search,
+      'the alignment must re-emit the owned query',
+    ).toBe('/invoices?q=acme')
+    expect(
+      window.location.href.includes('#'),
+      'the alignment must no longer carry the boot fragment forward',
+    ).toBe(false)
   })
 })
 
@@ -327,15 +356,6 @@ describe('QA adversarial coverage', () => {
     const ctx = requireCtx()
     expect(ctx.view, `a wrong-case path must not match, got '${ctx.view}'`).toBe('dashboard')
     expect(window.location.pathname, 'the corrected URL must be the bare root').toBe('/')
-  })
-
-  it('boot_theReviewHashWinsOverAMismatchedPathAndTheAlignmentWritesCreatePlusTheHash', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    await bootAt(`/settings${hash}`)
-    const ctx = requireCtx()
-    expect(ctx.view, 'the review hash must win over a completely unrelated path').toBe('create')
-    expect(window.location.pathname, 'the alignment must correct the path to /create').toBe('/create')
-    expect(window.location.hash, 'the alignment must carry the hash along').toBe(hash)
   })
 })
 
@@ -467,18 +487,24 @@ describe('ROUTE-04-07 QA adversarial coverage: hostile restored query values', (
   })
 })
 
-describe('ROUTE-04-02 AC-6: the review-hash boot path is unchanged', () => {
-  it('boot_theReviewHashPathIsUnchanged', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    // `q` is unowned on the bare root, so an alignment that appended the live search would
-    // carry it onto /create. A bare `/#review/...` boot cannot tell those two apart.
-    await bootAt(`/?q=acme${hash}`)
+describe('ROUTE-03-03: a review path with a hand-typed query keeps the query out of invoiceQuery', () => {
+  it('boot_theReviewPathIsUnchanged', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
+    // A hand-typed `?q=` on a review path -- not user-reachable (navigate('create') never
+    // emits q); only relevant as a stress case for the alignment's own param-dropping.
+    await bootAt(`${path}?q=acme`)
     const ctx = requireCtx()
-    expect(ctx.view, 'the review hash must still win the boot').toBe('create')
+    expect(ctx.view, 'the review path must still win the boot').toBe('create')
     expect(ctx.createStep, 'the review step must still be active').toBe('review')
-    expect(window.location.pathname, 'the alignment must still correct the path to /create').toBe('/create')
-    expect(window.location.hash, 'the alignment must still preserve the hash verbatim').toBe(hash)
-    expect(window.location.search, 'create owns no param, so the aligned URL carries no query').toBe('')
+    expect(ctx.reviewBatchIds, 'the id must still seed from the path').toEqual([REVIEW_ID])
+    expect(ctx.importedInvoiceId, 'a review boot must never seed a detail id').toBeNull()
+    // Behaviour change from the hash form (see ## Decisions): one carrier cannot say
+    // `create` and `invoices?q=acme` at once. The review PATH resolves the view directly
+    // to `create`, so `q` (owned only by `invoices`) is never read -- unlike the old hash,
+    // where the path half alone (`/invoices`) parsed to `invoices` before the hash won.
+    expect(ctx.invoiceQuery, 'create owns no q, so a hand-typed one must never seed invoiceQuery').toBe('')
+    expect(window.location.pathname, 'the alignment must preserve the review path verbatim').toBe(path)
+    expect(window.location.search, 'the unowned query must not survive the alignment').toBe('')
   })
 })
 
@@ -533,20 +559,6 @@ describe('ROUTE-04-02 QA adversarial coverage', () => {
     ).toBe('/audit')
   })
 
-  it('boot_theReviewHashBeatsAnOwnedParamAndTheAlignedUrlCarriesNeither', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    await bootAt(`/invoices?q=acme${hash}`)
-    const ctx = requireCtx()
-    expect(ctx.view, 'the review hash must beat the path that owns the param').toBe('create')
-    expect(ctx.createStep, 'the review step must be active').toBe('review')
-    // The term still seeds from the boot path, so leaving review returns to a filtered list;
-    // `create` owns no param, so it cannot appear in the URL while review is on screen.
-    expect(ctx.invoiceQuery, 'the seed reads the boot path, which the hash only overrides for `view`').toBe('acme')
-    expect(window.location.pathname, 'the alignment must correct the path to /create').toBe('/create')
-    expect(window.location.hash, 'the hash must survive the alignment verbatim').toBe(hash)
-    expect(window.location.search, "create owns nothing, so the term must not follow it into the URL").toBe('')
-  })
-
   it('boot_underStrictModeEveryWriteDropsTheUnownedParamAndKeepsTheOwnedOne', async () => {
     // AC-7's own fixture (/settings/roles) carries no query, so it cannot see a write that
     // re-emits `location.search` -- only the alignment runs before the review-hash mirror
@@ -595,8 +607,8 @@ describe('ROUTE-02-02: cold-boot seeding reaches both ids', () => {
     requireCtx()
     expect(pushSpy, 'mount must never call pushState').not.toHaveBeenCalled()
     // calls[0] is bootAt's own boot-setup replaceState (the AC-5 harness trap), not the
-    // app's. The app's writes start at calls[1]: the mount alignment, then the untouched
-    // review-hash mirror (App.tsx ~536), which also replaceState's on this same commit.
+    // app's. The app's writes start at calls[1]: the mount alignment. The review mirror is
+    // scoped to `view === 'create'` and this boot's view is 'detail', so it never fires here.
     const appCalls = replaceSpy.mock.calls.slice(1)
     expect(appCalls[0]?.[2], "the alignment's own replaceState call must carry the id").toBe(
       `/invoices/${DETAIL_ID}`,
@@ -605,16 +617,6 @@ describe('ROUTE-02-02: cold-boot seeding reaches both ids', () => {
     expect(droppingId, 'no app replaceState call may ever drop the id back to the bare /invoice path').toHaveLength(
       0,
     )
-  })
-
-  it('boot_theReviewHashBeatsThePathAndDropsThePathsId (B-5)', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    await bootAt(`/invoices/${DETAIL_ID}${hash}`)
-    const ctx = requireCtx()
-    expect(ctx.view, 'a live review hash must still win over a path carrying an id').toBe('create')
-    expect(ctx.importedInvoiceId, "the path's id must not survive when the review hash wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on /create').toBe('/create')
-    expect(window.location.hash, 'the alignment must preserve the review hash').toBe(hash)
   })
 
   it('boot_initialViewBeatsThePathAndDropsItsId (B-6)', async () => {
@@ -664,30 +666,27 @@ describe('QA adversarial coverage (ROUTE-02-02)', () => {
     ).toBe(unknownId)
   })
 
-  it('boot_aQueryStringAndAReviewHashTogetherStillDropTheIdAndNeverEchoSearch', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    await bootAt(`/invoices/${DETAIL_ID}?foo=bar${hash}`)
-    const ctx = requireCtx()
-    expect(ctx.view, 'the review hash must still win with a query string also present').toBe('create')
-    expect(ctx.importedInvoiceId, "the path's id must not survive when the hash wins").toBeNull()
-    expect(window.location.search, 'the alignment must never echo the query string').toBe('')
-    expect(window.location.hash, 'the alignment must still preserve the hash').toBe(hash)
-  })
-
-  it('boot_initialViewBeatsBothTheReviewHashAndThePathsIdOnRemount', async () => {
-    const hash = `#review/${REVIEW_ID}`
-    await bootAt(`/invoices/${DETAIL_ID}${hash}`, { demoMode: true })
+  // ROUTE-03-03: bootAt has no `initialView` knob, so the winning-view case is reached
+  // the same way App.standIn.test.tsx:482 reaches it -- boot straight on the review path,
+  // then carry a DEMO-06 initialView via becomePersona(MEMBER, 'create'), whose
+  // carryView('create') collapses to 'invoices'. The review path's own bootView never
+  // wins the remount, so reviewBatchIds and createStep must fall back to their id-less
+  // seeds -- exactly `[alignment-must-carry-the-id]`/`[ids-gate-on-the-winning-view]`
+  // applied to the review ids.
+  it('boot_theIdsGateOnTheWinningView', async () => {
+    const path = `/imports/${REVIEW_ID}/review`
+    await bootAt(path, { demoMode: true })
     let ctx = requireCtx()
-    expect(ctx.view, 'sanity: the review hash beats the path on the first mount').toBe('create')
+    expect(ctx.view, 'sanity: the review path wins the first mount').toBe('create')
     expect(typeof ctx.becomePersona, 'DEMO_MODE must expose becomePersona on ctx').toBe('function')
 
     await act(async () => {
-      await ctx.becomePersona!(MEMBER, 'audit')
+      await ctx.becomePersona!(MEMBER, 'create')
     })
     ctx = requireCtx()
-    expect(ctx.view, 'initialView must beat both the hash and the path on the remount').toBe('audit')
-    expect(ctx.importedInvoiceId, "the path's id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on /audit').toBe('/audit')
+    expect(ctx.view, 'initialView must beat the review path on the remount').toBe('invoices')
+    expect(ctx.reviewBatchIds, 'the ids must not survive when initialView wins').toEqual([])
+    expect(ctx.createStep, 'createStep must fall back to form when initialView wins').toBe('form')
   })
 
   it('boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId', async () => {

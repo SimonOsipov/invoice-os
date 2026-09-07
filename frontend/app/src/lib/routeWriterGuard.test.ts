@@ -66,6 +66,9 @@ describe('AC-3: the seam writers never read location.search', () => {
     const mirrorAnchorIdx = appSrc.indexOf('the WRITE half')
     expect(mirrorAnchorIdx, 'review mirror anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const mirrorBody = findBody(appSrc, 'useEffect(() => {', mirrorAnchorIdx)
+    const backfillAnchorIdx = appSrc.indexOf("Backfills the boot entry's stamp once the portfolio resolves")
+    expect(backfillAnchorIdx, 'stamp-backfill anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
 
     // Floor: a broken anchor search silently returning an empty population would make the
     // loop below vacuously pass with nothing checked. setInvoiceQuery is in the population
@@ -87,8 +90,11 @@ describe('AC-3: the seam writers never read location.search', () => {
       { name: "App.tsx's setSettingsTab()", body: findBody(appSrc, 'function setSettingsTab(t: SettingsTab)') },
       { name: "App.tsx's switchClient()", body: findBody(appSrc, 'function switchClient(id: string)') },
       { name: "App.tsx's review-path mirror", body: mirrorBody },
+      // ROUTE-06-02. A state-only stamp writer joins the population so a later
+      // location.search read inside it fails; nothing else scans this body.
+      { name: "App.tsx's stamp backfill", body: backfillBody },
     ]
-    expect(writerBodies.length, 'the writer population must not be empty').toBe(9)
+    expect(writerBodies.length, 'the writer population must not be empty').toBe(10)
     for (const { name, body } of writerBodies) {
       expect(body.length, `${name}'s extracted body is empty -- the anchor is broken`).toBeGreaterThan(0)
       expect(containsLocationSearch(body), `${name} must never read location.search`).toBe(false)
@@ -139,6 +145,9 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
     const mirrorAnchorIdx = appSrc.indexOf('the WRITE half')
     expect(mirrorAnchorIdx, 'review mirror anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const mirrorBody = findBody(appSrc, 'useEffect(() => {', mirrorAnchorIdx)
+    const backfillAnchorIdx = appSrc.indexOf("Backfills the boot entry's stamp once the portfolio resolves")
+    expect(backfillAnchorIdx, 'stamp-backfill anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
+    const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
 
     // Same nine bodies guard_theSeamsWriterNeverReadsLocationSearch scans above. This
     // population structurally EXCLUDES signOut and the persona strip -- neither is a
@@ -154,8 +163,11 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
       { name: "App.tsx's setSettingsTab()", body: findBody(appSrc, 'function setSettingsTab(t: SettingsTab)') },
       { name: "App.tsx's switchClient()", body: findBody(appSrc, 'function switchClient(id: string)') },
       { name: "App.tsx's review-path mirror", body: mirrorBody },
+      // ROUTE-06-02. A state-only stamp writer joins the population so a later
+      // location.search read inside it fails; nothing else scans this body.
+      { name: "App.tsx's stamp backfill", body: backfillBody },
     ]
-    expect(writerBodies.length, 'the writer population must not be empty').toBe(9)
+    expect(writerBodies.length, 'the writer population must not be empty').toBe(10)
     for (const { name, body } of writerBodies) {
       expect(body.length, `${name}'s extracted body is empty -- the anchor is broken`).toBeGreaterThan(0)
       expect(containsLocationHash(body), `${name} must never append a location fragment`).toBe(false)

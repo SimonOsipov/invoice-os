@@ -254,28 +254,33 @@ func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
 	}
 }
 
+// alMatchRejectCases is one realistic label and one near-miss per lexicon entry. Package level
+// so TestAnchorLexicon_AnOwningPhraseEarnsItsExemption reads the same phrases rather than
+// keeping a second table that can disagree with this one.
+var alMatchRejectCases = map[string]struct{ match, reject string }{
+	"invoice_no":   {"Invoice No:", "Invoice Date"},
+	"issue_date":   {"Invoice Date", "Dated"},
+	"supplier_tin": {"Supplier TIN", "Supplier Name"},
+	"buyer_tin":    {"Buyer TIN", "Supplier TIN"},
+	"bare_tin":     {"TIN:", "Tinned Goods"},
+	// The rejects are the near-misses the entry's own \b exists for: "Nominee" continues
+	// past "No", and "Authorised" carries no party word.
+	"party_ref":     {"Customer No.", "Customer Nominee"},
+	"signature":     {"Buyer's Signature", "Authorised Signature"},
+	"supplier_name": {"Supplier", "Buyer"},
+	"buyer_name":    {"Bill To", "Supplier"},
+	"currency":      {"Currency", "Concurrency"},
+	"subtotal":      {"Sub-total", "Grand Total"},
+	"vat":           {"VAT", "Vatican"},
+	// "Sub-total" DOES match total -- the hyphen is a word boundary. That overlap is
+	// deliberate; "Subtotal" unhyphenated is the near-miss.
+	"total": {"Grand Total", "Subtotal"},
+}
+
 // Every entry must match a realistic label and reject a near-miss, so no entry can rot into
 // a pattern matching everything or nothing.
 func TestAnchorLexicon_EveryEntryMatchesAndRejects(t *testing.T) {
-	cases := map[string]struct{ match, reject string }{
-		"invoice_no":   {"Invoice No:", "Invoice Date"},
-		"issue_date":   {"Invoice Date", "Dated"},
-		"supplier_tin": {"Supplier TIN", "Supplier Name"},
-		"buyer_tin":    {"Buyer TIN", "Supplier TIN"},
-		"bare_tin":     {"TIN:", "Tinned Goods"},
-		// The rejects are the near-misses the entry's own \b exists for: "Nominee" continues
-		// past "No", and "Authorised" carries no party word.
-		"party_ref":     {"Customer No.", "Customer Nominee"},
-		"signature":     {"Buyer's Signature", "Authorised Signature"},
-		"supplier_name": {"Supplier", "Buyer"},
-		"buyer_name":    {"Bill To", "Supplier"},
-		"currency":      {"Currency", "Concurrency"},
-		"subtotal":      {"Sub-total", "Grand Total"},
-		"vat":           {"VAT", "Vatican"},
-		// "Sub-total" DOES match total -- the hyphen is a word boundary. That overlap is
-		// deliberate; "Subtotal" unhyphenated is the near-miss.
-		"total": {"Grand Total", "Subtotal"},
-	}
+	cases := alMatchRejectCases
 
 	if len(anchorLexicon) == 0 {
 		t.Fatal("anchorLexicon is empty")

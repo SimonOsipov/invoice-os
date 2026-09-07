@@ -375,6 +375,7 @@ func TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord(t *testing.T) {
 
 	for _, c := range []struct{ text, owner, narrow string }{
 		{"Customer No.", "party_ref", "buyer_name"},
+		{"Supplier No.", "party_ref", "supplier_name"},
 		{"Buyer's Signature", "signature", "buyer_name"},
 		{"Supplier's Signature", "signature", "supplier_name"},
 	} {
@@ -406,5 +407,65 @@ func TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord(t *testing.T) {
 	ctl := alSpan(control, "buyer_name")
 	if ctl == nil || anchorOutranked(control, ctl) {
 		t.Errorf("%q: buyer_name span %v was outranked; an owning phrase must not suppress the party word on a token it does not appear on", control, ctl)
+	}
+}
+
+// alSuppressesARuleBearingEntry names the field-filling lexicon entry that phrase strictly
+// contains, or "" when it contains none.
+func alSuppressesARuleBearingEntry(phrase string, ruleBearing map[string]int) string {
+	for _, e := range anchorLexicon {
+		if ruleBearing[e.ID] == 0 {
+			continue
+		}
+		if inner := alSpan(phrase, e.ID); inner != nil && anchorOutranked(phrase, inner) {
+			return e.ID
+		}
+	}
+	return ""
+}
+
+// An entry listed in t1OwningPhraseIDs is exempt from carrying a Tier-1 rule, so nothing else
+// makes it earn its place: it ships in the fingerprint either way. It earns the exemption by
+// doing the two jobs it exists for -- being refused as a value whole, and strictly containing
+// an entry that DOES fill a field.
+func TestAnchorLexicon_AnOwningPhraseEarnsItsExemption(t *testing.T) {
+	if len(t1OwningPhraseIDs) == 0 {
+		t.Fatal("t1OwningPhraseIDs is empty; every assertion below would run over nothing")
+	}
+
+	ruleBearing := map[string]int{}
+	for _, r := range Tier1Rules {
+		for _, e := range anchorLexicon {
+			if r.Rule.Label == e.Pattern {
+				ruleBearing[e.ID]++
+			}
+		}
+	}
+	if len(ruleBearing) == 0 {
+		t.Fatal("no lexicon entry carries a Tier-1 rule; the containment below would find nothing for any phrase")
+	}
+
+	for _, id := range t1OwningPhraseIDs {
+		phrase := alMatchRejectCases[id].match
+		if phrase == "" {
+			t.Errorf("%s has no alMatchRejectCases entry; its exemption is asserted against nothing", id)
+			continue
+		}
+		if !isBareAnchorLabel(phrase) {
+			t.Errorf("%s: %q is not refused as a value; an owning phrase readable as a name is not the label it claims to be", id, phrase)
+		}
+		if got := alSuppressesARuleBearingEntry(phrase, ruleBearing); got == "" {
+			t.Errorf("%s: %q strictly contains no rule-bearing entry, so anchorOutranked suppresses nothing for it; the entry ships in the fingerprint and resolves nothing", id, phrase)
+		}
+	}
+
+	// The control: a rule-bearing entry's own label suppresses nothing inside it, so the probe
+	// above is not a test every entry in the table passes.
+	const ctl = "supplier_name"
+	if slices.Contains(t1OwningPhraseIDs, ctl) {
+		t.Fatalf("%s is declared an owning phrase; the control below no longer contrasts with the cases above", ctl)
+	}
+	if got := alSuppressesARuleBearingEntry(alMatchRejectCases[ctl].match, ruleBearing); got != "" {
+		t.Errorf("%s: %q suppresses %s; the probe passes for a plain label too and proves nothing about an owning phrase", ctl, alMatchRejectCases[ctl].match, got)
 	}
 }

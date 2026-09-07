@@ -299,7 +299,10 @@ func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
 	}
 }
 
-const wildTwoPartyBuyerName = "Honeywell Group"
+const (
+	wildTwoPartyBuyerName = "Honeywell Group"
+	wildTwoPartyHeading   = "Invoice to"
+)
 
 // The buyer's name on the two-party arrangement is the printed name, not the "Customer No." or
 // "Buyer's Signature" fragment that used to outrank it.
@@ -315,6 +318,11 @@ func TestWildLayouts_TheTwoPartyBuyerNameIsTheName(t *testing.T) {
 	for _, v := range names {
 		if strings.Contains(v, "No.") || strings.Contains(v, "Signature") {
 			t.Errorf("%s reaches %q as a buyer_name candidate (%v); a fragment of an owning phrase is a label, never a name", wildTwoParty, v, names)
+		}
+		// The heading is refused as a value at every rank, not only at rank 0: a candidate
+		// list holding it is one tie-break away from writing a label into the invoice row.
+		if v == wildTwoPartyHeading {
+			t.Errorf("%s reaches its %q heading as a buyer_name candidate (%v); the label that introduces the name is not the name", wildTwoParty, wildTwoPartyHeading, names)
 		}
 	}
 

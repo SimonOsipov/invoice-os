@@ -437,3 +437,38 @@ func TestTier1_ALabelFragmentIsNeverAPartyName(t *testing.T) {
 		t.Errorf("with both phrases dropped buyer_name = %v, want it to hold the name; the geometry alone never reached it", v)
 	}
 }
+
+// t1aBelowReach is the shipped below relation's max distance, read off the rule rather than
+// respelled, so the geometry check below moves with the dial.
+func t1aBelowReach(t *testing.T, key string) float64 {
+	t.Helper()
+	for _, r := range extraction.Tier1Rules {
+		if r.Key == key {
+			return r.Rule.Relation.MaxDistance
+		}
+	}
+	t.Fatalf("Tier1Rules carries no %s; the reach below is read off nothing", key)
+	return 0
+}
+
+// t1aOwningPage only discriminates while the phrase sits NEARER the name than the heading does:
+// a resolver that still read the phrase would win on distance. Its own comment says so, and
+// moving the phrase away leaves the arms above green, so this is what holds it.
+func TestTier1_TheOwningPagePutsThePhraseNearestTheName(t *testing.T) {
+	pages := t1aOwningPage("Invoice to", "Customer No.", "Honeywell Group", "Buyer's Signature")
+	if len(pages) != 1 || len(pages[0].Tokens) != 4 {
+		t.Fatalf("t1aOwningPage built %d page(s), want 1; the token indices below name other tokens", len(pages))
+	}
+	heading, phrase, name := pages[0].Tokens[0], pages[0].Tokens[1], pages[0].Tokens[2]
+
+	phraseGap, headingGap := name.Region.Y0-phrase.Region.Y1, name.Region.Y0-heading.Region.Y1
+	if phraseGap <= 0 || headingGap <= 0 {
+		t.Fatalf("phrase gap %v, heading gap %v; both must sit above the name or neither reaches it below", phraseGap, headingGap)
+	}
+	if phraseGap >= headingGap {
+		t.Errorf("the phrase is %v from the name and the heading %v; the phrase must be the NEARER anchor or the page stops reproducing the ranking it was measured from", phraseGap, headingGap)
+	}
+	if reach := t1aBelowReach(t, "t1.buyer_name.below"); headingGap > reach {
+		t.Errorf("the heading is %v from the name, past the below relation's %v; the surviving anchor could not reach the name and the arms above would rank nothing", headingGap, reach)
+	}
+}

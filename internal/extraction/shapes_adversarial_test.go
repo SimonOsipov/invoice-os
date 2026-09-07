@@ -417,17 +417,26 @@ func TestShapeAmount_OutputFitsTheColumnScale(t *testing.T) {
 // isBareAnchorLabel refuses a value one lexicon entry matches WHOLE, so an owning phrase is a
 // label in its entirety and no shape may read one as a value.
 func TestShapes_AnOwningPhraseIsABareAnchorLabel(t *testing.T) {
-	for _, raw := range []string{"Customer No.", "Buyer's Signature", "Supplier's Signature", "Account No.", "Invoice to"} {
+	for _, raw := range []string{
+		"Customer No.", "Buyer's Signature", "Supplier's Signature", "Account No.", "Invoice to",
+		// The supplier spellings of both entries, which the buyer cases above cannot reach.
+		"Supplier No.", "Vendor Code", "Seller Signature",
+	} {
 		wantNone(t, extraction.ShapeName, raw)
 	}
 	// The controls: only a WHOLE-value match is refused. "Customer Nominee Ltd" is the boundary
 	// -- party_ref's \b after "no" is what keeps it a name.
 	wantOne(t, extraction.ShapeName, "Adeyemi Trading Limited", "Adeyemi Trading Limited")
 	wantOne(t, extraction.ShapeName, "Customer Nominee Ltd", "Customer Nominee Ltd")
+	wantOne(t, extraction.ShapeName, "Vendor Code Systems Plc", "Vendor Code Systems Plc")
 
 	// party_ref's separator group is fully optional, so an unspaced compound matches whole and
 	// stops being an invoice number too. Kept deliberately: no shipped layout prints one.
 	wantNone(t, extraction.ShapeInvoiceNumber, "accountno")
+	wantNone(t, extraction.ShapeInvoiceNumber, "customerno")
 	wantNone(t, extraction.ShapeInvoiceNumber, "Customer No.")
+	// The boundary that bounds the class: a digit after the suffix defeats party_ref's \b, so
+	// the refusal cannot creep onto a real invoice number.
+	wantOne(t, extraction.ShapeInvoiceNumber, "customerno1", "customerno1")
 	wantOne(t, extraction.ShapeInvoiceNumber, "INV-2103", "INV-2103")
 }

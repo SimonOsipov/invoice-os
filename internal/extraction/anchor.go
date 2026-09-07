@@ -140,6 +140,15 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
 	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
+	// reg_identifier and doc_title are OWNING PHRASES over the amount vocabulary: they sit before
+	// vat, whose bare "vat"/"tax" they contain. rc_number contains nothing rule-bearing -- it is
+	// here to make the phrase a label at all
+	// (TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus).
+	// ceiling: the separator groups are optional, so RCNO/VATNO/TAXINVOICE stop being invoice
+	// numbers too. Revisit if a real invoice number is ever spelt that way.
+	{"reg_identifier", `(?i)\b(vat|v\.a\.t\.?|tax)\s*\.?\s*(reg(istration|\.)?\s*)?(no|num(ber)?|id(entification)?(\s*(no|num(ber)?))?)\b`},
+	{"rc_number", `(?i)\b(rc|cac)\s*\.?\s*(no|num(ber)?)\b`},
+	{"doc_title", `(?i)\b(tax|vat)\s*invoice\b`},
 	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},
 	{"total", `(?i)\b(grand\s*total|amount\s*due|balance\s*due|total)\b`},
 }

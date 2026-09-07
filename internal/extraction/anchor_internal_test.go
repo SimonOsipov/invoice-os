@@ -166,8 +166,8 @@ func TestAnchorLexicon_IsOrderedAndUnique(t *testing.T) {
 	if got := reflect.TypeOf(anchorLexicon).Kind(); got != reflect.Slice {
 		t.Fatalf("anchorLexicon is a %s, want a slice", got)
 	}
-	if len(anchorLexicon) != 13 {
-		t.Fatalf("len(anchorLexicon) = %d, want 13: the shipped generic label set", len(anchorLexicon))
+	if len(anchorLexicon) != 16 {
+		t.Fatalf("len(anchorLexicon) = %d, want 16: the shipped generic label set", len(anchorLexicon))
 	}
 
 	seen := make(map[string]bool, len(anchorLexicon))
@@ -489,6 +489,52 @@ func TestAnchorLexicon_TaxIdentificationNumberStaysSuppressed(t *testing.T) {
 		}
 		if loc[0] != 0 || loc[1] != len(phrase) {
 			t.Errorf("%q: %s survives suppression claiming %v, not the whole phrase; a partial claimant leaves part of the identifier readable as a value", phrase, id, loc)
+		}
+	}
+}
+
+// alBareTokenCases pairs each owning phrase with the bare token(s) it is built around: the head
+// of its own alternation, stripped of the tail that makes it a phrase.
+var alBareTokenCases = []struct {
+	owner, whole string
+	bare         []string
+}{
+	{"party_ref", "Customer No.", []string{"Customer", "Account"}},
+	{"signature", "Buyer's Signature", []string{"Buyer", "Signature"}},
+	{"reg_identifier", "VAT REG NO", []string{"VAT", "Tax", "V.A.T."}},
+	{"rc_number", "RC NUMBER", []string{"RC", "CAC"}},
+	{"doc_title", "TAX INVOICE", []string{"TAX", "Invoice"}},
+}
+
+// anchorOutranked needs a STRICTLY wider span, so an owning phrase that loses its required tail
+// degenerates to exactly the span of the entry it exists to suppress -- suppressing nothing while
+// every containment-shaped spec stays green. Each phrase must therefore refuse its own bare token.
+func TestAnchorLexicon_AnOwningPhraseRefusesTheBareTokenInsideIt(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+	// Set equality with the declared owning phrases, so neither list can grow or shrink alone and
+	// leave a phrase degenerating unwatched.
+	if len(alBareTokenCases) != len(t1OwningPhraseIDs) {
+		t.Fatalf("%d bare-token case(s) for %d owning phrase(s): every owning phrase needs one", len(alBareTokenCases), len(t1OwningPhraseIDs))
+	}
+	for _, c := range alBareTokenCases {
+		if !slices.Contains(t1OwningPhraseIDs, c.owner) {
+			t.Fatalf("%q carries a bare-token case yet is no declared owning phrase; the case is asserted against an entry that earns its place another way", c.owner)
+		}
+	}
+
+	for _, c := range alBareTokenCases {
+		// The paired positive: without it the refusals below hold equally against a pattern
+		// broken to recognise nothing.
+		if alSpan(c.whole, c.owner) == nil {
+			t.Errorf("%s does not match %q, the label it exists for", c.owner, c.whole)
+			continue
+		}
+		for _, bare := range c.bare {
+			if loc := alSpan(bare, c.owner); loc != nil {
+				t.Errorf("%s claims %v on the bare %q; a phrase reaching its own bare token claims no more than the entry it exists to suppress, so anchorOutranked leaves that entry anchoring", c.owner, loc, bare)
+			}
 		}
 	}
 }

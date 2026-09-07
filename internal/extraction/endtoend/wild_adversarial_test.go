@@ -174,8 +174,9 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 }
 
 // The two specs above assert absences, so their positive control is now
-// TestWildLayouts_TheTwoPartyBuyerNameIsTheName and TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty:
-// both read a value at rank 0 on wild_two_party_bare_tin.pdf.
+// TestWildLayouts_TheTwoPartyBuyerNameIsTheName, which reads the name at rank 0, and
+// TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty, which reads each party's TIN at any rank,
+// both on wild_two_party_bare_tin.pdf.
 
 // --- golden properties nothing else reads -----------------------------------------------------
 

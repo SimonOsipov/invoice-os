@@ -610,6 +610,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       if (at.reviewBatchIds.length > 0) {
         setReviewBatchIds(at.reviewBatchIds)
         setCreateStep('review')
+      } else if (at.view === 'create') {
+        // A restored bare /create names no batch, so the live one is stale; the mirror
+        // below would otherwise regrow it onto this entry. Functional setter -- this
+        // handler's deps are [] (see activeEntityIdRef, :285, for the same trap).
+        setReviewBatchIds([])
+        setCreateStep((prev) => (prev === 'review' ? 'upload' : prev))
       }
     }
     window.addEventListener('popstate', onPopState)

@@ -319,14 +319,17 @@ restored destination carries its drill-down id too (ROUTE-02 merge)` block.
   `applyRoute`); three Back presses land on the first entry, still bare `/create` in the
   browser's own history — but `reviewBatchIds` in memory still names the second batch, and
   the mirror rewrites the just-restored entry with that stale batch's path. This **predates
-  this story**: the identical walk today writes the retired hash form — `/create` with the
+  this story**: the identical walk once wrote the retired hash form — `/create` with the
   batch named in the fragment, not the path — over the restored entry instead of
   `/imports/<id>/review`; same defect, new spelling, because the mirror always rebuilt its
-  output from whatever `reviewBatchIds` held, hash or path. ROUTE-06 AC-2 and
-  AC-4 own the remedy: AC-2 already covers a related race on the same
-  `openCreate`/`resetImport` path (an entity snapshot taken before the entities fetch
-  resolves), and AC-4 audits every atom `switchClient` touches, `reviewBatchIds` among them,
-  as a per-atom table.
+  output from whatever `reviewBatchIds` held, hash or path. **Closed in ROUTE-06-04**: the
+  `popstate` handler's `else if (at.view === 'create')` arm, next to the existing
+  ids-present arm, clears `reviewBatchIds` and demotes `createStep` off `'review'`
+  (functional setter, never a plain write — the handler's `[]` deps make a closure read of
+  `createStep` freeze at mount) whenever the restored path is bare `/create`, so the mirror's
+  next write reproduces the bare path instead of re-attaching the stale batch. Pinned by
+  `App.routeReviewHash.test.tsx`'s `popstate_aRestoredBareCreateEntryDoesNotGrowAStaleBatchPath`
+  and `popstate_aRestoredBareCreateEntryLeavesNoEmptyReviewScreen`.
 
 ## Two things that cost time here
 

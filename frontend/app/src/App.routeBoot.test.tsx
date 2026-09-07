@@ -533,15 +533,37 @@ describe('ROUTE-04-02 QA adversarial coverage', () => {
     ).toBe('/invoices')
   })
 
-  it('boot_theDefaultSettingsTabIsOmittedFromTheAlignedUrl', async () => {
-    // Six e2e assertions are `$`-anchored on `/settings` exactly and start depending on
-    // omit-the-default once ROUTE-04-03 repoints navigate at routeUrl.
+  it('boot_theDefaultSettingsTabIsExplicitInTheAlignedUrl', async () => {
+    // Seven e2e assertions are `$`-anchored on the settings address (ROUTE-07-02).
     await bootAt('/settings/members')
     const ctx = requireCtx()
     expect(ctx.view, 'sanity: /settings/members must seed the settings view').toBe('settings')
     expect(ctx.settingsTab, 'the explicit default segment still seeds members').toBe('members')
-    expect(window.location.pathname, 'the default tab must be omitted from the aligned path').toBe('/settings')
+    expect(window.location.pathname, 'the default tab must survive the alignment').toBe('/settings/members')
     expect(window.location.search, 'the tab is a path segment, never a query param').toBe('')
+  })
+
+  it('boot_bareSettingsCanonicalisesWithReplaceNotPush', async () => {
+    // The settled URL alone cannot tell a replace from a push -- both leave the address bar
+    // reading /settings/members. The spies name the clause.
+    const lengthBefore = window.history.length
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await bootAt('/settings')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: bare /settings must seed the settings view').toBe('settings')
+    expect(ctx.settingsTab, 'sanity: bare /settings still parses to members').toBe('members')
+    expect(window.location.pathname, 'a bare /settings boot canonicalises to the members tab').toBe(
+      '/settings/members',
+    )
+    expect(window.location.search, 'the tab is a path segment, never a query param').toBe('')
+
+    const replaced = replaceSpy.mock.calls.map((c) => c[2])
+    expect(replaced, 'the canonical URL must be WRITTEN by replaceState, not merely settled into').toContain(
+      '/settings/members',
+    )
+    expect(pushSpy.mock.calls, 'the mount alignment must never push').toHaveLength(0)
+    expect(window.history.length, 'canonicalising must add no history entry').toBe(lengthBefore)
   })
 
   it('boot_aMalformedInvoiceIdNeverReachesTheAtomOrTheAlignedUrl', async () => {
@@ -702,7 +724,9 @@ describe('QA adversarial coverage (ROUTE-02-02)', () => {
     ctx = requireCtx()
     expect(ctx.view, 'initialView must beat the path').toBe('settings')
     expect(ctx.extractionJobId, "the path's job id must not survive when initialView wins").toBeNull()
-    expect(window.location.pathname, 'the alignment must land on /settings').toBe('/settings')
+    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
+      '/settings/members',
+    )
   })
 
   it('boot_theIdSurvivesRepeatedStrictModeRemounts', async () => {
@@ -769,7 +793,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
     expect(company, 'and both must equal the literal expected shape, not just each other').toEqual({
       view: 'settings',
       settingsTab: 'members',
-      alignedUrl: '/settings',
+      alignedUrl: '/settings/members',
       stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
     })
   })

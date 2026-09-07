@@ -170,18 +170,30 @@ describe('parseRoute — adversarial', () => {
 })
 
 describe('routeUrl — serialise', () => {
-  it('routeUrl_withNoParamsEqualsRoutePathForAllThirteen', () => {
+  it('routeUrl_withNoParamsEqualsRoutePathExceptSettings', () => {
     expect(ALL_VIEWS.length).toBe(13)
+    let compared = 0
     for (const v of ALL_VIEWS) {
+      if (v === 'settings') continue
       expect(routeUrl(v), `${v} must serialise to its shipped path`).toBe(routePath(v))
+      compared += 1
     }
+    expect(compared, 'the twelve non-settings views must each have been compared').toBe(12)
+    // settings is the one named exception, asserted rather than excused: the default tab
+    // is emitted, so the URL is strictly longer than the path. Both literals are pinned --
+    // an inequality alone would pass on any wrong value.
+    expect(routeUrl('settings'), 'settings is the one view whose URL is not its path').not.toBe(
+      routePath('settings'),
+    )
+    expect(routePath('settings')).toBe('/settings')
+    expect(routeUrl('settings')).toBe('/settings/members')
   })
 
   it('routeUrl_emitsOnlyTheParamsTheViewOwns', () => {
     // invoices owns q, audit owns invoice, settings owns the tab segment; no other view owns anything.
     expect(routeUrl('audit', { q: 'acme', settingsTab: 'roles' })).toBe('/audit')
     expect(routeUrl('invoices', { auditInvoice: UUID, settingsTab: 'roles' })).toBe('/invoices')
-    expect(routeUrl('settings', { q: 'acme', auditInvoice: UUID })).toBe('/settings')
+    expect(routeUrl('settings', { q: 'acme', auditInvoice: UUID })).toBe('/settings/members')
     expect(routeUrl('dashboard', { q: 'acme', auditInvoice: UUID, settingsTab: 'roles' })).toBe('/')
     expect(routeUrl('reports', { q: 'acme', auditInvoice: UUID })).toBe('/reports')
     // Control needle: the emitter still emits when the view does own the param.
@@ -196,15 +208,17 @@ describe('routeUrl — serialise', () => {
     expect(routeUrl('audit', { auditInvoice: null })).toBe('/audit')
   })
 
-  it('routeUrl_omitsTheDefaultSettingsTab', () => {
+  it('routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault', () => {
     expect(ALL_SETTINGS_TABS.length).toBe(6)
-    expect(routeUrl('settings')).toBe('/settings')
-    expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings')
-    const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
-    expect(nonDefault.length).toBe(5)
-    for (const t of nonDefault) {
+    expect(routeUrl('settings')).toBe('/settings/members')
+    expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings/members')
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
+    for (const t of ALL_SETTINGS_TABS) {
       expect(routeUrl('settings', { settingsTab: t }), `${t} is addressable`).toBe(`/settings/${t}`)
     }
+    // Floor: the six are not five defaults plus members -- members is one of the six.
+    const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
+    expect(nonDefault.length).toBe(5)
   })
 })
 
@@ -330,7 +344,8 @@ describe('the codec — adversarial', () => {
     expect(routeUrl('invoices', {})).toBe('/invoices')
     expect(routeUrl('invoices', { q: undefined })).toBe('/invoices')
     expect(routeUrl('audit', { auditInvoice: undefined })).toBe('/audit')
-    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings')
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe(routeUrl('settings'))
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
     // Control needle: the emitter is not simply ignoring its second argument.
     expect(routeUrl('invoices', { q: 'acme' })).toBe('/invoices?q=acme')
   })

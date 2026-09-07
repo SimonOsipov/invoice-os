@@ -308,7 +308,9 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     await bootWorkspaceAt('/settings')
     const ctx = requireCtx()
     expect(ctx.view, 'the harness must observe the real seeded view').toBe('settings')
-    expect(window.location.pathname, 'the harness must observe the real jsdom pathname').toBe('/settings')
+    // The typed and canonical forms of this path DIFFER (/settings -> /settings/members),
+    // so observing the canonical one proves the harness saw a real boot, not the argument.
+    expect(window.location.pathname, 'the harness must observe the real jsdom pathname').toBe('/settings/members')
   })
 
   it('restore_aStoredDestinationSeedsTheBootView', async () => {
@@ -362,7 +364,7 @@ describe('Workspace boot: restoring the captured destination (ROUTE-05-03)', () 
     await bootWorkspaceAt('/settings')
     const ctx = requireCtx()
     expect(ctx.view, 'a live non-root path must win over any stored destination').toBe('settings')
-    expect(window.location.pathname, 'the URL must honour the live path').toBe('/settings')
+    expect(window.location.pathname, 'the URL must honour the live path').toBe('/settings/members')
     // Plan text (task-923, "the restore point"): clearDestination() in the mount effect
     // is unconditional -- ANY Workspace mount sweeps a stored destination, whether or not
     // bootPath ever consulted it. A "smarter" implementation that only clears when the

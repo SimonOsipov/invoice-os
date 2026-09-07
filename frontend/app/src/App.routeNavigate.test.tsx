@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_PERSONAS, type Session } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { MAX_RUN_FILES } from './lib/importRun'
-import { ROUTE_PATHS } from './lib/route'
+import { ROUTE_PATHS, routeUrl } from './lib/route'
 import type { Member } from './lib/members'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { AuditPrefilter, PlatformCtx, View } from './types'
@@ -137,16 +137,23 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
     const views = Object.keys(ROUTE_PATHS) as View[]
     expect(views, 'the route table must have exactly 13 members').toHaveLength(13)
 
+    let settingsPushed: string | null = null
     for (const v of views) {
       const lengthBefore = window.history.length
       await act(async () => {
         capturedCtx!.nav(v)
       })
       const ctx = requireCtx()
-      expect(window.location.pathname, `nav('${v}') should push '${ROUTE_PATHS[v]}'`).toBe(ROUTE_PATHS[v])
+      // routeUrl, not ROUTE_PATHS: settings serialises its default tab, so the two differ
+      // for exactly one of the thirteen (routeUrl_withNoParamsEqualsRoutePathExceptSettings).
+      expect(window.location.pathname, `nav('${v}') should push '${routeUrl(v)}'`).toBe(routeUrl(v))
       expect(window.history.length, `nav('${v}') must add exactly one history entry`).toBe(lengthBefore + 1)
       expect(ctx.view, `nav('${v}') should set view to '${v}'`).toBe(v)
+      if (v === 'settings') settingsPushed = window.location.pathname
     }
+    // The loop calls routeUrl on both sides, and so does navigate -- a codec regression
+    // moves both and survives. One literal pin on the one view whose URL is not its path.
+    expect(settingsPushed, 'the settings push must be the canonical members path').toBe('/settings/members')
   })
 
   it('openCreate_pushesCreate', async () => {
@@ -574,7 +581,7 @@ describe('QA adversarial: rapid successive navigations', () => {
       capturedCtx!.nav('settings')
     })
     const ctx = requireCtx()
-    expect(window.location.pathname, 'the final push must win').toBe('/settings')
+    expect(window.location.pathname, 'the final push must win').toBe('/settings/members')
     expect(window.history.length, 'all three pushes must be counted, none coalesced').toBe(lengthBefore + 3)
     expect(ctx.view, 'ctx.view must track the final navigation').toBe('settings')
   })
@@ -593,7 +600,7 @@ describe('QA adversarial: a nav from a boot-seeded view, not a view reached by a
     })
     const ctx = requireCtx()
     expect(window.location.pathname, 'nav must push from a boot-seeded view exactly as from a clicked one').toBe(
-      '/settings',
+      '/settings/members',
     )
     expect(window.history.length, 'nav must add exactly one entry').toBe(lengthBefore + 1)
     expect(ctx.view).toBe('settings')
@@ -698,10 +705,10 @@ describe('AC-4: a settings-tab click replaces', () => {
     expect(ctx.settingsTab, 'state must move with the URL').toBe('roles')
   })
 
-  // The default tab is OMITTED, so returning to Members must write bare /settings. Every
-  // other writer spec drives 'roles', and the two /settings pins in App.routeBoot.test.tsx
-  // cover the boot alignment, not this click -- so nothing else here sees the omit rule.
-  it('settings_returningToMembersWritesTheBarePath', async () => {
+  // Members is named like every other tab, so returning to it must write
+  // /settings/members. Every other writer spec drives 'roles', and the settings pins in
+  // App.routeBoot.test.tsx cover the boot alignment, not this click.
+  it('settings_returningToMembersWritesTheCanonicalPath', async () => {
     await bootAt('/settings/roles')
     expect(requireCtx().settingsTab, 'sanity: the boot must open on Roles').toBe('roles')
 
@@ -711,7 +718,7 @@ describe('AC-4: a settings-tab click replaces', () => {
     })
     const ctx = requireCtx()
 
-    expect(window.location.pathname, 'the default tab must never appear as a segment').toBe('/settings')
+    expect(window.location.pathname, 'the default tab is named like any other').toBe('/settings/members')
     expect(pushSpy.mock.calls, 'a tab click must never push').toHaveLength(0)
     expect(ctx.settingsTab, 'state must move with the URL').toBe('members')
   })

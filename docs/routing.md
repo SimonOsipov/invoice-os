@@ -101,7 +101,7 @@ available set differ by one member in a firm workspace; an unavailable tab is an
 
 `members` is the default, so R2 omits it: Members is bare `/settings`, never
 `/settings/members`. Both halves of that omission are pinned —
-`App.routeNavigate.test.tsx`'s `settings_returningToMembersWritesTheBarePath` for the
+`App.routeNavigate.test.tsx`'s `settings_returningToMembersWritesTheCanonicalPath` for the
 writer, and the `SETTINGS_TAB_URL` map inside `e2e/topology/roles.spec.ts`'s
 `openSettingsTab` for the browser.
 

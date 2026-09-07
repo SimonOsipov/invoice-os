@@ -246,7 +246,7 @@ describe('AC-6: the alignment writes no history entry, and is idempotent', () =>
   })
 })
 
-describe('AC-7: signOut resets the pathname to /, and preserves the hash', () => {
+describe('AC-7: signOut resets the pathname to /, and no longer carries a fragment', () => {
   it('signOut_thePathnameDoesNotSurviveIntoTheNextSignIn', async () => {
     // ctx.nav() does not touch the URL until navigate()/pushState land (ROUTE-01-03) --
     // booting straight at /invoices is what dirties the pathname today, via the mount
@@ -272,9 +272,9 @@ describe('AC-7: signOut resets the pathname to /, and preserves the hash', () =>
     expect(ctx.view, 'a fresh sign-in must never inherit the previous session\'s view').toBe('dashboard')
   })
 
-  it('signOut_preservesTheHashAndEveryOtherReset', async () => {
-    // A generic fragment, not the (now removed) review hash -- subtask 05 deletes the
-    // last `+ window.location.hash` echoes, and this pins the writer, not the retired form.
+  it('signOut_dropsAnyLiveFragmentAlongWithEveryOtherReset', async () => {
+    // Subtask 05 deletes this writer's own fragment-append expression -- a live fragment
+    // no longer rides along; replaceState('/') resets the whole url, fragment included.
     const hash = `#frag`
     await bootAt(`/invoices${hash}`)
     const ctx = requireCtx()
@@ -284,10 +284,29 @@ describe('AC-7: signOut resets the pathname to /, and preserves the hash', () =>
       ctx.signOut()
     })
 
-    expect(window.location.hash, 'signOut must preserve the hash verbatim').toBe(hash)
+    expect(window.location.href.includes('#'), 'signOut must no longer preserve a live fragment').toBe(false)
     expect(window.location.pathname, 'signOut must still reset the pathname').toBe('/')
     expect(localStorage.getItem(SESSION_KEY), 'the persisted session must be cleared').toBeNull()
     expect(screen.queryByTestId('persona-toast'), 'no toast must be mounted after sign-out').toBeNull()
+  })
+})
+
+// ROUTE-03-05 AC-3, AC-5: the successor of the "preserve the hash verbatim" assertion --
+// nothing produces a fragment any more, so the alignment's own job is re-emitting the
+// owned query, and a fragment live at boot must no longer survive the rewrite.
+describe('ROUTE-03-05: the alignment re-emits the owned query, and drops any live fragment', () => {
+  it('alignment_preservesTheOwnedQueryNotAFragment', async () => {
+    await bootAt('/invoices?q=acme#frag')
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: the path must seed invoices').toBe('invoices')
+    expect(
+      window.location.pathname + window.location.search,
+      'the alignment must re-emit the owned query',
+    ).toBe('/invoices?q=acme')
+    expect(
+      window.location.href.includes('#'),
+      'the alignment must no longer carry the boot fragment forward',
+    ).toBe(false)
   })
 })
 

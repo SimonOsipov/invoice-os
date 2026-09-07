@@ -184,7 +184,7 @@ export type View = 'dashboard' | 'invoices' | 'rules' | 'workflows' | 'create' |
 // stage is the user's REVIEW SURFACE, not an import-report payload rendered on it — and
 // INVCR-01-09 cashed that distinction by deleting CreateReport.tsx outright. 'review' now
 // renders ReviewBatch.tsx off `reviewBatchIds` + two live GETs, which is also why the step
-// is reachable by URL (`#review/<uuid>`) where the payload-backed one never could be.
+// is reachable by URL (`/imports/<uuid>/review`) where the payload-backed one never could be.
 // EXTR-09-06 added 'documents' — the extraction run's own first step, on a strip that has
 // no Map. Every member needs an entry in lib/importFlow.ts's STAGE_OF or that file stops
 // compiling (STEPS-D3b).
@@ -413,7 +413,7 @@ export type PlatformCtx = {
   // order, and none may be dropped just because the review screen itself is not yet
   // widened to read more than the first (BULK-01-06). REPLACES the old
   // `report: ImportReport | null` before that, which was the POST's frozen 201 payload
-  // held in memory: D4 made the review screen revisitable by URL (`#review/<uuid>`),
+  // held in memory: D4 made the review screen revisitable by URL (`/imports/<uuid>/review`),
   // so it re-fetches from GET /v1/imports/{id} + the list endpoint's own totals
   // instead, and a stale in-memory report is exactly the frozen-counter source that
   // replaced. An id is all any consumer needs; nothing may resurrect the payload.

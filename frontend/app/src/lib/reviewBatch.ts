@@ -27,13 +27,8 @@
 //
 // filterToQuery/reviewQuery never filter, count, sort or page client-side
 // ([filters-are-server-side]). reviewQuery's `batchId` is REQUIRED, not optional -- the
-// type-level half of cashing 06's un-cashed `#review/<uuid>` safety argument
-// (constructing a review request without a batch id is a compile error).
-//
-// parseReviewHash/formatReviewHash are the pure hash codec only; reviewHash is the
-// App-facing composer over them. The `window.location.hash` read/write itself lives at
-// exactly TWO call sites in App.tsx (the boot initializer and the mirror effect) -- this
-// module stays DOM-free so it is node-testable with no jsdom.
+// type-level half of cashing 06's un-cashed review-route safety argument (constructing a
+// review request without a batch id is a compile error).
 import {
   invoiceStatusStyle,
   mbsPathToEditField,
@@ -53,8 +48,7 @@ import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
-import type { StatusStyle, View, CreateStep } from '../types'
-import { REVIEW_PATH_MAX_IDS } from './route'
+import type { StatusStyle } from '../types'
 // Type-only: importRun.ts:74 already imports routeAfterImport FROM this file, so a
 // runtime import back would be this codebase's first reviewBatch.ts <-> importRun.ts
 // cycle. `import type` is fully erased (verbatimModuleSyntax), so no such cycle exists.
@@ -403,41 +397,6 @@ export function pagerLabels(p: { limit: number; offset: number; total: number })
   return { showing, page: `PAGE ${page} / ${pages}` }
 }
 
-const REVIEW_HASH_PREFIX = '#review/'
-
-// Canonical 8-4-4-4-12 hex. Anchored at both ends on purpose: a `startsWith` + `slice`
-// parser would happily return '../../etc' or a '<uuid>/extra' suffix as if it were a batch
-// id, and that id goes straight into a request whose empty/absent form is a TENANT-WIDE
-// list. Case is accepted in both directions because uuid.Parse is (server side).
-const REVIEW_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
-
-// The value lives in route.ts's REVIEW_PATH_MAX_IDS, which mirrors importRun.ts's
-// MAX_RUN_FILES; route.test.ts's guard_theRunCapIsOneConstant fails if they diverge.
-export const REVIEW_HASH_MAX_IDS = REVIEW_PATH_MAX_IDS // one cap, retired in ROUTE-03-05
-
-// Returns null -- NEVER '' -- for anything that is not one-to-REVIEW_HASH_MAX_IDS comma-
-// separated `#review/<uuid>[,<uuid>...]` segments, EVERY one of which must match
-// REVIEW_UUID: one bad segment poisons the WHOLE hash, never a partial list. '' is a
-// string a caller can accidentally treat as a usable id, and passing it to listInvoices
-// omits the param and silently widens the query to the whole tenant. The prefix match is
-// case-SENSITIVE ('#REVIEW/...' is not our route) while each uuid's own case is preserved
-// VERBATIM -- lower-casing it here would be rewriting the caller's data.
-//
-// Widened in place from `(hash): string | null` -- its only caller, App.tsx's boot
-// initializer, was updated in the same commit (BULK-01-05/06).
-export function parseReviewHash(hash: string): string[] | null {
-  if (!hash.startsWith(REVIEW_HASH_PREFIX)) return null
-  const segments = hash.slice(REVIEW_HASH_PREFIX.length).split(',')
-  if (segments.length === 0 || segments.length > REVIEW_HASH_MAX_IDS) return null
-  return segments.every((s) => REVIEW_UUID.test(s)) ? segments : null
-}
-
-// Widened in place from `(id: string): string` -- a single-id array still formats
-// byte-identically to the shipped `#review/x` (AC-2).
-export function formatReviewHash(ids: string[]): string {
-  return `${REVIEW_HASH_PREFIX}${ids.join(',')}`
-}
-
 // The single composer 09/10 use to build every review request -- flagged as an 8th
 // export beyond AC-4's list, with justification recorded in the task's Implementation
 // Plan §4, not smuggled: it is the only lever this subtask has to discharge 06's
@@ -663,27 +622,6 @@ export function reviewTabs(
   if (counts.alreadyImported > 0)
     tabs.push({ id: 'already-imported', label: `Already imported (${counts.alreadyImported})` })
   return tabs
-}
-
-// --- Hash codec, the App-facing half (AC-1, §2) ---
-//
-// Mirrors App.tsx's mirror effect exactly: the hash is written iff view==='create' AND
-// createStep==='review' AND reviewBatchId is a NON-EMPTY string; every other combination
-// clears it. This is what stops the hash lingering after `Finish` or any other exit from
-// review -- App.tsx has ONE effect calling this, not N call sites each responsible for
-// remembering to clear it. `window` itself is never touched here -- only at the two call
-// sites this function's own module comment (top of file) names in App.tsx.
-// Widened in place from `(..., reviewBatchId: string | null)` -- the third param is now
-// every id in the run (App.tsx's `reviewBatchIds` state, BULK-01-05), not just the
-// first. Its only caller, App.tsx's mirror effect, was updated in the same commit; the
-// effect's own dep array joins the array (`reviewBatchIds.join(',')`), never passes the
-// array reference itself -- a fresh array every render would otherwise re-fire the
-// effect forever. This is a plain useEffect, not one of the three genuine useAsync sites
-// packages/api-client/src/async-state.ts:117's spread-deps hazard actually names
-// (ReviewBatch.tsx, ReviewInvoicesTab.tsx x2).
-export function reviewHash(view: View, createStep: CreateStep, reviewBatchIds: string[]): string | null {
-  if (view === 'create' && createStep === 'review' && reviewBatchIds.length > 0) return formatReviewHash(reviewBatchIds)
-  return null
 }
 
 // --- Unreadable-rows CSV (AC-5, §7.4 "Download this list (CSV)") ---

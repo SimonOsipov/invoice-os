@@ -499,12 +499,10 @@ describe('AC-7: switchClient clears the one atom Epic Q6 named, and nothing else
   })
 })
 
-describe('QA adversarial: navigate() carries forward a live fragment even though review no longer owns one', () => {
-  it('nav_thePushCallCarriesWhateverHashWasLiveAtCallTime', async () => {
-    // A generic fragment, not the (now removed) review hash -- its premise inverts once
-    // review is a path: nothing produces a hash any more, so this pins that navigate()
-    // still carries forward whatever fragment happens to be live, generically. Subtask 05
-    // deletes navigate()'s own `+ window.location.hash` append; this spec deletes with it.
+describe('QA adversarial: navigate() no longer carries a fragment forward', () => {
+  it('nav_thePushCallNoLongerCarriesAnyLiveFragment', async () => {
+    // Subtask 05 deletes navigate()'s own fragment-append expression -- a fragment live
+    // at call time no longer rides along; the pushed url is exactly routeUrl's output.
     await bootAt('/audit')
     window.history.replaceState(null, '', '/audit#frag')
     const pushSpy = vi.spyOn(window.history, 'pushState')
@@ -513,10 +511,7 @@ describe('QA adversarial: navigate() carries forward a live fragment even though
     })
     const call = pushSpy.mock.calls.find((c) => typeof c[2] === 'string' && c[2].startsWith('/invoices'))
     expect(call, 'no pushState call to /invoices was recorded').toBeDefined()
-    expect(
-      call![2],
-      "navigate() must carry forward whatever fragment was live at call time, per decision [one-writer-rule]",
-    ).toBe('/invoices#frag')
+    expect(call![2], 'navigate() must no longer carry a fragment forward').toBe('/invoices')
   })
 })
 
@@ -1245,11 +1240,11 @@ describe('QA adversarial: ctx.selectedId is gone from the real ctx, not just tes
   })
 })
 
-// QA adversarial (route-02-06): the scrub reads window.location.hash at call time, same
-// as every other writer in this seam (routePath(view) + hash) -- a live fragment on the
-// entry being left (e.g. a stale #review hash not yet cleared) must ride along, not drop.
-describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash on the entry being left', () => {
-  it('switchClient_scrubPreservesALiveHashOnTheEntryBeingLeft', async () => {
+// QA adversarial (route-02-06): subtask 05 deletes the scrub's fragment echo -- a live
+// fragment on the entry being left no longer rides along; the scrub writes the plain
+// scrubbed path only.
+describe('QA adversarial (route-02-06): switchClient scrub no longer carries a live fragment on the entry being left', () => {
+  it('switchClient_scrubDropsAnyLiveFragmentOnTheEntryBeingLeft', async () => {
     await bootAt('/')
     await act(async () => {
       capturedCtx!.openExtraction(JOB_A)
@@ -1262,7 +1257,7 @@ describe('QA adversarial (route-02-06): switchClient scrub preserves a live hash
     })
 
     expect(replaceSpy.mock.calls[0]?.[2], 'the scrub is the FIRST replaceState this switch performs').toBe(
-      '/invoices#stale-fragment',
+      '/invoices',
     )
   })
 })

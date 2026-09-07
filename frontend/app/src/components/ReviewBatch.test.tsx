@@ -123,6 +123,19 @@ describe('ReviewBatch: rendered captions name validation, not entitlement (APPR-
   })
 })
 
+// ROUTE-03-05 AC-6. This branch is defensive, not reachable from any URL: every route that
+// sets createStep='review' (the boot initializer, RunRoute's 'review' variant off
+// routeAfterRun, and the popstate arm's `reviewBatchIds.length > 0` gate) guarantees a
+// non-empty batch list, and a malformed review path parses to 'dashboard', never 'create'
+// (parseLocation('/imports/notauuid/review', '') returns view:'dashboard') -- true before
+// this story too. Covered here by direct construction, the only way left to prove it renders.
+describe('ROUTE-03-05 AC-6: the empty-batch error state, defensive and unreachable by url', () => {
+  it('review_theEmptyBatchErrorStateRendersWhenConstructedDirectly', () => {
+    render(<ReviewBatch ctx={reviewCtx([])} />)
+    expect(screen.getByText(/There is no import to review/)).toBeTruthy()
+  })
+})
+
 // --- EXTR-15-09 (task-835), QA pass: the document arm of the PARENT screen -------------
 //
 // CEN-2 and SW-3 prove a document literal is IN the source. Neither proves it RENDERS,

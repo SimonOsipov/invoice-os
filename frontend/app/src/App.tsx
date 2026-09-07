@@ -302,23 +302,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     [entitiesList, active.entityId],
   )
 
-  // --- `#review/<uuid>` deep link (INVCR-01-09, AC-1 / D4) — the READ half ---------
+  // --- boot deep link (INVCR-01-09, D4) — the READ half -------------------------------
   //
-  // ONE lazy parse of `window.location.hash`, here in Workspace rather than App: App
-  // renders <Workspace> only once `session != null`, so a read up there would run before
-  // the session exists on the deep-link hand-off path. The three initializers below are
+  // ONE lazy parse of the boot URL, here in Workspace rather than App: App renders
+  // <Workspace> only once `session != null`, so a read up there would run before the
+  // session exists on the deep-link hand-off path. The three initializers below are
   // DERIVED from this single value — there is deliberately no boot effect that navigates,
   // because StrictMode double-invokes effects and a navigating one would fire twice.
   //
-  // The hash survives the landing hand-off: App's `?persona=` strip (below) rebuilds the
-  // URL as `pathname + window.location.hash`, preserving it.
-  //
-  // There is NO `hashchange` listener, by decision. D4 asks that the screen survive a
-  // RELOAD, which it does. Path routing now pushes real history entries (navigate(),
-  // below); this hash still has no listener, and adding one here would make review
-  // diverge from a Back/Forward the mirror effect below cannot reconcile (hash
-  // hand-deleted while the review screen is still mounted). Recorded limitation: pasting
-  // a review hash into an already-open tab's address bar does not navigate until reload.
   // A stored destination only applies to a boot that landed on the bare root — the landing
   // hand-off's shape. A live non-root path is the URL the browser is showing; never override it.
   // Path and query come from the SAME source in one shot, so a restored destination's own
@@ -536,7 +527,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setEntityId(active.entityId)
     }
   }, [createStep, entityId, active.entityId])
-  // Aligns a boot URL that named no path (a review hash, a DEMO-06 carry, an unknown
+  // Aligns a boot URL that named no path (a DEMO-06 carry, an unknown
   // path) with the view it produced. `replaceState`, mount-only: never a history entry.
   // It also normalises a URL that DID name a path: unowned params are dropped and the
   // owned ones re-emitted from state.
@@ -556,7 +547,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       auditInvoice: auditPrefilter?.invoiceId ?? null,
       reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
     })
-    window.history.replaceState(null, '', url + window.location.hash)
+    window.history.replaceState(null, '', url)
     clearDestination()
   }, [])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
@@ -593,7 +584,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }, [])
   // --- review path — the WRITE half of create's URL ----------------------------------
   // One writer mirrors state to the URL so no review exit has to remember to clear it.
-  // `replaceState`, not `location.hash = …`, so Back doesn't bounce off a stray entry.
+  // `replaceState`, never `pushState`, so Back doesn't bounce off a stray entry.
   useEffect(() => {
     // Owns the `create` path only. navigate() pushes before this runs and owns every
     // other view, so the early return is what stops two writers fighting one URL.
@@ -628,7 +619,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
-    window.history.pushState(null, '', url + window.location.hash)
+    window.history.pushState(null, '', url)
   }
 
   function nav(id: View, params?: RouteParams) {
@@ -646,7 +637,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setInvoiceQuery(q: string) {
     setInvoiceQuery_(q)
     const url = routeUrl(view, { settingsTab, q, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState(null, '', url + window.location.hash)
+    window.history.replaceState(null, '', url)
   }
 
   function toggleSwitcher() {
@@ -657,7 +648,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setActiveEntityId(id)
     // The entry being left names a drill-down of the company being left. Scrub its id
     // through the same collapse a persona switch uses, so Back cannot return to it.
-    window.history.replaceState(null, '', routePath(carryView(view)) + window.location.hash)
+    window.history.replaceState(null, '', routePath(carryView(view)))
     navigate('dashboard')
     setDetailInvoiceId(null)
     setSwitcherOpen(false)
@@ -666,7 +657,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setCreateStep('form')
     // A batch belongs to ONE entity. Leaving this set would keep the review screen's
     // deep-link id pointing at the company just left — and the mirror effect above would
-    // keep writing its hash into the URL from the incoming company's dashboard.
+    // keep writing its path into the URL from the incoming company's dashboard.
     setReviewBatchIds([])
     // A failed filing's message named the company just left. `filing` is deliberately NOT
     // cleared: a request already in flight is still in flight, and it will land on the
@@ -1281,7 +1272,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setAuditInvoiceFilter(invoiceId: string | null, invoiceNumber: string | null) {
     setAuditPrefilter(invoiceId ? { invoiceId, invoiceNumber } : null)
     const url = routeUrl(view, { settingsTab, q: invoiceQuery, auditInvoice: invoiceId })
-    window.history.replaceState(null, '', url + window.location.hash)
+    window.history.replaceState(null, '', url)
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
@@ -1294,7 +1285,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState(null, '', url + window.location.hash)
+    window.history.replaceState(null, '', url)
   }
 
   function toggleConnector(id: ConnectorId) {
@@ -1666,7 +1657,7 @@ export default function App() {
     setCarriedView(null)
     // Since the boot seed, the URL carries `view` too. Clear it where carriedView is
     // cleared, or the next sign-in boots onto the signed-out session's screen.
-    window.history.replaceState(null, '', '/' + window.location.hash)
+    window.history.replaceState(null, '', '/')
     setToast(null)
     clearSession()
     // Wipes a destination captured before this session — the pathname reset above only
@@ -1762,7 +1753,7 @@ export default function App() {
   useEffect(() => {
     if (!autoPersona) return
     if (new URLSearchParams(window.location.search).has('persona')) {
-      window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+      window.history.replaceState(null, '', window.location.pathname)
     }
   }, [autoPersona])
 

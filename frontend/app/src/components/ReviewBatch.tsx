@@ -2,7 +2,7 @@
 // Core AC 6/8/9). REPLACES CreateReport.tsx, which rendered the POST's 201 payload held
 // in memory and therefore rendered a blank body under a step strip on any reload.
 //
-// D4's ruling is what this file is: the review screen is addressable (`#review/<uuid>`)
+// D4's ruling is what this file is: the review screen is addressable (`/imports/<uuid>/review`)
 // and REVISITABLE, so it re-derives everything from the server on every arrival instead
 // of reading a frozen import-time payload. Two consequences worth stating, because both
 // look like extra work until you know why:
@@ -180,9 +180,9 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
     else if (shell.error != null) lastShell.current = null
   }, [shell.data, shell.error])
 
-  // An ERROR, not an empty review surface. Reachable by editing the hash to something
-  // parseReviewHash rejects, which lands on the review step with no batch to show —
-  // CreateReport's `if (!report) return null` rendered a blank body there.
+  // An ERROR, not an empty review surface -- defensive, unreachable from any URL: every
+  // route that sets createStep === 'review' couples it to a non-empty batch. Pinned by
+  // review_theEmptyBatchErrorStateRendersWhenConstructedDirectly.
   if (batchIds.length === 0) {
     return <ErrorState error={new ApiError('network', 'There is no import to review. Start an import, or open one from the invoices list.')} />
   }

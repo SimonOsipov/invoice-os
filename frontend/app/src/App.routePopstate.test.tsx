@@ -184,7 +184,9 @@ describe('AC-3: the handler performs no history write', () => {
     const pushSpy = vi.spyOn(window.history, 'pushState')
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     const lengthBefore = window.history.length
-    const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+    // No fragment component -- subtask 05 removes the last writer that could have put one
+    // on the url, so this comparison is pathname+search only from here on.
+    const urlBeforeDispatch = window.location.pathname + window.location.search
 
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -827,7 +829,7 @@ describe('ROUTE-03-04 AC-4: a popstate onto a review path still writes no histor
     const pushSpy = vi.spyOn(window.history, 'pushState')
     const replaceSpy = vi.spyOn(window.history, 'replaceState')
     const lengthBefore = window.history.length
-    const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+    const urlBeforeDispatch = window.location.pathname + window.location.search
 
     await act(async () => {
       window.dispatchEvent(new PopStateEvent('popstate'))
@@ -929,7 +931,7 @@ describe('AC-4, extended: a filtered restore still writes no history entry', () 
       const pushSpy = vi.spyOn(window.history, 'pushState')
       const replaceSpy = vi.spyOn(window.history, 'replaceState')
       const lengthBefore = window.history.length
-      const urlBeforeDispatch = window.location.pathname + window.location.search + window.location.hash
+      const urlBeforeDispatch = window.location.pathname + window.location.search
 
       await act(async () => {
         window.dispatchEvent(new PopStateEvent('popstate'))

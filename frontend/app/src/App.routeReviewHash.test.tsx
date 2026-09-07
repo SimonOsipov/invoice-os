@@ -159,7 +159,10 @@ describe('AC-1: the two existing history writers are unchanged', () => {
   it('guard_theTwoExistingHistoryWritersAreUnchanged', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
     const reviewMirrorWrite = "routeUrl('create', { reviewBatchIds: ids })"
-    const personaStripWrite = 'window.location.pathname + window.location.hash'
+    // Subtask 05 drops this writer's own fragment append -- re-pointed at the resulting
+    // full statement, not a bare substring: `window.location.pathname` alone also occurs
+    // at three other, unrelated call sites in this file.
+    const personaStripWrite = "window.history.replaceState(null, '', window.location.pathname)"
 
     const reviewIdx = src.indexOf(reviewMirrorWrite)
     const personaIdx = src.indexOf(personaStripWrite)

@@ -339,7 +339,7 @@ describe('filterToQuery (AC-7)', () => {
   })
 })
 
-describe('reviewQuery (AC-4, cashing the un-cashed #review/<uuid> safety argument)', () => {
+describe('reviewQuery (AC-4, cashing the un-cashed batch-id safety argument)', () => {
   it('QUERY-1: reviewQuery always carries the batch id, merges filterToQuery with the extras, and never emits an empty q', () => {
     const id = 'batch-1'
 

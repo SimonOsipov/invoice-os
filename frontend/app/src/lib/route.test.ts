@@ -707,15 +707,15 @@ describe('review path — /imports/:batchIds/review (ROUTE-03-01)', () => {
 })
 
 // ROUTE-03-02: the three codec `describe` blocks below moved here from reviewBatch.test.ts,
-// retargeted from '#review/…' fragments to the '/imports/…/review' path. Spec ids kept for
-// traceability. Six of the eleven ported assertions duplicate specs already in the block
-// above (traceability only, not new coverage) — see task-951's Implementation Notes.
+// retargeted from the retired hash-fragment form to the '/imports/…/review' path. Spec ids
+// kept for traceability. Six of the eleven ported assertions duplicate specs already in the
+// block above (traceability only, not new coverage) — see task-951's Implementation Notes.
 
 describe('parseReviewHash / formatReviewHash (AC-4) — migrated to reviewPath/parseReviewPath (ROUTE-03-02, HASH-1/2)', () => {
-  // formatReviewHash([id])).toBe(`#review/${id}`) (reviewBatch.test.ts:446) is INVALIDATED,
-  // not ported: it pins the OLD '#review/' url ROUTE-00 Decision Log Q7 deliberately breaks.
-  // No path-form 'equivalent' invented — reviewPath's own byte shape is already pinned by
-  // review_theEmittedSegmentCarriesARawComma above.
+  // formatReviewHash([id]) resolving to the old hash-fragment url (reviewBatch.test.ts:446)
+  // is INVALIDATED, not ported: it pins the retired url shape ROUTE-00 Decision Log Q7
+  // deliberately breaks. No path-form 'equivalent' invented — reviewPath's own byte shape is
+  // already pinned by review_theEmittedSegmentCarriesARawComma above.
   it('HASH-1 (migrated): round-trips a uuid with case preserved verbatim (never lower-cased); an empty string and a foreign path are null', () => {
     expect(parseReviewPath(reviewPath([UUID_UPPER]))).toEqual([UUID_UPPER])
     // C1 (prefix check): defensive, unreachable in production — parseLocation gates the
@@ -792,10 +792,39 @@ describe('parseReviewHash: widened to a run (BULK-01-06, AC-1) — migrated to p
     expect(parseReviewPath(`/imports/${RUN_IDS.join(',')}/review`)).toBeNull()
   })
 
-  // formatReviewHash([a])).toBe(`#review/${a}`) (reviewBatch.test.ts:2527) is INVALIDATED,
-  // not ported: OLD '#review/' url byte-shape, broken by ROUTE-00 Decision Log Q7.
+  // formatReviewHash([a]) resolving to the old hash-fragment url (reviewBatch.test.ts:2527)
+  // is INVALIDATED, not ported: retired url byte-shape, broken by ROUTE-00 Decision Log Q7.
   it('BULK-06-6 (migrated): parseReviewPath(reviewPath([a,b])) round-trips two ids', () => {
     const [a, b] = RUN_IDS
     expect(parseReviewPath(reviewPath([a, b]))).toEqual([a, b])
+  })
+})
+
+// ROUTE-03-05 AC-1/AC-2: the whole-tree grep this AC runs by hand can't see route.test.ts
+// itself (a literal NUL byte a few hundred lines below makes plain grep classify the file as
+// binary and skip it) -- this in-process scan is what actually covers the six source files.
+// Built concatenated, not as a literal: a literal would make this scanner's own source
+// match itself, so the shell AC-1 grep could never return a true zero.
+const REVIEW_FRAGMENT = '#' + 'review'
+const LOCATION_HASH = 'location' + '.hash'
+
+describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
+  it('guard_noReviewHashSurvivesInTheApp', () => {
+    const files = [
+      { name: 'App.tsx', path: APP_TSX },
+      { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)) },
+      { name: 'lib/route.ts', path: ROUTE_TS },
+      { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)) },
+      { name: 'components/ReviewBatch.tsx', path: fileURLToPath(new URL('../components/ReviewBatch.tsx', import.meta.url)) },
+      { name: 'lib/importApi.ts', path: fileURLToPath(new URL('./importApi.ts', import.meta.url)) },
+    ]
+    for (const { name, path } of files) {
+      const src = readFileSync(path, 'utf8')
+      // Floor: a broken path reads back '', which would make the absence checks below pass
+      // on nothing read rather than a clean file -- M4-04 burned five instruments this way.
+      expect(src.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
+      expect(src.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
+      expect(src.includes(LOCATION_HASH), `${name} still reads or writes the url fragment`).toBe(false)
+    }
   })
 })

@@ -1,4 +1,4 @@
-// `node` environment (vitest.config.ts default) -- seven static source scans, nothing
+// `node` environment (vitest.config.ts default) -- eight static source scans, nothing
 // renders. Idiom-twin is lib/routeWriterGuard.test.ts, not the App.*.test.tsx family:
 // every file in that family renders the app component and needs a jsdom URL reset this
 // file does not, since it never mounts anything.

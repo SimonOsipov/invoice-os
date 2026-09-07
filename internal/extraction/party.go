@@ -23,13 +23,39 @@ var partyHeadings = []struct {
 // partyHeading is which party a token's text heads, or PartyUnknown. A token both vocabularies
 // match heads neither: a heading naming both parties names neither.
 func partyHeading(text string) Party {
-	_ = text
-	return PartyUnknown
+	found := PartyUnknown
+	matched := 0
+	for _, m := range anchorLabelMatchers {
+		p := PartyUnknown
+		for _, h := range partyHeadings {
+			if h.labelID == m.ID {
+				p = h.party
+			}
+		}
+		if p == PartyUnknown || !m.RE.MatchString(text) {
+			continue
+		}
+		matched++
+		found = p
+	}
+	if matched != 1 {
+		return PartyUnknown
+	}
+	return found
 }
 
 // partyOrder is one Party per token, in the page's own token order: the party of the nearest
 // party heading at or before that token. One page in, so a heading cannot reach the next one.
 func partyOrder(page TokenPage) []Party {
-	_ = page
-	return nil
+	out := make([]Party, len(page.Tokens))
+	current := PartyUnknown
+	for i, tok := range page.Tokens {
+		// Only a heading moves the block. An unconditional assignment would clear it at every
+		// ordinary token and leave the partition holding headings alone.
+		if p := partyHeading(tok.Text); p != PartyUnknown {
+			current = p
+		}
+		out[i] = current
+	}
+	return out
 }

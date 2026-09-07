@@ -606,3 +606,39 @@ func TestTier1_ABareTaxLabelStillAnchorsTheAmount(t *testing.T) {
 		}
 	}
 }
+
+// Every other arrangement here starts the phrase at offset 0, so an entry anchored to the start
+// of the token satisfies all of them while a real document printing "PROFORMA TAX INVOICE"
+// anchors an amount again.
+func TestTier1_AnOwningPhraseSuppressesWhereverItSitsOnTheToken(t *testing.T) {
+	t1Floor(t)
+
+	for _, arm := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"a prefixed title", t1aBesideItsValue("PROFORMA TAX INVOICE", 0.30, "1,500.00")},
+		{"a prefixed registration phrase", t1aBesideItsValue("Statement VAT REG NO", 0.30, "1234567")},
+	} {
+		if got := t1aVAT(arm.pages); len(got) != 0 {
+			t.Errorf("%s: vat = %v, want none; the phrase claims the token only when it opens it", arm.name, got)
+		}
+	}
+
+	// The paired controls: the same offsets with the phrase cut back to the bare label, so the
+	// zeros above cannot hold against a page shape Resolve reads nothing off.
+	for _, ctl := range []struct {
+		name  string
+		pages []extraction.TokenPage
+		want  string
+	}{
+		{"a prefixed bare label beside the amount", t1aBesideItsValue("PROFORMA TAX", 0.22, "1,500.00"), "1500.00"},
+		{"a prefixed bare label beside the number", t1aBesideItsValue("Statement VAT", 0.22, "1234567"), "1234567"},
+	} {
+		got := extraction.Resolve(ctl.pages, rvGeneric())
+		rvControl(t, got, ctl.name)
+		if v := rvValues(rvFor(got, "vat")); !slices.Equal(v, []string{ctl.want}) {
+			t.Errorf("%s: vat = %v, want [%s]; the geometry the arms above assert nothing on never reached the value", ctl.name, v, ctl.want)
+		}
+	}
+}

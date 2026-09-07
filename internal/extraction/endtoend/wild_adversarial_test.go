@@ -494,6 +494,35 @@ func TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus(t *testing.T) {
 	}
 }
 
+// The arm above takes any layout. This names the token behind the one rc_number observation the
+// corpus carries, so the arm cannot come to rest on some other document's phrase.
+func TestWildLayouts_TheRCLineIsTheOnlyCompanyNumberLabelTheCorpusPrints(t *testing.T) {
+	const printed = "RC NUMBER: " + wildRCNumber
+	pages := eeTokenPages(t, wildRCNaira)
+
+	found := false
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if tok.Text == printed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("%s prints no %q token; the label hit asserted below would be a hit on some other text", wildRCNaira, printed)
+	}
+
+	var hits []string
+	for _, o := range extraction.AnchorObservations(pages) {
+		if o.Label == "rc_number" {
+			hits = append(hits, o.Text)
+		}
+	}
+	if !slices.Equal(hits, []string{"RC NUMBER"}) {
+		t.Errorf("%s observes rc_number as %v, want exactly [RC NUMBER]; the printed line must be a label hit, and the value behind the colon must stay outside it", wildRCNaira, hits)
+	}
+}
+
 // The scanned layout has no text layer, so its tokens come from the committed golden. The
 // Tier-1 binding is fixed here even though the cell still misses end to end -- the document
 // quarantines and writes no invoices row.

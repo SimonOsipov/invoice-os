@@ -424,6 +424,10 @@ func TestAnchorLexicon_AnOwningPhraseOutranksTheAmountLabel(t *testing.T) {
 		{"TAX REGISTRATION NUMBER", "reg_identifier", "vat"},
 		{"TAX INVOICE", "doc_title", "vat"},
 		{"VAT INVOICE", "doc_title", "vat"},
+		// The phrase does not open the token: an entry anchored to the start of a token passes
+		// every other case here (TestTier1_AnOwningPhraseSuppressesWhereverItSitsOnTheToken).
+		{"PROFORMA TAX INVOICE", "doc_title", "vat"},
+		{"Statement VAT REG NO", "reg_identifier", "vat"},
 	} {
 		inner := alSpan(c.text, c.narrow)
 		if inner == nil {
@@ -503,7 +507,7 @@ var alBareTokenCases = []struct {
 	{"signature", "Buyer's Signature", []string{"Buyer", "Signature"}},
 	{"reg_identifier", "VAT REG NO", []string{"VAT", "Tax", "V.A.T."}},
 	{"rc_number", "RC NUMBER", []string{"RC", "CAC"}},
-	{"doc_title", "TAX INVOICE", []string{"TAX", "Invoice"}},
+	{"doc_title", "TAX INVOICE", []string{"TAX", "VAT", "Invoice"}},
 }
 
 // anchorOutranked needs a STRICTLY wider span, so an owning phrase that loses its required tail
@@ -518,10 +522,17 @@ func TestAnchorLexicon_AnOwningPhraseRefusesTheBareTokenInsideIt(t *testing.T) {
 	if len(alBareTokenCases) != len(t1OwningPhraseIDs) {
 		t.Fatalf("%d bare-token case(s) for %d owning phrase(s): every owning phrase needs one", len(alBareTokenCases), len(t1OwningPhraseIDs))
 	}
+	seen := map[string]bool{}
 	for _, c := range alBareTokenCases {
 		if !slices.Contains(t1OwningPhraseIDs, c.owner) {
 			t.Fatalf("%q carries a bare-token case yet is no declared owning phrase; the case is asserted against an entry that earns its place another way", c.owner)
 		}
+		// Without this the count above is length plus subset, not set equality: a duplicated
+		// owner keeps the count and leaves another phrase degenerating unwatched.
+		if seen[c.owner] {
+			t.Fatalf("%q carries two bare-token cases; one declared owning phrase then has none", c.owner)
+		}
+		seen[c.owner] = true
 	}
 
 	for _, c := range alBareTokenCases {

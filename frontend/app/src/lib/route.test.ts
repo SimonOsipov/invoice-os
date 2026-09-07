@@ -518,8 +518,12 @@ describe('routePath — drill-down id parameter', () => {
     expect(routePath('detail', null)).toBe('/invoice')
   })
 
-  it('serialize_idIsIgnoredForTheElevenViewsThatDoNotTakeOne', () => {
+  it('serialize_idIsIgnoredForTheTenViewsThatDoNotTakeOne', () => {
     expect(routePath('settings', 'x')).toBe('/settings')
+    // The count in the name is asserted, not decorative: a fourth id branch makes it wrong.
+    expect(ALL_VIEWS.length).toBe(13)
+    const ignoreTheId = ALL_VIEWS.filter((v) => routePath(v, 'x') === ROUTE_PATHS[v])
+    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(10)
   })
 })
 
@@ -533,7 +537,7 @@ describe('routePath / parseRoute round trip — id corpus', () => {
     'tag#1',
     'plain-string',
   ]
-  const ID_TAKING_VIEWS = new Set(['detail', 'extraction'])
+  const ID_TAKING_VIEWS = new Set(['detail', 'extraction', 'workflows'])
 
   it('roundTrip_idCorpusSurvivesForEveryViewAcrossAllIds', () => {
     expect(ALL_VIEWS.length).toBe(13)
@@ -544,6 +548,78 @@ describe('routePath / parseRoute round trip — id corpus', () => {
         expect(parseRoute(routePath(v, id)), `${v} with id ${id}`).toEqual(expected)
       }
     }
+  })
+
+  it('roundTrip_aPolicyIdSurvivesSerialiseAndParse', () => {
+    // Same corpus as the two shipped drill-downs, so the slash and '#' entries tell an
+    // encoding bug from a plain pass-through.
+    expect(ID_CORPUS.length).toBe(6)
+    for (const id of ID_CORPUS) {
+      expect(parseRoute(routePath('workflows', id)), `workflows with id ${id}`).toEqual({
+        view: 'workflows',
+        id,
+      })
+    }
+  })
+})
+
+describe('the workflows drill-down — /workflows/:policyId (ROUTE-07-03)', () => {
+  // The list and the drill-down share one view here, so segment count is the only
+  // discriminator: /invoices/<id> parses to a different view than /invoices, this does not.
+  it('parse_theListAndTheBuilderAreTwoAddresses', () => {
+    expect(parseRoute('/workflows')).toEqual({ view: 'workflows', id: null })
+    expect(parseRoute(`/workflows/${UUID}`)).toEqual({ view: 'workflows', id: UUID })
+    expect(parseRoute('/workflows/')).toEqual({ view: 'workflows', id: null })
+    expect(parseRoute('/workflows/a/b')).toBeNull()
+  })
+
+  // policyId is not on ParsedLocation until the codec lands; reading it off the runtime
+  // entry list keeps this an assertion failure rather than a compile error.
+  function policyIdOf(pathname: string): unknown {
+    const found = Object.entries(parseLocation(pathname, '')).find(([k]) => k === 'policyId')
+    return found === undefined ? undefined : found[1]
+  }
+
+  it('parseLocation_policyIdIsNonNullOnlyOnItsOwnView', () => {
+    expect(policyIdOf(`/workflows/${UUID}`), 'the builder path must carry its id').toBe(UUID)
+    const carryNothing = ['/workflows', `/invoices/${UUID}`, '/extraction/j1', '/settings/roles']
+    expect(carryNothing.length).toBe(4)
+    for (const pathname of carryNothing) {
+      expect(policyIdOf(pathname), `${pathname} must carry no policyId`).toBeNull()
+    }
+  })
+
+  // wireMirrors.test.ts's tsInterfaceKeys reads `export interface` only; ParsedLocation is a
+  // type alias.
+  function parsedLocationDeclaredKeys(): string[] {
+    const body = /export type ParsedLocation = \{([^{}]*)\}/.exec(readFileSync(ROUTE_TS, 'utf8'))?.[1] ?? ''
+    const keys: string[] = []
+    for (const rawSeg of body.split(/[\n;]/)) {
+      const seg = rawSeg.trim()
+      if (!seg || seg.startsWith('//')) continue
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(seg)
+      if (m) keys.push(m[1])
+    }
+    return keys
+  }
+
+  it('parseLocation_returnsEightFieldsAndDeclaresEight', () => {
+    const declared = parsedLocationDeclaredKeys()
+    // Vacuity floor: a renamed type or a nested brace reads [] here, which would compare
+    // nothing against nothing.
+    expect(declared.length, `ParsedLocation declares: ${declared.join(', ')}`).toBe(8)
+    expect([...declared].sort()).toEqual([
+      'auditInvoice',
+      'invoiceId',
+      'jobId',
+      'policyId',
+      'q',
+      'reviewBatchIds',
+      'settingsTab',
+      'view',
+    ])
+    const returned = Object.keys(parseLocation('/', ''))
+    expect([...returned].sort(), 'a field is declared and left unreturned').toEqual([...declared].sort())
   })
 })
 

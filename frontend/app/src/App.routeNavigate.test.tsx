@@ -1011,6 +1011,32 @@ describe('AC-8: every owned-param write goes through a URL writer', () => {
       bareToken(src) + 1,
     )
   })
+
+  it('guard_everyEditingPolicyIdWriteGoesThroughAUrlWriter', () => {
+    const src = appSrc()
+    expect(src, 'the scan read the wrong file').toContain('function navigate(view: View')
+    expect(
+      countCalls(src, 'setEditingPolicyId'),
+      'App.tsx may call setEditingPolicyId from exactly four sites: navigate, the popstate restore, switchClient and deletePolicy. navigate, switchClient and deletePolicy write the URL in the same block; the popstate restore is the one exception -- it reads the URL instead',
+    ).toBe(4)
+    // The useState destructure is `setEditingPolicyId]` -- a `]` sits between the name and
+    // the paren, so it is correctly not a call site.
+    expect(src, 'sanity: the destructure the count must NOT see').toContain('setEditingPolicyId] = useState')
+  })
+
+  it('guard_theEditingPolicyIdCountIgnoresAMereMention', () => {
+    const src = appSrc()
+    const planted = src + '\n// unlike closePolicy, this line only names setEditingPolicyId\n'
+    expect(countCalls(planted, 'setEditingPolicyId'), 'a comment naming the setter must not move the count').toBe(
+      countCalls(src, 'setEditingPolicyId'),
+    )
+    // Negative control: without it, the assertion above proves nothing about the regex CHOICE.
+    const bareToken = (t: string) => (t.match(/\bsetEditingPolicyId\b/g) ?? []).length
+    expect(bareToken(src), 'sanity: the bare-token form sees something to begin with').toBeGreaterThan(0)
+    expect(bareToken(planted), 'the bare-token form DOES move on that comment -- which is why it is wrong').toBe(
+      bareToken(src) + 1,
+    )
+  })
 })
 
 // QA adversarial (ROUTE-04-03). Every row below is a mutation that survived the Mode A specs.

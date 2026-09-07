@@ -210,7 +210,7 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `customRuleStore` | no | /rules | `correctly-reset` |
 | `openRuleKey` | yes | /rules | `correctly-reset` |
 | `policies` | no | /workflows, /settings/<tab> | `correctly-reset` |
-| `editingPolicyId` | yes | /workflows | `correctly-reset` |
+| `editingPolicyId` | yes | /workflows, /workflows/<id> | `stale-and-reachable` |
 | `members` | no | /workflows, /settings/<tab>, /invoice, /invoices/<id> | `correctly-reset` |
 | `roles` | no | /workflows, /settings/<tab> | `correctly-reset` |
 | `entityId` | yes | /create | `correctly-reset` |

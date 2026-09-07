@@ -1429,3 +1429,115 @@ describe('ROUTE-07-04 AC-7: a same-company Back onto a policy entry restores the
     expect(replaceSpy.mock.calls, 'an unclamped restore must write nothing at all').toEqual([])
   })
 })
+
+// --- ROUTE-07-05: the clamp this story inherits, at both of its call sites -------------
+
+describe('ROUTE-07-05 AC-4 (Core AC-7): a stale policy entry does not resume that builder', () => {
+  it('popstate_aStalePolicyEntryDoesNotResumeThatBuilder', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    const stale = currentEntry()
+    expect(stale.url, 'sanity: openPolicy must push /workflows/<id>').toBe(`/workflows/${POLICY_ID}`)
+    expect(stale.e, 'sanity: the pushed entry must name the company that minted it').toBe(ENTITY_A)
+
+    await act(async () => {
+      capturedCtx!.nav('workflows')
+    })
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+    expect(requireCtx().editingPolicyId, 'floor: nothing may be open before the Back press').toBeNull()
+
+    // Move the URL the way Back would BEFORE installing the spies (:172's discipline).
+    const state = { e: stale.e }
+    window.history.replaceState(state, '', stale.url)
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+
+    const ctx = requireCtx()
+    expect(ctx.editingPolicyId, "Back onto entity A's policy under entity B must not reopen that builder").toBeNull()
+    expect(ctx.view, 'the view is carried, collapsed to the list the selection belonged to').toBe('workflows')
+    expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/workflows')
+    // Names the clause. A value-only assertion passes on an entry that never carried an id,
+    // so it survives deleting the `stale` ternary; the recorded write does not.
+    expect(replaceSpy.mock.calls, 'the clamp must rewrite the restored entry exactly once').toHaveLength(1)
+    expect(replaceSpy.mock.calls[0]![2], 'the clamp must rewrite to the collapsed path').toBe('/workflows')
+    expect(replaceSpy.mock.calls[0]![0], 'the rewritten entry must be re-stamped with the company now active').toEqual({
+      e: ENTITY_B,
+    })
+  })
+})
+
+describe('ROUTE-07-05 AC-5 (Core AC-7): switchClient scrubs the policy id off the leaving entry', () => {
+  it('switchClient_scrubsThePolicyIdOffTheLeavingEntry', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    expect(window.location.pathname, 'sanity: the builder must be addressed before the switch').toBe(
+      `/workflows/${POLICY_ID}`,
+    )
+    expect(requireCtx().editingPolicyId, 'sanity: the builder must be open before the switch').toBe(POLICY_ID)
+
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+
+    expect(replaceSpy.mock.calls, 'the switch must scrub the leaving entry exactly once').toHaveLength(1)
+    expect(replaceSpy.mock.calls[0]![2], 'the leaving entry must be scrubbed back to the bare list').toBe('/workflows')
+    // The INCOMING company, by design: switchClient stamps its `id` parameter because
+    // setActiveEntityId has not committed (docs/routing.md, "The company stamp").
+    expect(replaceSpy.mock.calls[0]![0], 'the scrubbed entry is stamped with the incoming company').toEqual({
+      e: ENTITY_B,
+    })
+    const ctx = requireCtx()
+    expect(ctx.active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+    expect(ctx.editingPolicyId, 'the builder must not survive the switch in state either').toBeNull()
+  })
+})
+
+// Must-stay-green control for both clamps: adding `workflows` to carryView (D3) reddens the
+// fourth case, and a carryView that collapsed everything reddens nothing without the first
+// three.
+describe('ROUTE-07-05 AC-6 (D3): carryView collapses three views and passes workflows through', () => {
+  it('carryView_collapsesTheThreeDrillDownsAndPassesWorkflowsThrough', async () => {
+    await bootAtWithGateway('/')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+
+    const scrubbedPathAfterSwitching = async (arrive: () => void, to: string): Promise<string> => {
+      await act(async () => {
+        arrive()
+      })
+      // The create mirror writes on arrival; only the switch's own write is measured.
+      replaceSpy.mockClear()
+      await act(async () => {
+        capturedCtx!.switchClient(to)
+      })
+      expect(replaceSpy.mock.calls, 'the switch must scrub the leaving entry exactly once').toHaveLength(1)
+      return replaceSpy.mock.calls[0]![2] as string
+    }
+
+    expect(await scrubbedPathAfterSwitching(() => capturedCtx!.nav('create'), ENTITY_B), 'create collapses').toBe(
+      '/invoices',
+    )
+    expect(
+      await scrubbedPathAfterSwitching(() => capturedCtx!.openImportedInvoice(INVOICE_ID), ENTITY_A),
+      'detail collapses',
+    ).toBe('/invoices')
+    expect(
+      await scrubbedPathAfterSwitching(() => capturedCtx!.openExtraction(JOB_A), ENTITY_B),
+      'extraction collapses',
+    ).toBe('/invoices')
+    expect(
+      await scrubbedPathAfterSwitching(() => capturedCtx!.openPolicy(POLICY_ID), ENTITY_A),
+      'workflows passes through -- the list is where a dropped policy id lands',
+    ).toBe('/workflows')
+  })
+})

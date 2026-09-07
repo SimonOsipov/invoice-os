@@ -313,10 +313,10 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     name: 'editingPolicyId',
     kind: 'useState',
     resetBySwitchClient: true,
-    routes: ['/workflows'],
-    verdict: 'correctly-reset',
+    routes: ['/workflows', '/workflows/<id>'],
+    verdict: 'stale-and-reachable',
     citation: { in: 'function switchClient(id: string)', text: 'setEditingPolicyId(null)' },
-    note: 'Cleared at App.tsx#switchClient so the next Workflows visit opens the list, not a half-edited builder.',
+    note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /workflows/<id> entry at App.tsx#onPopState (ROUTE-07-04). App.tsx#navigate writes it too -- screen lifetime, so a bare Workflows visit clears it itself. Reaches WorkflowsView as ctx.editingPolicyId. Collapsed cross-company by ROUTE-06-02.',
   },
   {
     binding: 'members, setMembers',

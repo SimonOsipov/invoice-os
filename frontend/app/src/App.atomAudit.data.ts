@@ -350,7 +350,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: false,
     routes: ['/create'],
     verdict: 'stale-and-reachable',
-    note: "VERDICT CORRECTED by this audit: not gated behind a createStep. It reaches ctx as runKind (App.tsx#Workspace, runKindOf(pickedFiles)), and CreateFlow.tsx:37-38 feeds that to wizardHeader, whose strip renders unconditionally at CreateFlow.tsx:62-92 -- at every createStep, including the 'form' switchClient sets (App.tsx#switchClient). Back onto /create therefore draws the previous company's wizard path. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
+    note: "VERDICT CORRECTED by this audit, path corrected again after: not gated behind a createStep. NOT via wizardHeader -- its module-private single-step allowlist (lib/importFlow.ts) short-circuits it at the 'form' step switchClient sets, before runKind is ever read. Actual path: reaches ctx as runKind (App.tsx#Workspace, runKindOf(pickedFiles)); sole reader at 'form' is ImportProgress (components/ImportProgress.tsx#ImportProgress), gated by the same `importing = runIsActive(run)` as `run` itself. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
   },
   {
     binding: 'filesRefusal, setFilesRefusal',

@@ -692,6 +692,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
     setCreateStep('form')
+    // Same `id`-not-`active` discipline as the scrub above.
+    resetImport(id)
     // A batch belongs to ONE entity. Leaving this set would keep the review screen's
     // deep-link id pointing at the company just left — and the mirror effect above would
     // keep writing its path into the URL from the incoming company's dashboard.
@@ -730,8 +732,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // diverge from it, but the reseed still matters: every open takes the CURRENT
   // `active`, so switching company between two runs cannot leave the second run filing
   // under the first run's entity.
-  function resetImport() {
-    setEntityId(active.entityId)
+  // `target` is a parameter, never a state read: switchClient's setActiveEntityId has not
+  // committed, so `active` there still names the company being LEFT (:502-528's race).
+  function resetImport(target: string | null = active.entityId) {
+    setEntityId(target)
     setPickedFiles([])
     setFilesRefusal(null)
     setGroups([])

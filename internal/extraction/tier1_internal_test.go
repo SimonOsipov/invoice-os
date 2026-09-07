@@ -81,6 +81,12 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 // nothing must SAY so, and so one that later gains rules stops being exempt.
 var t1OwningPhraseIDs = []string{"party_ref", "signature"}
 
+// t1PrintedPhraseIDs are the owning phrases no rule-bearing entry sits inside, so suppression
+// cannot be what they are for. They earn their place by being PRINTED on a shipped layout, which
+// is the one fact this package cannot check: TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus
+// reads this declaration by source scan. Keep it on one line, or that scan runs past it.
+var t1PrintedPhraseIDs = []string{"rc_number"}
+
 // G-14
 func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 	if len(anchorLexicon) != 13 {

@@ -6,6 +6,7 @@ package endtoend
 import (
 	"cmp"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -434,6 +435,61 @@ func TestPartyNames_NoLayoutLosesAPartyNameItAlreadyRead(t *testing.T) {
 	}
 	if cutLosses, _, _ := wildPartyNameLosses(t, cut); cutLosses == 0 {
 		t.Errorf("dropping every buyer_name rule cost %d pinned cell(s) and the shipped set cost %d; the comparison is inert", cutLosses, losses)
+	}
+}
+
+// --- the print arm of the owning-phrase exemption ---------------------------------------------
+
+const (
+	wildPrintedPhraseFile = "../tier1_internal_test.go"
+	wildPrintedPhraseDecl = "var t1PrintedPhraseIDs = "
+
+	// wildPrintedPhraseFloor is a label every shipped layout set carries many times over. This
+	// spec asserts a PRESENCE, so a walk that observed nothing must fail on the floor first.
+	wildPrintedPhraseFloor = "invoice_no"
+)
+
+// wildUnprintedPhraseIDs are shipped lexicon ids no layout prints. They are the needle that keeps
+// the declared set derived from what the documents carry rather than from the lexicon.
+var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title"}
+
+var wildPrintedPhraseID = regexp.MustCompile(`"([a-z_]+)"`)
+
+// An owning phrase no rule-bearing entry sits inside suppresses nothing, so containment cannot be
+// why it ships. It earns its place by being printed. This is the other arm of
+// TestAnchorLexicon_AnOwningPhraseEarnsItsExemption, which cannot read a PDF.
+func TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus(t *testing.T) {
+	body := wildVarBody(t, wildReadFile(t, wildPrintedPhraseFile), wildPrintedPhraseDecl, wildPrintedPhraseFile)
+	var declared []string
+	for _, m := range wildPrintedPhraseID.FindAllStringSubmatch(body, -1) {
+		declared = append(declared, m[1])
+	}
+	if len(declared) == 0 {
+		t.Fatalf("%s's %q names no id; the walk below would assert nothing", wildPrintedPhraseFile, wildPrintedPhraseDecl)
+	}
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus", len(expectByLayout), wildPartyNameLayouts)
+	}
+
+	observed := map[string][]string{}
+	for _, want := range expectByLayout {
+		for _, o := range extraction.AnchorObservations(eeTokenPages(t, want.file)) {
+			observed[o.Label] = append(observed[o.Label], want.file)
+		}
+	}
+	if len(observed[wildPrintedPhraseFloor]) == 0 {
+		t.Fatalf("no shipped layout observed %s; the walk is not reading the corpus and every id below would read unprinted", wildPrintedPhraseFloor)
+	}
+
+	for _, id := range declared {
+		if len(observed[id]) == 0 {
+			t.Errorf("no shipped layout prints %s; an owning phrase that suppresses nothing and appears nowhere ships in the fingerprint and does nothing", id)
+		}
+	}
+	for _, id := range wildUnprintedPhraseIDs {
+		if len(observed[id]) != 0 {
+			t.Errorf("%s is observed on %v, so the corpus does print it; the declared set must be what the documents carry, not what the lexicon holds", id, observed[id])
+		}
 	}
 }
 

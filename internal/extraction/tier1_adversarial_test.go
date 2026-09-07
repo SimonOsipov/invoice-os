@@ -472,3 +472,137 @@ func TestTier1_TheOwningPagePutsThePhraseNearestTheName(t *testing.T) {
 		t.Errorf("the heading is %v from the name, past the below relation's %v; the surviving anchor could not reach the name and the arms above would rank nothing", headingGap, reach)
 	}
 }
+
+// --- the owning phrase, where the amount label used to anchor -------------------
+
+// t1aBesideItsValue is a label and its value on one baseline. The value's left edge is fixed, so
+// a longer label sits CLOSER to it than a bare one -- which is what lets a registration phrase
+// beat every other reading on distance.
+func t1aBesideItsValue(label string, labelX1 float64, value string) []extraction.TokenPage {
+	return rvPage(
+		rvTok(label, 0.10, 0.30, labelX1, 0.315),
+		rvTok(value, 0.36, 0.30, 0.46, 0.315),
+	)
+}
+
+// t1aOverItsValue is the same pair one line down, inside the below dial.
+func t1aOverItsValue(label string, labelX1 float64, value string) []extraction.TokenPage {
+	return rvPage(
+		rvTok(label, 0.10, 0.30, labelX1, 0.315),
+		rvTok(value, 0.10, 0.335, 0.20, 0.350),
+	)
+}
+
+// t1aVAT is one page's vat candidate values under the shipped set.
+func t1aVAT(pages []extraction.TokenPage) []string {
+	return rvValues(rvFor(extraction.Resolve(pages, rvGeneric()), "vat"))
+}
+
+// A VAT registration number is an identifier, never an amount. The whole phrase is the label, so
+// the bare "VAT" inside it must anchor nothing -- at either relation, in either spelling.
+func TestTier1_AVATRegistrationNumberIsNotTheVATAmount(t *testing.T) {
+	t1Floor(t)
+
+	const reg = "1234567"
+	for _, arm := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"VAT REG NO beside the number", t1aBesideItsValue("VAT REG NO", 0.25, reg)},
+		{"VAT REGISTRATION NUMBER beside the number", t1aBesideItsValue("VAT REGISTRATION NUMBER", 0.28, reg)},
+		{"TAX REGISTRATION NUMBER beside the number", t1aBesideItsValue("TAX REGISTRATION NUMBER", 0.28, reg)},
+		{"VAT REG NO over the number", t1aOverItsValue("VAT REG NO", 0.25, reg)},
+	} {
+		if got := t1aVAT(arm.pages); len(got) != 0 {
+			t.Errorf("%s: vat = %v, want none; a registration identifier read as the VAT amount is filed as tax", arm.name, got)
+		}
+	}
+
+	// The paired controls, one per relation: the same geometry with the bare label. Without them
+	// the zeros above hold equally against a Resolve that reads nothing off this page shape.
+	for _, ctl := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"the bare label beside the number", t1aBesideItsValue("VAT", 0.17, reg)},
+		{"the bare label over the number", t1aOverItsValue("VAT", 0.17, reg)},
+	} {
+		got := extraction.Resolve(ctl.pages, rvGeneric())
+		rvControl(t, got, ctl.name)
+		if v := rvValues(rvFor(got, "vat")); !slices.Equal(v, []string{reg}) {
+			t.Errorf("%s: vat = %v, want [%s]; the geometry the arms above assert nothing on never reached the number", ctl.name, v, reg)
+		}
+	}
+}
+
+// "TAX INVOICE" is the document's own title. The bare "TAX" inside it must anchor nothing, and
+// the title's span must stop at "invoice" so the invoice-number label behind it survives.
+func TestTier1_ATaxInvoiceTitleIsNotAVATAnchor(t *testing.T) {
+	t1Floor(t)
+
+	for _, arm := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"TAX INVOICE beside the amount", t1aBesideItsValue("TAX INVOICE", 0.26, "1,500.00")},
+		{"VAT INVOICE beside the amount", t1aBesideItsValue("VAT INVOICE", 0.26, "1,500.00")},
+		{"TAX INVOICE over the amount", t1aOverItsValue("TAX INVOICE", 0.26, "2,687.50")},
+	} {
+		if got := t1aVAT(arm.pages); len(got) != 0 {
+			t.Errorf("%s: vat = %v, want none; the document's own title is not a VAT label", arm.name, got)
+		}
+	}
+
+	for _, ctl := range []struct {
+		name  string
+		pages []extraction.TokenPage
+		want  string
+	}{
+		{"the bare label beside the amount", t1aBesideItsValue("TAX", 0.17, "1,500.00"), "1500.00"},
+		{"the bare label over the amount", t1aOverItsValue("TAX", 0.17, "2,687.50"), "2687.50"},
+	} {
+		got := extraction.Resolve(ctl.pages, rvGeneric())
+		rvControl(t, got, ctl.name)
+		if v := rvValues(rvFor(got, "vat")); !slices.Equal(v, []string{ctl.want}) {
+			t.Errorf("%s: vat = %v, want [%s]; the geometry the arms above assert nothing on never reached the amount", ctl.name, v, ctl.want)
+		}
+	}
+
+	// The over-reach guard: a title entry reaching past "invoice" would swallow the
+	// invoice-number label sharing the token.
+	const titledToken = "TAX INVOICE NO: INV-2103"
+	titled := extraction.Resolve(rvPage(rvTok(titledToken, 0.10, 0.30, 0.30, 0.315)), rvGeneric())
+	rvControl(t, titled, "a title token carrying the invoice-number label")
+	if v := rvValues(rvFor(titled, "invoice_number")); len(v) == 0 || v[0] != "INV-2103" {
+		t.Errorf("%q ranks invoice_number %v, want INV-2103 at rank 0; the title swallowed the label behind it", titledToken, v)
+	}
+
+	// The near-miss: "INVOICES" continues past the title's trailing word boundary, so that token
+	// keeps its amount label.
+	if v := t1aVAT(t1aBesideItsValue("TAX INVOICES", 0.27, "1,500.00")); !slices.Contains(v, "1500.00") {
+		t.Errorf("\"TAX INVOICES\" beside an amount: vat = %v, want it to hold 1500.00; the title entry widened past its own word boundary", v)
+	}
+}
+
+// The over-reach guard for both new patterns: a bare amount label is still an amount label.
+// Green before the owning phrases and green after -- a pattern that loses its required tail reds
+// here rather than on a corpus figure.
+func TestTier1_ABareTaxLabelStillAnchorsTheAmount(t *testing.T) {
+	t1Floor(t)
+
+	for _, c := range []struct {
+		name  string
+		pages []extraction.TokenPage
+		want  string
+	}{
+		{"Tax beside the amount", t1aBesideItsValue("Tax", 0.17, "187.50"), "187.50"},
+		{"VAT beside the amount", t1aBesideItsValue("VAT", 0.17, "1,500.00"), "1500.00"},
+		{"VAT: 75.00 on one token", rvPage(rvTok("VAT: 75.00", 0.10, 0.30, 0.25, 0.315)), "75.00"},
+	} {
+		got := extraction.Resolve(c.pages, rvGeneric())
+		rvFloor(t, got, c.name)
+		if v := rvValues(rvFor(got, "vat")); !slices.Equal(v, []string{c.want}) {
+			t.Errorf("%s: vat = %v, want [%s]; an owning phrase suppressed the bare label it only contains", c.name, v, c.want)
+		}
+	}
+}

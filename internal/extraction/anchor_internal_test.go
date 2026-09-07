@@ -410,6 +410,89 @@ func TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord(t *testing.T) {
 	}
 }
 
+// reg_identifier and doc_title are OWNING PHRASES over the amount vocabulary: the whole phrase
+// is the label, so the bare "vat"/"tax" inside it must not anchor an amount. Same mechanism as
+// AnOwningPhraseOutranksTheNarrowPartyWord above, one vocabulary over.
+func TestAnchorLexicon_AnOwningPhraseOutranksTheAmountLabel(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+
+	for _, c := range []struct{ text, owner, narrow string }{
+		{"VAT REG NO", "reg_identifier", "vat"},
+		{"VAT REGISTRATION NUMBER", "reg_identifier", "vat"},
+		{"TAX REGISTRATION NUMBER", "reg_identifier", "vat"},
+		{"TAX INVOICE", "doc_title", "vat"},
+		{"VAT INVOICE", "doc_title", "vat"},
+	} {
+		inner := alSpan(c.text, c.narrow)
+		if inner == nil {
+			t.Errorf("%q: %s does not match at all; the suppression below has nothing to suppress", c.text, c.narrow)
+			continue
+		}
+		if !anchorOutranked(c.text, inner) {
+			t.Errorf("%q: anchorOutranked left the %s span %v standing; the amount label inside an owning phrase would anchor a value on a token carrying no amount", c.text, c.narrow, inner)
+		}
+
+		outer := alSpan(c.text, c.owner)
+		if outer == nil {
+			t.Errorf("%q: anchorLexicon holds no %s span; nothing claims the phrase whole", c.text, c.owner)
+			continue
+		}
+		if !(outer[0] <= inner[0] && outer[1] >= inner[1] && outer[1]-outer[0] > inner[1]-inner[0]) {
+			t.Errorf("%q: %s claims %v and %s claims %v; the phrase must claim the STRICTLY wider span or anchorOutranked leaves the amount label anchoring", c.text, c.narrow, inner, c.owner, outer)
+		}
+	}
+
+	// The control: an amount label carrying its own value, where nothing wider claims the token
+	// and vat must still anchor.
+	const control = "VAT: 75.00"
+	if ids := alIDs(control); !slices.Contains(ids, "vat") {
+		t.Errorf("%q matches %v, want it to name vat; the control is not exercising the entry the cases above suppress", control, ids)
+	}
+	ctl := alSpan(control, "vat")
+	if ctl == nil || anchorOutranked(control, ctl) {
+		t.Errorf("%q: vat span %v was outranked; an owning phrase must not suppress the amount label on a token it does not appear on", control, ctl)
+	}
+}
+
+// "TAX IDENTIFICATION NUMBER" is a TIN label, and bare_tin already claims it whole. A second
+// entry that ties with bare_tin here must leave that unchanged. Green before the amount-vocabulary
+// owning phrases and green after: a regression guard, not their oracle.
+func TestAnchorLexicon_TaxIdentificationNumberStaysSuppressed(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+	const phrase = "TAX IDENTIFICATION NUMBER"
+
+	if !isBareAnchorLabel(phrase) {
+		t.Errorf("%q is not refused as a value; a TIN label readable as a value reaches a field of its own", phrase)
+	}
+	narrow := alSpan(phrase, "vat")
+	if narrow == nil {
+		t.Fatalf("%q: vat does not match at all; the suppression below has nothing to suppress", phrase)
+	}
+	if !anchorOutranked(phrase, narrow) {
+		t.Errorf("%q: anchorOutranked left the vat span %v standing; an identification number would anchor an amount", phrase, narrow)
+	}
+
+	ids := alIDs(phrase)
+	if !slices.Contains(ids, "bare_tin") {
+		t.Errorf("%q matches %v, want it to name bare_tin; without bare_tin's tax-id alternative the phrase belongs to whatever else claims it", phrase, ids)
+	}
+	// Every claimant that SURVIVES suppression must claim the phrase whole. A surviving claimant
+	// with a narrower span is a label reading part of an identifier.
+	for _, id := range ids {
+		loc := alSpan(phrase, id)
+		if anchorOutranked(phrase, loc) {
+			continue
+		}
+		if loc[0] != 0 || loc[1] != len(phrase) {
+			t.Errorf("%q: %s survives suppression claiming %v, not the whole phrase; a partial claimant leaves part of the identifier readable as a value", phrase, id, loc)
+		}
+	}
+}
+
 // alSuppressesARuleBearingEntry names the field-filling lexicon entry that phrase strictly
 // contains, or "" when it contains none.
 func alSuppressesARuleBearingEntry(phrase string, ruleBearing map[string]int) string {
@@ -425,12 +508,21 @@ func alSuppressesARuleBearingEntry(phrase string, ruleBearing map[string]int) st
 }
 
 // An entry listed in t1OwningPhraseIDs is exempt from carrying a Tier-1 rule, so nothing else
-// makes it earn its place: it ships in the fingerprint either way. It earns the exemption by
-// doing the two jobs it exists for -- being refused as a value whole, and strictly containing
-// an entry that DOES fill a field.
+// makes it earn its place: it ships in the fingerprint either way. Every such entry must be
+// refused as a value whole, and must then earn the exemption on exactly ONE of two arms --
+// suppression (it strictly contains an entry that DOES fill a field), or print (no rule-bearing
+// entry sits inside it, and a shipped layout carries the phrase). The arms are exclusive, so a
+// phrase cannot be parked in the weaker one; the print arm is
+// TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus, which reads a PDF this package
+// cannot.
 func TestAnchorLexicon_AnOwningPhraseEarnsItsExemption(t *testing.T) {
 	if len(t1OwningPhraseIDs) == 0 {
 		t.Fatal("t1OwningPhraseIDs is empty; every assertion below would run over nothing")
+	}
+	for _, id := range t1PrintedPhraseIDs {
+		if !slices.Contains(t1OwningPhraseIDs, id) {
+			t.Fatalf("t1PrintedPhraseIDs names %q, which t1OwningPhraseIDs does not; only an entry exempt from carrying a rule needs an arm to earn that exemption", id)
+		}
 	}
 
 	ruleBearing := map[string]int{}
@@ -454,8 +546,16 @@ func TestAnchorLexicon_AnOwningPhraseEarnsItsExemption(t *testing.T) {
 		if !isBareAnchorLabel(phrase) {
 			t.Errorf("%s: %q is not refused as a value; an owning phrase readable as a name is not the label it claims to be", id, phrase)
 		}
-		if got := alSuppressesARuleBearingEntry(phrase, ruleBearing); got == "" {
-			t.Errorf("%s: %q strictly contains no rule-bearing entry, so anchorOutranked suppresses nothing for it; the entry ships in the fingerprint and resolves nothing", id, phrase)
+
+		suppressed := alSuppressesARuleBearingEntry(phrase, ruleBearing)
+		if slices.Contains(t1PrintedPhraseIDs, id) {
+			if suppressed != "" {
+				t.Errorf("%s: %q strictly contains the rule-bearing entry %s, so suppression IS what it is for and it belongs in the containment arm", id, phrase, suppressed)
+			}
+			continue
+		}
+		if suppressed == "" {
+			t.Errorf("%s: %q strictly contains no rule-bearing entry, so anchorOutranked suppresses nothing for it; the entry ships in the fingerprint and resolves nothing. An owning phrase that suppresses nothing belongs in t1PrintedPhraseIDs and must be printed by a shipped layout", id, phrase)
 		}
 	}
 

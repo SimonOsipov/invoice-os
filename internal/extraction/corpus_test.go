@@ -1,6 +1,6 @@
 // corpus_test.go: the golden corpus and what Tier-1 must produce from it. The expectations are
 // a Go table rather than a JSON file so they review in the diff and register no second flag --
-// fixtures_test.go:23 owns -update.
+// fxUpdate in fixtures_test.go owns -update.
 //
 // The specs below guard the corpus itself: that every expectation names a committed file, that
 // every committed layout is expected, and that the TINs stay in the free part of the reserved

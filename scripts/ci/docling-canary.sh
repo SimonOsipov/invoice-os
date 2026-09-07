@@ -203,7 +203,10 @@ except urllib.error.HTTPError as err:
     raise SystemExit(f'/v1/read returned {err.code}: {err.read().decode()}')
 if status != 200:
     raise SystemExit(f'/v1/read returned {status}')
-print(json.dumps(payload, indent=2, sort_keys=True))
+# ensure_ascii=False: Go's json.MarshalIndent writes raw UTF-8, and
+# TestWildGoldens_AreMachineGenerated re-serialises a golden through it. An escaped \u20a6
+# would never round-trip. Every all-ASCII golden is unchanged.
+print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
 " >"$tmp"
 
   if [ "$update" = "--update" ]; then

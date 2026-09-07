@@ -91,6 +91,9 @@ scripts/ci/docling-canary.sh golden dev \
 
 Without `--update` the same command compares and prints a diff; that is what CI runs.
 
+The writer emits raw UTF-8 (`ensure_ascii=False`). Go's `json.MarshalIndent` never writes a
+`\uXXXX` escape, so an escaped glyph could not round-trip through the golden specs.
+
 The `<sha>` argument is a freshness gate, not decoration: the script reads `/healthz` and
 refuses to generate unless `build` matches. A `docling:canary` tag left over from an earlier
 build serves that build's `/v1/read` and yields a golden that looks plausible and is wrong.

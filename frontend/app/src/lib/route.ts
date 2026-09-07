@@ -129,14 +129,14 @@ export type ParsedLocation = {
   reviewBatchIds: string[]
 }
 
-// Path plus query, never a hash. Omit the default: the `members` tab, an empty `q` and an
-// absent id all serialise to nothing. The path half delegates to routePath so the
-// drill-down segment logic lives in exactly one place.
+// Path plus query, never a hash. Every settings tab is named including `members`, so each tab has
+// an address (routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault). An empty `q` and an absent
+// id still serialise to nothing. The path half delegates to routePath so the drill-down segment
+// logic lives in exactly one place.
 export function routeUrl(view: View, params: RouteParams = {}): string {
   const path = routePath(view, params.id)
   if (view === 'settings') {
-    const tab = params.settingsTab
-    return tab && tab !== 'members' ? `${path}/${tab}` : path
+    return `${path}/${params.settingsTab ?? 'members'}`
   }
   if (view === 'create') {
     const ids = params.reviewBatchIds

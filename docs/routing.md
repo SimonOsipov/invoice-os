@@ -350,5 +350,5 @@ landing on a review path — must still account for this writer firing in the sa
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot
 seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. A
 static guard in `App.routeNavigate.test.tsx`
-(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 15 files
+(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 16 files
 that render `<App />`.

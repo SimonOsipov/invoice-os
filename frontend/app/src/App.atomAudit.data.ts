@@ -40,7 +40,7 @@ export type AuditedAtom = {
 
 // Every route a screen reading an always-mounted atom can be on: the 13 ROUTE_PATHS
 // entries (lib/route.ts:7-20). Sidebar and Header mount on all of them (App.tsx#Workspace).
-const ALL_13 = [
+export const ALL_13 = [
   '/',
   '/invoices',
   '/approvals',

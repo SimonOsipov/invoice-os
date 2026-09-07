@@ -149,7 +149,7 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
     expect(backfillAnchorIdx, 'stamp-backfill anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
     const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
 
-    // Same nine bodies guard_theSeamsWriterNeverReadsLocationSearch scans above. This
+    // Same ten bodies guard_theSeamsWriterNeverReadsLocationSearch scans above. This
     // population structurally EXCLUDES signOut and the persona strip -- neither is a
     // member -- so it is NOT the oracle for those two removal sites; the whole-file scan
     // (lib/route.test.ts's guard_noReviewHashSurvivesInTheApp) covers those.

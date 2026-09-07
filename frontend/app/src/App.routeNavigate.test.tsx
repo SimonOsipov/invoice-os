@@ -616,8 +616,9 @@ describe('QA adversarial: navigating to the current view still pushes (documente
 // --- ROUTE-04-03: navigate(view, params) and the five URL-aware writers --------------
 //
 // The push/replace rule: navigate and searchInvoices PUSH; setInvoiceQuery, setSettingsTab
-// and setAuditInvoiceFilter REPLACE; the popstate handler writes nothing
-// (App.routePopstate.test.tsx's popstate_theHandlerWritesNoHistory).
+// and setAuditInvoiceFilter REPLACE; the popstate handler writes nothing on the unclamped
+// path (App.routePopstate.test.tsx's popstate_theHandlerWritesNoHistory), and its one write
+// -- the ROUTE-06-02 identity clamp -- also replaces (popstate_theClampReplacesAndNeverPushes).
 // Every history assertion below counts entries or reads the settled URL rather than merely
 // asking "did some replaceState write X" -- the review-hash mirror writes on these paths too
 // and has confounded three specs before.

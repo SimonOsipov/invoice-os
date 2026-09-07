@@ -86,8 +86,9 @@ renderable result, including the empty one.
 
 **R4 — Push on a navigation, replace on a correction.** `navigate` pushes. The boot
 alignment, a settings-tab click, a search-box clear and an in-screen audit filter edit all
-replace. The `popstate` handler writes nothing — the browser already moved the URL, and a
-write there would push a duplicate entry on every Back press. A *committed* search pushes
+replace. The `popstate` handler writes nothing on the ordinary path — the browser already
+moved the URL, and a write there would push a duplicate entry on every Back press. Its one
+write is the ROUTE-06 identity clamp below, and that is a `replaceState`. A *committed* search pushes
 exactly one entry; the header box is a `<form onSubmit>`, so there is no per-keystroke write
 path and therefore no debounce and no settle timer.
 
@@ -120,13 +121,34 @@ no view.
 Two writers sit outside `navigate` and are pinned rather than folded in. The review-path
 mirror in `Workspace` (the `replaceState` keyed on `[view, createStep,
 reviewBatchIds.join(',')]`) rebuilds only `create`'s own path from state and never reads
-`location.search` — it joined the nine writer bodies `lib/routeWriterGuard.test.ts` proves
+`location.search` — it joined the ten writer bodies `lib/routeWriterGuard.test.ts` proves
 clean, rather than staying that guard's one deliberate exception. The persona-strip clear
 (the effect commented *"Drop the consumed `?persona=` from the URL"*) is now that guard's
 sole reader of `search`, and its `new URLSearchParams(window.location.search)` is the control
-needle proving the other nine assertions can see a match at all. Both writers' own write
+needle proving the other ten assertions can see a match at all. Both writers' own write
 lines are still pinned byte-identical by `App.routeReviewHash.test.tsx`'s
 `guard_theTwoExistingHistoryWritersAreUnchanged`.
+
+## The company stamp on a history entry
+
+Every `Workspace` history write carries `{ e: <entityId> }` as its state — nine sites, and
+`App.routeNavigate.test.tsx`'s `guard_everyWorkspaceHistoryWriteCarriesTheStamp` allows zero
+still passing a literal `null`. `switchClient` stamps its `id` **parameter**, not a state
+read: `setActiveEntityId(id)` one line above has not committed. `signOut` and the
+persona strip stay `null`-stamped; both live in `App`, outside the slice that guard counts.
+
+Two of the nine are new machinery. The **stamp backfill** fills the boot entry once the
+portfolio resolves — the mount alignment runs before the entities fetch lands, so without it
+a cold deep link would stamp `null` forever and be permanently unclampable. It also mirrors
+`active.entityId` into a ref, because the `popstate` effect's deps are `[]` and a closure
+read there freezes at mount, when `clients` is still `[]`.
+
+The **clamp** is the second. `popstate` reads the restored entry's stamp; when both sides are
+known and differ, it re-derives the path through `carryView` at the TOP of the handler, so
+every setter below reads the clamped path. A tail rewrite would leave each atom armed for a
+frame and force an enumeration of the atoms to clear — and that enumeration is what missed
+`auditPrefilter`. The view is carried; only the selection is dropped. An entry naming no
+company (state `null`, or state with no `e`) is unknown, never stale, and never clamps.
 
 ## Why `Workspace` can't mount while `?persona=` is live
 

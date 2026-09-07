@@ -1,31 +1,45 @@
-// Row shape for the Workspace atom-drift guard (App.atomAudit.test.tsx). AUDITED_ATOMS
-// itself -- the 38-row audit table -- is authored next; this file only fixes its shape.
+// Row shape for the Workspace atom-drift guard (App.atomAudit.test.tsx).
+//
+// ROUTE-06-02 QA. Rows carry NO line numbers. They did, and every one had to be remapped
+// by hand each time App.tsx shifted -- a remap nothing verified, in a repo whose recorded
+// failure mode is a citation that resolves to the wrong line. `binding` locates the
+// declaration and `citation` locates the evidence, both by text, both proven to resolve to
+// exactly one site by guard_everyCitationResolvesToExactlyOneSite.
 
 export type Verdict = 'stale-and-reachable' | 'stale-but-unreachable' | 'correctly-reset' | 'deliberate'
+
+// Evidence anchor: `path#Symbol` plus the statement, the convention that survives edits.
+export type Citation = {
+  // Marker for the enclosing symbol whose braced body scopes the search. Omit when `text`
+  // is already unique across App.tsx.
+  in?: string
+  // A whole source line, trimmed. Must match EXACTLY ONE line in scope -- a needle that
+  // matches two sites cites neither.
+  text: string
+}
 
 export type AuditedAtom = {
   // Verbatim text extracted by the two regexes in App.atomAudit.test.tsx: an
   // `[x, setX]` pair for a useState atom, or the bare name for reqInFlight (useRef).
   binding: string
   name: string
-  line: number
   kind: 'useState' | 'useRef'
   resetBySwitchClient: boolean
   routes: string[]
   verdict: Verdict
-  // Line the PR cites as evidence for this row's verdict, e.g. filing's comment inside
-  // switchClient (App.tsx:698-701).
-  citationLine?: number
+  citation?: Citation
   note: string
 }
 
 // `correctly-reset` covers TWO shapes, deliberately not split into a fifth verdict:
-// (a) actively reset by switchClient (App.tsx:679-713), directly or via navigate('dashboard');
+// (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
-// Rows 1, 2, 4, 5, 20, 22, 23, 24, 26, 28, 29 below are shape (b).
+// Shape (b): suspended, clients, bootPath/bootSearch, seed, sandbox, connectors,
+// connectorMappings, customRuleStore, policies, members, roles. Named, not indexed --
+// inserting a row renumbers an index list and nothing catches it.
 
 // Every route a screen reading an always-mounted atom can be on: the 13 ROUTE_PATHS
-// entries (lib/route.ts:7-20). Sidebar and Header mount on all of them (App.tsx:1597,1599).
+// entries (lib/route.ts:7-20). Sidebar and Header mount on all of them (App.tsx#Workspace).
 const ALL_13 = [
   '/',
   '/invoices',
@@ -46,18 +60,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'suspended, setSuspended',
     name: 'suspended',
-    line: 225,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ALL_13,
     verdict: 'correctly-reset',
-    citationLine: 1590,
-    note: 'Tenant/membership-scoped and latched, never unlatched -- it pre-empts the whole shell at App.tsx:1590. Every company here shares one tenant.',
+    citation: { text: 'if (suspended) return <SuspendedNotice onSignOut={onSignOut} />' },
+    note: 'Tenant/membership-scoped and latched, never unlatched -- it pre-empts the whole shell at App.tsx#Workspace. Every company here shares one tenant.',
   },
   {
     binding: 'clients, setClients',
     name: 'clients',
-    line: 261,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ALL_13,
@@ -67,18 +79,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'activeEntityId, setActiveEntityId',
     name: 'activeEntityId',
-    line: 268,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ALL_13,
     verdict: 'correctly-reset',
-    citationLine: 680,
-    note: 'The switch itself (App.tsx:680). No component reads it directly; every screen sees it through the `active` memo (App.tsx:281-282).',
+    citation: { text: 'setActiveEntityId(id)' },
+    note: 'The switch itself (App.tsx#switchClient). No component reads it directly; every screen sees it through the `active` memo (App.tsx#Workspace).',
   },
   {
     binding: '{ path: bootPath, search: bootSearch }',
     name: 'bootPath/bootSearch',
-    line: 321,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: [],
@@ -88,7 +98,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'seed',
     name: 'seed',
-    line: 333,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: [],
@@ -98,62 +107,56 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'view, setView',
     name: 'view',
-    line: 342,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ALL_13,
     verdict: 'correctly-reset',
-    citationLine: 688,
-    note: "navigate('dashboard') at App.tsx:688 sets it; carryView owns the resume rule (ROUTE-02).",
+    citation: { text: 'navigate(\'dashboard\')' },
+    note: "navigate('dashboard') at App.tsx#switchClient sets it; carryView owns the resume rule (ROUTE-02).",
   },
   {
     binding: 'draft, setDraft',
     name: 'draft',
-    line: 343,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/create'],
     verdict: 'correctly-reset',
-    citationLine: 691,
-    note: 'Re-seeded from the incoming company at App.tsx:691. Read by CreateForm at createStep `form`.',
+    citation: { text: 'setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))' },
+    note: 'Re-seeded from the incoming company at App.tsx#switchClient. Read by CreateForm at createStep `form`.',
   },
   {
     binding: 'handOffDocumentId, setHandOffDocumentId',
     name: 'handOffDocumentId',
-    line: 347,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: [],
     verdict: 'correctly-reset',
-    citationLine: 692,
-    note: 'Cleared at App.tsx:692. No screen reads it; only the fileDraft handler does.',
+    citation: { in: 'function switchClient(id: string)', text: 'setHandOffDocumentId(null)' },
+    note: 'Cleared at App.tsx#switchClient. No screen reads it; only the fileDraft handler does.',
   },
   {
     binding: 'createStep, setCreateStep',
     name: 'createStep',
-    line: 348,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/create', '/imports/<ids>/review'],
     verdict: 'stale-and-reachable',
-    citationLine: 611,
-    note: "Reset to 'form' at App.tsx:693, but popstate re-arms it to 'review' at App.tsx:611 from an older entry. Fixed by ROUTE-06-02 (clamp) and pinned by ROUTE-06-04.",
+    citation: { in: 'const onPopState = (event: PopStateEvent) =>', text: 'setCreateStep(\'review\')' },
+    note: "Reset to 'form' at App.tsx#switchClient, but popstate re-arms it to 'review' at App.tsx#onPopState from an older entry. Fixed by ROUTE-06-02 (clamp) and pinned by ROUTE-06-04.",
   },
   {
     binding: 'reviewBatchIds, setReviewBatchIds',
     name: 'reviewBatchIds',
-    line: 353,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/create', '/imports/<ids>/review'],
     verdict: 'stale-and-reachable',
-    citationLine: 610,
-    note: 'Cleared at App.tsx:697, but popstate re-reads the ids out of an older review path at App.tsx:610. Fixed by ROUTE-06-02, pinned by ROUTE-06-04.',
+    citation: { text: 'setReviewBatchIds(at.reviewBatchIds)' },
+    note: 'Cleared at App.tsx#switchClient, but popstate re-reads the ids out of an older review path at App.tsx#onPopState. Fixed by ROUTE-06-02, pinned by ROUTE-06-04.',
   },
   {
     binding: 'groups, setGroups',
     name: 'groups',
-    line: 360,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -163,7 +166,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'groupIndex, setGroupIndex',
     name: 'groupIndex',
-    line: 361,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -173,7 +175,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'armedField, setArmedField',
     name: 'armedField',
-    line: 362,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -183,7 +184,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'dragField, setDragField',
     name: 'dragField',
-    line: 363,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -193,103 +193,93 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'detailInvoiceId, setDetailInvoiceId',
     name: 'detailInvoiceId',
-    line: 366,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/invoice', '/invoices/<id>'],
     verdict: 'stale-and-reachable',
-    citationLine: 595,
-    note: 'Cleared at App.tsx:689, but popstate re-derives it from an older /invoices/<id> entry at App.tsx:595. Reaches the screen as ctx.importedInvoiceId, read by InvoiceDetail. Fixed by ROUTE-06-02.',
+    citation: { text: 'setDetailInvoiceId(at.invoiceId)' },
+    note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /invoices/<id> entry at App.tsx#onPopState. Reaches the screen as ctx.importedInvoiceId, read by InvoiceDetail. Fixed by ROUTE-06-02.',
   },
   {
     binding: 'auditPrefilter, setAuditPrefilter',
     name: 'auditPrefilter',
-    line: 371,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/audit', '/audit?invoice=<id>'],
     verdict: 'stale-and-reachable',
-    citationLine: 604,
-    note: "Cleared by navigate('dashboard') (App.tsx:642,648), but popstate re-arms it from ?invoice= at App.tsx:604-608. Found by this audit (D24); fixed by ROUTE-06-02's top-of-handler clamp, which drops the search string.",
+    citation: { in: 'const onPopState = (event: PopStateEvent) =>', text: 'setAuditPrefilter((prev) =>' },
+    note: "Cleared by navigate('dashboard') (App.tsx#navigate), but popstate re-arms it from ?invoice= at App.tsx#onPopState. Found by this audit (D24); fixed by ROUTE-06-02's top-of-handler clamp, which drops the search string.",
   },
   {
     binding: 'extractionJobId, setExtractionJobId',
     name: 'extractionJobId',
-    line: 376,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/extraction', '/extraction/<jobId>'],
     verdict: 'stale-and-reachable',
-    citationLine: 596,
-    note: 'Cleared at App.tsx:712 (ROUTE-01), but popstate re-derives it from an older /extraction/<jobId> entry at App.tsx:596. Reaches ExtractionReview as an explicit jobId prop (App.tsx:1625), which also gates the mount. Fixed by ROUTE-06-02.',
+    citation: { text: 'setExtractionJobId(at.jobId)' },
+    note: 'Cleared at App.tsx#switchClient (ROUTE-01), but popstate re-derives it from an older /extraction/<jobId> entry at App.tsx#onPopState. Reaches ExtractionReview as an explicit jobId prop (App.tsx#Workspace), which also gates the mount. Fixed by ROUTE-06-02.',
   },
   {
     binding: 'invoiceQuery, setInvoiceQuery_',
     name: 'invoiceQuery',
-    line: 380,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: [...ALL_13, '/invoices?q=<text>'],
     verdict: 'deliberate',
-    citationLine: 638,
-    note: 'Durable by design (App.tsx:638-640). A filter text is not company data; the global search box keeps it across a switch.',
+    citation: { text: '// settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.' },
+    note: 'Durable by design (App.tsx#navigate). A filter text is not company data; the global search box keeps it across a switch.',
   },
   {
     binding: 'switcherOpen, setSwitcherOpen',
     name: 'switcherOpen',
-    line: 381,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ALL_13,
     verdict: 'correctly-reset',
-    citationLine: 690,
-    note: 'Closed at App.tsx:690 -- the switcher that fired the switch. Read by Sidebar on every route.',
+    citation: { in: 'function switchClient(id: string)', text: 'setSwitcherOpen(false)' },
+    note: 'Closed at App.tsx#switchClient -- the switcher that fired the switch. Read by Sidebar on every route.',
   },
   {
     binding: 'sandbox, setSandbox',
     name: 'sandbox',
-    line: 384,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: [...ALL_13, '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'A client-side constant (App.tsx:382-384), never fetched, so it carries no company dimension. Read by the always-mounted env banner and by SettingsView.',
+    note: 'A client-side constant (App.tsx#Workspace), never fetched, so it carries no company dimension. Read by the always-mounted env banner and by SettingsView.',
   },
   {
     binding: 'settingsTab, setSettingsTab_',
     name: 'settingsTab',
-    line: 387,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'deliberate',
-    citationLine: 638,
-    note: 'Durable by design (App.tsx:638-639); popstate re-clamps it by `mode` at App.tsx:600. A tab choice is not company data.',
+    citation: { text: '// settingsTab and q are DURABLE -- a param overrides, absence leaves state alone.' },
+    note: 'Durable by design (App.tsx#navigate); popstate re-clamps it by `mode` at App.tsx#onPopState. A tab choice is not company data.',
   },
   {
     binding: 'connectors, setConnectors',
     name: 'connectors',
-    line: 388,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'Never fetched -- seeded from the INITIAL_CONNECTORS literal (App.tsx:122) and toggled locally, so it has no company dimension to go stale.',
+    note: 'Never fetched -- seeded from the INITIAL_CONNECTORS literal (App.tsx#INITIAL_CONNECTORS) and toggled locally, so it has no company dimension to go stale.',
   },
   {
     binding: 'connectorMappings, setConnectorMappings',
     name: 'connectorMappings',
-    line: 391,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'correctly-reset',
-    note: 'Never fetched; keyed by ConnectorId only (App.tsx:1331-1333), never by entity, so it has no company dimension to go stale.',
+    note: 'Never fetched; keyed by ConnectorId only (App.tsx#saveConnectorMapping), never by entity, so it has no company dimension to go stale.',
   },
   {
     binding: 'customRuleStore, setCustomRuleStore',
     name: 'customRuleStore',
-    line: 397,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/rules'],
@@ -299,40 +289,36 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'openRuleKey, setOpenRuleKey',
     name: 'openRuleKey',
-    line: 398,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/rules'],
     verdict: 'correctly-reset',
-    citationLine: 705,
-    note: 'Cleared at App.tsx:705 -- rules are per company, so an open drawer would describe the company just left.',
+    citation: { in: 'function switchClient(id: string)', text: 'setOpenRuleKey(null)' },
+    note: 'Cleared at App.tsx#switchClient -- rules are per company, so an open drawer would describe the company just left.',
   },
   {
     binding: 'policies, setPolicies',
     name: 'policies',
-    line: 412,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/workflows', '/settings/<tab>'],
     verdict: 'correctly-reset',
-    citationLine: 706,
-    note: 'Tenant-scoped: listApprovalPolicies (lib/policies.ts:208) takes no params, so the set is unchanged by a switch (App.tsx:706-708 says so).',
+    citation: { text: '// Policies are per tenant, so the SET is unchanged — but the switch lands on the' },
+    note: 'Tenant-scoped: listApprovalPolicies (lib/policies.ts:208) takes no params, so the set is unchanged by a switch (App.tsx#switchClient says so).',
   },
   {
     binding: 'editingPolicyId, setEditingPolicyId',
     name: 'editingPolicyId',
-    line: 416,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/workflows'],
     verdict: 'correctly-reset',
-    citationLine: 709,
-    note: 'Cleared at App.tsx:709 so the next Workflows visit opens the list, not a half-edited builder.',
+    citation: { in: 'function switchClient(id: string)', text: 'setEditingPolicyId(null)' },
+    note: 'Cleared at App.tsx#switchClient so the next Workflows visit opens the list, not a half-edited builder.',
   },
   {
     binding: 'members, setMembers',
     name: 'members',
-    line: 432,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/workflows', '/settings/<tab>', '/invoice', '/invoices/<id>'],
@@ -342,7 +328,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'roles, setRoles',
     name: 'roles',
-    line: 443,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/workflows', '/settings/<tab>'],
@@ -352,7 +337,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'entityId, setEntityId',
     name: 'entityId',
-    line: 456,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -362,17 +346,15 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'pickedFiles, setPickedFiles',
     name: 'pickedFiles',
-    line: 460,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
     verdict: 'stale-and-reachable',
-    note: "VERDICT CORRECTED by this audit: not gated behind a createStep. It reaches ctx as runKind (App.tsx:1517, runKindOf(pickedFiles)), and CreateFlow.tsx:37-38 feeds that to wizardHeader, whose strip renders unconditionally at CreateFlow.tsx:62-92 -- at every createStep, including the 'form' switchClient sets (App.tsx:693). Back onto /create therefore draws the previous company's wizard path. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
+    note: "VERDICT CORRECTED by this audit: not gated behind a createStep. It reaches ctx as runKind (App.tsx#Workspace, runKindOf(pickedFiles)), and CreateFlow.tsx:37-38 feeds that to wizardHeader, whose strip renders unconditionally at CreateFlow.tsx:62-92 -- at every createStep, including the 'form' switchClient sets (App.tsx#switchClient). Back onto /create therefore draws the previous company's wizard path. Fixed by ROUTE-06-03; coverage unchanged, resetImport already clears it.",
   },
   {
     binding: 'filesRefusal, setFilesRefusal',
     name: 'filesRefusal',
-    line: 461,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -382,7 +364,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'run, setRun',
     name: 'run',
-    line: 478,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create', '/imports/<ids>/review'],
@@ -392,18 +373,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'documentStages, setDocumentStages',
     name: 'documentStages',
-    line: 481,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create', '/imports/<ids>/review'],
     verdict: 'stale-but-unreachable',
-    citationLine: 1085,
-    note: "CAVEAT: unreachable only ONCE ROUTE-06-03 lands. On head it IS reachable through `run`, so its covering subtask is ROUTE-06-03 via `run`, not a reset of its own. Sole reader is ImportProgress via documentRunRows(run, stages) (lib/documentRun.ts:128-130), which maps run.files 1:1 and so returns [] for an empty list; ImportProgress.tsx:50 then returns null. Cleared at App.tsx:1085, not 477.",
+    citation: { text: 'setDocumentStages({})' },
+    note: "CAVEAT: unreachable only ONCE ROUTE-06-03 lands. On head it IS reachable through `run`, so its covering subtask is ROUTE-06-03 via `run`, not a reset of its own. Sole reader is ImportProgress via documentRunRows(run, stages) (lib/documentRun.ts:128-130), which maps run.files 1:1 and so returns [] for an empty list; ImportProgress.tsx:50 then returns null. Cleared at App.tsx#startDocumentRun, never at its declaration.",
   },
   {
     binding: 'importError, setImportError',
     name: 'importError',
-    line: 482,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
@@ -413,45 +392,41 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
   {
     binding: 'filing, setFiling',
     name: 'filing',
-    line: 486,
     kind: 'useState',
     resetBySwitchClient: false,
     routes: ['/create'],
     verdict: 'deliberate',
-    citationLine: 698,
-    note: 'App.tsx:698-701: a request already in flight is still in flight and will land under the previous company. Leaving the button disabled until it settles is the honest frame. Do not clear.',
+    citation: { text: '// A failed filing\'s message named the company just left. `filing` is deliberately NOT' },
+    note: 'App.tsx#switchClient: a request already in flight is still in flight and will land under the previous company. Leaving the button disabled until it settles is the honest frame. Do not clear.',
   },
   {
     binding: 'filingError, setFilingError',
     name: 'filingError',
-    line: 487,
     kind: 'useState',
     resetBySwitchClient: true,
     routes: ['/create'],
     verdict: 'correctly-reset',
-    citationLine: 702,
-    note: 'Cleared at App.tsx:702 -- a distinct atom from `filing`; the failure message named the company just left.',
+    citation: { in: 'function switchClient(id: string)', text: 'setFilingError(null)' },
+    note: 'Cleared at App.tsx#switchClient -- a distinct atom from `filing`; the failure message named the company just left.',
   },
   {
     binding: 'activeEntityIdRef',
     name: 'activeEntityIdRef',
-    line: 287,
     kind: 'useRef',
     resetBySwitchClient: false,
     routes: [],
     verdict: 'correctly-reset',
-    citationLine: 285,
+    citation: { text: '// Latest-value mirror of active.entityId for the popstate handler, whose deps are [] --' },
     note: 'ROUTE-06-02. Not on ctx and no screen reads it: a latest-value mirror of active.entityId for the popstate handler, whose deps are [] and whose closure would otherwise freeze at mount. Written by the stamp backfill on every change of active.entityId, so it cannot go stale across a switch.',
   },
   {
     binding: 'reqInFlight',
     name: 'reqInFlight',
-    line: 500,
     kind: 'useRef',
     resetBySwitchClient: false,
     routes: [],
     verdict: 'deliberate',
-    citationLine: 698,
-    note: 'Not on ctx and no screen reads it: a re-entrancy guard shared by four round trips (App.tsx:489-499) -- taken directly at :788, :932, :1034 and passed as `inFlight` into the filing call at :1240. Same in-flight rationale as `filing` (App.tsx:698-701).',
+    citation: { text: '// A failed filing\'s message named the company just left. `filing` is deliberately NOT' },
+    note: 'Not on ctx and no screen reads it: a re-entrancy guard taken directly by App.tsx#readAllColumns, App.tsx#startRun and App.tsx#startDocumentRun, and passed as `inFlight` into the filing call in App.tsx#fileDraft. Same in-flight rationale as `filing` (App.tsx#switchClient).',
   },
 ]

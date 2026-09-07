@@ -567,7 +567,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     if (minted === null) window.history.replaceState({ e: active.entityId }, '', window.location.href)
   }, [active.entityId])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
-  // write. A write here would push a duplicate entry on every Back press.
+  // write on the unclamped path. A push here would duplicate an entry on every Back press;
+  // the identity clamp below is the one write, and it replaces.
   // All setters run in this one handler so the id lands in the same commit as the view,
   // matching openImportedInvoice/openExtraction's one-handler invariant. `create` owns
   // reviewBatchIds as its whole path (lib/route.ts), so that arm is gated on ids present,

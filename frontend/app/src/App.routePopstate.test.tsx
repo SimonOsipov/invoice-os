@@ -1348,3 +1348,49 @@ describe('ROUTE-06-02 AC-1, cross-session: a buried entry from the previous sess
     expect(window.location.pathname, 'the URL must agree with the collapsed view').toBe('/invoices')
   })
 })
+
+// QA adversarial (ROUTE-06-02). The `?? null` fold claims to collapse THREE no-stamp
+// shapes; popstate_anUnstampedEntryDoesNotClamp pins only the first (a bare null state).
+// Both specs below run on the resolved roster with `here` non-null, so the fold is the only
+// thing standing between them and a clamp -- dropping `?? null` reddens all three.
+describe('ROUTE-06-02 QA: the other two shapes the no-stamp fold collapses', () => {
+  // A state object that carries no `e` at all -- what any OTHER writer's state looks like
+  // to this handler.
+  it('popstate_anEntryWhoseStateCarriesNoCompanyKeyDoesNotClamp', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known, or nothing is being folded').toBe(
+      ENTITY_B,
+    )
+
+    const state = { scroll: 0 }
+    window.history.replaceState(state, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'a state object with no `e` names no company and must restore normally').toBe(
+      INVOICE_ID,
+    )
+    expect(ctx.view, 'it must still restore its own view').toBe('detail')
+  })
+
+  // `{ e: null }` -- the shape the mount alignment mints before the portfolio resolves, and
+  // the one a cold boot really carries until the backfill fills it.
+  it('popstate_anEntryStampedNullDoesNotClamp', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known').toBe(ENTITY_B)
+
+    await popToStamped(`/invoices/${INVOICE_ID}`, null)
+    const ctx = requireCtx()
+    expect(ctx.importedInvoiceId, 'an explicitly null stamp names no company and must restore normally').toBe(
+      INVOICE_ID,
+    )
+    expect(ctx.view, 'it must still restore its own view').toBe('detail')
+  })
+})

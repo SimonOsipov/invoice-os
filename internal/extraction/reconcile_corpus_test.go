@@ -3,9 +3,8 @@
 // -> Reconcile, with Lines and Entity zero-valued. Every other reconcile_*_test.go file runs
 // hand-built candidate slices; this is the one place a real document's output is pinned.
 //
-// corpusPinned is measured, not idealised. Two readings are still wrong and are tagged
-// KNOWN GAP where they sit: corpus_two_column.pdf's supplier_tin and buyer_tin, which need an
-// anchorLexicon edit and so a FingerprintVersion bump to close.
+// corpusPinned is measured, not idealised, and carries no reading a human would reject
+// (TestReconcileCorpus_NoWrongCommentSurvivesInThePins).
 package extraction_test
 
 import (

@@ -551,8 +551,8 @@ describe('routePath / parseRoute round trip — id corpus', () => {
   })
 
   it('roundTrip_aPolicyIdSurvivesSerialiseAndParse', () => {
-    // Same corpus as the two shipped drill-downs, so the slash and '#' entries tell an
-    // encoding bug from a plain pass-through.
+    // The same corpus the two OLDER drill-downs use (there are three forms now), so the
+    // slash and '#' entries tell an encoding bug from a plain pass-through.
     expect(ID_CORPUS.length).toBe(6)
     for (const id of ID_CORPUS) {
       expect(parseRoute(routePath('workflows', id)), `workflows with id ${id}`).toEqual({

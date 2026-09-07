@@ -1729,3 +1729,24 @@ describe('ROUTE-07-04 AC-4/AC-5: three ways back to the list, all of them addres
     expect(window.history.length, 'deletePolicy is not a navigation and must add no history entry').toBe(lengthBefore)
   })
 })
+
+// D7 puts the policy id in RouteParams' SHARED `id` slot -- the one openImportedInvoice and
+// openExtraction already fill. The `view === 'workflows'` guard on policyNext is the only
+// thing keeping an INVOICE id out of the builder's atom, and dropping it survives all 4413
+// specs. This is the wiring-side twin of parseLocation_policyIdIsNonNullOnlyOnItsOwnView.
+describe('ROUTE-07-04 QA: the id slot is shared, so the atom is gated on the view', () => {
+  it('nav_anIdBoundForAnotherViewNeverReachesThePolicyAtom', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.nav('detail', { id: INVOICE_ID })
+    })
+    const ctx = requireCtx()
+    expect(ctx.view, 'sanity: the nav must have landed on the drill-down').toBe('detail')
+    // Control needle: navigate DID consume params.id. Without this the atom assertion below
+    // would also pass on a build that ignores the second argument entirely.
+    expect(window.location.pathname, 'sanity: the id must have been serialised into the path').toBe(
+      `/invoices/${INVOICE_ID}`,
+    )
+    expect(ctx.editingPolicyId, "an invoice id must never land in the builder's atom").toBeNull()
+  })
+})

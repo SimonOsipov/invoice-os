@@ -1057,3 +1057,25 @@ describe('ROUTE-07-04 AC-6: an unknown policy id renders the list and keeps its 
     expect(window.location.pathname, 'the address must be unchanged across the swap').toBe(`/workflows/${POLICY_ID}`)
   })
 })
+
+// The seed's OTHER guard. boot_anIdLessInitialViewOtherThanAuditAlsoDropsAJobId pins this
+// for jobId; nothing pinned it for policyId, and dropping `bootView === 'workflows'` from
+// the initializer survives the whole suite.
+describe('ROUTE-07-04 QA: the boot seed is gated on the WINNING view, not on seed.view', () => {
+  it('boot_thePolicyIdMustNotSurviveWhenInitialViewWins', async () => {
+    await bootAt(`/workflows/${POLICY_ID}`, { demoMode: true })
+    let ctx = requireCtx()
+    expect(ctx.view, 'sanity: the first mount seeds workflows from the path').toBe('workflows')
+    expect(ctx.editingPolicyId, 'sanity: the first mount opened the builder on the path id').toBe(POLICY_ID)
+
+    await act(async () => {
+      await ctx.becomePersona!(MEMBER, 'settings')
+    })
+    ctx = requireCtx()
+    expect(ctx.view, 'initialView must beat the path').toBe('settings')
+    expect(ctx.editingPolicyId, "the path's policy id must not survive when initialView wins").toBeNull()
+    expect(window.location.pathname, 'the alignment must land on the canonical settings path').toBe(
+      '/settings/members',
+    )
+  })
+})

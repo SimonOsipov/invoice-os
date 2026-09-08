@@ -60,6 +60,15 @@ func rcCandAt(field, value string, tier extraction.Tier, distance float64) extra
 	return extraction.Candidate{Field: field, Value: value, Reason: extraction.ReasonNone, Tier: tier, Distance: distance}
 }
 
+// rcAdjacentAt is rcCandAt with the flag Resolve sets on a value read from a token BESIDE its
+// label. Every conjunct of the doubt test is explicit here, so a fixture that stopped
+// exercising one of them is visible in the call.
+func rcAdjacentAt(field, value string, tier extraction.Tier, distance float64) extraction.Candidate {
+	c := rcCandAt(field, value, tier, distance)
+	c.Adjacent = true
+	return c
+}
+
 // rcAllHeaderCandidates returns one plausible candidate per HeaderFields member, each with a
 // distinct filler value -- shared by every "every header field found" fixture so a totality gap
 // in one test cannot hide behind another's coincidental field list.
@@ -1160,4 +1169,143 @@ func TestReconcile_MissingLinesAndCleanSubtotalAreDistinguishable(t *testing.T) 
 	if got := rcLineFlags(out); len(got) != 0 {
 		t.Errorf("Reconcile emitted %d arithmetic flag(s) with no lines: %v", len(got), got)
 	}
+}
+
+// --- EXTR-22: an uncorroborated adjacent match reads doubtful ------------------------
+//
+// "Uncorroborated" is a head taken from a token BESIDE its label, by a shipped rule, on one of
+// the three fields the doubt covers. The value never moves; only the reason and the
+// alternatives do.
+
+// rcDecide reconciles cands and returns field's result, failing rather than returning a zero
+// FieldResult a later assertion would read as "decided with no value".
+func rcDecide(t *testing.T, field string, cands ...extraction.Candidate) extraction.FieldResult {
+	t.Helper()
+	got, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), field)
+	if !ok {
+		t.Fatalf("Reconcile emitted no %s", field)
+	}
+	if got.Value == nil {
+		t.Fatalf("%s decided no value from %d candidate(s); every assertion below reads a hole", field, len(cands))
+	}
+	return got
+}
+
+// rcDoubtPair is the shape the whole doubt turns on: an adjacent generic head and a farther
+// adjacent reading of the same field carrying a different value.
+func rcDoubtPair(field, near, far string, tier extraction.Tier) (extraction.Candidate, extraction.Candidate) {
+	return rcAdjacentAt(field, near, tier, 0.03), rcAdjacentAt(field, far, tier, 0.05)
+}
+
+// AC-1. The far reading is not equal standing (D-14) and today falls out of the group, so this
+// is the spec the widening exists to turn green.
+func TestReconcile_AnUncorroboratedAdjacentHeadIsAmbiguous(t *testing.T) {
+	const near, far = "Honeywell Group", "TIN: 99999999-0402"
+	n, f := rcDoubtPair("buyer_name", near, far, extraction.TierGeneric)
+
+	// far first: the head is chosen by the comparator, never by input position.
+	got := rcDecide(t, "buyer_name", f, n)
+	if *got.Value != near {
+		t.Errorf("buyer_name = %q, want %q -- the nearer reading still decides the value", *got.Value, near)
+	}
+	if got.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("buyer_name reason = %q, want %q -- an adjacent generic head with a second distinct value is not corroborated", got.Reason, extraction.ReasonAmbiguous)
+	}
+	if want := []string{far}; !slices.Equal(valuesOf(got.Alternatives), want) {
+		t.Errorf("buyer_name alternatives = %q, want %q -- the competing reading is what the reviewer has to settle", valuesOf(got.Alternatives), want)
+	}
+}
+
+// AC-2, AC-3. One distinct value is decided however the head was read. The second arm is the
+// one the widening can break: after it the far duplicate IS in the group, and only the dedup
+// (D-15) keeps the field out of doubt.
+func TestReconcile_ALoneAdjacentValueStaysDecided(t *testing.T) {
+	const v = "Honeywell Group"
+	lone := rcAdjacentAt("buyer_name", v, extraction.TierGeneric, 0.03)
+
+	// Non-vacuity: the fixture satisfies every conjunct of the doubt test, so the only thing
+	// deciding it is the count of distinct values.
+	if !lone.Adjacent || lone.Tier != extraction.TierGeneric || lone.Field != "buyer_name" {
+		t.Fatalf("the fixture is %+v; it must be adjacent, generic and in scope or the zero below is earned by the wrong clause", lone)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		cands []extraction.Candidate
+	}{
+		{"one reading", []extraction.Candidate{lone}},
+		{"two readings, one value", []extraction.Candidate{lone, rcAdjacentAt("buyer_name", v, extraction.TierGeneric, 0.05)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rcDecide(t, "buyer_name", tc.cands...)
+			if *got.Value != v {
+				t.Errorf("buyer_name = %q, want %q", *got.Value, v)
+			}
+			if got.Reason != extraction.ReasonNone {
+				t.Errorf("buyer_name reason = %q, want %q -- one distinct value is one answer", got.Reason, extraction.ReasonNone)
+			}
+			if len(got.Alternatives) != 0 {
+				t.Errorf("buyer_name alternatives = %q, want none", valuesOf(got.Alternatives))
+			}
+		})
+	}
+}
+
+// AC-3. A learned head is the tenant's own answer for this layout and is never second-guessed.
+// The generic arm is the discriminator: the two fixtures differ in Tier and nothing else, so a
+// widening that stopped reading Tier cannot pass both.
+func TestReconcile_ALearnedAdjacentHeadStaysDecided(t *testing.T) {
+	const near, far = "Honeywell Group", "TIN: 99999999-0402"
+
+	ln, lf := rcDoubtPair("buyer_name", near, far, extraction.TierLearned)
+	learned := rcDecide(t, "buyer_name", lf, ln)
+	if *learned.Value != near {
+		t.Errorf("buyer_name = %q, want %q", *learned.Value, near)
+	}
+	if learned.Reason != extraction.ReasonNone {
+		t.Errorf("a learned head reads %q, want %q -- the tenant's own rule is the corroboration", learned.Reason, extraction.ReasonNone)
+	}
+	if len(learned.Alternatives) != 0 {
+		t.Errorf("a learned head carries alternatives %q, want none", valuesOf(learned.Alternatives))
+	}
+
+	gn, gf := rcDoubtPair("buyer_name", near, far, extraction.TierGeneric)
+	generic := rcDecide(t, "buyer_name", gf, gn)
+	if generic.Reason != extraction.ReasonAmbiguous || !slices.Equal(valuesOf(generic.Alternatives), []string{far}) {
+		t.Fatalf("the same pair at TierGeneric reads %q with alternatives %q, want %q with [%q]; the learned zero above is otherwise a zero the widening never reaches", generic.Reason, valuesOf(generic.Alternatives), extraction.ReasonAmbiguous, far)
+	}
+}
+
+// rcScopeArms runs one pair under one scope-list member and one field outside the list. Each
+// member gets its own named spec: dropping one entry must red that entry's spec and no other.
+func rcScopeArms(t *testing.T, doubted, decided, near, far string) {
+	t.Helper()
+
+	n, f := rcDoubtPair(doubted, near, far, extraction.TierGeneric)
+	in := rcDecide(t, doubted, f, n)
+	if *in.Value != near {
+		t.Errorf("%s = %q, want %q -- the value does not move", doubted, *in.Value, near)
+	}
+	if in.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("%s reason = %q, want %q -- the field is in the doubt's scope", doubted, in.Reason, extraction.ReasonAmbiguous)
+	}
+	if want := []string{far}; !slices.Equal(valuesOf(in.Alternatives), want) {
+		t.Errorf("%s alternatives = %q, want %q", doubted, valuesOf(in.Alternatives), want)
+	}
+
+	on, of := rcDoubtPair(decided, near, far, extraction.TierGeneric)
+	out := rcDecide(t, decided, of, on)
+	if out.Reason != extraction.ReasonNone || len(out.Alternatives) != 0 {
+		t.Errorf("%s reads %q with alternatives %q, want %q with none -- D-4 still governs every field outside the scope", decided, out.Reason, valuesOf(out.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// AC-4. No corpus layout produces a doubtful buyer_tin, so this is that field's only oracle.
+func TestReconcile_TheWideningCoversBuyerTIN(t *testing.T) {
+	rcScopeArms(t, "buyer_tin", "supplier_tin", "99999999-0802", "99999999-0801")
+}
+
+// AC-4. No corpus layout produces a doubtful vat either.
+func TestReconcile_TheWideningCoversVAT(t *testing.T) {
+	rcScopeArms(t, "vat", "total", "90.00", "187.50")
 }

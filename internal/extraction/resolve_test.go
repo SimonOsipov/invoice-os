@@ -1102,3 +1102,33 @@ func TestResolve_TheBoundaryReadsEachPagesOwnLabels(t *testing.T) {
 	rvControl(t, vats, "the VAT read on the page whose middle token no lexicon entry claims")
 	rvbOnly(t, vats, "vat", "1234.50", "t1.vat.right", 0.290000)
 }
+
+// EXTR-22. Candidate.Adjacent is a constant of the relation, and BOTH beside-the-label
+// relations set it. Every doubtful cell the corpus produces heads on a below read, so a flag
+// wired for RelRight alone -- the shape the boundary predicate has -- leaves the doubt with
+// nothing to work on and every downstream assertion vacuously true.
+func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing.T) {
+	got := extraction.Resolve(rvPage(rvMixedTokens()...), rvMixedRules(t))
+	rvFloor(t, got, "the mixed-relation arrangement")
+
+	for _, tc := range []struct {
+		field    string
+		relation string
+		adjacent bool
+	}{
+		{"invoice_number", "same_token", false},
+		{"issue_date", "right", true},
+		{"total", "below", true},
+	} {
+		cands := rvFor(got, tc.field)
+		if len(cands) == 0 {
+			t.Errorf("no %s candidate; the %s relation is unread and its flag is unasserted", tc.field, tc.relation)
+			continue
+		}
+		for _, c := range cands {
+			if c.Adjacent != tc.adjacent {
+				t.Errorf("%s = %q via the %s relation reads Adjacent = %v, want %v", tc.field, c.Value, tc.relation, c.Adjacent, tc.adjacent)
+			}
+		}
+	}
+}

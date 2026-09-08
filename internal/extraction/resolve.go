@@ -28,6 +28,9 @@ type Candidate struct {
 	RuleID   string  // AnchorRule.ID or Tier1Rule.Key
 	Tier     Tier
 	Distance float64 // gap along the relation's axis, normalised; 0 for same_token
+	// Adjacent marks a value taken from a token beside its label, not from inside the label's
+	// own token. Not Distance != 0: a rightward token flush against its anchor reads gap 0.
+	Adjacent bool
 }
 
 // RuleSet is what Resolve reads. Neither slice is ever a map: iteration order is output order.
@@ -121,7 +124,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 			switch rule.Relation.Kind {
 			case RelSameToken:
 				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
-					usableRegion(tok.Region), outField, ruleID, tier, 0)
+					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
 				bounded := tier == TierGeneric && rule.Relation.Kind == RelRight
 				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
@@ -129,8 +132,10 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {
 						continue
 					}
+					// Adjacent is a constant of this branch, both relations: every value here
+					// came from a token beside the anchor, never from inside it.
 					dst = appendReadings(dst, rule.Shape, value.Text,
-						usableRegion(value.Region), outField, ruleID, tier, rel.distance)
+						usableRegion(value.Region), outField, ruleID, tier, rel.distance, true)
 				}
 			}
 		}
@@ -206,7 +211,7 @@ func crossesALabel(page TokenPage, labels []bool, anchor, value Region) bool {
 
 // appendReadings emits one candidate per reading the shape accepts, so an ambiguous numeric
 // date keeps both readings and the Value key separates them.
-func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, field, ruleID string, tier Tier, distance float64) []Candidate {
+func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, field, ruleID string, tier Tier, distance float64, adjacent bool) []Candidate {
 	for _, v := range shape.Normalize(raw) {
 		dst = append(dst, Candidate{
 			Field:    field,
@@ -216,6 +221,7 @@ func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, fi
 			RuleID:   ruleID,
 			Tier:     tier,
 			Distance: distance,
+			Adjacent: adjacent,
 		})
 	}
 	return dst
@@ -357,8 +363,9 @@ func usableBox(r Region) bool {
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // compareCandidates is the total order within one field: tier, distance, region, value, rule id.
-// Total because Field groups and Reason never varies, so two candidates comparing equal are
-// equal in every field. TestResolve_ComparatorIsTotal is the oracle -- the permutation specs
+// Total because Field groups, Reason never varies, and Adjacent follows RuleID -- one rule has
+// one relation kind (TestTier1_EveryKeyNamesItsOwnRelation) -- so two candidates comparing equal
+// are equal in every field. TestResolve_ComparatorIsTotal is the oracle -- the permutation specs
 // are not, since slices.SortFunc insertion-sorts below n=12 and leaves equals in place.
 func compareCandidates(a, b Candidate) int {
 	if a.Tier != b.Tier {

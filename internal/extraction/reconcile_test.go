@@ -1305,7 +1305,8 @@ func TestReconcile_TheWideningCoversBuyerTIN(t *testing.T) {
 	rcScopeArms(t, "buyer_tin", "supplier_tin", "99999999-0802", "99999999-0801")
 }
 
-// AC-4. No corpus layout produces a doubtful vat either.
+// AC-4. No corpus layout produces a doubtful vat either. subtotal is the out-of-scope control:
+// arithmetic-adjacent to vat, so it is a fair one, and the doubt does not cover it.
 func TestReconcile_TheWideningCoversVAT(t *testing.T) {
-	rcScopeArms(t, "vat", "total", "90.00", "187.50")
+	rcScopeArms(t, "vat", "subtotal", "90.00", "187.50")
 }

@@ -14,7 +14,7 @@ import (
 
 // rdqScope is the doubt's scope list, re-typed here rather than read from the package: the
 // point of the walk below is that the two agree.
-var rdqScope = []string{"buyer_tin", "buyer_name", "vat"}
+var rdqScope = []string{"buyer_tin", "buyer_name", "vat", "total"}
 
 // rdqPair is an in-scope-shaped doubt fixture on any field: an adjacent generic head and a
 // farther adjacent reading carrying a different value.
@@ -24,11 +24,11 @@ func rdqPair(field string) (near, far extraction.Candidate) {
 	return near, far
 }
 
-// AC-4. Only the two scope members with no corpus witness have a named spec each, so a FOURTH
+// AC-4. Only the scope members with no corpus witness have a named spec each, so a FIFTH
 // member added to doubtfulFields is silent unless some other spec happens to name that field.
 // invoice_number, currency and subtotal are named by none. This walks all ten header fields and
 // pins the partition, so the scope list can neither grow nor shrink without a red.
-func TestReconcile_TheDoubtCoversExactlyThreeOfTheTenHeaderFields(t *testing.T) {
+func TestReconcile_TheDoubtCoversExactlyFourOfTheTenHeaderFields(t *testing.T) {
 	if len(extraction.HeaderFields) != 10 {
 		t.Fatalf("HeaderFields names %d field(s), want 10; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
 	}

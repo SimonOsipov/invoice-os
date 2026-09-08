@@ -291,12 +291,13 @@ func riAltValues(alts []Field) []string {
 }
 
 // The user decided at EXTR-16's critical-fork gate (D-4) that decideField's equal-standing group
-// stays keyed on Tier AND Distance, because widening it turns 5 of 44 corpus pairs spuriously
-// ambiguous and offers cross-party junk as alternatives. A failure here is someone reversing that
-// decision, not a bug.
+// stays keyed on Tier AND Distance. EXTR-22's doubt reverses that for buyer_tin, buyer_name and
+// vat alone, so this spec now guards the two halves of that scope: supplier_name keeps D-4 with
+// an adjacent head, and buyer_name loses it with the same one. A supplier_name failure here is
+// someone widening the doubt past its scope list, not a bug.
 func TestReconcile_TheEqualStandingGroupStillKeysOnTierAndDistance(t *testing.T) {
-	near := Candidate{Field: "supplier_name", Value: "Adeyemi Trading Limited", Tier: TierGeneric, Distance: 0.01, RuleID: "t1.supplier_name.right"}
-	far := Candidate{Field: "supplier_name", Value: "Honeywell Group", Tier: TierGeneric, Distance: 0.02, RuleID: "t1.supplier_name.below"}
+	near := Candidate{Field: "supplier_name", Value: "Adeyemi Trading Limited", Tier: TierGeneric, Distance: 0.01, RuleID: "t1.supplier_name.right", Adjacent: true}
+	far := Candidate{Field: "supplier_name", Value: "Honeywell Group", Tier: TierGeneric, Distance: 0.02, RuleID: "t1.supplier_name.below", Adjacent: true}
 
 	got := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{far, near}}), "supplier_name")
 	if got.Value == nil || *got.Value != near.Value {
@@ -311,9 +312,150 @@ func TestReconcile_TheEqualStandingGroupStillKeysOnTierAndDistance(t *testing.T)
 
 	// Positive control: the same pair at one Distance does go ambiguous, so the assertions above
 	// are not passing over a pair decideField could never have grouped.
-	far.Distance = near.Distance
-	tied := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{far, near}}), "supplier_name")
+	tiedFar := far
+	tiedFar.Distance = near.Distance
+	tied := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{tiedFar, near}}), "supplier_name")
 	if tied.Reason != ReasonAmbiguous || !slices.Equal(riAltValues(tied.Alternatives), []string{far.Value}) {
 		t.Fatalf("at one Distance reason = %q with alternatives %v, want %q with [%q]", tied.Reason, riAltValues(tied.Alternatives), ReasonAmbiguous, far.Value)
+	}
+
+	// The paired in-scope arm. Same geometry, same tier, same adjacency -- only the field name
+	// differs, so the supplier_name zero above is earned by the scope list and nothing else.
+	bNear := near
+	bNear.Field, bNear.RuleID = "buyer_name", "t1.buyer_name.below"
+	bFar := far
+	bFar.Field, bFar.RuleID = "buyer_name", "t1.buyer_name.below"
+
+	buyer := riFieldResult(t, Reconcile(Input{Candidates: []Candidate{bFar, bNear}}), "buyer_name")
+	if buyer.Value == nil || *buyer.Value != bNear.Value {
+		t.Fatalf("buyer_name value = %v, want %q -- the doubt moves the reason, never the value", buyer.Value, bNear.Value)
+	}
+	if buyer.Reason != ReasonAmbiguous {
+		t.Errorf("buyer_name reason = %q, want %q -- an adjacent generic head on an in-scope field competes with every reading", buyer.Reason, ReasonAmbiguous)
+	}
+	if want := []string{bFar.Value}; !slices.Equal(riAltValues(buyer.Alternatives), want) {
+		t.Errorf("buyer_name alternatives = %v, want %v", riAltValues(buyer.Alternatives), want)
+	}
+}
+
+// --- EXTR-22: AC-2 is structural, not merely tested ------------------------------------
+//
+// decideField names ReasonAmbiguous at exactly one site, and that site sits behind the "fewer
+// than two distinct values" return, so the alternatives list is non-empty by the time the reason
+// is set. The review screen renders chips in place of an input on the strength of that
+// (frontend/app/src/components/ExtractionFields.tsx, the `candidates` gate). A second assignment
+// site, or the gate moving below one, breaks the invariant while every behavioural spec keeps
+// passing on the inputs the corpus supplies.
+
+// riTwoValueGate matches decideField's own `if len(x) < 2 { return ... }`.
+func riTwoValueGate(stmt ast.Stmt) bool {
+	ifs, ok := stmt.(*ast.IfStmt)
+	if !ok || ifs.Body == nil || len(ifs.Body.List) != 1 {
+		return false
+	}
+	if _, ok := ifs.Body.List[0].(*ast.ReturnStmt); !ok {
+		return false
+	}
+	cmp, ok := ifs.Cond.(*ast.BinaryExpr)
+	if !ok || cmp.Op != token.LSS {
+		return false
+	}
+	call, ok := cmp.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	fun, ok := call.Fun.(*ast.Ident)
+	if !ok || fun.Name != "len" {
+		return false
+	}
+	lit, ok := cmp.Y.(*ast.BasicLit)
+	return ok && lit.Value == "2"
+}
+
+func riNamesAmbiguous(n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if id, ok := x.(*ast.Ident); ok && id.Name == "ReasonAmbiguous" {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// riAmbiguousSites counts the places f names ReasonAmbiguous and reports whether the two-value
+// gate precedes every one of them inside decideField. found is the floor: a renamed decideField
+// must fail loudly rather than let gateFirst read true over nothing.
+func riAmbiguousSites(f *ast.File) (sites int, gateFirst, found bool) {
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == "ReasonAmbiguous" {
+			sites++
+		}
+		return true
+	})
+
+	gateFirst = true
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "decideField" || fn.Body == nil {
+			continue
+		}
+		found = true
+		gated := false
+		for _, stmt := range fn.Body.List {
+			if riTwoValueGate(stmt) {
+				gated = true
+			}
+			if riNamesAmbiguous(stmt) && !gated {
+				gateFirst = false
+			}
+		}
+	}
+	return sites, gateFirst, found
+}
+
+// AC-2. A field is never ReasonAmbiguous with an empty alternatives list, and it is the shape of
+// decideField that says so rather than the inputs the corpus happens to supply.
+func TestReconcile_AmbiguousIsSetAtOneSiteBehindTheTwoValueGate(t *testing.T) {
+	sites, gateFirst, found := riAmbiguousSites(riParse(t, "reconcile.go", nil))
+	if !found {
+		t.Fatal("reconcile.go declares no decideField; the ordering below was measured over nothing")
+	}
+	if sites != 1 {
+		t.Errorf("reconcile.go names ReasonAmbiguous at %d site(s), want 1 -- a second site can set the reason without passing the gate that fills the alternatives", sites)
+	}
+	if !gateFirst {
+		t.Error("decideField names ReasonAmbiguous ahead of its `len(...) < 2` return; an ambiguous field with an empty alternatives list becomes constructible")
+	}
+
+	const needle = `package p
+
+func decideField() Field {
+	result := Field{}
+	result.Reason = ReasonAmbiguous
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+`
+	if s, g, ok := riAmbiguousSites(riParse(t, "needle.go", needle)); !ok || s != 2 || g {
+		t.Errorf("the needle source names ReasonAmbiguous twice, once ahead of the gate, and the scan read found=%v sites=%d gateFirst=%v; the all-clear above proves nothing", ok, s, g)
+	}
+
+	const control = `package p
+
+func decideField() Field {
+	result := Field{}
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+`
+	if s, g, ok := riAmbiguousSites(riParse(t, "control.go", control)); !ok || s != 1 || !g {
+		t.Errorf("the control source is the shipped shape and the scan read found=%v sites=%d gateFirst=%v; the scan is not specific", ok, s, g)
 	}
 }

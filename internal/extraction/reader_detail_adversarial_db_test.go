@@ -514,7 +514,7 @@ func TestRLS_ExtractionDetailAlternativesNestOnlyUnderTheirOwnField(t *testing.T
 	if err != nil {
 		t.Fatalf("marshal the stripped detail: %v", err)
 	}
-	for _, needle := range []string{"ALT-RANK-1", "ALT-RANK-2", "0.11", "0.22", "0.33", "0.44"} {
+	for _, needle := range []string{"ALT-RANK-1", "ALT-RANK-2", `"x0":0.11`, `"y0":0.22`, `"x1":0.33`, `"y1":0.44`} {
 		if strings.Contains(string(sb), needle) {
 			t.Errorf("with every alternatives slice emptied the detail still marshals to\n  %s\nwhich carries %s -- a candidate_rank > 0 row reached the wire somewhere else",
 				sb, needle)
@@ -564,7 +564,7 @@ func TestExtractionDetail_OrphanAlternativeIsDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal the detail: %v", err)
 	}
-	for _, needle := range []string{"invoice_number", "ORPHAN-1", "ORPHAN-2", "0.61", "0.62", "0.63", "0.64"} {
+	for _, needle := range []string{"invoice_number", "ORPHAN-1", "ORPHAN-2", `"x0":0.61`, `"y0":0.62`, `"x1":0.63`, `"y1":0.64`} {
 		if strings.Contains(string(b), needle) {
 			t.Errorf("the detail marshals to\n  %s\nwhich carries %s from an orphan candidate_rank > 0 row", b, needle)
 		}

@@ -12,6 +12,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -772,5 +773,362 @@ func TestResolve_ALearnedRuleIsNeverSuppressedByTheLexicon(t *testing.T) {
 	}
 	if c.Value != "Adeyemi Trading Limited" {
 		t.Errorf("supplier_name candidate Value = %q, want %q", c.Value, "Adeyemi Trading Limited")
+	}
+}
+
+// --- the intervening-label boundary -----------------------------------------
+//
+// A label owns the value beyond it, so a rightward read stops at one. Every arrangement below
+// sits on ONE baseline inside the right relation's 0.35 dial, because that is the only shape
+// relatedTokens admits a rightward pair on.
+
+const (
+	rvbY0 = 0.70
+	rvbY1 = 0.72
+)
+
+// rvbRow puts one token on that shared baseline.
+func rvbRow(text string, x0, x1 float64) extraction.Token {
+	return rvTok(text, x0, rvbY0, x1, rvbY1)
+}
+
+// rvbBetween is the token that sits between the anchor and the value.
+func rvbBetween(text string) extraction.Token {
+	return rvbRow(text, 0.30, 0.38)
+}
+
+// rvbPage is the arrangement AC-1 names: a VAT anchor ending at 0.16, one token between, and
+// the amount starting at 0.45. vat reads it at 0.29, and Total -- when it is a label -- at 0.07.
+func rvbPage(between extraction.Token) []extraction.TokenPage {
+	return rvPage(rvbRow("VAT", 0.10, 0.16), between, rvbRow("2,687.50", 0.45, 0.58))
+}
+
+func rvbShow(cs []extraction.Candidate) string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = fmt.Sprintf("%s=%q via %s tier=%d d=%.6f", c.Field, c.Value, c.RuleID, c.Tier, c.Distance)
+	}
+	return strings.Join(out, ", ")
+}
+
+func rvbRuleIDs(cs []extraction.Candidate) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.RuleID
+	}
+	return out
+}
+
+// rvbOnly fails unless cs is exactly the one named candidate. Distance is compared too: a
+// boundary that dropped the nearest candidate and kept a farther one satisfies a value-only
+// assertion.
+func rvbOnly(t *testing.T, cs []extraction.Candidate, what, value, ruleID string, distance float64) {
+	t.Helper()
+	if len(cs) != 1 {
+		t.Fatalf("%s = [%s], want exactly one candidate %q from %s at %.6f", what, rvbShow(cs), value, ruleID, distance)
+	}
+	c := cs[0]
+	if c.Value != value || c.RuleID != ruleID || math.Abs(c.Distance-distance) > 1e-9 {
+		t.Errorf("%s = [%s], want %q from %s at %.6f", what, rvbShow(cs), value, ruleID, distance)
+	}
+}
+
+// AC-1. The Total label sits between the VAT anchor and the amount and shares its band, so the
+// VAT read stops there. The control is on the SAME page: the label that stopped it is an anchor
+// in its own right and its read must survive, or the zero above holds equally against a Resolve
+// that reads nothing off this arrangement.
+func TestResolve_ARightwardReadStopsAtAnInterveningLabel(t *testing.T) {
+	got := extraction.Resolve(rvbPage(rvbBetween("Total")), rvGeneric())
+	rvFloor(t, got, "the [VAT | Total | 2,687.50] arrangement")
+
+	if vats := rvFor(got, "vat"); len(vats) != 0 {
+		t.Errorf("vat = [%s], want none; Total owns the amount beyond it and the VAT read stops at the label", rvbShow(vats))
+	}
+
+	totals := rvFor(got, "total")
+	rvControl(t, totals, "the Total label's own rightward read on the same page")
+	rvbOnly(t, totals, "total", "2687.50", "t1.total.right", 0.070000)
+}
+
+// AC-2. Nothing about the boundary is specific to vat: a Sub-total anchor reaching past a VAT
+// label takes the VAT's own amount, and that read stops too. vat's read of the same amount is
+// the control -- it crosses nothing.
+func TestResolve_TheBoundaryHoldsForASubtotalCrossingVAT(t *testing.T) {
+	got := extraction.Resolve(rvPage(
+		rvbRow("Sub-total", 0.10, 0.20),
+		rvbRow("2,500.00", 0.30, 0.42),
+		rvbRow("VAT", 0.44, 0.48),
+		rvbRow("187.50", 0.50, 0.60),
+	), rvGeneric())
+	rvFloor(t, got, "the [Sub-total | 2,500.00 | VAT | 187.50] arrangement")
+
+	rvbOnly(t, rvFor(got, "subtotal"), "subtotal", "2500.00", "t1.subtotal.right", 0.100000)
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT label's own read of the amount beside it")
+	rvbOnly(t, vats, "vat", "187.50", "t1.vat.right", 0.020000)
+}
+
+// AC-2, over the fields no amount rule reaches. Each arm pairs the blocked arrangement with the
+// SAME geometry carrying a token no lexicon entry claims, so the absence is measured against a
+// read that demonstrably arrives.
+func TestResolve_TheBoundaryHoldsForANonAmountField(t *testing.T) {
+	for _, arm := range []struct {
+		name           string
+		anchor, value  extraction.Token
+		between, inert extraction.Token
+		field, ruleID  string
+		want           string
+		distance       float64
+	}{
+		{
+			name:    "an issue-date label between the invoice-number label and the number",
+			anchor:  rvbRow("Invoice No", 0.10, 0.20),
+			between: rvbRow("Issue Date", 0.28, 0.38),
+			inert:   rvbRow("::::", 0.28, 0.38),
+			value:   rvbRow("INV-2103", 0.40, 0.52),
+			field:   "invoice_number", ruleID: "t1.invoice_number.right",
+			want: "INV-2103", distance: 0.200000,
+		},
+		{
+			name:    "a total label between the currency label and the code",
+			anchor:  rvbRow("Currency", 0.10, 0.20),
+			between: rvbRow("Total", 0.28, 0.36),
+			inert:   rvbRow("::::", 0.28, 0.36),
+			value:   rvbRow("NGN", 0.40, 0.48),
+			field:   "currency", ruleID: "t1.currency.right",
+			want: "NGN", distance: 0.200000,
+		},
+		{
+			// Q-11's token: reg_identifier claims [6 16] and vat [0 3], so vat's narrower hit
+			// survives anchorOutranked and the token is a label under either reading.
+			name:    "a registration phrase between the buyer-TIN label and the TIN",
+			anchor:  rvbRow("Buyer TIN", 0.10, 0.20),
+			between: rvbRow("TAX / VAT REG NO", 0.28, 0.45),
+			inert:   rvbRow("::::", 0.28, 0.45),
+			value:   rvbRow("99999999-0101", 0.50, 0.65),
+			field:   "buyer_tin", ruleID: "t1.buyer_tin.right",
+			want: "99999999-0101", distance: 0.300000,
+		},
+	} {
+		// The control first: without it the absence below is what an arrangement that reaches
+		// nothing also reports.
+		ctl := rvFor(extraction.Resolve(rvPage(arm.anchor, arm.inert, arm.value), rvGeneric()), arm.field)
+		rvControl(t, ctl, arm.name+", with a token no lexicon entry claims in the same slot")
+		var reached bool
+		for _, c := range ctl {
+			if c.RuleID == arm.ruleID && c.Value == arm.want && math.Abs(c.Distance-arm.distance) <= 1e-9 {
+				reached = true
+			}
+		}
+		if !reached {
+			t.Fatalf("%s: the control produced [%s], want %s to read %q at %.6f; the arrangement never reached the value and the assertion below proves nothing", arm.name, rvbShow(ctl), arm.ruleID, arm.want, arm.distance)
+		}
+
+		got := rvFor(extraction.Resolve(rvPage(arm.anchor, arm.between, arm.value), rvGeneric()), arm.field)
+		if slices.Contains(rvbRuleIDs(got), arm.ruleID) {
+			t.Errorf("%s: %s = [%s], want no %s candidate; the label between owns the value beyond it whatever field the anchor fills", arm.name, arm.field, rvbShow(got), arm.ruleID)
+		}
+	}
+}
+
+// AC-1. The lexicon's own registration phrase is a label like any other. The second arm carries
+// it PAST the token start: a pattern anchored at ^ claims nothing there, and every phrase spec
+// on this story written before f707543a put its phrase at position 0.
+func TestResolve_TheRCPhraseStopsTheVATRead(t *testing.T) {
+	page := func(text string) []extraction.TokenPage {
+		return rvPage(rvbRow("VAT", 0.10, 0.16), rvbRow(text, 0.30, 0.45), rvbRow("1234567", 0.50, 0.62))
+	}
+
+	for _, arm := range []struct{ name, between, inert string }{
+		{"the phrase alone on the token", "RC NUMBER", "::::"},
+		{"the phrase past the token start", "Ref: RC NUMBER", "Ref: ----"},
+	} {
+		ctl := rvFor(extraction.Resolve(page(arm.inert), rvGeneric()), "vat")
+		rvControl(t, ctl, arm.name+", with a token no lexicon entry claims in the same slot")
+		rvbOnly(t, ctl, arm.name+", control vat", "1234567", "t1.vat.right", 0.340000)
+
+		if got := rvFor(extraction.Resolve(page(arm.between), rvGeneric()), "vat"); len(got) != 0 {
+			t.Errorf("%s: vat = [%s], want none; a company registration number is not the VAT amount", arm.name, rvbShow(got))
+		}
+	}
+}
+
+// AC-3. The boundary is rightward only. The below twin -- a VAT label taking the Total's value
+// one line down -- is measured and deliberately deferred to a story that asks for it, so this
+// pins the DECISION: it reds if the predicate is ever given a Y-axis twin for consistency.
+func TestResolve_TheBoundaryDoesNotApplyBelow(t *testing.T) {
+	got := extraction.Resolve(rvPage(
+		rvTok("VAT", 0.10, 0.700, 0.16, 0.720),
+		rvTok("Total", 0.10, 0.730, 0.18, 0.750),
+		rvTok("2,687.50", 0.10, 0.758, 0.23, 0.778),
+	), rvGeneric())
+	rvFloor(t, got, "the [VAT] / [Total] / [2,687.50] stack")
+
+	rvbOnly(t, rvFor(got, "vat"), "vat, reading past the Total label one line down", "2687.50", "t1.vat.below", 0.038000)
+	rvbOnly(t, rvFor(got, "total"), "total", "2687.50", "t1.total.below", 0.008000)
+}
+
+// AC-3. A learned rule is the tenant's answer to "the value is THERE" and the shipped lexicon
+// has no authority over it, so the boundary is gated on TierGeneric -- the gate anchorOutranked
+// already carries. Both halves are asserted on ONE page: a spec asserting only that the learned
+// candidate survives passes equally against a boundary that never fires.
+func TestResolve_ALearnedRuleIsNotBounded(t *testing.T) {
+	rules := extraction.RuleSet{
+		Learned: []extraction.AnchorRule{
+			rvLearned(t, "learned-vat", "vat", `(?i)\bvat\b`, extraction.RelRight, 0.35, extraction.ShapeAmount),
+		},
+		Tier1: extraction.Tier1Rules,
+	}
+
+	got := extraction.Resolve(rvbPage(rvbBetween("Total")), rules)
+	rvFloor(t, got, "the [VAT | Total | 2,687.50] arrangement under a learned rightward rule")
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the learned vat rule reading past the Total label")
+	rvbOnly(t, vats, "vat", "2687.50", "learned-vat", 0.290000)
+	if vats[0].Tier != extraction.TierLearned {
+		t.Errorf("the surviving vat candidate is tier %v, want TierLearned; the generic rule on this identical geometry is the one that goes", vats[0].Tier)
+	}
+}
+
+// AC-1. The value token carries a label of its own and must not block its own read: the cut is
+// b.X0 < value.X0, strict, so the value is never between the anchor and itself.
+func TestResolve_ALabelBesideTheValueDoesNotBlockItself(t *testing.T) {
+	got := extraction.Resolve(rvPage(
+		rvbRow("Buyer", 0.10, 0.17),
+		rvbRow("Buyer: Honeywell Group", 0.25, 0.50),
+	), rvGeneric())
+	rvFloor(t, got, "the [Buyer | Buyer: Honeywell Group] arrangement")
+
+	names := rvFor(got, "buyer_name")
+	rvControl(t, names, "the buyer_name rightward read of a value token that is itself a label")
+	if !slices.Contains(rvbRuleIDs(names), "t1.buyer_name.right") {
+		t.Fatalf("buyer_name = [%s], want a t1.buyer_name.right candidate; the value token blocked its own read", rvbShow(names))
+	}
+	for _, c := range names {
+		if c.RuleID != "t1.buyer_name.right" {
+			continue
+		}
+		if c.Value != "Buyer: Honeywell Group" || math.Abs(c.Distance-0.080000) > 1e-9 {
+			t.Errorf("buyer_name via t1.buyer_name.right = %q at %.6f, want %q at 0.080000", c.Value, c.Distance, "Buyer: Honeywell Group")
+		}
+	}
+}
+
+// AC-1. A label BEYOND the value is between nothing: the cut is b.X0 < value.X0.
+func TestResolve_ALabelBeyondTheValueDoesNotBlock(t *testing.T) {
+	got := extraction.Resolve(rvPage(
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("2,687.50", 0.25, 0.38),
+		rvbRow("Total", 0.45, 0.53),
+	), rvGeneric())
+	rvFloor(t, got, "the [VAT | 2,687.50 | Total] arrangement")
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read of an amount with the next label past it")
+	rvbOnly(t, vats, "vat", "2687.50", "t1.vat.right", 0.090000)
+}
+
+// AC-1. One page, both directions. The Total label sits LEFT of the VAT anchor and blocks
+// nothing for vat; the VAT label sits between Total and the amount, so total's own read stops.
+// A boundary that looked left would pass a spec asserting only the first half.
+func TestResolve_ALabelLeftOfTheAnchorDoesNotBlockIt(t *testing.T) {
+	got := extraction.Resolve(rvPage(
+		rvbRow("Total", 0.02, 0.08),
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("2,687.50", 0.30, 0.43),
+	), rvGeneric())
+	rvFloor(t, got, "the [Total | VAT | 2,687.50] arrangement")
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read with the other label to its left")
+	rvbOnly(t, vats, "vat", "2687.50", "t1.vat.right", 0.140000)
+
+	if totals := rvFor(got, "total"); len(totals) != 0 {
+		t.Errorf("total = [%s], want none; the VAT label is between the Total anchor and the amount", rvbShow(totals))
+	}
+}
+
+// AC-1. Only a LABEL blocks. The paired arrangement is the discriminator: the same geometry
+// with a lexicon-claimed token in that slot must lose the candidate, or "a non-label does not
+// block" holds equally against a boundary that never fires.
+func TestResolve_ANonLabelBetweenAnchorAndValueDoesNotBlock(t *testing.T) {
+	inert := rvFor(extraction.Resolve(rvbPage(rvbBetween("::::")), rvGeneric()), "vat")
+	rvControl(t, inert, "the VAT read past a token no lexicon entry claims")
+	rvbOnly(t, inert, "vat, with an unclaimed token between", "2687.50", "t1.vat.right", 0.290000)
+
+	if got := rvFor(extraction.Resolve(rvbPage(rvbBetween("Total")), rvGeneric()), "vat"); len(got) != 0 {
+		t.Errorf("vat with a LABEL in the same slot = [%s], want none; the two arrangements differ only in the middle token's text, so a boundary that ignores text passes the assertion above and fails here", rvbShow(got))
+	}
+}
+
+// AC-1. The label must share the anchor's band. The paired arrangement moves the same token
+// back onto the baseline, so this measures the band test rather than describing it.
+func TestResolve_ALabelOutsideTheAnchorsBandDoesNotBlock(t *testing.T) {
+	off := rvFor(extraction.Resolve(rvbPage(rvTok("Total", 0.30, 0.90, 0.38, 0.92)), rvGeneric()), "vat")
+	rvControl(t, off, "the VAT read past a label two tenths of a page below the baseline")
+	rvbOnly(t, off, "vat, with the label off the band", "2687.50", "t1.vat.right", 0.290000)
+
+	if got := rvFor(extraction.Resolve(rvbPage(rvbBetween("Total")), rvGeneric()), "vat"); len(got) != 0 {
+		t.Errorf("vat with the same label ON the band = [%s], want none; the two arrangements differ only in the middle token's Y, so a boundary that ignores the band passes the assertion above and fails here", rvbShow(got))
+	}
+}
+
+// AC-1. Label-ness is precomputed once per page, so the boundary has to read each page's OWN
+// array: page 1 carries a label in the slot where page 2 carries a token no lexicon entry
+// claims. Exactly one VAT read survives and it is page 2's -- a boundary reading page 1's
+// labels for page 2 loses it, and one reading page 2's for page 1 keeps two. Neither shape is
+// reachable on a single page, which is why this arrangement has two.
+func TestResolve_TheBoundaryReadsEachPagesOwnLabels(t *testing.T) {
+	row := func(page int, text string, x0, x1 float64) extraction.Token {
+		return extraction.Token{Text: text, Region: extraction.Region{Page: page, X0: x0, Y0: rvbY0, X1: x1, Y1: rvbY1}}
+	}
+	got := extraction.Resolve([]extraction.TokenPage{
+		{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+			row(1, "VAT", 0.10, 0.16), row(1, "Total", 0.30, 0.38), row(1, "2,687.50", 0.45, 0.58),
+		}},
+		{Number: 2, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+			row(2, "VAT", 0.10, 0.16), row(2, "::::", 0.30, 0.38), row(2, "1,234.50", 0.45, 0.58),
+		}},
+	}, rvGeneric())
+	rvFloor(t, got, "the two-page arrangement")
+
+	// The control: page 1 was walked. Its Total label reads its own value, so the single VAT
+	// candidate below is not what a Resolve that only ever reached page 2 also returns.
+	rvbOnly(t, rvFor(got, "total"), "total, read off page 1", "2687.50", "t1.total.right", 0.070000)
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read on the page whose middle token no lexicon entry claims")
+	rvbOnly(t, vats, "vat", "1234.50", "t1.vat.right", 0.290000)
+}
+
+// EXTR-22. Candidate.Adjacent is a constant of the relation, and BOTH beside-the-label
+// relations set it. Every doubtful cell the corpus produces heads on a below read, so a flag
+// wired for RelRight alone -- the shape the boundary predicate has -- leaves the doubt with
+// nothing to work on and every downstream assertion vacuously true.
+func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing.T) {
+	got := extraction.Resolve(rvPage(rvMixedTokens()...), rvMixedRules(t))
+	rvFloor(t, got, "the mixed-relation arrangement")
+
+	for _, tc := range []struct {
+		field    string
+		relation string
+		adjacent bool
+	}{
+		{"invoice_number", "same_token", false},
+		{"issue_date", "right", true},
+		{"total", "below", true},
+	} {
+		cands := rvFor(got, tc.field)
+		if len(cands) == 0 {
+			t.Errorf("no %s candidate; the %s relation is unread and its flag is unasserted", tc.field, tc.relation)
+			continue
+		}
+		for _, c := range cands {
+			if c.Adjacent != tc.adjacent {
+				t.Errorf("%s = %q via the %s relation reads Adjacent = %v, want %v", tc.field, c.Value, tc.relation, c.Adjacent, tc.adjacent)
+			}
+		}
 	}
 }

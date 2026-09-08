@@ -27,15 +27,15 @@ import (
 // RECALL, not accuracy: a hit is the expected value appearing anywhere among the field's
 // candidates. Which candidate decideField picks is the decision rate, pinned separately below.
 //
-// Measured 2026-08-29 on feature/extr-04-anchor-rules-and-field-resolution: the shipped Tier-1
-// set reaches 43 of the 44 (layout, field) pairs corpusExpect names across the six committed
-// layouts. The one miss is corpus_two_column.pdf / buyer_tin, the pair t1aGaps records.
+// Re-measured 2026-09-08: the shipped Tier-1 set reaches all 44 (layout, field) pairs
+// corpusExpect names across the six committed layouts. corpus_two_column.pdf / buyer_tin was
+// the last miss, and binding each party's TIN to the heading that owns it closed it.
 // A ratchet: docs/extraction-corpus.md says how to move it and why it may only go up.
 //
 // Written as a quotient of two pinned integers rather than a rounded decimal, so the run-time
 // float64(hits)/float64(total) M-01 compares against is bit-identical to the boundary.
 const (
-	tier1RecallHits  = 43
+	tier1RecallHits  = 44
 	tier1RecallPairs = 44
 	tier1RecallFloor = float64(tier1RecallHits) / float64(tier1RecallPairs)
 )
@@ -48,17 +48,17 @@ const acReportMarker = "tier-1 accuracy over the golden corpus"
 // sweep, so its three relation rules are the whole of its reach.
 const (
 	acMutilatedField = "invoice_number"
-	acMutilatedRules = 29 // 32 shipped minus invoice_number's three
-	acMutilatedHits  = 37 // 43 minus the six pairs invoice_number carries
+	acMutilatedRules = 31 // 34 shipped minus invoice_number's three
+	acMutilatedHits  = 38 // 44 minus the six pairs invoice_number carries
 )
 
 // The window each distance dial must stay inside, measured on this branch. Both dials are
 // bounded on BOTH sides. Distance is the box GAP (resolve.go:177), not centre-to-centre.
 const (
-	acRightLower     = 0.2060 // 43/44 here; 42/44 at acRightTooNarrow
+	acRightLower     = 0.2060 // 44/44 here; 43/44 at acRightTooNarrow
 	acRightUpper     = 0.4655 // t1.supplier_name.right reaches the buyer column on acRightColumnPage
 	acRightTooNarrow = 0.2059
-	acBelowLower     = 0.0095 // 43/44 here; 41/44 at acBelowTooNarrow
+	acBelowLower     = 0.0095 // 44/44 here; 42/44 at acBelowTooNarrow
 	acBelowUpper     = 0.1072 // the widest clean value; the merge sits just above, at acBelowMerges
 	acBelowMerges    = 0.1075 // t1.supplier_name.below reaches the next group's value, "22 Apr 2026"
 	acBelowTooNarrow = 0.0090
@@ -508,7 +508,7 @@ func TestCorpusDoc_RecordsTheMeasuredFloor(t *testing.T) {
 	}
 
 	// The rows are compared against a live measurement, not merely summed: a table that sums to
-	// 43/44 with the numbers in the wrong layouts would otherwise read as correct.
+	// 44/44 with the numbers in the wrong layouts would otherwise read as correct.
 	measured := make(map[string]acRow, len(corpusLayouts))
 	for _, r := range acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules).byFile {
 		measured[r.name] = r
@@ -768,20 +768,20 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 
 // --- the decision rate ------------------------------------------------------
 
-// What the pipeline DECIDES, over the same 44 pairs the rate above scores. Measured after
-// anchor specificity and the label/value split: every pair Resolve reaches is now also the pair
-// Reconcile decides, so the two numbers coincide on this corpus and the remaining miss is the
-// unreachable t1aGaps pair. The decision measure is still not the recall measure -- the decoy
-// set in TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate is what separates them.
+// What the pipeline DECIDES, over the same 44 pairs the rate above scores. Every pair Resolve
+// reaches is also the pair Reconcile decides, so the two numbers coincide on this corpus; the
+// last of them was corpus_two_column.pdf / buyer_tin. The decision measure is still not the
+// recall measure -- the decoy set in TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate is what
+// separates them.
 const (
-	tier1DecisionHits  = 43
+	tier1DecisionHits  = 44
 	tier1DecisionPairs = 44 // the recall denominator; asserted equal below, never assumed
 	tier1DecisionRate  = float64(tier1DecisionHits) / float64(tier1DecisionPairs)
 )
 
 // The decision rate with acMutilatedField's rules removed -- the pairs invoice_number decides
 // correctly, gone. M-05's acMutilatedHits is the same cut scored on recall.
-const acMutilatedDecisionHits = 37
+const acMutilatedDecisionHits = 38
 
 // acFalseDecided is every field decided with a value its layout never prints. corpusExpect
 // names the fields each layout carries, so a decided field it does not name is a reading
@@ -930,9 +930,10 @@ func acMutilatedRuleSet(t *testing.T) []extraction.Tier1Rule {
 }
 
 // M-11. The rank-aware measure EXTR-16 moves: 30/44 before anchor specificity and the
-// label/value split, 43/44 after. The floor above is recall and is monotone in the candidate
-// list, so it read 43/44 throughout. The mutilation subtest is what stops this becoming a
-// second blind number.
+// label/value split, 43/44 after, and 44/44 once each party's TIN bound to the heading that
+// owns it. The floor above is recall and is monotone in the candidate list, so it read 43/44
+// across that whole span. The mutilation
+// subtest is what stops this becoming a second blind number.
 func TestTier1Accuracy_DecisionRateOverTheCorpus(t *testing.T) {
 	t1Floor(t)
 	pages := acCorpusPages(t)
@@ -1028,10 +1029,11 @@ func acDecoyRuleSet(t *testing.T) []extraction.Tier1Rule {
 		rvTier1(t, acDecoyKey, acDecoyField, acDecoyLabel, extraction.RelSameToken, 0, extraction.ShapeAmount))
 }
 
-// M-12. The two measures are not one measure. On the shipped set they now coincide at 43/44 --
+// M-12. The two measures are not one measure. On the shipped set they now coincide at 44/44 --
 // every pair Resolve reaches, Reconcile decides -- so the shipped numbers alone can no longer
-// tell a decision measure from a candidate-containment one. The decoy set can: it out-ranks a
-// value Resolve still reaches, so recall holds and only the decision rate drops.
+// tell a decision measure from a candidate-containment one. Two rule sets can: the decoy
+// out-ranks a value Resolve still reaches, so recall holds and only the decision rate drops,
+// and the mutilated set is where the per-pair implication has a witness at all.
 func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 	t1Floor(t)
 	pages := acCorpusPages(t)
@@ -1053,23 +1055,41 @@ func TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate(t *testing.T) {
 		t.Errorf("the decision rate %d/%d is above recall %d/%d; decideField picks one of the candidates, so it can never decide a value Resolve did not reach -- one of the two measures is wrong", decision.hits, decision.total, recall.hits, recall.total)
 	}
 
-	// The per-pair half of the same claim. Two sets of the same size can still disagree about
-	// which pairs they hold, and then neither number describes the other.
-	if len(recall.missed) != tier1RecallPairs-tier1RecallHits || len(recall.missed) == 0 {
-		t.Fatalf("recall missed %d pair(s), want %d; with no miss the implication below is vacuous", len(recall.missed), tier1RecallPairs-tier1RecallHits)
+	// Both miss sets are exactly what the pins say, so the shipped corpus is stated rather
+	// than assumed to be clean.
+	if len(recall.missed) != tier1RecallPairs-tier1RecallHits {
+		t.Errorf("recall missed %d pair(s), want %d", len(recall.missed), tier1RecallPairs-tier1RecallHits)
 	}
-	wrong := make(map[acPair]bool, len(decision.wrong))
-	for _, d := range decision.wrong {
-		wrong[d.acPair] = true
-	}
-	for _, p := range recall.missed {
-		if !wrong[p] {
-			t.Errorf("recall never reaches %s / %s, yet the decision rate counts it as decided correctly; the decision measure is scoring something Resolve did not produce", p.file, p.field)
-		}
+	if len(decision.wrong) != tier1DecisionPairs-tier1DecisionHits {
+		t.Errorf("the decision rate counts %d wrong pair(s), want %d", len(decision.wrong), tier1DecisionPairs-tier1DecisionHits)
 	}
 
+	// The per-pair half of the same claim: every pair recall misses, the decision measure must
+	// also count wrong. Two sets of the same size can still disagree about which pairs they
+	// hold, and then neither number describes the other. On the shipped set both are empty, so
+	// the implication has no witness there -- it is asserted on the mutilated set, which is the
+	// only rule set on this corpus that misses anything at all.
+	t.Run("mutilated", func(t *testing.T) {
+		rules := acMutilatedRuleSet(t)
+		cutDecision := acScoreDecisions(t, pages, "the mutilated Tier-1 set", rules)
+		cutRecall := acScoreRules(t, "the mutilated Tier-1 set", rules)
+
+		if want := tier1RecallPairs - acMutilatedHits; len(cutRecall.missed) != want || len(cutRecall.missed) == 0 {
+			t.Fatalf("the mutilated set missed %d pair(s), want %d and more than none; with no miss the implication below is vacuous", len(cutRecall.missed), want)
+		}
+		wrong := make(map[acPair]bool, len(cutDecision.wrong))
+		for _, d := range cutDecision.wrong {
+			wrong[d.acPair] = true
+		}
+		for _, p := range cutRecall.missed {
+			if !wrong[p] {
+				t.Errorf("the mutilated set never reaches %s / %s, yet the decision rate counts it as decided correctly; the decision measure is scoring something Resolve did not produce", p.file, p.field)
+			}
+		}
+	})
+
 	// The discriminator. A measure that scored candidate containment reads the decoy set at
-	// 43/44 exactly as recall does; only a measure that reads rank sees the pair the decoy takes.
+	// 44/44 exactly as recall does; only a measure that reads rank sees the pair the decoy takes.
 	t.Run("decoy", func(t *testing.T) {
 		rules := acDecoyRuleSet(t)
 		decoyDecision := acScoreDecisions(t, pages, "the shipped set plus the ranking decoy", rules)

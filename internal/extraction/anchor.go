@@ -124,12 +124,32 @@ func ParseRule(raw []byte) (Rule, error) {
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
-	{"supplier_tin", `(?i)\b(supplier|seller|vendor)?\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
-	{"buyer_tin", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\s*\.?\s*(tin|tax\s*id)\b`},
+	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
+	{"buyer_tin", `(?i)\b((buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\s*\.?\s*(tin|tax\s*id)|invoice\s*to|deliver\s*to)\b`},
+	// bare_tin is the party-LESS TIN label. On a party-bearing token the party entry claims a
+	// strictly wider span, so anchorOutranked suppresses this one there -- position in the
+	// lexicon is not what does it
+	// (TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne).
+	{"bare_tin", `(?i)\b\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
+	// party_ref and signature are OWNING PHRASES: the whole phrase is the label, so they carry no
+	// Tier-1 rule of their own. They sit BEFORE the party-name entries they contain, which is
+	// where betterAnchor's lexiconIndex tiebreak needs them
+	// (TestTier1_ReusesTheAnchorLexiconPatterns, TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord).
+	{"party_ref", `(?i)\b(customer|client|buyer|account|supplier|vendor)\s*\.?\s*(no|num(ber)?|ref(erence)?|code)\b\.?`},
+	{"signature", `(?i)\b(buyer|customer|client|supplier|seller|vendor)(['’]s)?\s+signature\b`},
 	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
-	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to)\b`},
+	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
 	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
+	// reg_identifier and doc_title are OWNING PHRASES over the amount vocabulary: they sit before
+	// vat, whose bare "vat"/"tax" they contain. rc_number contains nothing rule-bearing -- it is
+	// here to make the phrase a label at all
+	// (TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus).
+	// ceiling: the separator groups are optional, so RCNO/VATNO/TAXINVOICE stop being invoice
+	// numbers too. Revisit if a real invoice number is ever spelt that way.
+	{"reg_identifier", `(?i)\b(vat|v\.a\.t\.?|tax)\s*\.?\s*(reg(istration|\.)?\s*)?(no|num(ber)?|id(entification)?(\s*(no|num(ber)?))?)\b`},
+	{"rc_number", `(?i)\b(rc|cac)\s*\.?\s*(no|num(ber)?)\b`},
+	{"doc_title", `(?i)\b(tax|vat)\s*invoice\b`},
 	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},
 	{"total", `(?i)\b(grand\s*total|amount\s*due|balance\s*due|total)\b`},
 }

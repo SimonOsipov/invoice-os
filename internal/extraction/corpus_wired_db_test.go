@@ -50,10 +50,10 @@ const cwDocSection = "## Wired-path decision rate"
 // is load-bearing rather than cosmetic. decideField (reconcile.go:78-82) keeps an alternative
 // only when it shares the head's Tier AND Distance, so a TierLearned decoy at Distance 0 leaves
 // the TierGeneric 5375.00 with no row at all: measured, the narrow decoy writes exactly ONE
-// total row and an any-rank scorer reads the same 42/44 a rank-0 scorer does. Matching both
+// total row and an any-rank scorer reads the same 43/44 a rank-0 scorer does. Matching both
 // amount tokens puts both candidates at TierLearned Distance 0, they tie, and compareRegions
 // hands rank 0 to the higher token (Sub-total, Y0 0.6861) and rank 1 to the real total
-// (Y0 0.7315). That is what makes an any-rank scorer read 43/44 and fail.
+// (Y0 0.7315). That is what makes an any-rank scorer read 44/44 and fail.
 const (
 	cwDecoyLayout = "corpus_totals_block.pdf"
 	cwDecoyField  = "total"
@@ -75,7 +75,7 @@ const cwLineItemsRow = "line_items"
 // --- harness -----------------------------------------------------------------------------
 
 // cwRankMode selects which candidate_rank rows the walk may score. Two modes, not one: on this
-// corpus the rank-0 rate and the any-rank rate coincide at 43/44, so the shipped number alone
+// corpus the rank-0 rate and the any-rank rate coincide at 44/44, so the shipped number alone
 // cannot tell a rank-reading scorer from a candidate-containment one. The decoy spec runs both.
 type cwRankMode int
 
@@ -375,7 +375,7 @@ func TestRLS_WiredPathRateMatchesTheInProcessDecisionRate(t *testing.T) {
 // AC-2, AC-3. The corpus runs through a REAL DoclingReader replaying the committed goldens --
 // the reader the deployed worker uses when EXTRACTOR=docling -- and PDFium is the second run
 // AC-4's equality claim is well-posed against. Compared by identity, not by rate: two readers
-// that both score 43/44 while missing DIFFERENT pairs are not the same reading.
+// that both score 44/44 while missing DIFFERENT pairs are not the same reading.
 func TestRLS_WiredPathReadsTheSameThroughBothReaders(t *testing.T) {
 	ctx := t.Context()
 
@@ -407,27 +407,25 @@ func TestRLS_WiredPathReadsTheSameThroughBothReaders(t *testing.T) {
 	}
 }
 
-// AC-5. The missed set compared to t1aGaps by identity, in BOTH directions. 43 == 43 also holds
+// AC-5. The missed set compared to t1aGaps by identity, in BOTH directions. 44 == 44 also holds
 // for a wired path that misses a different pair -- an exemption silently inherited -- so the
 // count cannot tell "the same one gap" from "a new gap plus a new hit". Mirrors
 // TestTier1Accuracy_TheMissedPairsAreExactlyTheRecordedGaps.
 //
-// The gap is corpus_two_column.pdf / buyer_tin, a Tier-1 REACH limit. A version bump is not what
-// gates it: a bump invalidates stored learned rules. The lexicon widening that WOULD close it
-// needs a FingerprintVersion AND a BoxlessFingerprintVersion bump since EXTR-19 --
-// anchorLabelMatchers feeds both producers (fingerprint.go:111, :211) -- which is a claim about
-// one candidate remedy and not about the gap.
+// t1aGaps is empty, so the anti-vacuity floor sits on the DENOMINATOR instead:
+// the walk must score every pair, and with no recorded gap the hits assertion below is the
+// strong claim that it reaches all of them.
 func TestRLS_WiredPathMissesExactlyTheRecordedGaps(t *testing.T) {
 	ctx := t.Context()
 
 	s := cwScoreWired(t, ctx, "the shipped Tier-1 set", 918500, cwDocling, cwRankZeroOnly, nil)
 	cwRequireWalk(t, s, "the shipped Tier-1 set")
 
-	if len(t1aGaps) == 0 {
-		t.Fatal("t1aGaps is empty; both comparisons below would hold over nothing")
+	if s.total != tier1DecisionPairs {
+		t.Fatalf("the wired walk scored %d pair(s), want %d; a walk that lost pairs flatters every comparison below", s.total, tier1DecisionPairs)
 	}
-	if len(s.missed) == 0 {
-		t.Fatalf("the wired walk missed no pair while t1aGaps records %d; the walk is not scoring the decision", len(t1aGaps))
+	if len(s.missed) != len(t1aGaps) {
+		t.Errorf("the wired walk missed %d pair(s) while t1aGaps records %d", len(s.missed), len(t1aGaps))
 	}
 
 	missed, recorded := cwMissedSet(s), cwGapSet()
@@ -504,7 +502,7 @@ func cwSeedDecoy(t *testing.T, ctx context.Context, tenantID, layout, fingerprin
 
 // AC-8, AC-9. The metric must move when extraction gets worse, and it must move for a reason
 // only a rank-reading measure can see. On this corpus the rank-0 rate and the any-rank rate
-// BOTH read 43/44, so swapping the wired scorer from rank 0 to any rank survives every other
+// BOTH read 44/44, so swapping the wired scorer from rank 0 to any rank survives every other
 // spec in this file -- the EXTR-16 defect restated.
 //
 // The decoy is a LEARNED rule through the real rule store, so TierLearned < TierGeneric
@@ -582,7 +580,7 @@ func TestRLS_WiredPathRankingDecoyMovesTheRate(t *testing.T) {
 	}
 
 	// The discriminator. A wired scorer that accepted a match at ANY candidate_rank reads the
-	// decoy run at 43/44 -- the shipped number -- and passes every other spec in this file.
+	// decoy run at 44/44 -- the shipped number -- and passes every other spec in this file.
 	t.Run("any_rank_scorer_reads_a_different_number", func(t *testing.T) {
 		anyRank := cwScoreWired(t, ctx, "the decoy run scored at any candidate_rank", 919100, cwDocling, cwAnyRank, cwSeedDecoy)
 		cwRequireWalk(t, anyRank, "the decoy run scored at any candidate_rank")

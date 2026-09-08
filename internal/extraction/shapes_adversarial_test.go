@@ -413,3 +413,46 @@ func TestShapeAmount_OutputFitsTheColumnScale(t *testing.T) {
 		t.Fatal("no amount reading was checked against the column scale")
 	}
 }
+
+// isBareAnchorLabel refuses a value one lexicon entry matches WHOLE, so an owning phrase is a
+// label in its entirety and no shape may read one as a value.
+func TestShapes_AnOwningPhraseIsABareAnchorLabel(t *testing.T) {
+	for _, raw := range []string{
+		"Customer No.", "Buyer's Signature", "Supplier's Signature", "Account No.", "Invoice to",
+		// The supplier spellings of both entries, which the buyer cases above cannot reach.
+		"Supplier No.", "Vendor Code", "Seller Signature",
+		// A registration identifier, a company number and a document title are whole labels too.
+		"VAT REG NO", "TAX REGISTRATION NUMBER", "RC NUMBER", "CAC NO", "TAX INVOICE",
+	} {
+		wantNone(t, extraction.ShapeName, raw)
+	}
+	// The controls: only a WHOLE-value match is refused. "Customer Nominee Ltd" is the boundary
+	// -- party_ref's \b after "no" is what keeps it a name.
+	wantOne(t, extraction.ShapeName, "Adeyemi Trading Limited", "Adeyemi Trading Limited")
+	wantOne(t, extraction.ShapeName, "Customer Nominee Ltd", "Customer Nominee Ltd")
+	wantOne(t, extraction.ShapeName, "Vendor Code Systems Plc", "Vendor Code Systems Plc")
+	// The label plus its value is not a whole match, so the token keeps its name reading.
+	wantOne(t, extraction.ShapeName, "RC NUMBER: RC-000142", "RC NUMBER: RC-000142")
+
+	// The separator groups are fully optional, so an unspaced compound matches whole and stops
+	// being an invoice number too. Kept deliberately: no shipped layout prints one.
+	wantNone(t, extraction.ShapeInvoiceNumber, "accountno")
+	wantNone(t, extraction.ShapeInvoiceNumber, "customerno")
+	wantNone(t, extraction.ShapeInvoiceNumber, "Customer No.")
+	for _, raw := range []string{"RCNO", "RCNUMBER", "CACNO", "VATNO", "TAXNO", "TAXINVOICE"} {
+		wantNone(t, extraction.ShapeInvoiceNumber, raw)
+	}
+	// reInvNum forbids the space and the colon, so the spaced spelling is refused before
+	// isBareAnchorLabel is consulted. A pin on the printed form, never this entry's oracle.
+	wantNone(t, extraction.ShapeInvoiceNumber, "RC NUMBER: RC-000142")
+
+	// The boundaries that bound the class: a digit after the suffix defeats party_ref's \b, a
+	// hyphen is no separator the company-number entry takes, an extra character either side
+	// defeats its \b, and "NO" running straight on defeats the title's.
+	wantOne(t, extraction.ShapeInvoiceNumber, "customerno1", "customerno1")
+	wantOne(t, extraction.ShapeInvoiceNumber, "INV-2103", "INV-2103")
+	wantOne(t, extraction.ShapeInvoiceNumber, "RC-000142", "RC-000142")
+	wantOne(t, extraction.ShapeInvoiceNumber, "RCNOX", "RCNOX")
+	wantOne(t, extraction.ShapeInvoiceNumber, "XRCNO", "XRCNO")
+	wantOne(t, extraction.ShapeInvoiceNumber, "TAXINVOICENO", "TAXINVOICENO")
+}

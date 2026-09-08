@@ -372,18 +372,18 @@ func TestCorpus_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
 // --- EXTR-16-02: the pins say what they mean ---------------------------------
 
 const (
-	corpusPinsFile   = "internal/extraction/reconcile_corpus_test.go"
-	corpusPinsStart  = "var corpusPinned = []struct {"
-	corpusPinsFloor  = 6 // one `file:` key per committed layout
-	corpusPinsKnown  = "// KNOWN GAP (t1aGaps)"
-	corpusPinsReject = "// WRONG"
+	corpusPinsFile    = "internal/extraction/reconcile_corpus_test.go"
+	corpusPinsStart   = "var corpusPinned = []struct {"
+	corpusPinsFloor   = 6 // one `file:` key per committed layout
+	corpusPinsControl = "extraction.ReasonNone"
+	corpusPinsReject  = "// WRONG"
 )
 
 // AC-6. corpusPinned no longer holds a reading a human would reject, so no WRONG comment may
-// survive inside it; the two out-of-scope readings carry the KNOWN GAP tag instead. Guarded
-// twice -- a floor on the keys the scanned span holds, and a control needle it must still find
-// -- because a scan that stops matching returns zero hits, and zero hits reads exactly like a
-// clean file.
+// survive inside it. Guarded twice -- a floor on the keys the scanned span holds, and a control
+// needle it must still find -- because a scan that stops matching returns zero hits, and zero
+// hits reads exactly like a clean file. The `file:` floor is the stronger of the two: the
+// control needle appears once per decided row and clears its own floor early in the span.
 func TestReconcileCorpus_NoWrongCommentSurvivesInThePins(t *testing.T) {
 	src := acRepoFile(t, corpusPinsFile)
 
@@ -401,12 +401,12 @@ func TestReconcileCorpus_NoWrongCommentSurvivesInThePins(t *testing.T) {
 	if n := strings.Count(span, "file:"); n < corpusPinsFloor {
 		t.Fatalf("the scanned span holds %d `file:` key(s), want at least %d; it is not corpusPinned", n, corpusPinsFloor)
 	}
-	if !strings.Contains(span, corpusPinsKnown) {
-		t.Fatalf("the scanned span carries no %q; the two out-of-scope readings are pinned under that tag, so a span without it is the wrong span", corpusPinsKnown)
+	if n := strings.Count(span, corpusPinsControl); n < corpusPinsFloor {
+		t.Fatalf("the scanned span carries %d %q, want at least %d -- one per layout's decided invoice_number; a span without them is the wrong span", n, corpusPinsControl, corpusPinsFloor)
 	}
 
 	if n := strings.Count(span, corpusPinsReject); n != 0 {
-		t.Errorf("corpusPinned carries %d %q comment(s); every in-scope reading is fixed and the two out-of-scope ones are tagged %q", n, corpusPinsReject, corpusPinsKnown)
+		t.Errorf("corpusPinned carries %d %q comment(s); every reading it pins is one a human accepts", n, corpusPinsReject)
 	}
 }
 

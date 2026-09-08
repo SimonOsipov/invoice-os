@@ -159,23 +159,21 @@ func rvObservationFor(t *testing.T, obs []extraction.AnchorObservation, label st
 }
 
 // R-01' (corrected): pointing at the buyer TIN token derives same_token at gap 0 for buyer_tin
-// -- even though the matching AnchorObservation's own Label is "supplier_tin": the lexicon's
-// supplier_tin pattern has an optional prefix and matches a bare "TIN", while buyer_tin's
-// pattern needs the word "buyer" inside the SAME token, which this one does not carry (it sits
-// in the adjacent "Buyer" token instead).
+// -- even though the matching AnchorObservation's own Label is "bare_tin": the token carries no
+// party word of its own, so neither party entry claims it and the party-less id does.
 func TestLearnRule_R01_SameTokenOnTheSharedBuyerTINBox(t *testing.T) {
 	pages := rvCorpusPages(t, "corpus_two_column.pdf")
 	obs := extraction.AnchorObservations(pages)
 
 	tok := rvTokenByText(t, pages, "TIN: 99999999-0402")
-	anchor := rvObservationFor(t, obs, "supplier_tin", tok)
+	anchor := rvObservationFor(t, obs, "bare_tin", tok)
 
 	lr, ok := extraction.LearnRule("buyer_tin", tok.Region, obs)
 	if !ok {
 		t.Fatalf("LearnRule(buyer_tin, the buyer TIN token's own box) ok = false, want true")
 	}
 	if lr.Anchor != anchor {
-		t.Errorf("LearnRule anchor = %+v, want the supplier_tin observation over the same box: %+v", lr.Anchor, anchor)
+		t.Errorf("LearnRule anchor = %+v, want the bare_tin observation over the same box: %+v", lr.Anchor, anchor)
 	}
 
 	const want = `{"label":"(?i)\\bTIN\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`

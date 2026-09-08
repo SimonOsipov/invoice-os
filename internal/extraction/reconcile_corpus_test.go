@@ -3,9 +3,8 @@
 // -> Reconcile, with Lines and Entity zero-valued. Every other reconcile_*_test.go file runs
 // hand-built candidate slices; this is the one place a real document's output is pinned.
 //
-// corpusPinned is measured, not idealised. Two readings are still wrong and are tagged
-// KNOWN GAP where they sit: corpus_two_column.pdf's supplier_tin and buyer_tin, which need an
-// anchorLexicon edit and so a FingerprintVersion bump to close.
+// corpusPinned is measured, not idealised, and carries no reading a human would reject
+// (TestReconcileCorpus_NoWrongCommentSurvivesInThePins).
 package extraction_test
 
 import (
@@ -106,7 +105,9 @@ var corpusPinned = []struct {
 			{"supplier_tin", rcStr("99999999-0301"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0302"), extraction.ReasonNone, nil},
-			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
+			// The name heads on a below read beside its label and the block's TIN is a second
+			// reading of the same field, so EXTR-22 offers it rather than hiding it.
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonAmbiguous, []string{"99999999-0302"}},
 			// This layout carries no currency/subtotal/vat token at all (docs/extraction-corpus.md);
 			// missing here is the correct reading, not a defect.
 			{"currency", nil, extraction.ReasonMissing, nil},
@@ -121,16 +122,12 @@ var corpusPinned = []struct {
 		fields: []corpusFieldPin{
 			{"invoice_number", rcStr("INV-1004"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-05-06"), extraction.ReasonNone, nil},
-			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
-			// lexicon. The bare "TIN" label's optional party word also matches the buyer's TIN,
-			// so a clean field reads ambiguous.
-			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonAmbiguous, []string{"99999999-0402"}},
+			// Each party's TIN follows its own heading, so neither reads
+			// ambiguous and neither absorbs the other.
+			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
-			// KNOWN GAP (t1aGaps) -- still wrong, owned elsewhere; EXTR-16 does not touch the
-			// lexicon. The buyer's own TIN (99999999-0402) is real but never reaches this field:
-			// it is entirely absorbed as supplier_tin's alternative above.
-			{"buyer_tin", nil, extraction.ReasonMissing, nil},
-			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
+			{"buyer_tin", rcStr("99999999-0402"), extraction.ReasonNone, nil},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonAmbiguous, []string{"TIN: 99999999-0402"}},
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
@@ -392,13 +389,13 @@ func TestReconcileCorpus_AmbiguousDateKeepsBothReadings(t *testing.T) {
 
 // corpusMissingExpect is AC-3's own expectation table: the exact set of ReasonMissing fields
 // per layout. line_items belongs to every row (AC-7); the rest follows which fields each
-// layout's generator omits (docs/extraction-corpus.md) plus the one omission the pipeline
-// itself introduces -- corpus_two_column.pdf's buyer_tin, the KNOWN GAP pinned above.
+// layout's generator omits (docs/extraction-corpus.md). The pipeline itself introduces no
+// omission.
 var corpusMissingExpect = map[string][]string{
 	"corpus_inline_labels.pdf":  {"line_items"},
 	"corpus_split_labels.pdf":   {"line_items"},
 	"corpus_stacked_labels.pdf": {"currency", "subtotal", "vat", "line_items"},
-	"corpus_two_column.pdf":     {"buyer_tin", "currency", "subtotal", "vat", "line_items"},
+	"corpus_two_column.pdf":     {"currency", "subtotal", "vat", "line_items"},
 	"corpus_ambiguous_date.pdf": {"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "line_items"},
 	"corpus_totals_block.pdf":   {"issue_date", "supplier_name", "buyer_tin", "buyer_name", "currency", "line_items"},
 }

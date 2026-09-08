@@ -150,7 +150,7 @@ func TestFingerprint_IsVersionPrefixed(t *testing.T) {
 // F-06: nil input and a page whose tokens match no lexicon entry both fingerprint to
 // FingerprintVersion + ":" + sha256(""), because the observation set is empty either way.
 func TestFingerprint_EmptyInputStillFingerprints(t *testing.T) {
-	const wantEmpty = "v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	const wantEmpty = "v2:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 	if got := extraction.Fingerprint(nil); got != wantEmpty {
 		t.Errorf("Fingerprint(nil) = %q, want %q", got, wantEmpty)
@@ -296,21 +296,23 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 
 // --- EXTR-16-02: the fingerprint may not move (D-3) --------------------------
 
-// fpCorpusPinned is every committed layout's fingerprint, measured at e763fccd, before anchor
-// specificity. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads those, so
-// a pattern edit silently invalidates every stored document's layout fingerprint and every rule
-// learned against it. These six are what says such an edit happened.
+// fpCorpusPinned is every committed layout's fingerprint, measured against the party-scoped
+// lexicon. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads
+// those, so a pattern edit silently invalidates every stored document's layout fingerprint and
+// every rule learned against it. These six are what says such an edit happened; moving them
+// without moving FingerprintVersion is the state this pin exists to forbid.
 var fpCorpusPinned = map[string]string{
-	"corpus_inline_labels.pdf":  "v1:60be15050c9a80950f7d1ea69d21178fe23e6fb61021668a937cabfa139c086d",
-	"corpus_split_labels.pdf":   "v1:1ca4de9d55d90a037fa1187ff70158b635cc48cd697e50f5ae52768413b0e680",
-	"corpus_stacked_labels.pdf": "v1:fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
-	"corpus_two_column.pdf":     "v1:452b9167485fb91b77eb67c9008dfb3893eefbfe819ec762b7392a06242473c5",
-	"corpus_ambiguous_date.pdf": "v1:5dd14339eef9ccb517bf3d96a2cb19fba6c6b0544b8f9d4499c65dbad6a807c5",
-	"corpus_totals_block.pdf":   "v1:91279772deacd7b7e8ffc8f7f168d3bc9735feb1917631d186d9362896f94ba4",
+	"corpus_inline_labels.pdf":  "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
+	"corpus_split_labels.pdf":   "v2:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
+	"corpus_stacked_labels.pdf": "v2:fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
+	"corpus_two_column.pdf":     "v2:02a5a7038b265c0df8ceb8a4633568cc8ac77d827361211e7bd2436d2ce2938c",
+	"corpus_ambiguous_date.pdf": "v2:aa3c59add58181ab233b5b690b57dee82ef1fdd1428daa1b2aba85a439161207",
+	"corpus_totals_block.pdf":   "v2:0da5ad8436bb5d80e3c523f3695e09acea833fa469474279c5c008f7937fd556",
 }
 
-// EXTR-16-02 AC-4. Green before the fix and green after it, by design: D-3 forbids the
-// anchorLexicon edit, and this is the oracle that catches one.
+// EXTR-16-02 AC-4. The oracle that catches an anchorLexicon edit. Moving a pin here is only
+// ever legitimate alongside a FingerprintVersion bump in the same commit
+// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant).
 func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
 		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each, or the loop below asserts over less than the corpus",
@@ -324,7 +326,7 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 			continue
 		}
 		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != want {
-			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump, and EXTR-16 does not touch the lexicon",
+			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump in the same commit",
 				name, got, want)
 		}
 	}
@@ -343,7 +345,7 @@ func TestAnchorObservations_OrdersTheTwoColumnCorpusExactly(t *testing.T) {
 		t.Fatalf("len(AnchorObservations(corpus_two_column.pdf)) = %d, want 7: %+v", len(obs), obs)
 	}
 
-	wantLabel := []string{"invoice_no", "issue_date", "supplier_name", "buyer_name", "supplier_tin", "supplier_tin", "total"}
+	wantLabel := []string{"invoice_no", "issue_date", "supplier_name", "buyer_name", "bare_tin", "bare_tin", "total"}
 	wantBand := []int{0, 0, 0, 2, 0, 2, 0}
 	for i, o := range obs {
 		if o.Page != 1 {
@@ -831,11 +833,11 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 		if len(fp) > bxColumnCapBytes {
 			t.Errorf("BoxlessFingerprint(%s) is %d bytes, over layout_fingerprint's %d-byte CHECK", c.name, len(fp), bxColumnCapBytes)
 		}
-		if !strings.HasPrefix(fp, "b1:") {
-			t.Errorf("BoxlessFingerprint(%s) = %q, want it to start with \"b1:\"", c.name, fp)
+		if !strings.HasPrefix(fp, "b2:") {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want it to start with \"b2:\"", c.name, fp)
 			continue
 		}
-		if h := strings.TrimPrefix(fp, "b1:"); !hexOnly.MatchString(h) {
+		if h := strings.TrimPrefix(fp, "b2:"); !hexOnly.MatchString(h) {
 			t.Errorf("BoxlessFingerprint(%s) hex part = %q (%d chars), want 64 lowercase hex characters", c.name, h, len(h))
 		}
 	}
@@ -851,11 +853,13 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 // is the prefix pair -- each function stamps its own version and the two versions differ -- so
 // this test fails if either constant moves or one is ever derived from the other.
 func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
-	if extraction.BoxlessFingerprintVersion != "b1" {
-		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b1")
+	// The lexicon reshape moves every stored digest, so both namespaces step to their second
+	// generation together: one bump clears only its own producer's rules.
+	if extraction.BoxlessFingerprintVersion != "b2" {
+		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b2")
 	}
-	if extraction.FingerprintVersion != "v1" {
-		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v1")
+	if extraction.FingerprintVersion != "v2" {
+		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v2")
 	}
 	if extraction.BoxlessFingerprintVersion == extraction.FingerprintVersion {
 		t.Fatalf("both versions are %q; the two namespaces have merged and every assertion below is meaningless", extraction.FingerprintVersion)
@@ -921,9 +925,9 @@ func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
 // the implementation from the golden's page-1 texts and anchorLexicon. Everything downstream
 // (EXTR-19-04/05 rule lookups) keys on these, so a moved value is a rule-invalidation event.
 var bxFixturePinned = []struct{ golden, want string }{
-	{dxGolden, "b1:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
-	{bxInlineGolden, "b1:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
-	{bxStackedGolden, "b1:e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f"},
+	{dxGolden, "b2:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxInlineGolden, "b2:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxStackedGolden, "b2:e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f"},
 }
 
 // AC-1/AC-2 as absolute values. The relational specs above say A != B and A == A-prime; they
@@ -935,7 +939,7 @@ func TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures(t *testing.T) {
 	for _, c := range bxFixturePinned {
 		got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden)))
 		if got != c.want {
-			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved, which invalidates every stored b1: rule and needs a BoxlessFingerprintVersion bump.\n  elements = %v",
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved, which invalidates every stored boxless rule and needs a BoxlessFingerprintVersion bump in the same commit.\n  elements = %v",
 				c.golden, got, c.want, bxElements(bxPage1(t, c.golden)))
 		}
 	}

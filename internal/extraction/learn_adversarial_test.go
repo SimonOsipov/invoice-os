@@ -841,9 +841,10 @@ func TestLearnBoxlessRule_RefusesAnEmptyLabel(t *testing.T) {
 
 	// The lexicon really does match this token starting at the boundary after "x", so the 128
 	// capped bytes are pure whitespace. Without this the refusal could be "nothing matched".
-	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "supplier_tin")
+	// bare_tin is the id that claims a party-less TIN label.
+	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "bare_tin")
 	if len(texts) != 1 {
-		t.Fatalf("lexicon id %q matched %d time(s) on the fixture (%q), want exactly 1", "supplier_tin", len(texts), texts)
+		t.Fatalf("lexicon id %q matched %d time(s) on the fixture (%q), want exactly 1", "bare_tin", len(texts), texts)
 	}
 	if texts[0] == "" || strings.TrimSpace(texts[0]) != "" {
 		t.Fatalf("matched text = %q (%d bytes), want non-empty whitespace that trims to empty", texts[0], len(texts[0]))
@@ -903,12 +904,12 @@ func TestLearnBoxlessRule_TakesLocFromTheEmittedLabelNotTheMatcher(t *testing.T)
 
 	// Must-stay-green: when the cap does not move the match end, the same field and value
 	// derive -- so the refusal above is about the moved end, not about the fixture family.
-	plain := []string{"supplier tin: 12345678-0001"}
+	plain := []string{"tin: 12345678-0001"}
 	lr, ok := extraction.LearnBoxlessRule("supplier_tin", "12345678-0001", plain)
 	if !ok {
 		t.Fatalf("control: LearnBoxlessRule(supplier_tin, %q, %v) ok = false, want true", "12345678-0001", plain)
 	}
-	const want = `{"label":"(?i)\\bsupplier tin\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
+	const want = `{"label":"(?i)\\btin\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
 	if string(lr.Body) != want {
 		t.Errorf("control: body = %s, want %s", lr.Body, want)
 	}
@@ -970,9 +971,9 @@ func TestLearnBoxlessRule_NeverEmitsAnEmptyLabel(t *testing.T) {
 
 	// The lexicon really matches, and the 128 capped bytes are pure whitespace, so learnedLabel
 	// is what refuses. Without this the refusal below could be "nothing matched".
-	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "supplier_tin")
+	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "bare_tin")
 	if len(texts) != 1 {
-		t.Fatalf("lexicon id %q matched %d time(s) on the fixture, want exactly 1", "supplier_tin", len(texts))
+		t.Fatalf("lexicon id %q matched %d time(s) on the fixture, want exactly 1", "bare_tin", len(texts))
 	}
 	if texts[0] == "" || strings.TrimSpace(texts[0]) != "" {
 		t.Fatalf("matched text = %q (%d bytes), want non-empty whitespace that trims to empty", texts[0], len(texts[0]))
@@ -1161,10 +1162,10 @@ func TestLearnBoxlessRule_KeepsTheFirstAnchorWhenTwoHitsShareABody(t *testing.T)
 	const wantBody = `{"label":"(?i)\\btin\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}`
 
 	// The two tokens really do produce different matched texts, or there is nothing to order.
-	spacedText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{spaced})), "supplier_tin")
-	bareText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{bare})), "supplier_tin")
+	spacedText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{spaced})), "bare_tin")
+	bareText := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{bare})), "bare_tin")
 	if len(spacedText) != 1 || len(bareText) != 1 {
-		t.Fatalf("lexicon id %q matched %q and %q, want exactly one each", "supplier_tin", spacedText, bareText)
+		t.Fatalf("lexicon id %q matched %q and %q, want exactly one each", "bare_tin", spacedText, bareText)
 	}
 	if spacedText[0] == bareText[0] {
 		t.Fatalf("both tokens matched %q; this spec needs two DIFFERENT matched texts that share one label", spacedText[0])

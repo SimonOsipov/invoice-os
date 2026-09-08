@@ -352,25 +352,27 @@ func TestWildGoldens_EveryNewFixtureIsWiredIntoTheCanaryJob(t *testing.T) {
 
 // --- AC-4: the corpus ratchets stay closed ---------------------------------------------------
 
-// wildRatchets are the four collections a wild_ layout may never enter, each with the number of
-// corpus_ entries it carries today. The floor is the control needle: a scan that stopped
-// finding the collection reads clean.
+// wildRatchets are the four collections a wild_ layout may never enter, each with a needle the
+// declaration must still carry. The floor is the control needle: a scan that stopped finding
+// the collection reads clean. t1aGaps is empty, so its needle is its own type text rather than
+// a row -- present in every literal form wildVarBody bounds.
 var wildRatchets = []struct {
 	file, decl string
-	minCorpus  int
+	needle     string
+	min        int
 }{
-	{"../corpus_test.go", "var corpusLayouts = ", 6},
-	{"../corpus_test.go", "var corpusExpect = ", 6},
-	{"../corpus_adversarial_test.go", "var corpusTokenFloor = ", 6},
-	{"../tier1_adversarial_test.go", "var t1aGaps = ", 1},
+	{"../corpus_test.go", "var corpusLayouts = ", "corpus_", 6},
+	{"../corpus_test.go", "var corpusExpect = ", "corpus_", 6},
+	{"../corpus_adversarial_test.go", "var corpusTokenFloor = ", "corpus_", 6},
+	{"../tier1_adversarial_test.go", "var t1aGaps = ", "field string", 1},
 }
 
 // wildTier1Pins are the Tier-1 numbers a fifth corpus layout would move. Regexes, not literals:
 // the const block's alignment is gofmt's, not the pin's.
 var wildTier1Pins = []*regexp.Regexp{
-	regexp.MustCompile(`tier1RecallHits\s*=\s*43\b`),
+	regexp.MustCompile(`tier1RecallHits\s*=\s*44\b`),
 	regexp.MustCompile(`tier1RecallPairs\s*=\s*44\b`),
-	regexp.MustCompile(`tier1DecisionHits\s*=\s*43\b`),
+	regexp.MustCompile(`tier1DecisionHits\s*=\s*44\b`),
 	regexp.MustCompile(`tier1DecisionPairs\s*=\s*44\b`),
 }
 
@@ -386,6 +388,14 @@ func wildVarBody(t *testing.T, src, decl, file string) string {
 		t.Fatalf("%s declares no %q; this scan asserts an absence and would report clean on a collection it never found", file, decl)
 	}
 	rest := src[i:]
+	// The declaration's own line closes the literal when its braces balance there: gofmt writes
+	// an EMPTY composite literal that way, and a short non-empty one too. Neither leaves a
+	// column-0 closing brace for the search below
+	// (TestWildVarBody_BoundsADeclarationInEveryLiteralForm).
+	if line, _, ok := strings.Cut(rest, "\n"); ok &&
+		strings.Count(line, "{") > 0 && strings.Count(line, "{") == strings.Count(line, "}") {
+		return line
+	}
 	j := strings.Index(rest, "\n}\n")
 	if j < 0 {
 		t.Fatalf("%s's %q has no closing brace at column 0; the body below would run to end of file", file, decl)
@@ -393,13 +403,65 @@ func wildVarBody(t *testing.T, src, decl, file string) string {
 	return rest[:j]
 }
 
+// wildVarBody bounds five declarations, so its span rule is driven by a test rather than by
+// hope. A declaration whose own line closes the literal has no column-0 closing brace to stop
+// at, and gofmt writes both an EMPTY composite literal and a short non-empty one that way.
+func TestWildVarBody_BoundsADeclarationInEveryLiteralForm(t *testing.T) {
+	const decoy = "wild_decoy"
+	const tail = "\n\nfunc after() string {\n\treturn \"" + decoy + "\"\n}\n"
+
+	cases := []struct {
+		name, src, decl, needle string
+	}{
+		{
+			"a collapsed empty literal, which is what gofmt writes for an emptied collection",
+			"package p\n\nvar t1aGaps = []struct{ file, field string }{}" + tail,
+			"var t1aGaps = ",
+			"field string",
+		},
+		{
+			"a single-line non-empty literal, which gofmt also keeps on one line",
+			"package p\n\nvar corpusLayouts = []string{\"corpus_two_column.pdf\"}" + tail,
+			"var corpusLayouts = ",
+			"corpus_two_column.pdf",
+		},
+		{
+			"a multi-line literal, which ends at its own column-0 closing brace",
+			"package p\n\nvar t1aGaps = []struct{ file, field string }{\n\t{\"corpus_two_column.pdf\", \"buyer_tin\"},\n}" + tail,
+			"var t1aGaps = ",
+			"corpus_two_column.pdf",
+		},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the loop below would check nothing")
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// The control under the absence asserted below: the decoy IS in the source, so
+			// its absence from the span is the span's doing and not the fixture's.
+			if !strings.Contains(c.src, decoy) {
+				t.Fatalf("the fixture source carries no %q; the absence asserted below would hold over a source that never had one", decoy)
+			}
+
+			body := wildVarBody(t, c.src, c.decl, "a synthetic source")
+			if !strings.Contains(body, c.needle) {
+				t.Errorf("the span for %q is %q, which does not carry %q; a span that stopped short reads clean over a collection it never reached", c.decl, body, c.needle)
+			}
+			if strings.Contains(body, decoy) {
+				t.Errorf("the span for %q is %q and ran into the function that follows the declaration; an absence scan over it reports on the wrong code", c.decl, body)
+			}
+		})
+	}
+}
+
 // AC-4. The wild layouts are scored by expectByLayout and by nothing in internal/extraction:
 // a wild_ entry in any of the four ratchets moves a pinned Tier-1 number silently.
 func TestWildLayouts_DoNotEnterTheCorpusRatchets(t *testing.T) {
 	for _, r := range wildRatchets {
 		body := wildVarBody(t, wildReadFile(t, r.file), r.decl, r.file)
-		if n := strings.Count(body, "corpus_"); n < r.minCorpus {
-			t.Fatalf("%s's %q names %d corpus_ entr(ies), want at least %d; the scan is not reading the collection", r.file, r.decl, n, r.minCorpus)
+		if n := strings.Count(body, r.needle); n < r.min {
+			t.Fatalf("%s's %q names %d %q entr(ies), want at least %d; the scan is not reading the collection", r.file, r.decl, n, r.needle, r.min)
 		}
 		if strings.Contains(body, "wild_") {
 			t.Errorf("%s's %q names a wild_ layout; a wild layout in a corpus ratchet moves the Tier-1 denominators", r.file, r.decl)
@@ -409,7 +471,7 @@ func TestWildLayouts_DoNotEnterTheCorpusRatchets(t *testing.T) {
 	accuracy := wildReadFile(t, wildAccuracyFile)
 	for _, re := range wildTier1Pins {
 		if !re.MatchString(accuracy) {
-			t.Errorf("%s no longer carries %s; the Tier-1 corpus must still read 43/44 on both rates", wildAccuracyFile, re)
+			t.Errorf("%s no longer carries %s; the Tier-1 corpus must still read 44/44 on both rates", wildAccuracyFile, re)
 		}
 	}
 }

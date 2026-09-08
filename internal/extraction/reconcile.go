@@ -57,10 +57,22 @@ func parseMoney(s *string) (decimal.Decimal, bool) {
 	return v, err == nil
 }
 
+// doubtfulFields are the fields whose adjacent reads this pass presents as doubtful.
+var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat"}
+
+// uncorroborated reports whether head was read from a token beside its label by a shipped rule,
+// on one of the fields above. A learned head is the tenant's own answer for the layout and is
+// never second-guessed. Nothing here counts readings: a field that reached one distinct value
+// falls out at decideField's own len(deduped) < 2 gate, so a count clause would be inert.
+func uncorroborated(head Candidate) bool {
+	return head.Adjacent && head.Tier == TierGeneric && slices.Contains(doubtfulFields, head.Field)
+}
+
 // decideField picks the value for one HeaderFields member out of every candidate naming it. No
 // candidate is ReasonMissing; the head candidate (compareCandidates order) decides the value,
-// and every peer sharing its Tier and Distance is "equal standing" (D-14) -- deduped by value
-// before counting (D-15), so two readings of the same value are one answer, not an ambiguity.
+// and every peer sharing its Tier and Distance is "equal standing" (D-14) -- except under an
+// uncorroborated head, where every peer stands. Deduped by value before counting (D-15), so two
+// readings of the same value are one answer, not an ambiguity.
 func decideField(cands []Candidate, field string) FieldResult {
 	var peers []Candidate
 	for _, c := range cands {
@@ -74,10 +86,16 @@ func decideField(cands []Candidate, field string) FieldResult {
 	slices.SortFunc(peers, compareCandidates) // peers is a fresh slice; in.Candidates is untouched
 
 	head := peers[0]
-	var group []Candidate
-	for _, c := range peers {
-		if c.Tier == head.Tier && c.Distance == head.Distance {
-			group = append(group, c)
+	// An uncorroborated head competes with every reading of its field, not only the equal-standing
+	// ones: the doubt is about the binding, so a value the same field reached further away is
+	// exactly the competing answer a reviewer has to settle.
+	group := peers
+	if !uncorroborated(head) {
+		group = nil
+		for _, c := range peers {
+			if c.Tier == head.Tier && c.Distance == head.Distance {
+				group = append(group, c)
+			}
 		}
 	}
 

@@ -571,7 +571,7 @@ func TestRLS_ExtractWorkerLooksUpRulesForTheFingerprintItStored(t *testing.T) {
 	}
 	// Pinned rather than merely "equal to itself": the fingerprint of this fixture's PDFium
 	// read is measured (fingerprint_test.go carries the same literal).
-	const wantFingerprint = "v1:60be15050c9a80950f7d1ea69d21178fe23e6fb61021668a937cabfa139c086d"
+	const wantFingerprint = "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945"
 	if asked != wantFingerprint {
 		t.Errorf("the rule lookup asked for %q, want the corpus fixture's PDFium fingerprint %q", asked, wantFingerprint)
 	}
@@ -650,7 +650,7 @@ func TestRLS_ExtractWorkerLosesTheLearnedRuleUnderWordSplitTokens(t *testing.T) 
 	if wkStr(got.value) == wkStr(stPtr(wpBuyerTIN)) {
 		t.Errorf("supplier_tin is still the learned reading %s under word-split tokens; the rule's label spans a whole line and cannot match one word", wpBuyerTIN)
 	}
-	wpAssertRankZero(t, rows, "supplier_tin", stPtr(wpSupplierTIN), stPtr("ambiguous"))
+	wpAssertRankZero(t, rows, "supplier_tin", stPtr(wpSupplierTIN), nil)
 }
 
 // AC-14. A rule stored for tenant B is invisible to tenant A's job. Vacuous alone -- it passes
@@ -761,22 +761,24 @@ func TestRLS_ExtractWorkerWritesAlternativesAboveRankZeroOnTheTextPath(t *testin
 	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
 	rows := wpResults(t, ctx, xid)
 
-	// The premise: without an ambiguous field there is no alternative to find.
-	wpAssertRankZero(t, rows, "supplier_tin", stPtr(wpSupplierTIN), stPtr("ambiguous"))
+	// The premise: without an ambiguous field there is no alternative to find. supplier_name is
+	// the field the word split leaves ambiguous here -- supplier_tin is not one, because each
+	// party's TIN binds to the heading that owns it.
+	wpAssertRankZero(t, rows, "supplier_name", stPtr("Supplier:"), stPtr("ambiguous"))
 
 	alts := []wpRow{}
 	for _, r := range rows {
-		if r.name == "supplier_tin" && r.rank > 0 {
+		if r.name == "supplier_name" && r.rank > 0 {
 			alts = append(alts, r)
 		}
 	}
 	if len(alts) == 0 {
-		t.Fatalf("supplier_tin reads ambiguous but stored no rank>0 row; the alternatives never reached the table: %v", rows)
+		t.Fatalf("supplier_name reads ambiguous but stored no rank>0 row; the alternatives never reached the table: %v", rows)
 	}
 	slices.SortFunc(alts, func(a, b wpRow) int { return a.rank - b.rank })
 	for i, a := range alts {
 		if a.rank != i+1 {
-			t.Errorf("supplier_tin alternative %d carries rank %d, want %d -- writeFieldResultsTx numbers them 1..N", i, a.rank, i+1)
+			t.Errorf("supplier_name alternative %d carries rank %d, want %d -- writeFieldResultsTx numbers them 1..N", i, a.rank, i+1)
 		}
 		if a.reason != nil {
 			t.Errorf("alternative %v carries reason_code %s; only the decided reading does", a, wkStr(a.reason))

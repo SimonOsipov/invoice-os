@@ -28,6 +28,9 @@ type Candidate struct {
 	RuleID   string  // AnchorRule.ID or Tier1Rule.Key
 	Tier     Tier
 	Distance float64 // gap along the relation's axis, normalised; 0 for same_token
+	// Adjacent marks a value taken from a token beside its label, not from inside the label's
+	// own token. Not Distance != 0: a rightward token flush against its anchor reads gap 0.
+	Adjacent bool
 }
 
 // RuleSet is what Resolve reads. Neither slice is ever a map: iteration order is output order.
@@ -48,6 +51,13 @@ const maxCandidatesPerField = 8
 // permutation-invariant, and a second ordering mechanism would mask a gap in the comparator.
 func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 	var all []Candidate
+	// One partition per page, read by every party-scoped rule below and computed once.
+	parties := make([][]Party, len(pages))
+	labels := make([][]bool, len(pages))
+	for i, p := range pages {
+		parties[i] = partyOrder(p)
+		labels[i] = labelTokens(p)
+	}
 	// Learned arrives seq DESC, so the first rule that produces anything for a field is the newest
 	// one reaching this page and supersedes the rest. A rule producing nothing claims nothing --
 	// resolve_converge_test.go and TestResolve_ANewerRuleThatProducesNothingDoesNotSuppressTheOlderOne.
@@ -57,13 +67,15 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 			continue
 		}
 		before := len(all)
-		all = appendRuleCandidates(all, pages, r.Rule, BandAnywhere, r.Field, r.ID, TierLearned)
+		// A learned rule is never party-scoped: re-routing one by heading would overrule the
+		// reviewer who pointed at the field.
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
 		}
 	}
 	for _, r := range rules.Tier1 {
-		all = appendRuleCandidates(all, pages, r.Rule, r.Band, r.Field, r.Key, TierGeneric)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, TierGeneric)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -85,12 +97,16 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 // order, skipping any anchor outside band. A Rule built as a composite literal has no compiled
 // matcher and yields nothing rather than panicking; ParseRule is the only constructor that sets
 // one.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band PageBand, field, ruleID string, tier Tier) []Candidate {
+//
+// scoped routes the candidate to the field the ANCHOR's party owns rather than to field. The
+// anchor, never the value: on a below relation the value can sit past a block boundary, and
+// reading its party there would let it steal the other party's field.
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier) []Candidate {
 	if rule.re == nil {
 		return dst
 	}
-	for _, page := range pages {
-		for _, tok := range page.Tokens {
+	for pi, page := range pages {
+		for ti, tok := range page.Tokens {
 			loc := rule.re.FindStringIndex(tok.Text)
 			if loc == nil {
 				continue
@@ -101,15 +117,25 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, rule Rule, band Pa
 			if !inBand(band, page.Number, tok.Region) {
 				continue
 			}
+			outField := field
+			if scoped {
+				outField = partyField(parties[pi][ti])
+			}
 			switch rule.Relation.Kind {
 			case RelSameToken:
 				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
-					usableRegion(tok.Region), field, ruleID, tier, 0)
+					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
+				bounded := tier == TierGeneric && rule.Relation.Kind == RelRight
 				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
 					value := page.Tokens[rel.index]
+					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {
+						continue
+					}
+					// Adjacent is a constant of this branch, both relations: every value here
+					// came from a token beside the anchor, never from inside it.
 					dst = appendReadings(dst, rule.Shape, value.Text,
-						usableRegion(value.Region), field, ruleID, tier, rel.distance)
+						usableRegion(value.Region), outField, ruleID, tier, rel.distance, true)
 				}
 			}
 		}
@@ -135,9 +161,58 @@ func anchorOutranked(text string, loc []int) bool {
 	return false
 }
 
+// labelTokens is one bool per token in the page's own order: does this token carry any
+// anchor-lexicon label. Computed once per page, like partyOrder: crossesALabel runs per candidate
+// pair, so reading the lexicon inside it costs orders of magnitude more than one whole Resolve on
+// a dense row. The ratio moves with label density and no benchmark is committed, so the shape is
+// held by TestResolve_TheBoundaryPredicateCallsNothingThatReadsTheLexicon, not by a figure here.
+//
+// No not-outranked qualifier: a token's WIDEST lexicon hit can never be strictly contained in a
+// wider one, so "carries a hit not itself outranked" and "carries a hit" are the same predicate
+// (TestAnchorLexicon_OutrankingNeverEmptiesATokensLabelSet).
+func labelTokens(page TokenPage) []bool {
+	out := make([]bool, len(page.Tokens))
+	for i, tok := range page.Tokens {
+		for _, m := range anchorLabelMatchers {
+			if m.RE.MatchString(tok.Text) {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// crossesALabel reports whether a labelled token sits between anchor and value on the rightward
+// path, inside the anchor's own band. A label owns what follows it, so the read stops there.
+//
+// The value token cannot block itself: the cut at its own left edge excludes it, which is why
+// that test is >= and not >.
+func crossesALabel(page TokenPage, labels []bool, anchor, value Region) bool {
+	for i, tok := range page.Tokens {
+		if !labels[i] {
+			continue
+		}
+		b := tok.Region
+		if !usableBox(b) {
+			continue
+		}
+		if b.X0 < anchor.X1 || b.X0 >= value.X0 {
+			continue
+		}
+		ov := overlap1D(anchor.Y0, anchor.Y1, b.Y0, b.Y1)
+		span := min(anchor.Y1-anchor.Y0, b.Y1-b.Y0)
+		if ov <= 0 || ov < 0.5*span {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // appendReadings emits one candidate per reading the shape accepts, so an ambiguous numeric
 // date keeps both readings and the Value key separates them.
-func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, field, ruleID string, tier Tier, distance float64) []Candidate {
+func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, field, ruleID string, tier Tier, distance float64, adjacent bool) []Candidate {
 	for _, v := range shape.Normalize(raw) {
 		dst = append(dst, Candidate{
 			Field:    field,
@@ -147,6 +222,7 @@ func appendReadings(dst []Candidate, shape Shape, raw string, region *Region, fi
 			RuleID:   ruleID,
 			Tier:     tier,
 			Distance: distance,
+			Adjacent: adjacent,
 		})
 	}
 	return dst
@@ -288,8 +364,9 @@ func usableBox(r Region) bool {
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // compareCandidates is the total order within one field: tier, distance, region, value, rule id.
-// Total because Field groups and Reason never varies, so two candidates comparing equal are
-// equal in every field. TestResolve_ComparatorIsTotal is the oracle -- the permutation specs
+// Total because Field groups, Reason never varies, and Adjacent follows RuleID -- one rule has
+// one relation kind (TestTier1_EveryKeyNamesItsOwnRelation) -- so two candidates comparing equal
+// are equal in every field. TestResolve_ComparatorIsTotal is the oracle -- the permutation specs
 // are not, since slices.SortFunc insertion-sorts below n=12 and leaves equals in place.
 func compareCandidates(a, b Candidate) int {
 	if a.Tier != b.Tier {

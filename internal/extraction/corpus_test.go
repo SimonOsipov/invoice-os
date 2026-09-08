@@ -435,9 +435,10 @@ const (
 
 var cldWhitespaceRun = regexp.MustCompile(`\s+`)
 
-// cldSubsections are the claims the "## Learned rules" section owes. Each needle is a phrase,
-// never a bare number: "0.06" is a substring of "0.065", and a bare-number list reports a
-// derivation present when only a summary line survived.
+// cldSubsections are the claims the "## Learned rules" section owes. Needles are phrases, so a
+// summary line that dropped the derivation cannot satisfy one. The two dial values are the
+// exception -- the derivation has no other spelling -- and they are the weakest needles here,
+// because a bare number also matches inside a longer one.
 var cldSubsections = []struct {
 	heading string
 	needles []string
@@ -451,7 +452,7 @@ var cldSubsections = []struct {
 			// "fingerprintversion" is a substring of "boxlessfingerprintversion" and so can
 			// never red on its own; arm 3 of TestCorpusDoc_NamesOneInvalidationRuleNotTwo
 			// masks the boxless spelling and is the guard that actually pins it.
-			"v1:", "b1:", "boxlessfingerprintversion", "fingerprintversion",
+			"namespace", "isboxlessfingerprint", "boxlessfingerprintversion", "fingerprintversion",
 			"<label>:<placement>", "band", "only its own",
 		},
 		why: "an operator who bumps FingerprintVersion and expects every stored rule gone is wrong, and a reader who cannot compose a b1: key cannot predict which documents share one",
@@ -470,7 +471,7 @@ var cldSubsections = []struct {
 		heading: "Which correction produces a rule",
 		needles: []string{
 			"typed", "undone", "zero rules", "anchors to nothing", "honest refusal",
-			"boxless", "b1:", "layout_tokens", "learnboxlessrule",
+			"boxless", "isboxlessfingerprint", "layout_tokens", "learnboxlessrule",
 			// What the boxless path derives, and the refusal that is not the no-hit one.
 			"same_token", "ambiguous",
 		},

@@ -11,7 +11,7 @@ import (
 )
 
 // sha256("") behind the version prefix: the fingerprint of zero observations.
-const emptyFingerprint = "v1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const emptyFingerprint = "v2:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // onePage fingerprints a single page-1 TokenPage built from tokens.
 func onePage(tokens ...extraction.Token) string {
@@ -287,7 +287,7 @@ func TestAnchorObservations_NoMatchIsEmptyNotNil(t *testing.T) {
 	}
 
 	if fp := extraction.Fingerprint(page); fp != emptyFingerprint {
-		t.Errorf("Fingerprint(page with no recognised label) = %q, want %q -- a real v1: value, not a degenerate one", fp, emptyFingerprint)
+		t.Errorf("Fingerprint(page with no recognised label) = %q, want %q -- a real v2: value, not a degenerate one", fp, emptyFingerprint)
 	}
 }
 
@@ -376,7 +376,7 @@ func TestAnchorObservations_TiedObservationsOrderDeterministically(t *testing.T)
 
 // bxEmptyFingerprint is sha256("") behind the boxless prefix -- the same digest as
 // emptyFingerprint above, deliberately, so the two schemes agree on a page with no label.
-const bxEmptyFingerprint = "b1:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const bxEmptyFingerprint = "b2:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // AC-5, and the ONLY assertion in this subtask that guards the no-sort rule.
 //
@@ -516,7 +516,7 @@ func TestBoxlessFingerprint_SplitsWholeLeadingAndInlineLabels(t *testing.T) {
 // own documented behaviour: a value that simply matches no stored rule.
 func TestBoxlessFingerprint_EmptyInputStillFingerprints(t *testing.T) {
 	// Parity with Fingerprint, spelled: the same digest under the other prefix.
-	if strings.TrimPrefix(bxEmptyFingerprint, "b1:") != strings.TrimPrefix(emptyFingerprint, "v1:") {
+	if strings.TrimPrefix(bxEmptyFingerprint, "b2:") != strings.TrimPrefix(emptyFingerprint, "v2:") {
 		t.Fatalf("bxEmptyFingerprint = %q and emptyFingerprint = %q carry different digests; one of the two constants is wrong", bxEmptyFingerprint, emptyFingerprint)
 	}
 

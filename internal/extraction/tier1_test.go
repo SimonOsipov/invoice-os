@@ -19,7 +19,7 @@ import (
 
 // t1RuleCount is the shipped set's size, written out here rather than read from the package:
 // a floor that reads the value it guards cannot fail.
-const t1RuleCount = 32
+const t1RuleCount = 34
 
 const (
 	t1Inline  = "corpus_inline_labels.pdf"
@@ -41,7 +41,6 @@ var t1WantKeys = []string{
 	"t1.buyer_tin.below",
 	"t1.buyer_tin.right",
 	"t1.buyer_tin.same_token",
-	"t1.buyer_tin.sweep",
 	"t1.currency.below",
 	"t1.currency.right",
 	"t1.currency.same_token",
@@ -60,7 +59,10 @@ var t1WantKeys = []string{
 	"t1.supplier_tin.below",
 	"t1.supplier_tin.right",
 	"t1.supplier_tin.same_token",
-	"t1.supplier_tin.sweep",
+	"t1.tin.below",
+	"t1.tin.right",
+	"t1.tin.same_token",
+	"t1.tin.sweep",
 	"t1.total.below",
 	"t1.total.right",
 	"t1.total.same_token",
@@ -78,7 +80,7 @@ func t1Rule(t *testing.T, key, field, label string, kind extraction.RelationKind
 	return r
 }
 
-// t1WithoutSweeps is the shipped set minus the two format-only rules -- G-10's negative control.
+// t1WithoutSweeps is the shipped set minus the one format-only rule -- G-10's negative control.
 func t1WithoutSweeps(rules []extraction.Tier1Rule) []extraction.Tier1Rule {
 	out := make([]extraction.Tier1Rule, 0, len(rules))
 	for _, r := range rules {
@@ -143,8 +145,8 @@ func TestTier1_KeysAreUniqueAndNonEmpty(t *testing.T) {
 			t.Errorf("a rule for %q ships with an empty Key; it lands in Candidate.RuleID", r.Field)
 			continue
 		}
-		if !strings.HasPrefix(r.Key, "t1."+r.Field+".") {
-			t.Errorf("key %q does not name its own field %q; the two disagree in every persisted candidate", r.Key, r.Field)
+		if !t1KeyNamesItsRole(r) {
+			t.Errorf("key %q does not name what produced it (field %q, party-scoped %v); the two disagree in every persisted candidate", r.Key, r.Field, r.PartyScoped)
 		}
 	}
 
@@ -312,7 +314,7 @@ func TestTier1_SubtotalAndTotalBothMatchAStackedTotalsBlock(t *testing.T) {
 }
 
 // G-10
-func TestTier1_TINSweepSeparatesSupplierFromBuyerByPageHalf(t *testing.T) {
+func TestTier1_TheSweepSeparatesSupplierFromBuyerByPartyBlock(t *testing.T) {
 	t.Run("stacked labels, where nothing but the sweep reaches a TIN", func(t *testing.T) {
 		pages := rvCorpusPages(t, t1Stacked)
 		got := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
@@ -330,18 +332,18 @@ func TestTier1_TINSweepSeparatesSupplierFromBuyerByPageHalf(t *testing.T) {
 		}
 
 		// Negative control, and it is what makes the spec's name true: this layout carries no
-		// TIN label token at all, so without the two sweeps neither field is reachable.
+		// TIN label token at all, so without the sweep neither field is reachable.
 		control := t1WithoutSweeps(extraction.Tier1Rules)
-		if len(control) != len(extraction.Tier1Rules)-2 {
-			t.Fatalf("the control set dropped %d rule(s), want exactly the 2 sweeps", len(extraction.Tier1Rules)-len(control))
+		if len(control) != len(extraction.Tier1Rules)-1 {
+			t.Fatalf("the control set dropped %d rule(s), want exactly the 1 sweep", len(extraction.Tier1Rules)-len(control))
 		}
 		ctl := extraction.Resolve(pages, extraction.RuleSet{Tier1: control})
-		rvControl(t, ctl, "the shipped set minus the two sweeps over "+t1Stacked)
+		rvControl(t, ctl, "the shipped set minus the sweep over "+t1Stacked)
 		if v := rvValues(rvFor(ctl, "supplier_tin")); len(v) != 0 {
-			t.Errorf("without the sweeps supplier_tin = %v, want none; a label rule did the work and this spec does not test the sweep", v)
+			t.Errorf("without the sweep supplier_tin = %v, want none; a label rule did the work and this spec does not test the sweep", v)
 		}
 		if v := rvValues(rvFor(ctl, "buyer_tin")); len(v) != 0 {
-			t.Errorf("without the sweeps buyer_tin = %v, want none", v)
+			t.Errorf("without the sweep buyer_tin = %v, want none", v)
 		}
 	})
 
@@ -358,8 +360,8 @@ func TestTier1_TINSweepSeparatesSupplierFromBuyerByPageHalf(t *testing.T) {
 			value  string
 			ruleID string
 		}{
-			{"supplier_tin", supplier[0], "99999999-0201", "t1.supplier_tin.sweep"},
-			{"buyer_tin", buyer[0], "99999999-0202", "t1.buyer_tin.sweep"},
+			{"supplier_tin", supplier[0], "99999999-0201", "t1.tin.sweep"},
+			{"buyer_tin", buyer[0], "99999999-0202", "t1.tin.sweep"},
 		} {
 			if c.got.Value != c.value || c.got.RuleID != c.ruleID {
 				t.Errorf("%s[0] = %q from rule %q, want %q from %q; the sweep sits at distance 0 and ranks first on this layout", c.field, c.got.Value, c.got.RuleID, c.value, c.ruleID)
@@ -457,5 +459,115 @@ func TestResolve_ABandedRuleIgnoresAnAnchorOutsideItsBand(t *testing.T) {
 			ctl := rvFor(extraction.Resolve(pageOf(c.region), sweep(t, extraction.BandAnywhere)), "supplier_tin")
 			rvControl(t, ctl, "the same token under BandAnywhere")
 		})
+	}
+}
+
+// --- the party-scoped TIN ----------------------------------------------------
+
+// The party partition replaced the page-half split, so the page-half scoping cannot return by
+// accident. PageBand and inBand stay live -- G-15 above builds its own banded rule.
+func TestTier1_NoShippedRuleIsBanded(t *testing.T) {
+	t1Floor(t)
+
+	for _, r := range extraction.Tier1Rules {
+		if r.Band != extraction.BandAnywhere {
+			t.Errorf("rule %q ships with band %v, want BandAnywhere; a bounded band scopes a rule by page half and the party block is what scopes it now", r.Key, r.Band)
+		}
+	}
+}
+
+// The shipped size after the merge: ten label specs x three relations, plus bare_tin's three,
+// plus the ONE merged sweep. t1RuleCount, eeShippedRules and acMutilatedRules all fatal against
+// len(Tier1Rules), so this is the number the other three follow.
+func TestTier1_ShipsThirtyFourRules(t *testing.T) {
+	const want = 10*3 + 3 + 1
+
+	if got := len(extraction.Tier1Rules); got != want {
+		t.Errorf("Tier1Rules holds %d rule(s), want %d -- ten label specs x three relations, bare_tin's three, and one merged party-scoped sweep", got, want)
+	}
+}
+
+// t1KeyRole is the name a rule's key must carry: its own Field, or the party-neutral "tin" when
+// the rule is PartyScoped. Conditional, never a disjunction -- a disjunction admits a
+// PartyScoped rule keyed t1.supplier_tin.sweep, which promises a field the rule contradicts on
+// every buyer token.
+func t1KeyRole(r extraction.Tier1Rule) string {
+	if r.PartyScoped {
+		return "tin"
+	}
+	return r.Field
+}
+
+func t1KeyNamesItsRole(r extraction.Tier1Rule) bool {
+	return strings.HasPrefix(r.Key, "t1."+t1KeyRole(r)+".")
+}
+
+// A key names what produced it, and a PartyScoped rule's Field is a fallback rather than a
+// name. The table is the predicate's own oracle: rows 3, 5 and 6 are the readings a disjunction
+// would admit.
+func TestTier1_ThePartyScopedRulesAreKeyedByTheNeutralRole(t *testing.T) {
+	t1Floor(t)
+
+	cases := []struct {
+		name string
+		rule extraction.Tier1Rule
+		want bool
+	}{
+		{"an unscoped rule keyed by its own field", extraction.Tier1Rule{Key: "t1.supplier_tin.right", Field: "supplier_tin"}, true},
+		{"an unscoped rule keyed by another field", extraction.Tier1Rule{Key: "t1.vat.right", Field: "total"}, false},
+		{"an unscoped rule borrowing the neutral name", extraction.Tier1Rule{Key: "t1.tin.right", Field: "supplier_tin"}, false},
+		{"a party-scoped rule keyed by the neutral role", extraction.Tier1Rule{Key: "t1.tin.sweep", Field: "supplier_tin", PartyScoped: true}, true},
+		{"a party-scoped rule claiming its fallback party", extraction.Tier1Rule{Key: "t1.supplier_tin.sweep", Field: "supplier_tin", PartyScoped: true}, false},
+		{"a party-scoped rule claiming the other party", extraction.Tier1Rule{Key: "t1.buyer_tin.sweep", Field: "buyer_tin", PartyScoped: true}, false},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the loop below would check nothing")
+	}
+	for _, c := range cases {
+		if got := t1KeyNamesItsRole(c.rule); got != c.want {
+			t.Errorf("%s: key %q with field %q party-scoped %v reads %v, want %v", c.name, c.rule.Key, c.rule.Field, c.rule.PartyScoped, got, c.want)
+		}
+	}
+
+	scoped := 0
+	for _, r := range extraction.Tier1Rules {
+		if !t1KeyNamesItsRole(r) {
+			t.Errorf("key %q does not name what produced it (field %q, party-scoped %v); the two disagree in every persisted candidate", r.Key, r.Field, r.PartyScoped)
+		}
+		if !r.PartyScoped {
+			continue
+		}
+		scoped++
+		if r.Field != "supplier_tin" {
+			t.Errorf("party-scoped rule %q carries field %q, want supplier_tin; the field is partyField's PartyUnknown fallback and nothing else", r.Key, r.Field)
+		}
+	}
+	if want := 4; scoped != want {
+		t.Errorf("the shipped set carries %d party-scoped rule(s), want %d -- bare_tin's three relations and the merged sweep", scoped, want)
+	}
+}
+
+// inBand fails closed on a boxless token, so the two banded sweeps produced nothing at all on a
+// DOCX. The party partition reads no box, so the merged sweep now binds there.
+func TestTier1_ABoxlessPageStillBindsABareTINByParty(t *testing.T) {
+	t1Floor(t)
+
+	const tin = "99999999-0802"
+	headed := extraction.Resolve(rvPage(rvBoxless("Buyer"), rvBoxless(tin)), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	if v := rvValues(rvFor(headed, "buyer_tin")); !slices.Equal(v, []string{tin}) {
+		t.Errorf("under a Buyer heading a boxless bare TIN gave buyer_tin = %v, want exactly [%s]", v, tin)
+	}
+	if v := rvValues(rvFor(headed, "supplier_tin")); len(v) != 0 {
+		t.Errorf("under a Buyer heading a boxless bare TIN also gave supplier_tin = %v, want none; the heading owns the token", v)
+	}
+
+	// The paired control: the SAME boxless token with the heading removed falls to the
+	// supplier. Without it the zero above holds equally against a page nothing reads.
+	headless := extraction.Resolve(rvPage(rvBoxless(tin)), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	if v := rvValues(rvFor(headless, "supplier_tin")); !slices.Equal(v, []string{tin}) {
+		t.Errorf("with no heading the same boxless bare TIN gave supplier_tin = %v, want exactly [%s]; PartyUnknown falls back to the supplier", v, tin)
+	}
+	if v := rvValues(rvFor(headless, "buyer_tin")); len(v) != 0 {
+		t.Errorf("with no heading the same boxless bare TIN gave buyer_tin = %v, want none", v)
 	}
 }

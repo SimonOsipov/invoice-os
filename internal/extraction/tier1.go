@@ -13,11 +13,15 @@ type Tier1Rule struct {
 	Field string
 	Rule  Rule
 	Band  PageBand // BandAnywhere unless the rule matches by format alone
+
+	// PartyScoped routes the candidate to the field the token's own party owns, instead of
+	// Field. Set only on the rules a party-LESS TIN label reaches.
+	PartyScoped bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon
-// labels, plus the two banded TIN sweeps.
-const tier1RuleCount = 32
+// labels, plus bare_tin's three, plus the one party-scoped TIN sweep.
+const tier1RuleCount = 34
 
 // The set's only distance dials; nothing else reads a distance. Distance is the box GAP, so
 // both are bounded on both sides: right must reach 0.2060 and must not reach
@@ -38,8 +42,9 @@ const (
 )
 
 // tier1TINSweepLabel matches a bare TIN token whole, so the label IS the value
-// (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Banded, never swept page-wide: an
-// unscoped sweep sits at Distance 0 and outranks the correct label-anchored candidate.
+// (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped: the party block the token
+// sits in tells the supplier's TIN from the buyer's, and reads no box
+// (TestTier1_ABoxlessPageStillBindsABareTINByParty).
 const tier1TINSweepLabel = `^\s*[0-9]{8}-[0-9]{4}\s*$`
 
 // tier1MaxDistanceSameToken is unread by same_token, but ParseRule range-checks it regardless.
@@ -80,14 +85,34 @@ func buildTier1Rules() []Tier1Rule {
 			mustTier1Rule("t1."+s.field+".right", s.field, label, RelRight, tier1MaxDistanceRightJSON, s.shape, BandAnywhere),
 			mustTier1Rule("t1."+s.field+".below", s.field, label, RelBelow, tier1MaxDistanceBelowJSON, s.shape, BandAnywhere),
 		)
+
+		// bare_tin has no tier1Specs entry -- it fills no field of its own -- so its rules ship
+		// at its own lexicon position, right after the last party-bearing TIN label
+		// (TestTier1_ReusesTheAnchorLexiconPatterns pins that order).
+		if s.labelID == "buyer_tin" {
+			bare := anchorPattern("bare_tin")
+			out = append(out,
+				mustTier1PartyRule("t1.tin.same_token", bare, RelSameToken, tier1MaxDistanceSameTokenJSON),
+				mustTier1PartyRule("t1.tin.right", bare, RelRight, tier1MaxDistanceRightJSON),
+				mustTier1PartyRule("t1.tin.below", bare, RelBelow, tier1MaxDistanceBelowJSON),
+			)
+		}
 	}
 
-	// The sweeps recognise a TIN by format alone, so only the band tells the supplier's from the
-	// buyer's (TestTier1_TINSweepSeparatesSupplierFromBuyerByPageHalf).
+	// The sweep names a TIN by format alone, so the party block the anchor sits in decides the
+	// field (TestTier1_TheSweepSeparatesSupplierFromBuyerByPartyBlock).
 	return append(out,
-		mustTier1Rule("t1.supplier_tin.sweep", "supplier_tin", tier1TINSweepLabel, RelSameToken, tier1MaxDistanceSameTokenJSON, ShapeTIN, BandPage1Top),
-		mustTier1Rule("t1.buyer_tin.sweep", "buyer_tin", tier1TINSweepLabel, RelSameToken, tier1MaxDistanceSameTokenJSON, ShapeTIN, BandPage1Bottom),
+		mustTier1PartyRule("t1.tin.sweep", tier1TINSweepLabel, RelSameToken, tier1MaxDistanceSameTokenJSON),
 	)
+}
+
+// mustTier1PartyRule builds one party-scoped rule. Its Field is partyField's PartyUnknown
+// fallback and never a name -- the key carries the neutral role instead
+// (TestTier1_ThePartyScopedRulesAreKeyedByTheNeutralRole).
+func mustTier1PartyRule(key, label string, kind RelationKind, maxDistance string) Tier1Rule {
+	r := mustTier1Rule(key, "supplier_tin", label, kind, maxDistance, ShapeTIN, BandAnywhere)
+	r.PartyScoped = true
+	return r
 }
 
 // anchorPattern is the lexicon's own pattern for id, never a copy: a forked label drifts from

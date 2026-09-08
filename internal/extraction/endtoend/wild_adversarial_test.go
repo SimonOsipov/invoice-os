@@ -6,6 +6,7 @@ package endtoend
 import (
 	"cmp"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -142,18 +143,15 @@ func TestWildLayouts_TheRuledTableReproducesACompetingTotal(t *testing.T) {
 	}
 }
 
-// TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect records two measured
-// NON-reproductions: this corpus gives EXTR-22's Due-Date half and the RC-as-VAT half NO ORACLE,
-// and the owning story must supply its own. The story lists three Objective defects for this
-// arrangement; only the naira yielding no currency is reproduced.
+// Two measured NON-reproductions on this arrangement, with different owners.
 //
 //   - Due Date above Issue Date: BOTH dates reach issue_date, but the printed issue date wins on
-//     distance because "Issue Date " is the longer label. The confusion is reachable and never
-//     decided, so the fixture is one dial from being an oracle.
-//   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing.
+//     distance because "Issue Date " is the longer label. Reachable and never decided, so the
+//     fixture is one dial from being an oracle. EXTR-25 owns that defect and must supply its own.
+//   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing, and
+//     since rc_number ships as an owning phrase it reads as a label; this is what holds that.
 //
-// Fails the moment either starts reproducing, which is the point: the day this reds is the day
-// EXTR-22 gets an oracle here.
+// Fails the moment either starts reproducing.
 func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T) {
 	dates := wildResolved(t, wildRCNaira, "issue_date")
 	issue := wildOneValue(t, wildRCNaira, "issue_date")
@@ -163,7 +161,7 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 		t.Errorf("%s no longer reaches the due date %s as an issue_date candidate; the arrangement stopped even being able to confuse the two", wildRCNaira, wildRCDueDate)
 	}
 	if len(dates) == 0 || dates[0] != issue {
-		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for EXTR-22's Due-Date half -- this corpus does not reproduce it and EXTR-22 must supply its own", wildRCNaira, dates, issue)
+		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for the Due-Date half -- this corpus does not reproduce it and EXTR-25 must supply its own", wildRCNaira, dates, issue)
 	}
 
 	vat := wildResolved(t, wildRCNaira, "vat")
@@ -172,21 +170,10 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 	}
 }
 
-// TestWildLayouts_TheTwoPartyDefectsAreReproduced is the positive control for the two above: the
-// same candidate read, on the arrangement that DOES reproduce its Objective defects. Without it
-// a Resolve that stopped producing candidates at all would read as two clean non-results.
-func TestWildLayouts_TheTwoPartyDefectsAreReproduced(t *testing.T) {
-	if got := wildResolved(t, wildTwoParty, "supplier_tin"); !slices.Contains(got, wildTINs[1]) {
-		t.Errorf("%s no longer binds the buyer TIN %s to supplier_tin (%v); EXTR-22's oracle is gone", wildTwoParty, wildTINs[1], got)
-	}
-	names := wildResolved(t, wildTwoParty, "buyer_name")
-	if len(names) == 0 || names[0] == "Honeywell Group" {
-		t.Errorf("%s ranks buyer_name %v with the real name first; the label fragment no longer wins and EXTR-22's oracle is gone", wildTwoParty, names)
-	}
-	if !slices.ContainsFunc(names, func(s string) bool { return strings.Contains(s, "No.") || strings.Contains(s, "Signature") }) {
-		t.Errorf("%s reaches no label fragment for buyer_name (%v)", wildTwoParty, names)
-	}
-}
+// The two specs above assert absences, so their positive control is now
+// TestWildLayouts_TheTwoPartyBuyerNameIsTheName, which reads the name at rank 0, and
+// TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty, which reads each party's TIN at any rank,
+// both on wild_two_party_bare_tin.pdf.
 
 // --- golden properties nothing else reads -----------------------------------------------------
 
@@ -284,5 +271,286 @@ func TestWildGoldens_CarryRawUTF8AndNeverAnEscape(t *testing.T) {
 	// Floor: an all-ASCII corpus passes the escape clause for the wrong reason.
 	if nonASCII == 0 {
 		t.Errorf("no committed golden carries a non-ASCII byte; the naira arrangements are gone and this scan proves nothing about ensure_ascii=False")
+	}
+}
+
+// --- the party block over the wild arrangements ----------------------------------------------
+
+// Each party's TIN reaches its own field. This and TestWildLayouts_TheTwoPartyBuyerNameIsTheName
+// together replaced the spec that pinned both readings as unfixed.
+func TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+
+	supplier := wildResolved(t, wildTwoParty, "supplier_tin")
+	if !slices.Contains(supplier, supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; the label before the buyer heading falls back to the supplier", wildTwoParty, supplier, supplierTIN)
+	}
+	if slices.Contains(supplier, buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v and still holds the buyer's %s; a bare TIN under \"Invoice to\" is not the supplier's", wildTwoParty, supplier, buyerTIN)
+	}
+
+	buyer := wildResolved(t, wildTwoParty, "buyer_tin")
+	if !slices.Contains(buyer, buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s", wildTwoParty, buyer, buyerTIN)
+	}
+	if slices.Contains(buyer, supplierTIN) {
+		t.Errorf("%s: buyer_tin = %v and holds the supplier's %s; the heading owns only what follows it", wildTwoParty, buyer, supplierTIN)
+	}
+}
+
+const (
+	wildTwoPartyBuyerName = "Honeywell Group"
+	wildTwoPartyHeading   = "Invoice to"
+)
+
+// The buyer's name on the two-party arrangement is the printed name, not the "Customer No." or
+// "Buyer's Signature" fragment that used to outrank it.
+//
+// The list is not asserted to hold one value: "TIN:" survives at rank 1 as a pre-existing
+// residue, and bare_tin matches it at [0,3] rather than whole, so nothing refuses it.
+func TestWildLayouts_TheTwoPartyBuyerNameIsTheName(t *testing.T) {
+	names := wildResolved(t, wildTwoParty, "buyer_name")
+
+	if names[0] != wildTwoPartyBuyerName {
+		t.Errorf("%s ranks buyer_name %v, want %q at rank 0; the label fragment still outranks the printed name", wildTwoParty, names, wildTwoPartyBuyerName)
+	}
+	for _, v := range names {
+		if strings.Contains(v, "No.") || strings.Contains(v, "Signature") {
+			t.Errorf("%s reaches %q as a buyer_name candidate (%v); a fragment of an owning phrase is a label, never a name", wildTwoParty, v, names)
+		}
+		// The heading is refused as a value at every rank, not only at rank 0: a candidate
+		// list holding it is one tie-break away from writing a label into the invoice row.
+		if v == wildTwoPartyHeading {
+			t.Errorf("%s reaches its %q heading as a buyer_name candidate (%v); the label that introduces the name is not the name", wildTwoParty, wildTwoPartyHeading, names)
+		}
+	}
+
+	// The control: the two party TINs on the same page. Without it the absence above holds
+	// equally against a Resolve that stopped producing anything on this layout.
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+	if v := wildResolved(t, wildTwoParty, "supplier_tin"); !slices.Contains(v, supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; the page still reads its other fields", wildTwoParty, v, supplierTIN)
+	}
+	if v := wildResolved(t, wildTwoParty, "buyer_tin"); !slices.Contains(v, buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s; the page still reads its other fields", wildTwoParty, v, buyerTIN)
+	}
+}
+
+// --- AC-4: no layout loses a party name it already read ---------------------------------------
+
+// wildPartyNameFields are the two fields the walk below compares. supplier_name has no key in
+// expectByLayout at all -- it is an entityDerivedField and is excluded from the end-to-end
+// score -- so the pinned table is the only oracle the supplier half has.
+var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
+
+// wildPartyNames is the party name each layout reads at rank 0, measured through PDFium before
+// the owning-phrase entries. A field a layout is not listed under read no name and is not
+// compared: wild_two_party_bare_tin.pdf carries no supplier heading and reads no supplier name,
+// corpus_totals_block.pdf and wild_stacked_borderless.pdf read no name at all, and
+// wild_scanned_no_number.pdf yields no pdfium token -- its docling golden carries neither
+// owning phrase.
+var wildPartyNames = map[string]map[string]string{
+	"corpus_inline_labels.pdf":    {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_split_labels.pdf":     {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_stacked_labels.pdf":   {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_two_column.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_ambiguous_date.pdf":   {"supplier_name": "Adeyemi Trading Limited"},
+	"wild_two_party_bare_tin.pdf": {"buyer_name": "Honeywell Group"},
+	"wild_ruled_lines_totals.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_rc_due_naira.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+}
+
+const (
+	wildPartyNameCells   = 14
+	wildPartyNameLayouts = 11
+)
+
+// wildRank0Names is each field's rank-0 value over one layout under rules, or "" where the
+// field produced no candidate.
+func wildRank0Names(t *testing.T, layout string, rules []extraction.Tier1Rule) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, c := range extraction.Resolve(eeTokenPages(t, layout), extraction.RuleSet{Tier1: rules}) {
+		if _, seen := out[c.Field]; !seen {
+			out[c.Field] = c.Value
+		}
+	}
+	return out
+}
+
+// wildPartyNameLosses counts the pinned cells rules fails to reproduce.
+func wildPartyNameLosses(t *testing.T, rules []extraction.Tier1Rule) (losses, compared int, report []string) {
+	t.Helper()
+	for _, want := range expectByLayout {
+		got := wildRank0Names(t, want.file, rules)
+		for _, field := range wildPartyNameFields {
+			pinned, ok := wildPartyNames[want.file][field]
+			if !ok {
+				continue
+			}
+			compared++
+			if got[field] != pinned {
+				losses++
+				report = append(report, want.file+"/"+field+" reads "+got[field]+", want "+pinned)
+			}
+		}
+	}
+	return losses, compared, report
+}
+
+func TestPartyNames_NoLayoutLosesAPartyNameItAlreadyRead(t *testing.T) {
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus than the table was measured on", len(expectByLayout), wildPartyNameLayouts)
+	}
+	for layout := range wildPartyNames {
+		if !slices.ContainsFunc(expectByLayout, func(r struct {
+			file   string
+			fields map[string][]string
+		}) bool {
+			return r.file == layout
+		}) {
+			t.Fatalf("wildPartyNames pins %s, which expectByLayout does not name; the walk would skip that row in silence", layout)
+		}
+	}
+
+	losses, compared, report := wildPartyNameLosses(t, extraction.Tier1Rules)
+	if compared != wildPartyNameCells {
+		t.Fatalf("compared %d party-name cell(s), want %d; the table shrank and the assertion below covers that much less", compared, wildPartyNameCells)
+	}
+	for _, line := range report {
+		t.Errorf("%s; a layout lost a party name the baseline already read", line)
+	}
+
+	// The control needle: the same walk with every buyer_name rule dropped must LOSE cells, or
+	// the comparison above would report clean against a Resolve that reads no name at all.
+	var cut []extraction.Tier1Rule
+	for _, r := range extraction.Tier1Rules {
+		if r.Field != "buyer_name" {
+			cut = append(cut, r)
+		}
+	}
+	if len(cut) == len(extraction.Tier1Rules) {
+		t.Fatal("the control cut dropped no rule; it is not the needle it claims to be")
+	}
+	if cutLosses, _, _ := wildPartyNameLosses(t, cut); cutLosses == 0 {
+		t.Errorf("dropping every buyer_name rule cost %d pinned cell(s) and the shipped set cost %d; the comparison is inert", cutLosses, losses)
+	}
+}
+
+// --- the print arm of the owning-phrase exemption ---------------------------------------------
+
+const (
+	wildPrintedPhraseFile = "../tier1_internal_test.go"
+	wildPrintedPhraseDecl = "var t1PrintedPhraseIDs = "
+
+	// wildPrintedPhraseFloor is a label every shipped layout set carries many times over. This
+	// spec asserts a PRESENCE, so a walk that observed nothing must fail on the floor first.
+	wildPrintedPhraseFloor = "invoice_no"
+)
+
+// wildUnprintedPhraseIDs are shipped lexicon ids no layout prints. They are the needle that keeps
+// the declared set derived from what the documents carry rather than from the lexicon.
+var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title"}
+
+var wildPrintedPhraseID = regexp.MustCompile(`"([a-z_]+)"`)
+
+// An owning phrase no rule-bearing entry sits inside suppresses nothing, so containment cannot be
+// why it ships. It earns its place by being printed. This is the other arm of
+// TestAnchorLexicon_AnOwningPhraseEarnsItsExemption, which cannot read a PDF.
+func TestWildLayouts_APrintedOwningPhraseIsObservedOnTheCorpus(t *testing.T) {
+	body := wildVarBody(t, wildReadFile(t, wildPrintedPhraseFile), wildPrintedPhraseDecl, wildPrintedPhraseFile)
+	var declared []string
+	for _, m := range wildPrintedPhraseID.FindAllStringSubmatch(body, -1) {
+		declared = append(declared, m[1])
+	}
+	if len(declared) == 0 {
+		t.Fatalf("%s's %q names no id; the walk below would assert nothing", wildPrintedPhraseFile, wildPrintedPhraseDecl)
+	}
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus", len(expectByLayout), wildPartyNameLayouts)
+	}
+
+	observed := map[string][]string{}
+	for _, want := range expectByLayout {
+		for _, o := range extraction.AnchorObservations(eeTokenPages(t, want.file)) {
+			observed[o.Label] = append(observed[o.Label], want.file)
+		}
+	}
+	if len(observed[wildPrintedPhraseFloor]) == 0 {
+		t.Fatalf("no shipped layout observed %s; the walk is not reading the corpus and every id below would read unprinted", wildPrintedPhraseFloor)
+	}
+
+	for _, id := range declared {
+		if len(observed[id]) == 0 {
+			t.Errorf("no shipped layout prints %s; an owning phrase that suppresses nothing and appears nowhere ships in the fingerprint and does nothing", id)
+		}
+	}
+	for _, id := range wildUnprintedPhraseIDs {
+		if len(observed[id]) != 0 {
+			t.Errorf("%s is observed on %v, so the corpus does print it; the declared set must be what the documents carry, not what the lexicon holds", id, observed[id])
+		}
+	}
+}
+
+// The arm above takes any layout. This names the token behind the one rc_number observation the
+// corpus carries, so the arm cannot come to rest on some other document's phrase.
+func TestWildLayouts_TheRCLineIsTheOnlyCompanyNumberLabelTheCorpusPrints(t *testing.T) {
+	const printed = "RC NUMBER: " + wildRCNumber
+	pages := eeTokenPages(t, wildRCNaira)
+
+	found := false
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if tok.Text == printed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("%s prints no %q token; the label hit asserted below would be a hit on some other text", wildRCNaira, printed)
+	}
+
+	var hits []string
+	for _, o := range extraction.AnchorObservations(pages) {
+		if o.Label == "rc_number" {
+			hits = append(hits, o.Text)
+		}
+	}
+	if !slices.Equal(hits, []string{"RC NUMBER"}) {
+		t.Errorf("%s observes rc_number as %v, want exactly [RC NUMBER]; the printed line must be a label hit, and the value behind the colon must stay outside it", wildRCNaira, hits)
+	}
+}
+
+// The scanned layout has no text layer, so its tokens come from the committed golden. The
+// Tier-1 binding is fixed here even though the cell still misses end to end -- the document
+// quarantines and writes no invoices row.
+func TestRLS_EndToEndTheScannedLayoutBindsTheBuyerTIN(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[8], wildTINs[9]
+
+	var pages []extraction.TokenPage
+	r := eeGoldenReader(t, wildGolden(wildScanned))
+	if _, err := r.Read(t.Context(), extraction.Document{ContentType: eeContentType}, extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("replay the %s golden: %v", wildScanned, err)
+	}
+	if len(pages) == 0 {
+		t.Fatalf("the %s golden replayed 0 page(s); everything resolved below is resolved from nothing", wildScanned)
+	}
+
+	got := map[string][]string{}
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		got[c.Field] = append(got[c.Field], c.Value)
+	}
+	if len(got) == 0 {
+		t.Fatalf("the %s golden's tokens produced no candidate at all; every assertion below would hold over nothing", wildScanned)
+	}
+
+	if !slices.Contains(got["buyer_tin"], buyerTIN) {
+		t.Errorf("%s: buyer_tin = %v, want it to hold %s; the bare TIN follows the BILL TO: heading", wildScanned, got["buyer_tin"], buyerTIN)
+	}
+	if slices.Contains(got["supplier_tin"], buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v and still holds the buyer's %s", wildScanned, got["supplier_tin"], buyerTIN)
+	}
+	if !slices.Contains(got["supplier_tin"], supplierTIN) {
+		t.Errorf("%s: supplier_tin = %v, want it to hold %s; without it the exclusion above holds against a field nothing reaches", wildScanned, got["supplier_tin"], supplierTIN)
 	}
 }

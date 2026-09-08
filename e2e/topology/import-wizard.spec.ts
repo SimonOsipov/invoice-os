@@ -3881,10 +3881,16 @@ test('EXTR12-E2E-03 (AC-7): the document toolbar no longer claims the screen is 
 
   // The claim is false because the fields beside it are editable now. Asserted here so
   // "the badge is gone" cannot pass on a screen that also lost its controls.
-  await expect(
-    page.getByTestId('extraction-input-total'),
-    'the badge went and no editable control replaced it',
-  ).toBeVisible()
+  // Both value-control shapes, never the input alone: total wears the chooser when its reading is
+  // doubtful (EXTR-23's scope, which this fixture reaches) and the input otherwise. The cell's
+  // point/cancel/undo buttons are excluded -- none edits the value, so none may stand in for one.
+  const totalCell = page.getByTestId('extraction-field-total')
+  await expect(totalCell, 'total rendered no cell -- the control assertion below is vacuous').toBeVisible()
+  const editable = totalCell
+    .locator('[data-testid="extraction-input-total"], [data-testid^="extraction-chip-total-"]')
+    .first()
+  await expect(editable, 'the badge went and no editable control replaced it').toBeVisible()
+  await expect(editable, 'the control replacing the badge is disabled, so the screen is still read-only').toBeEnabled()
 
   await testInfo.attach('extraction-read-only-retired.json', {
     body: JSON.stringify({ toolbarText }, null, 2),
@@ -4597,7 +4603,7 @@ const FIDELITY: FidelityRow[] = [
   { element: 'extraction-point-buyer_tin', property: 'text-align', artboard: 'left', source: ':324', expected: 'left', deviation: null },
 
   // The corrected marker, `:307`. The test posts one correction on `subtotal` before it opens
-  // the screen (rich fixture: `total` resolves clean, `subtotal` carries the disagreement), because
+  // the screen (rich fixture: `subtotal` is the header field carrying the disagreement), because
   // the marker renders only where a correction exists. A marker moved to `left: 11px` reds
   // nothing HERE -- EXTR12-E2E-02's right-of-centre clause is what catches it.
   { element: 'extraction-marker-subtotal', property: 'position', artboard: 'absolute', source: ':307', expected: 'absolute', deviation: null },
@@ -5186,9 +5192,9 @@ test('EXTR12-E2E-06 (AC-3/AC-5): choose, type and point settle three fields, and
   // writeFieldResultsTx writes a job's rows on ONE transaction, so reader.go's ORDER BY
   // degenerates to the name), and EXTR-13-02's line cells sort ahead of `subtotal`: "the first
   // writable inconsistent field" resolves to line_items[2].line_total, which has no header cell
-  // to type into and which refuseField would 422. On the rich fixture `total` itself resolves
-  // clean (reason ''), so `subtotal` is both the first writable candidate AND the only one
-  // carrying the disagreement. The two properties that pick made implicit are asserted here
+  // to type into and which refuseField would 422. `subtotal` sorts ahead of `total`, and since
+  // EXTR-23 put `total` in the doubt scope it renders a chooser rather than an input, so it
+  // offers nothing to type into either. The two properties that pick made implicit are asserted here
   // instead of assumed, so a build that locked `subtotal` or stopped flagging it reds on the wire
   // rather than at the POST. TestExtractionDetail_MockDefaultArrivesInFieldNameOrder pins the
   // ordering from the Go side.

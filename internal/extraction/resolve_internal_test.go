@@ -505,3 +505,51 @@ func crossesALabel(labels []bool) bool {
 		}
 	}
 }
+
+// --- the boundary's per-page precompute --------------------------------------
+
+// AC-1. labelTokens is what crossesALabel reads in place of the lexicon, so its answer has to be
+// right in both directions and its length has to match the page: the boundary indexes it by
+// token position. The two floors are what stop an all-false or an all-true return satisfying
+// the comparison.
+func TestResolve_LabelTokensMarksEveryLabelAndNoValue(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"Sub-total", true},
+		{"2,500.00", false},
+		{"VAT", true},
+		{"187.50", false},
+		{"Honeywell Group", false},
+		{"NGN", false},
+	}
+
+	// No boxes: label-ness is a property of the text alone, and the geometry lives in
+	// crossesALabel.
+	var page TokenPage
+	page.Number = 1
+	for _, c := range cases {
+		page.Tokens = append(page.Tokens, Token{Text: c.text})
+	}
+
+	got := labelTokens(page)
+	if len(got) != len(cases) {
+		t.Fatalf("labelTokens returned %d bool(s) over %d token(s); crossesALabel reads it at the token's own index", len(got), len(cases))
+	}
+
+	var marked, clear int
+	for i, c := range cases {
+		if got[i] != c.want {
+			t.Errorf("labelTokens(%q) = %v, want %v", c.text, got[i], c.want)
+		}
+		if c.want {
+			marked++
+		} else {
+			clear++
+		}
+	}
+	if marked == 0 || clear == 0 {
+		t.Fatalf("the page carries %d label(s) and %d non-label(s); a constant return satisfies a comparison that has only one kind in it", marked, clear)
+	}
+}

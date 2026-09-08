@@ -50,8 +50,10 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 	var all []Candidate
 	// One partition per page, read by every party-scoped rule below and computed once.
 	parties := make([][]Party, len(pages))
+	labels := make([][]bool, len(pages))
 	for i, p := range pages {
 		parties[i] = partyOrder(p)
+		labels[i] = labelTokens(p)
 	}
 	// Learned arrives seq DESC, so the first rule that produces anything for a field is the newest
 	// one reaching this page and supersedes the rest. A rule producing nothing claims nothing --
@@ -64,13 +66,13 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		before := len(all)
 		// A learned rule is never party-scoped: re-routing one by heading would overrule the
 		// reviewer who pointed at the field.
-		all = appendRuleCandidates(all, pages, parties, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
 		}
 	}
 	for _, r := range rules.Tier1 {
-		all = appendRuleCandidates(all, pages, parties, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, TierGeneric)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, TierGeneric)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -96,7 +98,7 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 // scoped routes the candidate to the field the ANCHOR's party owns rather than to field. The
 // anchor, never the value: on a below relation the value can sit past a block boundary, and
 // reading its party there would let it steal the other party's field.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier) []Candidate {
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier) []Candidate {
 	if rule.re == nil {
 		return dst
 	}
@@ -121,8 +123,12 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
 					usableRegion(tok.Region), outField, ruleID, tier, 0)
 			case RelRight, RelBelow:
+				bounded := tier == TierGeneric && rule.Relation.Kind == RelRight
 				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
 					value := page.Tokens[rel.index]
+					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {
+						continue
+					}
 					dst = appendReadings(dst, rule.Shape, value.Text,
 						usableRegion(value.Region), outField, ruleID, tier, rel.distance)
 				}
@@ -146,6 +152,54 @@ func anchorOutranked(text string, loc []int) bool {
 		if other[0] <= loc[0] && other[1] >= loc[1] && other[1]-other[0] > loc[1]-loc[0] {
 			return true
 		}
+	}
+	return false
+}
+
+// labelTokens is one bool per token in the page's own order: does this token carry any
+// anchor-lexicon label. Computed once per page, like partyOrder, because crossesALabel runs per
+// candidate pair and a per-pair regex scan is cubic in a dense row (measured: 134x one Resolve
+// on an 800-token single-band page, against 1.49x for this form).
+//
+// No not-outranked qualifier: a token's WIDEST lexicon hit can never be strictly contained in a
+// wider one, so "carries a hit not itself outranked" and "carries a hit" are the same predicate
+// (TestAnchorLexicon_OutrankingNeverEmptiesATokensLabelSet).
+func labelTokens(page TokenPage) []bool {
+	out := make([]bool, len(page.Tokens))
+	for i, tok := range page.Tokens {
+		for _, m := range anchorLabelMatchers {
+			if m.RE.MatchString(tok.Text) {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+// crossesALabel reports whether a labelled token sits between anchor and value on the rightward
+// path, inside the anchor's own band. A label owns what follows it, so the read stops there.
+//
+// The value token cannot block itself: the cut at its own left edge excludes it, which is why
+// that test is >= and not >.
+func crossesALabel(page TokenPage, labels []bool, anchor, value Region) bool {
+	for i, tok := range page.Tokens {
+		if !labels[i] {
+			continue
+		}
+		b := tok.Region
+		if !usableBox(b) {
+			continue
+		}
+		if b.X0 < anchor.X1 || b.X0 >= value.X0 {
+			continue
+		}
+		ov := overlap1D(anchor.Y0, anchor.Y1, b.Y0, b.Y1)
+		span := min(anchor.Y1-anchor.Y0, b.Y1-b.Y0)
+		if ov <= 0 || ov < 0.5*span {
+			continue
+		}
+		return true
 	}
 	return false
 }

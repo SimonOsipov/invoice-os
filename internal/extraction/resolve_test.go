@@ -1074,3 +1074,31 @@ func TestResolve_ALabelOutsideTheAnchorsBandDoesNotBlock(t *testing.T) {
 		t.Errorf("vat with the same label ON the band = [%s], want none; the two arrangements differ only in the middle token's Y, so a boundary that ignores the band passes the assertion above and fails here", rvbShow(got))
 	}
 }
+
+// AC-1. Label-ness is precomputed once per page, so the boundary has to read each page's OWN
+// array: page 1 carries a label in the slot where page 2 carries a token no lexicon entry
+// claims. Exactly one VAT read survives and it is page 2's -- a boundary reading page 1's
+// labels for page 2 loses it, and one reading page 2's for page 1 keeps two. Neither shape is
+// reachable on a single page, which is why this arrangement has two.
+func TestResolve_TheBoundaryReadsEachPagesOwnLabels(t *testing.T) {
+	row := func(page int, text string, x0, x1 float64) extraction.Token {
+		return extraction.Token{Text: text, Region: extraction.Region{Page: page, X0: x0, Y0: rvbY0, X1: x1, Y1: rvbY1}}
+	}
+	got := extraction.Resolve([]extraction.TokenPage{
+		{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+			row(1, "VAT", 0.10, 0.16), row(1, "Total", 0.30, 0.38), row(1, "2,687.50", 0.45, 0.58),
+		}},
+		{Number: 2, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+			row(2, "VAT", 0.10, 0.16), row(2, "::::", 0.30, 0.38), row(2, "1,234.50", 0.45, 0.58),
+		}},
+	}, rvGeneric())
+	rvFloor(t, got, "the two-page arrangement")
+
+	// The control: page 1 was walked. Its Total label reads its own value, so the single VAT
+	// candidate below is not what a Resolve that only ever reached page 2 also returns.
+	rvbOnly(t, rvFor(got, "total"), "total, read off page 1", "2687.50", "t1.total.right", 0.070000)
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read on the page whose middle token no lexicon entry claims")
+	rvbOnly(t, vats, "vat", "1234.50", "t1.vat.right", 0.290000)
+}

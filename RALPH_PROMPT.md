@@ -12,7 +12,14 @@ Stories arrive in one of two states: **basic** (intent-only — Objective, Core 
 
 ## Model Selection
 
-**Never use the Haiku model.** All agents and subagents must use Sonnet or Opus only.
+Pass `model:` on every `Task` call, taking the value from the **Model** column of the Subagent
+Mapping table below. `/qa-verify` sets its own models and overrides this table for that protocol.
+
+Use Sonnet or Opus. Do not use Haiku.
+
+Opus is for stages that decide what gets built or whether it is correct: story expansion,
+architecture, and QA verification. Sonnet is for stages that carry out a decision already made:
+test-spec authoring, execution, and search.
 
 ## CRITICAL RULES
 
@@ -21,10 +28,10 @@ Stories arrive in one of two states: **basic** (intent-only — Objective, Core 
 
 | Action | WRONG (bloats context) | RIGHT (uses agents) |
 |--------|------------------------|---------------------|
-| Find files | `Glob("internal/validation/**")` | `Task(subagent_type=Explore, prompt="Find all validation-engine files...")` |
+| Find files | `Glob("internal/validation/**")` | `Task(subagent_type=Explore, model=sonnet, prompt="Find all validation-engine files...")` |
 | Read code | `Read("/path/to/engine.go")` | Agent reads during its task |
-| Edit code | `Edit(file_path=..., old_string=...)` | `Task(subagent_type=product-executor, prompt="Implement...")` |
-| Research | Multiple Grep/Read calls | `Task(subagent_type=Explore, prompt="Research how the tenant-tx helper works...")` |
+| Edit code | `Edit(file_path=..., old_string=...)` | `Task(subagent_type=product-executor, model=sonnet, prompt="Implement...")` |
+| Research | Multiple Grep/Read calls | `Task(subagent_type=Explore, model=sonnet, prompt="Research how the tenant-tx helper works...")` |
 
 **Exception:** MCP tools (Backlog, git, gh, Railway read-only) can be called directly.
 
@@ -237,13 +244,18 @@ Then proceed to Phase 1 exactly as for a pre-planned story.
 For each subtask, in dependency order, execute the stages below. Delegate to subagents — never implement code directly.
 
 #### Subagent Mapping (MANDATORY)
-| Stage | Subagent Type | Usage |
-|-------|--------------|-------|
-| Architecture | product-architecture-spec | Always — review/enhance the implementation plan (data models, API contracts, file paths, edge cases; per-subtask `Test-first: yes/no` classification + a Test Specs table for logic-bearing subtasks) |
-| Explore | Explore | Always — verify files, patterns, and placement |
-| Test-Spec | product-qa-spec | **`Test-first: yes` subtasks only** — author the architect's Test Specs as runnable Go tests and confirm they fail (RED) before implementation (Mode A) |
-| Execution | product-executor | Always — implement all code changes; for `Test-first: yes` subtasks, drive the red tests to green |
-| QA Verify | product-qa-spec | Always — verify implementation correctness (skeptical by default). For test-first subtasks, confirm AC tests are green + meaningful and add adversarial/edge coverage (Mode B) |
+| Stage | Subagent Type | Model | Usage |
+|-------|--------------|-------|-------|
+| Architecture | product-architecture-spec | Opus | Always — review/enhance the implementation plan (data models, API contracts, file paths, edge cases; per-subtask `Test-first: yes/no` classification + a Test Specs table for logic-bearing subtasks) |
+| Explore | Explore | Sonnet | Always — verify files, patterns, and placement |
+| Test-Spec | product-qa-spec | Sonnet | **`Test-first: yes` subtasks only** — author the architect's Test Specs as runnable Go tests and confirm they fail (RED) before implementation (Mode A) |
+| Execution | product-executor | Sonnet | Always — implement all code changes; for `Test-first: yes` subtasks, drive the red tests to green |
+| QA Verify | product-qa-spec | **Opus** | Always — verify implementation correctness (skeptical by default). For test-first subtasks, confirm AC tests are green + meaningful and add adversarial/edge coverage (Mode B) |
+
+Any other subagent — `general-purpose`, ad-hoc research spawns — runs on Sonnet.
+
+QA Verify is the one stage that overrides its agent's own `model: sonnet` frontmatter. It is the
+gate that catches false greens, so it runs on Opus deliberately.
 
 > A second, **story-level** deploy gate runs once after all subtasks complete — see **Phase 3.5**.
 

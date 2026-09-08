@@ -28,6 +28,7 @@ import type { PlatformCtx, View } from './types'
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: null, me: null, verified: true }
 const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const JOB_A = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
+const POLICY_ID = 'e9f01234-5678-4abc-9def-0123456789ab'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -176,7 +177,7 @@ const SWEEP: Record<View, Row> = {
   extraction: plainRow(),
 }
 
-// The four parameterised forms. Each names the ROUTE_PATHS key it extends, so a form
+// The five parameterised forms. Each names the ROUTE_PATHS key it extends, so a form
 // cannot outlive the base view it drills into.
 const PARAMETERISED: { form: string; base: View; row: Row }[] = [
   {
@@ -223,6 +224,16 @@ const PARAMETERISED: { form: string; base: View; row: Row }[] = [
       // route restored. Asserted here instead.
       back: { test: 'sweep_theSettingsTabPathRestoresViewAndPathnameOnBackAndForward', file: SELF },
       forward: { test: 'sweep_theSettingsTabPathRestoresViewAndPathnameOnBackAndForward', file: SELF },
+    },
+  },
+  {
+    form: '/workflows/:id',
+    base: 'workflows',
+    row: {
+      coldBoot: { test: 'boot_workflowsPathSeedsThePolicyIdOnTheFirstCommittedRender', file: BOOT },
+      navUrl: { test: 'openPolicy_pushesTheWorkflowsPathAndKeepsTheSelection', file: NAVIGATE },
+      back: { test: 'popstate_backOntoAPolicyEntryRestoresTheBuilder', file: POPSTATE },
+      forward: { test: 'sweep_forwardRebuildsTheWorkflowBuilder', file: SELF },
     },
   },
 ]
@@ -286,9 +297,9 @@ describe('AC-4, AC-5: the ledger is total over the imported route table', () => 
     expect(verified, 'the ledger verified far too few cells to be total').toBe(13 * COLUMNS.length - 13)
   })
 
-  it('sweep_theParameterisedLedgerIsTotalOverTheFourForms', () => {
-    expect(PARAMETERISED, 'the four parameterised forms').toHaveLength(4)
-    expect(new Set(PARAMETERISED.map((p) => p.form)).size, 'the forms must be distinct').toBe(4)
+  it('sweep_theParameterisedLedgerIsTotalOverTheFiveForms', () => {
+    expect(PARAMETERISED, 'the five parameterised forms').toHaveLength(5)
+    expect(new Set(PARAMETERISED.map((p) => p.form)).size, 'the forms must be distinct').toBe(5)
 
     const problems: string[] = []
     let verified = 0
@@ -299,7 +310,7 @@ describe('AC-4, AC-5: the ledger is total over the imported route table', () => 
       }
     }
     expect(problems, 'every parameterised cell must be a verified citation').toEqual([])
-    expect(verified, 'no parameterised cell may be refused').toBe(4 * COLUMNS.length)
+    expect(verified, 'no parameterised cell may be refused').toBe(5 * COLUMNS.length)
   })
 })
 
@@ -390,6 +401,30 @@ describe('AC-3: Forward re-applies a parameterised route, screen and all', () =>
       'the rebuilt review screen must carry the job id',
     ).toBe(JOB_A)
     expect(window.location.pathname, 'the URL must be the forward entry').toBe(`/extraction/${JOB_A}`)
+  })
+
+  // No mount recorder: App.tsx renders no builder component directly, so the selection is
+  // observed on ctx -- same shape as the /settings/:tab row below.
+  it('sweep_forwardRebuildsTheWorkflowBuilder', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openPolicy(POLICY_ID)
+    })
+    await act(async () => {
+      capturedCtx!.nav('audit')
+    })
+
+    await popTo(`/workflows/${POLICY_ID}`)
+    await popTo('/')
+    // Floor: Forward proves nothing unless the Back really left the builder first.
+    expect(requireCtx().view, 'the Back hops must land back on the root').toBe('dashboard')
+    expect(requireCtx().editingPolicyId, 'the Back onto the root must have cleared the policy id').toBeNull()
+
+    await popTo(`/workflows/${POLICY_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view, 'Forward must re-apply the workflows view').toBe('workflows')
+    expect(ctx.editingPolicyId, 'Forward must re-apply the policy id, not just the view').toBe(POLICY_ID)
+    expect(window.location.pathname, 'the URL must be the forward entry').toBe(`/workflows/${POLICY_ID}`)
   })
 })
 

@@ -175,7 +175,7 @@ test("deployed app: Back walks the workspace's own history instead of leaving it
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
 
   await nav.getByRole('button', { name: 'Settings' }).click()
-  await expect(page, 'nav to Settings did not update the URL').toHaveURL(/\/settings$/)
+  await expect(page, 'nav to Settings did not update the URL').toHaveURL(/\/settings\/members$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
 
   await page.goBack()

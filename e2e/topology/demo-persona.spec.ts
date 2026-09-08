@@ -646,7 +646,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await signInAs(page, 'firm')
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
-  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings\/members$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
 
   const membersTable = page.getByTestId('members-table')
@@ -663,7 +663,7 @@ test('deployed app: the YOU chip follows the persona, and the return row restore
   await page.getByTestId('persona-toast-dismiss').click()
 
   await page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Settings' }).click()
-  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings$/)
+  await expect(page, 'inline nav to Settings did not update the URL').toHaveURL(/\/settings\/members$/)
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(membersTable).toBeVisible()
   await expect(membersTable.getByText('YOU', { exact: true })).toHaveCount(1)

@@ -92,9 +92,10 @@
 // The 18-step journey, in order: sign-in + firm MODE guard · h1 · eyebrow · firm-fork
 // subtitle · ladder settles and baseline captured · create opens the builder · rename
 // (with 8 interleaved) · Publish disabled while dirty · DRAG-1 · DRAG-2 · DRAG-4 places the
-// step · save persists · reload: row present, count baseline+1, DRAFT, Never published, step
-// survives · DRAG-3a · DRAG-3b · client switch leaves the list unchanged · delete returns the
-// count to baseline · console-error gate.
+// step · save persists · reload at `/workflows/<id>`: the builder reopens off the URL alone,
+// then row present, count baseline+1, DRAFT, Never published, step survives · DRAG-3a ·
+// DRAG-3b · client switch leaves the list unchanged · delete returns the count to baseline ·
+// console-error gate.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
 import { deleteApprovalPolicy, listApprovalPolicies, login, PERSONAS } from '../api/client'
@@ -138,7 +139,7 @@ const NAV_URL: Record<string, string | RegExp> = {
   Workflows: /\/workflows$/,
   Clients: /\/clients$/,
   Audit: /\/audit$/,
-  Settings: /\/settings$/,
+  Settings: /\/settings\/members$/,
 }
 
 async function goTo(page: Page, label: string): Promise<void> {
@@ -314,12 +315,23 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   await page.getByRole('button', { name: 'Save draft', exact: true }).click()
   await expect(page.getByTestId('publish-blocked-reason'), 'the step reached the server').toHaveCount(0)
 
-  // --- 13. the reload IS the per-tenant proof ------------------------------------------------
+  // --- 13. the reload IS the per-tenant proof, and now the ADDRESS's too ---------------------
   // `?persona=` is stripped at boot and lib/session.ts rehydrates from localStorage, so the
-  // session survives (roles.spec.ts:880 already relies on this). `view` and `editingPolicyId`
-  // are NOT persisted, so the nav and the builder are re-driven by hand below.
+  // session survives (roles.spec.ts:880 already relies on this). `editingPolicyId` is no longer
+  // hand-driven back: `/workflows/<id>` reopens the builder on its own
+  // (App.routeBoot.test.tsx, boot_workflowsPathSeedsThePolicyIdOnTheFirstCommittedRender).
+  const policyUrl = new RegExp(`/workflows/${createdPolicyId}$`)
+  await expect(page, 'creating the policy addressed the builder').toHaveURL(policyUrl)
   await page.reload()
   await expect(sidebar(page)).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  // THE discriminator: nothing between the reload and these three re-drives the nav or the
+  // row. The URL comes last — asserted first it can pass in the window before a clamp fires.
+  await expect(page.getByLabel('Policy name'), 'the URL alone reopened the builder on this policy').toHaveValue(POLICY_NAME)
+  await expect(page.getByText(PLACED_STEP, { exact: true }), 'with its saved step, off the gateway').toBeVisible()
+  await expect(page, 'and the reload kept the policy address').toHaveURL(policyUrl)
+
+  // The sidebar closes the builder and returns the bare list address. Every count below is
+  // still server-held: the fetch this reload forced is what drew the list.
   await goTo(page, 'Workflows')
   await expect(page.getByTestId('policies-list')).toBeVisible()
   await expect(row, 'the created policy is on the list exactly once after a reload').toHaveCount(1)
@@ -333,6 +345,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
   // The control. Without it, 3b below passes on a canvas rendering no lanes at all.
   await page.getByText(POLICY_NAME, { exact: true }).click()
   await expect(page.getByLabel('Policy name'), 'the builder reopened on this policy').toHaveValue(POLICY_NAME)
+  await expect(page, 'and opening it from the list moved the address to the policy').toHaveURL(policyUrl)
   await expect(page.getByText(PLACED_STEP, { exact: true }), 'the saved step renders in the reopened builder').toBeVisible()
 
   // A palette CLICK appends locally and touches no network (WorkflowBuilder.tsx:263-267). It is
@@ -359,6 +372,7 @@ test('firm Workflows, live: a policy built through the canvas survives a reload,
 
   // --- 16. the client switch: the set is keyed per TENANT ------------------------------------
   await page.getByRole('button', { name: 'All policies' }).click()
+  await expect(page, 'the builder back button returns the bare list address').toHaveURL(NAV_URL.Workflows)
   await expect(h1).toBeVisible()
   await expect(row, 'the unsaved condition left with the builder').toContainText('1 approval')
 

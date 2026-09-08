@@ -55,6 +55,7 @@ const APP_TSX = fileURLToPath(new URL('../App.tsx', import.meta.url))
 const ROUTE_TS = fileURLToPath(new URL('./route.ts', import.meta.url))
 const PACKAGE_JSON = fileURLToPath(new URL('../../package.json', import.meta.url))
 const ROUTING_DOC = fileURLToPath(new URL('../../../../docs/routing.md', import.meta.url))
+const TYPES_TS = fileURLToPath(new URL('../types.ts', import.meta.url))
 
 // Both DOM-scan tests below call this -- a typo'd pattern would report a clean zero on
 // route.ts exactly like a real zero, so the control needle over App.tsx must use it too.
@@ -170,18 +171,30 @@ describe('parseRoute — adversarial', () => {
 })
 
 describe('routeUrl — serialise', () => {
-  it('routeUrl_withNoParamsEqualsRoutePathForAllThirteen', () => {
+  it('routeUrl_withNoParamsEqualsRoutePathExceptSettings', () => {
     expect(ALL_VIEWS.length).toBe(13)
+    let compared = 0
     for (const v of ALL_VIEWS) {
+      if (v === 'settings') continue
       expect(routeUrl(v), `${v} must serialise to its shipped path`).toBe(routePath(v))
+      compared += 1
     }
+    expect(compared, 'the twelve non-settings views must each have been compared').toBe(12)
+    // settings is the one named exception, asserted rather than excused: the default tab
+    // is emitted, so the URL is strictly longer than the path. Both literals are pinned --
+    // an inequality alone would pass on any wrong value.
+    expect(routeUrl('settings'), 'settings is the one view whose URL is not its path').not.toBe(
+      routePath('settings'),
+    )
+    expect(routePath('settings')).toBe('/settings')
+    expect(routeUrl('settings')).toBe('/settings/members')
   })
 
   it('routeUrl_emitsOnlyTheParamsTheViewOwns', () => {
     // invoices owns q, audit owns invoice, settings owns the tab segment; no other view owns anything.
     expect(routeUrl('audit', { q: 'acme', settingsTab: 'roles' })).toBe('/audit')
     expect(routeUrl('invoices', { auditInvoice: UUID, settingsTab: 'roles' })).toBe('/invoices')
-    expect(routeUrl('settings', { q: 'acme', auditInvoice: UUID })).toBe('/settings')
+    expect(routeUrl('settings', { q: 'acme', auditInvoice: UUID })).toBe('/settings/members')
     expect(routeUrl('dashboard', { q: 'acme', auditInvoice: UUID, settingsTab: 'roles' })).toBe('/')
     expect(routeUrl('reports', { q: 'acme', auditInvoice: UUID })).toBe('/reports')
     // Control needle: the emitter still emits when the view does own the param.
@@ -196,15 +209,34 @@ describe('routeUrl — serialise', () => {
     expect(routeUrl('audit', { auditInvoice: null })).toBe('/audit')
   })
 
-  it('routeUrl_omitsTheDefaultSettingsTab', () => {
+  it('routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault', () => {
     expect(ALL_SETTINGS_TABS.length).toBe(6)
-    expect(routeUrl('settings')).toBe('/settings')
-    expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings')
-    const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
-    expect(nonDefault.length).toBe(5)
-    for (const t of nonDefault) {
+    expect(routeUrl('settings')).toBe('/settings/members')
+    expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings/members')
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
+    for (const t of ALL_SETTINGS_TABS) {
       expect(routeUrl('settings', { settingsTab: t }), `${t} is addressable`).toBe(`/settings/${t}`)
     }
+    // Floor: the six are not five defaults plus members -- members is one of the six.
+    const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
+    expect(nonDefault.length).toBe(5)
+  })
+
+  // ALL_SETTINGS_TABS is a local literal, so the `.length === 6` floor above asserts it
+  // against itself: a seventh tab added to types.ts would leave every tab loop in this file
+  // one short and silent. ROUTE_PATHS has such an anchor already
+  // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
+  it('settingsTabs_theTestTableIsAnchoredToTheShippedUnion', () => {
+    const src = readFileSync(TYPES_TS, 'utf8')
+    expect(src.length, 'types.ts read back empty -- the path is broken').toBeGreaterThan(0)
+    const line = src.split('\n').find((l) => l.startsWith('export type SettingsTab ='))
+    expect(line, 'types.ts no longer declares `export type SettingsTab =` on one line').toBeTruthy()
+    const shipped = (line ?? '').match(/'[a-z]+'/g)?.map((m) => m.slice(1, -1)) ?? []
+    // Needle: a regex that matched nothing would make the set comparison below vacuous.
+    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(6)
+    expect(shipped.sort(), 'the shipped union and this file\'s table must name the same tabs').toEqual(
+      [...ALL_SETTINGS_TABS].sort(),
+    )
   })
 })
 
@@ -330,7 +362,8 @@ describe('the codec — adversarial', () => {
     expect(routeUrl('invoices', {})).toBe('/invoices')
     expect(routeUrl('invoices', { q: undefined })).toBe('/invoices')
     expect(routeUrl('audit', { auditInvoice: undefined })).toBe('/audit')
-    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings')
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe(routeUrl('settings'))
+    expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
     // Control needle: the emitter is not simply ignoring its second argument.
     expect(routeUrl('invoices', { q: 'acme' })).toBe('/invoices?q=acme')
   })
@@ -485,8 +518,12 @@ describe('routePath — drill-down id parameter', () => {
     expect(routePath('detail', null)).toBe('/invoice')
   })
 
-  it('serialize_idIsIgnoredForTheElevenViewsThatDoNotTakeOne', () => {
+  it('serialize_idIsIgnoredForTheTenViewsThatDoNotTakeOne', () => {
     expect(routePath('settings', 'x')).toBe('/settings')
+    // The count in the name is asserted, not decorative: a fourth id branch makes it wrong.
+    expect(ALL_VIEWS.length).toBe(13)
+    const ignoreTheId = ALL_VIEWS.filter((v) => routePath(v, 'x') === ROUTE_PATHS[v])
+    expect(ignoreTheId.length, `views that ignore an id: ${ignoreTheId.join(', ')}`).toBe(10)
   })
 })
 
@@ -500,7 +537,7 @@ describe('routePath / parseRoute round trip — id corpus', () => {
     'tag#1',
     'plain-string',
   ]
-  const ID_TAKING_VIEWS = new Set(['detail', 'extraction'])
+  const ID_TAKING_VIEWS = new Set(['detail', 'extraction', 'workflows'])
 
   it('roundTrip_idCorpusSurvivesForEveryViewAcrossAllIds', () => {
     expect(ALL_VIEWS.length).toBe(13)
@@ -511,6 +548,78 @@ describe('routePath / parseRoute round trip — id corpus', () => {
         expect(parseRoute(routePath(v, id)), `${v} with id ${id}`).toEqual(expected)
       }
     }
+  })
+
+  it('roundTrip_aPolicyIdSurvivesSerialiseAndParse', () => {
+    // The same corpus the two OLDER drill-downs use (there are three forms now), so the
+    // slash and '#' entries tell an encoding bug from a plain pass-through.
+    expect(ID_CORPUS.length).toBe(6)
+    for (const id of ID_CORPUS) {
+      expect(parseRoute(routePath('workflows', id)), `workflows with id ${id}`).toEqual({
+        view: 'workflows',
+        id,
+      })
+    }
+  })
+})
+
+describe('the workflows drill-down — /workflows/:policyId (ROUTE-07-03)', () => {
+  // The list and the drill-down share one view here, so segment count is the only
+  // discriminator: /invoices/<id> parses to a different view than /invoices, this does not.
+  it('parse_theListAndTheBuilderAreTwoAddresses', () => {
+    expect(parseRoute('/workflows')).toEqual({ view: 'workflows', id: null })
+    expect(parseRoute(`/workflows/${UUID}`)).toEqual({ view: 'workflows', id: UUID })
+    expect(parseRoute('/workflows/')).toEqual({ view: 'workflows', id: null })
+    expect(parseRoute('/workflows/a/b')).toBeNull()
+  })
+
+  // policyId is not on ParsedLocation until the codec lands; reading it off the runtime
+  // entry list keeps this an assertion failure rather than a compile error.
+  function policyIdOf(pathname: string): unknown {
+    const found = Object.entries(parseLocation(pathname, '')).find(([k]) => k === 'policyId')
+    return found === undefined ? undefined : found[1]
+  }
+
+  it('parseLocation_policyIdIsNonNullOnlyOnItsOwnView', () => {
+    expect(policyIdOf(`/workflows/${UUID}`), 'the builder path must carry its id').toBe(UUID)
+    const carryNothing = ['/workflows', `/invoices/${UUID}`, '/extraction/j1', '/settings/roles']
+    expect(carryNothing.length).toBe(4)
+    for (const pathname of carryNothing) {
+      expect(policyIdOf(pathname), `${pathname} must carry no policyId`).toBeNull()
+    }
+  })
+
+  // wireMirrors.test.ts's tsInterfaceKeys reads `export interface` only; ParsedLocation is a
+  // type alias.
+  function parsedLocationDeclaredKeys(): string[] {
+    const body = /export type ParsedLocation = \{([^{}]*)\}/.exec(readFileSync(ROUTE_TS, 'utf8'))?.[1] ?? ''
+    const keys: string[] = []
+    for (const rawSeg of body.split(/[\n;]/)) {
+      const seg = rawSeg.trim()
+      if (!seg || seg.startsWith('//')) continue
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(seg)
+      if (m) keys.push(m[1])
+    }
+    return keys
+  }
+
+  it('parseLocation_returnsEightFieldsAndDeclaresEight', () => {
+    const declared = parsedLocationDeclaredKeys()
+    // Vacuity floor: a renamed type or a nested brace reads [] here, which would compare
+    // nothing against nothing.
+    expect(declared.length, `ParsedLocation declares: ${declared.join(', ')}`).toBe(8)
+    expect([...declared].sort()).toEqual([
+      'auditInvoice',
+      'invoiceId',
+      'jobId',
+      'policyId',
+      'q',
+      'reviewBatchIds',
+      'settingsTab',
+      'view',
+    ])
+    const returned = Object.keys(parseLocation('/', ''))
+    expect([...returned].sort(), 'a field is declared and left unreturned').toEqual([...declared].sort())
   })
 })
 
@@ -856,5 +965,54 @@ describe('ROUTE-03-07 AC-4: the routing doc names the shipped form', () => {
     expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
     expect(src.includes('/imports/'), 'docs/routing.md no longer names the shipped review path').toBe(true)
     expect(src.includes(':batchIds'), 'docs/routing.md no longer names the shipped batchIds segment').toBe(true)
+  })
+})
+
+// ROUTE-07-07 AC-8/AC-11: the two guards below are a PAIR by design, the same rule as the
+// ROUTE-03-07 pair above. An absence guard alone would pass on a doc that DELETED the route
+// table, the R2 rule and the /settings/:tab section instead of correcting them -- the
+// presence guard is what rules that out. Five retired claims, five replacements.
+const RETIRED_FIELD_COUNT = 'seven fields'
+const RETIRED_MEMBERS_DEFAULT = '`members` is the default, so R2 omits it'
+const RETIRED_TWO_DRILLDOWN_ROWS = "The last two rows aren't a 14th/15th `View`"
+const RETIRED_MEMBERS_PIN = 'settings_returningToMembersWritesTheBarePath'
+// The whole route-table row, pipes included -- NOT the bare '/workflows/:id'. The owned-param
+// table below it names that path too, so the bare form would read green on a route table that
+// never grew the row.
+const WORKFLOWS_ROUTE_ROW = '| `workflows` (drill-down) | `/workflows/:id` |'
+// R2's own wording -- the third area AC-8 names, and the one the four needles above miss:
+// reverting only this paragraph left all four green.
+const RETIRED_R2_UNIFORM_RULE = '**R2 — Omit the default.**'
+const R2_NON_UNIFORM_RULE = '**R2 — The query params omit their defaults; the settings tab is always explicit.**'
+
+describe('ROUTE-07-07 AC-8: the routing doc states no retired rule', () => {
+  it('guard_theRoutingDocNamesNoRetiredRule', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    // Floor: a broken path reads back '', which would make every absence check below pass on
+    // nothing read rather than on a corrected doc -- M4-04 burned five instruments this way.
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    // Needle: proves .includes() can see a match on this file at all, so the five absence
+    // checks below aren't vacuous.
+    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
+    expect(src.includes(RETIRED_FIELD_COUNT), 'docs/routing.md still says parseLocation returns seven fields').toBe(false)
+    expect(src.includes(RETIRED_MEMBERS_DEFAULT), 'docs/routing.md still states that R2 omits the members tab').toBe(false)
+    expect(src.includes(RETIRED_TWO_DRILLDOWN_ROWS), 'docs/routing.md still says only two route-table rows are drill-down forms').toBe(false)
+    expect(src.includes(RETIRED_MEMBERS_PIN), 'docs/routing.md still names the retired Members writer pin').toBe(false)
+    expect(src.includes(RETIRED_R2_UNIFORM_RULE), 'docs/routing.md still states R2 as the uniform omit-the-default rule').toBe(false)
+  })
+})
+
+describe('ROUTE-07-07 AC-11: the routing doc names both new forms', () => {
+  it('guard_theRoutingDocNamesBothNewForms', () => {
+    const src = readFileSync(ROUTING_DOC, 'utf8')
+    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
+    expect(src.includes('eight fields'), 'docs/routing.md no longer states parseLocation eight-field result').toBe(true)
+    // Floor, not a discriminator: '/settings/members' already occurred once in the doc before
+    // this story -- inside the very paragraph that denied it. Its presence proves the section
+    // survived; only the absence guard above proves the claim was corrected.
+    expect(src.includes('/settings/members'), 'docs/routing.md no longer names the canonical Members path').toBe(true)
+    expect(src.includes(WORKFLOWS_ROUTE_ROW), 'docs/routing.md route table has no /workflows/:id row').toBe(true)
+    expect(src.includes('settings_returningToMembersWritesTheCanonicalPath'), 'docs/routing.md no longer names the Members writer pin').toBe(true)
+    expect(src.includes(R2_NON_UNIFORM_RULE), 'docs/routing.md no longer states R2 as non-uniform -- query params omit, the settings tab never does').toBe(true)
   })
 })

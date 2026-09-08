@@ -413,7 +413,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   useEffect(() => {
     if (policiesAsync.status === 'ready' || policiesAsync.status === 'empty') setPolicies(policiesAsync.data ?? [])
   }, [policiesAsync.status, policiesAsync.data])
-  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null)
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(
+    bootView === 'workflows' ? seed.policyId : null,
+  )
   // The tenant's membership directory — ONE fetch, shared by the Members tab, the Roles
   // tab and the Workflows builder. The `entitiesAsync` idiom above: no mode key, because
   // one persona is one tenant and the server answers for that tenant alone.
@@ -543,7 +545,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // Deps stay []: a mount alignment, not a mirror --
   // boot_theAlignmentDoesNotReRunWhenViewChangesAfterMount.
   useEffect(() => {
-    const id = bootView === 'detail' ? seed.invoiceId : bootView === 'extraction' ? seed.jobId : null
+    const id =
+      bootView === 'detail'
+        ? seed.invoiceId
+        : bootView === 'extraction'
+          ? seed.jobId
+          : bootView === 'workflows'
+            ? seed.policyId
+            : null
     const url = routeUrl(bootView, {
       id,
       settingsTab,
@@ -595,6 +604,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setView(at.view)
       setDetailInvoiceId(at.invoiceId)
       setExtractionJobId(at.jobId)
+      setEditingPolicyId(at.policyId)
       // History is one stack across identities, so a Company entry from an earlier in-house
       // session resurfaces here; `mode` is stable for this mount, so the [] closure holds.
       // popstate_aStaleCompanyEntryIsClampedForAFirmWorkspace
@@ -647,6 +657,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     const qNext = params?.q ?? invoiceQuery
     // auditInvoice has SCREEN LIFETIME: the pill that edits it unmounts with /audit.
     const auditNext = view === 'audit' ? (params?.auditInvoice ?? null) : null
+    // Screen lifetime, like auditPrefilter: the builder's close is a nav to the bare path.
+    const policyNext = view === 'workflows' ? (params?.id ?? null) : null
     setView(view)
     if (params?.settingsTab != null) setSettingsTab_(params.settingsTab)
     if (params?.q != null) setInvoiceQuery_(params.q)
@@ -657,6 +669,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         ? null
         : { invoiceId: auditNext, invoiceNumber: prev?.invoiceId === auditNext ? prev.invoiceNumber : null },
     )
+    setEditingPolicyId(policyNext)
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
     window.history.pushState({ e: active.entityId }, '', url)
   }
@@ -1374,11 +1387,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   function openPolicy(id: string) {
-    setEditingPolicyId(id)
+    navigate('workflows', { id })
   }
 
   function closePolicy() {
-    setEditingPolicyId(null)
+    navigate('workflows')
   }
 
   // The four policy writes, the `setMemberStatus` shape below: call the gateway first,
@@ -1396,7 +1409,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   async function createPolicy(): Promise<void> {
     const created = await createApprovalPolicy(authedFetch, base!, 'Untitled policy')
     setPolicies((list) => [...list, created])
-    setEditingPolicyId(created.id)
+    navigate('workflows', { id: created.id })
     policiesAsync.run()
   }
 

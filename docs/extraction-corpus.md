@@ -30,10 +30,10 @@ compare trimmed.
 
 | Layout | What it exercises | Tokens | Bytes |
 |---|---|---|---|
-| `corpus_inline_labels.pdf` | `same_token` for all ten fields — every `Label: value` is one token. Carries no bare-TIN token, so the format-only sweeps deliberately cannot fire here. | 11 | 1117 |
-| `corpus_split_labels.pdf` | `right` — label and value on one baseline as two tokens, ~0.15 normalised apart. Its buyer TIN sits at `Y0` 0.53, in the lower half the buyer sweep needs. Its date, `15/04/2026`, has a day above 12 and is deliberately unambiguous. | 21 | 1429 |
+| `corpus_inline_labels.pdf` | `same_token` for all ten fields — every `Label: value` is one token. Carries no bare-TIN token, so the format-only sweep deliberately cannot fire here. | 11 | 1117 |
+| `corpus_split_labels.pdf` | `right` — label and value on one baseline as two tokens, ~0.15 normalised apart. Its buyer TIN sits at `Y0` 0.53, in the page's lower half — geography the retired banded sweeps read and nothing reads now; what routes a party-less TIN is the party block it stands in (**Party blocks** below). Its date, `15/04/2026`, has a day above 12 and is deliberately unambiguous. | 21 | 1429 |
 | `corpus_stacked_labels.pdf` | `below` — the only layout where *every* label's value sits under it, 16pt down at the same `x`, invoice number and date and total included. Every value `corpusExpect` requires from a `below` rule here sits at most 0.009111 normalised under its label, and the next group's label is no closer than 0.087010, so a `below` rule anchored on a label cannot span two groups. Since EXTR-16 a bare label is not a value, so what bounds the dial is the next group's *value*: 0.107212 down, an 11.77x window, with the buyer's name 0.321571 down behind it. (The widest *intra-group* gap is 0.026631, a party block's TIN line that no expectation requires; `TestCorpus_StackedValuesSitBelowTheirLabels` asserts that one and the 0.087010 separation, and `TestTier1_DialsStayInsideTheirMeasuredWindow` asserts the window.) `corpus_two_column.pdf` stacks its two party blocks the same way, so `below` reaches the name fields there too; what is unique here is that nothing else in this layout is inline. Its bare TINs are not unique either — `corpus_split_labels.pdf` carries one in each page half as well. | 13 | 1109 |
-| `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so neither format-only sweep can fire and neither is separated by page half. Under Tier-1 they are not separated by label either: the `supplier_tin` pattern's party word is optional, so a bare `TIN` label matches it and `supplier_tin` collects **both**, while `buyer_tin` — whose party word is required — is unreachable on this layout. That is a Tier-1 accuracy defect, not a corpus defect. EXTR-04-09 measured it and carried it forward rather than closing it: widening the lexicon would change every stored document's fingerprint under **both** layout identities, so the fix needs a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. | 10 | 1031 |
+| `corpus_two_column.pdf` | Column bands. Supplier labels centre at X 0.15–0.21 (band 0), buyer labels at 0.68–0.74 (band 2). It is the only layout whose anchor labels reach the right-hand third at all, and so the only one whose fingerprint carries a band above 1; `TestCorpus_TwoColumnPartiesLandInTheOuterBands` enforces both halves of that. Both TINs sit inside a longer token (`TIN: 99999999-0401` and `TIN: 99999999-0402`, both at `Y0` 0.2341), so the format-only sweep cannot fire on either. What separates them is the **party block**: the stacked `Supplier` and `Buyer` headings open one block each, and the party-less `TIN` label inside each token resolves to the field that block's party owns, so `supplier_tin` reads `99999999-0401` and `buyer_tin` reads `99999999-0402`. Until EXTR-22 neither was separated at all — `supplier_tin`'s party word was optional, so a bare `TIN` label matched it and `supplier_tin` collected **both**, while `buyer_tin`, whose party word is required, was unreachable here. EXTR-04-09 measured that gap and carried it forward rather than closing it, because closing it meant widening the shared anchor lexicon, which is an input to **both** layout identities and so needs a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump — the pair of bumps EXTR-22 made. | 10 | 1031 |
 | `corpus_ambiguous_date.pdf` | `12/03/2026` — both components at most 12 and no month name, so `ShapeDate` returns both readings and `issue_date` keeps two candidates. The one layout whose expectation row carries two values. | 6 | 873 |
 | `corpus_totals_block.pdf` | The lexicon overlap: `Sub-total` matches both `subtotal` and `\btotal\b`, because `-` is a non-word character. The `subtotal` entry claims the wider span of that token, so since EXTR-16 the `total` rule does not anchor there and the overlap mints one candidate, not two. Right-aligned split totals. The VAT label carries no percentage — a `7.5%` remainder would mint a spurious amount candidate. | 9 | 938 |
 
@@ -59,10 +59,229 @@ asserted in the table either; EXTR-04-09 owns the match semantics and the accura
 that floor's constant lives with the test that enforces it, not here.
 
 `TestTier1_ReachesEveryCorpusExpectation` resolves every layout against `Tier1Rules` alone and
-fails on any expected value the shipped set cannot reach. One pair is exempt and listed in
-`t1aGaps`: `corpus_two_column.pdf` / `buyer_tin`, per that layout's row above. The exemption is
-asserted still-unreached, so closing it is a deliberate diff rather than a silent
-pass.
+fails on any expected value the shipped set cannot reach. A pair the shipped set cannot reach is
+exempted by name in `t1aGaps`, and every exemption is asserted **still unreached**, so closing one
+is a deliberate diff rather than a silent pass.
+
+`t1aGaps` is **empty**. Its one entry was `corpus_two_column.pdf` / `buyer_tin`, and it closed when
+EXTR-22 bound each party's TIN to the heading that owns it — see that layout's row above and
+**Party blocks** below. An empty list is not a dead list: the declaration and its two oracles stay,
+so the next unreachable pair is recorded rather than absorbed.
+
+## Party blocks
+
+A page is partitioned into **party blocks** before any rule runs, and a rule anchored on a
+party-**less** TIN label is routed to the field that block's party owns instead of to a fixed
+field. Four rules are party-scoped and no others: `bare_tin`'s three relations
+(`t1.tin.same_token`, `t1.tin.right`, `t1.tin.below`) and the format-only `t1.tin.sweep`. Their
+`Field` is `partyField`'s `PartyUnknown` fallback rather than a party name, and the key carries the
+neutral role — a party-scoped rule keyed `t1.supplier_tin.*` would read as a supplier rule that
+sometimes files under the buyer.
+
+`internal/extraction/party.go` holds the whole partition: `Party`, `partyHeading`, `partyOrder` and
+`partyField`, and nothing else. `Resolve` computes one partition per page, beside the per-page
+label array, and reads it where a party-scoped rule mints its candidate.
+
+**A party heading opens a block, and the block runs to the next heading in page order.** A heading
+is a token whose text one — and only one — of the two party vocabularies matches: the
+`supplier_name` and `buyer_name` entries of `anchorLexicon`, read by **id** and never re-spelled
+in `party.go`, because a forked copy of a pattern drifts from the fingerprint in silence
+(`TestPartyHeading_ReadsTheLexiconAndNotACopy`). Every token from the heading onwards belongs to
+that party until another heading opens the next block, so a heading belongs to its own block and
+the last block on a page runs to the end of it
+(`TestPartyOrder_AssignsEveryTokenToTheHeadingBeforeIt`). Order is the page's own token order and
+nothing else — there is no sort, and no reading-order reconstruction.
+
+**A token both vocabularies match heads neither.** `Supplier / Buyer` names both parties, and a
+heading that names both names none: the partition keeps whichever block was already open rather
+than guessing (`TestPartyHeading_ATokenNamingBothPartiesHeadsNeither`,
+`TestPartyOrder_ABothPartiesTokenDoesNotEndTheBlock`). A token that repeats the party already
+heading the block — `Supplier TIN` after `Supplier` — opens a block of the same party, which is
+the same block; it neither resets nor toggles one
+(`TestPartyOrder_ARepeatedHeadingOfOnePartyDoesNotDisturbTheBlock`).
+
+**Before the first heading the party is `PartyUnknown`, and `PartyUnknown` falls back to the
+supplier.** That fallback is not a default chosen here; it is exactly what a party-less TIN label
+meant before EXTR-22, which is what makes the change **monotone**: a page carrying no heading at
+all reads as it always did (`TestPartyOrder_TokensBeforeTheFirstHeadingAreUnknown`,
+`TestPartyField_IsTotalOverEveryParty`, which also holds `partyField` total over a `Party` value no
+constant names yet). The fallback is load-bearing on a shipped arrangement:
+`wild_two_party_bare_tin.pdf` carries **no supplier heading at all** — its only heading is
+`Invoice to` at token 6 — so its entire supplier reading rests on the fallback.
+`TestPartyOrder_InvoiceToHeadsTheBuyerBlock` asserts both halves, the heading index and the
+absence of any `PartySupplier` on the page, so the fallback cannot be dropped while its only
+shipped user is still shipping.
+
+**A block cannot reach the next page.** `partyOrder` takes one `TokenPage`, so a heading in the
+last token of page 1 owns nothing on page 2 and every page begins at `PartyUnknown`. The bound is
+structural rather than a convention anyone has to remember, and
+`TestPartyOrder_OwnershipNeverCrossesAPage` holds it from both sides: the two pages walked
+separately, and the same tokens joined into one page as the control that proves the partition
+partitions at all.
+
+**The partition reads no box.** Token order and token text, nothing else — so a boxless read,
+where every token carries the zero box, partitions **identically** to the same tokens with real
+geometry (`TestPartyOrder_ABoxlessPagePartitionsTheSame`, with a non-degenerate control so two
+all-`PartyUnknown` slices cannot compare equal and pass). `TestParty_UsesNoMapAndNoGeometry` parses
+`party.go` and scans it for the two things it must not contain — a map type, whose iteration order
+is not deterministic, and any read of a token's `Region` — with a needle and a control for each
+scan, so an all-clear cannot be a broken scan.
+
+This is the reason the party block, and not a page band, is what scopes a party-less TIN. A
+bounded `PageBand` fails closed on a token with no usable box (`inBand`), by design, so the banded
+sweeps EXTR-04 shipped could match **nothing at all** on a boxless read. The partition has no such
+floor: it reads what a DOCX still carries, which is arrival order.
+
+### What the last block swallows
+
+The last block on a page owns everything after its heading, the totals included. On
+`wild_ruled_lines_totals.pdf` the buyer block opens at token 5 and runs to token 33 — **29
+tokens**, the whole line-item table and `Sub-total`, `VAT` and `Total` with it
+(`TestPartyOrder_TheLastBlockOnAPageOwnsTheTotals`, which asserts the run and then names those
+three tokens inside it, so a block called totals-owning that owns no total is a red test).
+
+That is harmless **only because no amount field is party-scoped**. Party scoping is set on the
+party-less TIN rules and nowhere else, so nothing today asks which party owns `Total`. The day a
+rule does — a per-party subtotal, an amount split by side — it inherits a partition in which the
+buyer owns the entire totals block, and it will look correct on every layout whose buyer block
+happens to come second. This paragraph is the warning that the partition was never designed to
+answer that question.
+
+### Why a heading is not outranked
+
+`anchorOutranked` is what stops a **rule** anchoring on a narrow label sitting inside a wider one:
+`Supplier` inside `Supplier TIN: 99999999-0101` owns nothing on that token, so no `supplier_name`
+rule may fire there. `partyHeading` deliberately does **not** consult it, and must not.
+
+Measured over the eleven scored layouts: adding the qualifier silences **14 of the 31 party
+headings** and moves **18** token assignments, because those headings are `Supplier TIN: …` /
+`Buyer TIN …`-shaped tokens whose party-name span sits strictly inside the party-TIN span. On most
+layouts a sibling heading — the plain `Supplier:` line — catches the block a token or two later,
+which is worse than it sounds: the party TIN token itself falls outside its own block. On
+`corpus_totals_block.pdf` it is fatal outright, because that page's **only** heading is the token
+`Supplier TIN: 99999999-0601`; silence it and the page has no block at all, and all seven tokens
+from that heading to the end of the page read `PartyUnknown`.
+
+The two questions are simply different. *Does this label own this token's value* is what outranking
+answers. *Which party does this token belong to* is what a heading answers — and a token that
+spells out `Supplier TIN` names the supplier louder, not more quietly.
+
+## Labels that own their token
+
+Five entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
+(`Customer No.`, `Client Code`) and `signature` (`Buyer's Signature`) sit over the party
+vocabulary; `reg_identifier` (`VAT REG NO`, `VAT REGISTRATION NUMBER`), `rc_number` (`RC NO`,
+`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary. None
+of the five carries a Tier-1 rule; none of them resolves a field. Each exists so that a token
+spelling one of those phrases is claimed **whole** by a label, which is what stops a narrower entry
+inside it — `buyer_name`'s bare `Buyer` inside `Buyer's Signature`, `vat`'s bare `VAT` inside
+`VAT REG NO`, its bare `TAX` inside `TAX INVOICE` — from anchoring its own rule there and reading
+whatever stands beside it as a party name or an amount.
+
+An entry that resolves nothing and suppresses nothing is indistinguishable from a **dead entry**
+that ships in the fingerprint and does no work — measured: one was added, declared owning, and
+passed the whole extraction suite. Three declarations close that:
+
+* `t1OwningPhraseIDs` names every entry carrying no Tier-1 rule, so an entry that resolves nothing
+  must **say** so, and one that later gains rules stops being exempt.
+* `t1PrintedPhraseIDs` names the subset that no rule-bearing entry sits inside, so suppression
+  cannot be what they are for. They earn their place by being **printed on a shipped layout**,
+  proved through `AnchorObservations` in the end-to-end package rather than asserted here.
+  `rc_number` is the only entry on that arm; `reg_identifier` and `doc_title` earn theirs by
+  containing `vat`. The declaration is read by source scan, so it must stay on one line.
+* `alBareTokenCases` carries one row per owning phrase, each with a paired positive (the owner must
+  match its own whole label) and a refusal (the owner must not match the bare token it protects).
+  It is set-equality pinned against `t1OwningPhraseIDs`, so neither list can grow or shrink alone.
+
+The bare-token row is the one that catches a **loosening**. Containment cannot see a phrase that
+degenerates to exactly its victim's span, because `anchorOutranked` requires a **strictly** wider
+one — measured, a `doc_title` broken that way passed all eleven other guards and only that row
+red.
+
+`wild_rc_due_naira.pdf` is the shipped instance. Its token `RC NUMBER: RC-000142` sits between
+`Sub-total` and `VAT` on the page, and since EXTR-22 it reads as a **label**. It is not suppressed,
+not displaced and not corrected: nothing rewrites it, nothing hides it, that layout's `vat` cell
+still reads `187.50` unchanged, and the RC line still displaces nothing. All that changed is that
+the phrase now has an owner, so no amount rule can anchor on the bare `RC` or on the `NUMBER`
+inside it.
+
+### The rightward label boundary
+
+A rightward read stops at an intervening label. When a labelled token sits between the anchor and
+the value, inside the anchor's own band, the pair is refused — a label owns what follows it, so the
+read may not reach past one to take a value that label introduces. `crossesALabel` is the
+predicate; `labelTokens` is the per-page precompute it reads.
+
+**The corpus does not exercise it, and the honest denominator is six, not eleven.** Only **6 of the
+11** layouts admit a rightward anchor/value pair at all — **29** pairs in total — and the other
+five read nothing rightward, so the predicate is never called on them. Those five are named in
+`bdSilentLayouts` rather than left implicit, because "the boundary moved nothing across all eleven
+layouts" is a claim whose effective denominator is six. Of the 29 pairs, **none** crosses a label,
+which is why the boundary removes zero candidates on the shipped corpus. Read that zero as "no
+shipped arrangement puts a label in the corridor", never as "the boundary does nothing".
+
+Two properties of the predicate have no behavioural oracle and are held by structural ones
+instead. The per-page precompute must not degenerate into a per-pair lexicon scan: the two produce
+a byte-identical candidate list on every arrangement, differing only by orders of magnitude in
+cost, so `TestResolve_TheBoundaryPredicateScansNoLexicon` and
+`TestResolve_TheBoundaryPredicateCallsNothingThatReadsTheLexicon` are the **only** things standing
+between the shipped shape and a silent regression — the second bounds the transitive closure,
+because a predicate that calls a helper that reads the lexicon names no banned identifier. And each
+page must be read against **its own** label array, which no single-page arrangement can see
+(`TestResolve_TheBoundaryReadsEachPagesOwnLabels`). Do not sweep any of the three.
+
+## Doubt on a header field
+
+A value supported only by an **uncorroborated adjacent match** presents as doubtful rather than
+decided, for the three fields EXTR-22 owns — `buyer_tin`, `buyer_name` and `vat`, declared in
+`doubtfulFields` in `reconcile.go`. *Adjacent* means the value was read `right` of or `below` its
+anchor rather than out of the anchor's own token; *uncorroborated* means a second, different value
+stands at the same tier and the same distance behind it. Such a cell reads `ReasonAmbiguous`,
+carries the competitor as an alternative, and **keeps its own value**.
+
+The scope list is pinned in both directions. Removing a member is caught by that member's own
+oracle, and **adding** one is caught by nothing unless the partition is pinned over the whole
+vocabulary — measured: adding `subtotal`, and adding an inert misspelling, both survived the entire
+suite. A ten-field behavioural partition and an order-blind source-level set pin close it, and both
+are needed.
+
+Four cells on the shipped corpus read as doubtful, all `buyer_name`, and every one of the four
+values is unchanged from EXTR-21's baseline:
+
+| Layout | Value, unchanged | The alternative offered |
+|---|---|---|
+| `corpus_stacked_labels.pdf` | `Honeywell Group` | `99999999-0302` |
+| `corpus_two_column.pdf` | `Honeywell Group` | `TIN: 99999999-0402` |
+| `wild_two_party_bare_tin.pdf` | `Honeywell Group` | `TIN:` |
+| `wild_scanned_no_number.pdf` | `7 AWOLOWO ROAD, IKOYI` | `TIN: 99999999-1202` |
+
+**Three of those four alternatives are TIN fragments offered under a *name* field, and that is
+accepted rather than overlooked.** An ambiguous field renders a chip picker and **no free-text
+input** (`ExtractionFields.tsx` gates the picker on `reason === 'ambiguous'` and a non-empty
+alternatives list), so a reviewer correcting the doubtful buyer name on
+`wild_two_party_bare_tin.pdf` is offered `TIN:` as one of exactly two choices. Filtering an
+implausible alternative away would hide the doubt this feature exists to surface, and it would also
+move the count — a cell whose only alternative is filtered falls back to `ReasonNone` — so it is a
+different story's scope. It is recorded here because it is invisible from the code: nothing in
+`reconcile.go` says an alternative must be a plausible name. Alternative-chip plausibility, and
+free-text entry on a doubtful field, are **owed**.
+
+**No stored value moves.** `documentCreateInput` maps `f.Value` and never `f.Reason`, so a cell
+flagged `ambiguous` still writes its value to the `invoices` row — which is also why
+`corpus_ambiguous_date.pdf`'s long-standing ambiguous `issue_date` has always scored as a hit.
+(The importer reads a reason in exactly one place, `isPoorScan`, and that predicate is over the
+whole field set rather than one field, so no header field's reason can reach it.) Over 110 cells
+before and after, four lines change and every one of them is a reason or an alternative; the value
+column diffs to nothing. Which value gets filed is decided one rung earlier: the read of
+`extraction_field_results` carries `candidate_rank = 0`, and without it a rank-1 alternative would
+file `TIN:` on the invoice. The doubt makes that predicate load-bearing.
+
+**`wild_scanned_no_number.pdf` is a live trap for the next author.** It is image-only: pdfium reads
+**zero tokens** off it, so a pdfium-sourced walk over "all eleven layouts" compares an empty set
+against an empty expectation on that row and calls it agreement. It must be sourced from its
+committed `wild_scanned_no_number.docling.json` golden — 17 tokens on page 1 — and any walk
+claiming eleven rows must prove each row was read, with a zero token count as a fatal rather than
+a pass.
 
 ## Tier-1 recall and the floor
 
@@ -502,26 +721,33 @@ A rule is keyed by a layout **fingerprint**, and two producers make one, in two 
 namespaces. Which one a job takes is decided when it is extracted, by whether the format returns
 usable geometry.
 
-* **`v1:` — the geometric identity.** `Fingerprint` hashes `<label>:<band>` elements: which
+* **The geometric identity, `v2:` today.** `Fingerprint` hashes `<label>:<band>` elements: which
   anchor labels page 1 carries, and which vertical third — left, middle or right — each one's
   box centres in. They are hashed in reading order, top edge then left edge. This is what a PDF
   gets.
-* **`b1:` — the boxless identity.** `BoxlessFingerprint` hashes `<label>:<placement>` elements,
-  where placement is `w` when the lexicon match is the whole token, `l` when it leads the token,
-  and `i` when it sits inside one. It is what a DOCX gets: every token a DOCX read returns
-  carries the zero box, so no `band` can be computed and no reading order can be recovered from
-  geometry. The elements are hashed in the order the tokens arrive — nothing sorts, and that
-  order is the whole signal.
+* **The boxless identity, `b2:` today.** `BoxlessFingerprint` hashes `<label>:<placement>`
+  elements, where placement is `w` when the lexicon match is the whole token, `l` when it leads
+  the token, and `i` when it sits inside one. It is what a DOCX gets: every token a DOCX read
+  returns carries the zero box, so no `band` can be computed and no reading order can be
+  recovered from geometry. The elements are hashed in the order the tokens arrive — nothing
+  sorts, and that order is the whole signal.
+
+**Read a prefix as a namespace, never as a fixed string.** A prefix is its lever's current value
+plus a colon, so it moves every time the lever does. The first generation of each spelled `v1:`
+and `b1:`; EXTR-22 widened the shared anchor lexicon and both stepped together to `v2:` and `b2:`.
+Prose, a test needle or an operator runbook that hard-codes a generation is one bump from being
+wrong, and this page has been exactly that.
 
 The two can never collide: they differ on byte 0, so one `layout_fingerprint` column holds both
 and `IsBoxlessFingerprint` tells them apart by prefix.
 
 Each namespace carries its **own** invalidation lever, and bumping one clears **only its own**
-class. Bumping `FingerprintVersion` retires every `v1:` rule and leaves every `b1:` rule readable
-under its unchanged key; bumping `BoxlessFingerprintVersion` does the reverse. So
+class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
+readable under its unchanged key; bumping `BoxlessFingerprintVersion` does the reverse. So
 `FingerprintVersion` is no longer the single lever it was before EXTR-19 — an operator who bumps
 it and expects every stored rule gone is wrong. A change to the shared anchor lexicon is the one
-case that needs **both**, because `anchorLabelMatchers` is an input to both producers.
+case that needs **both**, because `anchorLabelMatchers` is an input to both producers; EXTR-22 is
+the change that proved it, stepping both levers in one commit.
 
 ### How a rule is derived
 
@@ -544,10 +770,20 @@ that box, and picks the single best one with `betterAnchor`.
   unchanged — see `TestRLS_APointedCorrectionThatAnchorsToNothingCommitsWithoutARule`.
 
 The worked example, measured off `learned_two_party.pdf`. Both party blocks are stacked
-(`label` / `name` / bare TIN) in page 1's **top** half, so `t1.buyer_tin.sweep` — which is banded
-to page 1's bottom half — cannot reach the buyer's TIN, and the `buyer_tin` lexicon needs a party
-word beside a TIN word, which a bare number does not carry. Tier-1 alone therefore returns
-**zero** `buyer_tin` candidates and decides `missing`.
+(`label` / `name` / bare TIN) in page 1's top half, so the page reads `Supplier`,
+`Adeyemi Trading Limited`, `99999999-0701`, `Buyer`, `Honeywell Group`, `99999999-0702`. Since
+EXTR-22 **Tier-1 alone already reaches the buyer's TIN**: the `Buyer` token opens a party block,
+the party-scoped sweep names `99999999-0702` by format inside it, and the field decides
+`99999999-0702` with no alternatives — as `supplier_tin` decides `99999999-0701`. Before EXTR-22 it
+decided `missing`, because the two banded sweeps split the page by half rather than by party and
+both party blocks sat in the same half.
+
+That makes this a **sharper** example than the one it replaces, not a weaker one. The learned rule
+has to beat a real generic candidate carrying the same value rather than fill a void, so the only
+thing that says it fired is the **tier**: `TierLearned` outranks `TierGeneric` whatever the values
+are. `TestLearnedTwoParty_Tier1BindsTheBuyerTINAndTheLearnedRuleStillOutranksIt` asserts rank 0 on
+tier and rule id and never on value, precisely because a value-only assertion would pass whether
+the learned rule fired or not.
 
 A reviewer points at the bare token `99999999-0702`. The nearest qualifying anchor is
 `buyer_name` / `"Buyer"`, `below` at a gap of `0.026525`; `"Supplier"` is also below, at
@@ -559,8 +795,8 @@ A reviewer points at the bare token `99999999-0702`. The nearest qualifying anch
 
 On the next document of that layout the rule matches one token, `relatedTokens` reaches the two
 tokens under it, `ShapeTIN` rejects the party name, and `buyer_tin` resolves to `99999999-0702`
-as a `TierLearned` candidate with no alternatives —
-`TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN`.
+at rank 0 as a `TierLearned` candidate, one rank above Tier-1's own reading of the same value and
+with no alternatives — `TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN`.
 
 ### Which correction produces a rule
 
@@ -570,11 +806,16 @@ matches neither writes **zero rules**:
 | Method | Job's `layout_fingerprint` | Derivation | Extra input |
 |---|---|---|---|
 | `pointed`, with a region | any key, provided the job recorded a layout | `LearnRule` | the box, against `layout_anchors` |
-| `typed` | a `b1:` key — a **boxless** identity, written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
+| `typed` | a **boxless** key, `b2:` today — the identity written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
 | `chosen`, `undone` | either | none | — |
 
-The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a `v1:`
-key — writes **zero rules**: there was geometry to point at and the reviewer did not point at it.
+Read that middle row as *which namespace the job took*, never as two fixed bytes: the boxless
+prefix spelled `b1:` before EXTR-22 and spells `b2:` now, and `IsBoxlessFingerprint` is what tells
+the two namespaces apart — see **The two layout identities** above.
+
+The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a
+geometric key — writes **zero rules**: there was geometry to point at and the reviewer did not
+point at it.
 A `pointed` correction on a **DOCX** also writes zero rules, but for a different reason — every
 box it could anchor to is the zero box, so `LearnRule` finds no relation to record. The pointed
 gate reads the box, never the namespace: a job that took the boxless identity while carrying real
@@ -618,8 +859,8 @@ later document carrying that layout fingerprint. The undo revises what one field
 says; it does not withdraw the claim about *where that field lives on this layout*.
 
 The only way to displace a live rule is a second correction that derives a different one for the
-same field — a **second pointed correction** on a `v1:` layout, pointing at a distinguishing
-label; a second `typed` correction on a `b1:` layout, retyping a value some other page-1 token
+same field — a **second pointed correction** on a geometric layout, pointing at a distinguishing
+label; a second `typed` correction on a boxless layout, retyping a value some other page-1 token
 carries. Displacement is by **ordering**, never by deletion: the
 `extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds `INSERT` and
 `SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows remain**,
@@ -655,8 +896,8 @@ off, though: measured, both still pass with the policy disabled, because the sto
 `tenant_id` predicate filters the row. The oracle for the mechanism is
 `TestRLS_ExtractionAnchorRulesCrossTenantSelectRefused`, which reds when the policy is dropped.
 
-Both oracles read the `v1:` namespace, and the layout one says in its own comment that its
-cross-layout zero would survive the fingerprint gate being removed. The `b1:` boxless equivalents
+Both oracles read the geometric namespace, and the layout one says in its own comment that its
+cross-layout zero would survive the fingerprint gate being removed. The boxless equivalents
 do not have that weakness — `TestRLS_ABoxlessLearnedRuleDoesNotReachAnotherLayout` and
 `TestRLS_ABoxlessRuleAtTheSharedEmptyIdentityStaysInsideItAndItsTenant` put the same token on
 both layouts, so each zero reds when `AND layout_fingerprint = $2` is dropped. Their tenant halves
@@ -670,33 +911,42 @@ A learned rule is tenant data, not shipped code: it cannot be fixed by a deploy,
 admin screen that edits or retracts one. Bring the layout, the tenant and the field to the owner.
 
 The canonical misfire is `corpus_two_column.pdf`, and it is asserted rather than hidden —
-`TestRLS_TheTwoColumnLayoutGetsWorseBeforeItGetsBetter`.
+`TestRLS_TheTwoColumnLayoutRegressesFromACorrectReadingToAWrongOne`.
 
 That layout prints the supplier and buyer blocks side by side, each ending in a token spelled
-`TIN: 99999999-04NN`. Under Tier-1 alone `buyer_tin` reads **`missing`** — one honest gap.
-A reviewer points at the buyer's own token `TIN: 99999999-0402`; the best anchor is the
-`supplier_tin` lexicon entry matching the bare word `TIN` **inside that same token**, so the
-derived rule is:
+`TIN: 99999999-04NN`. **Since EXTR-22 Tier-1 alone reads `buyer_tin` correctly**, as
+`99999999-0402`, because the `Buyer` heading opens the block that token stands in — and that makes
+this misfire strictly *worse* to look at, not better: what turns a correct field into a wrong one
+is a reviewer pointing at a field that was already right.
+
+A reviewer points at the buyer's own token `TIN: 99999999-0402`. The best anchor is the `bare_tin`
+lexicon entry matching the party-less word `TIN` **inside that same token**, so the derived rule
+is:
 
 ```json
 {"label":"(?i)\\bTIN\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"tin"}
 ```
 
-That label matches **both** party blocks. With the rule live, `buyer_tin` gets **two candidates
-from one rule**, both at distance 0, and the decision comes out `99999999-0401` — **the
-supplier's TIN** — flagged `ambiguous` with `99999999-0402` as the alternative. The layout has
-gone from one honest `missing` to a confidently decided **wrong** value.
+That label matches **both** party blocks, and a learned rule is never party-scoped — party scoping
+would overrule the very reviewer who pointed at the token, which is another story's decision. With
+the rule live `buyer_tin` has **three** candidates: **two from that one rule**, both `TierLearned`
+at distance 0, plus Tier-1's own correct reading a tier below. The decision comes out
+`99999999-0401` — **the supplier's TIN** — flagged `ambiguous` with `99999999-0402` as the
+alternative. The layout has gone from a correct value to a confidently decided **wrong** one.
 
-Both candidates come from the *same* rule, so newest-rule-wins cannot rescue it. The tie is
-broken in `compareRegions`: the two tokens share a baseline, so their `Y0` is bit-identical
-(`0.23407067192925346`), and `X0` decides — `0.1179 < 0.6539` hands the field to the supplier.
+Both learned candidates come from the *same* rule, so newest-rule-wins cannot rescue it, and both
+outrank the correct generic reading by tier. The tie between them is broken in `compareRegions`:
+the two tokens share a baseline, so their `Y0` is bit-identical (`0.23407067192925346`), and `X0`
+decides — `0.1179 < 0.6539` hands the field to the supplier.
 
 The remedy today is a **second pointed correction** on a distinguishing label — a token whose
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
-so that `TIN` alone no longer anchors is **not** a remedy: the lexicon is an input to **both**
-fingerprints, so changing it invalidates every stored rule for every tenant and requires a
-`FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the same
-`anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every `b1:` key too.
+so that `TIN` alone no longer anchors is **not** a remedy here: it is what Tier-1 already does, and
+the learned rule outranks Tier-1 regardless. It is also the expensive lever, because the lexicon is
+an input to **both** fingerprints, so changing it invalidates every stored rule for every tenant
+and requires a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the
+same `anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every boxless key
+too.
 
 ### learned_two_party.pdf is not a corpus layout
 
@@ -706,17 +956,21 @@ fixture. It is deliberately named **outside** the `corpus_` prefix, and therefor
 `corpusExpect`, `corpusLayouts`, `corpusTokenFloor`, the Tier-1 recall rate and the Tier-1
 decision rate.
 
-That is the point: it exists to be a layout Tier-1 **cannot** fully read, and adding it to the
-corpus would move `EXTR-04`'s accuracy ratchet — which must keep measuring the same six layouts
-it has always measured — for a fixture whose whole purpose is a gap. Its own reserved-TIN scan
+That is the point: it is the **vehicle for the learning chain**, not a measured arrangement, and
+adding it to the corpus would move `EXTR-04`'s accuracy ratchet — which must keep measuring the
+same six layouts it has always measured — for a fixture nobody grades. Its own reserved-TIN scan
 is `TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs`, because
 `TestCorpus_UsesOnlyFreeReservedTINs` quantifies over `corpusLayouts` and cannot see it.
 
-One consequence worth recording: `supplier_tin` reads `ambiguous` on this fixture, because
-`t1.supplier_tin.sweep` is banded to page 1's top half and claims **both** bare TINs. That is the
-cost of putting both party blocks in the top half, it is what makes the buyer's TIN unreachable,
-and it is invisible to every accuracy number precisely because this is not a corpus layout. Do
-not "fix" it.
+One consequence worth recording, and it inverted at EXTR-22. `supplier_tin` used to read
+`ambiguous` here, because `t1.supplier_tin.sweep` was banded to page 1's top half and claimed
+**both** bare TINs, and the buyer's TIN was unreachable behind it. Both party blocks still sit in
+the top half, but the half decides nothing now — the party block does — so Tier-1 alone decides
+`supplier_tin` = `99999999-0701` and `buyer_tin` = `99999999-0702`, each with no alternatives.
+The fixture keeps its job either way, and the job got harder rather than easier: the rule a pointed
+correction teaches here must now outrank a *correct* generic reading instead of filling a gap,
+which is what makes it a real test of tier precedence. All of that is still invisible to every
+accuracy number, precisely because this is not a corpus layout.
 
 ## Scrubbing an anonymised real document
 

@@ -143,18 +143,15 @@ func TestWildLayouts_TheRuledTableReproducesACompetingTotal(t *testing.T) {
 	}
 }
 
-// TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect records two measured
-// NON-reproductions: this corpus gives EXTR-22's Due-Date half and the RC-as-VAT half NO ORACLE,
-// and the owning story must supply its own. The story lists three Objective defects for this
-// arrangement; only the naira yielding no currency is reproduced.
+// Two measured NON-reproductions on this arrangement, with different owners.
 //
 //   - Due Date above Issue Date: BOTH dates reach issue_date, but the printed issue date wins on
-//     distance because "Issue Date " is the longer label. The confusion is reachable and never
-//     decided, so the fixture is one dial from being an oracle.
-//   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing.
+//     distance because "Issue Date " is the longer label. Reachable and never decided, so the
+//     fixture is one dial from being an oracle. EXTR-25 owns that defect and must supply its own.
+//   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing, and
+//     since rc_number ships as an owning phrase it reads as a label; this is what holds that.
 //
-// Fails the moment either starts reproducing, which is the point: the day this reds is the day
-// EXTR-22 gets an oracle here.
+// Fails the moment either starts reproducing.
 func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T) {
 	dates := wildResolved(t, wildRCNaira, "issue_date")
 	issue := wildOneValue(t, wildRCNaira, "issue_date")
@@ -164,7 +161,7 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 		t.Errorf("%s no longer reaches the due date %s as an issue_date candidate; the arrangement stopped even being able to confuse the two", wildRCNaira, wildRCDueDate)
 	}
 	if len(dates) == 0 || dates[0] != issue {
-		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for EXTR-22's Due-Date half -- this corpus does not reproduce it and EXTR-22 must supply its own", wildRCNaira, dates, issue)
+		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for the Due-Date half -- this corpus does not reproduce it and EXTR-25 must supply its own", wildRCNaira, dates, issue)
 	}
 
 	vat := wildResolved(t, wildRCNaira, "vat")

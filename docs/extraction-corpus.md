@@ -78,9 +78,9 @@ field. Four rules are party-scoped and no others: `bare_tin`'s three relations
 neutral role — a party-scoped rule keyed `t1.supplier_tin.*` would read as a supplier rule that
 sometimes files under the buyer.
 
-`internal/extraction/party.go` holds the whole partition: `Party`, `partyHeading`, `partyOrder` and
-`partyField`, and nothing else. `Resolve` computes one partition per page, beside the per-page
-label array, and reads it where a party-scoped rule mints its candidate.
+`internal/extraction/party.go` holds the whole partition: `Party`, `partyHeadings`, `partyHeading`,
+`partyOrder` and `partyField`, and nothing else. `Resolve` computes one partition per page, beside
+the per-page label array, and reads it where a party-scoped rule mints its candidate.
 
 **A party heading opens a block, and the block runs to the next heading in page order.** A heading
 is a token whose text one — and only one — of the two party vocabularies matches: the
@@ -106,10 +106,13 @@ meant before EXTR-22, which is what makes the change **monotone**: a page carryi
 all reads as it always did (`TestPartyOrder_TokensBeforeTheFirstHeadingAreUnknown`,
 `TestPartyField_IsTotalOverEveryParty`, which also holds `partyField` total over a `Party` value no
 constant names yet). The fallback is load-bearing on a shipped arrangement:
-`wild_two_party_bare_tin.pdf` carries **no supplier heading at all** — its only heading is
-`Invoice to` at token 6 — so its entire supplier reading rests on the fallback.
-`TestPartyOrder_InvoiceToHeadsTheBuyerBlock` asserts both halves, the heading index and the
-absence of any `PartySupplier` on the page, so the fallback cannot be dropped while its only
+`wild_two_party_bare_tin.pdf` carries **no supplier heading at all** — every heading on it is a
+buyer heading, and the first is `Invoice to` at token 6 — so its entire supplier reading rests on
+the fallback. (The other two, `Customer No.` at token 7 and `Buyer's Signature` at token 11, repeat
+the party already heading the block and so open the same block; they are still headings, and the
+count in **Why a heading is not outranked** below counts them.)
+`TestPartyOrder_InvoiceToHeadsTheBuyerBlock` asserts both halves, the index of the first heading and
+the absence of any `PartySupplier` on the page, so the fallback cannot be dropped while its only
 shipped user is still shipping.
 
 **A block cannot reach the next page.** `partyOrder` takes one `TokenPage`, so a heading in the
@@ -154,9 +157,12 @@ answer that question.
 rule may fire there. `partyHeading` deliberately does **not** consult it, and must not.
 
 Measured over the eleven scored layouts: adding the qualifier silences **14 of the 31 party
-headings** and moves **18** token assignments, because those headings are `Supplier TIN: …` /
-`Buyer TIN …`-shaped tokens whose party-name span sits strictly inside the party-TIN span. On most
-layouts a sibling heading — the plain `Supplier:` line — catches the block a token or two later,
+headings** and moves **18** token assignments. **Twelve** of the fourteen are `Supplier TIN: …` /
+`Buyer TIN …`-shaped tokens whose party-name span sits strictly inside the party-TIN span; the other
+two are `wild_two_party_bare_tin.pdf`'s `Customer No.` and `Buyer's Signature`, silenced by the
+owning phrases of **Labels that own their token** below rather than by a TIN span — and those two
+move nothing, because both repeat the party already heading their block. On most of the rest a
+sibling heading — the plain `Supplier:` line — catches the block a token or two later,
 which is worse than it sounds: the party TIN token itself falls outside its own block. On
 `corpus_totals_block.pdf` it is fatal outright, because that page's **only** heading is the token
 `Supplier TIN: 99999999-0601`; silence it and the page has no block at all, and all seven tokens

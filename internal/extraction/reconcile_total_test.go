@@ -91,9 +91,9 @@ func TestReconcile_ALearnedTotalHeadStaysDecided(t *testing.T) {
 	}
 }
 
-// AC-5. RATCHET, not a driver: Reconcile runs no subtotal+vat identity today, so this asserts an
-// absence that is already true and it has no red phase in this subtask. It is EXTR-23-02's
-// oracle -- the referee it adds may break a tie, never condemn a lone reading.
+// AC-5. Reconcile now runs the subtotal + vat identity (corroborateTotal), and a lone reading
+// that fails it stays decided: the referee returns the cell untouched on every arm but "exactly
+// one of several competing readings balances".
 func TestReconcile_ASingleTotalCandidateThatFailsTheIdentityStaysDecided(t *testing.T) {
 	const total, subtotal, vat = "1000.00", "8000.00", "600.00" // 8000.00 + 600.00 = 8600.00, not 1000.00
 	lone := rcAdjacentAt("total", total, extraction.TierGeneric, 0.03)
@@ -177,6 +177,14 @@ func rtSameResult(a, b extraction.FieldResult) bool {
 		}
 	}
 	return true
+}
+
+// rtVal renders a cell's value for a failure message; a bare %v over a *string prints an address.
+func rtVal(v *string) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return *v
 }
 
 func rtShow(r extraction.FieldResult) string {
@@ -374,12 +382,12 @@ func TestReconcile_AnUndecidedAddendIsNotEvidence(t *testing.T) {
 				t.Fatalf("%s reads %q, want %q -- this arm never reached the state it names", tc.addend, addend.Reason, tc.wantReason)
 			}
 			if tc.wantValue != "" && (addend.Value == nil || *addend.Value != tc.wantValue) {
-				t.Fatalf("%s holds %v, want %q -- the arm is earned by the value, not by the reason", tc.addend, addend.Value, tc.wantValue)
+				t.Fatalf("%s holds %q, want %q -- the arm is earned by the value, not by the reason", tc.addend, rtVal(addend.Value), tc.wantValue)
 			}
 
 			total := rtaFind(t, results, "total")
 			if total.Value == nil || *total.Value != rtNear {
-				t.Errorf("total = %v, want %q -- an addend nobody trusts moves no value", total.Value, rtNear)
+				t.Errorf("total = %q, want %q -- an addend nobody trusts moves no value", rtVal(total.Value), rtNear)
 			}
 			if total.Reason != extraction.ReasonAmbiguous {
 				t.Errorf("total reason = %q, want %q -- corroboration needs an addend this pass itself decided", total.Reason, extraction.ReasonAmbiguous)
@@ -413,7 +421,7 @@ func TestReconcile_AMissingVATIsNotZero(t *testing.T) {
 
 	total := rtaFind(t, results, "total")
 	if total.Value == nil || *total.Value != rtNear {
-		t.Errorf("total = %v, want %q -- a subtotal that equals a competing reading is half the identity, not the identity", total.Value, rtNear)
+		t.Errorf("total = %q, want %q -- a subtotal that equals a competing reading is half the identity, not the identity", rtVal(total.Value), rtNear)
 	}
 	if total.Reason != extraction.ReasonAmbiguous {
 		t.Errorf("total reason = %q, want %q -- an absent VAT read as zero would corroborate every subtotal-equals-total document ever scanned", total.Reason, extraction.ReasonAmbiguous)

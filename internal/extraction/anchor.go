@@ -121,8 +121,8 @@ func ParseRule(raw []byte) (Rule, error) {
 //
 // The patterns overlap on purpose -- "Sub-total" matches both subtotal and total, and both
 // candidates are emitted. Reconciliation arithmetic downstream is the referee, not this table:
-// corroborateTotal settles the competing totals when subtotal and vat both decide, and a
-// reviewer settles the rest.
+// corroborateTotal settles competing totals where subtotal and vat both decide AND exactly one
+// reading balances; a reviewer settles the rest.
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},

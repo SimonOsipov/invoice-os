@@ -238,6 +238,10 @@ func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint, field
 	if body == "" {
 		t.Fatal("eeSeedDecoy was handed an empty rule body; a run against it measures the baseline")
 	}
+	// Symmetric with the body guard: a rule filed under no field is served for nothing.
+	if field == "" {
+		t.Fatal("eeSeedDecoy was handed an empty field name; the rule it writes bites no field")
+	}
 	var id string
 	if err := eeRequire(t).super.QueryRow(ctx,
 		`INSERT INTO extraction_anchor_rules

@@ -5,9 +5,10 @@
 // falls to 0 while most values stay reachable, so one test holds both halves of the gap the
 // number exists to show: "the rules still reach it" and "no invoice was written".
 //
-// The DECOY seeds a learned rule that out-ranks one layout's real total. The value is still
+// The DECOY seeds a learned rule that out-ranks one layout's real VAT. The value is still
 // written, one rank down, so only a rank-reading measure sees the loss -- the EXTR-16 defect
-// restated at this altitude.
+// restated at this altitude. The same shape filed under total is the REFEREE decoy, which
+// EXTR-23-02's subtotal + vat identity repairs instead.
 //
 // The Tier-1 set is not injectable: worker.go:249 reads the package var directly, and
 // ExtractWorker has no Tier1 field. So the cut installs a filtered struct COPY into
@@ -17,6 +18,7 @@ package endtoend
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -57,20 +59,49 @@ const (
 
 // The reach decoy. The two-branch alternation is load-bearing, not cosmetic: decideField keeps
 // an alternative only when it shares the head's Tier AND Distance, so a decoy matching only
-// 5,000.00 leaves the TierGeneric 5375.00 with no row at all and an any-rank read sees the same
+// 5,000.00 leaves the TierGeneric reading with no row at all and an any-rank read sees the same
 // loss a rank-0 read does. Matching both amounts ties them at TierLearned/Distance 0, and
-// compareRegions hands rank 0 to the higher token (Sub-total) and rank 1 to the real total.
+// compareRegions hands rank 0 to the higher token (Sub-total) and rank 1 to the real VAT.
+//
+// It bites VAT rather than the total because EXTR-23-02's arithmetic referee corroborates a
+// competing total against subtotal + vat and repairs a total decoy back to rank 0. VAT is
+// outside that referee's wiring. The total's own rank-1 shape is asserted by
+// TestRLS_EndToEndTheRefereeRepairsTheRankOneTotalDecoy below.
 const (
 	eeDecoyLayout = "corpus_totals_block.pdf" // expectByLayout[5]
-	eeDecoyField  = "total"
-	eeDecoyRule   = `{"label":"^\\s*5,(000|375)\\.00\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
-	eeDecoyRank0  = "5000.00" // the Sub-total amount, filed under total
-	eeDecoyRank1  = "5375.00" // the layout's real total, still reached, one rank down
+	eeDecoyField  = "vat"
+	eeDecoyRule   = `{"label":"^\\s*(5,000|375)\\.00\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
+	eeDecoyRank0  = "5000.00" // the Sub-total amount, filed under vat
+	eeDecoyRank1  = "375.00"  // the layout's real VAT, still reached, one rank down
 	eeDecoyRows   = 2
 
 	// eeDecoyBaseHits is what eeDecoyLayout scores with no decoy, under BOTH reads. The decoy
 	// run must score exactly one less.
 	eeDecoyBaseHits = 4
+)
+
+// eeShowRows renders rows as rank/value pairs for a failure message; a bare %v over eeRow
+// prints *string addresses.
+func eeShowRows(rows []eeRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		v := "<nil>"
+		if r.value != nil {
+			v = *r.value
+		}
+		out[i] = fmt.Sprintf("rank %d = %q", r.rank, v)
+	}
+	return out
+}
+
+// The referee decoy: the SAME shape filed under total, which is the one field EXTR-23-02's
+// arithmetic referee adjudicates. 5000.00 + 375.00 = 5375.00, so the referee promotes the real
+// total back over the decoy and the store keeps one row instead of two.
+const (
+	eeRefereeField     = "total"
+	eeRefereeRule      = `{"label":"^\\s*5,(000|375)\\.00\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
+	eeRefereeOutranked = "5000.00" // the Sub-total amount the decoy files under total
+	eeRefereeRepaired  = "5375.00" // the layout's real total, which the arithmetic restores
 )
 
 // --- the variants ------------------------------------------------------------------------
@@ -202,7 +233,7 @@ func eeFingerprintOf(t *testing.T, ctx context.Context, layout string) string {
 // in package extraction's test build, so it is unreachable from here; the READ side still goes
 // through the production AnchorRulesFor. tenants.id cascades, so eeSeed's teardown reaches
 // this row.
-func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint, body string) string {
+func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint, field, body string) string {
 	t.Helper()
 	if body == "" {
 		t.Fatal("eeSeedDecoy was handed an empty rule body; a run against it measures the baseline")
@@ -213,7 +244,7 @@ func eeSeedDecoy(t *testing.T, ctx context.Context, tenantID, fingerprint, body 
 		     (tenant_id, layout_fingerprint, field_name, rule, rule_schema_version)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
-		tenantID, fingerprint, eeDecoyField, body, extraction.RuleSchemaVersion).Scan(&id); err != nil {
+		tenantID, fingerprint, field, body, extraction.RuleSchemaVersion).Scan(&id); err != nil {
 		t.Fatalf("seed the rank-1 decoy for fingerprint %s: %v", fingerprint, err)
 	}
 	if id == "" {
@@ -236,8 +267,8 @@ type eeDecoyRun struct {
 // eeRunDecoyLayout drives ONE layout end to end. It exists because eeRunLayout gives no hook
 // between eeSeed and eeExtract, which is exactly where the rule must be written. Its own
 // subtest, like eeRunLayout, so eeExtract's Stop cleanup fires before the next run enqueues.
-// body is the learned rule to seed; "" is a baseline run with none.
-func eeRunDecoyLayout(t *testing.T, ctx context.Context, body string) eeDecoyRun {
+// field/body are the learned rule to seed; "" is a baseline run with none.
+func eeRunDecoyLayout(t *testing.T, ctx context.Context, field, body string) eeDecoyRun {
 	t.Helper()
 	eeRequireFixtures(t, []string{eeDecoyLayout})
 
@@ -246,6 +277,8 @@ func eeRunDecoyLayout(t *testing.T, ctx context.Context, body string) eeDecoyRun
 	case "":
 	case eeDecoyRule:
 		name = "decoy"
+	case eeRefereeRule:
+		name = "referee-decoy"
 	default:
 		name = "inert-decoy"
 	}
@@ -256,7 +289,7 @@ func eeRunDecoyLayout(t *testing.T, ctx context.Context, body string) eeDecoyRun
 		out.wantFP = eeFingerprintOf(t, ctx, eeDecoyLayout)
 
 		if body != "" {
-			out.decoyID = eeSeedDecoy(t, ctx, w.tenantID, out.wantFP, body)
+			out.decoyID = eeSeedDecoy(t, ctx, w.tenantID, out.wantFP, field, body)
 		}
 
 		// The production reader, not the insert, is what says the rule is servable.
@@ -430,7 +463,7 @@ func TestRLS_EndToEndARankOneDecoyMovesTheScore(t *testing.T) {
 	ctx := t.Context()
 	expect := eeDecoyExpect(t)
 
-	run := eeRunDecoyLayout(t, ctx, eeDecoyRule)
+	run := eeRunDecoyLayout(t, ctx, eeDecoyField, eeDecoyRule)
 
 	// 1. The decoy exists as a row.
 	if run.decoyID == "" {
@@ -467,7 +500,7 @@ func TestRLS_EndToEndARankOneDecoyMovesTheScore(t *testing.T) {
 		t.Errorf("the invoices row holds %s = %q, want the decoy's %q", eeDecoyField, got, eeDecoyRank0)
 	}
 
-	base := eeRunDecoyLayout(t, ctx, "")
+	base := eeRunDecoyLayout(t, ctx, eeDecoyField, "")
 	if base.decoyID != "" || base.served != 0 {
 		t.Fatalf("the baseline run was served %d learned rule(s); it is not a baseline", base.served)
 	}
@@ -520,7 +553,7 @@ func TestRLS_EndToEndTheScoreIsNotARecallMeasure(t *testing.T) {
 
 	// The same-run baseline control FIRST: two reads that are secretly the same function, and
 	// a scorer that always adds one, both fail here before the decoy is ever seeded.
-	base := eeRunDecoyLayout(t, ctx, "")
+	base := eeRunDecoyLayout(t, ctx, eeDecoyField, "")
 	if base.invoice == nil {
 		t.Fatal("the baseline run quarantined; both reads below would be over nothing")
 	}
@@ -536,7 +569,7 @@ func TestRLS_EndToEndTheScoreIsNotARecallMeasure(t *testing.T) {
 		t.Errorf("%s scores %d / %d under both reads with no decoy, pinned at %d -- re-measure and update eeDecoyBaseHits", eeDecoyLayout, baseInvoice, len(writtenFields), eeDecoyBaseHits)
 	}
 
-	run := eeRunDecoyLayout(t, ctx, eeDecoyRule)
+	run := eeRunDecoyLayout(t, ctx, eeDecoyField, eeDecoyRule)
 	if run.decoyID == "" || run.served != 1 {
 		t.Fatalf("the decoy run was served %d learned rule(s) (id %q), want 1; a run with no decoy cannot show the difference", run.served, run.decoyID)
 	}
@@ -754,6 +787,77 @@ func TestEndToEnd_TheRuleSetSwapSurvivesAGoexitAndAPanic(t *testing.T) {
 	}
 }
 
+// EXTR-23-02, at the altitude the number is read at. The SAME two-branch decoy shape, filed
+// under total instead of vat: the Sub-total amount out-ranks the layout's real total, and the
+// arithmetic referee promotes 5375.00 back because 5000.00 + 375.00 = 5375.00.
+//
+// This spec exists because the decoy above moved OFF total. Re-pointing alone would drop the
+// total's rank-1 coverage silently; here it becomes positive coverage, so a referee later
+// removed or narrowed reds this test rather than nothing.
+func TestRLS_EndToEndTheRefereeRepairsTheRankOneTotalDecoy(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	run := eeRunDecoyLayout(t, ctx, eeRefereeField, eeRefereeRule)
+
+	// The decoy exists, the PRODUCTION reader serves it, and it is keyed to the fingerprint the
+	// job stored. Without all three the repair below is a run that was never degraded.
+	if run.decoyID == "" {
+		t.Fatal("the referee decoy wrote no anchor rule; this run is a baseline by accident")
+	}
+	if run.served != 1 || !slices.Equal(run.servedFields, []string{eeRefereeField}) {
+		t.Fatalf("AnchorRulesFor served %d rule(s) %v, want exactly 1 for %q", run.served, run.servedFields, eeRefereeField)
+	}
+	if run.fingerprint != run.wantFP {
+		t.Fatalf("the job stored layout_fingerprint %q and the decoy was seeded under %q; a mis-keyed seed degrades to no decoy at all", run.fingerprint, run.wantFP)
+	}
+	if run.invoice == nil {
+		t.Fatal("the referee-decoy run quarantined; the reads below would be over nothing")
+	}
+
+	// The addends the referee reasons from, read off the invoices row rather than assumed.
+	if got := run.invoice["subtotal"]; got != eeRefereeOutranked {
+		t.Fatalf("the invoices row holds subtotal = %q, want %q; the identity the referee needs is not on this page", got, eeRefereeOutranked)
+	}
+	if got := run.invoice["vat"]; got != eeDecoyRank1 {
+		t.Fatalf("the invoices row holds vat = %q, want %q; the identity the referee needs is not on this page", got, eeDecoyRank1)
+	}
+
+	// The repair, by row shape and by value: one row, at rank 0, holding the real total with no
+	// reason at all. ReasonNone binds as SQL NULL (store.go writeFieldResultRowTx).
+	totals := eeDecoyFieldRows(run, eeRefereeField)
+	if len(totals) == 0 {
+		t.Fatalf("the referee-decoy run wrote no %q row at all; every assertion below reads a hole", eeRefereeField)
+	}
+	if len(totals) != 1 {
+		t.Errorf("the referee-decoy run wrote %d %q row(s) (%q), want 1 -- the arithmetic settled the choice, so the store keeps no alternative", len(totals), eeRefereeField, eeShowRows(totals))
+	}
+	if totals[0].rank != 0 || totals[0].value == nil || *totals[0].value != eeRefereeRepaired {
+		t.Errorf("the first %q row reads %q, want %q at rank 0 -- the reading the page's own arithmetic corroborates", eeRefereeField, eeShowRows(totals[:1]), eeRefereeRepaired)
+	}
+	if totals[0].reason != nil {
+		t.Errorf("the repaired %q row reads reason_code %q, want NULL -- a corroborated total sends no reviewer anywhere", eeRefereeField, *totals[0].reason)
+	}
+	if got := run.invoice[eeRefereeField]; got != eeRefereeRepaired {
+		t.Errorf("the invoices row holds %s = %q, want the repaired %q", eeRefereeField, got, eeRefereeRepaired)
+	}
+
+	// The discriminator. The same decoy shape on a field the referee is NOT wired for still
+	// out-ranks and still writes two rows, so the single repaired row above is the referee's
+	// work and not a decoy that never bit this layout at all.
+	control := eeRunDecoyLayout(t, ctx, eeDecoyField, eeDecoyRule)
+	if control.invoice == nil {
+		t.Fatal("the vat-decoy control quarantined; the comparison below measures the harness")
+	}
+	vats := eeDecoyFieldRows(control, eeDecoyField)
+	if len(vats) != eeDecoyRows {
+		t.Fatalf("the vat-decoy control wrote %d %q row(s), want %d -- the decoy mechanism is not live on this layout and the single row above proves nothing", len(vats), eeDecoyField, eeDecoyRows)
+	}
+	if got := control.invoice[eeDecoyField]; got != eeDecoyRank0 {
+		t.Errorf("the vat-decoy control holds %s = %q, want the decoy's own %q -- a field outside the referee's wiring is still out-ranked", eeDecoyField, got, eeDecoyRank0)
+	}
+}
+
 // AC-4's negative half, as a run rather than an assertion: a decoy that is served and writes
 // nothing must read exactly like the baseline under both reads.
 func TestRLS_EndToEndADecoyThatWritesNothingIsNotAMovedNumber(t *testing.T) {
@@ -761,7 +865,7 @@ func TestRLS_EndToEndADecoyThatWritesNothingIsNotAMovedNumber(t *testing.T) {
 	ctx := t.Context()
 	expect := eeDecoyExpect(t)
 
-	run := eeRunDecoyLayout(t, ctx, eeInertDecoyRule)
+	run := eeRunDecoyLayout(t, ctx, eeDecoyField, eeInertDecoyRule)
 	if run.decoyID == "" {
 		t.Fatal("the inert decoy wrote no anchor rule; this run is a baseline by accident")
 	}

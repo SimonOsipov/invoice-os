@@ -4,6 +4,7 @@
 package extraction_test
 
 import (
+	"go/ast"
 	"slices"
 	"testing"
 
@@ -153,5 +154,173 @@ func TestReconcile_ADoubtfulTotalSurvivesTheSubtotalAndSupplierPasses(t *testing
 	}
 	if got := rcLineFlags(results); len(got) != 0 {
 		t.Errorf("Reconcile flagged %d line row(s) %+v on arithmetic that balances", len(got), got)
+	}
+}
+
+// --- EXTR-23-02: the arithmetic referee is wired for the header total alone ----------
+
+// rtaReferee is the name the referee ships under. Named once so the AST reader below and its
+// two control sources cannot drift apart.
+const rtaReferee = "corroborateTotal"
+
+// rtaWiring is what reconcile.go's AST says about the referee: how often it is declared, how
+// often it is called, whether that call sits inside Reconcile, and whether the if guarding it
+// names totalField rather than a bare literal a rename would walk past.
+type rtaWiring struct {
+	decls, calls int
+	inReconcile  bool
+	gatedByField bool
+}
+
+func rtaReadWiring(f *ast.File) rtaWiring {
+	var w rtaWiring
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == rtaReferee {
+			w.decls++
+		}
+	}
+
+	var stack []ast.Node // the callback always returns true, so every push has its nil pop
+	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		stack = append(stack, n)
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != rtaReferee {
+			return true
+		}
+		w.calls++
+		for _, anc := range stack {
+			if fn, ok := anc.(*ast.FuncDecl); ok && fn.Name.Name == "Reconcile" {
+				w.inReconcile = true
+			}
+		}
+		for i := len(stack) - 1; i >= 0; i-- {
+			ifs, ok := stack[i].(*ast.IfStmt)
+			if !ok {
+				continue
+			}
+			w.gatedByField = rtaNamesIdent(ifs.Cond, "totalField")
+			break // the NEAREST enclosing if is the gate; an outer one guards something else
+		}
+		return true
+	})
+	return w
+}
+
+// rtaNamesIdent reports whether n names the identifier name anywhere inside it.
+func rtaNamesIdent(n ast.Node, name string) bool {
+	found := false
+	ast.Inspect(n, func(x ast.Node) bool {
+		if id, ok := x.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// The two control sources. Both are written with a different call arity and a lower-case field
+// than reconcile.go's own, so this file never matches a mutation needle aimed at the referee.
+const rtaWiredSrc = `package p
+
+func Reconcile(out []cell) {
+	for i := range out {
+		if out[i].name == totalField {
+			out[i] = corroborateTotal(out[i])
+			break
+		}
+	}
+}
+
+func corroborateTotal(c cell) cell { return c }
+`
+
+const rtaUnwiredSrc = `package p
+
+func someOtherPass(out []cell) {
+	for i := range out {
+		if out[i].name == "total" {
+			out[i] = corroborateTotal(out[i])
+		}
+	}
+}
+
+func corroborateTotal(c cell) cell { return c }
+`
+
+// AC-7. The referee adjudicates the header total and nothing else. Two halves, because either
+// alone is satisfiable by the wrong code: the AST says the referee is called once, inside
+// Reconcile, behind a gate naming totalField; the walk says that on the other nine header
+// fields the same competing pair and the same decided addends change nothing at all.
+func TestReconcile_TheRefereeIsWiredForTotalAlone(t *testing.T) {
+	got := rtaReadWiring(rcParse(t, "reconcile.go", nil))
+	if got.decls != 1 {
+		t.Fatalf("reconcile.go declares %s %d time(s), want 1; the wiring below was read over nothing", rtaReferee, got.decls)
+	}
+	if got.calls != 1 {
+		t.Errorf("reconcile.go calls %s at %d site(s), want 1 -- a second call site adjudicates a second field with no acceptance criterion of its own", rtaReferee, got.calls)
+	}
+	if !got.inReconcile {
+		t.Errorf("no call to %s sits inside Reconcile; a referee the decision stage never runs decides nothing", rtaReferee)
+	}
+	if !got.gatedByField {
+		t.Errorf("the if guarding %s does not name totalField; a bare literal is what lets the one wired field drift without a red", rtaReferee)
+	}
+
+	// Needle and control. A reader that cannot report the wiring PRESENT, or cannot report it
+	// ABSENT, reads exactly like a reader that never fired.
+	if w := rtaReadWiring(rcParse(t, "needle.go", rtaWiredSrc)); w.decls != 1 || w.calls != 1 || !w.inReconcile || !w.gatedByField {
+		t.Errorf("the reader reads %+v over a source wired exactly as required; it cannot report the wiring present", w)
+	}
+	if w := rtaReadWiring(rcParse(t, "control.go", rtaUnwiredSrc)); w.calls != 1 || w.inReconcile || w.gatedByField {
+		t.Errorf("the reader reads %+v over a source calling the referee outside Reconcile behind a literal; it cannot report the wiring absent", w)
+	}
+
+	// The behavioural half: the same competing pair on every header field in turn, with both
+	// addends decided except where the field under test IS the addend.
+	if len(extraction.HeaderFields) != 10 {
+		t.Fatalf("HeaderFields names %d field(s), want 10; the partition below was measured over a different vocabulary", len(extraction.HeaderFields))
+	}
+	var corroborated, untouched []string
+	for _, field := range extraction.HeaderFields {
+		var cands []extraction.Candidate
+		if slices.Contains(rdqScope, field) {
+			n, f := rcDoubtPair(field, rtNear, rtFar, extraction.TierGeneric)
+			cands = append(cands, f, n)
+		} else {
+			// Outside the doubt's scope only equal standing competes (D-14): same Tier AND same
+			// Distance. compareCandidates then heads on the lower value, rtNear.
+			cands = append(cands,
+				rcCandAt(field, rtFar, extraction.TierGeneric, 0.03),
+				rcCandAt(field, rtNear, extraction.TierGeneric, 0.03))
+		}
+		if field != "subtotal" {
+			cands = append(cands, rcCandidate("subtotal", rtSub))
+		}
+		if field != "vat" {
+			cands = append(cands, rcCandidate("vat", rtVAT))
+		}
+
+		res := rcDecide(t, field, cands...)
+		switch {
+		case *res.Value == rtFar && res.Reason == extraction.ReasonNone && len(res.Alternatives) == 0:
+			corroborated = append(corroborated, field)
+		case *res.Value == rtNear && res.Reason == extraction.ReasonAmbiguous && slices.Equal(valuesOf(res.Alternatives), []string{rtFar}):
+			untouched = append(untouched, field)
+		default:
+			t.Errorf("%s reads %q / %q offering %q; want either %q decided with no alternative, or %q still doubtful offering [%q]", field, *res.Value, res.Reason, valuesOf(res.Alternatives), rtFar, rtNear, rtFar)
+		}
+	}
+	if !slices.Equal(corroborated, []string{"total"}) {
+		t.Errorf("the arithmetic settled %q, want exactly [total] -- a referee wired for a second field decides a number no acceptance criterion covers", corroborated)
+	}
+	if want := len(extraction.HeaderFields) - 1; len(untouched) != want {
+		t.Errorf("%d of %d header field(s) came back untouched (%q), want %d; the [total] above is otherwise what a referee that ran on everything also produces", len(untouched), len(extraction.HeaderFields), untouched, want)
 	}
 }

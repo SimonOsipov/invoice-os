@@ -130,6 +130,10 @@ func TestPartyHeading_ReadsThroughPunctuationCaseAndSpacing(t *testing.T) {
 		{"(Buyer)", PartyBuyer},
 		{"buyer:", PartyBuyer},
 		{"Sold  To", PartyBuyer},
+		// The delivery/billing phrases head the buyer's block too, and no other spec fails here
+		// if one of them stops doing so.
+		{"Invoice to", PartyBuyer},
+		{"Deliver to", PartyBuyer},
 		{"SUPPLIER", PartySupplier},
 		{"Vendor / Seller", PartySupplier},
 		{"\tSupplier\n", PartySupplier},

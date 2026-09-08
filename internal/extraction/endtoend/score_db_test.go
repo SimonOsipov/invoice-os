@@ -365,9 +365,10 @@ func TestRLS_EndToEndAQuarantinedLayoutScoresZeroNotAbsent(t *testing.T) {
 }
 
 // eeScannedFieldFloor is how many of the seven non-invoice_number written fields the image-only
-// layout resolves to a rank-0 value, measured 2026-09-07 off its committed golden. A floor: the
-// point is that the read succeeded, not that it succeeded on exactly these six.
-const eeScannedFieldFloor = 6
+// layout resolves to a rank-0 value, re-measured 2026-09-08 off its committed golden: all seven,
+// since each party's TIN binds to the heading that owns it. A floor -- the point is that the read
+// succeeded.
+const eeScannedFieldFloor = 7
 
 // AC-3. The image-only arrangement reaches no invoices row and costs a full 0/8.
 func TestRLS_EndToEndTheScannedLayoutWritesNoInvoice(t *testing.T) {

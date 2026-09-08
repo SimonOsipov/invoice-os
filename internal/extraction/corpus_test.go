@@ -435,9 +435,10 @@ const (
 
 var cldWhitespaceRun = regexp.MustCompile(`\s+`)
 
-// cldSubsections are the claims the "## Learned rules" section owes. Each needle is a phrase,
-// never a bare number: "0.06" is a substring of "0.065", and a bare-number list reports a
-// derivation present when only a summary line survived.
+// cldSubsections are the claims the "## Learned rules" section owes. Needles are phrases, so a
+// summary line that dropped the derivation cannot satisfy one. The two dial values are the
+// exception -- the derivation has no other spelling -- and they are the weakest needles here,
+// because a bare number also matches inside a longer one.
 var cldSubsections = []struct {
 	heading string
 	needles []string

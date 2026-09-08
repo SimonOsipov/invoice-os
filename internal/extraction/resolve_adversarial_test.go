@@ -569,3 +569,39 @@ func TestResolve_RecencyDirectionIsReadNotJustOrderSensitivity(t *testing.T) {
 	}), "buyer_tin")
 	cvOnly(t, reversed, "older", cvSupplierTIN, "buyer_tin with the Supplier TIN rule at slice position 0")
 }
+
+// --- the intervening-label boundary, on a box no page really carries ---------
+//
+// Both arrangements below are the AC-1 page with the middle token's box degenerate. They are
+// the two shapes the boundary's usableBox clause is load-bearing for. The DOCX all-zero box is
+// not a third: X0 = 0 is left of the anchor, so the X0 >= anchor.X1 cut rejects it before
+// usableBox is consulted, and a spec built on it stays green with the clause deleted.
+
+// AC-1. Every float comparison against NaN is false, so without the usableBox clause this
+// token satisfies none of the cuts that would reject it -- and blocks every rightward read on
+// the page, not just this one.
+func TestResolve_ANonFiniteInterveningLabelDoesNotBlock(t *testing.T) {
+	nan := rvbBetween("Total")
+	nan.Region.Y0 = math.NaN()
+
+	got := extraction.Resolve(rvbPage(nan), rvGeneric())
+	rvFloor(t, got, "the [VAT | NaN-boxed Total | 2,687.50] arrangement")
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read past a label whose box carries a NaN coordinate")
+	rvbOnly(t, vats, "vat", "2687.50", "t1.vat.right", 0.290000)
+}
+
+// AC-1. An inverted box has no left edge to be right of. usableBox is what rejects it: X0 alone
+// would place this token inside the corridor.
+func TestResolve_AnInvertedInterveningLabelDoesNotBlock(t *testing.T) {
+	inverted := rvbBetween("Total")
+	inverted.Region.X0, inverted.Region.X1 = 0.38, 0.30
+
+	got := extraction.Resolve(rvbPage(inverted), rvGeneric())
+	rvFloor(t, got, "the [VAT | inverted-x Total | 2,687.50] arrangement")
+
+	vats := rvFor(got, "vat")
+	rvControl(t, vats, "the VAT read past a label whose box runs right to left")
+	rvbOnly(t, vats, "vat", "2687.50", "t1.vat.right", 0.290000)
+}

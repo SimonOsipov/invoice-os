@@ -626,3 +626,100 @@ func TestAnchorLexicon_AnOwningPhraseEarnsItsExemption(t *testing.T) {
 		t.Errorf("%s: %q suppresses %s; the probe passes for a plain label too and proves nothing about an owning phrase", ctl, alMatchRejectCases[ctl].match, got)
 	}
 }
+
+// --- the licence for the boundary having no not-outranked qualifier ----------
+
+// alQualifierBases are label-ish and value-ish token texts. The value-ish half is what makes the
+// hit population below smaller than the grid.
+var alQualifierBases = []string{
+	"VAT", "TAX", "V.A.T.", "Total", "Grand Total", "Sub-total", "Subtotal", "Net Amount",
+	"Goods Value", "Amount Due", "Balance Due", "Currency", "CCY", "Invoice No", "Invoice Number",
+	"Inv No", "Bill No", "Document No", "Date", "Invoice Date", "Issue Date", "Date of Issue",
+	"Supplier", "Seller", "Vendor", "Buyer", "Customer", "Client", "Bill To", "Sold To",
+	"Invoice To", "Deliver To", "Supplier TIN", "Buyer TIN", "TIN", "T.I.N.", "Tax ID",
+	"Tax Identification Number", "Customer No", "Client Code", "Account Ref", "Vendor Number",
+	"Buyer's Signature", "Supplier Signature", "VAT REG NO", "VAT Registration Number",
+	"TAX REGISTRATION NUMBER", "RC NUMBER", "CAC NO", "TAX INVOICE", "VAT INVOICE",
+	"Honeywell Group", "Adeyemi Trading Limited", "99999999-0101", "2,687.50", "NGN",
+	"2026-08-14", "INV-2103", "::::", "7 AWOLOWO ROAD",
+}
+
+// alQualifierForms decorate each base. Nine of the thirteen put it past position 0, which is
+// where a claim can start at an offset and a wider entry can wrap it.
+var alQualifierForms = []string{
+	"%s", "%s ", " %s", "%s:", "%s: 1,500.00", "1,500.00 %s", "Sub-total %s", "%s / VAT REG NO",
+	"VAT REG NO / %s", "TIN %s", "%s TIN", "PROFORMA %s", "%s INVOICE",
+}
+
+// The floors. Each is a population the implication below needs to be non-vacuous, set well
+// under the measured figure so lexicon churn moves them rather than breaking them:
+// 780 strings, 708 with a hit, 339 carrying an outranked hit, 389 whose surviving hit starts
+// past position 0.
+const (
+	alQualifierStringFloor    = 500
+	alQualifierHitFloor       = 400
+	alQualifierOutrankedFloor = 150
+	alQualifierOffsetFloor    = 150
+)
+
+// anchorOutranked can never empty a token's label set: it needs a STRICTLY wider containing
+// span, and the widest of the at most sixteen leftmost hits has none. So "carries a hit that is
+// not itself outranked" and "carries a hit" are the same predicate, and the rightward boundary
+// ships without the qualifier. Deleting this leaves the missing clause looking like an
+// oversight.
+func TestAnchorLexicon_OutrankingNeverEmptiesATokensLabelSet(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+
+	var grid, hits, outranked, offsets int
+	for _, base := range alQualifierBases {
+		for _, form := range alQualifierForms {
+			text := fmt.Sprintf(form, base)
+			grid++
+
+			var anyHit, survives, survivesPastStart, someOutranked bool
+			for _, m := range anchorLabelMatchers {
+				loc := m.RE.FindStringIndex(text)
+				if loc == nil {
+					continue
+				}
+				anyHit = true
+				if anchorOutranked(text, loc) {
+					someOutranked = true
+					continue
+				}
+				survives = true
+				if loc[0] > 0 {
+					survivesPastStart = true
+				}
+			}
+
+			if anyHit {
+				hits++
+			}
+			if someOutranked {
+				outranked++
+			}
+			if survivesPastStart {
+				offsets++
+			}
+			if anyHit != survives {
+				t.Errorf("%q carries a lexicon hit but every hit is outranked; the boundary's dropped qualifier would have made this token stop blocking a rightward read", text)
+			}
+		}
+	}
+
+	if grid < alQualifierStringFloor {
+		t.Fatalf("the grid is %d string(s), want at least %d", grid, alQualifierStringFloor)
+	}
+	if hits < alQualifierHitFloor {
+		t.Fatalf("%d of %d strings carry a lexicon hit, want at least %d; the implication above is satisfied by a grid nothing matches", hits, grid, alQualifierHitFloor)
+	}
+	if outranked < alQualifierOutrankedFloor {
+		t.Fatalf("%d of %d strings carry a hit that IS outranked, want at least %d; with no suppression anywhere the equivalence above is trivially true", outranked, grid, alQualifierOutrankedFloor)
+	}
+	if offsets < alQualifierOffsetFloor {
+		t.Fatalf("%d of %d strings keep a surviving hit that starts past position 0, want at least %d; an entry anchored at ^ would satisfy the equivalence on position-0 claims alone", offsets, grid, alQualifierOffsetFloor)
+	}
+}

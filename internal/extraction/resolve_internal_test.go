@@ -306,12 +306,12 @@ func rvTopLevelNames(f *ast.File) []string {
 	return out
 }
 
-// rvCalledNames is every function f calls by bare name. Calls only, never every identifier: a
+// rvCalledNames is every function n calls by bare name. Calls only, never every identifier: a
 // struct field key and a local variable are idents too, and either collides with a package-scope
 // name in an unrelated file.
-func rvCalledNames(f *ast.File) []string {
+func rvCalledNames(node ast.Node) []string {
 	var out []string
-	ast.Inspect(f, func(n ast.Node) bool {
+	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -404,6 +404,104 @@ func helper() int { return 1 }
 				t.Errorf("Resolve's path calls %s, declared in %s, which rvPureFiles does not list; the file shares Resolve's fences and nothing holds it to them", decl, name)
 			}
 			break
+		}
+	}
+}
+
+// rvFuncNamed is the top-level function name declares in f, or nil.
+func rvFuncNamed(f *ast.File, name string) *ast.FuncDecl {
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if ok && fd.Recv == nil && fd.Name.Name == name {
+			return fd
+		}
+	}
+	return nil
+}
+
+// rvIdentsIn is every identifier written inside node. Deliberately wider than rvCalledNames:
+// the question below is whether a function READS the lexicon at all, and a range statement is
+// not a call.
+func rvIdentsIn(node ast.Node) []string {
+	var out []string
+	ast.Inspect(node, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+// AC-1. crossesALabel runs once per candidate PAIR, the innermost loop on the resolution path,
+// so it must evaluate no lexicon pattern: a per-pair text scan measured 187x one Resolve on an
+// 800-token single-band page. Label-ness is precomputed once per page instead, beside the party
+// partition -- which is why only Resolve's own callees may read the lexicon.
+func TestResolve_TheBoundaryPredicateScansNoLexicon(t *testing.T) {
+	const lexicon = "anchorLabelMatchers"
+
+	self := rvParse(t, "resolve.go", nil)
+	if len(self.Decls) == 0 {
+		t.Fatal("resolve.go parses to zero declarations; every scan below would report clean over nothing")
+	}
+
+	// The control: the scan must see the reference this very file already carries.
+	if outranked := rvFuncNamed(self, "anchorOutranked"); outranked == nil || !slices.Contains(rvIdentsIn(outranked), lexicon) {
+		t.Fatalf("resolve.go's anchorOutranked does not read %s by this scan; the clean results below prove nothing", lexicon)
+	}
+
+	// The needle and its near-miss, so an all-clear is not what a scan that reached nothing
+	// also reports.
+	const needle = `package p
+
+func crossesALabel() bool {
+	for _, m := range anchorLabelMatchers {
+		_ = m
+	}
+	return false
+}
+`
+	const control = `package p
+
+func crossesALabel(labels []bool) bool {
+	return labels[0]
+}
+`
+	needleFn, controlFn := rvFuncNamed(rvParse(t, "needle.go", needle), "crossesALabel"), rvFuncNamed(rvParse(t, "control.go", control), "crossesALabel")
+	if needleFn == nil || controlFn == nil {
+		t.Fatal("rvFuncNamed missed crossesALabel in a source that declares it; the scan cannot find the real one either")
+	}
+	if !slices.Contains(rvIdentsIn(needleFn), lexicon) {
+		t.Fatalf("the needle's crossesALabel ranges %s and the scan did not report it; the all-clear below proves nothing", lexicon)
+	}
+	if slices.Contains(rvIdentsIn(controlFn), lexicon) {
+		t.Errorf("the control's crossesALabel reads a precomputed slice and the scan called it a %s read; the scan is not specific", lexicon)
+	}
+
+	crosses := rvFuncNamed(self, "crossesALabel")
+	if crosses == nil {
+		t.Fatal("resolve.go declares no crossesALabel; the rightward boundary has no home and the per-pair cost this spec bounds is unmeasurable")
+	}
+	for _, banned := range []string{lexicon, "anchorOutranked"} {
+		if slices.Contains(rvIdentsIn(crosses), banned) {
+			t.Errorf("crossesALabel reads %s; it runs once per candidate pair and a lexicon scan there is cubic in a dense row", banned)
+		}
+	}
+
+	// The general form: anchorOutranked is the one per-token exception, and everything else
+	// touching the lexicon must be called from Resolve's own body -- which is once per page.
+	resolve := rvFuncNamed(self, "Resolve")
+	if resolve == nil {
+		t.Fatal("resolve.go declares no Resolve; the per-page allowance below is derived from nothing")
+	}
+	allowed := append([]string{"anchorOutranked"}, rvCalledNames(resolve)...)
+	for _, d := range self.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil || !slices.Contains(rvIdentsIn(fd), lexicon) {
+			continue
+		}
+		if !slices.Contains(allowed, fd.Name.Name) {
+			t.Errorf("%s reads %s and Resolve does not call it; a lexicon scan reachable only from inside the token or pair loops is per-anchor or per-pair work, not per-page", fd.Name.Name, lexicon)
 		}
 	}
 }

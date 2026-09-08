@@ -239,11 +239,13 @@ page must be read against **its own** label array, which no single-page arrangem
 ## Doubt on a header field
 
 A value supported only by an **uncorroborated adjacent match** presents as doubtful rather than
-decided, for the three fields EXTR-22 owns — `buyer_tin`, `buyer_name` and `vat`, declared in
-`doubtfulFields` in `reconcile.go`. *Adjacent* means the value was read `right` of or `below` its
-anchor rather than out of the anchor's own token; *uncorroborated* means a second, different value
-stands at the same tier and the same distance behind it. Such a cell reads `ReasonAmbiguous`,
-carries the competitor as an alternative, and **keeps its own value**.
+decided, for four fields declared in `doubtfulFields` in `reconcile.go` — `buyer_tin`,
+`buyer_name` and `vat`, which EXTR-22 owns, and `total`, which EXTR-23 added. *Adjacent* means the
+value was read `right` of or `below` its anchor rather than out of the anchor's own token;
+*uncorroborated* means such a head at the generic tier, and on these four fields it competes with
+**every** reading of its field rather than only the equal-standing ones (D-4). A head that so meets
+a second, distinct value reads `ReasonAmbiguous`, carries the competitor as an alternative, and
+**keeps its own value**.
 
 The scope list is pinned in both directions. Removing a member is caught by that member's own
 oracle, and **adding** one is caught by nothing unless the partition is pinned over the whole
@@ -252,7 +254,8 @@ suite. A ten-field behavioural partition and an order-blind source-level set pin
 are needed.
 
 Four cells on the shipped corpus read as doubtful, all `buyer_name`, and every one of the four
-values is unchanged from EXTR-21's baseline:
+values is unchanged from EXTR-21's baseline. Widening the scope to `total` moved none of them — no
+shipped layout reaches a second distinct adjacent generic reading of `total`:
 
 | Layout | Value, unchanged | The alternative offered |
 |---|---|---|

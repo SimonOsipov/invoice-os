@@ -15,9 +15,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// dtInScope is the doubt's scope list, in the order dtByLayout stores its values. Every field
-// outside it stays under D-4.
-var dtInScope = [3]string{"buyer_tin", "buyer_name", "vat"}
+// dtColumnFields is the three doubt-scope fields dtByLayout stores a column for, in that order.
+// It is not the whole scope: EXTR-23 added total, which no shipped layout reads twice.
+var dtColumnFields = [3]string{"buyer_tin", "buyer_name", "vat"}
 
 // dtBelowSuffix and dtRightSuffix name the two beside-the-label relations by rule id.
 const (
@@ -54,7 +54,7 @@ const (
 	dtPreExistingField  = "issue_date"
 )
 
-// dtLayoutValues is one layout's decided value for each dtInScope field. "" is ReasonMissing.
+// dtLayoutValues is one layout's decided value for each dtColumnFields field. "" is ReasonMissing.
 // The doubt moves a reason and adds an alternative; it can move no value, and this is the
 // walk that says so over every cell in its blast surface.
 type dtLayoutValues struct {
@@ -202,7 +202,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 			got = append(got, dtCell{l.file, r.Name, dtValue(r), dtAltValues(r.Alternatives)})
 		}
 
-		for fi, field := range dtInScope {
+		for fi, field := range dtColumnFields {
 			cells++
 			f := dtResult(t, res, field)
 			if want := dtByLayout[i].values[fi]; dtValue(f) != want {
@@ -238,7 +238,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 	if walked != len(bdByLayout) {
 		t.Fatalf("walked %d of %d layout(s)", walked, len(bdByLayout))
 	}
-	if want := len(bdByLayout) * len(dtInScope); cells != want {
+	if want := len(bdByLayout) * len(dtColumnFields); cells != want {
 		t.Fatalf("read %d in-scope cell(s), want %d", cells, want)
 	}
 
@@ -286,7 +286,7 @@ func TestEndToEnd_TheRCLayoutsCompetingDatesStayDecided(t *testing.T) {
 		t.Errorf("%s reads %s = %q, want %q", layout, field, dtValue(f), "2026-07-08")
 	}
 	if f.Reason != extraction.ReasonNone {
-		t.Errorf("%s reads %s %q, want %q -- the doubt covers %v and nothing else", layout, field, f.Reason, extraction.ReasonNone, dtInScope)
+		t.Errorf("%s reads %s %q, want %q -- issue_date is outside doubtfulFields", layout, field, f.Reason, extraction.ReasonNone)
 	}
 	if len(f.Alternatives) != 0 {
 		t.Errorf("%s offers %q as alternatives for %s, want none", layout, dtAltValues(f.Alternatives), field)

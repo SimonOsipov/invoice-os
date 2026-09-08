@@ -1174,7 +1174,7 @@ func TestReconcile_MissingLinesAndCleanSubtotalAreDistinguishable(t *testing.T) 
 // --- EXTR-22: an uncorroborated adjacent match reads doubtful ------------------------
 //
 // "Uncorroborated" is a head taken from a token BESIDE its label, by a shipped rule, on one of
-// the three fields the doubt covers. The value never moves; only the reason and the
+// the fields the doubt covers. The value never moves; only the reason and the
 // alternatives do.
 
 // rcDecide reconciles cands and returns field's result, failing rather than returning a zero

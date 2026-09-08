@@ -58,7 +58,7 @@ func parseMoney(s *string) (decimal.Decimal, bool) {
 }
 
 // doubtfulFields are the fields whose adjacent reads this pass presents as doubtful.
-var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat"}
+var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat", "total"}
 
 // uncorroborated reports whether head was read from a token beside its label by a shipped rule,
 // on one of the fields above. A learned head is the tenant's own answer for the layout and is

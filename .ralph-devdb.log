@@ -1,0 +1,126 @@
+docker compose up -d --wait
+ Network extr-23_default  Creating
+ Network extr-23_default  Created
+ Volume extr-23_dev_db_data  Creating
+ Volume extr-23_dev_db_data  Created
+ Container extr-23-postgres-1  Creating
+ Container extr-23-postgres-1  Created
+ Container extr-23-postgres-1  Starting
+ Container extr-23-postgres-1  Started
+ Container extr-23-postgres-1  Waiting
+ Container extr-23-postgres-1  Healthy
+# Bootstrap the roles INSIDE the container: its psql is always present, so
+# no host psql client is required. -T disables the TTY so the file pipes to stdin.
+# `-f -` is required (not bare stdin redirection): psql ignores stdin when -c
+# options are also given unless the input is explicitly named as a file via "-".
+docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
+		-c "SELECT set_config('ascomply.migrator_password', 'migrator', false)" \
+		-c "SELECT set_config('ascomply.app_password', 'app', false)" \
+		-c "SELECT set_config('ascomply.reader_password', 'reader', false)" \
+		-f - \
+		< db/bootstrap.sql
+ set_config 
+------------
+ migrator
+(1 row)
+
+ set_config 
+------------
+ app
+(1 row)
+
+ set_config 
+------------
+ reader
+(1 row)
+
+DO
+ALTER ROLE
+ALTER ROLE
+ALTER ROLE
+DO
+GRANT
+GRANT
+REVOKE
+/Applications/Xcode.app/Contents/Developer/usr/bin/make migrate-up DATABASE_MIGRATION_URL="postgres://invoice_migrator:migrator@localhost:5433/invoice_os?sslmode=disable"
+GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=migrations GOOSE_DBSTRING="postgres://invoice_migrator:migrator@localhost:5433/invoice_os?sslmode=disable" go tool goose up
+2026/09/08 14:47:31 EMPTY 20260706153625_init_skeleton.sql (1.17ms)
+2026/09/08 14:47:31 OK   20260707122459_tenants_rls.sql (3.23ms)
+2026/09/08 14:47:31 OK   20260707193000_river_and_idempotency.sql (23.28ms)
+2026/09/08 14:47:31 OK   20260708062657_audit_log.sql (2.52ms)
+2026/09/08 14:47:31 OK   20260709151759_roles.sql (1.19ms)
+2026/09/08 14:47:31 OK   20260709153027_tenants_add_kind.sql (811.38µs)
+2026/09/08 14:47:31 OK   20260709155011_business_entities.sql (2.35ms)
+2026/09/08 14:47:31 OK   20260709160147_memberships.sql (2.01ms)
+2026/09/08 14:47:31 OK   20260709161252_invitations.sql (2.14ms)
+2026/09/08 14:47:31 OK   20260711051711_rule_set_versions.sql (2.82ms)
+2026/09/08 14:47:31 OK   20260711121327_seed_mbs_v1.sql (1.66ms)
+2026/09/08 14:47:31 OK   20260714100953_import_batches.sql (2.94ms)
+2026/09/08 14:47:31 OK   20260714103137_invoices.sql (3.46ms)
+2026/09/08 14:47:31 OK   20260714105151_line_items.sql (2.29ms)
+2026/09/08 14:47:31 OK   20260714111246_invoice_status_history.sql (2.57ms)
+2026/09/08 14:47:31 OK   20260715120000_line_rules.sql (1.24ms)
+2026/09/08 14:47:31 OK   20260716185106_rule_set_v2.sql (1.81ms)
+2026/09/08 14:47:31 OK   20260717120000_rule_immutability_lock.sql (1.83ms)
+2026/09/08 14:47:31 OK   20260717193449_active_seal_invariant.sql (815.83µs)
+2026/09/08 14:47:31 OK   20260718104103_invoices_entity_composite_fk.sql (1.42ms)
+2026/09/08 14:47:31 OK   20260722083015_invoices_fiscal_outcome.sql (1.17ms)
+2026/09/08 14:47:31 OK   20260722085427_submission_jobs.sql (3.06ms)
+2026/09/08 14:47:31 OK   20260722093218_app_exchange.sql (3.28ms)
+2026/09/08 14:47:31 OK   20260722114935_app_exchange_connection_failed.sql (793.54µs)
+2026/09/08 14:47:31 OK   20260722182935_submission_jobs_poll_ref.sql (636.38µs)
+2026/09/08 14:47:31 OK   20260723133200_submission_dead_letter_and_rate_limits.sql (1.93ms)
+2026/09/08 14:47:31 OK   20260724140830_submission_jobs_next_poll_at_index.sql (916.67µs)
+2026/09/08 14:47:31 OK   20260729095611_line_items_delete_grant.sql (561.13µs)
+2026/09/08 14:47:31 OK   20260731090000_rule_set_v3.sql (1.87ms)
+2026/09/08 14:47:31 OK   20260731100000_invoices_kept_as_is.sql (1.01ms)
+2026/09/08 14:47:31 OK   20260731151750_import_batches_filename.sql (602.25µs)
+2026/09/08 14:47:31 OK   20260802163544_documents.sql (4.21ms)
+2026/09/08 14:47:31 OK   20260803095405_invoices_source_rows.sql (1.04ms)
+2026/09/08 14:47:31 OK   20260803104130_audit_log_document_created_idx.sql (703.46µs)
+2026/09/08 14:47:31 OK   20260804210704_demo_portfolio_repair.sql (1.53ms)
+2026/09/08 14:47:31 OK   20260805075045_invoices_failure_kind.sql (647.92µs)
+2026/09/08 14:47:31 OK   20260806131239_rule_set_v4.sql (1.41ms)
+2026/09/08 14:47:31 OK   20260806184800_invoices_kept_as_is_failed.sql (785.5µs)
+2026/09/08 14:47:31 OK   20260808140706_memberships_status_and_identity.sql (879.13µs)
+2026/09/08 14:47:31 OK   20260809074152_workflow_roles.sql (3.4ms)
+2026/09/08 14:47:31 OK   20260809210326_approval_policies.sql (6.37ms)
+2026/09/08 14:47:31 OK   20260809232011_approval_runs.sql (5.42ms)
+2026/09/08 14:47:31 OK   20260810211829_approval_policy_delete.sql (1.09ms)
+2026/09/08 14:47:31 OK   20260811180932_approval_run_steps_notify.sql (605.83µs)
+2026/09/08 14:47:31 OK   20260813045539_approval_runs_invoice_lookup_idx.sql (726.17µs)
+2026/09/08 14:47:31 OK   20260820150810_audit_log_entity_id_and_read_indexes.sql (3.26ms)
+2026/09/08 14:47:31 OK   20260821135423_audit_log_entity_for_submission_failed.sql (882.88µs)
+2026/09/08 14:47:31 OK   20260822080722_audit_log_invoice_id_column_and_index.sql (2.71ms)
+2026/09/08 14:47:31 OK   20260827084025_extraction_jobs.sql (2.68ms)
+2026/09/08 14:47:31 OK   20260827100320_extraction_field_results.sql (2.82ms)
+2026/09/08 14:47:31 OK   20260828114600_extraction_page_images.sql (2.32ms)
+2026/09/08 14:47:31 OK   20260829082535_extraction_anchor_rules.sql (2.14ms)
+2026/09/08 14:47:31 OK   20260829195203_audit_log_entity_for_extraction.sql (714.08µs)
+2026/09/08 14:47:31 OK   20260829211136_extraction_field_results_candidate_rank.sql (907.67µs)
+2026/09/08 14:47:31 OK   20260901075955_extraction_field_corrections.sql (2.88ms)
+2026/09/08 14:47:31 OK   20260902235137_extraction_learned_rule_writer.sql (2.73ms)
+2026/09/08 14:47:31 OK   20260903055829_audit_log_entity_for_anchor_learned.sql (725.46µs)
+2026/09/08 14:47:31 OK   20260904154655_extraction_jobs_failure_kind.sql (655.46µs)
+2026/09/08 14:47:31 OK   20260905173456_extraction_jobs_layout_not_written.sql (806.75µs)
+2026/09/08 14:47:31 OK   20260905211213_extraction_jobs_layout_tokens.sql (654.63µs)
+2026/09/08 14:47:31 goose: successfully migrated database to version: 20260905211213
+# Seed a couple of test tenants (M2-06). Runs as the in-container superuser, which
+# has BYPASSRLS — so the fixture inserts need no tenant context and no app INSERT
+# grant. Idempotent (ON CONFLICT DO NOTHING), so re-running `make dev-db` is safe.
+docker compose exec -T postgres psql -U postgres -d invoice_os -v ON_ERROR_STOP=1 \
+		< db/seed.dev.sql
+INSERT 0 4
+INSERT 0 13
+INSERT 0 14
+INSERT 0 13
+UPDATE 0
+INSERT 0 10
+INSERT 0 1
+INSERT 0 31
+INSERT 0 13
+INSERT 0 50
+INSERT 0 133
+INSERT 0 5
+INSERT 0 21
+Local dev DB ready on localhost:5433 (db invoice_os; app role invoice_app). Seeded tenants: see db/seed.dev.sql.

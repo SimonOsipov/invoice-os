@@ -38,10 +38,10 @@ func TestPartyField_IsTotalOverEveryParty(t *testing.T) {
 	}
 }
 
-// EXTR-22-02 widened buyer_tin with "invoice to" and "deliver to". The shipped suppression spec
-// only exercises "Supplier TIN:" and "Buyer TIN ", so the new phrases had no containment
-// assertion: on an inline party-bearing token the widened entry must claim the strictly wider
-// span and anchorOutranked must drop bare_tin there.
+// buyer_tin carries "invoice to" and "deliver to" as well as the narrow party words. The
+// shipped suppression spec exercises only "Supplier TIN:" and "Buyer TIN ", so those two
+// phrases have no containment assertion there: on an inline party-bearing token the wider
+// entry must claim the strictly wider span and anchorOutranked must drop bare_tin.
 func TestAnchorLexicon_TheWidenedBuyerPhrasesOutrankTheBareTINLabel(t *testing.T) {
 	for _, text := range []string{
 		"Invoice to TIN: 99999999-0402",

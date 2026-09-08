@@ -579,9 +579,8 @@ func fxBuildCorpusTotalsBlock() []byte {
 const fxLearnedTwoParty = "learned_two_party.pdf"
 
 // fxBuildLearnedTwoParty stacks both party blocks (label / name / BARE TIN) in page 1's top
-// half. The bytes are unchanged since EXTR-14; what they mean changed at EXTR-22-02. The page
-// half no longer scopes the sweep, so each bare TIN follows its own heading and Tier-1 alone
-// now decides both supplier_tin and buyer_tin here.
+// half. The page half does not scope the sweep, so each bare TIN follows its own heading and
+// Tier-1 alone decides both supplier_tin and buyer_tin here.
 //
 // The chain the fixture exists for is unaffected and stronger: a pointed correction's learned
 // rule must now BEAT a real generic candidate rather than fill a void

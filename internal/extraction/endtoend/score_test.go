@@ -35,16 +35,16 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the eleven-layout figure, measured 2026-09-07 and pinned. Equality, not a
+// eeCorpusHits is the eleven-layout figure, re-measured 2026-09-08 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 35 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 31 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 53
+	eeCorpusHits  = 57
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
@@ -260,29 +260,22 @@ var eeRealMisses = map[string]string{
 	"corpus_stacked_labels.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_ambiguous_date.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
-	"corpus_two_column.pdf/buyer_tin":    "the bare TIN label matches supplier_tin only; docs/extraction-corpus.md records it as t1aGaps",
-
-	"wild_two_party_bare_tin.pdf/buyer_tin":  "both party blocks end in a bare TIN: token and compareRegions hands the field to the supplier",
-	"wild_two_party_bare_tin.pdf/buyer_name": "the Customer No. fragment wins the name; the invoice row holds \"No.\"",
 
 	"wild_ruled_lines_totals.pdf/total": "the Total label continues on the last data row's baseline, so t1.total.right reaches that row's 1,000.00 and never the printed 8,600.00",
 
 	"wild_rc_due_naira.pdf/currency": "the naira marks the amounts but anchors no currency label, so the invoice row carries none",
 
 	"wild_stacked_borderless.pdf/issue_date": "the value is offset 8pt below its label in a second column, so neither same_token, right nor below binds",
-	"wild_stacked_borderless.pdf/buyer_tin":  "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/buyer_name": "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/currency":   "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/subtotal":   "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/vat":        "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/total":      "the value is offset from its label, and the label carries no colon",
 
-	// Seven cells the raster page carries in ink and OCR reads cleanly, lost together: with no
+	// Six cells the raster page carries in ink and OCR reads cleanly, lost together: with no
 	// invoice number the import quarantines the document and writes no invoices row at all.
 	"wild_scanned_no_number.pdf/issue_date": "the document quarantines for the missing invoice number, so no invoices row carries this value",
-	// Measured: buyer_tin resolves to nothing at all -- both printed TINs bind to supplier_tin
-	// (rank 0 ambiguous, rank 1) -- so this cell misses on its own, quarantine or not.
-	"wild_scanned_no_number.pdf/buyer_tin": "both printed TINs bind to supplier_tin, so buyer_tin resolves to nothing; the quarantine costs it a second time",
+	"wild_scanned_no_number.pdf/buyer_tin":  "the value resolves correctly through the golden; the quarantine is the only thing costing this cell",
 	// Measured: buyer_name resolves to the address line under BILL TO:, not the name, so this
 	// cell misses on its own too.
 	"wild_scanned_no_number.pdf/buyer_name": "buyer_name resolves to the address line under BILL TO: rather than the name; the quarantine costs it a second time",

@@ -345,22 +345,23 @@ var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
 
 // wildPartyNames is the party name each layout reads at rank 0, measured through PDFium before
 // the owning-phrase entries. A field a layout is not listed under read no name and is not
-// compared: wild_two_party_bare_tin.pdf/buyer_name is absent on purpose (the baseline reads the
-// "No." fragment, and replacing it is the point), corpus_totals_block.pdf and
-// wild_stacked_borderless.pdf read no name at all, and wild_scanned_no_number.pdf yields no
-// pdfium token -- its docling golden carries neither owning phrase.
+// compared: wild_two_party_bare_tin.pdf carries no supplier heading and reads no supplier name,
+// corpus_totals_block.pdf and wild_stacked_borderless.pdf read no name at all, and
+// wild_scanned_no_number.pdf yields no pdfium token -- its docling golden carries neither
+// owning phrase.
 var wildPartyNames = map[string]map[string]string{
 	"corpus_inline_labels.pdf":    {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 	"corpus_split_labels.pdf":     {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 	"corpus_stacked_labels.pdf":   {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 	"corpus_two_column.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 	"corpus_ambiguous_date.pdf":   {"supplier_name": "Adeyemi Trading Limited"},
+	"wild_two_party_bare_tin.pdf": {"buyer_name": "Honeywell Group"},
 	"wild_ruled_lines_totals.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 	"wild_rc_due_naira.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 }
 
 const (
-	wildPartyNameCells   = 13
+	wildPartyNameCells   = 14
 	wildPartyNameLayouts = 11
 )
 

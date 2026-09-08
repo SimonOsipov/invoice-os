@@ -122,7 +122,7 @@ var corpusPinned = []struct {
 		fields: []corpusFieldPin{
 			{"invoice_number", rcStr("INV-1004"), extraction.ReasonNone, nil},
 			{"issue_date", rcStr("2026-05-06"), extraction.ReasonNone, nil},
-			// Each party's TIN follows its own heading since EXTR-22-02, so neither reads
+			// Each party's TIN follows its own heading, so neither reads
 			// ambiguous and neither absorbs the other.
 			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
@@ -390,7 +390,7 @@ func TestReconcileCorpus_AmbiguousDateKeepsBothReadings(t *testing.T) {
 // corpusMissingExpect is AC-3's own expectation table: the exact set of ReasonMissing fields
 // per layout. line_items belongs to every row (AC-7); the rest follows which fields each
 // layout's generator omits (docs/extraction-corpus.md). The pipeline itself introduces no
-// omission since EXTR-22-02.
+// omission.
 var corpusMissingExpect = map[string][]string{
 	"corpus_inline_labels.pdf":  {"line_items"},
 	"corpus_split_labels.pdf":   {"line_items"},

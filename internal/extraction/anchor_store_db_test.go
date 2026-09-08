@@ -1350,8 +1350,8 @@ func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	v1Key := extraction.Fingerprint(pages)
 	b1Key := extraction.BoxlessFingerprint(pages)
 	// A bumped prefix, DERIVED from the shipped constant rather than spelled as the next
-	// literal: this spec said "v2:" until EXTR-22-02 shipped that very version and the two keys
-	// collided.
+	// literal: a spelled-out next prefix collides with the real key the moment that version
+	// ships.
 	vNextKey := extraction.FingerprintVersion + "next:" + strings.TrimPrefix(v1Key, extraction.FingerprintVersion+":")
 	bNextKey := extraction.BoxlessFingerprintVersion + "next:" + strings.TrimPrefix(b1Key, extraction.BoxlessFingerprintVersion+":")
 

@@ -17,8 +17,8 @@ import (
 // --- harness ----------------------------------------------------------------
 
 // t1aGaps are the corpusExpect pairs Tier-1 cannot reach. Asserted STILL missing, so closing one
-// is a deliberate diff rather than a silent pass. Empty since EXTR-22-02 bound each party's TIN
-// to its own heading; TestWildLayouts_DoNotEnterTheCorpusRatchets still bounds the declaration.
+// is a deliberate diff rather than a silent pass. Empty: each party's TIN binds to the heading
+// that owns it. TestWildLayouts_DoNotEnterTheCorpusRatchets still bounds the declaration.
 var t1aGaps = []struct{ file, field string }{}
 
 func t1aIsGap(file, field string) bool {
@@ -196,7 +196,7 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	synth := rvFor(extraction.Resolve(t1aSweepVsLabel(), extraction.RuleSet{Tier1: extraction.Tier1Rules}), "supplier_tin")
 	rvFloor(t, synth, "supplier_tin on the sweep-versus-label page")
 
-	// A slice per rule, not one value: the sweep is page-wide since EXTR-22-02 and reaches the
+	// A slice per rule, not one value: the sweep is page-wide and reaches the
 	// labelled row's value token as well as the bare one.
 	byRule := make(map[string][]string, len(synth))
 	for _, c := range synth {
@@ -220,8 +220,8 @@ func TestTier1_TheSweepAndTheLabelPathBothSurviveAndDisagree(t *testing.T) {
 	}
 }
 
-// The supplier pattern's party word was optional before EXTR-22, so before EXTR-16 the supplier
-// label read across the party split and collected the buyer's TIN. Closed by anchor specificity:
+// The supplier pattern's party word was once optional, and the supplier label then read across
+// the party split and collected the buyer's TIN. Closed by anchor specificity:
 // on corpus_split_labels.pdf the buyer's own label claims the wider span of that token.
 func TestTier1_TheLabelPathNoLongerReachesTheOtherPartysTin(t *testing.T) {
 	t1Floor(t)

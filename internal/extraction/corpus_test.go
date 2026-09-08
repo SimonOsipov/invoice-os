@@ -451,7 +451,7 @@ var cldSubsections = []struct {
 			// "fingerprintversion" is a substring of "boxlessfingerprintversion" and so can
 			// never red on its own; arm 3 of TestCorpusDoc_NamesOneInvalidationRuleNotTwo
 			// masks the boxless spelling and is the guard that actually pins it.
-			"v1:", "b1:", "boxlessfingerprintversion", "fingerprintversion",
+			"namespace", "isboxlessfingerprint", "boxlessfingerprintversion", "fingerprintversion",
 			"<label>:<placement>", "band", "only its own",
 		},
 		why: "an operator who bumps FingerprintVersion and expects every stored rule gone is wrong, and a reader who cannot compose a b1: key cannot predict which documents share one",
@@ -470,7 +470,7 @@ var cldSubsections = []struct {
 		heading: "Which correction produces a rule",
 		needles: []string{
 			"typed", "undone", "zero rules", "anchors to nothing", "honest refusal",
-			"boxless", "b1:", "layout_tokens", "learnboxlessrule",
+			"boxless", "isboxlessfingerprint", "layout_tokens", "learnboxlessrule",
 			// What the boxless path derives, and the refusal that is not the no-hit one.
 			"same_token", "ambiguous",
 		},

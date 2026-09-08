@@ -126,8 +126,9 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
 	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
 	{"buyer_tin", `(?i)\b((buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\s*\.?\s*(tin|tax\s*id)|invoice\s*to|deliver\s*to)\b`},
-	// bare_tin is the party-LESS TIN label. It sits after both party entries so anchorOutranked
-	// suppresses it on every party-bearing token
+	// bare_tin is the party-LESS TIN label. On a party-bearing token the party entry claims a
+	// strictly wider span, so anchorOutranked suppresses this one there -- position in the
+	// lexicon is not what does it
 	// (TestAnchorLexicon_ABareTINLabelIsOutrankedByAPartyBearingOne).
 	{"bare_tin", `(?i)\b\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
 	// party_ref and signature are OWNING PHRASES: the whole phrase is the label, so they carry no

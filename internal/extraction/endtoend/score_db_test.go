@@ -436,6 +436,153 @@ func TestRLS_EndToEndTheScannedLayoutStillReadFields(t *testing.T) {
 	}
 }
 
+// eeBaselineHits is every cell EXTR-21 measured as a hit, named one by one. AC-7's oracle: no
+// field that read correctly in that baseline reads differently now. Derived once from EXTR-21's
+// miss set and FROZEN -- never re-derive it from eeAbsentCells/eeRealMisses, because those two
+// move with each improvement and a derived list would ratify a regression the moment the same
+// commit pinned it as a miss.
+var eeBaselineHits = []string{
+	"corpus_ambiguous_date.pdf/invoice_number",
+	"corpus_ambiguous_date.pdf/issue_date",
+	"corpus_ambiguous_date.pdf/total",
+	"corpus_inline_labels.pdf/buyer_name",
+	"corpus_inline_labels.pdf/buyer_tin",
+	"corpus_inline_labels.pdf/currency",
+	"corpus_inline_labels.pdf/invoice_number",
+	"corpus_inline_labels.pdf/issue_date",
+	"corpus_inline_labels.pdf/subtotal",
+	"corpus_inline_labels.pdf/total",
+	"corpus_inline_labels.pdf/vat",
+	"corpus_split_labels.pdf/buyer_name",
+	"corpus_split_labels.pdf/buyer_tin",
+	"corpus_split_labels.pdf/currency",
+	"corpus_split_labels.pdf/invoice_number",
+	"corpus_split_labels.pdf/issue_date",
+	"corpus_split_labels.pdf/subtotal",
+	"corpus_split_labels.pdf/total",
+	"corpus_split_labels.pdf/vat",
+	"corpus_stacked_labels.pdf/buyer_name",
+	"corpus_stacked_labels.pdf/buyer_tin",
+	"corpus_stacked_labels.pdf/invoice_number",
+	"corpus_stacked_labels.pdf/issue_date",
+	"corpus_stacked_labels.pdf/total",
+	"corpus_totals_block.pdf/invoice_number",
+	"corpus_totals_block.pdf/subtotal",
+	"corpus_totals_block.pdf/total",
+	"corpus_totals_block.pdf/vat",
+	"corpus_two_column.pdf/buyer_name",
+	"corpus_two_column.pdf/invoice_number",
+	"corpus_two_column.pdf/issue_date",
+	"corpus_two_column.pdf/total",
+	"wild_rc_due_naira.pdf/buyer_name",
+	"wild_rc_due_naira.pdf/buyer_tin",
+	"wild_rc_due_naira.pdf/invoice_number",
+	"wild_rc_due_naira.pdf/issue_date",
+	"wild_rc_due_naira.pdf/subtotal",
+	"wild_rc_due_naira.pdf/total",
+	"wild_rc_due_naira.pdf/vat",
+	"wild_ruled_lines_totals.pdf/buyer_name",
+	"wild_ruled_lines_totals.pdf/buyer_tin",
+	"wild_ruled_lines_totals.pdf/currency",
+	"wild_ruled_lines_totals.pdf/invoice_number",
+	"wild_ruled_lines_totals.pdf/issue_date",
+	"wild_ruled_lines_totals.pdf/subtotal",
+	"wild_ruled_lines_totals.pdf/vat",
+	"wild_stacked_borderless.pdf/invoice_number",
+	"wild_two_party_bare_tin.pdf/currency",
+	"wild_two_party_bare_tin.pdf/invoice_number",
+	"wild_two_party_bare_tin.pdf/issue_date",
+	"wild_two_party_bare_tin.pdf/subtotal",
+	"wild_two_party_bare_tin.pdf/total",
+	"wild_two_party_bare_tin.pdf/vat",
+}
+
+const eeBaselineHitCount = 53
+
+// AC-7. No field that read correctly in EXTR-21's baseline reads differently now, cell by cell.
+// The rate alone cannot see this: eeCorpusHits holds while one baseline hit breaks and one new
+// cell resolves.
+func TestRLS_EndToEndNoBaselineHitRegresses(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	// Floor 1: the frozen list is the size EXTR-21 measured, and holds no duplicate. A list
+	// silently shrunk to the cells that still pass asserts nothing.
+	if len(eeBaselineHits) != eeBaselineHitCount {
+		t.Fatalf("eeBaselineHits holds %d cell(s), want %d -- the frozen baseline was edited; it comes from EXTR-21's measurement, never from today's miss set", len(eeBaselineHits), eeBaselineHitCount)
+	}
+	seen := map[string]bool{}
+	for _, key := range eeBaselineHits {
+		if seen[key] {
+			t.Fatalf("eeBaselineHits names %s twice; the count above then covers fewer cells than it claims", key)
+		}
+		seen[key] = true
+	}
+
+	// Floor 2: every named cell is a (layout, field) the walk scores. A typo'd key would
+	// otherwise be a cell nobody checks.
+	for _, key := range eeBaselineHits {
+		layout, field, ok := strings.Cut(key, "/")
+		if !ok {
+			t.Fatalf("eeBaselineHits entry %q is not layout/field", key)
+		}
+		known := false
+		for _, want := range expectByLayout {
+			if want.file == layout {
+				known = true
+				break
+			}
+		}
+		if !known {
+			t.Fatalf("eeBaselineHits names layout %s, which the walk does not score", layout)
+		}
+		if !slices.Contains(writtenFields, field) {
+			t.Fatalf("eeBaselineHits names field %s, which the invoices row does not carry", field)
+		}
+	}
+
+	s := eeScoreCorpus(t, ctx)
+	report := eeRenderReport(s)
+
+	// Floor 3: the walk is real. Every comparison below passes over an empty one.
+	if s.total != eeCorpusCells {
+		t.Fatalf("the walk scored %d cell(s), want %d", s.total, eeCorpusCells)
+	}
+	if s.hits == 0 {
+		t.Fatalf("the walk scored 0 hit(s); the comparison below would name every baseline cell:\n%s", report)
+	}
+
+	missed := map[string]bool{}
+	for _, c := range s.missed {
+		missed[c.key()] = true
+	}
+	hit := map[string]bool{}
+	for cell := range s.saw {
+		if !missed[cell.key()] {
+			hit[cell.key()] = true
+		}
+	}
+
+	for _, key := range eeBaselineHits {
+		if !hit[key] {
+			t.Errorf("%s read correctly in EXTR-21's baseline and does not now; this story may only add hits\n%s", key, report)
+		}
+	}
+
+	// The anti-tautology clause. Without it a list that happens to equal today's hit set
+	// satisfies the walk above and ratifies whatever ships. eeCorpusHits - eeBaselineHitCount
+	// is what has been gained since: a story that adds a hit widens the gap, a regression
+	// narrows it.
+	// It is NOT eeBaselineHitCount + eeRealMisses + eeAbsentCells == eeCorpusCells -- that sums
+	// to 84, because the four gained cells are in neither collection.
+	if eeBaselineHitCount > eeCorpusHits {
+		t.Fatalf("the frozen baseline holds %d hit(s) and the corpus is pinned at %d; a pin below the baseline records a regression as the shipped number", eeBaselineHitCount, eeCorpusHits)
+	}
+	if len(eeAbsentCells)+len(eeRealMisses)+s.hits != eeCorpusCells {
+		t.Errorf("%d absent + %d real miss(es) + %d hit(s) = %d, want %d -- the two pinned miss lists no longer partition the walk", len(eeAbsentCells), len(eeRealMisses), s.hits, len(eeAbsentCells)+len(eeRealMisses)+s.hits, eeCorpusCells)
+	}
+}
+
 // AC-2. The published rate, its non-vacuity, and the instruction that a ratchet only goes up.
 //
 // Both clause groups together reduce to s.hits == eeCorpusHits, which is the equality pin in

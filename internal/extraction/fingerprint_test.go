@@ -296,8 +296,8 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 
 // --- EXTR-16-02: the fingerprint may not move (D-3) --------------------------
 
-// fpCorpusPinned is every committed layout's fingerprint, re-measured at EXTR-22-02 with the
-// party-scoped lexicon. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads
+// fpCorpusPinned is every committed layout's fingerprint, measured against the party-scoped
+// lexicon. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads
 // those, so a pattern edit silently invalidates every stored document's layout fingerprint and
 // every rule learned against it. These six are what says such an edit happened; moving them
 // without moving FingerprintVersion is the state this pin exists to forbid.

@@ -195,8 +195,8 @@ func TestPartyOrder_ALongRunInheritsTheHeadingBeforeIt(t *testing.T) {
 	}
 }
 
-// partyOrder is a read. A caller in EXTR-22-02 will hand it the same TokenPage the resolver is
-// still walking, so it must neither edit the page nor carry anything into the next call.
+// partyOrder is a read. Its caller hands it the same TokenPage the resolver is still walking,
+// so it must neither edit the page nor carry anything into the next call.
 func TestPartyOrder_TouchesNoInputAndRemembersNoCall(t *testing.T) {
 	headed := ptPage(1, "Buyer", "Zeta Plc", "99999999-0702")
 	headed.Tokens[1].Region = Region{Page: 1, X0: 0.1, Y0: 0.2, X1: 0.4, Y1: 0.3}

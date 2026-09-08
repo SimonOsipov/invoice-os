@@ -69,7 +69,7 @@ func TestPartyOrder_AssignsEveryTokenToTheHeadingBeforeIt(t *testing.T) {
 }
 
 func TestPartyOrder_TokensBeforeTheFirstHeadingAreUnknown(t *testing.T) {
-	// "Bill To", not "Invoice to": buyer_name does not match "Invoice to" until EXTR-22-02.
+	// headingIdx is "Bill To"'s position in the page below.
 	const headingIdx = 6
 	page := ptPage(1,
 		"INVOICE", "No. INV-001", "Date: 2026-01-05",

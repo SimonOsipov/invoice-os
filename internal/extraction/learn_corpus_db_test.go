@@ -33,8 +33,8 @@ const (
 	lcTwoCol = "corpus_two_column.pdf"
 	lcField  = "buyer_tin"
 
-	// The two bare TIN tokens on learned_two_party.pdf. Since EXTR-22-02 Tier-1 alone reaches
-	// each as its own party's field; the buyer's is what a reviewer points at.
+	// The two bare TIN tokens on learned_two_party.pdf. Tier-1 alone reaches each as its own
+	// party's field; the buyer's is what a reviewer points at.
 	lcBuyerTIN    = "99999999-0702"
 	lcSupplierTIN = "99999999-0701"
 
@@ -65,8 +65,8 @@ var lcTier1Decided = []struct {
 }
 
 // lcTier1Candidates is what Resolve returns over the whole page under Tier1Rules alone.
-// Unmoved by EXTR-22-02: a party-scoped rule reroutes an existing candidate's Field, it mints
-// none.
+// A party-scoped rule reroutes an existing candidate's Field rather than minting one, so this
+// count does not move with the party work.
 const lcTier1Candidates = 9
 
 // --- harness ----------------------------------------------------------------
@@ -335,7 +335,7 @@ func TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLearnedBuyerTIN(t *testi
 	if len(got.rules) != 1 || got.rules[0].ID != rules[0].id {
 		t.Fatalf("AnchorRulesFor returned %d rule(s) for job 2's fingerprint, want the 1 job 1 wrote (%s)", len(got.rules), rules[0].id)
 	}
-	// Two: the learned one and Tier-1's own, which reaches the same value since EXTR-22-02.
+	// Two: the learned one and Tier-1's own, which reaches the same value.
 	// Rank 0 is what says the learned rule fired -- both carry the same Value.
 	if len(got.cands) != 2 {
 		t.Fatalf("job 2 resolved %d %s candidate(s) %v, want exactly 2 -- the learned rule and Tier-1's party-scoped reading",
@@ -451,7 +451,7 @@ func TestRLS_TheLearnedRuleDoesNotLeaveItsTenant(t *testing.T) {
 	if len(gotA.rules) != 1 {
 		t.Fatalf("tenant A holds %d rule(s) for %q, want 1 -- tenant B's zero proves nothing without it", len(gotA.rules), fpA)
 	}
-	// Tier-1 reaches this value too since EXTR-22-02, so tenant A's control is the TIER at
+	// Tier-1 reaches this value too, so tenant A's control is the TIER at
 	// rank 0 -- a Value-only check passes whether the learned rule fired or not.
 	if len(gotA.cands) == 0 {
 		t.Fatalf("tenant A resolved no %s candidate at all; the rank asserted below would hold over nothing", lcField)
@@ -692,9 +692,9 @@ func TestRLS_ALearnedRuleIsNeverLoadedUnderAnotherLayoutsFingerprint(t *testing.
 
 // --- E-12: the two-column regression, asserted rather than avoided --------------------------
 
-// This is a regression this feature CAUSES, and EXTR-22-02 made it strictly MORE visible: the
-// layout now reads buyer_tin correctly before any correction, so a reviewer who points at an
-// already-correct field is what makes it wrong. D-17 says an undo does not un-teach.
+// This is a regression this feature CAUSES: the layout reads buyer_tin correctly before any
+// correction, so a reviewer who points at an already-correct field is what makes it wrong.
+// D-17 says an undo does not un-teach.
 //
 // The mechanism is unchanged and deliberately out of scope: the derived TIN label matches BOTH
 // party blocks, one rule mints two TierLearned candidates at distance 0, and compareRegions

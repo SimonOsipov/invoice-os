@@ -762,8 +762,8 @@ func TestRLS_ExtractWorkerWritesAlternativesAboveRankZeroOnTheTextPath(t *testin
 	rows := wpResults(t, ctx, xid)
 
 	// The premise: without an ambiguous field there is no alternative to find. supplier_name is
-	// the field the word split leaves ambiguous here -- supplier_tin stopped being one when
-	// EXTR-22-02 bound each party's TIN to its own heading.
+	// the field the word split leaves ambiguous here -- supplier_tin is not one, because each
+	// party's TIN binds to the heading that owns it.
 	wpAssertRankZero(t, rows, "supplier_name", stPtr("Supplier:"), stPtr("ambiguous"))
 
 	alts := []wpRow{}

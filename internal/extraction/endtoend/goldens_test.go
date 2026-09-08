@@ -370,9 +370,9 @@ var wildRatchets = []struct {
 // wildTier1Pins are the Tier-1 numbers a fifth corpus layout would move. Regexes, not literals:
 // the const block's alignment is gofmt's, not the pin's.
 var wildTier1Pins = []*regexp.Regexp{
-	regexp.MustCompile(`tier1RecallHits\s*=\s*43\b`),
+	regexp.MustCompile(`tier1RecallHits\s*=\s*44\b`),
 	regexp.MustCompile(`tier1RecallPairs\s*=\s*44\b`),
-	regexp.MustCompile(`tier1DecisionHits\s*=\s*43\b`),
+	regexp.MustCompile(`tier1DecisionHits\s*=\s*44\b`),
 	regexp.MustCompile(`tier1DecisionPairs\s*=\s*44\b`),
 }
 
@@ -471,7 +471,7 @@ func TestWildLayouts_DoNotEnterTheCorpusRatchets(t *testing.T) {
 	accuracy := wildReadFile(t, wildAccuracyFile)
 	for _, re := range wildTier1Pins {
 		if !re.MatchString(accuracy) {
-			t.Errorf("%s no longer carries %s; the Tier-1 corpus must still read 43/44 on both rates", wildAccuracyFile, re)
+			t.Errorf("%s no longer carries %s; the Tier-1 corpus must still read 44/44 on both rates", wildAccuracyFile, re)
 		}
 	}
 }

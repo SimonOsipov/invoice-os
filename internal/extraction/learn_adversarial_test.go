@@ -841,7 +841,7 @@ func TestLearnBoxlessRule_RefusesAnEmptyLabel(t *testing.T) {
 
 	// The lexicon really does match this token starting at the boundary after "x", so the 128
 	// capped bytes are pure whitespace. Without this the refusal could be "nothing matched".
-	// bare_tin is the id that claims a party-less TIN label since EXTR-22-02.
+	// bare_tin is the id that claims a party-less TIN label.
 	texts := lbxLabelTexts(extraction.AnchorObservations(lbxPage([]string{tok})), "bare_tin")
 	if len(texts) != 1 {
 		t.Fatalf("lexicon id %q matched %d time(s) on the fixture (%q), want exactly 1", "bare_tin", len(texts), texts)

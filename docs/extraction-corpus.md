@@ -291,24 +291,25 @@ a pass.
 
 ## Tier-1 recall and the floor
 
-Measured 2026-08-29 on `feature/extr-04-anchor-rules-and-field-resolution`: the shipped Tier-1
-set reaches **43 of 44** of the (layout, field) pairs `corpusExpect` names — **0.9773**. The
-denominator is the pairs the table actually asserts, so a field absent from a row is not counted
-and the ambiguous-date row's two accepted readings are one pair, not two.
+Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: the shipped Tier-1 set reaches
+**44 of 44** of the (layout, field) pairs `corpusExpect` names — **1.0000**. The denominator is
+the pairs the table actually asserts, so a field absent from a row is not counted and the
+ambiguous-date row's two accepted readings are one pair, not two.
 
 That number is **recall**. A pair is a **hit** when the expected value appears **anywhere**
 among that field's candidates; which of them the pipeline goes on to decide is not read here at
 all. It is **not** end-to-end accuracy. EXTR-04 shipped it as the headline accuracy figure and
-it never was that: recall is monotone in the candidate list, so it read 43/44 while every party
-name on every layout decided a label. What the pipeline decides is recorded under **Tier-1
-decision rate** below. The two numbers coincide today; they are still two measures.
+it never was that: recall is monotone in the candidate list, so through the EXTR-04 era it read
+43/44 while every party name on every layout decided a label. What the pipeline decides is
+recorded under **Tier-1 decision rate** below. The two numbers coincide today; they are still
+two measures.
 
 | Layout | Hits | Pairs |
 |---|---|---|
 | `corpus_inline_labels.pdf` | 10 | 10 |
 | `corpus_split_labels.pdf` | 10 | 10 |
 | `corpus_stacked_labels.pdf` | 7 | 7 |
-| `corpus_two_column.pdf` | 6 | 7 |
+| `corpus_two_column.pdf` | 7 | 7 |
 | `corpus_ambiguous_date.pdf` | 5 | 5 |
 | `corpus_totals_block.pdf` | 5 | 5 |
 
@@ -318,17 +319,15 @@ decision rate** below. The two numbers coincide today; they are still two measur
 | `issue_date` | 5 | 5 |
 | `supplier_tin` | 6 | 6 |
 | `supplier_name` | 5 | 5 |
-| `buyer_tin` | 3 | 4 |
+| `buyer_tin` | 4 | 4 |
 | `buyer_name` | 4 | 4 |
 | `currency` | 2 | 2 |
 | `subtotal` | 3 | 3 |
 | `vat` | 3 | 3 |
 | `total` | 6 | 6 |
 
-The single miss is `corpus_two_column.pdf` / `buyer_tin`, the pair `t1aGaps` records: that
-layout's bare `TIN` labels match the `supplier_tin` pattern, whose party word is optional, and
-never `buyer_tin`, whose party word is required. It is a Tier-1 lexicon defect carried forward,
-not a corpus defect — closing it changes `anchorLexicon`, which is an input to `Fingerprint`.
+No pair is missed. Every value `corpusExpect` names is reachable by the shipped set, and
+`t1aGaps` is empty.
 
 ### Moving the floor
 
@@ -379,20 +378,20 @@ put this bound back on the corpus.**
 
 ## Tier-1 decision rate
 
-Measured 2026-08-31 on `feature/extr-16-the-ranking-defect`, over the same 44 pairs the recall
-rate scores: the pipeline **decides** the value `corpusExpect` names on **43 of 44** —
-**0.9773**. It read 30 of 44 — 0.6818 — before EXTR-16, and every one of the 13 pairs it gained
+Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`, over the same 44 pairs the
+recall rate scores: the pipeline **decides** the value `corpusExpect` names on **44 of 44** —
+**1.0000**. It read 30 of 44 — 0.6818 — before EXTR-16, and every one of the 13 pairs it gained
 moved for the same two reasons: a Tier-1 rule no longer anchors on a token another lexicon entry
 matches more widely, and a value one lexicon entry matches whole is no longer a name or an
 invoice number. The layouts that moved are `corpus_inline_labels.pdf`, `corpus_split_labels.pdf`,
 `corpus_stacked_labels.pdf`, `corpus_two_column.pdf`, `corpus_ambiguous_date.pdf` and
-`corpus_totals_block.pdf` — all six. The one remaining miss is the unreachable `t1aGaps` pair,
-the same pair recall misses.
+`corpus_totals_block.pdf` — all six. EXTR-22 took the 44th, `corpus_two_column.pdf` /
+`buyer_tin`, by binding each party's TIN to the heading that owns it.
 
 `internal/extraction/accuracy_test.go` pins it as `tier1DecisionHits` / `tier1DecisionPairs`,
 and `TestTier1Accuracy_DecisionRateOverTheCorpus` re-measures it. Unlike the floor above this is
 a **measurement, not a ratchet**: move the pin to what is measured and say which layouts moved.
-Its mutilation control — dropping every `invoice_number` rule must lower it, 43 to 37 — is what
+Its mutilation control — dropping every `invoice_number` rule must lower it, 44 to 38 — is what
 stops it becoming a second number blind to rank.
 
 The two numbers now agree on this corpus, so neither the shipped rate nor the mutilation cut can
@@ -400,7 +399,7 @@ still tell a decision measure from a candidate-containment one.
 `TestTier1Accuracy_TheDecisionRateIsNotTheRecallRate` carries that job in a **decoy rule set**: a
 `same_token` rule that reads `corpus_totals_block.pdf`'s Sub-total amount token whole and files
 it under `total`. It sits at Distance 0 and out-ranks the layout's real total, which `Resolve`
-still reaches — so recall holds at 43/44 while the decision rate falls to 42/44.
+still reaches — so recall holds at 44/44 while the decision rate falls to 43/44.
 
 **False decisions: 0.** A false decision is a field decided with a value its layout never
 prints. `corpusExpect` names no such field on that layout, so no hit and no miss is scored for
@@ -412,25 +411,25 @@ false-decision row, so a new fabrication is red rather than green.
 
 ## Wired-path decision rate
 
-Measured 2026-09-03 on `feature/extr-17-the-pipeline-runs-end-to-end`, over the same 44 pairs the
+Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`, over the same 44 pairs the
 two rates above score. Driven through `ExtractWorker.Work` — the real document store, the real
 transaction boundaries, the fingerprint hoist, the learned-rule lookup and the rank-0 encoding —
 and scored from the rows read back out of `extraction_field_results` rather than from a
-`Reconcile` return value, the pipeline decides **43 of 44** — **0.9773**. That is the in-process
+`Reconcile` return value, the pipeline decides **44 of 44** — **1.0000**. That is the in-process
 decision rate, unmoved.
 
 `TestRLS_WiredPathRateMatchesTheInProcessDecisionRate` asserts the *equality* rather than pinning
 a second number, so a stage the in-process harness skips fails here instead of being absorbed.
-The single miss is the same `t1aGaps` pair, `corpus_two_column.pdf` / `buyer_tin`, and
 `TestRLS_WiredPathMissesExactlyTheRecordedGaps` compares the missed set to `t1aGaps` by identity
-in both directions: `43 == 43` also holds for a path that misses a *different* pair, so a count
-cannot tell one inherited gap from a new gap plus a new hit.
+in both directions, because a count alone cannot tell one inherited gap from a new gap plus a new
+hit. `t1aGaps` is empty and so is the missed set, so the anti-vacuity floor sits on the
+denominator — the walk must score every pair — and the hits assertion carries the claim.
 
 The corpus runs through a real `DoclingReader` replaying the six committed `corpus_*.docling.json`
 goldens — the reader the deployed worker uses when `EXTRACTOR=docling` — and a second time
-through `PDFiumReader`, the reader the in-process harness reads. Both decide 43 of 44 and miss
-the same pair; `TestRLS_WiredPathReadsTheSameThroughBothReaders` compares the two missed sets by
-identity, not by rate.
+through `PDFiumReader`, the reader the in-process harness reads. Both decide 44 of 44 and miss
+the same, empty set; `TestRLS_WiredPathReadsTheSameThroughBothReaders` compares the two missed
+sets by identity, not by rate.
 
 Two preconditions are asserted rather than assumed. The denominator is `tier1DecisionPairs`, and
 the walk is scoped to `HeaderFields`, so the `line_items` block row every layout writes is not
@@ -456,18 +455,18 @@ measured here", never as coverage.
 scored off the invoice's own `line_items` rows reads 0 while the any-rank
 `line_items[N]` read of `extraction_field_results` reads 4, and the spec asserts they disagree.
 
-**The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 43 of 44, so
+**The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 44 of 44, so
 the shipped number alone cannot tell a decision measure from a candidate-containment one. That is
 the EXTR-16 defect, and `TestRLS_WiredPathRankingDecoyMovesTheRate` is what stops it recurring
 here: a **learned** `AnchorRule`, written through the real rule store for
 `corpus_totals_block.pdf`'s fingerprint, whose label matches both amount tokens on that layout and
 files them under `total`. `TierLearned` out-ranks `TierGeneric`, the two candidates tie at
 Distance 0, and `compareRegions` hands rank 0 to the Sub-total amount above — so the wired rate
-falls to **42 of 44** while the layout's real total, still reached, is stored one rank down.
-Scored at *any* rank the same run reads 43 of 44, and the spec asserts that difference. A
+falls to **43 of 44** while the layout's real total, still reached, is stored one rank down.
+Scored at *any* rank the same run reads 44 of 44, and the spec asserts that difference. A
 single-amount decoy does not discriminate: `decideField` keeps an alternative only at the head's
 tier *and* distance, so a lone `TierLearned` match leaves the real total with no row at all and
-both scorers read 42.
+both scorers read 43.
 
 **This section has no honest oracle, and is recorded as having none.**
 `TestCorpusDoc_RecordsTheWiredPathRate` compares this prose to a Go constant, so it fails when
@@ -478,29 +477,29 @@ a passing test's buffered log, so the report reaches CI only from a step of its 
 its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest` keeps that
 step's `-run` filter from rotting into one that matches nothing.
 
-The remaining miss is a Tier-1 **reach** limit, not a storage or a ranking one. Closing it by
-widening the anchor lexicon needs a `FingerprintVersion` **and** a `BoxlessFingerprintVersion`
-bump, because the lexicon is an input to both layout identities; closing it by another route — a
-pointed correction on a distinguishing label — needs none.
+EXTR-22 closed the last reach limit by widening the anchor lexicon, which is an input to both
+layout identities, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
+together. A reach limit closed by another route — a pointed correction on a distinguishing
+label — needs neither bump.
 
 ## End-to-end field accuracy
 
-Measured 2026-09-07 on `feature/extr-21-a-number-that-moves-when-the-read-is-wrong`: a document
-goes in at the extraction worker and an `invoices` row comes out the other side, and that row
-carries the value the page prints on **53 of 88** cells — **0.6023**. Eleven layouts, eight
-written fields each. This is the first number on this page measured **end to end**: not what
-Tier-1 can reach, not what the pipeline decides, but what a user would find in the database.
+Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: a document goes in at the
+extraction worker and an `invoices` row comes out the other side, and that row carries the value
+the page prints on **57 of 88** cells — **0.6477**. Eleven layouts, eight written fields each.
+This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
+what the pipeline decides, but what a user would find in the database.
 
-The three rates above it are all in the high nineties. This one is not, and the gap is the
-point. Recall (`## Tier-1 recall and the floor`) scores the candidate list; the decision rate
+The three rates above it all read 44 of 44. This one does not, and the gap is the point. Recall
+(`## Tier-1 recall and the floor`) scores the candidate list; the decision rate
 (`## Tier-1 decision rate`) scores rank 0; the wired-path rate (`## Wired-path decision rate`)
 scores `extraction_field_results`. None of them reads the `invoices` row, and none of them scores
-the five arrangements added by EXTR-21 — so all three stayed at 43/44 while eleven observed
-defects sat between the decision and the row.
+the five arrangements added by EXTR-21 — so all three read 44/44 while eleven observed defects
+sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 35 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (22 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -510,17 +509,17 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `corpus_inline_labels.pdf` | 8 | 8 |
 | `corpus_split_labels.pdf` | 8 | 8 |
 | `corpus_stacked_labels.pdf` | 5 | 8 |
-| `corpus_two_column.pdf` | 4 | 8 |
+| `corpus_two_column.pdf` | 5 | 8 |
 | `corpus_ambiguous_date.pdf` | 3 | 8 |
 | `corpus_totals_block.pdf` | 4 | 8 |
-| `wild_two_party_bare_tin.pdf` | 6 | 8 |
+| `wild_two_party_bare_tin.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals.pdf` | 7 | 8 |
 | `wild_rc_due_naira.pdf` | 7 | 8 |
-| `wild_stacked_borderless.pdf` | 1 | 8 |
+| `wild_stacked_borderless.pdf` | 2 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 
 `wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
-so the import quarantines the document and writes no `invoices` row — and seven cells OCR reads
+so the import quarantines the document and writes no `invoices` row — and six cells OCR reads
 cleanly off its committed golden are lost with it. A quarantined layout stays in the denominator;
 dropping it would flatter the rate by the exact amount the defect costs.
 
@@ -530,16 +529,17 @@ dropping it would flatter the rate by the exact amount the defect costs.
 |---|---|---|
 | `invoice_number` | 10 | 11 |
 | `issue_date` | 8 | 11 |
-| `buyer_tin` | 5 | 11 |
-| `buyer_name` | 6 | 11 |
+| `buyer_tin` | 8 | 11 |
+| `buyer_name` | 7 | 11 |
 | `currency` | 4 | 11 |
 | `subtotal` | 6 | 11 |
 | `vat` | 6 | 11 |
 | `total` | 8 | 11 |
 
 `currency` at 4 of 11 is the worst field on the corpus: five layouts print the value inside the
-total or as a naira mark with no label to anchor it. `buyer_tin` at 5 of 11 is the two-party
-defect the tier-1 table already records as `t1aGaps`, now measured on four more arrangements.
+total or as a naira mark with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
+each party's TIN to the heading that owns it, and the three cells left are two layouts that carry
+no buyer block at all and the quarantined page.
 
 ### Moving the figure
 
@@ -593,7 +593,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 22 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live

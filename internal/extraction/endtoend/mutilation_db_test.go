@@ -47,12 +47,12 @@ const (
 	// the cut -- Resolve's candidate list, no database. The gap between it and eeCutScore is what
 	// separates this number from a recall measure.
 	//
-	// Not to be confused with the 37/44 the story cites: that is acMutilatedHits over
+	// Not to be confused with the 38/44 the story cites: that is acMutilatedHits over
 	// corpusExpect's 44 (layout, field) pairs across 10 vocabulary fields
 	// (internal/extraction/accuracy_test.go:52). This suite scores eeCorpusCells cells over the 8 fields
-	// the mapper writes. Different denominator, different table -- pinning 37 here would be a
+	// the mapper writes. Different denominator, different table -- pinning 38 here would be a
 	// false pin.
-	eeCutReach = 44
+	eeCutReach = 47
 )
 
 // The reach decoy. The two-branch alternation is load-bearing, not cosmetic: decideField keeps
@@ -391,7 +391,7 @@ func TestRLS_EndToEndAMutilatedRuleSetTakesTheScoreToZero(t *testing.T) {
 		t.Fatal("the cut reaches 0 cell(s); the gap between reach and the end-to-end score is vacuous, so the zero above proves nothing about the score")
 	}
 	if reach != eeCutReach {
-		t.Errorf("the cut reaches %d / %d value(s) while writing %d invoice(s); pinned at %d -- re-measure and update eeCutReach. The story's 37/44 is acMutilatedHits over corpusExpect's 44 pairs and is NOT this figure",
+		t.Errorf("the cut reaches %d / %d value(s) while writing %d invoice(s); pinned at %d -- re-measure and update eeCutReach. The story's 38/44 is acMutilatedHits over corpusExpect's 44 pairs and is NOT this figure",
 			reach, reachCells, len(expectByLayout)-len(cutScore.quarantined), eeCutReach)
 	}
 

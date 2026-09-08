@@ -4784,8 +4784,8 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
   // `subtotal` is admitted: refuseField locks only invoice_number, supplier_tin and
-  // supplier_name. The rich fixture resolves `total` clean, so `subtotal` -- the field
-  // carrying the flagged disagreement -- is the one with a pill to replace.
+  // supplier_name. On the rich fixture `subtotal` is the header field carrying the flagged
+  // disagreement, so it is the one with a pill to replace.
   await postFieldCorrection(token, jobId as string, 'subtotal', { value: '2222.00', method: 'typed' })
 
   const detail = await openExtractionReview(page)

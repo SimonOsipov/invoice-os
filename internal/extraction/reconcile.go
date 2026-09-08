@@ -37,6 +37,9 @@ type FieldResult struct {
 // printed subtotal is itself rounded.
 const reconcileTolerance = "0.01"
 
+// totalField is the one header field the arithmetic referee below is wired for.
+const totalField = "total"
+
 // exceedsTolerance reports whether diff (already non-negative) is a real disagreement rather
 // than a rounding artifact. Re-parses reconcileTolerance so every comparison shares one source.
 func exceedsTolerance(diff decimal.Decimal) bool {
@@ -58,7 +61,7 @@ func parseMoney(s *string) (decimal.Decimal, bool) {
 }
 
 // doubtfulFields are the fields whose adjacent reads this pass presents as doubtful.
-var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat"}
+var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat", "total"}
 
 // uncorroborated reports whether head was read from a token beside its label by a shipped rule,
 // on one of the fields above. A learned head is the tenant's own answer for the layout and is
@@ -88,7 +91,8 @@ func decideField(cands []Candidate, field string) FieldResult {
 	head := peers[0]
 	// An uncorroborated head competes with every reading of its field, not only the equal-standing
 	// ones: the doubt is about the binding, so a value the same field reached further away is
-	// exactly the competing answer a reviewer has to settle.
+	// exactly the competing answer to settle -- by corroborateTotal's arithmetic on the total,
+	// by a reviewer everywhere else.
 	group := peers
 	if !uncorroborated(head) {
 		group = nil
@@ -201,6 +205,15 @@ func Reconcile(in Input) []FieldResult {
 		}
 	}
 
+	// The arithmetic referee runs after the line-sum check so a subtotal that pass condemned is
+	// not evidence for a total.
+	for i := range out {
+		if out[i].Name == totalField {
+			out[i] = corroborateTotal(out[i], out)
+			break
+		}
+	}
+
 	// Q11's advisory supplier check: does the decided supplier reading match the signed-in
 	// entity. Advisory only -- it writes nothing; store.go overwrites these fields on every
 	// write regardless. Each field is gated independently, and only a ReasonNone field moves.
@@ -264,4 +277,58 @@ func flagIfInconsistent(out []FieldResult, name string, match func(string) bool)
 		}
 		return
 	}
+}
+
+// decidedMoney reads one already-reconciled amount out of the results built so far. Only a
+// DECIDED field is evidence: an ambiguous or flagged addend would corroborate a total with a
+// number nobody trusts. A field absent, undecided or unparseable is "not checked", never zero.
+func decidedMoney(decided []FieldResult, name string) (decimal.Decimal, bool) {
+	for _, cell := range decided {
+		if cell.Name != name {
+			continue
+		}
+		if cell.Reason != ReasonNone {
+			return decimal.Decimal{}, false
+		}
+		return parseMoney(cell.Value)
+	}
+	return decimal.Decimal{}, false
+}
+
+// corroborateTotal picks the one competing total reading that satisfies subtotal + vat = total.
+// Positive evidence only: on every other arm it returns res untouched, so a failed identity
+// moves no reason, no rank and no value. The competing set is res itself -- decideField already
+// put the head in Field and the rest in Alternatives, each carrying its own Region.
+func corroborateTotal(res FieldResult, decided []FieldResult) FieldResult {
+	if len(res.Alternatives) == 0 {
+		return res // nothing competes; decideField already decided this field
+	}
+	sub, haveSub := decidedMoney(decided, "subtotal")
+	if !haveSub {
+		return res
+	}
+	vat, haveVAT := decidedMoney(decided, "vat")
+	if !haveVAT {
+		return res
+	}
+
+	want := sub.Add(vat)
+	readings := append([]Field{res.Field}, res.Alternatives...)
+	var won []Field
+	for _, f := range readings {
+		v, ok := parseMoney(f.Value)
+		if !ok {
+			continue
+		}
+		if !exceedsTolerance(want.Sub(v).Abs()) {
+			won = append(won, f)
+		}
+	}
+	if len(won) != 1 {
+		return res // nothing balanced, or two readings did: arithmetic did not break the tie
+	}
+
+	winner := won[0]
+	value := *winner.Value // copied: the emitted cell never aliases the competing set
+	return FieldResult{Field: Field{Name: res.Name, Value: &value, Region: winner.Region, Reason: ReasonNone}, Alternatives: []Field{}}
 }

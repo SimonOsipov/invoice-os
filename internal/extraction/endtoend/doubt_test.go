@@ -2,6 +2,9 @@
 // ReasonAmbiguous, which adjacent heads earn their ReasonNone, and that no in-scope value
 // moves. No database.
 //
+// The fourth column is EXTR-23's: total joined the doubt scope, and the eleven values below say
+// the widening moved no corpus cell. Its candidate COUNTS live in total_test.go.
+//
 // Every walk here sources each layout the way bdByLayout does -- pdfium for ten, the committed
 // docling golden for the image-only one, which reads zero pdfium tokens and would otherwise
 // contribute an empty answer that agrees with any expectation.
@@ -15,9 +18,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// dtInScope is the doubt's scope list, in the order dtByLayout stores its values. Every field
-// outside it stays under D-4.
-var dtInScope = [3]string{"buyer_tin", "buyer_name", "vat"}
+// dtColumnFields is the whole doubt scope, one dtByLayout column each, in that order. total's
+// column is measured, never idealised: wild_ruled_lines_totals.pdf reads the line amount, and
+// score_test.go's expectByLayout pins the printed 8,600.00 it should read instead. The six
+// corpus_* rows have a twin in another package -- corpusPinned, reconcile_corpus_test.go.
+var dtColumnFields = [4]string{"buyer_tin", "buyer_name", "vat", "total"}
 
 // dtBelowSuffix and dtRightSuffix name the two beside-the-label relations by rule id.
 const (
@@ -54,26 +59,26 @@ const (
 	dtPreExistingField  = "issue_date"
 )
 
-// dtLayoutValues is one layout's decided value for each dtInScope field. "" is ReasonMissing.
+// dtLayoutValues is one layout's decided value for each dtColumnFields field. "" is ReasonMissing.
 // The doubt moves a reason and adds an alternative; it can move no value, and this is the
 // walk that says so over every cell in its blast surface.
 type dtLayoutValues struct {
 	file   string
-	values [3]string
+	values [4]string
 }
 
 var dtByLayout = []dtLayoutValues{
-	{"corpus_inline_labels.pdf", [3]string{"99999999-0102", "Honeywell Group", "75.00"}},
-	{"corpus_split_labels.pdf", [3]string{"99999999-0202", "Honeywell Group", "150.00"}},
-	{"corpus_stacked_labels.pdf", [3]string{"99999999-0302", "Honeywell Group", ""}},
-	{"corpus_two_column.pdf", [3]string{"99999999-0402", "Honeywell Group", ""}},
-	{"corpus_ambiguous_date.pdf", [3]string{"", "", ""}},
-	{"corpus_totals_block.pdf", [3]string{"", "", "375.00"}},
-	{"wild_two_party_bare_tin.pdf", [3]string{"99999999-0802", "Honeywell Group", "90.00"}},
-	{"wild_ruled_lines_totals.pdf", [3]string{"99999999-0902", "Honeywell Group", "600.00"}},
-	{"wild_rc_due_naira.pdf", [3]string{"99999999-1002", "Honeywell Group", "187.50"}},
-	{"wild_stacked_borderless.pdf", [3]string{"99999999-1102", "", ""}},
-	{"wild_scanned_no_number.pdf", [3]string{"99999999-1202", "7 AWOLOWO ROAD, IKOYI", "135.00"}},
+	{"corpus_inline_labels.pdf", [4]string{"99999999-0102", "Honeywell Group", "75.00", "1075.00"}},
+	{"corpus_split_labels.pdf", [4]string{"99999999-0202", "Honeywell Group", "150.00", "2150.00"}},
+	{"corpus_stacked_labels.pdf", [4]string{"99999999-0302", "Honeywell Group", "", "3225.00"}},
+	{"corpus_two_column.pdf", [4]string{"99999999-0402", "Honeywell Group", "", "6450.00"}},
+	{"corpus_ambiguous_date.pdf", [4]string{"", "", "", "4300.00"}},
+	{"corpus_totals_block.pdf", [4]string{"", "", "375.00", "5375.00"}},
+	{"wild_two_party_bare_tin.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
+	{"wild_ruled_lines_totals.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "1000.00"}},
+	{"wild_rc_due_naira.pdf", [4]string{"99999999-1002", "Honeywell Group", "187.50", "2687.50"}},
+	{"wild_stacked_borderless.pdf", [4]string{"99999999-1102", "", "", ""}},
+	{"wild_scanned_no_number.pdf", [4]string{"99999999-1202", "7 AWOLOWO ROAD, IKOYI", "135.00", "1935.00"}},
 }
 
 // dtRun is one layout through Resolve and Reconcile, with the token count that proves it was
@@ -202,7 +207,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 			got = append(got, dtCell{l.file, r.Name, dtValue(r), dtAltValues(r.Alternatives)})
 		}
 
-		for fi, field := range dtInScope {
+		for fi, field := range dtColumnFields {
 			cells++
 			f := dtResult(t, res, field)
 			if want := dtByLayout[i].values[fi]; dtValue(f) != want {
@@ -238,7 +243,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 	if walked != len(bdByLayout) {
 		t.Fatalf("walked %d of %d layout(s)", walked, len(bdByLayout))
 	}
-	if want := len(bdByLayout) * len(dtInScope); cells != want {
+	if want := len(bdByLayout) * len(dtColumnFields); cells != want {
 		t.Fatalf("read %d in-scope cell(s), want %d", cells, want)
 	}
 
@@ -286,7 +291,7 @@ func TestEndToEnd_TheRCLayoutsCompetingDatesStayDecided(t *testing.T) {
 		t.Errorf("%s reads %s = %q, want %q", layout, field, dtValue(f), "2026-07-08")
 	}
 	if f.Reason != extraction.ReasonNone {
-		t.Errorf("%s reads %s %q, want %q -- the doubt covers %v and nothing else", layout, field, f.Reason, extraction.ReasonNone, dtInScope)
+		t.Errorf("%s reads %s %q, want %q -- issue_date is outside doubtfulFields", layout, field, f.Reason, extraction.ReasonNone)
 	}
 	if len(f.Alternatives) != 0 {
 		t.Errorf("%s offers %q as alternatives for %s, want none", layout, dtAltValues(f.Alternatives), field)

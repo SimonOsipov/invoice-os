@@ -291,8 +291,8 @@ func riAltValues(alts []Field) []string {
 }
 
 // The user decided at EXTR-16's critical-fork gate (D-4) that decideField's equal-standing group
-// stays keyed on Tier AND Distance. EXTR-22's doubt reverses that for buyer_tin, buyer_name and
-// vat alone, so this spec now guards the two halves of that scope: supplier_name keeps D-4 with
+// stays keyed on Tier AND Distance. The doubt reverses that for doubtfulFields alone, so this
+// spec guards the two halves of that scope: supplier_name keeps D-4 with
 // an adjacent head, and buyer_name loses it with the same one. A supplier_name failure here is
 // someone widening the doubt past its scope list, not a bug.
 func TestReconcile_TheEqualStandingGroupStillKeysOnTierAndDistance(t *testing.T) {

@@ -1174,7 +1174,7 @@ func TestReconcile_MissingLinesAndCleanSubtotalAreDistinguishable(t *testing.T) 
 // --- EXTR-22: an uncorroborated adjacent match reads doubtful ------------------------
 //
 // "Uncorroborated" is a head taken from a token BESIDE its label, by a shipped rule, on one of
-// the three fields the doubt covers. The value never moves; only the reason and the
+// the fields the doubt covers. The value never moves; only the reason and the
 // alternatives do.
 
 // rcDecide reconciles cands and returns field's result, failing rather than returning a zero
@@ -1305,7 +1305,8 @@ func TestReconcile_TheWideningCoversBuyerTIN(t *testing.T) {
 	rcScopeArms(t, "buyer_tin", "supplier_tin", "99999999-0802", "99999999-0801")
 }
 
-// AC-4. No corpus layout produces a doubtful vat either.
+// AC-4. No corpus layout produces a doubtful vat either. subtotal is the out-of-scope control:
+// arithmetic-adjacent to vat, so it is a fair one, and the doubt does not cover it.
 func TestReconcile_TheWideningCoversVAT(t *testing.T) {
-	rcScopeArms(t, "vat", "total", "90.00", "187.50")
+	rcScopeArms(t, "vat", "subtotal", "90.00", "187.50")
 }

@@ -239,11 +239,13 @@ page must be read against **its own** label array, which no single-page arrangem
 ## Doubt on a header field
 
 A value supported only by an **uncorroborated adjacent match** presents as doubtful rather than
-decided, for the three fields EXTR-22 owns — `buyer_tin`, `buyer_name` and `vat`, declared in
-`doubtfulFields` in `reconcile.go`. *Adjacent* means the value was read `right` of or `below` its
-anchor rather than out of the anchor's own token; *uncorroborated* means a second, different value
-stands at the same tier and the same distance behind it. Such a cell reads `ReasonAmbiguous`,
-carries the competitor as an alternative, and **keeps its own value**.
+decided, for four fields declared in `doubtfulFields` in `reconcile.go` — `buyer_tin`,
+`buyer_name` and `vat`, which EXTR-22 owns, and `total`, which EXTR-23 added. *Adjacent* means the
+value was read `right` of or `below` its anchor rather than out of the anchor's own token;
+*uncorroborated* means such a head at the generic tier, and on these four fields it competes with
+**every** reading of its field rather than only the equal-standing ones (D-14). A head that so meets
+a second, distinct value reads `ReasonAmbiguous`, carries the competitor as an alternative, and
+**keeps its own value**.
 
 The scope list is pinned in both directions. Removing a member is caught by that member's own
 oracle, and **adding** one is caught by nothing unless the partition is pinned over the whole
@@ -252,7 +254,10 @@ suite. A ten-field behavioural partition and an order-blind source-level set pin
 are needed.
 
 Four cells on the shipped corpus read as doubtful, all `buyer_name`, and every one of the four
-values is unchanged from EXTR-21's baseline:
+values is unchanged from EXTR-21's baseline. Widening the scope to `total` moved none of them — no
+shipped layout reaches a second distinct reading of `total` at all under an adjacent generic head.
+Under the widening the head competes with *every* reading of its field, at any tier and any
+distance, so the group it would have to tie with is not the narrow one:
 
 | Layout | Value, unchanged | The alternative offered |
 |---|---|---|
@@ -540,6 +545,35 @@ dropping it would flatter the rate by the exact amount the defect costs.
 total or as a naira mark with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
 each party's TIN to the heading that owns it, and the three cells left are two layouts that carry
 no buyer block at all and the quarantined page.
+
+### What EXTR-23 changed
+
+Nothing on this page, and that is the finding rather than an omission. EXTR-23 ships an arithmetic
+referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
+decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
+removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. The
+headline stays **57 of 88** — 0.6477 — against EXTR-21's frozen baseline of 53 hits. `total` stays
+8 of 11 in the per-field table, no per-layout row moves, and every cell sits where EXTR-21 pinned
+it. **Do not read "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
+
+The referee is **inert on this corpus because no arrangement reaches two competing readings**, not
+because the mechanism cannot reach the defect. Measured across all eleven layouts, `Resolve` emits
+zero or one `total` candidate and never two, so the tie the referee breaks never occurs here.
+
+`wild_ruled_lines_totals.pdf/total` is the cell it was written for, and it stays in `eeRealMisses`.
+The reason that constant carries — the Total label continuing on the last data row's baseline — is
+true but narrower than the geometry. The printed `8,600.00` is not out-ranked; it is **unreachable
+by every shipped relation**. `Total` sits at `x=[0.621190,0.663190] y=[0.448717,0.459808]` and
+`8,600.00` at `x=[0.817739,0.892562] y=[0.524702,0.537566]`, so `right` fails on a y-overlap of
+`-0.064894`, and `below` fails on an x-overlap of `-0.154549` **and** a gap of `0.064894` against
+a `0.06` dial. An overlap is not a distance, so no dial widening reaches that value; finding it
+needs a new candidate *source*, which is EXTR-29's scope and not this story's.
+
+The mechanism is therefore graded by `internal/extraction/endtoend/total_test.go` — the exact
+per-layout candidate count, plus two planted controls that drive the same instrument to a positive
+— and by the unit specs in `reconcile_total_test.go` and `reconcile_total_adversarial_test.go`. It
+is not graded by a moved score, and this subsection is where that is recorded rather than inferred
+from a number that did not change.
 
 ### Moving the figure
 

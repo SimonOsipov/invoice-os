@@ -46,20 +46,24 @@ const cwDocSection = "## Wired-path decision rate"
 
 // The ranking decoy, seeded as a LEARNED rule through the real rule store.
 //
-// The label is the in-process acDecoyLabel widened by one alternation branch, and the widening
-// is load-bearing rather than cosmetic. decideField (reconcile.go:78-82) keeps an alternative
-// only when it shares the head's Tier AND Distance, so a TierLearned decoy at Distance 0 leaves
-// the TierGeneric 5375.00 with no row at all: measured, the narrow decoy writes exactly ONE
-// total row and an any-rank scorer reads the same 43/44 a rank-0 scorer does. Matching both
-// amount tokens puts both candidates at TierLearned Distance 0, they tie, and compareRegions
-// hands rank 0 to the higher token (Sub-total, Y0 0.6861) and rank 1 to the real total
-// (Y0 0.7315). That is what makes an any-rank scorer read 44/44 and fail.
+// The two-branch alternation is load-bearing rather than cosmetic. decideField (reconcile.go)
+// keeps an alternative only when it shares the head's Tier AND Distance, so a TierLearned decoy
+// at Distance 0 matching one amount leaves the TierGeneric reading with no row at all: measured,
+// the narrow decoy writes exactly ONE row and an any-rank scorer reads the same 43/44 a rank-0
+// scorer does. Matching both amount tokens puts both candidates at TierLearned Distance 0, they
+// tie, and compareRegions hands rank 0 to the higher token (Sub-total, Y0 0.6861) and rank 1 to
+// the real VAT. That is what makes an any-rank scorer read 44/44 and fail.
+//
+// The decoy bites VAT rather than the total because EXTR-23-02's arithmetic referee corroborates
+// a competing total against subtotal + vat and would repair this one back to rank 0. VAT is
+// outside that referee's wiring; TestRLS_EndToEndTheRefereeRepairsTheRankOneTotalDecoy is where
+// the total's own rank-1 shape is asserted now.
 const (
 	cwDecoyLayout = "corpus_totals_block.pdf"
-	cwDecoyField  = "total"
-	cwDecoyRule   = `{"label":"^\\s*5,(000|375)\\.00\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
-	cwDecoyRank0  = "5000.00" // the Sub-total amount, filed under total
-	cwDecoyRank1  = "5375.00" // the layout's real total, still reached, now an alternative
+	cwDecoyField  = "vat"
+	cwDecoyRule   = `{"label":"^\\s*(5,000|375)\\.00\\s*$","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`
+	cwDecoyRank0  = "5000.00" // the Sub-total amount, filed under vat
+	cwDecoyRank1  = "375.00"  // the layout's real VAT, still reached, now an alternative
 )
 
 // cwDecoyHits: the decoy takes exactly one pair off the wired rate.
@@ -555,7 +559,7 @@ func TestRLS_WiredPathRankingDecoyMovesTheRate(t *testing.T) {
 		}
 	}
 
-	// The row shape the drop is made of: the real total is still reached and still stored, one
+	// The row shape the drop is made of: the real VAT is still reached and still stored, one
 	// rank down. Without this the drop is indistinguishable from a decoy that destroyed reach.
 	run := decoy.run(t, cwDecoyLayout)
 	var ranks []wpRow
@@ -576,7 +580,7 @@ func TestRLS_WiredPathRankingDecoyMovesTheRate(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("%s / %s carries no rank-1 row holding %q (%v); Resolve still reaches the real total and the store must keep it", cwDecoyLayout, cwDecoyField, cwDecoyRank1, ranks)
+		t.Errorf("%s / %s carries no rank-1 row holding %q (%v); Resolve still reaches the real VAT and the store must keep it", cwDecoyLayout, cwDecoyField, cwDecoyRank1, ranks)
 	}
 
 	// The discriminator. A wired scorer that accepted a match at ANY candidate_rank reads the
@@ -593,7 +597,7 @@ func TestRLS_WiredPathRankingDecoyMovesTheRate(t *testing.T) {
 				anyRank.hits, anyRank.total, decoy.hits, decoy.total)
 		}
 		if anyRank.hits != tier1DecisionHits {
-			t.Errorf("the any-rank walk reads %d/%d, want the shipped %d/%d: the real total is at rank 1, so containment still finds it", anyRank.hits, anyRank.total, tier1DecisionHits, tier1DecisionPairs)
+			t.Errorf("the any-rank walk reads %d/%d, want the shipped %d/%d: the real VAT is at rank 1, so containment still finds it", anyRank.hits, anyRank.total, tier1DecisionHits, tier1DecisionPairs)
 		}
 	})
 }

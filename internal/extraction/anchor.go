@@ -120,7 +120,9 @@ func ParseRule(raw []byte) (Rule, error) {
 // ranged as a map: iteration order is fingerprint input.
 //
 // The patterns overlap on purpose -- "Sub-total" matches both subtotal and total, and both
-// candidates are emitted. Reconciliation arithmetic downstream is the referee, not this table.
+// candidates are emitted. Reconciliation arithmetic downstream is the referee, not this table:
+// corroborateTotal settles competing totals where subtotal and vat both decide AND exactly one
+// reading balances; a reviewer settles the rest.
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},

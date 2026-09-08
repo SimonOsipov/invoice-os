@@ -550,7 +550,8 @@ no buyer block at all and the quarantined page.
 
 Nothing on this page, and that is the finding rather than an omission. EXTR-23 ships an arithmetic
 referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
-decided `subtotal` plus the decided `vat`, that reading is taken and the doubt is removed. The
+decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
+removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. The
 headline stays **57 of 88** — 0.6477 — against EXTR-21's frozen baseline of 53 hits. `total` stays
 8 of 11 in the per-field table, no per-layout row moves, and every cell sits where EXTR-21 pinned
 it. **Do not read "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.

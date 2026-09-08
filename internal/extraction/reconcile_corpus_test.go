@@ -105,7 +105,9 @@ var corpusPinned = []struct {
 			{"supplier_tin", rcStr("99999999-0301"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0302"), extraction.ReasonNone, nil},
-			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
+			// The name heads on a below read beside its label and the block's TIN is a second
+			// reading of the same field, so EXTR-22 offers it rather than hiding it.
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonAmbiguous, []string{"99999999-0302"}},
 			// This layout carries no currency/subtotal/vat token at all (docs/extraction-corpus.md);
 			// missing here is the correct reading, not a defect.
 			{"currency", nil, extraction.ReasonMissing, nil},
@@ -125,7 +127,7 @@ var corpusPinned = []struct {
 			{"supplier_tin", rcStr("99999999-0401"), extraction.ReasonNone, nil},
 			{"supplier_name", rcStr("Adeyemi Trading Limited"), extraction.ReasonNone, nil},
 			{"buyer_tin", rcStr("99999999-0402"), extraction.ReasonNone, nil},
-			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonNone, nil},
+			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonAmbiguous, []string{"TIN: 99999999-0402"}},
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},

@@ -162,9 +162,10 @@ func anchorOutranked(text string, loc []int) bool {
 }
 
 // labelTokens is one bool per token in the page's own order: does this token carry any
-// anchor-lexicon label. Computed once per page, like partyOrder, because crossesALabel runs per
-// candidate pair and a per-pair regex scan is cubic in a dense row (measured: over 130x one
-// Resolve on an 800-token single-band page, against 1.5x for this form).
+// anchor-lexicon label. Computed once per page, like partyOrder: crossesALabel runs per candidate
+// pair, so reading the lexicon inside it costs orders of magnitude more than one whole Resolve on
+// a dense row. The ratio moves with label density and no benchmark is committed, so the shape is
+// held by TestResolve_TheBoundaryPredicateCallsNothingThatReadsTheLexicon, not by a figure here.
 //
 // No not-outranked qualifier: a token's WIDEST lexicon hit can never be strictly contained in a
 // wider one, so "carries a hit not itself outranked" and "carries a hit" are the same predicate

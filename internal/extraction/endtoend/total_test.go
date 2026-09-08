@@ -10,6 +10,9 @@
 // test function. The story's Out-of-Scope "a new candidate SOURCE for total" constrains
 // production rules; a fixture that proves an absence assertion CAN fail is its opposite.
 //
+// AC-5 -- score_test.go and score_db_test.go unmodified -- is checked by hand, not by a spec: CI
+// checks out at fetch-depth 1, so origin/main is absent there and a git-diff test cannot run.
+//
 // Deliberate overlap with TestWildLayouts_TheRuledTableReproducesACompetingTotal
 // (wild_adversarial_test.go): that spec pins the candidate VALUES on one arrangement, this file
 // pins the COUNT across all eleven. Two angles on one fact, kept on purpose.
@@ -198,9 +201,13 @@ func TestEndToEnd_ThePlantedSecondTotalIsSeenByTheCountWalk(t *testing.T) {
 	}
 }
 
-// AC-1's second control, and EXTR-29's ready oracle. The referee is inert on the corpus because
-// no arrangement reaches two total candidates -- not because the mechanism cannot reach the
-// corpus. This is what makes that distinction falsifiable.
+// AC-1's second control, and EXTR-29's ready oracle for the LEARNED-head shape. Both plants are
+// learned rules and TierLearned outranks TierGeneric, so the head here is learned and the tie is
+// D-14 equal standing, never EXTR-23-01's group widening -- that route is covered by
+// TestReconcile_TheBalancingTotalWinsTheTie in reconcile_total_test.go.
+//
+// The referee is inert on the corpus because no arrangement reaches two total candidates -- not
+// because the mechanism cannot reach the corpus. This is what makes that distinction falsifiable.
 //
 // The plant is an ALTERNATION over both competing readings, so neither out-ranks the other and
 // the cell arrives at corroborateTotal genuinely tied. Arm B strips the addends, which is the

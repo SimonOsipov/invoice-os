@@ -553,3 +553,148 @@ func TestResolve_LabelTokensMarksEveryLabelAndNoValue(t *testing.T) {
 		t.Fatalf("the page carries %d label(s) and %d non-label(s); a constant return satisfies a comparison that has only one kind in it", marked, clear)
 	}
 }
+
+// --- the boundary's cost, and the clause the below relation makes inert -------
+
+// rvLexiconReaders is every top-level function in f that reads the lexicon, directly or through
+// another function in f. The transitive closure is the point: a per-pair predicate calling a
+// per-page helper does the same work as inlining the scan, and the identifier it names is the
+// helper's, not the lexicon's.
+func rvLexiconReaders(f *ast.File, lexicon string) []string {
+	direct := map[string]bool{}
+	body := map[string][]string{}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Recv != nil {
+			continue
+		}
+		body[fd.Name.Name] = rvCalledNames(fd)
+		if slices.Contains(rvIdentsIn(fd), lexicon) {
+			direct[fd.Name.Name] = true
+		}
+	}
+	for grew := true; grew; {
+		grew = false
+		for name, calls := range body {
+			if direct[name] {
+				continue
+			}
+			for _, c := range calls {
+				if direct[c] {
+					direct[name], grew = true, true
+					break
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(direct))
+	for name := range direct {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// AC-1. TestResolve_TheBoundaryPredicateScansNoLexicon bans the lexicon's own name inside
+// crossesALabel, which leaves the class open one call deep: crossesALabel calling
+// labelTokens(page) names no banned identifier, grows a power faster than the shipped form, and
+// is green under every behavioural spec in this package. The two implementations are
+// observationally identical by construction, so a source scan is the only oracle there is.
+func TestResolve_TheBoundaryPredicateCallsNothingThatReadsTheLexicon(t *testing.T) {
+	const lexicon = "anchorLabelMatchers"
+
+	self := rvParse(t, "resolve.go", nil)
+	if len(self.Decls) == 0 {
+		t.Fatal("resolve.go parses to zero declarations; the scan below reports clean over nothing")
+	}
+
+	readers := rvLexiconReaders(self, lexicon)
+	// The floor: the closure must hold the two functions that demonstrably read the lexicon, or
+	// an empty set satisfies every membership test below.
+	for _, want := range []string{"anchorOutranked", "labelTokens"} {
+		if !slices.Contains(readers, want) {
+			t.Fatalf("the lexicon closure is %v and does not hold %s; the scan is not finding readers and the all-clear below proves nothing", readers, want)
+		}
+	}
+	// The near-miss: a function reading no lexicon must stay out of the closure.
+	if slices.Contains(readers, "crossesALabel") {
+		t.Errorf("crossesALabel is in the lexicon closure %v; it runs once per candidate pair", readers)
+	}
+
+	crosses := rvFuncNamed(self, "crossesALabel")
+	if crosses == nil {
+		t.Fatal("resolve.go declares no crossesALabel; the per-pair cost this spec bounds is unmeasurable")
+	}
+	for _, called := range rvCalledNames(crosses) {
+		if slices.Contains(readers, called) {
+			t.Errorf("crossesALabel calls %s, which reaches %s; per-page work inside the pair loop is per-pair work", called, lexicon)
+		}
+	}
+}
+
+// rvBelowGrid is a fixed grid of pages at every combination of column and row: an anchor, a
+// label and an amount on the anchor's own band, and a label just above a second amount on a
+// lower band. The first three give the rightward control something to block; the last two are
+// the below pair.
+func rvBelowGrid() []TokenPage {
+	var out []TokenPage
+	xs := []float64{0.02, 0.06, 0.10, 0.14, 0.18, 0.22, 0.30, 0.38, 0.44}
+	ys := []float64{0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70}
+	for _, ax := range xs {
+		for _, ay := range ys {
+			for _, vx := range xs {
+				for _, vy := range ys {
+					if vy <= ay {
+						continue
+					}
+					out = append(out, TokenPage{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+						{Text: "VAT", Region: Region{Page: 1, X0: ax, X1: ax + 0.06, Y0: ay, Y1: ay + 0.02}},
+						{Text: "Total", Region: Region{Page: 1, X0: 0.30, X1: 0.38, Y0: ay, Y1: ay + 0.02}},
+						{Text: "2,500.00", Region: Region{Page: 1, X0: 0.44, X1: 0.57, Y0: ay, Y1: ay + 0.02}},
+						{Text: "Sub-total", Region: Region{Page: 1, X0: 0.24, X1: 0.34, Y0: vy - 0.015, Y1: vy - 0.005}},
+						{Text: "2,687.50", Region: Region{Page: 1, X0: vx, X1: vx + 0.13, Y0: vy, Y1: vy + 0.02}},
+					}})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// AC-3. bounded's rule.Relation.Kind == RelRight conjunct can never change an answer, which is
+// why dropping it survives mutation. relatedTokens admits a below value only when it overlaps
+// the anchor in X, forcing value.X0 < anchor.X1; crossesALabel needs a label at
+// anchor.X1 <= X0 < value.X0, an empty interval. TestResolve_TheBoundaryDoesNotApplyBelow is
+// the separate refusal of a Y-axis twin, which is a different predicate and not this.
+func TestResolve_NoBelowPairCanSatisfyTheRightwardCorridor(t *testing.T) {
+	below := Relation{Kind: RelBelow, MaxDistance: 0.35}
+	right := Relation{Kind: RelRight, MaxDistance: 0.35}
+
+	var belowPairs, rightPairs, rightBlocked int
+	for _, page := range rvBelowGrid() {
+		labels := labelTokens(page)
+		anchor := page.Tokens[0].Region
+		for _, r := range relatedTokens(page, anchor, below) {
+			belowPairs++
+			if crossesALabel(page, labels, anchor, page.Tokens[r.index].Region) {
+				t.Fatalf("a below pair satisfied the rightward corridor: anchor %v value %v; the RelRight conjunct in bounded is load-bearing after all and this spec is the wrong shape", anchor, page.Tokens[r.index].Region)
+			}
+		}
+		for _, r := range relatedTokens(page, anchor, right) {
+			rightPairs++
+			if crossesALabel(page, labels, anchor, page.Tokens[r.index].Region) {
+				rightBlocked++
+			}
+		}
+	}
+
+	// The floors. Without the first the loop above ran over nothing; without the second the
+	// predicate never fires on this grid, and its silence on the below pairs says nothing about
+	// the relation.
+	if belowPairs < 100 {
+		t.Fatalf("the grid admitted %d below pair(s), want at least 100", belowPairs)
+	}
+	if rightBlocked < 20 {
+		t.Fatalf("the grid admitted %d rightward pair(s) and the boundary blocked %d, want at least 20 blocked; a predicate that never fires reports no below crossing either", rightPairs, rightBlocked)
+	}
+}

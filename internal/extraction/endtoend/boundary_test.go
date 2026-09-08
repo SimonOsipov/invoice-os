@@ -9,6 +9,9 @@ package endtoend
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -369,5 +372,62 @@ func TestWildLayouts_TheRuledTableTotalStillTakesTheLineAmount(t *testing.T) {
 	}
 	if corridor == 0 {
 		t.Errorf("no token sits between the %s label and %q; the band test above ran over nothing, so this spec would pass on a layout where the corridor is simply empty", bdRuledAnchor, bdRuledValue)
+	}
+}
+
+// bdFieldCap is maxCandidatesPerField in resolve.go. Unexported, so this is a copy, and
+// bdReadFieldCap keeps the copy honest: a headroom test against a stale cap measures nothing.
+const bdFieldCap = 8
+
+var bdFieldCapRE = regexp.MustCompile(`(?m)^const maxCandidatesPerField = (\d+)$`)
+
+func bdReadFieldCap(t *testing.T) int {
+	t.Helper()
+	src, err := os.ReadFile(filepath.Join("..", "resolve.go"))
+	if err != nil {
+		t.Fatalf("read resolve.go: %v", err)
+	}
+	m := bdFieldCapRE.FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("resolve.go declares no maxCandidatesPerField this scan recognises; bdFieldCap cannot be checked against anything")
+	}
+	n, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatalf("maxCandidatesPerField = %q: %v", m[1], err)
+	}
+	return n
+}
+
+// AC-4. The pinned table watches rightward candidates alone, which is complete only while no
+// field's list is cut: a cut list turns a removed rightward candidate into a promoted below or
+// same-token one, and that movement happens outside the table. The corpus is measured at four
+// candidates in its fullest field. This is the premise, asserted rather than assumed.
+func TestEndToEnd_NoLayoutFillsAFieldsCandidateList(t *testing.T) {
+	if got := bdReadFieldCap(t); got != bdFieldCap {
+		t.Fatalf("resolve.go caps a field at %d candidate(s) and this file assumes %d; the headroom below is measured against the wrong number", got, bdFieldCap)
+	}
+
+	worst, worstAt := 0, ""
+	for _, l := range bdByLayout {
+		pages, tokens := bdPages(t, l)
+		if tokens == 0 {
+			t.Fatalf("%s read 0 token(s); its candidate list is empty for a reason that is not the cap", l.file)
+		}
+		per := map[string]int{}
+		for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+			per[c.Field]++
+			if per[c.Field] > worst {
+				worst, worstAt = per[c.Field], l.file+"/"+c.Field
+			}
+		}
+	}
+
+	// The floor: one candidate per field everywhere means no field could be cut whatever the
+	// cap is, and the headroom below would be measuring nothing.
+	if worst < 2 {
+		t.Fatalf("the fullest field on the corpus carries %d candidate(s); nothing here can approach the cap and this spec watches nothing", worst)
+	}
+	if worst >= bdFieldCap {
+		t.Errorf("%s carries %d candidate(s) against a cap of %d; a rightward removal can now promote a candidate the pinned table does not watch, so AC-4's blast surface is wider than the .right rows", worstAt, worst, bdFieldCap)
 	}
 }

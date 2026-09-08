@@ -605,3 +605,73 @@ func TestResolve_AnInvertedInterveningLabelDoesNotBlock(t *testing.T) {
 	rvControl(t, vats, "the VAT read past a label whose box runs right to left")
 	rvbOnly(t, vats, "vat", "2687.50", "t1.vat.right", 0.290000)
 }
+
+// --- the corridor's two open edges, and the band's shorter span --------------
+
+// AC-1. The corridor is closed at the anchor and open at the value: a label starting exactly on
+// the anchor's right edge is between, one starting exactly on the value's left edge is not.
+// Both arms move a single coordinate by a hundredth, so neither zero is what a Resolve reading
+// nothing off the arrangement also reports.
+func TestResolve_TheCorridorIsClosedAtTheAnchorAndOpenAtTheValue(t *testing.T) {
+	// Closed at the anchor: X0 == anchor.X1 blocks, one hundredth left of it does not, because
+	// a label overlapping the anchor is not past it.
+	touching := rvFor(extraction.Resolve(rvPage(
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("Total", 0.16, 0.24),
+		rvbRow("2,687.50", 0.45, 0.58),
+	), rvGeneric()), "vat")
+	if len(touching) != 0 {
+		t.Errorf("vat with a label starting exactly on the anchor's right edge = [%s], want none", rvbShow(touching))
+	}
+
+	overlapping := rvFor(extraction.Resolve(rvPage(
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("Total", 0.15, 0.24),
+		rvbRow("2,687.50", 0.45, 0.58),
+	), rvGeneric()), "vat")
+	rvControl(t, overlapping, "the VAT read past a label whose box starts one hundredth left of the anchor's right edge")
+	rvbOnly(t, overlapping, "vat, with the label overlapping the anchor", "2687.50", "t1.vat.right", 0.290000)
+
+	// Open at the value: X0 == value.X0 does not block, one hundredth left of it does. Total
+	// carries no amount, so it never becomes the value itself.
+	sharing := rvFor(extraction.Resolve(rvPage(
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("Total", 0.45, 0.53),
+		rvbRow("2,687.50", 0.45, 0.58),
+	), rvGeneric()), "vat")
+	rvControl(t, sharing, "the VAT read past a label starting exactly on the value's left edge")
+	rvbOnly(t, sharing, "vat, with the label sharing the value's left edge", "2687.50", "t1.vat.right", 0.290000)
+
+	nudged := rvFor(extraction.Resolve(rvPage(
+		rvbRow("VAT", 0.10, 0.16),
+		rvbRow("Total", 0.44, 0.52),
+		rvbRow("2,687.50", 0.45, 0.58),
+	), rvGeneric()), "vat")
+	if len(nudged) != 0 {
+		t.Errorf("vat with the same label one hundredth left of the value = [%s], want none; the two arrangements differ by 0.01 on one coordinate", rvbShow(nudged))
+	}
+}
+
+// AC-1. The band test halves the SHORTER of the two heights, mirroring relatedTokens. A short
+// label inside a tall anchor overlaps its own height entirely and blocks; halving the ANCHOR's
+// height instead would let it through.
+func TestResolve_TheBandHalvesTheShorterOfTheTwoHeights(t *testing.T) {
+	page := func(between extraction.Token) []extraction.TokenPage {
+		return rvPage(
+			extraction.Token{Text: "VAT", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.60, X1: 0.16, Y1: 0.80}},
+			between,
+			extraction.Token{Text: "2,687.50", Region: extraction.Region{Page: 1, X0: 0.45, Y0: 0.60, X1: 0.58, Y1: 0.80}},
+		)
+	}
+	short := func(text string) extraction.Token {
+		return extraction.Token{Text: text, Region: extraction.Region{Page: 1, X0: 0.30, Y0: 0.69, X1: 0.38, Y1: 0.71}}
+	}
+
+	inert := rvFor(extraction.Resolve(page(short("::::")), rvGeneric()), "vat")
+	rvControl(t, inert, "the VAT read past a short unclaimed token inside a tall anchor")
+	rvbOnly(t, inert, "vat, with a short unclaimed token between", "2687.50", "t1.vat.right", 0.290000)
+
+	if got := rvFor(extraction.Resolve(page(short("Total")), rvGeneric()), "vat"); len(got) != 0 {
+		t.Errorf("vat with a short LABEL one tenth the anchor's height between = [%s], want none; the two arrangements differ only in the middle token's text, and halving the anchor's own height would keep this read", rvbShow(got))
+	}
+}

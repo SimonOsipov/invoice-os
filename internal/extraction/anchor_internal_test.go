@@ -723,3 +723,82 @@ func TestAnchorLexicon_OutrankingNeverEmptiesATokensLabelSet(t *testing.T) {
 		t.Fatalf("%d of %d strings keep a surviving hit that starts past position 0, want at least %d; an entry anchored at ^ would satisfy the equivalence on position-0 claims alone", offsets, grid, alQualifierOffsetFloor)
 	}
 }
+
+// alJoins glue two bases into one token text. The separators are what a real reader emits
+// between a phrase and the next word.
+var alJoins = []string{"", " ", " / ", ": ", " - ", "  "}
+
+// The floors for the mechanism grid below. Measured: 21 600 strings, 18 984 with a hit, 13 949
+// carrying two or more distinct hits, 7 743 carrying an outranked one. Set well under, so
+// lexicon churn moves them rather than breaking them.
+const (
+	alWidestGridFloor      = 15000
+	alWidestHitFloor       = 12000
+	alWidestMultiFloor     = 8000
+	alWidestOutrankedFloor = 5000
+)
+
+// The MECHANISM behind the dropped qualifier, not just its conclusion. anchorOutranked needs a
+// STRICTLY wider containing span, so the widest of a token's leftmost hits has none and always
+// survives. Asserting that directly is what reds if anchorOutranked is ever loosened to accept
+// an equal span -- the point at which "carries a hit" and "carries a hit not itself outranked"
+// stop being the same predicate and the boundary's missing clause starts to matter.
+func TestAnchorLexicon_TheWidestLexiconHitIsNeverOutranked(t *testing.T) {
+	if len(anchorLabelMatchers) == 0 {
+		t.Fatal("anchorLabelMatchers is empty; every assertion below would run over nothing")
+	}
+
+	var grid, hits, multi, outranked, reported int
+	for _, a := range alQualifierBases {
+		for _, j := range alJoins {
+			for _, b := range alQualifierBases {
+				text := a + j + b
+				grid++
+
+				var widest []int
+				seen := map[string]bool{}
+				someOutranked := false
+				for _, m := range anchorLabelMatchers {
+					loc := m.RE.FindStringIndex(text)
+					if loc == nil {
+						continue
+					}
+					seen[text[loc[0]:loc[1]]] = true
+					if anchorOutranked(text, loc) {
+						someOutranked = true
+					}
+					if widest == nil || loc[1]-loc[0] > widest[1]-widest[0] {
+						widest = loc
+					}
+				}
+				if widest == nil {
+					continue
+				}
+				hits++
+				if len(seen) > 1 {
+					multi++
+				}
+				if someOutranked {
+					outranked++
+				}
+				if anchorOutranked(text, widest) && reported < 5 {
+					reported++
+					t.Errorf("%q: the widest lexicon hit %q is outranked; containment is no longer strict and the boundary's dropped qualifier could change an answer", text, text[widest[0]:widest[1]])
+				}
+			}
+		}
+	}
+
+	if grid < alWidestGridFloor {
+		t.Fatalf("the grid is %d string(s), want at least %d", grid, alWidestGridFloor)
+	}
+	if hits < alWidestHitFloor {
+		t.Fatalf("%d of %d strings carry a hit, want at least %d; the assertion above ran over almost nothing", hits, grid, alWidestHitFloor)
+	}
+	if multi < alWidestMultiFloor {
+		t.Fatalf("%d of %d strings carry two or more distinct hits, want at least %d; with one hit each nothing can contain anything and the claim is trivial", multi, grid, alWidestMultiFloor)
+	}
+	if outranked < alWidestOutrankedFloor {
+		t.Fatalf("%d of %d strings carry a hit that IS outranked, want at least %d; with no suppression anywhere the widest hit surviving says nothing", outranked, grid, alWidestOutrankedFloor)
+	}
+}

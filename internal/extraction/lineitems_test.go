@@ -5,6 +5,7 @@
 package extraction_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -460,5 +461,31 @@ func TestParseLineFieldName_RoundTripsWithLineFieldName(t *testing.T) {
 		if _, _, ok := extraction.ParseLineFieldName(name); ok {
 			t.Errorf("ParseLineFieldName(%q) ok = true, want false", name)
 		}
+	}
+}
+
+// The offline oracle for wild_ruled_lines_totals.pdf: Tables is nil from PDFiumReader, so this
+// replays the committed Docling golden instead. Row 3's rate cell is "500.00 Total" -- reAmount
+// is anchored and rejects it by design, so that row's UnitPrice stays nil.
+func TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount(t *testing.T) {
+	pages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, "wild_ruled_lines_totals.docling.json"))
+
+	got := extraction.LineItems(pages)
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s), want 3", len(got))
+	}
+
+	wantUnitPrice := []string{"1000.00", "500.00", ""}
+	wantLineTotal := []string{"4000.00", "3000.00", "1000.00"}
+	for i, line := range got {
+		if line.Quantity == nil {
+			t.Errorf("line %d Quantity = nil, want a value", i)
+		}
+		if wantUnitPrice[i] == "" {
+			liWantNil(t, line.UnitPrice, "line "+strconv.Itoa(i)+" UnitPrice")
+		} else {
+			liWant(t, line.UnitPrice, wantUnitPrice[i], "line "+strconv.Itoa(i)+" UnitPrice")
+		}
+		liWant(t, line.LineTotal, wantLineTotal[i], "line "+strconv.Itoa(i)+" LineTotal")
 	}
 }

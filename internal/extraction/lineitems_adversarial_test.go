@@ -292,6 +292,22 @@ func TestLineItems_PurityScanUnchanged(t *testing.T) {
 	}
 }
 
+// TestLineItems_ImportsAreExactlyThreeAndDidNotGrow is AC-6's own guard, stricter than the
+// purity allowlist above: an equality check, not a subset check, so it cannot stay green if
+// unicode (permitted by liAllowedImports) is later added to lineitems.go.
+func TestLineItems_ImportsAreExactlyThreeAndDidNotGrow(t *testing.T) {
+	got := liImportPaths(liParse(t, "lineitems.go", nil))
+	if len(got) == 0 {
+		t.Fatal("lineitems.go imports nothing; the equality check below would hold vacuously")
+	}
+	sorted := slices.Clone(got)
+	slices.Sort(sorted)
+	want := []string{"regexp", "strconv", "strings"}
+	if !slices.Equal(sorted, want) {
+		t.Errorf("lineitems.go imports %v, want exactly %v", sorted, want)
+	}
+}
+
 // liParse parses one source. src nil reads the named file; a string is a needle/control.
 func liParse(t *testing.T, name string, src any) *ast.File {
 	t.Helper()

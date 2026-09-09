@@ -441,6 +441,21 @@ describe('linesToPost', () => {
     ])
   })
 
+  // The whole point of the fifth wire role: a row the user edited elsewhere still posts back the
+  // VAT it was read with. Asserting the KEY is present is not enough -- a body that always sent
+  // line_tax:null would carry the key and still erase the stored value on the replace-all.
+  it('posts the read line_tax alongside the cells the user did edit', () => {
+    const posted = linesToPost([
+      mkRow(1, { description: 'Widget (corrected)', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: '75.00' }),
+      mkRow(2, { description: 'Gadget', quantity: '1', unit_price: '5.00', line_total: '5.00' }),
+    ])
+
+    expect(posted.length, 'both rows were expected on the wire').toBe(2)
+    expect(posted[0].line_tax, 'the VAT the user never touched was dropped on the way to the server').toBe('75.00')
+    expect(posted[0].description, 'the edited cell must post its new value').toBe('Widget (corrected)')
+    expect(posted[1].line_tax, 'a row that carried no VAT must post null, not its neighbour value').toBeNull()
+  })
+
   it('keeps a row whose only non-null cell is line_tax', () => {
     const rows: LineRow[] = [
       {
@@ -780,5 +795,35 @@ describe('linesToPost / lineSetChanged (adversarial)', () => {
     const wire = [mkRow(1, { quantity: '1' }), mkRow(2, { quantity: '2' })]
     const draft = [wire[0], { ...wire[1], cells: { ...wire[1].cells, quantity: { ...wire[1].cells.quantity, value: '9' } } }]
     expect(lineSetChanged(wire, draft), 'a short-circuit that only checks the first row would miss this').toBe(true)
+  })
+
+  // '' and whitespace are the user clearing the cell; the server stores NULL for either, so both
+  // must post as null rather than as a string the numeric cast would refuse.
+  it('a blank or whitespace-only line_tax posts as null, not as a string', () => {
+    const cleared = linesToPost([mkRow(1, { description: 'W', line_tax: '' })])
+    expect(cleared.length, 'the row was dropped, so the claim below is vacuous').toBe(1)
+    expect(cleared[0].line_tax, "'' must post as null -- the column takes a numeric or nothing").toBeNull()
+    expect(cleared[0].description, 'the rest of the row must survive the cleared VAT').toBe('W')
+
+    const spaces = linesToPost([mkRow(1, { description: 'W', line_tax: '   ' })])
+    expect(spaces.length, 'the row was dropped, so the claim below is vacuous').toBe(1)
+    expect(spaces[0].line_tax, 'whitespace-only must canonicalize to null exactly as the four rendered cells do').toBeNull()
+  })
+
+  // Clearing a VAT is an edit like any other: Save must not go grey on it, or a deliberate
+  // correction cannot be submitted at all.
+  it('clearing a line_tax is detected as a change', () => {
+    const wire = [mkRow(1, { description: 'W', line_tax: '75.00' })]
+    const draft = [mkRow(1, { description: 'W', line_tax: '' })]
+    expect(lineSetChanged(wire, draft), 'clearing the VAT left Save disabled').toBe(true)
+  })
+
+  // Reordering two rows that differ ONLY in line_tax: a comparison that ignored the fifth role,
+  // or one that compared sets rather than positions, reads these as unchanged.
+  it('swapping two rows that differ only in line_tax is a change', () => {
+    const a = mkRow(1, { description: 'W', line_tax: '10.00' })
+    const b = mkRow(2, { description: 'W', line_tax: '75.00' })
+    expect(lineSetChanged([a, b], [a, b]), 'control: the same order must read as unchanged').toBe(false)
+    expect(lineSetChanged([a, b], [b, a]), 'the swap was not detected -- line_tax is positional like every other cell').toBe(true)
   })
 })

@@ -72,7 +72,7 @@ func LineFieldName(index int, role string) string {
 
 // ParseLineFieldName is LineFieldName's inverse. It mirrors the SPA's own regex
 // (frontend/app/src/lib/lineItems.ts LINE_FIELD_RE): a 1-based index with no leading zero and
-// one of the four roles. The block row "line_items" is not a cell name and does not parse.
+// one of the five roles. The block row "line_items" is not a cell name and does not parse.
 func ParseLineFieldName(name string) (index int, role string, ok bool) {
 	rest, found := strings.CutPrefix(name, lineFieldPrefix)
 	if !found {

@@ -524,9 +524,11 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
 
     // The typed client, driven for the first time. A DIFFERENT length, so a route that appended
-    // rather than replaced cannot produce the block value asserted below.
+    // rather than replaced cannot produce the block value asserted below. line_tax carries a REAL
+    // value here while `first` above sent nulls: the echo and the canonical blob below are then
+    // the only place a per-line VAT is proved to survive the deployed wire, not just a unit seam.
     const replaced: LineItemInput[] = [
-      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00', line_tax: null },
+      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00', line_tax: '1.50' },
     ]
     const echoed = await postLineItems(token, job.id, { lines: replaced })
     expect(echoed.lines, 'EXTR13-API-03: the second 201 echoes the second set, cell for cell').toEqual(replaced)

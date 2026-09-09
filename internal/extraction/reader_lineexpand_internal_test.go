@@ -16,9 +16,10 @@ import (
 
 func lxeStr(s string) *string { return &s }
 
-// lxeCarriedRoles are the four roles LineItemInput.cell knows. LineRoles has grown to five
-// (line_tax), but expandLineCorrection can only expand what LineItemInput carries, so a widened
-// LineRoles must not widen what these fixtures expect back -- that is EXTR-24-05's.
+// lxeCarriedRoles are the roles these fixtures state a value for. LineItemInput.cell now knows
+// all five, but expandLineCorrection emits a row only for a NON-NIL cell, so a fixture that
+// leaves line_tax nil still expands to four rows per line. The fifth row is its own case:
+// TestExtractionMerge_LineExpansionCarriesLineTaxWhenTheCorrectionStatesOne.
 var lxeCarriedRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal}
 
 // lxeBlockRead is the "line_items" block row Reconcile emits ahead of the cells -- a reading
@@ -522,5 +523,58 @@ func TestExtractionMerge_MiddleRowRemovalKeepsTheRemainingValues(t *testing.T) {
 	}
 	if f, ok := lmgFind(got, LineFieldName(3, LineRoleDescription)); ok {
 		t.Errorf("line 3 description came back as %s, want it dropped -- two rows were posted", mgShow(f))
+	}
+}
+
+// --- the read half of the carried cell -------------------------------------------------------
+//
+// EXTR-24-04 widened LineRoles to five; the fifth cell arm added here makes expandLineCorrection
+// emit a line_items[N].line_tax row it never emitted before, on the SAME Detail response the grid
+// reads back. Nothing else asserts that, so a save whose VAT reached the store could still be
+// invisible on the screen that wrote it.
+func TestExtractionMerge_LineExpansionCarriesLineTaxWhenTheCorrectionStatesOne(t *testing.T) {
+	fields := []ExtractionFieldState{lxeBlockRead()}
+	fields = append(fields, lmgLine(1, "DESC-1", "1", "1.00", "1.00", lmgUniformRegion(1))...)
+
+	withTax := lmgInput("DESC-1", "1", "1.00", "1.00")
+	withTax.LineTax = lxeStr("75.00")
+	got := mergeCorrections(fields, []Correction{lmgCorrection([]LineItemInput{withTax}, nil)})
+
+	// Floor: the four stated cells came back, so an absence below is a real absence and not an
+	// expansion that produced nothing at all.
+	for _, role := range lxeCarriedRoles {
+		if _, ok := lmgFind(got, LineFieldName(1, role)); !ok {
+			t.Fatalf("%s is absent -- the expansion produced nothing, so the line_tax claim below proves nothing",
+				LineFieldName(1, role))
+		}
+	}
+
+	name := LineFieldName(1, LineRoleLineTax)
+	f, ok := lmgFind(got, name)
+	if !ok {
+		t.Fatalf("%s is absent -- a VAT the save carried never reaches the screen that saved it", name)
+	}
+	if f.Value == nil || *f.Value != "75.00" {
+		t.Errorf("%s = %s, want %q", name, mgShow(f), "75.00")
+	}
+	if f.Corrected == nil || f.Corrected.Method != string(MethodTyped) {
+		t.Errorf("%s carries corrected %v, want method %q -- the cell must read as the operator's", name, f.Corrected, MethodTyped)
+	}
+}
+
+// The other half of the same rule: a correction stating NO line_tax must not conjure a fifth row.
+// Paired with the case above so neither "always emits" nor "never emits" passes both.
+func TestExtractionMerge_LineExpansionEmitsNoLineTaxRowWhenTheCorrectionHasNone(t *testing.T) {
+	fields := []ExtractionFieldState{lxeBlockRead()}
+	fields = append(fields, lmgLine(1, "DESC-1", "1", "1.00", "1.00", lmgUniformRegion(1))...)
+
+	got := mergeCorrections(fields, []Correction{lmgCorrection([]LineItemInput{lmgInput("DESC-1", "1", "1.00", "1.00")}, nil)})
+
+	if _, ok := lmgFind(got, LineFieldName(1, LineRoleDescription)); !ok {
+		t.Fatalf("the expansion produced no description row, so the absence claim below is vacuous")
+	}
+	if f, ok := lmgFind(got, LineFieldName(1, LineRoleLineTax)); ok {
+		t.Errorf("%s came back as %s, want it absent -- a null cell is an absence, never an empty row",
+			LineFieldName(1, LineRoleLineTax), mgShow(f))
 	}
 }

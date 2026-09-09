@@ -784,10 +784,12 @@ func TestWildGoldens_TheRuledTableGoldenCarriesTheHeaderRow(t *testing.T) {
 
 // wildLiLexiconKeys is liLexicon's shipped key set, measured at ../lineitems.go:127-144.
 // Exact-set equality below catches any further widening that is not named here first.
+// EXTR-24-04 adds "vat" and "tax" for the fifth read role, line_tax.
 var wildLiLexiconKeys = []string{
 	"description", "item", "details", "particulars", "service description", "description of goods",
 	"qty", "quantity", "unit price", "rate", "price", "unit rate",
 	"line total", "total", "amount",
+	"vat", "tax",
 }
 
 const wildLexiconFile = "../lineitems.go"

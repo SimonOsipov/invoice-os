@@ -19,6 +19,7 @@ import type { ExtractionFieldState, ExtractionRegion, ExtractionReason } from '.
 import {
   LINE_ROLES,
   LINE_TOLERANCE,
+  LINE_WIRE_ROLES,
   addRow,
   lineSetChanged,
   lineSumState,
@@ -97,13 +98,20 @@ describe('parseLineFieldName', () => {
     })
   })
 
+  it('the fifth role, line_tax, parses too -- the sixth near-miss is line_vat, not line_tax', () => {
+    expect(parseLineFieldName('line_items[1].line_tax'), 'line_tax at index 1').toEqual({
+      index: 1,
+      role: 'line_tax',
+    })
+  })
+
   it('six near-misses all parse to null', () => {
     const rejects = [
       'line_items',
       'line_items[0].quantity',
       'line_items[01].quantity',
       'line_itemsx[1].quantity',
-      'line_items[1].line_tax',
+      'line_items[1].line_vat',
       'document_text_layer',
     ]
     expect(rejects.length, 'the reject fixture list itself is empty').toBeGreaterThan(0)
@@ -478,6 +486,20 @@ describe('LINE_ROLES', () => {
       'quantity',
       'unit_price',
       'line_total',
+    ])
+  })
+
+  // AC-6 control: the rendered set (LINE_ROLES) stays four -- VAT is read and carried, never
+  // rendered as a grid column ([vat-carried-not-rendered]) -- but the WIRE set (LINE_WIRE_ROLES)
+  // widens to five, with line_tax last, mirroring extraction.LineRoles' own emit order.
+  it('LINE_WIRE_ROLES holds five roles, line_tax last, one more than the rendered LINE_ROLES', () => {
+    expect(LINE_WIRE_ROLES.length, 'a loop over LINE_WIRE_ROLES asserts less than it claims to').toBe(5)
+    expect([...LINE_WIRE_ROLES], 'the order diverged from extraction.LineRoles').toEqual([
+      'description',
+      'quantity',
+      'unit_price',
+      'line_total',
+      'line_tax',
     ])
   })
 })

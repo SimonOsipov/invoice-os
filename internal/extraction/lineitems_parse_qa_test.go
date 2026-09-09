@@ -17,8 +17,8 @@ import (
 
 // Every role at several indices, so a parse that hard-codes one role or one index fails here.
 func TestParseLineFieldName_AcceptsEveryRoleAtEveryIndex(t *testing.T) {
-	if len(extraction.LineRoles) != 4 {
-		t.Fatalf("LineRoles has %d entries, want 4 -- the table below would not cover the set", len(extraction.LineRoles))
+	if len(extraction.LineRoles) != 5 {
+		t.Fatalf("LineRoles has %d entries, want 5 -- the table below would not cover the set", len(extraction.LineRoles))
 	}
 	checked := 0
 	for _, index := range []int{1, 2, 9, 10, 99, 999} {
@@ -35,8 +35,9 @@ func TestParseLineFieldName_AcceptsEveryRoleAtEveryIndex(t *testing.T) {
 			checked++
 		}
 	}
-	if checked != 24 {
-		t.Errorf("the table accepted %d name(s), want 24", checked)
+	// 6 indices x 5 roles: the table asserts less than it claims if this drifts from LineRoles.
+	if checked != 30 {
+		t.Errorf("the table accepted %d name(s), want 30", checked)
 	}
 }
 
@@ -92,27 +93,34 @@ func TestParseLineFieldName_RefusesAnIndexThatOverflows(t *testing.T) {
 // ParseLineFieldName's doc comment claims it mirrors the SPA's own regex. The SPA parses the
 // same names off the same wire, so a change on either side that the other does not follow shows
 // up as a grid row the server settled and the browser ignores. Pinned by reading the source.
+// A third mirror lives in e2e/topology/import-wizard.spec.ts (LINE_CELL_RE, deliberately
+// restated because e2e compiles against no frontend module) -- both must move together.
 func TestParseLineFieldName_MirrorsTheSPARegex(t *testing.T) {
-	const path = "../../frontend/app/src/lib/lineItems.ts"
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if len(b) == 0 {
-		t.Fatalf("%s is empty; the scan would report a match either way", path)
-	}
-	src := string(b)
+	const spaPath = "../../frontend/app/src/lib/lineItems.ts"
+	const e2ePath = "../../e2e/topology/import-wizard.spec.ts"
 
 	// The index half: 1-based, no leading zero, no sign.
-	const want = `/^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total)$/`
-	if !strings.Contains(src, want) {
-		t.Errorf("%s no longer spells the line-field regex as\n  %s\n-- ParseLineFieldName "+
-			"(internal/extraction/lineitems.go) claims to mirror it", path, want)
-	}
-	// Floor: every role Go knows is named in that file, so a role added on one side only fails.
-	for _, role := range extraction.LineRoles {
-		if !strings.Contains(src, role) {
-			t.Errorf("%s does not mention the role %q that LineRoles carries", path, role)
+	const want = `/^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/`
+
+	for _, path := range []string{spaPath, e2ePath} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if len(b) == 0 {
+			t.Fatalf("%s is empty; the scan would report a match either way", path)
+		}
+		src := string(b)
+
+		if !strings.Contains(src, want) {
+			t.Errorf("%s no longer spells the line-field regex as\n  %s\n-- ParseLineFieldName "+
+				"(internal/extraction/lineitems.go) claims to mirror it", path, want)
+		}
+		// Floor: every role Go knows is named in that file, so a role added on one side only fails.
+		for _, role := range extraction.LineRoles {
+			if !strings.Contains(src, role) {
+				t.Errorf("%s does not mention the role %q that LineRoles carries", path, role)
+			}
 		}
 	}
 }

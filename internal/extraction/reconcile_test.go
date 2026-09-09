@@ -202,6 +202,34 @@ func TestReconcile_RowOffByTwoMinorUnitsFails(t *testing.T) {
 	}
 }
 
+// TestReconcileLines_LineTaxNeverRaisesAnArithmeticFlag pins AC-4 ([no-arithmetic-check-on-vat]):
+// reconcileLines checks quantity x unit price against the printed line total and nothing else --
+// a VAT far from any plausible rate must never itself raise a flag. The companion is asserted
+// first: the row's own arithmetic DID run and passed, so the absence of a flag below means "VAT
+// is not checked", not "nothing was checked at all".
+func TestReconcileLines_LineTaxNeverRaisesAnArithmeticFlag(t *testing.T) {
+	in := extraction.Input{
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00"), LineTax: rcStr("99.99")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	total, ok := rcFind(results, "line_items[1].line_total")
+	if !ok {
+		t.Fatalf(`"line_items[1].line_total" not found in %+v`, results)
+	}
+	if total.Reason != extraction.ReasonNone {
+		t.Errorf("line_items[1].line_total reason = %q, want ReasonNone -- 2 x 10.00 = 20.00 exactly, VAT plays no part in this check", total.Reason)
+	}
+
+	for _, r := range results {
+		if r.Reason == extraction.ReasonInconsistent {
+			t.Errorf("found %q at ReasonInconsistent, want no per-row flag anywhere -- a VAT of 99.99 against a 20.00 total is not a plausible rate, and must still raise nothing", r.Name)
+		}
+	}
+}
+
 func TestReconcile_ThreeDecimalQuantityMultipliesExactly(t *testing.T) {
 	in := extraction.Input{
 		Lines: []extraction.DocLine{

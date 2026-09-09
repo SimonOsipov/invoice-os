@@ -487,6 +487,64 @@ func TestExtractionDetail_CleanFieldCarriesAnEmptyReason(t *testing.T) {
 	}
 }
 
+// TestReaderDetail_LineTaxArrivesAsALineCellNotAHeaderField pins AC-5: a line_items[N].line_tax
+// row reaches Detail's fields array like any other line cell, and ExtractionFields.tsx's own
+// LINE_FIELD_RE (read from source, not restated by hand) still recognises the name -- so the
+// review pane never renders it as a header field.
+func TestReaderDetail_LineTaxArrivesAsALineCellNotAHeaderField(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
+
+	name := extraction.LineFieldName(1, "line_tax")
+	rvdSeedField(t, ctx, tenantA, jobA, name, rvdStr("75.00"), nil, 0, nil, now)
+
+	got, err := r.Detail(ctxA, jobA)
+	if err != nil {
+		t.Fatalf("Detail for job %s: %v", jobA, err)
+	}
+	if len(got.Fields) != 1 {
+		t.Fatalf("got %d field(s) %v, want exactly 1", len(got.Fields), rvdFieldNames(got.Fields))
+	}
+	if got.Fields[0].Name != name {
+		t.Fatalf("field name = %q, want %q", got.Fields[0].Name, name)
+	}
+	if got.Fields[0].Value == nil || *got.Fields[0].Value != "75.00" {
+		t.Errorf("field value = %v, want \"75.00\"", got.Fields[0].Value)
+	}
+
+	const tsxPath = "../../frontend/app/src/components/ExtractionFields.tsx"
+	b, err := os.ReadFile(tsxPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", tsxPath, err)
+	}
+	const marker = "const LINE_FIELD_RE = /"
+	idx := strings.Index(string(b), marker)
+	if idx == -1 {
+		t.Fatalf("%s no longer declares LINE_FIELD_RE the way this test expects", tsxPath)
+	}
+	rest := string(b)[idx+len(marker):]
+	end := strings.IndexByte(rest, '/')
+	if end == -1 {
+		t.Fatalf("%s: LINE_FIELD_RE's literal has no closing '/' on the same line", tsxPath)
+	}
+	lineFieldRE, err := regexp.Compile(rest[:end])
+	if err != nil {
+		t.Fatalf("compile the extracted LINE_FIELD_RE %q: %v", rest[:end], err)
+	}
+	if !lineFieldRE.MatchString(name) {
+		t.Errorf("%s's LINE_FIELD_RE does not match %q -- the line-tax cell would render as a header field", tsxPath, name)
+	}
+	// Negative control: a genuine header field name must still be excluded from the line-item
+	// filter, so the assertion above is a real match and not a regex that now accepts anything.
+	if lineFieldRE.MatchString("total") {
+		t.Errorf("%s's LINE_FIELD_RE now matches %q, which would wrongly exclude a header field from the pane", tsxPath, "total")
+	}
+}
+
 // EXTR-12-02 AC-2: alternatives is [] on every field, never null. The oracle is the marshalled
 // bytes: len(x) == 0 is true of nil and of []T{} alike, so it passes on the exact bug it must
 // catch. The control below proves a nil slice really does emit null.

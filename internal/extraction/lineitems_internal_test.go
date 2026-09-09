@@ -111,32 +111,36 @@ func TestLiNormalizeHeaderText_TheSharedFoldIsUnchangedForTheSupplierNamePath(t 
 	}
 }
 
-// liRoleReturnedFor maps liClassifyHeader's four named return values back onto the role that
-// owns each, so the sweep below can check "my role's slot is 0, the other three are -1" for an
+// liRoleReturnedFor maps liClassifyHeader's five named return values back onto the role that
+// owns each, so the sweep below can check "my role's slot is 0, the other four are -1" for an
 // arbitrary lexicon key without hand-listing every case.
-func liRoleReturnedFor(role liRole, descCol, qtyCol, priceCol, totalCol int) (mine int, others []int) {
+func liRoleReturnedFor(role liRole, descCol, qtyCol, priceCol, totalCol, taxCol int) (mine int, others []int) {
 	switch role {
 	case liRoleDescription:
-		return descCol, []int{qtyCol, priceCol, totalCol}
+		return descCol, []int{qtyCol, priceCol, totalCol, taxCol}
 	case liRoleQuantity:
-		return qtyCol, []int{descCol, priceCol, totalCol}
+		return qtyCol, []int{descCol, priceCol, totalCol, taxCol}
 	case liRoleUnitPrice:
-		return priceCol, []int{descCol, qtyCol, totalCol}
+		return priceCol, []int{descCol, qtyCol, totalCol, taxCol}
 	case liRoleLineTotal:
-		return totalCol, []int{descCol, qtyCol, priceCol}
+		return totalCol, []int{descCol, qtyCol, priceCol, taxCol}
+	case liRoleLineTax:
+		return taxCol, []int{descCol, qtyCol, priceCol, totalCol}
 	}
 	return -1, nil
 }
 
 // Every key liLexicon already carries today must keep classifying after this subtask -- the
 // header-strip must widen what reaches the lexicon, not narrow what the lexicon itself accepts.
+// Ranges over liLexicon directly, so the 15 -> 17 key widening this subtask makes is covered
+// without a hand-listed count here.
 func TestLiClassifyHeader_EveryPreExistingLexiconKeyStillClassifies(t *testing.T) {
 	if len(liLexicon) == 0 {
 		t.Fatal("liLexicon is empty; the sweep below would hold vacuously")
 	}
 	for key, role := range liLexicon {
-		descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleCell(key))
-		mine, others := liRoleReturnedFor(role, descCol, qtyCol, priceCol, totalCol)
+		descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(liHeaderRoleCell(key))
+		mine, others := liRoleReturnedFor(role, descCol, qtyCol, priceCol, totalCol, taxCol)
 		if mine != 0 {
 			t.Errorf("liClassifyHeader(%q) role column = %d, want 0", key, mine)
 		}
@@ -144,6 +148,27 @@ func TestLiClassifyHeader_EveryPreExistingLexiconKeyStillClassifies(t *testing.T
 			if o != -1 {
 				t.Errorf("liClassifyHeader(%q) an unrelated role column = %d, want -1", key, o)
 			}
+		}
+	}
+}
+
+// AC-1: a VAT header claims the line-tax role, and the other four columns are unaffected.
+func TestLiClassifyHeader_VatColumnClaimsTheLineTaxRole(t *testing.T) {
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(
+		liHeaderRoleRow("Description", "Qty", "Unit price", "Amount", "VAT ₦"))
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"descCol", descCol, 0},
+		{"qtyCol", qtyCol, 1},
+		{"priceCol", priceCol, 2},
+		{"totalCol", totalCol, 3},
+		{"taxCol", taxCol, 4},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
 		}
 	}
 }
@@ -281,7 +306,7 @@ func TestLiNormalizeHeaderForRole_FullWidthCurrencyLettersAreNotStripped(t *test
 // The only unit-level pin on the role lookup's call site: a decorated header row must reach
 // liClassifyHeader stripped, and the index column must claim nothing.
 func TestLiClassifyHeader_ADecoratedHeaderRowMapsEveryColumn(t *testing.T) {
-	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(
 		liHeaderRoleRow("S/N", "Description", "Qty", "RATE (N)", "Amount ₦"))
 	for _, tc := range []struct {
 		name string
@@ -292,6 +317,7 @@ func TestLiClassifyHeader_ADecoratedHeaderRowMapsEveryColumn(t *testing.T) {
 		{"qtyCol", qtyCol, 2},
 		{"priceCol", priceCol, 3},
 		{"totalCol", totalCol, 4},
+		{"taxCol", taxCol, -1},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
@@ -300,9 +326,10 @@ func TestLiClassifyHeader_ADecoratedHeaderRowMapsEveryColumn(t *testing.T) {
 }
 
 // AC-1: the measured production header -- a weak "Item" at column 0 must not beat a strong
-// "Service description" arriving later in reading order.
+// "Service description" arriving later in reading order. Also the measured header's own VAT
+// column, which now claims the line-tax role instead of falling through unclassified.
 func TestLiClassifyHeader_TheMeasuredDenseHeaderPutsDescriptionOnTheNamedColumn(t *testing.T) {
-	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(liHeaderRoleRow(
 		"Item", "Service description", "Reference", "Qty", "Unit rate ₦", "Amount ₦", "VAT ₦"))
 	for _, tc := range []struct {
 		name string
@@ -313,6 +340,7 @@ func TestLiClassifyHeader_TheMeasuredDenseHeaderPutsDescriptionOnTheNamedColumn(
 		{"qtyCol", qtyCol, 3},
 		{"priceCol", priceCol, 4},
 		{"totalCol", totalCol, 5},
+		{"taxCol", taxCol, 6},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
@@ -332,7 +360,7 @@ func TestLiClassifyHeader_StrongBeatsWeakFromEitherSide(t *testing.T) {
 		{"description first", liHeaderRoleRow("Description", "Item", "Qty", "Amount"), 0},
 		{"item first", liHeaderRoleRow("Item", "Description", "Qty", "Amount"), 1},
 	} {
-		descCol, _, _, _ := liClassifyHeader(tc.row)
+		descCol, _, _, _, _ := liClassifyHeader(tc.row)
 		if descCol != tc.want {
 			t.Errorf("%s: descCol = %d, want %d", tc.name, descCol, tc.want)
 		}
@@ -342,7 +370,7 @@ func TestLiClassifyHeader_StrongBeatsWeakFromEitherSide(t *testing.T) {
 // AC-3: item is demoted, not removed -- alone in its tier, the weak fallback still fires. The
 // only coverage anywhere of the ordinary Item|Qty|Price invoice shape.
 func TestLiClassifyHeader_ItemStillClaimsDescriptionWhenAloneInItsTier(t *testing.T) {
-	descCol, _, _, _ := liClassifyHeader(liHeaderRoleRow("Item", "Qty", "Unit price", "Amount"))
+	descCol, _, _, _, _ := liClassifyHeader(liHeaderRoleRow("Item", "Qty", "Unit price", "Amount"))
 	if descCol != 0 {
 		t.Errorf("descCol = %d, want 0", descCol)
 	}
@@ -351,7 +379,7 @@ func TestLiClassifyHeader_ItemStillClaimsDescriptionWhenAloneInItsTier(t *testin
 // AC-4: both new strong keys, both decorated -- DESCRIPTION OF GOODS case-folds, Unit rate ₦
 // strips its currency decoration.
 func TestLiClassifyHeader_TheDecoratedGoodsHeaderMapsAllFourRoles(t *testing.T) {
-	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(liHeaderRoleRow(
 		"S/N", "DESCRIPTION OF GOODS", "Qty", "Unit rate ₦", "Amount ₦"))
 	for _, tc := range []struct {
 		name string
@@ -362,6 +390,7 @@ func TestLiClassifyHeader_TheDecoratedGoodsHeaderMapsAllFourRoles(t *testing.T) 
 		{"qtyCol", qtyCol, 2},
 		{"priceCol", priceCol, 3},
 		{"totalCol", totalCol, 4},
+		{"taxCol", taxCol, -1},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
@@ -375,7 +404,7 @@ func TestLiClassifyHeader_IndexAndReferenceColumnsClaimNoRole(t *testing.T) {
 	liWantHeaderRole(t, "S/N", "s/n", liRoleNone)
 	liWantHeaderRole(t, "Reference", "reference", liRoleNone)
 
-	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow("S/N", "Reference", "Qty", "Amount"))
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(liHeaderRoleRow("S/N", "Reference", "Qty", "Amount"))
 	if qtyCol != 2 {
 		t.Errorf("qtyCol = %d, want 2 -- positive companion, else an all -1 classifier would pass silently", qtyCol)
 	}
@@ -385,7 +414,10 @@ func TestLiClassifyHeader_IndexAndReferenceColumnsClaimNoRole(t *testing.T) {
 	if priceCol != -1 {
 		t.Errorf("priceCol = %d, want -1 (no unit-price column present)", priceCol)
 	}
-	for _, got := range []int{descCol, qtyCol, priceCol, totalCol} {
+	if taxCol != -1 {
+		t.Errorf("taxCol = %d, want -1 (no VAT column present)", taxCol)
+	}
+	for _, got := range []int{descCol, qtyCol, priceCol, totalCol, taxCol} {
 		if got == 0 || got == 1 {
 			t.Errorf("a role resolved to column %d, want no role claiming S/N or Reference", got)
 		}
@@ -394,7 +426,7 @@ func TestLiClassifyHeader_IndexAndReferenceColumnsClaimNoRole(t *testing.T) {
 
 // AC-6: two columns in the same strong tier -- position remains the tiebreak WITHIN a tier.
 func TestLiClassifyHeader_ASecondStrongColumnDoesNotDisplaceTheFirst(t *testing.T) {
-	descCol, qtyCol, _, totalCol := liClassifyHeader(liHeaderRoleRow("Amount", "Total", "Qty", "Description"))
+	descCol, qtyCol, _, totalCol, _ := liClassifyHeader(liHeaderRoleRow("Amount", "Total", "Qty", "Description"))
 	if totalCol != 0 {
 		t.Errorf("totalCol = %d, want 0", totalCol)
 	}
@@ -427,7 +459,7 @@ func TestLiClassifyHeader_LeftmostWinsWhenCellsArriveOutOfColumnOrder(t *testing
 	for _, col := range []int{1, 3, 0, 2} {
 		cells = append(cells, TableCell{Row: 0, Col: col, RowSpan: 1, ColSpan: 1, Text: byCol[col]})
 	}
-	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(Table{Rows: 1, Cols: len(byCol), Cells: cells})
+	descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(Table{Rows: 1, Cols: len(byCol), Cells: cells})
 	if descCol != 0 {
 		t.Errorf("descCol = %d, want 0 -- two strong description columns, the leftmost wins whatever order the cells arrive in", descCol)
 	}
@@ -440,6 +472,9 @@ func TestLiClassifyHeader_LeftmostWinsWhenCellsArriveOutOfColumnOrder(t *testing
 	if totalCol != 3 {
 		t.Errorf("totalCol = %d, want 3", totalCol)
 	}
+	if taxCol != -1 {
+		t.Errorf("taxCol = %d, want -1 (no VAT column present)", taxCol)
+	}
 }
 
 // The tier rule must not rest on Go's randomised map iteration order. Every role here has two
@@ -451,7 +486,7 @@ func TestLiClassifyHeader_RepeatedCallsReturnOneResult(t *testing.T) {
 	const runs = 500
 	seen := make(map[result]int)
 	for i := 0; i < runs; i++ {
-		descCol, qtyCol, priceCol, totalCol := liClassifyHeader(row)
+		descCol, qtyCol, priceCol, totalCol, _ := liClassifyHeader(row)
 		seen[result{descCol, qtyCol, priceCol, totalCol}]++
 	}
 	want := result{desc: 1, qty: 4, price: 6, total: 8}
@@ -480,7 +515,9 @@ func TestLiClassifyHeader_EdgeHeaderShapes(t *testing.T) {
 		{"a single strong column", []string{"Description"}, 0, -1, -1, -1},
 		{"a single weak column", []string{"Item"}, 0, -1, -1, -1},
 	} {
-		descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(tc.texts...))
+		// None of the cases above names a VAT column, so taxCol is discarded here rather than
+		// added as a fifth always-(-1) field to every case.
+		descCol, qtyCol, priceCol, totalCol, _ := liClassifyHeader(liHeaderRoleRow(tc.texts...))
 		for _, role := range []struct {
 			name string
 			got  int

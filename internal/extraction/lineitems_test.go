@@ -686,6 +686,147 @@ func TestLineItems_AQuantityAndPriceTableWithoutATotalYieldsLines(t *testing.T) 
 	liWant(t, got[1].Quantity, "3", "line 1 Quantity")
 }
 
+// TestLineItems_VatCellsReadThroughNormalizeAmount pins AC-1 at the LineItems level: the fifth
+// role's cells go through the same normalizeAmount unit price and line total already use --
+// grouping commas stripped, the leading currency marker stripped.
+func TestLineItems_VatCellsReadThroughNormalizeAmount(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT ₦", nil),
+			liCell(1, 0, "Widget", nil),
+			liCell(1, 1, "2", nil),
+			liCell(1, 2, "500.00", nil),
+			liCell(1, 3, "1000.00", nil),
+			liCell(1, 4, "₦ 1,234.50", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s), want 1", len(got))
+	}
+	liWant(t, got[0].LineTax, "1234.50", "LineTax")
+}
+
+// TestLineItems_ReadsPerLineVat pins AC-2: LineItems populates DocLine.LineTax per row, from a
+// dedicated VAT column, distinct from every other role.
+func TestLineItems_ReadsPerLineVat(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "2", nil), liCell(1, 2, "500.00", nil), liCell(1, 3, "1000.00", nil), liCell(1, 4, "75.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "1", nil), liCell(2, 2, "500.00", nil), liCell(2, 3, "500.00", nil), liCell(2, 4, "37.50", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	liWant(t, got[0].LineTax, "75.00", "row0 LineTax")
+	liWant(t, got[1].LineTax, "37.50", "row1 LineTax")
+}
+
+// TestLineItemResults_EmitsLineTaxLastInRoleOrder pins AC-2: line_tax is the fifth cell, emitted
+// last in LineRoles' own order, immediately after line_total.
+func TestLineItemResults_EmitsLineTaxLastInRoleOrder(t *testing.T) {
+	desc := "Widget"
+	lines := []extraction.DocLine{
+		{Index: 1, Description: &desc, Quantity: rcStr("2"), UnitPrice: rcStr("500.00"), LineTotal: rcStr("1000.00"), LineTax: rcStr("75.00")},
+	}
+
+	got := extraction.LineItemResults(lines)
+	want := []string{
+		"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price",
+		"line_items[1].line_total", "line_items[1].line_tax",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LineItemResults returned %d row(s) %v, want exactly %d: %v", len(got), rcNames(got), len(want), want)
+	}
+	if gotNames := rcNames(got); !rcNamesEqual(gotNames, want) {
+		t.Errorf("row names = %v, want %v in exactly this order -- line_tax must land last, right after line_total", gotNames, want)
+	}
+}
+
+// TestLineItemResults_ANilLineTaxEmitsNoRow pins AC-3: an absent VAT cell emits no row at all,
+// never a row carrying an empty value. The positive companion (the other four rows) is asserted
+// first, so a projection that dropped every row could not pass the absence check that follows.
+func TestLineItemResults_ANilLineTaxEmitsNoRow(t *testing.T) {
+	desc := "Widget"
+	lines := []extraction.DocLine{
+		{Index: 1, Description: &desc, Quantity: rcStr("2"), UnitPrice: rcStr("500.00"), LineTotal: rcStr("1000.00"), LineTax: nil},
+	}
+
+	got := extraction.LineItemResults(lines)
+	want := []string{
+		"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price", "line_items[1].line_total",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LineItemResults returned %d row(s) %v, want exactly %d: %v -- a missing VAT cell emits no row", len(got), rcNames(got), len(want), want)
+	}
+	if gotNames := rcNames(got); !rcNamesEqual(gotNames, want) {
+		t.Errorf("row names = %v, want %v", gotNames, want)
+	}
+	for _, r := range got {
+		if r.Name == "line_items[1].line_tax" {
+			t.Errorf("found a row named %q, want none for a nil LineTax", r.Name)
+		}
+	}
+}
+
+// TestLineItems_AVatColumnWhoseCellsAreBlankIsDetectedButReadsNothing discriminates "VAT column
+// present but empty" from "VAT column absent": a header naming VAT still leaves DocLine.LineTax
+// nil when every data cell under it is blank or a dash. The companion (the table's other three
+// roles ARE populated) is asserted first, so the nil below means "this cell specifically read
+// nothing", not "the table was rejected whole".
+func TestLineItems_AVatColumnWhoseCellsAreBlankIsDetectedButReadsNothing(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT ₦", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "2", nil), liCell(1, 2, "500.00", nil), liCell(1, 3, "1000.00", nil), liCell(1, 4, "", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "1", nil), liCell(2, 2, "500.00", nil), liCell(2, 3, "500.00", nil), liCell(2, 4, "-", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	for i, line := range got {
+		if line.Quantity == nil || line.UnitPrice == nil || line.LineTotal == nil {
+			t.Fatalf("row %d Quantity/UnitPrice/LineTotal = %v/%v/%v, want all populated -- the table must be read before the VAT column's own blankness means anything",
+				i, line.Quantity, line.UnitPrice, line.LineTotal)
+		}
+	}
+	liWantNil(t, got[0].LineTax, "row0 LineTax")
+	liWantNil(t, got[1].LineTax, "row1 LineTax")
+
+	results := extraction.LineItemResults(got)
+	for _, r := range results {
+		if r.Name == "line_items[1].line_tax" || r.Name == "line_items[2].line_tax" {
+			t.Errorf("found a row named %q, want none -- a blank VAT cell must never surface as a value row", r.Name)
+		}
+	}
+}
+
 // TestLineItems_ASkippedTableLeavesNoHoleInTheIndexSequence pins AC-6: a rejected table burns no
 // ordinal, and the surviving descriptions must come from the second (usable) table, not the
 // first -- a count-only assertion could pass on either table's rows.

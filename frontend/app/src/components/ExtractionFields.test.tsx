@@ -783,6 +783,24 @@ describe('the line-item field filter (EXTR-13-07)', () => {
       HEADER_FIELDS.map((name) => `extraction-field-${name}`).sort(),
     )
   })
+
+  // AC-5: line_tax is a fifth line-item role, carried on the wire but never rendered in the
+  // grid ([vat-carried-not-rendered]); the pane must exclude it the same way it excludes the
+  // four rendered roles, not treat the unrecognised suffix as a header field.
+  it('excludes a line_items[N].line_tax cell too, without treating it as a header field', () => {
+    const header = tenFields()
+    const lineTax = mkField({ name: 'line_items[1].line_tax', value: '75.00' })
+
+    render(fieldsPane({ fields: [...header, lineTax] }))
+
+    // Positive companion first: the header set really rendered, so the absence below means
+    // "excluded", not "the pane rendered nothing at all".
+    expect(screen.queryByTestId('extraction-field-total'), 'the header set did not render').not.toBeNull()
+    expect(
+      screen.queryByTestId('extraction-field-line_items[1].line_tax'),
+      'a line_tax cell reached the header-field prefix',
+    ).toBeNull()
+  })
 })
 
 // ==========================================================================================

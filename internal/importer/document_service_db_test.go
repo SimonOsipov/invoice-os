@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -63,18 +64,52 @@ func docCleanValues(invoiceNumber string) map[string]*string {
 
 // docSeedExtraction seeds one succeeded extraction_jobs row for documentID plus one rank-0
 // field per (name, value) present in values -- a name absent from values is left out of the
-// row set entirely (distinct from present-but-nil, which is a NULL value column).
+// row set entirely (distinct from present-but-nil, which is a NULL value column). Header names
+// in mapperFieldNames order seed first, then any remaining key (line_items[N].<role> names)
+// in sorted order -- mapperFieldNames alone would silently drop every line key a caller passed.
 func docSeedExtraction(t *testing.T, super *pgxpool.Pool, tenantID, documentID string, values map[string]*string) {
 	t.Helper()
 	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", time.Now().UTC())
 	now := time.Now().UTC()
-	for i, name := range mapperFieldNames {
+	seeded := make(map[string]bool, len(values))
+	var i int
+	for _, name := range mapperFieldNames {
 		v, ok := values[name]
 		if !ok {
 			continue
 		}
 		seedExtractionField(t, super, tenantID, job, name, v, nil, 0, now.Add(time.Duration(i)*time.Millisecond))
+		seeded[name] = true
+		i++
 	}
+	rest := make([]string, 0, len(values)-len(seeded))
+	for name := range values {
+		if !seeded[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		seedExtractionField(t, super, tenantID, job, name, values[name], nil, 0, now.Add(time.Duration(i)*time.Millisecond))
+		i++
+	}
+}
+
+// docCountExtractionFields is the seed floor every line-carrying fixture needs: it counts
+// extraction_field_results rows across documentID's job(s), so a future narrowing of
+// docSeedExtraction back to header-only names empties a fixture LOUDLY instead of passing
+// vacuously.
+func docCountExtractionFields(t *testing.T, super *pgxpool.Pool, documentID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM extraction_field_results r
+		   JOIN extraction_jobs j ON j.id = r.extraction_job_id
+		  WHERE j.document_id = $1`, documentID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count extraction_field_results for document %s: %v", documentID, err)
+	}
+	return n
 }
 
 // docInvoiceLinks reads back one invoice's source_document_id/import_batch_id.
@@ -386,8 +421,9 @@ func TestServiceImportDocument_RuleSetVersionMarshalsToNullNotZeroDefault(t *tes
 
 // --- DOC-08 --------------------------------------------------------------
 
-// DOC-08: the written invoice has status draft and count(line_items) = 0 (D-13: nothing
-// extracted feeds LineItems yet).
+// DOC-08: the written invoice has status draft and count(line_items) = 0 -- docCleanValues
+// seeds no line rows, so this fixture is zero-line by construction, not by any code path that
+// drops lines.
 func TestServiceImportDocument_WrittenInvoiceIsDraftWithZeroLineItems(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

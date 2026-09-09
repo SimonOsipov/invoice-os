@@ -13,8 +13,17 @@
 //	MAP-07 TestDocumentCreateInput_IssueDateParsing
 //	MAP-08 TestDocumentCreateInput_MoneyFieldsPassThroughVerbatim
 //	MAP-09 TestDocumentCreateInput_AmbiguousInvoiceNumberWithDecidedValueStillWritten
-//	MAP-10 TestDocumentCreateInput_LineItemsNilNoAppendInBody
+//	MAP-10 TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames
 //	MAP-11 TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder
+//
+// Line-item grouping (retiring D-13):
+//
+//	TestDocumentCreateInput_MapsLineRowsOntoLineItems
+//	TestDocumentCreateInput_OrdersLinesByNumericIndexNotArrivalOrder
+//	TestDocumentCreateInput_NoLineRowsLeavesLineItemsNil
+//	TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms
+//	TestDocumentCreateInput_MockDefaultNowProducesFourLines
+//	TestImporterLineRoles_MatchesExtractionLineRoles
 //
 // Every spec below carries at least one POSITIVE expected-value assertion (not just an
 // absent-field check a zero-value stub would satisfy vacuously) -- mutation-confirmed
@@ -211,6 +220,7 @@ func TestDocumentCreateInput_UnknownFieldNamesDropped(t *testing.T) {
 			{Name: "buyer_tin", Value: mpPtr("MOCK-TIN-BUYER")},
 			{Name: "line_items", Value: mpPtr("garbage")},
 			{Name: "line_items[0].line_total", Value: mpPtr("999.99")},
+			{Name: "line_items[1].description", Value: mpPtr("Real Line")},
 		},
 	}
 	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
@@ -232,8 +242,13 @@ func TestDocumentCreateInput_UnknownFieldNamesDropped(t *testing.T) {
 	if got.SupplierTIN != nil {
 		t.Errorf("SupplierTIN = %v, want nil (Q11 -- unset regardless of \"known\"/\"unknown\")", got.SupplierTIN)
 	}
-	if got.LineItems != nil {
-		t.Errorf("LineItems = %v, want nil -- line_items/line_items[0].line_total are not header fields", got.LineItems)
+	// "line_items" (bare) and "line_items[0].line_total" (0 is not a legal 1-based index) are
+	// still rejected by the grammar; "line_items[1].description" is legal and must land.
+	if len(got.LineItems) != 1 {
+		t.Fatalf("len(LineItems) = %d, want 1 -- only the one legally-named line cell should parse", len(got.LineItems))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "Real Line" {
+		t.Errorf("LineItems[0].Description = %v, want %q", got.LineItems[0].Description, "Real Line")
 	}
 }
 
@@ -403,9 +418,15 @@ func TestDocumentCreateInput_AmbiguousInvoiceNumberWithDecidedValueStillWritten(
 	}
 }
 
-// --- MAP-10: LineItems nil, no append() anywhere in documentCreateInput's body ----------
+// --- MAP-10: line names come only from the parsed grammar, never a literal `values[...]` key --
 
-func TestDocumentCreateInput_LineItemsNilNoAppendInBody(t *testing.T) {
+// TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames re-points the former "no
+// append() in the body" guard: the grouping loop this story adds legitimately calls append, so
+// that scan would false-positive on any correct implementation. The robust equivalent: every
+// literal `values["..."]` key the body reads is a header name from mapperFieldNames -- a line
+// cell can only ever reach LineItems through the parsed line_items[N].<role> grammar, never
+// through a literal header-shaped lookup.
+func TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames(t *testing.T) {
 	ex := SettledExtraction{Fields: []extractedField{
 		{Name: "invoice_number", Value: mpPtr("INV-LINE-1")},
 		{Name: "subtotal", Value: mpPtr("10.00")},
@@ -420,57 +441,87 @@ func TestDocumentCreateInput_LineItemsNilNoAppendInBody(t *testing.T) {
 		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, "INV-LINE-1")
 	}
 	if got.LineItems != nil {
-		t.Errorf("LineItems = %v, want nil -- documentCreateInput never builds line items", got.LineItems)
+		t.Errorf("LineItems = %v, want nil -- no line_items[N].<role> field was present", got.LineItems)
 	}
 
-	// AST half: no `append(` call anywhere inside documentCreateInput's body. Scoped to that
-	// one func, not the whole file -- SettledExtraction (same file) legitimately appends to
-	// ex.Fields, and scanning the whole file would false-positive on that.
 	root := sxDepsRepoRoot(t) // reused from document_deps_test.go, same package
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join(root, "internal/importer/document.go"), nil, 0)
 	if err != nil {
 		t.Fatalf("parse document.go: %v", err)
 	}
-
-	var mapperFn, settledFn *ast.FuncDecl
+	var mapperFn *ast.FuncDecl
 	for _, decl := range f.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		switch fd.Name.Name {
-		case "documentCreateInput":
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == "documentCreateInput" {
 			mapperFn = fd
-		case "SettledExtraction":
-			settledFn = fd
 		}
 	}
 	if mapperFn == nil {
 		t.Fatal("documentCreateInput func decl not found in document.go -- the scan below would be vacuous")
 	}
-	if settledFn == nil || !mpBodyCallsAppend(settledFn) {
-		t.Fatal("control needle failed: SettledExtraction no longer calls append -- the append-detector can no longer find a planted hit, so the absence check below means nothing")
+
+	keys := mpValuesIndexKeys(mapperFn)
+	if len(keys) < 8 {
+		t.Fatalf("found %d literal values[...] key(s) in documentCreateInput, want at least 8 -- the scan below would be vacuous", len(keys))
 	}
-	if mpBodyCallsAppend(mapperFn) {
-		t.Error("documentCreateInput's body calls append -- it must never build a line item slice; LineItems stays nil")
+	for _, k := range keys {
+		if !slices.Contains(mapperFieldNames, k) {
+			t.Errorf("documentCreateInput indexes values[%q], which is not in mapperFieldNames -- a header lookup must never name a line-item key literally", k)
+		}
+	}
+
+	// Control needle: document.go's own body legitimately never contains a line_items literal
+	// key, so an absence there proves nothing unless the same collector can find a planted hit
+	// -- proven on a synthetic snippet instead.
+	needle := mpValuesIndexKeysFromSource(t, `package p
+func f(values map[string]*string) { _ = values["line_items[1].description"] }`)
+	if !slices.Contains(needle, "line_items[1].description") {
+		t.Fatal("control needle failed: the collector could not find a planted values[\"line_items[1].description\"] key in a synthetic snippet -- the absence check above proves nothing")
 	}
 }
 
-// mpBodyCallsAppend reports whether fn's body contains a call to the builtin append.
-func mpBodyCallsAppend(fn *ast.FuncDecl) bool {
-	found := false
+// mpValuesIndexKeys collects every literal string key `values["..."]` reads inside fn's body.
+func mpValuesIndexKeys(fn *ast.FuncDecl) []string {
+	var out []string
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
+		idx, ok := n.(*ast.IndexExpr)
 		if !ok {
 			return true
 		}
-		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "append" {
-			found = true
+		id, ok := idx.X.(*ast.Ident)
+		if !ok || id.Name != "values" {
+			return true
 		}
+		lit, ok := idx.Index.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		out = append(out, s)
 		return true
 	})
-	return found
+	return out
+}
+
+// mpValuesIndexKeysFromSource runs mpValuesIndexKeys over the first func declared in a
+// synthetic snippet -- the control needle for the scan above.
+func mpValuesIndexKeysFromSource(t *testing.T, src string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "needle.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse needle source: %v", err)
+	}
+	for _, decl := range f.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			return mpValuesIndexKeys(fd)
+		}
+	}
+	t.Fatal("needle source declares no func")
+	return nil
 }
 
 // --- MAP-11: the vocabulary drift guard ---------------------------------------------------
@@ -496,6 +547,217 @@ func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testi
 	if !slices.Equal(mapperNames, extractionNames) {
 		t.Errorf("mapperFieldNames = %v, want %v (element-for-element, in order, matching extraction.HeaderFields)", mapperNames, extractionNames)
 	}
+}
+
+// --- Line-item grouping (retiring D-13) --------------------------------------------------
+
+// AC-1: a settled extraction carrying line_items[1..3].* rows produces a LineItems of length
+// 3, cells mapped role-for-role including line_tax.
+func TestDocumentCreateInput_MapsLineRowsOntoLineItems(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-LINES-1")},
+		{Name: "line_items[1].description", Value: mpPtr("Widget")},
+		{Name: "line_items[1].quantity", Value: mpPtr("2")},
+		{Name: "line_items[1].unit_price", Value: mpPtr("10.00")},
+		{Name: "line_items[1].line_total", Value: mpPtr("20.00")},
+		{Name: "line_items[1].line_tax", Value: mpPtr("1.50")},
+		{Name: "line_items[2].description", Value: mpPtr("Gadget")},
+		{Name: "line_items[2].quantity", Value: mpPtr("1")},
+		{Name: "line_items[2].unit_price", Value: mpPtr("30.00")},
+		{Name: "line_items[2].line_total", Value: mpPtr("30.00")},
+		{Name: "line_items[2].line_tax", Value: mpPtr("2.25")},
+		{Name: "line_items[3].description", Value: mpPtr("Gizmo")},
+		{Name: "line_items[3].quantity", Value: mpPtr("3")},
+		{Name: "line_items[3].unit_price", Value: mpPtr("5.00")},
+		{Name: "line_items[3].line_total", Value: mpPtr("15.00")},
+		{Name: "line_items[3].line_tax", Value: mpPtr("1.00")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3", len(got.LineItems))
+	}
+	want := []invoice.LineItemInput{
+		{Description: mpPtr("Widget"), Quantity: mpPtr("2"), UnitPrice: mpPtr("10.00"), LineTotal: mpPtr("20.00"), LineTax: mpPtr("1.50")},
+		{Description: mpPtr("Gadget"), Quantity: mpPtr("1"), UnitPrice: mpPtr("30.00"), LineTotal: mpPtr("30.00"), LineTax: mpPtr("2.25")},
+		{Description: mpPtr("Gizmo"), Quantity: mpPtr("3"), UnitPrice: mpPtr("5.00"), LineTotal: mpPtr("15.00"), LineTax: mpPtr("1.00")},
+	}
+	for i, w := range want {
+		li := got.LineItems[i]
+		if li.Description == nil || *li.Description != *w.Description {
+			t.Errorf("LineItems[%d].Description = %v, want %q", i, li.Description, *w.Description)
+		}
+		if li.Quantity == nil || *li.Quantity != *w.Quantity {
+			t.Errorf("LineItems[%d].Quantity = %v, want %q", i, li.Quantity, *w.Quantity)
+		}
+		if li.UnitPrice == nil || *li.UnitPrice != *w.UnitPrice {
+			t.Errorf("LineItems[%d].UnitPrice = %v, want %q", i, li.UnitPrice, *w.UnitPrice)
+		}
+		if li.LineTotal == nil || *li.LineTotal != *w.LineTotal {
+			t.Errorf("LineItems[%d].LineTotal = %v, want %q", i, li.LineTotal, *w.LineTotal)
+		}
+		if li.LineTax == nil || *li.LineTax != *w.LineTax {
+			t.Errorf("LineItems[%d].LineTax = %v, want %q", i, li.LineTax, *w.LineTax)
+		}
+	}
+}
+
+// AC-2: fields for indices 10, 2, 1 supplied in that arrival order must return in index order
+// 1, 2, 10 -- SettledExtraction's ORDER BY created_at, id does not guarantee index order, so
+// the mapper itself must sort numerically.
+func TestDocumentCreateInput_OrdersLinesByNumericIndexNotArrivalOrder(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-ORDER-1")},
+		{Name: "line_items[10].description", Value: mpPtr("Ten")},
+		{Name: "line_items[2].description", Value: mpPtr("Two")},
+		{Name: "line_items[1].description", Value: mpPtr("One")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3", len(got.LineItems))
+	}
+	wantOrder := []string{"One", "Two", "Ten"}
+	for i, want := range wantOrder {
+		if got.LineItems[i].Description == nil || *got.LineItems[i].Description != want {
+			t.Errorf("LineItems[%d].Description = %v, want %q -- lines must sort by numeric index (1,2,10), not arrival order", i, got.LineItems[i].Description, want)
+		}
+	}
+}
+
+// AC-3: no line rows leaves CreateInput.LineItems nil -- today's behaviour, unchanged.
+func TestDocumentCreateInput_NoLineRowsLeavesLineItemsNil(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-NOLINES-1")},
+		{Name: "subtotal", Value: mpPtr("100.00")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	// Positive companion, so the nil check below did not pass vacuously against a stub.
+	if got.InvoiceNumber != "INV-NOLINES-1" {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, "INV-NOLINES-1")
+	}
+	if got.LineItems != nil {
+		t.Errorf("LineItems = %v, want nil", got.LineItems)
+	}
+}
+
+// AC-4: a hole in the indices (line_items[1], line_items[3]) yields two rows with line_no 1
+// and 2 once written -- here, two LineItemInput entries in index order, each carrying its OWN
+// seeded value so a renumber (relabeling index 3's cell as if it were index 2) cannot pass.
+func TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-HOLE-1")},
+		{Name: "line_items[1].description", Value: mpPtr("First Row")},
+		{Name: "line_items[3].description", Value: mpPtr("Third Row")},
+	}}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 2 {
+		t.Fatalf("len(LineItems) = %d, want 2", len(got.LineItems))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "First Row" {
+		t.Errorf("LineItems[0].Description = %v, want %q", got.LineItems[0].Description, "First Row")
+	}
+	if got.LineItems[1].Description == nil || *got.LineItems[1].Description != "Third Row" {
+		t.Errorf("LineItems[1].Description = %v, want %q", got.LineItems[1].Description, "Third Row")
+	}
+}
+
+// AC-9: internal/importer cannot import internal/extraction (document_deps_test.go), so its
+// line-role list is a local copy -- this reads both sides' Go source and compares them
+// element-for-element, matching MAP-11's vocabulary guard for the header fields.
+func TestImporterLineRoles_MatchesExtractionLineRoles(t *testing.T) {
+	root := sxDepsRepoRoot(t)
+
+	extractionRoles := mpResolvedIdentStringSliceVar(t, filepath.Join(root, "internal/extraction/lineitems.go"), "LineRoles")
+	if len(extractionRoles) != 5 {
+		t.Fatalf("resolved %d name(s) from extraction.LineRoles, want exactly 5 -- the resolver side of this guard is broken, so the comparison below would be vacuous", len(extractionRoles))
+	}
+
+	importerRoles := mpStringSliceVar(t, filepath.Join(root, "internal/importer/document.go"), "mapperLineRoles")
+	if len(importerRoles) == 0 {
+		t.Fatal("parsed 0 names from internal/importer/document.go's mapperLineRoles -- the importer's own local copy of the role list does not exist yet (expected RED in Mode A)")
+	}
+	if !slices.Equal(importerRoles, extractionRoles) {
+		t.Errorf("mapperLineRoles = %v, want %v (element-for-element, in order, matching extraction.LineRoles)", importerRoles, extractionRoles)
+	}
+}
+
+// mpResolvedIdentStringSliceVar is mpStringSliceVar's Ident-resolving sibling: it parses path
+// and returns the elements of the top-level `var name = []string{...}` declaration, resolving
+// each Ident element (e.g. extraction.LineRoles, whose elements are consts, not string
+// literals) to its own top-level `const <Ident> = "<literal>"` declaration in the SAME file.
+// mpStringSliceVar only reads BasicLits and returns nil on a slice of Idents.
+func mpResolvedIdentStringSliceVar(t *testing.T, path, name string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	consts := make(map[string]string)
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+				continue
+			}
+			lit, ok := vs.Values[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			s, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				continue
+			}
+			consts[vs.Names[0].Name] = s
+		}
+	}
+
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != name || len(vs.Values) != 1 {
+				continue
+			}
+			cl, ok := vs.Values[0].(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			var out []string
+			for _, elt := range cl.Elts {
+				id, ok := elt.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				lit, ok := consts[id.Name]
+				if !ok {
+					continue
+				}
+				out = append(out, lit)
+			}
+			return out
+		}
+	}
+	return nil
 }
 
 // --- Adversarial coverage (QA, task-762 Mode B) ------------------------------------------
@@ -707,11 +969,12 @@ func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
 	}
 }
 
-// AC-6, and CONFIRMATORY like its sibling above: documentCreateInput's unknown-name drop is
-// unchanged by EXTR-13-02, so this passes today. What it adds is a fixture carrying the mock's
-// real 16 line-item names (not the two illustrative ones MAP-04 uses), floored non-vacuous,
-// so the LineItems-nil claim is over the actual shape mock.go now emits.
-func TestDocumentCreateInput_MockDefaultStillProducesZeroLineItems(t *testing.T) {
+// AC-1/AC-4, re-point of the former "still zero line items" pin: the mock's real 16
+// line-item names (not the two illustrative ones MAP-04 uses) now group into 4 LineItems,
+// index order, over a fixture floored non-vacuous at 16 line-named entries. Line 3's cell set
+// carries no quantity (below) -- a partial line stores faithfully, it is not dropped or
+// zero-filled.
+func TestDocumentCreateInput_MockDefaultNowProducesFourLines(t *testing.T) {
 	lineFields := []extractedField{
 		{Name: "line_items"},
 		{Name: "line_items[1].description", Value: mpPtr("Widget")},
@@ -758,8 +1021,17 @@ func TestDocumentCreateInput_MockDefaultStillProducesZeroLineItems(t *testing.T)
 		t.Errorf("Total = %v, want %q -- a line value must not have overwritten it", got.Total, "1000.00")
 	}
 
-	if got.LineItems != nil {
-		t.Errorf("LineItems = %v, want nil -- line_items/line_items[N].<role> are not header fields; only a human pressing Save (subtask 03) writes lines", got.LineItems)
+	if len(got.LineItems) != 4 {
+		t.Fatalf("len(LineItems) = %d, want 4", len(got.LineItems))
+	}
+	wantDescs := []string{"Widget", "Assembly, calibration and on-site commissioning of the line-item rig", "Delivery", "Installation"}
+	for i, want := range wantDescs {
+		if got.LineItems[i].Description == nil || *got.LineItems[i].Description != want {
+			t.Errorf("LineItems[%d].Description = %v, want %q", i, got.LineItems[i].Description, want)
+		}
+	}
+	if got.LineItems[2].Quantity != nil {
+		t.Errorf("LineItems[2].Quantity = %v, want nil -- line_items[3] carries no quantity in the fixture", *got.LineItems[2].Quantity)
 	}
 }
 

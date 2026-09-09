@@ -267,7 +267,7 @@ func TestImportDocumentReadback_WrittenInvoiceIsDraftWithZeroLineItems(t *testin
 		t.Errorf("status = %q, want %q", got.Status, invoice.StatusDraft)
 	}
 	if len(got.LineItems) != 0 {
-		t.Errorf("len(LineItems) = %d, want 0 (D-13: nothing extracted feeds line items yet)", len(got.LineItems))
+		t.Errorf("len(LineItems) = %d, want 0", len(got.LineItems))
 	}
 	if got := countLineItems(t, super, invID); got != 0 {
 		t.Errorf("line_items rows for the written invoice = %d, want 0", got)
@@ -279,8 +279,8 @@ func TestImportDocumentReadback_WrittenInvoiceIsDraftWithZeroLineItems(t *testin
 // RB-08: the REAL invoice.Gate (never fakeGate) over a document-sourced, zero-line draft
 // leaves it draft and reports line-items-required -- Core AC 8's invoice half, extending
 // TestGate_ValidateZeroLineItemsStaysDraftWithLineItemsRequired (internal/invoice/gate_test.go:
-// 371) to a fixture ImportDocument actually produced (D-13 forces zero line items here) rather
-// than a hand-built one.
+// 371) to a fixture ImportDocument actually produced (docCleanValues seeds no line rows, so
+// this fixture is zero-line by construction) rather than a hand-built one.
 func TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -321,5 +321,219 @@ func TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired
 	}
 	if !found {
 		t.Errorf("violations = %+v, want one naming line-items-required", vs)
+	}
+}
+
+// --- line-item grouping reaches the store (retiring D-13) ------------------------
+
+// rbLineCellsRaw reads every line_items numeric-shaped column as text for invoiceID, so the
+// discrimination check below can prove no stored cell carries a HEADER amount, not just that
+// the hydrated Go values look right.
+func rbLineCellsRaw(t *testing.T, super *pgxpool.Pool, invoiceID string) []string {
+	t.Helper()
+	rows, err := super.Query(context.Background(),
+		`SELECT quantity::text, unit_price::text, line_total::text, line_tax::text
+		   FROM line_items WHERE invoice_id = $1 ORDER BY line_no`, invoiceID)
+	if err != nil {
+		t.Fatalf("read line_items raw cells: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var q, u, lt, tax *string
+		if err := rows.Scan(&q, &u, &lt, &tax); err != nil {
+			t.Fatalf("scan line_items raw cells: %v", err)
+		}
+		for _, v := range []*string{q, u, lt, tax} {
+			if v != nil {
+				out = append(out, *v)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate line_items raw cells: %v", err)
+	}
+	return out
+}
+
+// AC-1/AC-2: a document-imported invoice's line_items rows come from the reader, in numeric
+// index order -- proven against the REAL Service.ImportDocument and REAL invoice.Store, not a
+// hand-built CreateInput. Discrimination: every seeded line cell is a value that appears
+// NOWHERE among the header fields, and no stored line_items row carries a header amount.
+func TestImportDocumentReadback_WrittenInvoiceCarriesTheReadLines(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-READLINES tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-READLINES entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-READLINES-INV") // header subtotal/vat/total: 1000.00/75.00/1075.00
+	values["line_items[1].description"] = sxPtr("Line One Widget")
+	values["line_items[1].quantity"] = sxPtr("2")
+	values["line_items[1].unit_price"] = sxPtr("11.11")
+	values["line_items[1].line_total"] = sxPtr("22.22")
+	values["line_items[2].description"] = sxPtr("Line Two Gadget")
+	values["line_items[2].quantity"] = sxPtr("3")
+	values["line_items[2].unit_price"] = sxPtr("33.33")
+	values["line_items[2].line_total"] = sxPtr("99.99")
+	values["line_items[3].description"] = sxPtr("Line Three Gizmo")
+	values["line_items[3].quantity"] = sxPtr("4")
+	values["line_items[3].unit_price"] = sxPtr("44.44")
+	values["line_items[3].line_total"] = sxPtr("177.76")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land, so the read-back below would be vacuous", got, want)
+	}
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "RB-READLINES-INV")
+
+	istore := invoice.NewStore(app)
+	got, err := istore.Get(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3", len(got.LineItems))
+	}
+
+	wantDescs := []string{"Line One Widget", "Line Two Gadget", "Line Three Gizmo"}
+	wantQty := []string{"2.000", "3.000", "4.000"} // line_items.quantity is numeric(14,3)
+	wantPrice := []string{"11.11", "33.33", "44.44"}
+	wantTotal := []string{"22.22", "99.99", "177.76"}
+	for i, li := range got.LineItems {
+		if li.LineNo != i+1 {
+			t.Errorf("LineItems[%d].LineNo = %d, want %d", i, li.LineNo, i+1)
+		}
+		if li.Description == nil || *li.Description != wantDescs[i] {
+			t.Errorf("LineItems[%d].Description = %v, want %q", i, li.Description, wantDescs[i])
+		}
+		if li.Quantity == nil || *li.Quantity != wantQty[i] {
+			t.Errorf("LineItems[%d].Quantity = %v, want %q", i, li.Quantity, wantQty[i])
+		}
+		if li.UnitPrice == nil || *li.UnitPrice != wantPrice[i] {
+			t.Errorf("LineItems[%d].UnitPrice = %v, want %q", i, li.UnitPrice, wantPrice[i])
+		}
+		if li.LineTotal == nil || *li.LineTotal != wantTotal[i] {
+			t.Errorf("LineItems[%d].LineTotal = %v, want %q", i, li.LineTotal, wantTotal[i])
+		}
+	}
+
+	if n := countLineItems(t, super, invID); n != 3 {
+		t.Errorf("raw line_items rows = %d, want 3", n)
+	}
+
+	// Discrimination: no stored cell equals a header amount -- the lines came from the reader,
+	// not from the header row leaking into line_items by accident.
+	for _, headerVal := range []string{"1000.00", "75.00", "1075.00"} {
+		for _, cell := range rbLineCellsRaw(t, super, invID) {
+			if cell == headerVal {
+				t.Errorf("a stored line_items cell = %q, which is a header amount -- lines must never carry header values", headerVal)
+			}
+		}
+	}
+}
+
+// AC-1: per-line VAT (line_tax) reaches the stored row and invoice.SubmissionCanonical, using
+// a value distinct from the header vat so a mapper that accidentally read the header field
+// instead cannot pass.
+func TestImportDocumentReadback_PerLineVatReachesTheStoredRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-LINETAX tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-LINETAX entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-LINETAX-INV") // header vat: 75.00
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].line_tax"] = sxPtr("12.34") // deliberately not the header vat
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "RB-LINETAX-INV")
+
+	istore := invoice.NewStore(app)
+	got, err := istore.Get(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("len(LineItems) = %d, want 1", len(got.LineItems))
+	}
+	if got.LineItems[0].LineTax == nil || *got.LineItems[0].LineTax != "12.34" {
+		t.Fatalf("LineItems[0].LineTax = %v, want %q -- the assertions below then prove nothing", got.LineItems[0].LineTax, "12.34")
+	}
+
+	canonical := invoice.SubmissionCanonical(got)
+	if len(canonical.Lines) != 1 {
+		t.Fatalf("len(SubmissionCanonical.Lines) = %d, want 1", len(canonical.Lines))
+	}
+	if canonical.Lines[0].LineTax == nil || *canonical.Lines[0].LineTax != "12.34" {
+		t.Errorf("SubmissionCanonical.Lines[0].LineTax = %v, want %q", canonical.Lines[0].LineTax, "12.34")
+	}
+}
+
+// AC-6: a document-imported invoice whose table read cleanly is NOT blocked by
+// line-items-required once the REAL invoice.Gate runs over it. Attribution control:
+// TestImportDocumentReadback_RealGateLeavesZeroLineDraftWithLineItemsRequired (above, KEPT
+// GREEN) proves the same rule still fires on a line-less fixture, so a pass here is caused by
+// the seeded lines, not by an unrelated change to the gate.
+func TestImportDocumentReadback_RealGateNoLongerReportsLineItemsRequired(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-GATELINES tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-GATELINES entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-GATELINES-INV") // header subtotal: 1000.00
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].quantity"] = sxPtr("2")
+	values["line_items[1].unit_price"] = sxPtr("100.00")
+	values["line_items[1].line_total"] = sxPtr("200.00")
+	values["line_items[2].description"] = sxPtr("Gadget")
+	values["line_items[2].quantity"] = sxPtr("1")
+	values["line_items[2].unit_price"] = sxPtr("300.00")
+	values["line_items[2].line_total"] = sxPtr("300.00")
+	values["line_items[3].description"] = sxPtr("Widget XL")
+	values["line_items[3].quantity"] = sxPtr("1")
+	values["line_items[3].unit_price"] = sxPtr("500.00")
+	values["line_items[3].line_total"] = sxPtr("500.00") // 200+300+500 = 1000.00, the header subtotal
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land, so the gate assertion below would be vacuous", got, want)
+	}
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "RB-GATELINES-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+
+	got, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Validate: want a normal (nil-error) outcome, got err: %v", err)
+	}
+
+	var vs []invoice.Violation
+	if err := json.Unmarshal(got.Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", got.Violations, err)
+	}
+	for _, v := range vs {
+		if v.RuleKey == "line-items-required" {
+			t.Errorf("violations = %+v, still names line-items-required despite 3 seeded line rows", vs)
+		}
 	}
 }

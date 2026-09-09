@@ -18,6 +18,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -777,5 +778,42 @@ func TestRLS_EditBySourceDocumentTxRefusesAnEmptyStringLineTax(t *testing.T) {
 	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &lines}); !errors.Is(err, ErrValidation) {
 		t.Errorf("an empty line_tax returned %v, want ErrValidation -- \"\" must not be read as a null, "+
 			"nor reach the column as one", err)
+	}
+}
+
+// --- AC-8: replaceLinesTx's 22003 mapping is symmetric with Store.Create's -----------------
+
+// TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation drives EditBySourceDocumentTx, the
+// seam the extraction review screen's correction handler actually calls (via editTx ->
+// replaceLinesTx) -- not a stub applier. Mirrors
+// TestEditHandler_RealStore_MalformedLineNumericIs400NotFrom500 (handlers_test.go), the 22P02
+// precedent at this same seam.
+func TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation(t *testing.T) {
+	f := ebsSeed(t, "EBS-OVERFLOW")
+
+	desc := "Existing Line"
+	price := "50.00"
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, unit_price)
+		 VALUES ($1, $2, 1, $3, $4::numeric)`,
+		f.tenantID, f.invoiceID, desc, price); err != nil {
+		t.Fatalf("seed the existing line: %v", err)
+	}
+	before := readLineItemsForTest(t, f.super, f.invoiceID)
+	if len(before) != 1 || before[0].Description == nil || *before[0].Description != desc {
+		t.Fatalf("control: seeded line = %+v, want one row named %q -- the claim below has no reference state", before, desc)
+	}
+
+	oversized := strings.Repeat("9", 20) // numeric(14,2) holds at most 12 integer digits
+	newDesc := "Replacement"
+	lines := []LineItemInput{{Description: &newDesc, UnitPrice: &oversized}}
+	_, err := f.edit(t, f.documentID, EditInput{LineItems: &lines})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("EditBySourceDocumentTx with a 20-digit unit_price: err = %v, want ErrValidation (22003 numeric_value_out_of_range)", err)
+	}
+
+	after := readLineItemsForTest(t, f.super, f.invoiceID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("line_items changed despite a refused edit: before %+v, after %+v", before, after)
 	}
 }

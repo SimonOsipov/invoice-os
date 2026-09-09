@@ -32,6 +32,7 @@
 package importer
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -1388,5 +1389,166 @@ func quarantineBranches() []quarantineBranch {
 			}},
 			wantField: "issue_date",
 		},
+	}
+}
+
+// --- Adversarial line-item coverage (QA, task-991 Mode B) ---------------------------------
+
+// TestDocumentCreateInput_LineFieldNameGrammarRejections walks the shapes adjacent to a legal
+// line name. Every rejection sits in the same fixture as the one legal name, so a grammar that
+// refuses every shape cannot pass.
+func TestDocumentCreateInput_LineFieldNameGrammarRejections(t *testing.T) {
+	rejected := []string{
+		"line_items[0].description",   // 0 is not a 1-based index
+		"line_items[01].description",  // a leading zero is not a wire index
+		"line_items[+1].description",  // Atoi admits "+1"; the wire never writes it
+		"line_items[-1].description",  // negative
+		"line_items[].description",    // no digits
+		"line_items[ 1].description",  // padded
+		"line_items[1].line_item",     // not one of mapperLineRoles
+		"line_items[1].",              // empty role
+		"line_items[1]description",    // no separator
+		"line_item[1].description",    // wrong container
+		"xline_items[1].description",  // the prefix must anchor
+		"line_items[1].DESCRIPTION",   // roles are lower case on the wire
+		"line_items[1].description.x", // trailing junk lands in the role, which is then no role
+	}
+	fields := []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-GRAMMAR-1")},
+		{Name: "line_items[1].description", Value: mpPtr("The Only Legal One")},
+	}
+	for i, name := range rejected {
+		fields = append(fields, extractedField{Name: name, Value: mpPtr(fmt.Sprintf("reject-%d", i))})
+	}
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: fields})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("len(LineItems) = %d, want 1 -- exactly one of the %d names in the fixture is legal", len(got.LineItems), len(fields))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "The Only Legal One" {
+		t.Errorf("LineItems[0].Description = %v, want %q", got.LineItems[0].Description, "The Only Legal One")
+	}
+	for _, cell := range []*string{got.LineItems[0].Quantity, got.LineItems[0].UnitPrice, got.LineItems[0].LineTotal, got.LineItems[0].LineTax} {
+		if cell != nil {
+			t.Errorf("a rejected name reached a cell of the surviving line: %q", *cell)
+		}
+	}
+}
+
+// TestDocumentCreateInput_ASingleLineRowProducesOneEntry: the smallest table. A grouping keyed
+// on "more than one index" returns nil here.
+func TestDocumentCreateInput_ASingleLineRowProducesOneEntry(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-ONE-1")},
+		{Name: "line_items[1].description", Value: mpPtr("Only Row")},
+		{Name: "line_items[1].unit_price", Value: mpPtr("7.00")},
+	}})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("len(LineItems) = %d, want 1", len(got.LineItems))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "Only Row" {
+		t.Errorf("LineItems[0].Description = %v, want %q", got.LineItems[0].Description, "Only Row")
+	}
+	if got.LineItems[0].UnitPrice == nil || *got.LineItems[0].UnitPrice != "7.00" {
+		t.Errorf("LineItems[0].UnitPrice = %v, want %q", got.LineItems[0].UnitPrice, "7.00")
+	}
+}
+
+// TestDocumentCreateInput_DuplicateLineCellLastArrivalWins: the grouping loop walks ex.Fields,
+// not the deduplicated values map, so it needs its own answer for a repeated cell. Pinned as
+// last-arrival-wins, matching TestDocumentCreateInput_DuplicateFieldNameLastWriteWins for the
+// header fields -- the two halves of the mapper must not disagree.
+func TestDocumentCreateInput_DuplicateLineCellLastArrivalWins(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-DUP-1")},
+		{Name: "line_items[1].description", Value: mpPtr("First Arrival")},
+		{Name: "line_items[1].description", Value: mpPtr("Last Arrival")},
+	}})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("len(LineItems) = %d, want 1 -- a duplicate cell must not open a second line", len(got.LineItems))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "Last Arrival" {
+		t.Errorf("LineItems[0].Description = %v, want %q (last arrival wins, as the header fields do)", got.LineItems[0].Description, "Last Arrival")
+	}
+}
+
+// TestDocumentCreateInput_ALineWhoseEveryCellIsNullStillProducesAnEntry: a decided-but-NULL
+// reading is a real rank-0 row (present-but-nil, distinct from absent), so the mapper keeps its
+// ordinal instead of closing the hole -- the row a reviewer saw is the row the invoice carries.
+// TestImportDocumentReadback_ANullOnlyLineIsStillWritten proves the store accepts it.
+func TestDocumentCreateInput_ALineWhoseEveryCellIsNullStillProducesAnEntry(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-NULLCELL-1")},
+		{Name: "line_items[1].description", Value: mpPtr("Real Row")},
+		{Name: "line_items[2].description", Value: nil},
+		{Name: "line_items[2].quantity", Value: nil},
+		{Name: "line_items[3].description", Value: mpPtr("Third Row")},
+	}})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3 -- an all-NULL line holds its ordinal", len(got.LineItems))
+	}
+	if got.LineItems[0].Description == nil || *got.LineItems[0].Description != "Real Row" {
+		t.Errorf("LineItems[0].Description = %v, want %q", got.LineItems[0].Description, "Real Row")
+	}
+	if got.LineItems[1].Description != nil || got.LineItems[1].Quantity != nil {
+		t.Errorf("LineItems[1] = %+v, want every cell nil", got.LineItems[1])
+	}
+	if got.LineItems[2].Description == nil || *got.LineItems[2].Description != "Third Row" {
+		t.Errorf("LineItems[2].Description = %v, want %q -- the NULL row must not have swallowed the ordinal", got.LineItems[2].Description, "Third Row")
+	}
+}
+
+// TestDocumentCreateInput_ALargeIndexParsesAndSortsLast: a misread index is a plain int and the
+// sort is numeric, so a huge one sorts last rather than second. An index wider than an int64
+// fails Atoi and is dropped, the same answer any other unparseable name gets.
+func TestDocumentCreateInput_ALargeIndexParsesAndSortsLast(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("INV-BIGIDX-1")},
+		{Name: "line_items[2147483648].description", Value: mpPtr("Huge")},
+		{Name: "line_items[2].description", Value: mpPtr("Two")},
+		{Name: "line_items[99999999999999999999999].description", Value: mpPtr("Wider than int64")},
+	}})
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v, want nil", rowErr)
+	}
+	if len(got.LineItems) != 2 {
+		t.Fatalf("len(LineItems) = %d, want 2 -- the int64-overflowing index is dropped, the other two are kept", len(got.LineItems))
+	}
+	for i, want := range []string{"Two", "Huge"} {
+		if got.LineItems[i].Description == nil || *got.LineItems[i].Description != want {
+			t.Errorf("LineItems[%d].Description = %v, want %q", i, got.LineItems[i].Description, want)
+		}
+	}
+}
+
+// TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole is the observable behind
+// document.go's "grouping runs after the quarantine branch" note. The ordering fence at
+// TestDocumentCreateInput_OnlyUnknownFieldNamesReturnsInvoiceNumberRowError carries no line
+// cells, so it cannot see a document that HAS lines and no number.
+func TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole(t *testing.T) {
+	got, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: []extractedField{
+		{Name: "line_items[1].description", Value: mpPtr("Widget")},
+		{Name: "line_items[1].unit_price", Value: mpPtr("10.00")},
+		{Name: "line_items[2].description", Value: mpPtr("Gadget")},
+	}})
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a structural RowError on invoice_number")
+	}
+	if rowErr.Field != "invoice_number" {
+		t.Errorf("rowErr.Field = %q, want %q", rowErr.Field, "invoice_number")
+	}
+	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
+		t.Errorf("CreateInput = %+v, want the zero value -- a quarantined document carries no lines", got)
 	}
 }

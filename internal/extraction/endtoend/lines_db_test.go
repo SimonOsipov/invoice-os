@@ -1,12 +1,17 @@
 // lines_db_test.go: the line-item outcome, read off the invoice the path actually wrote.
 //
 // documentCreateInput now groups line_items[N].<role> extraction fields onto
-// invoice.CreateInput.LineItems, so the worker's line rows reach the invoice -- proven below
-// against rich_invoice.pdf, the only committed fixture carrying both a table and a docling
-// golden. The corpus-wide headline (TestRLS_EndToEndScoresLineItemOutcome) stays a permanent
-// zero regardless: no corpus_* layout carries a table. Every non-zero figure here still ships
-// with a positive control in the same test, so a scorer that cannot read line_items cannot fake
-// it.
+// invoice.CreateInput.LineItems, so the worker's line rows reach the invoice -- proven below on
+// rich_invoice.pdf and on wild_ruled_lines_totals.pdf, the two committed fixtures carrying both
+// a table and a docling golden.
+//
+// The corpus-wide headline (TestRLS_EndToEndScoresLineItemOutcome) still reads zero, and that
+// zero is now a TEXT-SEAM fact rather than a wiring one: no corpus_* layout carries a table, and
+// the one wild_* layout that does is read through pdfium in that walk, which extracts no line
+// row. TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling measures both readers on it.
+//
+// Every non-zero figure here still ships with a positive control in the same test, so a scorer
+// that cannot read line_items cannot fake it.
 package endtoend
 
 import (
@@ -193,8 +198,14 @@ func TestRLS_EndToEndScoresLineItemOutcome(t *testing.T) {
 			t.Errorf("%s scores its reached figure against a denominator of %d, want %d -- a layout carrying a table cannot be scored against zero",
 				want.file, reached.total, eeLinesExpected[want.file])
 		}
+		// The zero is a text-seam fact, not a mapper one: eeOptsFor hands a docling golden only
+		// to eeOCRLayouts, so every other layout is read through pdfium here and pdfium yields
+		// no line_items[N] row on any of them.
+		// TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling measures both readers on
+		// the one layout that carries a table, so this zero cannot be read as "lines never
+		// reach an invoice".
 		if reached.hits != 0 {
-			t.Errorf("%s reached %d line(s) on the invoice; the mapper writes none (documentCreateInput names no LineItems key), so a non-zero here means the read is not the invoice's own rows",
+			t.Errorf("%s reached %d line(s) on the invoice; no layout in this walk extracts a line row through pdfium, so a non-zero here means the read is not the invoice's own rows",
 				want.file, reached.hits)
 		}
 		// priced counts a subset of reached, so its denominator IS the reached figure.
@@ -458,4 +469,92 @@ func TestRLS_EndToEndPricedCountsTheColumnNotTheValue(t *testing.T) {
 	}
 
 	eeAssertControl(t, ctx, w, "EE-LINES-CONTROL-6")
+}
+
+// --- the corpus zero's real cause (QA, task-991 Mode B) -----------------------------------
+
+// eeRuledLines* are wild_ruled_lines_totals.pdf's own figures under the DOCLING reader,
+// measured: 3 of the document's 3 line rows extract at rank 0, all 3 reach the invoice, and 2 of
+// them carry a unit_price.
+const (
+	eeRuledExtracted = 3
+	eeRuledReached   = 3
+	eeRuledPriced    = 2
+)
+
+// TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling separates the two readers on the
+// one scored layout that carries a table. TestRLS_EndToEndScoresLineItemOutcome walks it through
+// pdfium and reads 0 of 3; that zero is a text-seam outcome, and reading it as "extracted lines
+// do not reach an invoice" would be wrong. Deployed extraction runs docling, and under docling
+// every extracted index reaches the invoice.
+//
+// Both halves live in one test: the pdfium zero alone is satisfied by a scorer that reads
+// nothing, and the docling figure alone cannot say what the corpus report's zero means.
+func TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	const layout = "wild_ruled_lines_totals.pdf"
+	eeRequireFixtures(t, []string{layout, wildGolden(layout)})
+
+	var pdfiumExtracted, pdfiumReached, doclingExtracted int
+	var doclingLines eeLineOutcome
+
+	// A subtest per reader: eeExtract registers its client Stop on the t it is given, so two
+	// live clients would otherwise share the extraction queue and race for the job.
+	t.Run("pdfium", func(t *testing.T) {
+		w := eeSeed(t, ctx, layout)
+		jobID := eeExtract(t, ctx, w, layout)
+		pdfiumExtracted = len(eeLineIndices(t, ctx, jobID))
+		eeImport(t, ctx, w)
+		if id, ok := eeInvoiceIDForDocument(t, ctx, w.documentID); ok {
+			pdfiumReached = eeScoreLines(t, ctx, id).reached
+		} else {
+			t.Fatalf("%s produced no invoices row under pdfium; the zero below would be a quarantine, not a text-seam outcome", layout)
+		}
+		eeAssertControl(t, ctx, w, "EE-RULED-CONTROL-PDFIUM")
+	})
+
+	t.Run("docling", func(t *testing.T) {
+		w := eeSeed(t, ctx, layout)
+		jobID := eeExtract(t, ctx, w, layout, eeWithText(eeGoldenReader(t, wildGolden(layout))))
+		doclingExtracted = len(eeLineIndices(t, ctx, jobID))
+		if doclingExtracted != eeRuledExtracted {
+			t.Fatalf("%s extracts %d distinct line_items[N] index(es) at rank 0 under docling, pinned at %d -- re-measure", layout, doclingExtracted, eeRuledExtracted)
+		}
+		eeImport(t, ctx, w)
+		id, ok := eeInvoiceIDForDocument(t, ctx, w.documentID)
+		if !ok {
+			t.Fatalf("%s produced no invoices row under docling", layout)
+		}
+		doclingLines = eeScoreLines(t, ctx, id)
+		if doclingLines.reached != eeRuledReached || doclingLines.priced != eeRuledPriced {
+			t.Errorf("%s holds %d line(s) reached / %d priced under docling, want %d / %d -- every extracted index must reach the invoice",
+				layout, doclingLines.reached, doclingLines.priced, eeRuledReached, eeRuledPriced)
+		}
+	})
+
+	if pdfiumExtracted != 0 {
+		t.Errorf("%s extracted %d line index(es) under pdfium; the corpus walk's zero is then NOT a text-seam outcome and its stated cause is wrong", layout, pdfiumExtracted)
+	}
+	if pdfiumReached != 0 {
+		t.Errorf("%s reached %d line(s) under pdfium, want 0 -- TestRLS_EndToEndScoresLineItemOutcome pins the same zero", layout, pdfiumReached)
+	}
+	if doclingLines.reached == pdfiumReached {
+		t.Errorf("both readers score %d reached; this test cannot then attribute the corpus zero to the text seam", pdfiumReached)
+	}
+}
+
+// eeLineIndices is the distinct rank-0 line_items[N] index set jobID wrote.
+func eeLineIndices(t *testing.T, ctx context.Context, jobID string) map[int]bool {
+	t.Helper()
+	out := map[int]bool{}
+	for _, r := range eeFieldResults(t, ctx, jobID) {
+		if r.rank != 0 {
+			continue
+		}
+		if idx, _, ok := extraction.ParseLineFieldName(r.name); ok {
+			out[idx] = true
+		}
+	}
+	return out
 }

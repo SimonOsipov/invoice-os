@@ -518,6 +518,12 @@ func TestImportDocumentReadback_RealGateNoLongerReportsLineItemsRequired(t *test
 	}
 	invID := invoiceIDByNumber(t, super, entityID, "RB-GATELINES-INV")
 
+	// Positive companion for the absence assertion below: the rule can only be silent for the
+	// right reason if the rows it looks for are actually there.
+	if n := countLineItems(t, super, invID); n != 3 {
+		t.Fatalf("the imported invoice holds %d line_items row(s), want 3 -- the gate assertion below would pass for the wrong reason", n)
+	}
+
 	srv := startInProcess04ForImporter(t, app)
 	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
 	gate := invoice.NewGate(invoice.NewStore(app), validator)
@@ -535,5 +541,127 @@ func TestImportDocumentReadback_RealGateNoLongerReportsLineItemsRequired(t *test
 		if v.RuleKey == "line-items-required" {
 			t.Errorf("violations = %+v, still names line-items-required despite 3 seeded line rows", vs)
 		}
+	}
+}
+
+// --- Adversarial line-item coverage (QA, task-991 Mode B) ---------------------------------
+
+// TestImportDocumentReadback_LineNoFollowsNumericIndexAcrossTen is AC-2's written-invoice half.
+// The three specs above all seed indices 1..3, where a lexicographic sort and a numeric one
+// agree; only an index past 9 separates them. docSeedExtraction seeds the non-header names in
+// sorted-name order, so "line_items[10].*" is written to extraction_field_results FIRST -- the
+// arrival order and the required order genuinely disagree here.
+func TestImportDocumentReadback_LineNoFollowsNumericIndexAcrossTen(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-TENIDX tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-TENIDX entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-TENIDX-INV")
+	values["line_items[10].description"] = sxPtr("Index Ten")
+	values["line_items[2].description"] = sxPtr("Index Two")
+	values["line_items[1].description"] = sxPtr("Index One")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land", got, want)
+	}
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "RB-TENIDX-INV")
+
+	got, err := invoice.NewStore(app).Get(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3", len(got.LineItems))
+	}
+	for i, want := range []string{"Index One", "Index Two", "Index Ten"} {
+		if got.LineItems[i].LineNo != i+1 {
+			t.Errorf("LineItems[%d].LineNo = %d, want %d", i, got.LineItems[i].LineNo, i+1)
+		}
+		if got.LineItems[i].Description == nil || *got.LineItems[i].Description != want {
+			t.Errorf("line_no %d reads %v, want %q -- a lexicographic sort puts index 10 second", i+1, got.LineItems[i].Description, want)
+		}
+	}
+}
+
+// TestImportDocumentReadback_ANullOnlyLineIsStillWritten: the store half of
+// TestDocumentCreateInput_ALineWhoseEveryCellIsNullStillProducesAnEntry. An all-NULL
+// LineItemInput is a legal line_items row, so the ordinal a reviewer saw survives the write.
+func TestImportDocumentReadback_ANullOnlyLineIsStillWritten(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-NULLLINE tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-NULLLINE entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-NULLLINE-INV")
+	values["line_items[1].description"] = sxPtr("Real Row")
+	values["line_items[2].description"] = nil
+	values["line_items[3].description"] = sxPtr("Third Row")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "RB-NULLLINE-INV")
+
+	got, err := invoice.NewStore(app).Get(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.LineItems) != 3 {
+		t.Fatalf("len(LineItems) = %d, want 3 -- an all-NULL line keeps its ordinal", len(got.LineItems))
+	}
+	if got.LineItems[1].Description != nil {
+		t.Errorf("LineItems[1].Description = %v, want nil", got.LineItems[1].Description)
+	}
+	if got.LineItems[2].Description == nil || *got.LineItems[2].Description != "Third Row" {
+		t.Errorf("LineItems[2].Description = %v, want %q", got.LineItems[2].Description, "Third Row")
+	}
+}
+
+// TestImportDocumentReadback_LinesWithoutAnInvoiceNumberWriteNothing: the persisted half of
+// document.go's "grouping runs after the quarantine branch" note. A table that read cleanly but
+// no invoice number quarantines whole -- no invoice, and so no line_items row either.
+func TestImportDocumentReadback_LinesWithoutAnInvoiceNumberWriteNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "RB-NONUM tenant")
+	entityID := seedEntity(t, super, tenantID, "RB-NONUM entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("RB-NONUM-INV")
+	delete(values, "invoice_number")
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].unit_price"] = sxPtr("10.00")
+	values["line_items[2].description"] = sxPtr("Gadget")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land", got, want)
+	}
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: want a quarantined domain outcome, got err: %v", err)
+	}
+	if res.RowsInvalid != 1 || len(res.Errors) == 0 {
+		t.Fatalf("RowsInvalid = %d with %d error(s), want 1 and at least one RowError", res.RowsInvalid, len(res.Errors))
+	}
+	if res.Errors[0].Field != "invoice_number" {
+		t.Errorf("RowError.Field = %q, want %q", res.Errors[0].Field, "invoice_number")
+	}
+	if n := countLineItemsForEntity(t, super, entityID); n != 0 {
+		t.Errorf("line_items for the entity = %d, want 0 -- a quarantined document writes no lines", n)
 	}
 }

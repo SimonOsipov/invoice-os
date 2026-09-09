@@ -445,10 +445,12 @@ anyone would satisfy the zero half alone.
 **The line-item figures.** The report carries `line items reached / expected` and
 `line items priced / reached` beside the header number, as two raw counts and a slash — never a
 computed ratio. `documentCreateInput` groups `line_items[N].<role>` extraction fields onto
-`invoice.CreateInput.LineItems` (EXTR-24), so the corpus-wide figures below are **0 on every
-layout** for an orthogonal reason, not because nothing connects the two.
+`invoice.CreateInput.LineItems`, so an extracted line does reach the invoice. The corpus-wide
+figures below still read **0 on every layout**, for a text-seam reason spelled out under
+[Line-item outcome](#line-item-outcome): this walk reads all but one layout through pdfium, which
+extracts no line row.
 
-Because no `corpus_*` layout carries a table, both denominators are 0 too, so every row renders
+Because no `corpus_*` layout carries a table, their denominators are 0 too, so those rows render
 `0/0` — which is indistinguishable from a satisfied denominator. The report therefore prints a
 `NO LINE SIGNAL` line whenever every reached row has a zero denominator, and stops printing it
 the moment a table-bearing layout joins the scored set.
@@ -655,12 +657,16 @@ reached rows hold a unit price.
 | `wild_stacked_borderless.pdf` | 0 | 0 | 0 |
 | `wild_scanned_no_number.pdf` | 0 | 0 | 0 |
 
-**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. This is
-a permanent zero for the life of this story, and it is a wiring gap rather than an extraction
-one: `documentCreateInput` names no `LineItems` key (`internal/importer/document.go`), while
-`invoice.Store.Create` does write one `line_items` row per `LineItemInput` and the extraction
-worker does write `line_items[N].<role>` rows. The two ends are simply not connected. EXTR-24
-owns connecting them.
+**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. That
+zero is a TEXT-SEAM outcome, not a wiring one. `documentCreateInput` groups
+`line_items[N].<role>` extraction fields onto `invoice.CreateInput.LineItems`, and
+`invoice.Store.Create` writes one `line_items` row per entry, so an extracted line does reach the
+invoice. This walk reads every layout except `wild_scanned_no_number.pdf` through pdfium
+(`eeOptsFor`, `score_db_test.go`), and pdfium extracts no line row from any of them.
+`TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling` runs
+`wild_ruled_lines_totals.pdf` through both readers in one test: **0 of 3** under pdfium, **3 of 3
+reached / 2 priced** under the docling golden, which is what deployed extraction uses. Read this
+table's zero as "pdfium read no table here", never as "lines do not reach invoices".
 
 Every other row reads `0 / 0`, which is indistinguishable from a satisfied denominator, so the
 report prints a `NO LINE SIGNAL` line whenever every reached row has a zero denominator. Read

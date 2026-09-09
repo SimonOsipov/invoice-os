@@ -320,8 +320,8 @@ func TestLiClassifyHeader_TheMeasuredDenseHeaderPutsDescriptionOnTheNamedColumn(
 	}
 }
 
-// AC-2: tier beats position from either side. "item first" is the shape today's code gets
-// wrong; "description first" is the control that would catch a wrong fix inverting the rule to
+// AC-2: tier beats position from either side. "item first" is the shape the pre-tier classifier
+// got wrong; "description first" is the control that catches a fix inverting the rule to
 // "last wins".
 func TestLiClassifyHeader_StrongBeatsWeakFromEitherSide(t *testing.T) {
 	for _, tc := range []struct {
@@ -415,6 +415,85 @@ func TestLiWeakHeaders_EveryWeakKeyIsALexiconKey(t *testing.T) {
 	for key := range liWeakHeaders {
 		if role := liLexicon[key]; role == liRoleNone {
 			t.Errorf("liWeakHeaders has key %q, which liLexicon does not classify", key)
+		}
+	}
+}
+
+// A reader may emit header cells in any column order, so leftmost-wins rests on liSortInts, not on
+// the input. Only an out-of-order cell slice can tell that the sort still runs.
+func TestLiClassifyHeader_LeftmostWinsWhenCellsArriveOutOfColumnOrder(t *testing.T) {
+	byCol := map[int]string{0: "Description", 1: "Particulars", 2: "Qty", 3: "Amount"}
+	cells := make([]TableCell, 0, len(byCol))
+	for _, col := range []int{1, 3, 0, 2} {
+		cells = append(cells, TableCell{Row: 0, Col: col, RowSpan: 1, ColSpan: 1, Text: byCol[col]})
+	}
+	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(Table{Rows: 1, Cols: len(byCol), Cells: cells})
+	if descCol != 0 {
+		t.Errorf("descCol = %d, want 0 -- two strong description columns, the leftmost wins whatever order the cells arrive in", descCol)
+	}
+	if qtyCol != 2 {
+		t.Errorf("qtyCol = %d, want 2", qtyCol)
+	}
+	if priceCol != -1 {
+		t.Errorf("priceCol = %d, want -1", priceCol)
+	}
+	if totalCol != 3 {
+		t.Errorf("totalCol = %d, want 3", totalCol)
+	}
+}
+
+// The tier rule must not rest on Go's randomised map iteration order. Every role here has two
+// rival strong columns, so a ranged map would return a distribution rather than one tuple.
+func TestLiClassifyHeader_RepeatedCallsReturnOneResult(t *testing.T) {
+	row := liHeaderRoleRow("Item", "Service description", "Particulars", "Reference",
+		"Qty", "Quantity", "Unit rate ₦", "Rate", "Amount ₦", "Total")
+	type result struct{ desc, qty, price, total int }
+	const runs = 500
+	seen := make(map[result]int)
+	for i := 0; i < runs; i++ {
+		descCol, qtyCol, priceCol, totalCol := liClassifyHeader(row)
+		seen[result{descCol, qtyCol, priceCol, totalCol}]++
+	}
+	want := result{desc: 1, qty: 4, price: 6, total: 8}
+	if len(seen) != 1 {
+		t.Fatalf("liClassifyHeader returned %d distinct results over %d runs (%v), want 1", len(seen), runs, seen)
+	}
+	if seen[want] != runs {
+		t.Errorf("liClassifyHeader = %v, want %v on all %d runs", seen, want, runs)
+	}
+}
+
+// Header shapes the worked traces never covered. Every case names all four roles, so an absence is
+// always read beside a column that did resolve. "Two rival strong description columns" has no
+// semantically right answer -- the rule is leftmost, and this pins that it stays leftmost.
+func TestLiClassifyHeader_EdgeHeaderShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		texts                   []string
+		desc, qty, price, total int
+	}{
+		{"identical duplicate headers", []string{"Amount", "Amount", "Qty"}, -1, 2, -1, 0},
+		{"two rival strong description columns", []string{"Description", "Service description", "Qty"}, 0, 2, -1, -1},
+		{"every column weak", []string{"Item", "Item"}, 0, -1, -1, -1},
+		{"a weak column repeated beside a strong one", []string{"Item", "Item", "Description", "Qty"}, 2, 3, -1, -1},
+		{"no column names a role", []string{"S/N", "Reference", "Notes", "Sr"}, -1, -1, -1, -1},
+		{"a single strong column", []string{"Description"}, 0, -1, -1, -1},
+		{"a single weak column", []string{"Item"}, 0, -1, -1, -1},
+	} {
+		descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(tc.texts...))
+		for _, role := range []struct {
+			name string
+			got  int
+			want int
+		}{
+			{"descCol", descCol, tc.desc},
+			{"qtyCol", qtyCol, tc.qty},
+			{"priceCol", priceCol, tc.price},
+			{"totalCol", totalCol, tc.total},
+		} {
+			if role.got != role.want {
+				t.Errorf("%s: %v %s = %d, want %d", tc.name, tc.texts, role.name, role.got, role.want)
+			}
 		}
 	}
 }

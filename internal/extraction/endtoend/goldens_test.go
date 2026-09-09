@@ -782,8 +782,8 @@ func TestWildGoldens_TheRuledTableGoldenCarriesTheHeaderRow(t *testing.T) {
 
 // --- AC-11: this story fixes nothing ----------------------------------------------------------
 
-// wildLiLexiconKeys is liLexicon's key set: 12 shipped today (../lineitems.go:127-141) plus 3
-// EXTR-24 adds by name -- exact-set equality below still catches any further casual widening.
+// wildLiLexiconKeys is liLexicon's shipped key set, measured at ../lineitems.go:127-144.
+// Exact-set equality below catches any further widening that is not named here first.
 var wildLiLexiconKeys = []string{
 	"description", "item", "details", "particulars", "service description", "description of goods",
 	"qty", "quantity", "unit price", "rate", "price", "unit rate",

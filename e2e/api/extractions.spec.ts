@@ -501,8 +501,8 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     // No <, > or & anywhere in these strings: Go's json.Marshal escapes all three, and the
     // canonical-JSON equality at the bottom compares against JSON.stringify, which does not.
     const first: LineItemInput[] = [
-      { description: 'EXTR13-API-03 alpha', quantity: '2', unit_price: '10.00', line_total: '20.00' },
-      { description: 'EXTR13-API-03 beta', quantity: null, unit_price: '5.00', line_total: '5.00' },
+      { description: 'EXTR13-API-03 alpha', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null },
+      { description: 'EXTR13-API-03 beta', quantity: null, unit_price: '5.00', line_total: '5.00', line_tax: null },
     ]
 
     const raw = await rawFetch(lineItemsPath(job.id), {
@@ -526,7 +526,7 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     // The typed client, driven for the first time. A DIFFERENT length, so a route that appended
     // rather than replaced cannot produce the block value asserted below.
     const replaced: LineItemInput[] = [
-      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00' },
+      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00', line_tax: null },
     ]
     const echoed = await postLineItems(token, job.id, { lines: replaced })
     expect(echoed.lines, 'EXTR13-API-03: the second 201 echoes the second set, cell for cell').toEqual(replaced)
@@ -588,7 +588,13 @@ test.describe('a line correction round-trips through Detail (API E2E, over the d
     )
 
     const corrected: LineItemInput[] = [
-      { description: 'EXTR13-API-04 corrected description', quantity: '2', unit_price: '500.00', line_total: '1000.00' },
+      {
+        description: 'EXTR13-API-04 corrected description',
+        quantity: '2',
+        unit_price: '500.00',
+        line_total: '1000.00',
+        line_tax: null,
+      },
     ]
     await postLineItems(token, job.id, { lines: corrected })
 

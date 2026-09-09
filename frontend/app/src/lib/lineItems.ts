@@ -48,6 +48,7 @@ export interface LineItemInput {
   quantity: string | null
   unit_price: string | null
   line_total: string | null
+  line_tax: string | null
 }
 
 // -- exact-decimal helpers over invoices.ts's Scaled kit -----------------------------------
@@ -218,15 +219,16 @@ export function linesToPost(rows: readonly LineRow[]): LineItemInput[] {
       quantity: postValue(row.cells.quantity),
       unit_price: postValue(row.cells.unit_price),
       line_total: postValue(row.cells.line_total),
+      line_tax: postValue(row.cells.line_tax),
     }))
-    .filter((line) => LINE_ROLES.some((role) => line[role] !== null))
+    .filter((line) => LINE_WIRE_ROLES.some((role) => line[role] !== null))
 }
 
 // diffLineItems' shape as a boolean, because Save's `disabled` is what consumes it: positional
-// over the four roles, both sides canonicalised, different lengths mean changed.
+// over all five wire roles, both sides canonicalised, different lengths mean changed.
 export function lineSetChanged(wireRows: readonly LineRow[], draftRows: readonly LineRow[]): boolean {
   if (wireRows.length !== draftRows.length) return true
   return !wireRows.every((wire, i) =>
-    LINE_ROLES.every((role) => postValue(wire.cells[role]) === postValue(draftRows[i].cells[role])),
+    LINE_WIRE_ROLES.every((role) => postValue(wire.cells[role]) === postValue(draftRows[i].cells[role])),
   )
 }

@@ -25,6 +25,7 @@ type LineItemInput struct {
 	Quantity    *string `json:"quantity"`
 	UnitPrice   *string `json:"unit_price"`
 	LineTotal   *string `json:"line_total"`
+	LineTax     *string `json:"line_tax"`
 }
 
 // cell returns one role's value, or nil when that cell is null. Mirrors DocLine.Cell so the
@@ -39,6 +40,8 @@ func (l LineItemInput) cell(role string) *string {
 		return l.UnitPrice
 	case LineRoleLineTotal:
 		return l.LineTotal
+	case LineRoleLineTax:
+		return l.LineTax
 	}
 	return nil
 }

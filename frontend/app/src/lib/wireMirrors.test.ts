@@ -673,11 +673,11 @@ describe('line-items wire types: what a key-set diff cannot see (EXTR-13-06)', (
   })
 
   it('lineItems_theDetectorFindsTheNullableFieldsThatDoExist', () => {
-    // The control for the row below: LineItemInput's four cells ARE '| null'.
+    // The control for the row below: LineItemInput's five cells ARE '| null'.
     const nullable = tsFieldLines(tsInterfaceBody(repoFile(LINE_ITEMS_SPA_PATH), 'LineItemInput')).filter((l) =>
       l.includes('| null'),
     )
-    expect(nullable, 'the nullability scan finds nothing, so the absence row below is vacuous').toHaveLength(4)
+    expect(nullable, 'the nullability scan finds nothing, so the absence row below is vacuous').toHaveLength(5)
   })
 
   it('lineItems_theLinesFieldIsAnArrayNeverNullOrAbsent', () => {

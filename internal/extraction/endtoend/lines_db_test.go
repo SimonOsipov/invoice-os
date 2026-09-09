@@ -1,12 +1,12 @@
 // lines_db_test.go: the line-item outcome, read off the invoice the path actually wrote.
 //
-// The headline figure is a permanent zero for this story's life: documentCreateInput's return
-// literal names no LineItems key (internal/importer/document.go:173-185), while
-// invoice.Store.Create does write one line_items row per LineItemInput
-// (internal/invoice/store.go:244-258) and extraction does write line_items[N].<role> rows. The
-// two are simply not connected; EXTR-24 owns connecting them. So every zero here ships with a
-// positive control in the same test, and the mutilations act on that control rather than on the
-// zero -- a scorer that cannot read line_items at all satisfies a bare zero exactly as well.
+// documentCreateInput now groups line_items[N].<role> extraction fields onto
+// invoice.CreateInput.LineItems, so the worker's line rows reach the invoice -- proven below
+// against rich_invoice.pdf, the only committed fixture carrying both a table and a docling
+// golden. The corpus-wide headline (TestRLS_EndToEndScoresLineItemOutcome) stays a permanent
+// zero regardless: no corpus_* layout carries a table. Every non-zero figure here still ships
+// with a positive control in the same test, so a scorer that cannot read line_items cannot fake
+// it.
 package endtoend
 
 import (
@@ -40,6 +40,14 @@ const (
 // extraction_field_results -- measured the same at rank 0 and at any rank (one 5x4 table).
 const eeLineIdxMeasured = 4
 
+// eeLineFixtureReached/eeLineFixturePriced are rich_invoice.pdf's own line figures once
+// imported: every extracted index reaches the invoice (so reached ties eeLineIdxMeasured), and
+// 3 of the 4 carry a unit_price -- measured, not assumed.
+const (
+	eeLineFixtureReached = eeLineIdxMeasured
+	eeLineFixturePriced  = 3
+)
+
 // The control invoice's own numbers. NOT held at a placeholder: these are fixed by the control's
 // inputs -- two LineItemInput entries, one carrying a UnitPrice -- and a zero here would be
 // satisfied by the very scorer this control exists to catch.
@@ -62,7 +70,8 @@ type eeLineOutcome struct {
 const eeLineCountSQL = `SELECT count(*), count(unit_price) FROM line_items WHERE invoice_id = $1`
 
 // eeScoreLines reads the invoice's OWN rows -- never extraction_field_results. That distinction
-// is the whole point of AC-8: the two disagree on a table-bearing document.
+// is AC-8's point: a line quarantined out of the invoice would still show up in an any-rank
+// extraction read, so the two scores are not interchangeable even where they agree today.
 func eeScoreLines(t *testing.T, ctx context.Context, invoiceID string) eeLineOutcome {
 	t.Helper()
 	var out eeLineOutcome
@@ -250,9 +259,9 @@ func TestRLS_EndToEndTheLineScorerReadsLinesWhenTheyExist(t *testing.T) {
 	}
 }
 
-// AC-4, AC-6. The worker DID write line_items[N].<role> rows for a table-bearing document, and
-// the invoice it fed still holds none: the loss is at the mapper, not at the read.
-func TestRLS_EndToEndTheWorkerWroteLineRowsTheInvoiceNeverGot(t *testing.T) {
+// AC-4, AC-6. The worker writes line_items[N].<role> rows for a table-bearing document, and the
+// invoice it fed now holds them, one row per extracted index -- documentCreateInput's grouping.
+func TestRLS_EndToEndTheWorkerWroteLineRowsAndTheInvoiceGotThem(t *testing.T) {
 	eeRequire(t)
 	ctx := t.Context()
 	eeRequireFixtures(t, []string{eeLineFixture, eeLineGolden})
@@ -283,9 +292,9 @@ func TestRLS_EndToEndTheWorkerWroteLineRowsTheInvoiceNeverGot(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s produced no invoices row; it must import, not quarantine, or the zero below is the quarantine and not the mapper", eeLineFixture)
 	}
-	if got := eeScoreLines(t, ctx, id); got.reached != 0 || got.priced != 0 {
-		t.Errorf("the invoice holds %d line(s) reached / %d priced after %d were extracted; EXTR-24 owns connecting the two and this story must not",
-			got.reached, got.priced, len(rankZero))
+	if got := eeScoreLines(t, ctx, id); got.reached != eeLineFixtureReached || got.priced != eeLineFixturePriced {
+		t.Errorf("the invoice holds %d line(s) reached / %d priced after %d were extracted, want %d / %d -- documentCreateInput must group every extracted index onto the invoice",
+			got.reached, got.priced, len(rankZero), eeLineFixtureReached, eeLineFixturePriced)
 	}
 
 	// AC-6, the dynamic half: the header row this document produced carries exactly the written
@@ -345,10 +354,14 @@ func TestRLS_EndToEndAMutilatedLineControlMovesTheNumber(t *testing.T) {
 	}
 }
 
-// AC-8. The line figure is not a recall measure: scored from the invoice's own rows and scored
-// by any-rank line_items[N] presence in extraction_field_results, the two disagree on the same
-// run of the same table-bearing document.
-func TestRLS_EndToEndTheLineScoreIsNotARecallMeasure(t *testing.T) {
+// AC-8. rich_invoice.pdf has zero attrition -- every extracted index reaches the invoice -- so
+// the invoice-read score and the any-rank extraction score now agree on it. That does not make
+// the invoice read a recall measure: eeScoreLines still counts a different table than
+// extraction_field_results, and a quarantined/rejected line would separate the two again.
+//
+// ceiling: this fixture cannot show that separation; bring back a divergence assertion once a
+// fixture with a rejected line row exists.
+func TestRLS_EndToEndInvoiceReadMatchesAnyRankOnAZeroAttritionFixture(t *testing.T) {
 	eeRequire(t)
 	ctx := t.Context()
 	eeRequireFixtures(t, []string{eeLineFixture, eeLineGolden})
@@ -397,15 +410,10 @@ func TestRLS_EndToEndTheLineScoreIsNotARecallMeasure(t *testing.T) {
 	}
 	byInvoice := eeScoreLines(t, ctx, id)
 
-	if byInvoice.reached != 0 {
-		t.Errorf("the invoice read scores %d, want 0 -- the mapper writes no line row", byInvoice.reached)
-	}
-	if byInvoice.reached == len(anyRank) {
-		t.Errorf("the invoice read and the any-rank read both score %d; the figure cannot tell a line that reached the invoice from one that was merely extracted, which is what a recall measure does",
-			byInvoice.reached)
+	if byInvoice.reached != len(anyRank) {
+		t.Errorf("the invoice read scores %d, want %d (this fixture's any-rank count) -- documentCreateInput must group every extracted index onto the invoice", byInvoice.reached, len(anyRank))
 	}
 
-	// The divergence is between a real number and a zero, not between two unread zeros.
 	eeAssertControl(t, ctx, w, "EE-LINES-CONTROL-5")
 }
 

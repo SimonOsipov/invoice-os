@@ -444,10 +444,9 @@ anyone would satisfy the zero half alone.
 
 **The line-item figures.** The report carries `line items reached / expected` and
 `line items priced / reached` beside the header number, as two raw counts and a slash — never a
-computed ratio. Both read **0 on every layout**, and will for as long as
-`documentCreateInput` names no `LineItems` key (`internal/importer/document.go:173-185`): the
-extraction worker writes `line_items[N].<role>` rows and `invoice.Store.Create` writes
-`line_items` rows, but nothing connects the two. EXTR-24 owns connecting them.
+computed ratio. `documentCreateInput` groups `line_items[N].<role>` extraction fields onto
+`invoice.CreateInput.LineItems` (EXTR-24), so the corpus-wide figures below are **0 on every
+layout** for an orthogonal reason, not because nothing connects the two.
 
 Because no `corpus_*` layout carries a table, both denominators are 0 too, so every row renders
 `0/0` — which is indistinguishable from a satisfied denominator. The report therefore prints a
@@ -456,9 +455,12 @@ the moment a table-bearing layout joins the scored set.
 `TestEndToEnd_AnEmptyLineCorpusSaysSoInWords` holds both directions. Read the zeros as "not
 measured here", never as coverage.
 
-`TestRLS_EndToEndTheLineScoreIsNotARecallMeasure` is what keeps the figure honest: the same run
-scored off the invoice's own `line_items` rows reads 0 while the any-rank
-`line_items[N]` read of `extraction_field_results` reads 4, and the spec asserts they disagree.
+`TestRLS_EndToEndTheWorkerWroteLineRowsAndTheInvoiceGotThem` and
+`TestRLS_EndToEndInvoiceReadMatchesAnyRankOnAZeroAttritionFixture` (`endtoend/lines_db_test.go`)
+drive the one committed table-bearing fixture, `rich_invoice.pdf`, through the real import path:
+the invoice reads back 4 line(s), 3 priced, matching what the worker extracted. That fixture has
+zero attrition, so it cannot show the invoice-read score diverging from an any-rank extraction
+read — a fixture with a rejected/quarantined line is still owed for that.
 
 **The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 44 of 44, so
 the shipped number alone cannot tell a decision measure from a candidate-containment one. That is

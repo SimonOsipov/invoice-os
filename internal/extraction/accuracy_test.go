@@ -48,7 +48,7 @@ const acReportMarker = "tier-1 accuracy over the golden corpus"
 // sweep, so its three relation rules are the whole of its reach.
 const (
 	acMutilatedField = "invoice_number"
-	acMutilatedRules = 31 // 34 shipped minus invoice_number's three
+	acMutilatedRules = 32 // 35 shipped minus invoice_number's three
 	acMutilatedHits  = 38 // 44 minus the six pairs invoice_number carries
 )
 

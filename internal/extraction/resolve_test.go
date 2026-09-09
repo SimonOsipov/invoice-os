@@ -1136,8 +1136,8 @@ func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing
 // --- EXTR-25-02: fallback tier precedence -----------------------------------
 //
 // Resolve tags a Fallback: true rule's candidates TierFallback, which compareCandidates sorts
-// below every labelled reading. No shipped rule sets Fallback, so every fixture below builds
-// its own RuleSet.
+// below every labelled reading. Only t1.currency.sweep ships Fallback (EXTR-25-03); every
+// fixture below still builds its own RuleSet to isolate the mechanism from the corpus.
 
 // AC-2.1. A labelled reading must beat a fallback one regardless of distance or reading order,
 // even when the fallback wins on every other axis (Distance 0 vs 0.12, Y0 0.10 vs 0.40).

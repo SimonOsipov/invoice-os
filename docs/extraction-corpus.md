@@ -495,7 +495,7 @@ label — needs neither bump.
 
 Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **57 of 88** cells — **0.6477**. Eleven layouts, eight written fields each.
+the page prints on **58 of 88** cells — **0.6591**. Eleven layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -507,8 +507,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 30 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (17 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -523,7 +523,7 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `corpus_totals_block.pdf` | 4 | 8 |
 | `wild_two_party_bare_tin.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals.pdf` | 7 | 8 |
-| `wild_rc_due_naira.pdf` | 7 | 8 |
+| `wild_rc_due_naira.pdf` | 8 | 8 |
 | `wild_stacked_borderless.pdf` | 2 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 
@@ -540,13 +540,13 @@ dropping it would flatter the rate by the exact amount the defect costs.
 | `issue_date` | 8 | 11 |
 | `buyer_tin` | 8 | 11 |
 | `buyer_name` | 7 | 11 |
-| `currency` | 4 | 11 |
+| `currency` | 5 | 11 |
 | `subtotal` | 6 | 11 |
 | `vat` | 6 | 11 |
 | `total` | 8 | 11 |
 
-`currency` at 4 of 11 is the worst field on the corpus: five layouts print the value inside the
-total or as a naira mark with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
+`currency` at 5 of 11 is the worst field on the corpus: three layouts print the value inside the
+total, with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
 each party's TIN to the heading that owns it, and the three cells left are two layouts that carry
 no buyer block at all and the quarantined page.
 
@@ -556,7 +556,7 @@ Nothing on this page, and that is the finding rather than an omission. EXTR-23 s
 referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
 decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
 removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. The
-headline stays **57 of 88** — 0.6477 — against EXTR-21's frozen baseline of 53 hits. `total` stays
+headline stays **58 of 88** — 0.6591 — against EXTR-21's frozen baseline of 53 hits. `total` stays
 8 of 11 in the per-field table, no per-layout row moves, and every cell sits where EXTR-21 pinned
 it. **Do not read "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
 
@@ -761,7 +761,8 @@ apply to them.
 A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
 derived from one correction — a **pointed** one on a document that has geometry, a **typed** one
 on a document that has none — stored against the layout's fingerprint, and read back on every
-later document of that layout. It is the tenant-specific tier; Tier-1 stays generic.
+later document of that layout. It is the tenant-specific tier; Tier-1 is generic except its one
+shape-only naira fallback (`t1.currency.sweep`).
 
 ### The two layout identities
 

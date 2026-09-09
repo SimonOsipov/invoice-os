@@ -76,6 +76,7 @@ package validation
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"sort"
 	"strings"
@@ -719,5 +720,56 @@ func TestSeed_ReversibilityRollback(t *testing.T) {
 	}
 	if v1RuleCount != 0 {
 		t.Errorf("rules under version=1 after Down = %d, want 0 (ON DELETE CASCADE)", v1RuleCount)
+	}
+}
+
+// TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged (QA, AC-7): the two line-item
+// rules at the ACTIVE version, unchanged -- rule_set_v2_test.go pins their params at v2 only;
+// this is the first pin at whichever version is currently active (activeSeedVersion), so a
+// future publish that accidentally alters either rule's shape or the kill-switch's enabled flag
+// reddens here rather than going unnoticed.
+// Mutation: flip either rule's `enabled` at the active version (DB-level -- `enabled` is the one
+// sanctioned live mutation even on a sealed version, the M3-06 kill-switch; verified and
+// reverted by hand, never committed).
+func TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged(t *testing.T) {
+	_, app := dbTestPools(t)
+
+	rs := loadActive(t, app)
+	if rs.Version != activeSeedVersion {
+		t.Fatalf("active RuleSet.Version = %d, want %d", rs.Version, activeSeedVersion)
+	}
+
+	var required, sum *Rule
+	for i := range rs.Rules {
+		switch rs.Rules[i].Key {
+		case "line-items-required":
+			required = &rs.Rules[i]
+		case "line-items-sum-subtotal":
+			sum = &rs.Rules[i]
+		}
+	}
+	if required == nil {
+		t.Fatal("line-items-required not found in the active rule set")
+	}
+	if sum == nil {
+		t.Fatal("line-items-sum-subtotal not found in the active rule set")
+	}
+
+	if required.Type != "required" || required.Severity != "error" || !required.Enabled {
+		t.Errorf("line-items-required = %+v, want type=required severity=error enabled=true", *required)
+	}
+	if sum.Type != "line_sum" || sum.Severity != "error" || !sum.Enabled {
+		t.Errorf("line-items-sum-subtotal = %+v, want type=line_sum severity=error enabled=true", *sum)
+	}
+	wantParams := `{"items":"line_items","amount":"unit_price","quantity":"quantity","expected":"subtotal","tolerance":0.005}`
+	var gotParsed, wantParsed map[string]any
+	if err := json.Unmarshal(sum.Params, &gotParsed); err != nil {
+		t.Fatalf("unmarshal line-items-sum-subtotal params %s: %v", sum.Params, err)
+	}
+	if err := json.Unmarshal([]byte(wantParams), &wantParsed); err != nil {
+		t.Fatalf("unmarshal expected params: %v", err)
+	}
+	if !reflect.DeepEqual(gotParsed, wantParsed) {
+		t.Errorf("line-items-sum-subtotal params decoded = %v, want %v (byte-identical to the migration's, decode-compared since jsonb reorders/respaces keys)", gotParsed, wantParsed)
 	}
 }

@@ -47,6 +47,7 @@ function mkRow(
       quantity: mkCell(lineFieldName(wireIndex, 'quantity'), v.quantity, regions.quantity ?? null),
       unit_price: mkCell(lineFieldName(wireIndex, 'unit_price'), v.unit_price, regions.unit_price ?? null),
       line_total: mkCell(lineFieldName(wireIndex, 'line_total'), v.line_total, regions.line_total ?? null),
+      line_tax: mkCell(lineFieldName(wireIndex, 'line_tax'), ''),
     },
   }
 }

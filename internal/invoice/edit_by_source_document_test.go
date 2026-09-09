@@ -11,12 +11,14 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 const (
@@ -578,5 +581,239 @@ func TestUpdateContentTx_RefusesACopiedClearSentinel(t *testing.T) {
 	}
 	if got := f.column(t, f.invoiceID, "total"); got != nil {
 		t.Errorf("invoices.total = %q, want SQL NULL", *got)
+	}
+}
+
+// --- the filing-path assertion: line_tax reaches the WIRE, not just the store -----------------
+
+// NOT red-first, by design: invoice.LineItemInput already carries LineTax (invoice.go),
+// replaceLinesTx already binds it, hydrateLinesTx already reads it, and SubmissionCanonical /
+// buildMockEnvelope already project it onto TaxTotal -- all four legs are pinned elsewhere
+// (submission_canonical_test.go, mock_wire_test.go) and are not re-derived here. This subtask's
+// unpinned leg is one hop EARLIER (posted body -> extraction.LineItemInput -> the applier),
+// which cmd/submission/lineitems_route_test.go and handlers_lineitems_db_test.go's new AC tests
+// cover; that hop cannot be exercised from this package (cmd/submission is not importable). What
+// this test adds is the end-to-end proof that once the value reaches invoice.LineItemInput, it
+// reaches the FILED envelope -- internal/ubl serves the preview only and is deliberately not
+// asserted on here.
+func TestRLS_EditBySourceDocumentTxLineTaxReachesTheFiledEnvelope(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX")
+
+	desc1, qty1, price1, total1, tax1 := "Widget", "2", "10.00", "20.00", "75.00"
+	desc2 := "Gadget" // LineTax nil on purpose
+	lines := []LineItemInput{
+		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1, LineTax: strPtr(tax1)},
+		{Description: &desc2},
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{LineItems: &lines})
+	if err != nil {
+		t.Fatalf("posting a line with line_tax: want success, got %v", err)
+	}
+
+	inv, err := f.store.Get(f.ctx, got.ID)
+	if err != nil {
+		t.Fatalf("Store.Get after the edit: %v", err)
+	}
+	if len(inv.LineItems) != 2 {
+		t.Fatalf("%d hydrated line(s), want 2 -- the assertions below then prove nothing", len(inv.LineItems))
+	}
+	if inv.LineItems[0].LineTax == nil || *inv.LineItems[0].LineTax != tax1 {
+		t.Fatalf("hydrated line 1 line_tax = %v, want %q -- the assertions below then prove nothing", inv.LineItems[0].LineTax, tax1)
+	}
+
+	canonical := SubmissionCanonical(inv)
+	wire, err := submission.NewMockAdapter(submission.MockConfig{}).Transform(f.ctx, canonical)
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+
+	var env struct {
+		InvoiceLine []struct {
+			TaxTotal *struct {
+				TaxAmount struct {
+					Value string `json:"value"`
+				} `json:"TaxAmount"`
+			} `json:"TaxTotal,omitempty"`
+		} `json:"InvoiceLine"`
+	}
+	if err := json.Unmarshal(wire, &env); err != nil {
+		t.Fatalf("decode the filed wire: %v", err)
+	}
+	if len(env.InvoiceLine) != 2 {
+		t.Fatalf("%d wire line(s), want 2", len(env.InvoiceLine))
+	}
+	if env.InvoiceLine[0].TaxTotal == nil {
+		t.Fatalf("wire line 1 carries no TaxTotal, want %q", tax1)
+	}
+	if env.InvoiceLine[0].TaxTotal.TaxAmount.Value != tax1 {
+		t.Errorf("wire line 1 TaxTotal.TaxAmount.value = %q, want %q", env.InvoiceLine[0].TaxTotal.TaxAmount.Value, tax1)
+	}
+	if env.InvoiceLine[1].TaxTotal != nil {
+		t.Errorf("wire line 2 carries a TaxTotal block, want none -- a nil line_tax must not fabricate a tax amount")
+	}
+}
+
+// --- line_tax on the REAL replace-all path, not a stub applier -------------------------------
+//
+// internal/extraction's AC tests drive a test-local applier that runs its own INSERT, so none of
+// them can see replaceLinesTx. These do: f.edit is the seam the correction handler uses, so a
+// server that reconstructed line_tax from a line_no it kept fails here.
+
+// ebsLineTaxes reads invoiceID's line_tax by line_no, "<null>" for SQL NULL.
+func ebsLineTaxes(t *testing.T, f *ebsFix) []string {
+	t.Helper()
+	rows, err := f.super.Query(f.ctx,
+		`SELECT line_tax::text FROM line_items WHERE invoice_id = $1 ORDER BY line_no`, f.invoiceID)
+	if err != nil {
+		t.Fatalf("read line_items.line_tax: %v", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v *string
+		if err := rows.Scan(&v); err != nil {
+			t.Fatalf("scan line_tax: %v", err)
+		}
+		if v == nil {
+			out = append(out, "<null>")
+			continue
+		}
+		out = append(out, *v)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read line_items.line_tax: %v", err)
+	}
+	return out
+}
+
+// ebsSeedLineTax plants one stored line carrying a line_tax -- the state a replace-all overwrites.
+func ebsSeedLineTax(t *testing.T, f *ebsFix, lineNo int, desc, tax string) {
+	t.Helper()
+	if _, err := f.super.Exec(f.ctx,
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, line_tax)
+		 VALUES ($1, $2, $3, $4, $5::text::numeric)`,
+		f.tenantID, f.invoiceID, lineNo, desc, tax); err != nil {
+		t.Fatalf("seed line %d: %v", lineNo, err)
+	}
+}
+
+// Reordering is what a line_no-keyed preservation cannot survive: the same two VATs, the same two
+// line_no slots, only the pairing differs. Posting rows in their stored order cannot tell the two
+// designs apart, because both answer the same there.
+func TestRLS_EditBySourceDocumentTxLineTaxFollowsItsRowNotItsLineNo(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX-SWAP")
+	ebsSeedLineTax(t, f, 1, "First", "10.00")
+	ebsSeedLineTax(t, f, 2, "Second", "75.00")
+	if got := ebsLineTaxes(t, f); !slices.Equal(got, []string{"10.00", "75.00"}) {
+		t.Fatalf("control: seeded line_tax = %v, want [10.00 75.00] -- the claim below has no reference state", got)
+	}
+
+	second, first := "Second", "First"
+	lines := []LineItemInput{
+		{Description: &second, LineTax: strPtr("75.00")},
+		{Description: &first, LineTax: strPtr("10.00")},
+	}
+	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &lines}); err != nil {
+		t.Fatalf("re-posting the two lines swapped: %v", err)
+	}
+
+	got := ebsLineTaxes(t, f)
+	if !slices.Equal(got, []string{"75.00", "10.00"}) {
+		t.Errorf("line_tax by line_no = %v, want [75.00 10.00] -- each VAT must follow the row that "+
+			"carried it on the wire; a line_no-keyed preservation answers [10.00 75.00] here", got)
+	}
+}
+
+// The conflict case: "preserve what the user did not edit" and "honour what the user did edit"
+// point opposite ways when the edit IS the clear. The edit must win, or a deliberate correction
+// is silently reverted into the document filed with MBS.
+func TestRLS_EditBySourceDocumentTxAClearedLineTaxStaysCleared(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX-CLEAR")
+	ebsSeedLineTax(t, f, 1, "Widget", "75.00")
+	if got := ebsLineTaxes(t, f); !slices.Equal(got, []string{"75.00"}) {
+		t.Fatalf("control: seeded line_tax = %v, want [75.00]", got)
+	}
+
+	desc := "Widget"
+	lines := []LineItemInput{{Description: &desc}} // LineTax nil: the user cleared the cell
+	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &lines}); err != nil {
+		t.Fatalf("re-posting the line with its VAT cleared: %v", err)
+	}
+
+	if got := ebsLineTaxes(t, f); !slices.Equal(got, []string{"<null>"}) {
+		t.Errorf("line_tax = %v, want [<null>] -- the user's clear must beat any preservation of the "+
+			"value that was there before", got)
+	}
+}
+
+// A row whose only stated cell is its VAT still stores that VAT: the emptiness rules upstream drop
+// a row with no values at all, so this one has to survive as a real line.
+func TestRLS_EditBySourceDocumentTxAVatOnlyRowKeepsItsVat(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX-ONLY")
+
+	lines := []LineItemInput{{LineTax: strPtr("75.00")}}
+	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &lines}); err != nil {
+		t.Fatalf("posting a VAT-only line: %v", err)
+	}
+
+	if got := ebsLineTaxes(t, f); !slices.Equal(got, []string{"75.00"}) {
+		t.Errorf("line_tax = %v, want [75.00] -- a row whose only value is its VAT must still store it", got)
+	}
+}
+
+// "" is not null: the other numeric cells refuse it as ErrValidation (the $N::text::numeric cast
+// raises 22P02), and line_tax must land on that same rule rather than storing a surprise.
+func TestRLS_EditBySourceDocumentTxRefusesAnEmptyStringLineTax(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX-EMPTY")
+	desc := "Widget"
+
+	control := []LineItemInput{{Description: &desc, LineTotal: strPtr("")}}
+	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &control}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("control: an empty line_total returned %v, want ErrValidation -- the claim below has "+
+			"no reference behaviour", err)
+	}
+
+	lines := []LineItemInput{{Description: &desc, LineTax: strPtr("")}}
+	if _, err := f.edit(t, f.documentID, EditInput{LineItems: &lines}); !errors.Is(err, ErrValidation) {
+		t.Errorf("an empty line_tax returned %v, want ErrValidation -- \"\" must not be read as a null, "+
+			"nor reach the column as one", err)
+	}
+}
+
+// --- AC-8: replaceLinesTx's 22003 mapping is symmetric with Store.Create's -----------------
+
+// TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation drives EditBySourceDocumentTx, the
+// seam the extraction review screen's correction handler actually calls (via editTx ->
+// replaceLinesTx) -- not a stub applier. Mirrors
+// TestEditHandler_RealStore_MalformedLineNumericIs400NotFrom500 (handlers_test.go), the 22P02
+// precedent at this same seam.
+func TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation(t *testing.T) {
+	f := ebsSeed(t, "EBS-OVERFLOW")
+
+	desc := "Existing Line"
+	price := "50.00"
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, unit_price)
+		 VALUES ($1, $2, 1, $3, $4::numeric)`,
+		f.tenantID, f.invoiceID, desc, price); err != nil {
+		t.Fatalf("seed the existing line: %v", err)
+	}
+	before := readLineItemsForTest(t, f.super, f.invoiceID)
+	if len(before) != 1 || before[0].Description == nil || *before[0].Description != desc {
+		t.Fatalf("control: seeded line = %+v, want one row named %q -- the claim below has no reference state", before, desc)
+	}
+
+	oversized := strings.Repeat("9", 20) // numeric(14,2) holds at most 12 integer digits
+	newDesc := "Replacement"
+	lines := []LineItemInput{{Description: &newDesc, UnitPrice: &oversized}}
+	_, err := f.edit(t, f.documentID, EditInput{LineItems: &lines})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("EditBySourceDocumentTx with a 20-digit unit_price: err = %v, want ErrValidation (22003 numeric_value_out_of_range)", err)
+	}
+
+	after := readLineItemsForTest(t, f.super, f.invoiceID)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("line_items changed despite a refused edit: before %+v, after %+v", before, after)
 	}
 }

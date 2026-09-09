@@ -56,8 +56,9 @@ var wildInvNums = []string{"INV-2101", "INV-2102", "INV-2103", "INV-2104"}
 
 const wildRCNumber = "RC-000142"
 
-// wildHeaders is the decorated line-item header row. EXTR-24 recognises these; EXTR-21 only
-// commits them, so none may enter liLexicon here.
+// wildHeaders is the decorated line-item header row. Recognising a decorated header is EXTR-24's
+// work -- "qty" and "description of goods" are in liLexicon because of it. The guard below only
+// forbids a key beyond wildLiLexiconKeys, EXTR-21's own overstep.
 var wildHeaders = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", "RATE (N)", "Amount ₦"}
 
 // wildLabels are the buyer-block heading and the two fragment-bearing labels. The apostrophe is
@@ -782,20 +783,22 @@ func TestWildGoldens_TheRuledTableGoldenCarriesTheHeaderRow(t *testing.T) {
 
 // --- AC-11: this story fixes nothing ----------------------------------------------------------
 
-// wildLiLexiconKeys is liLexicon's shipped key set, measured at ../lineitems.go:127-141.
-// Recognising a decorated header is EXTR-24's; EXTR-21 only commits the arrangement.
+// wildLiLexiconKeys is liLexicon's shipped key set, measured at ../lineitems.go:127-144.
+// Exact-set equality below catches any further widening that is not named here first.
+// EXTR-24-04 adds "vat" and "tax" for the fifth read role, line_tax.
 var wildLiLexiconKeys = []string{
-	"description", "item", "details", "particulars",
-	"qty", "quantity", "unit price", "rate", "price",
+	"description", "item", "details", "particulars", "service description", "description of goods",
+	"qty", "quantity", "unit price", "rate", "price", "unit rate",
 	"line total", "total", "amount",
+	"vat", "tax",
 }
 
 const wildLexiconFile = "../lineitems.go"
 
 var wildMapKeyRE = regexp.MustCompile(`"([^"]*)":`)
 
-// AC-11. liLexicon is unedited and holds none of the five decorated headers, normalised or not.
-func TestWildLayouts_TheHeaderLexiconIsNotEdited(t *testing.T) {
+// AC-11. liLexicon holds exactly wildLiLexiconKeys -- widened only by this named set, never casually.
+func TestWildLayouts_TheHeaderLexiconIsExactlyTheNamedSet(t *testing.T) {
 	body := wildVarBody(t, wildReadFile(t, wildLexiconFile), "var liLexicon = ", wildLexiconFile)
 
 	var keys []string
@@ -811,7 +814,7 @@ func TestWildLayouts_TheHeaderLexiconIsNotEdited(t *testing.T) {
 	want := slices.Clone(wildLiLexiconKeys)
 	slices.Sort(want)
 	if !slices.Equal(keys, want) {
-		t.Errorf("liLexicon holds %v, want %v -- this story commits the arrangement and changes no extraction rule", keys, want)
+		t.Errorf("liLexicon holds %v, want exactly %v -- widened only by this named set, never casually", keys, want)
 	}
 	for _, header := range wildHeaders {
 		for _, form := range []string{header, strings.ToLower(header)} {

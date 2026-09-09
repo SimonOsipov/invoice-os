@@ -34,7 +34,7 @@ const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
 // The line block and its cells belong to LineItemGrid. The block row itself carries no value and
 // no region, so neither surface renders it. EXTR11-E2E-02a and EXTR12-E2E-07 count rendered
 // `extraction-field-*` against the header half of the wire, which is what this keeps true.
-const LINE_FIELD_RE = /^line_items(\[[1-9][0-9]*\]\.(description|quantity|unit_price|line_total))?$/
+const LINE_FIELD_RE = /^line_items(\[[1-9][0-9]*\]\.(description|quantity|unit_price|line_total|line_tax))?$/
 
 function isHeaderField(name: string): boolean {
   return !LINE_FIELD_RE.test(name)

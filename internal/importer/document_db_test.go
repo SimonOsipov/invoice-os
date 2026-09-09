@@ -563,3 +563,86 @@ func TestSettledExtraction_IgnoresCorrectionsAndReadsRankZero(t *testing.T) {
 			*ex.Fields[0].Value, "READ-A")
 	}
 }
+
+// --- AC-7: an oversized line amount quarantines the row, it never errors the batch ----------
+
+// TestImportDocument_AnOversizedAmountQuarantinesRatherThanErroring: a line_items unit_price
+// the numeric(14,2) column cannot hold raises SQLSTATE 22003 at the line-item INSERT.
+// ImportDocument must map that through the same domain-error quarantine path any other bad
+// value takes -- a nil error, a completed batch, one RowError -- never a raw 500.
+func TestImportDocument_AnOversizedAmountQuarantinesRatherThanErroring(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-OVERFLOW tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-OVERFLOW entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("DOC-OVERFLOW-INV")
+	values["line_items[1].description"] = sxPtr("Oversized")
+	values["line_items[1].unit_price"] = sxPtr(strings.Repeat("9", 20)) // numeric(14,2) holds 12 integer digits
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: want a nil error (a quarantined domain outcome, not a raw 500), got %v", err)
+	}
+	if res.Status != "completed" {
+		t.Errorf("BatchResult.Status = %q, want %q -- an oversized value quarantines the row, it does not fail the batch", res.Status, "completed")
+	}
+	if res.RowsInvalid != 1 {
+		t.Errorf("RowsInvalid = %d, want 1", res.RowsInvalid)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("BatchResult.Errors is empty, want at least one RowError naming the refused row")
+	}
+
+	if got := countInvoicesByNumber(t, super, entityID, "DOC-OVERFLOW-INV"); got != 0 {
+		t.Errorf("invoices DOC-OVERFLOW-INV = %d, want 0 -- the oversized value must be quarantined, not written", got)
+	}
+	_, status, rowsTotal, rowsValid, rowsInvalid := docBatchRowByEntity(t, super, entityID)
+	if status != "completed" {
+		t.Errorf("import_batches.status = %q, want %q", status, "completed")
+	}
+	if rowsTotal != 1 || rowsValid != 0 || rowsInvalid != 1 {
+		t.Errorf("import_batches rows_total/valid/invalid = %d/%d/%d, want 1/0/1", rowsTotal, rowsValid, rowsInvalid)
+	}
+}
+
+// TestImportDocument_AnOversizedAmountOnALaterLineAlsoQuarantines (QA, task-991 Mode B): the
+// spec above puts the oversized value on the first line, where a mapping that only guarded the
+// first iteration of Store.Create's loop would still pass. Here two good lines precede it, and
+// the tx must roll all three back.
+func TestImportDocument_AnOversizedAmountOnALaterLineAlsoQuarantines(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "DOC-OVERFLOW3 tenant")
+	entityID := seedEntity(t, super, tenantID, "DOC-OVERFLOW3 entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	values := docCleanValues("DOC-OVERFLOW3-INV")
+	values["line_items[1].description"] = sxPtr("Fine")
+	values["line_items[1].unit_price"] = sxPtr("10.00")
+	values["line_items[2].description"] = sxPtr("Also fine")
+	values["line_items[2].unit_price"] = sxPtr("20.00")
+	values["line_items[3].description"] = sxPtr("Oversized")
+	values["line_items[3].quantity"] = sxPtr(strings.Repeat("9", 20)) // quantity is numeric(14,3)
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: want a nil error (a quarantined domain outcome), got %v", err)
+	}
+	if res.Status != "completed" || res.RowsInvalid != 1 || len(res.Errors) == 0 {
+		t.Errorf("BatchResult status/RowsInvalid/errors = %q/%d/%d, want completed/1/at least 1", res.Status, res.RowsInvalid, len(res.Errors))
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "DOC-OVERFLOW3-INV"); got != 0 {
+		t.Errorf("invoices DOC-OVERFLOW3-INV = %d, want 0", got)
+	}
+	if got := countLineItemsForEntity(t, super, entityID); got != 0 {
+		t.Errorf("line_items for the entity = %d, want 0 -- the two good lines written before the refusal must roll back too", got)
+	}
+}

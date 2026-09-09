@@ -717,6 +717,10 @@ var (
 	}
 )
 
+// The measured production header. Unescaped, unlike its ruled neighbour: nothing draws this
+// into a PDF, so it carries no builder and no committed bytes.
+var fxDenseIndexHeader = []string{"Item", "Service description", "Reference", "Qty", "Unit rate ₦", "Amount ₦", "VAT ₦"}
+
 // fxWildRuledRowText lays one five-column row on a baseline, 4pt into each column.
 func fxWildRuledRowText(baseline int, cells []string) []fxLine {
 	lines := make([]fxLine, len(cells))
@@ -1961,5 +1965,25 @@ func TestFixtures_TheNairaVariantNumbersObjectsByItsSliceLength(t *testing.T) {
 		if got := string(m[1]); got != strconv.Itoa(tc.objects) {
 			t.Errorf("the font dict names /ToUnicode %s 0 R, want the last object %d -- fxAssemble numbers by slice index, so the appended CMap is object %d", got, tc.objects, tc.objects)
 		}
+	}
+}
+
+// TestFixtures_DenseIndexHeaderIsTheMeasuredShape pins AC-7: the measured production header is a
+// named fixture, and stays distinguishable from its ruled neighbour's S/N-led arrangement.
+func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
+	if len(fxDenseIndexHeader) != 7 {
+		t.Fatalf("len(fxDenseIndexHeader) = %d, want 7", len(fxDenseIndexHeader))
+	}
+	if fxDenseIndexHeader[0] != "Item" {
+		t.Errorf("fxDenseIndexHeader[0] = %q, want %q", fxDenseIndexHeader[0], "Item")
+	}
+	if fxDenseIndexHeader[1] != "Service description" {
+		t.Errorf("fxDenseIndexHeader[1] = %q, want %q", fxDenseIndexHeader[1], "Service description")
+	}
+	if fxDenseIndexHeader[4] != "Unit rate ₦" {
+		t.Errorf("fxDenseIndexHeader[4] = %q, want %q", fxDenseIndexHeader[4], "Unit rate ₦")
+	}
+	if fxWildRuledHeader[0] != "S/N" {
+		t.Errorf("fxWildRuledHeader[0] = %q, want %q -- the two arrangements must stay distinguishable", fxWildRuledHeader[0], "S/N")
 	}
 }

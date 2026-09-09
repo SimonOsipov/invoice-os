@@ -237,8 +237,9 @@ func TestServiceImportDocument_SameDocumentDifferentEntitiesBothWriteIndependent
 // --- source_rows is genuinely NULL, never '{}' ------------------------------
 
 // invoices_source_rows_are_sheet_rows rejects BOTH '{}' (cardinality < 1) and any element < 2,
-// so NULL is the only legal value documentCreateInput can leave here (D-13: nothing extracted
-// feeds line-level rows yet). DOC-01 already checks source_document_id but not source_rows.
+// so NULL is the only legal value documentCreateInput can leave here -- source_rows names
+// SHEET rows, which a document import has none of. DOC-01 already checks source_document_id but
+// not source_rows.
 func TestServiceImportDocument_WrittenInvoiceSourceRowsIsNullNotEmptyArray(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

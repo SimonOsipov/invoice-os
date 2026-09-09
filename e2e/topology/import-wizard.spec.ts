@@ -5684,12 +5684,15 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 //   2. `extraction-write-error` still has no deployed coverage (jsdom only) -- unchanged from
 //      EXTR-12, and not this story's to close.
 
+// The RENDERED roles only, deliberately one short of LINE_CELL_RE below: line_tax rides the
+// wire but has no grid input, so widening this set would make gridValues read a control that
+// does not exist.
 const LINE_ROLE_NAMES = ['description', 'quantity', 'unit_price', 'line_total'] as const
 type LineRoleName = (typeof LINE_ROLE_NAMES)[number]
 
 // lineItems.ts's LINE_FIELD_RE, restated rather than imported: e2e/ compiles against no
 // frontend source, and a spec that imported the parser would assert the parser against itself.
-const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total)$/
+const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/
 
 type WireLineCell = { name: string; value: string | null; region: ExtractionRegion | null }
 type WireLine = { index: number; cells: Partial<Record<LineRoleName, WireLineCell>> }

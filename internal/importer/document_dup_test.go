@@ -253,13 +253,13 @@ func TestServiceImportDocument_ConcurrentDuplicateRaceWinnerWritesLosersEnriched
 	}
 
 	// DUP-D8: the losers leave no partial invoice (checked above), no orphan line_items and no
-	// orphan invoice_status_history row. The document path never writes line_items at all
-	// (Core AC 8, document.go:104-106), so the entity-wide count must be exactly 0; the
-	// winner's own Create writes exactly one status-history row (internal/invoice/store.go
-	// :261-266, inside the SAME tx as the invoices INSERT it follows -- a loser's 23505 aborts
-	// that tx before this INSERT runs, so a loser can never leave one behind).
+	// orphan invoice_status_history row. docCleanValues seeds no line rows for this fixture, so
+	// the entity-wide count must be exactly 0; the winner's own Create writes exactly one
+	// status-history row (internal/invoice/store.go:261-266, inside the SAME tx as the invoices
+	// INSERT it follows -- a loser's 23505 aborts that tx before this INSERT runs, so a loser
+	// can never leave one behind).
 	if got := countLineItemsForEntity(t, super, entityID); got != 0 {
-		t.Errorf("line_items for entity = %d, want 0 (the document path never writes line items)", got)
+		t.Errorf("line_items for entity = %d, want 0 (this fixture seeds no line rows)", got)
 	}
 	if got := countStatusHistoryForEntity(t, super, entityID); got != 1 {
 		t.Errorf("invoice_status_history rows for entity = %d, want exactly 1 (only the winner transitions)", got)

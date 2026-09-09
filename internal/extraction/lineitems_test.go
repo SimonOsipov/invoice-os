@@ -5,6 +5,7 @@
 package extraction_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -461,4 +462,400 @@ func TestParseLineFieldName_RoundTripsWithLineFieldName(t *testing.T) {
 			t.Errorf("ParseLineFieldName(%q) ok = true, want false", name)
 		}
 	}
+}
+
+// The offline oracle for wild_ruled_lines_totals.pdf: Tables is nil from PDFiumReader, so this
+// replays the committed Docling golden instead. Row 3's rate cell is "500.00 Total" -- reAmount
+// is anchored and rejects it by design, so that row's UnitPrice stays nil.
+func TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount(t *testing.T) {
+	pages, _, _ := dcServeGolden(t, dcReadNamedGolden(t, "wild_ruled_lines_totals.docling.json"))
+
+	got := extraction.LineItems(pages)
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s), want 3", len(got))
+	}
+
+	wantUnitPrice := []string{"1000.00", "500.00", ""}
+	wantLineTotal := []string{"4000.00", "3000.00", "1000.00"}
+	for i, line := range got {
+		if line.Quantity == nil {
+			t.Errorf("line %d Quantity = nil, want a value", i)
+		}
+		if wantUnitPrice[i] == "" {
+			liWantNil(t, line.UnitPrice, "line "+strconv.Itoa(i)+" UnitPrice")
+		} else {
+			liWant(t, line.UnitPrice, wantUnitPrice[i], "line "+strconv.Itoa(i)+" UnitPrice")
+		}
+		liWant(t, line.LineTotal, wantLineTotal[i], "line "+strconv.Itoa(i)+" LineTotal")
+	}
+}
+
+// TestLineItems_TheMeasuredDenseTableFilesTextNotRowNumbersAsDescriptions pins AC-1 at the
+// LineItems level: the measured production header must file each row's description text, never
+// its ordinal. The count is asserted before the per-row loop -- two rows cannot tell a skip from
+// a stop, and "every" would hold vacuously over one.
+func TestLineItems_TheMeasuredDenseTableFilesTextNotRowNumbersAsDescriptions(t *testing.T) {
+	descriptions := []string{"Steel Rods", "Cement Bags", "Roofing Sheets"}
+	rowNums := []string{"01", "02", "03"}
+	qtys := []string{"4", "6", "2"}
+	rates := []string{"1000.00", "500.00", "500.00"}
+	amounts := []string{"4000.00", "3000.00", "1000.00"}
+
+	cells := make([]extraction.TableCell, 0, len(fxDenseIndexHeader))
+	for i, text := range fxDenseIndexHeader {
+		cells = append(cells, liCell(0, i, text, nil))
+	}
+	for r := range descriptions {
+		row := r + 1
+		cells = append(cells,
+			liCell(row, 0, rowNums[r], nil),
+			liCell(row, 1, descriptions[r], nil),
+			liCell(row, 2, "REF-"+rowNums[r], nil),
+			liCell(row, 3, qtys[r], nil),
+			liCell(row, 4, rates[r], nil),
+			liCell(row, 5, amounts[r], nil),
+			liCell(row, 6, "0.00", nil),
+		)
+	}
+	tbl := extraction.Table{Rows: len(descriptions) + 1, Cols: len(fxDenseIndexHeader), Cells: cells}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s), want 3", len(got))
+	}
+	for i, want := range descriptions {
+		liWant(t, got[i].Description, want, "row "+strconv.Itoa(i)+" Description")
+		if got[i].Description != nil && *got[i].Description == rowNums[i] {
+			t.Errorf("row %d Description = %q, want the goods text %q, not the row ordinal", i, *got[i].Description, want)
+		}
+	}
+}
+
+// TestLineItems_AQuantityOnlyTableYieldsNoLines pins AC-1: quantity alone cannot state a
+// per-line amount. The positive control (same rows, an Amount column added) is what tells this
+// zero apart from a reader that found no table at all.
+func TestLineItems_AQuantityOnlyTableYieldsNoLines(t *testing.T) {
+	reject := extraction.Table{
+		Rows: 4, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Item", nil), liCell(0, 1, "Qty", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "1", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "2", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "3", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{reject}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a quantity-only header, want 0", len(got))
+	}
+
+	accept := extraction.Table{
+		Rows: 4, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Item", nil), liCell(0, 1, "Qty", nil), liCell(0, 2, "Amount", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "1", nil), liCell(1, 2, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "2", nil), liCell(2, 2, "20.00", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "3", nil), liCell(3, 2, "30.00", nil),
+		},
+	}
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{accept}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once an Amount column is added, want 3 -- the control proves the rows above were readable", len(got))
+	}
+}
+
+// TestLineItems_AUnitPriceOnlyTableYieldsNoLines pins AC-2: unit price alone cannot state a
+// per-line amount without a quantity to multiply against.
+func TestLineItems_AUnitPriceOnlyTableYieldsNoLines(t *testing.T) {
+	reject := extraction.Table{
+		Rows: 4, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Unit price", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "30.00", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{reject}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a unit-price-only header, want 0", len(got))
+	}
+
+	accept := extraction.Table{
+		Rows: 4, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Unit price", nil), liCell(0, 2, "Qty", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil), liCell(1, 2, "1", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil), liCell(2, 2, "2", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "30.00", nil), liCell(3, 2, "3", nil),
+		},
+	}
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{accept}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once a Qty column is added, want 3 -- the control proves the rows above were readable", len(got))
+	}
+}
+
+// TestLineItems_ADescriptionOnlyTableYieldsNoLines pins AC-3 (unchanged): description alone is
+// prose, not a table that can state a per-line amount.
+func TestLineItems_ADescriptionOnlyTableYieldsNoLines(t *testing.T) {
+	reject := extraction.Table{
+		Rows: 4, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Reference", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "REF-1", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "REF-2", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "REF-3", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{reject}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a description-only header, want 0", len(got))
+	}
+
+	accept := extraction.Table{
+		Rows: 4, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Reference", nil), liCell(0, 2, "Amount", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "REF-1", nil), liCell(1, 2, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "REF-2", nil), liCell(2, 2, "20.00", nil),
+			liCell(3, 0, "Gizmo", nil), liCell(3, 1, "REF-3", nil), liCell(3, 2, "30.00", nil),
+		},
+	}
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{accept}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once an Amount column is added, want 3 -- the control proves the rows above were readable", len(got))
+	}
+}
+
+// TestLineItems_ADescriptionAndAmountTableStillYieldsLines pins AC-4: a line total alone is
+// enough to state a per-line amount, so a Description|Amount invoice is not regressed.
+func TestLineItems_ADescriptionAndAmountTableStillYieldsLines(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}})
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	for i, line := range got {
+		liWantNil(t, line.Quantity, "Quantity")
+		liWantNil(t, line.UnitPrice, "UnitPrice")
+		if line.Description == nil {
+			t.Errorf("line %d Description = nil, want a value", i)
+		}
+		if line.LineTotal == nil {
+			t.Errorf("line %d LineTotal = nil, want a value", i)
+		}
+	}
+	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
+	liWant(t, got[1].LineTotal, "20.00", "line 1 LineTotal")
+}
+
+// TestLineItems_AQuantityAndPriceTableWithoutATotalYieldsLines pins AC-5: quantity and unit
+// price together state a per-line amount even with no printed total column.
+func TestLineItems_AQuantityAndPriceTableWithoutATotalYieldsLines(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 3,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil), liCell(0, 2, "Unit price", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "2", nil), liCell(1, 2, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "3", nil), liCell(2, 2, "20.00", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}})
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	for i, line := range got {
+		liWantNil(t, line.LineTotal, "LineTotal")
+		if line.Quantity == nil {
+			t.Errorf("line %d Quantity = nil, want a value", i)
+		}
+		if line.UnitPrice == nil {
+			t.Errorf("line %d UnitPrice = nil, want a value", i)
+		}
+	}
+	liWant(t, got[0].Quantity, "2", "line 0 Quantity")
+	liWant(t, got[1].Quantity, "3", "line 1 Quantity")
+}
+
+// TestLineItems_VatCellsReadThroughNormalizeAmount pins AC-1 at the LineItems level: the fifth
+// role's cells go through the same normalizeAmount unit price and line total already use --
+// grouping commas stripped, the leading currency marker stripped.
+func TestLineItems_VatCellsReadThroughNormalizeAmount(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 2, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT ₦", nil),
+			liCell(1, 0, "Widget", nil),
+			liCell(1, 1, "2", nil),
+			liCell(1, 2, "500.00", nil),
+			liCell(1, 3, "1000.00", nil),
+			liCell(1, 4, "₦ 1,234.50", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s), want 1", len(got))
+	}
+	liWant(t, got[0].LineTax, "1234.50", "LineTax")
+}
+
+// TestLineItems_ReadsPerLineVat pins AC-2: LineItems populates DocLine.LineTax per row, from a
+// dedicated VAT column, distinct from every other role.
+func TestLineItems_ReadsPerLineVat(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "2", nil), liCell(1, 2, "500.00", nil), liCell(1, 3, "1000.00", nil), liCell(1, 4, "75.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "1", nil), liCell(2, 2, "500.00", nil), liCell(2, 3, "500.00", nil), liCell(2, 4, "37.50", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	liWant(t, got[0].LineTax, "75.00", "row0 LineTax")
+	liWant(t, got[1].LineTax, "37.50", "row1 LineTax")
+}
+
+// TestLineItemResults_EmitsLineTaxLastInRoleOrder pins AC-2: line_tax is the fifth cell, emitted
+// last in LineRoles' own order, immediately after line_total.
+func TestLineItemResults_EmitsLineTaxLastInRoleOrder(t *testing.T) {
+	desc := "Widget"
+	lines := []extraction.DocLine{
+		{Index: 1, Description: &desc, Quantity: rcStr("2"), UnitPrice: rcStr("500.00"), LineTotal: rcStr("1000.00"), LineTax: rcStr("75.00")},
+	}
+
+	got := extraction.LineItemResults(lines)
+	want := []string{
+		"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price",
+		"line_items[1].line_total", "line_items[1].line_tax",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LineItemResults returned %d row(s) %v, want exactly %d: %v", len(got), rcNames(got), len(want), want)
+	}
+	if gotNames := rcNames(got); !rcNamesEqual(gotNames, want) {
+		t.Errorf("row names = %v, want %v in exactly this order -- line_tax must land last, right after line_total", gotNames, want)
+	}
+}
+
+// TestLineItemResults_ANilLineTaxEmitsNoRow pins AC-3: an absent VAT cell emits no row at all,
+// never a row carrying an empty value. The positive companion (the other four rows) is asserted
+// first, so a projection that dropped every row could not pass the absence check that follows.
+func TestLineItemResults_ANilLineTaxEmitsNoRow(t *testing.T) {
+	desc := "Widget"
+	lines := []extraction.DocLine{
+		{Index: 1, Description: &desc, Quantity: rcStr("2"), UnitPrice: rcStr("500.00"), LineTotal: rcStr("1000.00"), LineTax: nil},
+	}
+
+	got := extraction.LineItemResults(lines)
+	want := []string{
+		"line_items[1].description", "line_items[1].quantity", "line_items[1].unit_price", "line_items[1].line_total",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LineItemResults returned %d row(s) %v, want exactly %d: %v -- a missing VAT cell emits no row", len(got), rcNames(got), len(want), want)
+	}
+	if gotNames := rcNames(got); !rcNamesEqual(gotNames, want) {
+		t.Errorf("row names = %v, want %v", gotNames, want)
+	}
+	for _, r := range got {
+		if r.Name == "line_items[1].line_tax" {
+			t.Errorf("found a row named %q, want none for a nil LineTax", r.Name)
+		}
+	}
+}
+
+// TestLineItems_AVatColumnWhoseCellsAreBlankIsDetectedButReadsNothing discriminates "VAT column
+// present but empty" from "VAT column absent": a header naming VAT still leaves DocLine.LineTax
+// nil when every data cell under it is blank or a dash. The companion (the table's other three
+// roles ARE populated) is asserted first, so the nil below means "this cell specifically read
+// nothing", not "the table was rejected whole".
+func TestLineItems_AVatColumnWhoseCellsAreBlankIsDetectedButReadsNothing(t *testing.T) {
+	tbl := extraction.Table{
+		Rows: 3, Cols: 5,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil),
+			liCell(0, 1, "Qty", nil),
+			liCell(0, 2, "Unit price", nil),
+			liCell(0, 3, "Amount", nil),
+			liCell(0, 4, "VAT ₦", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "2", nil), liCell(1, 2, "500.00", nil), liCell(1, 3, "1000.00", nil), liCell(1, 4, "", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "1", nil), liCell(2, 2, "500.00", nil), liCell(2, 3, "500.00", nil), liCell(2, 4, "-", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	for i, line := range got {
+		if line.Quantity == nil || line.UnitPrice == nil || line.LineTotal == nil {
+			t.Fatalf("row %d Quantity/UnitPrice/LineTotal = %v/%v/%v, want all populated -- the table must be read before the VAT column's own blankness means anything",
+				i, line.Quantity, line.UnitPrice, line.LineTotal)
+		}
+	}
+	liWantNil(t, got[0].LineTax, "row0 LineTax")
+	liWantNil(t, got[1].LineTax, "row1 LineTax")
+
+	results := extraction.LineItemResults(got)
+	for _, r := range results {
+		if r.Name == "line_items[1].line_tax" || r.Name == "line_items[2].line_tax" {
+			t.Errorf("found a row named %q, want none -- a blank VAT cell must never surface as a value row", r.Name)
+		}
+	}
+}
+
+// TestLineItems_ASkippedTableLeavesNoHoleInTheIndexSequence pins AC-6: a rejected table burns no
+// ordinal, and the surviving descriptions must come from the second (usable) table, not the
+// first -- a count-only assertion could pass on either table's rows.
+func TestLineItems_ASkippedTableLeavesNoHoleInTheIndexSequence(t *testing.T) {
+	rejected := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil),
+			liCell(1, 0, "Skipped Row A", nil), liCell(1, 1, "1", nil),
+			liCell(2, 0, "Skipped Row B", nil), liCell(2, 1, "2", nil),
+		},
+	}
+	usable := extraction.Table{
+		Rows: 3, Cols: 4,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil), liCell(0, 2, "Unit Price", nil), liCell(0, 3, "Amount", nil),
+			liCell(1, 0, "Widget", nil), liCell(1, 1, "1", nil), liCell(1, 2, "10.00", nil), liCell(1, 3, "10.00", nil),
+			liCell(2, 0, "Gadget", nil), liCell(2, 1, "2", nil), liCell(2, 2, "20.00", nil), liCell(2, 3, "40.00", nil),
+		},
+	}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{rejected, usable}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s), want 2", len(got))
+	}
+	if got[0].Index != 1 || got[1].Index != 2 {
+		t.Errorf("Index = [%d %d], want [1 2] -- the skipped table must burn no ordinal", got[0].Index, got[1].Index)
+	}
+	liWant(t, got[0].Description, "Widget", "line 0 Description")
+	liWant(t, got[1].Description, "Gadget", "line 1 Description")
 }

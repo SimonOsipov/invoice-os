@@ -432,8 +432,8 @@ func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoic
 // newInvoiceLineItemsApplier adapts the invoice store to the line-set seam, mapping each domain
 // outcome onto an extraction sentinel exactly as newInvoiceFieldApplier does. The LineItems
 // pointer is always non-nil so an empty array means "remove every line" rather than "leave them
-// alone" ([line-items-optional]); LineTax stays nil because the extractor never reads one
-// (TestNewInvoiceLineItemsApplier_LeavesLineTaxNil).
+// alone" ([line-items-optional]). LineTax is carried through, not recomputed, so a replace-all
+// save cannot erase a cell the user never touched, and the value reaches the filed envelope.
 func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItemsToInvoice {
 	return func(ctx context.Context, tx pgx.Tx, documentID string, lines []extraction.LineItemInput) (string, error) {
 		converted := make([]invoice.LineItemInput, len(lines))
@@ -443,6 +443,7 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 				Quantity:    l.Quantity,
 				UnitPrice:   l.UnitPrice,
 				LineTotal:   l.LineTotal,
+				LineTax:     l.LineTax,
 			}
 		}
 		inv, err := edit(ctx, tx, documentID, invoice.EditInput{LineItems: &converted})

@@ -202,6 +202,73 @@ func TestReconcile_RowOffByTwoMinorUnitsFails(t *testing.T) {
 	}
 }
 
+// TestReconcileLines_LineTaxNeverRaisesAnArithmeticFlag pins AC-4 ([no-arithmetic-check-on-vat]):
+// reconcileLines checks quantity x unit price against the printed line total and nothing else --
+// a VAT far from any plausible rate must never itself raise a flag. The companion is asserted
+// first: the row's own arithmetic DID run and passed, so the absence of a flag below means "VAT
+// is not checked", not "nothing was checked at all".
+func TestReconcileLines_LineTaxNeverRaisesAnArithmeticFlag(t *testing.T) {
+	in := extraction.Input{
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00"), LineTax: rcStr("99.99")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	total, ok := rcFind(results, "line_items[1].line_total")
+	if !ok {
+		t.Fatalf(`"line_items[1].line_total" not found in %+v`, results)
+	}
+	if total.Reason != extraction.ReasonNone {
+		t.Errorf("line_items[1].line_total reason = %q, want ReasonNone -- 2 x 10.00 = 20.00 exactly, VAT plays no part in this check", total.Reason)
+	}
+
+	for _, r := range results {
+		if r.Reason == extraction.ReasonInconsistent {
+			t.Errorf("found %q at ReasonInconsistent, want no per-row flag anywhere -- a VAT of 99.99 against a 20.00 total is not a plausible rate, and must still raise nothing", r.Name)
+		}
+	}
+}
+
+// The name collision the role spelling exists to avoid: "vat" is a HeaderFields member, and the
+// per-line role is spelled line_tax. Both must reach the wire under their own name, carrying
+// their own value -- neither overwriting nor suppressing the other.
+func TestReconcile_TheInvoiceLevelVatAndThePerLineTaxAreDistinctFields(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandAt("vat", "150.00", extraction.TierGeneric, 0)},
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00"), LineTax: rcStr("1.50")},
+		},
+	}
+	results := extraction.Reconcile(in)
+	if len(results) == 0 {
+		t.Fatal("Reconcile returned nothing; the lookups below would report absence either way")
+	}
+
+	header, ok := rcFind(results, "vat")
+	if !ok {
+		t.Fatalf(`"vat" not found in %v`, rcNames(results))
+	}
+	if header.Value == nil || *header.Value != "150.00" {
+		t.Errorf(`"vat" value = %v, want "150.00" -- the invoice-level field, not the line's`, header.Value)
+	}
+
+	cell, ok := rcFind(results, "line_items[1].line_tax")
+	if !ok {
+		t.Fatalf(`"line_items[1].line_tax" not found in %v`, rcNames(results))
+	}
+	if cell.Value == nil || *cell.Value != "1.50" {
+		t.Errorf(`"line_items[1].line_tax" value = %v, want "1.50"`, cell.Value)
+	}
+
+	// No result may be named for the line under the header field's own spelling.
+	for _, r := range results {
+		if r.Name == "line_items[1].vat" {
+			t.Errorf("found %q; the per-line role is spelled line_tax, never vat", r.Name)
+		}
+	}
+}
+
 func TestReconcile_ThreeDecimalQuantityMultipliesExactly(t *testing.T) {
 	in := extraction.Input{
 		Lines: []extraction.DocLine{
@@ -381,6 +448,45 @@ func TestReconcile_LineSumMissesTheSubtotal(t *testing.T) {
 	}
 }
 
+// TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag: two rows whose printed line total sits
+// exactly reconcileTolerance (0.01) off qty*price, and whose printed subtotal equals their sum
+// exactly -- the grid reads wholly clean even though the same numbers block the invoice at the
+// validation rule's tighter 0.005 (internal/importer's
+// TestImportDocumentReadback_AGridCleanInvoiceCanStillBeRuleBlocked). Both residuals sit exactly
+// ON the reconciler boundary -- tightening reconcileTolerance below 0.01 flips this half silently.
+// Mutation: GreaterThan -> GreaterThanOrEqual at reconcile.go:50.
+func TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "40.02")},
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("3"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("30.01")},
+			{Index: 2, Quantity: rcStr("2"), UnitPrice: rcStr("5.00"), LineTotal: rcStr("10.01")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	// Positive companion: the block itself reached ReasonNone, so the sum check genuinely ran --
+	// the absence assertion below cannot pass vacuously on a Reconcile that never checked anything.
+	lineBlock, ok := rcFind(results, "line_items")
+	if !ok {
+		t.Fatal(`"line_items" result not found`)
+	}
+	if lineBlock.Reason != extraction.ReasonNone {
+		t.Fatalf("line_items reason = %q, want ReasonNone", lineBlock.Reason)
+	}
+	if flags := rcLineFlags(results); len(flags) != 0 {
+		t.Errorf("per-row flags = %+v, want none -- both residuals are exactly 0.01, not greater than reconcileTolerance", flags)
+	}
+
+	subtotal, ok := rcFind(results, "subtotal")
+	if !ok {
+		t.Fatal(`"subtotal" result not found`)
+	}
+	if subtotal.Reason != extraction.ReasonNone {
+		t.Errorf("subtotal reason = %q, want ReasonNone -- 30.01+10.01 = 40.02, exactly the printed subtotal", subtotal.Reason)
+	}
+}
+
 // The pair is the oracle (D-19): asserting either half alone could pass on a Reconcile that
 // always reports the subtotal clean, or one that always reports the block missing, regardless
 // of whether the sum check actually ran.
@@ -403,6 +509,81 @@ func TestReconcile_NoLinesLeavesTheSubtotalCleanAndTheBlockMissing(t *testing.T)
 	if subtotal.Reason != extraction.ReasonNone || lineBlock.Reason != extraction.ReasonMissing {
 		t.Errorf("subtotal reason = %q (want ReasonNone) and line_items reason = %q (want ReasonMissing) -- no lines means the sum check never ran, so subtotal stays clean while the block itself is missing",
 			subtotal.Reason, lineBlock.Reason)
+	}
+}
+
+// TestReconcile_AnUnusableTableLeavesTheLineItemsBlockMissing drives Lines from a real table
+// LineItems would reject whole, not a hand-built empty Lines --
+// TestReconcile_NoLinesLeavesTheSubtotalCleanAndTheBlockMissing already covers that case and
+// stays green regardless of the gate under test here.
+func TestReconcile_AnUnusableTableLeavesTheLineItemsBlockMissing(t *testing.T) {
+	mkPages := func(withAmount bool) []extraction.Page {
+		cols := 2
+		cells := []extraction.TableCell{
+			liCell(0, 0, "Item", nil), liCell(0, 1, "Qty", nil),
+		}
+		items := []string{"Widget", "Gadget", "Gizmo"}
+		qtys := []string{"1", "2", "3"}
+		totals := []string{"10.00", "20.00", "30.00"}
+		if withAmount {
+			cols = 3
+			cells = append(cells, liCell(0, 2, "Amount", nil))
+		}
+		for r := range items {
+			row := r + 1
+			cells = append(cells, liCell(row, 0, items[r], nil), liCell(row, 1, qtys[r], nil))
+			if withAmount {
+				cells = append(cells, liCell(row, 2, totals[r], nil))
+			}
+		}
+		tbl := extraction.Table{Rows: len(items) + 1, Cols: cols, Cells: cells}
+		return []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+	}
+
+	rejectIn := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "30.00")},
+		Lines:      extraction.LineItems(mkPages(false)),
+	}
+	results := extraction.Reconcile(rejectIn)
+	if len(results) == 0 {
+		t.Fatal("Reconcile returned zero results; the checks below would be vacuous")
+	}
+	lineBlock, ok := rcFind(results, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" result not found in %+v`, results)
+	}
+	if lineBlock.Reason != extraction.ReasonMissing {
+		t.Errorf("line_items reason = %q, want ReasonMissing -- the quantity-only table yields no lines", lineBlock.Reason)
+	}
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			t.Errorf("found row %q, want no line_items[N].* row when the table was rejected whole", r.Name)
+		}
+	}
+
+	// Positive control: the same table plus a line-total column must reach the block --
+	// otherwise ReasonMissing above could mean "no table found" rather than "gate rejected it".
+	acceptIn := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "30.00")},
+		Lines:      extraction.LineItems(mkPages(true)),
+	}
+	results = extraction.Reconcile(acceptIn)
+	lineBlock, ok = rcFind(results, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" result not found in %+v`, results)
+	}
+	if lineBlock.Reason != extraction.ReasonNone {
+		t.Errorf("line_items reason = %q, want ReasonNone once the table gains a line-total column", lineBlock.Reason)
+	}
+	found := false
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("found no line_items[N].* row, want at least one once the table is usable")
 	}
 }
 

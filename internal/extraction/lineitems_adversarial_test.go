@@ -203,14 +203,14 @@ func TestLineItems_SortsMoreThanTwelveOutOfOrderRows(t *testing.T) {
 	}
 }
 
-// A header naming only one of the gate's three roles still proceeds (fail-closed is
-// zero-of-three only); the two unmapped roles are nil on every row, not just the first.
+// A header naming a line total alone still proceeds (the gate needs qty and price together, or
+// a total on its own); quantity and unit price stay nil on every row, not just the first.
 func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T) {
 	tbl := extraction.Table{
 		Rows: 3, Cols: 2,
 		Cells: []extraction.TableCell{
 			liCell(0, 0, "Description", nil),
-			liCell(0, 1, "Line Total", nil), // the only role the fail-closed gate counts
+			liCell(0, 1, "Line Total", nil), // a line total alone satisfies the gate
 			liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
 			liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
 		},
@@ -219,7 +219,7 @@ func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T)
 
 	got := extraction.LineItems(pages)
 	if len(got) != 2 {
-		t.Fatalf("LineItems returned %d line(s), want 2 -- naming one of three roles still proceeds", len(got))
+		t.Fatalf("LineItems returned %d line(s), want 2 -- a line total alone still proceeds", len(got))
 	}
 	for i, line := range got {
 		liWantNil(t, line.Quantity, "Quantity")
@@ -289,6 +289,22 @@ func TestLineItems_PurityScanUnchanged(t *testing.T) {
 	want := []string{"regexp", "strconv", "strings", "unicode"}
 	if !slices.Equal(liAllowedImports, want) {
 		t.Errorf("liAllowedImports = %v, want %v -- lineitems.go's purity fence must not widen", liAllowedImports, want)
+	}
+}
+
+// TestLineItems_ImportsAreExactlyThreeAndDidNotGrow is AC-6's own guard, stricter than the
+// purity allowlist above: an equality check, not a subset check, so it cannot stay green if
+// unicode (permitted by liAllowedImports) is later added to lineitems.go.
+func TestLineItems_ImportsAreExactlyThreeAndDidNotGrow(t *testing.T) {
+	got := liImportPaths(liParse(t, "lineitems.go", nil))
+	if len(got) == 0 {
+		t.Fatal("lineitems.go imports nothing; the equality check below would hold vacuously")
+	}
+	sorted := slices.Clone(got)
+	slices.Sort(sorted)
+	want := []string{"regexp", "strconv", "strings"}
+	if !slices.Equal(sorted, want) {
+		t.Errorf("lineitems.go imports %v, want exactly %v", sorted, want)
 	}
 }
 
@@ -581,5 +597,317 @@ func TestLineFieldName_IsThePackagesOnlyNameSource(t *testing.T) {
 
 	if got := extraction.LineFieldName(999, extraction.LineRoleDescription); got != "line_items[999].description" {
 		t.Errorf("LineFieldName(999, description) = %q, want \"line_items[999].description\"", got)
+	}
+}
+
+// A header row of blank cells names no role, so the gate rejects the table however readable its
+// data rows are. The control fills the same header and the same rows come back.
+func TestLineItems_ABlankHeaderRowYieldsNoLines(t *testing.T) {
+	mk := func(h0, h1 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 2,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, h0, nil), liCell(0, 1, h1, nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, "30.00", nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("", "   ")}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a blank header row, want 0", len(got))
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Description", "Amount")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once the header names its roles, want 3 -- the control proves the rows above were readable", len(got))
+	}
+	liWant(t, got[0].Description, "Widget", "line 0 Description")
+}
+
+// A header that passes the gate does not manufacture rows: no data row means no line, and the
+// slice is still the non-nil empty one callers rely on.
+func TestLineItems_AUsableHeaderWithNoDataRowsYieldsNoLines(t *testing.T) {
+	header := []extraction.TableCell{liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil)}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{
+		{Rows: 1, Cols: 2, Cells: header},
+	}}})
+	if got == nil {
+		t.Fatal("LineItems returned nil, want a non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a header with no data rows, want 0", len(got))
+	}
+
+	withRow := append(append([]extraction.TableCell{}, header...), liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil))
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{
+		{Rows: 2, Cols: 2, Cells: withRow},
+	}}})
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s) once one data row is added, want 1", len(got))
+	}
+	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
+}
+
+// Two columns naming the SAME role claim one column between them (liClassifyHeader keeps the
+// leftmost), so a doubled quantity header never stands in for the unit price the gate wants.
+func TestLineItems_TwoQuantityColumnsDoNotSatisfyThePairing(t *testing.T) {
+	mk := func(h2 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 3,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil), liCell(0, 2, h2, nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, "1", nil), liCell(1, 2, "10.00", nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, "2", nil), liCell(2, 2, "20.00", nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, "3", nil), liCell(3, 2, "30.00", nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Quantity")}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a Qty|Quantity header, want 0 -- a second quantity column is not a unit price", len(got))
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Unit price")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once the second column names a unit price, want 3 -- the control proves the rows above were readable", len(got))
+	}
+	liWant(t, got[0].UnitPrice, "10.00", "line 0 UnitPrice")
+}
+
+// The skip is per table, not per document: a rejected table on page 1 costs page 2's table
+// neither its rows nor its ordinals.
+func TestLineItems_ATableRejectedOnOnePageLeavesTheNextPageWhole(t *testing.T) {
+	rejected := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil),
+			liCell(1, 0, "Page One A", nil), liCell(1, 1, "1", nil),
+			liCell(2, 0, "Page One B", nil), liCell(2, 1, "2", nil),
+		},
+	}
+	usable := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil),
+			liCell(1, 0, "Page Two A", nil), liCell(1, 1, "10.00", nil),
+			liCell(2, 0, "Page Two B", nil), liCell(2, 1, "20.00", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{
+		{Number: 1, Tables: []extraction.Table{rejected}},
+		{Number: 2, Tables: []extraction.Table{usable}},
+	})
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s) across two pages, want 2", len(got))
+	}
+	if got[0].Index != 1 || got[1].Index != 2 {
+		t.Errorf("Index = [%d %d], want [1 2] -- page 1's rejected table must burn no ordinal", got[0].Index, got[1].Index)
+	}
+	liWant(t, got[0].Description, "Page Two A", "line 0 Description")
+	liWant(t, got[1].Description, "Page Two B", "line 1 Description")
+}
+
+// The gate reads the HEADER, never the cells: a table headed with a line total still yields its
+// rows when every total cell is unparseable. LineTotal comes back nil, which is what reconcile
+// reads as "no total to sum" -- the gate is not a content filter.
+func TestLineItems_AUsableHeaderOverUnparseableTotalsStillYieldsLines(t *testing.T) {
+	mk := func(t1, t2, t3 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 2,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, t1, nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, t2, nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, t3, nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("n/a", "--", "see note")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) for unparseable totals, want 3 -- the gate reads the header, not the cells", len(got))
+	}
+	for i, line := range got {
+		liWantNil(t, line.LineTotal, "LineTotal")
+		if line.Description == nil {
+			t.Errorf("line %d Description = nil, want a value -- the row was emitted, so its readable cells must land", i)
+		}
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("10.00", "20.00", "30.00")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) for parseable totals, want 3", len(got))
+	}
+	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
+}
+
+// -- the fifth read role, line_tax: cases AC-1..AC-3's own traces do not reach ----------------
+
+// liTaxTable builds a table whose row 0 is headers and whose row 1 is one data row.
+func liTaxTable(headers, cells []string) extraction.Table {
+	if len(headers) != len(cells) {
+		panic("liTaxTable: header and cell counts differ")
+	}
+	out := extraction.Table{Rows: 2, Cols: len(headers)}
+	for col, h := range headers {
+		out.Cells = append(out.Cells, liCell(0, col, h, nil))
+	}
+	for col, c := range cells {
+		out.Cells = append(out.Cells, liCell(1, col, c, nil))
+	}
+	return out
+}
+
+func liTaxLine(t *testing.T, headers, cells []string) extraction.DocLine {
+	t.Helper()
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(headers, cells)}}})
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s) for headers %v, want 1", len(got), headers)
+	}
+	return got[0]
+}
+
+func liTaxPtr(s string) *string { return &s }
+
+// The "tax" lexicon key had no behavioural cover: dropping it left every test in this package
+// green, and only the sibling package's key-set inventory noticed. This is that cover.
+func TestLineItems_AHeaderSpelledTaxClaimsTheLineTaxRole(t *testing.T) {
+	for _, header := range []string{"Tax", "TAX", "Tax (₦)", "Tax N"} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "75.00"})
+		// Companion first: the table was read at all, so a nil below would mean this column.
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWant(t, line.LineTax, "75.00", header+" LineTax")
+	}
+}
+
+// Every currency decoration liNormalizeHeaderForRole strips, on the VAT header specifically.
+// "(VAT)" -- the whole header parenthesised -- is deliberately absent: the strip empties it and
+// falls back to the undecorated fold "(vat)", which no lexicon key matches. There is no honest
+// expected answer for that shape here, so this test does not pin one.
+func TestLineItems_ADecoratedVatHeaderStillClaimsTheRole(t *testing.T) {
+	for _, header := range []string{"VAT", "VAT ₦", "VAT (₦)", "VAT NGN", "vat n", "  Vat  "} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "₦ 1,234.50"})
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWant(t, line.LineTax, "1234.50", header+" LineTax")
+	}
+}
+
+// Two columns both naming the fifth role: leftmost wins, the same tiebreak every other role
+// follows. The second column's value must not surface on any cell of the line.
+func TestLineItems_TwoVatColumnsTheLeftmostWins(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"Description", "Qty", "Unit price", "Amount", "VAT", "Tax"},
+		[]string{"Widget", "2", "500.00", "1000.00", "75.00", "99.99"})
+	liWant(t, line.LineTotal, "1000.00", "LineTotal")
+	liWant(t, line.LineTax, "75.00", "LineTax -- the leftmost VAT column wins")
+	for _, cell := range []*string{line.Description, line.Quantity, line.UnitPrice, line.LineTotal, line.LineTax} {
+		if cell != nil && *cell == "99.99" {
+			t.Errorf("the second VAT column's value 99.99 reached a cell; only the leftmost may")
+		}
+	}
+}
+
+// The fifth role carries no positional assumption: a VAT column ahead of every other role
+// claims column 0 and leaves the other four on their own columns.
+func TestLineItems_AVatColumnLeftOfEveryOtherRoleStillClassifies(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"VAT", "Description", "Qty", "Unit price", "Amount"},
+		[]string{"75.00", "Widget", "2", "500.00", "1000.00"})
+	liWant(t, line.LineTax, "75.00", "LineTax")
+	liWant(t, line.Description, "Widget", "Description")
+	liWant(t, line.Quantity, "2", "Quantity")
+	liWant(t, line.UnitPrice, "500.00", "UnitPrice")
+	liWant(t, line.LineTotal, "1000.00", "LineTotal")
+}
+
+// Zero and negative VAT are values, not absences: normalizeAmount keeps a leading "-" and a
+// zero reads back as itself, so both emit a row. Accounting parentheses are NOT a negative to
+// the amount shape -- "(75.00)" matches nothing and reads as an absence. The row's line total
+// is asserted first, so a nil LineTax means this cell, never a dropped row.
+func TestLineItems_AZeroOrNegativeVatIsAValueButAccountingParenthesesAreNot(t *testing.T) {
+	for _, tc := range []struct {
+		cell string
+		want *string // nil means "no reading"
+	}{
+		{"0.00", liTaxPtr("0.00")},
+		{"0", liTaxPtr("0")},
+		{"-75.00", liTaxPtr("-75.00")},
+		{"₦ -1,234.50", liTaxPtr("-1234.50")},
+		{"(75.00)", nil},
+		{"n/a", nil},
+	} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", "VAT"},
+			[]string{"Widget", "2", "500.00", "1000.00", tc.cell})
+		liWant(t, line.LineTotal, "1000.00", tc.cell+" LineTotal")
+		if tc.want == nil {
+			liWantNil(t, line.LineTax, tc.cell+" LineTax")
+			continue
+		}
+		liWant(t, line.LineTax, *tc.want, tc.cell+" LineTax")
+
+		// A zero is a value, so it must reach the wire as a row; an absence would not.
+		results := extraction.LineItemResults([]extraction.DocLine{line})
+		if len(results) == 0 {
+			t.Fatalf("LineItemResults emitted nothing for %q; the scan below would hold vacuously", tc.cell)
+		}
+		var found bool
+		for _, r := range results {
+			if r.Name == extraction.LineFieldName(line.Index, "line_tax") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no line_tax row emitted for the readable VAT cell %q", tc.cell)
+		}
+	}
+}
+
+// The fifth role does not widen the usable-table gate: a VAT column is not a per-line amount,
+// so a table naming only description, quantity and VAT yields nothing. The companion runs
+// first -- the same shape WITH an amount column does yield a line -- so the zero below is the
+// gate refusing, not the fixture being unreadable.
+func TestLineItems_AVatColumnCannotRescueATableWithNoPerLineAmount(t *testing.T) {
+	usable := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(
+		[]string{"Description", "Qty", "Amount", "VAT"},
+		[]string{"Widget", "2", "1000.00", "75.00"})}}})
+	if len(usable) != 1 {
+		t.Fatalf("the companion table yielded %d line(s), want 1; the refusal below would prove nothing", len(usable))
+	}
+	liWant(t, usable[0].LineTax, "75.00", "companion LineTax")
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(
+		[]string{"Description", "Qty", "VAT"},
+		[]string{"Widget", "2", "75.00"})}}})
+	if len(got) != 0 {
+		t.Errorf("LineItems returned %d line(s) for a description/quantity/VAT table, want 0 -- VAT is not a per-line amount", len(got))
+	}
+}
+
+// A rate column is not an amount column: the lexicon matches exactly, so "VAT %" and "VAT Rate"
+// claim no role and their 7.5 never lands in LineTax. Reading a rate as an amount is the
+// confidently-wrong failure this exact-match rule exists to prevent. The undecorated "VAT"
+// companion runs first, so a nil below is the header being refused, not the fixture.
+func TestLineItems_AVatRateColumnClaimsNoRole(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"Description", "Qty", "Unit price", "Amount", "VAT"},
+		[]string{"Widget", "2", "500.00", "1000.00", "7.50"})
+	liWant(t, line.LineTax, "7.50", "companion LineTax -- an undecorated VAT header does claim the role")
+
+	for _, header := range []string{"VAT %", "VAT Rate", "Tax %", "Tax rate", "Taxable amount"} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "7.50"})
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWantNil(t, line.LineTax, header+" LineTax")
 	}
 }

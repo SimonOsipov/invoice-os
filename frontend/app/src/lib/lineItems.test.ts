@@ -19,6 +19,7 @@ import type { ExtractionFieldState, ExtractionRegion, ExtractionReason } from '.
 import {
   LINE_ROLES,
   LINE_TOLERANCE,
+  LINE_WIRE_ROLES,
   addRow,
   lineSetChanged,
   lineSumState,
@@ -55,6 +56,7 @@ interface RowValues {
   quantity?: string | null
   unit_price?: string | null
   line_total?: string | null
+  line_tax?: string | null
 }
 
 function mkRow(index: number, values: RowValues = {}): LineRow {
@@ -66,6 +68,7 @@ function mkRow(index: number, values: RowValues = {}): LineRow {
       quantity: cell(name('quantity'), values.quantity ?? null),
       unit_price: cell(name('unit_price'), values.unit_price ?? null),
       line_total: cell(name('line_total'), values.line_total ?? null),
+      line_tax: cell(`line_items[${index}].line_tax`, values.line_tax ?? null),
     },
   }
 }
@@ -97,13 +100,20 @@ describe('parseLineFieldName', () => {
     })
   })
 
+  it('the fifth role, line_tax, parses too -- the sixth near-miss is line_vat, not line_tax', () => {
+    expect(parseLineFieldName('line_items[1].line_tax'), 'line_tax at index 1').toEqual({
+      index: 1,
+      role: 'line_tax',
+    })
+  })
+
   it('six near-misses all parse to null', () => {
     const rejects = [
       'line_items',
       'line_items[0].quantity',
       'line_items[01].quantity',
       'line_itemsx[1].quantity',
-      'line_items[1].line_tax',
+      'line_items[1].line_vat',
       'document_text_layer',
     ]
     expect(rejects.length, 'the reject fixture list itself is empty').toBeGreaterThan(0)
@@ -288,6 +298,29 @@ describe('lineSumState', () => {
   })
 })
 
+// -- the divergent fixture: grid-clean, rule-blocked (QA, AC-2) -----------------------------
+// Mirrors reconcile_test.go's TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag: every
+// row's residual sits exactly on the 0.01 tolerance boundary, so the grid reads wholly clean --
+// yet the same numbers, folded at the blocking rule's tighter 0.005, is a REAL invoice the story
+// makes reachable and rule-blocked (Go side: TestImportDocumentReadback_
+// AGridCleanInvoiceCanStillBeRuleBlocked). Mutation: '> 0' -> '>= 0' in exceedsTolerance
+// (lineItems.ts:76).
+describe('lineSumState reads clean on the fixture the blocking rule refuses', () => {
+  it('both rows read ok and the sum sentence agrees', () => {
+    const rows = [
+      mkRow(1, { quantity: '3', unit_price: '10.00', line_total: '30.01' }),
+      mkRow(2, { quantity: '2', unit_price: '5.00', line_total: '10.01' }),
+    ]
+    expect(rowArithmetic(rows[0]), 'row 1: |3*10.00-30.01| = 0.01, not greater than LINE_TOLERANCE').toBe('ok')
+    expect(rowArithmetic(rows[1]), 'row 2: |2*5.00-10.01| = 0.01, not greater than LINE_TOLERANCE').toBe('ok')
+    expect(lineSumState(rows, '40.02'), '30.01 + 10.01 = 40.02, exactly the printed subtotal').toEqual({
+      sum: '40.02',
+      printed: '40.02',
+      agrees: true,
+    })
+  })
+})
+
 // -- remapRoles -------------------------------------------------------------------------------
 
 describe('remapRoles', () => {
@@ -318,6 +351,7 @@ describe('remapRoles', () => {
         region: { page: 1, x0: 0.6, y0: 0, x1: 0.7, y1: 0.02 },
         reason: '',
       },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
     },
   }
 
@@ -415,6 +449,7 @@ describe('linesToPost', () => {
           quantity: cell(null, '   '), // whitespace-only counts as blank
           unit_price: cell(null, ''),
           line_total: cell(null, ''),
+          line_tax: cell(null, ''),
         },
       },
       mkRow(3, { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00' }),
@@ -424,9 +459,44 @@ describe('linesToPost', () => {
 
     expect(posted.length, 'three rows in, two out -- the all-blank row must be dropped').toBe(2)
     expect(posted, "the blank cell must become null, and 'Widget' with its spaces must post verbatim").toEqual([
-      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00' },
-      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00' },
+      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: null },
+      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00', line_tax: null },
     ])
+  })
+
+  // The whole point of the fifth wire role: a row the user edited elsewhere still posts back the
+  // VAT it was read with. Asserting the KEY is present is not enough -- a body that always sent
+  // line_tax:null would carry the key and still erase the stored value on the replace-all.
+  it('posts the read line_tax alongside the cells the user did edit', () => {
+    const posted = linesToPost([
+      mkRow(1, { description: 'Widget (corrected)', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: '75.00' }),
+      mkRow(2, { description: 'Gadget', quantity: '1', unit_price: '5.00', line_total: '5.00' }),
+    ])
+
+    expect(posted.length, 'both rows were expected on the wire').toBe(2)
+    expect(posted[0].line_tax, 'the VAT the user never touched was dropped on the way to the server').toBe('75.00')
+    expect(posted[0].description, 'the edited cell must post its new value').toBe('Widget (corrected)')
+    expect(posted[1].line_tax, 'a row that carried no VAT must post null, not its neighbour value').toBeNull()
+  })
+
+  it('keeps a row whose only non-null cell is line_tax', () => {
+    const rows: LineRow[] = [
+      {
+        key: 'vat-only',
+        cells: {
+          description: cell(null, ''),
+          quantity: cell(null, ''),
+          unit_price: cell(null, ''),
+          line_total: cell(null, ''),
+          line_tax: cell(null, '75.00'),
+        },
+      },
+    ]
+
+    const posted = linesToPost(rows)
+
+    expect(posted.length, 'a row whose only value is line_tax was filtered out as if it were blank').toBe(1)
+    expect(posted[0].line_tax, 'the carried-but-unrendered cell did not reach the posted body').toBe('75.00')
   })
 })
 
@@ -463,9 +533,15 @@ describe('lineSetChanged', () => {
       "'' and whitespace-only must canonicalize the same, mirroring diffLineItems' canonField",
     ).toBe(false)
   })
+
+  it('a line_tax-only difference is detected as a change', () => {
+    const wire = [mkRow(1, { quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '75.00' })]
+    const draft = [mkRow(1, { quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '10.00' })]
+    expect(lineSetChanged(wire, draft), 'lineSetChanged ignored a line_tax-only difference').toBe(true)
+  })
 })
 
-// -- the arity pin: four roles, in extraction.LineRoles' own order -------------------------
+// -- the arity pins: four rendered roles, five wire roles ----------------------------------
 
 describe('LINE_ROLES', () => {
   it('holds exactly the four roles, in order', () => {
@@ -473,11 +549,25 @@ describe('LINE_ROLES', () => {
     // bounded by this set, so a shortened one would make them all assert less and still pass.
     // Go pins its own side in lineitems_parse_qa_test.go.
     expect(LINE_ROLES.length, 'a loop over LINE_ROLES asserts less than it claims to').toBe(4)
-    expect([...LINE_ROLES], "the order diverged from extraction.LineRoles").toEqual([
+    expect([...LINE_ROLES], "the rendered set diverged from extraction.LineRoles' first four").toEqual([
       'description',
       'quantity',
       'unit_price',
       'line_total',
+    ])
+  })
+
+  // AC-6 control: the rendered set (LINE_ROLES) stays four -- VAT is read and carried, never
+  // rendered as a grid column ([vat-carried-not-rendered]) -- but the WIRE set (LINE_WIRE_ROLES)
+  // widens to five, with line_tax last, mirroring extraction.LineRoles' own emit order.
+  it('LINE_WIRE_ROLES holds five roles, line_tax last, one more than the rendered LINE_ROLES', () => {
+    expect(LINE_WIRE_ROLES.length, 'a loop over LINE_WIRE_ROLES asserts less than it claims to').toBe(5)
+    expect([...LINE_WIRE_ROLES], 'the order diverged from extraction.LineRoles').toEqual([
+      'description',
+      'quantity',
+      'unit_price',
+      'line_total',
+      'line_tax',
     ])
   })
 })
@@ -552,6 +642,7 @@ describe('remapRoles (adversarial)', () => {
       quantity: { name: 'line_items[1].quantity', value: '2', region: null, reason: 'unreadable' },
       unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent' },
       line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing' },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
     },
   }
 
@@ -711,6 +802,7 @@ describe('linesToPost / lineSetChanged (adversarial)', () => {
     expect(posted.length, 'the single row was dropped').toBe(1)
     expect(Object.keys(posted[0]).sort(), 'the posted body gained or lost a key').toEqual([
       'description',
+      'line_tax',
       'line_total',
       'quantity',
       'unit_price',
@@ -726,5 +818,35 @@ describe('linesToPost / lineSetChanged (adversarial)', () => {
     const wire = [mkRow(1, { quantity: '1' }), mkRow(2, { quantity: '2' })]
     const draft = [wire[0], { ...wire[1], cells: { ...wire[1].cells, quantity: { ...wire[1].cells.quantity, value: '9' } } }]
     expect(lineSetChanged(wire, draft), 'a short-circuit that only checks the first row would miss this').toBe(true)
+  })
+
+  // '' and whitespace are the user clearing the cell; the server stores NULL for either, so both
+  // must post as null rather than as a string the numeric cast would refuse.
+  it('a blank or whitespace-only line_tax posts as null, not as a string', () => {
+    const cleared = linesToPost([mkRow(1, { description: 'W', line_tax: '' })])
+    expect(cleared.length, 'the row was dropped, so the claim below is vacuous').toBe(1)
+    expect(cleared[0].line_tax, "'' must post as null -- the column takes a numeric or nothing").toBeNull()
+    expect(cleared[0].description, 'the rest of the row must survive the cleared VAT').toBe('W')
+
+    const spaces = linesToPost([mkRow(1, { description: 'W', line_tax: '   ' })])
+    expect(spaces.length, 'the row was dropped, so the claim below is vacuous').toBe(1)
+    expect(spaces[0].line_tax, 'whitespace-only must canonicalize to null exactly as the four rendered cells do').toBeNull()
+  })
+
+  // Clearing a VAT is an edit like any other: Save must not go grey on it, or a deliberate
+  // correction cannot be submitted at all.
+  it('clearing a line_tax is detected as a change', () => {
+    const wire = [mkRow(1, { description: 'W', line_tax: '75.00' })]
+    const draft = [mkRow(1, { description: 'W', line_tax: '' })]
+    expect(lineSetChanged(wire, draft), 'clearing the VAT left Save disabled').toBe(true)
+  })
+
+  // Reordering two rows that differ ONLY in line_tax: a comparison that ignored the fifth role,
+  // or one that compared sets rather than positions, reads these as unchanged.
+  it('swapping two rows that differ only in line_tax is a change', () => {
+    const a = mkRow(1, { description: 'W', line_tax: '10.00' })
+    const b = mkRow(2, { description: 'W', line_tax: '75.00' })
+    expect(lineSetChanged([a, b], [a, b]), 'control: the same order must read as unchanged').toBe(false)
+    expect(lineSetChanged([a, b], [b, a]), 'the swap was not detected -- line_tax is positional like every other cell').toBe(true)
   })
 })

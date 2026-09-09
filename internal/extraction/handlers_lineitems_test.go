@@ -169,3 +169,38 @@ func TestLineItemsHandler_RefusesMoreThan999Lines(t *testing.T) {
 		t.Errorf("999 lines was refused with %q; the case above then proves nothing about the boundary", w2.Body.String())
 	}
 }
+
+// lixLinesBodyWithTax is lixLinesBody carrying a per-line line_tax, so the cap is exercised on the
+// widest body the route now accepts rather than on the pre-line_tax shape.
+func lixLinesBodyWithTax(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"lines":[`)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"description":"line ` + strconv.Itoa(i) +
+			`","quantity":"1","unit_price":"1.00","line_total":"1.00","line_tax":"0.0` + strconv.Itoa(i%10) + `"}`)
+	}
+	b.WriteString(`]}`)
+	return b.String()
+}
+
+// The cap counts lines, not cells: a fifth field per line must not shift the boundary, and the
+// larger body must not fall out through some other refusal on the way.
+func TestLineItemsHandler_The999CapIsUnchangedByLineTax(t *testing.T) {
+	spy := &lixSpy{}
+	w := lixPost(t, spy, lixLinesBodyWithTax(1000))
+	hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, lixMsgTooManyLines))
+	lixAssertUntouched(t, spy)
+
+	// Same control as the cap test above, and the same limit on it: lixPost drives a dead pool, so
+	// 999 lines cannot answer 201 here. What it CAN prove is that the boundary did not move --
+	// 999 is not refused by the cap, whether or not each line carries a fifth cell.
+	spy2 := &lixSpy{}
+	w2 := lixPost(t, spy2, lixLinesBodyWithTax(999))
+	if w2.Code == http.StatusBadRequest && w2.Body.String() == hndErrBody(t, lixMsgTooManyLines) {
+		t.Errorf("999 lines each carrying line_tax was refused with %q -- a fifth cell per line moved "+
+			"the cap, so the case above is refusing size rather than the stated boundary", w2.Body.String())
+	}
+}

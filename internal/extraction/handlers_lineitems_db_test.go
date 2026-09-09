@@ -78,6 +78,44 @@ func lixApplier(opts lixApplyOpts) extraction.ApplyLineItemsToInvoice {
 	}
 }
 
+// lixApplierWithTax is lixApplier's variant that also plants line_tax -- lixApplier's own INSERT
+// stays byte-for-byte for the pre-existing tests that share it; only the new line_tax tests use
+// this one.
+func lixApplierWithTax(opts lixApplyOpts) extraction.ApplyLineItemsToInvoice {
+	return func(ctx context.Context, tx pgx.Tx, documentID string, lines []extraction.LineItemInput) (string, error) {
+		var id, tenantID string
+		if err := tx.QueryRow(ctx,
+			`SELECT id, tenant_id FROM invoices WHERE source_document_id = $1`, documentID).Scan(&id, &tenantID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return "", extraction.ErrNoInvoiceForDocument
+			}
+			return "", err
+		}
+		if opts.write {
+			if _, err := tx.Exec(ctx, `DELETE FROM line_items WHERE invoice_id = $1`, id); err != nil {
+				return "", err
+			}
+			for i, l := range lines {
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total, line_tax)
+					 VALUES ($1, $2, $3, $4, $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)`,
+					tenantID, id, i+1, l.Description, l.Quantity, l.UnitPrice, l.LineTotal, l.LineTax); err != nil {
+					return "", err
+				}
+			}
+		}
+		if opts.demote {
+			if _, err := tx.Exec(ctx, `UPDATE invoices SET status = 'draft' WHERE id = $1 AND status = 'validated'`, id); err != nil {
+				return "", err
+			}
+		}
+		if opts.failAfter != nil {
+			return "", opts.failAfter
+		}
+		return id, nil
+	}
+}
+
 // lixRefusingApplier reports one domain sentinel without touching a row.
 func lixRefusingApplier(err error) extraction.ApplyLineItemsToInvoice {
 	return func(context.Context, pgx.Tx, string, []extraction.LineItemInput) (string, error) { return "", err }
@@ -117,6 +155,43 @@ func lixLineRows(t *testing.T, ctx context.Context, invoiceID string) []string {
 			continue
 		}
 		out = append(out, *d)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read line_items for invoice %s: %v", invoiceID, err)
+	}
+	return out
+}
+
+// lixLineWithTax is lixLineRows' sibling row shape: description AND line_tax, "<null>" for
+// either column's SQL NULL.
+type lixLineWithTax struct {
+	Description string
+	LineTax     string
+}
+
+// lixLineRowsWithTax reads what lixLineRows cannot see: lixLineRows SELECTs description only.
+func lixLineRowsWithTax(t *testing.T, ctx context.Context, invoiceID string) []lixLineWithTax {
+	t.Helper()
+	rows, err := stRequire(t).super.Query(ctx,
+		`SELECT description, line_tax::text FROM line_items WHERE invoice_id = $1 ORDER BY line_no`, invoiceID)
+	if err != nil {
+		t.Fatalf("read line_items for invoice %s: %v", invoiceID, err)
+	}
+	defer rows.Close()
+	out := []lixLineWithTax{}
+	for rows.Next() {
+		var d, lt *string
+		if err := rows.Scan(&d, &lt); err != nil {
+			t.Fatalf("scan line_items row: %v", err)
+		}
+		row := lixLineWithTax{Description: "<null>", LineTax: "<null>"}
+		if d != nil {
+			row.Description = *d
+		}
+		if lt != nil {
+			row.LineTax = *lt
+		}
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read line_items for invoice %s: %v", invoiceID, err)
@@ -369,8 +444,8 @@ func TestRLS_LineItemsAppendsOneCorrectionRowAndEchoesTheStoredSet(t *testing.T)
 	body := `{"lines":[` +
 		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00"},` +
 		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00"}]}`
-	wantValue := `[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00"},` +
-		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00"}]`
+	wantValue := `[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":null},` +
+		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00","line_tax":null}]`
 
 	w := lixDBServe(t, reqCtx, jobID, body, lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
 	if w.Code != http.StatusCreated {
@@ -522,5 +597,172 @@ func TestRLS_LineItemsWriteDemotesAValidatedInvoice(t *testing.T) {
 	}
 	if got := lixInvoiceStatus(t, ctx, invoiceID); got != "draft" {
 		t.Errorf("invoice status after the write = %q, want %q -- saving lines on a validated invoice must demote it", got, "draft")
+	}
+}
+
+// --- AC 1, 2, 3: line_tax survives a replace-all save, or clears on request -----------------
+
+func TestRLS_LineItemsStoresPerLineTax(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR24-05-STORE", "draft")
+
+	body := `{"lines":[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"75.00"}]}`
+
+	w := lixDBServe(t, reqCtx, jobID, body, lixApplierWithTax(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	got := lixLineRowsWithTax(t, ctx, invoiceID)
+	if len(got) != 1 {
+		t.Fatalf("%d line_items row(s), want 1", len(got))
+	}
+	if got[0].LineTax != "75.00" {
+		t.Errorf("line_items.line_tax = %s, want %q", got[0].LineTax, "75.00")
+	}
+}
+
+// A replace-all save that re-posts a line's own read VAT verbatim, alongside an edited
+// description, must leave line_tax unchanged -- the value survives a round trip through the
+// grid even though the whole row was deleted and re-inserted underneath it.
+func TestRLS_LineItemsAReplaceAllSavePreservesTheVatItWasGiven(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR24-05-ROUNDTRIP", "draft")
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, line_tax) VALUES ($1, $2, 1, 'Widget', 75.00)`,
+		tenantID, invoiceID); err != nil {
+		t.Fatalf("seed the stored line: %v", err)
+	}
+
+	body := `{"lines":[{"description":"Widget (corrected)","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"75.00"}]}`
+
+	w := lixDBServe(t, reqCtx, jobID, body, lixApplierWithTax(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	got := lixLineRowsWithTax(t, ctx, invoiceID)
+	if len(got) != 1 {
+		t.Fatalf("%d line_items row(s), want 1", len(got))
+	}
+	if got[0].Description != "Widget (corrected)" {
+		t.Errorf("description = %q, want the edited value", got[0].Description)
+	}
+	if got[0].LineTax != "75.00" {
+		t.Errorf("line_tax = %s, want the re-posted %q -- a replace-all save must not erase VAT it was not asked to change", got[0].LineTax, "75.00")
+	}
+}
+
+// Explicit null and an omitted key are distinct wire inputs; both must clear the column, so both
+// are proved rather than one standing in for the other.
+func TestRLS_LineItemsAnAbsentLineTaxClearsTheColumn(t *testing.T) {
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"explicit null", `{"lines":[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":null}]}`},
+		{"omitted key", `{"lines":[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+			t.Cleanup(func() { rdaPurge(t, tenantID) })
+			entityID := cxEntity(t, ctx, tenantID)
+			invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR24-05-CLEAR", "draft")
+			if _, err := stRequire(t).super.Exec(ctx,
+				`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, line_tax) VALUES ($1, $2, 1, 'Widget', 75.00)`,
+				tenantID, invoiceID); err != nil {
+				t.Fatalf("seed the stored line: %v", err)
+			}
+
+			w := lixDBServe(t, reqCtx, jobID, tc.body, lixApplierWithTax(lixApplyOpts{write: true}), cxAuditor(nil))
+			if w.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+			}
+
+			got := lixLineRowsWithTax(t, ctx, invoiceID)
+			if len(got) != 1 {
+				t.Fatalf("%d line_items row(s), want 1", len(got))
+			}
+			if got[0].LineTax != "<null>" {
+				t.Errorf("line_tax = %s, want NULL -- %s must still express an explicit clear", got[0].LineTax, tc.name)
+			}
+		})
+	}
+}
+
+// The discriminator: two stored lines with DIFFERENT line_tax values, re-posting only the
+// second. A positional (line_no) preservation would write the deleted first line's 10.00 onto
+// the surviving line_no 1 and fail here; a wire pass-through keeps the 75.00 the posted line
+// actually carried, because the row it belonged to is gone and took its VAT with it.
+func TestRLS_LineItemsADeletedRowTakesItsVatWithIt(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR24-05-DELETED-ROW", "draft")
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, line_tax) VALUES
+		 ($1, $2, 1, 'First', 10.00), ($1, $2, 2, 'Second', 75.00)`,
+		tenantID, invoiceID); err != nil {
+		t.Fatalf("seed the two stored lines: %v", err)
+	}
+
+	body := `{"lines":[{"description":"Second","quantity":"1","unit_price":"75.00","line_total":"75.00","line_tax":"75.00"}]}`
+
+	w := lixDBServe(t, reqCtx, jobID, body, lixApplierWithTax(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	got := lixLineRowsWithTax(t, ctx, invoiceID)
+	if len(got) != 1 {
+		t.Fatalf("%d line_items row(s), want exactly 1", len(got))
+	}
+	if got[0].Description != "Second" {
+		t.Errorf("description = %q, want %q", got[0].Description, "Second")
+	}
+	if got[0].LineTax != "75.00" {
+		t.Errorf("line_tax = %s, want %q -- a positional (line_no) preservation would have written the deleted row's 10.00 here", got[0].LineTax, "75.00")
+	}
+}
+
+// A new row has no reading to preserve; it must not inherit VAT from the row beside it.
+func TestRLS_LineItemsAnAddedRowCarriesNoVat(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	invoiceID := cxInvoice(t, ctx, tenantID, entityID, documentID, "EXTR24-05-ADDED-ROW", "draft")
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO line_items (tenant_id, invoice_id, line_no, description, line_tax) VALUES ($1, $2, 1, 'First', 75.00)`,
+		tenantID, invoiceID); err != nil {
+		t.Fatalf("seed the stored line: %v", err)
+	}
+
+	body := `{"lines":[` +
+		`{"description":"First","quantity":"1","unit_price":"75.00","line_total":"75.00","line_tax":"75.00"},` +
+		`{"description":"New","quantity":"1","unit_price":"5.00","line_total":"5.00"}]}`
+
+	w := lixDBServe(t, reqCtx, jobID, body, lixApplierWithTax(lixApplyOpts{write: true}), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	got := lixLineRowsWithTax(t, ctx, invoiceID)
+	if len(got) != 2 {
+		t.Fatalf("%d line_items row(s), want 2", len(got))
+	}
+	if got[0].LineTax != "75.00" {
+		t.Errorf("line 1 line_tax = %s, want %q", got[0].LineTax, "75.00")
+	}
+	if got[1].LineTax != "<null>" {
+		t.Errorf("line 2 (new) line_tax = %s, want NULL -- a new row must not inherit a VAT it never carried", got[1].LineTax)
 	}
 }

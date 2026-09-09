@@ -1208,6 +1208,7 @@ export interface LineItemInput {
   quantity: string | null
   unit_price: string | null
   line_total: string | null
+  line_tax: string | null
 }
 
 export interface LineItemsRequest {

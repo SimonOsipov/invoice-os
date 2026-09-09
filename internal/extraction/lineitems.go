@@ -14,10 +14,11 @@ const (
 	LineRoleQuantity    = "quantity"
 	LineRoleUnitPrice   = "unit_price"
 	LineRoleLineTotal   = "line_total"
+	LineRoleLineTax     = "line_tax" // per-line VAT; distinct from the invoice-level "vat" header field
 )
 
 // LineRoles is one line's cells in emit order: reading order, left to right.
-var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal}
+var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal, LineRoleLineTax}
 
 // DocLine is one data row of a reader table, projected onto the invoice's line-item shape.
 type DocLine struct {
@@ -26,6 +27,7 @@ type DocLine struct {
 	Quantity    *string
 	UnitPrice   *string
 	LineTotal   *string
+	LineTax     *string
 	Region      *Region            // the line-total cell's region, or nil
 	Regions     map[string]*Region // per-role cell region, keyed by LineRole*; nil-safe to read
 }
@@ -41,6 +43,8 @@ func (l DocLine) Cell(role string) *string {
 		return l.UnitPrice
 	case LineRoleLineTotal:
 		return l.LineTotal
+	case LineRoleLineTax:
+		return l.LineTax
 	}
 	return nil
 }
@@ -68,7 +72,7 @@ func LineFieldName(index int, role string) string {
 
 // ParseLineFieldName is LineFieldName's inverse. It mirrors the SPA's own regex
 // (frontend/app/src/lib/lineItems.ts LINE_FIELD_RE): a 1-based index with no leading zero and
-// one of the four roles. The block row "line_items" is not a cell name and does not parse.
+// one of the five roles. The block row "line_items" is not a cell name and does not parse.
 func ParseLineFieldName(name string) (index int, role string, ok bool) {
 	rest, found := strings.CutPrefix(name, lineFieldPrefix)
 	if !found {
@@ -111,7 +115,7 @@ func LineItemResults(lines []DocLine) []FieldResult {
 	return out
 }
 
-// liRole is which of the four line-item fields a header column names.
+// liRole is which of the five line-item fields a header column names.
 type liRole int
 
 const (
@@ -120,25 +124,36 @@ const (
 	liRoleQuantity
 	liRoleUnitPrice
 	liRoleLineTotal
+	liRoleLineTax
 )
 
 // liLexicon maps a normalised header cell to its role. Exact match only -- a substring match
 // would let "Description" contain "amount" style false positives.
 var liLexicon = map[string]liRole{
-	"description": liRoleDescription,
-	"item":        liRoleDescription,
-	"details":     liRoleDescription,
-	"particulars": liRoleDescription,
+	"description":          liRoleDescription,
+	"service description":  liRoleDescription,
+	"description of goods": liRoleDescription,
+	"item":                 liRoleDescription,
+	"details":              liRoleDescription,
+	"particulars":          liRoleDescription,
 
 	"qty":        liRoleQuantity,
 	"quantity":   liRoleQuantity,
 	"unit price": liRoleUnitPrice,
+	"unit rate":  liRoleUnitPrice,
 	"rate":       liRoleUnitPrice,
 	"price":      liRoleUnitPrice,
 	"line total": liRoleLineTotal,
 	"total":      liRoleLineTotal,
 	"amount":     liRoleLineTotal,
+
+	"vat": liRoleLineTax,
+	"tax": liRoleLineTax,
 }
+
+// liWeakHeaders names lexicon keys that claim a role only when no strong column claims it: "item"
+// is a description header alone, but a line-number header beside "Service description".
+var liWeakHeaders = map[string]bool{"item": true}
 
 // reLineQty is quantity's own pattern, distinct from ShapeAmount's: line_items.quantity is
 // numeric(14,3), a third fraction digit money's numeric(14,2) has no room for.
@@ -150,10 +165,10 @@ func LineItems(pages []Page) []DocLine {
 	index := 0
 	for _, page := range pages {
 		for _, tbl := range page.Tables {
-			descCol, qtyCol, priceCol, totalCol := liClassifyHeader(tbl)
-			if qtyCol == -1 && priceCol == -1 && totalCol == -1 {
-				// The gate counts quantity, unit price and line total only: a header naming
-				// description alone is prose, not a line-item table.
+			descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(tbl)
+			if !((qtyCol != -1 && priceCol != -1) || totalCol != -1) {
+				// A partial table (qty-only or price-only) looks populated on screen but
+				// fails the invoice-level sum rule, so it yields nothing rather than something misleading.
 				continue
 			}
 
@@ -204,6 +219,15 @@ func LineItems(pages []Page) []DocLine {
 						}
 					}
 				}
+				if taxCol != -1 {
+					if cell, ok := cells[taxCol]; ok {
+						line.setRegion(LineRoleLineTax, cell.Region)
+						if readings := normalizeAmount(cell.Text); len(readings) > 0 {
+							v := readings[0]
+							line.LineTax = &v
+						}
+					}
+				}
 
 				lines = append(lines, line)
 			}
@@ -213,9 +237,11 @@ func LineItems(pages []Page) []DocLine {
 }
 
 // liClassifyHeader reads row 0 (the header, by convention) and returns each role's column, or
-// -1 when the header does not name it. A role named twice keeps its lowest-numbered column.
-func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
-	descCol, qtyCol, priceCol, totalCol = -1, -1, -1, -1
+// -1 when the header does not name it. Tier beats position: every strong column is assigned
+// first, left to right; a weak column (liWeakHeaders) only fills a role still unclaimed after
+// that pass. Within a tier, the leftmost column wins.
+func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol, taxCol int) {
+	descCol, qtyCol, priceCol, totalCol, taxCol = -1, -1, -1, -1, -1
 
 	headerByCol := make(map[int]TableCell)
 	cols := make([]int, 0)
@@ -228,8 +254,12 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 	}
 	liSortInts(cols)
 
-	for _, col := range cols {
-		switch liLexicon[liNormalizeHeaderText(headerByCol[col].Text)] {
+	assign := func(col int, weak bool) {
+		key := liNormalizeHeaderForRole(headerByCol[col].Text)
+		if liWeakHeaders[key] != weak {
+			return
+		}
+		switch liLexicon[key] {
 		case liRoleDescription:
 			if descCol == -1 {
 				descCol = col
@@ -246,7 +276,18 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 			if totalCol == -1 {
 				totalCol = col
 			}
+		case liRoleLineTax:
+			if taxCol == -1 {
+				taxCol = col
+			}
 		}
+	}
+
+	for _, col := range cols {
+		assign(col, false)
+	}
+	for _, col := range cols {
+		assign(col, true)
 	}
 	return
 }
@@ -267,10 +308,44 @@ func liIndexRows(tbl Table) map[int]map[int]TableCell {
 	return byRow
 }
 
-// liNormalizeHeaderText case-folds, trims and collapses internal whitespace so the lexicon can
-// match exactly rather than by substring.
+// liNormalizeHeaderText case-folds, trims and collapses internal whitespace. Shared base: the
+// role lookup reaches it through liNormalizeHeaderForRole, reconcile.go's supplier-name
+// equality calls it directly, so it must strip nothing beyond whitespace and case.
 func liNormalizeHeaderText(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// liNormalizeHeaderForRole strips a header's currency decoration and parenthesised qualifier on
+// top of the shared fold, for the role lookup only -- reconcile.go's supplier-name equality keeps
+// using the plain fold untouched. A result emptied by the strip falls back to the base fold, so a
+// currency-only header (e.g. "₦") is never read as a blank column name.
+func liNormalizeHeaderForRole(s string) string {
+	base := liNormalizeHeaderText(s)
+	out := base
+
+	if i := strings.Index(out, ")"); strings.HasPrefix(out, "(") && i != -1 {
+		out = strings.TrimSpace(out[i+1:])
+	} else if strings.HasSuffix(out, ")") {
+		if j := strings.LastIndex(out, "("); j != -1 {
+			out = strings.TrimSpace(out[:j])
+		}
+	}
+
+	out = strings.ReplaceAll(out, "₦", "")
+
+	fields := strings.Fields(out)
+	kept := fields[:0]
+	for _, f := range fields {
+		if f != "n" && f != "ngn" {
+			kept = append(kept, f)
+		}
+	}
+	out = strings.Join(kept, " ")
+
+	if out == "" {
+		return base
+	}
+	return out
 }
 
 // liNormalizeDescription trims a description cell and reports whether anything is left. A blank

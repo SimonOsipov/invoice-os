@@ -10,20 +10,21 @@ import (
 	"testing"
 )
 
-// A fixed three-line input: one line with every cell present, one with two absent cells, one
-// with every cell absent -- so the null-for-absent rule is proved on more than the all-nil case.
+// A fixed three-line input: one line with every cell present (line_tax included, so the
+// null-for-absent rule is proved on more than the all-nil case), one with two absent cells, one
+// with every cell absent.
 func TestLineItemsCorrection_ValueIsCanonicalJSON(t *testing.T) {
-	desc, qty, price, total := "Widget", "2", "10.00", "20.00"
+	desc, qty, price, total, tax := "Widget", "2", "10.00", "20.00", "1.50"
 	partial := "Assembly fee"
 	lines := []LineItemInput{
-		{Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total},
-		{Description: &partial, Quantity: nil, UnitPrice: nil, LineTotal: nil},
-		{Description: nil, Quantity: nil, UnitPrice: nil, LineTotal: nil},
+		{Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total, LineTax: &tax},
+		{Description: &partial, Quantity: nil, UnitPrice: nil, LineTotal: nil, LineTax: nil},
+		{Description: nil, Quantity: nil, UnitPrice: nil, LineTotal: nil, LineTax: nil},
 	}
 	want := `[` +
-		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00"},` +
-		`{"description":"Assembly fee","quantity":null,"unit_price":null,"line_total":null},` +
-		`{"description":null,"quantity":null,"unit_price":null,"line_total":null}` +
+		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"1.50"},` +
+		`{"description":"Assembly fee","quantity":null,"unit_price":null,"line_total":null,"line_tax":null},` +
+		`{"description":null,"quantity":null,"unit_price":null,"line_total":null,"line_tax":null}` +
 		`]`
 
 	if got := canonicalLineJSON(lines); got != want {
@@ -79,7 +80,7 @@ func TestLineItemsWireTypes_HaveBraceFreeBodies(t *testing.T) {
 		name string
 		want int
 	}{
-		{"LineItemInput", 4},
+		{"LineItemInput", 5},
 		{"LineItemsRequest", 1},
 		{"LineItemsResponse", 4},
 	} {

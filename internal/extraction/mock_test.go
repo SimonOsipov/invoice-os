@@ -334,15 +334,17 @@ func mxSiblingTypesAndConsts(t *testing.T) map[string]bool {
 // TestLineFieldName_IsThePackagesOnlyNameSource forbids it from spelling a bracketed line name
 // itself. A literal set, never a prefix -- and mxAssertLineAPIExemptionIsFloored proves it is
 // safe rather than assuming it.
-var mockLineAPI = []string{"LineFieldName", "LineItemResults", "LineRoles"}
+// LineRoles dropped out once the three Regions call sites (mock.go:188,193,203) took the
+// explicit four-role form instead of "LineRoles..." -- mock.go no longer names it at all.
+var mockLineAPI = []string{"LineFieldName", "LineItemResults"}
 
 // mxAssertLineAPIExemptionIsFloored proves the exemption is real, used and safe: each name is
 // declared in lineitems.go, each is actually referenced by mock.go (a dead exemption is a hole
 // nobody would notice), and the purity scans that make lineitems.go safe to call still exist.
 func mxAssertLineAPIExemptionIsFloored(t *testing.T, mock *ast.File) {
 	t.Helper()
-	if len(mockLineAPI) != 3 {
-		t.Fatalf("mockLineAPI carries %d name(s), want 3; the exemption has widened", len(mockLineAPI))
+	if len(mockLineAPI) != 2 {
+		t.Fatalf("mockLineAPI carries %d name(s), want 2; the exemption has widened", len(mockLineAPI))
 	}
 
 	declared := map[string]bool{}

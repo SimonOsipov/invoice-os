@@ -444,21 +444,25 @@ anyone would satisfy the zero half alone.
 
 **The line-item figures.** The report carries `line items reached / expected` and
 `line items priced / reached` beside the header number, as two raw counts and a slash — never a
-computed ratio. Both read **0 on every layout**, and will for as long as
-`documentCreateInput` names no `LineItems` key (`internal/importer/document.go:173-185`): the
-extraction worker writes `line_items[N].<role>` rows and `invoice.Store.Create` writes
-`line_items` rows, but nothing connects the two. EXTR-24 owns connecting them.
+computed ratio. `documentCreateInput` groups `line_items[N].<role>` extraction fields onto
+`invoice.CreateInput.LineItems`, so an extracted line does reach the invoice. The corpus-wide
+figures below still read **0 on every layout**, for a text-seam reason spelled out under
+[Line-item outcome](#line-item-outcome): this walk reads all but one layout through pdfium, which
+extracts no line row.
 
-Because no `corpus_*` layout carries a table, both denominators are 0 too, so every row renders
+Because no `corpus_*` layout carries a table, their denominators are 0 too, so those rows render
 `0/0` — which is indistinguishable from a satisfied denominator. The report therefore prints a
 `NO LINE SIGNAL` line whenever every reached row has a zero denominator, and stops printing it
 the moment a table-bearing layout joins the scored set.
 `TestEndToEnd_AnEmptyLineCorpusSaysSoInWords` holds both directions. Read the zeros as "not
 measured here", never as coverage.
 
-`TestRLS_EndToEndTheLineScoreIsNotARecallMeasure` is what keeps the figure honest: the same run
-scored off the invoice's own `line_items` rows reads 0 while the any-rank
-`line_items[N]` read of `extraction_field_results` reads 4, and the spec asserts they disagree.
+`TestRLS_EndToEndTheWorkerWroteLineRowsAndTheInvoiceGotThem` and
+`TestRLS_EndToEndInvoiceReadMatchesAnyRankOnAZeroAttritionFixture` (`endtoend/lines_db_test.go`)
+drive the one committed table-bearing fixture, `rich_invoice.pdf`, through the real import path:
+the invoice reads back 4 line(s), 3 priced, matching what the worker extracted. That fixture has
+zero attrition, so it cannot show the invoice-read score diverging from an any-rank extraction
+read — a fixture with a rejected/quarantined line is still owed for that.
 
 **The rank control.** On this corpus the rank-0 rate and the any-rank rate both read 44 of 44, so
 the shipped number alone cannot tell a decision measure from a candidate-containment one. That is
@@ -653,12 +657,16 @@ reached rows hold a unit price.
 | `wild_stacked_borderless.pdf` | 0 | 0 | 0 |
 | `wild_scanned_no_number.pdf` | 0 | 0 | 0 |
 
-**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. This is
-a permanent zero for the life of this story, and it is a wiring gap rather than an extraction
-one: `documentCreateInput` names no `LineItems` key (`internal/importer/document.go`), while
-`invoice.Store.Create` does write one `line_items` row per `LineItemInput` and the extraction
-worker does write `line_items[N].<role>` rows. The two ends are simply not connected. EXTR-24
-owns connecting them.
+**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. That
+zero is a TEXT-SEAM outcome, not a wiring one. `documentCreateInput` groups
+`line_items[N].<role>` extraction fields onto `invoice.CreateInput.LineItems`, and
+`invoice.Store.Create` writes one `line_items` row per entry, so an extracted line does reach the
+invoice. This walk reads every layout except `wild_scanned_no_number.pdf` through pdfium
+(`eeOptsFor`, `score_db_test.go`), and pdfium extracts no line row from any of them.
+`TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling` runs
+`wild_ruled_lines_totals.pdf` through both readers in one test: **0 of 3** under pdfium, **3 of 3
+reached / 2 priced** under the docling golden, which is what deployed extraction uses. Read this
+table's zero as "pdfium read no table here", never as "lines do not reach invoices".
 
 Every other row reads `0 / 0`, which is indistinguishable from a satisfied denominator, so the
 report prints a `NO LINE SIGNAL` line whenever every reached row has a zero denominator. Read

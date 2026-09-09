@@ -1191,6 +1191,52 @@ func TestStoreCreate_NonExistentEntityIDRejected(t *testing.T) {
 	}
 }
 
+// AC-7: a line-item value the numeric(14,2) column cannot hold (SQLSTATE 22003,
+// numeric_value_out_of_range) must map to ErrValidation at Store.Create's line-item INSERT,
+// mirroring the 22P02 handling that site already has, and the whole tx must roll back.
+func TestStoreCreate_AnOversizedLineAmountIsErrValidation(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "INV-OVERFLOW tenant")
+	entityID := seedEntity(t, super, tenantID, "INV-OVERFLOW entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	oversized := strings.Repeat("9", 20) // numeric(14,2) holds at most 12 integer digits
+	desc := "Oversized"
+	_, err := store.Create(c, CreateInput{
+		EntityID:      entityID,
+		InvoiceNumber: "INV-OVERFLOW",
+		LineItems:     []LineItemInput{{Description: &desc, UnitPrice: &oversized}},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create with a 20-digit unit_price: err = %v, want ErrValidation (22003 numeric_value_out_of_range)", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM invoices WHERE entity_id = $1`, entityID); n != 0 {
+		t.Errorf("invoices rows for the entity after the refused create = %d, want 0 (the tx rolled back)", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM line_items WHERE tenant_id = $1`, tenantID); n != 0 {
+		t.Errorf("line_items rows for tenant after the refused create = %d, want 0", n)
+	}
+
+	// Control: the identical shape with an in-range price creates cleanly, so the rejection
+	// above is not the store refusing every line item outright.
+	desc2 := "In range"
+	price := "100.00"
+	inv, err := store.Create(c, CreateInput{
+		EntityID:      entityID,
+		InvoiceNumber: "INV-OVERFLOW-OK",
+		LineItems:     []LineItemInput{{Description: &desc2, UnitPrice: &price}},
+	})
+	if err != nil {
+		t.Fatalf("control: Create with an in-range unit_price: %v", err)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM line_items WHERE invoice_id = $1`, inv.ID); n != 1 {
+		t.Errorf("control invoice's line_items rows = %d, want 1", n)
+	}
+}
+
 // M4-06-03 (QA Mode A, RED): closes the invoices->entity leg of the D8
 // cross-tenant dangling-reference residual for Store.Create. This is the
 // entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS

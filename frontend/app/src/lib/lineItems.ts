@@ -7,8 +7,16 @@ import { addScaled, mulScaled, parseScaled, renderScaled, type Scaled } from './
 
 export type LineRole = 'description' | 'quantity' | 'unit_price' | 'line_total'
 
-// Mirrors extraction.LineRoles order (lineitems.go).
+// The fifth wire role, per-line VAT: read and carried, never rendered as a grid column
+// ([vat-carried-not-rendered]) -- 'vat' is taken by the invoice-level header field.
+export type LineWireRole = LineRole | 'line_tax'
+
+// The rendered grid columns: extraction.LineRoles' first four, in its order. A prefix of the
+// wire set below, not a mirror of it.
 export const LINE_ROLES: readonly LineRole[] = ['description', 'quantity', 'unit_price', 'line_total']
+
+// Mirrors extraction.LineRoles order (lineitems.go): every wire role, line_tax last.
+export const LINE_WIRE_ROLES: readonly LineWireRole[] = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax']
 
 // reconcile.go's reconcileTolerance, pinned to the Go literal by a source-reading spec.
 export const LINE_TOLERANCE = '0.01'
@@ -22,7 +30,7 @@ export interface LineCell {
 
 export interface LineRow {
   key: string
-  cells: Record<LineRole, LineCell>
+  cells: Record<LineWireRole, LineCell>
 }
 
 export type RowArithmetic = 'ok' | 'flagged' | 'unchecked'
@@ -40,6 +48,7 @@ export interface LineItemInput {
   quantity: string | null
   unit_price: string | null
   line_total: string | null
+  line_tax: string | null
 }
 
 // -- exact-decimal helpers over invoices.ts's Scaled kit -----------------------------------
@@ -69,16 +78,16 @@ function exceedsTolerance(diff: Scaled): boolean {
 
 // -- field names ----------------------------------------------------------------------------
 
-const LINE_FIELD_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total)$/
+const LINE_FIELD_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/
 
-export function lineFieldName(index: number, role: LineRole): string {
+export function lineFieldName(index: number, role: LineWireRole): string {
   return `line_items[${index}].${role}`
 }
 
-export function parseLineFieldName(name: string): { index: number; role: LineRole } | null {
+export function parseLineFieldName(name: string): { index: number; role: LineWireRole } | null {
   const m = LINE_FIELD_RE.exec(name)
   if (m === null) return null
-  return { index: Number(m[1]), role: m[2] as LineRole }
+  return { index: Number(m[1]), role: m[2] as LineWireRole }
 }
 
 // -- grouping -------------------------------------------------------------------------------
@@ -105,6 +114,7 @@ export function linesFromFields(fields: readonly ExtractionFieldState[]): LineRo
           quantity: blankCell(lineFieldName(index, 'quantity')),
           unit_price: blankCell(lineFieldName(index, 'unit_price')),
           line_total: blankCell(lineFieldName(index, 'line_total')),
+          line_tax: blankCell(lineFieldName(index, 'line_tax')),
         },
       }
       byIndex.set(index, row)
@@ -181,6 +191,7 @@ export function addRow(rows: readonly LineRow[]): LineRow[] {
         quantity: blankCell(null),
         unit_price: blankCell(null),
         line_total: blankCell(null),
+        line_tax: blankCell(null),
       },
     },
   ]
@@ -208,15 +219,16 @@ export function linesToPost(rows: readonly LineRow[]): LineItemInput[] {
       quantity: postValue(row.cells.quantity),
       unit_price: postValue(row.cells.unit_price),
       line_total: postValue(row.cells.line_total),
+      line_tax: postValue(row.cells.line_tax),
     }))
-    .filter((line) => LINE_ROLES.some((role) => line[role] !== null))
+    .filter((line) => LINE_WIRE_ROLES.some((role) => line[role] !== null))
 }
 
 // diffLineItems' shape as a boolean, because Save's `disabled` is what consumes it: positional
-// over the four roles, both sides canonicalised, different lengths mean changed.
+// over all five wire roles, both sides canonicalised, different lengths mean changed.
 export function lineSetChanged(wireRows: readonly LineRow[], draftRows: readonly LineRow[]): boolean {
   if (wireRows.length !== draftRows.length) return true
   return !wireRows.every((wire, i) =>
-    LINE_ROLES.every((role) => postValue(wire.cells[role]) === postValue(draftRows[i].cells[role])),
+    LINE_WIRE_ROLES.every((role) => postValue(wire.cells[role]) === postValue(draftRows[i].cells[role])),
   )
 }

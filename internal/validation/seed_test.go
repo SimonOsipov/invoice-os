@@ -723,7 +723,7 @@ func TestSeed_ReversibilityRollback(t *testing.T) {
 	}
 }
 
-// TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged (QA, task-992, AC-7): the two line-item
+// TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged (QA, AC-7): the two line-item
 // rules at the ACTIVE version, unchanged -- rule_set_v2_test.go pins their params at v2 only;
 // this is the first pin at whichever version is currently active (activeSeedVersion), so a
 // future publish that accidentally alters either rule's shape or the kill-switch's enabled flag

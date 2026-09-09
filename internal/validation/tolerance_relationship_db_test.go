@@ -1,4 +1,4 @@
-// tolerance_relationship_db_test.go (QA, task-992, AC-6): the reconciler's exceedsTolerance
+// tolerance_relationship_db_test.go (QA, AC-6): the reconciler's exceedsTolerance
 // ("0.01", per-row/subtotal arithmetic read off the page) and the line_sum rule's tolerance
 // (0.005, seeded) are looser/tighter on purpose AND measure different quantities -- the rule
 // folds quantity x unit_price against subtotal, the reconciler's row check folds against

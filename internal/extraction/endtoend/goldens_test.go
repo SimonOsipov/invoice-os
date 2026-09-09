@@ -56,8 +56,9 @@ var wildInvNums = []string{"INV-2101", "INV-2102", "INV-2103", "INV-2104"}
 
 const wildRCNumber = "RC-000142"
 
-// wildHeaders is the decorated line-item header row. EXTR-24 recognises these; EXTR-21 only
-// commits them, so none may enter liLexicon here.
+// wildHeaders is the decorated line-item header row. Recognising a decorated header is EXTR-24's
+// work -- "qty" and "description of goods" are in liLexicon because of it. The guard below only
+// forbids a key beyond wildLiLexiconKeys, EXTR-21's own overstep.
 var wildHeaders = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", "RATE (N)", "Amount ₦"}
 
 // wildLabels are the buyer-block heading and the two fragment-bearing labels. The apostrophe is

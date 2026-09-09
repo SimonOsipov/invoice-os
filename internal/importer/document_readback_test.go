@@ -23,22 +23,24 @@
 // RB-07 is not a Go test: CI checks out refs/pull/N/merge with fetch-depth 1, so origin/main is
 // unresolvable and the spreadsheet-path diff can't be observed. Verified as PR evidence instead.
 //
-// AC #6 (Core AC 8's extraction half) is NOT met by this story -- D-19
-// (.ralph/EXTR-06-finalized.md), now owned by EXTR-17 The Pipeline Runs End To End. Work does
-// compose Reconcile, but only on its text branch, and cmd/submission passes a nil Text
-// (TestSubmissionMain_WiresTheQueueSeams), so a deployed import still writes no line-item value
-// and no `line_items=missing` row. There is no oracle for that absence, so asserting it would be
-// vacuous; this comment is the story's evidence for AC #6 instead of a test row.
+// AC #6 (Core AC 8's extraction half) was not met by EXTR-06 and is no longer open: EXTR-17
+// wired the deployed text reader, and EXTR-24-06 connected the read lines to the invoice, so a
+// document import does now write line_items -- see the RealGateNoLongerReportsLineItemsRequired
+// and AGridCleanInvoiceCanStillBeRuleBlocked specs below.
 package importer
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 )
@@ -666,7 +668,7 @@ func TestImportDocumentReadback_LinesWithoutAnInvoiceNumberWriteNothing(t *testi
 	}
 }
 
-// --- The newly-reachable sum rule, characterised against the REAL gate (QA, task-992) --------
+// --- The newly-reachable sum rule, characterised against the REAL gate (QA) -------------------
 //
 // line-items-sum-subtotal (evaluator line_sum, tolerance 0.005) never evaluated real extracted
 // data before EXTR-24-06 made lines reach the invoice. These characterise that it now does, on
@@ -819,9 +821,72 @@ func ac2Fixture(t *testing.T, super *pgxpool.Pool, tenantID, documentID, invoice
 	values["line_items[2].quantity"] = sxPtr("2")
 	values["line_items[2].unit_price"] = sxPtr("5.00")
 	values["line_items[2].line_total"] = sxPtr("10.01")
+	ac2AssertStillDivergent(t, values)
 	docSeedExtraction(t, super, tenantID, documentID, values)
 	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
 		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land", got, want)
+	}
+}
+
+var ac2ReconcileToleranceRe = regexp.MustCompile(`const\s+reconcileTolerance\s*=\s*"([^"]+)"`)
+
+// ac2AssertStillDivergent re-derives the divergence from the numbers ac2Fixture actually seeds,
+// against the reconciler's LIVE constant -- so editing either the fixture or reconcileTolerance
+// reddens here instead of silently falsifying the "grid-clean" half, which is asserted in
+// packages this one may not import (document_deps_test.go's SX-09 fence).
+func ac2AssertStillDivergent(t *testing.T, values map[string]*string) {
+	t.Helper()
+
+	src, err := os.ReadFile("../extraction/reconcile.go")
+	if err != nil {
+		t.Fatalf("read ../extraction/reconcile.go: %v", err)
+	}
+	m := ac2ReconcileToleranceRe.FindSubmatch(src)
+	if m == nil {
+		t.Fatal("reconcileTolerance not found in ../extraction/reconcile.go")
+	}
+	tol, err := decimal.NewFromString(string(m[1]))
+	if err != nil {
+		t.Fatalf("parse reconcileTolerance %q: %v", m[1], err)
+	}
+
+	dec := func(key string) decimal.Decimal {
+		t.Helper()
+		p := values[key]
+		if p == nil {
+			t.Fatalf("fixture has no %s", key)
+		}
+		d, err := decimal.NewFromString(*p)
+		if err != nil {
+			t.Fatalf("parse %s = %q: %v", key, *p, err)
+		}
+		return d
+	}
+
+	printedSubtotal := dec("subtotal")
+	lineTotalSum, foldSum := decimal.Zero, decimal.Zero
+	for i := 1; ; i++ {
+		q := fmt.Sprintf("line_items[%d].quantity", i)
+		if values[q] == nil {
+			if i == 1 {
+				t.Fatal("fixture seeded no line rows")
+			}
+			break
+		}
+		lineTotal := dec(fmt.Sprintf("line_items[%d].line_total", i))
+		fold := dec(q).Mul(dec(fmt.Sprintf("line_items[%d].unit_price", i)))
+		if residual := fold.Sub(lineTotal).Abs(); !residual.Equal(tol) {
+			t.Errorf("row %d residual = %s, want exactly %s -- the row must sit ON the reconciler boundary, so no row flags", i, residual, tol)
+		}
+		lineTotalSum = lineTotalSum.Add(lineTotal)
+		foldSum = foldSum.Add(fold)
+	}
+
+	if !lineTotalSum.Equal(printedSubtotal) {
+		t.Errorf("sum of line_total = %s, printed subtotal = %s -- they must agree exactly, or the grid's sum sentence is not clean", lineTotalSum, printedSubtotal)
+	}
+	if foldSum.Equal(printedSubtotal) {
+		t.Errorf("fold of quantity x unit_price = %s equals the printed subtotal -- the blocking rule would have nothing to report", foldSum)
 	}
 }
 

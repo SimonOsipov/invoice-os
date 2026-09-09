@@ -448,6 +448,45 @@ func TestReconcile_LineSumMissesTheSubtotal(t *testing.T) {
 	}
 }
 
+// TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag: two rows whose printed line total sits
+// exactly reconcileTolerance (0.01) off qty*price, and whose printed subtotal equals their sum
+// exactly -- the grid reads wholly clean even though the same numbers block the invoice at the
+// validation rule's tighter 0.005 (internal/importer's
+// TestImportDocumentReadback_AGridCleanInvoiceCanStillBeRuleBlocked). Both residuals sit exactly
+// ON the reconciler boundary -- tightening reconcileTolerance below 0.01 flips this half silently.
+// Mutation: GreaterThan -> GreaterThanOrEqual at reconcile.go:50.
+func TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "40.02")},
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("3"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("30.01")},
+			{Index: 2, Quantity: rcStr("2"), UnitPrice: rcStr("5.00"), LineTotal: rcStr("10.01")},
+		},
+	}
+	results := extraction.Reconcile(in)
+
+	// Positive companion: the block itself reached ReasonNone, so the sum check genuinely ran --
+	// the absence assertion below cannot pass vacuously on a Reconcile that never checked anything.
+	lineBlock, ok := rcFind(results, "line_items")
+	if !ok {
+		t.Fatal(`"line_items" result not found`)
+	}
+	if lineBlock.Reason != extraction.ReasonNone {
+		t.Fatalf("line_items reason = %q, want ReasonNone", lineBlock.Reason)
+	}
+	if flags := rcLineFlags(results); len(flags) != 0 {
+		t.Errorf("per-row flags = %+v, want none -- both residuals are exactly 0.01, not greater than reconcileTolerance", flags)
+	}
+
+	subtotal, ok := rcFind(results, "subtotal")
+	if !ok {
+		t.Fatal(`"subtotal" result not found`)
+	}
+	if subtotal.Reason != extraction.ReasonNone {
+		t.Errorf("subtotal reason = %q, want ReasonNone -- 30.01+10.01 = 40.02, exactly the printed subtotal", subtotal.Reason)
+	}
+}
+
 // The pair is the oracle (D-19): asserting either half alone could pass on a Reconcile that
 // always reports the subtotal clean, or one that always reports the block missing, regardless
 // of whether the sum check actually ran.

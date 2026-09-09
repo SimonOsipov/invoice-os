@@ -298,6 +298,29 @@ describe('lineSumState', () => {
   })
 })
 
+// -- the divergent fixture: grid-clean, rule-blocked (QA, AC-2) -----------------------------
+// Mirrors reconcile_test.go's TestReconcileLines_TheDivergentFixtureRaisesNoRowFlag: every
+// row's residual sits exactly on the 0.01 tolerance boundary, so the grid reads wholly clean --
+// yet the same numbers, folded at the blocking rule's tighter 0.005, is a REAL invoice the story
+// makes reachable and rule-blocked (Go side: TestImportDocumentReadback_
+// AGridCleanInvoiceCanStillBeRuleBlocked). Mutation: '> 0' -> '>= 0' in exceedsTolerance
+// (lineItems.ts:76).
+describe('lineSumState reads clean on the fixture the blocking rule refuses', () => {
+  it('both rows read ok and the sum sentence agrees', () => {
+    const rows = [
+      mkRow(1, { quantity: '3', unit_price: '10.00', line_total: '30.01' }),
+      mkRow(2, { quantity: '2', unit_price: '5.00', line_total: '10.01' }),
+    ]
+    expect(rowArithmetic(rows[0]), 'row 1: |3*10.00-30.01| = 0.01, not greater than LINE_TOLERANCE').toBe('ok')
+    expect(rowArithmetic(rows[1]), 'row 2: |2*5.00-10.01| = 0.01, not greater than LINE_TOLERANCE').toBe('ok')
+    expect(lineSumState(rows, '40.02'), '30.01 + 10.01 = 40.02, exactly the printed subtotal').toEqual({
+      sum: '40.02',
+      printed: '40.02',
+      agrees: true,
+    })
+  })
+})
+
 // -- remapRoles -------------------------------------------------------------------------------
 
 describe('remapRoles', () => {

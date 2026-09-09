@@ -665,3 +665,350 @@ func TestImportDocumentReadback_LinesWithoutAnInvoiceNumberWriteNothing(t *testi
 		t.Errorf("line_items for the entity = %d, want 0 -- a quarantined document writes no lines", n)
 	}
 }
+
+// --- The newly-reachable sum rule, characterised against the REAL gate (QA, task-992) --------
+//
+// line-items-sum-subtotal (evaluator line_sum, tolerance 0.005) never evaluated real extracted
+// data before EXTR-24-06 made lines reach the invoice. These characterise that it now does, on
+// the surfaces that already report a document-import outcome -- legible only once Re-validate
+// runs (ImportDocument stamps no rule_set_version), never on import itself.
+
+// ac1Fixture seeds a 3-line invoice whose qty*unit_price folds to 1000.00 against a printed
+// subtotal of 1200.00 -- shared by the AC-1/AC-3 pair so both read the identical shortfall.
+func ac1Fixture(t *testing.T, super *pgxpool.Pool, tenantID, documentID, invoiceNumber string) {
+	t.Helper()
+	values := docCleanValues(invoiceNumber)
+	values["subtotal"] = sxPtr("1200.00")
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].quantity"] = sxPtr("2")
+	values["line_items[1].unit_price"] = sxPtr("100.00")
+	values["line_items[1].line_total"] = sxPtr("200.00")
+	values["line_items[2].description"] = sxPtr("Gadget")
+	values["line_items[2].quantity"] = sxPtr("3")
+	values["line_items[2].unit_price"] = sxPtr("100.00")
+	values["line_items[2].line_total"] = sxPtr("300.00")
+	values["line_items[3].description"] = sxPtr("Widget XL")
+	values["line_items[3].quantity"] = sxPtr("1")
+	values["line_items[3].unit_price"] = sxPtr("500.00")
+	values["line_items[3].line_total"] = sxPtr("500.00") // 200+300+500 = 1000.00, printed subtotal 1200.00
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land", got, want)
+	}
+}
+
+// AC-1: a document-imported invoice whose read lines do not sum to the printed subtotal is left
+// draft by the REAL gate and carries line-items-sum-subtotal, not line-items-required.
+// Mutation: `LineItems: lineItems` -> `LineItems: nil` in documentCreateInput (document.go) --
+// line-items-required returns and this rule goes silent.
+func TestImportDocumentReadback_LinesThatMissTheSubtotalBlockOnTheSumRule(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AC1 tenant")
+	entityID := seedEntity(t, super, tenantID, "AC1 entity")
+	documentID := seedDocument(t, super, tenantID)
+	ac1Fixture(t, super, tenantID, documentID, "AC1-INV")
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "AC1-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+
+	got, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Validate: want a normal (nil-error) BLOCKED outcome, got err: %v", err)
+	}
+	if got.Status != invoice.StatusDraft {
+		t.Errorf("status = %q, want %q", got.Status, invoice.StatusDraft)
+	}
+
+	var vs []invoice.Violation
+	if err := json.Unmarshal(got.Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", got.Violations, err)
+	}
+	var haveSum, haveRequired bool
+	for _, v := range vs {
+		switch v.RuleKey {
+		case "line-items-sum-subtotal":
+			haveSum = true
+		case "line-items-required":
+			haveRequired = true
+		}
+	}
+	if !haveSum {
+		t.Errorf("violations = %+v, want one naming line-items-sum-subtotal", vs)
+	}
+	if haveRequired {
+		t.Errorf("violations = %+v, must not name line-items-required -- 3 lines were seeded", vs)
+	}
+}
+
+// AC-3: the line-items-sum-subtotal violation names the shortfall as exact decimal strings --
+// Expected is the folded line sum (1000), Actual the printed subtotal (1200): evaluators_math.go
+// hoists `declared` once and reuses it for both the comparison and Actual (Stage 2 correction
+// C3), and decimal.String() trims trailing zeros, so this is "1000"/"1200", never "1000.00".
+// Mutation: swap withExpected(sum.String())/withActual(declared.String()) at evaluators_math.go:275.
+func TestImportDocumentReadback_TheSumViolationNamesTheShortfall(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AC3 tenant")
+	entityID := seedEntity(t, super, tenantID, "AC3 entity")
+	documentID := seedDocument(t, super, tenantID)
+	ac1Fixture(t, super, tenantID, documentID, "AC3-INV")
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "AC3-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+
+	got, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	var vs []invoice.Violation
+	if err := json.Unmarshal(got.Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", got.Violations, err)
+	}
+	var found *invoice.Violation
+	for i := range vs {
+		if vs[i].RuleKey == "line-items-sum-subtotal" {
+			found = &vs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("violations = %+v, want one naming line-items-sum-subtotal", vs)
+	}
+	if found.Path != "subtotal" {
+		t.Errorf("Path = %q, want %q", found.Path, "subtotal")
+	}
+	if found.Expected == nil || *found.Expected != "1000" {
+		t.Errorf("Expected = %v, want %q -- the folded line sum, decimal-trimmed", found.Expected, "1000")
+	}
+	if found.Actual == nil || *found.Actual != "1200" {
+		t.Errorf("Actual = %v, want %q -- the printed subtotal", found.Actual, "1200")
+	}
+}
+
+// ac2Fixture seeds the two-line divergent fixture: every per-row residual sits exactly on the
+// reconciler's 0.01 boundary (so the grid reads clean -- see TestReconcileLines_
+// TheDivergentFixtureRaisesNoRowFlag and lineItems.test.ts's sibling), while the fold at the
+// rule's tighter 0.005 tolerance is 0.02 off (10.00*3 + 5.00*2 = 40.00 against printed 40.02).
+func ac2Fixture(t *testing.T, super *pgxpool.Pool, tenantID, documentID, invoiceNumber string) {
+	t.Helper()
+	values := docCleanValues(invoiceNumber)
+	values["subtotal"] = sxPtr("40.02")
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].quantity"] = sxPtr("3")
+	values["line_items[1].unit_price"] = sxPtr("10.00")
+	values["line_items[1].line_total"] = sxPtr("30.01")
+	values["line_items[2].description"] = sxPtr("Gadget")
+	values["line_items[2].quantity"] = sxPtr("2")
+	values["line_items[2].unit_price"] = sxPtr("5.00")
+	values["line_items[2].line_total"] = sxPtr("10.01")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	if got, want := docCountExtractionFields(t, super, documentID), len(values); got != want {
+		t.Fatalf("seeded %d extraction_field_results row(s), want %d -- the fixture did not land", got, want)
+	}
+}
+
+// AC-2: a grid-clean invoice can still be rule-blocked. Every row reads 'ok' and the grid's own
+// sum sentence agrees (see the reconcile/lineItems siblings), yet the REAL gate blocks the same
+// invoice on line-items-sum-subtotal -- the new, confusing, user-visible outcome this story
+// makes reachable. Asserting only the block would miss the point; the grid-clean half is proven
+// by this test's siblings over the identical numbers.
+// Mutation: raise the seeded line-items-sum-subtotal tolerance above 0.02 (DB-level, verified
+// and reverted by hand -- Out of Scope forbids a committed change to any seeded tolerance).
+func TestImportDocumentReadback_AGridCleanInvoiceCanStillBeRuleBlocked(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AC2 tenant")
+	entityID := seedEntity(t, super, tenantID, "AC2 entity")
+	documentID := seedDocument(t, super, tenantID)
+	ac2Fixture(t, super, tenantID, documentID, "AC2-INV")
+
+	svc := newTestService(app)
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "AC2-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+
+	got, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got.Status != invoice.StatusDraft {
+		t.Errorf("status = %q, want %q -- a grid-clean invoice can still be blocked by the sum rule", got.Status, invoice.StatusDraft)
+	}
+
+	var vs []invoice.Violation
+	if err := json.Unmarshal(got.Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", got.Violations, err)
+	}
+	var haveSum, haveRequired bool
+	var expected, actual string
+	for _, v := range vs {
+		switch v.RuleKey {
+		case "line-items-sum-subtotal":
+			haveSum = true
+			if v.Expected != nil {
+				expected = *v.Expected
+			}
+			if v.Actual != nil {
+				actual = *v.Actual
+			}
+		case "line-items-required":
+			haveRequired = true
+		}
+	}
+	if !haveSum {
+		t.Fatalf("violations = %+v, want one naming line-items-sum-subtotal", vs)
+	}
+	if expected != "40" || actual != "40.02" {
+		t.Errorf("Expected/Actual = %q/%q, want \"40\"/\"40.02\"", expected, actual)
+	}
+	if haveRequired {
+		t.Errorf("violations = %+v, must not name line-items-required -- 2 lines were seeded", vs)
+	}
+}
+
+// AC-4: the blocked invoice is returned by the review screen's own batch query -- Store.List
+// filtered by ImportBatchIDs, RLS-scoped. Moved here from internal/invoice (Correction 4): that
+// package cannot import internal/importer (cycle), so a real ImportDocument-produced batch id is
+// only reachable from this package.
+// Mutation: drop the `import_batch_id = ANY(...)` clause at store.go -- the tenant's OTHER,
+// unrelated batch then leaks into this one's result and the total/len assertion fails. (RLS is
+// a separate, orthogonal guard: the cross-tenant companion below stays 0/0 regardless of this
+// clause, since RLS scopes by tenant independently of any WHERE filter.)
+func TestImportDocumentReadback_TheBlockedInvoiceIsReturnedByItsBatchQuery(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AC4A tenant")
+	otherTenantID := seedTenant(t, super, "AC4A other tenant")
+	entityID := seedEntity(t, super, tenantID, "AC4A entity")
+	documentID := seedDocument(t, super, tenantID)
+	ac2Fixture(t, super, tenantID, documentID, "AC4A-INV")
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "AC4A-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+	if _, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// A second, unrelated batch for the SAME tenant -- without this, dropping the
+	// import_batch_id filter would still leave total=1 (the tenant's only invoice) and the
+	// mutation below would pass unnoticed.
+	otherDocumentID := rbSeedDocumentWithMeta(t, super, tenantID, "ac4a-other.pdf", 1, strings.Repeat("c", 64))
+	docSeedExtraction(t, super, tenantID, otherDocumentID, docCleanValues("AC4A-OTHER-INV"))
+	if _, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, otherDocumentID); err != nil {
+		t.Fatalf("ImportDocument (second batch): %v", err)
+	}
+
+	istore := invoice.NewStore(app)
+	items, total, err := istore.List(sxIdentity(ctx, tenantID), invoice.ListFilter{ImportBatchIDs: []string{res.ID}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("List(ImportBatchIDs: [batch]).total/len = %d/%d, want 1/1 -- the tenant's OTHER batch must not leak in", total, len(items))
+	}
+	var vs []invoice.Violation
+	if err := json.Unmarshal(items[0].Violations, &vs); err != nil {
+		t.Fatalf("unmarshal violations %s: %v", items[0].Violations, err)
+	}
+	var found bool
+	for _, v := range vs {
+		if v.RuleKey == "line-items-sum-subtotal" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("returned invoice's violations = %+v, want one naming line-items-sum-subtotal", vs)
+	}
+
+	crossItems, crossTotal, err := istore.List(sxIdentity(ctx, otherTenantID), invoice.ListFilter{ImportBatchIDs: []string{res.ID}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (other tenant, same batch id): %v", err)
+	}
+	if crossTotal != 0 || len(crossItems) != 0 {
+		t.Errorf("List (other tenant, same batch id).total/len = %d/%d, want 0/0", crossTotal, len(crossItems))
+	}
+}
+
+// AC-4: violationSummary's rule-key rail counts the sum rule for the batch.
+// Mutation: seed the violation with an empty rule_key -- ViolationSummary's
+// `nullif(v->>'rule_key', '') IS NOT NULL` guard drops it (verified by hand against this test's
+// own seeded row; TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard pins the SQL
+// clause itself in isolation).
+func TestImportDocumentReadback_ViolationSummaryCountsTheSumRuleForTheBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AC4B tenant")
+	entityID := seedEntity(t, super, tenantID, "AC4B entity")
+	documentID := seedDocument(t, super, tenantID)
+	ac2Fixture(t, super, tenantID, documentID, "AC4B-INV")
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "AC4B-INV")
+
+	srv := startInProcess04ForImporter(t, app)
+	validator := invoice.NewValidator(srv.URL, impvS2SToken, nil)
+	gate := invoice.NewGate(invoice.NewStore(app), validator)
+	if _, _, err := gate.Validate(sxIdentity(ctx, tenantID), invID); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	istore := invoice.NewStore(app)
+	summary, err := istore.ViolationSummary(sxIdentity(ctx, tenantID), []string{res.ID})
+	if err != nil {
+		t.Fatalf("ViolationSummary: %v", err)
+	}
+	if len(summary) == 0 {
+		t.Fatal("ViolationSummary returned no rows; the count check below would be vacuous")
+	}
+	var found bool
+	for _, rc := range summary {
+		if rc.RuleKey == "line-items-sum-subtotal" {
+			found = true
+			if rc.Invoices != 1 {
+				t.Errorf("RuleCount.Invoices for line-items-sum-subtotal = %d, want 1", rc.Invoices)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("summary = %+v, want a RuleCount naming line-items-sum-subtotal", summary)
+	}
+}

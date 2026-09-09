@@ -298,3 +298,123 @@ func TestLiClassifyHeader_ADecoratedHeaderRowMapsEveryColumn(t *testing.T) {
 		}
 	}
 }
+
+// AC-1: the measured production header -- a weak "Item" at column 0 must not beat a strong
+// "Service description" arriving later in reading order.
+func TestLiClassifyHeader_TheMeasuredDenseHeaderPutsDescriptionOnTheNamedColumn(t *testing.T) {
+	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(
+		"Item", "Service description", "Reference", "Qty", "Unit rate ₦", "Amount ₦", "VAT ₦"))
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"descCol", descCol, 1},
+		{"qtyCol", qtyCol, 3},
+		{"priceCol", priceCol, 4},
+		{"totalCol", totalCol, 5},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// AC-2: tier beats position from either side. "item first" is the shape today's code gets
+// wrong; "description first" is the control that would catch a wrong fix inverting the rule to
+// "last wins".
+func TestLiClassifyHeader_StrongBeatsWeakFromEitherSide(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  Table
+		want int
+	}{
+		{"description first", liHeaderRoleRow("Description", "Item", "Qty", "Amount"), 0},
+		{"item first", liHeaderRoleRow("Item", "Description", "Qty", "Amount"), 1},
+	} {
+		descCol, _, _, _ := liClassifyHeader(tc.row)
+		if descCol != tc.want {
+			t.Errorf("%s: descCol = %d, want %d", tc.name, descCol, tc.want)
+		}
+	}
+}
+
+// AC-3: item is demoted, not removed -- alone in its tier, the weak fallback still fires. The
+// only coverage anywhere of the ordinary Item|Qty|Price invoice shape.
+func TestLiClassifyHeader_ItemStillClaimsDescriptionWhenAloneInItsTier(t *testing.T) {
+	descCol, _, _, _ := liClassifyHeader(liHeaderRoleRow("Item", "Qty", "Unit price", "Amount"))
+	if descCol != 0 {
+		t.Errorf("descCol = %d, want 0", descCol)
+	}
+}
+
+// AC-4: both new strong keys, both decorated -- DESCRIPTION OF GOODS case-folds, Unit rate ₦
+// strips its currency decoration.
+func TestLiClassifyHeader_TheDecoratedGoodsHeaderMapsAllFourRoles(t *testing.T) {
+	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow(
+		"S/N", "DESCRIPTION OF GOODS", "Qty", "Unit rate ₦", "Amount ₦"))
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"descCol", descCol, 1},
+		{"qtyCol", qtyCol, 2},
+		{"priceCol", priceCol, 3},
+		{"totalCol", totalCol, 4},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// AC-5: paired with the row-level positive columns (qtyCol, totalCol) so an all -1 classifier
+// cannot pass by only checking absence.
+func TestLiClassifyHeader_IndexAndReferenceColumnsClaimNoRole(t *testing.T) {
+	liWantHeaderRole(t, "S/N", "s/n", liRoleNone)
+	liWantHeaderRole(t, "Reference", "reference", liRoleNone)
+
+	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(liHeaderRoleRow("S/N", "Reference", "Qty", "Amount"))
+	if qtyCol != 2 {
+		t.Errorf("qtyCol = %d, want 2 -- positive companion, else an all -1 classifier would pass silently", qtyCol)
+	}
+	if totalCol != 3 {
+		t.Errorf("totalCol = %d, want 3", totalCol)
+	}
+	if priceCol != -1 {
+		t.Errorf("priceCol = %d, want -1 (no unit-price column present)", priceCol)
+	}
+	for _, got := range []int{descCol, qtyCol, priceCol, totalCol} {
+		if got == 0 || got == 1 {
+			t.Errorf("a role resolved to column %d, want no role claiming S/N or Reference", got)
+		}
+	}
+}
+
+// AC-6: two columns in the same strong tier -- position remains the tiebreak WITHIN a tier.
+func TestLiClassifyHeader_ASecondStrongColumnDoesNotDisplaceTheFirst(t *testing.T) {
+	descCol, qtyCol, _, totalCol := liClassifyHeader(liHeaderRoleRow("Amount", "Total", "Qty", "Description"))
+	if totalCol != 0 {
+		t.Errorf("totalCol = %d, want 0", totalCol)
+	}
+	if descCol != 3 {
+		t.Errorf("descCol = %d, want 3 -- positive companion", descCol)
+	}
+	if qtyCol != 2 {
+		t.Errorf("qtyCol = %d, want 2", qtyCol)
+	}
+}
+
+// AC-6: a weak key that names no liLexicon role would be a fallback that can never fire -- the
+// goldens source scan bounds only "var liLexicon = ", not this set.
+func TestLiWeakHeaders_EveryWeakKeyIsALexiconKey(t *testing.T) {
+	if len(liWeakHeaders) == 0 {
+		t.Fatal("liWeakHeaders is empty; the sweep below would hold vacuously")
+	}
+	for key := range liWeakHeaders {
+		if role := liLexicon[key]; role == liRoleNone {
+			t.Errorf("liWeakHeaders has key %q, which liLexicon does not classify", key)
+		}
+	}
+}

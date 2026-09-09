@@ -782,11 +782,11 @@ func TestWildGoldens_TheRuledTableGoldenCarriesTheHeaderRow(t *testing.T) {
 
 // --- AC-11: this story fixes nothing ----------------------------------------------------------
 
-// wildLiLexiconKeys is liLexicon's shipped key set, measured at ../lineitems.go:127-141.
-// Recognising a decorated header is EXTR-24's; EXTR-21 only commits the arrangement.
+// wildLiLexiconKeys is liLexicon's key set: 12 shipped today (../lineitems.go:127-141) plus 3
+// EXTR-24 adds by name -- exact-set equality below still catches any further casual widening.
 var wildLiLexiconKeys = []string{
-	"description", "item", "details", "particulars",
-	"qty", "quantity", "unit price", "rate", "price",
+	"description", "item", "details", "particulars", "service description", "description of goods",
+	"qty", "quantity", "unit price", "rate", "price", "unit rate",
 	"line total", "total", "amount",
 }
 
@@ -794,8 +794,8 @@ const wildLexiconFile = "../lineitems.go"
 
 var wildMapKeyRE = regexp.MustCompile(`"([^"]*)":`)
 
-// AC-11. liLexicon is unedited and holds none of the five decorated headers, normalised or not.
-func TestWildLayouts_TheHeaderLexiconIsNotEdited(t *testing.T) {
+// AC-11. liLexicon holds exactly wildLiLexiconKeys -- widened only by this named set, never casually.
+func TestWildLayouts_TheHeaderLexiconIsExactlyTheNamedSet(t *testing.T) {
 	body := wildVarBody(t, wildReadFile(t, wildLexiconFile), "var liLexicon = ", wildLexiconFile)
 
 	var keys []string
@@ -811,7 +811,7 @@ func TestWildLayouts_TheHeaderLexiconIsNotEdited(t *testing.T) {
 	want := slices.Clone(wildLiLexiconKeys)
 	slices.Sort(want)
 	if !slices.Equal(keys, want) {
-		t.Errorf("liLexicon holds %v, want %v -- this story commits the arrangement and changes no extraction rule", keys, want)
+		t.Errorf("liLexicon holds %v, want exactly %v -- widened only by this named set, never casually", keys, want)
 	}
 	for _, header := range wildHeaders {
 		for _, form := range []string{header, strings.ToLower(header)} {

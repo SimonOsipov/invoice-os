@@ -489,3 +489,45 @@ func TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount(t *testing.T) {
 		liWant(t, line.LineTotal, wantLineTotal[i], "line "+strconv.Itoa(i)+" LineTotal")
 	}
 }
+
+// TestLineItems_TheMeasuredDenseTableFilesTextNotRowNumbersAsDescriptions pins AC-1 at the
+// LineItems level: the measured production header must file each row's description text, never
+// its ordinal. The count is asserted before the per-row loop -- two rows cannot tell a skip from
+// a stop, and "every" would hold vacuously over one.
+func TestLineItems_TheMeasuredDenseTableFilesTextNotRowNumbersAsDescriptions(t *testing.T) {
+	descriptions := []string{"Steel Rods", "Cement Bags", "Roofing Sheets"}
+	rowNums := []string{"01", "02", "03"}
+	qtys := []string{"4", "6", "2"}
+	rates := []string{"1000.00", "500.00", "500.00"}
+	amounts := []string{"4000.00", "3000.00", "1000.00"}
+
+	cells := make([]extraction.TableCell, 0, len(fxDenseIndexHeader))
+	for i, text := range fxDenseIndexHeader {
+		cells = append(cells, liCell(0, i, text, nil))
+	}
+	for r := range descriptions {
+		row := r + 1
+		cells = append(cells,
+			liCell(row, 0, rowNums[r], nil),
+			liCell(row, 1, descriptions[r], nil),
+			liCell(row, 2, "REF-"+rowNums[r], nil),
+			liCell(row, 3, qtys[r], nil),
+			liCell(row, 4, rates[r], nil),
+			liCell(row, 5, amounts[r], nil),
+			liCell(row, 6, "0.00", nil),
+		)
+	}
+	tbl := extraction.Table{Rows: len(descriptions) + 1, Cols: len(fxDenseIndexHeader), Cells: cells}
+	pages := []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+
+	got := extraction.LineItems(pages)
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s), want 3", len(got))
+	}
+	for i, want := range descriptions {
+		liWant(t, got[i].Description, want, "row "+strconv.Itoa(i)+" Description")
+		if got[i].Description != nil && *got[i].Description == rowNums[i] {
+			t.Errorf("row %d Description = %q, want the goods text %q, not the row ordinal", i, *got[i].Description, want)
+		}
+	}
+}

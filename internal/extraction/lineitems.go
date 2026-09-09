@@ -125,20 +125,27 @@ const (
 // liLexicon maps a normalised header cell to its role. Exact match only -- a substring match
 // would let "Description" contain "amount" style false positives.
 var liLexicon = map[string]liRole{
-	"description": liRoleDescription,
-	"item":        liRoleDescription,
-	"details":     liRoleDescription,
-	"particulars": liRoleDescription,
+	"description":          liRoleDescription,
+	"service description":  liRoleDescription,
+	"description of goods": liRoleDescription,
+	"item":                 liRoleDescription,
+	"details":              liRoleDescription,
+	"particulars":          liRoleDescription,
 
 	"qty":        liRoleQuantity,
 	"quantity":   liRoleQuantity,
 	"unit price": liRoleUnitPrice,
+	"unit rate":  liRoleUnitPrice,
 	"rate":       liRoleUnitPrice,
 	"price":      liRoleUnitPrice,
 	"line total": liRoleLineTotal,
 	"total":      liRoleLineTotal,
 	"amount":     liRoleLineTotal,
 }
+
+// liWeakHeaders names lexicon keys that claim a role only when no strong column claims it: "item"
+// is a description header alone, but a line-number header beside "Service description".
+var liWeakHeaders = map[string]bool{"item": true}
 
 // reLineQty is quantity's own pattern, distinct from ShapeAmount's: line_items.quantity is
 // numeric(14,3), a third fraction digit money's numeric(14,2) has no room for.
@@ -213,7 +220,9 @@ func LineItems(pages []Page) []DocLine {
 }
 
 // liClassifyHeader reads row 0 (the header, by convention) and returns each role's column, or
-// -1 when the header does not name it. A role named twice keeps its lowest-numbered column.
+// -1 when the header does not name it. Tier beats position: every strong column is assigned
+// first, left to right; a weak column (liWeakHeaders) only fills a role still unclaimed after
+// that pass. Within a tier, the leftmost column wins.
 func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 	descCol, qtyCol, priceCol, totalCol = -1, -1, -1, -1
 
@@ -228,8 +237,12 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 	}
 	liSortInts(cols)
 
-	for _, col := range cols {
-		switch liLexicon[liNormalizeHeaderForRole(headerByCol[col].Text)] {
+	assign := func(col int, weak bool) {
+		key := liNormalizeHeaderForRole(headerByCol[col].Text)
+		if liWeakHeaders[key] != weak {
+			return
+		}
+		switch liLexicon[key] {
 		case liRoleDescription:
 			if descCol == -1 {
 				descCol = col
@@ -247,6 +260,13 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 				totalCol = col
 			}
 		}
+	}
+
+	for _, col := range cols {
+		assign(col, false)
+	}
+	for _, col := range cols {
+		assign(col, true)
 	}
 	return
 }

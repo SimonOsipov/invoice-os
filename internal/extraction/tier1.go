@@ -19,8 +19,7 @@ type Tier1Rule struct {
 	PartyScoped bool
 
 	// Fallback marks a rule that recognises a value by its shape alone, with no label to
-	// corroborate it -- e.g. a bare currency symbol. Declared for EXTR-25-02's tests; Resolve
-	// does not read this field yet, so it is inert and no shipped rule sets it.
+	// corroborate it -- e.g. a bare currency symbol. No shipped rule sets it yet.
 	Fallback bool
 }
 

@@ -16,7 +16,9 @@ const isoDate = "2006-01-02"
 // shape's own bound.
 const maxNameRunes = 256
 
-// One ₦, at most 24 runes of decoration either side.
+// One ₦, at most 24 runes of decoration either side. Shared by ShapeCurrency's matcher below and
+// by t1.currency.sweep's label, so the two cannot drift
+// (TestTier1_TheNairaSweepReusesTheShapePattern, TestShapeCurrency_BoundsTheDecorationAroundTheNaira).
 const nairaTokenPattern = `^[^₦]{0,24}₦[^₦]{0,24}$`
 
 var (

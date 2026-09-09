@@ -109,6 +109,32 @@ func TestCorpusDoc_RecordsTheEndToEndProcedure(t *testing.T) {
 	}
 }
 
+// eeDocLearnedSection is the section that describes the two tiers to a reader. It said "Tier-1
+// stays generic" until EXTR-25-03 shipped a shape-only fallback rule and falsified it.
+const eeDocLearnedSection = "## Learned rules"
+
+// AC-3.12. The doc names the shipped fallback rule rather than calling Tier-1 wholly generic.
+// A phrase assertion is only worth its green if the scan can miss, so the control needle below
+// is a phrase the section certainly carries: without it, a renamed heading or a reworked section
+// would report clean on any wording at all.
+func TestCorpusDoc_TheLearnedRulesSectionNamesTheShippedFallback(t *testing.T) {
+	section := eeDocSection(t, wildReadFile(t, eeDocFile), eeDocLearnedSection)
+
+	const control = "tenant-specific tier"
+	if !strings.Contains(section, control) {
+		t.Fatalf("%s's %q section does not carry the control phrase %q; the assertions below would report clean on a section that no longer says anything", eeDocFile, eeDocLearnedSection, control)
+	}
+
+	const want = "t1.currency.sweep"
+	if !strings.Contains(section, want) {
+		t.Errorf("%s's %q section never names %q; Tier-1 ships one shape-only fallback and a reader is told otherwise", eeDocFile, eeDocLearnedSection, want)
+	}
+	const falsified = "Tier-1 stays generic"
+	if strings.Contains(section, falsified) {
+		t.Errorf("%s's %q section still says %q, which t1.currency.sweep falsified", eeDocFile, eeDocLearnedSection, falsified)
+	}
+}
+
 // AC-5. The limit the figure cannot see, stated in the doc: it is monotone in both distance
 // dials, so its non-vacuity rests on the mutilation controls and not on the dial window.
 func TestCorpusDoc_RecordsTheDialBlindness(t *testing.T) {

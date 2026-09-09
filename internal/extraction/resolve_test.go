@@ -132,7 +132,8 @@ func rvMixedRules(t *testing.T) extraction.RuleSet {
 	}
 }
 
-// rvGeneric is the shipped Tier-1 set, read from the package and never re-typed here: a
+// rvGeneric is the shipped Tier-1 set -- generic apart from t1.currency.sweep -- read from the
+// package and never re-typed here: a
 // test-local fork of the ten lexicon patterns drifts from the shipped ones silently
 // (TestTier1_ReusesTheAnchorLexiconPatterns).
 func rvGeneric() extraction.RuleSet {
@@ -391,7 +392,7 @@ func TestResolve_IsDeterministicAcrossRepeatedCalls(t *testing.T) {
 // V-09
 func TestResolve_ReasonIsAlwaysNone(t *testing.T) {
 	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
-	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
+	rvFloor(t, got, rvCorpusInline+" under the shipped rule set")
 
 	for i, c := range got {
 		if c.Reason != extraction.ReasonNone {
@@ -465,7 +466,7 @@ func TestResolve_SpatialRelationsSkipDegenerateBoxes(t *testing.T) {
 // V-12
 func TestResolve_EveryRegionSatisfiesTheColumnCheck(t *testing.T) {
 	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
-	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
+	rvFloor(t, got, rvCorpusInline+" under the shipped rule set")
 
 	withRegion := 0
 	for i, c := range got {
@@ -1320,8 +1321,11 @@ func TestResolve_ManyNairaTokensStillDecideOneCurrency(t *testing.T) {
 			naira++
 		}
 	}
-	if naira == 0 {
-		t.Fatalf("no t1.currency.sweep candidate among the twelve ₦ tokens; the decision below has nothing to compete over")
+	// Exactly maxCandidatesPerField, not twelve: Resolve truncates per field AFTER ordering. A
+	// bare "> 0" floor would let a rule that emitted one candidate satisfy the dedupe claim below
+	// vacuously, which is the whole point of a twelve-token page.
+	if naira != 8 {
+		t.Fatalf("got %d t1.currency.sweep candidate(s) from twelve ₦ tokens, want 8 (maxCandidatesPerField); the dedupe below would hold over the wrong set", naira)
 	}
 
 	results := extraction.Reconcile(extraction.Input{Candidates: cands})
@@ -1336,10 +1340,19 @@ func TestResolve_ManyNairaTokensStillDecideOneCurrency(t *testing.T) {
 		t.Errorf("currency reason = %q alternatives = %q, want %q with none -- twelve identical NGN readings must dedupe to one", currency.Reason, valuesOf(currency.Alternatives), extraction.ReasonNone)
 	}
 
-	for _, field := range []string{"subtotal", "total"} {
-		fr, ok := rcFind(results, field)
+	// The anti-vacuity floor asserts the VALUE, not merely that something decided: a page whose
+	// other fields read the wrong number would still satisfy "decided something".
+	for _, want := range []struct{ field, value string }{
+		{"subtotal", "1200.00"},
+		{"total", "1290.00"},
+	} {
+		fr, ok := rcFind(results, want.field)
 		if !ok || fr.Value == nil {
-			t.Errorf("%s decided nothing; the anti-vacuity floor requires it to still resolve on this page", field)
+			t.Errorf("%s decided nothing; the anti-vacuity floor requires it to still resolve on this page", want.field)
+			continue
+		}
+		if *fr.Value != want.value {
+			t.Errorf("%s = %q, want %q", want.field, *fr.Value, want.value)
 		}
 	}
 }

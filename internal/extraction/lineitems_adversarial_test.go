@@ -219,7 +219,7 @@ func TestLineItems_HeaderNamesOnlyOneRoleLeavesOthersNilOnEveryRow(t *testing.T)
 
 	got := extraction.LineItems(pages)
 	if len(got) != 2 {
-		t.Fatalf("LineItems returned %d line(s), want 2 -- naming one of three roles still proceeds", len(got))
+		t.Fatalf("LineItems returned %d line(s), want 2 -- a line total alone still proceeds", len(got))
 	}
 	for i, line := range got {
 		liWantNil(t, line.Quantity, "Quantity")
@@ -598,4 +598,150 @@ func TestLineFieldName_IsThePackagesOnlyNameSource(t *testing.T) {
 	if got := extraction.LineFieldName(999, extraction.LineRoleDescription); got != "line_items[999].description" {
 		t.Errorf("LineFieldName(999, description) = %q, want \"line_items[999].description\"", got)
 	}
+}
+
+// A header row of blank cells names no role, so the gate rejects the table however readable its
+// data rows are. The control fills the same header and the same rows come back.
+func TestLineItems_ABlankHeaderRowYieldsNoLines(t *testing.T) {
+	mk := func(h0, h1 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 2,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, h0, nil), liCell(0, 1, h1, nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, "20.00", nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, "30.00", nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("", "   ")}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a blank header row, want 0", len(got))
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Description", "Amount")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once the header names its roles, want 3 -- the control proves the rows above were readable", len(got))
+	}
+	liWant(t, got[0].Description, "Widget", "line 0 Description")
+}
+
+// A header that passes the gate does not manufacture rows: no data row means no line, and the
+// slice is still the non-nil empty one callers rely on.
+func TestLineItems_AUsableHeaderWithNoDataRowsYieldsNoLines(t *testing.T) {
+	header := []extraction.TableCell{liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil)}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{
+		{Rows: 1, Cols: 2, Cells: header},
+	}}})
+	if got == nil {
+		t.Fatal("LineItems returned nil, want a non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a header with no data rows, want 0", len(got))
+	}
+
+	withRow := append(append([]extraction.TableCell{}, header...), liCell(1, 0, "Widget", nil), liCell(1, 1, "10.00", nil))
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{
+		{Rows: 2, Cols: 2, Cells: withRow},
+	}}})
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s) once one data row is added, want 1", len(got))
+	}
+	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
+}
+
+// Two columns naming the SAME role claim one column between them (liClassifyHeader keeps the
+// leftmost), so a doubled quantity header never stands in for the unit price the gate wants.
+func TestLineItems_TwoQuantityColumnsDoNotSatisfyThePairing(t *testing.T) {
+	mk := func(h2 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 3,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil), liCell(0, 2, h2, nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, "1", nil), liCell(1, 2, "10.00", nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, "2", nil), liCell(2, 2, "20.00", nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, "3", nil), liCell(3, 2, "30.00", nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Quantity")}}})
+	if len(got) != 0 {
+		t.Fatalf("LineItems returned %d line(s) for a Qty|Quantity header, want 0 -- a second quantity column is not a unit price", len(got))
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("Unit price")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) once the second column names a unit price, want 3 -- the control proves the rows above were readable", len(got))
+	}
+	liWant(t, got[0].UnitPrice, "10.00", "line 0 UnitPrice")
+}
+
+// The skip is per table, not per document: a rejected table on page 1 costs page 2's table
+// neither its rows nor its ordinals.
+func TestLineItems_ATableRejectedOnOnePageLeavesTheNextPageWhole(t *testing.T) {
+	rejected := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Qty", nil),
+			liCell(1, 0, "Page One A", nil), liCell(1, 1, "1", nil),
+			liCell(2, 0, "Page One B", nil), liCell(2, 1, "2", nil),
+		},
+	}
+	usable := extraction.Table{
+		Rows: 3, Cols: 2,
+		Cells: []extraction.TableCell{
+			liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil),
+			liCell(1, 0, "Page Two A", nil), liCell(1, 1, "10.00", nil),
+			liCell(2, 0, "Page Two B", nil), liCell(2, 1, "20.00", nil),
+		},
+	}
+	got := extraction.LineItems([]extraction.Page{
+		{Number: 1, Tables: []extraction.Table{rejected}},
+		{Number: 2, Tables: []extraction.Table{usable}},
+	})
+	if len(got) != 2 {
+		t.Fatalf("LineItems returned %d line(s) across two pages, want 2", len(got))
+	}
+	if got[0].Index != 1 || got[1].Index != 2 {
+		t.Errorf("Index = [%d %d], want [1 2] -- page 1's rejected table must burn no ordinal", got[0].Index, got[1].Index)
+	}
+	liWant(t, got[0].Description, "Page Two A", "line 0 Description")
+	liWant(t, got[1].Description, "Page Two B", "line 1 Description")
+}
+
+// The gate reads the HEADER, never the cells: a table headed with a line total still yields its
+// rows when every total cell is unparseable. LineTotal comes back nil, which is what reconcile
+// reads as "no total to sum" -- the gate is not a content filter.
+func TestLineItems_AUsableHeaderOverUnparseableTotalsStillYieldsLines(t *testing.T) {
+	mk := func(t1, t2, t3 string) extraction.Table {
+		return extraction.Table{
+			Rows: 4, Cols: 2,
+			Cells: []extraction.TableCell{
+				liCell(0, 0, "Description", nil), liCell(0, 1, "Amount", nil),
+				liCell(1, 0, "Widget", nil), liCell(1, 1, t1, nil),
+				liCell(2, 0, "Gadget", nil), liCell(2, 1, t2, nil),
+				liCell(3, 0, "Gizmo", nil), liCell(3, 1, t3, nil),
+			},
+		}
+	}
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("n/a", "--", "see note")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) for unparseable totals, want 3 -- the gate reads the header, not the cells", len(got))
+	}
+	for i, line := range got {
+		liWantNil(t, line.LineTotal, "LineTotal")
+		if line.Description == nil {
+			t.Errorf("line %d Description = nil, want a value -- the row was emitted, so its readable cells must land", i)
+		}
+	}
+
+	got = extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{mk("10.00", "20.00", "30.00")}}})
+	if len(got) != 3 {
+		t.Fatalf("LineItems returned %d line(s) for parseable totals, want 3", len(got))
+	}
+	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
 }

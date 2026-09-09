@@ -158,9 +158,9 @@ func LineItems(pages []Page) []DocLine {
 	for _, page := range pages {
 		for _, tbl := range page.Tables {
 			descCol, qtyCol, priceCol, totalCol := liClassifyHeader(tbl)
-			if qtyCol == -1 && priceCol == -1 && totalCol == -1 {
-				// The gate counts quantity, unit price and line total only: a header naming
-				// description alone is prose, not a line-item table.
+			if !((qtyCol != -1 && priceCol != -1) || totalCol != -1) {
+				// A partial table (qty-only or price-only) looks populated on screen but
+				// fails the invoice-level sum rule, so it yields nothing rather than something misleading.
 				continue
 			}
 

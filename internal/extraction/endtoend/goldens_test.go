@@ -921,13 +921,16 @@ func TestWildLayouts_TheNairaRolesStaySeparate(t *testing.T) {
 		t.Errorf("expectByLayout[%s].currency = %v, want [NGN] sourced from the label", wildRuled, got)
 	}
 
-	// The header's naira is decoration: the whole token is not a currency reading.
-	header, ok := wildTokenContaining(ruled, "Amount")
-	if !ok {
-		t.Fatalf("%s carries no Amount header token", wildRuled)
+	// The header's naira does not stop the word underneath mapping to its line-item role.
+	// (The currency field still deciding from the label, not this token, is EXTR-25-03's AC-3.4.)
+	lines := extraction.LineItems(eeGoldenPages(t, wildGolden(wildRuled)))
+	if len(lines) == 0 {
+		t.Fatalf("%s's golden yields no line items; the Amount ₦ header failed to classify", wildRuled)
 	}
-	if got := extraction.ShapeCurrency.Normalize(header.Text); len(got) != 0 {
-		t.Errorf("%s's header token %q reads as currency %v; the naira there is decoration, not a marker", wildRuled, header.Text, got)
+	for _, line := range lines {
+		if line.LineTotal == nil {
+			t.Errorf("%s line %d carries no line_total; the Amount ₦ header did not map to its role", wildRuled, line.Index)
+		}
 	}
 
 	rc := wildPages(t, wildRCNaira)

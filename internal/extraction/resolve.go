@@ -15,9 +15,9 @@ type Tier int
 
 const (
 	TierLearned Tier = iota // a stored rule for this layout fingerprint
-	TierGeneric             // a shipped Tier-1 rule
-	// TierFallback: a shipped rule that recognises a value by its shape alone, with no label
-	// to corroborate it.
+	TierGeneric             // a LABELLED shipped Tier-1 rule
+	// TierFallback: a shipped Tier-1 rule that recognises a value by its shape alone, with no
+	// label to corroborate it. Also shipped, so "shipped rule" alone no longer names TierGeneric.
 	TierFallback
 )
 

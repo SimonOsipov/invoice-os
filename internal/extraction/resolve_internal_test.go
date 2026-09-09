@@ -733,12 +733,11 @@ func TestResolve_ComparatorIsTotalOverThreeTiers(t *testing.T) {
 	}
 }
 
-// AC-2.5. Both shipped guards still read tier == TierGeneric (untouched by this subtask), so
-// calling appendRuleCandidates directly with an explicit tier -- bypassing Resolve's own
-// still-hardcoded TierGeneric assignment -- is the only way to see what each guard does with a
-// TierFallback candidate today. The fallback sub-cases are the red: neither guard reaches a
-// TierFallback candidate yet. The learned sub-cases are controls: a learned rule was never
-// subject to either guard and stays that way.
+// AC-2.5. Both shipped guards read tier != TierLearned, so a TierFallback candidate is subject
+// to each exactly as a TierGeneric one is. Calling appendRuleCandidates directly pins the guards
+// themselves; TestResolve_AFallbackRuleKeepsTheShippedPostureThroughResolve pins that Resolve
+// threads a Fallback rule's tier INTO them. The learned sub-cases are the controls: a learned
+// rule was never subject to either guard and stays that way.
 func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	// anchorOutranked: supplier_name's bare "supplier" match is a strict sub-span of the
 	// shipped lexicon's supplier_tin match on this token (the same fixture resolve_test.go's

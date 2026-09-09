@@ -1135,11 +1135,9 @@ func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing
 
 // --- EXTR-25-02: fallback tier precedence -----------------------------------
 //
-// TierFallback exists as a declaration only -- Resolve still hardcodes TierGeneric for every
-// Tier-1 rule regardless of Fallback (that wiring is EXTR-25-02's own implementation, not this
-// spec pass). Below, a Fallback: true rule therefore resolves exactly like an ordinary one, so
-// a candidate that should lose to a label instead competes with it on Distance or reading order
-// alone -- the red this test pins.
+// Resolve tags a Fallback: true rule's candidates TierFallback, which compareCandidates sorts
+// below every labelled reading. No shipped rule sets Fallback, so every fixture below builds
+// its own RuleSet.
 
 // AC-2.1. A labelled reading must beat a fallback one regardless of distance or reading order,
 // even when the fallback wins on every other axis (Distance 0 vs 0.12, Y0 0.10 vs 0.40).
@@ -1220,7 +1218,8 @@ func TestResolve_AFallbackNeverOutranksALabelledReading(t *testing.T) {
 }
 
 // AC-2.2. With no labelled candidate for the field, the fallback rule decides alone. The Tier
-// assertion is the red: Resolve must tag its own candidate TierFallback, and does not yet.
+// assertion is the discriminator: it is the only one that reds if Resolve stops tagging a
+// Fallback rule's candidates TierFallback and hands them TierGeneric instead.
 func TestResolve_AFallbackDecidesWhenNoLabelResolved(t *testing.T) {
 	fallback := extraction.Tier1Rule{
 		Key: "g.currency.sweep", Field: "currency",

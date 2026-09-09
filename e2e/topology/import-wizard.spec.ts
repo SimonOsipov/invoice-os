@@ -5689,7 +5689,7 @@ type LineRoleName = (typeof LINE_ROLE_NAMES)[number]
 
 // lineItems.ts's LINE_FIELD_RE, restated rather than imported: e2e/ compiles against no
 // frontend source, and a spec that imported the parser would assert the parser against itself.
-const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total)$/
+const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/
 
 type WireLineCell = { name: string; value: string | null; region: ExtractionRegion | null }
 type WireLine = { index: number; cells: Partial<Record<LineRoleName, WireLineCell>> }

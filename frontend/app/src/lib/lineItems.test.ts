@@ -67,6 +67,7 @@ function mkRow(index: number, values: RowValues = {}): LineRow {
       quantity: cell(name('quantity'), values.quantity ?? null),
       unit_price: cell(name('unit_price'), values.unit_price ?? null),
       line_total: cell(name('line_total'), values.line_total ?? null),
+      line_tax: cell(`line_items[${index}].line_tax`, null),
     },
   }
 }
@@ -326,6 +327,7 @@ describe('remapRoles', () => {
         region: { page: 1, x0: 0.6, y0: 0, x1: 0.7, y1: 0.02 },
         reason: '',
       },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
     },
   }
 
@@ -423,6 +425,7 @@ describe('linesToPost', () => {
           quantity: cell(null, '   '), // whitespace-only counts as blank
           unit_price: cell(null, ''),
           line_total: cell(null, ''),
+          line_tax: cell(null, ''),
         },
       },
       mkRow(3, { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00' }),
@@ -574,6 +577,7 @@ describe('remapRoles (adversarial)', () => {
       quantity: { name: 'line_items[1].quantity', value: '2', region: null, reason: 'unreadable' },
       unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent' },
       line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing' },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
     },
   }
 

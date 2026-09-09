@@ -185,12 +185,12 @@ var mockDefaultLines = []DocLine{
 	{
 		Index: 1, Description: mockValue("Widget"), Quantity: mockValue("2"),
 		UnitPrice: mockValue("500.00"), LineTotal: mockValue("1000.00"),
-		Regions: mockLineRegions(1, LineRoles...),
+		Regions: mockLineRegions(1, LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal),
 	},
 	{
 		Index: 2, Description: mockValue("Assembly, calibration and on-site commissioning of the line-item rig"), Quantity: mockValue("3"),
 		UnitPrice: mockValue("250.00"), LineTotal: mockValue("900.00"),
-		Regions: mockLineRegions(2, LineRoles...),
+		Regions: mockLineRegions(2, LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal),
 	},
 	{
 		Index: 3, Description: mockValue("Delivery"),
@@ -200,7 +200,7 @@ var mockDefaultLines = []DocLine{
 	{
 		Index: 4, Description: mockValue("Installation"), Quantity: mockValue("1"),
 		UnitPrice: mockValue("75.50"), LineTotal: mockValue("75.50"),
-		Regions: mockLineRegions(4, LineRoles...),
+		Regions: mockLineRegions(4, LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal),
 	},
 }
 

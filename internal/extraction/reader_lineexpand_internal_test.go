@@ -16,6 +16,11 @@ import (
 
 func lxeStr(s string) *string { return &s }
 
+// lxeCarriedRoles are the four roles LineItemInput.cell knows. LineRoles has grown to five
+// (line_tax), but expandLineCorrection can only expand what LineItemInput carries, so a widened
+// LineRoles must not widen what these fixtures expect back -- that is EXTR-24-05's.
+var lxeCarriedRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal}
+
 // lxeBlockRead is the "line_items" block row Reconcile emits ahead of the cells -- a reading
 // that shares the correction's field name exactly, so the per-field merge overlays it.
 func lxeBlockRead() ExtractionFieldState {
@@ -59,7 +64,7 @@ func TestExtractionMerge_LineExpansionKeepsTheWireOrder(t *testing.T) {
 
 	want := []string{"total", "line_items"}
 	for i := 1; i <= 3; i++ {
-		for _, role := range LineRoles {
+		for _, role := range lxeCarriedRoles {
 			want = append(want, LineFieldName(i, role))
 		}
 	}
@@ -87,7 +92,7 @@ func TestExtractionMerge_LineExpansionKeepsTheTailWhenTheSetShrinks(t *testing.T
 	got := mergeCorrections(fields, []Correction{corr})
 
 	want := []string{"line_items"}
-	for _, role := range LineRoles {
+	for _, role := range lxeCarriedRoles {
 		want = append(want, LineFieldName(1, role))
 	}
 	want = append(want, "currency")

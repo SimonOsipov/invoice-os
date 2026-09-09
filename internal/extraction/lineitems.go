@@ -14,10 +14,11 @@ const (
 	LineRoleQuantity    = "quantity"
 	LineRoleUnitPrice   = "unit_price"
 	LineRoleLineTotal   = "line_total"
+	LineRoleLineTax     = "line_tax" // per-line VAT; distinct from the invoice-level "vat" header field
 )
 
 // LineRoles is one line's cells in emit order: reading order, left to right.
-var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal}
+var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal, LineRoleLineTax}
 
 // DocLine is one data row of a reader table, projected onto the invoice's line-item shape.
 type DocLine struct {
@@ -26,6 +27,7 @@ type DocLine struct {
 	Quantity    *string
 	UnitPrice   *string
 	LineTotal   *string
+	LineTax     *string
 	Region      *Region            // the line-total cell's region, or nil
 	Regions     map[string]*Region // per-role cell region, keyed by LineRole*; nil-safe to read
 }
@@ -41,6 +43,8 @@ func (l DocLine) Cell(role string) *string {
 		return l.UnitPrice
 	case LineRoleLineTotal:
 		return l.LineTotal
+	case LineRoleLineTax:
+		return l.LineTax
 	}
 	return nil
 }
@@ -111,7 +115,7 @@ func LineItemResults(lines []DocLine) []FieldResult {
 	return out
 }
 
-// liRole is which of the four line-item fields a header column names.
+// liRole is which of the five line-item fields a header column names.
 type liRole int
 
 const (
@@ -120,6 +124,7 @@ const (
 	liRoleQuantity
 	liRoleUnitPrice
 	liRoleLineTotal
+	liRoleLineTax
 )
 
 // liLexicon maps a normalised header cell to its role. Exact match only -- a substring match
@@ -141,6 +146,9 @@ var liLexicon = map[string]liRole{
 	"line total": liRoleLineTotal,
 	"total":      liRoleLineTotal,
 	"amount":     liRoleLineTotal,
+
+	"vat": liRoleLineTax,
+	"tax": liRoleLineTax,
 }
 
 // liWeakHeaders names lexicon keys that claim a role only when no strong column claims it: "item"
@@ -157,7 +165,7 @@ func LineItems(pages []Page) []DocLine {
 	index := 0
 	for _, page := range pages {
 		for _, tbl := range page.Tables {
-			descCol, qtyCol, priceCol, totalCol := liClassifyHeader(tbl)
+			descCol, qtyCol, priceCol, totalCol, taxCol := liClassifyHeader(tbl)
 			if !((qtyCol != -1 && priceCol != -1) || totalCol != -1) {
 				// A partial table (qty-only or price-only) looks populated on screen but
 				// fails the invoice-level sum rule, so it yields nothing rather than something misleading.
@@ -211,6 +219,15 @@ func LineItems(pages []Page) []DocLine {
 						}
 					}
 				}
+				if taxCol != -1 {
+					if cell, ok := cells[taxCol]; ok {
+						line.setRegion(LineRoleLineTax, cell.Region)
+						if readings := normalizeAmount(cell.Text); len(readings) > 0 {
+							v := readings[0]
+							line.LineTax = &v
+						}
+					}
+				}
 
 				lines = append(lines, line)
 			}
@@ -223,8 +240,8 @@ func LineItems(pages []Page) []DocLine {
 // -1 when the header does not name it. Tier beats position: every strong column is assigned
 // first, left to right; a weak column (liWeakHeaders) only fills a role still unclaimed after
 // that pass. Within a tier, the leftmost column wins.
-func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
-	descCol, qtyCol, priceCol, totalCol = -1, -1, -1, -1
+func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol, taxCol int) {
+	descCol, qtyCol, priceCol, totalCol, taxCol = -1, -1, -1, -1, -1
 
 	headerByCol := make(map[int]TableCell)
 	cols := make([]int, 0)
@@ -258,6 +275,10 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 		case liRoleLineTotal:
 			if totalCol == -1 {
 				totalCol = col
+			}
+		case liRoleLineTax:
+			if taxCol == -1 {
+				taxCol = col
 			}
 		}
 	}

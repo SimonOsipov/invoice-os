@@ -147,3 +147,154 @@ func TestLiClassifyHeader_EveryPreExistingLexiconKeyStillClassifies(t *testing.T
 		}
 	}
 }
+
+// liHeaderRoleRow builds a one-row header table with each text in its own column, so a whole
+// decorated header row can be classified at once.
+func liHeaderRoleRow(texts ...string) Table {
+	cells := make([]TableCell, 0, len(texts))
+	for i, text := range texts {
+		cells = append(cells, TableCell{Row: 0, Col: i, RowSpan: 1, ColSpan: 1, Text: text})
+	}
+	return Table{Rows: 1, Cols: len(texts), Cells: cells}
+}
+
+// liWantHeaderRole asserts one header's normalised form and the role it then looks up.
+func liWantHeaderRole(t *testing.T, header, want string, wantRole liRole) {
+	t.Helper()
+	got := liNormalizeHeaderForRole(header)
+	if got != want {
+		t.Errorf("liNormalizeHeaderForRole(%q) = %q, want %q", header, got, want)
+		return
+	}
+	if role := liLexicon[got]; role != wantRole {
+		t.Errorf("liLexicon[%q] = %v, want %v", got, role, wantRole)
+	}
+}
+
+// The strip removes decoration, it does not sanitise: a header carrying no word survives whole
+// and still names no role. Paired with a header that does strip, so neither half passes alone.
+func TestLiNormalizeHeaderForRole_PunctuationOnlyHeadersSurviveWhole(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"---", "---"},
+		{"()", "()"},
+		{"( )", "( )"},
+		{"//", "//"},
+		{"n n n", "n n n"},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the sweep below would hold vacuously")
+	}
+	for _, tc := range cases {
+		liWantHeaderRole(t, tc.header, tc.want, liRoleNone)
+	}
+	liWantHeaderRole(t, "Amount (N)", "amount", liRoleLineTotal)
+}
+
+// The empty-result fallback covers the paren strip too, not only the currency strip: a wholly
+// parenthesised header keeps its parens rather than becoming the bare word inside.
+func TestLiNormalizeHeaderForRole_AWhollyParenthesisedHeaderKeepsItsParens(t *testing.T) {
+	liWantHeaderRole(t, "(Amount)", "(amount)", liRoleNone)
+	liWantHeaderRole(t, "Amount (NGN)", "amount", liRoleLineTotal)
+}
+
+// The fallback returns the base fold, so it cannot invent content a blank header never had.
+func TestLiNormalizeHeaderForRole_AWhitespaceOnlyHeaderIsEmptyBothWays(t *testing.T) {
+	if got := liNormalizeHeaderText("   \t\n "); got != "" {
+		t.Fatalf("liNormalizeHeaderText of a blank header = %q, want %q", got, "")
+	}
+	liWantHeaderRole(t, "   \t\n ", "", liRoleNone)
+	liWantHeaderRole(t, "  Amount  ", "amount", liRoleLineTotal)
+}
+
+// An unbalanced paren fails closed: the header is left as folded and names no role, rather than
+// being guessed at.
+func TestLiNormalizeHeaderForRole_UnbalancedParensAreLeftAlone(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"Amount (N", "amount (n"},
+		{"(N Amount", "(n amount"},
+		{"Amount N)", "amount n)"},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the sweep below would hold vacuously")
+	}
+	for _, tc := range cases {
+		liWantHeaderRole(t, tc.header, tc.want, liRoleNone)
+	}
+	liWantHeaderRole(t, "Amount (N)", "amount", liRoleLineTotal)
+}
+
+// ceiling: only a leading or trailing group is stripped -- widen when a corpus header carries a
+// mid-string qualifier.
+func TestLiNormalizeHeaderForRole_AParenGroupInTheMiddleIsNotStripped(t *testing.T) {
+	liWantHeaderRole(t, "Unit (N) price", "unit (n) price", liRoleNone)
+	liWantHeaderRole(t, "Unit price (N)", "unit price", liRoleUnitPrice)
+}
+
+// ceiling: one group per header -- widen when a corpus header carries two.
+func TestLiNormalizeHeaderForRole_OnlyOneParenGroupIsStripped(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"(a) Rate (N)", "rate (n)"},
+		{"Rate (N) (each)", "rate (n)"},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the sweep below would hold vacuously")
+	}
+	for _, tc := range cases {
+		liWantHeaderRole(t, tc.header, tc.want, liRoleNone)
+	}
+	liWantHeaderRole(t, "Rate (N)", "rate", liRoleUnitPrice)
+}
+
+// "ngn" is dropped as a whole token only, so a word merely containing those letters is intact.
+func TestLiNormalizeHeaderForRole_NGNInsideAWordIsNotAToken(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"Ngntech Ltd", "ngntech ltd"},
+		{"Amount in NGNs", "amount in ngns"},
+		{"NGNAmount", "ngnamount"},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the sweep below would hold vacuously")
+	}
+	for _, tc := range cases {
+		liWantHeaderRole(t, tc.header, tc.want, liRoleNone)
+	}
+	liWantHeaderRole(t, "Amount NGN", "amount", liRoleLineTotal)
+}
+
+// ceiling: the token match is ASCII, so a full-width naira letter survives and its header names
+// no role -- widen when a corpus header carries one.
+func TestLiNormalizeHeaderForRole_FullWidthCurrencyLettersAreNotStripped(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"Ｎ", "ｎ"},
+		{"ＮＧＮ", "ｎｇｎ"},
+		{"Amount Ｎ", "amount ｎ"},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases; the sweep below would hold vacuously")
+	}
+	for _, tc := range cases {
+		liWantHeaderRole(t, tc.header, tc.want, liRoleNone)
+	}
+	liWantHeaderRole(t, "Amount N", "amount", liRoleLineTotal)
+}
+
+// The only unit-level pin on the role lookup's call site: a decorated header row must reach
+// liClassifyHeader stripped, and the index column must claim nothing.
+func TestLiClassifyHeader_ADecoratedHeaderRowMapsEveryColumn(t *testing.T) {
+	descCol, qtyCol, priceCol, totalCol := liClassifyHeader(
+		liHeaderRoleRow("S/N", "Description", "Qty", "RATE (N)", "Amount ₦"))
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"descCol", descCol, 1},
+		{"qtyCol", qtyCol, 2},
+		{"priceCol", priceCol, 3},
+		{"totalCol", totalCol, 4},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("liClassifyHeader %s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+}

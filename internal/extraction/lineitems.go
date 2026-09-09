@@ -267,8 +267,9 @@ func liIndexRows(tbl Table) map[int]map[int]TableCell {
 	return byRow
 }
 
-// liNormalizeHeaderText case-folds, trims and collapses internal whitespace so the lexicon can
-// match exactly rather than by substring.
+// liNormalizeHeaderText case-folds, trims and collapses internal whitespace. Shared base: the
+// role lookup reaches it through liNormalizeHeaderForRole, reconcile.go's supplier-name
+// equality calls it directly, so it must strip nothing beyond whitespace and case.
 func liNormalizeHeaderText(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }

@@ -229,7 +229,7 @@ func liClassifyHeader(tbl Table) (descCol, qtyCol, priceCol, totalCol int) {
 	liSortInts(cols)
 
 	for _, col := range cols {
-		switch liLexicon[liNormalizeHeaderText(headerByCol[col].Text)] {
+		switch liLexicon[liNormalizeHeaderForRole(headerByCol[col].Text)] {
 		case liRoleDescription:
 			if descCol == -1 {
 				descCol = col
@@ -271,6 +271,39 @@ func liIndexRows(tbl Table) map[int]map[int]TableCell {
 // match exactly rather than by substring.
 func liNormalizeHeaderText(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// liNormalizeHeaderForRole strips a header's currency decoration and parenthesised qualifier on
+// top of the shared fold, for the role lookup only -- reconcile.go's supplier-name equality keeps
+// using the plain fold untouched. A result emptied by the strip falls back to the base fold, so a
+// currency-only header (e.g. "₦") is never read as a blank column name.
+func liNormalizeHeaderForRole(s string) string {
+	base := liNormalizeHeaderText(s)
+	out := base
+
+	if i := strings.Index(out, ")"); strings.HasPrefix(out, "(") && i != -1 {
+		out = strings.TrimSpace(out[i+1:])
+	} else if strings.HasSuffix(out, ")") {
+		if j := strings.LastIndex(out, "("); j != -1 {
+			out = strings.TrimSpace(out[:j])
+		}
+	}
+
+	out = strings.ReplaceAll(out, "₦", "")
+
+	fields := strings.Fields(out)
+	kept := fields[:0]
+	for _, f := range fields {
+		if f != "n" && f != "ngn" {
+			kept = append(kept, f)
+		}
+	}
+	out = strings.Join(kept, " ")
+
+	if out == "" {
+		return base
+	}
+	return out
 }
 
 // liNormalizeDescription trims a description cell and reports whether anything is left. A blank

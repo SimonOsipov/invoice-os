@@ -56,6 +56,7 @@ interface RowValues {
   quantity?: string | null
   unit_price?: string | null
   line_total?: string | null
+  line_tax?: string | null
 }
 
 function mkRow(index: number, values: RowValues = {}): LineRow {
@@ -67,7 +68,7 @@ function mkRow(index: number, values: RowValues = {}): LineRow {
       quantity: cell(name('quantity'), values.quantity ?? null),
       unit_price: cell(name('unit_price'), values.unit_price ?? null),
       line_total: cell(name('line_total'), values.line_total ?? null),
-      line_tax: cell(`line_items[${index}].line_tax`, null),
+      line_tax: cell(`line_items[${index}].line_tax`, values.line_tax ?? null),
     },
   }
 }
@@ -435,9 +436,29 @@ describe('linesToPost', () => {
 
     expect(posted.length, 'three rows in, two out -- the all-blank row must be dropped').toBe(2)
     expect(posted, "the blank cell must become null, and 'Widget' with its spaces must post verbatim").toEqual([
-      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00' },
-      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00' },
+      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: null },
+      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00', line_tax: null },
     ])
+  })
+
+  it('keeps a row whose only non-null cell is line_tax', () => {
+    const rows: LineRow[] = [
+      {
+        key: 'vat-only',
+        cells: {
+          description: cell(null, ''),
+          quantity: cell(null, ''),
+          unit_price: cell(null, ''),
+          line_total: cell(null, ''),
+          line_tax: cell(null, '75.00'),
+        },
+      },
+    ]
+
+    const posted = linesToPost(rows)
+
+    expect(posted.length, 'a row whose only value is line_tax was filtered out as if it were blank').toBe(1)
+    expect(posted[0].line_tax, 'the carried-but-unrendered cell did not reach the posted body').toBe('75.00')
   })
 })
 
@@ -473,6 +494,12 @@ describe('lineSetChanged', () => {
       lineSetChanged(wire, draft),
       "'' and whitespace-only must canonicalize the same, mirroring diffLineItems' canonField",
     ).toBe(false)
+  })
+
+  it('a line_tax-only difference is detected as a change', () => {
+    const wire = [mkRow(1, { quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '75.00' })]
+    const draft = [mkRow(1, { quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '10.00' })]
+    expect(lineSetChanged(wire, draft), 'lineSetChanged ignored a line_tax-only difference').toBe(true)
   })
 })
 
@@ -737,6 +764,7 @@ describe('linesToPost / lineSetChanged (adversarial)', () => {
     expect(posted.length, 'the single row was dropped').toBe(1)
     expect(Object.keys(posted[0]).sort(), 'the posted body gained or lost a key').toEqual([
       'description',
+      'line_tax',
       'line_total',
       'quantity',
       'unit_price',

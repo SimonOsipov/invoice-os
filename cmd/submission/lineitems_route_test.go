@@ -120,19 +120,21 @@ func TestNewInvoiceLineItemsApplier_AlwaysPassesANonNilPointer(t *testing.T) {
 }
 
 // Field-for-field, order-for-order: a transposed assignment (e.g. UnitPrice into LineTotal)
-// passes any test that only checks length or a single populated cell.
+// passes any test that only checks length or a single populated cell. LineTax rides along on
+// line 1 -- a fifth cell dropped by position would still pass a test that only checked the
+// original four.
 func TestNewInvoiceLineItemsApplier_CopiesEveryCellByPosition(t *testing.T) {
-	desc1, qty1, price1, total1 := "Widget", "2", "10.00", "20.00"
+	desc1, qty1, price1, total1, tax1 := "Widget", "2", "10.00", "20.00", "1.50"
 	desc2 := "Gadget"
 	desc3, qty3, price3, total3 := "Gizmo", "1", "5.00", "5.00"
 
 	in := []extraction.LineItemInput{
-		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1},
-		{Description: &desc2}, // Quantity/UnitPrice/LineTotal nil on purpose
+		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1, LineTax: &tax1},
+		{Description: &desc2}, // Quantity/UnitPrice/LineTotal/LineTax nil on purpose
 		{Description: &desc3, Quantity: &qty3, UnitPrice: &price3, LineTotal: &total3},
 	}
 	want := []invoice.LineItemInput{
-		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1},
+		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1, LineTax: &tax1},
 		{Description: &desc2},
 		{Description: &desc3, Quantity: &qty3, UnitPrice: &price3, LineTotal: &total3},
 	}
@@ -156,13 +158,15 @@ func TestNewInvoiceLineItemsApplier_CopiesEveryCellByPosition(t *testing.T) {
 	}
 }
 
-// D-04-1: invoice.LineItemInput carries a fifth field, LineTax, that extraction.LineItemInput
-// does not. A replace-all save from this route must leave it nil rather than erasing whatever
-// line_tax the row already stored by accident -- pinned so that is a choice, not a silent bug.
-func TestNewInvoiceLineItemsApplier_LeavesLineTaxNil(t *testing.T) {
-	desc, qty, price, total := "Widget", "2", "10.00", "20.00"
+// D-04-1: extraction.LineItemInput now carries LineTax too. The adapter must pass the posted
+// value through unchanged -- never invent one, never drop the one the grid read back -- so a
+// replace-all save no longer erases line_tax the store already had (formerly
+// LeavesLineTaxNil, retired the moment EXTR-24-04 started reading a value here).
+func TestNewInvoiceLineItemsApplier_PassesLineTaxThrough(t *testing.T) {
+	desc, qty, price, total, tax := "Widget", "2", "10.00", "20.00", "75.00"
 	in := []extraction.LineItemInput{
-		{Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total},
+		{Description: &desc, Quantity: &qty, UnitPrice: &price, LineTotal: &total, LineTax: &tax},
+		{Description: &desc}, // LineTax nil on purpose
 	}
 
 	spy := &fcEditSpy{returnedID: fcInvoiceID}
@@ -171,11 +175,14 @@ func TestNewInvoiceLineItemsApplier_LeavesLineTaxNil(t *testing.T) {
 	}
 
 	got := spy.gotInput.LineItems
-	if got == nil || len(*got) != 1 {
-		t.Fatalf("captured %v line(s), want 1", got)
+	if got == nil || len(*got) != 2 {
+		t.Fatalf("captured %v line(s), want 2", got)
 	}
-	if (*got)[0].LineTax != nil {
-		t.Errorf("LineItemInput.LineTax = %q, want nil -- D-04-1: the grid must not claim a tax value the extractor never read", *(*got)[0].LineTax)
+	if (*got)[0].LineTax == nil || *(*got)[0].LineTax != tax {
+		t.Errorf("line 0 LineTax = %v, want %q -- the adapter must pass the posted value through, never invent one", (*got)[0].LineTax, tax)
+	}
+	if (*got)[1].LineTax != nil {
+		t.Errorf("line 1 LineTax = %q, want nil -- a nil in must give a nil out", *(*got)[1].LineTax)
 	}
 }
 
@@ -368,16 +375,17 @@ func TestSubmissionMain_RegistersTheLineItemsRouteExactlyOnce(t *testing.T) {
 	}
 }
 
-// If either type grows a field, the adapter leaves the new invoice cell nil and
-// CopiesEveryCellByPosition still passes -- both sides get the zero. This forces D-04-1 to be
-// retaken rather than defaulted.
+// Both types now carry the same five fields in the same order -- pinned so
+// CopiesEveryCellByPosition cannot go green over a field the adapter silently drops. If either
+// type grows a SIXTH field with no mapping decision taken, this reds again rather than the
+// adapter defaulting the new cell to nil.
 func TestLineItemInputTypes_CarryTheFieldsTheAdapterWasWrittenFor(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		typ  reflect.Type
 		want []string
 	}{
-		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal"}},
+		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
 		{"invoice.LineItemInput", reflect.TypeOf(invoice.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

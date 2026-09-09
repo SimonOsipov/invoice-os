@@ -199,7 +199,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/lineItems.ts',
     spaAnchor: 'export function linesToPost(',
     e2eAnchor: 'export function postLineItems(',
-    floor: 4,
+    floor: 5,
   },
   {
     ts: 'LineItemsRequest',

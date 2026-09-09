@@ -11,6 +11,7 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 const (
@@ -578,5 +580,75 @@ func TestUpdateContentTx_RefusesACopiedClearSentinel(t *testing.T) {
 	}
 	if got := f.column(t, f.invoiceID, "total"); got != nil {
 		t.Errorf("invoices.total = %q, want SQL NULL", *got)
+	}
+}
+
+// --- the filing-path assertion: line_tax reaches the WIRE, not just the store -----------------
+
+// NOT red-first, by design: invoice.LineItemInput already carries LineTax (invoice.go),
+// replaceLinesTx already binds it, hydrateLinesTx already reads it, and SubmissionCanonical /
+// buildMockEnvelope already project it onto TaxTotal -- all four legs are pinned elsewhere
+// (submission_canonical_test.go, mock_wire_test.go) and are not re-derived here. This subtask's
+// unpinned leg is one hop EARLIER (posted body -> extraction.LineItemInput -> the applier),
+// which cmd/submission/lineitems_route_test.go and handlers_lineitems_db_test.go's new AC tests
+// cover; that hop cannot be exercised from this package (cmd/submission is not importable). What
+// this test adds is the end-to-end proof that once the value reaches invoice.LineItemInput, it
+// reaches the FILED envelope -- internal/ubl serves the preview only and is deliberately not
+// asserted on here.
+func TestRLS_EditBySourceDocumentTxLineTaxReachesTheFiledEnvelope(t *testing.T) {
+	f := ebsSeed(t, "EBS-LINETAX")
+
+	desc1, qty1, price1, total1, tax1 := "Widget", "2", "10.00", "20.00", "75.00"
+	desc2 := "Gadget" // LineTax nil on purpose
+	lines := []LineItemInput{
+		{Description: &desc1, Quantity: &qty1, UnitPrice: &price1, LineTotal: &total1, LineTax: strPtr(tax1)},
+		{Description: &desc2},
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{LineItems: &lines})
+	if err != nil {
+		t.Fatalf("posting a line with line_tax: want success, got %v", err)
+	}
+
+	inv, err := f.store.Get(f.ctx, got.ID)
+	if err != nil {
+		t.Fatalf("Store.Get after the edit: %v", err)
+	}
+	if len(inv.LineItems) != 2 {
+		t.Fatalf("%d hydrated line(s), want 2 -- the assertions below then prove nothing", len(inv.LineItems))
+	}
+	if inv.LineItems[0].LineTax == nil || *inv.LineItems[0].LineTax != tax1 {
+		t.Fatalf("hydrated line 1 line_tax = %v, want %q -- the assertions below then prove nothing", inv.LineItems[0].LineTax, tax1)
+	}
+
+	canonical := SubmissionCanonical(inv)
+	wire, err := submission.NewMockAdapter(submission.MockConfig{}).Transform(f.ctx, canonical)
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+
+	var env struct {
+		InvoiceLine []struct {
+			TaxTotal *struct {
+				TaxAmount struct {
+					Value string `json:"value"`
+				} `json:"TaxAmount"`
+			} `json:"TaxTotal,omitempty"`
+		} `json:"InvoiceLine"`
+	}
+	if err := json.Unmarshal(wire, &env); err != nil {
+		t.Fatalf("decode the filed wire: %v", err)
+	}
+	if len(env.InvoiceLine) != 2 {
+		t.Fatalf("%d wire line(s), want 2", len(env.InvoiceLine))
+	}
+	if env.InvoiceLine[0].TaxTotal == nil {
+		t.Fatalf("wire line 1 carries no TaxTotal, want %q", tax1)
+	}
+	if env.InvoiceLine[0].TaxTotal.TaxAmount.Value != tax1 {
+		t.Errorf("wire line 1 TaxTotal.TaxAmount.value = %q, want %q", env.InvoiceLine[0].TaxTotal.TaxAmount.Value, tax1)
+	}
+	if env.InvoiceLine[1].TaxTotal != nil {
+		t.Errorf("wire line 2 carries a TaxTotal block, want none -- a nil line_tax must not fabricate a tax amount")
 	}
 }

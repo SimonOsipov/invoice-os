@@ -253,6 +253,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 				id.TenantID, inv.ID, i+1, li.Description,
 				li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
 			), &item); err != nil {
+				if pgCode(err) == "22003" {
+					return ErrValidation
+				}
 				return err
 			}
 			inv.LineItems = append(inv.LineItems, item)
@@ -504,7 +507,7 @@ func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, 
 			tenantID, invoiceID, i+1, li.Description,
 			li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
 		), &item); err != nil {
-			if pgCode(err) == "22P02" {
+			if code := pgCode(err); code == "22P02" || code == "22003" {
 				return nil, ErrValidation
 			}
 			return nil, err

@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,6 +106,39 @@ var mapperFieldNames = []string{
 	"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
 }
 
+// mapperLineRoles is internal/importer's own copy of extraction.LineRoles, in the same order --
+// internal/importer cannot import internal/extraction (document_deps_test.go / SX-09), so
+// nothing compiler-links the two lists; TestImporterLineRoles_MatchesExtractionLineRoles is the
+// drift guard.
+var mapperLineRoles = []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+
+// lineFieldPrefix is line_items[N].<role>'s opening.
+const lineFieldPrefix = "line_items["
+
+// parseLineFieldName is a local copy of extraction.ParseLineFieldName's grammar (SX-09 fence):
+// a 1-based index with no leading zero and one of mapperLineRoles.
+func parseLineFieldName(name string) (index int, role string, ok bool) {
+	rest, found := strings.CutPrefix(name, lineFieldPrefix)
+	if !found {
+		return 0, "", false
+	}
+	digits, role, found := strings.Cut(rest, "].")
+	if !found {
+		return 0, "", false
+	}
+	index, err := strconv.Atoi(digits)
+	// Itoa back: Atoi admits "+1" and "01", neither of which the wire name can carry.
+	if err != nil || index < 1 || strconv.Itoa(index) != digits {
+		return 0, "", false
+	}
+	for _, r := range mapperLineRoles {
+		if r == role {
+			return index, role, true
+		}
+	}
+	return 0, "", false
+}
+
 // The two sentences the mapper quarantines a document with. Written down here, not assembled
 // at call time, so TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals can find them.
 const (
@@ -127,9 +162,10 @@ func isPoorScan(fields []extractedField) bool {
 // documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput.
 // Pure. supplier_tin/supplier_name are never set -- Store.Create overwrites both from the
 // entity on every write (store.go:220-221, Q11), so writing a value here would state a claim
-// the store then silently discards. SourceRows and LineItems stay nil: SourceRows because the
-// column CHECKs reject both '{}' and any element < 2, so NULL is the only legal value here;
-// LineItems because nothing extracted feeds it yet (D-13).
+// the store then silently discards. SourceRows stays nil: the column CHECKs reject both '{}'
+// and any element < 2, so NULL is the only legal value here. Line grouping runs LAST, after the
+// invoice_number quarantine branch below, so a document with lines but no invoice number still
+// quarantines whole.
 func documentCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
 	values := make(map[string]*string, len(ex.Fields))
 	for _, f := range ex.Fields {
@@ -169,6 +205,46 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		issueDate = parsed
 	}
 
+	// Group line_items[N].<role> cells by index, then sort NUMERICALLY: SettledExtraction's
+	// ORDER BY created_at, id does not guarantee index order, and Store.Create assigns
+	// line_no = 1..N by array position (D10), so a hole in the indices closes ordinally.
+	groups := make(map[int]*invoice.LineItemInput)
+	for _, f := range ex.Fields {
+		idx, role, ok := parseLineFieldName(f.Name)
+		if !ok {
+			continue
+		}
+		g, exists := groups[idx]
+		if !exists {
+			g = &invoice.LineItemInput{}
+			groups[idx] = g
+		}
+		switch role {
+		case "description":
+			g.Description = f.Value
+		case "quantity":
+			g.Quantity = f.Value
+		case "unit_price":
+			g.UnitPrice = f.Value
+		case "line_total":
+			g.LineTotal = f.Value
+		case "line_tax":
+			g.LineTax = f.Value
+		}
+	}
+	var lineItems []invoice.LineItemInput
+	if len(groups) > 0 {
+		indices := make([]int, 0, len(groups))
+		for idx := range groups {
+			indices = append(indices, idx)
+		}
+		sort.Ints(indices)
+		lineItems = make([]invoice.LineItemInput, 0, len(indices))
+		for _, idx := range indices {
+			lineItems = append(lineItems, *groups[idx])
+		}
+	}
+
 	docID := documentID
 	return invoice.CreateInput{
 		EntityID:         entityID,
@@ -180,6 +256,7 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		Subtotal:         values["subtotal"],
 		VAT:              values["vat"],
 		Total:            values["total"],
+		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil
 }

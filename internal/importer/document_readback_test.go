@@ -1030,7 +1030,7 @@ func TestImportDocumentReadback_TheBlockedInvoiceIsReturnedByItsBatchQuery(t *te
 
 // AC-4: violationSummary's rule-key rail counts the sum rule for the batch.
 // Mutation: seed the violation with an empty rule_key -- ViolationSummary's
-// `nullif(v->>'rule_key', ”) IS NOT NULL` guard drops it (verified by hand against this test's
+// nullif-on-empty-string guard drops it (verified by hand against this test's
 // own seeded row; TestViolationSummary_EmptyOrMissingRuleKeyExcludedByNullifGuard pins the SQL
 // clause itself in isolation).
 func TestImportDocumentReadback_ViolationSummaryCountsTheSumRuleForTheBatch(t *testing.T) {

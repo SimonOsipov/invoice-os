@@ -493,7 +493,7 @@ label — needs neither bump.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: a document goes in at the
+Re-measured 2026-09-10 on `feature/extr-25-a-symbol-names-the-currency`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
 the page prints on **58 of 88** cells — **0.6591**. Eleven layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
@@ -545,20 +545,21 @@ dropping it would flatter the rate by the exact amount the defect costs.
 | `vat` | 6 | 11 |
 | `total` | 8 | 11 |
 
-`currency` at 5 of 11 is the worst field on the corpus: three layouts print the value inside the
-total, with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
-each party's TIN to the heading that owns it, and the three cells left are two layouts that carry
-no buyer block at all and the quarantined page.
+`currency` at 5 of 11 is still the worst field on the corpus, and its six misses split four ways:
+three layouts print the value inside a total with no label to anchor it, one prints no currency at
+all, one offsets the value from a colon-less label, and the last is the quarantined page.
+`buyer_tin` reads 8 of 11: EXTR-22 bound each party's TIN to the heading that owns it, and the
+three cells left are two layouts that carry no buyer block at all and the quarantined page.
 
 ### What EXTR-23 changed
 
 Nothing on this page, and that is the finding rather than an omission. EXTR-23 ships an arithmetic
 referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
 decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
-removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. The
-headline stays **58 of 88** — 0.6591 — against EXTR-21's frozen baseline of 53 hits. `total` stays
-8 of 11 in the per-field table, no per-layout row moves, and every cell sits where EXTR-21 pinned
-it. **Do not read "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
+removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. It
+moved no cell: `total` stayed 8 of 11 in the per-field table, no per-layout row moved, and the
+headline it left behind was 57 hits, against EXTR-21's frozen baseline of 53. **Do not read
+"EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
 
 The referee is **inert on this corpus because no arrangement reaches two competing readings**, not
 because the mechanism cannot reach the defect. Measured across all eleven layouts, `Resolve` emits
@@ -578,6 +579,20 @@ per-layout candidate count, plus two planted controls that drive the same instru
 — and by the unit specs in `reconcile_total_test.go` and `reconcile_total_adversarial_test.go`. It
 is not graded by a moved score, and this subsection is where that is recorded rather than inferred
 from a number that did not change.
+
+### What EXTR-25 changed
+
+EXTR-25 ships `t1.currency.sweep`, a shape-only Tier-1 rule that reads `NGN` off a bare ₦ with no
+label to corroborate it. It moves **exactly one cell**: `wild_rc_due_naira.pdf/currency`, which
+takes that layout to 8 of 8 and `currency` to 5 of 11, and the headline from 57 hits to 58. Every
+other per-layout and per-field figure above is unchanged, and `eeBaselineHits` is untouched.
+
+The rule is a fallback tier, so a labelled reading always outranks it
+(`TestResolve_ALabelledCurrencyBeatsABareSymbol`). It is also blind: nothing ties the symbol to an
+amount, so a ₦ in a footer, a street name or a reference code resolves the field just as readily,
+and an unlabelled invoice priced in another currency that carries one ₦ reads `NGN` with no doubt
+attached. Those readings are pinned in `internal/extraction/sweep_qa_test.go` rather than left to
+be found on a tenant's document.
 
 ### Moving the figure
 

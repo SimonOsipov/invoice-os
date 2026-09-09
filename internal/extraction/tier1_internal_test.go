@@ -310,3 +310,21 @@ func TestTier1_NoShippedRuleIsAFallbackYet(t *testing.T) {
 		}
 	}
 }
+
+// AC-3.10. The sweep's label is nairaTokenPattern itself, never a copy: a forked pattern must
+// drift the fingerprint check silently otherwise.
+func TestTier1_TheNairaSweepReusesTheShapePattern(t *testing.T) {
+	found := false
+	for _, r := range Tier1Rules {
+		if r.Key != "t1.currency.sweep" {
+			continue
+		}
+		found = true
+		if r.Rule.Label != nairaTokenPattern {
+			t.Errorf("t1.currency.sweep label = %q, want %q -- the sweep must reference the constant, not a copy", r.Rule.Label, nairaTokenPattern)
+		}
+	}
+	if !found {
+		t.Fatalf("Tier1Rules carries no t1.currency.sweep rule; the label comparison above ran over nothing")
+	}
+}

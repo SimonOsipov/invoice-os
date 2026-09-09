@@ -1261,3 +1261,85 @@ func TestResolve_TheTierOrderIsLearnedGenericFallback(t *testing.T) {
 		t.Errorf("TierGeneric (%d) is not less than TierFallback (%d)", extraction.TierGeneric, extraction.TierFallback)
 	}
 }
+
+// --- EXTR-25-03: the naira sweep, on the shipped rule set --------------------
+
+// AC-3.5, Core AC 4's oracle. A labelled currency must beat a bare ₦ symbol on the SHIPPED rule
+// set, in both reading orders -- not a synthetic stand-in for the sweep.
+func TestResolve_ALabelledCurrencyBeatsABareSymbol(t *testing.T) {
+	run := func(t *testing.T, symbolY0 float64) {
+		pages := rvPage(
+			rvTok("Currency: USD", 0.10, 0.40, 0.30, 0.43),
+			rvTok("₦2,500.00", 0.10, symbolY0, 0.24, symbolY0+0.03),
+		)
+		cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+
+		sweep := false
+		for _, c := range rvFor(cands, "currency") {
+			if c.RuleID == "t1.currency.sweep" {
+				sweep = true
+			}
+		}
+		if !sweep {
+			t.Fatalf("no t1.currency.sweep candidate on the ₦ token; the precedence below has nothing to compete against")
+		}
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", rvFor(cands, "currency"))
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the sweep's distance is also 0", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+	}
+
+	t.Run("symbol above the label", func(t *testing.T) { run(t, 0.10) })
+	t.Run("symbol below the label", func(t *testing.T) { run(t, 0.70) })
+}
+
+// AC-3.6. Twelve ₦ tokens and no currency label still decide ONE currency -- deduped by value,
+// not left ambiguous -- and the two other money fields on the same page still decide their own
+// values (anti-vacuity floor).
+func TestResolve_ManyNairaTokensStillDecideOneCurrency(t *testing.T) {
+	tokens := []extraction.Token{
+		rvTok("Sub-total: 1,200.00", 0.10, 0.60, 0.34, 0.63),
+		rvTok("Total: 1,290.00", 0.10, 0.70, 0.34, 0.73),
+	}
+	for i := 0; i < 12; i++ {
+		y := 0.05 + float64(i)*0.04
+		tokens = append(tokens, rvTok("₦100.00", 0.10, y, 0.20, y+0.02))
+	}
+	cands := extraction.Resolve(rvPage(tokens...), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+
+	naira := 0
+	for _, c := range rvFor(cands, "currency") {
+		if c.RuleID == "t1.currency.sweep" {
+			naira++
+		}
+	}
+	if naira == 0 {
+		t.Fatalf("no t1.currency.sweep candidate among the twelve ₦ tokens; the decision below has nothing to compete over")
+	}
+
+	results := extraction.Reconcile(extraction.Input{Candidates: cands})
+	currency, ok := rcFind(results, "currency")
+	if !ok || currency.Value == nil {
+		t.Fatalf("currency decided nothing from %d sweep candidate(s)", naira)
+	}
+	if *currency.Value != "NGN" {
+		t.Errorf("currency = %q, want %q", *currency.Value, "NGN")
+	}
+	if currency.Reason != extraction.ReasonNone || len(currency.Alternatives) != 0 {
+		t.Errorf("currency reason = %q alternatives = %q, want %q with none -- twelve identical NGN readings must dedupe to one", currency.Reason, valuesOf(currency.Alternatives), extraction.ReasonNone)
+	}
+
+	for _, field := range []string{"subtotal", "total"} {
+		fr, ok := rcFind(results, field)
+		if !ok || fr.Value == nil {
+			t.Errorf("%s decided nothing; the anti-vacuity floor requires it to still resolve on this page", field)
+		}
+	}
+}

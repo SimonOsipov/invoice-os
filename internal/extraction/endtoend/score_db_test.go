@@ -364,6 +364,27 @@ func TestRLS_EndToEndAQuarantinedLayoutScoresZeroNotAbsent(t *testing.T) {
 	}
 }
 
+// AC-3.1. wild_rc_due_naira.pdf prints the naira symbol and never the word "Currency" -- that
+// value must reach the invoices row it writes, not only Resolve's candidate list.
+func TestRLS_EndToEndTheSymbolOnlyCurrencyReachesTheInvoiceRow(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	const layout = "wild_rc_due_naira.pdf"
+	eeRequireFixtures(t, []string{layout})
+
+	w := eeSeed(t, ctx, layout)
+	eeExtract(t, ctx, w, layout, eeOptsFor(t, layout)...)
+	eeImport(t, ctx, w)
+
+	got := eeWrittenRow(t, ctx, w.documentID)
+	if got == nil {
+		t.Fatalf("%s produced no invoices row; the currency assertion below would read an absent row", layout)
+	}
+	if got["currency"] != "NGN" {
+		t.Errorf("%s: invoices.currency = %q, want %q -- the naira symbol alone must resolve the field", layout, got["currency"], "NGN")
+	}
+}
+
 // eeScannedFieldFloor is how many of the seven non-invoice_number written fields the image-only
 // layout resolves to a rank-0 value, re-measured 2026-09-08 off its committed golden: all seven,
 // since each party's TIN binds to the heading that owns it. A floor -- the point is that the read

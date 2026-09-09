@@ -406,6 +406,81 @@ func TestReconcile_NoLinesLeavesTheSubtotalCleanAndTheBlockMissing(t *testing.T)
 	}
 }
 
+// TestReconcile_AnUnusableTableLeavesTheLineItemsBlockMissing drives Lines from a real table
+// LineItems would reject whole, not a hand-built empty Lines --
+// TestReconcile_NoLinesLeavesTheSubtotalCleanAndTheBlockMissing already covers that case and
+// stays green regardless of the gate under test here.
+func TestReconcile_AnUnusableTableLeavesTheLineItemsBlockMissing(t *testing.T) {
+	mkPages := func(withAmount bool) []extraction.Page {
+		cols := 2
+		cells := []extraction.TableCell{
+			liCell(0, 0, "Item", nil), liCell(0, 1, "Qty", nil),
+		}
+		items := []string{"Widget", "Gadget", "Gizmo"}
+		qtys := []string{"1", "2", "3"}
+		totals := []string{"10.00", "20.00", "30.00"}
+		if withAmount {
+			cols = 3
+			cells = append(cells, liCell(0, 2, "Amount", nil))
+		}
+		for r := range items {
+			row := r + 1
+			cells = append(cells, liCell(row, 0, items[r], nil), liCell(row, 1, qtys[r], nil))
+			if withAmount {
+				cells = append(cells, liCell(row, 2, totals[r], nil))
+			}
+		}
+		tbl := extraction.Table{Rows: len(items) + 1, Cols: cols, Cells: cells}
+		return []extraction.Page{{Number: 1, Tables: []extraction.Table{tbl}}}
+	}
+
+	rejectIn := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "30.00")},
+		Lines:      extraction.LineItems(mkPages(false)),
+	}
+	results := extraction.Reconcile(rejectIn)
+	if len(results) == 0 {
+		t.Fatal("Reconcile returned zero results; the checks below would be vacuous")
+	}
+	lineBlock, ok := rcFind(results, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" result not found in %+v`, results)
+	}
+	if lineBlock.Reason != extraction.ReasonMissing {
+		t.Errorf("line_items reason = %q, want ReasonMissing -- the quantity-only table yields no lines", lineBlock.Reason)
+	}
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			t.Errorf("found row %q, want no line_items[N].* row when the table was rejected whole", r.Name)
+		}
+	}
+
+	// Positive control: the same table plus a line-total column must reach the block --
+	// otherwise ReasonMissing above could mean "no table found" rather than "gate rejected it".
+	acceptIn := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandidate("subtotal", "30.00")},
+		Lines:      extraction.LineItems(mkPages(true)),
+	}
+	results = extraction.Reconcile(acceptIn)
+	lineBlock, ok = rcFind(results, "line_items")
+	if !ok {
+		t.Fatalf(`"line_items" result not found in %+v`, results)
+	}
+	if lineBlock.Reason != extraction.ReasonNone {
+		t.Errorf("line_items reason = %q, want ReasonNone once the table gains a line-total column", lineBlock.Reason)
+	}
+	found := false
+	for _, r := range results {
+		if strings.HasPrefix(r.Name, "line_items[") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("found no line_items[N].* row, want at least one once the table is usable")
+	}
+}
+
 func TestReconcile_NoSubtotalCandidateRunsNoSumCheck(t *testing.T) {
 	in := extraction.Input{
 		Lines: []extraction.DocLine{

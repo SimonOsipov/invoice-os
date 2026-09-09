@@ -548,3 +548,56 @@ func TestShapeCurrency_ReNairaHasOneCaller(t *testing.T) {
 		t.Errorf("reNaira appears %d times across %d non-test files, want exactly 2 (its declaration and normalizeCurrency)", uses, files)
 	}
 }
+
+// The widening accepts decoration around the naira, so the glyph itself is the whole gate. Every
+// other currency sign and every N look-alike must still miss it: U+A7A4 N WITH OBLIQUE STROKE,
+// N plus U+0335 COMBINING SHORT STROKE OVERLAY, Greek capital Nu and fullwidth N all render close
+// to ₦ and none of them is it.
+func TestShapeCurrency_RefusesEveryOtherCurrencySignAndNairaLookAlike(t *testing.T) {
+	rejects := []string{
+		"₨1,500.00", "₩1,500.00", "¥1,500.00", "€1,500.00", "$1,500.00", "₹1,500.00", "₱1,500.00", "£1,500.00",
+		"Amount ₨", "Amount ₹", "Amount Ꞥ", "Amount N̵", "Amount Ν", "Amount Ｎ",
+	}
+	if len(rejects) == 0 {
+		t.Fatal("fixture list is empty")
+	}
+	for _, raw := range rejects {
+		wantNone(t, extraction.ShapeCurrency, raw)
+	}
+	wantOne(t, extraction.ShapeCurrency, "Amount ₦", "NGN")
+}
+
+// The 24 bound counts RUNES, not bytes: Go's regexp classes are rune classes, so 24 CJK runes
+// (72 bytes) fit where a byte-counting bound would have cut them at 8.
+func TestShapeCurrency_TheDecorationBoundCountsRunesNotBytes(t *testing.T) {
+	cjk24, cjk25 := strings.Repeat("漢", 24), strings.Repeat("漢", 25)
+	if len(cjk24) != 72 || len([]rune(cjk24)) != 24 {
+		t.Fatalf("cjk24 is %d bytes / %d runes, want 72 / 24", len(cjk24), len([]rune(cjk24)))
+	}
+
+	t.Run("twenty_four_multibyte_runes_accept", func(t *testing.T) {
+		wantOne(t, extraction.ShapeCurrency, cjk24+"₦", "NGN")
+		wantOne(t, extraction.ShapeCurrency, "₦"+cjk24, "NGN")
+	})
+	t.Run("twenty_five_multibyte_runes_reject", func(t *testing.T) {
+		wantNone(t, extraction.ShapeCurrency, cjk25+"₦")
+		wantNone(t, extraction.ShapeCurrency, "₦"+cjk25)
+	})
+	t.Run("both_sides_at_the_cap_at_once", func(t *testing.T) {
+		pad24, pad25 := strings.Repeat("a", 24), strings.Repeat("a", 25)
+		wantOne(t, extraction.ShapeCurrency, pad24+"₦"+pad24, "NGN")
+		wantNone(t, extraction.ShapeCurrency, pad25+"₦"+pad25)
+	})
+}
+
+// Whitespace is decoration like any other rune, so a token made only of it carries no naira and
+// reads as nothing. The accept arm is the contrast: whitespace AROUND a naira is still a naira
+// token, newline included -- [^₦] matches \n and Go's unanchored $ is end of text, not of line.
+func TestShapeCurrency_WhitespaceAloneIsNotANairaToken(t *testing.T) {
+	for _, raw := range []string{"", " ", "   ", "\t", "\n", " \t\n "} {
+		wantNone(t, extraction.ShapeCurrency, raw)
+	}
+	for _, raw := range []string{" ₦ ", "\t₦\t", "\n₦\n", "₦\n"} {
+		wantOne(t, extraction.ShapeCurrency, raw, "NGN")
+	}
+}

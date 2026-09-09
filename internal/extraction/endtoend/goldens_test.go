@@ -900,9 +900,10 @@ func TestWildLayouts_TheRuledTableTotalsDiscriminate(t *testing.T) {
 
 const wildCurrencyLabel = "Currency"
 
-// AC-14. On wild_ruled_lines_totals the naira is decoration glued to a column header and the
-// currency is sourced from an explicit label; on wild_rc_due_naira it is the currency marker and
-// there is no label at all. EXTR-24's Out of Scope forbids conflating the two.
+// AC-14. The symbol reads as currency on both layouts (EXTR-25-01 widened ShapeCurrency); the
+// jobs stay apart. wild_ruled_lines_totals sources its currency from an explicit label while the
+// header word under the naira keeps its line-item role; wild_rc_due_naira has no label at all,
+// so the symbol is its only marker. EXTR-24's Out of Scope forbids conflating the two.
 func TestWildLayouts_TheNairaRolesStaySeparate(t *testing.T) {
 	ruled := wildPages(t, wildRuled)
 

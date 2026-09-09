@@ -736,7 +736,7 @@ func fxWildRuledRowText(baseline int, cells []string) []fxLine {
 // corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
 // tell a corroborated pick from a positional one.
 //
-// The naira here is decoration glued to a column header; the currency comes from the explicit
+// The naira here sits on a column header; the currency is sourced from the explicit
 // "Currency: NGN" label. Neither fxTextPage nor fxNairaTextPage builds a naira font AND rules,
 // so the objects are assembled directly: fxAssemble numbers by slice index, so the CMap is 6.
 func fxBuildWildRuledLinesTotals() []byte {

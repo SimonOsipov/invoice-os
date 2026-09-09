@@ -11,7 +11,8 @@ export type LineRole = 'description' | 'quantity' | 'unit_price' | 'line_total'
 // ([vat-carried-not-rendered]) -- 'vat' is taken by the invoice-level header field.
 export type LineWireRole = LineRole | 'line_tax'
 
-// Mirrors extraction.LineRoles order (lineitems.go): the rendered grid columns.
+// The rendered grid columns: extraction.LineRoles' first four, in its order. A prefix of the
+// wire set below, not a mirror of it.
 export const LINE_ROLES: readonly LineRole[] = ['description', 'quantity', 'unit_price', 'line_total']
 
 // Mirrors extraction.LineRoles order (lineitems.go): every wire role, line_tax last.

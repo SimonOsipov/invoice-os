@@ -476,7 +476,7 @@ describe('lineSetChanged', () => {
   })
 })
 
-// -- the arity pin: four roles, in extraction.LineRoles' own order -------------------------
+// -- the arity pins: four rendered roles, five wire roles ----------------------------------
 
 describe('LINE_ROLES', () => {
   it('holds exactly the four roles, in order', () => {
@@ -484,7 +484,7 @@ describe('LINE_ROLES', () => {
     // bounded by this set, so a shortened one would make them all assert less and still pass.
     // Go pins its own side in lineitems_parse_qa_test.go.
     expect(LINE_ROLES.length, 'a loop over LINE_ROLES asserts less than it claims to').toBe(4)
-    expect([...LINE_ROLES], "the order diverged from extraction.LineRoles").toEqual([
+    expect([...LINE_ROLES], "the rendered set diverged from extraction.LineRoles' first four").toEqual([
       'description',
       'quantity',
       'unit_price',

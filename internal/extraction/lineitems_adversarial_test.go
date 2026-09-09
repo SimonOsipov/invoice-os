@@ -745,3 +745,169 @@ func TestLineItems_AUsableHeaderOverUnparseableTotalsStillYieldsLines(t *testing
 	}
 	liWant(t, got[0].LineTotal, "10.00", "line 0 LineTotal")
 }
+
+// -- the fifth read role, line_tax: cases AC-1..AC-3's own traces do not reach ----------------
+
+// liTaxTable builds a table whose row 0 is headers and whose row 1 is one data row.
+func liTaxTable(headers, cells []string) extraction.Table {
+	if len(headers) != len(cells) {
+		panic("liTaxTable: header and cell counts differ")
+	}
+	out := extraction.Table{Rows: 2, Cols: len(headers)}
+	for col, h := range headers {
+		out.Cells = append(out.Cells, liCell(0, col, h, nil))
+	}
+	for col, c := range cells {
+		out.Cells = append(out.Cells, liCell(1, col, c, nil))
+	}
+	return out
+}
+
+func liTaxLine(t *testing.T, headers, cells []string) extraction.DocLine {
+	t.Helper()
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(headers, cells)}}})
+	if len(got) != 1 {
+		t.Fatalf("LineItems returned %d line(s) for headers %v, want 1", len(got), headers)
+	}
+	return got[0]
+}
+
+func liTaxPtr(s string) *string { return &s }
+
+// The "tax" lexicon key had no behavioural cover: dropping it left every test in this package
+// green, and only the sibling package's key-set inventory noticed. This is that cover.
+func TestLineItems_AHeaderSpelledTaxClaimsTheLineTaxRole(t *testing.T) {
+	for _, header := range []string{"Tax", "TAX", "Tax (₦)", "Tax N"} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "75.00"})
+		// Companion first: the table was read at all, so a nil below would mean this column.
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWant(t, line.LineTax, "75.00", header+" LineTax")
+	}
+}
+
+// Every currency decoration liNormalizeHeaderForRole strips, on the VAT header specifically.
+// "(VAT)" -- the whole header parenthesised -- is deliberately absent: the strip empties it and
+// falls back to the undecorated fold "(vat)", which no lexicon key matches. There is no honest
+// expected answer for that shape here, so this test does not pin one.
+func TestLineItems_ADecoratedVatHeaderStillClaimsTheRole(t *testing.T) {
+	for _, header := range []string{"VAT", "VAT ₦", "VAT (₦)", "VAT NGN", "vat n", "  Vat  "} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "₦ 1,234.50"})
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWant(t, line.LineTax, "1234.50", header+" LineTax")
+	}
+}
+
+// Two columns both naming the fifth role: leftmost wins, the same tiebreak every other role
+// follows. The second column's value must not surface on any cell of the line.
+func TestLineItems_TwoVatColumnsTheLeftmostWins(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"Description", "Qty", "Unit price", "Amount", "VAT", "Tax"},
+		[]string{"Widget", "2", "500.00", "1000.00", "75.00", "99.99"})
+	liWant(t, line.LineTotal, "1000.00", "LineTotal")
+	liWant(t, line.LineTax, "75.00", "LineTax -- the leftmost VAT column wins")
+	for _, cell := range []*string{line.Description, line.Quantity, line.UnitPrice, line.LineTotal, line.LineTax} {
+		if cell != nil && *cell == "99.99" {
+			t.Errorf("the second VAT column's value 99.99 reached a cell; only the leftmost may")
+		}
+	}
+}
+
+// The fifth role carries no positional assumption: a VAT column ahead of every other role
+// claims column 0 and leaves the other four on their own columns.
+func TestLineItems_AVatColumnLeftOfEveryOtherRoleStillClassifies(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"VAT", "Description", "Qty", "Unit price", "Amount"},
+		[]string{"75.00", "Widget", "2", "500.00", "1000.00"})
+	liWant(t, line.LineTax, "75.00", "LineTax")
+	liWant(t, line.Description, "Widget", "Description")
+	liWant(t, line.Quantity, "2", "Quantity")
+	liWant(t, line.UnitPrice, "500.00", "UnitPrice")
+	liWant(t, line.LineTotal, "1000.00", "LineTotal")
+}
+
+// Zero and negative VAT are values, not absences: normalizeAmount keeps a leading "-" and a
+// zero reads back as itself, so both emit a row. Accounting parentheses are NOT a negative to
+// the amount shape -- "(75.00)" matches nothing and reads as an absence. The row's line total
+// is asserted first, so a nil LineTax means this cell, never a dropped row.
+func TestLineItems_AZeroOrNegativeVatIsAValueButAccountingParenthesesAreNot(t *testing.T) {
+	for _, tc := range []struct {
+		cell string
+		want *string // nil means "no reading"
+	}{
+		{"0.00", liTaxPtr("0.00")},
+		{"0", liTaxPtr("0")},
+		{"-75.00", liTaxPtr("-75.00")},
+		{"₦ -1,234.50", liTaxPtr("-1234.50")},
+		{"(75.00)", nil},
+		{"n/a", nil},
+	} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", "VAT"},
+			[]string{"Widget", "2", "500.00", "1000.00", tc.cell})
+		liWant(t, line.LineTotal, "1000.00", tc.cell+" LineTotal")
+		if tc.want == nil {
+			liWantNil(t, line.LineTax, tc.cell+" LineTax")
+			continue
+		}
+		liWant(t, line.LineTax, *tc.want, tc.cell+" LineTax")
+
+		// A zero is a value, so it must reach the wire as a row; an absence would not.
+		results := extraction.LineItemResults([]extraction.DocLine{line})
+		if len(results) == 0 {
+			t.Fatalf("LineItemResults emitted nothing for %q; the scan below would hold vacuously", tc.cell)
+		}
+		var found bool
+		for _, r := range results {
+			if r.Name == extraction.LineFieldName(line.Index, "line_tax") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no line_tax row emitted for the readable VAT cell %q", tc.cell)
+		}
+	}
+}
+
+// The fifth role does not widen the usable-table gate: a VAT column is not a per-line amount,
+// so a table naming only description, quantity and VAT yields nothing. The companion runs
+// first -- the same shape WITH an amount column does yield a line -- so the zero below is the
+// gate refusing, not the fixture being unreadable.
+func TestLineItems_AVatColumnCannotRescueATableWithNoPerLineAmount(t *testing.T) {
+	usable := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(
+		[]string{"Description", "Qty", "Amount", "VAT"},
+		[]string{"Widget", "2", "1000.00", "75.00"})}}})
+	if len(usable) != 1 {
+		t.Fatalf("the companion table yielded %d line(s), want 1; the refusal below would prove nothing", len(usable))
+	}
+	liWant(t, usable[0].LineTax, "75.00", "companion LineTax")
+
+	got := extraction.LineItems([]extraction.Page{{Number: 1, Tables: []extraction.Table{liTaxTable(
+		[]string{"Description", "Qty", "VAT"},
+		[]string{"Widget", "2", "75.00"})}}})
+	if len(got) != 0 {
+		t.Errorf("LineItems returned %d line(s) for a description/quantity/VAT table, want 0 -- VAT is not a per-line amount", len(got))
+	}
+}
+
+// A rate column is not an amount column: the lexicon matches exactly, so "VAT %" and "VAT Rate"
+// claim no role and their 7.5 never lands in LineTax. Reading a rate as an amount is the
+// confidently-wrong failure this exact-match rule exists to prevent. The undecorated "VAT"
+// companion runs first, so a nil below is the header being refused, not the fixture.
+func TestLineItems_AVatRateColumnClaimsNoRole(t *testing.T) {
+	line := liTaxLine(t,
+		[]string{"Description", "Qty", "Unit price", "Amount", "VAT"},
+		[]string{"Widget", "2", "500.00", "1000.00", "7.50"})
+	liWant(t, line.LineTax, "7.50", "companion LineTax -- an undecorated VAT header does claim the role")
+
+	for _, header := range []string{"VAT %", "VAT Rate", "Tax %", "Tax rate", "Taxable amount"} {
+		line := liTaxLine(t,
+			[]string{"Description", "Qty", "Unit price", "Amount", header},
+			[]string{"Widget", "2", "500.00", "1000.00", "7.50"})
+		liWant(t, line.LineTotal, "1000.00", header+" LineTotal")
+		liWantNil(t, line.LineTax, header+" LineTax")
+	}
+}

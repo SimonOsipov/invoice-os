@@ -230,6 +230,45 @@ func TestReconcileLines_LineTaxNeverRaisesAnArithmeticFlag(t *testing.T) {
 	}
 }
 
+// The name collision the role spelling exists to avoid: "vat" is a HeaderFields member, and the
+// per-line role is spelled line_tax. Both must reach the wire under their own name, carrying
+// their own value -- neither overwriting nor suppressing the other.
+func TestReconcile_TheInvoiceLevelVatAndThePerLineTaxAreDistinctFields(t *testing.T) {
+	in := extraction.Input{
+		Candidates: []extraction.Candidate{rcCandAt("vat", "150.00", extraction.TierGeneric, 0)},
+		Lines: []extraction.DocLine{
+			{Index: 1, Quantity: rcStr("2"), UnitPrice: rcStr("10.00"), LineTotal: rcStr("20.00"), LineTax: rcStr("1.50")},
+		},
+	}
+	results := extraction.Reconcile(in)
+	if len(results) == 0 {
+		t.Fatal("Reconcile returned nothing; the lookups below would report absence either way")
+	}
+
+	header, ok := rcFind(results, "vat")
+	if !ok {
+		t.Fatalf(`"vat" not found in %v`, rcNames(results))
+	}
+	if header.Value == nil || *header.Value != "150.00" {
+		t.Errorf(`"vat" value = %v, want "150.00" -- the invoice-level field, not the line's`, header.Value)
+	}
+
+	cell, ok := rcFind(results, "line_items[1].line_tax")
+	if !ok {
+		t.Fatalf(`"line_items[1].line_tax" not found in %v`, rcNames(results))
+	}
+	if cell.Value == nil || *cell.Value != "1.50" {
+		t.Errorf(`"line_items[1].line_tax" value = %v, want "1.50"`, cell.Value)
+	}
+
+	// No result may be named for the line under the header field's own spelling.
+	for _, r := range results {
+		if r.Name == "line_items[1].vat" {
+			t.Errorf("found %q; the per-line role is spelled line_tax, never vat", r.Name)
+		}
+	}
+}
+
 func TestReconcile_ThreeDecimalQuantityMultipliesExactly(t *testing.T) {
 	in := extraction.Input{
 		Lines: []extraction.DocLine{

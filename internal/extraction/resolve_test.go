@@ -1132,3 +1132,133 @@ func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing
 		}
 	}
 }
+
+// --- EXTR-25-02: fallback tier precedence -----------------------------------
+//
+// TierFallback exists as a declaration only -- Resolve still hardcodes TierGeneric for every
+// Tier-1 rule regardless of Fallback (that wiring is EXTR-25-02's own implementation, not this
+// spec pass). Below, a Fallback: true rule therefore resolves exactly like an ordinary one, so
+// a candidate that should lose to a label instead competes with it on Distance or reading order
+// alone -- the red this test pins.
+
+// AC-2.1. A labelled reading must beat a fallback one regardless of distance or reading order,
+// even when the fallback wins on every other axis (Distance 0 vs 0.12, Y0 0.10 vs 0.40).
+func TestResolve_AFallbackNeverOutranksALabelledReading(t *testing.T) {
+	t.Run("fallback closer", func(t *testing.T) {
+		label := rvTier1(t, "g.currency.right", "currency", `(?i)currency:`, extraction.RelRight, 0.35, extraction.ShapeName)
+		fallback := extraction.Tier1Rule{
+			Key: "g.currency.sweep", Field: "currency",
+			Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+			Fallback: true,
+		}
+		page := rvPage(
+			rvTok("Currency:", 0.10, 0.10, 0.20, 0.13),
+			rvTok("USD", 0.32, 0.10, 0.40, 0.13), // gap 0.12 from the label
+			rvTok("NGN", 0.10, 0.40, 0.20, 0.43), // same_token, distance 0
+		)
+		rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{label, fallback}}
+
+		got := extraction.Resolve(page, rules)
+		cands := rvFor(got, "currency")
+		rvFloor(t, cands, "the [Currency: USD] label beside a bare NGN token")
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", cands)
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the fallback's distance is 0 against the label's 0.12", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+
+		// Control: the same two candidates re-tiered to one shared tier decide NGN, the closer
+		// one -- proving the pass above is the tier split's own doing, not a fixture coincidence.
+		retiered := make([]extraction.Candidate, len(cands))
+		for i, c := range cands {
+			c.Tier = extraction.TierGeneric
+			retiered[i] = c
+		}
+		ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: retiered}), "currency")
+		if !ok || ctl.Value == nil || *ctl.Value != "NGN" {
+			t.Fatalf("control: untiered currency = %+v, want NGN decided -- otherwise the USD pass above proves nothing", ctl)
+		}
+	})
+
+	t.Run("fallback first in reading order", func(t *testing.T) {
+		label := extraction.Tier1Rule{
+			Key: "g.currency.same_token", Field: "currency",
+			Rule: rvRule(t, `^USD$`, extraction.RelSameToken, 0, extraction.ShapeName),
+		}
+		fallback := extraction.Tier1Rule{
+			Key: "g.currency.sweep2", Field: "currency",
+			Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+			Fallback: true,
+		}
+		page := rvPage(
+			rvTok("NGN", 0.10, 0.10, 0.20, 0.13), // reads first
+			rvTok("USD", 0.10, 0.40, 0.20, 0.43),
+		)
+		rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{label, fallback}}
+
+		got := extraction.Resolve(page, rules)
+		cands := rvFor(got, "currency")
+		rvFloor(t, cands, "USD and NGN as two whole same_token candidates")
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", cands)
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the fallback's token reads first", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+	})
+}
+
+// AC-2.2. With no labelled candidate for the field, the fallback rule decides alone. The Tier
+// assertion is the red: Resolve must tag its own candidate TierFallback, and does not yet.
+func TestResolve_AFallbackDecidesWhenNoLabelResolved(t *testing.T) {
+	fallback := extraction.Tier1Rule{
+		Key: "g.currency.sweep", Field: "currency",
+		Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+		Fallback: true,
+	}
+	page := rvPage(rvTok("NGN", 0.10, 0.10, 0.20, 0.13))
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{fallback}}
+
+	got := extraction.Resolve(page, rules)
+	cands := rvFor(got, "currency")
+	rvFloor(t, cands, "the sole fallback rule over its own token")
+	if len(cands) != 1 {
+		t.Fatalf("currency candidates = %+v, want exactly one", cands)
+	}
+	if cands[0].Tier != extraction.TierFallback {
+		t.Errorf("currency candidate Tier = %v, want TierFallback -- Resolve must tag a Fallback rule's own candidates TierFallback", cands[0].Tier)
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+	if !ok || field.Value == nil {
+		t.Fatalf("currency decided nothing from %+v", cands)
+	}
+	if *field.Value != "NGN" {
+		t.Errorf("currency = %q, want %q", *field.Value, "NGN")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// AC-2.7. TierFallback must sort below TierGeneric, itself below TierLearned -- asserted by
+// name so a reordering of the iota block reds even though the ints still compare.
+func TestResolve_TheTierOrderIsLearnedGenericFallback(t *testing.T) {
+	if !(extraction.TierLearned < extraction.TierGeneric) {
+		t.Errorf("TierLearned (%d) is not less than TierGeneric (%d)", extraction.TierLearned, extraction.TierGeneric)
+	}
+	if !(extraction.TierGeneric < extraction.TierFallback) {
+		t.Errorf("TierGeneric (%d) is not less than TierFallback (%d)", extraction.TierGeneric, extraction.TierFallback)
+	}
+}

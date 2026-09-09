@@ -17,6 +17,11 @@ type Tier1Rule struct {
 	// PartyScoped routes the candidate to the field the token's own party owns, instead of
 	// Field. Set only on the rules a party-LESS TIN label reaches.
 	PartyScoped bool
+
+	// Fallback marks a rule that recognises a value by its shape alone, with no label to
+	// corroborate it -- e.g. a bare currency symbol. Declared for EXTR-25-02's tests; Resolve
+	// does not read this field yet, so it is inert and no shipped rule sets it.
+	Fallback bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon

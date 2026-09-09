@@ -16,6 +16,10 @@ type Tier int
 const (
 	TierLearned Tier = iota // a stored rule for this layout fingerprint
 	TierGeneric             // a shipped Tier-1 rule
+	// TierFallback: a shipped rule that recognises a value by its shape alone, with no label
+	// to corroborate it. Declared for EXTR-25-02's tests; Resolve does not read Tier1Rule.
+	// Fallback yet, so no candidate carries this tier until that wiring lands.
+	TierFallback
 )
 
 // Candidate is one possible value for one field. Not a Field: law E07 makes Field.Name unique

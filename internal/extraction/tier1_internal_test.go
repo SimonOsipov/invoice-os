@@ -298,3 +298,15 @@ func TestTier1_JSONStringRoundTripsABackslashAndAQuote(t *testing.T) {
 		t.Error("ParseRule accepted an unescaped double quote; jsonString's escaping is untested by the round trip above")
 	}
 }
+
+// AC-2.6. No shipped rule sets Fallback yet -- EXTR-25-03 is what wires the naira sweep.
+func TestTier1_NoShippedRuleIsAFallbackYet(t *testing.T) {
+	if len(Tier1Rules) != tier1RuleCount {
+		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)
+	}
+	for _, r := range Tier1Rules {
+		if r.Fallback {
+			t.Errorf("shipped rule %s carries Fallback = true, want false; no shipped rule is a fallback yet", r.Key)
+		}
+	}
+}

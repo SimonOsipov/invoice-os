@@ -1491,3 +1491,81 @@ func TestReconcile_TheWideningCoversBuyerTIN(t *testing.T) {
 func TestReconcile_TheWideningCoversVAT(t *testing.T) {
 	rcScopeArms(t, "vat", "subtotal", "90.00", "187.50")
 }
+
+// --- EXTR-25-02: fallback tier precedence -------------------------------------------------
+//
+// decideField's own Tier+Distance grouping (reconcile.go, unchanged by this subtask) already
+// handles a third Tier value correctly the moment TierFallback exists, so every sub-case below
+// pins already-correct behaviour rather than exercising new logic.
+
+// AC-2.3. The fallback tier changes precedence, not the doubt rule. Only the third sub-case
+// observes decideField's own group test; (a) and (b) are controls.
+func TestReconcile_TheFallbackTierChangesPrecedenceNotDoubt(t *testing.T) {
+	t.Run("same value same distance dedupes to one", func(t *testing.T) {
+		a := rcCandAt("currency", "NGN", extraction.TierFallback, 0)
+		b := rcCandAt("currency", "NGN", extraction.TierFallback, 0)
+		got := rcDecide(t, "currency", a, b)
+		if *got.Value != "NGN" {
+			t.Errorf("currency = %q, want %q", *got.Value, "NGN")
+		}
+		if got.Reason != extraction.ReasonNone || len(got.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", got.Reason, valuesOf(got.Alternatives), extraction.ReasonNone)
+		}
+	})
+
+	t.Run("different values same distance is ambiguous", func(t *testing.T) {
+		a := rcCandAt("currency", "NGN", extraction.TierFallback, 0)
+		b := rcCandAt("currency", "USD", extraction.TierFallback, 0)
+		got := rcDecide(t, "currency", a, b)
+		if got.Reason != extraction.ReasonAmbiguous {
+			t.Errorf("currency reason = %q, want %q", got.Reason, extraction.ReasonAmbiguous)
+		}
+		if len(got.Alternatives) != 1 {
+			t.Errorf("currency alternatives = %q, want exactly one", valuesOf(got.Alternatives))
+		}
+	})
+
+	t.Run("different values different distances decides the closer", func(t *testing.T) {
+		near := rcCandAt("currency", "NGN", extraction.TierFallback, 0)
+		far := rcCandAt("currency", "USD", extraction.TierFallback, 0.2)
+		got := rcDecide(t, "currency", far, near) // far first: the head is the comparator's doing
+		if *got.Value != "NGN" {
+			t.Errorf("currency = %q, want %q", *got.Value, "NGN")
+		}
+		if got.Reason != extraction.ReasonNone {
+			t.Errorf("currency reason = %q, want %q -- two fallback readings at different distances do not tie", got.Reason, extraction.ReasonNone)
+		}
+		if len(got.Alternatives) != 0 {
+			t.Errorf("currency alternatives = %q, want none", valuesOf(got.Alternatives))
+		}
+	})
+}
+
+// AC-2.8. uncorroborated keeps head.Tier == TierGeneric (unchanged, deliberately -- see the
+// story's [uncorroborated-unchanged] decision), so a TierFallback head already fails that check
+// and is exempt from the doubt widening the moment TierFallback exists. This pins that, and
+// guards against a future accidental widening (e.g. changing the check to != TierLearned).
+func TestReconcile_AFallbackHeadIsExemptFromTheDoubtWidening(t *testing.T) {
+	near := rcAdjacentAt("total", "2500.00", extraction.TierGeneric, 0.05)
+	far := rcAdjacentAt("total", "2687.50", extraction.TierGeneric, 0.10)
+	generic := rcDecide(t, "total", far, near)
+	if generic.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("total reason = %q, want %q -- a generic adjacent head with a farther distinct reading is uncorroborated", generic.Reason, extraction.ReasonAmbiguous)
+	}
+	if len(generic.Alternatives) != 1 {
+		t.Errorf("total alternatives = %q, want exactly one", valuesOf(generic.Alternatives))
+	}
+
+	fnear := rcAdjacentAt("total", "2500.00", extraction.TierFallback, 0.05)
+	ffar := rcAdjacentAt("total", "2687.50", extraction.TierFallback, 0.10)
+	fallback := rcDecide(t, "total", ffar, fnear)
+	if *fallback.Value != "2500.00" {
+		t.Errorf("total = %q, want %q", *fallback.Value, "2500.00")
+	}
+	if fallback.Reason != extraction.ReasonNone {
+		t.Errorf("total reason = %q, want %q -- a fallback head has no label to be uncorroborated against", fallback.Reason, extraction.ReasonNone)
+	}
+	if len(fallback.Alternatives) != 0 {
+		t.Errorf("total alternatives = %q, want none", valuesOf(fallback.Alternatives))
+	}
+}

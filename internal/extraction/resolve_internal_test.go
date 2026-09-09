@@ -698,3 +698,87 @@ func TestResolve_NoBelowPairCanSatisfyTheRightwardCorridor(t *testing.T) {
 		t.Fatalf("the grid admitted %d rightward pair(s) and the boundary blocked %d, want at least 20 blocked; a predicate that never fires reports no below crossing either", rightPairs, rightBlocked)
 	}
 }
+
+// --- EXTR-25-02: fallback tier precedence, internal access ------------------
+
+// AC-2.4. compareCandidates must stay a strict total order now that a third Tier value exists.
+// The comparator already sorts Tier as a bare int (untouched by this subtask), so this pins
+// that it keeps working rather than exercising new logic.
+func TestResolve_ComparatorIsTotalOverThreeTiers(t *testing.T) {
+	box := func(x0, y0 float64) *Region { return &Region{Page: 1, X0: x0, Y0: y0, X1: x0 + 0.1, Y1: y0 + 0.1} }
+	set := []Candidate{
+		{Field: "total", Value: "A", Region: box(0.1, 0.1), RuleID: "r1", Tier: TierLearned, Distance: 0.10},
+		{Field: "total", Value: "B", Region: box(0.2, 0.2), RuleID: "r2", Tier: TierGeneric, Distance: 0.10},
+		{Field: "total", Value: "C", Region: box(0.3, 0.3), RuleID: "r3", Tier: TierFallback, Distance: 0.10},
+		{Field: "total", Value: "D", Region: box(0.4, 0.4), RuleID: "r4", Tier: TierFallback, Distance: 0.20},
+		{Field: "total", Value: "E", Region: box(0.5, 0.5), RuleID: "r5", Tier: TierFallback, Distance: 0.10},
+	}
+
+	for i := range set {
+		if got := compareCandidates(set[i], set[i]); got != 0 {
+			t.Errorf("compareCandidates is not reflexive on index %d: got %d, want 0", i, got)
+		}
+	}
+	for i := range set {
+		for j := i + 1; j < len(set); j++ {
+			ij := compareCandidates(set[i], set[j])
+			ji := compareCandidates(set[j], set[i])
+			if ij == 0 {
+				t.Errorf("compareCandidates(%d, %d) == 0 but the two differ; the order is not total", i, j)
+			}
+			if (ij > 0) != (ji < 0) || (ij < 0) != (ji > 0) {
+				t.Errorf("compareCandidates is not antisymmetric on (%d, %d): got %d and %d", i, j, ij, ji)
+			}
+		}
+	}
+}
+
+// AC-2.5. Both shipped guards still read tier == TierGeneric (untouched by this subtask), so
+// calling appendRuleCandidates directly with an explicit tier -- bypassing Resolve's own
+// still-hardcoded TierGeneric assignment -- is the only way to see what each guard does with a
+// TierFallback candidate today. The fallback sub-cases are the red: neither guard reaches a
+// TierFallback candidate yet. The learned sub-cases are controls: a learned rule was never
+// subject to either guard and stays that way.
+func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
+	// anchorOutranked: supplier_name's bare "supplier" match is a strict sub-span of the
+	// shipped lexicon's supplier_tin match on this token (the same fixture resolve_test.go's
+	// TestResolve_ASubSpanLabelDoesNotAnchorAGenericRule uses).
+	outrankedText := "Supplier TIN: 99999999-0101"
+	outrankedPages := []TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		{Text: outrankedText, Region: Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.45, Y1: 0.13}},
+	}}}
+	supplierNameRule, err := ParseRule([]byte(`{"label":"(?i)\\bsupplier\\b","relation":{"kind":"same_token","max_distance":0},"shape":"name"}`))
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	oParties := [][]Party{partyOrder(outrankedPages[0])}
+	oLabels := [][]bool{labelTokens(outrankedPages[0])}
+
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.fallback.outranked", TierFallback); len(got) != 0 {
+		t.Errorf("fallback candidate over %q = %+v, want none: a Fallback rule must be outranked exactly like a generic one", outrankedText, got)
+	}
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.learned.outranked", TierLearned); len(got) != 1 {
+		t.Errorf("learned candidate over %q = %+v, want exactly one: a learned rule is never outranked by the shipped lexicon", outrankedText, got)
+	}
+
+	// crossesALabel / bounded: "Total" sits between the VAT anchor and its amount and carries
+	// the shipped total label, so a rightward read must stop there.
+	boundaryPages := []TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		{Text: "VAT", Region: Region{Page: 1, X0: 0.10, Y0: 0.70, X1: 0.16, Y1: 0.72}},
+		{Text: "Total", Region: Region{Page: 1, X0: 0.30, Y0: 0.70, X1: 0.38, Y1: 0.72}},
+		{Text: "2,687.50", Region: Region{Page: 1, X0: 0.45, Y0: 0.70, X1: 0.58, Y1: 0.72}},
+	}}}
+	vatRule, err := ParseRule([]byte(`{"label":"(?i)\\bvat\\b","relation":{"kind":"right","max_distance":0.35},"shape":"amount"}`))
+	if err != nil {
+		t.Fatalf("ParseRule: %v", err)
+	}
+	bParties := [][]Party{partyOrder(boundaryPages[0])}
+	bLabels := [][]bool{labelTokens(boundaryPages[0])}
+
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.boundary", TierFallback); len(got) != 0 {
+		t.Errorf("fallback candidate crossing the intervening Total label = %+v, want none: a Fallback rightward read must stop at a label exactly like a generic one", got)
+	}
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.learned.boundary", TierLearned); len(got) != 1 {
+		t.Errorf("learned candidate crossing the same intervening label = %+v, want exactly one: a learned rightward read never stops at a label", got)
+	}
+}

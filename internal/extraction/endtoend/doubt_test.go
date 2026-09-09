@@ -340,3 +340,47 @@ func TestEndToEnd_ASameTokenHeadIsNotDoubtedEvenWithACompetitor(t *testing.T) {
 		})
 	}
 }
+
+// EXTR-25-04 AC-4.12. Once due_date refuses one of wild_rc_due_naira.pdf's two competing
+// reads, that layout no longer offers two distinct issue_date candidates and
+// TestEndToEnd_TheRCLayoutsCompetingDatesStayDecided loses its subject -- it is the only
+// committed layout with two rows on one field. This reproduces the shape synthetically instead:
+// two labels reaching issue_date at unequal distances, neither of them "Due Date", so the new
+// entry cannot touch this page. Green before AND after -- it is a replacement oracle, not a red
+// test for the due_date feature itself.
+func TestEndToEnd_TheRCLayoutsCompetingDatesStayDecidedSynthetically(t *testing.T) {
+	pages := []extraction.TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+		{Text: "Issue Date", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.13}},
+		{Text: "2026-07-08", Region: extraction.Region{Page: 1, X0: 0.24, Y0: 0.10, X1: 0.34, Y1: 0.13}},
+		{Text: "Delivery Date", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.23, Y1: 0.23}},
+		{Text: "2026-08-07", Region: extraction.Region{Page: 1, X0: 0.30, Y0: 0.20, X1: 0.40, Y1: 0.23}},
+	}}}
+
+	cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	dates := dtFor(cands, "issue_date")
+	if len(dates) == 0 {
+		t.Fatal("the synthetic page reaches no issue_date candidate; there is no competition to be decided over")
+	}
+	if want := []string{"2026-07-08", "2026-08-07"}; !slices.Equal(dtDistinct(dates), want) {
+		t.Fatalf("issue_date reaches %q, want %q -- without a second distinct value the zero below is earned by the count, not by the scope", dtDistinct(dates), want)
+	}
+	for _, c := range dates {
+		if !c.Adjacent || c.Tier != extraction.TierGeneric {
+			t.Fatalf("issue_date reads %q via %s at tier %d adjacent=%v, want an adjacent generic read", c.Value, c.RuleID, c.Tier, c.Adjacent)
+		}
+	}
+	if dates[0].Distance == dates[1].Distance {
+		t.Fatalf("both reads sit at distance %v; the two must be unequal or decideField's equal-standing group ties them into a doubt", dates[0].Distance)
+	}
+
+	f := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: cands}), "issue_date")
+	if dtValue(f) != "2026-07-08" {
+		t.Errorf("issue_date = %q, want %q -- the closer read must win outright", dtValue(f), "2026-07-08")
+	}
+	if f.Reason != extraction.ReasonNone {
+		t.Errorf("issue_date reason = %q, want %q -- issue_date is outside doubtfulFields", f.Reason, extraction.ReasonNone)
+	}
+	if len(f.Alternatives) != 0 {
+		t.Errorf("issue_date offers %q as alternatives, want none", dtAltValues(f.Alternatives))
+	}
+}

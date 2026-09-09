@@ -332,6 +332,48 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 	}
 }
 
+// EXTR-25-04 AC-4.7. The lexicon reset for due_date is scoped to pages that print the phrase:
+// every pinned hash above must hold, AND wild_rc_due_naira.pdf -- the one committed layout that
+// prints "Due Date" -- must move in BOTH namespaces. Both pre-change values hard-coded, so
+// "nothing moved" cannot pass on a build that never added the entry.
+func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing.T) {
+	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
+		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each", len(corpusLayouts), len(fpCorpusPinned))
+	}
+	for _, name := range corpusLayouts {
+		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != fpCorpusPinned[name] {
+			t.Errorf("Fingerprint(%s) = %q, want %q unchanged -- the reset must not reach a page that never prints \"Due Date\"", name, got, fpCorpusPinned[name])
+		}
+	}
+	if len(bxFixturePinned) != 3 {
+		t.Fatalf("bxFixturePinned pins %d fixture(s), want 3", len(bxFixturePinned))
+	}
+	for _, c := range bxFixturePinned {
+		if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden))); got != c.want {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q unchanged", c.golden, got, c.want)
+		}
+	}
+
+	const (
+		naira         = "wild_rc_due_naira.pdf"
+		nairaGolden   = "wild_rc_due_naira.docling.json"
+		wantGeoBefore = "v2:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
+		wantGeoAfter  = "v2:d49e1c6d5aa0da37f80db44d645ffe9934896639d3010dec86274d1a06648cb5"
+		wantBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
+		wantBoxAfter  = "b2:157d3177b0bb51728b09d07d04c46884c6dca8facb3afaa0ef3d58c605491dca"
+	)
+	if got := extraction.Fingerprint(rvCorpusPages(t, naira)); got != wantGeoAfter {
+		t.Errorf("Fingerprint(%s) = %q, want %q -- the entry must add a due_date element on the one layout that prints the phrase", naira, got, wantGeoAfter)
+	} else if got == wantGeoBefore {
+		t.Errorf("Fingerprint(%s) still holds its pre-change value %q", naira, wantGeoBefore)
+	}
+	if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, nairaGolden))); got != wantBoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moves too, not only the geometric one", nairaGolden, got, wantBoxAfter)
+	} else if got == wantBoxBefore {
+		t.Errorf("BoxlessFingerprint(%s) still holds its pre-change value %q", nairaGolden, wantBoxBefore)
+	}
+}
+
 // --- EXTR-14-02 -------------------------------------------------------------
 
 // O-02: AnchorObservations on corpus_two_column.pdf returns exactly seven observations, in the

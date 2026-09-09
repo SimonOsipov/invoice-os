@@ -1356,3 +1356,102 @@ func TestResolve_ManyNairaTokensStillDecideOneCurrency(t *testing.T) {
 		}
 	}
 }
+
+// EXTR-25-04. AC-4.1: "Due Date" is an owning phrase over issue_date's bare "date", so the
+// two no longer tie into a doubt. The control (due-date token replaced by a non-date label)
+// decides identically before and after -- a floor against "nothing resolved", not an oracle.
+func TestResolve_ADueDateNoLongerContestsTheIssueDate(t *testing.T) {
+	page := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+
+	got := extraction.Resolve(page, rvGeneric())
+	rvFloor(t, rvFor(got, "issue_date"), "the same-token issue_date read off ISSUE DATE: 2026-08-12")
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided", field.Value, "2026-08-12")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("issue_date reason = %q alternatives = %q, want %q with none -- due_date must refuse the DUE DATE token's competing read, not merely lose the tie", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+
+	control := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("PAYMENT REF: X", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+	ctlGot := extraction.Resolve(control, rvGeneric())
+	rvControl(t, rvFor(ctlGot, "issue_date"), "the control page's own issue_date read")
+	ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: ctlGot}), "issue_date")
+	if !ok || ctl.Value == nil || *ctl.Value != "2026-08-12" {
+		t.Fatalf("control issue_date = %v, want %q decided -- otherwise the pass above proves nothing about due_date specifically", ctl.Value, "2026-08-12")
+	}
+	if ctl.Reason != extraction.ReasonNone || len(ctl.Alternatives) != 0 {
+		t.Errorf("control issue_date reason = %q alternatives = %q, want %q with none", ctl.Reason, valuesOf(ctl.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// AC-4.2: a due date with no issue-date label anywhere on the page anchors nothing -- refused,
+// not routed to issue_date. total still deciding is the floor against an empty-page bug.
+func TestResolve_ADueDateAloneAnchorsNoIssueDate(t *testing.T) {
+	page := rvPage(
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.10, 0.40, 0.13),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.20, 0.40, 0.23),
+	)
+	results := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())})
+
+	issueDate, ok := rcFind(results, "issue_date")
+	if !ok {
+		t.Fatal("Reconcile emitted no issue_date")
+	}
+	if issueDate.Reason != extraction.ReasonMissing || issueDate.Value != nil {
+		t.Errorf("issue_date value = %v reason = %q, want nil value and %q -- a due date must be refused, not routed to issue_date", issueDate.Value, issueDate.Reason, extraction.ReasonMissing)
+	}
+	if len(issueDate.Alternatives) != 0 {
+		t.Errorf("issue_date alternatives = %q, want none", valuesOf(issueDate.Alternatives))
+	}
+
+	total, ok := rcFind(results, "total")
+	if !ok || total.Value == nil {
+		t.Fatalf("total decided nothing; an empty-page bug would satisfy the refusal above for the wrong reason")
+	}
+	if *total.Value != "1500.00" {
+		t.Errorf("total = %q, want %q", *total.Value, "1500.00")
+	}
+}
+
+// AC-4.3: the refusal names its clause. AnchorObservations does not apply anchorOutranked, so
+// the DUE DATE token still emits an issue_date/"DATE" observation too -- this asserts exactly
+// one due_date observation, not "one observation on that token".
+func TestAnchorLexicon_TheDueDateRefusalIsTheOwningPhrase(t *testing.T) {
+	page := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+
+	obs := extraction.AnchorObservations(page)
+	if len(obs) == 0 {
+		t.Fatal("AnchorObservations returned nothing; every assertion below would run over an empty set")
+	}
+	var dueDate []extraction.AnchorObservation
+	for _, o := range obs {
+		if o.Label == "due_date" {
+			dueDate = append(dueDate, o)
+		}
+	}
+	if len(dueDate) != 1 {
+		t.Fatalf("AnchorObservations reports %d due_date observation(s) %+v, want exactly 1", len(dueDate), dueDate)
+	}
+	if dueDate[0].Text != "DUE DATE" {
+		t.Errorf("due_date observation Text = %q, want %q", dueDate[0].Text, "DUE DATE")
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided -- the observation above proves nothing if the rule itself stopped resolving", field.Value, "2026-08-12")
+	}
+}

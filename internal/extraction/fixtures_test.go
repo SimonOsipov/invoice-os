@@ -77,6 +77,12 @@ var fxCorpus = []struct {
 	{fxWildStacked, fxBuildWildStackedBorderless},
 	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
 	{fxWildScanned, fxBuildWildScannedNoNumber},
+	// EXTR-26-06: faithful transcriptions of two real Nigerian invoices, outside every corpus_
+	// ratchet.
+	{fxAdvisoryRegister, func() []byte { return fxBuildAdvisoryRegister(false) }},
+	// R0 with the two letter-spaced header labels unspaced -- the one declared transformation.
+	{fxAdvisoryRegisterUnspaced, func() []byte { return fxBuildAdvisoryRegister(true) }},
+	{fxAdvisoryDense, fxBuildAdvisoryDense},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -1158,6 +1164,250 @@ func fxBuildWildScannedNoNumber() []byte {
 		fxStream([]byte(fxImageDraw)),
 		fxImageObjectRLE(fxRasterW, fxRasterH, c.pack()),
 	})
+}
+
+// --- the advisory arrangements (NOT corpus layouts) -------------------------
+
+// Faithful transcriptions of two real Nigerian invoices (arch-26-06 Appendix C), TINs swapped
+// into the free reserved block. Neither is registered in requiredPDFs, expectByLayout,
+// corpusExpect, corpusLayouts or corpusTokenFloor -- no score constant and no doc table moves.
+const (
+	fxAdvisoryRegister         = "advisory_register.pdf"
+	fxAdvisoryRegisterUnspaced = "advisory_register_unspaced.pdf"
+	fxAdvisoryDense            = "advisory_dense.pdf"
+)
+
+// fxNairaTextPages is fxNairaTextPage generalised to N pages sharing one naira font -- the
+// register's second page. Object numbering follows fxBuildNative3Page: page p's content sits at
+// object 2+2p, the shared font at 2+2n+1, the CMap (if any) right after.
+func fxNairaTextPages(withCMap bool, pages ...[]fxLine) []byte {
+	fontObj := 2 + 2*len(pages) + 1
+	toUnicode := 0
+	if withCMap {
+		toUnicode = fontObj + 1
+	}
+
+	objs := make([]fxObject, 2, 2*len(pages)+4)
+	kids := make([]string, len(pages))
+	for p, lines := range pages {
+		pageObj := 3 + 2*p
+		kids[p] = fmt.Sprintf("%d 0 R", pageObj)
+		objs = append(objs, fxPage(fxFontRes(fontObj), pageObj+1), fxStream(fxText(lines...)))
+	}
+	objs[0] = fxObject("<< /Type /Catalog /Pages 2 0 R >>")
+	objs[1] = fxObject(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages)))
+	objs = append(objs, fxObject(fxNairaFont(toUnicode)))
+	if withCMap {
+		objs = append(objs, fxNairaCMap())
+	}
+	return fxAssemble(objs)
+}
+
+// fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the real advisory register transcribed
+// faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
+// (D-26-06 -- neither issue_date nor total resolves on R0; R1 proves Issued resolves without
+// touching geometry, and total stays missing on both).
+func fxBuildAdvisoryRegister(unspaced bool) []byte {
+	invoiceNumberLabel := `I N V O I C E   N U M B E R`
+	issuedLabel := `I S S U E D`
+	if unspaced {
+		invoiceNumberLabel = "Invoice number"
+		issuedLabel = "Issued"
+	}
+
+	page1 := []fxLine{
+		{10, 65, 721, `OKONKWO ADVISORY PARTNERS`},
+		{26, 65, 657, `Invoice`},
+		{6, 65, 610, invoiceNumberLabel},
+		{9, 65, 592, `OAP/2026/0088`},
+		{6, 224, 610, issuedLabel},
+		{9, 224, 592, `2026-09-01`},
+		{6, 383, 610, `DUE`},
+		{9, 383, 592, `2026-09-15`},
+		{6, 65, 553, `CURRENCY`},
+		{9, 65, 536, `NGN`},
+		{6, 65, 497, `FROM`},
+		{9, 65, 479, `Okonkwo Advisory Partners`},
+		{7, 65, 461, `4th Floor, Alfred Rewane Road`},
+		{7, 65, 443, `Ikoyi, Lagos`},
+		{7, 65, 425, `TIN 99999999-1311`},
+		{7, 65, 407, `RC 1667402`},
+		{6, 262, 497, `BILLED TO`},
+		{9, 262, 479, `Honeywell Group Nigeria Plc`},
+		{7, 262, 461, `Finance Department`},
+		{7, 262, 443, `2 Adeyemo Alakija Street, Victoria Island`},
+		{7, 262, 425, `Lagos`},
+		{7, 262, 407, `TIN 99999999-1312`},
+		{8, 65, 358, `Transfer pricing documentation review`},
+		{7, 65, 344, `Engagement TP-2026-14 - 62 hours`},
+		{8, 473, 358, `\2447,750,000.00`},
+		{8, 65, 312, `FIRS audit representation`},
+		{7, 65, 297, `Three sittings, Lagos tax office`},
+		{8, 473, 312, `\2444,200,000.00`},
+		{8, 65, 265, `VAT compliance health check`},
+		{7, 65, 252, `FY2025 and Q1-Q2 2026`},
+		{8, 473, 265, `\2442,850,000.00`},
+		{8, 65, 205, `Subtotal`},
+		{8, 467, 205, `\24414,800,000.00`},
+		{8, 65, 181, `VAT 7.5%`},
+		{8, 473, 181, `\2441,110,000.00`},
+		{8, 65, 158, `Withholding tax 10%`},
+		{8, 467, 158, `-\2441,480,000.00`},
+		{12, 65, 117, `Amount payable`},
+		{12, 433, 117, `\24414,430,000.00`},
+	}
+	page2 := []fxLine{
+		{7, 65, 730, `Payment to Access Bank Plc - 0745118820 - Okonkwo Advisory Partners.`},
+		{7, 65, 716, `Withholding tax has been deducted at source; please furnish the WHT credit note within 30 days.`},
+		{7, 65, 701, `Professional services rendered are VATable at the standard rate of 7.5% under the Nigeria Tax Act 2025.`},
+	}
+	return fxNairaTextPages(true, page1, page2)
+}
+
+// fxBuildAdvisoryDense is D0 (arch-26-06 Appendix C), the real dense telecoms invoice
+// transcribed faithful: one page, no withholding row and no line-table Total column -- the
+// competing total is the SUMMARY box's "Total payable", reaching row 1 via below.
+func fxBuildAdvisoryDense() []byte {
+	lines := []fxLine{
+		{10, 40, 748, `SAHARA TELECOMS NIGERIA PLC`},
+		{8, 430, 748, `MONTHLY SERVICE INVOICE`},
+		{5, 39, 730, `INVOICE NUMBER`},
+		{6, 39, 722, `STN0004829173`},
+		{5, 130, 730, `BILL PERIOD`},
+		{6, 130, 722, `01 Aug 2026 - 31 Aug`},
+		{6, 130, 713, `2026`},
+		{5, 221, 730, `INVOICE DATE`},
+		{6, 221, 722, `01 Sep 2026`},
+		{5, 312, 730, `PAYMENT DUE`},
+		{6, 312, 722, `16 Sep 2026`},
+		{5, 403, 730, `ACCOUNT NUMBER`},
+		{6, 403, 722, `ACC-88214077`},
+		{5, 494, 730, `CURRENCY`},
+		{6, 494, 722, `NGN`},
+		{6, 39, 692, `SUPPLIER`},
+		{6, 39, 675, `Sahara Telecoms Nigeria Plc`},
+		{6, 39, 666, `Plot 1234 Herbert Macaulay Way`},
+		{6, 39, 656, `Central Business District, Abuja`},
+		{6, 39, 647, `TIN: 99999999-1321   RC: 219877`},
+		{6, 39, 637, `VAT Registration: 99999999-1321`},
+		{6, 223, 692, `CUSTOMER`},
+		{6, 223, 675, `Bello Construction Nigeria Ltd`},
+		{6, 223, 666, `Km 8 Kaduna-Abuja Expressway`},
+		{6, 223, 656, `Kaduna State`},
+		{6, 223, 647, `TIN: 99999999-1322   RC: 771044`},
+		{6, 223, 637, `Contact: procurement@belloconstruction.ng`},
+		{6, 408, 692, `SUMMARY`},
+		{6, 408, 675, `Previous balance   \2440.00`},
+		{6, 408, 666, `Current charges   \2443,187,420.00`},
+		{6, 408, 656, `VAT   \244239,056.50`},
+		{6, 408, 647, `Total payable   \2443,426,476.50`},
+		{6, 36, 614, `Item`},
+		{6, 68, 614, `Service description`},
+		{6, 269, 614, `Reference`},
+		{6, 352, 614, `Qty`},
+		{6, 400, 614, `Unit rate \244`},
+		{6, 478, 614, `Amount \244`},
+		{6, 554, 614, `VAT \244`},
+		{6, 36, 600, `01`},
+		{6, 68, 600, `Dedicated internet access 200 Mbps`},
+		{6, 269, 600, `DIA-KD-0091`},
+		{6, 360, 600, `1`},
+		{6, 392, 600, `1,250,000.00`},
+		{6, 466, 600, `1,250,000.00`},
+		{6, 541, 600, `93,750.00`},
+		{6, 36, 586, `02`},
+		{6, 68, 586, `MPLS site link - Kaduna to Abuja`},
+		{6, 269, 586, `MPLS-4471`},
+		{6, 360, 586, `2`},
+		{6, 399, 586, `385,000.00`},
+		{6, 473, 586, `770,000.00`},
+		{6, 541, 586, `57,750.00`},
+		{6, 36, 572, `03`},
+		{6, 68, 572, `Corporate voice bundle, 12 lines`},
+		{6, 269, 572, `VOICE-1120`},
+		{6, 355, 572, `12`},
+		{6, 403, 572, `18,500.00`},
+		{6, 473, 572, `222,000.00`},
+		{6, 541, 572, `16,650.00`},
+		{6, 36, 558, `04`},
+		{6, 68, 558, `SIP trunk channels`},
+		{6, 269, 558, `SIP-3390`},
+		{6, 355, 558, `30`},
+		{6, 408, 558, `6,200.00`},
+		{6, 473, 558, `186,000.00`},
+		{6, 541, 558, `13,950.00`},
+		{6, 36, 543, `05`},
+		{6, 68, 543, `Static IPv4 allocation /29`},
+		{6, 269, 543, `IP-0044`},
+		{6, 360, 543, `1`},
+		{6, 403, 543, `45,000.00`},
+		{6, 478, 543, `45,000.00`},
+		{6, 545, 543, `3,375.00`},
+		{6, 36, 529, `06`},
+		{6, 68, 529, `Managed firewall service`},
+		{6, 269, 529, `FW-2210`},
+		{6, 360, 529, `1`},
+		{6, 399, 529, `310,000.00`},
+		{6, 473, 529, `310,000.00`},
+		{6, 541, 529, `23,250.00`},
+		{6, 36, 515, `07`},
+		{6, 68, 515, `On-site engineer visit`},
+		{6, 269, 515, `SV-8871`},
+		{6, 360, 515, `3`},
+		{6, 403, 515, `64,000.00`},
+		{6, 473, 515, `192,000.00`},
+		{6, 541, 515, `14,400.00`},
+		{6, 36, 501, `08`},
+		{6, 68, 501, `CPE router lease - Cisco ISR 4331`},
+		{6, 269, 501, `CPE-0912`},
+		{6, 360, 501, `2`},
+		{6, 403, 501, `57,500.00`},
+		{6, 474, 501, `115,000.00`},
+		{6, 545, 501, `8,625.00`},
+		{6, 36, 487, `09`},
+		{6, 68, 487, `Cloud PBX seats`},
+		{6, 269, 487, `PBX-6650`},
+		{6, 355, 487, `20`},
+		{6, 408, 487, `3,400.00`},
+		{6, 478, 487, `68,000.00`},
+		{6, 545, 487, `5,100.00`},
+		{6, 36, 473, `10`},
+		{6, 68, 473, `SMS gateway bundle, 50,000 units`},
+		{6, 269, 473, `SMS-1002`},
+		{6, 360, 473, `1`},
+		{6, 399, 473, `175,000.00`},
+		{6, 473, 473, `175,000.00`},
+		{6, 541, 473, `13,125.00`},
+		{6, 36, 459, `11`},
+		{6, 68, 459, `Domain & DNS management, annual`},
+		{6, 269, 459, `DNS-0031`},
+		{6, 360, 459, `1`},
+		{6, 403, 459, `28,420.00`},
+		{6, 478, 459, `28,420.00`},
+		{6, 545, 459, `2,131.50`},
+		{6, 36, 445, `12`},
+		{6, 68, 445, `Service credit - SLA breach July 2026`},
+		{6, 269, 445, `CR-0007`},
+		{6, 360, 445, `1`},
+		{6, 396, 445, `-174,000.00`},
+		{6, 470, 445, `-174,000.00`},
+		{6, 538, 445, `-13,050.00`},
+		{6, 39, 421, `Payment instructions.`},
+		{6, 119, 421, ` Pay to United Bank for Africa Plc, account 1022994417, Sahara`},
+		{6, 39, 413, `Telecoms Nigeria Plc. Quote invoice number STN0004829173 as the payment narration.`},
+		{6, 39, 395, `VAT is charged at the standard Nigerian rate of 7.5% on all taxable service lines. A service`},
+		{6, 39, 386, `credit reverses VAT at the same rate. This document is a valid tax invoice for the purposes of`},
+		{6, 39, 378, `input VAT recovery.`},
+		{6, 374, 423, `Taxable amount`},
+		{6, 527, 423, `3,187,420.00`},
+		{6, 374, 407, `VAT @ 7.5%`},
+		{6, 534, 407, `239,056.50`},
+		{6, 374, 392, `Previous balance`},
+		{6, 558, 392, `0.00`},
+		{7, 374, 376, `TOTAL DUE \(NGN\)`},
+		{7, 517, 376, `3,426,476.50`},
+	}
+	return fxNairaTextPage(true, lines...)
 }
 
 // --- reading a fixture back -------------------------------------------------

@@ -451,7 +451,7 @@ const (
 
 // wildUnprintedPhraseIDs are shipped lexicon ids no layout prints. They are the needle that keeps
 // the declared set derived from what the documents carry rather than from the lexicon.
-var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title"}
+var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title", "withholding_tax"}
 
 var wildPrintedPhraseID = regexp.MustCompile(`"([a-z_]+)"`)
 

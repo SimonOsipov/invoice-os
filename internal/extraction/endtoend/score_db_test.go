@@ -657,3 +657,16 @@ func TestRLS_EndToEndMeetsTheFloor(t *testing.T) {
 		t.Errorf("the floor %v is above the measured rate %v; it is a prediction, not a ratchet", eeCorpusFloor, rate)
 	}
 }
+
+// AC-5.1. Core AC 7's two claims, live: currency strictly improves on ee25CurrencyBefore and
+// issue_date holds at or above ee25IssueDateBefore. ee25ClaimHolds adds no cell-level coverage of
+// its own -- see its comment in score_test.go.
+func TestRLS_EndToEndTheEXTR25FieldsMovedAsClaimed(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	s := eeScoreCorpus(t, ctx)
+	if err := ee25ClaimHolds(s); err != nil {
+		t.Errorf("%v\n%s", err, eeRenderReport(s))
+	}
+}

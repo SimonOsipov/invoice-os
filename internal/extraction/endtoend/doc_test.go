@@ -109,6 +109,25 @@ func TestCorpusDoc_RecordsTheEndToEndProcedure(t *testing.T) {
 	}
 }
 
+// AC-5.9. The doc's own miss count must equal len(eeRealMisses); a second copy that drifts from
+// the pinned map is worse than no copy.
+func TestCorpusDoc_RealMissCountMatchesEeRealMisses(t *testing.T) {
+	section := eeDocSection(t, wildReadFile(t, eeDocFile), eeDocAccSection)
+
+	re := regexp.MustCompile(`([0-9]+) real misses`)
+	m := re.FindAllStringSubmatch(section, -1)
+	if len(m) != 1 {
+		t.Fatalf("%s's %q section carries %d \"N real misses\" phrase(s), want exactly 1", eeDocFile, eeDocAccSection, len(m))
+	}
+	got, err := strconv.Atoi(m[0][1])
+	if err != nil {
+		t.Fatalf("parse %q: %v", m[0][1], err)
+	}
+	if got != len(eeRealMisses) {
+		t.Errorf("%s says %d real misses; eeRealMisses holds %d", eeDocFile, got, len(eeRealMisses))
+	}
+}
+
 // eeDocLearnedSection is the section that describes the two tiers to a reader. It said "Tier-1
 // stays generic" until EXTR-25-03 shipped a shape-only fallback rule and falsified it.
 const eeDocLearnedSection = "## Learned rules"

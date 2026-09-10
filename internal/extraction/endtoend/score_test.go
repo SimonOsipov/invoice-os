@@ -49,6 +49,13 @@ const (
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
 
+// EXTR-25's own before-figures, measured on 8acf0879. A floor apiece, not the aggregate: the
+// headline can hold while one field falls and another rises.
+const (
+	ee25CurrencyBefore  = 4
+	ee25IssueDateBefore = 8
+)
+
 // writtenFields is what documentCreateInput actually puts in the invoices row, in
 // mapperFieldNames order (internal/importer/document.go:174-183).
 var writtenFields = []string{
@@ -332,6 +339,44 @@ func eeLinesScoredComplete(s eeScore) error {
 	if s.linesScored+len(s.quarantined) != eeLayoutCount {
 		return fmt.Errorf("the walk read line rows off %d layout invoice(s) and quarantined %d, which is %d of %d; a walk that never scores reports the same zeros",
 			s.linesScored, len(s.quarantined), s.linesScored+len(s.quarantined), eeLayoutCount)
+	}
+	return nil
+}
+
+// eeFieldRow finds one byField row by name; a missing row reads (zero value, false).
+func eeFieldRow(s eeScore, name string) (eeScoreRow, bool) {
+	for _, r := range s.byField {
+		if r.name == name {
+			return r, true
+		}
+	}
+	return eeScoreRow{}, false
+}
+
+// ee25ClaimHolds states Core AC 7 in the score's own vocabulary: currency strictly improves on
+// ee25CurrencyBefore, issue_date holds at or above ee25IssueDateBefore. It adds no cell-level
+// coverage of its own -- the miss set is already pinned in both directions by
+// TestRLS_EndToEndScoresTheCorpus and TestRLS_EndToEndNoBaselineHitRegresses.
+func ee25ClaimHolds(s eeScore) error {
+	cur, ok := eeFieldRow(s, "currency")
+	if !ok {
+		return fmt.Errorf("currency: no byField row -- the walk never scored this field")
+	}
+	iss, ok := eeFieldRow(s, "issue_date")
+	if !ok {
+		return fmt.Errorf("issue_date: no byField row -- the walk never scored this field")
+	}
+	if cur.total != eeLayoutCount {
+		return fmt.Errorf("currency: denominator is %d of %d, want %d -- a shrunk denominator flatters the figure below", cur.hits, cur.total, eeLayoutCount)
+	}
+	if iss.total != eeLayoutCount {
+		return fmt.Errorf("issue_date: denominator is %d of %d, want %d -- a shrunk denominator flatters the figure below", iss.hits, iss.total, eeLayoutCount)
+	}
+	if cur.hits <= ee25CurrencyBefore {
+		return fmt.Errorf("currency: %d of %d, want strictly more than %d -- Core AC 7 claims currency improves", cur.hits, cur.total, ee25CurrencyBefore)
+	}
+	if iss.hits < ee25IssueDateBefore {
+		return fmt.Errorf("issue_date: %d of %d, want at least %d -- Core AC 7 claims issue_date does not regress", iss.hits, iss.total, ee25IssueDateBefore)
 	}
 	return nil
 }
@@ -901,5 +946,39 @@ func TestEndToEnd_TheFloorIsAQuotientOfThePinnedIntegers(t *testing.T) {
 	}
 	if eeCorpusFloor <= 0 || eeCorpusFloor > 1 {
 		t.Errorf("eeCorpusFloor is %v, outside (0, 1]; no rate can be compared against it meaningfully", eeCorpusFloor)
+	}
+}
+
+// AC-5.2. ee25ClaimHolds is not vacuous: the shipped figures pass, and each clause has a control
+// that falls through it alone. The fourth control kills a shrunk denominator (mutation M3) --
+// without it the floor clauses are dead code against the other three controls.
+func TestEndToEnd_TheEXTR25ClaimIsNotVacuous(t *testing.T) {
+	build := func(currencyHits, issueDateHits, total int) eeScore {
+		return eeScore{byField: []eeScoreRow{
+			{name: "currency", hits: currencyHits, total: total},
+			{name: "issue_date", hits: issueDateHits, total: total},
+		}}
+	}
+	cases := []struct {
+		name    string
+		s       eeScore
+		wantErr bool
+	}{
+		{"the shipped figures", build(5, 8, eeLayoutCount), false},
+		{"currency held at the before-figure", build(ee25CurrencyBefore, 8, eeLayoutCount), true},
+		{"issue_date one below the floor", build(5, ee25IssueDateBefore-1, eeLayoutCount), true},
+		{"the denominator shrunk by one layout", build(5, 8, eeLayoutCount-1), true},
+		{"an empty score", eeScore{}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ee25ClaimHolds(c.s)
+			if c.wantErr && err == nil {
+				t.Errorf("ee25ClaimHolds(%+v) = nil, want an error", c.s)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("ee25ClaimHolds(%+v) = %v, want nil -- the shipped figures must pass", c.s, err)
+			}
+		})
 	}
 }

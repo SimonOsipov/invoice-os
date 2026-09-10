@@ -127,3 +127,41 @@ func TestAnchorLexicon_ADecoratedLabelStillNamesItsOwnField(t *testing.T) {
 		}
 	}
 }
+
+// T-02.1: RED today -- measured, all five miss every entry (.ralph/arch-26-02.md §1).
+func TestAnchorLexicon_TheAdvisoryWordsNameTheirOwnField(t *testing.T) {
+	for _, c := range []struct{ text, owner string }{
+		{"Taxable amount", "subtotal"},
+		{"Amount payable", "total"},
+		{"Amount payable (NGN)", "total"},
+		{"Issued", "issue_date"},
+		{"Issued:", "issue_date"},
+	} {
+		ids := alIDs(c.text)
+		if len(ids) != 1 {
+			t.Errorf("%q: claimed by %v, want exactly one entry", c.text, ids)
+			continue
+		}
+		if ids[0] != c.owner {
+			t.Errorf("%q: claimed by %q, want %q", c.text, ids[0], c.owner)
+		}
+	}
+}
+
+// T-02.2: passes today -- the non-vacuity fence for T-02.1. The last two rows are what make
+// Core AC-3 work: total has no bare amount arm, and subtotal's amount arm needs a leading net,
+// so the two new arms can never cross into each other's field.
+func TestAnchorLexicon_TheAdvisoryWordsDoNotReachTheirNeighbours(t *testing.T) {
+	for _, c := range []struct{ text, id string }{
+		{"Subtotal", "total"},
+		{"Grand Total", "subtotal"},
+		{"Dated", "issue_date"},
+		{"Tax", "subtotal"},
+		{"Taxable amount", "total"},
+		{"Amount payable", "subtotal"},
+	} {
+		if loc := alSpan(c.text, c.id); loc != nil {
+			t.Errorf("%q: %s span = %v, want no match", c.text, c.id, loc)
+		}
+	}
+}

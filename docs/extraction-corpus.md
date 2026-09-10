@@ -174,11 +174,11 @@ spells out `Supplier TIN` names the supplier louder, not more quietly.
 
 ## Labels that own their token
 
-Five entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
+Six entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
 (`Customer No.`, `Client Code`) and `signature` (`Buyer's Signature`) sit over the party
 vocabulary; `reg_identifier` (`VAT REG NO`, `VAT REGISTRATION NUMBER`), `rc_number` (`RC NO`,
-`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary. None
-of the five carries a Tier-1 rule; none of them resolves a field. Each exists so that a token
+`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary; `due_date` sits over `issue_date`'s bare `date`. None
+of the six carries a Tier-1 rule; none of them resolves a field. Each exists so that a token
 spelling one of those phrases is claimed **whole** by a label, which is what stops a narrower entry
 inside it — `buyer_name`'s bare `Buyer` inside `Buyer's Signature`, `vat`'s bare `VAT` inside
 `VAT REG NO`, its bare `TAX` inside `TAX INVOICE` — from anchoring its own rule there and reading
@@ -486,10 +486,10 @@ a passing test's buffered log, so the report reaches CI only from a step of its 
 its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest` keeps that
 step's `-run` filter from rotting into one that matches nothing.
 
-EXTR-22 closed the last reach limit by widening the anchor lexicon, which is an input to both
-layout identities, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
-together. A reach limit closed by another route — a pointed correction on a distinguishing
-label — needs neither bump.
+EXTR-22 closed the last reach limit by widening an EXISTING anchor pattern, which invalidates
+every stored rule, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
+together. A NEW rule-less owning-phrase entry needs neither bump — it resets only pages that
+print the phrase. A reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
@@ -1006,11 +1006,11 @@ decides — `0.1179 < 0.6539` hands the field to the supplier.
 The remedy today is a **second pointed correction** on a distinguishing label — a token whose
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
 so that `TIN` alone no longer anchors is **not** a remedy here: it is what Tier-1 already does, and
-the learned rule outranks Tier-1 regardless. It is also the expensive lever, because the lexicon is
-an input to **both** fingerprints, so changing it invalidates every stored rule for every tenant
-and requires a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the
-same `anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every boxless key
-too.
+the learned rule outranks Tier-1 regardless. It is also the expensive lever: WIDENING AN EXISTING
+pattern invalidates every stored rule for every tenant and requires a `FingerprintVersion` **and**
+a `BoxlessFingerprintVersion` bump. A NEW rule-less owning-phrase entry needs neither bump. Since
+EXTR-19-02 the same `anchorLabelMatchers` feed `BoxlessFingerprint` too, but only a widened
+pattern moves every boxless key that reaches it — a new entry moves only the keys for pages printing it.
 
 ### learned_two_party.pdf is not a corpus layout
 

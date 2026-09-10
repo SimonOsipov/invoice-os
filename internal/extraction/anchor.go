@@ -125,6 +125,9 @@ func ParseRule(raw []byte) (Rule, error) {
 // reading balances; a reviewer settles the rest.
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
+	// due_date is an OWNING PHRASE over issue_date's bare "date": it carries no rule and fills no
+	// field, so a due date is refused rather than routed.
+	{"due_date", `(?i)\bdue\s*date\b`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
 	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
 	{"buyer_tin", `(?i)\b((buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\s*\.?\s*(tin|tax\s*id)|invoice\s*to|deliver\s*to)\b`},

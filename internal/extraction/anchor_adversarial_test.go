@@ -240,7 +240,7 @@ func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
 	// The amount-vocabulary owning phrases sit between subtotal and vat for the same reason, and
 	// after bare_tin, which they tie with at equal spans on every "tax id" phrase.
 	want := []string{
-		"invoice_no", "issue_date", "supplier_tin", "buyer_tin", "bare_tin",
+		"invoice_no", "due_date", "issue_date", "supplier_tin", "buyer_tin", "bare_tin",
 		"party_ref", "signature",
 		"supplier_name", "buyer_name", "currency", "subtotal",
 		"reg_identifier", "rc_number", "doc_title",
@@ -286,6 +286,8 @@ var alMatchRejectCases = map[string]struct{ match, reject string }{
 	// "Sub-total" DOES match total -- the hyphen is a word boundary. That overlap is
 	// deliberate; "Subtotal" unhyphenated is the near-miss.
 	"total": {"Grand Total", "Subtotal"},
+	// The reject is the reversed word order: due_date requires "due" before "date".
+	"due_date": {"Due Date", "Date Due"},
 }
 
 // Every entry must match a realistic label and reject a near-miss, so no entry can rot into

@@ -265,39 +265,6 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 	}
 }
 
-// AC-4. wild_rc_due_naira.pdf's issue_date is the exact shape the doubt catches -- an adjacent
-// generic head with a second distinct value -- and it stays decided only because issue_date is
-// outside the scope list. Green before and after: the non-vacuity clause is what makes it an
-// oracle rather than decoration.
-func TestEndToEnd_TheRCLayoutsCompetingDatesStayDecided(t *testing.T) {
-	const layout, field = "wild_rc_due_naira.pdf", "issue_date"
-	cands, res, _ := dtRun(t, dtLayout(t, layout))
-
-	dates := dtFor(cands, field)
-	if len(dates) == 0 {
-		t.Fatalf("%s reaches no %s candidate; there is no competition to be decided over", layout, field)
-	}
-	if want := []string{"2026-07-08", "2026-08-07"}; !slices.Equal(dtDistinct(dates), want) {
-		t.Fatalf("%s reaches %q for %s, want %q -- without a second distinct value the zero below is earned by the count, not by the scope", layout, dtDistinct(dates), field, want)
-	}
-	for _, c := range dates {
-		if !c.Adjacent || c.Tier != extraction.TierGeneric {
-			t.Fatalf("%s reads %s = %q via %s at tier %d adjacent=%v, want an adjacent generic read -- an out-of-scope field that is not a doubt candidate proves nothing about the scope", layout, field, c.Value, c.RuleID, c.Tier, c.Adjacent)
-		}
-	}
-
-	f := dtResult(t, res, field)
-	if dtValue(f) != "2026-07-08" {
-		t.Errorf("%s reads %s = %q, want %q", layout, field, dtValue(f), "2026-07-08")
-	}
-	if f.Reason != extraction.ReasonNone {
-		t.Errorf("%s reads %s %q, want %q -- issue_date is outside doubtfulFields", layout, field, f.Reason, extraction.ReasonNone)
-	}
-	if len(f.Alternatives) != 0 {
-		t.Errorf("%s offers %q as alternatives for %s, want none", layout, dtAltValues(f.Alternatives), field)
-	}
-}
-
 // AC-3. A head read from inside its own label token is corroborated by the label, so a second
 // distinct value beside it is not a doubt. Both layouts reach "Currency: NGN" through an
 // adjacent generic rule and stay decided anyway.
@@ -341,13 +308,13 @@ func TestEndToEnd_ASameTokenHeadIsNotDoubtedEvenWithACompetitor(t *testing.T) {
 	}
 }
 
-// EXTR-25-04 AC-4.12. Once due_date refuses one of wild_rc_due_naira.pdf's two competing
-// reads, that layout no longer offers two distinct issue_date candidates and
-// TestEndToEnd_TheRCLayoutsCompetingDatesStayDecided loses its subject -- it is the only
-// committed layout with two rows on one field. This reproduces the shape synthetically instead:
-// two labels reaching issue_date at unequal distances, neither of them "Due Date", so the new
-// entry cannot touch this page. Green before AND after -- it is a replacement oracle, not a red
-// test for the due_date feature itself.
+// AC-4, AC-4.12. issue_date's doubt-scope exemption -- an adjacent generic head with a second
+// distinct value still decides, because issue_date sits outside doubtfulFields -- needs a
+// witness with two distinct issue_date candidates. wild_rc_due_naira.pdf was that witness until
+// EXTR-25-04's due_date entry refused one of its two competing reads, so this reproduces the
+// shape synthetically instead: two labels reaching issue_date at unequal distances, neither of
+// them "Due Date", so the new entry cannot touch this page. Green before AND after -- it is a
+// replacement oracle, not a red test for the due_date feature itself.
 func TestEndToEnd_TheRCLayoutsCompetingDatesStayDecidedSynthetically(t *testing.T) {
 	pages := []extraction.TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
 		{Text: "Issue Date", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.13}},

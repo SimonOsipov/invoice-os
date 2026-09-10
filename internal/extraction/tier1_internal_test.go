@@ -79,7 +79,7 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 // the label, so they exist only to let anchorOutranked suppress the narrower party word inside
 // them and isBareAnchorLabel refuse the phrase as a value. Declared here so an entry resolving
 // nothing must SAY so, and so one that later gains rules stops being exempt.
-var t1OwningPhraseIDs = []string{"party_ref", "signature", "reg_identifier", "rc_number", "doc_title"}
+var t1OwningPhraseIDs = []string{"party_ref", "signature", "reg_identifier", "rc_number", "doc_title", "due_date"}
 
 // t1PrintedPhraseIDs are the owning phrases no rule-bearing entry sits inside, so suppression
 // cannot be what they are for. They earn their place by being PRINTED on a shipped layout, which
@@ -89,8 +89,8 @@ var t1PrintedPhraseIDs = []string{"rc_number"}
 
 // G-14
 func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
-	if len(anchorLexicon) != 16 {
-		t.Fatalf("anchorLexicon holds %d entry/entries, want 16; the coverage assertion below would run over the wrong table", len(anchorLexicon))
+	if len(anchorLexicon) != 17 {
+		t.Fatalf("anchorLexicon holds %d entry/entries, want 17; the coverage assertion below would run over the wrong table", len(anchorLexicon))
 	}
 	if len(Tier1Rules) != tier1RuleCount {
 		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)

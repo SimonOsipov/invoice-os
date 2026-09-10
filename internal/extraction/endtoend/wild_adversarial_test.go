@@ -145,9 +145,10 @@ func TestWildLayouts_TheRuledTableReproducesACompetingTotal(t *testing.T) {
 
 // Two measured NON-reproductions on this arrangement, with different owners.
 //
-//   - Due Date above Issue Date: BOTH dates reach issue_date, but the printed issue date wins on
-//     distance because "Issue Date " is the longer label. Reachable and never decided, so the
-//     fixture is one dial from being an oracle. EXTR-25 owns that defect and must supply its own.
+//   - Due Date above Issue Date: EXTR-25-04's due_date entry now refuses the due-date token
+//     outright, so only the printed issue date reaches issue_date as a candidate. The synthetic
+//     oracles for this are TestResolve_ADueDateNoLongerContestsTheIssueDate (resolve_test.go) and
+//     TestEndToEnd_TheRCLayoutsCompetingDatesStayDecidedSynthetically (doubt_test.go).
 //   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing, and
 //     since rc_number ships as an owning phrase it reads as a label; this is what holds that.
 //
@@ -157,11 +158,11 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 	issue := wildOneValue(t, wildRCNaira, "issue_date")
 	const wildRCDueDate = "2026-08-07"
 
-	if !slices.Contains(dates, wildRCDueDate) {
-		t.Errorf("%s no longer reaches the due date %s as an issue_date candidate; the arrangement stopped even being able to confuse the two", wildRCNaira, wildRCDueDate)
+	if slices.Contains(dates, wildRCDueDate) {
+		t.Errorf("%s still reaches the due date %s as an issue_date candidate; due_date should have refused it", wildRCNaira, wildRCDueDate)
 	}
 	if len(dates) == 0 || dates[0] != issue {
-		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for the Due-Date half -- this corpus does not reproduce it and EXTR-25 must supply its own", wildRCNaira, dates, issue)
+		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0", wildRCNaira, dates, issue)
 	}
 
 	vat := wildResolved(t, wildRCNaira, "vat")

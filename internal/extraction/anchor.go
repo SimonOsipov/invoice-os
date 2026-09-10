@@ -116,6 +116,10 @@ func ParseRule(raw []byte) (Rule, error) {
 	return r, nil
 }
 
+// alSuffix is the enumerated tail admitted between the words of a two-word label: "Billed to"
+// is "Bill to". A closed set of four, never a stemmer.
+const alSuffix = `(?:ed|ing|s|d)?`
+
 // anchorLexicon maps a canonical label id to the pattern that recognises it. Ordered, never
 // ranged as a map: iteration order is fingerprint input.
 //
@@ -130,7 +134,7 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"due_date", `(?i)\bdue\s*date\b`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
 	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
-	{"buyer_tin", `(?i)\b((buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\s*\.?\s*(tin|tax\s*id)|invoice\s*to|deliver\s*to)\b`},
+	{"buyer_tin", `(?i)\b((buyer|customer|client|bill` + alSuffix + `\s*to|sold` + alSuffix + `\s*to|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\s*\.?\s*(tin|tax\s*id)|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\b`},
 	// bare_tin is the party-LESS TIN label. On a party-bearing token the party entry claims a
 	// strictly wider span, so anchorOutranked suppresses this one there -- position in the
 	// lexicon is not what does it
@@ -143,7 +147,7 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"party_ref", `(?i)\b(customer|client|buyer|account|supplier|vendor)\s*\.?\s*(no|num(ber)?|ref(erence)?|code)\b\.?`},
 	{"signature", `(?i)\b(buyer|customer|client|supplier|seller|vendor)(['’]s)?\s+signature\b`},
 	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
-	{"buyer_name", `(?i)\b(buyer|customer|client|bill\s*to|sold\s*to|invoice\s*to|deliver\s*to)\b`},
+	{"buyer_name", `(?i)\b(buyer|customer|client|bill` + alSuffix + `\s*to|sold` + alSuffix + `\s*to|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
 	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
 	// reg_identifier and doc_title are OWNING PHRASES over the amount vocabulary: they sit before

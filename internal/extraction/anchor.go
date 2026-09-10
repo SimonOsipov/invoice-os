@@ -162,8 +162,8 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"reg_identifier", `(?i)\b(vat|v\.a\.t\.?|tax)\s*\.?\s*(reg(istration|\.)?\s*)?(no|num(ber)?|id(entification)?(\s*(no|num(ber)?))?)\b`},
 	{"rc_number", `(?i)\b(rc|cac)\s*\.?\s*(no|num(ber)?)\b`},
 	{"doc_title", `(?i)\b(tax|vat)\s*invoice\b`},
-	// withholding_tax is an OWNING PHRASE over vat's bare "tax": RE2 has no lookbehind, so an
-	// owning phrase placed before its victim is the mechanism, not a position dependency.
+	// withholding_tax is an OWNING PHRASE over vat's bare "tax": RE2 has no lookbehind, so a
+	// strictly wider claimant is the mechanism. anchorOutranked does the work, not the position.
 	{"withholding_tax", `(?i)\bwith[\s-]*hold(?:ing)?\s*tax\b`},
 	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},
 	{"total", `(?i)\b(grand\s*total|amount\s*(due|payable)|balance\s*due|total)\b`},

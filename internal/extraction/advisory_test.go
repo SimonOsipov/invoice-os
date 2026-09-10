@@ -1,7 +1,5 @@
-// advisory_test.go: T-06.1..T-06.11 (T-06.8, the fixture-generator tests, already exist in
-// fixtures_test.go). Pass-on-arrival oracles over the three faithful advisory fixtures
-// (arch-26-06 Appendix C, amendments A1-A14) -- EXTR-26-01..05 already shipped the lexicon
-// these pin against, so nothing here is red at HEAD without a named mutant.
+// Oracles over the advisory fixtures. The lexicon they pin shipped before them, so every test is
+// green on arrival and reds only under a mutant of the code it names.
 package extraction_test
 
 import (
@@ -29,7 +27,8 @@ func advReconcile(t *testing.T, fixture string) []extraction.FieldResult {
 	return extraction.Reconcile(extraction.Input{Candidates: advResolve(t, fixture)})
 }
 
-// advObserved reports whether page 1 carries an AnchorObservation for label.
+// advObserved reports whether page 1 carries an AnchorObservation for label; AnchorObservations
+// reads no other page.
 func advObserved(t *testing.T, fixture, label string) bool {
 	t.Helper()
 	for _, o := range extraction.AnchorObservations(rvCorpusPages(t, fixture)) {
@@ -40,21 +39,26 @@ func advObserved(t *testing.T, fixture, label string) bool {
 	return false
 }
 
-// advDistance returns the Distance of the field/value candidate, or fatals -- every T-06.6 row
-// reads Resolve's own computed gap rather than a hand-typed one.
+// advDistance returns Resolve's Distance for field/value read from a neighbouring token, or fatals
+// unless every such candidate carries the same one (the dense line amount is read twice).
 func advDistance(t *testing.T, cands []extraction.Candidate, field, value string) float64 {
 	t.Helper()
+	var ds []float64
 	for _, c := range cands {
-		if c.Field == field && c.Value == value {
-			return c.Distance
+		if c.Field == field && c.Value == value && c.Adjacent {
+			ds = append(ds, c.Distance)
 		}
 	}
-	t.Fatalf("no %s candidate valued %q among %d candidate(s)", field, value, len(cands))
-	return 0
+	slices.Sort(ds)
+	ds = slices.Compact(ds)
+	if len(ds) != 1 {
+		t.Fatalf("adjacent %s candidates valued %q carry distances %v, want exactly one", field, value, ds)
+	}
+	return ds[0]
 }
 
 // advToken returns the one token, on any page, whose trimmed text equals want -- pdfium pads a
-// split label with a trailing space (docs/extraction-corpus.md: "compare trimmed").
+// split label with a trailing space.
 func advToken(t *testing.T, pages []extraction.TokenPage, want string) extraction.Token {
 	t.Helper()
 	var hits []extraction.Token
@@ -71,9 +75,8 @@ func advToken(t *testing.T, pages []extraction.TokenPage, want string) extractio
 	return hits[0]
 }
 
-// advRewriteToken deep-copies pages and replaces the text of the token trimmed-equal to from
-// with to, box unchanged -- the token-rewrite mechanism (arch-26-06 S8), isolating the WORD from
-// the label's own box the way a second PDF cannot.
+// advRewriteToken copies pages with one token's text replaced and its box kept, so only the word
+// differs -- a second PDF would move the label's box too.
 func advRewriteToken(t *testing.T, pages []extraction.TokenPage, from, to string) []extraction.TokenPage {
 	t.Helper()
 	out := make([]extraction.TokenPage, len(pages))
@@ -111,10 +114,8 @@ func advSameValue(a, b *string) bool {
 
 // --- T-06.1 -------------------------------------------------------------------
 
-// T-06.1: Core AC-5 is NOT delivered on the register (D-26-06, arch-26-06 S11) -- both filing
-// blockers are pinned as KNOWN GAPS BY NAME, never silently passed. Renamed from the story's
-// "clears both filing blockers": the faithful register clears neither.
-// Controls: M1 (no "issued") reds the R1 half; M2 (no "payable") reds the label-matches half.
+// T-06.1: the faithful register resolves neither filing blocker, so both are pinned as known gaps
+// by name and never counted as passes.
 func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 	out := advReconcile(t, fxAdvisoryRegister)
 
@@ -127,8 +128,7 @@ func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 		t.Errorf("R0 carries an issue_date AnchorObservation; the letter-spaced-label gap claims it has none")
 	}
 
-	// known gap: value beyond tier1MaxDistanceRight -- the label MATCHES ("Amount payable");
-	// only the value sits past the dial. This label-matches half is what M2 reds.
+	// known gap: value beyond tier1MaxDistanceRight -- the label matches, only the value is too far.
 	total, ok := rcFind(out, "total")
 	if !ok || total.Reason != extraction.ReasonMissing {
 		t.Errorf("R0 total = %+v (ok=%v), want Reason %q -- known gap: value beyond tier1MaxDistanceRight", total, ok, extraction.ReasonMissing)
@@ -137,8 +137,7 @@ func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 		t.Errorf("R0 carries no total AnchorObservation; \"Amount payable\" should still match the label")
 	}
 
-	// R1 unspaces only the two header labels: issue_date resolves, total does not -- the
-	// totals column gap is untouched by that one transformation.
+	// R1 unspaces only the header labels, so issue_date resolves and the totals gap stays.
 	out1 := advReconcile(t, fxAdvisoryRegisterUnspaced)
 	issueDate1, ok := rcFind(out1, "issue_date")
 	if !ok || issueDate1.Reason != extraction.ReasonNone || !advSameValue(issueDate1.Value, rcStr("2026-09-01")) {
@@ -152,10 +151,8 @@ func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 
 // --- T-06.2 -------------------------------------------------------------------
 
-// T-06.2: Core AC-3, the referee's first decision on a real document's vocabulary.
-// Controls: M3 (no "taxable amount"); M0 (the whole pre-story lexicon, which reproduces the
-// 2026-09-09 production observation on the real document: subtotal missing, total 1250000.00
-// ambiguous alts=[3426476.50]).
+// T-06.2: Core AC-3 -- once "Taxable amount" decides subtotal, the referee picks the printed total
+// over the nearer line amount.
 func TestAdvisory_TheDenseInvoiceLetsTheRefereeDecide(t *testing.T) {
 	out := advReconcile(t, fxAdvisoryDense)
 
@@ -175,10 +172,8 @@ func TestAdvisory_TheDenseInvoiceLetsTheRefereeDecide(t *testing.T) {
 
 // --- T-06.3 -------------------------------------------------------------------
 
-// T-06.3: the referee's non-vacuity guard (A5) -- INJECT an equal-standing subtotal candidate,
-// never DROP (dropping the subtotal candidates does not discriminate reconcile.go's
-// decidedMoney guard at all: total stays ambiguous either way).
-// Control: G1 removes the `if cell.Reason != ReasonNone { return ... false }` guard.
+// T-06.3: inject a competing subtotal rather than drop one -- a missing subtotal fails parseMoney
+// with or without decidedMoney's ReasonNone guard, so only an ambiguous one exercises it.
 func TestAdvisory_TheRefereeIsWhatMovedIt(t *testing.T) {
 	cands := advResolve(t, fxAdvisoryDense)
 
@@ -186,8 +181,7 @@ func TestAdvisory_TheRefereeIsWhatMovedIt(t *testing.T) {
 	if len(subs) != 1 {
 		t.Fatalf("subtotal candidates = %+v, want exactly 1 to copy", subs)
 	}
-	// 9999999.99 + 239056.50 = 10239056.49, not a candidate -- the injected value must not
-	// accidentally corroborate anything of its own.
+	// 9999999.99 + 239056.50 matches no total, so the injected value corroborates nothing itself.
 	injected := subs[0]
 	injected.Value = "9999999.99"
 	cands = append(cands, injected)
@@ -216,11 +210,8 @@ func TestAdvisory_TheRefereeIsWhatMovedIt(t *testing.T) {
 
 // --- T-06.4 -------------------------------------------------------------------
 
-// T-06.4: characterisation only (A13), not a discriminating oracle -- on the real register the
-// withholding value sits outside the right dial (0.4838), so the owning phrase is not
-// load-bearing for vat on this document. Core AC-4's discriminating oracle is EXTR-26-04's
-// T-04.1. M4 does NOT move this row: a DECLARED SURVIVOR, not a bug. Do not add a tamed layout
-// to manufacture a discriminator here.
+// T-06.4: characterisation only. The register's withholding value sits outside the right dial, so
+// vat never reaches it; TestResolve_AWithholdingLineIsNotTheVAT is the owning phrase's oracle.
 func TestAdvisory_TheWithholdingLineIsNotTheVAT(t *testing.T) {
 	for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
 		out := advReconcile(t, fixture)
@@ -238,8 +229,8 @@ func TestAdvisory_TheWithholdingLineIsNotTheVAT(t *testing.T) {
 
 // --- T-06.5 -------------------------------------------------------------------
 
-// advArms is the seven label-vocabulary entries EXTR-26-01..05 added or widened (arch-26-06
-// S5a), independently retyped so this test does not read anchorLexicon to grade itself.
+// advArms retypes the seven label arms this story added or widened, so T-06.5 does not grade
+// anchorLexicon with itself.
 var advArms = map[string]*regexp.Regexp{
 	"buyer_tin":       regexp.MustCompile(`(?i)\bbill(?:ed|ing|s|d)?\s*to\b.*\btin\b`),
 	"buyer_name":      regexp.MustCompile(`(?i)\bbill(?:ed|ing|s|d)?\s*to\b`),
@@ -252,8 +243,8 @@ var advArms = map[string]*regexp.Regexp{
 
 var advNewFields = []string{"buyer_tin", "buyer_name", "issue_date", "subtotal", "total", "supplier_name", "withholding_tax"}
 
-// advDeclared is field x fixture -> matched, arch-26-06 A6. issue_date/R0 and every
-// buyer_tin cell are absent (declared false) on purpose.
+// advDeclared is field x fixture -> matched. An absent cell is declared false: that covers
+// buyer_tin, which neither source prints, and the letter-spaced "I S S U E D" on R0.
 var advDeclared = map[[2]string]bool{
 	{"buyer_name", fxAdvisoryRegister}:              true,
 	{"buyer_name", fxAdvisoryRegisterUnspaced}:      true,
@@ -267,10 +258,8 @@ var advDeclared = map[[2]string]bool{
 	{"withholding_tax", fxAdvisoryRegisterUnspaced}: true,
 }
 
-// T-06.5: one row per newly matched label, matched and resolved graded separately, compared
-// against the declared set in BOTH directions -- a declared row not measured reds, and a
-// measured hit on any of the seven arms not declared also reds (A6).
-// Controls: M1, M2, M3, M4, M6 each flip one row's matched column; M5 flips row 2 (buyer_name).
+// T-06.5: matched and resolved are graded separately, and matched is compared against advDeclared
+// in both directions, so an unresolved label can never be silently absent.
 func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 	for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced, fxAdvisoryDense} {
 		obs := extraction.AnchorObservations(rvCorpusPages(t, fixture))
@@ -296,8 +285,7 @@ func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 		out  []extraction.FieldResult
 	}{{"R0", r0}, {"R1", r1}}
 
-	// buyer_name: known gap -- ambiguous, alt is "Finance Department" (the line under the
-	// name), not "the TIN line" (D-A8's description is wrong for this document).
+	// buyer_name: known gap, ambiguous against the line under the name.
 	for _, o := range named {
 		bn, ok := rcFind(o.out, "buyer_name")
 		if !ok || bn.Reason != extraction.ReasonAmbiguous || !advSameValue(bn.Value, rcStr("Honeywell Group Nigeria Plc")) {
@@ -337,103 +325,99 @@ func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 		}
 	}
 
-	// withholding_tax: n/a (owning phrase) -- it owns no HeaderFields member, so Reconcile
-	// produces no cell for it at all. A third state, never scored gap or pass.
+	// withholding_tax: n/a -- an owning phrase fills no field, so it is neither gap nor pass.
 	if _, ok := rcFind(r0, "withholding_tax"); ok {
 		t.Errorf("R0 produced a withholding_tax field result; the owning phrase fills no field")
 	}
 	if _, ok := rcFind(r1, "withholding_tax"); ok {
 		t.Errorf("R1 produced a withholding_tax field result; the owning phrase fills no field")
 	}
-
-	// buyer_tin: not printed by either source -- the matched-grid loop above already confirmed
-	// zero hits on all three fixtures; named here so the both-directions compare is explicit.
 }
 
 // --- T-06.6 -------------------------------------------------------------------
 
-// T-06.6: one row per newly matched label, the fixture gap asserted to 4dp against Resolve's
-// own Distance, or (for the one out-of-dial row) the SAME gap formula relatedTokens uses
-// (RightGapForTest), never a hand-typed one. The real-document gap (arch-26-06 S6, local
-// docling 1.10.0) is cited as provenance only, never asserted.
-// Control: move one value fxLine >= 5pt in the builder, regenerate -- reds (run manually; the
-// committed PDFs are byte-pinned, not reproduced in-process here).
+// T-06.6: each gap is measured on the built fixture, to 4dp, and asserted on its side of the dial.
+// Row names carry the real-document gap (local docling) as provenance, never asserted.
 func TestAdvisory_TheLabelValueGapsAreRecorded(t *testing.T) {
 	const tol = 5e-5
+	dense := advResolve(t, fxAdvisoryDense)
+
+	inDial := func(t *testing.T, got, want, dial float64) {
+		t.Helper()
+		if math.Abs(got-want) > tol {
+			t.Errorf("gap = %v, want %v", got, want)
+		}
+		if got > dial {
+			t.Errorf("gap %v exceeds its dial %v", got, dial)
+		}
+	}
+	// outOfDial reads a pair Resolve never relates, so it measures with RightGapForTest; the weld
+	// subtest below holds that helper to Resolve's own formula.
+	outOfDial := func(t *testing.T, labelText, valueText string, want float64) {
+		t.Helper()
+		for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
+			pages := rvCorpusPages(t, fixture)
+			got := extraction.RightGapForTest(advToken(t, pages, labelText).Region, advToken(t, pages, valueText).Region)
+			if math.Abs(got-want) > tol {
+				t.Errorf("%s: gap = %v, want %v", fixture, got, want)
+			}
+			if got <= extraction.Tier1MaxDistanceRightForTest {
+				t.Errorf("%s: gap %v is inside tier1MaxDistanceRight %v; the out-of-dial record no longer holds", fixture, got, extraction.Tier1MaxDistanceRightForTest)
+			}
+		}
+	}
+
+	t.Run("RightGapForTest equals Resolve's Distance on D0 Taxable amount", func(t *testing.T) {
+		pages := rvCorpusPages(t, fxAdvisoryDense)
+		helper := extraction.RightGapForTest(advToken(t, pages, "Taxable amount").Region, advToken(t, pages, "3,187,420.00").Region)
+		if resolved := advDistance(t, dense, "subtotal", "3187420.00"); helper != resolved {
+			t.Errorf("RightGapForTest = %v, Resolve's Distance = %v; the helper no longer mirrors relatedTokens", helper, resolved)
+		}
+	})
 
 	t.Run("supplier_name FROM to name, R0, below, real doc 0.0145", func(t *testing.T) {
 		got := advDistance(t, advResolve(t, fxAdvisoryRegister), "supplier_name", "Okonkwo Advisory Partners")
-		if math.Abs(got-0.0142) > tol {
-			t.Errorf("gap = %v, want 0.0142", got)
-		}
-		if got > extraction.Tier1MaxDistanceBelowForTest {
-			t.Errorf("gap %v exceeds tier1MaxDistanceBelow %v", got, extraction.Tier1MaxDistanceBelowForTest)
-		}
+		inDial(t, got, 0.0142, extraction.Tier1MaxDistanceBelowForTest)
 	})
 
 	t.Run("buyer_name BILLED TO to name, R0, below, real doc 0.0145", func(t *testing.T) {
 		got := advDistance(t, advResolve(t, fxAdvisoryRegister), "buyer_name", "Honeywell Group Nigeria Plc")
-		if math.Abs(got-0.0142) > tol {
-			t.Errorf("gap = %v, want 0.0142", got)
-		}
-		if got > extraction.Tier1MaxDistanceBelowForTest {
-			t.Errorf("gap %v exceeds tier1MaxDistanceBelow %v", got, extraction.Tier1MaxDistanceBelowForTest)
-		}
+		inDial(t, got, 0.0142, extraction.Tier1MaxDistanceBelowForTest)
 	})
 
-	t.Run("issue_date Issued to date, R1, below, real doc 0.0145", func(t *testing.T) {
+	t.Run("issue_date Issued to date, R1 (tamed label, R0 geometry), below, real doc 0.0145", func(t *testing.T) {
 		got := advDistance(t, advResolve(t, fxAdvisoryRegisterUnspaced), "issue_date", "2026-09-01")
-		if math.Abs(got-0.0146) > tol {
-			t.Errorf("gap = %v, want 0.0146", got)
-		}
-		if got > extraction.Tier1MaxDistanceBelowForTest {
-			t.Errorf("gap %v exceeds tier1MaxDistanceBelow %v", got, extraction.Tier1MaxDistanceBelowForTest)
-		}
+		inDial(t, got, 0.0146, extraction.Tier1MaxDistanceBelowForTest)
 	})
 
 	t.Run("subtotal Taxable amount to value, D0, right, real doc 0.1581", func(t *testing.T) {
-		got := advDistance(t, advResolve(t, fxAdvisoryDense), "subtotal", "3187420.00")
-		if math.Abs(got-0.1802) > tol {
-			t.Errorf("gap = %v, want 0.1802", got)
-		}
-		if got > extraction.Tier1MaxDistanceRightForTest {
-			t.Errorf("gap %v exceeds tier1MaxDistanceRight %v", got, extraction.Tier1MaxDistanceRightForTest)
-		}
+		inDial(t, advDistance(t, dense, "subtotal", "3187420.00"), 0.1802, extraction.Tier1MaxDistanceRightForTest)
+	})
+
+	t.Run("vat VAT @ 7.5% to value, D0, right, real doc 0.1878", func(t *testing.T) {
+		inDial(t, advDistance(t, dense, "vat", "239056.50"), 0.2053, extraction.Tier1MaxDistanceRightForTest)
 	})
 
 	t.Run("total TOTAL DUE (NGN) to value, D0, right, real doc 0.0940", func(t *testing.T) {
-		got := advDistance(t, advResolve(t, fxAdvisoryDense), "total", "3426476.50")
-		if math.Abs(got-0.1344) > tol {
-			t.Errorf("gap = %v, want 0.1344", got)
-		}
-		if got > extraction.Tier1MaxDistanceRightForTest {
-			t.Errorf("gap %v exceeds tier1MaxDistanceRight %v", got, extraction.Tier1MaxDistanceRightForTest)
-		}
+		inDial(t, advDistance(t, dense, "total", "3426476.50"), 0.1344, extraction.Tier1MaxDistanceRightForTest)
+	})
+
+	t.Run("total Total payable to line amount, D0, below, real doc 0.0537", func(t *testing.T) {
+		inDial(t, advDistance(t, dense, "total", "1250000.00"), 0.0524, extraction.Tier1MaxDistanceBelowForTest)
 	})
 
 	t.Run("total Amount payable to value, R0+R1, right, KNOWN GAP, real doc 0.3932", func(t *testing.T) {
-		for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
-			pages := rvCorpusPages(t, fixture)
-			label := advToken(t, pages, "Amount payable")
-			value := advToken(t, pages, "₦14,430,000.00")
-			got := extraction.RightGapForTest(label.Region, value.Region)
-			if math.Abs(got-0.4604) > tol {
-				t.Errorf("%s: gap = %v, want 0.4604", fixture, got)
-			}
-			if got <= extraction.Tier1MaxDistanceRightForTest {
-				t.Errorf("%s: gap %v is inside tier1MaxDistanceRight %v; the known gap no longer holds", fixture, got, extraction.Tier1MaxDistanceRightForTest)
-			}
-		}
+		outOfDial(t, "Amount payable", "₦14,430,000.00", 0.4604)
+	})
+
+	t.Run("withholding_tax Withholding tax 10% to value, R0+R1, right, outside the dial, real doc 0.4838", func(t *testing.T) {
+		outOfDial(t, "Withholding tax 10%", "-₦1,480,000.00", 0.5388)
 	})
 }
 
 // --- T-06.7 -------------------------------------------------------------------
 
-// T-06.7: AC-7, the fixture-level companion to T-01.4. Token-rewrite mechanism (arch-26-06 S8,
-// preferred over a second PDF, which also moves the label's own box). Compares Value/Reason/
-// Alternatives over all ten HeaderFields.
-// Control: M5 (empty alSuffix) gives 7/10 -- three fields move, not one; the story's "fails
-// today because buyer_name" is false at HEAD.
+// T-06.7: AC-7 -- "BILL TO" decides like "BILLED TO" across all ten header fields.
 func TestAdvisory_TheLoosenedRegisterDecidesLikeTheExactOne(t *testing.T) {
 	exactPages := rvCorpusPages(t, fxAdvisoryRegister)
 	loosenedPages := advRewriteToken(t, rvCorpusPages(t, fxAdvisoryRegister), "BILLED TO", "BILL TO")
@@ -465,11 +449,8 @@ func TestAdvisory_TheLoosenedRegisterDecidesLikeTheExactOne(t *testing.T) {
 
 // --- T-06.9 -------------------------------------------------------------------
 
-// T-06.9: Resolve only (arch-26-06 S2d) -- the non-vacuity guard for T-06.2 and the
-// fixture-level twin of T-02.7. Asserts value sets and the nearest value, not candidate counts
-// (A4: the faithful layout mints THREE total candidates, not two). Measured, not predicted: S2d
-// guessed the nearest vat candidate would be Adjacent; the real reading is same_token.
-// Control: M3 removes the only subtotal candidate.
+// T-06.9: the contest T-06.2 rests on exists -- the line amount is the nearer total, so ordering
+// alone cannot pick the printed one. Value sets, not counts: the line amount is read twice.
 func TestAdvisory_TheDenseInvoiceStagesTheContest(t *testing.T) {
 	got := advResolve(t, fxAdvisoryDense)
 
@@ -509,21 +490,14 @@ func TestAdvisory_TheDenseInvoiceStagesTheContest(t *testing.T) {
 		t.Errorf("nearest vat candidate = %+v, want Value 239056.50", nearest)
 	}
 	if nearest.Adjacent {
-		t.Errorf("nearest vat candidate Adjacent = true, want false (same_token) -- measured, not S2d's predicted true")
+		t.Errorf("nearest vat candidate Adjacent = true, want false (the SUMMARY box's same-token read)")
 	}
 }
 
 // --- T-06.10 ------------------------------------------------------------------
 
-// T-06.10: P-10 as an oracle, not prose in ## Decisions -- pins the tokenisation gap AC-5's
-// second half declines to fix (sameTokenValue is not touched by this story). Asserting the
-// label MATCHES and separately that the value does NOT resolve is what tells a tokenisation gap
-// from a vocabulary miss; without the first half this would pass on a mislabelled token.
-// Controls:
-//   - matches half: the total arm that matches bare "Total" is removed with a unique needle.
-//   - resolves-nothing half: sameTokenValue is mutated to also strip a leading WORD (not just
-//     separators) before handing the remainder to ShapeAmount -- the minimal shape a real fix
-//     to AC-5's second half would take.
+// T-06.10: the summary prints "Total payable ₦3,426,476.50" as one token. The label matches, but
+// sameTokenValue's residue is no amount, so no total may be read from that token's box.
 func TestAdvisory_AJoinedLabelAndValueResolvesNothing(t *testing.T) {
 	const joined = "Total payable ₦3,426,476.50"
 	pages := rvCorpusPages(t, fxAdvisoryDense)
@@ -539,39 +513,46 @@ func TestAdvisory_AJoinedLabelAndValueResolvesNothing(t *testing.T) {
 		t.Errorf("no total AnchorObservation on the joined token %q -- the label half must still match", joined)
 	}
 
-	for _, c := range rvFor(extraction.Resolve(pages, rvGeneric()), "total") {
-		if c.Region != nil && *c.Region == tok.Region && c.Distance == 0 {
-			t.Errorf("a same-token total candidate was minted from the joined token: %+v", c)
+	totals := rvFor(extraction.Resolve(pages, rvGeneric()), "total")
+	rvFloor(t, totals, "total on the dense invoice")
+	for _, c := range totals {
+		if c.Region != nil && *c.Region == tok.Region {
+			t.Errorf("a total candidate was read from the joined token: %+v", c)
 		}
 	}
 }
 
 // --- T-06.11 ------------------------------------------------------------------
 
-// T-06.11: the design section's tokenisation table (S7, A7) as a committed literal, compared
-// against measured token counts in both directions -- a declared "two" that measures as one
-// token (or vice versa) reds either way, since advToken fatals unless the count is exactly 1.
-// Control: join a declared split pair onto one fxLine in the builder, regenerate -- reds.
+// T-06.11: each newly matched label's declared tokenisation holds on the built PDF. A split row
+// needs label and value as two exact tokens; a joined row needs one token carrying both.
 func TestAdvisory_TheFixturesTokeniseTheWayTheyDeclare(t *testing.T) {
+	register := []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced}
 	type decl struct {
-		fixture, what, label, value string // value == "" means label IS the whole (joined) token
+		fixtures           []string
+		what, label, value string // value == "" means label IS the whole (joined) token
 	}
 	rows := []decl{
-		{fxAdvisoryRegister, "Amount payable + value, split, evidenced (local docling 1.10.0)", "Amount payable", "₦14,430,000.00"},
-		{fxAdvisoryRegister, "I S S U E D + date, split", "I S S U E D", "2026-09-01"},
-		{fxAdvisoryRegisterUnspaced, "Issued + date, split", "Issued", "2026-09-01"},
-		{fxAdvisoryDense, "Taxable amount + value, split", "Taxable amount", "3,187,420.00"},
-		{fxAdvisoryDense, "VAT @ 7.5% + value, split", "VAT @ 7.5%", "239,056.50"},
-		{fxAdvisoryDense, "TOTAL DUE (NGN) + value, split", "TOTAL DUE (NGN)", "3,426,476.50"},
-		{fxAdvisoryDense, "Total payable + value, JOINED", "Total payable ₦3,426,476.50", ""},
+		{register, "FROM + name, split, evidenced (local docling)", "FROM", "Okonkwo Advisory Partners"},
+		{register, "BILLED TO + name, split, evidenced (local docling)", "BILLED TO", "Honeywell Group Nigeria Plc"},
+		{register, "Withholding tax 10% + value, split, evidenced (local docling)", "Withholding tax 10%", "-₦1,480,000.00"},
+		{register, "Amount payable + value, split, evidenced (local docling)", "Amount payable", "₦14,430,000.00"},
+		{[]string{fxAdvisoryRegister}, "I S S U E D + date, split, evidenced (local docling)", "I S S U E D", "2026-09-01"},
+		{[]string{fxAdvisoryRegisterUnspaced}, "Issued + date, split, tamed (R0 unspaced)", "Issued", "2026-09-01"},
+		{[]string{fxAdvisoryDense}, "Taxable amount + value, split, evidenced (local docling)", "Taxable amount", "3,187,420.00"},
+		{[]string{fxAdvisoryDense}, "VAT @ 7.5% + value, split, evidenced (local docling)", "VAT @ 7.5%", "239,056.50"},
+		{[]string{fxAdvisoryDense}, "TOTAL DUE (NGN) + value, split, evidenced (local docling)", "TOTAL DUE (NGN)", "3,426,476.50"},
+		{[]string{fxAdvisoryDense}, "Total payable + value, JOINED, evidenced (local docling)", "Total payable ₦3,426,476.50", ""},
 	}
 	for _, row := range rows {
-		t.Run(row.what, func(t *testing.T) {
-			pages := rvCorpusPages(t, row.fixture)
-			advToken(t, pages, row.label) // fatals unless exactly 1 -- present regardless of split/joined
-			if row.value != "" {
-				advToken(t, pages, row.value) // a SEPARATE token: proves "two", not "one"
-			}
-		})
+		for _, fixture := range row.fixtures {
+			t.Run(fixture+"/"+row.what, func(t *testing.T) {
+				pages := rvCorpusPages(t, fixture)
+				advToken(t, pages, row.label) // fatals unless exactly 1
+				if row.value != "" {
+					advToken(t, pages, row.value) // a separate token: two, not one
+				}
+			})
+		}
 	}
 }

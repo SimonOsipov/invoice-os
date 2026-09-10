@@ -79,7 +79,7 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 // the label, so they exist only to let anchorOutranked suppress the narrower party word inside
 // them and isBareAnchorLabel refuse the phrase as a value. Declared here so an entry resolving
 // nothing must SAY so, and so one that later gains rules stops being exempt.
-var t1OwningPhraseIDs = []string{"party_ref", "signature", "reg_identifier", "rc_number", "doc_title"}
+var t1OwningPhraseIDs = []string{"party_ref", "signature", "reg_identifier", "rc_number", "doc_title", "due_date"}
 
 // t1PrintedPhraseIDs are the owning phrases no rule-bearing entry sits inside, so suppression
 // cannot be what they are for. They earn their place by being PRINTED on a shipped layout, which
@@ -89,8 +89,8 @@ var t1PrintedPhraseIDs = []string{"rc_number"}
 
 // G-14
 func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
-	if len(anchorLexicon) != 16 {
-		t.Fatalf("anchorLexicon holds %d entry/entries, want 16; the coverage assertion below would run over the wrong table", len(anchorLexicon))
+	if len(anchorLexicon) != 17 {
+		t.Fatalf("anchorLexicon holds %d entry/entries, want 17; the coverage assertion below would run over the wrong table", len(anchorLexicon))
 	}
 	if len(Tier1Rules) != tier1RuleCount {
 		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)
@@ -125,8 +125,8 @@ func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 		i := slices.Index(patterns, r.Rule.Label)
 		if i < 0 {
 			sweepRules++
-			if r.Rule.Label != tier1TINSweepLabel {
-				t.Errorf("Tier1Rules[%q] carries label %q, which is neither an anchorLexicon pattern nor tier1TINSweepLabel; a forked copy of a lexicon regex drifts from the fingerprint silently", r.Key, r.Rule.Label)
+			if r.Rule.Label != tier1TINSweepLabel && r.Rule.Label != nairaTokenPattern {
+				t.Errorf("Tier1Rules[%q] carries label %q, which is none of an anchorLexicon pattern, tier1TINSweepLabel or nairaTokenPattern; a forked copy of a lexicon regex drifts from the fingerprint silently", r.Key, r.Rule.Label)
 			}
 			continue
 		}
@@ -137,8 +137,8 @@ func TestTier1_ReusesTheAnchorLexiconPatterns(t *testing.T) {
 		used[i]++
 	}
 
-	if labelRules != 33 || sweepRules != 1 {
-		t.Errorf("the set splits %d label rule(s) and %d non-lexicon rule(s), want 33 and 1", labelRules, sweepRules)
+	if labelRules != 33 || sweepRules != 2 {
+		t.Errorf("the set splits %d label rule(s) and %d non-lexicon rule(s), want 33 and 2", labelRules, sweepRules)
 	}
 	for i, n := range used {
 		owning := slices.Contains(t1OwningPhraseIDs, ids[i])
@@ -296,5 +296,43 @@ func TestTier1_JSONStringRoundTripsABackslashAndAQuote(t *testing.T) {
 	// does nothing.
 	if _, err := ParseRule([]byte(`{"label":"a"b","relation":{"kind":"same_token","max_distance":0},"shape":"amount"}`)); err == nil {
 		t.Error("ParseRule accepted an unescaped double quote; jsonString's escaping is untested by the round trip above")
+	}
+}
+
+// AC-2.6, retargeted by EXTR-25-03: the naira sweep is now the only shipped rule that carries
+// Fallback -- a count assertion, so a second silently-added fallback still reds.
+func TestTier1_TheNairaSweepIsTheOnlyShippedFallback(t *testing.T) {
+	if len(Tier1Rules) != tier1RuleCount {
+		t.Fatalf("Tier1Rules holds %d rule(s), want %d; every assertion below would run over the wrong set", len(Tier1Rules), tier1RuleCount)
+	}
+	var fallbacks []string
+	for _, r := range Tier1Rules {
+		if r.Fallback {
+			fallbacks = append(fallbacks, r.Key)
+		}
+	}
+	if len(fallbacks) != 1 {
+		t.Fatalf("shipped rules carrying Fallback = %v, want exactly one", fallbacks)
+	}
+	if fallbacks[0] != "t1.currency.sweep" {
+		t.Errorf("the one shipped Fallback rule is %q, want %q", fallbacks[0], "t1.currency.sweep")
+	}
+}
+
+// AC-3.10. The sweep's label is nairaTokenPattern itself, never a copy: a forked pattern must
+// drift the fingerprint check silently otherwise.
+func TestTier1_TheNairaSweepReusesTheShapePattern(t *testing.T) {
+	found := false
+	for _, r := range Tier1Rules {
+		if r.Key != "t1.currency.sweep" {
+			continue
+		}
+		found = true
+		if r.Rule.Label != nairaTokenPattern {
+			t.Errorf("t1.currency.sweep label = %q, want %q -- the sweep must reference the constant, not a copy", r.Rule.Label, nairaTokenPattern)
+		}
+	}
+	if !found {
+		t.Fatalf("Tier1Rules carries no t1.currency.sweep rule; the label comparison above ran over nothing")
 	}
 }

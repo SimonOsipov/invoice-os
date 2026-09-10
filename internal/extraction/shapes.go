@@ -16,6 +16,11 @@ const isoDate = "2006-01-02"
 // shape's own bound.
 const maxNameRunes = 256
 
+// One ₦, at most 24 runes of decoration either side. Shared by ShapeCurrency's matcher below and
+// by t1.currency.sweep's label, so the two cannot drift
+// (TestTier1_TheNairaSweepReusesTheShapePattern, TestShapeCurrency_BoundsTheDecorationAroundTheNaira).
+const nairaTokenPattern = `^[^₦]{0,24}₦[^₦]{0,24}$`
+
 var (
 	// Matches seed_mbs_v1.sql's ^[0-9]{8}-[0-9]{4}$ once the interior whitespace is dropped.
 	reTIN = regexp.MustCompile(`^\s*([0-9]{8})\s*-\s*([0-9]{4})\s*$`)
@@ -23,7 +28,7 @@ var (
 	// numeric(14,2) has no third one to hold -- a longer fraction rejects rather than rounds.
 	reAmount   = regexp.MustCompile(`^\s*(?:NGN|₦|N)?\s*(-?)([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.([0-9]{1,2}))?\s*$`)
 	reCurrency = regexp.MustCompile(`^\s*([A-Za-z]{3})\s*$`)
-	reNaira    = regexp.MustCompile(`^\s*₦\s*$`)
+	reNaira    = regexp.MustCompile(nairaTokenPattern)
 	reInvNum   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$`)
 	// One per separator: a mixed pair such as 12/03-2026 matches none and rejects.
 	reNumDateSlash = regexp.MustCompile(`^\s*([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\s*$`)

@@ -298,9 +298,11 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 
 // fpCorpusPinned is every committed layout's fingerprint, measured against the party-scoped
 // lexicon. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads
-// those, so a pattern edit silently invalidates every stored document's layout fingerprint and
-// every rule learned against it. These six are what says such an edit happened; moving them
-// without moving FingerprintVersion is the state this pin exists to forbid.
+// those, so WIDENING AN EXISTING pattern silently invalidates every stored document's layout
+// fingerprint and every rule learned against it. These six are what says such an edit
+// happened; moving them without moving FingerprintVersion is the state this pin exists to
+// forbid. A new rule-less owning-phrase entry is the other case: it moves only the pages that
+// print its phrase, none of which are these six (EXTR-25-04).
 var fpCorpusPinned = map[string]string{
 	"corpus_inline_labels.pdf":  "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
 	"corpus_split_labels.pdf":   "v2:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
@@ -312,7 +314,8 @@ var fpCorpusPinned = map[string]string{
 
 // EXTR-16-02 AC-4. The oracle that catches an anchorLexicon edit. Moving a pin here is only
 // ever legitimate alongside a FingerprintVersion bump in the same commit
-// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant).
+// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant), because none
+// of these six prints a phrase a rule-less entry could claim.
 func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
 		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each, or the loop below asserts over less than the corpus",
@@ -326,9 +329,57 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 			continue
 		}
 		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != want {
-			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump in the same commit",
+			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed. A WIDENED existing pattern invalidates every stored rule and needs a FingerprintVersion bump in the same commit; a new rule-less owning-phrase entry does not, but it must not reach a page that never prints its phrase, and this is one",
 				name, got, want)
 		}
+	}
+}
+
+// EXTR-25-04 AC-4.7. The lexicon reset for due_date is scoped to pages that print the phrase:
+// every pinned hash above must hold, AND wild_rc_due_naira.pdf -- the one committed layout that
+// prints "Due Date" -- must move in BOTH namespaces. The post-change value is what proves the
+// entry landed; the pre-change value is pinned beside it and asserted DISTINCT, which is what
+// stops a later re-pin from asserting a move against itself.
+func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing.T) {
+	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
+		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each", len(corpusLayouts), len(fpCorpusPinned))
+	}
+	for _, name := range corpusLayouts {
+		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != fpCorpusPinned[name] {
+			t.Errorf("Fingerprint(%s) = %q, want %q unchanged -- the reset must not reach a page that never prints \"Due Date\"", name, got, fpCorpusPinned[name])
+		}
+	}
+	if len(bxFixturePinned) != 3 {
+		t.Fatalf("bxFixturePinned pins %d fixture(s), want 3", len(bxFixturePinned))
+	}
+	for _, c := range bxFixturePinned {
+		if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden))); got != c.want {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q unchanged", c.golden, got, c.want)
+		}
+	}
+
+	const (
+		naira         = "wild_rc_due_naira.pdf"
+		nairaGolden   = "wild_rc_due_naira.docling.json"
+		wantGeoBefore = "v2:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
+		wantGeoAfter  = "v2:d49e1c6d5aa0da37f80db44d645ffe9934896639d3010dec86274d1a06648cb5"
+		wantBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
+		wantBoxAfter  = "b2:157d3177b0bb51728b09d07d04c46884c6dca8facb3afaa0ef3d58c605491dca"
+	)
+	// The before-pins carry the "it MOVED" half. Without this floor they carry nothing: an
+	// author re-pinning after a later lexicon change can paste one hash into both, and the two
+	// equality checks below would then pass on a fingerprint that never moved.
+	if wantGeoAfter == wantGeoBefore {
+		t.Fatalf("wantGeoAfter equals wantGeoBefore (%q); the assertion below cannot tell a move from a stall", wantGeoBefore)
+	}
+	if wantBoxAfter == wantBoxBefore {
+		t.Fatalf("wantBoxAfter equals wantBoxBefore (%q); the assertion below cannot tell a move from a stall", wantBoxBefore)
+	}
+	if got := extraction.Fingerprint(rvCorpusPages(t, naira)); got != wantGeoAfter {
+		t.Errorf("Fingerprint(%s) = %q, want %q -- the entry must add a due_date element on the one layout that prints the phrase (pre-change it read %q)", naira, got, wantGeoAfter, wantGeoBefore)
+	}
+	if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, nairaGolden))); got != wantBoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moves too, not only the geometric one (pre-change it read %q)", nairaGolden, got, wantBoxAfter, wantBoxBefore)
 	}
 }
 
@@ -939,7 +990,7 @@ func TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures(t *testing.T) {
 	for _, c := range bxFixturePinned {
 		got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden)))
 		if got != c.want {
-			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved, which invalidates every stored boxless rule and needs a BoxlessFingerprintVersion bump in the same commit.\n  elements = %v",
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved. A WIDENED existing pattern invalidates every stored boxless rule and needs a BoxlessFingerprintVersion bump in the same commit; a new rule-less owning-phrase entry does not, but none of these three prints such a phrase.\n  elements = %v",
 				c.golden, got, c.want, bxElements(bxPage1(t, c.golden)))
 		}
 	}

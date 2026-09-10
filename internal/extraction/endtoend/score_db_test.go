@@ -364,6 +364,27 @@ func TestRLS_EndToEndAQuarantinedLayoutScoresZeroNotAbsent(t *testing.T) {
 	}
 }
 
+// AC-3.1. wild_rc_due_naira.pdf prints the naira symbol and never the word "Currency" -- that
+// value must reach the invoices row it writes, not only Resolve's candidate list.
+func TestRLS_EndToEndTheSymbolOnlyCurrencyReachesTheInvoiceRow(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	const layout = "wild_rc_due_naira.pdf"
+	eeRequireFixtures(t, []string{layout})
+
+	w := eeSeed(t, ctx, layout)
+	eeExtract(t, ctx, w, layout, eeOptsFor(t, layout)...)
+	eeImport(t, ctx, w)
+
+	got := eeWrittenRow(t, ctx, w.documentID)
+	if got == nil {
+		t.Fatalf("%s produced no invoices row; the currency assertion below would read an absent row", layout)
+	}
+	if got["currency"] != "NGN" {
+		t.Errorf("%s: invoices.currency = %q, want %q -- the naira symbol alone must resolve the field", layout, got["currency"], "NGN")
+	}
+}
+
 // eeScannedFieldFloor is how many of the seven non-invoice_number written fields the image-only
 // layout resolves to a rank-0 value, re-measured 2026-09-08 off its committed golden: all seven,
 // since each party's TIN binds to the heading that owns it. A floor -- the point is that the read
@@ -634,5 +655,18 @@ func TestRLS_EndToEndMeetsTheFloor(t *testing.T) {
 	}
 	if eeCorpusFloor > rate {
 		t.Errorf("the floor %v is above the measured rate %v; it is a prediction, not a ratchet", eeCorpusFloor, rate)
+	}
+}
+
+// AC-5.1. Core AC 7's two claims, live: currency strictly improves on ee25CurrencyBefore and
+// issue_date holds at or above ee25IssueDateBefore. ee25ClaimHolds adds no cell-level coverage of
+// its own -- see its comment in score_test.go.
+func TestRLS_EndToEndTheEXTR25FieldsMovedAsClaimed(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+
+	s := eeScoreCorpus(t, ctx)
+	if err := ee25ClaimHolds(s); err != nil {
+		t.Errorf("%v\n%s", err, eeRenderReport(s))
 	}
 }

@@ -646,7 +646,7 @@ func TestCorpusDoc_NamesOneInvalidationRuleNotTwo(t *testing.T) {
 		if strings.Contains(p, cldLeverMask) {
 			continue
 		}
-		t.Errorf("%s names %s as an invalidation lever without %s:\n\n%s\n\nSince EXTR-19-02 the same anchorLabelMatchers feed both fingerprints, so a lexicon change needs both bumps; a paragraph naming one lever tells the reader a stale half-truth",
+		t.Errorf("%s names %s as an invalidation lever without %s:\n\n%s\n\nSince EXTR-19-02 the same anchorLabelMatchers feed both fingerprints, so WIDENING an existing pattern needs both bumps (a new rule-less entry needs neither); a paragraph naming one lever tells the reader a stale half-truth",
 			acDoc, cldGeoLever, cldBoxlessLever, strings.TrimSpace(p))
 	}
 	if named < cldLeverFloor {

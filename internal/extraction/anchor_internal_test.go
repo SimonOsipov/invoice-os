@@ -166,8 +166,8 @@ func TestAnchorLexicon_IsOrderedAndUnique(t *testing.T) {
 	if got := reflect.TypeOf(anchorLexicon).Kind(); got != reflect.Slice {
 		t.Fatalf("anchorLexicon is a %s, want a slice", got)
 	}
-	if len(anchorLexicon) != 16 {
-		t.Fatalf("len(anchorLexicon) = %d, want 16: the shipped generic label set", len(anchorLexicon))
+	if len(anchorLexicon) != 17 {
+		t.Fatalf("len(anchorLexicon) = %d, want 17: the shipped generic label set", len(anchorLexicon))
 	}
 
 	seen := make(map[string]bool, len(anchorLexicon))
@@ -508,6 +508,7 @@ var alBareTokenCases = []struct {
 	{"reg_identifier", "VAT REG NO", []string{"VAT", "Tax", "V.A.T."}},
 	{"rc_number", "RC NUMBER", []string{"RC", "CAC"}},
 	{"doc_title", "TAX INVOICE", []string{"TAX", "VAT", "Invoice"}},
+	{"due_date", "Due Date", []string{"Due", "Date"}},
 }
 
 // anchorOutranked needs a STRICTLY wider span, so an owning phrase that loses its required tail
@@ -663,7 +664,7 @@ const (
 )
 
 // anchorOutranked can never empty a token's label set: it needs a STRICTLY wider containing
-// span, and the widest of the at most sixteen leftmost hits has none. So "carries a hit that is
+// span, and the widest of a token's leftmost hits (at most one per lexicon entry) has none. So "carries a hit that is
 // not itself outranked" and "carries a hit" are the same predicate, and the rightward boundary
 // ships without the qualifier. Deleting this leaves the missing clause looking like an
 // oversight.

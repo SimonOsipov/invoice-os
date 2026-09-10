@@ -15,7 +15,10 @@ type Tier int
 
 const (
 	TierLearned Tier = iota // a stored rule for this layout fingerprint
-	TierGeneric             // a shipped Tier-1 rule
+	TierGeneric             // a LABELLED shipped Tier-1 rule
+	// TierFallback: a shipped Tier-1 rule that recognises a value by its shape alone, with no
+	// label to corroborate it. Also shipped, so "shipped rule" alone no longer names TierGeneric.
+	TierFallback
 )
 
 // Candidate is one possible value for one field. Not a Field: law E07 makes Field.Name unique
@@ -75,7 +78,11 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		}
 	}
 	for _, r := range rules.Tier1 {
-		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, TierGeneric)
+		tier := TierGeneric
+		if r.Fallback {
+			tier = TierFallback
+		}
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, tier)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -111,7 +118,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 			if loc == nil {
 				continue
 			}
-			if tier == TierGeneric && anchorOutranked(tok.Text, loc) {
+			if tier != TierLearned && anchorOutranked(tok.Text, loc) {
 				continue
 			}
 			if !inBand(band, page.Number, tok.Region) {
@@ -126,7 +133,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
 					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
-				bounded := tier == TierGeneric && rule.Relation.Kind == RelRight
+				bounded := tier != TierLearned && rule.Relation.Kind == RelRight
 				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
 					value := page.Tokens[rel.index]
 					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {

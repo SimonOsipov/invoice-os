@@ -145,9 +145,10 @@ func TestWildLayouts_TheRuledTableReproducesACompetingTotal(t *testing.T) {
 
 // Two measured NON-reproductions on this arrangement, with different owners.
 //
-//   - Due Date above Issue Date: BOTH dates reach issue_date, but the printed issue date wins on
-//     distance because "Issue Date " is the longer label. Reachable and never decided, so the
-//     fixture is one dial from being an oracle. EXTR-25 owns that defect and must supply its own.
+//   - Due Date above Issue Date: EXTR-25-04's due_date entry now refuses the due-date token
+//     outright, so only the printed issue date reaches issue_date as a candidate. The synthetic
+//     oracles for this are TestResolve_ADueDateNoLongerContestsTheIssueDate (resolve_test.go) and
+//     TestEndToEnd_TheRCLayoutsCompetingDatesStayDecidedSynthetically (doubt_test.go).
 //   - RC number beside the VAT line: vat has one candidate. The RC line displaces nothing, and
 //     since rc_number ships as an owning phrase it reads as a label; this is what holds that.
 //
@@ -157,11 +158,11 @@ func TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect(t *testing.T)
 	issue := wildOneValue(t, wildRCNaira, "issue_date")
 	const wildRCDueDate = "2026-08-07"
 
-	if !slices.Contains(dates, wildRCDueDate) {
-		t.Errorf("%s no longer reaches the due date %s as an issue_date candidate; the arrangement stopped even being able to confuse the two", wildRCNaira, wildRCDueDate)
+	if slices.Contains(dates, wildRCDueDate) {
+		t.Errorf("%s still reaches the due date %s as an issue_date candidate; due_date should have refused it", wildRCNaira, wildRCDueDate)
 	}
 	if len(dates) == 0 || dates[0] != issue {
-		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0. NO ORACLE HERE for the Due-Date half -- this corpus does not reproduce it and EXTR-25 must supply its own", wildRCNaira, dates, issue)
+		t.Errorf("%s ranks issue_date %v; the printed issue date %q was measured at rank 0", wildRCNaira, dates, issue)
 	}
 
 	vat := wildResolved(t, wildRCNaira, "vat")
@@ -518,6 +519,224 @@ func TestWildLayouts_TheRCLineIsTheOnlyCompanyNumberLabelTheCorpusPrints(t *test
 	}
 	if !slices.Equal(hits, []string{"RC NUMBER"}) {
 		t.Errorf("%s observes rc_number as %v, want exactly [RC NUMBER]; the printed line must be a label hit, and the value behind the colon must stay outside it", wildRCNaira, hits)
+	}
+}
+
+// --- EXTR-25-03: the naira sweep, on the shipped rule set -----------------------------------
+
+// AC-3.1. wild_rc_due_naira.pdf prints ₦ 2,500.00 / ₦ 187.50 / ₦ 2,687.50 and never the word
+// "Currency" or "CCY" -- its currency must resolve from the naira symbol alone.
+func TestWildLayouts_TheRCLayoutResolvesItsCurrencyFromTheSymbol(t *testing.T) {
+	cands := extraction.Resolve(eeTokenPages(t, wildRCNaira), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	found := false
+	for _, c := range cands {
+		if c.Field == "currency" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("%s produced no currency candidate at all; the decision below would hold over nothing", wildRCNaira)
+	}
+
+	decided := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: cands}), "currency")
+	if got := dtValue(decided); got != "NGN" {
+		t.Errorf("%s: currency = %q, want %q", wildRCNaira, got, "NGN")
+	}
+	if decided.Reason != extraction.ReasonNone {
+		t.Errorf("%s: currency reason = %q, want %q", wildRCNaira, decided.Reason, extraction.ReasonNone)
+	}
+	if len(decided.Alternatives) != 0 {
+		t.Errorf("%s: currency alternatives = %v, want none", wildRCNaira, decided.Alternatives)
+	}
+}
+
+// AC-3.4. Regression guard, not the precedence oracle (AC-3.5 is): wild_ruled_lines_totals.pdf
+// carries both a labelled "Currency: NGN" and the "Amount ₦" column header. The label must
+// still head the field, and the sweep must still fire on the header -- two real candidates, not
+// an absence pass.
+func TestWildLayouts_ALabelledCurrencyStillHeadsTheRuledTable(t *testing.T) {
+	cands := extraction.Resolve(eeTokenPages(t, wildRuled), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+
+	var currency []extraction.Candidate
+	sweep := false
+	for _, c := range cands {
+		if c.Field != "currency" {
+			continue
+		}
+		currency = append(currency, c)
+		if c.RuleID == "t1.currency.sweep" {
+			sweep = true
+		}
+	}
+	if len(currency) == 0 {
+		t.Fatalf("%s produced no currency candidate at all; the assertions below would hold over nothing", wildRuled)
+	}
+	if !sweep {
+		t.Errorf(`%s produced no t1.currency.sweep candidate on its "Amount ₦" header; the two-candidate precedence this guards is untested`, wildRuled)
+	}
+	if currency[0].RuleID != "t1.currency.same_token" {
+		t.Errorf("%s heads currency via %s, want t1.currency.same_token -- the label must still win over the sweep", wildRuled, currency[0].RuleID)
+	}
+
+	decided := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: cands}), "currency")
+	if got := dtValue(decided); got != "NGN" {
+		t.Errorf("%s: currency = %q, want %q", wildRuled, got, "NGN")
+	}
+	if decided.Reason != extraction.ReasonNone {
+		t.Errorf("%s: currency reason = %q, want %q", wildRuled, decided.Reason, extraction.ReasonNone)
+	}
+	if len(decided.Alternatives) != 0 {
+		t.Errorf("%s: currency alternatives = %v, want none", wildRuled, decided.Alternatives)
+	}
+}
+
+// wildSweepCandidatesOnPages is every t1.currency.sweep candidate the SHIPPED rule set produces
+// over pages.
+func wildSweepCandidatesOnPages(pages []extraction.TokenPage) []extraction.Candidate {
+	var out []extraction.Candidate
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		if c.Field == "currency" && c.RuleID == "t1.currency.sweep" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// wildSweepCandidates is wildSweepCandidatesOnPages over one committed layout's real pdfium read.
+func wildSweepCandidates(t *testing.T, layout string) []extraction.Candidate {
+	t.Helper()
+	return wildSweepCandidatesOnPages(eeTokenPages(t, layout))
+}
+
+// wildNairaProbe plants one ₦ token the sweep must catch and one N-prefixed lookalike (no ₦
+// glyph) it must refuse -- the control that the walk below is running at all, not reading
+// nothing.
+func wildNairaProbe() []extraction.TokenPage {
+	return []extraction.TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+		{Text: "₦1,500.00", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.24, Y1: 0.13}},
+		{Text: "N1,500.00", Region: extraction.Region{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.24, Y1: 0.23}},
+	}}}
+}
+
+const wildSweepMinCandidates = 3
+
+// AC-3.2. Over the eleven committed layouts plus the planted probe, every t1.currency.sweep
+// candidate carries the value NGN -- and there are at least three, so a rule that produced
+// nothing could not satisfy the value check below vacuously.
+func TestTier1_TheNairaSweepEmitsOnlyNGN(t *testing.T) {
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus", len(expectByLayout), wildPartyNameLayouts)
+	}
+
+	var all []extraction.Candidate
+	for _, want := range expectByLayout {
+		all = append(all, wildSweepCandidates(t, want.file)...)
+	}
+	all = append(all, wildSweepCandidatesOnPages(wildNairaProbe())...)
+
+	if len(all) < wildSweepMinCandidates {
+		t.Fatalf("the walk produced %d t1.currency.sweep candidate(s), want at least %d", len(all), wildSweepMinCandidates)
+	}
+	for _, c := range all {
+		if c.Value != "NGN" {
+			t.Errorf("a t1.currency.sweep candidate carries value %q, want %q (region %+v)", c.Value, "NGN", c.Region)
+		}
+	}
+}
+
+// wildTokenRegion is the region of the token whose text is EXACTLY want, on one layout's real
+// pdfium read. Fatal on a miss: the absence checked against it must be about a real token, not a
+// stale byte string.
+func wildTokenRegion(t *testing.T, layout, want string) extraction.Region {
+	t.Helper()
+	for _, p := range eeTokenPages(t, layout) {
+		for _, tok := range p.Tokens {
+			if tok.Text == want {
+				return tok.Region
+			}
+		}
+	}
+	t.Fatalf("%s carries no token %q; the absence checked against it would be a typo, not a refusal", layout, want)
+	return extraction.Region{}
+}
+
+// wildSweepFreeTokens are byte-exact ₦-free tokens across the corpus that could tempt a widened
+// pattern: the rate/amount shapes on wild_ruled_lines_totals.pdf (nine occurrences, eight
+// distinct raw strings -- trailing spaces differ), and the ISO code glued to an amount on the
+// two layouts that print it inside a total.
+var wildSweepFreeTokens = map[string][]string{
+	wildRuled: {
+		"RATE (N) ",
+		"1,000.00 ", "4,000.00", "500.00 ", "3,000.00", "1,000.00",
+		"8,000.00", "600.00", "8,600.00",
+	},
+	"corpus_two_column.pdf":     {"Total: NGN 6,450.00"},
+	"corpus_stacked_labels.pdf": {"NGN 3,225.00"},
+}
+
+const wildSweepMinTokens = 150 // measured 161; the story's earlier >= 300 floor was unmeetable
+
+// AC-3.3. Negative oracle with a control: over the eleven committed layouts, no ₦-free token --
+// named byte-exact -- produces a t1.currency.sweep candidate, and the same walk over the
+// planted probe finds exactly one, on the ₦ token, so the absence above is the pattern
+// refusing rather than the walk failing to run.
+func TestTier1_TheNairaSweepFindsNoCurrencyInAMoneyTokenWithoutTheSymbol(t *testing.T) {
+	if len(expectByLayout) != wildPartyNameLayouts {
+		t.Fatalf("expectByLayout names %d layout(s), want %d; the walk below would cover a different corpus", len(expectByLayout), wildPartyNameLayouts)
+	}
+
+	layoutsWalked, tokensRead, sweepTotal := 0, 0, 0
+	sweptRegions := map[string][]extraction.Region{}
+	for _, want := range expectByLayout {
+		layoutsWalked++
+		pages := eeTokenPages(t, want.file)
+		for _, p := range pages {
+			tokensRead += len(p.Tokens)
+		}
+		cands := wildSweepCandidatesOnPages(pages)
+		sweepTotal += len(cands)
+		for _, c := range cands {
+			if c.Region != nil {
+				sweptRegions[want.file] = append(sweptRegions[want.file], *c.Region)
+			}
+		}
+	}
+	if layoutsWalked != wildPartyNameLayouts {
+		t.Fatalf("walked %d layout(s), want %d", layoutsWalked, wildPartyNameLayouts)
+	}
+	if tokensRead < wildSweepMinTokens {
+		t.Fatalf("read %d token(s) across the corpus, want at least %d -- the negative assertions below would hold over too small a walk", tokensRead, wildSweepMinTokens)
+	}
+	if sweepTotal != 4 {
+		t.Errorf("the walk produced %d t1.currency.sweep candidate(s), want exactly 4", sweepTotal)
+	}
+
+	for layout, tokens := range wildSweepFreeTokens {
+		for _, want := range tokens {
+			region := wildTokenRegion(t, layout, want)
+			for _, r := range sweptRegions[layout] {
+				if r == region {
+					t.Errorf("%s: token %q produced a t1.currency.sweep candidate; it carries no ₦", layout, want)
+				}
+			}
+		}
+	}
+
+	// Control: the same walk over a planted page finds exactly one candidate, on the ₦ token,
+	// and none on the N-prefixed lookalike -- proving the zeros above are the pattern refusing
+	// and not the walk failing to run.
+	probe := wildNairaProbe()
+	probeCands := wildSweepCandidatesOnPages(probe)
+	if len(probeCands) != 1 {
+		t.Fatalf("the probe page produced %d t1.currency.sweep candidate(s), want exactly 1", len(probeCands))
+	}
+	if probeCands[0].Value != "NGN" {
+		t.Errorf("the probe's sweep candidate carries value %q, want %q", probeCands[0].Value, "NGN")
+	}
+	naira := probe[0].Tokens[0].Region
+	if probeCands[0].Region == nil || *probeCands[0].Region != naira {
+		t.Errorf("the probe's sole sweep candidate is not on the ₦ token; N1,500.00 must never anchor it")
 	}
 }
 

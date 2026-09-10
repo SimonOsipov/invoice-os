@@ -174,11 +174,12 @@ spells out `Supplier TIN` names the supplier louder, not more quietly.
 
 ## Labels that own their token
 
-Five entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
+Six entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
 (`Customer No.`, `Client Code`) and `signature` (`Buyer's Signature`) sit over the party
 vocabulary; `reg_identifier` (`VAT REG NO`, `VAT REGISTRATION NUMBER`), `rc_number` (`RC NO`,
-`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary. None
-of the five carries a Tier-1 rule; none of them resolves a field. Each exists so that a token
+`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary;
+`due_date` (`Due Date`, `PAST DUE DATE`) sits over `issue_date`'s bare `date`. None of the six carries
+a Tier-1 rule; none of them resolves a field. Each exists so that a token
 spelling one of those phrases is claimed **whole** by a label, which is what stops a narrower entry
 inside it — `buyer_name`'s bare `Buyer` inside `Buyer's Signature`, `vat`'s bare `VAT` inside
 `VAT REG NO`, its bare `TAX` inside `TAX INVOICE` — from anchoring its own rule there and reading
@@ -486,16 +487,16 @@ a passing test's buffered log, so the report reaches CI only from a step of its 
 its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest` keeps that
 step's `-run` filter from rotting into one that matches nothing.
 
-EXTR-22 closed the last reach limit by widening the anchor lexicon, which is an input to both
-layout identities, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
-together. A reach limit closed by another route — a pointed correction on a distinguishing
-label — needs neither bump.
+EXTR-22 closed the last reach limit by widening an EXISTING anchor pattern, which invalidates
+every stored rule, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
+together. A NEW rule-less owning-phrase entry needs neither bump — it resets only pages that
+print the phrase. A reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: a document goes in at the
+Re-measured 2026-09-10 on `feature/extr-25-a-symbol-names-the-currency`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **57 of 88** cells — **0.6477**. Eleven layouts, eight written fields each.
+the page prints on **58 of 88** cells — **0.6591**. Eleven layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -507,8 +508,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 30 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (17 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -523,7 +524,7 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `corpus_totals_block.pdf` | 4 | 8 |
 | `wild_two_party_bare_tin.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals.pdf` | 7 | 8 |
-| `wild_rc_due_naira.pdf` | 7 | 8 |
+| `wild_rc_due_naira.pdf` | 8 | 8 |
 | `wild_stacked_borderless.pdf` | 2 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 
@@ -540,25 +541,26 @@ dropping it would flatter the rate by the exact amount the defect costs.
 | `issue_date` | 8 | 11 |
 | `buyer_tin` | 8 | 11 |
 | `buyer_name` | 7 | 11 |
-| `currency` | 4 | 11 |
+| `currency` | 5 | 11 |
 | `subtotal` | 6 | 11 |
 | `vat` | 6 | 11 |
 | `total` | 8 | 11 |
 
-`currency` at 4 of 11 is the worst field on the corpus: five layouts print the value inside the
-total or as a naira mark with no label to anchor it. `buyer_tin` reads 8 of 11: EXTR-22 bound
-each party's TIN to the heading that owns it, and the three cells left are two layouts that carry
-no buyer block at all and the quarantined page.
+`currency` at 5 of 11 is still the worst field on the corpus, and its six misses split four ways:
+three layouts print the value inside a total with no label to anchor it, one prints no currency at
+all, one offsets the value from a colon-less label, and the last is the quarantined page.
+`buyer_tin` reads 8 of 11: EXTR-22 bound each party's TIN to the heading that owns it, and the
+three cells left are two layouts that carry no buyer block at all and the quarantined page.
 
 ### What EXTR-23 changed
 
 Nothing on this page, and that is the finding rather than an omission. EXTR-23 ships an arithmetic
 referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
 decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
-removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. The
-headline stays **57 of 88** — 0.6477 — against EXTR-21's frozen baseline of 53 hits. `total` stays
-8 of 11 in the per-field table, no per-layout row moves, and every cell sits where EXTR-21 pinned
-it. **Do not read "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
+removed. Two readings inside that tolerance pick nothing, and no reading is ever condemned. It
+moved no cell: `total` stayed 8 of 11 in the per-field table, no per-layout row moved, and the
+headline it left behind was 57 hits, against EXTR-21's frozen baseline of 53. **Do not read
+"EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
 
 The referee is **inert on this corpus because no arrangement reaches two competing readings**, not
 because the mechanism cannot reach the defect. Measured across all eleven layouts, `Resolve` emits
@@ -578,6 +580,30 @@ per-layout candidate count, plus two planted controls that drive the same instru
 — and by the unit specs in `reconcile_total_test.go` and `reconcile_total_adversarial_test.go`. It
 is not graded by a moved score, and this subsection is where that is recorded rather than inferred
 from a number that did not change.
+
+### What EXTR-25 changed
+
+EXTR-25 ships `t1.currency.sweep`, a shape-only Tier-1 rule that reads `NGN` off a bare ₦ with no
+label to corroborate it. It moves **exactly one cell**: `wild_rc_due_naira.pdf/currency`, which
+takes that layout to 8 of 8 and `currency` to 5 of 11, and the headline from 57 hits to 58. Every
+other per-layout and per-field figure above is unchanged, and `eeBaselineHits` is untouched.
+
+The rule is a fallback tier, so a labelled reading always outranks it
+(`TestResolve_ALabelledCurrencyBeatsABareSymbol`). It is also blind: nothing ties the symbol to an
+amount, so a ₦ in a footer, a street name or a reference code resolves the field just as readily,
+and an unlabelled invoice priced in another currency that carries one ₦ reads `NGN` with no doubt
+attached. Those readings are pinned in `internal/extraction/sweep_qa_test.go` rather than left to
+be found on a tenant's document.
+
+EXTR-25 also ships a `due_date` owning phrase: `(?i)\bdue\s*date\b` refuses to anchor the issue
+date. It moves no cell, and **not** because the corpus is silent on it: `wild_rc_due_naira.pdf`
+prints "Due Date" above a second date (`internal/extraction/fixtures_test.go:798`), and the entry
+does remove that token's competing `2026-08-07` read. The printed issue date was already winning
+that contest on distance, so the decided value — and every figure above — is the same before and
+after. This score therefore does not grade the refusal; its oracles are
+`TestResolve_ADueDateNoLongerContestsTheIssueDate` and
+`TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect`, and both red the moment the entry
+is removed.
 
 ### Moving the figure
 
@@ -631,7 +657,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 17 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live
@@ -761,7 +787,8 @@ apply to them.
 A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
 derived from one correction — a **pointed** one on a document that has geometry, a **typed** one
 on a document that has none — stored against the layout's fingerprint, and read back on every
-later document of that layout. It is the tenant-specific tier; Tier-1 stays generic.
+later document of that layout. It is the tenant-specific tier; Tier-1 is generic except its one
+shape-only naira fallback (`t1.currency.sweep`).
 
 ### The two layout identities
 
@@ -793,9 +820,11 @@ Each namespace carries its **own** invalidation lever, and bumping one clears **
 class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
 readable under its unchanged key; bumping `BoxlessFingerprintVersion` does the reverse. So
 `FingerprintVersion` is no longer the single lever it was before EXTR-19 — an operator who bumps
-it and expects every stored rule gone is wrong. A change to the shared anchor lexicon is the one
-case that needs **both**, because `anchorLabelMatchers` is an input to both producers; EXTR-22 is
-the change that proved it, stepping both levers in one commit.
+it and expects every stored rule gone is wrong. WIDENING an existing shared-anchor-lexicon pattern
+is the one case that needs **both**, because `anchorLabelMatchers` is an input to both producers;
+EXTR-22 is the change that proved it, stepping both levers in one commit. A NEW rule-less
+owning-phrase entry needs neither: EXTR-25-04 added `due_date` and moved neither lever, because a
+new entry resets only the pages that print the phrase rather than invalidating every stored rule.
 
 ### How a rule is derived
 
@@ -990,11 +1019,11 @@ decides — `0.1179 < 0.6539` hands the field to the supplier.
 The remedy today is a **second pointed correction** on a distinguishing label — a token whose
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
 so that `TIN` alone no longer anchors is **not** a remedy here: it is what Tier-1 already does, and
-the learned rule outranks Tier-1 regardless. It is also the expensive lever, because the lexicon is
-an input to **both** fingerprints, so changing it invalidates every stored rule for every tenant
-and requires a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump. Since EXTR-19-02 the
-same `anchorLabelMatchers` feed `BoxlessFingerprint`, so a lexicon change moves every boxless key
-too.
+the learned rule outranks Tier-1 regardless. It is also the expensive lever: WIDENING AN EXISTING
+pattern invalidates every stored rule for every tenant and requires a `FingerprintVersion` **and**
+a `BoxlessFingerprintVersion` bump. A NEW rule-less owning-phrase entry needs neither bump. Since
+EXTR-19-02 the same `anchorLabelMatchers` feed `BoxlessFingerprint` too, but only a widened
+pattern moves every boxless key that reaches it — a new entry moves only the keys for pages printing it.
 
 ### learned_two_party.pdf is not a corpus layout
 

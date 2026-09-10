@@ -38,15 +38,22 @@ const (
 // eeCorpusHits is the eleven-layout figure, re-measured 2026-09-08 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 31 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 30 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 57
+	eeCorpusHits  = 58
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
+)
+
+// EXTR-25's own before-figures, measured on 8acf0879. A floor apiece, not the aggregate: the
+// headline can hold while one field falls and another rises.
+const (
+	ee25CurrencyBefore  = 4
+	ee25IssueDateBefore = 8
 )
 
 // writtenFields is what documentCreateInput actually puts in the invoices row, in
@@ -263,8 +270,6 @@ var eeRealMisses = map[string]string{
 
 	"wild_ruled_lines_totals.pdf/total": "the Total label continues on the last data row's baseline, so t1.total.right reaches that row's 1,000.00 and never the printed 8,600.00",
 
-	"wild_rc_due_naira.pdf/currency": "the naira marks the amounts but anchors no currency label, so the invoice row carries none",
-
 	"wild_stacked_borderless.pdf/issue_date": "the value is offset 8pt below its label in a second column, so neither same_token, right nor below binds",
 	"wild_stacked_borderless.pdf/buyer_name": "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/currency":   "the value is offset from its label, and the label carries no colon",
@@ -334,6 +339,44 @@ func eeLinesScoredComplete(s eeScore) error {
 	if s.linesScored+len(s.quarantined) != eeLayoutCount {
 		return fmt.Errorf("the walk read line rows off %d layout invoice(s) and quarantined %d, which is %d of %d; a walk that never scores reports the same zeros",
 			s.linesScored, len(s.quarantined), s.linesScored+len(s.quarantined), eeLayoutCount)
+	}
+	return nil
+}
+
+// eeFieldRow finds one byField row by name; a missing row reads (zero value, false).
+func eeFieldRow(s eeScore, name string) (eeScoreRow, bool) {
+	for _, r := range s.byField {
+		if r.name == name {
+			return r, true
+		}
+	}
+	return eeScoreRow{}, false
+}
+
+// ee25ClaimHolds states Core AC 7 in the score's own vocabulary: currency strictly improves on
+// ee25CurrencyBefore, issue_date holds at or above ee25IssueDateBefore. It adds no cell-level
+// coverage of its own -- the miss set is already pinned in both directions by
+// TestRLS_EndToEndScoresTheCorpus and TestRLS_EndToEndNoBaselineHitRegresses.
+func ee25ClaimHolds(s eeScore) error {
+	cur, ok := eeFieldRow(s, "currency")
+	if !ok {
+		return fmt.Errorf("currency: no byField row -- the walk never scored this field")
+	}
+	iss, ok := eeFieldRow(s, "issue_date")
+	if !ok {
+		return fmt.Errorf("issue_date: no byField row -- the walk never scored this field")
+	}
+	if cur.total != eeLayoutCount {
+		return fmt.Errorf("currency: denominator is %d of %d, want %d -- a shrunk denominator flatters the figure below", cur.hits, cur.total, eeLayoutCount)
+	}
+	if iss.total != eeLayoutCount {
+		return fmt.Errorf("issue_date: denominator is %d of %d, want %d -- a shrunk denominator flatters the figure below", iss.hits, iss.total, eeLayoutCount)
+	}
+	if cur.hits <= ee25CurrencyBefore {
+		return fmt.Errorf("currency: %d of %d, want strictly more than %d -- Core AC 7 claims currency improves", cur.hits, cur.total, ee25CurrencyBefore)
+	}
+	if iss.hits < ee25IssueDateBefore {
+		return fmt.Errorf("issue_date: %d of %d, want at least %d -- Core AC 7 claims issue_date does not regress", iss.hits, iss.total, ee25IssueDateBefore)
 	}
 	return nil
 }
@@ -903,5 +946,41 @@ func TestEndToEnd_TheFloorIsAQuotientOfThePinnedIntegers(t *testing.T) {
 	}
 	if eeCorpusFloor <= 0 || eeCorpusFloor > 1 {
 		t.Errorf("eeCorpusFloor is %v, outside (0, 1]; no rate can be compared against it meaningfully", eeCorpusFloor)
+	}
+}
+
+// AC-5.2. ee25ClaimHolds is not vacuous: the shipped figures pass, and each clause has a control
+// that falls through it alone. The fourth control kills a shrunk denominator (mutation M3) --
+// without it the floor clauses are dead code against the other three controls.
+func TestEndToEnd_TheEXTR25ClaimIsNotVacuous(t *testing.T) {
+	build := func(currencyHits, issueDateHits, total int) eeScore {
+		return eeScore{byField: []eeScoreRow{
+			{name: "currency", hits: currencyHits, total: total},
+			{name: "issue_date", hits: issueDateHits, total: total},
+		}}
+	}
+	cases := []struct {
+		name    string
+		s       eeScore
+		wantErr bool
+	}{
+		{"the shipped figures", build(5, 8, eeLayoutCount), false},
+		// Literal 4 and 7, not ee25CurrencyBefore/ee25IssueDateBefore: a control built from the
+		// constant under test moves with it and cannot catch the constant itself being lowered.
+		{"currency held at the before-figure", build(4, 8, eeLayoutCount), true},
+		{"issue_date one below the floor", build(5, 7, eeLayoutCount), true},
+		{"the denominator shrunk by one layout", build(5, 8, eeLayoutCount-1), true},
+		{"an empty score", eeScore{}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := ee25ClaimHolds(c.s)
+			if c.wantErr && err == nil {
+				t.Errorf("ee25ClaimHolds(%+v) = nil, want an error", c.s)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("ee25ClaimHolds(%+v) = %v, want nil -- the shipped figures must pass", c.s, err)
+			}
+		})
 	}
 }

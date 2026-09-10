@@ -132,7 +132,8 @@ func rvMixedRules(t *testing.T) extraction.RuleSet {
 	}
 }
 
-// rvGeneric is the shipped Tier-1 set, read from the package and never re-typed here: a
+// rvGeneric is the shipped Tier-1 set -- generic apart from t1.currency.sweep -- read from the
+// package and never re-typed here: a
 // test-local fork of the ten lexicon patterns drifts from the shipped ones silently
 // (TestTier1_ReusesTheAnchorLexiconPatterns).
 func rvGeneric() extraction.RuleSet {
@@ -391,7 +392,7 @@ func TestResolve_IsDeterministicAcrossRepeatedCalls(t *testing.T) {
 // V-09
 func TestResolve_ReasonIsAlwaysNone(t *testing.T) {
 	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
-	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
+	rvFloor(t, got, rvCorpusInline+" under the shipped rule set")
 
 	for i, c := range got {
 		if c.Reason != extraction.ReasonNone {
@@ -465,7 +466,7 @@ func TestResolve_SpatialRelationsSkipDegenerateBoxes(t *testing.T) {
 // V-12
 func TestResolve_EveryRegionSatisfiesTheColumnCheck(t *testing.T) {
 	got := extraction.Resolve(rvCorpusPages(t, rvCorpusInline), rvGeneric())
-	rvFloor(t, got, rvCorpusInline+" under the generic rule set")
+	rvFloor(t, got, rvCorpusInline+" under the shipped rule set")
 
 	withRegion := 0
 	for i, c := range got {
@@ -1130,5 +1131,440 @@ func TestResolve_EveryRelationBesideTheLabelMarksItsCandidateAdjacent(t *testing
 				t.Errorf("%s = %q via the %s relation reads Adjacent = %v, want %v", tc.field, c.Value, tc.relation, c.Adjacent, tc.adjacent)
 			}
 		}
+	}
+}
+
+// --- EXTR-25-02: fallback tier precedence -----------------------------------
+//
+// Resolve tags a Fallback: true rule's candidates TierFallback, which compareCandidates sorts
+// below every labelled reading. Only t1.currency.sweep ships Fallback (EXTR-25-03); every
+// fixture below still builds its own RuleSet to isolate the mechanism from the corpus.
+
+// AC-2.1. A labelled reading must beat a fallback one regardless of distance or reading order,
+// even when the fallback wins on every other axis (Distance 0 vs 0.12, Y0 0.10 vs 0.40).
+func TestResolve_AFallbackNeverOutranksALabelledReading(t *testing.T) {
+	t.Run("fallback closer", func(t *testing.T) {
+		label := rvTier1(t, "g.currency.right", "currency", `(?i)currency:`, extraction.RelRight, 0.35, extraction.ShapeName)
+		fallback := extraction.Tier1Rule{
+			Key: "g.currency.sweep", Field: "currency",
+			Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+			Fallback: true,
+		}
+		page := rvPage(
+			rvTok("Currency:", 0.10, 0.10, 0.20, 0.13),
+			rvTok("USD", 0.32, 0.10, 0.40, 0.13), // gap 0.12 from the label
+			rvTok("NGN", 0.10, 0.40, 0.20, 0.43), // same_token, distance 0
+		)
+		rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{label, fallback}}
+
+		got := extraction.Resolve(page, rules)
+		cands := rvFor(got, "currency")
+		rvFloor(t, cands, "the [Currency: USD] label beside a bare NGN token")
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", cands)
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the fallback's distance is 0 against the label's 0.12", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+
+		// Control: the same two candidates re-tiered to one shared tier decide NGN, the closer
+		// one -- proving the pass above is the tier split's own doing, not a fixture coincidence.
+		retiered := make([]extraction.Candidate, len(cands))
+		for i, c := range cands {
+			c.Tier = extraction.TierGeneric
+			retiered[i] = c
+		}
+		ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: retiered}), "currency")
+		if !ok || ctl.Value == nil || *ctl.Value != "NGN" {
+			t.Fatalf("control: untiered currency = %+v, want NGN decided -- otherwise the USD pass above proves nothing", ctl)
+		}
+	})
+
+	t.Run("fallback first in reading order", func(t *testing.T) {
+		label := extraction.Tier1Rule{
+			Key: "g.currency.same_token", Field: "currency",
+			Rule: rvRule(t, `^USD$`, extraction.RelSameToken, 0, extraction.ShapeName),
+		}
+		fallback := extraction.Tier1Rule{
+			Key: "g.currency.sweep2", Field: "currency",
+			Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+			Fallback: true,
+		}
+		page := rvPage(
+			rvTok("NGN", 0.10, 0.10, 0.20, 0.13), // reads first
+			rvTok("USD", 0.10, 0.40, 0.20, 0.43),
+		)
+		rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{label, fallback}}
+
+		got := extraction.Resolve(page, rules)
+		cands := rvFor(got, "currency")
+		rvFloor(t, cands, "USD and NGN as two whole same_token candidates")
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", cands)
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the fallback's token reads first", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+	})
+}
+
+// AC-2.2. With no labelled candidate for the field, the fallback rule decides alone. The Tier
+// assertion is the discriminator: it is the only one that reds if Resolve stops tagging a
+// Fallback rule's candidates TierFallback and hands them TierGeneric instead.
+func TestResolve_AFallbackDecidesWhenNoLabelResolved(t *testing.T) {
+	fallback := extraction.Tier1Rule{
+		Key: "g.currency.sweep", Field: "currency",
+		Rule:     rvRule(t, `^NGN$`, extraction.RelSameToken, 0, extraction.ShapeName),
+		Fallback: true,
+	}
+	page := rvPage(rvTok("NGN", 0.10, 0.10, 0.20, 0.13))
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{fallback}}
+
+	got := extraction.Resolve(page, rules)
+	cands := rvFor(got, "currency")
+	rvFloor(t, cands, "the sole fallback rule over its own token")
+	if len(cands) != 1 {
+		t.Fatalf("currency candidates = %+v, want exactly one", cands)
+	}
+	if cands[0].Tier != extraction.TierFallback {
+		t.Errorf("currency candidate Tier = %v, want TierFallback -- Resolve must tag a Fallback rule's own candidates TierFallback", cands[0].Tier)
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "currency")
+	if !ok || field.Value == nil {
+		t.Fatalf("currency decided nothing from %+v", cands)
+	}
+	if *field.Value != "NGN" {
+		t.Errorf("currency = %q, want %q", *field.Value, "NGN")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// AC-2.7. TierFallback must sort below TierGeneric, itself below TierLearned -- asserted by
+// name so a reordering of the iota block reds even though the ints still compare.
+func TestResolve_TheTierOrderIsLearnedGenericFallback(t *testing.T) {
+	if !(extraction.TierLearned < extraction.TierGeneric) {
+		t.Errorf("TierLearned (%d) is not less than TierGeneric (%d)", extraction.TierLearned, extraction.TierGeneric)
+	}
+	if !(extraction.TierGeneric < extraction.TierFallback) {
+		t.Errorf("TierGeneric (%d) is not less than TierFallback (%d)", extraction.TierGeneric, extraction.TierFallback)
+	}
+}
+
+// --- EXTR-25-03: the naira sweep, on the shipped rule set --------------------
+
+// AC-3.5, Core AC 4's oracle. A labelled currency must beat a bare ₦ symbol on the SHIPPED rule
+// set, in both reading orders -- not a synthetic stand-in for the sweep.
+func TestResolve_ALabelledCurrencyBeatsABareSymbol(t *testing.T) {
+	run := func(t *testing.T, symbolY0 float64) {
+		pages := rvPage(
+			rvTok("Currency: USD", 0.10, 0.40, 0.30, 0.43),
+			rvTok("₦2,500.00", 0.10, symbolY0, 0.24, symbolY0+0.03),
+		)
+		cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+
+		sweep := false
+		for _, c := range rvFor(cands, "currency") {
+			if c.RuleID == "t1.currency.sweep" {
+				sweep = true
+			}
+		}
+		if !sweep {
+			t.Fatalf("no t1.currency.sweep candidate on the ₦ token; the precedence below has nothing to compete against")
+		}
+
+		field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "currency")
+		if !ok || field.Value == nil {
+			t.Fatalf("currency decided nothing from %+v", rvFor(cands, "currency"))
+		}
+		if *field.Value != "USD" {
+			t.Errorf("currency = %q, want %q -- the label must win even though the sweep's distance is also 0", *field.Value, "USD")
+		}
+		if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+			t.Errorf("currency reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+		}
+	}
+
+	t.Run("symbol above the label", func(t *testing.T) { run(t, 0.10) })
+	t.Run("symbol below the label", func(t *testing.T) { run(t, 0.70) })
+}
+
+// AC-3.6. Twelve ₦ tokens and no currency label still decide ONE currency -- deduped by value,
+// not left ambiguous -- and the two other money fields on the same page still decide their own
+// values (anti-vacuity floor).
+func TestResolve_ManyNairaTokensStillDecideOneCurrency(t *testing.T) {
+	tokens := []extraction.Token{
+		rvTok("Sub-total: 1,200.00", 0.10, 0.60, 0.34, 0.63),
+		rvTok("Total: 1,290.00", 0.10, 0.70, 0.34, 0.73),
+	}
+	for i := 0; i < 12; i++ {
+		y := 0.05 + float64(i)*0.04
+		tokens = append(tokens, rvTok("₦100.00", 0.10, y, 0.20, y+0.02))
+	}
+	cands := extraction.Resolve(rvPage(tokens...), extraction.RuleSet{Tier1: extraction.Tier1Rules})
+
+	naira := 0
+	for _, c := range rvFor(cands, "currency") {
+		if c.RuleID == "t1.currency.sweep" {
+			naira++
+		}
+	}
+	// Exactly maxCandidatesPerField, not twelve: Resolve truncates per field AFTER ordering. A
+	// bare "> 0" floor would let a rule that emitted one candidate satisfy the dedupe claim below
+	// vacuously, which is the whole point of a twelve-token page.
+	if naira != 8 {
+		t.Fatalf("got %d t1.currency.sweep candidate(s) from twelve ₦ tokens, want 8 (maxCandidatesPerField); the dedupe below would hold over the wrong set", naira)
+	}
+
+	results := extraction.Reconcile(extraction.Input{Candidates: cands})
+	currency, ok := rcFind(results, "currency")
+	if !ok || currency.Value == nil {
+		t.Fatalf("currency decided nothing from %d sweep candidate(s)", naira)
+	}
+	if *currency.Value != "NGN" {
+		t.Errorf("currency = %q, want %q", *currency.Value, "NGN")
+	}
+	if currency.Reason != extraction.ReasonNone || len(currency.Alternatives) != 0 {
+		t.Errorf("currency reason = %q alternatives = %q, want %q with none -- twelve identical NGN readings must dedupe to one", currency.Reason, valuesOf(currency.Alternatives), extraction.ReasonNone)
+	}
+
+	// The anti-vacuity floor asserts the VALUE, not merely that something decided: a page whose
+	// other fields read the wrong number would still satisfy "decided something".
+	for _, want := range []struct{ field, value string }{
+		{"subtotal", "1200.00"},
+		{"total", "1290.00"},
+	} {
+		fr, ok := rcFind(results, want.field)
+		if !ok || fr.Value == nil {
+			t.Errorf("%s decided nothing; the anti-vacuity floor requires it to still resolve on this page", want.field)
+			continue
+		}
+		if *fr.Value != want.value {
+			t.Errorf("%s = %q, want %q", want.field, *fr.Value, want.value)
+		}
+	}
+}
+
+// EXTR-25-04. AC-4.1: "Due Date" is an owning phrase over issue_date's bare "date", so the
+// two no longer tie into a doubt. The control (due-date token replaced by a non-date label)
+// decides identically before and after -- a floor against "nothing resolved", not an oracle.
+func TestResolve_ADueDateNoLongerContestsTheIssueDate(t *testing.T) {
+	page := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+
+	got := extraction.Resolve(page, rvGeneric())
+	rvFloor(t, rvFor(got, "issue_date"), "the same-token issue_date read off ISSUE DATE: 2026-08-12")
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: got}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided", field.Value, "2026-08-12")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("issue_date reason = %q alternatives = %q, want %q with none -- due_date must refuse the DUE DATE token's competing read, not merely lose the tie", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+
+	control := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("PAYMENT REF: X", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+	ctlGot := extraction.Resolve(control, rvGeneric())
+	rvControl(t, rvFor(ctlGot, "issue_date"), "the control page's own issue_date read")
+	ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: ctlGot}), "issue_date")
+	if !ok || ctl.Value == nil || *ctl.Value != "2026-08-12" {
+		t.Fatalf("control issue_date = %v, want %q decided -- otherwise the pass above proves nothing about due_date specifically", ctl.Value, "2026-08-12")
+	}
+	if ctl.Reason != extraction.ReasonNone || len(ctl.Alternatives) != 0 {
+		t.Errorf("control issue_date reason = %q alternatives = %q, want %q with none", ctl.Reason, valuesOf(ctl.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// AC-4.2: a due date with no issue-date label anywhere on the page anchors nothing -- refused,
+// not routed to issue_date. total still deciding is the floor against an empty-page bug.
+func TestResolve_ADueDateAloneAnchorsNoIssueDate(t *testing.T) {
+	page := rvPage(
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.10, 0.40, 0.13),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.20, 0.40, 0.23),
+	)
+	results := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())})
+
+	issueDate, ok := rcFind(results, "issue_date")
+	if !ok {
+		t.Fatal("Reconcile emitted no issue_date")
+	}
+	if issueDate.Reason != extraction.ReasonMissing || issueDate.Value != nil {
+		t.Errorf("issue_date value = %v reason = %q, want nil value and %q -- a due date must be refused, not routed to issue_date", issueDate.Value, issueDate.Reason, extraction.ReasonMissing)
+	}
+	if len(issueDate.Alternatives) != 0 {
+		t.Errorf("issue_date alternatives = %q, want none", valuesOf(issueDate.Alternatives))
+	}
+
+	total, ok := rcFind(results, "total")
+	if !ok || total.Value == nil {
+		t.Fatalf("total decided nothing; an empty-page bug would satisfy the refusal above for the wrong reason")
+	}
+	if *total.Value != "1500.00" {
+		t.Errorf("total = %q, want %q", *total.Value, "1500.00")
+	}
+}
+
+// AC-4.3: the refusal names its clause. AnchorObservations does not apply anchorOutranked, so
+// the DUE DATE token still emits an issue_date/"DATE" observation too -- this asserts exactly
+// one due_date observation, not "one observation on that token".
+func TestAnchorLexicon_TheDueDateRefusalIsTheOwningPhrase(t *testing.T) {
+	page := rvPage(
+		rvTok("ISSUE DATE: 2026-08-12", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.20, 0.40, 0.23),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.30, 0.40, 0.33),
+	)
+
+	obs := extraction.AnchorObservations(page)
+	if len(obs) == 0 {
+		t.Fatal("AnchorObservations returned nothing; every assertion below would run over an empty set")
+	}
+	var dueDate []extraction.AnchorObservation
+	for _, o := range obs {
+		if o.Label == "due_date" {
+			dueDate = append(dueDate, o)
+		}
+	}
+	if len(dueDate) != 1 {
+		t.Fatalf("AnchorObservations reports %d due_date observation(s) %+v, want exactly 1", len(dueDate), dueDate)
+	}
+	if dueDate[0].Text != "DUE DATE" {
+		t.Errorf("due_date observation Text = %q, want %q", dueDate[0].Text, "DUE DATE")
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided -- the observation above proves nothing if the rule itself stopped resolving", field.Value, "2026-08-12")
+	}
+}
+
+// EXTR-25-04 QA. AC-4.2 checks that issue_date does not take the due date. This checks that
+// NOTHING does: a refused value must leave the page, not move to a neighbouring field. The
+// three other fields deciding is the floor -- a page that resolved nothing would satisfy the
+// absence clause for the wrong reason.
+func TestResolve_ARefusedDueDateReachesNoFieldAtAll(t *testing.T) {
+	const refused = "2026-09-11"
+	page := rvPage(
+		rvTok("Invoice No: INV-7", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: "+refused, 0.10, 0.20, 0.40, 0.23),
+		rvTok("Supplier TIN: 99999999-0201", 0.10, 0.30, 0.40, 0.33),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.40, 0.40, 0.43),
+	)
+	results := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())})
+	if len(results) == 0 {
+		t.Fatal("Reconcile emitted no field; the absence clause below would pass over nothing")
+	}
+
+	for _, f := range results {
+		if f.Value != nil && *f.Value == refused {
+			t.Errorf("%s took the refused due date %q as its value; the refusal must drop the reading, not relocate it", f.Name, refused)
+		}
+		if slices.Contains(valuesOf(f.Alternatives), refused) {
+			t.Errorf("%s offers the refused due date %q as an alternative %q", f.Name, refused, valuesOf(f.Alternatives))
+		}
+	}
+
+	for _, want := range []struct{ field, value string }{
+		{"invoice_number", "INV-7"},
+		{"supplier_tin", "99999999-0201"},
+		{"total", "1500.00"},
+	} {
+		f, ok := rcFind(results, want.field)
+		if !ok || f.Value == nil || *f.Value != want.value {
+			t.Fatalf("%s = %v, want %q decided -- without it the absence above is a page that resolved nothing", want.field, f.Value, want.value)
+		}
+	}
+}
+
+// The refusal must hold on the BELOW relation too, not only same-token: a "Due Date" column
+// head with its value stacked underneath is the arrangement wild_rc_due_naira.pdf prints.
+func TestResolve_ADueDateColumnHeadRefusesTheDateBelowIt(t *testing.T) {
+	page := rvPage(
+		rvTok("Issue Date", 0.10, 0.10, 0.20, 0.13),
+		rvTok("2026-08-12", 0.30, 0.10, 0.40, 0.13),
+		rvTok("Due Date", 0.10, 0.30, 0.18, 0.33),
+		rvTok("2026-09-11", 0.10, 0.36, 0.20, 0.39),
+	)
+	cands := extraction.Resolve(page, rvGeneric())
+	rvFloor(t, rvFor(cands, "issue_date"), "the issue_date read off the Issue Date column head")
+
+	for _, c := range rvFor(cands, "issue_date") {
+		if c.Value == "2026-09-11" {
+			t.Errorf("issue_date reached the stacked due date via %s; the refusal must cover the below relation too", c.RuleID)
+		}
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided", field.Value, "2026-08-12")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("issue_date reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// A tenant who already taught this producer that its issue date sits on the "Due Date" token
+// keeps that reading: resolve.go's outranking clause is guarded by `tier != TierLearned`, so
+// the generic refusal never overrides a correction.
+//
+// The learned label is the BARE word, not the phrase. A learned rule spelling `due\s*date`
+// claims [0,8] on this token, which due_date's own [0,8] does not STRICTLY contain, so it
+// survives whether or not the tier guard exists and cannot discriminate it. `\bdate\b` claims
+// [4,8], which [0,8] does strictly contain -- the tier guard is then the only thing standing
+// between the correction and suppression, and stripping it reds this test.
+//
+// The control run without the learned rule proves the reading is the learned rule's doing and
+// not a Tier-1 read that survived.
+func TestResolve_ALearnedRuleStillReadsARefusedDueDateToken(t *testing.T) {
+	page := rvPage(
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.10, 0.40, 0.13),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.20, 0.40, 0.23),
+	)
+
+	learned := extraction.RuleSet{
+		Tier1:   extraction.Tier1Rules,
+		Learned: []extraction.AnchorRule{rvLearned(t, "rule-1", "issue_date", `(?i)\bdate\b`, extraction.RelSameToken, 0, extraction.ShapeDate)},
+	}
+	cands := extraction.Resolve(page, learned)
+	rvFloor(t, rvFor(cands, "issue_date"), "the learned issue_date read off the DUE DATE token")
+
+	var sawLearned bool
+	for _, c := range rvFor(cands, "issue_date") {
+		if c.Tier == extraction.TierLearned && c.Value == "2026-09-11" {
+			sawLearned = true
+		}
+	}
+	if !sawLearned {
+		t.Fatalf("no TierLearned issue_date candidate reads 2026-09-11 from %+v; the refusal reached the learned tier", rvFor(cands, "issue_date"))
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-09-11" {
+		t.Fatalf("issue_date = %v, want %q -- a learned rule outranks the generic refusal", field.Value, "2026-09-11")
+	}
+
+	// Control: the same page with no learned rule reads nothing, so the pass above is the
+	// learned rule's doing and not a Tier-1 read that survived.
+	ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())}), "issue_date")
+	if !ok || ctl.Value != nil || ctl.Reason != extraction.ReasonMissing {
+		t.Fatalf("control issue_date = %v reason = %q, want nil and %q", ctl.Value, ctl.Reason, extraction.ReasonMissing)
 	}
 }

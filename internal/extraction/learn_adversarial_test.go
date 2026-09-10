@@ -1261,3 +1261,54 @@ func TestLearnBoxlessRule_MatchesAnyReadingOfAnAmbiguousShape(t *testing.T) {
 		t.Errorf("LearnBoxlessRule(issue_date, the month-first reading) body = %s, want %s", lr.Body, wantBody)
 	}
 }
+
+// AC-1.6 (EXTR-25-01). The naira widening's one new learnable case: a boxless currency
+// correction now derives from a symbol glued to a label, where the unwidened pattern refused
+// it. Paired controls: the same total with no naira glyph, and a token no lexicon matcher hits.
+func TestLearnBoxlessRule_ACurrencyCorrectionLearnsFromAGluedSymbol(t *testing.T) {
+	tokens := []string{"Total: ₦1,500.00"}
+	got, ok := extraction.LearnBoxlessRule("currency", "NGN", tokens)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(currency, NGN, %v) ok = false, want true", tokens)
+	}
+	const wantBody = `{"label":"(?i)\\bTotal\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"currency"}`
+	if string(got.Body) != wantBody {
+		t.Errorf("LearnBoxlessRule(currency, NGN, %v) body = %s, want %s", tokens, got.Body, wantBody)
+	}
+
+	noGlyph := []string{"Total: 1,500.00"}
+	if lr, ok := extraction.LearnBoxlessRule("currency", "NGN", noGlyph); ok {
+		t.Errorf("control: LearnBoxlessRule(currency, NGN, %v) ok = true, body = %s, want false: no naira glyph", noGlyph, lr.Body)
+	}
+
+	noLabel := []string{"Amount ₦"}
+	if lr, ok := extraction.LearnBoxlessRule("currency", "NGN", noLabel); ok {
+		t.Errorf("control: LearnBoxlessRule(currency, NGN, %v) ok = true, body = %s, want false: no lexicon matcher hits it", noLabel, lr.Body)
+	}
+}
+
+// AC-1.6's widening is not one case. readsAs only asks whether the post-label remainder reads as
+// NGN, so ANY lexicon label whose token carries a naira now learns a currency rule -- an invoice
+// number among them. Measured: unwidened, this returned false. The two controls are the pattern's
+// own bounds holding at the learn layer, where nothing else asserts them.
+func TestLearnBoxlessRule_ACurrencyRuleIsLearnableFromANonCurrencyLabel(t *testing.T) {
+	tokens := []string{"Invoice No: ₦-1234"}
+	got, ok := extraction.LearnBoxlessRule("currency", "NGN", tokens)
+	if !ok {
+		t.Fatalf("LearnBoxlessRule(currency, NGN, %v) ok = false, want true", tokens)
+	}
+	const wantBody = `{"label":"(?i)\\bInvoice No\\b","relation":{"kind":"same_token","max_distance":0.00},"shape":"currency"}`
+	if string(got.Body) != wantBody {
+		t.Errorf("LearnBoxlessRule(currency, NGN, %v) body = %s, want %s", tokens, got.Body, wantBody)
+	}
+
+	overCap := []string{"Total: " + strings.Repeat("z", 30) + "₦"}
+	if lr, ok := extraction.LearnBoxlessRule("currency", "NGN", overCap); ok {
+		t.Errorf("control: LearnBoxlessRule(currency, NGN, %v) ok = true, body = %s, want false: over the 24-rune decoration cap", overCap, lr.Body)
+	}
+
+	twoGlyphs := []string{"Total: ₦ ₦"}
+	if lr, ok := extraction.LearnBoxlessRule("currency", "NGN", twoGlyphs); ok {
+		t.Errorf("control: LearnBoxlessRule(currency, NGN, %v) ok = true, body = %s, want false: two naira glyphs", twoGlyphs, lr.Body)
+	}
+}

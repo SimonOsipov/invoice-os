@@ -216,3 +216,20 @@ func TestShapes_InvoiceNumberRejectsABareAnchorLabel(t *testing.T) {
 		t.Errorf("ShapeInvoiceNumber.Normalize(%q) = %v, want %v", "INV-1002", got, want)
 	}
 }
+
+// --- EXTR-25-01: a decorated naira token still normalises to NGN --------------
+
+// AC-1.1. The naira symbol is a currency signal whether it stands alone, is glued to an amount,
+// or sits inside a column header -- not only when it is the whole token.
+func TestShapeCurrency_AcceptsADecoratedNairaToken(t *testing.T) {
+	accepts := []string{
+		"₦", "  ₦  ", "₦1,500.00", "₦ 2,500.00",
+		"Amount ₦", "Unit rate ₦", "VAT ₦", "Amount (₦)",
+	}
+	if len(accepts) == 0 {
+		t.Fatal("fixture list is empty")
+	}
+	for _, raw := range accepts {
+		wantOne(t, extraction.ShapeCurrency, raw, "NGN")
+	}
+}

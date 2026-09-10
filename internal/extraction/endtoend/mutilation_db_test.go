@@ -36,9 +36,9 @@ import (
 // number of rules must fail here, naming the cut, rather than mutilate a different field
 // silently.
 const (
-	eeShippedRules = 34                            // extraction.Tier1Rules: 10 specs x 3 relations + bare_tin's 3 + 1 party-scoped TIN sweep
+	eeShippedRules = 35                            // extraction.Tier1Rules: 10 specs x 3 relations + bare_tin's 3 + 1 party-scoped TIN sweep + 1 shape-only naira sweep
 	eeCutRemoved   = 3                             // every invoice_number rule
-	eeCutRules     = eeShippedRules - eeCutRemoved // 31
+	eeCutRules     = eeShippedRules - eeCutRemoved // 32
 	eeCutField     = "invoice_number"
 	// Over eeCorpusCells. An empty invoice number is refused twice -- documentCreateInput
 	// (importer/document.go) and Store.Create (invoice/store.go:159) -- so this suite scores the
@@ -54,7 +54,7 @@ const (
 	// (internal/extraction/accuracy_test.go:52). This suite scores eeCorpusCells cells over the 8 fields
 	// the mapper writes. Different denominator, different table -- pinning 38 here would be a
 	// false pin.
-	eeCutReach = 47
+	eeCutReach = 48
 )
 
 // The reach decoy. The two-branch alternation is load-bearing, not cosmetic: decideField keeps

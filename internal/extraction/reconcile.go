@@ -63,10 +63,11 @@ func parseMoney(s *string) (decimal.Decimal, bool) {
 // doubtfulFields are the fields whose adjacent reads this pass presents as doubtful.
 var doubtfulFields = []string{"buyer_tin", "buyer_name", "vat", "total"}
 
-// uncorroborated reports whether head was read from a token beside its label by a shipped rule,
-// on one of the fields above. A learned head is the tenant's own answer for the layout and is
-// never second-guessed. Nothing here counts readings: a field that reached one distinct value
-// falls out at decideField's own len(deduped) < 2 gate, so a count clause would be inert.
+// uncorroborated reports whether head was read from a token beside its label by a labelled
+// shipped rule, on one of the fields above. A learned head is the tenant's own answer for the
+// layout and is never second-guessed; a TierFallback head has no label to be uncorroborated
+// against. Nothing here counts readings: a field that reached one distinct value falls out at
+// decideField's own len(deduped) < 2 gate, so a count clause would be inert.
 func uncorroborated(head Candidate) bool {
 	return head.Adjacent && head.Tier == TierGeneric && slices.Contains(doubtfulFields, head.Field)
 }

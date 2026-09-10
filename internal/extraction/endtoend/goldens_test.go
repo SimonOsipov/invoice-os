@@ -900,9 +900,10 @@ func TestWildLayouts_TheRuledTableTotalsDiscriminate(t *testing.T) {
 
 const wildCurrencyLabel = "Currency"
 
-// AC-14. On wild_ruled_lines_totals the naira is decoration glued to a column header and the
-// currency is sourced from an explicit label; on wild_rc_due_naira it is the currency marker and
-// there is no label at all. EXTR-24's Out of Scope forbids conflating the two.
+// AC-14. The symbol reads as currency on both layouts (EXTR-25-01 widened ShapeCurrency); the
+// jobs stay apart. wild_ruled_lines_totals sources its currency from an explicit label while the
+// header word under the naira keeps its line-item role; wild_rc_due_naira has no label at all,
+// so the symbol is its only marker. EXTR-24's Out of Scope forbids conflating the two.
 func TestWildLayouts_TheNairaRolesStaySeparate(t *testing.T) {
 	ruled := wildPages(t, wildRuled)
 
@@ -921,13 +922,16 @@ func TestWildLayouts_TheNairaRolesStaySeparate(t *testing.T) {
 		t.Errorf("expectByLayout[%s].currency = %v, want [NGN] sourced from the label", wildRuled, got)
 	}
 
-	// The header's naira is decoration: the whole token is not a currency reading.
-	header, ok := wildTokenContaining(ruled, "Amount")
-	if !ok {
-		t.Fatalf("%s carries no Amount header token", wildRuled)
+	// The header's naira does not stop the word underneath mapping to its line-item role.
+	// (The currency field still deciding from the label, not this token, is EXTR-25-03's AC-3.4.)
+	lines := extraction.LineItems(eeGoldenPages(t, wildGolden(wildRuled)))
+	if len(lines) == 0 {
+		t.Fatalf("%s's golden yields no line items; the Amount ₦ header failed to classify", wildRuled)
 	}
-	if got := extraction.ShapeCurrency.Normalize(header.Text); len(got) != 0 {
-		t.Errorf("%s's header token %q reads as currency %v; the naira there is decoration, not a marker", wildRuled, header.Text, got)
+	for _, line := range lines {
+		if line.LineTotal == nil {
+			t.Errorf("%s line %d carries no line_total; the Amount ₦ header did not map to its role", wildRuled, line.Index)
+		}
 	}
 
 	rc := wildPages(t, wildRCNaira)

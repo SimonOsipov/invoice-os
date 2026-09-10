@@ -19,7 +19,7 @@ import (
 
 // t1RuleCount is the shipped set's size, written out here rather than read from the package:
 // a floor that reads the value it guards cannot fail.
-const t1RuleCount = 34
+const t1RuleCount = 35
 
 const (
 	t1Inline  = "corpus_inline_labels.pdf"
@@ -44,6 +44,7 @@ var t1WantKeys = []string{
 	"t1.currency.below",
 	"t1.currency.right",
 	"t1.currency.same_token",
+	"t1.currency.sweep",
 	"t1.invoice_number.below",
 	"t1.invoice_number.right",
 	"t1.invoice_number.same_token",
@@ -80,7 +81,7 @@ func t1Rule(t *testing.T, key, field, label string, kind extraction.RelationKind
 	return r
 }
 
-// t1WithoutSweeps is the shipped set minus the one format-only rule -- G-10's negative control.
+// t1WithoutSweeps is the shipped set minus its two format-only rules -- G-10's negative control.
 func t1WithoutSweeps(rules []extraction.Tier1Rule) []extraction.Tier1Rule {
 	out := make([]extraction.Tier1Rule, 0, len(rules))
 	for _, r := range rules {
@@ -334,11 +335,11 @@ func TestTier1_TheSweepSeparatesSupplierFromBuyerByPartyBlock(t *testing.T) {
 		// Negative control, and it is what makes the spec's name true: this layout carries no
 		// TIN label token at all, so without the sweep neither field is reachable.
 		control := t1WithoutSweeps(extraction.Tier1Rules)
-		if len(control) != len(extraction.Tier1Rules)-1 {
-			t.Fatalf("the control set dropped %d rule(s), want exactly the 1 sweep", len(extraction.Tier1Rules)-len(control))
+		if len(control) != len(extraction.Tier1Rules)-2 {
+			t.Fatalf("the control set dropped %d rule(s), want exactly the 2 sweeps", len(extraction.Tier1Rules)-len(control))
 		}
 		ctl := extraction.Resolve(pages, extraction.RuleSet{Tier1: control})
-		rvControl(t, ctl, "the shipped set minus the sweep over "+t1Stacked)
+		rvControl(t, ctl, "the shipped set minus both sweeps over "+t1Stacked)
 		if v := rvValues(rvFor(ctl, "supplier_tin")); len(v) != 0 {
 			t.Errorf("without the sweep supplier_tin = %v, want none; a label rule did the work and this spec does not test the sweep", v)
 		}
@@ -477,13 +478,13 @@ func TestTier1_NoShippedRuleIsBanded(t *testing.T) {
 }
 
 // The shipped size after the merge: ten label specs x three relations, plus bare_tin's three,
-// plus the ONE merged sweep. t1RuleCount, eeShippedRules and acMutilatedRules all fatal against
-// len(Tier1Rules), so this is the number the other three follow.
-func TestTier1_ShipsThirtyFourRules(t *testing.T) {
-	const want = 10*3 + 3 + 1
+// plus the TIN sweep, plus the naira sweep. t1RuleCount, eeShippedRules and acMutilatedRules all
+// fatal against len(Tier1Rules), so this is the number the other three follow.
+func TestTier1_ShipsThirtyFiveRules(t *testing.T) {
+	const want = 10*3 + 3 + 1 + 1
 
 	if got := len(extraction.Tier1Rules); got != want {
-		t.Errorf("Tier1Rules holds %d rule(s), want %d -- ten label specs x three relations, bare_tin's three, and one merged party-scoped sweep", got, want)
+		t.Errorf("Tier1Rules holds %d rule(s), want %d -- ten label specs x three relations, bare_tin's three, the party-scoped TIN sweep and the shape-only naira sweep", got, want)
 	}
 }
 

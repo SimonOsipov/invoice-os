@@ -1,13 +1,13 @@
-// tier1.go: the shipped generic rule set -- what a tenant's FIRST document resolves against,
-// before anything is learned. Every rule must be built through ParseRule: a composite-literal
-// Rule has no compiled matcher and Resolve silently emits nothing for it
-// (TestTier1_EveryRuleHasACompiledMatcher).
+// tier1.go: the shipped rule set -- generic except the one shape-only naira fallback -- what a
+// tenant's FIRST document resolves against, before anything is learned. Every rule must be built
+// through ParseRule: a composite-literal Rule has no compiled matcher and Resolve silently emits
+// nothing for it (TestTier1_EveryRuleHasACompiledMatcher).
 package extraction
 
 import "strings"
 
-// Tier1Rule is a shipped generic rule. Band scopes it to part of a page and lives on this type
-// only, so the persisted rule body and EXTR-14's contract are untouched.
+// Tier1Rule is a shipped rule -- generic unless Fallback. Band scopes it to part of a page and
+// lives on this type only, so the persisted rule body and EXTR-14's contract are untouched.
 type Tier1Rule struct {
 	Key   string // stable, e.g. "t1.invoice_number.same_token"
 	Field string
@@ -17,11 +17,16 @@ type Tier1Rule struct {
 	// PartyScoped routes the candidate to the field the token's own party owns, instead of
 	// Field. Set only on the rules a party-LESS TIN label reaches.
 	PartyScoped bool
+
+	// Fallback marks a rule that recognises a value by its shape alone, with no label to
+	// corroborate it -- shipped only by t1.currency.sweep, the bare naira symbol.
+	Fallback bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon
-// labels, plus bare_tin's three, plus the one party-scoped TIN sweep.
-const tier1RuleCount = 34
+// labels, plus bare_tin's three, plus the one party-scoped TIN sweep and the one shape-only
+// naira sweep.
+const tier1RuleCount = 35
 
 // The set's only distance dials; nothing else reads a distance. Distance is the box GAP, so
 // both are bounded on both sides: right must reach 0.2060 and must not reach
@@ -99,10 +104,17 @@ func buildTier1Rules() []Tier1Rule {
 		}
 	}
 
+	// The naira sweep: the label IS the value, so sameTokenValue hands the whole token to
+	// ShapeCurrency and a glued symbol resolves with no label to corroborate it
+	// (TestTier1_TheNairaSweepReusesTheShapePattern -- nairaTokenPattern, never a copy).
+	naira := mustTier1Rule("t1.currency.sweep", "currency", nairaTokenPattern, RelSameToken, tier1MaxDistanceSameTokenJSON, ShapeCurrency, BandAnywhere)
+	naira.Fallback = true
+
 	// The sweep names a TIN by format alone, so the party block the anchor sits in decides the
 	// field (TestTier1_TheSweepSeparatesSupplierFromBuyerByPartyBlock).
 	return append(out,
 		mustTier1PartyRule("t1.tin.sweep", tier1TINSweepLabel, RelSameToken, tier1MaxDistanceSameTokenJSON),
+		naira,
 	)
 }
 

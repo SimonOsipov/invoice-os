@@ -337,8 +337,9 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 
 // EXTR-25-04 AC-4.7. The lexicon reset for due_date is scoped to pages that print the phrase:
 // every pinned hash above must hold, AND wild_rc_due_naira.pdf -- the one committed layout that
-// prints "Due Date" -- must move in BOTH namespaces. Both pre-change values hard-coded, so
-// "nothing moved" cannot pass on a build that never added the entry.
+// prints "Due Date" -- must move in BOTH namespaces. The post-change value is what proves the
+// entry landed; the pre-change value is pinned beside it and asserted DISTINCT, which is what
+// stops a later re-pin from asserting a move against itself.
 func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing.T) {
 	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
 		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each", len(corpusLayouts), len(fpCorpusPinned))
@@ -365,15 +366,20 @@ func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing
 		wantBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
 		wantBoxAfter  = "b2:157d3177b0bb51728b09d07d04c46884c6dca8facb3afaa0ef3d58c605491dca"
 	)
+	// The before-pins carry the "it MOVED" half. Without this floor they carry nothing: an
+	// author re-pinning after a later lexicon change can paste one hash into both, and the two
+	// equality checks below would then pass on a fingerprint that never moved.
+	if wantGeoAfter == wantGeoBefore {
+		t.Fatalf("wantGeoAfter equals wantGeoBefore (%q); the assertion below cannot tell a move from a stall", wantGeoBefore)
+	}
+	if wantBoxAfter == wantBoxBefore {
+		t.Fatalf("wantBoxAfter equals wantBoxBefore (%q); the assertion below cannot tell a move from a stall", wantBoxBefore)
+	}
 	if got := extraction.Fingerprint(rvCorpusPages(t, naira)); got != wantGeoAfter {
-		t.Errorf("Fingerprint(%s) = %q, want %q -- the entry must add a due_date element on the one layout that prints the phrase", naira, got, wantGeoAfter)
-	} else if got == wantGeoBefore {
-		t.Errorf("Fingerprint(%s) still holds its pre-change value %q", naira, wantGeoBefore)
+		t.Errorf("Fingerprint(%s) = %q, want %q -- the entry must add a due_date element on the one layout that prints the phrase (pre-change it read %q)", naira, got, wantGeoAfter, wantGeoBefore)
 	}
 	if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, nairaGolden))); got != wantBoxAfter {
-		t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moves too, not only the geometric one", nairaGolden, got, wantBoxAfter)
-	} else if got == wantBoxBefore {
-		t.Errorf("BoxlessFingerprint(%s) still holds its pre-change value %q", nairaGolden, wantBoxBefore)
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moves too, not only the geometric one (pre-change it read %q)", nairaGolden, got, wantBoxAfter, wantBoxBefore)
 	}
 }
 

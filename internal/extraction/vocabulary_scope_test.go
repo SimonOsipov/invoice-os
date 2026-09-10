@@ -1,5 +1,6 @@
-// vocabulary_scope_test.go: EXTR-26-01, T-01.4. External package: Resolve, Reconcile,
-// Tier1Rules and HeaderFields are all exported, so no internal hook is needed.
+// vocabulary_scope_test.go: what the widened label vocabulary decides once Resolve and
+// Reconcile have run over it. External package: Resolve, Reconcile, Tier1Rules and HeaderFields
+// are all exported, so no internal hook is needed.
 package extraction_test
 
 import (
@@ -36,8 +37,8 @@ func vsDeref(s *string) string {
 }
 
 // T-01.4: two pages identical except "Bill to" vs "Billed to" must decide every header field
-// the same way. RED today: the loosened page resolves buyer_name missing, so the two sides
-// differ.
+// the same way. Without alSuffix the loosened page resolves buyer_name missing, so the two
+// sides differ.
 func TestReconcile_ALoosenedPartyLabelDecidesExactlyAsTheExactOneDoes(t *testing.T) {
 	rules := rvGeneric()
 
@@ -138,9 +139,9 @@ func TestResolve_TheAdvisoryPageStagesTheContestTheRefereeMustSettle(t *testing.
 	}
 }
 
-// T-02.3: RED today -- subtotal reads missing, so corroborateTotal returns res untouched at its
-// haveSub gate and total keeps the wrong line amount. T-02.7 above is this row's non-vacuity
-// guard.
+// T-02.3: without the taxable-amount arm subtotal reads missing, corroborateTotal returns res
+// untouched at its haveSub gate, and total keeps the wrong line amount. T-02.7 above is this
+// row's non-vacuity guard: with the contest unstaged this test passes proving nothing.
 func TestReconcile_TheRefereeDecidesTheAdvisoryTotal(t *testing.T) {
 	out := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(vsRefereeCore("Taxable amount", false), rvGeneric())})
 
@@ -158,8 +159,9 @@ func TestReconcile_TheRefereeDecidesTheAdvisoryTotal(t *testing.T) {
 	}
 }
 
-// T-02.4: the control for T-02.3 -- proves the subtotal moved total, not page order. Passes
-// today.
+// T-02.4: the control for T-02.3 -- proves the SUBTOTAL VOCABULARY moved total, not page order.
+// It does not discriminate corroborateTotal's haveSub gate: strip that gate and this still
+// passes, because a zero subtotal balances neither reading and the referee returns res anyway.
 func TestReconcile_TheRefereeIsStillSilentWithoutASubtotal(t *testing.T) {
 	out := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(vsRefereeCore("Assessable consideration", false), rvGeneric())})
 
@@ -188,8 +190,9 @@ func firsFooterPage(secondLine string) []extraction.TokenPage {
 
 // T-02.5: the negative half alone is vacuous -- it passes whether "issued" is absent from the
 // lexicon or present and shape-refused, for two different reasons. The paired control proves
-// the zero is ShapeDate refusing the neighbour, not the vocabulary missing the anchor -- and it
-// reds today, before the widening, since there is then no anchor here for either page to bind.
+// the zero is ShapeDate refusing the neighbour, not the vocabulary missing the anchor. The
+// control is what carries the meaning: strip the issued arm and the control reds while the
+// negative half stays silent.
 func TestResolve_TheFIRSFooterIsNotAnIssueDate(t *testing.T) {
 	rules := rvGeneric()
 
@@ -203,13 +206,23 @@ func TestResolve_TheFIRSFooterIsNotAnIssueDate(t *testing.T) {
 
 	dates := rvFor(control, "issue_date")
 	if len(dates) != 1 || dates[0].Value != "2026-09-10" {
-		t.Errorf("issue_date candidates = %+v, want exactly one at %q -- otherwise the zero above cannot be told apart from a vocabulary miss", dates, "2026-09-10")
+		t.Fatalf("issue_date candidates = %+v, want exactly one at %q -- otherwise the zero above cannot be told apart from a vocabulary miss", dates, "2026-09-10")
+	}
+	// The measured distance: the anchor is the footer's first line, one line above. A candidate
+	// bound from anywhere else would carry a different one.
+	if got := dates[0].Distance; got < 0.0199 || got > 0.0201 {
+		t.Errorf("issue_date distance = %v, want 0.0200 -- the control must bind the token directly below ISSUED UNDER THE FIRS", got)
 	}
 }
 
-// T-02.8: CHARACTERISATION, not a fix. subtotal is absent from doubtfulFields
-// (reconcile.go:64), so a second reading never presents as doubtful -- it silently wins on
-// distance. Repairing needs column-header awareness, and that vocabulary is EXTR-24's fence.
+// T-02.8: CHARACTERISATION, not a fix. Exposure: any advisory invoice printing a per-line
+// "Taxable amount" column. subtotal is absent from doubtfulFields (reconcile.go:64), so the
+// column reading is never weighed against the footer's -- being strictly nearer, it decides
+// unflagged and the referee is then fed the wrong addend. Only the WIDENED peer group is lost:
+// at equal standing the pair still flags, per
+// TestReconcile_TwoSubtotalSpellingsAreDoubtfulOnlyAtEqualStanding. Repairing needs
+// column-header awareness, which is [vocabulary-fence]: line-item column vocabulary is
+// EXTR-24's, not this entry's.
 func TestResolve_ATaxableAmountColumnHeaderMintsASecondSubtotal(t *testing.T) {
 	cands := extraction.Resolve(vsRefereeCore("Taxable amount", true), rvGeneric())
 

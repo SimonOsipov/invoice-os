@@ -1,12 +1,12 @@
-// vocabulary_scope_internal_test.go: EXTR-26-01, T-01.1/T-01.2/T-01.3/T-01.5/T-01.6. Package
-// extraction: every spec reads a span through alSpan (anchor_internal_test.go) or calls
-// anchorOutranked, both unexported.
+// vocabulary_scope_internal_test.go: which spellings each lexicon entry admits, and which it
+// must keep refusing. Package extraction: every spec reads a span through alSpan
+// (anchor_internal_test.go) or calls anchorOutranked, both unexported.
 package extraction
 
 import "testing"
 
 // T-01.1: alSuffix lets a two-word party label take one of four enumerated tails between its
-// words. RED today: `bill\s*to` needs "bill" then whitespace then "to", and in "Billed to" the
+// words. Without it `bill\s*to` needs "bill" then whitespace then "to", and in "Billed to" the
 // next char is "e" -- no match at all.
 func TestAnchorLexicon_ATwoWordPartyLabelTakesAnEnumeratedSuffix(t *testing.T) {
 	for _, c := range []struct {
@@ -32,8 +32,8 @@ func TestAnchorLexicon_ATwoWordPartyLabelTakesAnEnumeratedSuffix(t *testing.T) {
 }
 
 // T-01.2: the suffix must not reach the four uninflected two-word entries it was never meant
-// for. Passes today -- 0 of 16 spellings match at offset 0 -- and it is the fence that reds on
-// all 16 the moment someone generalises alSuffix into one of these patterns.
+// for: 0 of 16 spellings match at offset 0. It is the fence that reds on all 16 the moment
+// someone generalises alSuffix into one of these patterns.
 //
 // Not `loc == nil`: total's bare "total" arm and issue_date's bare "date" arm already match the
 // trailing noun of half these spellings at a non-zero offset, for a reason unrelated to
@@ -75,8 +75,8 @@ func TestAnchorLexicon_TheOriginalPartySpellingsStillMatch(t *testing.T) {
 	}
 }
 
-// T-01.5: the loosened buyer_name/buyer_tin must still outrank the party-less bare_tin. RED
-// today: buyer_tin does not match this token at all, leaving bare_tin unopposed.
+// T-01.5: the loosened buyer_name/buyer_tin must still outrank the party-less bare_tin. Without
+// the suffix buyer_tin does not match this token at all, leaving bare_tin unopposed.
 func TestAnchorLexicon_TheLoosenedBuyerLabelStillOutranksTheBareTIN(t *testing.T) {
 	const text = "Billed to TIN: 99999999-1302"
 
@@ -99,7 +99,7 @@ func TestAnchorLexicon_TheLoosenedBuyerLabelStillOutranksTheBareTIN(t *testing.T
 	}
 }
 
-// T-01.6: a characterisation pin, not red-first -- passes today by design. Non-vacuity is
+// T-01.6: a characterisation pin, not red-first. Non-vacuity is
 // structural rather than a length check: every row asserts a non-nil span, so the table reds if
 // the matcher goes silent; "₦Total" starts at offset 3, so it reds under a `^` anchor; the nine
 // trailing-decoration rows end before len(text), so they red under a `$` anchor; and slicing the
@@ -128,7 +128,8 @@ func TestAnchorLexicon_ADecoratedLabelStillNamesItsOwnField(t *testing.T) {
 	}
 }
 
-// T-02.1: RED today -- measured, all five miss every entry (.ralph/arch-26-02.md §1).
+// T-02.1: the three advisory arms, each claimed by exactly one entry. Before the widening all
+// five spellings missed every entry.
 func TestAnchorLexicon_TheAdvisoryWordsNameTheirOwnField(t *testing.T) {
 	for _, c := range []struct{ text, owner string }{
 		{"Taxable amount", "subtotal"},
@@ -148,7 +149,7 @@ func TestAnchorLexicon_TheAdvisoryWordsNameTheirOwnField(t *testing.T) {
 	}
 }
 
-// T-02.2: passes today -- the non-vacuity fence for T-02.1. The last two rows are what make
+// T-02.2: the non-vacuity fence for T-02.1. The last two rows are what make
 // Core AC-3 work: total has no bare amount arm, and subtotal's amount arm needs a leading net,
 // so the two new arms can never cross into each other's field.
 func TestAnchorLexicon_TheAdvisoryWordsDoNotReachTheirNeighbours(t *testing.T) {

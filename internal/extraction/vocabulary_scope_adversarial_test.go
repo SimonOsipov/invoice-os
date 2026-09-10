@@ -1,6 +1,6 @@
-// vocabulary_scope_adversarial_test.go: the edge, negative and boundary coverage the EXTR-26-01
-// specs did not carry. Package extraction: alSpan, alSuffix, anchorLexicon and partyOrder are
-// all unexported.
+// vocabulary_scope_adversarial_test.go: the edge, negative and boundary coverage the
+// vocabulary-widening specs did not carry -- the party suffix and the three advisory arms.
+// Package extraction: alSpan, alSuffix, anchorLexicon and partyOrder are all unexported.
 package extraction
 
 import (
@@ -255,5 +255,146 @@ func TestAnchorLexicon_TheClosedSetMissesTheElidingInflection(t *testing.T) {
 	}
 	if alSpan("Invoiceing to", "buyer_name") == nil {
 		t.Error("\"Invoiceing to\": buyer_name span = nil, want a match; the tail is a blind concatenation onto the stem")
+	}
+}
+
+// vsaAdvisoryArms is the three arms this story spliced in, each with the shipped pattern's
+// pre-widening spelling. Derived from the shipped string, never re-typed, so a later edit to an
+// entry cannot leave the "before" side stale.
+var vsaAdvisoryArms = []struct{ id, arm, without string }{
+	{"subtotal", `|taxable\s*amount`, ``},
+	{"total", `amount\s*(due|payable)`, `amount\s*(due)`},
+	{"issue_date", `issued|`, ``},
+}
+
+// vsaBefore is the entry's pattern with its advisory arm removed.
+func vsaBefore(t *testing.T, id string) string {
+	t.Helper()
+	for _, a := range vsaAdvisoryArms {
+		if a.id != id {
+			continue
+		}
+		for _, e := range anchorLexicon {
+			if e.ID != id {
+				continue
+			}
+			if n := strings.Count(e.Pattern, a.arm); n != 1 {
+				t.Fatalf("%s: the advisory arm %q appears %d time(s) in the shipped pattern %q, want exactly 1 -- the before-pattern below cannot be derived", id, a.arm, n, e.Pattern)
+			}
+			return strings.Replace(e.Pattern, a.arm, a.without, 1)
+		}
+	}
+	t.Fatalf("%s is not an advisory-arm entry", id)
+	return ""
+}
+
+// The three advisory arms are case- and whitespace-insensitive between their two words, and none
+// reaches a one-word near miss. T-02.1/T-02.2 pin one canonical spelling apiece; a real page
+// prints the label in whatever case its template chose.
+func TestAnchorLexicon_TheAdvisoryArmsSurviveCasingAndSpacing(t *testing.T) {
+	for _, c := range []struct{ text, owner string }{
+		{"TAXABLE AMOUNT", "subtotal"},
+		{"taxable amount", "subtotal"},
+		{"Taxable  Amount", "subtotal"},
+		{"Taxable\tamount", "subtotal"},
+		{"Taxable amount (NGN)", "subtotal"},
+		{"AMOUNT PAYABLE", "total"},
+		{"amount payable", "total"},
+		{"Amount  Payable", "total"},
+		{"ISSUED", "issue_date"},
+		{"issued", "issue_date"},
+		{"Issued on", "issue_date"},
+		{"Issued by", "issue_date"},
+	} {
+		loc := alSpan(c.text, c.owner)
+		if loc == nil {
+			t.Errorf("%q: %s span = nil, want a match", c.text, c.owner)
+			continue
+		}
+		if loc[0] != 0 {
+			t.Errorf("%q: %s matches at %v, want the label to start at offset 0", c.text, c.owner, loc)
+		}
+	}
+
+	// One-word near misses. The arms are two words wide (or, for issued, one whole word), so a
+	// stem or a fragment must claim nothing.
+	for _, c := range []struct{ text, id string }{
+		{"Taxable", "subtotal"},
+		{"Taxation", "subtotal"},
+		{"Amounts payable", "subtotal"},
+		{"Payable", "total"},
+		{"Balance payable", "total"},
+		{"Amounts payable", "total"},
+		{"Reissued", "issue_date"},
+		{"Issuer", "issue_date"},
+		{"Unissued", "issue_date"},
+	} {
+		if loc := alSpan(c.text, c.id); loc != nil {
+			t.Errorf("%q: %s span = %v, want no match", c.text, c.id, loc)
+		}
+	}
+}
+
+// vsaScoredArrangements is the eleven layouts endtoend scores (endtoend/score_test.go's
+// expectByLayout). Named rather than globbed: the question this test answers is about the
+// scored corpus, and a glob would silently answer it about whatever else lands in testdata.
+var vsaScoredArrangements = []string{
+	"corpus_inline_labels", "corpus_split_labels", "corpus_stacked_labels",
+	"corpus_two_column", "corpus_ambiguous_date", "corpus_totals_block",
+	"wild_two_party_bare_tin", "wild_ruled_lines_totals", "wild_rc_due_naira",
+	"wild_stacked_borderless", "wild_scanned_no_number",
+}
+
+// The three advisory arms reach no token on any scored arrangement: every widened entry claims
+// the span its pre-widening spelling claimed. That is what makes the 58/88 and 44/44 floors
+// evidence rather than coincidence, and it bounds the column-header defect
+// TestResolve_ATaxableAmountColumnHeaderMintsASecondSubtotal characterises to a hand-built page.
+func TestAnchorLexicon_TheAdvisoryArmsAddNoAnchorOnTheScoredArrangements(t *testing.T) {
+	if len(vsaScoredArrangements) != 11 {
+		t.Fatalf("%d arrangement(s) named, want the 11 endtoend scores", len(vsaScoredArrangements))
+	}
+
+	var texts []string
+	for _, name := range vsaScoredArrangements {
+		path := filepath.Join("testdata", name+".docling.json")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		var doc struct {
+			Pages []struct {
+				Tokens []struct{ Text string } `json:"tokens"`
+			} `json:"pages"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		for _, p := range doc.Pages {
+			for _, tok := range p.Tokens {
+				texts = append(texts, tok.Text)
+			}
+		}
+	}
+	if len(texts) == 0 {
+		t.Fatal("the scored arrangements carry no token text; every assertion below would range over nothing")
+	}
+
+	for _, a := range vsaAdvisoryArms {
+		before := regexp.MustCompile(vsaBefore(t, a.id))
+		matched := 0
+		for _, text := range texts {
+			got, want := alSpan(text, a.id), before.FindStringIndex(text)
+			if (got == nil) != (want == nil) || (got != nil && (got[0] != want[0] || got[1] != want[1])) {
+				t.Errorf("%s on %q: widened span %v, pre-widening span %v; the advisory arm changed a scored arrangement's anchors", a.id, text, got, want)
+			}
+			if want != nil {
+				matched++
+			}
+		}
+		// Non-vacuity: an all-nil column would satisfy the equality without exercising either
+		// pattern.
+		if matched == 0 {
+			t.Errorf("%s matched none of the %d scored token text(s); the equality above proved nothing", a.id, len(texts))
+		}
 	}
 }

@@ -126,7 +126,7 @@ func TestAnchorLexicon_TheBumpRuleDistinguishesANewEntryFromAWidenedPattern(t *t
 
 	passages := []struct{ from, to int }{
 		{489, 492},
-		{1006, 1013},
+		{1011, 1018},
 	}
 	matched := 0
 	for _, p := range passages {

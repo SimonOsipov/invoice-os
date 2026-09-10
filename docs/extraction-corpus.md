@@ -594,6 +594,11 @@ and an unlabelled invoice priced in another currency that carries one ₦ reads 
 attached. Those readings are pinned in `internal/extraction/sweep_qa_test.go` rather than left to
 be found on a tenant's document.
 
+EXTR-25 also ships a `due_date` owning phrase: `(?i)\bdue\s*date\b` refuses to anchor the issue
+date. It moves no cell on this corpus — no layout prints "Due Date" — so this score does not grade
+it. Its oracles are `TestResolve_ADueDateNoLongerContestsTheIssueDate` and
+`TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect`.
+
 ### Moving the figure
 
 The number lives in `internal/extraction/endtoend/score_test.go` as two pinned integers,
@@ -646,7 +651,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 17 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live

@@ -3,7 +3,10 @@
 // (anchor_internal_test.go) or calls anchorOutranked, both unexported.
 package extraction
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // T-01.1: alSuffix lets a two-word party label take one of four enumerated tails between its
 // words. Without it `bill\s*to` needs "bill" then whitespace then "to", and in "Billed to" the
@@ -260,6 +263,38 @@ func TestAnchorLexicon_TheWithholdingPhraseStrictlyContainsTheVATWord(t *testing
 	}
 }
 
+// Both \b anchors survived mutation: dropping either left every spec green. The leading one is
+// behavioural -- without it the phrase opens mid-word and suppresses a vat label the token really
+// carries; the trailing one is match-level, like doc_title's "TAX INVOICES" reject.
+func TestAnchorLexicon_TheWithholdingPhraseIsBoundedAtBothEnds(t *testing.T) {
+	// The paired positives: the refusals below hold equally against a pattern broken to match
+	// nothing. Both boundaries sit against a non-word char here, so both still match.
+	for _, text := range []string{"WHT-Withholding tax", "Withholding tax: 318,742.00"} {
+		if alSpan(text, "withholding_tax") == nil {
+			t.Errorf("%q: withholding_tax span = nil, want a match", text)
+		}
+	}
+
+	for _, c := range []struct{ text, why string }{
+		{"Nonwithholding tax", "the phrase opened inside a word it does not own"},
+		{"Withholding Taxable amount", "the phrase ran past its own tax into the taxable-amount label"},
+	} {
+		if loc := alSpan(c.text, "withholding_tax"); loc != nil {
+			t.Errorf("withholding_tax claims %v on %q; %s", loc, c.text, c.why)
+		}
+	}
+
+	// The consequence the leading boundary buys: that token's own vat label still anchors.
+	const inner = "Nonwithholding tax"
+	vat := alSpan(inner, "vat")
+	if vat == nil {
+		t.Fatalf("%q: vat span = nil; the suppression claim below has nothing to stand on", inner)
+	}
+	if anchorOutranked(inner, vat) {
+		t.Errorf("anchorOutranked(%q, %v) = true, want false: a phrase opening mid-word suppressed a label it does not contain", inner, vat)
+	}
+}
+
 // vsVATPatternAtEXTR22 is an independently typed transcription of the shipped vat entry's
 // pattern, verified byte-identical against origin/main and HEAD at authoring time. EXTR-22 owns
 // this pattern; this story adds an entry above it and writes nothing inside it.
@@ -285,5 +320,26 @@ func TestAnchorLexicon_TheVATPatternIsUnchangedByThisStory(t *testing.T) {
 	// or removed.
 	if n != 1 {
 		t.Fatalf("anchorLexicon holds %d entr(y/ies) with ID %q, want exactly 1", n, "vat")
+	}
+
+	// Second witness. Measured: widening vat AND this constant together passes the whole package,
+	// so the comparison above cannot tell a co-edit from no edit. reg_identifier is EXTR-22's
+	// other site and carries the same alternation byte-identically; taking the needle from the
+	// constant makes a co-edit red from a site it did not touch.
+	alt := strings.TrimSuffix(strings.TrimPrefix(vsVATPatternAtEXTR22, `(?i)\b`), `\b`)
+	if alt == vsVATPatternAtEXTR22 {
+		t.Fatalf("%q does not open (?i)\\b and close \\b; the needle below is not the alternation", vsVATPatternAtEXTR22)
+	}
+	reg := ""
+	for _, e := range anchorLexicon {
+		if e.ID == "reg_identifier" {
+			reg = e.Pattern
+		}
+	}
+	if reg == "" {
+		t.Fatalf("anchorLexicon holds no reg_identifier entry; the witness below reads nothing")
+	}
+	if !strings.Contains(reg, alt) {
+		t.Errorf("reg_identifier pattern %q does not carry %q; EXTR-22's two sites carry one alternation, so one of them moved", reg, alt)
 	}
 }

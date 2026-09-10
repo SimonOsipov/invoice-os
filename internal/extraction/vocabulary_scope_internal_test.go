@@ -167,8 +167,7 @@ func TestAnchorLexicon_TheAdvisoryWordsDoNotReachTheirNeighbours(t *testing.T) {
 	}
 }
 
-// T-03.1: the five leading spellings anchor supplier_name at offset 0 -- from is absent from
-// the entry today, so all five are nil.
+// T-03.1: the five leading spellings anchor supplier_name at offset 0.
 func TestAnchorLexicon_FromNamesTheSupplierWhenItLeadsTheToken(t *testing.T) {
 	for _, text := range []string{"From", "From:", "FROM", "  From", "From: Kaduna Advisory Partners"} {
 		loc := alSpan(text, "supplier_name")
@@ -193,10 +192,11 @@ func TestAnchorLexicon_FromNamesTheSupplierWhenItLeadsTheToken(t *testing.T) {
 	}
 }
 
-// T-03.2: the terminator's whole justification. A mid-sentence from must refuse -- vacuously
-// true today, since no from arm exists yet. A LEADING from in ordinary prose must ALSO refuse:
-// a bare `^\s*from\b`, with no terminator, would accept every one of the four below, fabricate
-// a supplier name and lose buyer_tin (TestParty_ALeadingProseFromLeavesTheBuyerTINAlone).
+// T-03.2: the terminator's whole justification. A LEADING from in ordinary prose must refuse:
+// a bare `^\s*from\b` with no terminator accepts every one of the four below, fabricates a supplier
+// name and loses buyer_tin (TestParty_ALeadingProseFromLeavesTheBuyerTINAlone). The mid-sentence
+// rows below are the terminator's alone; the leading anchor's own rows are in
+// TestAnchorLexicon_AMidSentenceFromWithATerminatorNamesNobody.
 func TestAnchorLexicon_FromInProseNamesNobody(t *testing.T) {
 	midSentence := []string{
 		"Balance carried forward from previous invoice",

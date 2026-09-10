@@ -472,3 +472,461 @@ func TestParty_ALeadingProseFromLeavesTheBuyerTINAlone(t *testing.T) {
 		t.Errorf("buyer_tin = %+v, want ReasonNone / %q", tin, "99999999-1302")
 	}
 }
+
+// --- the from arm ------------------------------------------------------------------------
+
+// vsaFromArm is the alternation branch supplier_name gained, derived from the shipped entry so
+// the before-pattern below cannot go stale, and vsaFromOnly is that branch alone.
+const (
+	vsaFromArm  = `|^\s*from\b\s*(?:[:.\-–—]|$)`
+	vsaFromOnly = `(?i)^\s*from\b\s*(?:[:.\-–—]|$)`
+)
+
+// vsaSupplierBefore is supplier_name's pattern with the from arm removed.
+func vsaSupplierBefore(t *testing.T) string {
+	t.Helper()
+	for _, e := range anchorLexicon {
+		if e.ID != "supplier_name" {
+			continue
+		}
+		if n := strings.Count(e.Pattern, vsaFromArm); n != 1 {
+			t.Fatalf("the from arm %q appears %d time(s) in %q, want exactly 1; the before-pattern cannot be derived", vsaFromArm, n, e.Pattern)
+		}
+		return strings.Replace(e.Pattern, vsaFromArm, "", 1)
+	}
+	t.Fatal("anchorLexicon carries no supplier_name entry")
+	return ""
+}
+
+// vsaSameSpan reports whether two FindStringIndex results agree, nil included.
+func vsaSameSpan(a, b []int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || (a[0] == b[0] && a[1] == b[1])
+}
+
+// vsaStrings is a generated probe set: three vocabulary slots joined by one separator, plus a
+// two-slot set behind five leading prefixes. Wide enough that a silent change to the
+// supplier/seller/vendor arm cannot hide in it.
+func vsaStrings() []string {
+	words := []string{
+		"supplier", "Seller", "VENDOR", "vendors", "subsupplier",
+		"from", "From", "FROM", "freight", "fromage",
+		"buyer", "Lagos", "invoice", "", "-", ":", "—",
+	}
+	seps := []string{"", " ", "  ", ":", ".", "\t", "\n", "-"}
+	out := make([]string, 0, 45000)
+	for _, a := range words {
+		for _, b := range words {
+			for _, c := range words {
+				for _, s := range seps {
+					out = append(out, a+s+b+" "+c)
+				}
+			}
+		}
+	}
+	for _, pre := range []string{"", " ", "  ", "\t", "\n"} {
+		for _, a := range words {
+			for _, b := range words {
+				out = append(out, pre+a+" "+b, pre+a+b)
+			}
+		}
+	}
+	return out
+}
+
+// The alternation was restructured -- the outer \b pair moved inside the first arm -- so the
+// supplier/seller/vendor reading could have shifted without any from spec noticing, since every
+// one of them is about from. Each difference from the pre-arm spelling has to be the from arm's,
+// and the entry minus its arm has to read exactly as the un-parenthesised original did.
+func TestAnchorLexicon_TheFromArmIsTheOnlyThingSupplierNameGained(t *testing.T) {
+	const original = `(?i)\b(supplier|seller|vendor)\b`
+
+	before := regexp.MustCompile(vsaSupplierBefore(t))
+	fromArm := regexp.MustCompile(vsaFromOnly)
+	orig := regexp.MustCompile(original)
+
+	set := vsaStrings()
+	if len(set) == 0 {
+		t.Fatal("the probe set is empty; every count below would be zero for the wrong reason")
+	}
+
+	var differ, added, lost, shifted, attributed, reparenthesised, beforeMatched int
+	for _, s := range set {
+		b, n := before.FindStringIndex(s), alSpan(s, "supplier_name")
+		if b != nil {
+			beforeMatched++
+		}
+		// The parenthesisation itself must be inert: dropping the from arm has to leave the
+		// original spelling's exact span.
+		if o := orig.FindStringIndex(s); !vsaSameSpan(o, b) {
+			reparenthesised++
+			if reparenthesised <= 3 {
+				t.Errorf("%q: %q spans %v, the shipped entry minus its from arm spans %v; the rewrite moved the supplier/seller/vendor reading", s, original, o, b)
+			}
+		}
+		if vsaSameSpan(b, n) {
+			continue
+		}
+		differ++
+		switch {
+		case b == nil:
+			added++
+		case n == nil:
+			lost++
+			if lost <= 3 {
+				t.Errorf("%q: matched %v before the from arm and nothing after it; the from arm may only add", s, b)
+			}
+		default:
+			shifted++
+		}
+		if f := fromArm.FindStringIndex(s); vsaSameSpan(f, n) {
+			attributed++
+		} else if differ-attributed <= 3 {
+			t.Errorf("%q: span moved from %v to %v and the from arm spans %v; the difference is not the from arm's", s, b, n, f)
+		}
+	}
+
+	// Non-vacuity on both sides: an all-nil column, or a set no from ever leads, satisfies the
+	// equalities above without exercising either pattern.
+	if beforeMatched == 0 {
+		t.Errorf("the pre-arm pattern matched none of the %d probe(s); the equality above proved nothing", len(set))
+	}
+	if added == 0 {
+		t.Errorf("the from arm added no match over %d probe(s); the attribution above proved nothing", len(set))
+	}
+	if differ != attributed {
+		t.Errorf("%d probe(s) differ and %d are the from arm's; %d are unaccounted for", differ, attributed, differ-attributed)
+	}
+	t.Logf("probes=%d differ=%d added=%d lost=%d shifted=%d attributed=%d", len(set), differ, added, lost, shifted, attributed)
+}
+
+// The ^ carries the guard on its own. Nothing pinned it: every prose row the story listed puts a
+// bare word after its from, which the terminator refuses anyway, so the anchor could be deleted
+// and the suite stay green. These rows put a real terminator behind a mid-sentence from, where
+// only the ^ refuses them.
+func TestAnchorLexicon_AMidSentenceFromWithATerminatorNamesNobody(t *testing.T) {
+	for _, text := range []string{
+		"Period from:",
+		"Valid from:",
+		"Amount received from:",
+		"Balance carried forward from.",
+		"Invoice period from —",
+		"Goods shipped from-",
+		"Discount applied from",
+	} {
+		if loc := alSpan(text, "supplier_name"); loc != nil {
+			t.Errorf("%q: supplier_name span = %v, want no match; only the leading anchor refuses this row", text, loc)
+		}
+	}
+
+	// The paired positive: the same terminators at the start of a token are admitted, so the
+	// refusals above are the anchor's and not the terminator set's.
+	for _, text := range []string{"From:", "From.", "From —", "From-"} {
+		if loc := alSpan(text, "supplier_name"); loc == nil || loc[0] != 0 {
+			t.Errorf("%q: supplier_name span = %v, want a match starting at 0", text, loc)
+		}
+	}
+}
+
+// The terminator set, pinned in both directions. Its members are five printable separators plus
+// end-of-token, and ASCII whitespace may precede them. Everything else refuses -- including a
+// non-breaking space, which Go's \s does not cover, so a PDF that prints "From<NBSP>:" reads no
+// supplier at all.
+func TestAnchorLexicon_TheFromArmsTerminatorSet(t *testing.T) {
+	admit := []string{
+		"From", "From:", "From.", "From-", "From–", "From—",
+		"From ", "From\t", "From\n", "From\r\n", "From  :", "From :",
+		"From:Kaduna", "From—Kaduna", "From. Kaduna Advisory Partners",
+		"  From:", "\nFrom:", "  \n From:",
+	}
+	refuse := []string{
+		"From;", "From,", "From =", "From_", "From/", "From|", "From*", "From#",
+		"From)", "From]", "From'", `From"`, "From·", "From ", "From :",
+		"FromKaduna", "Fromm:", "From Kaduna Advisory Partners", "From to",
+	}
+	if len(admit) == 0 || len(refuse) == 0 {
+		t.Fatal("a side of the table is empty; the assertions below would range over nothing")
+	}
+	for _, text := range admit {
+		if loc := alSpan(text, "supplier_name"); loc == nil || loc[0] != 0 {
+			t.Errorf("%q: supplier_name span = %v, want a match starting at 0", text, loc)
+		}
+	}
+	for _, text := range refuse {
+		if loc := alSpan(text, "supplier_name"); loc != nil {
+			t.Errorf("%q: supplier_name span = %v, want no match", text, loc)
+		}
+	}
+
+	// $ is end-of-TEXT, not end-of-line: a token holding two lines refuses, so a stacked
+	// "From\nKaduna" block cannot be read as a bare From heading.
+	if loc := alSpan("From\nKaduna Advisory Partners", "supplier_name"); loc != nil {
+		t.Errorf("a two-line token spans %v, want no match; the arm carries no (?m) flag", loc)
+	}
+}
+
+// vsaPage stacks texts one under another on a single page.
+func vsaPage(texts ...string) TokenPage {
+	page := TokenPage{Number: 1, WidthPt: 612, HeightPt: 792}
+	for i, s := range texts {
+		y := 0.10 + float64(i)*0.05
+		page.Tokens = append(page.Tokens, Token{Text: s, Region: Region{Page: 1, X0: 0.10, Y0: y, X1: 0.45, Y1: y + 0.02}})
+	}
+	return page
+}
+
+// vsaOrder is partyOrder with its per-token count checked.
+func vsaOrder(t *testing.T, page TokenPage) []Party {
+	t.Helper()
+	order := partyOrder(page)
+	if len(order) != len(page.Tokens) {
+		t.Fatalf("partyOrder returned %d part(ies) for %d token(s)", len(order), len(page.Tokens))
+	}
+	return order
+}
+
+// The terminator's cost in the other direction, characterised rather than left silent: a date
+// range printed "From: <date>" or "From – To" is a leading, terminated from, so it opens a
+// supplier block and names a date as the supplier. The uncolonned refusal
+// (TestAnchorLexicon_AnUncolonnedFromNamesNoSupplier) is the same trade seen from the other end.
+func TestParty_ATerminatedFromOnADateRangeNamesTheDate(t *testing.T) {
+	for _, c := range []struct{ text, want string }{
+		{"From: 01 Aug 2026", "01 Aug 2026"},
+		{"From – To", "To"},
+	} {
+		page := vsaPage(c.text)
+		if order := vsaOrder(t, page); order[0] != PartySupplier {
+			t.Errorf("%q party = %s, want PartySupplier", c.text, ptName(order[0]))
+		}
+		cands := Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})
+		if len(cands) == 0 {
+			t.Fatalf("%q: Resolve returned no candidate; the assertion below would range over nothing", c.text)
+		}
+		out := Reconcile(Input{Candidates: cands})
+		name := riFieldResult(t, out, "supplier_name")
+		if name.Value == nil || *name.Value != c.want {
+			t.Errorf("%q: supplier_name = %+v, want %q -- the residual surface the terminator admits", c.text, name, c.want)
+		}
+	}
+}
+
+// A From heading behind the buyer's block opens a supplier block mid-page and strands nothing:
+// both names and both TINs still route. The mirror of
+// TestParty_ALeadingFromOpensASupplierBlock, whose From leads the page.
+func TestParty_AFromHeadingBehindTheBuyerBlockOpensASupplierBlock(t *testing.T) {
+	page := vsaPage(
+		"Billed to", "Enugu Ceramics Limited", "TIN 99999999-1302",
+		"From", "Kaduna Advisory Partners", "TIN 99999999-1301",
+	)
+	order := vsaOrder(t, page)
+	for i, want := range []Party{PartyBuyer, PartyBuyer, PartyBuyer, PartySupplier, PartySupplier, PartySupplier} {
+		if order[i] != want {
+			t.Errorf("token[%d] (%q) party = %s, want %s", i, page.Tokens[i].Text, ptName(order[i]), ptName(want))
+		}
+	}
+
+	cands := Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})
+	if len(cands) == 0 {
+		t.Fatal("Resolve returned no candidate; every assertion below would range over nothing")
+	}
+	out := Reconcile(Input{Candidates: cands})
+	for _, c := range []struct{ field, want string }{
+		{"buyer_name", "Enugu Ceramics Limited"},
+		{"buyer_tin", "99999999-1302"},
+		{"supplier_name", "Kaduna Advisory Partners"},
+		{"supplier_tin", "99999999-1301"},
+	} {
+		got := riFieldResult(t, out, c.field)
+		if got.Reason != ReasonNone || got.Value == nil || *got.Value != c.want {
+			t.Errorf("%s = %+v, want ReasonNone / %q", c.field, got, c.want)
+		}
+	}
+}
+
+// Two real From headings: the nearer one takes the block and the first block's name is dropped
+// without a trace -- no alternative, no doubt. Characterised, not endorsed; partyOrder keeps
+// only the nearest heading by construction.
+func TestParty_ASecondFromHeadingTakesTheBlockFromTheFirst(t *testing.T) {
+	page := vsaPage("From", "Alpha Ltd", "From:", "Beta Ltd", "TIN 99999999-1301")
+	for i, p := range vsaOrder(t, page) {
+		if p != PartySupplier {
+			t.Errorf("token[%d] (%q) party = %s, want PartySupplier", i, page.Tokens[i].Text, ptName(p))
+		}
+	}
+
+	cands := Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})
+	if len(cands) == 0 {
+		t.Fatal("Resolve returned no candidate; every assertion below would range over nothing")
+	}
+	out := Reconcile(Input{Candidates: cands})
+	name := riFieldResult(t, out, "supplier_name")
+	if name.Reason != ReasonNone || name.Value == nil || *name.Value != "Beta Ltd" {
+		t.Errorf("supplier_name = %+v, want ReasonNone / %q", name, "Beta Ltd")
+	}
+	if len(name.Alternatives) != 0 {
+		t.Errorf("supplier_name alternatives = %+v, want none; the first block's name is dropped silently", name.Alternatives)
+	}
+	tin := riFieldResult(t, out, "supplier_tin")
+	if tin.Reason != ReasonNone || tin.Value == nil || *tin.Value != "99999999-1301" {
+		t.Errorf("supplier_tin = %+v, want ReasonNone / %q", tin, "99999999-1301")
+	}
+}
+
+// A flattened two-column header names both parties in one token. Before the from arm such a
+// token headed the buyer; now both vocabularies match it, so partyHeading's "names both parties,
+// names neither" rule takes over and no block opens at all.
+func TestParty_AFromTokenThatAlsoNamesTheBuyerHeadsNeither(t *testing.T) {
+	for _, text := range []string{"From: Billed to", "From — Invoice to", "From. Deliver to"} {
+		if alSpan(text, "supplier_name") == nil || alSpan(text, "buyer_name") == nil {
+			t.Fatalf("%q does not match both party vocabularies; the rule under test is not reached", text)
+		}
+		if p := partyHeading(text); p != PartyUnknown {
+			t.Errorf("%q heads %s, want PartyUnknown -- a heading naming both parties names neither", text, ptName(p))
+		}
+	}
+
+	// The control: with the from arm out of reach the same trailing phrase still heads the
+	// buyer, so the refusals above are the collision's and not the phrase's.
+	if p := partyHeading("Invoice to: From"); p != PartyBuyer {
+		t.Errorf("%q heads %s, want PartyBuyer", "Invoice to: From", ptName(p))
+	}
+}
+
+// A From heading whose only neighbour is another label names nobody: crossesALabel refuses the
+// pair. Without it a bare heading column would read the next label as the supplier's name.
+func TestParty_AFromHeadingWhoseValueIsALabelNamesNoSupplier(t *testing.T) {
+	page := vsaPage("From:", "Invoice No")
+	if p := partyHeading(page.Tokens[0].Text); p != PartySupplier {
+		t.Fatalf("%q heads %s, want PartySupplier; the refusal below would not be crossesALabel's", page.Tokens[0].Text, ptName(p))
+	}
+	for _, c := range Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules}) {
+		if c.Field == "supplier_name" {
+			t.Errorf("supplier_name candidate = %+v, want none", c)
+		}
+	}
+
+	// The control: the same heading over an ordinary name does read it, so the refusal above is
+	// the label's and not the layout's.
+	found := false
+	for _, c := range Resolve([]TokenPage{vsaPage("From:", "Kaduna Advisory Partners")}, RuleSet{Tier1: Tier1Rules}) {
+		if c.Field == "supplier_name" && c.Value == "Kaduna Advisory Partners" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the control page minted no supplier_name candidate; the refusal above proves nothing")
+	}
+}
+
+// A From alone on a page opens a block with nothing in it: the boundary is drawn and every
+// party field stays missing.
+func TestParty_AFromAloneOnAPageNamesNobody(t *testing.T) {
+	page := vsaPage("From")
+	if order := vsaOrder(t, page); order[0] != PartySupplier {
+		t.Errorf("token[0] party = %s, want PartySupplier", ptName(order[0]))
+	}
+	out := Reconcile(Input{Candidates: Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})})
+	if len(out) == 0 {
+		t.Fatal("Reconcile returned no field; the assertions below would range over nothing")
+	}
+	for _, field := range []string{"supplier_name", "supplier_tin", "buyer_name", "buyer_tin"} {
+		if got := riFieldResult(t, out, field); got.Value != nil {
+			t.Errorf("%s = %q, want nil; the page carries nothing but the heading", field, *got.Value)
+		}
+	}
+}
+
+// The from arm reaches no token on any committed arrangement: every one claims the span it
+// claimed before the arm. That is what proves wild_two_party_bare_tin's PartyUnknown -> supplier
+// fallback undisturbed by measurement rather than by inspection.
+func TestAnchorLexicon_TheFromArmAddsNoAnchorOnTheCommittedArrangements(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("testdata", "*.docling.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) < len(vsaScoredArrangements) {
+		t.Fatalf("%d docling fixture(s) found, want at least the %d scored arrangements", len(paths), len(vsaScoredArrangements))
+	}
+
+	before := regexp.MustCompile(vsaSupplierBefore(t))
+	var texts []string
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		var doc struct {
+			Pages []struct {
+				Tokens []struct{ Text string } `json:"tokens"`
+			} `json:"pages"`
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		for _, p := range doc.Pages {
+			for _, tok := range p.Tokens {
+				texts = append(texts, tok.Text)
+			}
+		}
+	}
+	if len(texts) == 0 {
+		t.Fatal("the committed arrangements carry no token text; every assertion below would range over nothing")
+	}
+
+	matched := 0
+	for _, text := range texts {
+		got, want := alSpan(text, "supplier_name"), before.FindStringIndex(text)
+		if !vsaSameSpan(got, want) {
+			t.Errorf("supplier_name on %q: span %v, pre-arm span %v; the from arm changed a committed arrangement's anchors", text, got, want)
+		}
+		if want != nil {
+			matched++
+		}
+	}
+	// Non-vacuity: an all-nil column satisfies the equality without exercising either pattern.
+	if matched == 0 {
+		t.Errorf("supplier_name matched none of the %d committed token text(s); the equality above proved nothing", len(texts))
+	}
+}
+
+// The ceiling above supplier_name's entry, proved rather than asserted. A From token becomes an
+// AnchorObservation carrying the matched text, and learnedLabel rebuilds it word-bounded with no
+// leading anchor -- so the learned rule reaches a mid-sentence from the entry itself refuses.
+func TestLearn_ALearnedFromLabelLosesTheLeadingGuard(t *testing.T) {
+	obs := AnchorObservations([]TokenPage{vsaPage("From")})
+	if len(obs) == 0 {
+		t.Fatal("AnchorObservations returned nothing for a From token; every assertion below would range over nothing")
+	}
+	var text string
+	for _, o := range obs {
+		if o.Label == "supplier_name" {
+			text = o.Text
+		}
+	}
+	if text != "From" {
+		t.Fatalf("the supplier_name observation carries %q, want %q", text, "From")
+	}
+
+	label, ok := learnedLabel(text)
+	if !ok {
+		t.Fatal("learnedLabel refused the observed text")
+	}
+	if label != `(?i)\bFrom\b` {
+		t.Errorf("learnedLabel(%q) = %q, want %q", text, label, `(?i)\bFrom\b`)
+	}
+	re, err := regexp.Compile(label)
+	if err != nil {
+		t.Fatalf("compile %q: %v", label, err)
+	}
+	const prose = "Balance carried forward from previous invoice"
+	if !re.MatchString(prose) {
+		t.Errorf("the learned label %q refuses %q; the ceiling names a reach that is not there", label, prose)
+	}
+	// The control: the entry itself still refuses the same prose, so the reach above is the
+	// learned rule's alone.
+	if loc := alSpan(prose, "supplier_name"); loc != nil {
+		t.Errorf("supplier_name spans %v on %q; the guard the ceiling says is lost was never there", loc, prose)
+	}
+}

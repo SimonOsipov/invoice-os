@@ -410,16 +410,18 @@ func vsFirstParagraph(text string) string {
 // `date`), which carries no parenthetical of its own.
 var vsListedIDRE = regexp.MustCompile("`([a-z_]+)`\\s*\\(")
 
-// vsListedLexiconIDs is the deduplicated, sorted set of anchorLexicon ids vsListedIDRE finds in
-// text.
-func vsListedLexiconIDs(text string) []string {
+// vsBacktickIDRE matches any backticked id, with or without a parenthetical.
+var vsBacktickIDRE = regexp.MustCompile("`([a-z_]+)`")
+
+// vsLexiconIDs is the deduplicated, sorted set of anchorLexicon ids re finds in text.
+func vsLexiconIDs(re *regexp.Regexp, text string) []string {
 	known := make(map[string]bool, len(anchorLexicon))
 	for _, e := range anchorLexicon {
 		known[e.ID] = true
 	}
 	seen := make(map[string]bool)
 	var ids []string
-	for _, m := range vsListedIDRE.FindAllStringSubmatch(text, -1) {
+	for _, m := range re.FindAllStringSubmatch(text, -1) {
 		if id := m[1]; known[id] && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
@@ -458,9 +460,10 @@ func TestCorpusDoc_RecordsTheLabelTolerance(t *testing.T) {
 		t.Fatalf("anchorLexicon entries carrying alSuffix = %v, want %v", derived, wantDerived)
 	}
 
-	named := vsListedLexiconIDs(sub)
+	// Any backticked id counts: a false claim misleads without a parenthetical.
+	named := vsLexiconIDs(vsBacktickIDRE, sub)
 	if !slices.Equal(named, derived) {
-		t.Errorf("%q subsection lists %v as taking the suffix, want exactly %v", vsToleranceHeading, named, derived)
+		t.Errorf("%q subsection names %v, want exactly the entries carrying the suffix, %v", vsToleranceHeading, named, derived)
 	}
 }
 
@@ -508,7 +511,7 @@ func TestCorpusDoc_TheOwningPhraseCountMatchesTheDeclaration(t *testing.T) {
 		t.Errorf("%s's \"None of the\" count = %q, want %q", vsOwningPhraseHeading, noneOfThe[0][1], want)
 	}
 
-	named := vsListedLexiconIDs(opening)
+	named := vsLexiconIDs(vsListedIDRE, opening)
 	// Found-needle control: if the parser is blind, party_ref would be absent even though the
 	// doc text plainly backticks and enumerates it.
 	if !slices.Contains(named, "party_ref") {

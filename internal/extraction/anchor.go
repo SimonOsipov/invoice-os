@@ -132,7 +132,7 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	// due_date is an OWNING PHRASE over issue_date's bare "date": it carries no rule and fills no
 	// field, so a due date is refused rather than routed.
 	{"due_date", `(?i)\bdue\s*date\b`},
-	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|date)\b`},
+	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|issued|date)\b`},
 	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},
 	{"buyer_tin", `(?i)\b((buyer|customer|client|bill` + alSuffix + `\s*to|sold` + alSuffix + `\s*to|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\s*\.?\s*(tin|tax\s*id)|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\b`},
 	// bare_tin is the party-LESS TIN label. On a party-bearing token the party entry claims a
@@ -149,7 +149,7 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
 	{"buyer_name", `(?i)\b(buyer|customer|client|bill` + alSuffix + `\s*to|sold` + alSuffix + `\s*to|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
-	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value)\b`},
+	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value|taxable\s*amount)\b`},
 	// reg_identifier and doc_title are OWNING PHRASES over the amount vocabulary: they sit before
 	// vat, whose bare "vat"/"tax" they contain. rc_number contains nothing rule-bearing -- it is
 	// here to make the phrase a label at all
@@ -160,5 +160,5 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	{"rc_number", `(?i)\b(rc|cac)\s*\.?\s*(no|num(ber)?)\b`},
 	{"doc_title", `(?i)\b(tax|vat)\s*invoice\b`},
 	{"vat", `(?i)\b(vat|v\.a\.t\.?|tax)\b`},
-	{"total", `(?i)\b(grand\s*total|amount\s*due|balance\s*due|total)\b`},
+	{"total", `(?i)\b(grand\s*total|amount\s*(due|payable)|balance\s*due|total)\b`},
 }

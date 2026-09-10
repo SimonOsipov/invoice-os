@@ -298,9 +298,11 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 
 // fpCorpusPinned is every committed layout's fingerprint, measured against the party-scoped
 // lexicon. anchorLexicon compiles into anchorLabelMatchers and Fingerprint reads
-// those, so a pattern edit silently invalidates every stored document's layout fingerprint and
-// every rule learned against it. These six are what says such an edit happened; moving them
-// without moving FingerprintVersion is the state this pin exists to forbid.
+// those, so WIDENING AN EXISTING pattern silently invalidates every stored document's layout
+// fingerprint and every rule learned against it. These six are what says such an edit
+// happened; moving them without moving FingerprintVersion is the state this pin exists to
+// forbid. A new rule-less owning-phrase entry is the other case: it moves only the pages that
+// print its phrase, none of which are these six (EXTR-25-04).
 var fpCorpusPinned = map[string]string{
 	"corpus_inline_labels.pdf":  "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
 	"corpus_split_labels.pdf":   "v2:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
@@ -312,7 +314,8 @@ var fpCorpusPinned = map[string]string{
 
 // EXTR-16-02 AC-4. The oracle that catches an anchorLexicon edit. Moving a pin here is only
 // ever legitimate alongside a FingerprintVersion bump in the same commit
-// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant).
+// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant), because none
+// of these six prints a phrase a rule-less entry could claim.
 func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
 		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each, or the loop below asserts over less than the corpus",
@@ -326,7 +329,7 @@ func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 			continue
 		}
 		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != want {
-			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed; that invalidates every stored rule and needs a FingerprintVersion bump in the same commit",
+			t.Errorf("Fingerprint(%s) = %q, want %q -- the layout fingerprint moved, which means anchorLexicon changed. A WIDENED existing pattern invalidates every stored rule and needs a FingerprintVersion bump in the same commit; a new rule-less owning-phrase entry does not, but it must not reach a page that never prints its phrase, and this is one",
 				name, got, want)
 		}
 	}
@@ -981,7 +984,7 @@ func TestBoxlessFingerprint_IsUnchangedByTheCommittedFixtures(t *testing.T) {
 	for _, c := range bxFixturePinned {
 		got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden)))
 		if got != c.want {
-			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved, which invalidates every stored boxless rule and needs a BoxlessFingerprintVersion bump in the same commit.\n  elements = %v",
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moved. A WIDENED existing pattern invalidates every stored boxless rule and needs a BoxlessFingerprintVersion bump in the same commit; a new rule-less owning-phrase entry does not, but none of these three prints such a phrase.\n  elements = %v",
 				c.golden, got, c.want, bxElements(bxPage1(t, c.golden)))
 		}
 	}

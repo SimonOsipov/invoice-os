@@ -1455,3 +1455,116 @@ func TestAnchorLexicon_TheDueDateRefusalIsTheOwningPhrase(t *testing.T) {
 		t.Fatalf("issue_date = %v, want %q decided -- the observation above proves nothing if the rule itself stopped resolving", field.Value, "2026-08-12")
 	}
 }
+
+// EXTR-25-04 QA. AC-4.2 checks that issue_date does not take the due date. This checks that
+// NOTHING does: a refused value must leave the page, not move to a neighbouring field. The
+// three other fields deciding is the floor -- a page that resolved nothing would satisfy the
+// absence clause for the wrong reason.
+func TestResolve_ARefusedDueDateReachesNoFieldAtAll(t *testing.T) {
+	const refused = "2026-09-11"
+	page := rvPage(
+		rvTok("Invoice No: INV-7", 0.10, 0.10, 0.40, 0.13),
+		rvTok("DUE DATE: "+refused, 0.10, 0.20, 0.40, 0.23),
+		rvTok("Supplier TIN: 99999999-0201", 0.10, 0.30, 0.40, 0.33),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.40, 0.40, 0.43),
+	)
+	results := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())})
+	if len(results) == 0 {
+		t.Fatal("Reconcile emitted no field; the absence clause below would pass over nothing")
+	}
+
+	for _, f := range results {
+		if f.Value != nil && *f.Value == refused {
+			t.Errorf("%s took the refused due date %q as its value; the refusal must drop the reading, not relocate it", f.Name, refused)
+		}
+		if slices.Contains(valuesOf(f.Alternatives), refused) {
+			t.Errorf("%s offers the refused due date %q as an alternative %q", f.Name, refused, valuesOf(f.Alternatives))
+		}
+	}
+
+	for _, want := range []struct{ field, value string }{
+		{"invoice_number", "INV-7"},
+		{"supplier_tin", "99999999-0201"},
+		{"total", "1500.00"},
+	} {
+		f, ok := rcFind(results, want.field)
+		if !ok || f.Value == nil || *f.Value != want.value {
+			t.Fatalf("%s = %v, want %q decided -- without it the absence above is a page that resolved nothing", want.field, f.Value, want.value)
+		}
+	}
+}
+
+// The refusal must hold on the BELOW relation too, not only same-token: a "Due Date" column
+// head with its value stacked underneath is the arrangement wild_rc_due_naira.pdf prints.
+func TestResolve_ADueDateColumnHeadRefusesTheDateBelowIt(t *testing.T) {
+	page := rvPage(
+		rvTok("Issue Date", 0.10, 0.10, 0.20, 0.13),
+		rvTok("2026-08-12", 0.30, 0.10, 0.40, 0.13),
+		rvTok("Due Date", 0.10, 0.30, 0.18, 0.33),
+		rvTok("2026-09-11", 0.10, 0.36, 0.20, 0.39),
+	)
+	cands := extraction.Resolve(page, rvGeneric())
+	rvFloor(t, rvFor(cands, "issue_date"), "the issue_date read off the Issue Date column head")
+
+	for _, c := range rvFor(cands, "issue_date") {
+		if c.Value == "2026-09-11" {
+			t.Errorf("issue_date reached the stacked due date via %s; the refusal must cover the below relation too", c.RuleID)
+		}
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-08-12" {
+		t.Fatalf("issue_date = %v, want %q decided", field.Value, "2026-08-12")
+	}
+	if field.Reason != extraction.ReasonNone || len(field.Alternatives) != 0 {
+		t.Errorf("issue_date reason = %q alternatives = %q, want %q with none", field.Reason, valuesOf(field.Alternatives), extraction.ReasonNone)
+	}
+}
+
+// A tenant who already taught this producer that its issue date sits on the "Due Date" token
+// keeps that reading: resolve.go's outranking clause is guarded by `tier != TierLearned`, so
+// the generic refusal never overrides a correction.
+//
+// The learned label is the BARE word, not the phrase. A learned rule spelling `due\s*date`
+// claims [0,8] on this token, which due_date's own [0,8] does not STRICTLY contain, so it
+// survives whether or not the tier guard exists and cannot discriminate it. `\bdate\b` claims
+// [4,8], which [0,8] does strictly contain -- the tier guard is then the only thing standing
+// between the correction and suppression, and stripping it reds this test.
+//
+// The control run without the learned rule proves the reading is the learned rule's doing and
+// not a Tier-1 read that survived.
+func TestResolve_ALearnedRuleStillReadsARefusedDueDateToken(t *testing.T) {
+	page := rvPage(
+		rvTok("DUE DATE: 2026-09-11", 0.10, 0.10, 0.40, 0.13),
+		rvTok("TOTAL: 1,500.00", 0.10, 0.20, 0.40, 0.23),
+	)
+
+	learned := extraction.RuleSet{
+		Tier1:   extraction.Tier1Rules,
+		Learned: []extraction.AnchorRule{rvLearned(t, "rule-1", "issue_date", `(?i)\bdate\b`, extraction.RelSameToken, 0, extraction.ShapeDate)},
+	}
+	cands := extraction.Resolve(page, learned)
+	rvFloor(t, rvFor(cands, "issue_date"), "the learned issue_date read off the DUE DATE token")
+
+	var sawLearned bool
+	for _, c := range rvFor(cands, "issue_date") {
+		if c.Tier == extraction.TierLearned && c.Value == "2026-09-11" {
+			sawLearned = true
+		}
+	}
+	if !sawLearned {
+		t.Fatalf("no TierLearned issue_date candidate reads 2026-09-11 from %+v; the refusal reached the learned tier", rvFor(cands, "issue_date"))
+	}
+
+	field, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: cands}), "issue_date")
+	if !ok || field.Value == nil || *field.Value != "2026-09-11" {
+		t.Fatalf("issue_date = %v, want %q -- a learned rule outranks the generic refusal", field.Value, "2026-09-11")
+	}
+
+	// Control: the same page with no learned rule reads nothing, so the pass above is the
+	// learned rule's doing and not a Tier-1 read that survived.
+	ctl, ok := rcFind(extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(page, rvGeneric())}), "issue_date")
+	if !ok || ctl.Value != nil || ctl.Reason != extraction.ReasonMissing {
+		t.Fatalf("control issue_date = %v reason = %q, want nil and %q", ctl.Value, ctl.Reason, extraction.ReasonMissing)
+	}
+}

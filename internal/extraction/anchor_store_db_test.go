@@ -1401,3 +1401,55 @@ func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	readNone("after a BoxlessFingerprintVersion bump", bNextKey)
 	readOne("with the BoxlessFingerprintVersion bumped, the geometric class", v1Key, geoID)
 }
+
+// EXTR-25-04 QA. The due_date entry moves wild_rc_due_naira.pdf's identity without bumping
+// either version constant, so a tenant who had taught that layout is ORPHANED rather than
+// migrated. This is what "no bump needed" costs, and it must cost it gracefully: the new key
+// reads zero rows and no error, while the old key still reads its own row.
+//
+// The pre-change digests are the same literals TestFingerprint_TheLexiconResetIsScopedToPages-
+// ThatPrintThePhrase pins; keep the two in step.
+const (
+	ddNairaGeoBefore = "v2:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
+	ddNairaBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
+)
+
+func TestRLS_TheDueDateEntryOrphansTheRCLayoutsStoredRulesGracefully(t *testing.T) {
+	ctx := t.Context()
+	s := stStore(t)
+	tenantID, _ := stTenant(t, ctx)
+
+	live := extraction.Fingerprint(rvCorpusPages(t, "wild_rc_due_naira.pdf"))
+	if live == ddNairaGeoBefore {
+		t.Fatalf("Fingerprint(wild_rc_due_naira.pdf) still reads its pre-change value %q; there is no orphaning to be graceful about", live)
+	}
+
+	geoID := stSeedAnchorRule(t, ctx, tenantID, ddNairaGeoBefore, "issue_date", stAnchorRuleValid, extraction.RuleSchemaVersion)
+	boxID := stSeedAnchorRule(t, ctx, tenantID, ddNairaBoxBefore, "total_amount", stAnchorRuleValid, extraction.RuleSchemaVersion)
+
+	// The floor: both stored rules must be readable under the keys they were written with,
+	// or the zero below is an empty table rather than an orphaning.
+	for _, c := range []struct{ what, key, wantID string }{
+		{"the pre-change geometric key", ddNairaGeoBefore, geoID},
+		{"the pre-change boxless key", ddNairaBoxBefore, boxID},
+	} {
+		out, err := s.AnchorRulesFor(ctx, tenantID, c.key)
+		if err != nil {
+			t.Fatalf("%s: AnchorRulesFor(%q): %v", c.what, c.key, err)
+		}
+		if len(out) != 1 || out[0].ID != c.wantID {
+			t.Fatalf("%s: AnchorRulesFor(%q) returned %d row(s) %v, want exactly rule %s", c.what, c.key, len(out), arIDs(out), c.wantID)
+		}
+	}
+
+	out, err := s.AnchorRulesFor(ctx, tenantID, live)
+	if err != nil {
+		t.Fatalf("AnchorRulesFor(%q): %v -- an orphaned layout must read empty, not error", live, err)
+	}
+	if len(out) != 0 {
+		t.Errorf("AnchorRulesFor(%q) returned %d row(s) %v, want 0 -- the layout's identity moved, so its stored rules no longer answer for it", live, len(out), arIDs(out))
+	}
+	if out == nil {
+		t.Error("AnchorRulesFor returned a nil slice for the orphaned key; layout_anchors takes a JSON array, never null")
+	}
+}

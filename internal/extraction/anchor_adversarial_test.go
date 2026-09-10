@@ -10,6 +10,7 @@ import (
 	"math"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -467,5 +468,82 @@ func TestAnchorLexicon_TheDueDateEntryStealsNoTotal(t *testing.T) {
 		if anchorOutranked(text, loc) {
 			t.Errorf("%q: total span %v was outranked; due_date must not reach the totals vocabulary", text, loc)
 		}
+	}
+}
+
+// ddSpellings pins what `\bdue\s*date\b` actually reads, measured. The refusal is a SPELLING
+// rule, so the line between refused and kept has to be written down rather than reasoned about:
+// `\s*` matches zero characters, so "DueDate" matches -- but issue_date's bare `date` never
+// matched it either, so the entry costs nothing there. A hyphen is not `\s`, so "Due-Date" is
+// NOT refused while its issue_date anchor survives; that spelling is a live gap, outside
+// EXTR-25's narrow scope and recorded here rather than left to be found.
+var ddSpellings = []struct {
+	text      string
+	dueSpan   []int
+	issueSpan []int
+	refused   bool
+}{
+	{"DUE DATE", []int{0, 8}, []int{4, 8}, true},
+	{"due date", []int{0, 8}, []int{4, 8}, true},
+	{"Due  Date", []int{0, 9}, []int{5, 9}, true},
+	{"Due\tDate", []int{0, 8}, []int{4, 8}, true},
+	{"Due\nDate", []int{0, 8}, []int{4, 8}, true},
+	{"PAST DUE DATE", []int{5, 13}, []int{9, 13}, true},
+	{"DueDate", []int{0, 7}, nil, false},
+	{"Due Dates", nil, nil, false},
+	{"Overdue Date", nil, []int{8, 12}, false},
+	{"Due-Date", nil, []int{4, 8}, false},
+}
+
+func TestAnchorLexicon_TheDueDateSpellingBoundaryIsPinned(t *testing.T) {
+	if len(ddSpellings) == 0 {
+		t.Fatal("ddSpellings is empty; every assertion below would run over nothing")
+	}
+
+	var refused, kept int
+	for _, c := range ddSpellings {
+		if got := alSpan(c.text, "due_date"); !slices.Equal(got, c.dueSpan) {
+			t.Errorf("%q: due_date span = %v, want %v", c.text, got, c.dueSpan)
+		}
+		loc := alSpan(c.text, "issue_date")
+		if !slices.Equal(loc, c.issueSpan) {
+			t.Errorf("%q: issue_date span = %v, want %v", c.text, loc, c.issueSpan)
+		}
+		got := loc != nil && anchorOutranked(c.text, loc)
+		if got != c.refused {
+			t.Errorf("%q: issue_date outranked = %v, want %v", c.text, got, c.refused)
+		}
+		if c.refused {
+			refused++
+		} else {
+			kept++
+		}
+	}
+
+	// A pattern matching everything, or nothing, would satisfy a one-sided table.
+	if refused == 0 || kept == 0 {
+		t.Fatalf("the table holds %d refused and %d kept spelling(s); it must carry both sides to discriminate", refused, kept)
+	}
+}
+
+// The refusal is scoped to the SPAN due_date claims, not to the whole token: a token spelling
+// two labels keeps the anchor of the one due_date does not contain.
+func TestAnchorLexicon_TheDueDateRefusalIsScopedToItsOwnSpan(t *testing.T) {
+	const text = "Due Date / Invoice No: INV-7"
+
+	issue := alSpan(text, "issue_date")
+	if !slices.Equal(issue, []int{4, 8}) {
+		t.Fatalf("%q: issue_date span = %v, want [4 8]; the refusal below would be about a different span", text, issue)
+	}
+	if !anchorOutranked(text, issue) {
+		t.Errorf("%q: issue_date span %v was NOT outranked, want it refused", text, issue)
+	}
+
+	inv := alSpan(text, "invoice_no")
+	if !slices.Equal(inv, []int{11, 21}) {
+		t.Fatalf("%q: invoice_no span = %v, want [11 21]", text, inv)
+	}
+	if anchorOutranked(text, inv) {
+		t.Errorf("%q: invoice_no span %v was outranked; due_date claims [0 8] and does not contain it, so the refusal must not reach it", text, inv)
 	}
 }

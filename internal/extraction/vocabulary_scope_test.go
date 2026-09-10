@@ -250,3 +250,32 @@ func TestResolve_ATaxableAmountColumnHeaderMintsASecondSubtotal(t *testing.T) {
 		t.Errorf("total = %+v (ok=%v), want ReasonAmbiguous / %q -- corroborateTotal's subtotal is now wrong (1162790.70 + 239056.50 balances neither total reading), so it defers", total, ok, "1250000.00")
 	}
 }
+
+// T-03.3: a mid-sentence from never opens a supplier block. Measured to red under a bare
+// (unterminated) `from`, which files the TIN as supplier_tin and fabricates
+// supplier_name = "01 Aug to 31 Aug 2026" -- this row is the shipped guard's whole
+// justification.
+func TestParty_AMidSentenceFromDoesNotOpenASupplierBlock(t *testing.T) {
+	page := rvPage(
+		rvTok("Billed to", 0.10, 0.10, 0.20, 0.12),
+		rvTok("Enugu Ceramics Limited", 0.10, 0.13, 0.32, 0.15),
+		rvTok("Services rendered from 01 Aug to 31 Aug 2026", 0.10, 0.20, 0.55, 0.22),
+		rvTok("TIN 99999999-1302", 0.10, 0.30, 0.30, 0.32),
+	)
+	cands := extraction.Resolve(page, rvGeneric())
+	rvFloor(t, cands, "the mid-sentence-from page")
+
+	if got := rvFor(cands, "supplier_name"); len(got) != 0 {
+		t.Errorf("supplier_name candidates = %+v, want none", got)
+	}
+
+	out := extraction.Reconcile(extraction.Input{Candidates: cands})
+	tin, ok := rcFind(out, "buyer_tin")
+	if !ok || tin.Reason != extraction.ReasonNone || tin.Value == nil || *tin.Value != "99999999-1302" {
+		t.Errorf("buyer_tin = %+v (ok=%v), want ReasonNone / %q", tin, ok, "99999999-1302")
+	}
+	name, ok := rcFind(out, "buyer_name")
+	if !ok || name.Reason != extraction.ReasonNone || name.Value == nil || *name.Value != "Enugu Ceramics Limited" {
+		t.Errorf("buyer_name = %+v (ok=%v), want ReasonNone / %q", name, ok, "Enugu Ceramics Limited")
+	}
+}

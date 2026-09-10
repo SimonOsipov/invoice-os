@@ -398,3 +398,77 @@ func TestAnchorLexicon_TheAdvisoryArmsAddNoAnchorOnTheScoredArrangements(t *test
 		}
 	}
 }
+
+// T-03.4: a leading From opens the supplier block. supplier_tin alone is not evidence of that
+// -- it already reads 99999999-1301 today via partyField's PartyUnknown -> supplier fallback,
+// with no heading recognised at all. Only partyOrder tells the two apart: 0 0 0 (the fallback)
+// must move to 1 1 1 (a genuinely opened block).
+func TestParty_ALeadingFromOpensASupplierBlock(t *testing.T) {
+	page := TokenPage{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		{Text: "From", Region: Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.12}},
+		{Text: "Kaduna Advisory Partners", Region: Region{Page: 1, X0: 0.10, Y0: 0.13, X1: 0.40, Y1: 0.15}},
+		{Text: "TIN 99999999-1301", Region: Region{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.30, Y1: 0.22}},
+	}}
+
+	order := partyOrder(page)
+	if len(order) != len(page.Tokens) {
+		t.Fatalf("partyOrder returned %d part(ies) for %d token(s)", len(order), len(page.Tokens))
+	}
+	for i, p := range order {
+		if p != PartySupplier {
+			t.Errorf("token[%d] party = %s, want PartySupplier", i, ptName(p))
+		}
+	}
+
+	cands := Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})
+	if len(cands) == 0 {
+		t.Fatal("Resolve returned no candidate; every assertion below would range over nothing")
+	}
+	out := Reconcile(Input{Candidates: cands})
+
+	name := riFieldResult(t, out, "supplier_name")
+	if name.Reason != ReasonNone || name.Value == nil || *name.Value != "Kaduna Advisory Partners" {
+		t.Errorf("supplier_name = %+v, want ReasonNone / %q", name, "Kaduna Advisory Partners")
+	}
+	tin := riFieldResult(t, out, "supplier_tin")
+	if tin.Reason != ReasonNone || tin.Value == nil || *tin.Value != "99999999-1301" {
+		t.Errorf("supplier_tin = %+v, want ReasonNone / %q", tin, "99999999-1301")
+	}
+}
+
+// T-03.6: the end-to-end proof of the residual leading-from surface, characterised as a
+// regression guard. Under a bare (unterminated) `^\s*from\b` this exact page yields
+// supplier_name = "Lagos to Abuja" and loses buyer_tin entirely -- measured. The shipped
+// (terminated) arm must never reach this token, so this stays green through the change.
+func TestParty_ALeadingProseFromLeavesTheBuyerTINAlone(t *testing.T) {
+	page := TokenPage{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		{Text: "Billed to", Region: Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.20, Y1: 0.12}},
+		{Text: "Enugu Ceramics Limited", Region: Region{Page: 1, X0: 0.10, Y0: 0.13, X1: 0.32, Y1: 0.15}},
+		{Text: "From Lagos to Abuja", Region: Region{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.35, Y1: 0.22}},
+		{Text: "TIN 99999999-1302", Region: Region{Page: 1, X0: 0.10, Y0: 0.30, X1: 0.30, Y1: 0.32}},
+	}}
+
+	order := partyOrder(page)
+	if len(order) != len(page.Tokens) {
+		t.Fatalf("partyOrder returned %d part(ies) for %d token(s)", len(order), len(page.Tokens))
+	}
+	if order[2] != PartyBuyer {
+		t.Errorf("token[2] (%q) party = %s, want PartyBuyer -- no supplier block may open here", page.Tokens[2].Text, ptName(order[2]))
+	}
+
+	cands := Resolve([]TokenPage{page}, RuleSet{Tier1: Tier1Rules})
+	if len(cands) == 0 {
+		t.Fatal("Resolve returned no candidate; every assertion below would range over nothing")
+	}
+	for _, c := range cands {
+		if c.Field == "supplier_name" {
+			t.Errorf("supplier_name candidate = %+v, want none", c)
+		}
+	}
+
+	out := Reconcile(Input{Candidates: cands})
+	tin := riFieldResult(t, out, "buyer_tin")
+	if tin.Reason != ReasonNone || tin.Value == nil || *tin.Value != "99999999-1302" {
+		t.Errorf("buyer_tin = %+v, want ReasonNone / %q", tin, "99999999-1302")
+	}
+}

@@ -166,3 +166,64 @@ func TestAnchorLexicon_TheAdvisoryWordsDoNotReachTheirNeighbours(t *testing.T) {
 		}
 	}
 }
+
+// T-03.1: the five leading spellings anchor supplier_name at offset 0 -- from is absent from
+// the entry today, so all five are nil.
+func TestAnchorLexicon_FromNamesTheSupplierWhenItLeadsTheToken(t *testing.T) {
+	for _, text := range []string{"From", "From:", "FROM", "  From", "From: Kaduna Advisory Partners"} {
+		loc := alSpan(text, "supplier_name")
+		if loc == nil {
+			t.Errorf("%q: supplier_name span = nil, want a match starting at 0", text)
+			continue
+		}
+		if loc[0] != 0 {
+			t.Errorf("%q: supplier_name span = %v, want it to start at 0", text, loc)
+		}
+	}
+
+	// The paired positive: the rewritten alternation must still carry its original arm, and
+	// Buyer must still refuse it.
+	for _, text := range []string{"Supplier", "Seller", "Vendor"} {
+		if alSpan(text, "supplier_name") == nil {
+			t.Errorf("%q: supplier_name span = nil, want a match", text)
+		}
+	}
+	if loc := alSpan("Buyer", "supplier_name"); loc != nil {
+		t.Errorf("%q: supplier_name span = %v, want no match", "Buyer", loc)
+	}
+}
+
+// T-03.2: the terminator's whole justification. A mid-sentence from must refuse -- vacuously
+// true today, since no from arm exists yet. A LEADING from in ordinary prose must ALSO refuse:
+// a bare `^\s*from\b`, with no terminator, would accept every one of the four below, fabricate
+// a supplier name and lose buyer_tin (TestParty_ALeadingProseFromLeavesTheBuyerTINAlone).
+func TestAnchorLexicon_FromInProseNamesNobody(t *testing.T) {
+	midSentence := []string{
+		"Balance carried forward from previous invoice",
+		"Amount due from customer",
+		"Services rendered from 01 Aug to 31 Aug 2026",
+		"Payment received from Honeywell Group",
+		"Freight from Lagos",
+	}
+	leading := []string{
+		"From Lagos to Abuja",
+		"From 01 Aug 2026 to 31 Aug 2026",
+		"From the above, the amount due is",
+		"From our records",
+	}
+	for _, text := range append(append([]string{}, midSentence...), leading...) {
+		if loc := alSpan(text, "supplier_name"); loc != nil {
+			t.Errorf("%q: supplier_name span = %v, want no match", text, loc)
+		}
+	}
+}
+
+// T-03.5: the terminator's cost, characterised rather than left silent. The accepted trade: the
+// alternative -- an unterminated leading anchor -- fabricates a supplier out of a route line
+// and takes buyer_tin with it (TestParty_ALeadingProseFromLeavesTheBuyerTINAlone).
+func TestAnchorLexicon_AnUncolonnedFromNamesNoSupplier(t *testing.T) {
+	const text = "From Kaduna Advisory Partners"
+	if loc := alSpan(text, "supplier_name"); loc != nil {
+		t.Errorf("%q: supplier_name span = %v, want no match -- an uncolonned inline heading reads no supplier name", text, loc)
+	}
+}

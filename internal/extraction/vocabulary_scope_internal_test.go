@@ -227,3 +227,63 @@ func TestAnchorLexicon_AnUncolonnedFromNamesNoSupplier(t *testing.T) {
 		t.Errorf("%q: supplier_name span = %v, want no match -- an uncolonned inline heading reads no supplier name", text, loc)
 	}
 }
+
+// T-04.2: withholding_tax must strictly contain vat's span on every AC-2 spelling, not just the
+// plain one. "WHT (Withholding Tax)" is the sharpest case: vat's bare "tax" arm matches inside
+// the parenthesis, and the owner's span must still reach around it, not stop short.
+func TestAnchorLexicon_TheWithholdingPhraseStrictlyContainsTheVATWord(t *testing.T) {
+	for _, text := range []string{
+		"Withholding tax 10%",
+		"WHT (Withholding Tax)",
+		"With-holding Tax",
+		"WITHHOLDING TAX",
+		"Withhold tax",
+		"Withholding  Tax",
+	} {
+		// Non-vacuity: the containment claim below compares against nothing if vat itself missed.
+		vat := alSpan(text, "vat")
+		if vat == nil {
+			t.Errorf("%q: vat span = nil, want a match", text)
+			continue
+		}
+		if !anchorOutranked(text, vat) {
+			t.Errorf("anchorOutranked(%q, %v) = false, want true: withholding_tax must claim a strictly wider span", text, vat)
+		}
+		owner := alSpan(text, "withholding_tax")
+		if owner == nil {
+			t.Errorf("%q: withholding_tax span = nil, want a match", text)
+			continue
+		}
+		if !(owner[0] <= vat[0] && owner[1] >= vat[1] && owner[1]-owner[0] > vat[1]-vat[0]) {
+			t.Errorf("%q: withholding_tax span %v does not strictly contain vat span %v", text, owner, vat)
+		}
+	}
+}
+
+// vsVATPatternAtEXTR22 is an independently typed transcription of the shipped vat entry's
+// pattern, verified byte-identical against origin/main and HEAD at authoring time. EXTR-22 owns
+// this pattern; this story adds an entry above it and writes nothing inside it.
+const vsVATPatternAtEXTR22 = `(?i)\b(vat|v\.a\.t\.?|tax)\b`
+
+// T-04.5: a guard, not a driver -- passes on arrival. Measured (.ralph/arch-26-04.md 9a): an
+// ADDITIVE widening of vat (adding a |levy arm) passes the entire extraction and endtoend
+// suites, so this is the only mechanical guard on that pattern. The reference literal is retyped
+// above, never read back from anchorLexicon (a tautology) and never fetched via git at test time
+// (CI clones at fetch-depth 1, so origin/main is unreachable there).
+func TestAnchorLexicon_TheVATPatternIsUnchangedByThisStory(t *testing.T) {
+	n := 0
+	for _, e := range anchorLexicon {
+		if e.ID != "vat" {
+			continue
+		}
+		n++
+		if e.Pattern != vsVATPatternAtEXTR22 {
+			t.Errorf("vat pattern = %q, want %q -- EXTR-22 owns this pattern and this story does not write to it", e.Pattern, vsVATPatternAtEXTR22)
+		}
+	}
+	// Non-vacuity: without this, the loop above passes vacuously if the entry is ever renamed
+	// or removed.
+	if n != 1 {
+		t.Fatalf("anchorLexicon holds %d entr(y/ies) with ID %q, want exactly 1", n, "vat")
+	}
+}

@@ -251,6 +251,59 @@ func TestResolve_ATaxableAmountColumnHeaderMintsASecondSubtotal(t *testing.T) {
 	}
 }
 
+// vsWithholdingCore is vsRefereeCore's page (Taxable amount, no taxable column) with one
+// "Withholding tax 10%" / "318,742.00" line inserted above VAT -- P-4 in .ralph/arch-26-04.md.
+// Before withholding_tax lands, the withholding value outranks the real VAT on distance and
+// decides the vat field, which blocks corroborateTotal's decidedMoney(decided, "vat") guard.
+func vsWithholdingCore() []extraction.TokenPage {
+	return rvPage(
+		rvTok("Total", 0.62, 0.30, 0.70, 0.33),
+		rvTok("1,250,000.00", 0.60, 0.37, 0.78, 0.40),
+		rvTok("Taxable amount", 0.10, 0.60, 0.24, 0.63),
+		rvTok("3,187,420.00", 0.36, 0.60, 0.50, 0.63),
+		rvTok("Withholding tax 10%", 0.10, 0.65, 0.30, 0.68),
+		rvTok("318,742.00", 0.39, 0.65, 0.53, 0.68),
+		rvTok("VAT @ 7.5%", 0.10, 0.70, 0.24, 0.73),
+		rvTok("239,056.50", 0.39, 0.70, 0.53, 0.73),
+		rvTok("TOTAL DUE (NGN)", 0.10, 0.80, 0.30, 0.83),
+		rvTok("3,426,476.50", 0.39, 0.80, 0.53, 0.83),
+	)
+}
+
+// T-04.1: the withholding line must not decide vat, and total must clear corroborateTotal --
+// the only pre-EXTR-26-06 assertion that this subtask is a precondition for Core AC-3. Measured
+// today: vat decides 318742.00 ambiguous with 239056.50 as the alternative, which blocks
+// corroborateTotal and leaves total at 1250000.00 ambiguous.
+func TestResolve_AWithholdingLineIsNotTheVAT(t *testing.T) {
+	cands := extraction.Resolve(vsWithholdingCore(), rvGeneric())
+	rvFloor(t, cands, "the withholding page")
+
+	vats := rvFor(cands, "vat")
+	if len(vats) != 1 || vats[0].Value != "239056.50" {
+		t.Fatalf("vat candidates = %+v, want exactly one at %q -- the withholding line must not survive as a competing reading", vats, "239056.50")
+	}
+
+	out := extraction.Reconcile(extraction.Input{Candidates: cands})
+
+	vat, ok := rcFind(out, "vat")
+	if !ok || vat.Reason != extraction.ReasonNone || vat.Value == nil || *vat.Value != "239056.50" {
+		t.Errorf("vat = %+v (ok=%v), want ReasonNone / %q", vat, ok, "239056.50")
+	}
+	if len(vat.Alternatives) != 0 {
+		t.Errorf("vat alternatives = %v, want none", vat.Alternatives)
+	}
+
+	// Mandatory clause (story .ralph/story-final.md T-04.1): without it, this subtask has no
+	// test before EXTR-26-06 proving it is a precondition for Core AC-3 rather than a tidy-up.
+	total, ok := rcFind(out, "total")
+	if !ok || total.Reason != extraction.ReasonNone || total.Value == nil || *total.Value != "3426476.50" {
+		t.Errorf("total = %+v (ok=%v), want ReasonNone / %q", total, ok, "3426476.50")
+	}
+	if len(total.Alternatives) != 0 {
+		t.Errorf("total alternatives = %v, want none", total.Alternatives)
+	}
+}
+
 // T-03.3: a mid-sentence from never opens a supplier block. Measured to red under a bare
 // (unterminated) `from`, which files the TIN as supplier_tin and fabricates
 // supplier_name = "01 Aug to 31 Aug 2026" -- this row is the shipped guard's whole

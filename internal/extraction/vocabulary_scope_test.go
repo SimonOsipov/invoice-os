@@ -4,7 +4,11 @@
 package extraction_test
 
 import (
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -330,5 +334,100 @@ func TestParty_AMidSentenceFromDoesNotOpenASupplierBlock(t *testing.T) {
 	name, ok := rcFind(out, "buyer_name")
 	if !ok || name.Reason != extraction.ReasonNone || name.Value == nil || *name.Value != "Enugu Ceramics Limited" {
 		t.Errorf("buyer_name = %+v (ok=%v), want ReasonNone / %q", name, ok, "Enugu Ceramics Limited")
+	}
+}
+
+// vgOldGenerationNeedles are the four literal shapes the retired v2/b2 fingerprint generation
+// can be spelled in source. vgSelfFile carries them as data, not as generation literals, so the
+// walk below excludes it by name -- otherwise this table would flag itself.
+var vgOldGenerationNeedles = []string{"v2:", "b2:", `"v2"`, `"b2"`}
+
+const vgSelfFile = "vocabulary_scope_test.go"
+
+func vgScanEligible(path string) bool {
+	switch filepath.Ext(path) {
+	case ".go", ".md":
+		return filepath.Base(path) != vgSelfFile
+	default:
+		return false
+	}
+}
+
+// EXTR-26-05 T-05.4. internal/extraction/** and docs/extraction-corpus.md must carry no
+// v2:/b2: literal once the generation bump lands. Reads files in Go by extension rather than
+// shelling to grep, which classifies any NUL-bearing file "data" and silently skips it --
+// structurally impossible here, though the trap does not bite the current corpus (measured:
+// every NUL-bearing file under internal/extraction/ is a testdata/ binary, extension-filtered
+// out regardless).
+func TestFingerprint_NoSourceStillNamesTheOldGeneration(t *testing.T) {
+	root := rxRepoRoot(t)
+	extractionDir := filepath.Join(root, "internal", "extraction")
+	docPath := filepath.Join(root, "docs", "extraction-corpus.md")
+
+	// Planted needle: proves the scan reads CONTENT, not just filenames. Present in all three
+	// per the re-point table (fingerprint.go declares it; the other two read it back).
+	const needle = "BoxlessFingerprintVersion"
+	needleFiles := map[string]bool{"fingerprint.go": false, "fingerprint_test.go": false, "duedate_scope_test.go": false}
+
+	var goFiles int
+	var hits []string
+
+	scan := func(path, rel string) error {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(b)
+		if _, tracked := needleFiles[filepath.Base(path)]; tracked && strings.Contains(text, needle) {
+			needleFiles[filepath.Base(path)] = true
+		}
+		for _, n := range vgOldGenerationNeedles {
+			if strings.Contains(text, n) {
+				hits = append(hits, rel+": "+n)
+			}
+		}
+		return nil
+	}
+
+	err := filepath.WalkDir(extractionDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !vgScanEligible(path) {
+			return nil
+		}
+		if filepath.Ext(path) == ".go" {
+			goFiles++
+		}
+		rel, _ := filepath.Rel(root, path)
+		return scan(path, filepath.ToSlash(rel))
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", extractionDir, err)
+	}
+
+	// Population floor: a clean report over a walk that reached nothing reads exactly like a
+	// clean repo. Measured well over 100 .go files under internal/extraction/.
+	if goFiles < 100 {
+		t.Fatalf("the walk read %d .go file(s) under internal/extraction/, want at least 100 -- a clean report over a broken walk means nothing", goFiles)
+	}
+
+	if _, err := os.Stat(docPath); err != nil {
+		t.Fatalf("stat %s: %v -- the doc is not in the visited set, so its absence below proves nothing", docPath, err)
+	}
+	rel, _ := filepath.Rel(root, docPath)
+	if err := scan(docPath, filepath.ToSlash(rel)); err != nil {
+		t.Fatalf("read %s: %v", docPath, err)
+	}
+
+	for base, found := range needleFiles {
+		if !found {
+			t.Fatalf("the scan did not find %q in %s; it can no longer find a planted hit, so the absence of old-generation literals below means nothing", needle, base)
+		}
+	}
+
+	if len(hits) > 0 {
+		slices.Sort(hits)
+		t.Errorf("%d old-generation literal(s) remain:\n%s", len(hits), strings.Join(hits, "\n"))
 	}
 }

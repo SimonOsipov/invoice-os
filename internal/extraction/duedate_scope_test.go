@@ -110,11 +110,11 @@ func ddHasQualifier(text string) bool {
 // existing pattern (bump) from a new rule-less owning-phrase entry (no bump). Each passage is
 // graded on its own, so one qualifier cannot cover for the other.
 func TestAnchorLexicon_TheBumpRuleDistinguishesANewEntryFromAWidenedPattern(t *testing.T) {
-	if extraction.FingerprintVersion != "v2" {
-		t.Errorf("FingerprintVersion = %q, want %q -- a rule-less lexicon entry must not bump it", extraction.FingerprintVersion, "v2")
+	if extraction.FingerprintVersion != "v3" {
+		t.Errorf("FingerprintVersion = %q, want %q -- EXTR-26 widened six shared-lexicon patterns and stepped this lever; the next bump must be as deliberate", extraction.FingerprintVersion, "v3")
 	}
-	if extraction.BoxlessFingerprintVersion != "b2" {
-		t.Errorf("BoxlessFingerprintVersion = %q, want %q -- a rule-less lexicon entry must not bump it", extraction.BoxlessFingerprintVersion, "b2")
+	if extraction.BoxlessFingerprintVersion != "b3" {
+		t.Errorf("BoxlessFingerprintVersion = %q, want %q -- anchorLabelMatchers feeds both producers, so the widening stepped this lever with the geometric one", extraction.BoxlessFingerprintVersion, "b3")
 	}
 
 	root := rxRepoRoot(t)

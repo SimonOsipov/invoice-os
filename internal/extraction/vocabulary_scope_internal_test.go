@@ -4,6 +4,11 @@
 package extraction
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -341,5 +346,178 @@ func TestAnchorLexicon_TheVATPatternIsUnchangedByThisStory(t *testing.T) {
 	}
 	if !strings.Contains(reg, alt) {
 		t.Errorf("reg_identifier pattern %q does not carry %q; EXTR-22's two sites carry one alternation, so one of them moved", reg, alt)
+	}
+}
+
+// vsReadCorpusDoc reads docs/extraction-corpus.md. Package extraction (not _test), so it cannot
+// reuse extraction_test's rxRepoRoot/acRepoFile; the test binary's working directory is its own
+// package directory, same assumption those helpers make.
+func vsReadCorpusDoc(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "extraction-corpus.md"))
+	if err != nil {
+		t.Fatalf("read docs/extraction-corpus.md: %v", err)
+	}
+	return string(b)
+}
+
+// vsDocSection is heading's body up to the next "## " heading.
+func vsDocSection(t *testing.T, doc, heading string) string {
+	t.Helper()
+	i := strings.Index(doc, heading)
+	if i < 0 {
+		t.Fatalf("docs/extraction-corpus.md carries no %q section", heading)
+	}
+	body := doc[i+len(heading):]
+	if j := strings.Index(body, "\n## "); j >= 0 {
+		body = body[:j]
+	}
+	return body
+}
+
+// vsDocSubsection is heading's body up to the next "## " or "### " heading -- for a heading one
+// level deeper than vsDocSection reads.
+func vsDocSubsection(t *testing.T, doc, heading string) string {
+	t.Helper()
+	i := strings.Index(doc, heading)
+	if i < 0 {
+		t.Fatalf("docs/extraction-corpus.md carries no %q subsection", heading)
+	}
+	body := doc[i+len(heading):]
+	end := len(body)
+	for _, marker := range []string{"\n## ", "\n### "} {
+		if j := strings.Index(body, marker); j >= 0 && j < end {
+			end = j
+		}
+	}
+	return body[:end]
+}
+
+// vsFirstParagraph is text up to the first blank line -- markdown's own paragraph unit, the same
+// split duedate_scope_test.go's ddParagraphContaining uses.
+func vsFirstParagraph(text string) string {
+	text = strings.TrimLeft(text, "\n")
+	if i := strings.Index(text, "\n\n"); i >= 0 {
+		return text[:i]
+	}
+	return text
+}
+
+// vsListedIDRE matches a backtick id immediately opening its own parenthetical example list --
+// the shape every entry in "## Labels that own their token" already uses ("`party_ref`
+// (`Customer No.`, ...)"). It is what tells "the entries this paragraph enumerates" apart from an
+// id the same paragraph merely mentions in passing (`vat`'s bare `tax`, `issue_date`'s bare
+// `date`), which carries no parenthetical of its own.
+var vsListedIDRE = regexp.MustCompile("`([a-z_]+)`\\s*\\(")
+
+// vsListedLexiconIDs is the deduplicated, sorted set of anchorLexicon ids vsListedIDRE finds in
+// text.
+func vsListedLexiconIDs(text string) []string {
+	known := make(map[string]bool, len(anchorLexicon))
+	for _, e := range anchorLexicon {
+		known[e.ID] = true
+	}
+	seen := make(map[string]bool)
+	var ids []string
+	for _, m := range vsListedIDRE.FindAllStringSubmatch(text, -1) {
+		if id := m[1]; known[id] && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// vsToleranceHeading is the literal the doc must carry; the executor writes exactly this string.
+const vsToleranceHeading = "### A label may carry a verb inflection"
+
+// T-07.1: the tolerance subsection under "## Labels that own their token" must carry the alSuffix
+// literal and name exactly the anchorLexicon entries that carry it -- no more, no fewer.
+func TestCorpusDoc_RecordsTheLabelTolerance(t *testing.T) {
+	doc := vsReadCorpusDoc(t)
+	sub := vsDocSubsection(t, doc, vsToleranceHeading)
+
+	if !strings.Contains(sub, alSuffix) {
+		t.Errorf("the %q subsection does not carry the literal alSuffix tail %q", vsToleranceHeading, alSuffix)
+	}
+
+	var derived []string
+	for _, e := range anchorLexicon {
+		if strings.Contains(e.Pattern, alSuffix) {
+			derived = append(derived, e.ID)
+		}
+	}
+	sort.Strings(derived)
+	// Population floor: a table over an empty set passes vacuously.
+	if len(derived) == 0 {
+		t.Fatalf("no anchorLexicon entry carries alSuffix; the checks below would pass vacuously")
+	}
+	wantDerived := []string{"buyer_name", "buyer_tin"}
+	if !slices.Equal(derived, wantDerived) {
+		t.Fatalf("anchorLexicon entries carrying alSuffix = %v, want %v", derived, wantDerived)
+	}
+
+	named := vsListedLexiconIDs(sub)
+	if !slices.Equal(named, derived) {
+		t.Errorf("%q subsection lists %v as taking the suffix, want exactly %v", vsToleranceHeading, named, derived)
+	}
+}
+
+// vsOwningPhraseHeading is the existing section T-07.2 reads and re-counts.
+const vsOwningPhraseHeading = "## Labels that own their token"
+
+var (
+	// vsOpeningCountRE reads the section's opening "<N> entries in `anchorLexicon`" sentence.
+	vsOpeningCountRE = regexp.MustCompile(`(?i)\b(\w+) entries in `)
+	// vsNoneOfTheRE reads the section's later "None of the <n> carries a Tier-1 rule" sentence.
+	vsNoneOfTheRE = regexp.MustCompile(`(?i)\bNone of the (\w+)\b`)
+)
+
+// vsNumberWords spells the small counts this section's prose plausibly carries.
+var vsNumberWords = map[int]string{
+	4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+}
+
+// T-07.2: every spelled count in "## Labels that own their token" -- the opening sentence and the
+// later "None of the <n>" -- must equal len(t1OwningPhraseIDs) spelled in words, and the opening
+// paragraph's enumerated ids must equal that declaration exactly.
+func TestCorpusDoc_TheOwningPhraseCountMatchesTheDeclaration(t *testing.T) {
+	doc := vsReadCorpusDoc(t)
+	section := vsDocSection(t, doc, vsOwningPhraseHeading)
+	opening := vsFirstParagraph(section)
+
+	want, ok := vsNumberWords[len(t1OwningPhraseIDs)]
+	if !ok {
+		t.Fatalf("no spelled word for %d in vsNumberWords; extend it", len(t1OwningPhraseIDs))
+	}
+
+	openingCount := vsOpeningCountRE.FindAllStringSubmatch(section, -1)
+	if len(openingCount) != 1 {
+		t.Fatalf("%q section carries %d \"<n> entries in\" phrase(s), want exactly 1", vsOwningPhraseHeading, len(openingCount))
+	}
+	if got := strings.ToLower(openingCount[0][1]); got != want {
+		t.Errorf("opening count = %q, want %q (len(t1OwningPhraseIDs) = %d)", openingCount[0][1], want, len(t1OwningPhraseIDs))
+	}
+
+	noneOfThe := vsNoneOfTheRE.FindAllStringSubmatch(section, -1)
+	if len(noneOfThe) != 1 {
+		t.Fatalf("%q section carries %d \"None of the <n>\" phrase(s), want exactly 1", vsOwningPhraseHeading, len(noneOfThe))
+	}
+	if got := strings.ToLower(noneOfThe[0][1]); got != want {
+		t.Errorf("%s's \"None of the\" count = %q, want %q", vsOwningPhraseHeading, noneOfThe[0][1], want)
+	}
+
+	named := vsListedLexiconIDs(opening)
+	// Found-needle control: if the parser is blind, party_ref would be absent even though the
+	// doc text plainly backticks and enumerates it.
+	if !slices.Contains(named, "party_ref") {
+		t.Fatalf("party_ref not found among the opening paragraph's listed ids %v; the parser is blind", named)
+	}
+
+	wantIDs := append([]string(nil), t1OwningPhraseIDs...)
+	sort.Strings(wantIDs)
+	if !slices.Equal(named, wantIDs) {
+		t.Errorf("%s's opening paragraph lists %v as owning phrases, want exactly %v (t1OwningPhraseIDs)", vsOwningPhraseHeading, named, wantIDs)
 	}
 }

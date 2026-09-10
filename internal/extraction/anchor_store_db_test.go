@@ -1340,7 +1340,7 @@ func TestAnchorRulesFor_ABoxlessKeyOrdersFromTheIndexWithoutASort(t *testing.T) 
 // A version bump is a prefix change over the same digest, so a bumped class must read zero
 // while the untouched class re-reads ITS OWN row, non-empty. The re-read is the control:
 // without it a reader that returns nothing for every key passes both bump arms.
-// TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint owns the literal-level claim.
+// TestFingerprint_BothGenerationsAreThePinnedOnes owns the literal-level claim.
 func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	ctx := t.Context()
 	s := stStore(t)

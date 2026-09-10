@@ -44,7 +44,7 @@ func CollectTokens(dst *[]TokenPage) func(Page) error {
 
 // FingerprintVersion prefixes only Fingerprint's geometric hash. Bumping it invalidates every
 // stored rule in that namespace; BoxlessFingerprintVersion is the separate lever for the other.
-const FingerprintVersion = "v2"
+const FingerprintVersion = "v3"
 
 // anchorMatcher is one anchorLexicon pattern, compiled.
 type anchorMatcher struct {
@@ -166,15 +166,16 @@ func Fingerprint(pages []TokenPage) string {
 }
 
 // BoxlessFingerprintVersion prefixes every boxless fingerprint. Disjoint from
-// FingerprintVersion on byte 0, which is what makes a "b2:" value unable to collide with any
-// "v2:" value in the shared layout_fingerprint column. Both producers read anchorLexicon, so a
+// FingerprintVersion on byte 0, which is what makes a "b3:" value unable to collide with any
+// "v3:" value in the shared layout_fingerprint column. Both producers read anchorLexicon, so a
 // reshape of it steps both namespaces together.
-const BoxlessFingerprintVersion = "b2"
+const BoxlessFingerprintVersion = "b3"
 
 // IsBoxlessFingerprint reports whether f is a key in the boxless namespace. A classifier, not
-// a validator: the two producers differ on byte 0, so the prefix is total over the column's
-// real range. The constant and its colon, never the literal -- the constant is the
-// invalidation lever (TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring).
+// a validator: it is total only over the CURRENT generation's range -- a retired prefix (a
+// prior FingerprintVersion or BoxlessFingerprintVersion, still live in stored rows) reads
+// false, same as any other non-match. The constant and its colon, never the literal -- the
+// constant is the invalidation lever (TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring).
 func IsBoxlessFingerprint(f string) bool {
 	return strings.HasPrefix(f, BoxlessFingerprintVersion+":")
 }

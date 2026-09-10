@@ -796,11 +796,11 @@ A rule is keyed by a layout **fingerprint**, and two producers make one, in two 
 namespaces. Which one a job takes is decided when it is extracted, by whether the format returns
 usable geometry.
 
-* **The geometric identity, `v2:` today.** `Fingerprint` hashes `<label>:<band>` elements: which
+* **The geometric identity, `v3:` today.** `Fingerprint` hashes `<label>:<band>` elements: which
   anchor labels page 1 carries, and which vertical third — left, middle or right — each one's
   box centres in. They are hashed in reading order, top edge then left edge. This is what a PDF
   gets.
-* **The boxless identity, `b2:` today.** `BoxlessFingerprint` hashes `<label>:<placement>`
+* **The boxless identity, `b3:` today.** `BoxlessFingerprint` hashes `<label>:<placement>`
   elements, where placement is `w` when the lexicon match is the whole token, `l` when it leads
   the token, and `i` when it sits inside one. It is what a DOCX gets: every token a DOCX read
   returns carries the zero box, so no `band` can be computed and no reading order can be
@@ -809,9 +809,10 @@ usable geometry.
 
 **Read a prefix as a namespace, never as a fixed string.** A prefix is its lever's current value
 plus a colon, so it moves every time the lever does. The first generation of each spelled `v1:`
-and `b1:`; EXTR-22 widened the shared anchor lexicon and both stepped together to `v2:` and `b2:`.
-Prose, a test needle or an operator runbook that hard-codes a generation is one bump from being
-wrong, and this page has been exactly that.
+and `b1:`; EXTR-22 widened the shared anchor lexicon and both stepped together to their second
+generation, `v2`/`b2`; EXTR-26 widened it again and both stepped to `v3:` and `b3:`. Prose, a test
+needle or an operator runbook that hard-codes a generation is one bump from being wrong, and this
+page has been exactly that.
 
 The two can never collide: they differ on byte 0, so one `layout_fingerprint` column holds both
 and `IsBoxlessFingerprint` tells them apart by prefix.
@@ -883,12 +884,13 @@ matches neither writes **zero rules**:
 | Method | Job's `layout_fingerprint` | Derivation | Extra input |
 |---|---|---|---|
 | `pointed`, with a region | any key, provided the job recorded a layout | `LearnRule` | the box, against `layout_anchors` |
-| `typed` | a **boxless** key, `b2:` today — the identity written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
+| `typed` | a **boxless** key, `b3:` today — the identity written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
 | `chosen`, `undone` | either | none | — |
 
 Read that middle row as *which namespace the job took*, never as two fixed bytes: the boxless
-prefix spelled `b1:` before EXTR-22 and spells `b2:` now, and `IsBoxlessFingerprint` is what tells
-the two namespaces apart — see **The two layout identities** above.
+prefix spelled `b1:` before EXTR-22, `b2` before EXTR-26, and spells `b3:` now, and
+`IsBoxlessFingerprint` is what tells the two namespaces apart — see **The two layout identities**
+above.
 
 The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a
 geometric key — writes **zero rules**: there was geometry to point at and the reviewer did not

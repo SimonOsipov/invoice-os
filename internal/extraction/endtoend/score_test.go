@@ -965,8 +965,10 @@ func TestEndToEnd_TheEXTR25ClaimIsNotVacuous(t *testing.T) {
 		wantErr bool
 	}{
 		{"the shipped figures", build(5, 8, eeLayoutCount), false},
-		{"currency held at the before-figure", build(ee25CurrencyBefore, 8, eeLayoutCount), true},
-		{"issue_date one below the floor", build(5, ee25IssueDateBefore-1, eeLayoutCount), true},
+		// Literal 4 and 7, not ee25CurrencyBefore/ee25IssueDateBefore: a control built from the
+		// constant under test moves with it and cannot catch the constant itself being lowered.
+		{"currency held at the before-figure", build(4, 8, eeLayoutCount), true},
+		{"issue_date one below the floor", build(5, 7, eeLayoutCount), true},
 		{"the denominator shrunk by one layout", build(5, 8, eeLayoutCount-1), true},
 		{"an empty score", eeScore{}, true},
 	}

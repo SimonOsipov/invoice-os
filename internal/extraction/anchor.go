@@ -146,7 +146,10 @@ var anchorLexicon = []struct{ ID, Pattern string }{
 	// (TestTier1_ReusesTheAnchorLexiconPatterns, TestAnchorLexicon_AnOwningPhraseOutranksTheNarrowPartyWord).
 	{"party_ref", `(?i)\b(customer|client|buyer|account|supplier|vendor)\s*\.?\s*(no|num(ber)?|ref(erence)?|code)\b\.?`},
 	{"signature", `(?i)\b(buyer|customer|client|supplier|seller|vendor)(['’]s)?\s+signature\b`},
-	{"supplier_name", `(?i)\b(supplier|seller|vendor)\b`},
+	// ceiling: a learned rule derived from a From match (fingerprint.go's m.RE.FindString) loses
+	// this leading guard -- learnedLabel rebuilds an unguarded \bFrom\b. Revisit if learning ever
+	// needs to carry anchor position, not just text.
+	{"supplier_name", `(?i)(\b(supplier|seller|vendor)\b|^\s*from\b\s*(?:[:.\-–—]|$))`},
 	{"buyer_name", `(?i)\b(buyer|customer|client|bill` + alSuffix + `\s*to|sold` + alSuffix + `\s*to|invoice` + alSuffix + `\s*to|deliver` + alSuffix + `\s*to)\b`},
 	{"currency", `(?i)\b(currency|ccy)\b`},
 	{"subtotal", `(?i)\b(sub[\s-]*total|net\s*(amount|total)|goods\s*value|taxable\s*amount)\b`},

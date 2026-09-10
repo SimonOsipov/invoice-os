@@ -86,7 +86,10 @@ the per-page label array, and reads it where a party-scoped rule mints its candi
 is a token whose text one — and only one — of the two party vocabularies matches: the
 `supplier_name` and `buyer_name` entries of `anchorLexicon`, read by **id** and never re-spelled
 in `party.go`, because a forked copy of a pattern drifts from the fingerprint in silence
-(`TestPartyHeading_ReadsTheLexiconAndNotACopy`). Every token from the heading onwards belongs to
+(`TestPartyHeading_ReadsTheLexiconAndNotACopy`). Since this story, `supplier_name` alone carries
+the lexicon's only **position-anchored** arm, `^\s*from\b\s*(?:[:.\-–—]|$)` — no `(?m)` flag, so
+`^` is start-of-text and not start-of-line, and the trailing terminator is required, not optional
+(**The `From` guard** below). Every token from the heading onwards belongs to
 that party until another heading opens the next block, so a heading belongs to its own block and
 the last block on a page runs to the end of it
 (`TestPartyOrder_AssignsEveryTokenToTheHeadingBeforeIt`). Order is the page's own token order and
@@ -95,7 +98,11 @@ nothing else — there is no sort, and no reading-order reconstruction.
 **A token both vocabularies match heads neither.** `Supplier / Buyer` names both parties, and a
 heading that names both names none: the partition keeps whichever block was already open rather
 than guessing (`TestPartyHeading_ATokenNamingBothPartiesHeadsNeither`,
-`TestPartyOrder_ABothPartiesTokenDoesNotEndTheBlock`). A token that repeats the party already
+`TestPartyOrder_ABothPartiesTokenDoesNotEndTheBlock`). Since the `From` guard, the rule also
+reaches `From: Billed to`, `From — Invoice to` and `From. Deliver to` — tokens that headed the
+**buyer** block before this story, because only `buyer_name` matched them; now both vocabularies
+do, and the heading opens neither (`TestParty_AFromTokenThatAlsoNamesTheBuyerHeadsNeither`). A
+token that repeats the party already
 heading the block — `Supplier TIN` after `Supplier` — opens a block of the same party, which is
 the same block; it neither resets nor toggles one
 (`TestPartyOrder_ARepeatedHeadingOfOnePartyDoesNotDisturbTheBlock`).
@@ -172,13 +179,71 @@ The two questions are simply different. *Does this label own this token's value*
 answers. *Which party does this token belong to* is what a heading answers — and a token that
 spells out `Supplier TIN` names the supplier louder, not more quietly.
 
+### The `From` guard
+
+`supplier_name` gained one alternation arm, `^\s*from\b\s*(?:[:.\-–—]|$)` — the lexicon's only
+position-anchored pattern. `^` is Go's start-of-text (no `(?m)` flag is set anywhere this pattern
+compiles), so the arm only ever opens a token, never a sentence mid-flight, and it must close on
+one of five printable separators or end-of-token; ASCII whitespace may lead the terminator, and
+nothing else — not even a non-breaking space — satisfies it
+(`TestAnchorLexicon_TheFromArmsTerminatorSet`).
+
+Three committed refusal sets hold the guard down:
+
+* **Prose, five mid-sentence and four leading, refuses outright** — `Freight from Lagos`,
+  `From Lagos to Abuja` and seven more like them match nothing
+  (`TestAnchorLexicon_FromInProseNamesNobody`).
+* **A mid-sentence `from` followed by a real terminator still refuses**, because only the leading
+  `^` stops it — `Period from:`, `Goods shipped from-` and five more carry a terminator and match
+  nothing (`TestAnchorLexicon_AMidSentenceFromWithATerminatorNamesNobody`).
+* **Leading prose loses no TIN.** Under the bare, unterminated `^\s*from\b` this exact page —
+  `Billed to` / `Enugu Ceramics Limited` / `From Lagos to Abuja` / `TIN 99999999-1302` — files
+  `buyer_tin` as `supplier_tin` and fabricates `supplier_name = "Lagos to Abuja"`, measured. The
+  shipped arm never reaches that token, so `buyer_tin` stays `99999999-1302`
+  (`TestParty_ALeadingProseFromLeavesTheBuyerTINAlone`).
+
+Differential oracle: `TestAnchorLexicon_TheFromArmIsTheOnlyThingSupplierNameGained` derives the
+pre-arm pattern from the shipped one and diffs it against a generated probe set wide enough that
+a silent change to the supplier/seller/vendor arm cannot hide in it, so every span the arm adds,
+keeps or moves is attributed to the arm itself and not to the rewritten parenthesisation around
+it.
+
+**The guard's cost, characterised rather than left silent:**
+
+* An uncolonned `From Kaduna Advisory Partners` in one token reads no supplier at all
+  (`TestAnchorLexicon_AnUncolonnedFromNamesNoSupplier`).
+* `From: 01 Aug 2026` names the date `01 Aug 2026` as the supplier, and `From – To` names `To`
+  (`TestParty_ATerminatedFromOnADateRangeNamesTheDate`).
+* A non-breaking space before the terminator refuses, and so does a two-line token — the arm
+  carries no `(?m)` flag (`TestAnchorLexicon_TheFromArmsTerminatorSet`).
+* A second `From` heading silently drops the first block's name; only the newer one decides, with
+  no alternative recorded (`TestParty_ASecondFromHeadingTakesTheBlockFromTheFirst`).
+* A learned label derives the unguarded `(?i)\bFrom\b` — `LearnRule`'s `learnedLabel` rebuilds a
+  rule from the anchor's own matched text, which carries no position
+  (`TestLearn_ALearnedFromLabelLosesTheLeadingGuard`; the `ceiling:` beside the entry in
+  `anchor.go`).
+
+**A one-off, uncommitted control, named so it is not mistaken for a shipped oracle**: the bare,
+unterminated `from` misfile described above was a Stage-1 mutation, never a committed test.
+`TestParty_AMidSentenceFromDoesNotOpenASupplierBlock` is the test that reds under it.
+
+**The positive cases.** A leading `From` opens a supplier block wherever it sits on the page —
+leading the page (`TestParty_ALeadingFromOpensASupplierBlock`) or behind an already-open buyer
+block, stranding neither party's fields
+(`TestParty_AFromHeadingBehindTheBuyerBlockOpensASupplierBlock`). And a suffixed buyer heading —
+`Billed to`, `Billing to`, `Delivered to` — moves the bare TIN behind it to the buyer exactly as
+`Bill to` always did; a spelling outside the closed set leaves it with the supplier
+(`TestPartyOrder_ASuffixedBuyerHeadingMovesTheBareTIN`).
+
 ## Labels that own their token
 
-Six entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
+Seven entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
 (`Customer No.`, `Client Code`) and `signature` (`Buyer's Signature`) sit over the party
 vocabulary; `reg_identifier` (`VAT REG NO`, `VAT REGISTRATION NUMBER`), `rc_number` (`RC NO`,
 `CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary;
-`due_date` (`Due Date`, `PAST DUE DATE`) sits over `issue_date`'s bare `date`. None of the six carries
+`due_date` (`Due Date`, `PAST DUE DATE`) sits over `issue_date`'s bare `date`, and
+`withholding_tax` (`Withholding tax 10%`, `With holding tax`) sits over `vat`'s bare `tax`, by
+strict containment. None of the seven carries
 a Tier-1 rule; none of them resolves a field. Each exists so that a token
 spelling one of those phrases is claimed **whole** by a label, which is what stops a narrower entry
 inside it — `buyer_name`'s bare `Buyer` inside `Buyer's Signature`, `vat`'s bare `VAT` inside
@@ -211,6 +276,35 @@ not displaced and not corrected: nothing rewrites it, nothing hides it, that lay
 still reads `187.50` unchanged, and the RC line still displaces nothing. All that changed is that
 the phrase now has an owner, so no amount rule can anchor on the bare `RC` or on the `NUMBER`
 inside it.
+
+An owning phrase is one defence against a word inside prose; a positional guard —
+`supplier_name`'s `From` arm, in **Party blocks** above — is a second kind, refusing a token by
+where the word sits rather than by what claims it.
+
+### A label may carry a verb inflection
+
+Two entries admit one enumerated tail between the words of their `<verb> to` arm: the constant
+`alSuffix`, `(?:ed|ing|s|d)?` (`anchor.go:121`), sits after `bill`, `sold`, `invoice` and
+`deliver` — the only four verbs in this lexicon whose head word inflects. `buyer_name`
+(`Billed to`, `Billing to`, `Bills to`, `Delivered to`, `Invoiced to`) and `buyer_tin`
+(`Billed to TIN`, `Invoiced to TIN`) both carry it, and no other entry does.
+
+The set is closed at four tails. `es`, `er` and `ment` are all refused — `Billeder to`,
+`Billments to` match nothing — because the rule names a morphological class, the four verbs
+above inflecting, and is not a stemmer over arbitrary verbs. A noun-noun entry takes no tail at
+all: `sub total`, `grand total`, `amount due` and `invoice date` refuse every one of the four,
+because an intervening suffix between two nouns spells nothing in English.
+
+Decoration needs no rule on this path, because header-field matching is unanchored substring
+search over raw token text: a trailing colon, a currency symbol or a percentage cannot break a
+match that never anchored to the token's edges
+(`TestAnchorLexicon_ADecoratedLabelStillNamesItsOwnField`).
+
+The set elides no letter, so it has an edge. `Invoicing to` misses and `Invoiceing to` matches —
+the tail is a blind concatenation onto the stem, not a real elision of the trailing `e`
+(`TestAnchorLexicon_TheClosedSetMissesTheElidingInflection`). And the trailing boundary still
+fires after `to`, never after any word: `Billed total` is refused, because the suffixed verb must
+be followed by `to`, not by an unrelated noun.
 
 ### The rightward label boundary
 
@@ -297,7 +391,7 @@ a pass.
 
 ## Tier-1 recall and the floor
 
-Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`: the shipped Tier-1 set reaches
+Re-measured 2026-09-10 on `feature/extr-26-a-label-is-read-by-its-word`: the shipped Tier-1 set reaches
 **44 of 44** of the (layout, field) pairs `corpusExpect` names — **1.0000**. The denominator is
 the pairs the table actually asserts, so a field absent from a row is not counted and the
 ambiguous-date row's two accepted readings are one pair, not two.
@@ -384,7 +478,7 @@ put this bound back on the corpus.**
 
 ## Tier-1 decision rate
 
-Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`, over the same 44 pairs the
+Re-measured 2026-09-10 on `feature/extr-26-a-label-is-read-by-its-word`, over the same 44 pairs the
 recall rate scores: the pipeline **decides** the value `corpusExpect` names on **44 of 44** —
 **1.0000**. It read 30 of 44 — 0.6818 — before EXTR-16, and every one of the 13 pairs it gained
 moved for the same two reasons: a Tier-1 rule no longer anchors on a token another lexicon entry
@@ -417,7 +511,7 @@ false-decision row, so a new fabrication is red rather than green.
 
 ## Wired-path decision rate
 
-Re-measured 2026-09-08 on `feature/extr-22-one-token-one-field`, over the same 44 pairs the
+Re-measured 2026-09-10 on `feature/extr-26-a-label-is-read-by-its-word`, over the same 44 pairs the
 two rates above score. Driven through `ExtractWorker.Work` — the real document store, the real
 transaction boundaries, the fingerprint hoist, the learned-rule lookup and the rank-0 encoding —
 and scored from the rows read back out of `extraction_field_results` rather than from a
@@ -487,14 +581,19 @@ a passing test's buffered log, so the report reaches CI only from a step of its 
 its own output for the marker; `TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest` keeps that
 step's `-run` filter from rotting into one that matches nothing.
 
-EXTR-22 closed the last reach limit by widening an EXISTING anchor pattern, which invalidates
-every stored rule, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
-together. A NEW rule-less owning-phrase entry needs neither bump — it resets only pages that
-print the phrase. A reach limit closed by another route needs neither bump either.
+EXTR-22 closed the last reach limit by widening an EXISTING anchor pattern, which sits behind
+both fingerprint producers, so it bumped `FingerprintVersion` **and** `BoxlessFingerprintVersion`
+together. The bump is a namespace decision taken **by policy**, not one forced by a measured
+digest shift: EXTR-26 widened six shared patterns the same way and measured it directly — 0 of 72
+stored digests moved (`84a08f9c`) — and still bumped both levers, because a widened pattern
+invalidates every stored rule in both namespaces by the rule the fingerprint scheme ships,
+whether or not a given corpus happens to shift under it. A NEW rule-less owning-phrase entry
+needs neither bump — it resets only pages that print the phrase. A reach limit closed by another
+route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-10 on `feature/extr-25-a-symbol-names-the-currency`: a document goes in at the
+Re-measured 2026-09-10 on `feature/extr-26-a-label-is-read-by-its-word`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
 the page prints on **58 of 88** cells — **0.6591**. Eleven layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
@@ -604,6 +703,24 @@ after. This score therefore does not grade the refusal; its oracles are
 `TestResolve_ADueDateNoLongerContestsTheIssueDate` and
 `TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect`, and both red the moment the entry
 is removed.
+
+### What EXTR-26 changed
+
+Nothing on this page moved, and the headline stayed at **58 of 88**. EXTR-26 widened six shared
+header-field patterns — the party suffix, the `From` guard, `Taxable amount`, `Amount payable`
+and `Issued` — and added one rule-less owning phrase, `withholding_tax`. It moved no cell because
+no scored arrangement prints a spelling the pre-story lexicon missed. Two goldens print a
+suffix-arm spelling that already matched before this story: `Invoice to`
+(`wild_two_party_bare_tin.pdf`) and `BILL TO` (`wild_scanned_no_number.pdf`, the quarantined
+0-of-8 page). Measured, not assumed: the suffix adds no anchor on any committed fixture
+(`TestAnchorLexicon_TheSuffixAddsNoAnchorOnTheCommittedFixtures`), the three advisory arms add
+none on the eleven scored arrangements
+(`TestAnchorLexicon_TheAdvisoryArmsAddNoAnchorOnTheScoredArrangements`), and the `From` arm adds
+none on any committed arrangement
+(`TestAnchorLexicon_TheFromArmAddsNoAnchorOnTheCommittedArrangements`). `withholding_tax` is
+listed in `wildUnprintedPhraseIDs`: no scored layout prints the phrase either. The words this
+story newly matches live on the advisory register and its dense sibling, outside this ratchet —
+see **The advisory arrangements** below.
 
 ### Moving the figure
 
@@ -782,6 +899,77 @@ reason: a ruled table plus a deliberately inconsistent totals block, exercised b
 scored by `expectByLayout`, but outside every `corpus_` ratchet, so edits 2, 3 and 4 above do not
 apply to them.
 
+The three advisory arrangements (`advisory_register.pdf`, `advisory_register_unspaced.pdf`,
+`advisory_dense.pdf` — **The advisory arrangements** below) join this list for a related but
+narrower reason: generated and byte-compared like every other fixture, and, for
+`withholding_tax`, scored by `wildUnprintedPhraseIDs` (`endtoend/wild_adversarial_test.go:454`) —
+but outside `expectByLayout` and every `corpus_` ratchet entirely. Registering any one of them in
+`expectByLayout` removes `withholding_tax` from `wildUnprintedPhraseIDs` in the same commit,
+because the register prints the withholding line. `dense_invoice.pdf` (pre-existing, unrelated to
+this story) belongs on this "not a layout" list too and has never been added; named here, not
+fixed.
+
+This also deviates from **When a client's invoice fails to extract** step 4 below, which asks a
+reproduction to add its `corpusExpect` row and watch it fail: the advisory reproductions
+deliberately carry none, for the reason the EXTR-33 collision below names.
+
+**The EXTR-33 collision.** EXTR-33 (`Planned`) owns verbatim `wild_<arrangement>_asprinted.pdf`
+siblings, scored beside the eleven. One of its four measured divergences,
+`wild_ruled_lines_totals`, transcribes the same dense telecoms source `advisory_dense.pdf`
+transcribes here — `Taxable amount` / `VAT @ 7.5%` / `TOTAL DUE (NGN)`, total filed
+`1,250,000.00` against a printed `3,426,476.50`. EXTR-33's acceptance criterion that its siblings
+turn red on the four divergences before EXTR-24, EXTR-25, EXTR-26 or EXTR-31 land is **unmeetable**
+for that divergence once this story merges: the sibling would pass on arrival against the widened
+lexicon. The scored arrangement for that source belongs to EXTR-33's sibling, and EXTR-33 must
+prove it red against the **pre-EXTR-26** lexicon instead. `advisory_register.pdf`'s source has no
+EXTR-33 divergence at all, so a scored arrangement for it is **owed and unowned** — this story does
+not create one, and does not attribute the gap to EXTR-33 either.
+
+## The advisory arrangements
+
+Three fixtures reproduce the real Nigerian advisory-firm invoice this story was written against:
+`advisory_register.pdf` (R0, faithful, two pages), `advisory_register_unspaced.pdf` (R1, exactly
+one declared transformation) and `advisory_dense.pdf` (D0, faithful). The `wild_*` layouts set
+the precedent for this kind of proxy — geometry copied from a real, unscrubbed document, labels
+rewritten to something a template would print — and these three are transcribed the same way: the
+arrangement is real, the bytes are not.
+
+### Letter-spacing is a second text-layer taming axis
+
+R0's header labels print letter-spaced — `I S S U E D`, `I N V O I C E   N U M B E R` — and no
+lexicon entry reaches a letter-spaced word. That evidence is the **local docling 1.10.0 canary,
+not the deployed sidecar**. R1 exists to isolate that one variable: it unspaces exactly the header
+labels and changes nothing else, so a spec run against R1 measures the suffix tolerance and the
+advisory arms cleanly, without the letter-spacing gap standing in front of them. `Amount payable`
+is evidenced **split**, with no `(NGN)` beside it, by the same local canary
+(`TestAdvisory_TheFixturesTokeniseTheWayTheyDeclare` pins every fixture's declared tokenisation —
+split label-and-value or joined into one token — against the built PDF).
+
+### The joined label-and-value token
+
+D0's summary block prints `Total payable   ₦3,426,476.50` as **one token**. `total` matches only
+the bare `Total`; the residue `payable   ₦3,426,476.50` goes to `sameTokenValue`, which hands it
+to `ShapeAmount`, and `ShapeAmount` rejects it — `isLabelSep` trims only `:`, `-`, `–`, `—` and
+whitespace, none of which opens the residue. The same joined token still anchors a `below`
+candidate at row 1's competing `1,250,000.00`, so it is not inert — it feeds the wrong candidate
+while starving the right one. `sameTokenValue`'s residue handling is a **value-normaliser** gap,
+not a label-matching one, and it is **owed**, not fixed here
+(`TestAdvisory_AJoinedLabelAndValueResolvesNothing`).
+
+### Core AC-5 is not delivered on the real register
+
+Through the local docling canary, `invoice_number`, `issue_date`, `subtotal`, `vat` and `total`
+all decide `missing` on the real advisory register. Two blockers, both **owed**:
+
+1. The header labels are letter-spaced (above).
+2. The totals sit 0.3932–0.5880 right of their labels — pdfium R0's own `Amount payable` gap
+   measures 0.4604 — against `tier1MaxDistanceRight = 0.35` (`tier1.go:43`).
+
+Neither letter-spaced label matching nor a far-right totals column exists; both follow-ups are
+**owed and not created**. On the faithful fixture, `issue_date` and `total` are known gaps by
+name, recorded as gaps and never counted as passes
+(`TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName`).
+
 ## Learned rules
 
 A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
@@ -814,8 +1002,18 @@ generation, `v2`/`b2`; EXTR-26 widened it again and both stepped to `v3:` and `b
 needle or an operator runbook that hard-codes a generation is one bump from being wrong, and this
 page has been exactly that.
 
-The two can never collide: they differ on byte 0, so one `layout_fingerprint` column holds both
-and `IsBoxlessFingerprint` tells them apart by prefix.
+The two can never collide **within the current generation**: they differ on byte 0, so one
+`layout_fingerprint` column holds both, and `IsBoxlessFingerprint` tells them apart by prefix —
+true only for the current generation, the way `fingerprint.go:174-178`'s own comment on that
+function now says. A key stored under a retired prefix reads false from that classifier, the same
+as any other non-match: `AnchorRulesFor` (`anchor_store.go:52`) matches by exact equality, so a
+row keyed under a retired generation is never selected again, raises no error and is logged
+nowhere — and it cannot be deleted either, because `invoice_app` holds `INSERT` and `SELECT` only
+(**A rule is scoped to one tenant and one layout fingerprint** below). A typed correction on a job
+extracted before the bump derives nothing, because the `IsBoxlessFingerprint` gate at
+`handlers_correction.go:315` reads false on that job's stored key; a pointed correction on the
+same job still writes a rule under the retired key, which nothing will ever select again, and
+still records an `AnchorLearned` event for a rule no future extraction can reach.
 
 Each namespace carries its **own** invalidation lever, and bumping one clears **only its own**
 class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
@@ -823,7 +1021,10 @@ readable under its unchanged key; bumping `BoxlessFingerprintVersion` does the r
 `FingerprintVersion` is no longer the single lever it was before EXTR-19 — an operator who bumps
 it and expects every stored rule gone is wrong. WIDENING an existing shared-anchor-lexicon pattern
 is the one case that needs **both**, because `anchorLabelMatchers` is an input to both producers;
-EXTR-22 is the change that proved it, stepping both levers in one commit. A NEW rule-less
+EXTR-22 is the change that proved it, stepping both levers in one commit — true of EXTR-22
+specifically, not a rule about commits in general. EXTR-26 widened six patterns across three
+commits and stepped both levers in a fourth, all inside one merge; deploy runs on merge, so the
+merge is the unit that matters, not any one commit inside it. A NEW rule-less
 owning-phrase entry needs neither: EXTR-25-04 added `due_date` and moved neither lever, because a
 new entry resets only the pages that print the phrase rather than invalidating every stored rule.
 
@@ -1022,10 +1223,15 @@ The remedy today is a **second pointed correction** on a distinguishing label �
 text tells the two blocks apart — which prepends a superseding rule. Widening the anchor lexicon
 so that `TIN` alone no longer anchors is **not** a remedy here: it is what Tier-1 already does, and
 the learned rule outranks Tier-1 regardless. It is also the expensive lever: WIDENING AN EXISTING
-pattern invalidates every stored rule for every tenant and requires a `FingerprintVersion` **and**
-a `BoxlessFingerprintVersion` bump. A NEW rule-less owning-phrase entry needs neither bump. Since
-EXTR-19-02 the same `anchorLabelMatchers` feed `BoxlessFingerprint` too, but only a widened
-pattern moves every boxless key that reaches it — a new entry moves only the keys for pages printing it.
+pattern requires a `FingerprintVersion` **and** a `BoxlessFingerprintVersion` bump, by policy, in
+both namespaces — not because a stored rule's own key is measured to move. A widening shifts a
+page's digest only when that page's tokens print a spelling the pattern newly matches; across the
+six patterns EXTR-26 widened, that was zero of 72 measured digests (`84a08f9c`), and both levers
+still bumped, because the scheme invalidates by rule, not by observed drift. A NEW rule-less
+owning-phrase entry needs neither bump. Since
+EXTR-19-02 the same `anchorLabelMatchers` feed `BoxlessFingerprint` too, and only a widened
+pattern can move a boxless key at all — a new entry moves only the keys of the pages that print
+the phrase it adds.
 
 ### learned_two_party.pdf is not a corpus layout
 

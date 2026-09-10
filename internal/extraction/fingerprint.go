@@ -53,7 +53,7 @@ type anchorMatcher struct {
 }
 
 // anchorLabelMatchers is anchorLexicon's compiled form, in the same order, built once so
-// Fingerprint does not recompile ten patterns per call. TestAnchorLexicon_IsOrderedAndUnique
+// Fingerprint does not recompile the whole lexicon per call. TestAnchorLexicon_IsOrderedAndUnique
 // proves every pattern compiles, so MustCompile here cannot panic.
 var anchorLabelMatchers = compileAnchorLexicon()
 

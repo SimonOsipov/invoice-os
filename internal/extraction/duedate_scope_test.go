@@ -3,6 +3,7 @@
 package extraction_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -91,8 +92,7 @@ func TestExtraction_NoDueDateFieldExists(t *testing.T) {
 }
 
 // ddQualifierMarkers are the terms the added qualifier must carry: the AC's own language names
-// the new entry a "rule-less owning-phrase entry", which is the distinguishing concept absent
-// from both passages today.
+// the new entry a "rule-less owning-phrase entry".
 var ddQualifierMarkers = []string{"rule-less", "owning phrase", "owning-phrase"}
 
 func ddHasQualifier(text string) bool {
@@ -107,8 +107,8 @@ func ddHasQualifier(text string) bool {
 
 // AC-4.11. Neither FingerprintVersion nor BoxlessFingerprintVersion moves, and both cited
 // bump-rule passages in docs/extraction-corpus.md gain the qualifier distinguishing a widened
-// existing pattern (bump) from a new rule-less owning-phrase entry (no bump). Floor of 2
-// matched passages out of 2 cited, so a rewritten doc cannot pass on zero.
+// existing pattern (bump) from a new rule-less owning-phrase entry (no bump). Each passage is
+// graded on its own, so one qualifier cannot cover for the other.
 func TestAnchorLexicon_TheBumpRuleDistinguishesANewEntryFromAWidenedPattern(t *testing.T) {
 	if extraction.FingerprintVersion != "v2" {
 		t.Errorf("FingerprintVersion = %q, want %q -- a rule-less lexicon entry must not bump it", extraction.FingerprintVersion, "v2")
@@ -122,25 +122,43 @@ func TestAnchorLexicon_TheBumpRuleDistinguishesANewEntryFromAWidenedPattern(t *t
 	if err != nil {
 		t.Fatalf("read docs/extraction-corpus.md: %v", err)
 	}
-	lines := strings.Split(string(b), "\n")
+	for _, locator := range ddBumpPassageLocators {
+		para, err := ddParagraphContaining(string(b), locator)
+		if err != nil {
+			t.Errorf("%v", err)
+			continue
+		}
+		if !ddHasQualifier(para) {
+			t.Errorf("the docs/extraction-corpus.md passage owning %q carries no new-entry/widened-pattern qualifier (one of %v):\n%s", locator, ddQualifierMarkers, para)
+		}
+	}
+}
 
-	passages := []struct{ from, to int }{
-		{489, 492},
-		{1011, 1018},
-	}
-	matched := 0
-	for _, p := range passages {
-		if p.to > len(lines) {
-			t.Fatalf("docs/extraction-corpus.md has %d line(s), want at least %d for the %d-%d passage", len(lines), p.to, p.from, p.to)
+// ddBumpPassageLocators name the two doc passages that state a lexicon change's fingerprint-bump
+// cost. Keyed on a sentence each passage owns, not a line number: the ranges this test used to
+// carry rotted the first time a paragraph was inserted above them, and three other passages in the
+// same file say "owning phrase", so a drifted range can pass on the wrong text. Neither locator
+// contains a qualifier marker, so matching one proves nothing on its own.
+var ddBumpPassageLocators = []string{
+	"EXTR-22 closed the last reach limit by widening an EXISTING anchor pattern",
+	"It is also the expensive lever: WIDENING AN EXISTING",
+	// The third passage. It stated the bump rule over the whole lexicon and so contradicted
+	// this story's own entry; it was uncaught because only the first two were ever cited.
+	"an operator who bumps\nit and expects every stored rule gone is wrong",
+}
+
+// ddParagraphContaining returns the blank-line-delimited block holding locator. Exactly one
+// block must hold it: zero means the passage was rewritten and this test needs re-pointing, more
+// than one means the locator stopped identifying a single passage.
+func ddParagraphContaining(doc, locator string) (string, error) {
+	var found []string
+	for _, para := range strings.Split(strings.ReplaceAll(doc, "\r\n", "\n"), "\n\n") {
+		if strings.Contains(para, locator) {
+			found = append(found, para)
 		}
-		text := strings.Join(lines[p.from-1:p.to], "\n")
-		if ddHasQualifier(text) {
-			matched++
-		} else {
-			t.Logf("docs/extraction-corpus.md:%d-%d carries no new-entry/widened-pattern qualifier yet:\n%s", p.from, p.to, text)
-		}
 	}
-	if matched < 2 {
-		t.Errorf("%d of 2 cited passages carry the new-entry/widened-pattern qualifier, want both -- a rewritten doc must not pass on zero", matched)
+	if len(found) != 1 {
+		return "", fmt.Errorf("docs/extraction-corpus.md holds %d passage(s) containing %q, want exactly 1 -- re-point this test at the passage that replaced it", len(found), locator)
 	}
+	return found[0], nil
 }

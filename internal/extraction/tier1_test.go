@@ -339,7 +339,7 @@ func TestTier1_TheSweepSeparatesSupplierFromBuyerByPartyBlock(t *testing.T) {
 			t.Fatalf("the control set dropped %d rule(s), want exactly the 2 sweeps", len(extraction.Tier1Rules)-len(control))
 		}
 		ctl := extraction.Resolve(pages, extraction.RuleSet{Tier1: control})
-		rvControl(t, ctl, "the shipped set minus the sweep over "+t1Stacked)
+		rvControl(t, ctl, "the shipped set minus both sweeps over "+t1Stacked)
 		if v := rvValues(rvFor(ctl, "supplier_tin")); len(v) != 0 {
 			t.Errorf("without the sweep supplier_tin = %v, want none; a label rule did the work and this spec does not test the sweep", v)
 		}

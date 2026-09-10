@@ -193,8 +193,10 @@ func TestBetterAnchor_GapOutranksRelationKind(t *testing.T) {
 }
 
 // betterAnchor must consult lexicon index (key 3) BEFORE the Label string itself (key 4):
-// supplier_tin (lexicon index 2) beats buyer_tin (index 3) even though "buyer_tin" sorts first
-// alphabetically -- a comparator that skipped straight to the string compare would pick wrong.
+// supplier_tin sits at a lower lexicon index than buyer_tin and so beats it, even though
+// "buyer_tin" sorts first alphabetically -- a comparator that skipped straight to the string
+// compare would pick wrong. The indices themselves are deliberately not quoted here; they shift
+// every time anchorLexicon gains an entry, and only their ORDER carries this argument.
 func TestBetterAnchor_LexiconIndexOutranksLabelString(t *testing.T) {
 	if "buyer_tin" > "supplier_tin" {
 		t.Fatal("this test assumes buyer_tin sorts before supplier_tin; it no longer does")
@@ -203,7 +205,7 @@ func TestBetterAnchor_LexiconIndexOutranksLabelString(t *testing.T) {
 	buyerTIN := candidate{AnchorObservation: AnchorObservation{Label: "buyer_tin", Text: "TIN", Page: 1}, kind: RelSameToken, gap: 0}
 
 	if !betterAnchor(supplierTIN, buyerTIN) {
-		t.Error("betterAnchor(supplier_tin, buyer_tin) = false, want true -- lexicon index (2 < 3) must decide before the alphabetical compare would (which favours buyer_tin)")
+		t.Error("betterAnchor(supplier_tin, buyer_tin) = false, want true -- supplier_tin's lower lexicon index must decide before the alphabetical compare would (which favours buyer_tin)")
 	}
 	if betterAnchor(buyerTIN, supplierTIN) {
 		t.Error("betterAnchor(buyer_tin, supplier_tin) = true, want false")

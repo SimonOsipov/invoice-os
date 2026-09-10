@@ -258,7 +258,7 @@ func TestLearnRule_R03_SameTokenOverlapOnInlineLabel(t *testing.T) {
 
 // R-12: the "Sub-total" token on corpus_totals_block.pdf is matched by two lexicon entries --
 // subtotal and total, sharing the token's own box. Both are same_token candidates at gap 0, so
-// the tie goes to lexicon order: subtotal (index 7) beats total (index 9). QuoteMeta does not
+// the tie goes to lexicon order: subtotal sits at a lower index than total and wins. QuoteMeta does not
 // escape "-", so a label of "(?i)\bSub\-total\b" would be wrong.
 func TestLearnRule_R12_LexiconTieBreakPicksSubtotalOverTotal(t *testing.T) {
 	pages := rvCorpusPages(t, "corpus_totals_block.pdf")

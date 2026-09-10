@@ -664,7 +664,7 @@ const (
 )
 
 // anchorOutranked can never empty a token's label set: it needs a STRICTLY wider containing
-// span, and the widest of the at most sixteen leftmost hits has none. So "carries a hit that is
+// span, and the widest of a token's leftmost hits (at most one per lexicon entry) has none. So "carries a hit that is
 // not itself outranked" and "carries a hit" are the same predicate, and the rightward boundary
 // ships without the qualifier. Deleting this leaves the missing clause looking like an
 // oversight.

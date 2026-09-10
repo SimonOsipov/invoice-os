@@ -177,8 +177,9 @@ spells out `Supplier TIN` names the supplier louder, not more quietly.
 Six entries in `anchorLexicon` exist to be **labels and nothing else**. `party_ref`
 (`Customer No.`, `Client Code`) and `signature` (`Buyer's Signature`) sit over the party
 vocabulary; `reg_identifier` (`VAT REG NO`, `VAT REGISTRATION NUMBER`), `rc_number` (`RC NO`,
-`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary; `due_date` sits over `issue_date`'s bare `date`. None
-of the six carries a Tier-1 rule; none of them resolves a field. Each exists so that a token
+`CAC NUMBER`) and `doc_title` (`TAX INVOICE`, `VAT INVOICE`) sit over the amount vocabulary;
+`due_date` (`Due Date`, `PAST DUE DATE`) sits over `issue_date`'s bare `date`. None of the six carries
+a Tier-1 rule; none of them resolves a field. Each exists so that a token
 spelling one of those phrases is claimed **whole** by a label, which is what stops a narrower entry
 inside it — `buyer_name`'s bare `Buyer` inside `Buyer's Signature`, `vat`'s bare `VAT` inside
 `VAT REG NO`, its bare `TAX` inside `TAX INVOICE` — from anchoring its own rule there and reading
@@ -595,9 +596,14 @@ attached. Those readings are pinned in `internal/extraction/sweep_qa_test.go` ra
 be found on a tenant's document.
 
 EXTR-25 also ships a `due_date` owning phrase: `(?i)\bdue\s*date\b` refuses to anchor the issue
-date. It moves no cell on this corpus — no layout prints "Due Date" — so this score does not grade
-it. Its oracles are `TestResolve_ADueDateNoLongerContestsTheIssueDate` and
-`TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect`.
+date. It moves no cell, and **not** because the corpus is silent on it: `wild_rc_due_naira.pdf`
+prints "Due Date" above a second date (`internal/extraction/fixtures_test.go:798`), and the entry
+does remove that token's competing `2026-08-07` read. The printed issue date was already winning
+that contest on distance, so the decided value — and every figure above — is the same before and
+after. This score therefore does not grade the refusal; its oracles are
+`TestResolve_ADueDateNoLongerContestsTheIssueDate` and
+`TestWildLayouts_TheRCLayoutDoesNotReproduceItsDateOrVATDefect`, and both red the moment the entry
+is removed.
 
 ### Moving the figure
 
@@ -814,9 +820,11 @@ Each namespace carries its **own** invalidation lever, and bumping one clears **
 class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
 readable under its unchanged key; bumping `BoxlessFingerprintVersion` does the reverse. So
 `FingerprintVersion` is no longer the single lever it was before EXTR-19 — an operator who bumps
-it and expects every stored rule gone is wrong. A change to the shared anchor lexicon is the one
-case that needs **both**, because `anchorLabelMatchers` is an input to both producers; EXTR-22 is
-the change that proved it, stepping both levers in one commit.
+it and expects every stored rule gone is wrong. WIDENING an existing shared-anchor-lexicon pattern
+is the one case that needs **both**, because `anchorLabelMatchers` is an input to both producers;
+EXTR-22 is the change that proved it, stepping both levers in one commit. A NEW rule-less
+owning-phrase entry needs neither: EXTR-25-04 added `due_date` and moved neither lever, because a
+new entry resets only the pages that print the phrase rather than invalidating every stored rule.
 
 ### How a rule is derived
 

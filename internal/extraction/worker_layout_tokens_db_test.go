@@ -324,8 +324,8 @@ func TestRLS_ABoxlessJobWithANulByteStoresNoTokens(t *testing.T) {
 }
 
 // LT-5 (AC-4, sink probe). layout_anchors is the OTHER page-1 sink, and it is written from the
-// same token set on the PDF arm too. Green by design: every anchorLexicon pattern is literal
-// words, \s*, \.? and [\s-]*, none of which match a NUL, so no matched substring can carry one.
+// same token set on the PDF arm too. Green by design: no anchorLexicon construct matches a NUL,
+// so no matched substring can carry one.
 // The value is the alarm -- a lexicon edit that admitted a NUL into a match would make the real
 // INSERT below fail, and that failure reaches the PDF arm as a dead-letter.
 func TestRLS_LayoutAnchorsSurviveANulBearingToken(t *testing.T) {

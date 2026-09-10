@@ -116,8 +116,8 @@ func ParseRule(raw []byte) (Rule, error) {
 	return r, nil
 }
 
-// alSuffix is the enumerated tail admitted between the words of a two-word label: "Billed to"
-// is "Bill to". A closed set of four, never a stemmer.
+// alSuffix is the enumerated tail the four party "<verb> to" arms admit between their words, so
+// "Billed to" reads as "Bill to". Blind concatenation over a closed set of four, not a stemmer.
 const alSuffix = `(?:ed|ing|s|d)?`
 
 // anchorLexicon maps a canonical label id to the pattern that recognises it. Ordered, never

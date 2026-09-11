@@ -571,7 +571,7 @@ func TestRLS_ExtractWorkerLooksUpRulesForTheFingerprintItStored(t *testing.T) {
 	}
 	// Pinned rather than merely "equal to itself": the fingerprint of this fixture's PDFium
 	// read is measured (fingerprint_test.go carries the same literal).
-	const wantFingerprint = "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945"
+	const wantFingerprint = "v3:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945"
 	if asked != wantFingerprint {
 		t.Errorf("the rule lookup asked for %q, want the corpus fixture's PDFium fingerprint %q", asked, wantFingerprint)
 	}

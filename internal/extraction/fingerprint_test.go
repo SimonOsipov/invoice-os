@@ -150,7 +150,7 @@ func TestFingerprint_IsVersionPrefixed(t *testing.T) {
 // F-06: nil input and a page whose tokens match no lexicon entry both fingerprint to
 // FingerprintVersion + ":" + sha256(""), because the observation set is empty either way.
 func TestFingerprint_EmptyInputStillFingerprints(t *testing.T) {
-	const wantEmpty = "v2:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	const wantEmpty = "v3:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 	if got := extraction.Fingerprint(nil); got != wantEmpty {
 		t.Errorf("Fingerprint(nil) = %q, want %q", got, wantEmpty)
@@ -275,7 +275,7 @@ func TestCollectTokens_DoesNotRetainTheBorrowedImage(t *testing.T) {
 	}
 }
 
-// F-10: the output length is a constant 67 bytes -- "v1:" plus a 64-hex SHA-256 digest -- for
+// F-10: the output length is a constant 67 bytes -- "v3:" plus a 64-hex SHA-256 digest -- for
 // every input, never proportional to page busyness. The 128-byte layout_fingerprint CHECK
 // ceiling has headroom to spare.
 func TestFingerprint_FitsTheColumnCap(t *testing.T) {
@@ -304,17 +304,17 @@ func TestFingerprint_FitsTheColumnCap(t *testing.T) {
 // forbid. A new rule-less owning-phrase entry is the other case: it moves only the pages that
 // print its phrase, none of which are these six (EXTR-25-04).
 var fpCorpusPinned = map[string]string{
-	"corpus_inline_labels.pdf":  "v2:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
-	"corpus_split_labels.pdf":   "v2:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
-	"corpus_stacked_labels.pdf": "v2:fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
-	"corpus_two_column.pdf":     "v2:02a5a7038b265c0df8ceb8a4633568cc8ac77d827361211e7bd2436d2ce2938c",
-	"corpus_ambiguous_date.pdf": "v2:aa3c59add58181ab233b5b690b57dee82ef1fdd1428daa1b2aba85a439161207",
-	"corpus_totals_block.pdf":   "v2:0da5ad8436bb5d80e3c523f3695e09acea833fa469474279c5c008f7937fd556",
+	"corpus_inline_labels.pdf":  "v3:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
+	"corpus_split_labels.pdf":   "v3:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
+	"corpus_stacked_labels.pdf": "v3:fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
+	"corpus_two_column.pdf":     "v3:02a5a7038b265c0df8ceb8a4633568cc8ac77d827361211e7bd2436d2ce2938c",
+	"corpus_ambiguous_date.pdf": "v3:aa3c59add58181ab233b5b690b57dee82ef1fdd1428daa1b2aba85a439161207",
+	"corpus_totals_block.pdf":   "v3:0da5ad8436bb5d80e3c523f3695e09acea833fa469474279c5c008f7937fd556",
 }
 
 // EXTR-16-02 AC-4. The oracle that catches an anchorLexicon edit. Moving a pin here is only
 // ever legitimate alongside a FingerprintVersion bump in the same commit
-// (TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint holds the constant), because none
+// (TestFingerprint_BothGenerationsAreThePinnedOnes holds the constant), because none
 // of these six prints a phrase a rule-less entry could claim.
 func TestFingerprint_IsUnchangedByAnchorSpecificity(t *testing.T) {
 	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
@@ -361,10 +361,10 @@ func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing
 	const (
 		naira         = "wild_rc_due_naira.pdf"
 		nairaGolden   = "wild_rc_due_naira.docling.json"
-		wantGeoBefore = "v2:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
-		wantGeoAfter  = "v2:d49e1c6d5aa0da37f80db44d645ffe9934896639d3010dec86274d1a06648cb5"
-		wantBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
-		wantBoxAfter  = "b2:157d3177b0bb51728b09d07d04c46884c6dca8facb3afaa0ef3d58c605491dca"
+		wantGeoBefore = "v3:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
+		wantGeoAfter  = "v3:d49e1c6d5aa0da37f80db44d645ffe9934896639d3010dec86274d1a06648cb5"
+		wantBoxBefore = "b3:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
+		wantBoxAfter  = "b3:157d3177b0bb51728b09d07d04c46884c6dca8facb3afaa0ef3d58c605491dca"
 	)
 	// The before-pins carry the "it MOVED" half. Without this floor they carry nothing: an
 	// author re-pinning after a later lexicon change can paste one hash into both, and the two
@@ -380,6 +380,119 @@ func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing
 	}
 	if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, nairaGolden))); got != wantBoxAfter {
 		t.Errorf("BoxlessFingerprint(%s) = %q, want %q -- the boxless identity moves too, not only the geometric one (pre-change it read %q)", nairaGolden, got, wantBoxAfter, wantBoxBefore)
+	}
+}
+
+// fpBodiesAtCF68C9AD is every pinned digest's hex BODY -- the SHA-256 with no generation prefix
+// -- measured on cf68c9ad, this story's base. Deliberately prefix-less: a generation bump's
+// re-point is a mechanical prefix-only sweep, so a reference carrying no prefix is the one site
+// that sweep cannot reach. A golden re-measured instead of re-prefixed reds here.
+var fpBodiesAtCF68C9AD = map[string]string{
+	"corpus_inline_labels.pdf":  "8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
+	"corpus_split_labels.pdf":   "4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",
+	"corpus_stacked_labels.pdf": "fdd95d43c0d4a79dbe0e3c5c3ea09b23a8bba6b3bed73c3a7d51dfb23e4e1846",
+	"corpus_two_column.pdf":     "02a5a7038b265c0df8ceb8a4633568cc8ac77d827361211e7bd2436d2ce2938c",
+	"corpus_ambiguous_date.pdf": "aa3c59add58181ab233b5b690b57dee82ef1fdd1428daa1b2aba85a439161207",
+	"corpus_totals_block.pdf":   "0da5ad8436bb5d80e3c523f3695e09acea833fa469474279c5c008f7937fd556",
+}
+
+// EXTR-26-05 T-05.3. Pass-on-arrival, not red-first: fingerprint.go concatenates the version
+// after hashing (Fingerprint, above), so a version bump cannot structurally move a digest body.
+// A guard, not a driver -- proven by a mutation control on every arm, not by going red once.
+func TestFingerprint_NoStoredDigestMovedWithTheGeneration(t *testing.T) {
+	if len(fpBodiesAtCF68C9AD) != 6 || len(fpCorpusPinned) != 6 || len(corpusLayouts) != 6 {
+		t.Fatalf("fpBodiesAtCF68C9AD pins %d, fpCorpusPinned pins %d, corpusLayouts names %d; want 6 each -- the loop below would assert over less than the corpus",
+			len(fpBodiesAtCF68C9AD), len(fpCorpusPinned), len(corpusLayouts))
+	}
+
+	hex64 := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	wantPrefix := extraction.FingerprintVersion + ":"
+
+	for name, body := range fpBodiesAtCF68C9AD {
+		// Arm 1: shape guard on the reference itself. A prefixed value is a value the
+		// mechanical prefix sweep CAN reach, which defeats the whole point of this table.
+		if strings.Contains(body, ":") || !hex64.MatchString(body) {
+			t.Fatalf("fpBodiesAtCF68C9AD[%s] = %q is not a bare 64-char hex body", name, body)
+		}
+
+		pinned, ok := fpCorpusPinned[name]
+		if !ok {
+			t.Fatalf("%s is not in fpCorpusPinned", name)
+		}
+		// Arm 2: the pinned literal agrees with the frozen body. HasPrefix is explicit --
+		// TrimPrefix silently no-ops on a miss and would compare the whole prefixed string.
+		if !strings.HasPrefix(pinned, wantPrefix) {
+			t.Fatalf("fpCorpusPinned[%s] = %q does not start with %q", name, pinned, wantPrefix)
+		}
+		if got := strings.TrimPrefix(pinned, wantPrefix); got != body {
+			t.Errorf("fpCorpusPinned[%s] body = %q, want %q -- the pin and the frozen reference disagree", name, got, body)
+		}
+
+		// Arm 3: second witness, recomputed live from the committed PDF. This is what reds on
+		// a co-edit that reshapes the lexicon AND re-measures fpCorpusPinned in step -- arm 2
+		// alone would stay green because both tables would carry the same wrong value.
+		live := extraction.Fingerprint(rvCorpusPages(t, name))
+		if !strings.HasPrefix(live, wantPrefix) {
+			t.Fatalf("Fingerprint(%s) = %q does not start with %q", name, live, wantPrefix)
+		}
+		if got := strings.TrimPrefix(live, wantPrefix); got != body {
+			t.Errorf("Fingerprint(%s) body = %q, want %q -- the digest body moved under the generation bump, which the version-after-hash concatenation says it structurally cannot", name, got, body)
+		}
+	}
+
+	// Arm 4: a derived anchor no transcription can be wrong about. sha256.Sum256(nil) is a
+	// mathematical constant; F-06's wantEmpty (above) pins the same value independently.
+	emptySum := sha256.Sum256(nil)
+	const wantEmptyBody = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if got := hex.EncodeToString(emptySum[:]); got != wantEmptyBody {
+		t.Fatalf("sha256.Sum256(nil) = %q, want %q", got, wantEmptyBody)
+	}
+	if got := extraction.Fingerprint(nil); got != wantPrefix+wantEmptyBody {
+		t.Errorf("Fingerprint(nil) = %q, want %q", got, wantPrefix+wantEmptyBody)
+	}
+}
+
+// Every package-level digest pin outside fpCorpusPinned, body frozen prefix-less. The test above
+// covers the geometric corpus only, so a boxless pin re-measured instead of re-prefixed reached no guard.
+func TestFingerprint_NoOtherPinnedDigestMovedWithTheGeneration(t *testing.T) {
+	if len(bxFixturePinned) != 3 {
+		t.Fatalf("bxFixturePinned pins %d fixture(s), want 3", len(bxFixturePinned))
+	}
+	boxless := func(golden string) func() string {
+		return func() string { return extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, golden))) }
+	}
+	cases := []struct {
+		name, pinned, version, body string
+		live                        func() string // nil: a pre-change value nothing recomputes
+	}{
+		{bxFixturePinned[0].golden, bxFixturePinned[0].want, extraction.BoxlessFingerprintVersion, "8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af", boxless(bxFixturePinned[0].golden)},
+		{bxFixturePinned[1].golden, bxFixturePinned[1].want, extraction.BoxlessFingerprintVersion, "8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af", boxless(bxFixturePinned[1].golden)},
+		{bxFixturePinned[2].golden, bxFixturePinned[2].want, extraction.BoxlessFingerprintVersion, "e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f", boxless(bxFixturePinned[2].golden)},
+		{"emptyFingerprint", emptyFingerprint, extraction.FingerprintVersion, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", func() string { return extraction.Fingerprint(nil) }},
+		{"bxEmptyFingerprint", bxEmptyFingerprint, extraction.BoxlessFingerprintVersion, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", func() string { return extraction.BoxlessFingerprint(nil) }},
+		{"ddNairaGeoBefore", ddNairaGeoBefore, extraction.FingerprintVersion, "3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e", nil},
+		{"ddNairaBoxBefore", ddNairaBoxBefore, extraction.BoxlessFingerprintVersion, "8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba", nil},
+	}
+
+	hex64 := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	for _, c := range cases {
+		if !hex64.MatchString(c.body) {
+			t.Fatalf("%s: frozen body %q is not a bare 64-char hex body", c.name, c.body)
+		}
+		prefix := c.version + ":"
+		// HasPrefix first: TrimPrefix no-ops on a miss, so a prefix-less pin would equal its body.
+		if !strings.HasPrefix(c.pinned, prefix) {
+			t.Errorf("%s = %q does not start with %q", c.name, c.pinned, prefix)
+			continue
+		}
+		if got := strings.TrimPrefix(c.pinned, prefix); got != c.body {
+			t.Errorf("%s body = %q, want %q -- the pin and the frozen reference disagree", c.name, got, c.body)
+		}
+		if c.live != nil {
+			if got := c.live(); got != prefix+c.body {
+				t.Errorf("%s recomputed = %q, want %q", c.name, got, prefix+c.body)
+			}
+		}
 	}
 }
 
@@ -884,11 +997,11 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 		if len(fp) > bxColumnCapBytes {
 			t.Errorf("BoxlessFingerprint(%s) is %d bytes, over layout_fingerprint's %d-byte CHECK", c.name, len(fp), bxColumnCapBytes)
 		}
-		if !strings.HasPrefix(fp, "b2:") {
-			t.Errorf("BoxlessFingerprint(%s) = %q, want it to start with \"b2:\"", c.name, fp)
+		if !strings.HasPrefix(fp, "b3:") {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want it to start with \"b3:\"", c.name, fp)
 			continue
 		}
-		if h := strings.TrimPrefix(fp, "b2:"); !hexOnly.MatchString(h) {
+		if h := strings.TrimPrefix(fp, "b3:"); !hexOnly.MatchString(h) {
 			t.Errorf("BoxlessFingerprint(%s) hex part = %q (%d chars), want 64 lowercase hex characters", c.name, h, len(h))
 		}
 	}
@@ -899,19 +1012,25 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 	}
 }
 
+// EXTR-26-05 T-05.1. A widened shared-lexicon pattern steps both namespaces together, whether or
+// not a committed digest moved: one bump clears only its own producer's rules. Kept
+// generation-free by name ("Read a prefix as a namespace", docs/extraction-corpus.md) -- see the
+// two cases this exact rot broke in TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring.
+func TestFingerprint_BothGenerationsAreThePinnedOnes(t *testing.T) {
+	if extraction.FingerprintVersion != "v3" {
+		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v3")
+	}
+	if extraction.BoxlessFingerprintVersion != "b3" {
+		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b3")
+	}
+}
+
 // AC-4, D-AC-2, the namespace claim. The cross product below is a backstop, not the proof: two
 // unequal digests never collide however the versions are spelled. What holds for EVERY input
 // is the prefix pair -- each function stamps its own version and the two versions differ -- so
-// this test fails if either constant moves or one is ever derived from the other.
+// this test fails if the two ever collide, or if either producer's own prefix drifts from its
+// own constant. TestFingerprint_BothGenerationsAreThePinnedOnes pins the constants themselves.
 func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
-	// The lexicon reshape moves every stored digest, so both namespaces step to their second
-	// generation together: one bump clears only its own producer's rules.
-	if extraction.BoxlessFingerprintVersion != "b2" {
-		t.Errorf("BoxlessFingerprintVersion = %q, want %q", extraction.BoxlessFingerprintVersion, "b2")
-	}
-	if extraction.FingerprintVersion != "v2" {
-		t.Errorf("FingerprintVersion = %q, want %q", extraction.FingerprintVersion, "v2")
-	}
 	if extraction.BoxlessFingerprintVersion == extraction.FingerprintVersion {
 		t.Fatalf("both versions are %q; the two namespaces have merged and every assertion below is meaningless", extraction.FingerprintVersion)
 	}
@@ -976,9 +1095,9 @@ func TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint(t *testing.T) {
 // the implementation from the golden's page-1 texts and anchorLexicon. Everything downstream
 // (EXTR-19-04/05 rule lookups) keys on these, so a moved value is a rule-invalidation event.
 var bxFixturePinned = []struct{ golden, want string }{
-	{dxGolden, "b2:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
-	{bxInlineGolden, "b2:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
-	{bxStackedGolden, "b2:e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f"},
+	{dxGolden, "b3:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxInlineGolden, "b3:8e005c5c3eec09db6aae241a1709eb15f13a9c237aeb7f115e35df922249d8af"},
+	{bxStackedGolden, "b3:e82dee0d7804a84fd98841b2b133c0b5f7f677f91db9c239b154b8ca1a33256f"},
 }
 
 // AC-1/AC-2 as absolute values. The relational specs above say A != B and A == A-prime; they
@@ -1012,8 +1131,8 @@ func TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring(t *testing.T) {
 		{"a real Fingerprint", extraction.Fingerprint([]extraction.TokenPage{{Number: 1, Tokens: headerTokens()}}), false},
 		{"the empty string", "", false},
 		{"the version with no colon", extraction.BoxlessFingerprintVersion, false},
-		{"a longer version sharing the prefix", "b10:" + hex64, false},
-		{"the version upper-cased", "B1:" + hex64, false},
+		{"a longer version sharing the prefix", extraction.BoxlessFingerprintVersion + "0:" + hex64, false},
+		{"the version upper-cased", strings.ToUpper(extraction.BoxlessFingerprintVersion) + ":" + hex64, false},
 		{"the version anywhere but the front", extraction.FingerprintVersion + ":" + extraction.BoxlessFingerprintVersion + ":" + hex64, false},
 		{"the colon leading", ":" + extraction.BoxlessFingerprintVersion + hex64, false},
 	}

@@ -245,7 +245,7 @@ func TestAnchorLexicon_OrderIsPinned(t *testing.T) {
 		"party_ref", "signature",
 		"supplier_name", "buyer_name", "currency", "subtotal",
 		"reg_identifier", "rc_number", "doc_title",
-		"vat", "total",
+		"withholding_tax", "vat", "total",
 	}
 
 	got := make([]string, 0, len(anchorLexicon))
@@ -280,10 +280,11 @@ var alMatchRejectCases = map[string]struct{ match, reject string }{
 	// The rejects are each entry's own required tail, dropped: "VAT REG" has no no|num|id,
 	// "RC-000142" offers a hyphen the separator group does not take, and "INVOICES" continues
 	// past the title's trailing \b.
-	"reg_identifier": {"VAT REG NO", "VAT REG"},
-	"rc_number":      {"RC NUMBER", "RC-000142"},
-	"doc_title":      {"TAX INVOICE", "TAX INVOICES"},
-	"vat":            {"VAT", "Vatican"},
+	"reg_identifier":  {"VAT REG NO", "VAT REG"},
+	"rc_number":       {"RC NUMBER", "RC-000142"},
+	"doc_title":       {"TAX INVOICE", "TAX INVOICES"},
+	"withholding_tax": {"Withholding Tax", "Withholding Amount"},
+	"vat":             {"VAT", "Vatican"},
 	// "Sub-total" DOES match total -- the hyphen is a word boundary. That overlap is
 	// deliberate; "Subtotal" unhyphenated is the near-miss.
 	"total": {"Grand Total", "Subtotal"},

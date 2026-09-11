@@ -1340,7 +1340,7 @@ func TestAnchorRulesFor_ABoxlessKeyOrdersFromTheIndexWithoutASort(t *testing.T) 
 // A version bump is a prefix change over the same digest, so a bumped class must read zero
 // while the untouched class re-reads ITS OWN row, non-empty. The re-read is the control:
 // without it a reader that returns nothing for every key passes both bump arms.
-// TestBoxlessFingerprint_CanNeverEqualAGeometricFingerprint owns the literal-level claim.
+// TestFingerprint_BothGenerationsAreThePinnedOnes owns the literal-level claim.
 func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 	ctx := t.Context()
 	s := stStore(t)
@@ -1410,8 +1410,8 @@ func TestRLS_AVersionBumpInvalidatesOnlyItsOwnClass(t *testing.T) {
 // The pre-change digests are the same literals TestFingerprint_TheLexiconResetIsScopedToPages-
 // ThatPrintThePhrase pins; keep the two in step.
 const (
-	ddNairaGeoBefore = "v2:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
-	ddNairaBoxBefore = "b2:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
+	ddNairaGeoBefore = "v3:3b8fa9dcb0d6bd936aac05fc83a695f191b694c814f5a88a057a94098119d47e"
+	ddNairaBoxBefore = "b3:8fd03fce337cafafa836f3ccd1b212c2fef2dc9c03948b31ef0d96eefcc7c3ba"
 )
 
 func TestRLS_TheDueDateEntryOrphansTheRCLayoutsStoredRulesGracefully(t *testing.T) {

@@ -106,6 +106,10 @@ const (
 	Tier1MaxDistanceBelowForTest = tier1MaxDistanceBelow
 )
 
+// RightGapForTest mirrors relatedTokens' right-relation gap for a pair outside the dial, where
+// Resolve mints no Distance to read. TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
+func RightGapForTest(anchor, value Region) float64 { return value.X0 - anchor.X1 }
+
 // MaxUploadBytesForTest exposes the request-body cap so the 413 spec asserts the production
 // constant rather than a copy of it.
 const MaxUploadBytesForTest = maxUploadBytes

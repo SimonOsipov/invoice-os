@@ -166,8 +166,8 @@ func TestAnchorLexicon_IsOrderedAndUnique(t *testing.T) {
 	if got := reflect.TypeOf(anchorLexicon).Kind(); got != reflect.Slice {
 		t.Fatalf("anchorLexicon is a %s, want a slice", got)
 	}
-	if len(anchorLexicon) != 17 {
-		t.Fatalf("len(anchorLexicon) = %d, want 17: the shipped generic label set", len(anchorLexicon))
+	if len(anchorLexicon) != 18 {
+		t.Fatalf("len(anchorLexicon) = %d, want 18: the shipped generic label set", len(anchorLexicon))
 	}
 
 	seen := make(map[string]bool, len(anchorLexicon))
@@ -509,6 +509,7 @@ var alBareTokenCases = []struct {
 	{"rc_number", "RC NUMBER", []string{"RC", "CAC"}},
 	{"doc_title", "TAX INVOICE", []string{"TAX", "VAT", "Invoice"}},
 	{"due_date", "Due Date", []string{"Due", "Date"}},
+	{"withholding_tax", "Withholding Tax", []string{"Withholding", "Tax"}},
 }
 
 // anchorOutranked needs a STRICTLY wider span, so an owning phrase that loses its required tail

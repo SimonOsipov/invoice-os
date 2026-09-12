@@ -1524,6 +1524,46 @@ func TestListHandler_NotEvaluatedParse(t *testing.T) {
 	})
 }
 
+// not_evaluated takes every strconv.ParseBool spelling and leaves sibling filters intact.
+func TestListHandler_NotEvaluatedParseBoolSpellingsAndSiblings(t *testing.T) {
+	cases := []struct {
+		query    string
+		want     bool
+		keptAsIs bool
+		needsFix bool
+		status   Status
+	}{
+		{"?not_evaluated=TRUE", true, false, false, ""},
+		{"?not_evaluated=t", true, false, false, ""},
+		{"?not_evaluated=0", false, false, false, ""},
+		{"?not_evaluated=true&kept_as_is=true&status=draft", true, true, false, StatusDraft},
+		{"?not_evaluated=false&needs_fix=true", false, false, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+			var captured ListFilter
+			called := false
+			list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+				called = true
+				captured = f
+				return []Invoice{}, 0, nil
+			}
+			rec, _ := doInvoiceList(t, list, &id, tc.query)
+			if !called {
+				t.Fatalf("store.List not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+			}
+			if captured.NotEvaluated != tc.want {
+				t.Errorf("NotEvaluated = %v, want %v", captured.NotEvaluated, tc.want)
+			}
+			if captured.KeptAsIs != tc.keptAsIs || captured.NeedsFix != tc.needsFix || captured.Status != tc.status {
+				t.Errorf("siblings = {KeptAsIs:%v NeedsFix:%v Status:%q}, want {%v %v %q}",
+					captured.KeptAsIs, captured.NeedsFix, captured.Status, tc.keptAsIs, tc.needsFix, tc.status)
+			}
+		})
+	}
+}
+
 // TestListHandler_RuleKeyAndQLengthCap (QA Mode B, AC-6, task-282): the
 // implementation plan's own §1 param-contract table requires rule_key/q to
 // 400 with "rule_key is too long" / "q is too long" above a 200-char cap --

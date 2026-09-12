@@ -1226,3 +1226,148 @@ func TestRLS_ListNotEvaluatedCrossTenantIsEmpty(t *testing.T) {
 		t.Fatalf("List (same-tenant) items = %+v, want exactly [%s]", sameItems, unstampedA)
 	}
 }
+
+// stampInvoice writes a real rule_set_version_id, as the gate does.
+func stampInvoice(t *testing.T, super *pgxpool.Pool, rsvID, id string) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(), `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, id); err != nil {
+		t.Fatalf("stamp invoice %s: %v", id, err)
+	}
+}
+
+// assertExactIDs fails unless items holds exactly want, by id.
+func assertExactIDs(t *testing.T, label string, items []Invoice, want ...string) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, inv := range items {
+		got[inv.ID] = true
+	}
+	if len(items) != len(want) || len(got) != len(want) {
+		t.Fatalf("%s: got %d items %+v, want exactly %v", label, len(items), items, want)
+	}
+	for _, id := range want {
+		if !got[id] {
+			t.Fatalf("%s: missing %s, got %+v", label, id, items)
+		}
+	}
+}
+
+// AC-1: NotEvaluated false, and the zero ListFilter, return stamped and unstamped rows alike.
+func TestStoreList_NotEvaluatedFalseAppliesNoPredicate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED-FALSE tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED-FALSE entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	rsvID := seedRuleSetVersionID(t, super)
+
+	unstamped := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-FALSE-U", &batchID, time.Now().UTC())
+	stamped := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-FALSE-S", &batchID, time.Now().UTC())
+	stampInvoice(t, super, rsvID, stamped)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	// Literal zero value: LIMIT 0 returns no rows, so only total is observable.
+	_, zeroTotal, err := store.List(c, ListFilter{})
+	if err != nil {
+		t.Fatalf("List (zero ListFilter): %v", err)
+	}
+	if zeroTotal != 2 {
+		t.Errorf("List (zero ListFilter).total = %d, want 2", zeroTotal)
+	}
+
+	items, total, err := store.List(c, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatalf("List (Limit only): %v", err)
+	}
+	if total != 2 {
+		t.Errorf("List (Limit only).total = %d, want 2", total)
+	}
+	assertExactIDs(t, "List (Limit only)", items, unstamped, stamped)
+
+	items, total, err = store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Status: StatusDraft, NotEvaluated: false, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (batch+draft, NotEvaluated: false): %v", err)
+	}
+	if total != 2 {
+		t.Errorf("List (batch+draft, NotEvaluated: false).total = %d, want 2", total)
+	}
+	assertExactIDs(t, "List (batch+draft, NotEvaluated: false)", items, unstamped, stamped)
+}
+
+// AC-1 binds the bare predicate: an unstamped validated row (unreachable via the API) still matches.
+func TestStoreList_NotEvaluatedIsStatusAgnostic(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED-STATUS tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED-STATUS entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	rsvID := seedRuleSetVersionID(t, super)
+
+	unstampedValidated := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "NOT-EVALUATED-STATUS-V", batchID, "validated", "[]")
+	stampedValidated := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "NOT-EVALUATED-STATUS-W", batchID, "validated", "[]")
+	stampInvoice(t, super, rsvID, stampedValidated)
+	seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-STATUS-D", &batchID, time.Now().UTC())
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Status: StatusValidated, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (validated, NotEvaluated: true): %v", err)
+	}
+	if total != 1 {
+		t.Errorf("List (validated, NotEvaluated: true).total = %d, want 1", total)
+	}
+	assertExactIDs(t, "List (validated, NotEvaluated: true)", items, unstampedValidated)
+
+	_, controlTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Status: StatusValidated, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (validated): %v", err)
+	}
+	if controlTotal != 2 {
+		t.Fatalf("List (validated).total = %d, want 2", controlTotal)
+	}
+}
+
+// AC-4: total counts every unevaluated row, not just the page.
+func TestStoreList_NotEvaluatedTotalCountsBeyondThePage(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED-PAGE tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED-PAGE entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	rsvID := seedRuleSetVersionID(t, super)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	older := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-PAGE-1", &batchID, base)
+	newer := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-PAGE-2", &batchID, base.Add(time.Minute))
+	// Newest row is stamped, so a dropped predicate puts it on page one.
+	stamped := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-PAGE-S", &batchID, base.Add(2*time.Minute))
+	stampInvoice(t, super, rsvID, stamped)
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	page1, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, NotEvaluated: true, Limit: 1})
+	if err != nil {
+		t.Fatalf("List (Limit 1): %v", err)
+	}
+	if total != 2 {
+		t.Errorf("List (Limit 1).total = %d, want 2", total)
+	}
+	assertExactIDs(t, "List (Limit 1)", page1, newer)
+
+	page2, total2, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, NotEvaluated: true, Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("List (Limit 1, Offset 1): %v", err)
+	}
+	if total2 != 2 {
+		t.Errorf("List (Limit 1, Offset 1).total = %d, want 2", total2)
+	}
+	assertExactIDs(t, "List (Limit 1, Offset 1)", page2, older)
+}

@@ -110,12 +110,14 @@ export interface CorrectedMarker {
 // tenth. Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
 const FIELD_LABELS: Record<string, string> = { ...EDIT_FIELD_LABELS, invoice_number: 'Invoice number' }
 
-const REASON_PILLS: Record<Exclude<ExtractionReason, ''>, string> = {
+const REASON_PILLS: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
   unreadable: "COULDN'T READ THIS CLEARLY",
-  ambiguous: 'FOUND TWO POSSIBLE VALUES',
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
 }
+
+// Words keep the design's "TWO"; resolve.go:47 caps a field at 8 candidates, so the numeral is unreachable from a real read.
+const COUNT_WORDS = ['', '', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT']
 
 // Reconcile reuses one `inconsistent` code for the line-sum check and the entity match, so
 // the note is what tells them apart.
@@ -131,8 +133,10 @@ export function fieldLabel(name: string): string {
   return FIELD_LABELS[name] ?? name
 }
 
-export function reasonPill(reason: ExtractionReason): string | null {
-  return reason === '' ? null : REASON_PILLS[reason]
+export function reasonPill(reason: ExtractionReason, candidateCount: number): string | null {
+  if (reason === '') return null
+  if (reason !== 'ambiguous') return REASON_PILLS[reason]
+  return `FOUND ${COUNT_WORDS[candidateCount] || candidateCount} POSSIBLE VALUES`
 }
 
 /** Keyed on the reason first: a clean subtotal carries no note. */

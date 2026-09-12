@@ -29,7 +29,7 @@ function listResponse(total: number): MockResponse {
   return { ok: true, status: 200, json: () => Promise.resolve({ invoices: [], pagination: { limit: 1, offset: 0, total } }) }
 }
 
-const TOTALS = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3 }
+const TOTALS = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3, notEvaluatedTotal: 0 }
 
 function batch(over: Partial<ImportBatch> = {}): ImportBatch {
   return {
@@ -61,6 +61,7 @@ function mockReviewFetch(b: ImportBatch, totals: typeof TOTALS) {
     }
     if (url.includes('/invoices')) {
       const params = new URL(url).searchParams
+      if (params.get('not_evaluated') === 'true') return Promise.resolve(listResponse(totals.notEvaluatedTotal))
       if (params.get('kept_as_is') === 'true') return Promise.resolve(listResponse(totals.keptTotal))
       if (params.get('needs_fix') === 'true') return Promise.resolve(listResponse(totals.failingTotal))
       if (params.get('status') === 'validated') return Promise.resolve(listResponse(totals.cleanTotal))
@@ -197,6 +198,7 @@ function mockReviewFetchAll(batches: ImportBatch[], totals: typeof TOTALS) {
     }
     if (url.includes('/invoices')) {
       const params = new URL(url).searchParams
+      if (params.get('not_evaluated') === 'true') return Promise.resolve(listResponse(totals.notEvaluatedTotal))
       if (params.get('kept_as_is') === 'true') return Promise.resolve(listResponse(totals.keptTotal))
       if (params.get('needs_fix') === 'true') return Promise.resolve(listResponse(totals.failingTotal))
       if (params.get('status') === 'validated') return Promise.resolve(listResponse(totals.cleanTotal))
@@ -421,5 +423,107 @@ describe('EXTR-15-09 SW-16 (AC-2): the restructured paragraphs render byte-ident
     // Floor, so the absence claim below cannot pass over an empty list.
     expect(paragraphs.length, 'no paragraphs were collected').toBeGreaterThanOrEqual(6)
     expect(paragraphs.filter((p) => /\s{2}/.test(p))).toEqual([])
+  })
+})
+
+describe('EXTR-30-04 NE-1..NE-5 (AC-1/AC-2/AC-3/AC-4): the third Imported tile counts unevaluated invoices', () => {
+  it('NE-1: the shell asks the server for the unvalidated count, scoped to every batch', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.pdf' }), batch({ id: 'b2', filename: 'b.pdf' })]
+    const fetchMock = mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const { container } = render(<ReviewBatch ctx={reviewCtx(batches.map((b) => b.id))} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const neCalls = fetchMock.mock.calls
+      .map((c) => c[0])
+      .filter((u) => u.includes('/invoices') && new URL(u).searchParams.get('not_evaluated') === 'true')
+    expect(neCalls.length, `expected exactly one not_evaluated=true request, got ${neCalls.length}`).toBe(1)
+
+    const url = new URL(neCalls[0])
+    expect(url.searchParams.getAll('import_batch_id')).toEqual(['b1', 'b2'])
+    expect([...url.searchParams.keys()].sort()).toEqual(['import_batch_id', 'import_batch_id', 'limit', 'not_evaluated'])
+    expect(url.searchParams.get('limit')).toBe('1')
+  })
+
+  it('NE-2: unvalidated invoices get their own tile, counted by the server', async () => {
+    const totals = { allTotal: 5, cleanTotal: 0, failingTotal: 0, queuedTotal: 1, keptTotal: 1, notEvaluatedTotal: 2 }
+    mockReviewFetchAll(cleanRun('.pdf'), totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    expect(container.textContent).toContain('0 valid')
+    expect(container.textContent).toContain('0 failed a rule')
+    expect(container.textContent).toContain('2 not yet validated')
+    expect(container.textContent).toContain('Stored, but no rule has been run against them yet.')
+    // Guards the two silent-fallthrough values a routing mistake would render instead.
+    expect(container.textContent).not.toContain('5 not yet validated')
+    expect(container.textContent).not.toContain('3 not yet validated')
+  })
+
+  it('NE-3: the third tile is the solid neutral treatment, after failed a rule', async () => {
+    const totals = { allTotal: 5, cleanTotal: 0, failingTotal: 0, queuedTotal: 1, keptTotal: 1, notEvaluatedTotal: 2 }
+    mockReviewFetchAll(cleanRun('.pdf'), totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const value = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === '2 not yet validated')
+    expect(value, 'no "2 not yet validated" tile value found').toBeTruthy()
+    expect(value!.style.color, 'the value text is not the neutral fg-2').toBe('var(--fg-2)')
+
+    const tile = value!.parentElement!
+    expect(tile.style.background, 'the tile is not the neutral bg-3').toBe('var(--bg-3)')
+    expect(tile.style.border, 'the tile is not a solid line-2 border').toBe('1px solid var(--line-2)')
+
+    const row = tile.parentElement!
+    expect(row.children.length, 'the Imported tile row is not three tiles wide').toBe(3)
+    expect(row.children[2], 'the third child is not the not-yet-validated tile').toBe(tile)
+    expect(row.children[1]?.textContent, "the second child is not the 'failed a rule' tile").toContain('failed a rule')
+  })
+
+  it('NE-4: at zero the Imported row is the shipped pair', async () => {
+    for (const ext of ['.pdf', '.csv']) {
+      mockReviewFetchAll(cleanRun(ext), TOTALS)
+      const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+      await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+      expect(container.textContent, `${ext}: a zero count must render no third tile`).not.toContain('not yet validated')
+
+      const captionNode = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === TILE_CAPTION_VALID)
+      expect(captionNode, `${ext}: no valid-caption tile found`).toBeTruthy()
+      const row = captionNode!.parentElement!.parentElement!
+      expect(row.children.length, `${ext}: the tile row is not two tiles wide`).toBe(2)
+      cleanup()
+    }
+  })
+
+  it('NE-5: a non-zero count changes nothing outside the Imported row', async () => {
+    const batches = mixedRun('.pdf')
+    const batchIds = batches.map((b) => b.id)
+    const footerText = reviewFooterSummary(TOTALS)
+
+    function readOutsideImported(container: HTMLElement) {
+      const notImportedLabel = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === 'Not imported')
+      return {
+        heading: container.querySelector('h2')?.textContent ?? '',
+        notImported: notImportedLabel?.parentElement?.textContent ?? '',
+        tabs: Array.from(container.querySelectorAll('button.pf-tab')).map((b) => b.textContent),
+      }
+    }
+
+    mockReviewFetchAll(batches, TOTALS)
+    const zero = render(<ReviewBatch ctx={reviewCtx(batchIds)} />)
+    await waitFor(() => expect(zero.container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const zeroFacts = readOutsideImported(zero.container)
+    expect(zeroFacts.tabs.length, 'no tab labels found to compare').toBeGreaterThan(0)
+    expect(zeroFacts.notImported.length, 'no Not imported column text found to compare').toBeGreaterThan(0)
+    expect(screen.getByText(footerText), 'the shipped footer text must be present at zero').toBeTruthy()
+    cleanup()
+
+    mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const nonZero = render(<ReviewBatch ctx={reviewCtx(batchIds)} />)
+    await waitFor(() => expect(nonZero.container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const nonZeroFacts = readOutsideImported(nonZero.container)
+    expect(screen.getByText(footerText), 'a non-zero count must not change the footer').toBeTruthy()
+
+    expect(nonZeroFacts, 'a non-zero unvalidated count changed something outside the Imported row').toEqual(zeroFacts)
   })
 })

@@ -7645,6 +7645,192 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+const RICH_PDF_NAME = 'rich_invoice.pdf'
+const RICH_PDF_NUMBER = 'ASC-2026-0918'
+
+test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed', async ({
+  page,
+}, testInfo) => {
+  // Two extractions on a possibly cold sidecar, a reload, then a four-width sweep.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  // A document import runs no gate, so both invoices land unstamped -- no second run needed.
+  const { token, entityId, jobs } = await runDocuments(page, 'EXTR-30 unvalidated', [
+    { name: RICH_PDF_NAME, mimeType: 'application/pdf', buffer: uniquePdfBytes() },
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  expect(
+    jobs[RICH_PDF_NAME].state,
+    `the rich PDF did not settle succeeded (kind ${jobs[RICH_PDF_NAME].failure_kind ?? 'null'}, error ${jobs[RICH_PDF_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+  expect(
+    jobs[GOLDEN_DOCX_NAME].state,
+    `the golden DOCX did not settle succeeded (kind ${jobs[GOLDEN_DOCX_NAME].failure_kind ?? 'null'}, error ${jobs[GOLDEN_DOCX_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  // Vacuity guard: both invoices must exist in the register before any tile is read.
+  await expect
+    .poll(
+      async () =>
+        (await listInvoices(token, { entity_id: entityId, limit: 50 })).invoices.map((i) => i.invoice_number).sort(),
+      {
+        message: 'a document run holding two unevaluated drafts must still list both in the register',
+        timeout: 120_000,
+        intervals: [1_000],
+      },
+    )
+    .toEqual([RICH_PDF_NUMBER, GOLDEN_DOCX_NUMBER])
+
+  // Two documents cannot take routeAfterRun's 'single' arm, so the landing carries both
+  // batch ids -- EXTR15-E2E-02's own reading of the path.
+  await expect
+    .poll(() => new URL(page.url()).pathname, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
+  const landingMatch = new URL(page.url()).pathname.match(/^\/imports\/([0-9a-fA-F-]{36}),([0-9a-fA-F-]{36})\/review$/)
+  expect(landingMatch, 'the landing path must carry two batch ids').toBeTruthy()
+  const [, batchId1, batchId2] = landingMatch!
+
+  // The count oracle is the wire, never the DOM: registered BEFORE the reload (INVCR-E2E-6
+  // idiom), so the response the reload fires cannot be missed.
+  const notEvaluatedResponse = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('not_evaluated') === 'true',
+  )
+  await page.reload()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  const resp = await notEvaluatedResponse
+
+  expect(resp.status(), 'the not_evaluated count request must succeed').toBe(200)
+  const respUrl = new URL(resp.url())
+  expect(
+    respUrl.searchParams.getAll('import_batch_id').sort(),
+    'the shell must scope the count to both batches',
+  ).toEqual([batchId1, batchId2].sort())
+  expect(respUrl.searchParams.get('limit'), 'the count is a pagination total, not a page of rows').toBe('1')
+  const neTotal = ((await resp.json()) as { pagination: { total: number } }).pagination.total
+  expect(neTotal, 'a document import runs no gate, so both invoices are unevaluated').toBe(2)
+
+  // AC-5: the header and the three tile values.
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  for (const value of ['0 valid', '0 failed a rule', `${neTotal} not yet validated`]) {
+    await expect(page.getByText(value, { exact: true }), `expected exactly one "${value}"`).toHaveCount(1)
+  }
+
+  // AC-7: the layout sweep runs before any row expands below.
+  const column = page.getByText('Imported · stored in the ledger', { exact: true }).locator('xpath=..')
+  await expect(column, 'the resolved parent is the Imported column').toContainText('Built from 2 documents')
+
+  const tileSpecs = [
+    ['0 valid', 'Passed every rule.'],
+    ['0 failed a rule', 'Read fine, stored, but not compliant yet.'],
+    [`${neTotal} not yet validated`, 'Stored, but no rule has been run against them yet.'],
+  ] as const
+  const values = tileSpecs.map(([value]) => page.getByText(value, { exact: true }))
+  const tiles = values.map((v) => v.locator('xpath=..'))
+  for (const [i, [tileValue, caption]] of tileSpecs.entries()) {
+    await expect(values[i], `${tileValue}'s value`).toHaveCount(1)
+    await expect(tiles[i], 'the resolved parent is the tile, which also carries its caption').toContainText(caption)
+  }
+
+  type Fit = { width: number; wrapped: boolean; validSlack: number; failedSlack: number; notEvaluatedSlack: number }
+  const fits: Fit[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22).
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [columnBox, tileBoxes, tileEdges, valueEdges] = await Promise.all([
+          column.boundingBox(),
+          Promise.all(tiles.map((t) => t.boundingBox())),
+          Promise.all(tiles.map((t) => t.evaluate(edgesOf))),
+          Promise.all(values.map((v) => v.evaluate(edgesOf))),
+        ])
+        return { columnBox, tileBoxes, tileEdges, valueEdges }
+      }
+      const m = await settledRead(read, `unvalidated tile geometry at ${width}px`)
+      expect(
+        m.columnBox && m.tileBoxes.every(Boolean),
+        `the column and all three tiles must render at ${width}px`,
+      ).toBeTruthy()
+
+      // (1) pairwise non-overlap. rectsOverlap is a boolean and cannot state a containment
+      // relationship on its own, but it is exactly what a shared-edge collision needs.
+      for (const [a, b] of [[0, 1], [0, 2], [1, 2]] as const) {
+        expect(
+          rectsOverlap(m.tileBoxes[a]!, m.tileBoxes[b]!),
+          `tiles ${a} and ${b} must not overlap at ${width}px (${JSON.stringify(m.tileBoxes[a])}, ${JSON.stringify(m.tileBoxes[b])})`,
+        ).toBe(false)
+      }
+
+      // (2) containment in the column -- the intersection is the tile's own rect.
+      for (const i of [0, 1, 2]) {
+        expect(
+          sameRect(overlapOf(m.tileBoxes[i]!, m.columnBox!), m.tileBoxes[i]!),
+          `tile ${i} must sit wholly inside the Imported column at ${width}px (tile ${JSON.stringify(m.tileBoxes[i])}, column ${JSON.stringify(m.columnBox)})`,
+        ).toBe(true)
+      }
+
+      // (3) each value's text stays inside its own tile, and fits the box it was given.
+      for (const i of [0, 1, 2]) {
+        const text = m.valueEdges[i]
+        const tile = m.tileEdges[i]
+        expect(text.outerLeft, `tile ${i}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
+          tile.left - 0.5,
+        )
+        expect(text.outerRight, `tile ${i}'s value must end inside its tile at ${width}px`).toBeLessThanOrEqual(
+          tile.right + 0.5,
+        )
+        expect(
+          text.scrollWidth,
+          `tile ${i}'s value text overflows its own box at ${width}px (${text.scrollWidth} > ${text.clientWidth})`,
+        ).toBeLessThanOrEqual(text.clientWidth + 1)
+      }
+
+      fits.push({
+        width,
+        // Recorded, not asserted: a same-top check fails at 1280 by design.
+        wrapped: m.tileBoxes[2]!.y >= m.tileBoxes[0]!.y + m.tileBoxes[0]!.height - 1,
+        validSlack: m.tileEdges[0].right - m.valueEdges[0].outerRight,
+        failedSlack: m.tileEdges[1].right - m.valueEdges[1].outerRight,
+        notEvaluatedSlack: m.tileEdges[2].right - m.valueEdges[2].outerRight,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(fits.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('unvalidated-tile-geometry.json', {
+    body: JSON.stringify(fits, null, 2),
+    contentType: 'application/json',
+  })
+
+  // AC-6: both rows, checked only after the layout sweep above.
+  const rows = page.getByTestId('review-row')
+  await expect(rows, 'a document run with two unevaluated invoices renders two rows').toHaveCount(2)
+  for (let i = 0; i < 2; i++) {
+    await rows.nth(i).click()
+    await expect(page.getByTestId('review-row-expansion')).toHaveCount(1)
+    await expect(page.getByTestId('review-row-not-validated')).toHaveText(
+      'Not yet validated — run Re-validate to check compliance.',
+    )
+    await expect(page.getByTestId('review-row-passing')).toHaveCount(0)
+    const expansionText = await page.getByTestId('review-row-expansion').innerText()
+    expect(expansionText, `row ${i}'s expansion must never say passed`).not.toContain('passed')
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // --- EXTR-18-07 · the deployed proof: docling's real reading, not the mock's fixed shape ---
 //
 // Cannot run before EXTRACTOR=docling is set on production and this PR leaves draft (D-35) --

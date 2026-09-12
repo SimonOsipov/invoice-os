@@ -175,6 +175,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     // over the whole file, so registering it here still covers it.
     'EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row',
     'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
+    'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -232,6 +233,7 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
     'uniqueGarbageBytes()',
     'uniqueGoldenDocxBytes()',
     'uniqueEmptyDocxBytes()',
+    'uniquePdfBytes()',
   ]
   const FORWARDERS = new Set(['Buffer', 'file.buffer'])
   // Comment-stripped: this span's own header documents the rule below in prose, and the

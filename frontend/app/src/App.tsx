@@ -1646,7 +1646,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           {view === 'settings' && <SettingsView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
-          {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} />}
+          {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={null} />}
         </div>
       </main>
     </div>

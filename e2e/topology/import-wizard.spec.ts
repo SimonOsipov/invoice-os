@@ -3673,12 +3673,24 @@ test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other o
 
 // The story's Invented-copy table. A transcription, deliberately not an import: the SPA is a
 // different package, and reading the mapping out of the module under test would assert it
-// against itself.
-const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
+// against itself. `ambiguous` is not a fixed key here -- its pill's word depends on a live
+// chip count, which COUNT_WORD below transcribes instead.
+const REASON_PILL: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
   unreadable: "COULDN'T READ THIS CLEARLY",
-  ambiguous: 'FOUND TWO POSSIBLE VALUES',
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+}
+
+// A transcription with NO numeral fallback: resolve.go:47 caps a field at 8 candidates, so a
+// chip count with no word here is a real defect on the deployed build.
+const COUNT_WORD: Record<number, string> = {
+  2: 'TWO',
+  3: 'THREE',
+  4: 'FOUR',
+  5: 'FIVE',
+  6: 'SIX',
+  7: 'SEVEN',
+  8: 'EIGHT',
 }
 
 // internal/extraction/vocabulary.go, HeaderFields -- and the order one Save writes in. The
@@ -3727,25 +3739,132 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
 
+  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
+  const ambiguousMeasured: AmbiguousMeasure[] = []
+
   for (const f of headerFlagged) {
     const cell = page.getByTestId(`extraction-field-${f.name}`)
     await expect(cell, `${f.name} rendered no cell`).toBeVisible()
-    const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, ''>]
+
+    if (f.reason === 'ambiguous') {
+      // The count comes off the DOM chip row, never off `f.alternatives` directly -- this is
+      // what proves the pill's word is what the person actually sees beside it, and it holds
+      // for both a mock and a docling deploy without a fixture that forces one shape.
+      const chips = cell.locator(`[data-testid^="extraction-chip-${f.name}-"]`)
+      await expect(chips, `${f.name} rendered no chip row`).toHaveCount(1 + f.alternatives.length)
+      const n = await chips.count()
+      const word = COUNT_WORD[n]
+      expect(word, `${n} chips beside ${f.name} has no word in the transcribed table`).toBeTruthy()
+      await expect(
+        cell.getByText(`FOUND ${word} POSSIBLE VALUES`, { exact: true }),
+        `${f.name} carries ${n} chips and renders no "FOUND ${word} POSSIBLE VALUES" pill`,
+      ).toBeVisible()
+      ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
+      continue
+    }
+
+    const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, '' | 'ambiguous'>]
     await expect(
       cell.getByText(pill, { exact: true }),
       `${f.name} reported "${f.reason}" and renders no "${pill}" pill`,
     ).toBeVisible()
   }
 
-  // The code itself is machine vocabulary and never reaches the screen.
+  const ambiguous = headerFlagged.filter((f) => f.reason === 'ambiguous')
+  expect(ambiguous.length, 'no ambiguous field was flagged -- the layout sweep below would examine nothing').toBeGreaterThan(0)
+
+  // AC-7: every ambiguous pill's rect stays wholly inside its own cell, and its text never
+  // spills its own box, at every WIDE_WIDTHS entry, widest first. NO ASSERTION STATES A PIXEL
+  // WIDTH -- a width that fits at 2560 and overflows at 1280 has the same width at both.
+  type WidthField = {
+    name: string
+    chips: number
+    slack: { left: number; right: number }
+    pill: Rect
+    cell: Rect
+    pillFit: { scrollWidth: number; clientWidth: number }
+    cellFit: { scrollWidth: number; clientWidth: number }
+  }
+  type WidthMeasure = { width: number; fields: WidthField[] }
+  const measured: WidthMeasure[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a spill strands only what the window is
+    // too narrow for, rather than every width after it.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const fields: WidthField[] = []
+      for (const known of ambiguousMeasured) {
+        const cell = page.getByTestId(`extraction-field-${known.name}`)
+        const pill = cell.getByText(`FOUND ${known.word} POSSIBLE VALUES`, { exact: true })
+
+        const m = await settledRead(async () => {
+          const [cellBox, pillBox, cellFit, pillFit] = await Promise.all([
+            cell.boundingBox(),
+            pill.boundingBox(),
+            cell.evaluate(edgesOf),
+            pill.evaluate(edgesOf),
+          ])
+          return { cellBox, pillBox, cellFit, pillFit }
+        }, `${known.name}'s pill geometry at ${width}px`)
+
+        expect(m.cellBox && m.pillBox, `${known.name}'s cell and pill must both render at ${width}px`).toBeTruthy()
+        const cellRect = m.cellBox as Rect
+        const pillRect = m.pillBox as Rect
+        expect(pillRect.width, `${known.name}'s pill has no width at ${width}px`).toBeGreaterThan(0)
+        expect(pillRect.height, `${known.name}'s pill has no height at ${width}px`).toBeGreaterThan(0)
+
+        // Containment: overlapOf clamps per axis, so the intersection collapses to the pill's
+        // own rect only when the pill is wholly inside the cell.
+        expect(
+          sameRect(overlapOf(pillRect, cellRect), pillRect),
+          `${known.name}'s pill must sit wholly inside its cell at ${width}px (pill ${JSON.stringify(pillRect)}, cell ${JSON.stringify(cellRect)})`,
+        ).toBe(true)
+        expect(
+          m.pillFit.scrollWidth - m.pillFit.clientWidth,
+          `${known.name}'s pill text overflows its own box at ${width}px`,
+        ).toBeLessThanOrEqual(1)
+        expect(
+          m.cellFit.scrollWidth - m.cellFit.clientWidth,
+          `${known.name}'s cell overflows its column at ${width}px`,
+        ).toBeLessThanOrEqual(1)
+
+        fields.push({
+          name: known.name,
+          chips: known.chips,
+          slack: gaps(pillRect, cellRect),
+          pill: pillRect,
+          cell: cellRect,
+          pillFit: m.pillFit,
+          cellFit: m.cellFit,
+        })
+      }
+      measured.push({ width, fields })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
+  // lost `ambiguous` when the table dropped its fixed key, so all four codes are named
+  // explicitly -- the retype must not silently stop checking one of them.
   const paneText = await page.getByTestId('extraction-fields').innerText()
   expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of Object.keys(REASON_PILL)) {
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing'] as const) {
     expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
   }
 
   await testInfo.attach('extraction-reason-pills.json', {
-    body: JSON.stringify(flagged.map((f) => ({ name: f.name, reason: f.reason })), null, 2),
+    body: JSON.stringify(
+      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })), ambiguous: ambiguousMeasured, measured },
+      null,
+      2,
+    ),
     contentType: 'application/json',
   })
 

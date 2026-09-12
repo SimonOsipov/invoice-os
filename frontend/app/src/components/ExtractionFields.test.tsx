@@ -983,7 +983,15 @@ describe('the reason pill', () => {
     // false positive in the one slot both pills compete for.
     const fields = [
       mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
-      mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+      // An ambiguous field with no alternatives is impossible (reconcile.go never emits the
+      // reason under two candidates) -- one alternative is the fixture's own floor, and it is
+      // what makes PILL_AMBIGUOUS's 'TWO' correct for this row.
+      mkField({
+        name: 'issue_date',
+        value: '2026-08-12',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-08-21', 3)],
+      }),
       mkField({ name: 'subtotal', value: '3,626,000.00', reason: 'inconsistent' }),
       mkField({ name: 'buyer_tin', value: '31775208-0003', reason: 'missing' }),
     ]
@@ -997,7 +1005,14 @@ describe('the reason pill', () => {
 
     for (const f of fields) {
       const r = row(f.name)
-      expect(valueOf(f.name), `${f.name} did not render — its pill row is vacuous`).toBe(f.value)
+      // An ambiguous cell renders chips, not an input -- valueOf would read null here.
+      if (f.reason === 'ambiguous') {
+        const chips = chipsOf(f.name)
+        expect(chips.length, `${f.name} renders no chip row`).toBeGreaterThan(0)
+        expect(chips[0].textContent, `${f.name}'s own reading is missing from its chip row`).toContain(f.value)
+      } else {
+        expect(valueOf(f.name), `${f.name} did not render — its pill row is vacuous`).toBe(f.value)
+      }
       expect(within(r).queryByText(pills[f.name]), `${f.name} renders no "${pills[f.name]}" pill`).toBeTruthy()
 
       // within(row) is load-bearing: a pane that renders all four pills once, anywhere, passes
@@ -1012,6 +1027,44 @@ describe('the reason pill', () => {
     for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing']) {
       expect(text, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
     }
+  })
+
+  it("the pill's number is the number of chips beside it", () => {
+    // AC-3: the pill's n comes off the SAME candidates array the chips render from -- k
+    // alternatives is k + 1 chips (W-3's decided-reading-is-a-chip rule), and a pill naming k + 1.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [
+          mkCandidate('2026-01-10', 3),
+          mkCandidate('2026-02-14', 4),
+          mkCandidate('2026-06-30', 5),
+          mkCandidate('2026-10-01', 6),
+        ],
+      }),
+      mkField({
+        name: 'total',
+        value: '1,250,000.00',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('1,205,000.00', 3)],
+      }),
+    ]
+    render(fieldsPane({ fields }))
+
+    expect(chipsOf('issue_date'), 'four alternatives is five chips').toHaveLength(5)
+    expect(within(row('issue_date')).getByText('FOUND FIVE POSSIBLE VALUES')).toBeTruthy()
+
+    expect(chipsOf('total'), 'one alternative is two chips').toHaveLength(2)
+    expect(within(row('total')).getByText('FOUND TWO POSSIBLE VALUES')).toBeTruthy()
+
+    // In its own row only -- a pane that renders one pill shared by both fields passes a bare
+    // getByText and fails here.
+    expect(
+      within(row('total')).queryByText('FOUND FIVE POSSIBLE VALUES'),
+      "total borrowed issue_date's pill",
+    ).toBeNull()
   })
 
   it('gives the slot to the reason, and keeps NO REGION for a field with no reason', () => {
@@ -1363,7 +1416,9 @@ describe('the pane renders nothing it does not declare', () => {
       SENTENCE,
       PILL,
       PILL_UNREADABLE,
-      PILL_AMBIGUOUS,
+      // Not PILL_AMBIGUOUS: this fixture's issue_date carries 2 alternatives, so 3 chips and
+      // a THREE pill -- the count comes off the candidates array, not a fixed word.
+      'FOUND THREE POSSIBLE VALUES',
       PILL_INCONSISTENT,
       PILL_MISSING,
       NOTE_SUPPLIER,

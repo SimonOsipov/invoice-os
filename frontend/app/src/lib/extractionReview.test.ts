@@ -37,6 +37,7 @@ import type {
   ExtractionDocument,
   ExtractionFieldState,
   ExtractionPage,
+  ExtractionReason,
   ExtractionRegion,
   FrameBox,
   LineItemsResponse,
@@ -736,15 +737,39 @@ describe('fieldLabel', () => {
 })
 
 describe('reasonPill', () => {
+  // Bound through the two-argument type, not an `as` cast: tsc still checks the return type,
+  // and a one-parameter function is assignable to a two-parameter type, so this file typechecks
+  // before and after GREEN adds `candidateCount` to reasonPill's own signature.
+  const pillFor: (reason: ExtractionReason, candidateCount: number) => string | null = reasonPill
+
   it('maps each reason code to its copy-table string', () => {
-    expect(reasonPill('unreadable')).toBe("COULDN'T READ THIS CLEARLY")
-    expect(reasonPill('ambiguous')).toBe('FOUND TWO POSSIBLE VALUES')
-    expect(reasonPill('inconsistent')).toBe("DOESN'T ADD UP")
-    expect(reasonPill('missing')).toBe('NOT FOUND')
+    // resolve.go:47 caps a field at 8 candidates -- TWO through EIGHT is the whole range a
+    // real read can produce.
+    expect(pillFor('ambiguous', 2), 'byte-equal to the shipped literal').toBe('FOUND TWO POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 3)).toBe('FOUND THREE POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 4)).toBe('FOUND FOUR POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 5)).toBe('FOUND FIVE POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 6)).toBe('FOUND SIX POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 7)).toBe('FOUND SEVEN POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 8)).toBe('FOUND EIGHT POSSIBLE VALUES')
+  })
+
+  it("past the resolver's cap the count is a numeral", () => {
+    // Synthetic only: reconcile.go:127 never emits ambiguous under 2, and resolve.go:47/:98
+    // truncates at 8 -- no real read reaches 0, 1 or 9.
+    expect(pillFor('ambiguous', 0)).toBe('FOUND 0 POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 1)).toBe('FOUND 1 POSSIBLE VALUES')
+    expect(pillFor('ambiguous', 9)).toBe('FOUND 9 POSSIBLE VALUES')
+  })
+
+  it('the other codes ignore the count', () => {
+    expect(pillFor('unreadable', 5)).toBe("COULDN'T READ THIS CLEARLY")
+    expect(pillFor('inconsistent', 0)).toBe("DOESN'T ADD UP")
+    expect(pillFor('missing', 3)).toBe('NOT FOUND')
 
     // A clean field has nothing to say, and the cell's one pill slot then falls back to the
     // shipped NO REGION cue.
-    expect(reasonPill(''), 'a clean field claimed the pill slot').toBeNull()
+    expect(pillFor('', 3), 'a clean field claimed the pill slot').toBeNull()
   })
 })
 

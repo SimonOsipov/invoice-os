@@ -2045,7 +2045,7 @@ describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human labe
   })
 })
 
-describe('rowExpansionView: a clean invoice (zero violations) is the passing line, never a card list (AC-6, FIX-9)', () => {
+describe('rowExpansionView: a clean invoice is the passing line only when a rule set stamped it; unstamped is not validated (AC-6, FIX-9)', () => {
   it('FIX-9: rule_set_version 3 -> passing, summary is "Every rule in NG-MBS v3 passed.", zero cards', () => {
     const view = rowExpansionView(
       { violations: [], rule_set_version: 3 },
@@ -2075,8 +2075,7 @@ describe('rowExpansionView: a clean invoice (zero violations) is the passing lin
       { can_revalidate: true, revalidate_blocked_reason: null },
     )
 
-    // Replaces the prior "renders honestly, not v0" assertion in place -- the retarget
-    // must fail on today's summary string, not on an unrelated field.
+    // First, so a regression quotes the old sentence 'Every rule in not evaluated passed.'
     expect(view.summary).toBeNull()
     expect(view.passing).toBe(false)
     expect(view).toHaveProperty('notValidated', true)
@@ -2108,6 +2107,46 @@ describe('rowExpansionView: a clean invoice (zero violations) is the passing lin
       expect(s).not.toContain('passed')
       expect(s).not.toContain('not evaluated')
     }
+  })
+
+  it('rule_set_version 0 is stamped: passing, not notValidated (`!= null`, never truthiness)', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: 0 },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(true)
+    expect(view.notValidated).toBe(false)
+    expect(view.summary).toBe('Every rule in NG-MBS v0 passed.')
+    expect(view.sectionLabel).toBeNull()
+  })
+
+  it('a warning-only invoice with no version stays advisory: neither passing nor notValidated, nothing says passed', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'warning' })], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.notValidated).toBe(false)
+    expect(view.summary).toBeNull()
+    expect(view.sectionLabel).toBe(ROW_EXPANSION_COPY.advisorySectionLabel)
+    expect(view.cards).toHaveLength(1)
+    const strings = Object.values(view).filter((v): v is string => typeof v === 'string')
+    expect(strings.length).toBeGreaterThan(0)
+    for (const s of strings) expect(s).not.toContain('passed')
+  })
+
+  it('an error with no version keeps its cards: a violation outranks the missing stamp', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: undefined },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.notValidated).toBe(false)
+    expect(view.sectionLabel).toBe(ROW_EXPANSION_COPY.sectionLabel)
+    expect(view.cards).toHaveLength(1)
   })
 })
 

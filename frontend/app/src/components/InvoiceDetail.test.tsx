@@ -2144,12 +2144,11 @@ describe('InvoiceDetail Compliance panel: the rule-set version is stated once (B
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
     await screen.findByText('INV-FAILED-1')
 
-    // Test-local literal, copied byte-for-byte from InvoiceDetail.tsx's own inline string
-    // -- includes the U+2014 em dash, not a retyped hyphen.
+    // A literal, not the constant (U+2014 em dash).
     const NOT_VALIDATED = 'Not yet validated — run Re-validate to check compliance.'
     expect(screen.getByTestId('not-validated').textContent).toBe(NOT_VALIDATED)
-    // Pins the constant too -- an equality to the literal alone can't see an edit that
-    // moves the sentence off ROW_EXPANSION_COPY.notValidated.
+    // Catches the constant drifting while this card keeps its own copy. A re-inline with
+    // unchanged text stays green here; the source scan in reviewBatch.test.ts catches it.
     expect(ROW_EXPANSION_COPY).toHaveProperty('notValidated', NOT_VALIDATED)
   })
 

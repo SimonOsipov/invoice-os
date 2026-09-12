@@ -1900,10 +1900,9 @@ test('DOC-E2E-01 (Core AC 5): the deployed wizard imports by document_id and nev
 //
 // AC-1 AMENDMENT: the story says a PDF reaches "a review landing naming one batch". The
 // untouched routers say otherwise at ONE file — routeAfterRun sees files.length === 1 and
-// routeAfterImport resolves {kind:'single'}, because DOCUP-02/03 pin a clean document
-// import at status 'completed' / ready_invoices 1 and reviewQuery(batchId,'all') lists the
-// draft it wrote. The landing is the real InvoiceDetail, the route INVCR-E2E-2 already
-// proves for a single-invoice CSV.
+// routeAfterImport resolves {kind:'single'}. A document whose job the wire identifies lands
+// on its own extraction review instead; a single-invoice CSV still lands on the real detail,
+// the route INVCR-E2E-2 proves.
 
 const DOCUMENT_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '../fixtures/documents')
 // Committed by EXTR-09-03, re-pointed at the rich fixture by EXTR-18-05 so the wire-derived
@@ -2066,10 +2065,10 @@ const REFUSE_DOCUMENT_IN_SPREADSHEET_RUN =
 const REFUSE_SPREADSHEET_IN_DOCUMENT_RUN =
   'A run holds one kind of file: this is a document run, so the spreadsheet was not added. Remove the document files first, or start a separate spreadsheet run.'
 
-test('EXTR09-E2E-01 (AC-1/AC-5): a PDF forks to the document path, extracts, and lands on a real invoice', async ({ page }) => {
+test('EXTR09-E2E-01 / EXTR32-E2E-01: a PDF forks to the document path, extracts, and lands on its own extraction review', async ({ page }, testInfo) => {
   // Upload + extraction poll (LIVE_POLL_MS interval, 120s budget) + import, on a fleet
   // that may be cold. Well above the api suite's own 180s for the same three calls.
-  test.setTimeout(300_000)
+  test.setTimeout(420_000)
   const errors = collectErrors(page)
 
   // The spreadsheet path must never be touched. Counted rather than asserted at one
@@ -2121,23 +2120,93 @@ test('EXTR09-E2E-01 (AC-1/AC-5): a PDF forks to the document path, extracts, and
     /^2\s*Review$/,
   ])
 
-  expect((await uploadResp).status(), 'the document upload returns 201').toBe(201)
+  const upload = await uploadResp
+  expect(upload.status(), 'the document upload returns 201').toBe(201)
+  const documentId = ((await upload.json()) as { document_id?: string }).document_id
+  expect(documentId, 'the upload must mint a stored document id').toMatch(/^[0-9a-fA-F-]{36}$/)
   expect((await importResp).status(), 'a settled document imports 201').toBe(201)
 
-  // The landing, named rather than waited on: a wrong landing fails saying WHICH one
-  // appeared. See the AC-1 amendment in this section's header for why this is the detail
-  // page and not the review shell.
+  // Named, not waited on: a wrong landing fails saying which one appeared.
   await expect
     .poll(
       async () => {
+        if (await page.getByTestId('extraction-review').isVisible()) return 'extraction review'
         if (await page.getByTestId('invoice-detail').isVisible()) return 'invoice detail'
         if (await page.getByText(/^BATCH /).first().isVisible()) return 'review batch surface'
         if (await page.getByRole('button', { name: 'Extract invoices' }).isVisible()) return 'back on the picker (the run failed)'
         return 'nothing yet'
       },
-      { message: 'the document run must land on the real invoice detail (routeAfterRun single)', timeout: 60_000 },
+      { message: 'the document run must land on its extraction review (routeAfterRun extraction)', timeout: 60_000 },
     )
-    .toBe('invoice detail')
+    .toBe('extraction review')
+
+  // Ids from the API, never the URL: a path built from the wrong id must not verify itself.
+  const { jobs } = await getExtractions(token, documentId!)
+  expect(jobs, 'one fresh upload must mint exactly one extraction job').toHaveLength(1)
+  const jobId = jobs[0].id
+  const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
+  expect(invoices, 'the fresh entity must hold exactly the one imported invoice').toHaveLength(1)
+  const invoice = invoices[0]
+
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'AC-1: the landing is addressed at its job' }).toBe(`/extraction/${jobId}`)
+
+  // Layout sweep ([no-layout-constant-but-a-new-row-occupant]): the exit and Save share the
+  // settled footer's row, inside the review root, at every wide breakpoint.
+  const exit = page.getByTestId('extraction-open-invoice')
+  const save = page.getByTestId('extraction-save')
+  const root = page.getByTestId('extraction-review')
+  await expect(save, 'control: the settled footer rendered').toBeVisible({ timeout: 60_000 })
+  await expect(exit, 'the settled footer never offered the exit').toBeVisible()
+
+  const measured: { width: number; exit: Rect; save: Rect; root: Rect }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first -- WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const m = await settledRead(async () => {
+        const [e, s, r] = await Promise.all([exit.boundingBox(), save.boundingBox(), root.boundingBox()])
+        return { e, s, r }
+      }, `review footer at ${width}px`)
+      expect(m.e && m.s && m.r, `the exit, Save and the review root must all render at ${width}px`).toBeTruthy()
+      const [e, s, r] = [m.e as Rect, m.s as Rect, m.r as Rect]
+      // Non-empty first: collapsed rects clear each other and pass vacuously.
+      for (const [name, b] of [['exit', e], ['save', s]] as const) {
+        expect(b.width, `${name} has no width at ${width}px`).toBeGreaterThan(0)
+        expect(b.height, `${name} has no height at ${width}px`).toBeGreaterThan(0)
+      }
+      expect(rectsOverlap(e, s), `the exit covers Save at ${width}px: ${JSON.stringify({ e, s })}`).toBe(false)
+      expect(Math.abs(e.y + e.height / 2 - (s.y + s.height / 2)), `the exit left Save's row at ${width}px`).toBeLessThanOrEqual(1)
+      expect(e.x + e.width, `the exit is not left of Save at ${width}px`).toBeLessThanOrEqual(s.x)
+      for (const [name, b] of [['exit', e], ['save', s]] as const) {
+        expect(b.x, `${name} spills the review's left edge at ${width}px`).toBeGreaterThanOrEqual(r.x)
+        expect(b.y, `${name} spills the review's top edge at ${width}px`).toBeGreaterThanOrEqual(r.y)
+        expect(b.x + b.width, `${name} spills the review's right edge at ${width}px`).toBeLessThanOrEqual(r.x + r.width)
+        expect(b.y + b.height, `${name} spills the review's bottom edge at ${width}px`).toBeLessThanOrEqual(r.y + r.height)
+      }
+      measured.push({ width, exit: e, save: s, root: r })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  expect(measured.map((x) => x.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('extraction-exit-footer.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+
+  await page.goBack()
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'Back must return to /create' }).toBe('/create')
+  // Render floor: the step strip renders above both the picker and the progress card.
+  await expect(stepChips(page), 'the create flow did not render after Back').toHaveText([/^1\s*Import$/, /^2\s*Review$/])
+  await expect(page.getByTestId('import-progress'), 'AC-6: Back must not reopen the finished run').toHaveCount(0)
+  await expect(page.getByTestId('extraction-review'), 'Back must leave the review').toHaveCount(0)
+
+  await page.goForward()
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'Forward must restore the review' }).toBe(`/extraction/${jobId}`)
+  await expect(page.getByTestId('extraction-open-invoice'), 'the exit must survive a Forward onto its entry').toBeVisible({ timeout: 60_000 })
+
+  await page.getByTestId('extraction-open-invoice').click()
+  await expect.poll(() => new URL(page.url()).pathname, { message: 'AC-2: the exit must open THIS invoice' }).toBe(`/invoices/${invoice.id}`)
+  await expect(page.getByTestId('invoice-detail'), 'the exit lands on the real detail').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(invoice.invoice_number)
   await expect(page.getByTestId('status-strip'), 'the real detail carries the state strip').toBeVisible()
   await expect(page.getByTestId('review-table'), 'never a one-row review grid').toHaveCount(0)
 
@@ -2793,10 +2862,8 @@ test('EXTR10-E2E-02: a dead-lettered row wraps its long reason without inflating
 // extraction to check.", "Extraction review"); an earlier draft of this comment said otherwise.
 
 /**
- * The document journey EXTR09-E2E-01 proved, stopped at the real invoice detail.
- *
- * `file` defaults to the one-page fixture every caller before EXTR-11-09 used, so the eight
- * specs above are byte-for-byte unchanged; only EXTR11-E2E-05 passes the two-page one.
+ * The document journey EXTR09-E2E-01 proves: lands on the document's own extraction review,
+ * then takes its exit to the real invoice detail. `file` defaults to the one-page fixture.
  */
 async function extractOneDocument(
   page: Page,
@@ -2815,9 +2882,15 @@ async function extractOneDocument(
     .setInputFiles({ name: file.name, mimeType: 'application/pdf', buffer: file.buffer })
   await page.getByRole('button', { name: 'Extract invoices' }).click()
 
-  await expect(page.getByTestId('invoice-detail'), 'the document run must land on the real invoice detail').toBeVisible({
+  await expect(page.getByTestId('extraction-review'), 'the document run must land on its extraction review').toBeVisible({
     timeout: 240_000,
   })
+  await expect
+    .poll(() => new URL(page.url()).pathname, { message: 'the landing must be addressed at its own job path' })
+    .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+  await expect(page.getByTestId('extraction-open-invoice'), 'the review must offer its exit').toBeVisible({ timeout: 60_000 })
+  await page.getByTestId('extraction-open-invoice').click()
+  await expect(page.getByTestId('invoice-detail'), 'the exit must reach the real invoice detail').toBeVisible({ timeout: 60_000 })
 }
 
 // Opens the review screen and RETURNS the 200 the SPA itself consumed. Every wire fact these
@@ -2856,9 +2929,8 @@ async function openExtractionReview(page: Page): Promise<ExtractionDetail> {
 // in-memory React state and forces the boot-seed path to be the only thing that can
 // reopen the review screen.
 //
-// ~4-5 minutes: extractOneDocument's own 240s upload-to-invoice-detail wait, plus
-// openExtractionReview's 120s review-read wait, plus this second document load. No
-// cheaper fixture path exists.
+// ~4-5 minutes: extractOneDocument's own landing and exit, plus openExtractionReview's 120s
+// review-read wait, plus this second document load. No cheaper fixture path exists.
 test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
@@ -2873,6 +2945,8 @@ test('deployed app: /extraction/<jobId> is a working deep link', async ({ page }
 
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
   await expect(page.getByTestId('extraction-review'), 'the cold boot must reopen the review screen').toBeVisible()
+  await expect(page.getByTestId('extraction-save'), 'control: the settled footer rendered').toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('extraction-open-invoice'), 'a cold boot holds no invoice id, so no exit').toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -4854,7 +4928,7 @@ const DEVIATIONS_OUTSIDE_THE_TABLE = [
 // EXTR-12's carried deviations, printed into this run's artifact so the record is not only prose
 // in a task file. NONE is a defect to fix here.
 const CARRIED_DEVIATIONS = [
-  'AA-21: AC-5\'s "rendered reason" on a disabled Save is UNMET by decision. `disabled` and `filter: none` are met (ExtractionReview.tsx:261-263); the reason clause is not, because the only disabling condition is "nothing settled yet" and both shipped precedents disable without one.',
+  'AA-21: AC-5\'s "rendered reason" on a disabled Save is UNMET by decision. `disabled` and `filter: none` are met (ExtractionReview.tsx\'s SAVE_DISABLED style and the Save button\'s `disabled` prop); the reason clause is not, because the only disabling condition is "nothing settled yet" and both shipped precedents disable without one.',
   'AA-24 / Z-5: NOT met. The retired READ ONLY badge\'s five rows were replaced by rows measuring a CHIP in the fields pane; the document toolbar slot has no fidelity coverage at all. The chip supersedes the read-only CLAIM, not the toolbar ELEMENT.',
   'CC-2: POINT_ARMED is corrected copy, not the artboard\'s. "Waiting — drag a box around it on the document" replaces `:662`\'s "Waiting — click the words on the document", because this build\'s gesture is a drag and under the 24x12 floor a click returns nothing.',
   'CC-3 / BB-3: Core AC-3\'s "the value is read from there" is UNMET. Still unbuildable on the geometric path: the box records WHERE and the person types WHAT. The "no migration persists token text" reason no longer holds -- EXTR-19 added extraction_jobs.layout_tokens, but it stores page-1 text for BOXLESS jobs only and no seam reads a value out of a box.',
@@ -4868,8 +4942,8 @@ const CARRIED_DEVIATIONS = [
 // Leftovers -- for the story's list, not for building here.
 const LEFTOVERS = [
   'L-1: the fidelity tautology cited as `:4134` in two documents was really the `table.length === FIDELITY.length` check; it is replaced above by the row-set pin.',
-  'L-2: the `write` generation guard is unreachable and untested. `write.current !== mine` can only be true if a second Save starts while the first is in flight, and Save is disabled while writing (ExtractionReview.tsx:98, :160-161, :189).',
-  'L-3: four redundant derivation slots, unkillable by construction -- `current`, `entries`, `arming` and `data` each re-test `x.jobId === jobId` after the render-phase `setX(null)` above has already discarded this pass (ExtractionReview.tsx:78-79, 86-87, 115-116, 117-118).',
+  'L-2: the `write` generation guard is unreachable and untested. `write.current !== mine` can only be true if a second Save starts while the first is in flight, and Save is disabled while writing (ExtractionReview.tsx\'s `write` ref, `save`\'s `if (write.current !== mine) return` guard, and the Save button\'s `disabled` prop).',
+  'L-3: four redundant derivation slots, unkillable by construction -- `current`, `entries`, `arming` and `data` each re-test `x.jobId === jobId` after the render-phase `setX(null)` above has already discarded this pass (ExtractionReview.tsx\'s `current`, `entries`, `arming` and `data` derivations).',
   'L-4: an unenforced invariant -- "a `missing` field carries no value" is what makes `pointedEntry`\'s middle arm unreachable from the shell, and nothing enforces it (extractionReview.ts:452-456).',
   'L-5: R13 / R14 / R9\'s keep-clause / R26\'s selection clause stay flagged as PAIRS, never counted as coverage: each is satisfied by a build that never calls the thing under test.',
   'L-6: you cannot clear a field by emptying it, and nothing says so. `savableCorrections` drops a blank typed entry (extractionReview.ts:276) and the blank visibly bounces back with no explanation.',
@@ -7293,7 +7367,8 @@ async function settledRunSurface(page: Page): Promise<string> {
   await expect
     .poll(
       async () => {
-        if (await page.getByTestId('invoice-detail').isVisible()) seen = 'invoice detail'
+        if (await page.getByTestId('extraction-review').isVisible()) seen = 'extraction review'
+        else if (await page.getByTestId('invoice-detail').isVisible()) seen = 'invoice detail'
         else if (await page.getByTestId('review-table').isVisible()) seen = 'review batch surface'
         else if (await page.getByText(/^BATCH /).first().isVisible()) seen = 'review batch surface'
         else if (await page.getByTestId('document-failures-card').isVisible()) seen = 'the failures card'
@@ -7307,7 +7382,7 @@ async function settledRunSurface(page: Page): Promise<string> {
 }
 
 test('EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its printed fields', async ({ page }, testInfo) => {
-  // One DOCX on a fleet that may be cold, then the import and the detail landing.
+  // One DOCX on a fleet that may be cold, then the import and the landing.
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
@@ -7877,12 +7952,13 @@ test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", 
 
 // A document whose invoice_number never resolves mints a QUARANTINED batch, not an invoice
 // (internal/importer/document.go:161) -- so routeAfterRun's 'single' arm is unreachable and
-// extractOneDocument's wait for invoice-detail can never settle. Both fixtures below are that
+// extractOneDocument's landing wait can never settle. Both fixtures below are that
 // case by construction: the scan has no recoverable text at all, and the dense page's label
 // OCRs as "INV0ICE NO:" (D-33). The verdict is therefore read off the deployed wire, which is
 // also exactly what EXTR-15's Core AC will consume. The review SCREEN cannot serve as the
-// oracle here: its only entry point is SourceDocumentCard's open-extraction-review, which
-// renders on the invoice detail -- building a surface for these terminal states is EXTR-15's.
+// oracle here: the review is reached from an import landing or from SourceDocumentCard, and
+// both need an invoice these documents never produce -- building a surface for these terminal
+// states is EXTR-15's.
 async function settleOneDocument(
   page: Page,
   label: string,

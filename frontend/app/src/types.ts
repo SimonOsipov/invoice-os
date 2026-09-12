@@ -396,7 +396,7 @@ export type PlatformCtx = {
   // lib/importRun.ts's runReducer; every view over it (runBatchIds/runFailures/
   // runFileRows/routeAfterRun) is a pure derivation of THIS value, never re-computed
   // ad hoc by a component. `status: 'idle'` both before a run starts and once
-  // applyRoute has drained a finished run into `reviewBatchIds`/an opened invoice.
+  // applyRoute has drained a finished run into `reviewBatchIds`, an opened invoice or its review.
   // `'failed'` (BULK-01-05 QA correction, task-308) is a distinct landing applyRoute
   // sets on a `none` route (AC #9) instead of resetting to idle — `files`/`cursor`
   // survive so runFailures keeps returning them, and CreateMapping renders again

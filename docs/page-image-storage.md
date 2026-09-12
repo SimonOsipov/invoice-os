@@ -178,10 +178,9 @@ The canvas itself now exists — `frontend/app/src/components/ExtractionCanvas.t
 renders one aspect-locked frame per stored page and fetches each page's bytes into a blob URL —
 and `ExtractionReview.tsx` mounts it. **A user can now reach it.** EXTR-11-08 added the
 `'extraction'` view, the `openExtraction(jobId)` hand-off on `PlatformCtx`, and the
-`open-extraction-review` control on the invoice detail's source-document card. That control is
-the screen's **only** entry: there is no hash route (`#review/…` is the review batch's, not
-this screen's) and no sidebar item, so an operator arrives at the review screen by opening an
-invoice whose source document has a settled extraction job, and by no other path.
+`open-extraction-review` control on the invoice detail's source-document card. A one-document
+import that produced one invoice also lands there, at `/extraction/<jobId>`, and that path
+reopens the screen on a reload. There is no sidebar item.
 
 Reachable *in code* is not the same as *proven on the deployed build*. Twelve `EXTR11-E2E-*` rows
 in `e2e/topology/import-wizard.spec.ts` walk this path; eleven enter through that one control, and

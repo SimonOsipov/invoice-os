@@ -223,6 +223,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Cleared at App.tsx#switchClient (ROUTE-01), but popstate re-derives it from an older /extraction/<jobId> entry at App.tsx#onPopState. Reaches ExtractionReview as an explicit jobId prop (App.tsx#Workspace), which also gates the mount. Fixed by ROUTE-06-02.',
   },
   {
+    binding: 'extractionInvoices, setExtractionInvoices',
+    name: 'extractionInvoices',
+    kind: 'useState',
+    resetBySwitchClient: true,
+    routes: ['/extraction', '/extraction/<jobId>'],
+    verdict: 'correctly-reset',
+    citation: { in: 'function switchClient(id: string)', text: 'setExtractionInvoices({})' },
+    note: 'Emptied at App.tsx#switchClient. Popstate does not write it, so a restored entry for a job the map does not hold renders no exit.',
+  },
+  {
     binding: 'invoiceQuery, setInvoiceQuery_',
     name: 'invoiceQuery',
     kind: 'useState',

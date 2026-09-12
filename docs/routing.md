@@ -223,6 +223,7 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `detailInvoiceId` | yes | /invoice, /invoices/<id> | `stale-and-reachable` |
 | `auditPrefilter` | yes | /audit, /audit?invoice=<id> | `stale-and-reachable` |
 | `extractionJobId` | yes | /extraction, /extraction/<jobId> | `stale-and-reachable` |
+| `extractionInvoices` | yes | /extraction, /extraction/<jobId> | `correctly-reset` |
 | `invoiceQuery` | no | all 13, /invoices?q=<text> | `deliberate` |
 | `switcherOpen` | yes | all 13 | `correctly-reset` |
 | `sandbox` | no | all 13, /settings/<tab> | `correctly-reset` |

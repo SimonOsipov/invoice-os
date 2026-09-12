@@ -1067,6 +1067,66 @@ describe('the reason pill', () => {
     ).toBeNull()
   })
 
+  it('pill and chips agree at every count a real read can produce, two through eight', () => {
+    // resolve.go:47's cap is 8 candidates. One render, seven neighbours: a clamp, a cached count or
+    // a shared pill fails a row the two- and five-chip fixtures above never reach.
+    const words: Record<number, string> = { 2: 'TWO', 3: 'THREE', 4: 'FOUR', 5: 'FIVE', 6: 'SIX', 7: 'SEVEN', 8: 'EIGHT' }
+    const names = ['issue_date', 'buyer_tin', 'buyer_name', 'currency', 'subtotal', 'vat', 'total']
+    const fields = names.map((name, k) =>
+      mkField({
+        name,
+        value: `${name}-0`,
+        reason: 'ambiguous',
+        alternatives: Array.from({ length: k + 1 }, (_, j) => mkCandidate(`${name}-${j + 1}`, j + 2)),
+      }),
+    )
+    render(fieldsPane({ fields }))
+
+    const seen: number[] = []
+    for (const [k, name] of names.entries()) {
+      const chips = chipsOf(name)
+      expect(chips, `${name} carries ${k + 1} alternative(s)`).toHaveLength(k + 2)
+      const pills = within(row(name)).getAllByText(/POSSIBLE VALUES$/)
+      expect(pills, `${name} renders exactly one counted pill`).toHaveLength(1)
+      expect(pills[0].textContent, `${name}'s pill disagrees with its ${chips.length} chips`).toBe(
+        `FOUND ${words[chips.length]} POSSIBLE VALUES`,
+      )
+      seen.push(chips.length)
+    }
+    expect(seen, 'every count 2..8 must be rendered once').toEqual([2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('a field with alternatives but another reason keeps its own pill and no count', () => {
+    // Chips gate on the reason (ExtractionFields.tsx), so the count is 0 here and must not surface.
+    const fields = [
+      mkField({
+        name: 'subtotal',
+        value: '3,626,000.00',
+        reason: 'inconsistent',
+        alternatives: [mkCandidate('3,726,000.00', 3), mkCandidate('3,526,000.00', 5)],
+      }),
+      mkField({
+        name: 'vat',
+        value: '271,950.00',
+        reason: 'unreadable',
+        alternatives: [mkCandidate('217,950.00', 2)],
+      }),
+      mkField({ name: 'total', value: '1,250,000.00', region: null }),
+    ]
+    render(fieldsPane({ fields }))
+
+    for (const [name, want] of [
+      ['subtotal', PILL_INCONSISTENT],
+      ['vat', PILL_UNREADABLE],
+      ['total', PILL],
+    ] as const) {
+      expect(inputOf(name), `${name} renders no input -- its pill row is vacuous`).toBeTruthy()
+      expect(chipsOf(name), `${name} rendered chips`).toHaveLength(0)
+      expect(within(row(name)).queryByText(want), `${name} lost its "${want}" pill`).toBeTruthy()
+      expect(within(row(name)).queryByText(/POSSIBLE VALUES/), `${name} rendered a counted pill`).toBeNull()
+    }
+  })
+
   it('gives the slot to the reason, and keeps NO REGION for a field with no reason', () => {
     // `Y-1`. Both pills declare `white-space: nowrap`; two of them in a strip inside a 470px
     // pane is how that floor gets broken, so the reason wins and NO REGION is the fallback.

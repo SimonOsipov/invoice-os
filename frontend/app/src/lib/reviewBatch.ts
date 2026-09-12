@@ -1233,18 +1233,16 @@ export const ROW_EXPANSION_COPY = {
   keeping: 'Keeping…',
   keepReasonPlaceholder: 'Why are you keeping this despite the failure? (required)',
   keptPrefix: 'Kept as-is — ',
-  // Moved from InvoiceDetail.tsx's own inline literal (EXTR-30-01) -- ReviewRow.tsx's
-  // row-expansion arm and InvoiceDetail.tsx's Compliance card both read this ONE copy.
+  // Single owner: ReviewRow.tsx's row-expansion arm and InvoiceDetail.tsx's Compliance
+  // card both read this one copy.
   notValidated: 'Not yet validated — run Re-validate to check compliance.',
 } as const
 
 export interface RowExpansionView {
   passing: boolean
-  // True iff the invoice carries zero violations AND a NULL/undefined rule_set_version
-  // (EXTR-30-01) -- a document import that ran no rule gate at all. Distinct from
-  // `passing`: an unevaluated invoice is never `passing`, and a passing one is never
-  // `notValidated`. Drives the third ReviewRow.tsx arm (neither the green strip nor the
-  // card list).
+  // Zero violations and no rule-set stamp: no rule has run against it yet. Distinct
+  // from `passing` -- drives the third ReviewRow.tsx arm (neither the green strip nor
+  // the card list).
   notValidated: boolean
   // True iff at least one violation is `severity === 'error'` -- the SAME predicate
   // verdictPill/fixCard use (§10.12's trap). Drives which of the two non-passing
@@ -1271,15 +1269,14 @@ export interface RowExpansionView {
 // The row-expansion panel's WHOLE model, mirroring bulkBarView's own one-function
 // composite: ReviewRow.tsx reads every field off THIS, never re-deriving any of it,
 // including which of the two non-passing section labels to show. `passing` requires
-// BOTH zero violations AND a non-null rule_set_version (EXTR-30-01) -- a genuinely
+// BOTH zero violations AND a non-null rule_set_version -- a genuinely
 // CLEAN invoice that a rule gate actually ran against, distinct from a warning-only
 // one (which still renders its violations as non-blocking cards under the ADVISORY
 // label, §10.12's trap) -- so the green summary line is unreachable while anything,
 // even a single warning, fired, or while the invoice was never evaluated at all.
-// `can_revalidate`/`revalidate_blocked_reason` are
-// consumed AS GIVEN -- this function performs no `?? false`/fallback-string authoring
-// of its own; that discipline lives at the wire boundary (getInvoice, lib/invoices.ts)
-// and is not repeated here.
+// `can_revalidate`/`revalidate_blocked_reason` are consumed AS GIVEN -- this function
+// performs no `?? false`/fallback-string authoring of its own; that discipline lives
+// at the wire boundary (getInvoice, lib/invoices.ts) and is not repeated here.
 export function rowExpansionView(
   invoice: {
     violations: Violation[]

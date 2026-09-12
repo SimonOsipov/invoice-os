@@ -6766,7 +6766,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
     timeout: 60_000,
   })
   await expect(
-    page.getByRole('button', { name: /^Unreadable documents \(/ }),
+    page.getByRole('button', { name: /^Quarantined documents \(/ }),
     'the document tab label reached a spreadsheet run',
   ).toHaveCount(0)
 
@@ -7241,7 +7241,7 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   // The tab is matched on its prefix, not on its count: the count is a second statement of
   // what toHaveCount below already asserts, and matching it here would fail one step earlier
   // with a locator error instead of a row count.
-  const unreadableTab = page.getByRole('button', { name: /^Unreadable documents \(/ })
+  const unreadableTab = page.getByRole('button', { name: /^Quarantined documents \(/ })
   await expect(unreadableTab, 'neither document quarantined -- there is no unreadable tab').toHaveCount(1)
   await unreadableTab.click()
 
@@ -7253,6 +7253,17 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
   expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
   expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+
+  // Cross-discriminating pair: bare "scan" is vacuous (the row text also carries the
+  // filename scanned_invoice.pdf), so "supplier" tells the two RowError messages apart.
+  expect(rowLabels[scannedIdx], 'the scanned row must carry the scan-quality message').toContain('The scan of this document')
+  expect(rowLabels[scannedIdx], 'the scanned row must carry the supplier ask').toContain('supplier')
+  expect(rowLabels[scannedIdx], "the scanned row leaked the dense row's message").not.toContain('was read')
+
+  expect(rowLabels[denseIdx], 'the dense row must carry the no-invoice-number message').toContain(
+    'was read, but no invoice number',
+  )
+  expect(rowLabels[denseIdx], "the dense row leaked the scanned row's supplier ask").not.toContain('supplier')
 
   // (c) the SCANNED row's own control, and the invoice it produces named by equality against
   // the scanned document — never "is not null", which the dense document would satisfy too.
@@ -7448,7 +7459,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
 
   // --- AC-2: the header, the tiles and both tab labels ----------------------------------
   const registerTabName = 'Already imported (1)'
-  const unreadableTabName = 'Unreadable documents (1)'
+  const unreadableTabName = 'Quarantined documents (1)'
   await expect(
     page.getByRole('button', { name: unreadableTabName }),
     'the scan must quarantine into its own tab, labelled in documents',
@@ -7472,8 +7483,13 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   expect(header, "B8's document arm -- the AC's own wording").toContain('1 already in the register')
   expect(header, "B10's document arm").toContain('1 invoices already in the register. Nothing to fix.')
   expect(header, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
-  expect(header, "B2's document arm").toContain('1 unreadable documents')
+  expect(header, "B2's document arm").toContain('1 quarantined documents')
   expect(header, "B2's spreadsheet arm reached a document run").not.toContain('1 unreadable rows')
+  expect(header, 'the shipped unreadable wording reached a document run').not.toContain('unreadable documents')
+  expect(header, "B11's document arm").toContain(
+    'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.',
+  )
+  expect(header, "B11's spreadsheet arm reached a document run").not.toContain('Nothing was stored')
 
   // --- AC-2: the already-imported tab body ----------------------------------------------
   await page.getByRole('button', { name: registerTabName }).click()
@@ -7504,7 +7520,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   const unreadable = await screenText(page)
   expect(unreadable, "U2's document arm").toContain('1 documents never became invoices')
   expect(unreadable, "U3's document arm").toContain(
-    'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.',
+    'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.',
   )
   expect(unreadable, "U3's spreadsheet arm reached a document run").not.toContain('The importer could not read them')
   expect(unreadable, "U5's document arm").toContain('1 of 2 documents. The invoices that did import are unaffected.')
@@ -7545,7 +7561,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   await expect(registerTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
     'Nothing to fix.',
   )
-  const unreadableTileValue = page.getByText('1 unreadable documents', { exact: true })
+  const unreadableTileValue = page.getByText('1 quarantined documents', { exact: true })
   await expect(unreadableTileValue, "B2's tile value").toHaveCount(1)
   const unreadableTile = unreadableTileValue.locator('xpath=..')
   await expect(unreadableTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
@@ -7608,7 +7624,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
       // inside it overflows, so the edge check alone passes on the very defect this guards.
       for (const [label, text, tile] of [
         ['the already-in-the-register tile', m.registerText, m.registerBox],
-        ['the unreadable-documents tile', m.unreadableText, m.unreadableBox],
+        ['the quarantined-documents tile', m.unreadableText, m.unreadableBox],
       ] as const) {
         expect(text.outerLeft, `${label}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
           tile.left - 0.5,

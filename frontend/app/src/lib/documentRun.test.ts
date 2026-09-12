@@ -1596,3 +1596,36 @@ describe('startDocumentRun — a failure names the document it failed on (HO-1, 
     expect(outcomes.map((o) => documentIdOf(o.outcome))).toEqual(['doc-ok.pdf', undefined])
   })
 })
+
+describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScript copy', () => {
+  // { recursive: true } risks an @types/node version mismatch; explicit recursion does not.
+  function nonTestFiles(root: string): string[] {
+    const files: string[] = []
+    function walk(dir: string) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+          files.push(path.relative(root, full).split(path.sep).join('/'))
+        }
+      }
+    }
+    walk(path.join(root, 'src'))
+    return files
+  }
+
+  it('QS-1: neither Go quarantine sentence has leaked into non-test TypeScript', () => {
+    const root = process.cwd()
+    const files = nonTestFiles(root)
+    // Floor, so the absence claims below cannot pass over a walk that silently found nothing.
+    expect(files.length, 'the source walk found suspiciously few files').toBeGreaterThan(50)
+
+    const contentsOf = (needle: string) => files.filter((f) => readFileSync(path.join(root, f), 'utf8').includes(needle))
+
+    // Control: a needle known to live in exactly this one file, proving the walk is live.
+    expect(contentsOf('could not get any text out of it')).toEqual(['src/lib/documentRun.ts'])
+
+    expect(contentsOf('was read, but no invoice number')).toEqual([])
+    expect(contentsOf('too poor to read, so no invoice fields')).toEqual([])
+  })
+})

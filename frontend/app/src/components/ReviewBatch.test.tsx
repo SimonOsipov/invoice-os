@@ -239,7 +239,7 @@ const ARMS = {
     document: [
       '500 DOCUMENTS READ · SERVER VERDICT · RULE SET ', // R2, through reviewHeaderAll
       'Built from 480 documents. Every one of these exists in the ledger — fixing and submitting is what is left.', // B1
-      '0 unreadable documents', // B2
+      '0 quarantined documents', // B2
       'Every document in this import could be read.', // B3
       '0 already in the register', // B8
       'Nothing in this import was already in the register.', // B9
@@ -255,16 +255,18 @@ const ARMS = {
   },
   mixed: {
     document: [
-      '1 unreadable documents', // B2 above zero
+      '1 quarantined documents', // B2 above zero
       '1 already in the register', // B8 above zero
       '1 invoices already in the register. Nothing to fix.', // B10
-      'Unreadable documents (1)', // R3, the tab label, through reviewTabs
+      'Quarantined documents (1)', // R3, the tab label, through reviewTabs
+      'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.', // B11
     ],
     spreadsheet: [
       '1 unreadable rows',
       '1 already imported',
       '1 invoices already in your ledger. Nothing to fix.',
       'Unreadable rows (1)',
+      'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.', // B11
     ],
   },
   rejectedFile: {
@@ -353,8 +355,8 @@ describe('EXTR-15-09 SW-18 (AC-6): B5 and B6 are two whole Tiles per arm, and on
 // A hard-coded `unit="spreadsheet"` at either call site is invisible without this.
 const TAB_ARMS = {
   unreadable: {
-    label: { document: 'Unreadable documents (1)', spreadsheet: 'Unreadable rows (1)' },
-    document: ['1 documents never became invoices', 'The extractor could not read them'], // U2, U3
+    label: { document: 'Quarantined documents (1)', spreadsheet: 'Unreadable rows (1)' },
+    document: ['1 documents never became invoices', 'No invoice was created from them'], // U2, U3
     spreadsheet: ['1 rows never became invoices', 'The importer could not read them'],
   },
   alreadyImported: {
@@ -602,5 +604,72 @@ describe('EXTR-30-04 NE-6..NE-8: the third tile under a failed count, a count of
     const captionNode = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === TILE_CAPTION_VALID)
     expect(captionNode, 'no valid-caption tile after the refetch').toBeTruthy()
     expect(captionNode!.parentElement!.parentElement!.children.length, 'the row is not the shipped pair again').toBe(2)
+  })
+})
+
+const PARA_DOC =
+  'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.'
+const PARA_SHEET = 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'
+const AT_ZERO_PARAGRAPH = 'This channel stays visible even at zero, so its absence is a fact and not an omission.'
+
+describe('EXTR-30-05 QN-1/QN-2 (AC-2/AC-5): a quarantined document is not called unreadable or unstored', () => {
+  // Every tab button stays mounted across clicks (SW-17's own premise), so one render can
+  // walk all three tab bodies in sequence.
+  async function allTabsText(ext: string, unreadableLabel: string): Promise<string> {
+    mockReviewFetchAll(mixedRun(ext), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const text0 = container.textContent ?? ''
+
+    const findTab = (label: string) => Array.from(container.querySelectorAll('button.pf-tab')).find((b) => b.textContent === label)
+    const unreadableButton = findTab(unreadableLabel)
+    expect(unreadableButton, `no tab button labelled ${unreadableLabel}`).toBeTruthy()
+    fireEvent.click(unreadableButton as HTMLElement)
+    const text1 = container.textContent ?? ''
+
+    const alreadyImportedButton = findTab('Already imported (1)')
+    expect(alreadyImportedButton, 'no tab button labelled Already imported (1)').toBeTruthy()
+    fireEvent.click(alreadyImportedButton as HTMLElement)
+    const text2 = container.textContent ?? ''
+    cleanup()
+    return text0 + text1 + text2
+  }
+
+  it('QN-1: a document run never calls a quarantined document unreadable or unstored', async () => {
+    const all = await allTabsText('.pdf', 'Quarantined documents (1)')
+
+    for (const s of ['1 quarantined documents', 'No invoice was created from them', '1 documents were already in the register']) {
+      expect(all, `document run did not render ${JSON.stringify(s)}`).toContain(s)
+    }
+    for (const s of ['unreadable documents', 'Unreadable documents', 'could not read them', 'Nothing was stored', 'nothing was stored']) {
+      expect(all, `document run leaked ${JSON.stringify(s)}`).not.toContain(s)
+    }
+
+    // Control: the same walk on a spreadsheet run still carries its own frozen wording, so
+    // the absence checks above are not vacuous over an empty or broken render.
+    const sheetAll = await allTabsText('.csv', 'Unreadable rows (1)')
+    for (const s of ['unreadable rows', 'Nothing was stored.']) {
+      expect(sheetAll, `spreadsheet run did not render ${JSON.stringify(s)}`).toContain(s)
+    }
+  })
+
+  it('QN-2: the channel paragraph branches on unit, and its other arms are whole-element unchanged', async () => {
+    const doc = await renderArm(mixedRun('.pdf'), BATCH_ANCHOR)
+    expect(doc.paragraphs, 'the document arm did not render PARA_DOC').toContain(PARA_DOC)
+    expect(doc.paragraphs, 'the document arm leaked the spreadsheet paragraph').not.toContain(PARA_SHEET)
+
+    const sheet = await renderArm(mixedRun('.csv'), BATCH_ANCHOR)
+    expect(sheet.paragraphs, 'the spreadsheet arm did not render PARA_SHEET').toContain(PARA_SHEET)
+    expect(sheet.paragraphs, 'the spreadsheet arm leaked the document paragraph').not.toContain(PARA_DOC)
+
+    const cleanDoc = await renderArm(cleanRun('.pdf'), BATCH_ANCHOR)
+    const cleanSheet = await renderArm(cleanRun('.csv'), BATCH_ANCHOR)
+    for (const arm of [cleanDoc, cleanSheet]) {
+      expect(arm.paragraphs, 'the at-zero arm must be unchanged in both units').toContain(AT_ZERO_PARAGRAPH)
+    }
+
+    const paragraphs = [doc, sheet, cleanDoc, cleanSheet].flatMap((r) => r.paragraphs)
+    expect(paragraphs.length, 'no paragraphs were collected').toBeGreaterThanOrEqual(4)
+    expect(paragraphs.filter((p) => /\s{2}/.test(p))).toEqual([])
   })
 })

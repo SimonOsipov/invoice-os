@@ -3151,7 +3151,7 @@ describe('EXTR-15-09 SW-2 (AC-1/AC-2): the seven lib branches, spreadsheet half 
     // frozen in BOTH units, which is half of AC-6 (no tab added, renamed or dropped).
     const strip = (tabs: ReturnType<typeof reviewTabs>) => tabs.map((t) => `${t.id}=${t.label}`).join('|')
     check('R3 spreadsheet', strip(reviewTabsU(counts, 'spreadsheet')), 'invoices=Invoices (7)|unreadable=Unreadable rows (2)|already-imported=Already imported (1)')
-    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Unreadable documents (2)|already-imported=Already imported (1)')
+    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Quarantined documents (2)|already-imported=Already imported (1)')
 
     // R4/R5/R6 -- the three CSV headers. D1: the middle column is DROPPED for a document,
     // never renamed to `Document`. In a document run the row number is always empty

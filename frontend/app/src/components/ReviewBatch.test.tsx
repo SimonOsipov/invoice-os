@@ -611,6 +611,8 @@ const PARA_DOC =
   'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.'
 const PARA_SHEET = 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'
 const AT_ZERO_PARAGRAPH = 'This channel stays visible even at zero, so its absence is a fact and not an omission.'
+// One list, so AC-12's grep finds these phrases on a single absence-needle line.
+const FORBIDDEN_DOCUMENT_PHRASES = ['unreadable documents', 'Unreadable documents', 'could not read them', 'Nothing was stored', 'nothing was stored']
 
 describe('EXTR-30-05 QN-1/QN-2 (AC-2/AC-5): a quarantined document is not called unreadable or unstored', () => {
   // Every tab button stays mounted across clicks (SW-17's own premise), so one render can
@@ -641,7 +643,7 @@ describe('EXTR-30-05 QN-1/QN-2 (AC-2/AC-5): a quarantined document is not called
     for (const s of ['1 quarantined documents', 'No invoice was created from them', '1 documents were already in the register']) {
       expect(all, `document run did not render ${JSON.stringify(s)}`).toContain(s)
     }
-    for (const s of ['unreadable documents', 'Unreadable documents', 'could not read them', 'Nothing was stored', 'nothing was stored']) {
+    for (const s of FORBIDDEN_DOCUMENT_PHRASES) {
       expect(all, `document run leaked ${JSON.stringify(s)}`).not.toContain(s)
     }
 
@@ -671,5 +673,94 @@ describe('EXTR-30-05 QN-1/QN-2 (AC-2/AC-5): a quarantined document is not called
     const paragraphs = [doc, sheet, cleanDoc, cleanSheet].flatMap((r) => r.paragraphs)
     expect(paragraphs.length, 'no paragraphs were collected').toBeGreaterThanOrEqual(4)
     expect(paragraphs.filter((p) => /\s{2}/.test(p))).toEqual([])
+  })
+})
+
+const U3_DOC =
+  'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.'
+const U3_SHEET =
+  'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'
+const ZERO_TOTALS = { allTotal: 0, cleanTotal: 0, queuedTotal: 0, failingTotal: 0, keptTotal: 0, notEvaluatedTotal: 0 }
+
+// One document quarantined for its invoice number. Go omits `row` on every document RowError.
+function quarantinedDocument(id: string, filename: string): ImportBatch {
+  return batch({
+    id,
+    filename,
+    document_id: `doc-${id}`,
+    rows_total: 1,
+    rows_valid: 0,
+    rows_invalid: 1,
+    errors: [{ field: 'invoice_number', message: 'no number on it' }],
+  })
+}
+
+describe('EXTR-30-05 QN-3..QN-5: whole tab bodies, an all-quarantined run, and a mixed-extension run', () => {
+  // Every <p> and the page text before and after one tab click, plus the tab strip's labels.
+  async function openTab(batches: ImportBatch[], totals: typeof TOTALS, label: string) {
+    mockReviewFetchAll(batches, totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(batches.map((b) => b.id))} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const snapshot = () => ({
+      text: container.textContent ?? '',
+      paragraphs: Array.from(container.querySelectorAll('p')).map((p) => p.textContent ?? ''),
+    })
+    const before = snapshot()
+    const buttons = Array.from(container.querySelectorAll('button.pf-tab'))
+    const tabLabels = buttons.map((b) => b.textContent ?? '')
+    const button = buttons.find((b) => b.textContent === label)
+    expect(button, `no tab button labelled ${label}: ${JSON.stringify(tabLabels)}`).toBeTruthy()
+    fireEvent.click(button as HTMLElement)
+    const after = snapshot()
+    cleanup()
+    return { before, after, tabLabels }
+  }
+
+  it('QN-3: each unit renders its own tab-body sentence as one whole paragraph, and never the other unit\'s', async () => {
+    const doc = await openTab(mixedRun('.pdf'), TOTALS, 'Quarantined documents (1)')
+    expect(doc.before.paragraphs, 'the tab body rendered before its tab was clicked').not.toContain(U3_DOC)
+    expect(doc.after.paragraphs).toContain(U3_DOC)
+    expect(doc.after.paragraphs).toContain(PARA_DOC)
+    expect(doc.after.text).not.toContain(U3_SHEET)
+
+    const sheet = await openTab(mixedRun('.csv'), TOTALS, 'Unreadable rows (1)')
+    expect(sheet.after.paragraphs).toContain(U3_SHEET)
+    expect(sheet.after.paragraphs).toContain(PARA_SHEET)
+    expect(sheet.after.text).not.toContain(U3_DOC)
+    expect(sheet.after.text).not.toContain(PARA_DOC)
+  })
+
+  it('QN-4: a .pdf run where every document quarantined reads quarantined throughout', async () => {
+    const run = [quarantinedDocument('b1', 'a.pdf'), quarantinedDocument('b2', 'b.pdf')]
+    const { before, after, tabLabels } = await openTab(run, ZERO_TOTALS, 'Quarantined documents (2)')
+
+    expect(tabLabels, 'nothing was already imported, so there is no register tab').toEqual(['Invoices (0)', 'Quarantined documents (2)'])
+    expect(before.paragraphs).toContain(PARA_DOC)
+    expect(after.paragraphs).toContain(U3_DOC)
+    const all = before.text + after.text
+    expect(all).toContain('2 quarantined documents')
+    expect(all).toContain('2 documents never became invoices')
+    for (const s of [...FORBIDDEN_DOCUMENT_PHRASES, 'unreadable rows', 'Unreadable rows']) {
+      expect(all, `an all-quarantined run leaked ${JSON.stringify(s)}`).not.toContain(s)
+    }
+  })
+
+  // runUnit is all-must-agree, so a .pdf beside a .csv reads spreadsheet. addPickedFiles refuses
+  // such a run: this pins the defined fallback, not a reachable screen.
+  it('QN-5: a run mixing a .pdf and a .csv takes the spreadsheet arm in the tile, paragraph, tab and body', async () => {
+    const run = [
+      batch({ id: 'b1', filename: 'june.pdf', errors: [{ field: 'invoice_number', message: 'no number on it' }] }),
+      batch({ id: 'b2', filename: 'june.csv', errors: [{ row: 3, field: 'total', message: 'could not be read' }] }),
+    ]
+    const { before, after, tabLabels } = await openTab(run, TOTALS, 'Unreadable rows (2)')
+
+    expect(tabLabels).toContain('Unreadable rows (2)')
+    expect(before.text).toContain('2 unreadable rows')
+    expect(before.paragraphs).toContain(PARA_SHEET)
+    expect(after.paragraphs).toContain(U3_SHEET)
+    const all = before.text + after.text
+    for (const s of ['quarantined documents', 'Quarantined documents', PARA_DOC, U3_DOC]) {
+      expect(all, `a mixed run leaked the document arm's ${JSON.stringify(s)}`).not.toContain(s)
+    }
   })
 })

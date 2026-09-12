@@ -20,7 +20,8 @@
 // unit, where the spreadsheet unit keeps "already in your ledger". Those five are marked
 // `AC` below. SIX were settled by 09's architecture pass: R4, R5 and R6 (D1, the middle
 // CSV column is dropped, not renamed), U4 and A5 (D4, an em dash, not the word
-// `Document`) and C1 (D2, one unbranched paragraph carrying both grains).
+// `Document`) and C1 (D2, one unbranched paragraph carrying both grains). EXTR-30 later
+// retargeted B2, R3 and U3 to "quarantined" wording and added B11.
 //
 // AC-3 forbids "row"/"rows" as an ENGLISH NOUN in a document branch, not the identifier:
 // `{rows.length}` and `${batch.rows_total}` stay, because they name a variable. SW-3 is
@@ -124,7 +125,7 @@ const SITES: Site[] = [
     documentLiteral: '0 of ${batch.rows_total} documents produced an invoice',
   },
 
-  // --- components/ReviewBatch.tsx (8) ---
+  // --- components/ReviewBatch.tsx (11) ---
   {
     id: 'B1',
     file: REVIEW_BATCH_TSX,

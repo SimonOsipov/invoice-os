@@ -224,10 +224,11 @@ function serving(detail: ExtractionDetail = mkDetail()): Wire {
 interface ReviewProps {
   ctx: PlatformCtx
   jobId: string
+  onOpenInvoice: (() => void) | null
 }
 
 function review(over: Partial<ReviewProps> & { ctx: PlatformCtx }) {
-  const props: ReviewProps = { jobId: JOB_ID, ...over }
+  const props: ReviewProps = { jobId: JOB_ID, onOpenInvoice: null, ...over }
   return <ExtractionReview {...props} />
 }
 
@@ -354,6 +355,10 @@ function chipsOf(name: string): HTMLElement[] {
 
 function saveButton(): HTMLButtonElement | null {
   return screen.queryByTestId('extraction-save') as HTMLButtonElement | null
+}
+
+function exitButton(): HTMLButtonElement | null {
+  return screen.queryByTestId('extraction-open-invoice') as HTMLButtonElement | null
 }
 
 /** Every request that was not the detail GET. */
@@ -713,6 +718,14 @@ describe('the state ladder', () => {
       ).toBe(false)
     }
 
+    // The invoice reaches this screen only as App's callback, never as an id or a violations list.
+    for (const word of ['invoiceId', 'invoice_id', 'violations']) {
+      expect(
+        new RegExp(String.raw`\b${word}\b`).test(src),
+        `the review holds ${word}: the invoice reaches it only as App's callback`,
+      ).toBe(false)
+    }
+
     // The prop contract on the other side of the mount, so a widened one is noticed here.
     const app = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
     expect(app, 'the scan ran over a moved or renamed App').toContain('<ExtractionReview')
@@ -720,8 +733,8 @@ describe('the state ladder', () => {
     expect(mount, 'no ExtractionReview mount found — the prop pin below is vacuous').not.toBeNull()
     expect(
       Array.from((mount as RegExpExecArray)[1].matchAll(/(\w+)=/g), (m) => m[1]),
-      'ExtractionReview is mounted with props other than ctx and jobId',
-    ).toEqual(['ctx', 'jobId'])
+      'ExtractionReview is mounted with props other than ctx, jobId and onOpenInvoice',
+    ).toEqual(['ctx', 'jobId', 'onOpenInvoice'])
   })
 })
 
@@ -2389,5 +2402,191 @@ describe('the line draft and the widened Save', () => {
     await flush()
 
     expect(screen.queryByTestId('line-item-sum'), 'a subtotal drafted into agreement still shouts').toBeNull()
+  })
+})
+
+// ==========================================================================================
+// The exit to the invoice (AC-2)
+// ==========================================================================================
+
+describe('the one exit to the invoice', () => {
+  // Navigation only, never a write: App supplies the handler and this screen just renders it.
+  const OPEN_INVOICE = 'Go to the invoice →'
+
+  it("EXTR32-X1: the exit sits in the settled reading's footer before Save, and one click hands off once", async () => {
+    const spy = vi.fn()
+    const w = serving(mkDetail())
+    render(review({ ctx: w.ctx, onOpenInvoice: spy }))
+    await flush()
+
+    const save = saveButton()
+    expect(save, 'the settled footer rendered no Save -- the checks below are vacuous').toBeTruthy()
+
+    const exit = exitButton()
+    expect(exit, 'the settled footer rendered no exit').toBeTruthy()
+    expect(exit!.textContent).toBe(OPEN_INVOICE)
+    expect(exit!.className).toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(exit!.getAttribute('type')).toBe('button')
+    expect(exit!.hasAttribute('disabled')).toBe(false)
+    expect(exit!.hasAttribute('style')).toBe(false)
+    expect(document.querySelectorAll('[data-testid="extraction-open-invoice"]').length).toBe(1)
+    expect(
+      Array.from(save!.parentElement!.children).map((el) => (el as HTMLElement).dataset.testid ?? '<no testid>'),
+    ).toEqual(['extraction-open-invoice', 'extraction-save'])
+    expect(exit!.nextElementSibling).toBe(save)
+
+    const before = w.calls().length
+    const bytes = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length
+
+    await act(async () => {
+      fireEvent.click(exit as HTMLElement)
+    })
+    await flush()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(w.calls().length).toBe(before)
+    expect((globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(bytes)
+    expect(writes(w)).toEqual([])
+  })
+
+  it('EXTR32-X2: with no handler there is no exit', async () => {
+    const w = serving(mkDetail())
+    render(review({ ctx: w.ctx, onOpenInvoice: null }))
+    await flush()
+
+    expect(saveButton(), 'the settled footer did not render -- the absence below is vacuous').toBeTruthy()
+    expect(exitButton()).toBeNull()
+  })
+
+  it('EXTR32-X3: the exit stays live while a Save is writing', async () => {
+    let release: ((v: unknown) => void) | null = null
+    const spy = vi.fn()
+    const w = writing(AMBIGUOUS_JOB, () => new Promise((r) => (release = r)))
+    render(review({ ctx: w.ctx, onOpenInvoice: spy }))
+    await flush()
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip -- every claim below is vacuous').toBe(3)
+    fireEvent.click(chips[1])
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(release, 'the POST never started -- the in-flight claim below is vacuous').toBeTruthy()
+    expect(saveButton()!.disabled, 'Save did not disable while writing').toBe(true)
+
+    const exit = exitButton()
+    expect(exit, 'the exit disappeared while Save was writing').toBeTruthy()
+    expect(exit!.disabled).toBe(false)
+    expect(exit!.hasAttribute('disabled')).toBe(false)
+    expect(exit!.hasAttribute('style')).toBe(false)
+
+    await act(async () => {
+      fireEvent.click(exit as HTMLElement)
+    })
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      ;(release as unknown as (v: unknown) => void)(mkCorrectionResponse('issue_date', '2026-01-10', 'chosen'))
+    })
+    await flush()
+  })
+
+  type X4Row = { label: string; make: () => Wire; floor: () => void }
+
+  const X4_ROWS: X4Row[] = [
+    {
+      label: 'loading',
+      make: () => wire(() => new Promise<ExtractionDetail>(() => {})),
+      floor: () => {
+        expect(
+          document.querySelector(LOADING_SPINNER),
+          'no loading surface rendered -- the absence below is vacuous',
+        ).toBeTruthy()
+      },
+    },
+    {
+      label: 'error',
+      make: () =>
+        wire(async () => {
+          throw new ApiError('http', 'Not Found', 404)
+        }),
+      floor: () => {
+        expect(screen.getByText(ERROR_HEADING), 'no error surface rendered -- the absence below is vacuous').toBeTruthy()
+      },
+    },
+    {
+      label: 'still reading',
+      make: () => serving(mkDetail({ state: 'extracting' })),
+      floor: () => {
+        expect(
+          screen.getByText(STILL_READING),
+          'no still-reading sentence rendered -- the absence below is vacuous',
+        ).toBeTruthy()
+      },
+    },
+    {
+      label: 'dead-lettered',
+      make: () => serving(mkDetail({ state: 'dead_lettered', failure_kind: 'extract_failed' })),
+      floor: () => {
+        expect(
+          screen.getByText(sentenceFor('extract_failed')),
+          'no dead-letter sentence rendered -- the absence below is vacuous',
+        ).toBeTruthy()
+      },
+    },
+  ]
+
+  it.each(X4_ROWS)('EXTR32-X4: an unsettled or failed read renders no exit ($label)', async ({ make, floor }) => {
+    const w = make()
+    render(review({ ctx: w.ctx, onOpenInvoice: vi.fn() }))
+    await flush()
+
+    floor()
+    expect(exitButton(), 'an unsettled or failed read rendered an exit').toBeNull()
+    expect(saveButton(), 'an unsettled or failed read rendered Save').toBeNull()
+  })
+
+  it('EXTR32-X5: a refused write keeps the exit between the error and Save', async () => {
+    const REFUSAL = 'the invoice refused this value'
+    const w = writing(mkDetail({ fields: AMBIGUOUS_JOB.fields }), async () => {
+      throw new ApiError('http', REFUSAL, 400)
+    })
+    render(review({ ctx: w.ctx, onOpenInvoice: vi.fn() }))
+    await flush()
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '2,222.00' } })
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(
+      screen.queryByTestId('extraction-write-error')?.textContent,
+      "the server's own sentence was not rendered verbatim",
+    ).toBe(REFUSAL)
+
+    const save = saveButton()
+    expect(save, 'the screen renders no Save button').toBeTruthy()
+    expect(
+      Array.from(save!.parentElement!.children).map((el) => (el as HTMLElement).dataset.testid ?? '<no testid>'),
+    ).toEqual(['extraction-write-error', 'extraction-open-invoice', 'extraction-save'])
+  })
+
+  // The Exact idiom from policiesWiring.test.ts: only compiles if the signature is precisely
+  // ctx, jobId and a required nullable onOpenInvoice.
+  type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
+  type Props = Parameters<typeof ExtractionReview>[0]
+  const _threeKeys: Exact<keyof Props, 'ctx' | 'jobId' | 'onOpenInvoice'> = true
+  const _nullableCallback: Exact<Props['onOpenInvoice'], (() => void) | null> = true
+  const _required: {} extends Pick<Props, 'onOpenInvoice'> ? false : true = true
+
+  it('EXTR32-X6: the prop contract is ctx, jobId and a required nullable onOpenInvoice, and nothing else', () => {
+    expect([_threeKeys, _nullableCallback, _required]).toEqual([true, true, true])
   })
 })

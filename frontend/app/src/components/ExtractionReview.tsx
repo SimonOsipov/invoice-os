@@ -27,6 +27,7 @@ import { ExtractionFields } from './ExtractionFields'
 
 const STILL_READING = 'This document is still being read.'
 const SAVE = 'Save what you settled'
+const OPEN_INVOICE = 'Go to the invoice →'
 
 // River retries a `failed` job, so it is not terminal and takes the still-reading sentence.
 const UNSETTLED = ['queued', 'extracting', 'failed']
@@ -68,7 +69,16 @@ const SAVE_DISABLED: CSSProperties = {
 
 const WRITE_ERROR: CSSProperties = { flex: 1, minWidth: 0, fontSize: 12, color: 'var(--status-red-text)' }
 
-export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: string }) {
+export function ExtractionReview({
+  ctx,
+  jobId,
+  onOpenInvoice,
+}: {
+  ctx: PlatformCtx
+  jobId: string
+  // App's hand-off to the invoice this job imported; null when App holds no invoice for it.
+  onOpenInvoice: (() => void) | null
+}) {
   const base = gatewayBase()
   const detail = useAsync<ExtractionDetail>(
     () => (base ? getExtractionDetail(ctx.authedFetch, base, jobId) : Promise.reject(new Error('no gateway configured'))),
@@ -314,6 +324,12 @@ export function ExtractionReview({ ctx, jobId }: { ctx: PlatformCtx; jobId: stri
             <span data-testid="extraction-write-error" style={WRITE_ERROR}>
               {writeError}
             </span>
+          )}
+          {/* Navigation, not a write: nothing to guard against re-entry, so it stays live while Save writes. */}
+          {onOpenInvoice === null ? null : (
+            <button type="button" data-testid="extraction-open-invoice" className="v2-btn v2-btn-ghost pf-btn" onClick={onOpenInvoice}>
+              {OPEN_INVOICE}
+            </button>
           )}
           <button
             type="button"

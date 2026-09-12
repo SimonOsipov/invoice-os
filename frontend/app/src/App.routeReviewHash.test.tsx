@@ -24,6 +24,9 @@ const GATEWAY = 'https://gw.test'
 const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const DOCUMENT_ID = 'dddddddd-0000-4000-8000-00000000000d'
 const BATCH_ID = 'bbbbbbbb-1111-4111-8111-111111111111'
+// EXTR32-A6's own ids, distinct from the review-mirror fixtures above.
+const SINGLE_BATCH_ID = 'cccccccc-2222-4222-8222-222222222222'
+const SINGLE_INVOICE_ID = 'aaaaaaaa-5555-4555-8555-555555555555'
 
 // Node v25's native localStorage collides with jsdom's (App.standIn.test.tsx:74-75).
 function createMemoryStorage() {
@@ -114,14 +117,54 @@ class FakeXhr {
   }
 }
 
+// A minimally valid InvoiceRecord (lib/invoices.ts) -- every required field present, so
+// InvoiceDetail's render (rejection_reasons.length, etc.) never sees an undefined one.
+function invoiceDetailReply(id: string) {
+  return {
+    id,
+    entity_id: ENTITY_A,
+    import_batch_id: null,
+    invoice_number: 'INV-0001',
+    status: 'accepted',
+    issue_date: null,
+    supplier_tin: null,
+    supplier_name: null,
+    buyer_tin: null,
+    buyer_name: null,
+    currency: null,
+    subtotal: null,
+    vat: null,
+    total: null,
+    violations: [],
+    rule_set_version_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    irn: null,
+    csid: null,
+    qr_payload: null,
+    rejection_reasons: [],
+    kept_as_is_at: null,
+    kept_as_is_by: null,
+    kept_as_is_reason: null,
+    failure_kind: null,
+    rule_set_version: null,
+    approval: null,
+    can_approve: false,
+    approve_blocked_reason: null,
+    can_submit: false,
+    submit_blocked_reason: null,
+  }
+}
+
 function entityRow(id: string, name: string, tin: string) {
   return { id, name, tin, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
 }
 
 // One real entity so switchClient/openCreate has somewhere to resolve `activeEntity`;
 // every other endpoint answers well enough not to crash a mounting Workspace
-// (App.handOff.test.tsx's routeFetch, same fallback shape).
-function routeFetch() {
+// (App.handOff.test.tsx's routeFetch, same fallback shape). `invoicesByBatch` extends the
+// table with resolveSoleInvoiceId's follow-up read (App.tsx), reached only when a run's
+// sole file reports exactly one ready invoice -- EXTR32-A6's own control.
+function routeFetch(invoicesByBatch: Record<string, { id: string }[]> = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
@@ -136,6 +179,32 @@ function routeFetch() {
             }),
         })
       }
+      if (url.includes('/api/invoice/v1/invoices?') && url.includes('import_batch_id=')) {
+        const m = /import_batch_id=([^&]+)/.exec(url)
+        const batchId = m ? decodeURIComponent(m[1]) : ''
+        const invoices = invoicesByBatch[batchId] ?? []
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ invoices, pagination: { limit: 1, offset: 0, total: invoices.length } }),
+        })
+      }
+      // getInvoiceApprovalRun (lib/approvals.ts) reads a 404 as "no run" -- the generic
+      // fallback below is a truthy object, which renders as a malformed run instead.
+      if (/\/api\/invoice\/v1\/invoices\/[^/?]+\/approval$/.test(url)) {
+        return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'not found' }) })
+      }
+      // The single-invoice shortcut's own landing (getInvoice) -- a well-formed row so
+      // InvoiceDetail's render (rejection_reasons.length et al.) does not throw on a
+      // fallback shape.
+      const invoiceMatch = /\/api\/invoice\/v1\/invoices\/([^/?]+)$/.exec(url)
+      if (invoiceMatch) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(invoiceDetailReply(decodeURIComponent(invoiceMatch[1]))),
+        })
+      }
       return Promise.resolve({
         ok: true,
         status: 200,
@@ -148,8 +217,8 @@ function routeFetch() {
 
 // bootAt plus the gateway/XHR wiring the run-driven mirror spec needs; every other spec in
 // this file keeps using the plain bootAt above (no gateway, no network).
-async function bootAtWithGateway(path: string) {
-  routeFetch()
+async function bootAtWithGateway(path: string, invoicesByBatch: Record<string, { id: string }[]> = {}) {
+  routeFetch(invoicesByBatch)
   vi.stubGlobal('XMLHttpRequest', FakeXhr)
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
   return bootAt(path)
@@ -272,6 +341,91 @@ describe('AC-4: entering review from a run rewrites the entry, never pushes', ()
       window.history.length,
       'entering review from a run must rewrite the CURRENT entry, never push a new one',
     ).toBe(lengthBefore)
+  })
+})
+
+describe('EXTR32-A6: a one-file spreadsheet run with one ready invoice still lands on the invoice detail', () => {
+  // Control: the spreadsheet run's imported outcome never carries a jobId (App.tsx's
+  // startRun), so routeAfterRun's extraction fork can never fire here -- this must stay
+  // green whether or not the document path's own landing is wired.
+  it('EXTR32-A6: a one-file spreadsheet run with one ready invoice still lands on the invoice detail', async () => {
+    FakeXhr.instances = []
+    await bootAtWithGateway('/', { [SINGLE_BATCH_ID]: [{ id: SINGLE_INVOICE_ID }] })
+
+    act(() => {
+      requireCtx().openCreate()
+    })
+    await waitFor(() =>
+      expect(requireCtx().activeEntity?.id, 'activeEntity never resolved from the entity list').toBe(ENTITY_A),
+    )
+
+    const file = new File(['invoice_number,total\nINV-1,100'], 'invoices.csv', { type: 'text/csv' })
+    act(() => {
+      requireCtx().addPickedFiles([file])
+    })
+
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    expect(FakeXhr.instances, 'control: the preview never reached the upload transport').toHaveLength(1)
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, {
+        document_id: DOCUMENT_ID,
+        format: 'csv',
+        delimiter: ',',
+        encoding: 'utf-8',
+        columns: ['invoice_number', 'total'],
+        sample_rows: [['INV-1', '100']],
+        rows_total: 1,
+      })
+    })
+    await waitFor(() => expect(requireCtx().createStep, 'preview never landed on the mapping step').toBe('mapping'))
+
+    act(() => {
+      requireCtx().armField('invoice_number')
+    })
+    act(() => {
+      requireCtx().clickCol('invoice_number')
+    })
+    expect(
+      requireCtx().groups[0]?.mapping.invoice_number,
+      'sanity: the click must map invoice_number',
+    ).toBe('invoice_number')
+
+    act(() => {
+      requireCtx().continueMapping()
+    })
+    expect(FakeXhr.instances, 'control: the run never reached the createImport transport').toHaveLength(2)
+    act(() => {
+      // ready_invoices: 1, quarantined_invoices: 0 -- the single-invoice shortcut, unlike
+      // the review-mirror spec above which deliberately keeps it off that branch.
+      FakeXhr.instances[1]!.respond(200, {
+        id: SINGLE_BATCH_ID,
+        status: 'completed',
+        format: 'csv',
+        delimiter: ',',
+        encoding: 'utf-8',
+        rows_total: 1,
+        rows_valid: 1,
+        rows_invalid: 0,
+        ready_invoices: 1,
+        quarantined_invoices: 0,
+        errors: [],
+        rule_set_version: null,
+        invoices_clean: 1,
+        invoices_with_violations: 0,
+        invoice_violations: [],
+      })
+    })
+
+    await waitFor(() =>
+      expect(
+        window.location.pathname,
+        'a one-file run with one ready invoice must land on the invoice detail',
+      ).toBe(`/invoices/${SINGLE_INVOICE_ID}`),
+    )
+    expect(requireCtx().view, 'the shortcut must land on the detail view').toBe('detail')
+    expect(requireCtx().extractionJobId, 'a spreadsheet run must never carry a job id').toBeNull()
   })
 })
 

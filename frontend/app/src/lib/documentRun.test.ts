@@ -691,6 +691,25 @@ describe('startDocumentRun — a throwing onStage is swallowed by that pipeline�
   })
 })
 
+// --- D1 (EXTR-32-03) ---------------------------------------------------------
+
+describe('startDocumentRun — a settled document carries its job id onto the imported outcome (D1, AC-1)', () => {
+  it('EXTR32-D1: a settled document carries its job id onto the imported outcome', async () => {
+    const files = docFiles(['a.pdf'])
+    const deps: DocumentPipelineDeps = {
+      upload: async () => 'doc-1',
+      poll: async () => ({ kind: 'succeeded', jobId: 'job-1' }),
+      importDocument: async () => report('b1', 1),
+      onStage: () => {},
+    }
+
+    const outcomes = await startDocumentRun(files, deps)
+
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0].outcome).toEqual({ kind: 'imported', batchId: 'b1', report: report('b1', 1), jobId: 'job-1' })
+  })
+})
+
 // --- STAGE-1..6 (EXTR-10-01, task-783) --------------------------------------
 
 describe('stageOf — classifies every state in the CHECK constraint, and only those (STAGE-1, Core AC 1/2)', () => {

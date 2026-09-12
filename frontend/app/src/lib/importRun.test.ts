@@ -1315,10 +1315,8 @@ describe('App.tsx binds ctx.runKind to a real answer (FORK-4, AC-3)', () => {
   })
 })
 
-describe('routeAfterRun over document outcomes — the SHIPPED router, unchanged (RUN-2, RUN-3, AC-2, AC-7)', () => {
-  // Green from birth by design: AC-7 is "the document path reuses these routers", so a RED
-  // here would mean a router had already moved. Falsifiability is RUN-5's job below, which
-  // fails the moment either router's source changes.
+describe('routeAfterRun over document outcomes — a job-less document keeps the shipped landings (RUN-2, RUN-3, AC-2, AC-7)', () => {
+  // Job-less fixtures: these pin the landings a document keeps when no job id rides the outcome.
   it('RUN-2: three imported documents route to review with three batch ids in run order', () => {
     const run = startRun([
       mkRunFile('f1', 'first.pdf', { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1' } }),
@@ -1330,7 +1328,7 @@ describe('routeAfterRun over document outcomes — the SHIPPED router, unchanged
     expect(routeAfterRun(run, 'inv-1')).toEqual({ kind: 'review', batchIds: ['b1', 'b2', 'b3'] })
   })
 
-  it('RUN-3: one document that imports one ready invoice routes single to the detail page', () => {
+  it('RUN-3: one document with no job id that imports one ready invoice falls back to single, the detail page', () => {
     const run = startRun([
       mkRunFile('f1', 'only.pdf', {
         kind: 'imported',
@@ -1346,13 +1344,13 @@ describe('routeAfterRun over document outcomes — the SHIPPED router, unchanged
 
 // --- RUN-5 -----------------------------------------------------------------
 
-// AC-6: neither router moved. task-774's Test Specs row words this as "identical to
-// main's" via `git show origin/main:...`, which CANNOT run here — CI checks out
-// refs/pull/N/merge at fetch-depth 1, so origin/main is unresolvable, which is exactly why
-// EXTR-06-07's RB-07 was deleted one commit ago (702aa274). The pin is therefore a LITERAL
-// copy of both functions as they stand on origin/main, embedded below; it fails on any
-// edit, in CI and locally alike. Following RB-07's own precedent it covers the declaration
-// through its closing brace (inline comments included), not the doc comment above it.
+// AC-6: the shared decision forks, and the fork is reviewed. `git show origin/main:...`
+// CANNOT run here — CI checks out refs/pull/N/merge at fetch-depth 1, so origin/main is
+// unresolvable, which is exactly why EXTR-06-07's RB-07 was deleted one commit ago
+// (702aa274). ROUTE_AFTER_IMPORT_ON_MAIN is a LITERAL copy of main's routeAfterImport;
+// ROUTE_AFTER_RUN_ON_MAIN is routeAfterRun's reviewed body with the extraction fork. Both
+// pins fail on any further edit, in CI and locally alike. Following RB-07's own precedent
+// each covers the declaration through its closing brace, not the doc comment above it.
 const ROUTE_AFTER_IMPORT_ON_MAIN: readonly string[] = [
   'export function routeAfterImport(report: ImportReport, resolvedInvoiceId: string | null): PostImportRoute {',
   '  // 1. STATUS first, through the SHIPPED predicate. reportSummary keys `failed` on',
@@ -1387,7 +1385,10 @@ const ROUTE_AFTER_RUN_ON_MAIN: readonly string[] = [
   '    const outcome = run.files[0].outcome',
   '    if (outcome.kind === \'imported\') {',
   '      const route = routeAfterImport(outcome.report, resolvedInvoiceId)',
-  '      if (route.kind === \'single\') return { kind: \'single\', invoiceId: route.invoiceId }',
+  '      if (route.kind === \'single\') {',
+  '        if (outcome.jobId) return { kind: \'extraction\', jobId: outcome.jobId, invoiceId: route.invoiceId }',
+  '        return { kind: \'single\', invoiceId: route.invoiceId }',
+  '      }',
   '    }',
   '  }',
   '  return { kind: \'review\', batchIds }',
@@ -1404,8 +1405,8 @@ function functionSource(source: string, name: string): string[] {
   return lines.slice(start, end + 1)
 }
 
-describe('routeAfterImport and routeAfterRun are byte-identical to main (RUN-5, AC-6)', () => {
-  it('RUN-5: neither router moved', () => {
+describe('routeAfterImport and routeAfterRun are pinned byte-for-byte (RUN-5, AC-6)', () => {
+  it('RUN-5: routeAfterImport has not moved, and routeAfterRun matches its reviewed body', () => {
     // Both pins are non-empty and must start with the declaration the extractor looked
     // for, so a rename or a failed slice cannot pass as an unchanged function.
     expect(ROUTE_AFTER_IMPORT_ON_MAIN.length).toBeGreaterThan(5)
@@ -1479,15 +1480,13 @@ function failureDocumentId(failure: { name: string; message: string }): string |
 }
 
 describe('FileOutcome — failed carries an optional documentId (HO-2, AC-1)', () => {
-  it('HO-2: the widened variant type-checks, and routeAfterRun reads only kind/report', () => {
+  it('HO-2: the widened variant type-checks, and routeAfterRun ignores documentId', () => {
     // The typecheck red. At RUNTIME this line is inert, so the assertions below are a
     // green-by-design regression pin — "the type change alone breaks no test" (AC-1).
     const carried: FileOutcome = { kind: 'failed', message: 'docling: no text layer', documentId: HO2_DOCUMENT_ID }
     const bare: FileOutcome = { kind: 'failed', message: 'docling: no text layer' }
 
-    // routeAfterRun (importRun.ts:326-337) reads run.files.length, outcome.kind and
-    // outcome.report. A run of two failures routes 'none' whether or not the new field
-    // is present — the two runs differ ONLY by that field.
+    // routeAfterRun never reads a failed outcome's documentId, so these two runs route alike.
     const withField: ImportRun = {
       files: [mkRunFile('f1', 'a.pdf', carried), mkRunFile('f2', 'b.pdf', carried)],
       cursor: 2,
@@ -1570,5 +1569,105 @@ describe('runFailures — the row names its document, and reading it consumes no
     expect(run.files).toHaveLength(2)
     expect(run.files.map((f) => f.outcome.kind)).toEqual(['failed', 'failed'])
     expect(run.status).toBe('failed')
+  })
+})
+
+// EXTR32-R1..R3: a document run reuses the shared fork once a job id rides the outcome.
+describe('routeAfterRun — a document whose job is known lands on its extraction review (EXTR32-R1..R3)', () => {
+  function oneDocument(overrides: Partial<Extract<FileOutcome, { kind: 'imported' }>> = {}): ImportRun {
+    const run = startRun([pendingFile('f1', 'only.pdf')])
+    return runReducer(run, {
+      type: 'settled',
+      outcome: {
+        kind: 'imported',
+        batchId: 'b1',
+        report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 },
+        jobId: 'job-1',
+        ...overrides,
+      },
+    })
+  }
+
+  function noJobIdKey(): ImportRun {
+    return runReducer(startRun([pendingFile('f1', 'only.pdf')]), {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 } },
+    })
+  }
+
+  function twoDocuments(): ImportRun {
+    let run = startRun([pendingFile('f1', 'a.pdf'), pendingFile('f2', 'b.pdf')])
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b1', report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1 }, jobId: 'job-1' },
+    })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 1 }, jobId: 'job-2' },
+    })
+    return run
+  }
+
+  function failedPlusImported(): ImportRun {
+    let run = startRun([pendingFile('f1', 'a.pdf'), pendingFile('f2', 'b.pdf')])
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'failed', message: 'docling: no text layer', documentId: 'doc-1' },
+    })
+    run = runReducer(run, {
+      type: 'settled',
+      outcome: { kind: 'imported', batchId: 'b2', report: { ...BASE_RUN_REPORT, id: 'b2', ready_invoices: 1 }, jobId: 'job-2' },
+    })
+    return run
+  }
+
+  it('EXTR32-R1: one document whose job is known routes to its extraction review with both ids', () => {
+    expect(routeAfterRun(oneDocument(), 'inv-1')).toEqual({ kind: 'extraction', jobId: 'job-1', invoiceId: 'inv-1' })
+  })
+
+  it.each([
+    { label: 'jobId undefined', run: oneDocument({ jobId: undefined }) },
+    { label: 'jobId empty string', run: oneDocument({ jobId: '' }) },
+    { label: 'no jobId key', run: noJobIdKey() },
+  ])('EXTR32-R2: a document whose job is unidentifiable falls back to the invoice detail ($label)', ({ run }) => {
+    expect(routeAfterRun(run, 'inv-1')).toEqual({ kind: 'single', invoiceId: 'inv-1' })
+  })
+
+  it.each([
+    {
+      label: 'two documents',
+      run: twoDocuments(),
+      resolvedInvoiceId: 'inv-1',
+      expected: { kind: 'review', batchIds: ['b1', 'b2'] },
+    },
+    { label: 'invoice id unresolved', run: oneDocument(), resolvedInvoiceId: null, expected: { kind: 'review', batchIds: ['b1'] } },
+    {
+      label: 'quarantined, zero ready',
+      run: oneDocument({ report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 0, quarantined_invoices: 1 } }),
+      resolvedInvoiceId: 'inv-1',
+      expected: { kind: 'review', batchIds: ['b1'] },
+    },
+    {
+      label: 'two ready',
+      run: oneDocument({ report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 2 } }),
+      resolvedInvoiceId: 'inv-1',
+      expected: { kind: 'review', batchIds: ['b1'] },
+    },
+    {
+      label: 'failed status',
+      run: oneDocument({ report: { ...BASE_RUN_REPORT, id: 'b1', ready_invoices: 1, status: 'failed' } }),
+      resolvedInvoiceId: 'inv-1',
+      expected: { kind: 'review', batchIds: ['b1'] },
+    },
+    {
+      label: 'one failed plus one imported',
+      run: failedPlusImported(),
+      resolvedInvoiceId: 'inv-1',
+      expected: { kind: 'review', batchIds: ['b2'] },
+    },
+  ])('EXTR32-R3: a known job moves no other landing ($label)', ({ run, resolvedInvoiceId, expected }) => {
+    const route = routeAfterRun(run, resolvedInvoiceId)
+    expect(route).toEqual(expected)
+    if (route.kind === 'review') expect(route.batchIds.length).toBeGreaterThan(0)
   })
 })

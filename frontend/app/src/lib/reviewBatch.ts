@@ -1233,17 +1233,27 @@ export const ROW_EXPANSION_COPY = {
   keeping: 'Keeping…',
   keepReasonPlaceholder: 'Why are you keeping this despite the failure? (required)',
   keptPrefix: 'Kept as-is — ',
+  // Moved from InvoiceDetail.tsx's own inline literal (EXTR-30-01) -- ReviewRow.tsx's
+  // row-expansion arm and InvoiceDetail.tsx's Compliance card both read this ONE copy.
+  notValidated: 'Not yet validated — run Re-validate to check compliance.',
 } as const
 
 export interface RowExpansionView {
   passing: boolean
+  // True iff the invoice carries zero violations AND a NULL/undefined rule_set_version
+  // (EXTR-30-01) -- a document import that ran no rule gate at all. Distinct from
+  // `passing`: an unevaluated invoice is never `passing`, and a passing one is never
+  // `notValidated`. Drives the third ReviewRow.tsx arm (neither the green strip nor the
+  // card list).
+  notValidated: boolean
   // True iff at least one violation is `severity === 'error'` -- the SAME predicate
   // verdictPill/fixCard use (§10.12's trap). Drives which of the two non-passing
   // section labels renders; a mix of one error and any number of warnings is still
   // blocking overall, matching verdictPill's own errorCount-first precedence.
   blocking: boolean
   summary: string | null
-  // `null` iff `passing` -- the green summary line replaces it entirely, never both.
+  // `null` iff `passing || notValidated` -- the green summary line and the
+  // not-validated arm each replace this entirely, never alongside it.
   sectionLabel: string | null
   cards: FixCard[]
   revalidateDisabled: boolean
@@ -1260,11 +1270,13 @@ export interface RowExpansionView {
 
 // The row-expansion panel's WHOLE model, mirroring bulkBarView's own one-function
 // composite: ReviewRow.tsx reads every field off THIS, never re-deriving any of it,
-// including which of the two non-passing section labels to show. `passing` is
-// `violations.length === 0` -- a genuinely CLEAN invoice, distinct from a warning-only
+// including which of the two non-passing section labels to show. `passing` requires
+// BOTH zero violations AND a non-null rule_set_version (EXTR-30-01) -- a genuinely
+// CLEAN invoice that a rule gate actually ran against, distinct from a warning-only
 // one (which still renders its violations as non-blocking cards under the ADVISORY
 // label, §10.12's trap) -- so the green summary line is unreachable while anything,
-// even a single warning, fired. `can_revalidate`/`revalidate_blocked_reason` are
+// even a single warning, fired, or while the invoice was never evaluated at all.
+// `can_revalidate`/`revalidate_blocked_reason` are
 // consumed AS GIVEN -- this function performs no `?? false`/fallback-string authoring
 // of its own; that discipline lives at the wire boundary (getInvoice, lib/invoices.ts)
 // and is not repeated here.
@@ -1282,16 +1294,18 @@ export function rowExpansionView(
   },
   gate: { can_revalidate: boolean; revalidate_blocked_reason: string | null },
 ): RowExpansionView {
-  const passing = invoice.violations.length === 0
+  const passing = invoice.violations.length === 0 && invoice.rule_set_version != null
+  const notValidated = invoice.violations.length === 0 && invoice.rule_set_version == null
   const blocking = invoice.violations.some((v) => v.severity === 'error')
   return {
     passing,
+    notValidated,
     blocking,
     // D1: the app supplies the name, the server supplies the number -- ruleSetLabel
     // (defined above, INVCR-01-08) is the SAME function channelTiles/reviewHeader use,
     // never a second copy or a hardcoded fallback.
     summary: passing ? `Every rule in ${ruleSetLabel(invoice.rule_set_version)} passed.` : null,
-    sectionLabel: passing ? null : blocking ? ROW_EXPANSION_COPY.sectionLabel : ROW_EXPANSION_COPY.advisorySectionLabel,
+    sectionLabel: passing || notValidated ? null : blocking ? ROW_EXPANSION_COPY.sectionLabel : ROW_EXPANSION_COPY.advisorySectionLabel,
     cards: invoice.violations.map(fixCard),
     revalidateDisabled: !gate.can_revalidate,
     revalidateReason: gate.revalidate_blocked_reason,

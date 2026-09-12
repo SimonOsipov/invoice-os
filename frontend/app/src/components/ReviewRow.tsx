@@ -427,6 +427,13 @@ function ExpandedFixPanel({
         >
           {view.summary}
         </div>
+      ) : view.notValidated ? (
+        <div
+          data-testid="review-row-not-validated"
+          style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
+        >
+          {ROW_EXPANSION_COPY.notValidated}
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* AC-8/§10.12's trap: a warning-only invoice renders the ADVISORY label here,
@@ -464,7 +471,7 @@ function ExpandedFixPanel({
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, borderTop: view.passing ? undefined : '1px solid var(--line-2)', paddingTop: view.passing ? 0 : 4 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6, borderTop: view.passing || view.notValidated ? undefined : '1px solid var(--line-2)', paddingTop: view.passing || view.notValidated ? 0 : 4 }}>
         {/* The persisted reason, verbatim (INVCR-01-15, D6) — shown ABOVE the action
             row, before Keep as-is's own input, so the operator sees the existing
             triage decision before typing a new one. Amber, mirroring KEPT · INVALID's

@@ -363,6 +363,8 @@ export interface ListInvoicesOptions {
   // needsFix/keptAsIs's boolean shape. Server param shipped in APPR-08-07
   // (ListFilter.AwaitingApproval); this is the first caller to send it.
   awaitingApproval?: boolean
+  // notEvaluated -- the review shell's "not yet validated" count (ListFilter.NotEvaluated).
+  notEvaluated?: boolean
 }
 
 // The server's `q` cap is 200 UTF-8 BYTES, not JS string length (handlers.go

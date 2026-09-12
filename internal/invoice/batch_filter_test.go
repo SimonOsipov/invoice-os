@@ -1031,3 +1031,198 @@ func TestRLS_SeveralImportBatchIDsCrossTenantMemberIsInvisible(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreList_NotEvaluatedIsTheNeverStampedInvoice (AC-1, AC-3): one batch
+// holds A (never stamped, draft), B (validated, stamped) and C (draft with a
+// blocking violation, stamped -- a blocked verdict stamps too). Filtering
+// NotEvaluated must return only A. The control leg (no filter) proves the
+// batch really has 3 rows, so the filtered total isn't just an empty batch.
+func TestStoreList_NotEvaluatedIsTheNeverStampedInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	rsvID := seedRuleSetVersionID(t, super)
+
+	idA := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-A", &batchID, time.Now().UTC())
+
+	idB := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "NOT-EVALUATED-B", batchID, "validated", "[]")
+	if _, err := super.Exec(ctx, `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, idB); err != nil {
+		t.Fatalf("stamp invoice B: %v", err)
+	}
+
+	idC := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "NOT-EVALUATED-C", batchID, "draft", `[{"severity": "error"}]`)
+	if _, err := super.Exec(ctx, `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, idC); err != nil {
+		t.Fatalf("stamp invoice C: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (NotEvaluated: true): %v", err)
+	}
+	if total != 1 {
+		t.Errorf("List (NotEvaluated: true).total = %d, want 1", total)
+	}
+	if len(items) != 1 || items[0].ID != idA {
+		t.Fatalf("List (NotEvaluated: true) items = %+v, want exactly [%s]", items, idA)
+	}
+
+	_, controlTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (no NotEvaluated): %v", err)
+	}
+	if controlTotal != 3 {
+		t.Fatalf("List (no NotEvaluated).total = %d, want 3 (false applies no predicate)", controlTotal)
+	}
+}
+
+// TestStoreList_NotEvaluatedExcludesABlockedDraft (AC-3): a batch containing
+// only a stamped, blocked draft must return an empty page under
+// NotEvaluated, even though the row is still a draft -- the stamp, not the
+// status, is what disqualifies it.
+func TestStoreList_NotEvaluatedExcludesABlockedDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED-BLOCKED tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED-BLOCKED entity")
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	rsvID := seedRuleSetVersionID(t, super)
+
+	blockedID := seedInvoiceWithBatchAndStatus(t, super, tenantID, entityID, "NOT-EVALUATED-BLOCKED-C", batchID, "draft", `[{"severity": "error"}]`)
+	if _, err := super.Exec(ctx, `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, blockedID); err != nil {
+		t.Fatalf("stamp blocked draft: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (NotEvaluated: true): %v", err)
+	}
+	if total != 0 {
+		t.Errorf("List (NotEvaluated: true).total = %d, want 0", total)
+	}
+	if len(items) != 0 {
+		t.Fatalf("List (NotEvaluated: true) items = %+v, want []", items)
+	}
+
+	_, controlTotal, err := store.List(c, ListFilter{ImportBatchIDs: []string{batchID}, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (no NotEvaluated): %v", err)
+	}
+	if controlTotal != 1 {
+		t.Fatalf("List (no NotEvaluated).total = %d, want 1 (the blocked draft is still a real row)", controlTotal)
+	}
+}
+
+// TestStoreList_NotEvaluatedANDsWithSeveralImportBatchIDs (AC-4): three
+// batches each hold one unstamped invoice; batch 2 also holds a stamped one.
+// Querying batches 1 and 2 (never batch 3) with NotEvaluated must return
+// exactly the two unstamped invoices from the queried batches.
+func TestStoreList_NotEvaluatedANDsWithSeveralImportBatchIDs(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "NOT-EVALUATED-MULTI tenant")
+	entityID := seedEntity(t, super, tenantID, "NOT-EVALUATED-MULTI entity")
+	rsvID := seedRuleSetVersionID(t, super)
+
+	batch1 := seedImportBatch(t, super, tenantID, entityID)
+	batch2 := seedImportBatch(t, super, tenantID, entityID)
+	batch3 := seedImportBatch(t, super, tenantID, entityID)
+
+	unstamped1 := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-MULTI-1", &batch1, time.Now().UTC())
+	unstamped2 := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-MULTI-2", &batch2, time.Now().UTC())
+	seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-MULTI-3", &batch3, time.Now().UTC())
+
+	stamped2 := seedInvoiceWithBatchAt(t, super, tenantID, entityID, "NOT-EVALUATED-MULTI-2-stamped", &batch2, time.Now().UTC())
+	if _, err := super.Exec(ctx, `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, stamped2); err != nil {
+		t.Fatalf("stamp batch 2's second invoice: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	items, total, err := store.List(c, ListFilter{ImportBatchIDs: []string{batch1, batch2}, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (ImportBatchIDs: [batch1, batch2], NotEvaluated: true): %v", err)
+	}
+	if total != 2 {
+		t.Errorf("List (...).total = %d, want 2", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("List (...) len = %d, want 2", len(items))
+	}
+	seen := map[string]bool{}
+	for _, inv := range items {
+		seen[inv.ID] = true
+	}
+	for _, id := range []string{unstamped1, unstamped2} {
+		if !seen[id] {
+			t.Errorf("List (...) is missing unstamped invoice %s", id)
+		}
+	}
+	if seen[stamped2] {
+		t.Errorf("List (...) wrongly includes batch 2's stamped invoice %s", stamped2)
+	}
+}
+
+// TestRLS_ListNotEvaluatedCrossTenantIsEmpty (AC-5): tenant A's batch holds
+// one unstamped invoice beside one stamped one; tenant B's own batch holds
+// one unstamped invoice. Tenant A querying tenant B's batch with
+// NotEvaluated must get an empty page (RLS, never a leaked row), while the
+// SAME identity querying its own batch must get exactly its own unstamped
+// row -- the same-tenant leg proves the predicate itself (not just RLS) is
+// doing the narrowing, per TestRLS_ListImportBatchIDCrossTenantIsEmptyNot404.
+func TestRLS_ListNotEvaluatedCrossTenantIsEmpty(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "NOT-EVALUATED-RLS tenant A")
+	tenantB := seedTenant(t, super, "NOT-EVALUATED-RLS tenant B")
+	entityA := seedEntity(t, super, tenantA, "NOT-EVALUATED-RLS entity A")
+	entityB := seedEntity(t, super, tenantB, "NOT-EVALUATED-RLS entity B")
+	rsvID := seedRuleSetVersionID(t, super)
+
+	batchA := seedImportBatch(t, super, tenantA, entityA)
+	batchB := seedImportBatch(t, super, tenantB, entityB)
+
+	unstampedA := seedInvoiceWithBatchAt(t, super, tenantA, entityA, "NOT-EVALUATED-RLS-A-unstamped", &batchA, time.Now().UTC())
+	stampedA := seedInvoiceWithBatchAt(t, super, tenantA, entityA, "NOT-EVALUATED-RLS-A-stamped", &batchA, time.Now().UTC())
+	if _, err := super.Exec(ctx, `UPDATE invoices SET rule_set_version_id = $1 WHERE id = $2`, rsvID, stampedA); err != nil {
+		t.Fatalf("stamp tenant A's second invoice: %v", err)
+	}
+	seedInvoiceWithBatchAt(t, super, tenantB, entityB, "NOT-EVALUATED-RLS-B-unstamped", &batchB, time.Now().UTC())
+
+	store := NewStore(app)
+	cA := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
+
+	crossItems, crossTotal, err := store.List(cA, ListFilter{ImportBatchIDs: []string{batchB}, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (tenant A, ImportBatchIDs: [batchB], NotEvaluated: true) err = %v, want nil", err)
+	}
+	if crossTotal != 0 {
+		t.Errorf("List (cross-tenant).total = %d, want 0", crossTotal)
+	}
+	if len(crossItems) != 0 {
+		t.Fatalf("List (cross-tenant) items = %+v, want []", crossItems)
+	}
+
+	sameItems, sameTotal, err := store.List(cA, ListFilter{ImportBatchIDs: []string{batchA}, NotEvaluated: true, Limit: 50})
+	if err != nil {
+		t.Fatalf("List (tenant A, ImportBatchIDs: [batchA], NotEvaluated: true): %v", err)
+	}
+	if sameTotal != 1 {
+		t.Errorf("List (same-tenant).total = %d, want 1", sameTotal)
+	}
+	if len(sameItems) != 1 || sameItems[0].ID != unstampedA {
+		t.Fatalf("List (same-tenant) items = %+v, want exactly [%s]", sameItems, unstampedA)
+	}
+}

@@ -466,6 +466,42 @@ describe('listInvoices: the envelope + widened options (AC-1, Stage 2.5)', () =>
     expect(trueUrl).toContain('kept_as_is=true')
   })
 
+  it('LIST-ne: notEvaluated true emits not_evaluated=true; false and absent emit nothing', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // Control param proves the harness observes emitted params -- a false/absent leg
+    // can't pass merely because nothing here ever reaches the URL.
+    const falseMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { notEvaluated: false, keptAsIs: true })
+    const [falseUrl] = falseMock.mock.calls[0] as [string, RequestInit]
+    expect(falseUrl).toContain('kept_as_is=true')
+    expect(falseUrl).not.toContain('not_evaluated')
+
+    const absentMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { keptAsIs: true })
+    const [absentUrl] = absentMock.mock.calls[0] as [string, RequestInit]
+    expect(absentUrl).toContain('kept_as_is=true')
+    expect(absentUrl).not.toContain('not_evaluated')
+
+    const trueMock = mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ invoices: [], pagination: { limit: 50, offset: 0, total: 0 } }),
+    })
+    await listInvoices(af, base, { notEvaluated: true, keptAsIs: true })
+    const [trueUrl] = trueMock.mock.calls[0] as [string, RequestInit]
+    expect(trueUrl).toContain('kept_as_is=true')
+    expect(trueUrl).toContain('not_evaluated=true')
+  })
+
   it('LIST-4: offset:0 is emitted, not dropped -- the classic falsy-zero bug (`!= null`, never truthiness)', async () => {
     const fetchMock = mockFetchOnce({
       ok: true,

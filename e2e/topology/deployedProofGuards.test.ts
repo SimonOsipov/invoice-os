@@ -225,7 +225,7 @@ describe('[extr-15-12] EXTR-15 span population (control needle + floor)', () => 
 })
 
 describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-call helper', () => {
-  // The five helpers that mint fresh bytes on every call. A raw module-scope constant reaching
+  // The helpers that mint fresh bytes on every call. A raw module-scope constant reaching
   // setInputFiles is the defect; `Buffer`, runDocuments' own type annotation, is not.
   const FRESH_HELPERS = [
     'uniqueScannedPdfBytes()',

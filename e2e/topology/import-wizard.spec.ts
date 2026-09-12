@@ -7693,6 +7693,8 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   const landingMatch = new URL(page.url()).pathname.match(/^\/imports\/([0-9a-fA-F-]{36}),([0-9a-fA-F-]{36})\/review$/)
   expect(landingMatch, 'the landing path must carry two batch ids').toBeTruthy()
   const [, batchId1, batchId2] = landingMatch!
+  // The landing's shell settles first, or the listener below can catch its pre-reload response.
+  await expect(page.getByRole('heading', { name: '2 invoices imported', exact: true })).toBeVisible({ timeout: 60_000 })
 
   // The count oracle is the wire, never the DOM: registered BEFORE the reload (INVCR-E2E-6
   // idiom), so the response the reload fires cannot be missed.
@@ -7717,7 +7719,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   expect(neTotal, 'a document import runs no gate, so both invoices are unevaluated').toBe(2)
 
   // AC-5: the header and the three tile values.
-  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { name: '2 invoices imported', exact: true })).toBeVisible({ timeout: 60_000 })
   for (const value of ['0 valid', '0 failed a rule', `${neTotal} not yet validated`]) {
     await expect(page.getByText(value, { exact: true }), `expected exactly one "${value}"`).toHaveCount(1)
   }
@@ -7762,8 +7764,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
         `the column and all three tiles must render at ${width}px`,
       ).toBeTruthy()
 
-      // (1) pairwise non-overlap. rectsOverlap is a boolean and cannot state a containment
-      // relationship on its own, but it is exactly what a shared-edge collision needs.
+      // (1) pairwise non-overlap; a shared edge counts as clearance (rectsOverlap, layout.ts).
       for (const [a, b] of [[0, 1], [0, 2], [1, 2]] as const) {
         expect(
           rectsOverlap(m.tileBoxes[a]!, m.tileBoxes[b]!),
@@ -7819,13 +7820,17 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   await expect(rows, 'a document run with two unevaluated invoices renders two rows').toHaveCount(2)
   for (let i = 0; i < 2; i++) {
     await rows.nth(i).click()
+    // Ties the expansion below to THIS row: row 0's identical box must be gone first.
+    await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'true')
+    await expect(rows.nth(1 - i)).toHaveAttribute('aria-expanded', 'false')
     await expect(page.getByTestId('review-row-expansion')).toHaveCount(1)
     await expect(page.getByTestId('review-row-not-validated')).toHaveText(
       'Not yet validated — run Re-validate to check compliance.',
     )
     await expect(page.getByTestId('review-row-passing')).toHaveCount(0)
     const expansionText = await page.getByTestId('review-row-expansion').innerText()
-    expect(expansionText, `row ${i}'s expansion must never say passed`).not.toContain('passed')
+    // Case-insensitive: TILE_CAPTION_VALID is capitalised "Passed every rule.".
+    expect(expansionText, `row ${i}'s expansion must never say passed`).not.toMatch(/passed/i)
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

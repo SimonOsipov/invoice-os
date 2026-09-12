@@ -15,14 +15,14 @@
 //  2. The left channel's counts are LIVE `pagination.total`s off filtered list queries,
 //     not the batch's frozen counters, so a tile MOVES when a row is fixed (AC-2).
 //
-// ONE useAsync over a Promise.all of requests (five, now seven with INVCR-01-15's own
-// kept-as-is total), not one hook per request: the shell either has its numbers or it
+// ONE useAsync over a Promise.all of requests (seven: the batch GETs, four toolbar counts,
+// kept-as-is and not-evaluated), not one hook per request: the shell either has its numbers or it
 // does not, and independent hooks give partial renders where the header shows one
 // channel before the other. Every TOOLBAR list query goes through `reviewQuery` — this
 // is its first real caller, which is what finally cashes 06's required-`batchId` guard
-// (an empty batch id would otherwise list the whole tenant); the kept-as-is total is
-// the one exception, composed directly (see its own comment below) since it is not one
-// of the four toolbar pills reviewQuery/filterToQuery cover.
+// (an empty batch id would otherwise list the whole tenant); the kept-as-is and
+// not-evaluated totals are the two exceptions, composed directly (see their comments below)
+// since neither is one of the four toolbar pills reviewQuery/filterToQuery cover.
 //
 // NO `entity_id` and NO `gateByActiveEntity`, unlike InvoicesList. The batch id already
 // narrows to one entity and RLS bounds the tenant; narrowing AGAIN by the workspace

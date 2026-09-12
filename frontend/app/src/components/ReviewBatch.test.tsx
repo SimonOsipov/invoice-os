@@ -48,7 +48,7 @@ function batch(over: Partial<ImportBatch> = {}): ImportBatch {
   }
 }
 
-// The shell fires six concurrent GETs (batch + four pill counts + kept-as-is), and the
+// The shell fires seven concurrent GETs (batch + four pill counts + kept-as-is + not-evaluated), and the
 // invoices tab fires two more (its own paginated list + violation summary) -- dispatched
 // by URL/param, not call order, mirroring InvoiceDetail.test.tsx's mockDetailFetch idiom.
 function mockReviewFetch(b: ImportBatch, totals: typeof TOTALS) {
@@ -502,8 +502,11 @@ describe('EXTR-30-04 NE-1..NE-5 (AC-1/AC-2/AC-3/AC-4): the third Imported tile c
 
     function readOutsideImported(container: HTMLElement) {
       const notImportedLabel = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === 'Not imported')
+      const h2 = container.querySelector('h2')
       return {
-        heading: container.querySelector('h2')?.textContent ?? '',
+        heading: h2?.textContent ?? '',
+        subline: h2?.nextElementSibling?.textContent ?? '',
+        batchLine: h2?.nextElementSibling?.nextElementSibling?.textContent ?? '',
         notImported: notImportedLabel?.parentElement?.textContent ?? '',
         tabs: Array.from(container.querySelectorAll('button.pf-tab')).map((b) => b.textContent),
       }
@@ -525,5 +528,79 @@ describe('EXTR-30-04 NE-1..NE-5 (AC-1/AC-2/AC-3/AC-4): the third Imported tile c
     expect(screen.getByText(footerText), 'a non-zero count must not change the footer').toBeTruthy()
 
     expect(nonZeroFacts, 'a non-zero unvalidated count changed something outside the Imported row').toEqual(zeroFacts)
+  })
+})
+
+describe('EXTR-30-04 NE-6..NE-8: the third tile under a failed count, a count of one, and a refetch to zero', () => {
+  // One list leg answers 500; every other request keeps mockReviewFetchAll's routing.
+  function failLeg(batches: ImportBatch[], param: string) {
+    const fetchMock = mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const routed = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string) =>
+      url.includes('/invoices') && new URL(url).searchParams.get(param) === 'true'
+        ? Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+        : routed(url),
+    )
+    return fetchMock
+  }
+
+  it('NE-6: a failed not-evaluated count errors the whole shell, exactly as a failed kept-as-is count does', async () => {
+    const seen: Record<string, string> = {}
+    for (const param of ['kept_as_is', 'not_evaluated']) {
+      const fetchMock = failLeg(cleanRun('.pdf'), param)
+      const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+      await waitFor(() => expect(container.textContent ?? '').toContain('Something went wrong'))
+
+      const failed = fetchMock.mock.calls
+        .map((c) => c[0])
+        .filter((u) => u.includes('/invoices') && new URL(u).searchParams.get(param) === 'true')
+      expect(failed.length, `${param}: the failing leg was never requested`).toBeGreaterThan(0)
+
+      const text = container.textContent ?? ''
+      for (const partial of [BATCH_ANCHOR, 'Imported · stored in the ledger', TILE_CAPTION_VALID, 'failed a rule', 'not yet validated']) {
+        expect(text, `${param}: a half-rendered shell shows ${JSON.stringify(partial)}`).not.toContain(partial)
+      }
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+      seen[param] = text
+      cleanup()
+    }
+    expect(seen.not_evaluated, 'the not-evaluated leg fails differently from the kept-as-is leg').toBe(seen.kept_as_is)
+  })
+
+  it('NE-7: a count of one renders "1 not yet validated" with the caption unchanged', async () => {
+    mockReviewFetchAll(cleanRun('.pdf'), { ...TOTALS, notEvaluatedTotal: 1 })
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    // The story defines no singular form (Listed gap 6); this pins the shipped template.
+    const value = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === '1 not yet validated')
+    expect(value, 'no "1 not yet validated" tile value').toBeTruthy()
+    expect(value!.nextElementSibling?.textContent).toBe('Stored, but no rule has been run against them yet.')
+    expect(value!.parentElement!.parentElement!.children.length, 'a count of one must still render the third tile').toBe(3)
+  })
+
+  it('NE-8: a refetch that finds zero removes the tile instead of keeping the last count', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.pdf' }), batch({ id: 'b2', filename: 'b.pdf' })]
+    const totals = { ...TOTALS, notEvaluatedTotal: 2 }
+    const fetchMock = mockReviewFetchAll(batches, totals)
+    const { container, rerender } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain('2 not yet validated'))
+
+    // A new batch id set is the shell's refetch trigger (deps: batchIdsKey).
+    totals.notEvaluatedTotal = 0
+    rerender(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    // The batch line arrives in the same shell data as the count, so the refetch has landed.
+    await waitFor(() => expect(container.textContent ?? '').toContain('BATCH b1, b2'))
+
+    const scopes = fetchMock.mock.calls
+      .map((c) => new URL(c[0]))
+      .filter((u) => u.pathname.endsWith('/invoices') && u.searchParams.get('not_evaluated') === 'true')
+      .map((u) => u.searchParams.getAll('import_batch_id'))
+    expect(scopes, 'the count was not fetched once per batch id set').toEqual([['b1'], ['b1', 'b2']])
+    expect(container.textContent, 'the tile kept a stale count after the refetch').not.toContain('not yet validated')
+
+    const captionNode = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === TILE_CAPTION_VALID)
+    expect(captionNode, 'no valid-caption tile after the refetch').toBeTruthy()
+    expect(captionNode!.parentElement!.parentElement!.children.length, 'the row is not the shipped pair again').toBe(2)
   })
 })

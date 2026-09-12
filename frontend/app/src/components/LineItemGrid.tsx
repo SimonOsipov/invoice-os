@@ -243,7 +243,7 @@ export function LineItemGrid({
                         <span style={LABEL_STRIP}>
                           {flagged ? (
                             <span className="mono" data-testid={`line-item-flag-${n}`} style={PILL}>
-                              {reasonPill('inconsistent')}
+                              {reasonPill('inconsistent', 0)}
                             </span>
                           ) : null}
                         </span>

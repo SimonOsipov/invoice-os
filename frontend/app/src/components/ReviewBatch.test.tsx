@@ -29,7 +29,7 @@ function listResponse(total: number): MockResponse {
   return { ok: true, status: 200, json: () => Promise.resolve({ invoices: [], pagination: { limit: 1, offset: 0, total } }) }
 }
 
-const TOTALS = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3 }
+const TOTALS = { allTotal: 500, cleanTotal: 474, queuedTotal: 6, failingTotal: 20, keptTotal: 3, notEvaluatedTotal: 0 }
 
 function batch(over: Partial<ImportBatch> = {}): ImportBatch {
   return {
@@ -48,7 +48,7 @@ function batch(over: Partial<ImportBatch> = {}): ImportBatch {
   }
 }
 
-// The shell fires six concurrent GETs (batch + four pill counts + kept-as-is), and the
+// The shell fires seven concurrent GETs (batch + four pill counts + kept-as-is + not-evaluated), and the
 // invoices tab fires two more (its own paginated list + violation summary) -- dispatched
 // by URL/param, not call order, mirroring InvoiceDetail.test.tsx's mockDetailFetch idiom.
 function mockReviewFetch(b: ImportBatch, totals: typeof TOTALS) {
@@ -61,6 +61,7 @@ function mockReviewFetch(b: ImportBatch, totals: typeof TOTALS) {
     }
     if (url.includes('/invoices')) {
       const params = new URL(url).searchParams
+      if (params.get('not_evaluated') === 'true') return Promise.resolve(listResponse(totals.notEvaluatedTotal))
       if (params.get('kept_as_is') === 'true') return Promise.resolve(listResponse(totals.keptTotal))
       if (params.get('needs_fix') === 'true') return Promise.resolve(listResponse(totals.failingTotal))
       if (params.get('status') === 'validated') return Promise.resolve(listResponse(totals.cleanTotal))
@@ -197,6 +198,7 @@ function mockReviewFetchAll(batches: ImportBatch[], totals: typeof TOTALS) {
     }
     if (url.includes('/invoices')) {
       const params = new URL(url).searchParams
+      if (params.get('not_evaluated') === 'true') return Promise.resolve(listResponse(totals.notEvaluatedTotal))
       if (params.get('kept_as_is') === 'true') return Promise.resolve(listResponse(totals.keptTotal))
       if (params.get('needs_fix') === 'true') return Promise.resolve(listResponse(totals.failingTotal))
       if (params.get('status') === 'validated') return Promise.resolve(listResponse(totals.cleanTotal))
@@ -237,7 +239,7 @@ const ARMS = {
     document: [
       '500 DOCUMENTS READ · SERVER VERDICT · RULE SET ', // R2, through reviewHeaderAll
       'Built from 480 documents. Every one of these exists in the ledger — fixing and submitting is what is left.', // B1
-      '0 unreadable documents', // B2
+      '0 quarantined documents', // B2
       'Every document in this import could be read.', // B3
       '0 already in the register', // B8
       'Nothing in this import was already in the register.', // B9
@@ -253,16 +255,18 @@ const ARMS = {
   },
   mixed: {
     document: [
-      '1 unreadable documents', // B2 above zero
+      '1 quarantined documents', // B2 above zero
       '1 already in the register', // B8 above zero
       '1 invoices already in the register. Nothing to fix.', // B10
-      'Unreadable documents (1)', // R3, the tab label, through reviewTabs
+      'Quarantined documents (1)', // R3, the tab label, through reviewTabs
+      'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.', // B11
     ],
     spreadsheet: [
       '1 unreadable rows',
       '1 already imported',
       '1 invoices already in your ledger. Nothing to fix.',
       'Unreadable rows (1)',
+      'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.', // B11
     ],
   },
   rejectedFile: {
@@ -351,8 +355,8 @@ describe('EXTR-15-09 SW-18 (AC-6): B5 and B6 are two whole Tiles per arm, and on
 // A hard-coded `unit="spreadsheet"` at either call site is invisible without this.
 const TAB_ARMS = {
   unreadable: {
-    label: { document: 'Unreadable documents (1)', spreadsheet: 'Unreadable rows (1)' },
-    document: ['1 documents never became invoices', 'The extractor could not read them'], // U2, U3
+    label: { document: 'Quarantined documents (1)', spreadsheet: 'Unreadable rows (1)' },
+    document: ['1 documents never became invoices', 'No invoice was created from them'], // U2, U3
     spreadsheet: ['1 rows never became invoices', 'The importer could not read them'],
   },
   alreadyImported: {
@@ -421,5 +425,342 @@ describe('EXTR-15-09 SW-16 (AC-2): the restructured paragraphs render byte-ident
     // Floor, so the absence claim below cannot pass over an empty list.
     expect(paragraphs.length, 'no paragraphs were collected').toBeGreaterThanOrEqual(6)
     expect(paragraphs.filter((p) => /\s{2}/.test(p))).toEqual([])
+  })
+})
+
+describe('EXTR-30-04 NE-1..NE-5 (AC-1/AC-2/AC-3/AC-4): the third Imported tile counts unevaluated invoices', () => {
+  it('NE-1: the shell asks the server for the unvalidated count, scoped to every batch', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.pdf' }), batch({ id: 'b2', filename: 'b.pdf' })]
+    const fetchMock = mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const { container } = render(<ReviewBatch ctx={reviewCtx(batches.map((b) => b.id))} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const neCalls = fetchMock.mock.calls
+      .map((c) => c[0])
+      .filter((u) => u.includes('/invoices') && new URL(u).searchParams.get('not_evaluated') === 'true')
+    expect(neCalls.length, `expected exactly one not_evaluated=true request, got ${neCalls.length}`).toBe(1)
+
+    const url = new URL(neCalls[0])
+    expect(url.searchParams.getAll('import_batch_id')).toEqual(['b1', 'b2'])
+    expect([...url.searchParams.keys()].sort()).toEqual(['import_batch_id', 'import_batch_id', 'limit', 'not_evaluated'])
+    expect(url.searchParams.get('limit')).toBe('1')
+  })
+
+  it('NE-2: unvalidated invoices get their own tile, counted by the server', async () => {
+    const totals = { allTotal: 5, cleanTotal: 0, failingTotal: 0, queuedTotal: 1, keptTotal: 1, notEvaluatedTotal: 2 }
+    mockReviewFetchAll(cleanRun('.pdf'), totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    expect(container.textContent).toContain('0 valid')
+    expect(container.textContent).toContain('0 failed a rule')
+    expect(container.textContent).toContain('2 not yet validated')
+    expect(container.textContent).toContain('Stored, but no rule has been run against them yet.')
+    // Guards the two silent-fallthrough values a routing mistake would render instead.
+    expect(container.textContent).not.toContain('5 not yet validated')
+    expect(container.textContent).not.toContain('3 not yet validated')
+  })
+
+  it('NE-3: the third tile is the solid neutral treatment, after failed a rule', async () => {
+    const totals = { allTotal: 5, cleanTotal: 0, failingTotal: 0, queuedTotal: 1, keptTotal: 1, notEvaluatedTotal: 2 }
+    mockReviewFetchAll(cleanRun('.pdf'), totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    const value = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === '2 not yet validated')
+    expect(value, 'no "2 not yet validated" tile value found').toBeTruthy()
+    expect(value!.style.color, 'the value text is not the neutral fg-2').toBe('var(--fg-2)')
+
+    const tile = value!.parentElement!
+    expect(tile.style.background, 'the tile is not the neutral bg-3').toBe('var(--bg-3)')
+    expect(tile.style.border, 'the tile is not a solid line-2 border').toBe('1px solid var(--line-2)')
+
+    const row = tile.parentElement!
+    expect(row.children.length, 'the Imported tile row is not three tiles wide').toBe(3)
+    expect(row.children[2], 'the third child is not the not-yet-validated tile').toBe(tile)
+    expect(row.children[1]?.textContent, "the second child is not the 'failed a rule' tile").toContain('failed a rule')
+  })
+
+  it('NE-4: at zero the Imported row is the shipped pair', async () => {
+    for (const ext of ['.pdf', '.csv']) {
+      mockReviewFetchAll(cleanRun(ext), TOTALS)
+      const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+      await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+      expect(container.textContent, `${ext}: a zero count must render no third tile`).not.toContain('not yet validated')
+
+      const captionNode = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === TILE_CAPTION_VALID)
+      expect(captionNode, `${ext}: no valid-caption tile found`).toBeTruthy()
+      const row = captionNode!.parentElement!.parentElement!
+      expect(row.children.length, `${ext}: the tile row is not two tiles wide`).toBe(2)
+      cleanup()
+    }
+  })
+
+  it('NE-5: a non-zero count changes nothing outside the Imported row', async () => {
+    const batches = mixedRun('.pdf')
+    const batchIds = batches.map((b) => b.id)
+    const footerText = reviewFooterSummary(TOTALS)
+
+    function readOutsideImported(container: HTMLElement) {
+      const notImportedLabel = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === 'Not imported')
+      const h2 = container.querySelector('h2')
+      return {
+        heading: h2?.textContent ?? '',
+        subline: h2?.nextElementSibling?.textContent ?? '',
+        batchLine: h2?.nextElementSibling?.nextElementSibling?.textContent ?? '',
+        notImported: notImportedLabel?.parentElement?.textContent ?? '',
+        tabs: Array.from(container.querySelectorAll('button.pf-tab')).map((b) => b.textContent),
+      }
+    }
+
+    mockReviewFetchAll(batches, TOTALS)
+    const zero = render(<ReviewBatch ctx={reviewCtx(batchIds)} />)
+    await waitFor(() => expect(zero.container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const zeroFacts = readOutsideImported(zero.container)
+    expect(zeroFacts.tabs.length, 'no tab labels found to compare').toBeGreaterThan(0)
+    expect(zeroFacts.notImported.length, 'no Not imported column text found to compare').toBeGreaterThan(0)
+    expect(screen.getByText(footerText), 'the shipped footer text must be present at zero').toBeTruthy()
+    cleanup()
+
+    mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const nonZero = render(<ReviewBatch ctx={reviewCtx(batchIds)} />)
+    await waitFor(() => expect(nonZero.container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const nonZeroFacts = readOutsideImported(nonZero.container)
+    expect(screen.getByText(footerText), 'a non-zero count must not change the footer').toBeTruthy()
+
+    expect(nonZeroFacts, 'a non-zero unvalidated count changed something outside the Imported row').toEqual(zeroFacts)
+  })
+})
+
+describe('EXTR-30-04 NE-6..NE-8: the third tile under a failed count, a count of one, and a refetch to zero', () => {
+  // One list leg answers 500; every other request keeps mockReviewFetchAll's routing.
+  function failLeg(batches: ImportBatch[], param: string) {
+    const fetchMock = mockReviewFetchAll(batches, { ...TOTALS, notEvaluatedTotal: 2 })
+    const routed = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string) =>
+      url.includes('/invoices') && new URL(url).searchParams.get(param) === 'true'
+        ? Promise.resolve<MockResponse>({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+        : routed(url),
+    )
+    return fetchMock
+  }
+
+  it('NE-6: a failed not-evaluated count errors the whole shell, exactly as a failed kept-as-is count does', async () => {
+    const seen: Record<string, string> = {}
+    for (const param of ['kept_as_is', 'not_evaluated']) {
+      const fetchMock = failLeg(cleanRun('.pdf'), param)
+      const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+      await waitFor(() => expect(container.textContent ?? '').toContain('Something went wrong'))
+
+      const failed = fetchMock.mock.calls
+        .map((c) => c[0])
+        .filter((u) => u.includes('/invoices') && new URL(u).searchParams.get(param) === 'true')
+      expect(failed.length, `${param}: the failing leg was never requested`).toBeGreaterThan(0)
+
+      const text = container.textContent ?? ''
+      for (const partial of [BATCH_ANCHOR, 'Imported · stored in the ledger', TILE_CAPTION_VALID, 'failed a rule', 'not yet validated']) {
+        expect(text, `${param}: a half-rendered shell shows ${JSON.stringify(partial)}`).not.toContain(partial)
+      }
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+      seen[param] = text
+      cleanup()
+    }
+    expect(seen.not_evaluated, 'the not-evaluated leg fails differently from the kept-as-is leg').toBe(seen.kept_as_is)
+  })
+
+  it('NE-7: a count of one renders "1 not yet validated" with the caption unchanged', async () => {
+    mockReviewFetchAll(cleanRun('.pdf'), { ...TOTALS, notEvaluatedTotal: 1 })
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    // The story defines no singular form (Listed gap 6); this pins the shipped template.
+    const value = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === '1 not yet validated')
+    expect(value, 'no "1 not yet validated" tile value').toBeTruthy()
+    expect(value!.nextElementSibling?.textContent).toBe('Stored, but no rule has been run against them yet.')
+    expect(value!.parentElement!.parentElement!.children.length, 'a count of one must still render the third tile').toBe(3)
+  })
+
+  it('NE-8: a refetch that finds zero removes the tile instead of keeping the last count', async () => {
+    const batches = [batch({ id: 'b1', filename: 'a.pdf' }), batch({ id: 'b2', filename: 'b.pdf' })]
+    const totals = { ...TOTALS, notEvaluatedTotal: 2 }
+    const fetchMock = mockReviewFetchAll(batches, totals)
+    const { container, rerender } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain('2 not yet validated'))
+
+    // A new batch id set is the shell's refetch trigger (deps: batchIdsKey).
+    totals.notEvaluatedTotal = 0
+    rerender(<ReviewBatch ctx={reviewCtx(['b1', 'b2'])} />)
+    // The batch line arrives in the same shell data as the count, so the refetch has landed.
+    await waitFor(() => expect(container.textContent ?? '').toContain('BATCH b1, b2'))
+
+    const scopes = fetchMock.mock.calls
+      .map((c) => new URL(c[0]))
+      .filter((u) => u.pathname.endsWith('/invoices') && u.searchParams.get('not_evaluated') === 'true')
+      .map((u) => u.searchParams.getAll('import_batch_id'))
+    expect(scopes, 'the count was not fetched once per batch id set').toEqual([['b1'], ['b1', 'b2']])
+    expect(container.textContent, 'the tile kept a stale count after the refetch').not.toContain('not yet validated')
+
+    const captionNode = Array.from(container.querySelectorAll('div')).find((d) => d.textContent === TILE_CAPTION_VALID)
+    expect(captionNode, 'no valid-caption tile after the refetch').toBeTruthy()
+    expect(captionNode!.parentElement!.parentElement!.children.length, 'the row is not the shipped pair again').toBe(2)
+  })
+})
+
+const PARA_DOC =
+  'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.'
+const PARA_SHEET = 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'
+const AT_ZERO_PARAGRAPH = 'This channel stays visible even at zero, so its absence is a fact and not an omission.'
+// One list, so AC-12's grep finds these phrases on a single absence-needle line.
+const FORBIDDEN_DOCUMENT_PHRASES = ['unreadable documents', 'Unreadable documents', 'could not read them', 'Nothing was stored', 'nothing was stored']
+
+describe('EXTR-30-05 QN-1/QN-2 (AC-2/AC-5): a quarantined document is not called unreadable or unstored', () => {
+  // Every tab button stays mounted across clicks (SW-17's own premise), so one render can
+  // walk all three tab bodies in sequence.
+  async function allTabsText(ext: string, unreadableLabel: string): Promise<string> {
+    mockReviewFetchAll(mixedRun(ext), TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const text0 = container.textContent ?? ''
+
+    const findTab = (label: string) => Array.from(container.querySelectorAll('button.pf-tab')).find((b) => b.textContent === label)
+    const unreadableButton = findTab(unreadableLabel)
+    expect(unreadableButton, `no tab button labelled ${unreadableLabel}`).toBeTruthy()
+    fireEvent.click(unreadableButton as HTMLElement)
+    const text1 = container.textContent ?? ''
+
+    const alreadyImportedButton = findTab('Already imported (1)')
+    expect(alreadyImportedButton, 'no tab button labelled Already imported (1)').toBeTruthy()
+    fireEvent.click(alreadyImportedButton as HTMLElement)
+    const text2 = container.textContent ?? ''
+    cleanup()
+    return text0 + text1 + text2
+  }
+
+  it('QN-1: a document run never calls a quarantined document unreadable or unstored', async () => {
+    const all = await allTabsText('.pdf', 'Quarantined documents (1)')
+
+    for (const s of ['1 quarantined documents', 'No invoice was created from them', '1 documents were already in the register']) {
+      expect(all, `document run did not render ${JSON.stringify(s)}`).toContain(s)
+    }
+    for (const s of FORBIDDEN_DOCUMENT_PHRASES) {
+      expect(all, `document run leaked ${JSON.stringify(s)}`).not.toContain(s)
+    }
+
+    // Control: the same walk on a spreadsheet run still carries its own frozen wording, so
+    // the absence checks above are not vacuous over an empty or broken render.
+    const sheetAll = await allTabsText('.csv', 'Unreadable rows (1)')
+    for (const s of ['unreadable rows', 'Nothing was stored.']) {
+      expect(sheetAll, `spreadsheet run did not render ${JSON.stringify(s)}`).toContain(s)
+    }
+  })
+
+  it('QN-2: the channel paragraph branches on unit, and its other arms are whole-element unchanged', async () => {
+    const doc = await renderArm(mixedRun('.pdf'), BATCH_ANCHOR)
+    expect(doc.paragraphs, 'the document arm did not render PARA_DOC').toContain(PARA_DOC)
+    expect(doc.paragraphs, 'the document arm leaked the spreadsheet paragraph').not.toContain(PARA_SHEET)
+
+    const sheet = await renderArm(mixedRun('.csv'), BATCH_ANCHOR)
+    expect(sheet.paragraphs, 'the spreadsheet arm did not render PARA_SHEET').toContain(PARA_SHEET)
+    expect(sheet.paragraphs, 'the spreadsheet arm leaked the document paragraph').not.toContain(PARA_DOC)
+
+    const cleanDoc = await renderArm(cleanRun('.pdf'), BATCH_ANCHOR)
+    const cleanSheet = await renderArm(cleanRun('.csv'), BATCH_ANCHOR)
+    for (const arm of [cleanDoc, cleanSheet]) {
+      expect(arm.paragraphs, 'the at-zero arm must be unchanged in both units').toContain(AT_ZERO_PARAGRAPH)
+    }
+
+    const paragraphs = [doc, sheet, cleanDoc, cleanSheet].flatMap((r) => r.paragraphs)
+    expect(paragraphs.length, 'no paragraphs were collected').toBeGreaterThanOrEqual(4)
+    expect(paragraphs.filter((p) => /\s{2}/.test(p))).toEqual([])
+  })
+})
+
+const U3_DOC =
+  'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.'
+const U3_SHEET =
+  'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'
+const ZERO_TOTALS = { allTotal: 0, cleanTotal: 0, queuedTotal: 0, failingTotal: 0, keptTotal: 0, notEvaluatedTotal: 0 }
+
+// One document quarantined for its invoice number. Go omits `row` on every document RowError.
+function quarantinedDocument(id: string, filename: string): ImportBatch {
+  return batch({
+    id,
+    filename,
+    document_id: `doc-${id}`,
+    rows_total: 1,
+    rows_valid: 0,
+    rows_invalid: 1,
+    errors: [{ field: 'invoice_number', message: 'no number on it' }],
+  })
+}
+
+describe('EXTR-30-05 QN-3..QN-5: whole tab bodies, an all-quarantined run, and a mixed-extension run', () => {
+  // Every <p> and the page text before and after one tab click, plus the tab strip's labels.
+  async function openTab(batches: ImportBatch[], totals: typeof TOTALS, label: string) {
+    mockReviewFetchAll(batches, totals)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(batches.map((b) => b.id))} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+    const snapshot = () => ({
+      text: container.textContent ?? '',
+      paragraphs: Array.from(container.querySelectorAll('p')).map((p) => p.textContent ?? ''),
+    })
+    const before = snapshot()
+    const buttons = Array.from(container.querySelectorAll('button.pf-tab'))
+    const tabLabels = buttons.map((b) => b.textContent ?? '')
+    const button = buttons.find((b) => b.textContent === label)
+    expect(button, `no tab button labelled ${label}: ${JSON.stringify(tabLabels)}`).toBeTruthy()
+    fireEvent.click(button as HTMLElement)
+    const after = snapshot()
+    cleanup()
+    return { before, after, tabLabels }
+  }
+
+  it('QN-3: each unit renders its own tab-body sentence as one whole paragraph, and never the other unit\'s', async () => {
+    const doc = await openTab(mixedRun('.pdf'), TOTALS, 'Quarantined documents (1)')
+    expect(doc.before.paragraphs, 'the tab body rendered before its tab was clicked').not.toContain(U3_DOC)
+    expect(doc.after.paragraphs).toContain(U3_DOC)
+    expect(doc.after.paragraphs).toContain(PARA_DOC)
+    expect(doc.after.text).not.toContain(U3_SHEET)
+
+    const sheet = await openTab(mixedRun('.csv'), TOTALS, 'Unreadable rows (1)')
+    expect(sheet.after.paragraphs).toContain(U3_SHEET)
+    expect(sheet.after.paragraphs).toContain(PARA_SHEET)
+    expect(sheet.after.text).not.toContain(U3_DOC)
+    expect(sheet.after.text).not.toContain(PARA_DOC)
+  })
+
+  it('QN-4: a .pdf run where every document quarantined reads quarantined throughout', async () => {
+    const run = [quarantinedDocument('b1', 'a.pdf'), quarantinedDocument('b2', 'b.pdf')]
+    const { before, after, tabLabels } = await openTab(run, ZERO_TOTALS, 'Quarantined documents (2)')
+
+    expect(tabLabels, 'nothing was already imported, so there is no register tab').toEqual(['Invoices (0)', 'Quarantined documents (2)'])
+    expect(before.paragraphs).toContain(PARA_DOC)
+    expect(after.paragraphs).toContain(U3_DOC)
+    const all = before.text + after.text
+    expect(all).toContain('2 quarantined documents')
+    expect(all).toContain('2 documents never became invoices')
+    for (const s of [...FORBIDDEN_DOCUMENT_PHRASES, 'unreadable rows', 'Unreadable rows']) {
+      expect(all, `an all-quarantined run leaked ${JSON.stringify(s)}`).not.toContain(s)
+    }
+  })
+
+  // runUnit is all-must-agree, so a .pdf beside a .csv reads spreadsheet. addPickedFiles refuses
+  // such a run: this pins the defined fallback, not a reachable screen.
+  it('QN-5: a run mixing a .pdf and a .csv takes the spreadsheet arm in the tile, paragraph, tab and body', async () => {
+    const run = [
+      batch({ id: 'b1', filename: 'june.pdf', errors: [{ field: 'invoice_number', message: 'no number on it' }] }),
+      batch({ id: 'b2', filename: 'june.csv', errors: [{ row: 3, field: 'total', message: 'could not be read' }] }),
+    ]
+    const { before, after, tabLabels } = await openTab(run, TOTALS, 'Unreadable rows (2)')
+
+    expect(tabLabels).toContain('Unreadable rows (2)')
+    expect(before.text).toContain('2 unreadable rows')
+    expect(before.paragraphs).toContain(PARA_SHEET)
+    expect(after.paragraphs).toContain(U3_SHEET)
+    const all = before.text + after.text
+    for (const s of ['quarantined documents', 'Quarantined documents', PARA_DOC, U3_DOC]) {
+      expect(all, `a mixed run leaked the document arm's ${JSON.stringify(s)}`).not.toContain(s)
+    }
   })
 })

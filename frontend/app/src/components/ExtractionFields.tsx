@@ -325,7 +325,6 @@ export function ExtractionFields({
                 const note = settled === null ? fieldNote(f.reason, f.name) : null
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
-                const pill = settled === null ? (reasonPill(f.reason) ?? cue) : null
                 // The gate is the REASON first -- a field can carry alternatives the extractor
                 // ranked below a reading it is sure of, and those stay off the screen. The
                 // second clause is the render invariant, not a weakening: no chips means there
@@ -336,6 +335,8 @@ export function ExtractionFields({
                   wire.reason === 'ambiguous' && wire.alternatives.length > 0
                     ? [{ value: wire.value, region: wire.region }, ...wire.alternatives]
                     : null
+                // The pill's number is the chip array's own length, so the two can never drift.
+                const pill = settled === null ? (reasonPill(f.reason, candidates?.length ?? 0) ?? cue) : null
                 const locked = LOCKED_FIELDS.includes(f.name)
                 const lock = LOCK_REASONS[f.name] ?? null
                 // The value the invoice holds, or the one the draft will settle it to. With no

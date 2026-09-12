@@ -15,14 +15,14 @@
 //  2. The left channel's counts are LIVE `pagination.total`s off filtered list queries,
 //     not the batch's frozen counters, so a tile MOVES when a row is fixed (AC-2).
 //
-// ONE useAsync over a Promise.all of requests (five, now six with INVCR-01-15's own
-// kept-as-is total), not one hook per request: the shell either has its numbers or it
+// ONE useAsync over a Promise.all of requests (seven: the batch GETs, four toolbar counts,
+// kept-as-is and not-evaluated), not one hook per request: the shell either has its numbers or it
 // does not, and independent hooks give partial renders where the header shows one
 // channel before the other. Every TOOLBAR list query goes through `reviewQuery` — this
 // is its first real caller, which is what finally cashes 06's required-`batchId` guard
-// (an empty batch id would otherwise list the whole tenant); the kept-as-is total is
-// the one exception, composed directly (see its own comment below) since it is not one
-// of the four toolbar pills reviewQuery/filterToQuery cover.
+// (an empty batch id would otherwise list the whole tenant); the kept-as-is and
+// not-evaluated totals are the two exceptions, composed directly (see their comments below)
+// since neither is one of the four toolbar pills reviewQuery/filterToQuery cover.
 //
 // NO `entity_id` and NO `gateByActiveEntity`, unlike InvoicesList. The batch id already
 // narrows to one entity and RLS bounds the tenant; narrowing AGAIN by the workspace
@@ -85,6 +85,8 @@ interface ReviewShellData {
   // (System Design §7's own table only names All/Needs a fix/Validated/Queued),
   // so it is fetched here rather than through reviewQuery/filterToQuery.
   keptTotal: number
+  // Server total of never-evaluated invoices; never derived from the other totals.
+  notEvaluatedTotal: number
 }
 
 // One channel tile. `dashed` and `muted` are RENDER decisions taken here, in the
@@ -152,13 +154,17 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             // (INVCR-01-15, D6), so this composes ListInvoicesOptions directly, the
             // same way `all` above narrows by importBatchIds alone.
             listInvoices(ctx.authedFetch, base, { importBatchIds: batchIds, keptAsIs: true, limit: 1 }),
-          ]).then(([batches, all, ready, fix, queued, kept]) => ({
+            // Seventh leg, same direct-composition style as keptAsIs above -- also not
+            // one of the four toolbar pills.
+            listInvoices(ctx.authedFetch, base, { importBatchIds: batchIds, notEvaluated: true, limit: 1 }),
+          ]).then(([batches, all, ready, fix, queued, kept, notEvaluated]) => ({
             batches,
             allTotal: all.pagination.total,
             cleanTotal: ready.pagination.total,
             failingTotal: fix.pagination.total,
             queuedTotal: queued.pagination.total,
             keptTotal: kept.pagination.total,
+            notEvaluatedTotal: notEvaluated.pagination.total,
           }))
         : Promise.reject(new Error('no gateway configured')),
     // `batchIdsKey` (batchIds.join(',')), never `batchIds` itself: a fresh array has a
@@ -203,7 +209,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
   const shellData = shell.data ?? lastShell.current
   if (shellData == null) return <Loading label="Reading the import…" />
 
-  const { batches, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal } = shellData
+  const { batches, allTotal, cleanTotal, failingTotal, queuedTotal, keptTotal, notEvaluatedTotal } = shellData
 
   // The ONE derivation of the review unit for this screen and everything under it. Both
   // rejected surfaces and both tabs take it as a prop rather than re-deriving it; a second
@@ -305,6 +311,15 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
                 border="var(--status-red-border)"
                 text="var(--status-red-text)"
               />
+              {notEvaluatedTotal > 0 && (
+                <Tile
+                  value={`${notEvaluatedTotal} not yet validated`}
+                  caption="Stored, but no rule has been run against them yet."
+                  bg="var(--bg-3)"
+                  border="var(--line-2)"
+                  text="var(--fg-2)"
+                />
+              )}
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
               {/* The clause branches, the shared tail does not — one copy to keep in step. */}
@@ -348,7 +363,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
                   omission, which is also why `atZero` is an explicit field on the
                   view-model rather than `count === 0` inferred here. */}
               <Tile
-                value={unit === 'document' ? `${tiles.frozen.unreadable} unreadable documents` : `${tiles.frozen.unreadable} unreadable rows`}
+                value={unit === 'document' ? `${tiles.frozen.unreadable} quarantined documents` : `${tiles.frozen.unreadable} unreadable rows`}
                 caption={
                   tiles.atZero
                     ? unit === 'document'
@@ -365,7 +380,9 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
               {tiles.atZero
                 ? 'This channel stays visible even at zero, so its absence is a fact and not an omission.'
-                : 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'}
+                : unit === 'document'
+                  ? 'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.'
+                  : 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'}
             </p>
           </div>
         </div>

@@ -139,8 +139,8 @@ func parseLineFieldName(name string) (index int, role string, ok bool) {
 	return 0, "", false
 }
 
-// The two sentences the mapper quarantines a document with. Written down here, not assembled
-// at call time, so TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals can find them.
+// The two sentences the mapper quarantines a document with; the review screen renders them verbatim
+// and this file is their only owner. Literals so TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals can find them.
 const (
 	poorScanMessage = "The scan of this document was too poor to read, so no invoice fields could be taken from it. Ask the supplier whether they can send the original PDF, or enter this invoice manually to carry on."
 

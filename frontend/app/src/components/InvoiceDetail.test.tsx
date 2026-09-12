@@ -2138,6 +2138,20 @@ describe('InvoiceDetail Compliance panel: the rule-set version is stated once (B
     expect(screen.queryByTestId('compliance-ruleset-version')).toBeNull()
   })
 
+  it('invoiceDetail_notValidatedSentenceIsTheSharedConstant', async () => {
+    mockDetailFetch(detailRecord({ rule_set_version: null, rule_set_version_id: null }))
+
+    render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
+    await screen.findByText('INV-FAILED-1')
+
+    // A literal, not the constant (U+2014 em dash).
+    const NOT_VALIDATED = 'Not yet validated — run Re-validate to check compliance.'
+    expect(screen.getByTestId('not-validated').textContent).toBe(NOT_VALIDATED)
+    // Catches the constant drifting while this card keeps its own copy. A re-inline with
+    // unchanged text stays green here; the source scan in reviewBatch.test.ts catches it.
+    expect(ROW_EXPANSION_COPY).toHaveProperty('notValidated', NOT_VALIDATED)
+  })
+
   // QA Mode B (BUG-13-01). `!= null`, not truthiness: rule-set 0 is a validated invoice,
   // and a `&&` gate would silently drop both the chip and the table for it. The two other
   // chip specs use 4, so neither can tell the two gates apart.

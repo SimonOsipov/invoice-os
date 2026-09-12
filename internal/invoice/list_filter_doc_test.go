@@ -88,7 +88,7 @@ func mustParseFile(t *testing.T, filename string) *ast.File {
 }
 
 // listHandlerDoc returns ListHandler's doc comment (handlers.go), which
-// carries the "ELEVEN params" count claim.
+// carries the "N params AND together today" count claim.
 func listHandlerDoc(t *testing.T) string {
 	t.Helper()
 	f := mustParseFile(t, "handlers.go")
@@ -159,7 +159,7 @@ func keptAsIsFieldDoc(t *testing.T) string {
 
 // TestListFilterDoc_CommentCountMatchesTheLiveFieldCount (AC-1, AC-2): ports
 // A01-5's idiom (invoices.test.ts:692-726) to Go. handlers.go's count
-// paragraph names the total TWICE ("ELEVEN params" and "all eleven") --
+// paragraph names the total TWICE ("N params" and "all N") --
 // every occurrence in the paragraph must agree with ListFilter's live field
 // count, not just the first one found.
 func TestListFilterDoc_CommentCountMatchesTheLiveFieldCount(t *testing.T) {

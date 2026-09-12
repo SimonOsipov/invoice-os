@@ -983,7 +983,15 @@ describe('the reason pill', () => {
     // false positive in the one slot both pills compete for.
     const fields = [
       mkField({ name: 'vat', value: '271,950.00', reason: 'unreadable' }),
-      mkField({ name: 'issue_date', value: '2026-08-12', reason: 'ambiguous' }),
+      // An ambiguous field with no alternatives is impossible (reconcile.go never emits the
+      // reason under two candidates) -- one alternative is the fixture's own floor, and it is
+      // what makes PILL_AMBIGUOUS's 'TWO' correct for this row.
+      mkField({
+        name: 'issue_date',
+        value: '2026-08-12',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('2026-08-21', 3)],
+      }),
       mkField({ name: 'subtotal', value: '3,626,000.00', reason: 'inconsistent' }),
       mkField({ name: 'buyer_tin', value: '31775208-0003', reason: 'missing' }),
     ]
@@ -997,7 +1005,14 @@ describe('the reason pill', () => {
 
     for (const f of fields) {
       const r = row(f.name)
-      expect(valueOf(f.name), `${f.name} did not render — its pill row is vacuous`).toBe(f.value)
+      // An ambiguous cell renders chips, not an input -- valueOf would read null here.
+      if (f.reason === 'ambiguous') {
+        const chips = chipsOf(f.name)
+        expect(chips.length, `${f.name} renders no chip row`).toBeGreaterThan(0)
+        expect(chips[0].textContent, `${f.name}'s own reading is missing from its chip row`).toContain(f.value)
+      } else {
+        expect(valueOf(f.name), `${f.name} did not render — its pill row is vacuous`).toBe(f.value)
+      }
       expect(within(r).queryByText(pills[f.name]), `${f.name} renders no "${pills[f.name]}" pill`).toBeTruthy()
 
       // within(row) is load-bearing: a pane that renders all four pills once, anywhere, passes
@@ -1011,6 +1026,104 @@ describe('the reason pill', () => {
     const text = pane().textContent ?? ''
     for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing']) {
       expect(text, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
+    }
+  })
+
+  it("the pill's number is the number of chips beside it", () => {
+    // AC-3: the pill's n comes off the SAME candidates array the chips render from -- k
+    // alternatives is k + 1 chips (W-3's decided-reading-is-a-chip rule), and a pill naming k + 1.
+    const fields = [
+      mkField({
+        name: 'issue_date',
+        value: '2026-01-01',
+        reason: 'ambiguous',
+        alternatives: [
+          mkCandidate('2026-01-10', 3),
+          mkCandidate('2026-02-14', 4),
+          mkCandidate('2026-06-30', 5),
+          mkCandidate('2026-10-01', 6),
+        ],
+      }),
+      mkField({
+        name: 'total',
+        value: '1,250,000.00',
+        reason: 'ambiguous',
+        alternatives: [mkCandidate('1,205,000.00', 3)],
+      }),
+    ]
+    render(fieldsPane({ fields }))
+
+    expect(chipsOf('issue_date'), 'four alternatives is five chips').toHaveLength(5)
+    expect(within(row('issue_date')).getByText('FOUND FIVE POSSIBLE VALUES')).toBeTruthy()
+
+    expect(chipsOf('total'), 'one alternative is two chips').toHaveLength(2)
+    expect(within(row('total')).getByText('FOUND TWO POSSIBLE VALUES')).toBeTruthy()
+
+    // In its own row only -- a pane that renders one pill shared by both fields passes a bare
+    // getByText and fails here.
+    expect(
+      within(row('total')).queryByText('FOUND FIVE POSSIBLE VALUES'),
+      "total borrowed issue_date's pill",
+    ).toBeNull()
+  })
+
+  it('pill and chips agree at every count a real read can produce, two through eight', () => {
+    // resolve.go:47's cap is 8 candidates. One render, seven neighbours: a clamp, a cached count or
+    // a shared pill fails a row the two- and five-chip fixtures above never reach.
+    const words: Record<number, string> = { 2: 'TWO', 3: 'THREE', 4: 'FOUR', 5: 'FIVE', 6: 'SIX', 7: 'SEVEN', 8: 'EIGHT' }
+    const names = ['issue_date', 'buyer_tin', 'buyer_name', 'currency', 'subtotal', 'vat', 'total']
+    const fields = names.map((name, k) =>
+      mkField({
+        name,
+        value: `${name}-0`,
+        reason: 'ambiguous',
+        alternatives: Array.from({ length: k + 1 }, (_, j) => mkCandidate(`${name}-${j + 1}`, j + 2)),
+      }),
+    )
+    render(fieldsPane({ fields }))
+
+    const seen: number[] = []
+    for (const [k, name] of names.entries()) {
+      const chips = chipsOf(name)
+      expect(chips, `${name} carries ${k + 1} alternative(s)`).toHaveLength(k + 2)
+      const pills = within(row(name)).getAllByText(/POSSIBLE VALUES$/)
+      expect(pills, `${name} renders exactly one counted pill`).toHaveLength(1)
+      expect(pills[0].textContent, `${name}'s pill disagrees with its ${chips.length} chips`).toBe(
+        `FOUND ${words[chips.length]} POSSIBLE VALUES`,
+      )
+      seen.push(chips.length)
+    }
+    expect(seen, 'every count 2..8 must be rendered once').toEqual([2, 3, 4, 5, 6, 7, 8])
+  })
+
+  it('a field with alternatives but another reason keeps its own pill and no count', () => {
+    // Chips gate on the reason (ExtractionFields.tsx), so the count is 0 here and must not surface.
+    const fields = [
+      mkField({
+        name: 'subtotal',
+        value: '3,626,000.00',
+        reason: 'inconsistent',
+        alternatives: [mkCandidate('3,726,000.00', 3), mkCandidate('3,526,000.00', 5)],
+      }),
+      mkField({
+        name: 'vat',
+        value: '271,950.00',
+        reason: 'unreadable',
+        alternatives: [mkCandidate('217,950.00', 2)],
+      }),
+      mkField({ name: 'total', value: '1,250,000.00', region: null }),
+    ]
+    render(fieldsPane({ fields }))
+
+    for (const [name, want] of [
+      ['subtotal', PILL_INCONSISTENT],
+      ['vat', PILL_UNREADABLE],
+      ['total', PILL],
+    ] as const) {
+      expect(inputOf(name), `${name} renders no input -- its pill row is vacuous`).toBeTruthy()
+      expect(chipsOf(name), `${name} rendered chips`).toHaveLength(0)
+      expect(within(row(name)).queryByText(want), `${name} lost its "${want}" pill`).toBeTruthy()
+      expect(within(row(name)).queryByText(/POSSIBLE VALUES/), `${name} rendered a counted pill`).toBeNull()
     }
   })
 
@@ -1363,7 +1476,9 @@ describe('the pane renders nothing it does not declare', () => {
       SENTENCE,
       PILL,
       PILL_UNREADABLE,
-      PILL_AMBIGUOUS,
+      // Not PILL_AMBIGUOUS: this fixture's issue_date carries 2 alternatives, so 3 chips and
+      // a THREE pill -- the count comes off the candidates array, not a fixed word.
+      'FOUND THREE POSSIBLE VALUES',
       PILL_INCONSISTENT,
       PILL_MISSING,
       NOTE_SUPPLIER,

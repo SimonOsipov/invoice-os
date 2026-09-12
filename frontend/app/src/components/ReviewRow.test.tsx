@@ -269,6 +269,126 @@ describe('ReviewRow row-expansion: the kept banner is a draft-only concept, not 
   })
 })
 
+// A literal, not ROW_EXPANSION_COPY.notValidated, so an edit to the constant reddens RR-nv-1 (U+2014 em dash).
+const NOT_VALIDATED = 'Not yet validated — run Re-validate to check compliance.'
+
+describe('ReviewRow row-expansion: an unevaluated invoice never renders as passing (AC-6)', () => {
+  it('RR-nv-1: an unvalidated row, expanded, renders the not-validated arm and no green strip', async () => {
+    mockGetInvoice(detailFixture({ status: 'draft', violations: [], rule_set_version: null }))
+
+    render(
+      <Row
+        r={listRow({ status: 'draft' })}
+        batches={[]}
+        checked={false}
+        expanded
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={rowCtx()}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+
+    await screen.findByTestId('review-revalidate') // wait for the record to load before asserting
+
+    const notValidated = screen.queryByTestId('review-row-not-validated')
+    expect(notValidated).not.toBeNull()
+    expect(notValidated?.textContent).toBe(NOT_VALIDATED)
+    expect(screen.queryAllByTestId('review-row-passing')).toHaveLength(0)
+
+    const expansion = screen.getByTestId('review-row-expansion')
+    expect(expansion.querySelectorAll('.eyebrow')).toHaveLength(0)
+    expect(expansion.textContent).not.toContain('passed')
+  })
+
+  it('RR-nv-2: a validated clean row still renders the green strip', async () => {
+    mockGetInvoice(detailFixture({
+      status: 'validated',
+      violations: [],
+      rule_set_version: 3,
+      rule_set_version_id: 'rsv-3',
+    }))
+
+    render(
+      <Row
+        r={listRow({ status: 'validated' })}
+        batches={[]}
+        checked={false}
+        expanded
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={rowCtx()}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+
+    await screen.findByTestId('review-revalidate')
+
+    expect(screen.queryByTestId('review-row-passing')).not.toBeNull()
+    expect(screen.queryByTestId('review-row-not-validated')).toBeNull()
+  })
+
+  function renderExpanded(detail: InvoiceDetailRecord) {
+    mockGetInvoice(detail)
+    render(
+      <Row r={listRow({ status: detail.status })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={rowCtx()} base="https://gw" onChanged={() => {}} />,
+    )
+    return screen.findByTestId('review-revalidate')
+  }
+
+  // The action row has no testid: it is the Re-validate button's grandparent.
+  async function actionRowOf(detail: InvoiceDetailRecord) {
+    const btn = await renderExpanded(detail)
+    return btn.parentElement?.parentElement as HTMLElement
+  }
+
+  it('RR-nv-3: the not-validated arm draws no rule above the action row, like the passing strip', async () => {
+    const actionRow = await actionRowOf(detailFixture({ status: 'draft', violations: [], rule_set_version: null }))
+
+    expect(actionRow.style.paddingTop).toBe('0px')
+    expect(actionRow.style.borderTop).toBe('')
+  })
+
+  it('RR-nv-3 control: a failing row keeps the rule, so an empty border can discriminate', async () => {
+    const actionRow = await actionRowOf(detailFixture({
+      status: 'failed',
+      violations: [{ rule_key: 'buyer-tin-required', severity: 'error', message: 'Buyer TIN is required.', path: 'buyer.tin' }],
+      rule_set_version: 3,
+      rule_set_version_id: 'rsv-3',
+    }))
+
+    expect(actionRow.style.paddingTop).toBe('4px')
+    expect(actionRow.style.borderTop).toContain('solid')
+  })
+
+  it('RR-nv-4: a warning-only row with no version renders its advisory cards, not the not-validated arm', async () => {
+    await renderExpanded(detailFixture({
+      status: 'draft',
+      violations: [{ rule_key: 'advisory-x', severity: 'warning', message: 'Advisory only.', path: 'buyer.tin' }],
+      rule_set_version: null,
+    }))
+
+    const expansion = screen.getByTestId('review-row-expansion')
+    expect(screen.queryByTestId('review-row-not-validated')).toBeNull()
+    expect(screen.queryByTestId('review-row-passing')).toBeNull()
+    const eyebrows = expansion.querySelectorAll('.eyebrow')
+    expect(eyebrows).toHaveLength(1)
+    expect(eyebrows[0].textContent).toBe(ROW_EXPANSION_COPY.advisorySectionLabel)
+    expect(expansion.textContent).toContain('Advisory only.')
+    expect(expansion.textContent).not.toContain('passed')
+  })
+
+  it('RR-nv-5: the arm says run Re-validate, so Re-validate is enabled and Keep as-is is absent', async () => {
+    const btn = await renderExpanded(detailFixture({ status: 'draft', violations: [], rule_set_version: null }))
+
+    expect(screen.getByTestId('review-row-not-validated')).toBeTruthy()
+    expect((btn as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByTestId('review-keep')).toBeNull()
+  })
+})
+
 // QA Stage 4 gap-fill (task-500, APPR-08-09). ReviewRow.tsx's isRowSelectable call site
 // had NO render oracle: reverting it alone to `r.status` reddened nothing but tsc, while
 // the same revert in InvoicesList.tsx reddens its own parity spec. This is that spec's

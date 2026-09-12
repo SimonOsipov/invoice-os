@@ -3673,12 +3673,24 @@ test('EXTR11-E2E-07 (AC-6): the entry control and its sibling clear each other o
 
 // The story's Invented-copy table. A transcription, deliberately not an import: the SPA is a
 // different package, and reading the mapping out of the module under test would assert it
-// against itself.
-const REASON_PILL: Record<Exclude<ExtractionReason, ''>, string> = {
+// against itself. `ambiguous` is not a fixed key here -- its pill's word depends on a live
+// chip count, which COUNT_WORD below transcribes instead.
+const REASON_PILL: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
   unreadable: "COULDN'T READ THIS CLEARLY",
-  ambiguous: 'FOUND TWO POSSIBLE VALUES',
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+}
+
+// A transcription with NO numeral fallback: resolve.go:47 caps a field at 8 candidates, so a
+// chip count with no word here is a real defect on the deployed build.
+const COUNT_WORD: Record<number, string> = {
+  2: 'TWO',
+  3: 'THREE',
+  4: 'FOUR',
+  5: 'FIVE',
+  6: 'SIX',
+  7: 'SEVEN',
+  8: 'EIGHT',
 }
 
 // internal/extraction/vocabulary.go, HeaderFields -- and the order one Save writes in. The
@@ -3727,25 +3739,132 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   const headerFlagged = flagged.filter((f) => VOCABULARY.includes(f.name))
   expect(headerFlagged.length, 'no header-vocabulary field was flagged -- the loop below would examine nothing').toBeGreaterThan(0)
 
+  type AmbiguousMeasure = { name: string; alternatives: number; chips: number; word: string }
+  const ambiguousMeasured: AmbiguousMeasure[] = []
+
   for (const f of headerFlagged) {
     const cell = page.getByTestId(`extraction-field-${f.name}`)
     await expect(cell, `${f.name} rendered no cell`).toBeVisible()
-    const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, ''>]
+
+    if (f.reason === 'ambiguous') {
+      // The count comes off the DOM chip row, never off `f.alternatives` directly -- this is
+      // what proves the pill's word is what the person actually sees beside it, and it holds
+      // for both a mock and a docling deploy without a fixture that forces one shape.
+      const chips = cell.locator(`[data-testid^="extraction-chip-${f.name}-"]`)
+      await expect(chips, `${f.name} rendered no chip row`).toHaveCount(1 + f.alternatives.length)
+      const n = await chips.count()
+      const word = COUNT_WORD[n]
+      expect(word, `${n} chips beside ${f.name} has no word in the transcribed table`).toBeTruthy()
+      await expect(
+        cell.getByText(`FOUND ${word} POSSIBLE VALUES`, { exact: true }),
+        `${f.name} carries ${n} chips and renders no "FOUND ${word} POSSIBLE VALUES" pill`,
+      ).toBeVisible()
+      ambiguousMeasured.push({ name: f.name, alternatives: f.alternatives.length, chips: n, word })
+      continue
+    }
+
+    const pill = REASON_PILL[f.reason as Exclude<ExtractionReason, '' | 'ambiguous'>]
     await expect(
       cell.getByText(pill, { exact: true }),
       `${f.name} reported "${f.reason}" and renders no "${pill}" pill`,
     ).toBeVisible()
   }
 
-  // The code itself is machine vocabulary and never reaches the screen.
+  const ambiguous = headerFlagged.filter((f) => f.reason === 'ambiguous')
+  expect(ambiguous.length, 'no ambiguous field was flagged -- the layout sweep below would examine nothing').toBeGreaterThan(0)
+
+  // AC-7: every ambiguous pill's rect stays wholly inside its own cell, and its text never
+  // spills its own box, at every WIDE_WIDTHS entry, widest first. NO ASSERTION STATES A PIXEL
+  // WIDTH -- a width that fits at 2560 and overflows at 1280 has the same width at both.
+  type WidthField = {
+    name: string
+    chips: number
+    slack: { left: number; right: number }
+    pill: Rect
+    cell: Rect
+    pillFit: { scrollWidth: number; clientWidth: number }
+    cellFit: { scrollWidth: number; clientWidth: number }
+  }
+  type WidthMeasure = { width: number; fields: WidthField[] }
+  const measured: WidthMeasure[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first (WIDE_WIDTHS' own order, layout.ts): a spill strands only what the window is
+    // too narrow for, rather than every width after it.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const fields: WidthField[] = []
+      for (const known of ambiguousMeasured) {
+        const cell = page.getByTestId(`extraction-field-${known.name}`)
+        const pill = cell.getByText(`FOUND ${known.word} POSSIBLE VALUES`, { exact: true })
+
+        const m = await settledRead(async () => {
+          const [cellBox, pillBox, cellFit, pillFit] = await Promise.all([
+            cell.boundingBox(),
+            pill.boundingBox(),
+            cell.evaluate(edgesOf),
+            pill.evaluate(edgesOf),
+          ])
+          return { cellBox, pillBox, cellFit, pillFit }
+        }, `${known.name}'s pill geometry at ${width}px`)
+
+        expect(m.cellBox && m.pillBox, `${known.name}'s cell and pill must both render at ${width}px`).toBeTruthy()
+        const cellRect = m.cellBox as Rect
+        const pillRect = m.pillBox as Rect
+        expect(pillRect.width, `${known.name}'s pill has no width at ${width}px`).toBeGreaterThan(0)
+        expect(pillRect.height, `${known.name}'s pill has no height at ${width}px`).toBeGreaterThan(0)
+
+        // Containment: overlapOf clamps per axis, so the intersection collapses to the pill's
+        // own rect only when the pill is wholly inside the cell.
+        expect(
+          sameRect(overlapOf(pillRect, cellRect), pillRect),
+          `${known.name}'s pill must sit wholly inside its cell at ${width}px (pill ${JSON.stringify(pillRect)}, cell ${JSON.stringify(cellRect)})`,
+        ).toBe(true)
+        expect(
+          m.pillFit.scrollWidth - m.pillFit.clientWidth,
+          `${known.name}'s pill text overflows its own box at ${width}px`,
+        ).toBeLessThanOrEqual(1)
+        expect(
+          m.cellFit.scrollWidth - m.cellFit.clientWidth,
+          `${known.name}'s cell overflows its column at ${width}px`,
+        ).toBeLessThanOrEqual(1)
+
+        fields.push({
+          name: known.name,
+          chips: known.chips,
+          slack: gaps(pillRect, cellRect),
+          pill: pillRect,
+          cell: cellRect,
+          pillFit: m.pillFit,
+          cellFit: m.cellFit,
+        })
+      }
+      measured.push({ width, fields })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([
+    ...WIDE_WIDTHS,
+  ])
+
+  // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
+  // lost `ambiguous` when the table dropped its fixed key, so all four codes are named
+  // explicitly -- the retype must not silently stop checking one of them.
   const paneText = await page.getByTestId('extraction-fields').innerText()
   expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of Object.keys(REASON_PILL)) {
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing'] as const) {
     expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
   }
 
   await testInfo.attach('extraction-reason-pills.json', {
-    body: JSON.stringify(flagged.map((f) => ({ name: f.name, reason: f.reason })), null, 2),
+    body: JSON.stringify(
+      { flagged: flagged.map((f) => ({ name: f.name, reason: f.reason })), ambiguous: ambiguousMeasured, measured },
+      null,
+      2,
+    ),
     contentType: 'application/json',
   })
 
@@ -6647,7 +6766,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
     timeout: 60_000,
   })
   await expect(
-    page.getByRole('button', { name: /^Unreadable documents \(/ }),
+    page.getByRole('button', { name: /^Quarantined documents \(/ }),
     'the document tab label reached a spreadsheet run',
   ).toHaveCount(0)
 
@@ -7122,7 +7241,7 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   // The tab is matched on its prefix, not on its count: the count is a second statement of
   // what toHaveCount below already asserts, and matching it here would fail one step earlier
   // with a locator error instead of a row count.
-  const unreadableTab = page.getByRole('button', { name: /^Unreadable documents \(/ })
+  const unreadableTab = page.getByRole('button', { name: /^Quarantined documents \(/ })
   await expect(unreadableTab, 'neither document quarantined -- there is no unreadable tab').toHaveCount(1)
   await unreadableTab.click()
 
@@ -7134,6 +7253,17 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   expect(scannedIdx, `no row names ${scannedName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
   expect(denseIdx, `no row names ${denseName}: ${JSON.stringify(rowLabels)}`).toBeGreaterThanOrEqual(0)
   expect(scannedIdx, 'one row names both files -- the labels do not discriminate the rows').not.toBe(denseIdx)
+
+  // Cross-discriminating pair: bare "scan" is vacuous (the row text also carries the
+  // filename scanned_invoice.pdf), so "supplier" tells the two RowError messages apart.
+  expect(rowLabels[scannedIdx], 'the scanned row must carry the scan-quality message').toContain('The scan of this document')
+  expect(rowLabels[scannedIdx], 'the scanned row must carry the supplier ask').toContain('supplier')
+  expect(rowLabels[scannedIdx], "the scanned row leaked the dense row's message").not.toContain('was read')
+
+  expect(rowLabels[denseIdx], 'the dense row must carry the no-invoice-number message').toContain(
+    'was read, but no invoice number',
+  )
+  expect(rowLabels[denseIdx], "the dense row leaked the scanned row's supplier ask").not.toContain('supplier')
 
   // (c) the SCANNED row's own control, and the invoice it produces named by equality against
   // the scanned document — never "is not null", which the dense document would satisfy too.
@@ -7329,7 +7459,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
 
   // --- AC-2: the header, the tiles and both tab labels ----------------------------------
   const registerTabName = 'Already imported (1)'
-  const unreadableTabName = 'Unreadable documents (1)'
+  const unreadableTabName = 'Quarantined documents (1)'
   await expect(
     page.getByRole('button', { name: unreadableTabName }),
     'the scan must quarantine into its own tab, labelled in documents',
@@ -7353,8 +7483,13 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   expect(header, "B8's document arm -- the AC's own wording").toContain('1 already in the register')
   expect(header, "B10's document arm").toContain('1 invoices already in the register. Nothing to fix.')
   expect(header, 'the spreadsheet ledger wording reached a document run').not.toContain('already in your ledger')
-  expect(header, "B2's document arm").toContain('1 unreadable documents')
+  expect(header, "B2's document arm").toContain('1 quarantined documents')
   expect(header, "B2's spreadsheet arm reached a document run").not.toContain('1 unreadable rows')
+  expect(header, 'the shipped unreadable wording reached a document run').not.toContain('unreadable documents')
+  expect(header, "B11's document arm").toContain(
+    'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.',
+  )
+  expect(header, "B11's spreadsheet arm reached a document run").not.toContain('Nothing was stored')
 
   // --- AC-2: the already-imported tab body ----------------------------------------------
   await page.getByRole('button', { name: registerTabName }).click()
@@ -7385,7 +7520,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   const unreadable = await screenText(page)
   expect(unreadable, "U2's document arm").toContain('1 documents never became invoices')
   expect(unreadable, "U3's document arm").toContain(
-    'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.',
+    'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.',
   )
   expect(unreadable, "U3's spreadsheet arm reached a document run").not.toContain('The importer could not read them')
   expect(unreadable, "U5's document arm").toContain('1 of 2 documents. The invoices that did import are unaffected.')
@@ -7426,7 +7561,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
   await expect(registerTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
     'Nothing to fix.',
   )
-  const unreadableTileValue = page.getByText('1 unreadable documents', { exact: true })
+  const unreadableTileValue = page.getByText('1 quarantined documents', { exact: true })
   await expect(unreadableTileValue, "B2's tile value").toHaveCount(1)
   const unreadableTile = unreadableTileValue.locator('xpath=..')
   await expect(unreadableTile, 'the resolved parent is the tile, which also carries its caption').toContainText(
@@ -7489,7 +7624,7 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
       // inside it overflows, so the edge check alone passes on the very defect this guards.
       for (const [label, text, tile] of [
         ['the already-in-the-register tile', m.registerText, m.registerBox],
-        ['the unreadable-documents tile', m.unreadableText, m.unreadableBox],
+        ['the quarantined-documents tile', m.unreadableText, m.unreadableBox],
       ] as const) {
         expect(text.outerLeft, `${label}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
           tile.left - 0.5,
@@ -7522,6 +7657,197 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
     body: JSON.stringify(fits, null, 2),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+const RICH_PDF_NAME = 'rich_invoice.pdf'
+const RICH_PDF_NUMBER = 'ASC-2026-0918'
+
+test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed', async ({
+  page,
+}, testInfo) => {
+  // Two extractions on a possibly cold sidecar, a reload, then a four-width sweep.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  // A document import runs no gate, so both invoices land unstamped -- no second run needed.
+  const { token, entityId, jobs } = await runDocuments(page, 'EXTR-30 unvalidated', [
+    { name: RICH_PDF_NAME, mimeType: 'application/pdf', buffer: uniquePdfBytes() },
+    { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
+  ])
+  expect(
+    jobs[RICH_PDF_NAME].state,
+    `the rich PDF did not settle succeeded (kind ${jobs[RICH_PDF_NAME].failure_kind ?? 'null'}, error ${jobs[RICH_PDF_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+  expect(
+    jobs[GOLDEN_DOCX_NAME].state,
+    `the golden DOCX did not settle succeeded (kind ${jobs[GOLDEN_DOCX_NAME].failure_kind ?? 'null'}, error ${jobs[GOLDEN_DOCX_NAME].last_error ?? 'none'})`,
+  ).toBe('succeeded')
+
+  // Vacuity guard: both invoices must exist in the register before any tile is read.
+  await expect
+    .poll(
+      async () =>
+        (await listInvoices(token, { entity_id: entityId, limit: 50 })).invoices.map((i) => i.invoice_number).sort(),
+      {
+        message: 'a document run holding two unevaluated drafts must still list both in the register',
+        timeout: 120_000,
+        intervals: [1_000],
+      },
+    )
+    .toEqual([RICH_PDF_NUMBER, GOLDEN_DOCX_NUMBER])
+
+  // Two documents cannot take routeAfterRun's 'single' arm, so the landing carries both
+  // batch ids -- EXTR15-E2E-02's own reading of the path.
+  await expect
+    .poll(() => new URL(page.url()).pathname, {
+      message: 'a two-document run must land on the review batch surface with both batch ids',
+      timeout: 180_000,
+    })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36},[0-9a-fA-F-]{36}\/review$/)
+  const landingMatch = new URL(page.url()).pathname.match(/^\/imports\/([0-9a-fA-F-]{36}),([0-9a-fA-F-]{36})\/review$/)
+  expect(landingMatch, 'the landing path must carry two batch ids').toBeTruthy()
+  const [, batchId1, batchId2] = landingMatch!
+  // The landing's shell settles first, or the listener below can catch its pre-reload response.
+  await expect(page.getByRole('heading', { name: '2 invoices imported', exact: true })).toBeVisible({ timeout: 60_000 })
+
+  // The count oracle is the wire, never the DOM: registered BEFORE the reload (INVCR-E2E-6
+  // idiom), so the response the reload fires cannot be missed.
+  const notEvaluatedResponse = page.waitForResponse(
+    (r) =>
+      r.request().method() === 'GET' &&
+      new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices') &&
+      new URL(r.url()).searchParams.get('not_evaluated') === 'true',
+  )
+  await page.reload()
+  await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached()
+  const resp = await notEvaluatedResponse
+
+  expect(resp.status(), 'the not_evaluated count request must succeed').toBe(200)
+  const respUrl = new URL(resp.url())
+  expect(
+    respUrl.searchParams.getAll('import_batch_id').sort(),
+    'the shell must scope the count to both batches',
+  ).toEqual([batchId1, batchId2].sort())
+  expect(respUrl.searchParams.get('limit'), 'the count is a pagination total, not a page of rows').toBe('1')
+  const neTotal = ((await resp.json()) as { pagination: { total: number } }).pagination.total
+  expect(neTotal, 'a document import runs no gate, so both invoices are unevaluated').toBe(2)
+
+  // AC-5: the header and the three tile values.
+  await expect(page.getByRole('heading', { name: '2 invoices imported', exact: true })).toBeVisible({ timeout: 60_000 })
+  for (const value of ['0 valid', '0 failed a rule', `${neTotal} not yet validated`]) {
+    await expect(page.getByText(value, { exact: true }), `expected exactly one "${value}"`).toHaveCount(1)
+  }
+
+  // AC-7: the layout sweep runs before any row expands below.
+  const column = page.getByText('Imported · stored in the ledger', { exact: true }).locator('xpath=..')
+  await expect(column, 'the resolved parent is the Imported column').toContainText('Built from 2 documents')
+
+  const tileSpecs = [
+    ['0 valid', 'Passed every rule.'],
+    ['0 failed a rule', 'Read fine, stored, but not compliant yet.'],
+    [`${neTotal} not yet validated`, 'Stored, but no rule has been run against them yet.'],
+  ] as const
+  const values = tileSpecs.map(([value]) => page.getByText(value, { exact: true }))
+  const tiles = values.map((v) => v.locator('xpath=..'))
+  for (const [i, [tileValue, caption]] of tileSpecs.entries()) {
+    await expect(values[i], `${tileValue}'s value`).toHaveCount(1)
+    await expect(tiles[i], 'the resolved parent is the tile, which also carries its caption').toContainText(caption)
+  }
+
+  type Fit = { width: number; wrapped: boolean; validSlack: number; failedSlack: number; notEvaluatedSlack: number }
+  const fits: Fit[] = []
+  const entryViewport = page.viewportSize()
+
+  try {
+    // Widest first -- WIDE_WIDTHS' own order (layout.ts:22).
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const read = async () => {
+        const [columnBox, tileBoxes, tileEdges, valueEdges] = await Promise.all([
+          column.boundingBox(),
+          Promise.all(tiles.map((t) => t.boundingBox())),
+          Promise.all(tiles.map((t) => t.evaluate(edgesOf))),
+          Promise.all(values.map((v) => v.evaluate(edgesOf))),
+        ])
+        return { columnBox, tileBoxes, tileEdges, valueEdges }
+      }
+      const m = await settledRead(read, `unvalidated tile geometry at ${width}px`)
+      expect(
+        m.columnBox && m.tileBoxes.every(Boolean),
+        `the column and all three tiles must render at ${width}px`,
+      ).toBeTruthy()
+
+      // (1) pairwise non-overlap; a shared edge counts as clearance (rectsOverlap, layout.ts).
+      for (const [a, b] of [[0, 1], [0, 2], [1, 2]] as const) {
+        expect(
+          rectsOverlap(m.tileBoxes[a]!, m.tileBoxes[b]!),
+          `tiles ${a} and ${b} must not overlap at ${width}px (${JSON.stringify(m.tileBoxes[a])}, ${JSON.stringify(m.tileBoxes[b])})`,
+        ).toBe(false)
+      }
+
+      // (2) containment in the column -- the intersection is the tile's own rect.
+      for (const i of [0, 1, 2]) {
+        expect(
+          sameRect(overlapOf(m.tileBoxes[i]!, m.columnBox!), m.tileBoxes[i]!),
+          `tile ${i} must sit wholly inside the Imported column at ${width}px (tile ${JSON.stringify(m.tileBoxes[i])}, column ${JSON.stringify(m.columnBox)})`,
+        ).toBe(true)
+      }
+
+      // (3) each value's text stays inside its own tile, and fits the box it was given.
+      for (const i of [0, 1, 2]) {
+        const text = m.valueEdges[i]
+        const tile = m.tileEdges[i]
+        expect(text.outerLeft, `tile ${i}'s value must start inside its tile at ${width}px`).toBeGreaterThanOrEqual(
+          tile.left - 0.5,
+        )
+        expect(text.outerRight, `tile ${i}'s value must end inside its tile at ${width}px`).toBeLessThanOrEqual(
+          tile.right + 0.5,
+        )
+        expect(
+          text.scrollWidth,
+          `tile ${i}'s value text overflows its own box at ${width}px (${text.scrollWidth} > ${text.clientWidth})`,
+        ).toBeLessThanOrEqual(text.clientWidth + 1)
+      }
+
+      fits.push({
+        width,
+        // Recorded, not asserted: a same-top check fails at 1280 by design.
+        wrapped: m.tileBoxes[2]!.y >= m.tileBoxes[0]!.y + m.tileBoxes[0]!.height - 1,
+        validSlack: m.tileEdges[0].right - m.valueEdges[0].outerRight,
+        failedSlack: m.tileEdges[1].right - m.valueEdges[1].outerRight,
+        notEvaluatedSlack: m.tileEdges[2].right - m.valueEdges[2].outerRight,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(fits.map((f) => f.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('unvalidated-tile-geometry.json', {
+    body: JSON.stringify(fits, null, 2),
+    contentType: 'application/json',
+  })
+
+  // AC-6: both rows, checked only after the layout sweep above.
+  const rows = page.getByTestId('review-row')
+  await expect(rows, 'a document run with two unevaluated invoices renders two rows').toHaveCount(2)
+  for (let i = 0; i < 2; i++) {
+    await rows.nth(i).click()
+    // Ties the expansion below to THIS row: row 0's identical box must be gone first.
+    await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'true')
+    await expect(rows.nth(1 - i)).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByTestId('review-row-expansion')).toHaveCount(1)
+    await expect(page.getByTestId('review-row-not-validated')).toHaveText(
+      'Not yet validated — run Re-validate to check compliance.',
+    )
+    await expect(page.getByTestId('review-row-passing')).toHaveCount(0)
+    const expansionText = await page.getByTestId('review-row-expansion').innerText()
+    // Case-insensitive: TILE_CAPTION_VALID is capitalised "Passed every rule.".
+    expect(expansionText, `row ${i}'s expansion must never say passed`).not.toMatch(/passed/i)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

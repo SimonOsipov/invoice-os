@@ -328,6 +328,9 @@ type ListFilter struct {
 	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
 	// Zero value applies no predicate, like every other bool above.
 	AwaitingApproval bool
+
+	// NotEvaluated narrows to invoices no rule set has run against. Zero value applies no predicate.
+	NotEvaluated bool
 }
 
 // Sentinels for the invoice error model. ErrIllegalTransition/

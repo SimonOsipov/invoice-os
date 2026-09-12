@@ -265,6 +265,8 @@ describe('T5 one flag per broken row', () => {
     const flags = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="line-item-flag-"]'))
     expect(flags.length, 'exactly one row is broken in this fixture').toBe(1)
     expect(flags[0].dataset.testid).toBe('line-item-flag-2')
+    // extractionReview.ts's copy table, verbatim -- reasonPill('inconsistent', 0)'s own string.
+    expect(flags[0].textContent).toBe("DOESN'T ADD UP")
   })
 })
 

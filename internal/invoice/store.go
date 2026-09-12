@@ -746,6 +746,11 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// status = 'draft': on a failed row the mark means resolved outside, not kept as-is.
 			conditions = append(conditions, `(status = 'draft' AND kept_as_is_at IS NOT NULL)`)
 		}
+		if f.NotEvaluated {
+			// NULL means never stamped: both the validation stamp and the
+			// revalidation sweep always write a real rule_set_version_id.
+			conditions = append(conditions, "rule_set_version_id IS NULL")
+		}
 		if f.RuleKey != "" {
 			// json.Marshal, never fmt.Sprintf: a quote-bearing rule_key built by
 			// string formatting emits malformed JSON, which Postgres rejects as

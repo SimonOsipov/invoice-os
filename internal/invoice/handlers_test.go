@@ -1413,6 +1413,157 @@ func TestListHandler_NonBoolNeedsFix400(t *testing.T) {
 	})
 }
 
+// TestListHandler_NotEvaluatedParse (AC-2): absent/empty default to false,
+// true/1 set the filter, false stays false, and an unparseable value 400s
+// with the exact message and never reaches the store.
+func TestListHandler_NotEvaluatedParse(t *testing.T) {
+	t.Run("absent defaults to false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NotEvaluated {
+			t.Errorf("captured ListFilter.NotEvaluated = true, want false when ?not_evaluated is absent")
+		}
+	})
+
+	t.Run("empty value defaults to false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?not_evaluated=")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NotEvaluated {
+			t.Errorf("captured ListFilter.NotEvaluated = true, want false for ?not_evaluated=")
+		}
+	})
+
+	t.Run("true sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?not_evaluated=true")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if !captured.NotEvaluated {
+			t.Errorf("captured ListFilter.NotEvaluated = false, want true for ?not_evaluated=true")
+		}
+	})
+
+	t.Run("1 sets the filter", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?not_evaluated=1")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if !captured.NotEvaluated {
+			t.Errorf("captured ListFilter.NotEvaluated = false, want true for ?not_evaluated=1")
+		}
+	})
+
+	t.Run("false stays false", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		var captured ListFilter
+		called := false
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			called = true
+			captured = f
+			return []Invoice{}, 0, nil
+		}
+		rec, _ := doInvoiceList(t, list, &id, "?not_evaluated=false")
+		if !called {
+			t.Fatalf("store.List was not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+		}
+		if captured.NotEvaluated {
+			t.Errorf("captured ListFilter.NotEvaluated = true, want false for ?not_evaluated=false")
+		}
+	})
+
+	t.Run("unparseable value 400s, store not called", func(t *testing.T) {
+		id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+		list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+			t.Fatal("store.List must not run when not_evaluated is not a bool")
+			return nil, 0, nil
+		}
+		rec, resp := doInvoiceList(t, list, &id, "?not_evaluated=maybe")
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if resp.Error != "not_evaluated must be a boolean" {
+			t.Errorf("resp.Error = %q, want %q", resp.Error, "not_evaluated must be a boolean")
+		}
+	})
+}
+
+// not_evaluated takes every strconv.ParseBool spelling and leaves sibling filters intact.
+func TestListHandler_NotEvaluatedParseBoolSpellingsAndSiblings(t *testing.T) {
+	cases := []struct {
+		query    string
+		want     bool
+		keptAsIs bool
+		needsFix bool
+		status   Status
+	}{
+		{"?not_evaluated=TRUE", true, false, false, ""},
+		{"?not_evaluated=t", true, false, false, ""},
+		{"?not_evaluated=0", false, false, false, ""},
+		{"?not_evaluated=true&kept_as_is=true&status=draft", true, true, false, StatusDraft},
+		{"?not_evaluated=false&needs_fix=true", false, false, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.query, func(t *testing.T) {
+			id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+			var captured ListFilter
+			called := false
+			list := func(ctx context.Context, f ListFilter) ([]Invoice, int, error) {
+				called = true
+				captured = f
+				return []Invoice{}, 0, nil
+			}
+			rec, _ := doInvoiceList(t, list, &id, tc.query)
+			if !called {
+				t.Fatalf("store.List not called (status=%d, body=%s)", rec.Code, rec.Body.String())
+			}
+			if captured.NotEvaluated != tc.want {
+				t.Errorf("NotEvaluated = %v, want %v", captured.NotEvaluated, tc.want)
+			}
+			if captured.KeptAsIs != tc.keptAsIs || captured.NeedsFix != tc.needsFix || captured.Status != tc.status {
+				t.Errorf("siblings = {KeptAsIs:%v NeedsFix:%v Status:%q}, want {%v %v %q}",
+					captured.KeptAsIs, captured.NeedsFix, captured.Status, tc.keptAsIs, tc.needsFix, tc.status)
+			}
+		})
+	}
+}
+
 // TestListHandler_RuleKeyAndQLengthCap (QA Mode B, AC-6, task-282): the
 // implementation plan's own §1 param-contract table requires rule_key/q to
 // 400 with "rule_key is too long" / "q is too long" above a 200-char cap --

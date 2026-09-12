@@ -91,7 +91,7 @@ export function ReviewUnreadableTab({
         </div>
         <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>
           {unit === 'document'
-            ? 'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.'
+            ? 'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.'
             : 'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.'}
         </p>
       </div>

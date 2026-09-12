@@ -1081,7 +1081,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     data-testid="not-validated"
                     style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', border: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--fg-2)' }}
                   >
-                    Not yet validated — run Re-validate to check compliance.
+                    {ROW_EXPANSION_COPY.notValidated}
                   </div>
                 )}
               </div>

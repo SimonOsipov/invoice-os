@@ -15,7 +15,7 @@
 // failing thing and must not be rewritten to make it pass: either a document branch has
 // gone missing from the source, or a spreadsheet one has been edited.
 //
-// THE DOCUMENT LITERALS ARE THE SHIPPED WORDING, settled by EXTR-15-09. FIVE carry an AC
+// THE DOCUMENT LITERALS ARE THE SHIPPED WORDING. FIVE carry an AC
 // of their own: B8, A3, A4, A6 and A7 read "already in the register" for the document
 // unit, where the spreadsheet unit keeps "already in your ledger". Those five are marked
 // `AC` below. SIX were settled by 09's architecture pass: R4, R5 and R6 (D1, the middle
@@ -26,8 +26,8 @@
 // `{rows.length}` and `${batch.rows_total}` stay, because they name a variable. SW-3 is
 // the guard and strips every `{...}` / `${...}` expression before it applies the regex.
 //
-// BOUNDARY. The census pins the 31 sites it knows about, measured on this branch. It
-// CANNOT catch a thirty-second unit-ambiguous string added later, nor a seventh file. Its
+// BOUNDARY. The census pins the 32 sites it knows about, measured on this branch. It
+// CANNOT catch a thirty-third unit-ambiguous string added later, nor a seventh file. Its
 // floor is a ratchet against silent deletion, not a discovery instrument.
 //
 // DELIBERATE EXCLUSION, so the absence is a decision and not an oversight:
@@ -35,7 +35,7 @@
 // cannot be sent.` (bulkBarView) is NOT a site. Its "row" already means a TABLE row, not a
 // line of an uploaded file: it is scoped by "on this page" (pagination), it counts
 // InvoiceRecords, and even in a spreadsheet run one invoice can come from many file rows —
-// so the word is exactly as accurate, and as loose, in both units. Every one of the 31
+// so the word is exactly as accurate, and as loose, in both units. Every one of the 32
 // sites below fails that test: each uses "row" for a line of the source file, which a PDF
 // does not have.
 //
@@ -92,7 +92,7 @@ const SITES: Site[] = [
     id: 'R3',
     file: REVIEW_BATCH,
     spreadsheetLiteral: 'Unreadable rows (${counts.unreadable})',
-    documentLiteral: 'Unreadable documents (${counts.unreadable})',
+    documentLiteral: 'Quarantined documents (${counts.unreadable})',
   },
   {
     id: 'R4',
@@ -124,7 +124,7 @@ const SITES: Site[] = [
     documentLiteral: '0 of ${batch.rows_total} documents produced an invoice',
   },
 
-  // --- components/ReviewBatch.tsx (8) ---
+  // --- components/ReviewBatch.tsx (11) ---
   {
     id: 'B1',
     file: REVIEW_BATCH_TSX,
@@ -135,7 +135,7 @@ const SITES: Site[] = [
     id: 'B2',
     file: REVIEW_BATCH_TSX,
     spreadsheetLiteral: '${tiles.frozen.unreadable} unreadable rows',
-    documentLiteral: '${tiles.frozen.unreadable} unreadable documents',
+    documentLiteral: '${tiles.frozen.unreadable} quarantined documents',
   },
   {
     id: 'B3',
@@ -194,6 +194,13 @@ const SITES: Site[] = [
     spreadsheetLiteral: '${tiles.frozen.alreadyImportedInvoices} invoices already in your ledger. Nothing to fix.',
     documentLiteral: '${tiles.frozen.alreadyImportedInvoices} invoices already in the register. Nothing to fix.',
   },
+  {
+    id: 'B11', // AC-6: the channel paragraph, branched by unit
+    file: REVIEW_BATCH_TSX,
+    spreadsheetLiteral: 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.',
+    documentLiteral:
+      'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.',
+  },
 
   // --- components/ReviewUnreadableTab.tsx (5) ---
   {
@@ -214,7 +221,7 @@ const SITES: Site[] = [
     spreadsheetLiteral:
       'The importer could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: correct the rows in your file and import again.',
     documentLiteral:
-      'The extractor could not read them, so no rule was ever run against them and nothing was stored. They cannot be fixed here: replace the documents and import again.',
+      'No invoice was created from them, so no rule was ever run against them. Each document is still stored, and the list below says what stopped it: enter that invoice by hand, or replace the document and import again.',
   },
   {
     id: 'U4',
@@ -313,9 +320,9 @@ function occurrences(haystack: string, needle: string): number {
 
 describe('review-copy census (EXTR-15-08)', () => {
   // Floor and ceiling in one line: a deleted row and a smuggled-in row both fail here.
-  it('CEN-1 (GREEN on landing): the census names exactly 31 sites', () => {
-    expect(SITES).toHaveLength(31)
-    expect(new Set(SITES.map((s) => s.id)).size).toBe(31)
+  it('CEN-1 (GREEN on landing): the census names exactly 32 sites', () => {
+    expect(SITES).toHaveLength(32)
+    expect(new Set(SITES.map((s) => s.id)).size).toBe(32)
   })
 
   // Both halves must be present at once — the unit is a branch, not a replacement.

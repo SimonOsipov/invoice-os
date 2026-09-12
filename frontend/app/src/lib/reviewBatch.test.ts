@@ -79,6 +79,7 @@ import {
   reviewShellState,
   reviewShellStateAll,
   reviewTabs,
+  ROW_EXPANSION_COPY,
   rowExpansionView,
   routeAfterImport,
   showsSourceFile,
@@ -2044,7 +2045,7 @@ describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human labe
   })
 })
 
-describe('rowExpansionView: a clean invoice (zero violations) is the passing line, never a card list (AC-6, FIX-9)', () => {
+describe('rowExpansionView: a clean invoice is the passing line only when a rule set stamped it; unstamped is not validated (AC-6, FIX-9)', () => {
   it('FIX-9: rule_set_version 3 -> passing, summary is "Every rule in NG-MBS v3 passed.", zero cards', () => {
     const view = rowExpansionView(
       { violations: [], rule_set_version: 3 },
@@ -2056,13 +2057,96 @@ describe('rowExpansionView: a clean invoice (zero violations) is the passing lin
     expect(view.cards).toEqual([])
   })
 
-  it('a null rule_set_version (never evaluated) still renders honestly, not v0', () => {
+  it('a stamped clean invoice is passing and not notValidated', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: 3 },
+      { can_revalidate: false, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(true)
+    expect(view).toHaveProperty('notValidated', false)
+    expect(view.summary).toBe('Every rule in NG-MBS v3 passed.')
+    expect(view.sectionLabel).toBeNull()
+  })
+
+  it('a null rule_set_version (never evaluated) is not validated, and never passing', () => {
     const view = rowExpansionView(
       { violations: [], rule_set_version: null },
       { can_revalidate: true, revalidate_blocked_reason: null },
     )
 
-    expect(view.summary).toBe('Every rule in not evaluated passed.')
+    // First, so a regression quotes the old sentence 'Every rule in not evaluated passed.'
+    expect(view.summary).toBeNull()
+    expect(view.passing).toBe(false)
+    expect(view).toHaveProperty('notValidated', true)
+    expect(view.sectionLabel).toBeNull()
+  })
+
+  it('an undefined rule_set_version (the list-row trap) is not validated', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: undefined },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view).toHaveProperty('notValidated', true)
+    expect(view.summary).toBeNull()
+    expect(view.sectionLabel).toBeNull()
+  })
+
+  it('nothing on an unevaluated view says passed', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    const strings = Object.values(view).filter((v): v is string => typeof v === 'string')
+    // Floor: without this, an empty `strings` would vacuously pass the loop below.
+    expect(strings.length).toBeGreaterThan(0)
+    for (const s of strings) {
+      expect(s).not.toContain('passed')
+      expect(s).not.toContain('not evaluated')
+    }
+  })
+
+  it('rule_set_version 0 is stamped: passing, not notValidated (`!= null`, never truthiness)', () => {
+    const view = rowExpansionView(
+      { violations: [], rule_set_version: 0 },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(true)
+    expect(view.notValidated).toBe(false)
+    expect(view.summary).toBe('Every rule in NG-MBS v0 passed.')
+    expect(view.sectionLabel).toBeNull()
+  })
+
+  it('a warning-only invoice with no version stays advisory: neither passing nor notValidated, nothing says passed', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'warning' })], rule_set_version: null },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.notValidated).toBe(false)
+    expect(view.summary).toBeNull()
+    expect(view.sectionLabel).toBe(ROW_EXPANSION_COPY.advisorySectionLabel)
+    expect(view.cards).toHaveLength(1)
+    const strings = Object.values(view).filter((v): v is string => typeof v === 'string')
+    expect(strings.length).toBeGreaterThan(0)
+    for (const s of strings) expect(s).not.toContain('passed')
+  })
+
+  it('an error with no version keeps its cards: a violation outranks the missing stamp', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: undefined },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view.notValidated).toBe(false)
+    expect(view.sectionLabel).toBe(ROW_EXPANSION_COPY.sectionLabel)
+    expect(view.cards).toHaveLength(1)
   })
 })
 
@@ -2078,6 +2162,24 @@ describe('reviewBatch.ts source (whole file): the fake "NG-MBS v8" label is neve
     const source = readFileSync(srcPath, 'utf8')
 
     expect(source).not.toMatch(/NG-MBS v8/i)
+  })
+})
+
+// Test-local literal, copied byte-for-byte from InvoiceDetail.tsx's own (pre-move) inline
+// string -- includes the U+2014 em dash, not a retyped hyphen.
+const NOT_VALIDATED = 'Not yet validated — run Re-validate to check compliance.'
+
+describe('the not-validated sentence has exactly one owner (AC-7)', () => {
+  it('reviewBatch.ts defines it once; InvoiceDetail.tsx never repeats it as a literal, reading ROW_EXPANSION_COPY.notValidated instead', () => {
+    const libSource = readFileSync(fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)), 'utf8')
+    const detailSource = readFileSync(fileURLToPath(new URL('../components/InvoiceDetail.tsx', import.meta.url)), 'utf8')
+
+    // Control: both files are real source, not empty/truncated reads.
+    expect(libSource.length).toBeGreaterThan(1000)
+    expect(detailSource.length).toBeGreaterThan(1000)
+    expect(libSource.split(NOT_VALIDATED).length - 1).toBe(1)
+    expect(detailSource.split(NOT_VALIDATED).length - 1).toBe(0)
+    expect(detailSource).toContain('{ROW_EXPANSION_COPY.notValidated}')
   })
 })
 
@@ -2097,6 +2199,17 @@ describe('rowExpansionView: a failing invoice carries one card per violation, in
     expect(view.summary).toBeNull()
     expect(view.cards.map((c) => c.ruleKey)).toEqual(['buyer-tin-format', 'vat-standard-rate'])
     expect(view.cards.map((c) => c.field)).toEqual(['buyer_tin', 'vat'])
+  })
+
+  it('a violated invoice is neither passing nor not-validated', () => {
+    const view = rowExpansionView(
+      { violations: [mkViolation({ severity: 'error' })], rule_set_version: 3 },
+      { can_revalidate: true, revalidate_blocked_reason: null },
+    )
+
+    expect(view.passing).toBe(false)
+    expect(view).toHaveProperty('notValidated', false)
+    expect(view.sectionLabel).toBe(ROW_EXPANSION_COPY.sectionLabel)
   })
 })
 
@@ -3038,7 +3151,7 @@ describe('EXTR-15-09 SW-2 (AC-1/AC-2): the seven lib branches, spreadsheet half 
     // frozen in BOTH units, which is half of AC-6 (no tab added, renamed or dropped).
     const strip = (tabs: ReturnType<typeof reviewTabs>) => tabs.map((t) => `${t.id}=${t.label}`).join('|')
     check('R3 spreadsheet', strip(reviewTabsU(counts, 'spreadsheet')), 'invoices=Invoices (7)|unreadable=Unreadable rows (2)|already-imported=Already imported (1)')
-    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Unreadable documents (2)|already-imported=Already imported (1)')
+    check('R3 document', strip(reviewTabsU(counts, 'document')), 'invoices=Invoices (7)|unreadable=Quarantined documents (2)|already-imported=Already imported (1)')
 
     // R4/R5/R6 -- the three CSV headers. D1: the middle column is DROPPED for a document,
     // never renamed to `Document`. In a document run the row number is always empty

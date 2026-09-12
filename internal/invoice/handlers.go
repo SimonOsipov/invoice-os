@@ -583,9 +583,10 @@ const maxImportBatchIDs = 25
 // from Invoices/Reports/Customers whenever they weren't inside the newest 50
 // tenant-wide (the CI-caught regression this param fixes).
 //
-// ELEVEN params AND together today, and the SPA's ListInvoicesOptions mirrors
-// all eleven (lib/invoices.ts): limit, offset, needs_attention, entity_id,
-// import_batch_id, status, needs_fix, rule_key, q, kept_as_is, awaiting_approval.
+// TWELVE params AND together today, and the SPA's ListInvoicesOptions mirrors
+// all twelve (lib/invoices.ts): limit, offset, needs_attention, entity_id,
+// import_batch_id, status, needs_fix, rule_key, q, kept_as_is, awaiting_approval,
+// not_evaluated.
 //
 // INVCR-01-06 ([D4], Core AC 7) added the review screen's five of them:
 // import_batch_id (uuid.Parse, same shape as entity_id), status (validated by
@@ -777,11 +778,23 @@ func ListHandler(
 			awaitingApproval = b
 		}
 
+		// not_evaluated: invoices no rule set has run against. Same
+		// empty-is-absent/strconv.ParseBool shape as the other bool filters above.
+		notEvaluated := false
+		if raw := query.Get("not_evaluated"); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "not_evaluated must be a boolean")
+				return
+			}
+			notEvaluated = b
+		}
+
 		filter := ListFilter{
 			Limit: limit, Offset: offset, EntityID: entityID, NeedsAttention: needsAttention,
 			ImportBatchIDs: importBatchIDs, Status: statusFilter, NeedsFix: needsFix,
 			RuleKey: ruleKey, Query: q, KeptAsIs: keptAsIs,
-			AwaitingApproval: awaitingApproval,
+			AwaitingApproval: awaitingApproval, NotEvaluated: notEvaluated,
 		}
 
 		items, total, err := list(r.Context(), filter)

@@ -683,3 +683,38 @@ describe('EXTR32-A8: a reload of the wired landing reopens the review cleanly wi
     }
   })
 })
+
+// Popstate must neither write nor clear the map: only applyRoute adds an entry.
+describe('EXTR32-A9: a history restore onto a job the map does not hold offers no exit', () => {
+  it('EXTR32-A9: a history restore onto a job the map does not hold offers no exit', async () => {
+    await landOneDocumentRun(
+      {
+        jobsByDocument: { [DOC_ID]: [extractionJob(JOB_ID, DOC_ID)] },
+        detailByJob: {
+          [JOB_ID]: extractionDetail(JOB_ID, DOC_ID),
+          [OTHER_JOB_ID]: extractionDetail(OTHER_JOB_ID, DOC_ID),
+        },
+        importReplies: [importReply(BATCH_ID)],
+        invoicesByBatch: { [BATCH_ID]: [{ id: INVOICE_ID }] },
+      },
+      DOC_ID,
+    )
+    await waitFor(() =>
+      expect(window.location.pathname, 'sanity: the run must land on its own job path').toBe(`/extraction/${JOB_ID}`),
+    )
+
+    await popTo(`/extraction/${OTHER_JOB_ID}`)
+    await waitFor(() => expect(requireCtx().extractionJobId, 'popstate must restore the other job').toBe(OTHER_JOB_ID))
+    await waitFor(() =>
+      expect(screen.queryByTestId('extraction-save'), 'control: the settled footer rendered').not.toBeNull(),
+    )
+    expect(screen.queryByTestId('extraction-open-invoice'), 'a restored unmapped job must offer no exit').toBeNull()
+
+    await popTo(`/extraction/${JOB_ID}`)
+    await waitFor(() =>
+      expect(screen.queryByTestId('extraction-open-invoice'), 'a restore back onto the landed job must keep its exit').not.toBeNull(),
+    )
+    fireEvent.click(screen.getByTestId('extraction-open-invoice'))
+    await waitFor(() => expect(window.location.pathname, 'the restored exit must open its own invoice').toBe(`/invoices/${INVOICE_ID}`))
+  })
+})

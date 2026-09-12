@@ -11,11 +11,8 @@
 // the four style objects as a STRUCTURAL regression guard over the declarations that make
 // containment work. A rendered `boundingBox().width === 620` stays forbidden (`D-4`).
 //
-// ASSUMED CONTRACT: `<ExtractionReview ctx={ctx} jobId={jobId} />`. System Design §7 writes
-// the route as `<ExtractionReview ctx={ctx} />` with the id off `ctx.extractionJobId`, but
-// that ctx member is EXTR-11-08's to add — reading it here makes THIS subtask's own commit
-// fail `tsc`. The prop also matches `ExtractionCanvas`'s shape and gives AC-9 a handle to
-// change. EXTR-11-08 then renders `<ExtractionReview ctx={ctx} jobId={ctx.extractionJobId} />`.
+// Contract: `<ExtractionReview ctx={ctx} jobId={jobId} onOpenInvoice={handler or null} />`.
+// App.tsx passes its `extractionJobId`; TS15-11 pins the mount's prop list.
 //
 // MEASURED jsdom 27.4.0 serialization — read back off a rendered probe, not assumed:
 //   `flex: 1` reads `1 1 0%`; `flex: '1 1 auto'` and `flex: '1 1 620px'` round-trip raw
@@ -39,6 +36,7 @@ import path from 'node:path'
 import { createPortal } from 'react-dom'
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -2588,5 +2586,101 @@ describe('the one exit to the invoice', () => {
 
   it('EXTR32-X6: the prop contract is ctx, jobId and a required nullable onOpenInvoice, and nothing else', () => {
     expect([_threeKeys, _nullableCallback, _required]).toEqual([true, true, true])
+  })
+
+  it('EXTR32-QA1: Enter and Space on the focused exit each hand off once', async () => {
+    // fireEvent.click skips the keyboard path; a non-button or a swallowed key survives X1.
+    const spy = vi.fn()
+    const w = serving(mkDetail())
+    render(review({ ctx: w.ctx, onOpenInvoice: spy }))
+    await flush()
+
+    const exit = exitButton()
+    expect(exit, 'the settled footer rendered no exit').toBeTruthy()
+    expect(exit!.tagName).toBe('BUTTON')
+    const user = userEvent.setup()
+    exit!.focus()
+    expect(document.activeElement, 'the exit took no focus -- the key presses below are vacuous').toBe(exit)
+
+    await user.keyboard('{Enter}')
+    expect(spy).toHaveBeenCalledTimes(1)
+    await user.keyboard(' ')
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(writes(w)).toEqual([])
+  })
+
+  it('EXTR32-QA2: a drafted change does not ride the exit', async () => {
+    // X1 clicks with an empty draft, where save() returns early; this one has something to save.
+    const spy = vi.fn()
+    const w = writing(AMBIGUOUS_JOB)
+    render(review({ ctx: w.ctx, onOpenInvoice: spy }))
+    await flush()
+
+    const chips = chipsOf('issue_date')
+    expect(chips.length, 'the ambiguous field rendered no chip -- the draft below is vacuous').toBe(3)
+    fireEvent.click(chips[1])
+    await flush()
+    expect(saveButton()!.disabled, 'the draft did not arm Save -- the no-write claim is vacuous').toBe(false)
+
+    await act(async () => {
+      fireEvent.click(exitButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(writes(w), 'the exit posted the draft').toEqual([])
+    expect(saveButton()!.disabled, 'the exit discarded the draft').toBe(false)
+  })
+
+  it('EXTR32-QA3: after a refused save the exit is still one enabled control that hands off', async () => {
+    const spy = vi.fn()
+    const w = writing(mkDetail({ fields: AMBIGUOUS_JOB.fields }), async () => {
+      throw new ApiError('http', 'the invoice refused this value', 400)
+    })
+    render(review({ ctx: w.ctx, onOpenInvoice: spy }))
+    await flush()
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '2,222.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+    expect(screen.queryByTestId('extraction-write-error'), 'the write was not refused -- the claims below are vacuous').toBeTruthy()
+
+    const posted = writes(w).length
+    expect(document.querySelectorAll('[data-testid="extraction-open-invoice"]').length).toBe(1)
+    expect(exitButton()!.disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(exitButton() as HTMLElement)
+    })
+    await flush()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(writes(w).length, 'the exit retried the refused write').toBe(posted)
+  })
+
+  it('EXTR32-QA4: switching jobs keeps one exit wired to the current handler, and null removes it', async () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    const w = serving(mkDetail())
+    const { rerender } = render(review({ ctx: w.ctx, onOpenInvoice: first }))
+    await flush()
+    expect(exitButton(), 'the first job rendered no exit').toBeTruthy()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID, onOpenInvoice: second }))
+    await flush()
+    expect(w.asked(), 'the screen did not re-read under the new job').toEqual([JOB_ID, OTHER_JOB_ID])
+    expect(document.querySelectorAll('[data-testid="extraction-open-invoice"]').length).toBe(1)
+
+    await act(async () => {
+      fireEvent.click(exitButton() as HTMLElement)
+    })
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(first, "the exit handed off to the replaced job's handler").not.toHaveBeenCalled()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID, onOpenInvoice: null }))
+    await flush()
+    expect(saveButton(), 'the settled footer vanished -- the absence below is vacuous').toBeTruthy()
+    expect(exitButton()).toBeNull()
   })
 })

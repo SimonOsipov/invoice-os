@@ -29,9 +29,9 @@ export function newestJob(jobs: readonly ExtractionJob[]): ExtractionJob | null 
   return newest
 }
 
-// Sole copy owner of the terminal wording, for BOTH surfaces: the import run's card and the
-// review screen render what these return verbatim. Every sentence names manual entry, and none
-// names a destination — View has no documents member to send anyone to (TS15-3).
+// Sole copy owner of the extraction job's terminal wording (poll budget, dead letter) for the run
+// card and Extraction review. A quarantined import row's sentence is internal/importer/document.go's.
+// Every sentence names manual entry, and none names a destination (TS15-3).
 export function pollBudgetRefusal(): string {
   const seconds = Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)
   return `This document is still being read after ${seconds} seconds, and this run will not wait any longer. It was stored and the read continues. Enter this invoice manually to carry on.`

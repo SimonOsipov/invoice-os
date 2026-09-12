@@ -363,7 +363,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
                   omission, which is also why `atZero` is an explicit field on the
                   view-model rather than `count === 0` inferred here. */}
               <Tile
-                value={unit === 'document' ? `${tiles.frozen.unreadable} unreadable documents` : `${tiles.frozen.unreadable} unreadable rows`}
+                value={unit === 'document' ? `${tiles.frozen.unreadable} quarantined documents` : `${tiles.frozen.unreadable} unreadable rows`}
                 caption={
                   tiles.atZero
                     ? unit === 'document'
@@ -380,7 +380,9 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
             <p style={{ fontSize: 11.5, color: 'var(--fg-3)', margin: '9px 0 0', lineHeight: 1.55 }}>
               {tiles.atZero
                 ? 'This channel stays visible even at zero, so its absence is a fact and not an omission.'
-                : 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'}
+                : unit === 'document'
+                  ? 'A structural failure, not a compliance one: no rule was ever run and no invoice was created. The documents themselves are still stored.'
+                  : 'A structural failure, not a compliance one: no rule was ever run. Nothing was stored.'}
             </p>
           </div>
         </div>

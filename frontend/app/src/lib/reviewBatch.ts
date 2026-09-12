@@ -617,7 +617,7 @@ export function reviewTabs(
     tabs.push({
       id: 'unreadable',
       label:
-        unit === 'document' ? `Unreadable documents (${counts.unreadable})` : `Unreadable rows (${counts.unreadable})`,
+        unit === 'document' ? `Quarantined documents (${counts.unreadable})` : `Unreadable rows (${counts.unreadable})`,
     })
   if (counts.alreadyImported > 0)
     tabs.push({ id: 'already-imported', label: `Already imported (${counts.alreadyImported})` })

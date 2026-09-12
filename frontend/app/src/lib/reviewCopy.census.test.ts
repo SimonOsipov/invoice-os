@@ -15,13 +15,12 @@
 // failing thing and must not be rewritten to make it pass: either a document branch has
 // gone missing from the source, or a spreadsheet one has been edited.
 //
-// THE DOCUMENT LITERALS ARE THE SHIPPED WORDING, settled by EXTR-15-09. FIVE carry an AC
+// THE DOCUMENT LITERALS ARE THE SHIPPED WORDING. FIVE carry an AC
 // of their own: B8, A3, A4, A6 and A7 read "already in the register" for the document
 // unit, where the spreadsheet unit keeps "already in your ledger". Those five are marked
 // `AC` below. SIX were settled by 09's architecture pass: R4, R5 and R6 (D1, the middle
 // CSV column is dropped, not renamed), U4 and A5 (D4, an em dash, not the word
-// `Document`) and C1 (D2, one unbranched paragraph carrying both grains). EXTR-30 later
-// retargeted B2, R3 and U3 to "quarantined" wording and added B11.
+// `Document`) and C1 (D2, one unbranched paragraph carrying both grains).
 //
 // AC-3 forbids "row"/"rows" as an ENGLISH NOUN in a document branch, not the identifier:
 // `{rows.length}` and `${batch.rows_total}` stay, because they name a variable. SW-3 is

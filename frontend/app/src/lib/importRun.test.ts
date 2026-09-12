@@ -1572,8 +1572,8 @@ describe('runFailures — the row names its document, and reading it consumes no
   })
 })
 
-// EXTR32-R1..R3: a document run reuses the shared fork once a job id rides the outcome.
-describe('routeAfterRun — a document whose job is known lands on its extraction review (EXTR32-R1..R3)', () => {
+// EXTR32-R1..R4: a document run reuses the shared fork once a job id rides the outcome.
+describe('routeAfterRun — a document whose job is known lands on its extraction review (EXTR32-R1..R4)', () => {
   function oneDocument(overrides: Partial<Extract<FileOutcome, { kind: 'imported' }>> = {}): ImportRun {
     const run = startRun([pendingFile('f1', 'only.pdf')])
     return runReducer(run, {
@@ -1669,5 +1669,28 @@ describe('routeAfterRun — a document whose job is known lands on its extractio
     const route = routeAfterRun(run, resolvedInvoiceId)
     expect(route).toEqual(expected)
     if (route.kind === 'review') expect(route.batchIds.length).toBeGreaterThan(0)
+  })
+
+  function runOf(...outcomes: Extract<FileOutcome, { kind: 'imported' } | { kind: 'failed' }>[]): ImportRun {
+    let run = startRun(outcomes.map((_, i) => pendingFile(`f${i + 1}`, `doc${i + 1}.pdf`)))
+    for (const outcome of outcomes) run = runReducer(run, { type: 'settled', outcome })
+    return run
+  }
+
+  function imported(id: string, jobId?: string): Extract<FileOutcome, { kind: 'imported' }> {
+    return { kind: 'imported', batchId: id, report: { ...BASE_RUN_REPORT, id, ready_invoices: 1 }, ...(jobId ? { jobId } : {}) }
+  }
+
+  const failed: Extract<FileOutcome, { kind: 'failed' }> = { kind: 'failed', message: 'docling: no text layer', documentId: 'doc-1' }
+
+  // The gate is the run's size, not its imported count: the failure's position must not matter.
+  it.each([
+    { label: 'imported with job, then failed', run: runOf(imported('b1', 'job-1'), failed), resolvedInvoiceId: 'inv-1', expected: ['b1'] },
+    { label: 'imported without job, then failed', run: runOf(imported('b1'), failed), resolvedInvoiceId: 'inv-1', expected: ['b1'] },
+    { label: 'failed, then imported without job', run: runOf(failed, imported('b2')), resolvedInvoiceId: 'inv-1', expected: ['b2'] },
+    { label: 'job known, invoice id empty string', run: oneDocument(), resolvedInvoiceId: '', expected: ['b1'] },
+  ])('EXTR32-R4: a known job never bypasses the run-size gate or the id truthiness ($label)', ({ run, resolvedInvoiceId, expected }) => {
+    expect(run.status).toBe('finished')
+    expect(routeAfterRun(run, resolvedInvoiceId)).toEqual({ kind: 'review', batchIds: expected })
   })
 })

@@ -510,3 +510,73 @@ func TestCorpusDoc_StatesTheSiblingParityRule(t *testing.T) {
 		}
 	}
 }
+
+var (
+	eeDocInventoryRE = regexp.MustCompile(`^- \*\*(NG-[1-5]) `)
+	eeDocSourceRE    = regexp.MustCompile(`^NG-[1-5]\b`)
+)
+
+// eeDocInventoryProblems reports a sibling label whose label-table row names no source inventory
+// that prints it. Whitespace is collapsed because pdfium collapses a letter-spaced word gap.
+func eeDocInventoryProblems(t *testing.T, section string, labels map[string][]string) []string {
+	t.Helper()
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	inventories, src := map[string]string{}, ""
+	for _, line := range strings.Split(eeDocSubsection(t, section, "### Source label inventories"), "\n") {
+		if m := eeDocInventoryRE.FindStringSubmatch(line); m != nil {
+			src = m[1]
+		}
+		if src != "" {
+			inventories[src] += flat(line) + " "
+		}
+	}
+	tables := eeDocSubsection(t, section, "### Label tables")
+	var problems []string
+	for _, sib := range slices.Sorted(maps.Keys(labels)) {
+		marker := "**`" + sib + "`**"
+		i := strings.Index(tables, marker)
+		if i < 0 {
+			problems = append(problems, fmt.Sprintf("%s: no label table", sib))
+			continue
+		}
+		table := tables[i+len(marker):]
+		if j := strings.Index(table, "\n**"); j >= 0 {
+			table = table[:j]
+		}
+		for _, l := range labels[sib] {
+			var sources []string
+			for _, row := range strings.Split(table, "\n") {
+				cells := strings.Split(row, " | ")
+				if strings.HasPrefix(row, "| ") && len(cells) == 4 && (cells[2] == "`"+l+"`" || cells[2] == "same" && cells[1] == "`"+l+"`") {
+					sources = append(sources, eeDocSourceRE.FindString(cells[3]))
+				}
+			}
+			if len(sources) != 1 || sources[0] == "" {
+				problems = append(problems, fmt.Sprintf("%s: label %q has label-table source(s) %q, want exactly one NG-n", sib, l, sources))
+				continue
+			}
+			if !strings.Contains(inventories[sources[0]], "`"+flat(l)+"`") {
+				problems = append(problems, fmt.Sprintf("%s: label %q is not in the %s inventory", sib, l, sources[0]))
+			}
+		}
+	}
+	return problems
+}
+
+// Core AC-3. Each sibling label's table row names its source, and that source's inventory prints it.
+func TestCorpusDoc_EachPrintedLabelIsInItsSourceInventory(t *testing.T) {
+	section := eeDocSection(t, wildReadFile(t, eeDocFile), eeDocSiblingSection)
+	for _, p := range eeDocInventoryProblems(t, section, wildAsPrintedLabels) {
+		t.Error(p)
+	}
+
+	// Controls: the inventory's `Taxable amount` (its first occurrence) renamed; the signature row's source moved.
+	renamed := strings.Replace(section, "`Taxable amount`", "`Taxable Amount`", 1)
+	if got := eeDocInventoryProblems(t, renamed, wildAsPrintedLabels); len(got) != 1 || !strings.Contains(got[0], "Taxable amount") {
+		t.Errorf("with the inventory's Taxable amount renamed the checker reports %q, want exactly one problem naming it", got)
+	}
+	moved := strings.Replace(section, "| NG-5: ", "| NG-2: ", 1)
+	if got := eeDocInventoryProblems(t, moved, wildAsPrintedLabels); len(got) != 1 || !strings.Contains(got[0], "Customer's Signature") {
+		t.Errorf("with the signature row's source moved to NG-2 the checker reports %q, want exactly one problem naming it", got)
+	}
+}

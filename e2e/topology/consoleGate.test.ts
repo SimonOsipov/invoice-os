@@ -132,7 +132,7 @@ describe('notFoundIdDropper (ROUTE-02-07 AC-5)', () => {
   })
 })
 
-// EXTR27-G1..G3 — the status-parameterised dropper 04 reuses for its own edit URL.
+// The status-parameterised dropper, over the supply URL.
 const SUPPLY_URL = 'https://gw.test/api/invoice/v1/imports/document/invoice'
 const SUPPLY_PATTERN = /\/api\/invoice\/v1\/imports\/document\/invoice$/
 const CONFLICT_409 = 'Failed to load resource: the server responded with a status of 409 ()'

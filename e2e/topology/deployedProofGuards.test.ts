@@ -176,8 +176,6 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row',
     'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
     'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
-    // EXTR-27-03. Not yet in import-wizard.spec.ts -- this row reds on absence until the
-    // executor lands EXTR27-E2E-01.
     'EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied',
   ]
 

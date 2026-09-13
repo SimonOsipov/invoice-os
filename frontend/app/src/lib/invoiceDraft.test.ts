@@ -705,8 +705,6 @@ describe('fileDraftInvoice: the hand-off’s document reaches the create body (H
   })
 })
 
-// EXTR-27-03 (F1, F2) -- RED against fileSuppliedNumber's empty-async stub, which never
-// touches `deps` at all.
 const F_TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
 
 describe('fileSuppliedNumber: ordering + refusal (EXTR27-F1, F2)', () => {

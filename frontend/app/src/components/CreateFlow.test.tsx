@@ -510,9 +510,7 @@ describe('CreateFlow — the row and card recipes are byte-copies of their shipp
   })
 })
 
-// EXTR-27-03 (C1..C4). CreateForm.tsx does not read ctx.handOffReading yet, so every
-// carried-* testid below is absent until the executor lands §3.5 -- these rows red on that
-// absence, not on a crash (queryByTestId, never getByTestId, so a miss is a clean `null`).
+// Carried mode of the manual form (ctx.handOffReading non-null).
 const C_TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
 const C_CAPTION = 'Read from the document. Enter the invoice number to file it.'
 
@@ -616,6 +614,17 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
     expect(container.textContent).toContain('VAT · 7.5%')
     expect(container.textContent).toContain('The rule engine')
     expect(container.textContent).not.toContain(C_CAPTION)
+
+    // Number, date, buyer, TIN, and the one line's three cells: all editable, none carried.
+    const inputs = Array.from(container.querySelectorAll('input'))
+    expect(inputs).toHaveLength(7)
+    for (const el of inputs) {
+      expect(el.readOnly).toBe(false)
+      expect(el.hasAttribute('aria-readonly')).toBe(false)
+    }
+    expect(container.querySelector('[aria-label="Remove line 1"]')).not.toBeNull()
+    expect(container.textContent).not.toContain('Currency')
+    expect(container.textContent).not.toContain('No line items were read.')
   })
 
   it('EXTR27-C3: a refusal keeps the carried values and the typed number', () => {
@@ -660,5 +669,55 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
     expect(container.querySelector('[data-testid="carried-vat"]')?.textContent).toBe('—')
     expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('—')
     expect(container.querySelector('[data-testid="carried-subtotal"]')?.textContent).toBe('1000.00')
+  })
+
+  it('EXTR27-C5: carried money and line cells render verbatim, never re-derived or reformatted', () => {
+    // Each figure differs from both qty x price and its 2dp formatting.
+    const reading = {
+      ...C_READING,
+      subtotal: '1234.5',
+      vat: '92.6',
+      total: '1327.1',
+      line_items: [
+        { description: 'Discounted bolts', quantity: '3', unit_price: '10.00', line_total: '29.99', line_tax: '2.25' },
+        { description: 'Half crate', quantity: '1.5', unit_price: '1234.5', line_total: '1851.7', line_tax: null },
+      ],
+    }
+    const { container } = render(<CreateFlow ctx={carriedCtx({ handOffReading: reading })} />)
+
+    expect(container.querySelector('[data-testid="carried-subtotal"]')?.textContent).toBe('1234.5')
+    expect(container.querySelector('[data-testid="carried-vat"]')?.textContent).toBe('92.6')
+    expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('1327.1')
+
+    const rows = Array.from(container.querySelectorAll('[data-testid="carried-line-row"]'))
+    expect(rows).toHaveLength(2)
+    const cells = (row: Element) => Array.from(row.querySelectorAll('input')).map((el) => el.value)
+    expect(cells(rows[0]!)).toEqual(['Discounted bolts', '3', '10.00'])
+    expect(cells(rows[1]!)).toEqual(['Half crate', '1.5', '1234.5'])
+    expect(rows[0]!.querySelector('.money')?.textContent).toBe('29.99Tax 2.25')
+    expect(rows[1]!.querySelector('.money')?.textContent).toBe('1851.7')
+  })
+
+  it('EXTR27-C6: a carried line with every cell null renders blanks and a dash, read-only, never NaN', () => {
+    const reading = {
+      ...C_READING,
+      line_items: [{ description: null, quantity: null, unit_price: null, line_total: null, line_tax: null }],
+    }
+    const { container } = render(<CreateFlow ctx={carriedCtx({ handOffReading: reading })} />)
+
+    const rows = container.querySelectorAll('[data-testid="carried-line-row"]')
+    expect(rows).toHaveLength(1)
+    const inputs = Array.from(rows[0]!.querySelectorAll('input'))
+    expect(inputs).toHaveLength(3)
+    for (const el of inputs) {
+      expect(el.value).toBe('')
+      expect(el.readOnly).toBe(true)
+      expect(el.getAttribute('aria-readonly')).toBe('true')
+      expect(el.disabled).toBe(false)
+    }
+    expect(rows[0]!.querySelector('.money')?.textContent).toBe('—')
+    expect(container.textContent, 'control: carried mode rendered').toContain(C_CAPTION)
+    expect(container.textContent).not.toContain('NaN')
+    expect(rows[0]!.textContent).not.toContain('Tax')
   })
 })

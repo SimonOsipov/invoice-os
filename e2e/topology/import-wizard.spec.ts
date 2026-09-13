@@ -7447,7 +7447,14 @@ test('EXTR27-E2E-01: a read document with no number carries its reading into the
   await expect(page.getByText(NUMBER_TAKEN_REASON, { exact: true })).toBeVisible()
   await expect(numberInput).toHaveValue(taken)
   await expect(fileBtn).toBeEnabled()
-  await expect(page.getByTestId('carried-subtotal')).toHaveText(reading!.subtotal ?? '—')
+  await expect(page.getByText(CARRIED_CAPTION), 'the refusal left carried mode').toBeVisible()
+  for (const k of ['issue_date', 'buyer_name', 'buyer_tin', 'currency'] as const) {
+    await expect(page.getByTestId(`carried-${k}`), `the refusal changed carried-${k}`).toHaveValue(reading![k] ?? '')
+  }
+  for (const k of ['subtotal', 'vat', 'total'] as const) {
+    await expect(page.getByTestId(`carried-${k}`), `the refusal changed carried-${k}`).toHaveText(reading![k] ?? '—')
+  }
+  await expect(page.getByTestId('carried-line-row')).toHaveCount(reading!.line_items.length)
   await expect(page.getByTestId('invoice-detail')).toHaveCount(0)
 
   // 5. Filed (AC-3).

@@ -234,7 +234,7 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function createInvoice(',
     floor: 13,
   },
-  // EXTR-27-03 — the carried reading and its supply (internal/importer/handlers_document.go).
+  // The carried reading and its supply (internal/importer/handlers_document.go).
   {
     ts: 'CarriedReading',
     go: 'CarriedReading',

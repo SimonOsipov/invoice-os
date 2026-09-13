@@ -950,9 +950,7 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
   })
 })
 
-// EXTR-27-03 — readingForDocument/supplyInvoiceNumber, the reading GET and the number-supply
-// POST. RED against the stubs: readingForDocument never calls fetch (always resolves null);
-// supplyInvoiceNumber rejects synchronously.
+// readingForDocument/supplyInvoiceNumber: the reading GET and the number-supply POST.
 const TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
 
 describe('carried reading and supply (EXTR27-W1, W2)', () => {

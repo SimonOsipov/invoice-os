@@ -491,9 +491,8 @@ export type PlatformCtx = {
   // the user is going back precisely to keep.
   restartImport: () => void
   skipUpload: () => void
-  // The route out of a dead-lettered document (EXTR-15-07). Lands on the same 'form' step
-  // skipUpload does, but records the stored document so the filing carries
-  // source_document_id. Offered only on a failure row that HAS one.
+  // The route out of a document that produced no invoice. Reads the document's carried reading,
+  // then lands on the 'form' step; the filing carries the document either way.
   enterByHand: (documentId: string) => void
   // The manual path's ONLY action. Fire-and-forget: it never rejects and never returns a
   // verdict — outcomes arrive through `filing`/`filingError` and, on 201, through the

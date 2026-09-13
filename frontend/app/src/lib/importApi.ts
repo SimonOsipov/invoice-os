@@ -424,22 +424,25 @@ export interface SupplyNumberRequest {
   invoice_number: string
 }
 
-// RED stub (EXTR-27-03): no network touched -- readingForDocument/supplyInvoiceNumber's
-// real bodies land with the feature.
+// null when there is nothing to carry: the route answers 200 null, never 404 (importApi.test.ts's EXTR27-W1).
 export async function readingForDocument(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _documentId: string,
+  authedFetch: AuthedFetch,
+  base: string,
+  documentId: string,
 ): Promise<CarriedReading | null> {
-  return null
+  const res = await authedFetch<{ reading?: CarriedReading | null }>(
+    `${base}/api/invoice/v1/imports/document/reading?document_id=${encodeURIComponent(documentId)}`,
+  )
+  return res?.reading ?? null
 }
 
+// The 201 body is createInvoice's invoice.
 export async function supplyInvoiceNumber(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _req: SupplyNumberRequest,
+  authedFetch: AuthedFetch,
+  base: string,
+  req: SupplyNumberRequest,
 ): Promise<InvoiceRecord> {
-  throw new Error('not implemented')
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

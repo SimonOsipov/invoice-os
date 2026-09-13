@@ -235,13 +235,29 @@ export type FileSuppliedNumberDeps = Omit<FileDraftDeps, 'create'> & {
   supply: (req: SupplyNumberRequest) => Promise<{ id: string }>
 }
 
-// RED stub (EXTR-27-03): fileSuppliedNumber's ordering contract lands with the feature.
+// fileDraftInvoice's ordering contract over the supply route. The reading is mapped
+// server-side, so only the entity, document and typed number cross (invoiceDraft.test.ts's EXTR27-F1).
 export async function fileSuppliedNumber(
-  _invoiceNumber: string,
-  _entity: Pick<Entity, 'id'>,
-  _documentId: string,
-  _deps: FileSuppliedNumberDeps,
-): Promise<void> {}
+  invoiceNumber: string,
+  entity: Pick<Entity, 'id'>,
+  documentId: string,
+  deps: FileSuppliedNumberDeps,
+): Promise<void> {
+  if (deps.inFlight.current) return
+  deps.inFlight.current = true
+  deps.onError(null)
+  deps.onPending(true)
+  try {
+    const created = await deps.supply({ entity_id: entity.id, document_id: documentId, invoice_number: invoiceNumber })
+    deps.onCreated(created.id)
+  } catch (err: unknown) {
+    deps.onError(toApiError(err))
+  } finally {
+    deps.inFlight.current = false
+    deps.onPending(false)
+  }
+}
+// The number is not trimmed here. The server trims ([number-trim-not-case]), and `fileDraftGate` gates only `''` (QA-GATE-1).
 
 // Precedence: entity first (unresolvable in-app -- no picker on this screen), invoice
 // number second (resolvable -- the field is editable) -- mirrors CreateMapping.tsx:

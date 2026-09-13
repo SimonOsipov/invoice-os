@@ -344,9 +344,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
-  // The document a dead-lettered extraction left behind, recorded by enterByHand so the
-  // invoice typed instead keeps its provenance and its carried reading. Cleared wherever
-  // `draft` is reseeded -- it describes THIS draft, not the session.
+  // The document that produced no invoice, recorded by enterByHand so the invoice filed
+  // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
+  // wherever `draft` is reseeded -- it describes THIS draft, not the session.
   const [handOffDocumentId, setHandOffDocumentId] = useState<string | null>(null)
   const [handOffReading, setHandOffReading] = useState<CarriedReading | null>(null)
   // Bumped by every hand-off and every clear, so only the latest pending read may land.
@@ -1307,7 +1307,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // in LIVE via "Skip — enter manually", so a production user could complete it and lose
   // the invoice silently.
   //
-  // Everything ordering-sensitive lives in fileDraftInvoice (lib/invoiceDraft.ts), which is
+  // Everything ordering-sensitive lives in fileDraftInvoice and, for a carried reading,
+  // fileSuppliedNumber (lib/invoiceDraft.ts), which are
   // node-testable under the no-jsdom constraint; this is the wiring only. `onCreated` is
   // passed as a BARE function reference so there is no local closure here that could do
   // anything other than navigate, and no branch in which it fires early.

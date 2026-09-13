@@ -4,7 +4,8 @@
 // 1386-1388), then rebuilt by INVCR-01-03 into a real entry form.
 //
 // This is the only from-scratch creation path in production, and its primary now performs
-// one real POST /v1/invoices. Two things follow, and neither is cosmetic:
+// one real POST /v1/invoices (in carried mode, POST /v1/imports/document/invoice). Two
+// things follow, and neither is cosmetic:
 //
 //  - NOTHING here may affirm a filing. There is no success banner, no tick, no optimistic
 //    row: the affirmation is the real invoice detail screen rendering the server's own row,
@@ -17,10 +18,10 @@
 // Every field on this screen is editable and every one of them is transmitted. Fields with
 // no column behind them (billing address, WHT, document type) were removed outright: a
 // field whose value is silently discarded is the same lie as the mock approve it replaced.
-// Carried mode (ctx.handOffReading) is the exception: the server files the reading, so its
-// values are read-only and only the number is typed.
-// `currency` is the one deliberate exception to "editable" — NGN-only is the real
-// currency-allowed rule parameter, so there is nothing to choose.
+// `currency` is not a field here — NGN-only is the real currency-allowed rule parameter, so
+// there is nothing to choose.
+// Carried mode (ctx.handOffReading) is the exception to all of this: the server files the
+// reading, so its values (currency included) are read-only and only the number is typed.
 
 import { amount, fmt } from '../lib/format'
 import { fileDraftGate } from '../lib/invoiceDraft'

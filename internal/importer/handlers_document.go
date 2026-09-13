@@ -3,7 +3,7 @@
 // already stored (mirrors internal/invoice/handlers.go:156-178's CreateHandler shape, not the
 // spreadsheet CreateHandler's multipart/mapping/dry_run one -- this route carries neither, D-3/
 // D-4). No dry_run means no 200 branch: a quarantine (imp returns err == nil) is still 201.
-// Also carries GET .../document/reading and POST .../document/invoice (EXTR-27-02).
+// Also carries GET .../document/reading and POST .../document/invoice.
 package importer
 
 import (

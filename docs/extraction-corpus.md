@@ -632,8 +632,9 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 
 `wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
-so the import quarantines the document and writes no `invoices` row — and six cells OCR reads
-cleanly off its committed golden are lost with it. A quarantined layout stays in the denominator;
+so the import quarantines the document and writes no `invoices` row — the six cells OCR reads
+cleanly off its committed golden score nothing. They reach an invoice only when the operator
+supplies the number (`POST /v1/imports/document/invoice`). A quarantined layout stays in the denominator;
 dropping it would flatter the rate by the exact amount the defect costs.
 
 ### Per field

@@ -2,7 +2,7 @@
 // mapper (EXTR-06-02, task-762), and the document-import orchestration entrypoint
 // (EXTR-06-03, task-763) -- a second entry into internal/importer alongside Import()'s
 // spreadsheet path (service.go). Also carries a no-number reading into manual entry and files
-// it once the operator supplies the number (EXTR-27-02). See .ralph/EXTR-06-finalized.md, "The
+// it once the operator supplies the number. See .ralph/EXTR-06-finalized.md, "The
 // settled-extraction input type".
 package importer
 

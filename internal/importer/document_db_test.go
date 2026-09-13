@@ -343,8 +343,8 @@ func TestRLS_SettledExtractionCrossTenantReadReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-// EXTR-27-02: cross-tenant refusal for SupplyInvoiceNumber -- same RLS mechanism as SX-06
-// above, a different entrypoint. Two documents per tenant so a predicate that ignores
+// Cross-tenant refusal for SupplyInvoiceNumber: SX-06's RLS mechanism through another
+// entrypoint. Two documents per tenant so a predicate that ignores
 // source_document_id (or the caller's tenant) cannot pass by accident.
 func TestRLS_SupplyInvoiceNumberRefusesAnotherTenantsDocument(t *testing.T) {
 	super, app := dbTestPools(t)

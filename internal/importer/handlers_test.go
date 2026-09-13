@@ -693,8 +693,8 @@ func imhmIsErrorsNewCall(e ast.Expr, errorsAlias string) bool {
 
 // TestImporterHandlers_NoSecondSentinel (AC-4): db.ErrNotActiveMember is
 // reached at each of the three sites ONLY through statusForErr or an inline
-// errors.Is arm, and no new top-level error var joins the three the package
-// already declares (ErrBackfillPrivilegedRole, ErrValidation, ErrNotFound).
+// errors.Is arm, and every top-level error var is on allowedSentinels, so a
+// second sentinel for db.ErrNotActiveMember cannot join unreviewed.
 // AST, not text, mirroring internal/platform/db/handler_mapping_test.go's
 // scan -- scoped to one package and the three named sites rather than a
 // generic per-function population, because CreateHandler already calls
@@ -713,7 +713,7 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrBackfillPrivilegedRole": true,
 		"ErrValidation":             true,
 		"ErrNotFound":               true,
-		// EXTR-27-02: carry/filing sentinels, unrelated to db.ErrNotActiveMember.
+		// Supply refusals, each its own 409 sentence; neither restates db.ErrNotActiveMember.
 		"ErrReadingNotCarried":    true,
 		"ErrDocumentAlreadyFiled": true,
 	}

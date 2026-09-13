@@ -451,8 +451,8 @@ func TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames(t *testing.T) 
 	if err != nil {
 		t.Fatalf("parse document.go: %v", err)
 	}
-	// EXTR-27-02 splits documentCreateInput: the number branch stays here, the rest moves to
-	// readingCreateInput. The floor is the union of both funcs' literal values[...] keys.
+	// documentCreateInput holds the number branch and readingCreateInput the rest, so the floor
+	// is the union of both funcs' literal values[...] keys.
 	wantFuncs := []string{"documentCreateInput", "readingCreateInput"}
 	found := map[string]*ast.FuncDecl{}
 	for _, decl := range f.Decls {
@@ -560,7 +560,7 @@ func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testi
 	}
 }
 
-// --- EXTR-27-02, D6(a): the split -------------------------------------------------------
+// --- readingCreateInput: the mapper without the number ----------------------------------
 
 // TestReadingCreateInput_IsTheMapperWithoutTheNumber pins the split: readingCreateInput must
 // equal documentCreateInput on the same fields, minus the number. Second leg: a shared RowError
@@ -600,6 +600,24 @@ func TestReadingCreateInput_IsTheMapperWithoutTheNumber(t *testing.T) {
 	if !reflect.DeepEqual(gotReading, wantInvoice) {
 		t.Errorf("readingCreateInput = %+v, want documentCreateInput(withNumber) with InvoiceNumber cleared: %+v", gotReading, wantInvoice)
 	}
+	// documentCreateInput calls readingCreateInput, so the equality above moves with any body
+	// edit; these literals do not.
+	if gotReading.InvoiceNumber != "" || gotReading.EntityID != "entity-1" ||
+		gotReading.SourceDocumentID == nil || *gotReading.SourceDocumentID != "doc-1" ||
+		gotReading.IssueDate == nil || gotReading.IssueDate.Format("2006-01-02") != "2026-03-01" ||
+		gotReading.BuyerName == nil || *gotReading.BuyerName != "Read Buyer Ltd" ||
+		gotReading.BuyerTIN == nil || *gotReading.BuyerTIN != "87654321-0001" ||
+		gotReading.Currency == nil || *gotReading.Currency != "NGN" ||
+		gotReading.Subtotal == nil || *gotReading.Subtotal != "1000.00" ||
+		gotReading.VAT == nil || *gotReading.VAT != "75.00" ||
+		gotReading.Total == nil || *gotReading.Total != "1075.00" {
+		t.Errorf("readingCreateInput header = %+v, want the fixture's literal values and no number", gotReading)
+	}
+	if len(gotReading.LineItems) != 2 || gotReading.LineItems[0].Description == nil || *gotReading.LineItems[0].Description != "Widget" ||
+		gotReading.LineItems[0].UnitPrice == nil || *gotReading.LineItems[0].UnitPrice != "10.00" ||
+		gotReading.LineItems[1].Description == nil || *gotReading.LineItems[1].Description != "Gadget" {
+		t.Errorf("readingCreateInput lines = %+v, want [Widget 10.00, Gadget]", gotReading.LineItems)
+	}
 
 	// Second leg: an identical bad-date RowError from both funcs.
 	badDate := SettledExtraction{Fields: []extractedField{
@@ -616,11 +634,11 @@ func TestReadingCreateInput_IsTheMapperWithoutTheNumber(t *testing.T) {
 	}
 }
 
-// --- EXTR-27-02, D6(b): the carry predicate --------------------------------------------------
+// --- carriedInput: the carry predicate ---------------------------------------------------
 
 // TestCarriedInput_OnlyTheNoNumberQuarantineIsCarried: only a no-number reading with at least
-// one carried value is carriable. Poor scan and all-null are the discriminators the gate and
-// the all-null check each catch on their own (M1/M2 in the plan's mutation table).
+// one carried value is carriable. The poor-scan and all-null rows each fail alone when their
+// clause is removed.
 func TestCarriedInput_OnlyTheNoNumberQuarantineIsCarried(t *testing.T) {
 	oneLineAllHeadersNull := SettledExtraction{Fields: []extractedField{
 		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},

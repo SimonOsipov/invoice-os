@@ -710,7 +710,7 @@ func TestServiceImportDocument_PoorScanQuarantineCarriesTheScanQualityMessage(t 
 	}
 }
 
-// --- EXTR-27-02 (task-1014): a no-number reading is readable and fileable ------------------
+// --- a no-number reading is readable and fileable ------------------------------------------
 
 // docNoNumberValues is the reading a no-number document quarantines with: docCleanValues("")
 // but invoice_number itself absent (unreadable), not the empty string -- the real shape.
@@ -1071,6 +1071,12 @@ func TestServiceSupplyInvoiceNumber_ATakenNumberWritesNothing(t *testing.T) {
 	}
 	if inv.InvoiceNumber != "N2" {
 		t.Errorf("InvoiceNumber = %q, want %q", inv.InvoiceNumber, "N2")
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
+		t.Errorf("invoices citing document after the re-supply = %d, want 1", got)
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "N1"); got != 1 {
+		t.Errorf("invoices N1 = %d, want 1 -- the collision must leave the existing invoice alone", got)
 	}
 }
 

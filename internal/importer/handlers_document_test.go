@@ -27,11 +27,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -392,7 +397,7 @@ func TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice(t *t
 	}
 }
 
-// --- EXTR-27-02 (task-1014): ReadingHandler / SupplyNumberHandler --------------------------
+// --- ReadingHandler / SupplyNumberHandler ---------------------------------------------------
 
 // readingSpy records every call ReadingHandler's read closure receives.
 type readingSpy struct {
@@ -453,7 +458,7 @@ func doSupplyPost(t *testing.T, supply func(ctx context.Context, entityID, docum
 	return rec, rec.Body.Bytes()
 }
 
-// --- H-10 (EXTR-27-02) -----------------------------------------------------------------
+// --- H-10 ------------------------------------------------------------------------------
 
 func TestReadingHandler_AnswersNullNeverNotFound(t *testing.T) {
 	id := testIdentity()
@@ -565,7 +570,7 @@ func TestReadingHandler_AnswersNullNeverNotFound(t *testing.T) {
 	})
 }
 
-// --- H-11 (EXTR-27-02) -----------------------------------------------------------------
+// --- H-11 ------------------------------------------------------------------------------
 
 func TestSupplyNumberHandler_MapsEveryOutcome(t *testing.T) {
 	id := testIdentity()
@@ -672,11 +677,61 @@ func TestSupplyNumberHandler_MapsEveryOutcome(t *testing.T) {
 	})
 }
 
-// --- H-12 (EXTR-27-02, added) -----------------------------------------------------------
+// --- H-12 ------------------------------------------------------------------------------
 
-// TestImportRoutes_ReadingAndSupplyDoNotCollide mounts the two new routes alongside the two
-// existing ones on one mux and proves neither swallows the other's call.
+// importRoutePatterns reads the pattern cmd/invoice/main.go registers for each named importer
+// handler, so the route test below drives the deployed registrations, not copies of them.
+func importRoutePatterns(t *testing.T, handlers ...string) map[string]string {
+	t.Helper()
+	path := filepath.Join(repoRootForImporter(t), "cmd", "invoice", "main.go")
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	out := map[string]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		h, hOK := call.Args[1].(*ast.CallExpr)
+		if !ok || lit.Kind != token.STRING || !hOK {
+			return true
+		}
+		for _, name := range handlers {
+			if selectorNameForImporter(h.Fun) != "importer."+name {
+				continue
+			}
+			pattern, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("unquote %s: %v", lit.Value, err)
+			}
+			if prev, dup := out[name]; dup {
+				t.Errorf("cmd/invoice/main.go registers importer.%s twice (%q and %q)", name, prev, pattern)
+			}
+			out[name] = pattern
+		}
+		return true
+	})
+	for _, name := range handlers {
+		if out[name] == "" {
+			t.Fatalf("cmd/invoice/main.go registers no route for importer.%s", name)
+		}
+	}
+	return out
+}
+
+// TestImportRoutes_ReadingAndSupplyDoNotCollide mounts main.go's four /v1/imports patterns on
+// one mux and sends each wire path the clients call. Every request must reach its own handler
+// and no other one.
 func TestImportRoutes_ReadingAndSupplyDoNotCollide(t *testing.T) {
+	patterns := importRoutePatterns(t, "CreateDocumentHandler", "GetHandler", "ReadingHandler", "SupplyNumberHandler")
+
 	var getCalls int
 	getFn := func(ctx context.Context, id string) (Batch, error) {
 		getCalls++
@@ -684,48 +739,61 @@ func TestImportRoutes_ReadingAndSupplyDoNotCollide(t *testing.T) {
 	}
 	docSpy := &docImpSpy{res: BatchResult{ID: "d1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}}
 	readSpy := &readingSpy{}
-	invoiceSpy := &supplySpy{}
+	invoiceSpy := &supplySpy{inv: invoice.Invoice{ID: "inv-1", InvoiceNumber: "N1"}}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
-	mux.HandleFunc("GET /v1/imports/{id}", GetHandler(getFn, nil))
-	mux.HandleFunc("GET /v1/imports/document/reading", ReadingHandler(readSpy.fn(), nil))
-	mux.HandleFunc("POST /v1/imports/document/invoice", SupplyNumberHandler(invoiceSpy.fn(), nil))
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("main.go's import patterns %v conflict on one mux: %v", patterns, r)
+			}
+		}()
+		mux.HandleFunc(patterns["CreateDocumentHandler"], CreateDocumentHandler(docSpy.fn(), nil))
+		mux.HandleFunc(patterns["GetHandler"], GetHandler(getFn, nil))
+		mux.HandleFunc(patterns["ReadingHandler"], ReadingHandler(readSpy.fn(), nil))
+		mux.HandleFunc(patterns["SupplyNumberHandler"], SupplyNumberHandler(invoiceSpy.fn(), nil))
+	}()
 
 	id := testIdentity()
 	documentID := uuid.NewString()
+	counts := func() [4]int { return [4]int{len(docSpy.calls), getCalls, len(readSpy.calls), len(invoiceSpy.calls)} }
+	names := [4]string{"document import", "batch get", "reading", "supply"}
 
-	r := httptest.NewRequest("GET", "/v1/imports/document/reading?document_id="+documentID, nil)
-	r = r.WithContext(auth.WithIdentity(r.Context(), id))
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, r)
-	if getCalls != 0 {
-		t.Errorf("GetHandler's get called %d time(s) for a /document/reading request -- pattern collision", getCalls)
+	probes := []struct {
+		method, target, body string
+		handler              int // index into counts
+		wantStatus           int
+	}{
+		{"GET", "/v1/imports/document/reading?document_id=" + documentID, "", 2, http.StatusOK},
+		{"POST", "/v1/imports/document/invoice", supplyJSONBody(uuid.NewString(), documentID, "N1"), 3, http.StatusCreated},
+		{"POST", "/v1/imports/document", docJSONBody(uuid.NewString(), documentID), 0, http.StatusCreated},
+		{"GET", "/v1/imports/" + uuid.NewString(), "", 1, http.StatusNotFound},
 	}
+	for _, p := range probes {
+		r := httptest.NewRequest(p.method, p.target, strings.NewReader(p.body))
+		r.Header.Set("Content-Type", "application/json")
+		r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		before := counts()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+		after := counts()
 
-	r2 := httptest.NewRequest("POST", "/v1/imports/document/invoice", strings.NewReader(supplyJSONBody(uuid.NewString(), documentID, "N1")))
-	r2.Header.Set("Content-Type", "application/json")
-	r2 = r2.WithContext(auth.WithIdentity(r2.Context(), id))
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, r2)
-	if len(docSpy.calls) != 0 {
-		t.Errorf("CreateDocumentHandler's imp called %d time(s) for a /document/invoice request -- pattern collision", len(docSpy.calls))
-	}
-
-	// The existing GET /v1/imports/{id} route still resolves, and never reaches the reading closure.
-	r3 := httptest.NewRequest("GET", "/v1/imports/"+uuid.NewString(), nil)
-	r3 = r3.WithContext(auth.WithIdentity(r3.Context(), id))
-	rec3 := httptest.NewRecorder()
-	mux.ServeHTTP(rec3, r3)
-	if getCalls != 1 {
-		t.Errorf("GetHandler's get called %d time(s) for its own route, want 1", getCalls)
-	}
-	if len(readSpy.calls) != 0 {
-		t.Errorf("reading closure called %d time(s) by the /v1/imports/{id} route, want 0", len(readSpy.calls))
+		if rec.Code != p.wantStatus {
+			t.Errorf("%s %s: status = %d, want %d -- body %s", p.method, p.target, rec.Code, p.wantStatus, rec.Body.String())
+		}
+		for i := range after {
+			want := 0
+			if i == p.handler {
+				want = 1
+			}
+			if got := after[i] - before[i]; got != want {
+				t.Errorf("%s %s reached the %s handler %d time(s), want %d", p.method, p.target, names[i], got, want)
+			}
+		}
 	}
 }
 
-// --- H-13 (EXTR-27-02, added, handler over the real service) ---------------------------
+// --- H-13 (handler over the real service) ----------------------------------------------
 
 // TestSupplyNumberHandler_AGateOutageStillAnswers201 wires the REAL Service (a fake gate that
 // errors) through SupplyNumberHandler on a mux -- the outage must not turn into a 500.
@@ -757,6 +825,10 @@ func TestSupplyNumberHandler_AGateOutageStillAnswers201(t *testing.T) {
 	}
 	if resp.InvoiceNumber != "SNH-01-INV" {
 		t.Errorf("invoice_number = %q, want %q", resp.InvoiceNumber, "SNH-01-INV")
+	}
+	// Never validated: the operator's Re-validate is what stamps a verdict later.
+	if resp.Status != invoice.StatusDraft || resp.RuleSetVersionID != nil {
+		t.Errorf("status = %q, rule_set_version_id = %v, want draft and null", resp.Status, resp.RuleSetVersionID)
 	}
 	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
 		t.Errorf("invoices citing document = %d, want 1", got)

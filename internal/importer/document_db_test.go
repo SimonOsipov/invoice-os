@@ -343,6 +343,60 @@ func TestRLS_SettledExtractionCrossTenantReadReturnsErrNotFound(t *testing.T) {
 	}
 }
 
+// EXTR-27-02: cross-tenant refusal for SupplyInvoiceNumber -- same RLS mechanism as SX-06
+// above, a different entrypoint. Two documents per tenant so a predicate that ignores
+// source_document_id (or the caller's tenant) cannot pass by accident.
+func TestRLS_SupplyInvoiceNumberRefusesAnotherTenantsDocument(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantA := seedTenant(t, super, "SN-RLS tenant A")
+	entityA := seedEntity(t, super, tenantA, "SN-RLS entity A")
+	docA1 := docSeedDocument(t, super, tenantA)
+	docSeedExtraction(t, super, tenantA, docA1, docNoNumberValues())
+	docA2 := docSeedDocument(t, super, tenantA)
+	docSeedExtraction(t, super, tenantA, docA2, docNoNumberValues())
+
+	tenantB := seedTenant(t, super, "SN-RLS tenant B")
+	docB1 := docSeedDocument(t, super, tenantB)
+	docSeedExtraction(t, super, tenantB, docB1, docNoNumberValues())
+	docB2 := docSeedDocument(t, super, tenantB)
+	docSeedExtraction(t, super, tenantB, docB2, docNoNumberValues())
+
+	svc := newTestServiceWithGate(app, &fakeGate{})
+	ctxA := sxIdentity(ctx, tenantA)
+
+	// Control: A files one invoice on its own doc1.
+	if _, err := svc.SupplyInvoiceNumber(ctxA, entityA, docA1, "SN-RLS-A1"); err != nil {
+		t.Fatalf("A filing its own doc1: %v", err)
+	}
+
+	if _, err := svc.SupplyInvoiceNumber(ctxA, entityA, docB1, "SN-RLS-X1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("A supplying to B's doc1: err = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.SupplyInvoiceNumber(ctxA, entityA, docB2, "SN-RLS-X2"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("A supplying to B's doc2: err = %v, want ErrNotFound", err)
+	}
+	if got := countInvoicesCitingDocument(t, super, docB1); got != 0 {
+		t.Errorf("invoices citing B's doc1 = %d, want 0", got)
+	}
+	if got := countInvoicesCitingDocument(t, super, docB2); got != 0 {
+		t.Errorf("invoices citing B's doc2 = %d, want 0", got)
+	}
+
+	// Controls: A's doc2 is still carriable; B still reads both of its own documents.
+	if reading, err := svc.CarriedReading(ctxA, docA2); err != nil || reading == nil {
+		t.Errorf("A's doc2: reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+	ctxB := sxIdentity(ctx, tenantB)
+	if reading, err := svc.CarriedReading(ctxB, docB1); err != nil || reading == nil {
+		t.Errorf("B's doc1: reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+	if reading, err := svc.CarriedReading(ctxB, docB2); err != nil || reading == nil {
+		t.Errorf("B's doc2: reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+}
+
 // SX-07: Fields is never nil -- neither on the ErrNotFound path nor on a success with zero
 // field rows. A nil slice marshals to JSON null on the eventual wire response.
 func TestSettledExtraction_FieldsNeverNilOnErrorAndEmptySuccess(t *testing.T) {

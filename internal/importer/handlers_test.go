@@ -713,6 +713,9 @@ func TestImporterHandlers_NoSecondSentinel(t *testing.T) {
 		"ErrBackfillPrivilegedRole": true,
 		"ErrValidation":             true,
 		"ErrNotFound":               true,
+		// EXTR-27-02: carry/filing sentinels, unrelated to db.ErrNotActiveMember.
+		"ErrReadingNotCarried":    true,
+		"ErrDocumentAlreadyFiled": true,
 	}
 
 	found := map[string]bool{"CreateHandler": false, "PreviewHandler": false, "SheetHandler": false}

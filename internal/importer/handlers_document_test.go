@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -388,5 +389,376 @@ func TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice(t *t
 	}
 	if got := countInvoicesByNumber(t, super, entityID, "H-09-INV"); got != 1 {
 		t.Errorf("invoices by number = %d, want 1 -- the write never reached the DB", got)
+	}
+}
+
+// --- EXTR-27-02 (task-1014): ReadingHandler / SupplyNumberHandler --------------------------
+
+// readingSpy records every call ReadingHandler's read closure receives.
+type readingSpy struct {
+	calls   []string // document ids
+	reading *CarriedReading
+	err     error
+}
+
+func (s *readingSpy) fn() func(ctx context.Context, documentID string) (*CarriedReading, error) {
+	return func(ctx context.Context, documentID string) (*CarriedReading, error) {
+		s.calls = append(s.calls, documentID)
+		return s.reading, s.err
+	}
+}
+
+// supplySpy records every call SupplyNumberHandler's supply closure receives.
+type supplySpy struct {
+	calls []struct{ entityID, documentID, invoiceNumber string }
+	inv   invoice.Invoice
+	err   error
+}
+
+func (s *supplySpy) fn() func(ctx context.Context, entityID, documentID, invoiceNumber string) (invoice.Invoice, error) {
+	return func(ctx context.Context, entityID, documentID, invoiceNumber string) (invoice.Invoice, error) {
+		s.calls = append(s.calls, struct{ entityID, documentID, invoiceNumber string }{entityID, documentID, invoiceNumber})
+		return s.inv, s.err
+	}
+}
+
+// doReadingGet drives ReadingHandler directly with an optional identity and raw query string.
+func doReadingGet(t *testing.T, read func(ctx context.Context, documentID string) (*CarriedReading, error), id *auth.Identity, rawQuery string) (*httptest.ResponseRecorder, []byte) {
+	t.Helper()
+	r := httptest.NewRequest("GET", "/v1/imports/document/reading?"+rawQuery, nil)
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	ReadingHandler(read, nil).ServeHTTP(rec, r)
+	return rec, rec.Body.Bytes()
+}
+
+// supplyJSONBody renders the POST /v1/imports/document/invoice JSON body.
+func supplyJSONBody(entityID, documentID, number string) string {
+	b, _ := json.Marshal(supplyRequest{EntityID: entityID, DocumentID: documentID, InvoiceNumber: number})
+	return string(b)
+}
+
+// doSupplyPost drives SupplyNumberHandler directly with an optional identity and raw JSON body.
+func doSupplyPost(t *testing.T, supply func(ctx context.Context, entityID, documentID, invoiceNumber string) (invoice.Invoice, error), id *auth.Identity, rawBody string) (*httptest.ResponseRecorder, []byte) {
+	t.Helper()
+	r := httptest.NewRequest("POST", "/v1/imports/document/invoice", strings.NewReader(rawBody))
+	r.Header.Set("Content-Type", "application/json")
+	if id != nil {
+		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
+	}
+	rec := httptest.NewRecorder()
+	SupplyNumberHandler(supply, nil).ServeHTTP(rec, r)
+	return rec, rec.Body.Bytes()
+}
+
+// --- H-10 (EXTR-27-02) -----------------------------------------------------------------
+
+func TestReadingHandler_AnswersNullNeverNotFound(t *testing.T) {
+	id := testIdentity()
+	validDoc := uuid.NewString()
+
+	t.Run("nilReading", func(t *testing.T) {
+		spy := &readingSpy{reading: nil}
+		rec, raw := doReadingGet(t, spy.fn(), &id, "document_id="+validDoc)
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 -- a nothing-to-carry document is not a 404", rec.Code)
+		}
+		if string(raw) != `{"reading":null}`+"\n" {
+			t.Errorf("body = %q, want %q", raw, `{"reading":null}`+"\n")
+		}
+	})
+
+	t.Run("realReading", func(t *testing.T) {
+		reading := &CarriedReading{
+			DocumentID: validDoc, ExtractionJobID: "job-1",
+			IssueDate: nilIfEmpty("2026-03-01"), BuyerTIN: nilIfEmpty("TIN"), BuyerName: nilIfEmpty("Buyer"),
+			Currency: nilIfEmpty("NGN"), Subtotal: nilIfEmpty("10.00"), VAT: nilIfEmpty("1.00"), Total: nilIfEmpty("11.00"),
+			LineItems: []CarriedLine{},
+		}
+		spy := &readingSpy{reading: reading}
+		rec, raw := doReadingGet(t, spy.fn(), &id, "document_id="+validDoc)
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", rec.Code)
+		}
+		gotOuter := jsonKeyOrder(t, raw)
+		if !reflect.DeepEqual(gotOuter, []string{"reading"}) {
+			t.Fatalf("outer keys = %v, want [reading]", gotOuter)
+		}
+		var wrapper struct {
+			Reading json.RawMessage `json:"reading"`
+		}
+		if err := json.Unmarshal(raw, &wrapper); err != nil {
+			t.Fatalf("decode wrapper: %v", err)
+		}
+		wantKeys := []string{"document_id", "extraction_job_id", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total", "line_items"}
+		gotKeys := jsonKeyOrder(t, wrapper.Reading)
+		if !reflect.DeepEqual(gotKeys, wantKeys) {
+			t.Errorf("reading keys = %v, want %v", gotKeys, wantKeys)
+		}
+	})
+
+	t.Run("missingDocumentID", func(t *testing.T) {
+		spy := &readingSpy{}
+		rec, _ := doReadingGet(t, spy.fn(), &id, "")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("read called %d time(s), want 0", len(spy.calls))
+		}
+	})
+
+	t.Run("malformedDocumentID", func(t *testing.T) {
+		spy := &readingSpy{}
+		rec, _ := doReadingGet(t, spy.fn(), &id, "document_id=not-a-uuid")
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("read called %d time(s), want 0", len(spy.calls))
+		}
+	})
+
+	t.Run("noIdentity", func(t *testing.T) {
+		spy := &readingSpy{}
+		rec, _ := doReadingGet(t, spy.fn(), nil, "document_id="+validDoc)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("read called %d time(s), want 0", len(spy.calls))
+		}
+	})
+
+	t.Run("notActiveMember", func(t *testing.T) {
+		spy := &readingSpy{err: db.ErrNotActiveMember}
+		rec, raw := doReadingGet(t, spy.fn(), &id, "document_id="+validDoc)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("status = %d, want 403 -- body %s", rec.Code, raw)
+		}
+		var resp struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Error != db.NotActiveMemberMessage {
+			t.Errorf("error = %q, want %q", resp.Error, db.NotActiveMemberMessage)
+		}
+	})
+
+	t.Run("urnUUIDCanonicalized", func(t *testing.T) {
+		spy := &readingSpy{}
+		parsed, err := uuid.Parse(validDoc)
+		if err != nil {
+			t.Fatalf("parse validDoc: %v", err)
+		}
+		rec, _ := doReadingGet(t, spy.fn(), &id, "document_id=urn:uuid:"+validDoc)
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200", rec.Code)
+		}
+		if len(spy.calls) != 1 || spy.calls[0] != parsed.String() {
+			t.Errorf("read called with %v, want exactly [%q]", spy.calls, parsed.String())
+		}
+	})
+}
+
+// --- H-11 (EXTR-27-02) -----------------------------------------------------------------
+
+func TestSupplyNumberHandler_MapsEveryOutcome(t *testing.T) {
+	id := testIdentity()
+	entityID, documentID := uuid.NewString(), uuid.NewString()
+
+	errCases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantMsg    string
+	}{
+		{"duplicateNumber", invoice.ErrDuplicateNumber, http.StatusConflict, invoice.NumberTakenReason},
+		{"readingNotCarried", ErrReadingNotCarried, http.StatusConflict, readingNotCarriedReason},
+		{"documentAlreadyFiled", ErrDocumentAlreadyFiled, http.StatusConflict, documentAlreadyFiledReason},
+		{"notFound", ErrNotFound, http.StatusNotFound, ""},
+		{"invoiceValidation", invoice.ErrValidation, http.StatusBadRequest, "one or more fields failed validation"},
+		{"importerValidation", ErrValidation, http.StatusBadRequest, ""},
+		{"notActiveMember", db.ErrNotActiveMember, http.StatusForbidden, db.NotActiveMemberMessage},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &supplySpy{err: tc.err}
+			rec, raw := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, "N1"))
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d -- body %s", rec.Code, tc.wantStatus, raw)
+			}
+			if tc.wantMsg != "" {
+				var resp struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(raw, &resp); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if resp.Error != tc.wantMsg {
+					t.Errorf("error = %q, want %q", resp.Error, tc.wantMsg)
+				}
+			}
+		})
+	}
+
+	t.Run("success", func(t *testing.T) {
+		spy := &supplySpy{inv: invoice.Invoice{ID: "inv-1", InvoiceNumber: "N1", Status: invoice.StatusDraft}}
+		rec, raw := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, "N1"))
+		if rec.Code != http.StatusCreated {
+			t.Errorf("status = %d, want 201 -- body %s", rec.Code, raw)
+		}
+		var resp invoice.Invoice
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.InvoiceNumber != "N1" {
+			t.Errorf("invoice_number = %q, want %q", resp.InvoiceNumber, "N1")
+		}
+	})
+
+	t.Run("blankNumber", func(t *testing.T) {
+		spy := &supplySpy{}
+		rec, raw := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, ""))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 -- body %s", rec.Code, raw)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("supply called %d time(s), want 0", len(spy.calls))
+		}
+	})
+
+	t.Run("whitespaceOnlyNumber", func(t *testing.T) {
+		spy := &supplySpy{}
+		rec, raw := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, "   "))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400 -- body %s", rec.Code, raw)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("supply called %d time(s), want 0", len(spy.calls))
+		}
+	})
+
+	t.Run("numberIsTrimmedBeforeCall", func(t *testing.T) {
+		spy := &supplySpy{inv: invoice.Invoice{InvoiceNumber: "N2"}}
+		doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, "  N2  "))
+		if len(spy.calls) != 1 || spy.calls[0].invoiceNumber != "N2" {
+			t.Errorf("supply called with %+v, want invoiceNumber %q", spy.calls, "N2")
+		}
+	})
+
+	t.Run("bodyTooLarge", func(t *testing.T) {
+		spy := &supplySpy{}
+		bigNumber := strings.Repeat("x", 5*1024)
+		rec, _ := doSupplyPost(t, spy.fn(), &id, supplyJSONBody(entityID, documentID, bigNumber))
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("status = %d, want 413", rec.Code)
+		}
+	})
+
+	t.Run("noIdentity", func(t *testing.T) {
+		spy := &supplySpy{}
+		rec, _ := doSupplyPost(t, spy.fn(), nil, supplyJSONBody(entityID, documentID, "N1"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want 401", rec.Code)
+		}
+		if len(spy.calls) != 0 {
+			t.Errorf("supply called %d time(s), want 0", len(spy.calls))
+		}
+	})
+}
+
+// --- H-12 (EXTR-27-02, added) -----------------------------------------------------------
+
+// TestImportRoutes_ReadingAndSupplyDoNotCollide mounts the two new routes alongside the two
+// existing ones on one mux and proves neither swallows the other's call.
+func TestImportRoutes_ReadingAndSupplyDoNotCollide(t *testing.T) {
+	var getCalls int
+	getFn := func(ctx context.Context, id string) (Batch, error) {
+		getCalls++
+		return Batch{}, ErrNotFound
+	}
+	docSpy := &docImpSpy{res: BatchResult{ID: "d1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}}
+	readSpy := &readingSpy{}
+	invoiceSpy := &supplySpy{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
+	mux.HandleFunc("GET /v1/imports/{id}", GetHandler(getFn, nil))
+	mux.HandleFunc("GET /v1/imports/document/reading", ReadingHandler(readSpy.fn(), nil))
+	mux.HandleFunc("POST /v1/imports/document/invoice", SupplyNumberHandler(invoiceSpy.fn(), nil))
+
+	id := testIdentity()
+	documentID := uuid.NewString()
+
+	r := httptest.NewRequest("GET", "/v1/imports/document/reading?document_id="+documentID, nil)
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	if getCalls != 0 {
+		t.Errorf("GetHandler's get called %d time(s) for a /document/reading request -- pattern collision", getCalls)
+	}
+
+	r2 := httptest.NewRequest("POST", "/v1/imports/document/invoice", strings.NewReader(supplyJSONBody(uuid.NewString(), documentID, "N1")))
+	r2.Header.Set("Content-Type", "application/json")
+	r2 = r2.WithContext(auth.WithIdentity(r2.Context(), id))
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, r2)
+	if len(docSpy.calls) != 0 {
+		t.Errorf("CreateDocumentHandler's imp called %d time(s) for a /document/invoice request -- pattern collision", len(docSpy.calls))
+	}
+
+	// The existing GET /v1/imports/{id} route still resolves, and never reaches the reading closure.
+	r3 := httptest.NewRequest("GET", "/v1/imports/"+uuid.NewString(), nil)
+	r3 = r3.WithContext(auth.WithIdentity(r3.Context(), id))
+	rec3 := httptest.NewRecorder()
+	mux.ServeHTTP(rec3, r3)
+	if getCalls != 1 {
+		t.Errorf("GetHandler's get called %d time(s) for its own route, want 1", getCalls)
+	}
+	if len(readSpy.calls) != 0 {
+		t.Errorf("reading closure called %d time(s) by the /v1/imports/{id} route, want 0", len(readSpy.calls))
+	}
+}
+
+// --- H-13 (EXTR-27-02, added, handler over the real service) ---------------------------
+
+// TestSupplyNumberHandler_AGateOutageStillAnswers201 wires the REAL Service (a fake gate that
+// errors) through SupplyNumberHandler on a mux -- the outage must not turn into a 500.
+func TestSupplyNumberHandler_AGateOutageStillAnswers201(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	tenantID := seedTenant(t, super, "SNH-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "SNH-01 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	svc := newTestServiceWithGate(app, &fakeGate{validateBatchErr: invoice.ErrUpstream})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/imports/document/invoice", SupplyNumberHandler(svc.SupplyInvoiceNumber, nil))
+
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
+	r := httptest.NewRequest("POST", "/v1/imports/document/invoice", strings.NewReader(supplyJSONBody(entityID, documentID, "SNH-01-INV")))
+	r.Header.Set("Content-Type", "application/json")
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("status = %d, want 201 -- body %s", rec.Code, rec.Body.String())
+	}
+	var resp invoice.Invoice
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.InvoiceNumber != "SNH-01-INV" {
+		t.Errorf("invoice_number = %q, want %q", resp.InvoiceNumber, "SNH-01-INV")
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
+		t.Errorf("invoices citing document = %d, want 1", got)
 	}
 }

@@ -25,6 +25,11 @@ var (
 	// ErrNotFound is returned when a lookup resolves to zero rows under the
 	// caller's tenant (RLS-scoped) — mirrors internal/invoice's sentinel.
 	ErrNotFound = errors.New("importer: not found")
+
+	// ErrReadingNotCarried: the document has a reading, but not one a supplied number can file.
+	ErrReadingNotCarried = errors.New("importer: reading not carried")
+	// ErrDocumentAlreadyFiled: an invoice already cites the document.
+	ErrDocumentAlreadyFiled = errors.New("importer: document already filed")
 )
 
 // RowError is one entry in an import_batches.errors jsonb array — either a

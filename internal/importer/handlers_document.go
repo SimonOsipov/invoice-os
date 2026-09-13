@@ -14,12 +14,66 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // maxCreateDocumentBodyBytes bounds the request body BEFORE it is decoded (CodeRabbit,
 // CWE-400): the body carries only entity_id and document_id, two uuids.
 const maxCreateDocumentBodyBytes = 4 * 1024
+
+// CarriedReading is a no-number document's stored reading, carried into manual entry.
+type CarriedReading struct {
+	DocumentID      string        `json:"document_id"`
+	ExtractionJobID string        `json:"extraction_job_id"`
+	IssueDate       *string       `json:"issue_date"` // YYYY-MM-DD
+	BuyerTIN        *string       `json:"buyer_tin"`
+	BuyerName       *string       `json:"buyer_name"`
+	Currency        *string       `json:"currency"`
+	Subtotal        *string       `json:"subtotal"`
+	VAT             *string       `json:"vat"`
+	Total           *string       `json:"total"`
+	LineItems       []CarriedLine `json:"line_items"` // never nil
+}
+
+type CarriedLine struct {
+	Description *string `json:"description"`
+	Quantity    *string `json:"quantity"`
+	UnitPrice   *string `json:"unit_price"`
+	LineTotal   *string `json:"line_total"`
+	LineTax     *string `json:"line_tax"`
+}
+
+type readingResponse struct {
+	Reading *CarriedReading `json:"reading"`
+}
+
+type supplyRequest struct {
+	EntityID      string `json:"entity_id"`
+	DocumentID    string `json:"document_id"`
+	InvoiceNumber string `json:"invoice_number"`
+}
+
+const (
+	readingNotCarriedReason    = "This document's reading cannot be carried into an invoice. Enter this invoice by hand."
+	documentAlreadyFiledReason = "An invoice has already been filed from this document."
+)
+
+// ReadingHandler: EXTR-27-02 wires GET /v1/imports/document/reading. Stub -- always 501, read
+// never called.
+func ReadingHandler(read func(ctx context.Context, documentID string) (*CarriedReading, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// SupplyNumberHandler: EXTR-27-02 wires POST /v1/imports/document/invoice. Stub -- always 501,
+// supply never called.
+func SupplyNumberHandler(supply func(ctx context.Context, entityID, documentID, invoiceNumber string) (invoice.Invoice, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
 
 // createDocumentRequest is the POST /v1/imports/document JSON body.
 type createDocumentRequest struct {

@@ -261,6 +261,18 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 	}, nil
 }
 
+// readingCreateInput: EXTR-27-02 wires the real split (documentCreateInput's post-number body
+// moves here). Stub -- zero value, no behaviour wired.
+func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
+	return invoice.CreateInput{}, nil
+}
+
+// carriedInput: EXTR-27-02 wires the carry predicate over documentCreateInput/readingCreateInput.
+// Stub -- always false, no behaviour wired.
+func carriedInput(documentID string, ex SettledExtraction) (invoice.CreateInput, bool) {
+	return invoice.CreateInput{}, false
+}
+
 // ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
 // read -> map -> mint batch -> dedup precheck -> create -> finalize. rows_total is always 1
 // (D-5, one document = one invoice); no gate runs (RuleSetVersion stays nil, AC #6).
@@ -351,4 +363,16 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		Errors:            []RowError{},
 		InvoiceViolations: []InvoiceViolations{},
 	}, nil
+}
+
+// CarriedReading: EXTR-27-02 wires the real read+carry check. Stub -- zero value, no behaviour
+// wired.
+func (s *Service) CarriedReading(ctx context.Context, documentID string) (*CarriedReading, error) {
+	return &CarriedReading{}, nil
+}
+
+// SupplyInvoiceNumber: EXTR-27-02 wires the real filing. Stub -- zero value, no write, no gate
+// call, no behaviour wired.
+func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID, number string) (invoice.Invoice, error) {
+	return invoice.Invoice{}, nil
 }

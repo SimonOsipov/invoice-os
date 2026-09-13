@@ -1326,12 +1326,8 @@ func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testi
 	}
 }
 
-// TestStoreGet_EverSubmittedReadsTheHistory (EXTR-27-01, Mode A RED): getTx
-// fills EverSubmitted from invoice_status_history, not from status alone -- a
-// draft with no history past draft/validated reads false; a draft whose
-// history shows it once reached queued (even since demoted back) reads true.
-// RED today: Invoice.EverSubmitted is a compile stub only, never populated by
-// getTx, so it stays the zero value (false) on both invoices below.
+// TestStoreGet_EverSubmittedReadsTheHistory: getTx reads EverSubmitted from the history, not the
+// status -- a draft whose history once reached queued reads true.
 func TestStoreGet_EverSubmittedReadsTheHistory(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

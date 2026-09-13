@@ -593,9 +593,9 @@ every other scoped read.
 The consequence is that the recorded key renders **then** while the search renders **now**. A
 renamed invoice strands the rows carrying its old number — the new number finds them, the old one
 does not — and a deleted invoice cannot be resolved at all, so its rows stop being findable by
-number even though their payloads still carry it. No production path renames an invoice number
-today (D-15), so this is latent rather than observed. The recorded key's role is display and
-provenance, not search.
+number even though their payloads still carry it. A never-submitted draft's number can be renamed
+(`PATCH /v1/invoices/{id}`); that rename's `invoice.updated` row records `previous_invoice_number`
+beside the new `invoice_number`. The recorded key's role is display and provenance, not search.
 
 ### 10.13 The write side: the writer set is enumerated, not hand-maintained
 

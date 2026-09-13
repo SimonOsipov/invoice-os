@@ -302,13 +302,8 @@ func TestCreateHandler_TwoInvoicesMayNameOneSourceDocument(t *testing.T) {
 	}
 }
 
-// TestStoreCreate_ASuppliedNumberNamesItsDocumentInTheAudit (EXTR-27-01, Mode
-// A RED): NumberSupplied widens invoice.created's payload to name the
-// document the number came from; an ordinary create's payload is untouched;
-// a supplied number with no document is refused, nothing written. RED today:
-// CreateInput.NumberSupplied is a compile stub only -- Store.Create neither
-// guards nor audits it, so the "supplied" leg's extra keys never appear and
-// the "nil document" leg succeeds instead of refusing.
+// TestStoreCreate_ASuppliedNumberNamesItsDocumentInTheAudit: NumberSupplied names the document in
+// invoice.created; an ordinary create's payload is untouched; no document is refused, nothing written.
 func TestStoreCreate_ASuppliedNumberNamesItsDocumentInTheAudit(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

@@ -301,8 +301,8 @@ func TestCorrectionHandler_UnknownFieldNameIsRefused(t *testing.T) {
 	}
 }
 
-// The identity fence: the correction route still refuses invoice_number outright, even though
-// the invoice edit path itself now renames a never-submitted draft (EXTR-27-01).
+// The identity fence: the correction route refuses invoice_number. A draft's number is
+// renamed through the invoice edit path instead.
 func TestCorrectionHandler_InvoiceNumberIsRefusedWithAReason(t *testing.T) {
 	spy := newCorSpy()
 

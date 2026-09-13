@@ -78,10 +78,8 @@ type transitionReq struct {
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
-// createRequest's own (above) minus entity_id -- identity is not the edit's
-// job ([D9]). InvoiceNumber (EXTR-27-01) IS editable: it renames a
-// never-submitted draft, trimmed and refused blank by EditHandler before
-// Store.Edit ever runs.
+// createRequest's own (above) minus entity_id ([D9]). InvoiceNumber renames a
+// never-submitted draft; EditHandler trims it and refuses a blank one.
 //
 // LineItems (INVED-01-05) is a POINTER to a slice, mirroring
 // EditInput.LineItems, because three states must stay distinguishable
@@ -283,11 +281,9 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // follow the same two rules, appended last of all, and come from ONE
 // approvalGate call -- approve and reject availability are identical.
 //
-// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason (EXTR-27-01) follow the
-// same two rules, appended last of all: derived from canCorrectNumber
-// (store.go), never a status switch. The reason is non-null exactly when
-// CanEdit && !CanCorrectInvoiceNumber -- mirroring RevalidateBlockedReason's
-// own gate below.
+// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
+// appended last of all, from canCorrectNumber (store.go). The reason is non-null
+// exactly when CanEdit && !CanCorrectInvoiceNumber.
 type getResponse struct {
 	Invoice
 	RuleSetVersion              *int    `json:"rule_set_version"`
@@ -1078,9 +1074,8 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			lines = &mapped
 		}
 
-		// InvoiceNumber (EXTR-27-01): trimmed before it ever reaches EditInput,
-		// matching the document mapper (internal/importer/document.go); a blank
-		// result 400s BEFORE edit is called, never as a store-level refusal.
+		// Trimmed like the document mapper (internal/importer/document.go); a blank
+		// number is refused here, never by the store.
 		var invoiceNumber *string
 		if req.InvoiceNumber != nil {
 			n := strings.TrimSpace(*req.InvoiceNumber)

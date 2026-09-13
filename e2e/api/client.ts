@@ -413,9 +413,7 @@ export interface GetInvoiceResult extends Invoice {
   approve_blocked_reason: string | null
   can_reject: boolean
   reject_blocked_reason: string | null
-  // CanCorrectInvoiceNumber/InvoiceNumberBlockedReason (EXTR-27-01): same no-omitempty
-  // convention, appended last. Derived from status AND submission history (never status
-  // alone) -- true only for a draft that has never left draft/validated.
+  // True only for a draft whose history never left draft/validated -- never status alone.
   can_correct_invoice_number: boolean
   invoice_number_blocked_reason: string | null
 }
@@ -425,11 +423,10 @@ export function getInvoice(token: string, id: string): Promise<GetInvoiceResult>
 }
 
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
-// optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03) --
-// identity is not the edit's job ([D9]). issue_date is a plain string on the wire
-// (Go *time.Time unmarshals from/marshals to an RFC3339 string). invoice_number
-// (EXTR-27-01) IS editable: it renames a never-submitted draft; absent leaves it
-// alone, and a blank (post-trim) value 400s before the store is ever called.
+// optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03), plus
+// invoice_number, which renames a never-submitted draft (blank after trimming is a 400).
+// entity_id is not the edit's job ([D9]). issue_date is a plain string on the wire
+// (Go *time.Time unmarshals from/marshals to an RFC3339 string).
 export interface InvoiceEditInput {
   issue_date?: string
   supplier_tin?: string

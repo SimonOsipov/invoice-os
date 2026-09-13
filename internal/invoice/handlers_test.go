@@ -3089,12 +3089,9 @@ func TestStatusForErr_NotFixableIs409(t *testing.T) {
 	}
 }
 
-// TestStatusForErr_NumberSentences (EXTR-27-01, Mode A RED): ErrNumberTaken and
-// ErrNumberFixed each map to 409 with their own operator sentence.
-// ErrDuplicateNumber is the control (PAR-04): its store-level 409 stays
-// "duplicate invoice number", untouched by the two new cases. RED today:
-// statusForErr has no case for either new sentinel, so both fall through to
-// the unmapped default (500, "internal server error").
+// TestStatusForErr_NumberSentences: each rename sentinel maps to 409 with its own sentence;
+// ErrDuplicateNumber is the PAR-04 control. TestQA27_EditHandlerRefusalsCarryTheDecidedSentences
+// pins the literal text.
 func TestStatusForErr_NumberSentences(t *testing.T) {
 	if status, msg := statusForErr(ErrNumberTaken); status != http.StatusConflict || msg != NumberTakenReason {
 		t.Errorf("statusForErr(ErrNumberTaken) = (%d, %q), want (409, %q)", status, msg, NumberTakenReason)
@@ -3107,12 +3104,8 @@ func TestStatusForErr_NumberSentences(t *testing.T) {
 	}
 }
 
-// TestEditHandler_NumberIsTrimmedAndBlankIs400 (EXTR-27-01, Mode A RED):
-// editReq.invoice_number is trimmed before reaching EditInput; a blank
-// result after trimming refuses 400 without calling edit; a padded, non-blank
-// value reaches EditInput trimmed. RED today: EditHandler never reads
-// req.InvoiceNumber, so the blank legs get 200 (edit runs unconditionally)
-// and the trim leg gets a nil EditInput.InvoiceNumber.
+// TestEditHandler_NumberIsTrimmedAndBlankIs400: a number blank after trimming is a 400 and edit
+// never runs; a padded number reaches EditInput trimmed.
 func TestEditHandler_NumberIsTrimmedAndBlankIs400(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()
@@ -3150,12 +3143,8 @@ func TestEditHandler_NumberIsTrimmedAndBlankIs400(t *testing.T) {
 	}
 }
 
-// TestGetHandler_NumberGateFollowsStatusAndHistory (EXTR-27-01, Mode A RED):
-// can_correct_invoice_number and invoice_number_blocked_reason follow status
-// AND EverSubmitted, not status alone -- reason is non-null exactly when
-// can_edit && !can_correct_invoice_number. RED today: GetHandler never sets
-// either field, so both stay their zero value (false / null) on every row,
-// which mismatches the draft/queued "true"/"non-null" expectations below.
+// TestGetHandler_NumberGateFollowsStatusAndHistory: the number gate follows status AND
+// EverSubmitted; the reason is non-null exactly when can_edit && !can_correct_invoice_number.
 func TestGetHandler_NumberGateFollowsStatusAndHistory(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 

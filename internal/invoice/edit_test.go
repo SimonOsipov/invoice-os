@@ -3002,14 +3002,6 @@ func TestEdit_CancelRollsBackWithTheEdit(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// EXTR-27-01 (Mode A, RED): renaming a never-submitted draft's invoice_number
-// through Store.Edit / EditBySourceDocumentTx. EditInput.InvoiceNumber exists
-// only as a compile stub today (invoice.go): editTx does not read it, so
-// every test below that expects a rename to succeed instead trips today's
-// step-1 "no fields to update" guard (ErrValidation), never a compile error.
-// ---------------------------------------------------------------------------
-
 // TestStoreEdit_ANumberOnlyInputIsNotEmpty: a number-only EditInput must pass
 // the step-1 guard on both entries; the all-nil input is the control that
 // proves the guard still fires at all.

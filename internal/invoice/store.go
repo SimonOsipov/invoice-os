@@ -1237,8 +1237,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //  1. nothing-to-do guard (checked BEFORE any tx opens, mirroring Store.Update's
 //     own guard, [A7]) -- ErrValidation. WIDENED by INVED-01-04: refused only
 //     when there are no header fields AND no line array was sent, because a
-//     lines-only edit is legitimate. WIDENED again by EXTR-27-01: a number-only
-//     input is likewise legitimate.
+//     lines-only edit is legitimate, and so is a number-only one.
 //  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
 //     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
 //     ErrNotFound; 22P02 -> ErrValidation).
@@ -1251,7 +1250,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     ApplyValidation's re-check is. beforeLines comes from hydrateLinesTx on
 //     THIS tx: scanInvoice leaves LineItems nil and the fingerprint takes its
 //     lines explicitly ([fingerprint-explicit-lines-param]).
-//     3b. (EXTR-27-01) when InvoiceNumber names a genuinely different number: the
+//     3b. when InvoiceNumber names a genuinely different number: the
 //     canCorrectNumber guard (draft AND never submitted, via everSubmittedTx)
 //     -- else ErrNumberFixed -- then the number UPDATE itself, mapping 23505
 //     to ErrNumberTaken. Runs BEFORE the header/line writes so a refused
@@ -1279,7 +1278,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     fields array carries what was SUBMITTED (updateContentTx's list), plus
 //     the literal "line_items" whenever an array was sent
 //     ([audit-fields-includes-line-items]), so a lines-only edit audits
-//     fields: ["line_items"]. A rename (EXTR-27-01) prepends "invoice_number"
+//     fields: ["line_items"]. A rename prepends "invoice_number"
 //     and the payload additionally carries previous_invoice_number.
 //  8. demotes to draft whenever the state machine allows before.Status -> draft,
 //     via transitionTx on THIS same tx -- the real
@@ -1611,8 +1610,8 @@ func canEdit(s Status) bool {
 	return s == StatusDraft || canTransition(s, StatusDraft)
 }
 
-// canCorrectNumber reports whether editTx may rename the invoice's number
-// (EXTR-27-01): only a draft whose history never left draft/validated. A
+// canCorrectNumber reports whether editTx may rename the invoice's number:
+// only a draft whose history never left draft/validated. A
 // status-only check would wrongly re-admit a draft demoted back from
 // queued/submitted -- everSubmitted closes that gap.
 func canCorrectNumber(s Status, everSubmitted bool) bool { return s == StatusDraft && !everSubmitted }

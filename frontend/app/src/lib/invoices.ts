@@ -395,9 +395,9 @@ export interface LineItemEditInput {
   line_tax: string | null
 }
 
-// editInvoice's PATCH body: the 9 optional header MBS-content fields (editReq,
-// handlers.go:70-80, [D9]) — identity/lifecycle are not the edit's job. Reuses
-// InvoiceRecord's own field types so the two never drift apart.
+// editInvoice's PATCH body (editReq, internal/invoice/handlers.go): the 9 optional header
+// fields plus invoice_number, which renames a never-submitted draft. entity_id is not the
+// edit's job ([D9]). Reuses InvoiceRecord's own field types so the two never drift apart.
 //
 // `line_items` (INVED-01-06) mirrors editReq.LineItems, a POINTER to a slice, so all
 // three states stay distinguishable ([line-items-optional]): key ABSENT -- or set to
@@ -417,6 +417,7 @@ export type InvoiceEditInput = Partial<
     | 'subtotal'
     | 'vat'
     | 'total'
+    | 'invoice_number'
   >
 > & {
   line_items?: LineItemEditInput[]
@@ -616,7 +617,7 @@ export async function violationSummary(
   return res.rules
 }
 
-// The seven action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
+// The eight action booleans normalize with `=== true`, NOT `?? false`: `??` only defends
 // against null/undefined, so any non-boolean truthy the wire might carry (a proxy or mock
 // emitting the STRING "false", a 1) would come through permissive. These gate a
 // destructive-ish action, so anything that is not literally `true` must deny -- a
@@ -624,7 +625,7 @@ export async function violationSummary(
 // Every key is listed EXPLICITLY even though `...res` is already typed
 // InvoiceDetailRecord: an omitted line compiles clean and tsc reports nothing, so the
 // APPROVE-1/2/3/5 specs are the only oracle that the fail-closed convention was applied.
-// The six `*_blocked_reason` fields all keep `?? null` (their
+// The seven `*_blocked_reason` fields all keep `?? null` (their
 // declared type is nullable, so `??` is reachable and idiomatic) and are passed through
 // BYTE-IDENTICALLY -- no fallback string, no rewriting: that copy is the backend's
 // ([revalidate-reason-from-backend]/[gates-on-the-wire]), and an SPA-authored default here
@@ -653,6 +654,8 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     approve_blocked_reason: res.approve_blocked_reason ?? null,
     can_reject: res.can_reject === true,
     reject_blocked_reason: res.reject_blocked_reason ?? null,
+    can_correct_invoice_number: res.can_correct_invoice_number === true,
+    invoice_number_blocked_reason: res.invoice_number_blocked_reason ?? null,
   }
 }
 

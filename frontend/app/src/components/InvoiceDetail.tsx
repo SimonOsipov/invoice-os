@@ -386,7 +386,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     // (established by the `if (base == null)` branch above) does not survive into a
     // nested function DECLARATION — TS resets it there because declarations are
     // hoisted — but does survive into a closure/arrow function.
-    const handleSaved = () => {
+    const handleSaved = (renamed: boolean) => {
       // FIRST: leave edit mode before the refresh below flips the ladder to <Loading/>, so
       // the editor can never remount against a half-refreshed record (INVED-01-07).
       setEditing(false)
@@ -411,6 +411,9 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       detail.run()
       history.run()
       approval.run() // Q13's visible face (D-22) -- an edit can demote to draft and close the live run
+      // A rename re-runs validation; no other edit does. `handleRevalidate` is declared
+      // below, but this closure only runs from a click, by which time it already exists.
+      if (renamed) void handleRevalidate()
     }
 
     // INVED-01-07: the button this drives is now DISABLED whenever `!inv.can_revalidate`,
@@ -1285,7 +1288,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
 // the always-mounted 9-field form inside the deleted fused card). It now replaces the
 // left-column card's read-only body while `editing`, and covers the 9 header fields
 // ([edit-form-nine-fields]) PLUS the line items, which are editable for the first time
-// here (add / edit / remove).
+// here (add / edit / remove), and the invoice number, editable only while `can_correct_invoice_number`.
 //
 // Both state slices are seeded once from `inv` at mount, matching EntityFormModal's
 // once-per-open init: the component only ever mounts while `editing`, so Cancel is
@@ -1308,10 +1311,13 @@ function InvoiceEditBody({
   base: string
   invoiceId: string
   inv: InvoiceDetailRecord
-  onSaved: () => void
+  onSaved: (renamed: boolean) => void
   onCancel: () => void
 }) {
   const [form, setForm] = useState<EditFormState>(() => formFromInvoice(inv))
+  // Seeded once at mount, like `form`. Kept out of EditFormState: the number is not an
+  // EditFieldKey, so diffEditInput never sees it.
+  const [number, setNumber] = useState(inv.invoice_number)
   const [rows, setRows] = useState<LineRowState[]>(() => rowsFromInvoice(inv))
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -1391,6 +1397,9 @@ function InvoiceEditBody({
     e.preventDefault()
     if (submitting) return
     const patch = diffEditInput(inv, form)
+    // Trimmed on both sides: padding, or a legacy untrimmed stored number, is not a rename.
+    const typedNumber = number.trim()
+    if (typedNumber !== inv.invoice_number.trim()) patch.invoice_number = typedNumber
     // `undefined` (content-identical lines) leaves the key ABSENT, so a header-only save
     // never touches the stored lines or churns their ids ([fingerprint-excludes-line-ids]).
     // `[]` — emptying a populated invoice — IS assigned, making the patch non-empty, so the
@@ -1408,7 +1417,7 @@ function InvoiceEditBody({
     setFormError(null)
     try {
       await editInvoice(ctx.authedFetch, base, invoiceId, patch)
-      onSaved()
+      onSaved(patch.invoice_number !== undefined)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
     } finally {
@@ -1426,14 +1435,22 @@ function InvoiceEditBody({
         )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
           <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Invoice number</div>
+            {inv.can_correct_invoice_number ? (
+              <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} onChange={(e) => setNumber(e.target.value)} style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+            ) : (
+              <>
+                <input data-testid="edit-invoice-number" className="pf-input" type="text" value={number} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} disabled={submitting} />
+                {inv.invoice_number_blocked_reason != null && (
+                  <div style={{ fontSize: 11, color: 'var(--fg-3)', marginTop: 5, lineHeight: 1.4 }}>{inv.invoice_number_blocked_reason}</div>
+                )}
+              </>
+            )}
+          </div>
+          <div>
             <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Issue date</div>
             {fieldFlag('issue_date')}
             <input className="pf-input" type="text" value={form.issue_date} onChange={(e) => updateField('issue_date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} disabled={submitting} />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
-            {fieldFlag('currency')}
-            <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
           </div>
           {/* Supplier name/TIN are DISPLAY-ONLY (INVCR-01-18, C7 fix, edit path -- a narrowly
               authorized §14 exception, no other field or layout on this screen touched): the
@@ -1504,6 +1521,11 @@ function InvoiceEditBody({
             <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Total</div>
             {fieldFlag('total')}
             <input className="pf-input" type="text" value={form.total} onChange={(e) => updateField('total', e.target.value)} disabled={submitting} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
+            {fieldFlag('currency')}
+            <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} disabled={submitting} />
           </div>
         </div>
 

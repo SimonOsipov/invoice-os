@@ -694,9 +694,9 @@ func fxQuoteTextPage(lines ...fxLine) []byte {
 }
 
 // fxBuildWildTwoPartyBareTIN puts the supplier and buyer blocks side by side, each ending in a
-// bare "TIN:" label whose value is a separate Tj. The buyer block is headed "Invoice to" and
-// carries a fragment-bearing label above ("Customer No.") and below ("Buyer's Signature") its
-// name. The apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
+// TIN label whose value is a separate Tj. The friendly set labels both "TIN:", heads the buyer
+// block "Invoice to" and puts "Customer No." above and "Buyer's Signature" below its name. The
+// apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
 func fxBuildWildTwoPartyBareTIN(l fxWildTwoPartyLabels) []byte {
 	return fxQuoteTextPage(fxWildTwoPartyLines(l)...)
 }
@@ -879,9 +879,8 @@ func fxBuildWildRCDueNaira() []byte {
 // punctuation, and offsets every value 8pt below its label in a second column so neither
 // same_token, right nor below binds.
 //
-// One field stays readable on purpose: "Invoice No" over its value at the same x, the aligned
-// stack fxBuildCorpusStackedLabels proves. A layout that quarantines is never line-scored, and
-// lines_db_test.go's linesScored == eeLayoutCount would red on it.
+// The friendly set keeps "Invoice No" readable on purpose, over its value at the same x
+// (fxBuildCorpusStackedLabels); the as-printed set letter-spaces it as NG-3 prints it.
 func fxBuildWildStackedBorderless(l fxWildStackedLabels) []byte {
 	return fxTextPage(fxWildStackedLines(l)...)
 }
@@ -2516,4 +2515,26 @@ func TestFixtures_EachAsPrintedSiblingReadsItsDeclaredLabels(t *testing.T) {
 			t.Errorf("the merged label reported %q, want a label glued to an amount", p)
 		}
 	})
+}
+
+// A sibling's number is its twin's plus 100 behind the twin's own label, so the pair stays distinct.
+func TestFixtures_EachAsPrintedSiblingDrawsItsTwinsNumberPlus100(t *testing.T) {
+	for _, tc := range []struct{ name, twinText, text string }{
+		{"wild_two_party_bare_tin_asprinted.pdf", "Invoice No: INV-2101", "Invoice No: INV-2201"},
+		{"wild_ruled_lines_totals_asprinted.pdf", "Invoice No: INV-2102", "Invoice No: INV-2202"},
+		{"wild_stacked_borderless_asprinted.pdf", "INV-2104", "INV-2204"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			twin, _ := fxDrawnLines(t, fxCorpusBuilder(t, s.twin)())
+			lines, _ := fxDrawnLines(t, s.build())
+			i := slices.IndexFunc(twin, func(l fxLine) bool { return l.text == tc.twinText })
+			if i < 0 || i >= len(lines) {
+				t.Fatalf("%s draws no %q", s.twin, tc.twinText)
+			}
+			if lines[i].text != tc.text {
+				t.Errorf("line %d draws %q, want %q", i, lines[i].text, tc.text)
+			}
+		})
+	}
 }

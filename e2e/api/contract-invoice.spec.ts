@@ -791,6 +791,66 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       })
       assertErrorEnvelope(res, 400, 'malformed line numeric')
     })
+
+    // EXTR27-API-01: NumberTakenReason/numberFixedReason copied byte-exact from
+    // internal/invoice/handlers.go -- a drift there must be caught here, not silently
+    // reworded on the wire.
+    const numberTakenReason = 'This invoice number is already in the register for this company. Enter a different number.'
+    const numberFixedReason = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
+
+    test("EXTR27-API-01: a draft's number is renamed, a taken or fixed number is refused in operator language", async () => {
+      const draftA = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-27A-${freshTin()}` })
+      const draftB = await createInvoice(token, { entity_id: entity.id, invoice_number: `INV-27B-${freshTin()}` })
+      const created = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-27C-${freshTin()}`) })
+      const validated = await validateInvoice(token, created.id)
+      expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+      // 1. renaming to another invoice's number is refused, nothing written.
+      const takenRes = await rawFetch(`/api/invoice/v1/invoices/${draftA.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_number: draftB.invoice_number },
+      })
+      assertErrorEnvelope(takenRes, 409, 'rename to a taken number')
+      expect((takenRes.body as Record<string, unknown>).error, 'the taken-number refusal should use the operator sentence').toBe(numberTakenReason)
+
+      // 2. a never-submitted draft renames, and GET reflects it as still correctable.
+      const fresh = `INV-27A2-${freshTin()}`
+      const renameRes = await rawFetch(`/api/invoice/v1/invoices/${draftA.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_number: fresh },
+      })
+      expect(renameRes.status, 'a never-submitted draft should rename').toBe(200)
+
+      const draftAAfter = await getInvoice(token, draftA.id)
+      expect(draftAAfter.invoice_number, 'GET should reflect the renamed number').toBe(fresh)
+      expect(draftAAfter.can_correct_invoice_number, 'a never-submitted draft stays correctable').toBe(true)
+      expect(draftAAfter.invoice_number_blocked_reason, 'a correctable draft carries no blocked reason').toBeNull()
+
+      // 3. a validated invoice's number is fixed -- GET names it, in operator language.
+      const validatedGet = await getInvoice(token, created.id)
+      expect(validatedGet.can_correct_invoice_number, 'a validated invoice cannot correct its number').toBe(false)
+      expect(validatedGet.invoice_number_blocked_reason, 'the reason should be the operator sentence').toBe(numberFixedReason)
+
+      // 4. renaming a fixed invoice is refused with the same 409 sentence.
+      const fixedRes = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_number: `INV-27C2-${freshTin()}` },
+      })
+      assertErrorEnvelope(fixedRes, 409, 'rename a fixed (validated) invoice')
+      expect((fixedRes.body as Record<string, unknown>).error, 'the fixed-number refusal should use the operator sentence').toBe(numberFixedReason)
+
+      // 5. a blank (post-trim) number 400s before the store is ever called.
+      const blankRes = await rawFetch(`/api/invoice/v1/invoices/${draftA.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { invoice_number: '' },
+      })
+      assertErrorEnvelope(blankRes, 400, 'blank invoice_number')
+      expect((blankRes.body as Record<string, unknown>).error).toBe('invoice_number must not be blank')
+    })
   })
 
   test.describe('resolve-outside', () => {

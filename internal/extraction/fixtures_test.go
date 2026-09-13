@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -2236,4 +2238,196 @@ func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
 	if fxWildRuledHeader[0] != "S/N" {
 		t.Errorf("fxWildRuledHeader[0] = %q, want %q -- the two arrangements must stay distinguishable", fxWildRuledHeader[0], "S/N")
 	}
+}
+
+// --- the as-printed siblings ------------------------------------------------
+
+// fxWildSibling is an as-printed sibling: its builder, and the page both members draw on.
+type fxWildSibling struct {
+	name, twin string
+	build      func() []byte
+	page       func(lines ...fxLine) []byte
+}
+
+// fxWildSiblings are the three as-printed siblings. TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry.
+var fxWildSiblings []fxWildSibling
+
+var (
+	// The last block's newline is optional: fxContent trims the stream's trailing EOL.
+	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 (\d+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
+	fxAmountRe    = regexp.MustCompile(`[0-9][0-9,]*\.[0-9]{2}`)
+)
+
+// fxDrawnLines parses a built one-page PDF back into the lines it draws, each text the literal
+// the builder wrote. outside is every object with the content stream's text blocks removed.
+func fxDrawnLines(t *testing.T, raw []byte) (lines []fxLine, outside map[int]string) {
+	t.Helper()
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) != 1 {
+		t.Fatalf("parsed %d page(s), want 1", len(pages))
+	}
+	content := string(fxContent(t, objs, pages[0]))
+	for _, m := range fxTextBlockRe.FindAllStringSubmatch(content, -1) {
+		size, _ := strconv.Atoi(m[1])
+		x, _ := strconv.Atoi(m[2])
+		y, _ := strconv.Atoi(m[3])
+		lines = append(lines, fxLine{size, x, y, m[4]})
+	}
+	if n := strings.Count(content, "BT\n"); n != len(lines) || n == 0 {
+		t.Fatalf("parsed %d of %d text block(s)", len(lines), n)
+	}
+
+	contents := fxContentsRe.FindSubmatch(pages[0])
+	num, _ := strconv.Atoi(string(contents[1]))
+	outside = map[int]string{}
+	for n, body := range objs {
+		outside[n] = string(body)
+	}
+	outside[num] = fxTextBlockRe.ReplaceAllString(content, "")
+	return lines, outside
+}
+
+// fxGeometryProblems reports each line whose size or origin differs between twin and sibling,
+// and each text that differs where changed does not declare it, or matches where it does.
+func fxGeometryProblems(twin, sibling []fxLine, changed []int) []string {
+	if len(twin) != len(sibling) {
+		return []string{fmt.Sprintf("the sibling draws %d line(s), its twin %d", len(sibling), len(twin))}
+	}
+	var out []string
+	for i, a := range twin {
+		b := sibling[i]
+		if a.size != b.size || a.x != b.x || a.y != b.y {
+			out = append(out, fmt.Sprintf("line %d moved: %dpt (%d,%d) -> %dpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
+		}
+		if declared := slices.Contains(changed, i); declared != (a.text != b.text) {
+			out = append(out, fmt.Sprintf("line %d: %q -> %q, declared changed=%v", i, a.text, b.text, declared))
+		}
+	}
+	return out
+}
+
+// fxLabelProblems reports a token count other than want, a label that is not the trimmed text
+// of exactly one token, and a token carrying two labels or a label beside an amount.
+func fxLabelProblems(texts []string, want int, labels []string) []string {
+	var out []string
+	if len(texts) != want {
+		out = append(out, fmt.Sprintf("read %d token(s), want %d", len(texts), want))
+	}
+	for _, label := range labels {
+		n := 0
+		for _, text := range texts {
+			if strings.TrimSpace(text) == label {
+				n++
+			}
+		}
+		if n != 1 {
+			out = append(out, fmt.Sprintf("%q is the whole text of %d token(s), want 1", label, n))
+		}
+	}
+	for _, text := range texts {
+		var carried []string
+		for _, label := range labels {
+			if strings.Contains(text, label) {
+				carried = append(carried, label)
+			}
+		}
+		if len(carried) > 1 {
+			out = append(out, fmt.Sprintf("token %q carries %q", text, carried))
+		}
+		if len(carried) > 0 && fxAmountRe.MatchString(text) {
+			out = append(out, fmt.Sprintf("token %q glues %q to an amount", text, carried))
+		}
+	}
+	return out
+}
+
+// fxWildSiblingNamed is a runtime lookup, so an unregistered sibling fails its own subtest.
+func fxWildSiblingNamed(t *testing.T, name string) fxWildSibling {
+	t.Helper()
+	for _, s := range fxWildSiblings {
+		if s.name == name {
+			return s
+		}
+	}
+	t.Fatalf("fxWildSiblings registers no %s", name)
+	return fxWildSibling{}
+}
+
+func fxCorpusBuilder(t *testing.T, name string) func() []byte {
+	t.Helper()
+	for _, f := range fxCorpus {
+		if f.name == name {
+			return f.build
+		}
+	}
+	t.Fatalf("fxCorpus has no %s", name)
+	return nil
+}
+
+func TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		changed []int // label lines and the invoice-number line
+	}{
+		{"wild_two_party_bare_tin_asprinted.pdf", []int{0, 1, 4, 6, 11, 13, 15, 17}},
+		{"wild_ruled_lines_totals_asprinted.pdf", []int{0, 1, 8, 9, 10, 11, 28, 30}},
+		{"wild_stacked_borderless_asprinted.pdf", []int{0, 1, 2, 3, 5, 9, 13, 15, 17, 19}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			twin, twinOutside := fxDrawnLines(t, fxCorpusBuilder(t, s.twin)())
+			lines, outside := fxDrawnLines(t, s.build())
+
+			if p := fxGeometryProblems(twin, lines, tc.changed); len(p) > 0 {
+				t.Errorf("%s drifts from %s:\n%s", tc.name, s.twin, strings.Join(p, "\n"))
+			}
+			if !maps.Equal(twinOutside, outside) {
+				t.Errorf("%s differs from %s outside its text: rules, fonts or CMap", tc.name, s.twin)
+			}
+
+			moved := slices.Clone(lines)
+			moved[5].y++
+			if p := fxGeometryProblems(lines, moved, nil); len(p) != 1 || !strings.HasPrefix(p[0], "line 5 moved") {
+				t.Errorf("a 1pt move at line 5 reported %q, want exactly that line", p)
+			}
+		})
+	}
+}
+
+func TestFixtures_EachAsPrintedSiblingReadsItsDeclaredLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tokens int
+		labels []string // the label tables' "pdfium reads" values
+	}{
+		{"wild_two_party_bare_tin_asprinted.pdf", 19, []string{"Sales Invoice", "VAT Reg. No:", "INVOICE TO:", "Customer No.", "TIN:", "Customer's Signature", "Currency: NGN", "Net Amount", "VAT @ 7.5%", "Total NGN"}},
+		{"wild_ruled_lines_totals_asprinted.pdf", 34, []string{"MONTHLY SERVICE INVOICE", "Item", "Service description", "Qty", "Unit rate ₦", "Amount ₦", "Taxable amount", "VAT @ 7.5%"}},
+		{"wild_stacked_borderless_asprinted.pdf", 21, []string{"Invoice", "I N V O I C E N U M B E R", "I S S U E D", "BILLED TO", "FROM", "CURRENCY", "Subtotal", "VAT 7.5%", "Amount payable"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			if p := fxLabelProblems(fxTexts(fxTokens(t, s.build())), tc.tokens, tc.labels); len(p) > 0 {
+				t.Errorf("%s:\n%s", tc.name, strings.Join(p, "\n"))
+			}
+		})
+	}
+
+	t.Run("control: TOTAL DUE (NGN) on the Total line", func(t *testing.T) {
+		s := fxWildSiblingNamed(t, "wild_ruled_lines_totals_asprinted.pdf")
+		lines, _ := fxDrawnLines(t, s.build())
+		if !bytes.Equal(s.page(lines...), s.build()) {
+			t.Fatal("the parsed lines do not rebuild the sibling's bytes; the control would read another page")
+		}
+		i := slices.IndexFunc(lines, func(l fxLine) bool { return l.text == "Total" })
+		if i < 0 {
+			t.Fatal("the ruled sibling draws no Total line")
+		}
+		lines[i].text = `TOTAL DUE \(NGN\)`
+		p := fxLabelProblems(fxTexts(fxTokens(t, s.page(lines...))), 34, []string{"TOTAL DUE (NGN)"})
+		if !slices.ContainsFunc(p, func(msg string) bool { return strings.Contains(msg, "glues") }) {
+			t.Errorf("the merged label reported %q, want a label glued to an amount", p)
+		}
+	})
 }

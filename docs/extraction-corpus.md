@@ -780,8 +780,8 @@ on the mutilation controls instead — `eeCutScore` is what the same corpus scor
 distance dial guarantees off those, never off this rate.
 
 It also cannot see a defect that lives only in a real document. The corpus is fourteen **synthetic
-arrangements** — six `corpus_*` layouts, the five `wild_*` reproductions and three as-printed siblings — not the five real
-anonymised PDFs. A production read that fails on paper texture, a scanner's skew or a vendor's
+arrangements** — six `corpus_*` layouts, the five `wild_*` reproductions and three as-printed siblings — not the five source
+mock-ups. A production read that fails on paper texture, a scanner's skew or a vendor's
 unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
 reproducible in this repo and never will be.
 
@@ -946,8 +946,9 @@ register's own geometry, and that gap is **owed and unowned**.
 The five documents the `wild_*` arrangements were drawn from are **synthetic mock-ups, not client
 documents**, so transcribing their printed labels verbatim does not breach the 100%-synthetic rule
 at the top of this page. Labels and column headers cross into the repository; the documents' bytes
-never do, and neither does any name, address, TIN, account number or invoice number printed on
-them. The two invoices **The advisory arrangements** transcribes are NG-3 and NG-4 below.
+never do, and neither does any address, TIN, account number or invoice number printed on them.
+The only printed names that cross are the short supplier names in the file names below. The two
+invoices **The advisory arrangements** transcribes are NG-3 and NG-4 below.
 
 The sources live outside the repository, in the project vault at
 `Simon Vault/Projects/ASComply Africa/User Stories/EXTR/sources/`:
@@ -959,7 +960,8 @@ The sources live outside the repository, in the project vault at
 - NG-5 `NG-Invoice-5-Ibadan-Goods-scan.pdf`
 
 No test reads that folder, so the inventories below are the durable record of what each source
-prints.
+prints. `TestCorpusDoc_EachPrintedLabelIsInItsSourceInventory` holds each label a sibling prints to
+its source's inventory; nothing checks the other labels.
 
 ### The pairs
 
@@ -1002,7 +1004,7 @@ Labels and column headers only, as each source prints them.
   - Header: `Invoice`, `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`
   - Parties: `FROM`, `BILLED TO`, `TIN`, `RC`
   - Totals: `Subtotal`, `VAT 7.5%`, `Withholding tax 10%`, `Amount payable`
-  - Spacing, as R0 records it: `I N V O I C E   N U M B E R` and `I S S U E D` letter-spaced, the rest unspaced. Amounts are ₦-joined.
+  - Spacing: `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`, `FROM` and `BILLED TO` print letter-spaced, the rest unspaced. R0 letter-spaces only `I N V O I C E   N U M B E R` and `I S S U E D`. Amounts are ₦-joined.
 - **NG-4 Sahara Telecoms (dense):**
   - Title: `MONTHLY SERVICE INVOICE`
   - Header strip, labels above values: `INVOICE NUMBER`, `BILL PERIOD`, `INVOICE DATE`, `PAYMENT DUE`, `ACCOUNT NUMBER`, `CURRENCY`
@@ -1097,7 +1099,8 @@ in the totals block, `RC:`, `VAT Registration:`, `Contact:`, `Payment instructio
 Not transcribed: `DUE` and its date, `RC`, `Withholding tax 10%` (no row at the twin's geometry), the
 service lines, and the page-2 payment text.
 
-**One space, not three.** The sibling letter-spaces exactly the two labels R0 letter-spaces. R0
+**One space, not three.** The sibling letter-spaces exactly the two labels R0 letter-spaces, and
+prints `FROM`, `BILLED TO` and `CURRENCY` unspaced as R0 does, although NG-3 letter-spaces them. R0
 prints `I N V O I C E   N U M B E R` with three spaces between words; with that string the pinned
 docling image keeps the gap pdfium collapses, and `TestWildGoldens_DescribeTheirPDF` fails on the
 token. With one space both readers read `I N V O I C E N U M B E R`, so the sibling prints one.
@@ -1201,6 +1204,7 @@ subtotal or (b) red. The lines above come from a throwaway probe, run once per b
 directory outside the repository and never committed:
 
 ```
+mkdir -p <scratch>/<build>
 git archive <build> | tar -x -C <scratch>/<build>
 cp internal/extraction/testdata/wild_*_asprinted.pdf \
    internal/extraction/testdata/wild_ruled_lines_totals_asprinted.docling.json \
@@ -1238,11 +1242,11 @@ sibling.
 
 ## The advisory arrangements
 
-Three fixtures transcribe two real Nigerian invoices, TINs swapped into the reserved block.
+Three fixtures transcribe two of the Nigerian invoice mock-ups, NG-3 and NG-4, TINs swapped into the reserved block.
 `advisory_register.pdf` (R0, faithful, two pages) and `advisory_register_unspaced.pdf` (R1, exactly
 one declared transformation) transcribe the advisory-firm register EXTR-26 was written against;
 `advisory_dense.pdf` (D0, faithful) transcribes the dense telecoms invoice. The `wild_*` layouts
-are the precedent these depart from: they copied a real document's geometry and rewrote its labels
+are the precedent these depart from: they copied a source document's geometry and rewrote its labels
 to something a template would print, which tamed the text layer. R0 and D0 keep both the geometry
 and the printed words; only the bytes are generated.
 

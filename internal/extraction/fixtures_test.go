@@ -83,7 +83,7 @@ var fxCorpus = []struct {
 	{fxWildTwoPartyAsPrinted, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyPrinted) }},
 	{fxWildRuledAsPrinted, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledPrinted) }},
 	{fxWildStackedAsPrinted, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedPrinted) }},
-	// EXTR-26-06: faithful transcriptions of two real Nigerian invoices, outside every corpus_
+	// EXTR-26-06: faithful transcriptions of two Nigerian invoice mock-ups, outside every corpus_
 	// ratchet.
 	{fxAdvisoryRegister, func() []byte { return fxBuildAdvisoryRegister(false) }},
 	// R0 with the two letter-spaced header labels unspaced -- the one declared transformation.
@@ -751,7 +751,7 @@ var (
 	fxWildRuledColXs = [6]int{72, 116, 290, 340, 430, 540}
 	fxWildRuledRowYs = [5]int{512, 488, 464, 440, 416}
 
-	// The decoration real Nigerian invoices print. "RATE (N)" is escaped so the balanced
+	// The decoration the Nigerian source mock-ups print. "RATE (N)" is escaped so the balanced
 	// parens in the PDF string literal are explicit; "Amount " + fxNaira must stay one Tj,
 	// because a lone \244 Tj emits no token at all.
 	fxWildRuledHeader = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", `RATE \(N\)`, "Amount " + fxNaira}
@@ -1269,7 +1269,7 @@ func fxBuildWildScannedNoNumber() []byte {
 
 // --- the advisory arrangements (NOT corpus layouts) -------------------------
 
-// Faithful transcriptions of two real Nigerian invoices (arch-26-06 Appendix C), TINs swapped
+// Faithful transcriptions of two Nigerian invoice mock-ups (arch-26-06 Appendix C), TINs swapped
 // into the free reserved block. Neither is registered in requiredPDFs, expectByLayout,
 // corpusExpect, corpusLayouts or corpusTokenFloor -- no score constant and no doc table moves.
 const (
@@ -1304,8 +1304,8 @@ func fxNairaTextPages(withCMap bool, pages ...[]fxLine) []byte {
 	return fxAssemble(objs)
 }
 
-// fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the real advisory register transcribed
-// faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
+// fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the NG-3 advisory register mock-up
+// transcribed faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
 // (D-26-06 -- neither issue_date nor total resolves on R0; R1 proves Issued resolves without
 // touching geometry, and total stays missing on both).
 func fxBuildAdvisoryRegister(unspaced bool) []byte {

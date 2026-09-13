@@ -62,6 +62,7 @@ import {
   type LineItemCreateInput,
   type Scaled,
 } from './invoices'
+import type { SupplyNumberRequest } from './importApi'
 import type { Draft, LineItem } from '../types'
 import type { Entity } from './portfolio'
 
@@ -229,6 +230,18 @@ export async function fileDraftInvoice(
     deps.onPending(false)
   }
 }
+
+export type FileSuppliedNumberDeps = Omit<FileDraftDeps, 'create'> & {
+  supply: (req: SupplyNumberRequest) => Promise<{ id: string }>
+}
+
+// RED stub (EXTR-27-03): fileSuppliedNumber's ordering contract lands with the feature.
+export async function fileSuppliedNumber(
+  _invoiceNumber: string,
+  _entity: Pick<Entity, 'id'>,
+  _documentId: string,
+  _deps: FileSuppliedNumberDeps,
+): Promise<void> {}
 
 // Precedence: entity first (unresolvable in-app -- no picker on this screen), invoice
 // number second (resolvable -- the field is editable) -- mirrors CreateMapping.tsx:

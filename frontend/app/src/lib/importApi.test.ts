@@ -65,12 +65,16 @@ import {
   makeImportAuth,
   normalizeReport,
   previewImport,
+  readingForDocument,
   rowErrorRows,
+  supplyInvoiceNumber,
   uploadPercent,
+  type CarriedReading,
   type CreateImportRequest,
   type ImportAuth,
   type ImportPreview,
   type ImportReport,
+  type SupplyNumberRequest,
   type UploadPhase,
   type XhrCtor,
 } from './importApi'
@@ -943,6 +947,79 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(500)
+  })
+})
+
+// EXTR-27-03 — readingForDocument/supplyInvoiceNumber, the reading GET and the number-supply
+// POST. RED against the stubs: readingForDocument never calls fetch (always resolves null);
+// supplyInvoiceNumber rejects synchronously.
+const TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
+
+describe('carried reading and supply (EXTR27-W1, W2)', () => {
+  const READING: CarriedReading = {
+    document_id: DOC_ID,
+    extraction_job_id: 'j-1',
+    issue_date: '2026-03-01',
+    buyer_tin: '23456789-0001',
+    buyer_name: 'Kano Mills Ltd',
+    currency: 'NGN',
+    subtotal: '1000.00',
+    vat: '75.00',
+    total: '1075.00',
+    line_items: [
+      { description: 'Bolts', quantity: '10', unit_price: '50.00', line_total: '500.00', line_tax: '37.50' },
+      { description: 'Nuts', quantity: '5', unit_price: '100.00', line_total: '500.00', line_tax: null },
+    ],
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('EXTR27-W1: the reading read GETs its route and answers null for nothing to carry', async () => {
+    // (a) nothing to carry -- and the control that the GET really happened.
+    const fetchMockA = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ reading: null }) })
+    const afA = createAuthedFetch(() => 'tok', vi.fn())
+    const resultA = await readingForDocument(afA, base, 'doc 1')
+    expect(resultA).toBeNull()
+    expect(fetchMockA, 'readingForDocument must GET the reading route').toHaveBeenCalledTimes(1)
+    const [urlA, initA] = fetchMockA.mock.calls[0] as [string, RequestInit]
+    expect(urlA).toBe('https://gw/api/invoice/v1/imports/document/reading?document_id=doc%201')
+    expect(initA.method).toBe('GET')
+
+    // (b) a reading present resolves verbatim.
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ reading: READING }) })
+    const afB = createAuthedFetch(() => 'tok', vi.fn())
+    const resultB = await readingForDocument(afB, base, READING.document_id)
+    expect(resultB).toEqual(READING)
+
+    // (c) a body with no `reading` key at all -- never undefined.
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const afC = createAuthedFetch(() => 'tok', vi.fn())
+    const resultC = await readingForDocument(afC, base, READING.document_id)
+    expect(resultC).toBeNull()
+  })
+
+  it('EXTR27-W2: the supply posts exactly its three keys and surfaces a refusal verbatim', async () => {
+    const req: SupplyNumberRequest = { entity_id: 'e-1', document_id: 'd-1', invoice_number: 'N-1' }
+
+    // (a) 201 resolves the created invoice; the body carries exactly the three request keys.
+    const fetchMockA = mockFetchOnce({ ok: true, status: 201, json: () => Promise.resolve({ id: 'inv-1' }) })
+    const afA = createAuthedFetch(() => 'tok', vi.fn())
+    const resultA = await supplyInvoiceNumber(afA, base, req)
+    expect(resultA.id).toBe('inv-1')
+    const [urlA, initA] = fetchMockA.mock.calls[0] as [string, RequestInit]
+    expect(urlA).toBe('https://gw/api/invoice/v1/imports/document/invoice')
+    expect(initA.method).toBe('POST')
+    expect(JSON.parse(initA.body as string)).toEqual({ entity_id: 'e-1', document_id: 'd-1', invoice_number: 'N-1' })
+
+    // (b) 409 surfaces the register sentence verbatim, never swallowed.
+    mockFetchOnce({ ok: false, status: 409, json: () => Promise.resolve({ error: TAKEN }) })
+    const afB = createAuthedFetch(() => 'tok', vi.fn())
+    const err = await captureRejection(() => supplyInvoiceNumber(afB, base, req))
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(409)
+    expect((err as ApiError).message).toBe(TAKEN)
   })
 })
 

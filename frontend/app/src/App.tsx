@@ -1522,6 +1522,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     connectorMappings,
     filing,
     filingError,
+    // RED stub (EXTR-27-03): frozen null until enterByHand actually carries a reading.
+    handOffReading: null,
     customRules,
     openRuleKey,
     policies,

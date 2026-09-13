@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
+import type { CarriedReading } from './lib/importApi'
 import { runFailures } from './lib/importRun'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -71,7 +72,41 @@ const GATEWAY = 'https://gw.test'
 const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const ENTITY_B = 'bbbbbbbb-0000-4000-8000-000000000002'
 const DOC_ID = 'dddddddd-0000-4000-8000-00000000000d'
+const DOC_ID_2 = 'eeeeeeee-0000-4000-8000-00000000000e'
 const CREATED_ID = 'cccccccc-0000-4000-8000-00000000000c'
+
+// EXTR-27-03. RED against enterByHand's unmodified, synchronous body -- readingRequests
+// stays empty until the executor wires the async read, so every A-test's control below
+// fails cleanly rather than exercising the future behaviour by accident.
+const READING: CarriedReading = {
+  document_id: DOC_ID,
+  extraction_job_id: 'j-1',
+  issue_date: '2026-03-01',
+  buyer_tin: '23456789-0001',
+  buyer_name: 'Kano Mills Ltd',
+  currency: 'NGN',
+  subtotal: '1000.00',
+  vat: '75.00',
+  total: '1075.00',
+  line_items: [
+    { description: 'Bolts', quantity: '10', unit_price: '50.00', line_total: '500.00', line_tax: '37.50' },
+    { description: 'Nuts', quantity: '5', unit_price: '100.00', line_total: '500.00', line_tax: null },
+  ],
+}
+
+// A fetch-response-shaped resolution, matching what the real reading/supply routes return.
+function ok(body: unknown) {
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+}
+
+// Captured `resolve` so a test controls exactly when a reading GET settles.
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
@@ -91,10 +126,20 @@ vi.mock('./components/InvoiceDetail', () => ({
 // Every POST body sent to the create endpoint, in call order. Parsed from the fetch init
 // because apiFetch JSON.stringifies the body -- this is literally what crosses the wire.
 let createBodies: Record<string, unknown>[] = []
+// Every POST body sent to the supply-number endpoint, in call order.
+let supplyBodies: Record<string, unknown>[] = []
+// document_id query values the reading route was actually GET-ed with, in call order --
+// the control every A-test leans on: enterByHand's unmodified body never touches this.
+let readingRequests: string[] = []
+// Per-document override for the reading GET's response; falls back to `{reading:null}`.
+let readingReplies: Record<string, () => Promise<unknown>> = {}
 
 beforeEach(() => {
   capturedCtx = undefined
   createBodies = []
+  supplyBodies = []
+  readingRequests = []
+  readingReplies = {}
   FakeXhr.instances = []
   vi.stubGlobal('localStorage', createMemoryStorage())
   vi.stubGlobal('XMLHttpRequest', FakeXhr)
@@ -114,6 +159,15 @@ function routeFetch() {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: { method?: string; body?: string }) => {
+      if (url.includes('/api/invoice/v1/imports/document/reading')) {
+        const id = new URL(url).searchParams.get('document_id') ?? ''
+        readingRequests.push(id)
+        return readingReplies[id]?.() ?? ok({ reading: null })
+      }
+      if (url.endsWith('/api/invoice/v1/imports/document/invoice') && init?.method === 'POST') {
+        supplyBodies.push(JSON.parse(init.body ?? '{}') as Record<string, unknown>)
+        return ok({ id: CREATED_ID, invoice_number: 'N-1', status: 'draft' })
+      }
       if (url.endsWith('/api/invoice/v1/invoices') && init?.method === 'POST') {
         createBodies.push(JSON.parse(init.body ?? '{}') as Record<string, unknown>)
         return Promise.resolve({
@@ -223,7 +277,9 @@ describe('EXTR-15-07: the hand-off id crosses the wire', () => {
     await act(async () => {
       requireCtx().enterByHand(DOC_ID)
     })
-    expect(requireCtx().createStep, 'enterByHand must land on the form step').toBe('form')
+    // The landing is async (EXTR-27-03): a late reply must not overwrite typing, so the
+    // form step is only reachable after the read settles.
+    await waitFor(() => expect(requireCtx().createStep, 'enterByHand must land on the form step').toBe('form'))
 
     const body = await fileAndReadBody()
     expect(body.source_document_id, 'the hand-off document did not reach the create request').toBe(DOC_ID)
@@ -249,6 +305,7 @@ describe('EXTR-15-07: a recorded hand-off does not outlive its create flow', () 
     await act(async () => {
       requireCtx().enterByHand(DOC_ID)
     })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
 
     await act(async () => {
       requireCtx().openCreate()
@@ -268,6 +325,7 @@ describe('EXTR-15-07: a recorded hand-off does not outlive its create flow', () 
     await act(async () => {
       requireCtx().enterByHand(DOC_ID)
     })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
 
     await act(async () => {
       requireCtx().switchClient(ENTITY_B)
@@ -315,9 +373,204 @@ describe('EXTR-15-07: enterByHand leaves the run alone', () => {
     await act(async () => {
       requireCtx().enterByHand(DOC_ID)
     })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
 
     const after = runFailures(requireCtx().run)
     expect(after, 'enterByHand emptied the failure list the user backs out to').toEqual(before)
     expect(requireCtx().run.files, 'enterByHand discarded the run files').toHaveLength(1)
+  })
+})
+
+describe('EXTR-27-03: the hand-off carries the reading', () => {
+  // While the read is in flight the flow must stay on 'upload' -- today's enterByHand sets
+  // 'form' synchronously, so this reds on the very first check.
+  it('EXTR27-A1: a carried reading lands the form in carried mode, after the read, with a blank number', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    const held = deferred<unknown>()
+    readingReplies[DOC_ID] = () => held.promise
+
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+
+    expect(requireCtx().createStep, 'the landing must wait for the read before leaving upload').toBe('upload')
+    expect(requireCtx().handOffReading).toBeNull()
+    expect(readingRequests, 'control: enterByHand must request the reading').toContain(DOC_ID)
+
+    await act(async () => {
+      held.resolve({ ok: true, status: 200, json: () => Promise.resolve({ reading: READING }) })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+    expect(requireCtx().handOffReading).toEqual(READING)
+    expect(requireCtx().draft.number).toBe('')
+  })
+
+  it('EXTR27-A2: nothing to carry lands today\'s blank form', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+
+    expect(readingRequests, 'control: enterByHand must request the reading').toContain(DOC_ID)
+    expect(requireCtx().handOffReading).toBeNull()
+    expect(requireCtx().draft.number).toBe('INV-2026-00482')
+  })
+
+  it('EXTR27-A3: a late reading for an earlier document is dropped', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    const heldA = deferred<unknown>()
+    readingReplies[DOC_ID] = () => heldA.promise
+
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID_2)
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+
+    expect(readingRequests, 'control: both hand-offs must request a reading').toEqual([DOC_ID, DOC_ID_2])
+
+    await act(async () => {
+      heldA.resolve({ ok: true, status: 200, json: () => Promise.resolve({ reading: READING }) })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(requireCtx().handOffReading, 'a late reply for an earlier document must be dropped').toBeNull()
+    expect(requireCtx().draft.number).toBe('INV-2026-00482')
+
+    const body = await fileAndReadBody()
+    expect(body.source_document_id, 'the filing must carry the later document').toBe(DOC_ID_2)
+    expect(supplyBodies, 'a dropped read must never reach the supply route').toHaveLength(0)
+  })
+
+  it('EXTR27-A4: filing a carried draft posts the supply, not a create, and lands on the invoice', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    readingReplies[DOC_ID] = () => ok({ reading: READING })
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+
+    expect(readingRequests, 'control: enterByHand must request the reading').toContain(DOC_ID)
+
+    act(() => {
+      requireCtx().updateDraft('number', 'N-1')
+    })
+    act(() => {
+      requireCtx().fileDraft()
+    })
+
+    await waitFor(() => expect(supplyBodies, 'the filing must post the supply route, not create').toHaveLength(1))
+    expect(supplyBodies[0]).toEqual({ entity_id: ENTITY_A, document_id: DOC_ID, invoice_number: 'N-1' })
+    expect(createBodies).toHaveLength(0)
+    await waitFor(() => expect(requireCtx().importedInvoiceId).toBe(CREATED_ID))
+    expect(window.location.pathname).toBe('/invoices/' + CREATED_ID)
+  })
+
+  describe('a clearer drops a landed reading', () => {
+    async function landCarried() {
+      await openCreateAndSettle()
+      readingReplies[DOC_ID] = () => ok({ reading: READING })
+      await act(async () => {
+        requireCtx().enterByHand(DOC_ID)
+      })
+      await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+      expect(readingRequests, 'control: enterByHand must request the reading').toContain(DOC_ID)
+    }
+
+    it('EXTR27-A5a: switchClient drops the reading', async () => {
+      await renderApp()
+      await landCarried()
+
+      await act(async () => {
+        requireCtx().switchClient(ENTITY_B)
+      })
+      await waitFor(() => expect(requireCtx().activeEntity?.id).toBe(ENTITY_B))
+
+      expect(requireCtx().handOffReading).toBeNull()
+    })
+
+    it('EXTR27-A5b: openCreate drops the reading', async () => {
+      await renderApp()
+      await landCarried()
+
+      await act(async () => {
+        requireCtx().openCreate()
+      })
+
+      expect(requireCtx().handOffReading).toBeNull()
+    })
+
+    it('EXTR27-A5c: skipUpload drops the reading', async () => {
+      await renderApp()
+      await landCarried()
+
+      act(() => {
+        requireCtx().skipUpload()
+      })
+
+      expect(requireCtx().handOffReading).toBeNull()
+    })
+  })
+
+  it('EXTR27-A6: a failed read lands today\'s blank form with the document still recorded', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    readingReplies[DOC_ID] = () =>
+      Promise.resolve({ ok: false, status: 500, statusText: 'boom', json: () => Promise.resolve({ error: 'boom' }) })
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('form'))
+
+    expect(readingRequests, 'control: enterByHand must attempt the reading even when it will fail').toContain(DOC_ID)
+    expect(requireCtx().handOffReading).toBeNull()
+    expect(requireCtx().draft.number).toBe('INV-2026-00482')
+
+    const body = await fileAndReadBody()
+    expect(body.source_document_id, 'the document must still be recorded after a failed read').toBe(DOC_ID)
+  })
+
+  it('EXTR27-A7: a read still pending across a company switch lands nothing', async () => {
+    await renderApp()
+    await openCreateAndSettle()
+
+    const held = deferred<unknown>()
+    readingReplies[DOC_ID] = () => held.promise
+    await act(async () => {
+      requireCtx().enterByHand(DOC_ID)
+    })
+
+    expect(readingRequests, 'control: enterByHand must request the reading before the switch').toContain(DOC_ID)
+
+    await act(async () => {
+      requireCtx().switchClient(ENTITY_B)
+    })
+    await waitFor(() => expect(requireCtx().activeEntity?.id).toBe(ENTITY_B))
+
+    await act(async () => {
+      held.resolve({ ok: true, status: 200, json: () => Promise.resolve({ reading: READING }) })
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    expect(requireCtx().handOffReading, 'a read pending across a company switch must land nothing').toBeNull()
+
+    const body = await fileAndReadBody()
+    expect(body.entity_id).toBe(ENTITY_B)
+    expect('source_document_id' in body, 'a dropped read must not carry its document onto the new company').toBe(false)
+    expect(supplyBodies).toHaveLength(0)
   })
 })

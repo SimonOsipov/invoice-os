@@ -234,6 +234,37 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function createInvoice(',
     floor: 13,
   },
+  // EXTR-27-03 — the carried reading and its supply (internal/importer/handlers_document.go).
+  {
+    ts: 'CarriedReading',
+    go: 'CarriedReading',
+    goPath: 'internal/importer/handlers_document.go',
+    goAnchor: 'func ReadingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function readingForDocument(',
+    e2eAnchor: 'export function getCarriedReading(',
+    floor: 10,
+  },
+  {
+    ts: 'CarriedLine',
+    go: 'CarriedLine',
+    goPath: 'internal/importer/handlers_document.go',
+    goAnchor: 'func ReadingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function readingForDocument(',
+    e2eAnchor: 'export function getCarriedReading(',
+    floor: 5,
+  },
+  {
+    ts: 'SupplyNumberRequest',
+    go: 'supplyRequest',
+    goPath: 'internal/importer/handlers_document.go',
+    goAnchor: 'func SupplyNumberHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function supplyInvoiceNumber(',
+    e2eAnchor: 'export function supplyInvoiceNumber(',
+    floor: 3,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -354,6 +385,9 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'LineItemsRequest',
       'LineItemsResponse',
       'InvoiceCreateInput',
+      'CarriedReading',
+      'CarriedLine',
+      'SupplyNumberRequest',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })

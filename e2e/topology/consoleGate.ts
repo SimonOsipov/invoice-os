@@ -46,6 +46,12 @@ export function expected404Dropper(page: Page, urlPattern: RegExp): Dropper {
   }
 }
 
+// RED stub (EXTR-27-03/04): 04 reuses this for its own edit URL. The real body
+// generalizes expected404Dropper's, wired once the executor lands the feature.
+export function expectedStatusDropper(_page: Page, _status: number, _urlPattern: RegExp): Dropper {
+  return () => false
+}
+
 export function approvalRun404Dropper(page: Page): Dropper {
   return expected404Dropper(page, APPROVAL_RUN_URL)
 }

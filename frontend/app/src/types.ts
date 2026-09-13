@@ -5,7 +5,7 @@
 // import here would form a cycle. `AuthedFetch`/`Entity` are only ever used as types below.
 import type { AuthedFetch, Entity } from './lib/portfolio'
 import type { ApiError, AsyncStatus } from '@invoice-os/api-client'
-import type { ImportPreview } from './lib/importApi'
+import type { CarriedReading, ImportPreview } from './lib/importApi'
 import type { DocumentRowState } from './lib/documentRun'
 import type { ImportRun, PickedFile } from './lib/importRun'
 import type { PickedKind } from './lib/importFlow'
@@ -299,6 +299,9 @@ export type PlatformCtx = {
   // `importError` on the map step. No status->copy table: ApiError.message already carries
   // the gateway's {"error":…} text, and a second copy of it drifts.
   filingError: ApiError | null
+  // The reading enterByHand carried. Non-null puts CreateForm in carried mode and routes
+  // fileDraft to the supply route.
+  handOffReading: CarriedReading | null
 
   // --- Rules screen ---------------------------------------------------------
   // The ACTIVE client's custom rules, already resolved out of the per-client store

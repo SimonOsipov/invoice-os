@@ -17,23 +17,29 @@ import (
 
 // poReader emits the listed page numbers in order and wraps onPage's error, as a reader may.
 type poReader struct {
-	pages   []int
-	err     error
-	reads   int
-	emitted []int
+	pages    []int
+	err      error
+	closeErr error // returned instead of onPage's error, as a reader whose cleanup fails would
+	reads    int
+	emitted  []int
+	ctx      context.Context
 }
 
 func (r *poReader) Name() string    { return "po-fake" }
 func (r *poReader) Version() string { return "v0" }
 
-func (r *poReader) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+func (r *poReader) Read(ctx context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
 	r.reads++
+	r.ctx = ctx
 	if r.err != nil {
 		return extraction.PageResult{}, r.err
 	}
 	for _, n := range r.pages {
 		r.emitted = append(r.emitted, n)
 		if err := onPage(extraction.Page{Number: n, Tokens: []extraction.Token{{Text: fmt.Sprintf("page %d", n)}}}); err != nil {
+			if r.closeErr != nil {
+				return extraction.PageResult{}, r.closeErr
+			}
 			return extraction.PageResult{}, fmt.Errorf("po-fake: page %d: %w", n, err)
 		}
 	}
@@ -135,6 +141,41 @@ func TestPageOneReader_PassesAReadErrorThrough(t *testing.T) {
 	_, ok, err = extraction.PageOneReader(poOpen(fxRead(t, dxFixture)), extraction.NewPDFiumReader())(t.Context(), "doc-docx")
 	if err == nil || ok {
 		t.Errorf("pdfium over %s: ok=%v err=%v, want an error", dxFixture, ok, err)
+	}
+}
+
+func TestPageOneReader_AReadErrorAfterPageOneKeepsNoPage(t *testing.T) {
+	closeErr := errors.New("pdfium: close document: wasm trap")
+	fake := &poReader{pages: []int{1, 2}, closeErr: closeErr}
+	page, ok, err := extraction.PageOneReader(poOpen(nil), fake)(t.Context(), "doc-1")
+	if !slices.Equal(fake.emitted, []int{1}) {
+		t.Fatalf("the reader emitted %v, want [1]; page 1 never reached onPage and nothing below is tested", fake.emitted)
+	}
+	// Any read error learns nothing, even after onPage saw page 1.
+	if !errors.Is(err, closeErr) || ok || !reflect.DeepEqual(page, extraction.TokenPage{}) {
+		t.Errorf("ok=%v err=%v page=%+v, want the reader's error and no page", ok, err, page)
+	}
+}
+
+func TestPageOneReader_HandsTheCallersContextToOpenAndTheReader(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	var openCtx context.Context
+	open := func(c context.Context, _ string) (extraction.Document, error) {
+		openCtx = c
+		return extraction.Document{}, nil
+	}
+	fake := &poReader{pages: []int{1}}
+
+	if _, ok, err := extraction.PageOneReader(open, fake)(ctx, "doc-1"); err != nil || !ok {
+		t.Fatalf("ok=%v err=%v, want page 1 and no error", ok, err)
+	}
+	// Identity, not a value probe: context.WithoutCancel keeps the operator and drops the route's deadline.
+	if openCtx != ctx {
+		t.Errorf("open got %T, want the caller's context unchanged", openCtx)
+	}
+	if fake.ctx != ctx {
+		t.Errorf("the reader got %T, want the caller's context unchanged", fake.ctx)
 	}
 }
 

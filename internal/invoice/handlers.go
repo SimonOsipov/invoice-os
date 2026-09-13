@@ -78,8 +78,10 @@ type transitionReq struct {
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
-// createRequest's own (above) minus entity_id/invoice_number -- identity and
-// lifecycle are not the edit's job ([D9]).
+// createRequest's own (above) minus entity_id -- identity is not the edit's
+// job ([D9]). InvoiceNumber (EXTR-27-01) IS editable: it renames a
+// never-submitted draft, trimmed and refused blank by EditHandler before
+// Store.Edit ever runs.
 //
 // LineItems (INVED-01-05) is a POINTER to a slice, mirroring
 // EditInput.LineItems, because three states must stay distinguishable
@@ -99,7 +101,7 @@ type editReq struct {
 	VAT          *string        `json:"vat"`
 	Total        *string        `json:"total"`
 	LineItems    *[]lineItemReq `json:"line_items"`
-	// InvoiceNumber: not yet read by EditHandler (compile stub, red phase).
+	// InvoiceNumber: nil leaves the number alone; trimmed by EditHandler.
 	InvoiceNumber *string `json:"invoice_number"`
 }
 
@@ -280,6 +282,12 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
 // follow the same two rules, appended last of all, and come from ONE
 // approvalGate call -- approve and reject availability are identical.
+//
+// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason (EXTR-27-01) follow the
+// same two rules, appended last of all: derived from canCorrectNumber
+// (store.go), never a status switch. The reason is non-null exactly when
+// CanEdit && !CanCorrectInvoiceNumber -- mirroring RevalidateBlockedReason's
+// own gate below.
 type getResponse struct {
 	Invoice
 	RuleSetVersion              *int    `json:"rule_set_version"`
@@ -297,10 +305,8 @@ type getResponse struct {
 	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
 	CanReject                   bool    `json:"can_reject"`
 	RejectBlockedReason         *string `json:"reject_blocked_reason"`
-	// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason: not yet set by
-	// GetHandler (compile stub, red phase).
-	CanCorrectInvoiceNumber    bool    `json:"can_correct_invoice_number"`
-	InvoiceNumberBlockedReason *string `json:"invoice_number_blocked_reason"`
+	CanCorrectInvoiceNumber     bool    `json:"can_correct_invoice_number"`
+	InvoiceNumberBlockedReason  *string `json:"invoice_number_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -310,8 +316,8 @@ type getResponse struct {
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
 
-// NumberTakenReason / numberFixedReason are editTx's rename refusal sentences.
-// Not yet mapped by statusForErr (compile stubs, red phase).
+// NumberTakenReason / numberFixedReason are editTx's rename refusal sentences,
+// mapped by statusForErr below.
 const NumberTakenReason = "This invoice number is already in the register for this company. Enter a different number."
 const numberFixedReason = "The invoice number can only be corrected while the invoice is a draft that has never been submitted."
 
@@ -542,10 +548,15 @@ func GetHandler(
 			ApproveBlockedReason:        decideReason,
 			CanReject:                   canDecide,
 			RejectBlockedReason:         decideReason,
+			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
 			resp.RevalidateBlockedReason = &reason
+		}
+		if resp.CanEdit && !resp.CanCorrectInvoiceNumber {
+			reason := numberFixedReason // a const is not addressable; copy to a local
+			resp.InvoiceNumberBlockedReason = &reason
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -1067,6 +1078,19 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			lines = &mapped
 		}
 
+		// InvoiceNumber (EXTR-27-01): trimmed before it ever reaches EditInput,
+		// matching the document mapper (internal/importer/document.go); a blank
+		// result 400s BEFORE edit is called, never as a store-level refusal.
+		var invoiceNumber *string
+		if req.InvoiceNumber != nil {
+			n := strings.TrimSpace(*req.InvoiceNumber)
+			if n == "" {
+				writeError(w, http.StatusBadRequest, "invoice_number must not be blank")
+				return
+			}
+			invoiceNumber = &n
+		}
+
 		inv, err := edit(r.Context(), id, EditInput{UpdateInput: UpdateInput{
 			IssueDate:    req.IssueDate,
 			SupplierTIN:  req.SupplierTIN,
@@ -1077,7 +1101,7 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			Subtotal:     req.Subtotal,
 			VAT:          req.VAT,
 			Total:        req.Total,
-		}, LineItems: lines})
+		}, LineItems: lines, InvoiceNumber: invoiceNumber})
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status >= http.StatusInternalServerError {
@@ -1553,6 +1577,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice changed during validation"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
+	case errors.Is(err, ErrNumberTaken):
+		return http.StatusConflict, NumberTakenReason
+	case errors.Is(err, ErrNumberFixed):
+		return http.StatusConflict, numberFixedReason
 	case errors.Is(err, ErrNotKeepable):
 		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
 	case errors.Is(err, ErrNotPermitted):

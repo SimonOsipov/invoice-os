@@ -134,7 +134,7 @@ type Invoice struct {
 	RuleSetVersion *int `json:"-"`
 
 	// EverSubmitted: some history row left draft/validated; filled by getTx
-	// only. Compile stub -- not yet populated (red phase).
+	// only. Feeds canCorrectNumber's history-aware half (store.go).
 	EverSubmitted bool `json:"-"`
 }
 
@@ -208,8 +208,8 @@ type CreateInput struct {
 	// for the same reason as SourceDocumentID (TestInvoiceColumns_OmitsSourceRows).
 	SourceRows []int
 	// NumberSupplied: the operator typed the number for a stored reading;
-	// audited, never on a wire. Compile stub -- not yet enforced or audited
-	// (red phase).
+	// audited, never on a wire. Requires SourceDocumentID -- Store.Create's
+	// pre-tx guard refuses a supplied number with no document.
 	NumberSupplied bool
 }
 
@@ -265,7 +265,7 @@ type EditInput struct {
 	UpdateInput
 	LineItems *[]LineItemInput
 	// InvoiceNumber renames a never-submitted draft; nil leaves the number
-	// alone. Compile stub -- not yet read by editTx (red phase).
+	// alone.
 	InvoiceNumber *string
 }
 
@@ -444,7 +444,6 @@ var (
 
 	// ErrNumberTaken / ErrNumberFixed are editTx's rename sentinels (a 23505 on
 	// the number UPDATE, and the canCorrectNumber guard, respectively).
-	// Compile stubs -- not yet returned by any method (red phase).
 	ErrNumberTaken = errors.New("invoice: number taken")
 	ErrNumberFixed = errors.New("invoice: number fixed")
 )

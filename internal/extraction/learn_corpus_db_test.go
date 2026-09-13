@@ -293,16 +293,15 @@ func TestRLS_APointedCorrectionOnTheTwoPartyLayoutWritesOneRule(t *testing.T) {
 	}
 	lcRuleBodyIs(t, ctx, r.id, lcBuyerRuleBody)
 
-	// The control on the SAME job: a typed correction teaches nothing on a v1: layout (since
-	// EXTR-19-08 it does on a b1: one), so the 1 above is the
+	// The control on the SAME job: a chosen correction teaches nothing, so the 1 above is the
 	// pointed gesture and not "any correction writes a rule".
-	w := cxServe(t, f.reqCtx, f.jobID, lcField, corBody(lcBuyerTIN, "typed", ""),
+	w := cxServe(t, f.reqCtx, f.jobID, lcField, corBody(lcBuyerTIN, "chosen", ""),
 		cxApplier(false, nil), cxAuditor(nil))
 	if w.Code != http.StatusCreated {
-		t.Fatalf("control: the typed correction answered %d (body=%q), want 201", w.Code, w.Body.String())
+		t.Fatalf("control: the chosen correction answered %d (body=%q), want 201", w.Code, w.Body.String())
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
-		t.Errorf("control: %d anchor rule(s) after a typed correction, want the same 1 -- on a v1: layout only a POINTED correction teaches", n)
+		t.Errorf("control: %d anchor rule(s) after a chosen correction, want the same 1 -- a chosen correction never teaches", n)
 	}
 }
 

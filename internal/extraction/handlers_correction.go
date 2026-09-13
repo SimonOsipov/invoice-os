@@ -153,7 +153,7 @@ func validMethod(m CorrectionMethod) bool {
 // CorrectionHandler returns POST /v1/extractions/{id}/fields/{name}/corrections. Identity is
 // checked FIRST, before any path value or body is read, so an unauthenticated caller learns
 // nothing about which field names exist.
-func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, recordLearned RecordAnchorLearned, log *slog.Logger) http.HandlerFunc {
+func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, recordLearned RecordAnchorLearned, pageOne ReadPageOne, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}

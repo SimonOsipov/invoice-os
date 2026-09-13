@@ -128,7 +128,7 @@ func corServe(t *testing.T, spy *corSpy, rawID, rawName, body string, id *auth.I
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	w := httptest.NewRecorder()
-	extraction.CorrectionHandler(corDeadPool, spy.apply, spy.record, spy.recordLearned, log)(w, r)
+	extraction.CorrectionHandler(corDeadPool, spy.apply, spy.record, spy.recordLearned, cxNoPageRead(t), log)(w, r)
 	return w
 }
 

@@ -197,14 +197,20 @@ func TestRLS_ACorrectionThatLearnsNothingWritesNoAnchorLearnedRow(t *testing.T) 
 		name string
 		// arrange prepares the branch and returns the body the no-rule request sends.
 		arrange func(t *testing.T, ctx context.Context, f clFixture) string
+		// reads marks the arm whose request reads page 1 of the corpus.
+		reads bool
 	}{
 		{
-			// B1: not pointed, and clLayout's v1: key with layout_tokens NULL keeps it out of
-			// the boxless arm too.
-			name: "a typed correction on a layout-bearing job",
+			// B1: typed on a geometric layout, a value no page-1 token carries.
+			name:  "a typed correction whose value no page-1 token carries",
+			reads: true,
 			arrange: func(t *testing.T, ctx context.Context, f clFixture) string {
-				clLayout(t, ctx, f.jobID)
-				return corBody(clTINValue, "typed", "")
+				const unprinted = "99999999-0499"
+				_, pages := clLayout(t, ctx, f.jobID)
+				if v := ctVerdict(t, pages, clField, unprinted); v != extraction.TypedNoToken {
+					t.Fatalf("LearnTypedRule(%s, %q) = %d on the corpus, want TypedNoToken", clField, unprinted, v)
+				}
+				return corBody(unprinted, "typed", "")
 			},
 		},
 		{
@@ -237,8 +243,12 @@ func TestRLS_ACorrectionThatLearnsNothingWritesNoAnchorLearnedRow(t *testing.T) 
 			f := clSeed(t, ctx, "EXTR14-07-A02-"+strconv.Itoa(len(tc.name)))
 			body := tc.arrange(t, ctx, f)
 
+			pageOne := cxNoPageRead(t)
+			if tc.reads {
+				_, pageOne = ctReader(t, clCorpus)
+			}
 			rec := &laRecorder{}
-			w := cxServe(t, f.reqCtx, f.jobID, clField, body, cxApplier(false, nil), cxAuditor(nil), rec.record)
+			w := cxServeWith(t, f.reqCtx, f.jobID, clField, body, pageOne, nil, cxApplier(false, nil), cxAuditor(nil), rec.record)
 			if w.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want %d -- refusing to learn is not refusing the request (body=%q)",
 					w.Code, http.StatusCreated, w.Body.String())

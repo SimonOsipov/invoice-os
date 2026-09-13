@@ -190,7 +190,8 @@ func main() {
 	// audits the pair (TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators).
 	app.Mux.HandleFunc("POST /v1/extractions/{id}/fields/{name}/corrections",
 		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
-			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(), app.Logger))
+			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(),
+			extraction.PageOneReader(newDocumentOpener(docSvc.Open), extraction.NewPDFiumReader()), app.Logger))
 
 	// POST /v1/extractions/{id}/line-items -- the same transaction shape as the correction
 	// route, replacing the invoice's whole line set

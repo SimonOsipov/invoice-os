@@ -73,10 +73,10 @@ var fxCorpus = []struct {
 	{fxRich, fxBuildRichInvoice},
 	// Not corpus_-prefixed on purpose: EXTR-21-06's four production arrangements. Byte-compared
 	// like the rest, outside every corpus_ ratchet.
-	{fxWildTwoParty, fxBuildWildTwoPartyBareTIN},
-	{fxWildRuled, fxBuildWildRuledLinesTotals},
+	{fxWildTwoParty, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyFriendly) }},
+	{fxWildRuled, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledFriendly) }},
 	{fxWildRCNaira, fxBuildWildRCDueNaira},
-	{fxWildStacked, fxBuildWildStackedBorderless},
+	{fxWildStacked, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedFriendly) }},
 	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
 	{fxWildScanned, fxBuildWildScannedNoNumber},
 	// EXTR-26-06: faithful transcriptions of two real Nigerian invoices, outside every corpus_
@@ -624,6 +624,11 @@ const (
 	fxWildRCNaira  = "wild_rc_due_naira.pdf"
 	fxWildStacked  = "wild_stacked_borderless.pdf"
 	fxWildScanned  = "wild_scanned_no_number.pdf"
+
+	// Each twin's geometry under its source document's printed labels.
+	fxWildTwoPartyAsPrinted = "wild_two_party_bare_tin_asprinted.pdf"
+	fxWildRuledAsPrinted    = "wild_ruled_lines_totals_asprinted.pdf"
+	fxWildStackedAsPrinted  = "wild_stacked_borderless_asprinted.pdf"
 )
 
 // The pinned synthetic identifier table. Every literal is freshly minted, never observed; the
@@ -645,6 +650,11 @@ const (
 	fxWildInvRuled    = "INV-2102"
 	fxWildInvRCNaira  = "INV-2103"
 	fxWildInvStacked  = "INV-2104"
+
+	// A sibling's number is its twin's plus 100.
+	fxWildInvTwoPartyAsPrinted = "INV-2201"
+	fxWildInvRuledAsPrinted    = "INV-2202"
+	fxWildInvStackedAsPrinted  = "INV-2204"
 
 	// An RC (Corporate Affairs Commission registration) number is an "other identifier" under
 	// step 3 of the scrubbing procedure and is replaced like a TIN.
@@ -687,23 +697,46 @@ func fxQuoteTextPage(lines ...fxLine) []byte {
 // bare "TIN:" label whose value is a separate Tj. The buyer block is headed "Invoice to" and
 // carries a fragment-bearing label above ("Customer No.") and below ("Buyer's Signature") its
 // name. The apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
-func fxBuildWildTwoPartyBareTIN() []byte {
-	return fxQuoteTextPage(
-		fxLine{24, 72, 720, "INVOICE"},
-		fxLine{12, 72, 690, "Invoice No: " + fxWildInvTwoParty},
-		fxLine{12, 72, 672, "Invoice Date: 2026-06-11"},
-		fxLine{12, 72, 630, fxWildSupplier},
-		fxLine{12, 72, 614, "TIN:"}, fxLine{12, 160, 614, fxWildTINSupplierTwoParty},
-		fxLine{12, 360, 646, "Invoice to"},
-		fxLine{12, 360, 630, "Customer No."},
-		fxLine{12, 360, 614, fxWildBuyer},
-		fxLine{12, 360, 598, "TIN:"}, fxLine{12, 448, 598, fxWildTINBuyerTwoParty},
-		fxLine{12, 360, 560, "Buyer's Signature"},
-		fxLine{12, 72, 582, "Currency: NGN"},
-		fxLine{12, 72, 240, "Sub-total"}, fxLine{12, 220, 240, "1,200.00"},
-		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, "90.00"},
-		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, "1,290.00"},
-	)
+func fxBuildWildTwoPartyBareTIN(l fxWildTwoPartyLabels) []byte {
+	return fxQuoteTextPage(fxWildTwoPartyLines(l)...)
+}
+
+// fxWildTwoPartyLabels is every label the two-party page prints, plus its invoice number.
+type fxWildTwoPartyLabels struct {
+	title, invoiceNo, invNum, invoiceDate, supplierTIN, invoiceTo, customerNo, buyerTIN, signature, currency, subtotal, vat, total string
+}
+
+var (
+	fxWildTwoPartyFriendly = fxWildTwoPartyLabels{
+		title: "INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvTwoParty, invoiceDate: "Invoice Date: ",
+		supplierTIN: "TIN:", invoiceTo: "Invoice to", customerNo: "Customer No.", buyerTIN: "TIN:",
+		signature: "Buyer's Signature", currency: "Currency: NGN", subtotal: "Sub-total", vat: "VAT", total: "Total",
+	}
+	// NG-2's printed labels. The signature is NG-5's, the source the twin's paraphrase came from.
+	fxWildTwoPartyPrinted = fxWildTwoPartyLabels{
+		title: "Sales Invoice", invoiceNo: "Invoice No: ", invNum: fxWildInvTwoPartyAsPrinted, invoiceDate: "Invoice Date: ",
+		supplierTIN: "VAT Reg. No:", invoiceTo: "INVOICE TO:", customerNo: "Customer No.", buyerTIN: "TIN:",
+		signature: "Customer's Signature", currency: "Currency: NGN", subtotal: "Net Amount", vat: "VAT @ 7.5%", total: "Total NGN",
+	}
+)
+
+func fxWildTwoPartyLines(l fxWildTwoPartyLabels) []fxLine {
+	return []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo + l.invNum},
+		{12, 72, 672, l.invoiceDate + "2026-06-11"},
+		{12, 72, 630, fxWildSupplier},
+		{12, 72, 614, l.supplierTIN}, {12, 160, 614, fxWildTINSupplierTwoParty},
+		{12, 360, 646, l.invoiceTo},
+		{12, 360, 630, l.customerNo},
+		{12, 360, 614, fxWildBuyer},
+		{12, 360, 598, l.buyerTIN}, {12, 448, 598, fxWildTINBuyerTwoParty},
+		{12, 360, 560, l.signature},
+		{12, 72, 582, l.currency},
+		{12, 72, 240, l.subtotal}, {12, 220, 240, "1,200.00"},
+		{12, 72, 222, l.vat}, {12, 220, 222, "90.00"},
+		{12, 72, 204, l.total}, {12, 220, 204, "1,290.00"},
+	}
 }
 
 // fxWildRuledColXs are the five-column table's vertical rule positions (6 boundaries).
@@ -743,34 +776,60 @@ func fxWildRuledRowText(baseline int, cells []string) []fxLine {
 // t1.total.right therefore reaches that row's 1,000.00 and not the printed 8,600.00. The totals
 // corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
 // tell a corroborated pick from a positional one.
-//
-// The naira here sits on a column header; the currency is sourced from the explicit
-// "Currency: NGN" label. Neither fxTextPage nor fxNairaTextPage builds a naira font AND rules,
-// so the objects are assembled directly: fxAssemble numbers by slice index, so the CMap is 6.
-func fxBuildWildRuledLinesTotals() []byte {
-	lines := []fxLine{
-		{24, 72, 720, "INVOICE"},
-		{12, 72, 690, "Invoice No: " + fxWildInvRuled},
-		{12, 72, 672, "Invoice Date: 2026-06-24"},
-		{12, 72, 654, "Supplier TIN: " + fxWildTINSupplierRuled},
-		{12, 72, 636, "Supplier: " + fxWildSupplier},
-		{12, 72, 618, "Buyer TIN: " + fxWildTINBuyerRuled},
-		{12, 72, 600, "Buyer: " + fxWildBuyer},
-		{12, 72, 582, "Currency: NGN"},
+func fxBuildWildRuledLinesTotals(l fxWildRuledLabels) []byte {
+	return fxWildRuledPage(fxWildRuledLines(l)...)
+}
+
+// fxWildRuledLabels is every label the ruled page prints, plus its invoice number.
+type fxWildRuledLabels struct {
+	title, invoiceNo, invNum, invoiceDate, supplierTIN, supplier, buyerTIN, buyer, currency string
+	header                                                                                  []string
+	subtotal, vat, total                                                                    string
+}
+
+var (
+	fxWildRuledFriendly = fxWildRuledLabels{
+		title: "INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvRuled, invoiceDate: "Invoice Date: ",
+		supplierTIN: "Supplier TIN: ", supplier: "Supplier: ", buyerTIN: "Buyer TIN: ", buyer: "Buyer: ", currency: "Currency: NGN",
+		header: fxWildRuledHeader, subtotal: "Sub-total", vat: "VAT", total: "Total",
 	}
-	lines = append(lines, fxWildRuledRowText(500, fxWildRuledHeader)...)
+	// NG-4's printed labels. Total stays: TOTAL DUE (NGN) merges with row 3's amount here.
+	fxWildRuledPrinted = fxWildRuledLabels{
+		title: "MONTHLY SERVICE INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvRuledAsPrinted, invoiceDate: "Invoice Date: ",
+		supplierTIN: "Supplier TIN: ", supplier: "Supplier: ", buyerTIN: "Buyer TIN: ", buyer: "Buyer: ", currency: "Currency: NGN",
+		header:   []string{"Item", "Service description", "Qty", "Unit rate " + fxNaira, "Amount " + fxNaira},
+		subtotal: "Taxable amount", vat: "VAT @ 7.5%", total: "Total",
+	}
+)
+
+func fxWildRuledLines(l fxWildRuledLabels) []fxLine {
+	lines := []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo + l.invNum},
+		{12, 72, 672, l.invoiceDate + "2026-06-24"},
+		{12, 72, 654, l.supplierTIN + fxWildTINSupplierRuled},
+		{12, 72, 636, l.supplier + fxWildSupplier},
+		{12, 72, 618, l.buyerTIN + fxWildTINBuyerRuled},
+		{12, 72, 600, l.buyer + fxWildBuyer},
+		{12, 72, 582, l.currency},
+	}
+	lines = append(lines, fxWildRuledRowText(500, l.header)...)
 	lines = append(lines, fxWildRuledRowText(476, fxWildRuledBody[0])...)
 	lines = append(lines, fxWildRuledRowText(452, fxWildRuledBody[1])...)
 	lines = append(lines, fxWildRuledRowText(428, fxWildRuledBody[2])...)
-	lines = append(lines,
-		fxLine{12, 380, 404, "Sub-total"}, fxLine{12, 500, 404, "8,000.00"},
-		fxLine{12, 380, 386, "VAT"}, fxLine{12, 500, 386, "600.00"},
+	return append(lines,
+		fxLine{12, 380, 404, l.subtotal}, fxLine{12, 500, 404, "8,000.00"},
+		fxLine{12, 380, 386, l.vat}, fxLine{12, 500, 386, "600.00"},
 		// The Total label continues on the last data row's own baseline, so t1.total.right
 		// reaches the line amount beside it and the printed 8,600.00 falls outside every
 		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
-		fxLine{12, 380, 428, "Total"}, fxLine{12, 500, 368, "8,600.00"},
+		fxLine{12, 380, 428, l.total}, fxLine{12, 500, 368, "8,600.00"},
 	)
+}
 
+// fxWildRuledPage draws lines over the ruled table's rules; neither fxTextPage nor
+// fxNairaTextPage builds a naira font AND rules, so the objects are assembled directly (CMap is 6).
+func fxWildRuledPage(lines ...fxLine) []byte {
 	// H before V, matching fxBuildTable's own loop shape.
 	var rules bytes.Buffer
 	for _, y := range fxWildRuledRowYs {
@@ -823,21 +882,58 @@ func fxBuildWildRCDueNaira() []byte {
 // One field stays readable on purpose: "Invoice No" over its value at the same x, the aligned
 // stack fxBuildCorpusStackedLabels proves. A layout that quarantines is never line-scored, and
 // lines_db_test.go's linesScored == eeLayoutCount would red on it.
-func fxBuildWildStackedBorderless() []byte {
-	return fxTextPage(
-		fxLine{24, 72, 720, "INVOICE"},
-		fxLine{12, 72, 690, "Invoice No"},
-		fxLine{12, 72, 674, fxWildInvStacked},
-		fxLine{12, 72, 620, "Issue Date"}, fxLine{12, 300, 612, "2026-07-30"},
-		fxLine{12, 72, 596, "Buyer"}, fxLine{12, 300, 588, fxWildBuyer},
-		fxLine{12, 72, 572, "Buyer TIN"}, fxLine{12, 300, 564, fxWildTINBuyerStacked},
-		fxLine{12, 72, 548, "Supplier"}, fxLine{12, 300, 540, fxWildSupplier},
-		fxLine{12, 72, 524, "Supplier TIN"}, fxLine{12, 300, 516, fxWildTINSupplierStacked},
-		fxLine{12, 72, 500, "Currency"}, fxLine{12, 300, 492, "NGN"},
-		fxLine{12, 72, 260, "Sub total"}, fxLine{12, 300, 252, "1,500.00"},
-		fxLine{12, 72, 236, "VAT"}, fxLine{12, 300, 228, "112.50"},
-		fxLine{12, 72, 212, "Total"}, fxLine{12, 300, 204, "1,612.50"},
-	)
+func fxBuildWildStackedBorderless(l fxWildStackedLabels) []byte {
+	return fxTextPage(fxWildStackedLines(l)...)
+}
+
+// fxWildStackedLabels is every label the stacked page prints, plus its invoice number.
+type fxWildStackedLabels struct {
+	title, invoiceNo, invNum, issueDate, buyer, buyerTIN, supplier, supplierTIN, currency, subtotal, vat, total string
+}
+
+var (
+	fxWildStackedFriendly = fxWildStackedLabels{
+		title: "INVOICE", invoiceNo: "Invoice No", invNum: fxWildInvStacked, issueDate: "Issue Date",
+		buyer: "Buyer", buyerTIN: "Buyer TIN", supplier: "Supplier", supplierTIN: "Supplier TIN", currency: "Currency",
+		subtotal: "Sub total", vat: "VAT", total: "Total",
+	}
+	// NG-3's printed labels, letter-spaced where fxBuildAdvisoryRegister's R0 spaces them.
+	fxWildStackedPrinted = fxWildStackedLabels{
+		title: "Invoice", invoiceNo: `I N V O I C E   N U M B E R`, invNum: fxWildInvStackedAsPrinted, issueDate: `I S S U E D`,
+		buyer: "BILLED TO", buyerTIN: "Buyer TIN", supplier: "FROM", supplierTIN: "Supplier TIN", currency: "CURRENCY",
+		subtotal: "Subtotal", vat: "VAT 7.5%", total: "Amount payable",
+	}
+)
+
+func fxWildStackedLines(l fxWildStackedLabels) []fxLine {
+	return []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo},
+		{12, 72, 674, l.invNum},
+		{12, 72, 620, l.issueDate}, {12, 300, 612, "2026-07-30"},
+		{12, 72, 596, l.buyer}, {12, 300, 588, fxWildBuyer},
+		{12, 72, 572, l.buyerTIN}, {12, 300, 564, fxWildTINBuyerStacked},
+		{12, 72, 548, l.supplier}, {12, 300, 540, fxWildSupplier},
+		{12, 72, 524, l.supplierTIN}, {12, 300, 516, fxWildTINSupplierStacked},
+		{12, 72, 500, l.currency}, {12, 300, 492, "NGN"},
+		{12, 72, 260, l.subtotal}, {12, 300, 252, "1,500.00"},
+		{12, 72, 236, l.vat}, {12, 300, 228, "112.50"},
+		{12, 72, 212, l.total}, {12, 300, 204, "1,612.50"},
+	}
+}
+
+// fxWildSibling is an as-printed sibling: its builder, and the page both members draw on.
+type fxWildSibling struct {
+	name, twin string
+	build      func() []byte
+	page       func(lines ...fxLine) []byte
+}
+
+// fxWildSiblings are the three as-printed siblings. TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry.
+var fxWildSiblings = []fxWildSibling{
+	{fxWildTwoPartyAsPrinted, fxWildTwoParty, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyPrinted) }, fxQuoteTextPage},
+	{fxWildRuledAsPrinted, fxWildRuled, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledPrinted) }, fxWildRuledPage},
+	{fxWildStackedAsPrinted, fxWildStacked, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedPrinted) }, fxTextPage},
 }
 
 // --- the raster half --------------------------------------------------------
@@ -2241,16 +2337,6 @@ func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
 }
 
 // --- the as-printed siblings ------------------------------------------------
-
-// fxWildSibling is an as-printed sibling: its builder, and the page both members draw on.
-type fxWildSibling struct {
-	name, twin string
-	build      func() []byte
-	page       func(lines ...fxLine) []byte
-}
-
-// fxWildSiblings are the three as-printed siblings. TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry.
-var fxWildSiblings []fxWildSibling
 
 var (
 	// The last block's newline is optional: fxContent trims the stream's trailing EOL.

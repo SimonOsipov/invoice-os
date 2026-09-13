@@ -692,3 +692,52 @@ func TestRLS_AFailedTypedRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit(t 
 		t.Errorf("control: %d %s audit row(s), want 1", len(rows), cxEvent)
 	}
 }
+
+// The refusals before the self-check record the correction and log nothing; the self-check's own
+// refusal is pinned by the TIN and split specs.
+func TestRLS_ATypedRefusalBeforeTheSelfCheckRecordsTheCorrectionAndLogsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name, seed, field, value string
+		verdict                  extraction.TypedVerdict
+	}{
+		{"several tokens", "EXTR28-05-SILENT-SEVERAL", "currency", "NGN", extraction.TypedSeveralTokens},
+		{"no token", "EXTR28-05-SILENT-NOTOKEN", ctField, "14800001.00", extraction.TypedNoToken},
+		{"no anchor relates", "EXTR28-05-SILENT-NOTDERIVED", "buyer_name", "Paid: ₦0.00", extraction.TypedNotDerived},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			f, _, pages := ctJob(t, ctx, tc.seed, fxLearnedTypedTotal)
+			if v := ctVerdict(t, pages, tc.field, tc.value); v != tc.verdict {
+				t.Fatalf("LearnTypedRule(%s, %q) = %d, want %d", tc.field, tc.value, v, tc.verdict)
+			}
+
+			buf, log := ctLog()
+			op, pageOne := ctReader(t, fxLearnedTypedTotal)
+			learned := &blLearnRecorder{}
+			ctPost(t, f, f.jobID, tc.field, tc.value, pageOne, log, learned.record)
+			if n := op.count(); n != 1 {
+				t.Errorf("%s: the typed correction read the document %d time(s), want 1", tc.name, n)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("%s: logged %s, want nothing", tc.name, buf)
+			}
+			if n := cxCorrectionRows(t, ctx, f.jobID); n != 1 {
+				t.Errorf("%s: %d correction row(s), want 1", tc.name, n)
+			}
+			if n := len(cxCorrectionAudit(t, ctx, f.tenantID)); n != 1 {
+				t.Errorf("%s: %d %s row(s), want 1", tc.name, n, cxEvent)
+			}
+			if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+				t.Errorf("%s: %d anchor rule(s), want 0", tc.name, n)
+			}
+			if n := len(learned.events()); n != 0 {
+				t.Errorf("%s: %d anchor.learned event(s), want 0", tc.name, n)
+			}
+
+			ctPost(t, f, f.jobID, ctField, ctTotal, pageOne, nil)
+			if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+				t.Errorf("%s: control: typed %q on the same job left %d anchor rule(s), want 1", tc.name, ctTotal, n)
+			}
+		})
+	}
+}

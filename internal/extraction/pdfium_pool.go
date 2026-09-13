@@ -13,7 +13,7 @@ import (
 )
 
 // Matches MaxWorkers for QueueName in cmd/submission/main.go (TestPDFiumMaxTotalMatchesTheQueueWorkerCount).
-// The correction route borrows from the same pool, so a typed correction can wait up to pageOneReadTimeout.
+// The correction route shares the pool: it waits up to pageOneReadTimeout, and a worker may wait on it too.
 const pdfiumMaxTotal = 2
 
 // Entries into the once-func, read by TestPDFiumPool_BuiltAtMostOnce.

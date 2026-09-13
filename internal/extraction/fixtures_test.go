@@ -67,6 +67,12 @@ var fxCorpus = []struct {
 	// Not corpus_-prefixed on purpose: EXTR-14-09's learned-rule fixture, regenerated and
 	// byte-compared like the rest but outside every corpus_ ratchet.
 	{fxLearnedTwoParty, fxBuildLearnedTwoParty},
+	{fxLearnedTypedTotal, func() []byte {
+		return fxBuildLearnedTypedTotal("INV-1009", "2026-05-02", "Adeyemi Trading Limited", "14,800,000.00")
+	}},
+	{fxLearnedTypedTotalTwin, func() []byte {
+		return fxBuildLearnedTypedTotal("INV-1010", "2026-06-09", "Okafor Industries Limited", "9,250,000.00")
+	}},
 	// Not corpus_-prefixed on purpose: EXTR-18-01's rich fixture, outside every corpus_ ratchet.
 	{fxRich, fxBuildRichInvoice},
 	// Not corpus_-prefixed on purpose: EXTR-21-06's four production arrangements. Byte-compared

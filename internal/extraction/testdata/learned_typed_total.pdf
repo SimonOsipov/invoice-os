@@ -1,0 +1,100 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 436 >>
+stream
+BT
+/F1 24 Tf
+72 720 Td
+(INVOICE) Tj
+ET
+BT
+/F1 12 Tf
+72 690 Td
+(Invoice No: INV-1009) Tj
+ET
+BT
+/F1 12 Tf
+72 672 Td
+(Invoice Date: 2026-05-02) Tj
+ET
+BT
+/F1 12 Tf
+72 650 Td
+(Supplier: Adeyemi Trading Limited) Tj
+ET
+BT
+/F1 12 Tf
+72 630 Td
+(Currency: NGN) Tj
+ET
+BT
+/F1 12 Tf
+72 240 Td
+(Paid: \2440.00) Tj
+ET
+BT
+/F1 12 Tf
+72 204 Td
+(Total) Tj
+ET
+BT
+/F1 12 Tf
+150 204 Td
+(VAT inclusive) Tj
+ET
+BT
+/F1 12 Tf
+300 204 Td
+(\24414,800,000.00) Tj
+ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /Differences [164 /naira] >> /ToUnicode 6 0 R >>
+endobj
+6 0 obj
+<< /Length 323 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Naira-UCS2 def
+/CMapType 2 def
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<A4> <20A6>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000734 00000 n 
+0000000879 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1253
+%%EOF

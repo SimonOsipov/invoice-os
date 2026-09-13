@@ -30,9 +30,10 @@ type candidate struct {
 	gap  float64
 }
 
-// LearnRule derives one rule from a pointed correction. ok is false when no anchor stands in a
-// relation to region -- an honest refusal; the correction is still recorded. The field lock
-// (invoice_number, supplier_tin, supplier_name) lives in the handler's refuseField, not here.
+// LearnRule derives one rule from a box, pointed or located by LearnTypedRule. ok is false when
+// no anchor stands in a relation to region -- an honest refusal; the correction is still recorded.
+// The field lock (invoice_number, supplier_tin, supplier_name) lives in the handler's refuseField,
+// not here.
 func LearnRule(field string, region Region, anchors []AnchorObservation) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
 	if !ok {

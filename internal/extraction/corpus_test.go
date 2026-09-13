@@ -518,9 +518,9 @@ var cldSubsections = []struct {
 		needles: []string{
 			"learntypedrule", "page 1", "sametokenvalue", "both sides",
 			"TestLearnTypedRule_AddsNoToleranceTheShapeLacks", "exactly one candidate",
-			"pointed correction is not checked", "document.read", "pageonereadtimeout", "anchor_label",
+			"pointed correction is not checked", "document.read", "pageonereadtimeout", "never the typed value", "anchor_label",
 			"typednotoken", "typedseveraltokens", "typednotderived", "typedselfcheckrefused", "typedlearned",
-			"learned_typed_total.pdf",
+			"learned_typed_total.pdf", "TestRLS_ATypedCorrectionOnAnotherTenantsJobReadsNoDocument",
 		},
 		why: "a reader who cannot tell which clause refused a typed value cannot predict what typing teaches, or that pointing is never checked",
 	},

@@ -985,7 +985,7 @@ A learned rule is one tenant's answer to "this producer puts the buyer's TIN *th
 derived from one correction — a **pointed** one, or a **typed** one on either layout identity —
 stored against the layout's fingerprint, and read back on every later document of that layout. It
 is the tenant-specific tier; Tier-1 is generic except its one shape-only naira fallback
-(`t1.currency.sweep`). A typed correction on a document that has geometry learns only through a
+(`t1.currency.sweep`). A typed correction on a geometric layout learns only through a
 self-check: the rule derived from the token the value names must re-read page 1 as exactly that
 value. A pointed correction is never checked (**How a typed value finds its token** below).
 
@@ -1025,10 +1025,11 @@ its job's stored key, whatever the generation. On a retired geometric key, a poi
 and a typed one that names exactly one page-1 token and passes the self-check each still write a
 rule under that key, which nothing will ever select again, and each still record an
 `AnchorLearned` event for a rule no future extraction can reach
-(`TestRLS_ATypedCorrectionOnARetiredGenerationJobWritesARuleNoExtractionSelects`). On a retired
-boxless key the boxless branch never runs, because `IsBoxlessFingerprint` reads false there, and a
-DOCX job's anchors carry the zero box, so no page is read and nothing is learned
-(`TestRLS_ATypedCorrectionOnAV1KeyedBoxlessJobLearnsNothing`).
+(`TestRLS_ATypedCorrectionOnARetiredGenerationJobWritesARuleNoExtractionSelects`). A DOCX job
+keyed outside the current boxless namespace never reaches the boxless branch, because
+`IsBoxlessFingerprint` reads false there, and its anchors carry the zero box, so no page is read
+and nothing is learned (`TestRLS_ATypedCorrectionOnAV1KeyedBoxlessJobLearnsNothing` re-keys a DOCX
+job into the geometric namespace).
 
 Each namespace carries its **own** invalidation lever, and bumping one clears **only its own**
 class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
@@ -1169,7 +1170,8 @@ into a place, then hands the place to the same `LearnRule` a pointed correction 
 first refusal.
 
 1. **Locate.** Only page 1 is searched — the fingerprint, the stored anchors and the learner are
-   page 1 only. A token names the value when its whole text, or the remainder after an
+   page 1 only (`TestPageOneReader_StopsAfterPageOne`,
+   `TestLearnTypedRule_ATokenOffPageOneDerivesNothing`). A token names the value when its whole text, or the remainder after an
    anchor-lexicon label inside it (`sameTokenValue`, the raw form `Resolve` reads there), shares a
    reading with the typed value under the field's shape. Both sides pass through that shape, so a
    typed `14800000.00` names the printed `₦14,800,000.00`
@@ -1188,19 +1190,21 @@ first refusal.
    tokens through `Resolve`. The rule is learned only when that yields exactly one candidate and
    the candidate equals the typed value under the field's shape; anything else gives
    `TypedSelfCheckRefused`
-   (`TestLearnTypedRule_TheSelfCheckRefusesOneCandidateThatIsNotTheTypedValue`). Only
+   (`TestLearnTypedRule_TheSelfCheckRefusesOneCandidateThatIsNotTheTypedValue`,
+   `TestLearnTypedRule_TheSelfCheckRefusesEveryReachableMisfire`). Only
    `TypedLearned` writes a rule, and the zero verdict is `TypedNoToken`, so an unset verdict
    refuses (`TestLearnTypedRule_TheZeroVerdictRefuses`).
 
 Where the self-check passes, the typed rule is the rule pointing at the same token teaches, body,
 label and anchor alike (`TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule`). A
 pointed correction is not checked: it keeps teaching every rule `LearnRule` derives, including the
-misfires the self-check refuses — see **When a learned rule misfires** below.
+misfires the self-check refuses
+(`TestRLS_OnTheSplitLayoutPointingTeachesTheTotalAndTypingItRefuses`) — see **When a learned rule
+misfires** below.
 
 The page comes from the stored document, read again inside the correction request, before its
 transaction, through the same audited opener the extraction worker uses. Each read writes one
-`document.read` audit row attributed to the operator, in its own transaction, so the row commits
-even when nothing is learned (`TestStoreGet_WritesReadAudit`,
+`document.read` audit row attributed to the operator (`TestStoreGet_WritesReadAudit`,
 `TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators`,
 `TestRLS_ATypedCorrectionTeachesThePointedRuleOnAGeometricLayout`). The route reads only for a
 `typed` correction on a job the caller can see whose stored layout is not boxless and carries at
@@ -1209,22 +1213,26 @@ least one usable anchor box (`TestRLS_ATypedCorrectionOnAJobWithNoUsableAnchorRe
 `TestRLS_ATypedCorrectionOnABoxlessJobNeverReadsTheDocumentAndStillLearns`). Another tenant's job
 answers `404` and reads no document (`TestRLS_ATypedCorrectionOnAnotherTenantsJobReadsNoDocument`).
 
-The read is bounded by `pageOneReadTimeout` (5 s), because it borrows one of the two PDFium
-instances the extraction queue also uses. An open error, a read error, a document with no page 1,
-or the expired bound learns nothing: the route writes one WARN naming the job and the field, never
-the typed value, and the correction still commits with `201`
-(`TestRLS_AFailedPageReadCommitsTheCorrectionAndTeachesNothing`,
-`TestRLS_APageReadIsBoundedAndItsExpiryCommitsTheCorrection`). A refusal at any clause writes no
-log line and no `extraction.anchor.learned` row, and the correction commits with `201`
+The read is bounded by `pageOneReadTimeout` (5 s), because it borrows an instance from the PDFium
+pool the extraction queue also uses, sized to that queue's workers
+(`TestPDFiumMaxTotalMatchesTheQueueWorkerCount`,
+`TestPageOneReader_AnExhaustedPoolReturnsAtItsDeadline`). An open error, a read error, a document
+with no page 1, or the expired bound learns nothing, and the correction still commits with `201`
+(`TestPageOneReader_PassesTheOpenErrorThrough`,
+`TestRLS_AFailedPageReadCommitsTheCorrectionAndTeachesNothing`,
+`TestRLS_APageReadIsBoundedAndItsExpiryCommitsTheCorrection`). A read error writes one WARN naming
+the job and the field, never the typed value
+(`TestRLS_AFailedPageReadCommitsTheCorrectionAndTeachesNothing`). A refusal at any clause writes no
+WARN and no `extraction.anchor.learned` row, a refusal before the self-check writes no log line at
+all, and the correction commits with `201`
 (`TestRLS_ATypedRefusalBeforeTheSelfCheckRecordsTheCorrectionAndLogsNothing`,
 `TestRLS_ATypedTINCorrectionOnTheTwoColumnLayoutRefusesAtTheSelfCheck`). An undecodable stored
 `layout_anchors` column is a different posture: the correction aborts with `500` and commits
 nothing (`TestRLS_AnUndecodableLayoutAnchorsColumnAbortsATypedCorrection`). A learned rule is
 written in the correction's own transaction, so a failed rule write rolls back the correction, the
 invoice field and the audit row with it
-(`TestRLS_AFailedTypedRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit`). The correction row
-keeps the trimmed `anchor_label` the client sent, never the derived label
-(`TestRLS_ATypedGeometricLearningWritesNoAnchorLabel`).
+(`TestRLS_AFailedTypedRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit`). The correction row's
+`anchor_label` never carries the derived label (`TestRLS_ATypedGeometricLearningWritesNoAnchorLabel`).
 
 The vehicle is the `learned_typed_total.pdf` / `learned_typed_total_twin.pdf` pair: one
 arrangement whose `total` Tier-1 leaves missing on both documents
@@ -1346,7 +1354,7 @@ A typed correction refuses that class at the self-check.
 rows — `total` on `corpus_split_labels.pdf`, `corpus_totals_block.pdf` and `rich_invoice.pdf`;
 `buyer_name` on `corpus_split_labels.pdf` and `corpus_inline_labels.pdf`; `buyer_tin` on
 `corpus_two_column.pdf` and `advisory_register.pdf` — and asserts that `LearnRule` derives a rule
-over the located token and that the self-check refuses it. Through the route, typing the buyer's
+over the token that prints the value and that the self-check refuses it. Through the route, typing the buyer's
 `99999999-0402` on `corpus_two_column.pdf` records the correction and writes no rule
 (`TestRLS_ATypedTINCorrectionOnTheTwoColumnLayoutRefusesAtTheSelfCheck`), so typing is no remedy
 for this layout either. On `corpus_split_labels.pdf` the same `2,150.00` token teaches the `Total`
@@ -1382,9 +1390,8 @@ is `TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs`, because
 path, and sit outside the same ratchets for the same reason. `fxBuildLearnedTypedTotal` generates
 both, `TestFixtures_MatchTheirGenerator` byte-compares them like every other fixture, and neither
 carries a `corpus_` or `wild_` prefix, so no `corpusExpect`, `corpusLayouts`, `corpusTokenFloor` or
-`expectByLayout` row names them. They print no TIN, so no reserved-TIN scan applies. Tier-1 reads
-`vat` as the printed amount on both, because the `VAT inclusive` label stands left of it; that is
-an artefact of the arrangement, and learning leaves every field but `total` unchanged
+`expectByLayout` row names them. They print no TIN, so no reserved-TIN scan applies. Learning
+leaves every field but `total` unchanged on the twin
 (`TestLearnedTypedTotal_TheAmountTokenTeachesARuleTheTwinReads`).
 
 One consequence worth recording, and it inverted at EXTR-22. `supplier_tin` used to read

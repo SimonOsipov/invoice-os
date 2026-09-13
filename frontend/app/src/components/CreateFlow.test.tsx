@@ -559,6 +559,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       expect(input!.disabled).toBe(false)
       expect(input!.title).toBe('')
       expect(input!.value).toBe(value)
+      expect(input!.getAttribute('placeholder'), `carried-${key} is non-null and must not show the — placeholder`).not.toBe('—')
     }
 
     const buyerName = container.querySelector('[data-testid="carried-buyer_name"]') as HTMLInputElement
@@ -579,7 +580,10 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
     for (const row of Array.from(rows)) {
       const inputs = row.querySelectorAll('input')
       expect(inputs.length, 'every carried line cell must render').toBeGreaterThan(0)
-      for (const el of Array.from(inputs)) expect((el as HTMLInputElement).readOnly).toBe(true)
+      for (const el of Array.from(inputs)) {
+        expect((el as HTMLInputElement).readOnly).toBe(true)
+        expect((el as HTMLInputElement).getAttribute('placeholder'), 'a non-null carried line cell must not show the — placeholder').not.toBe('—')
+      }
     }
     expect(rows[0]?.textContent).toContain('500.00')
     expect(rows[0]?.textContent).toContain('Tax 37.50')
@@ -622,6 +626,10 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       expect(el.readOnly).toBe(false)
       expect(el.hasAttribute('aria-readonly')).toBe(false)
     }
+
+    // Blank mode is byte-unchanged: its own placeholder, not the carried "—" cue.
+    const dateInput = container.querySelector('input[placeholder="YYYY-MM-DD"]') as HTMLInputElement | null
+    expect(dateInput, 'blank mode must keep its own date placeholder').not.toBeNull()
     expect(container.querySelector('[aria-label="Remove line 1"]')).not.toBeNull()
     expect(container.textContent).not.toContain('Currency')
     expect(container.textContent).not.toContain('No line items were read.')
@@ -665,6 +673,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       const input = container.querySelector(`[data-testid="carried-${key}"]`) as HTMLInputElement | null
       expect(input, `carried-${key} must render even when null`).not.toBeNull()
       expect(input!.value).toBe('')
+      expect(input!.getAttribute('placeholder'), `carried-${key} is null and must show the — placeholder`).toBe('—')
     }
     expect(container.querySelector('[data-testid="carried-vat"]')?.textContent).toBe('—')
     expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('—')
@@ -714,6 +723,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       expect(el.readOnly).toBe(true)
       expect(el.getAttribute('aria-readonly')).toBe('true')
       expect(el.disabled).toBe(false)
+      expect(el.getAttribute('placeholder'), 'a null carried line cell must show the — placeholder').toBe('—')
     }
     expect(rows[0]!.querySelector('.money')?.textContent).toBe('—')
     expect(container.textContent, 'control: carried mode rendered').toContain(C_CAPTION)

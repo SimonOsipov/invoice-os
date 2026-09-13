@@ -30,6 +30,10 @@ import type { PlatformCtx } from '../types'
 
 const ROW_COLS = '1fr 70px 120px 120px 28px'
 
+// A carried read-only input never invents a value: null stays value='', with '—' only as
+// the placeholder cue (matches the Amount cell's own null glyph, CreateForm.tsx:166).
+const dash = (v: string | null) => (v === null ? '—' : undefined)
+
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   const { active, activeEntity, draft, filing, filingError, handOffReading: reading } = ctx
 
@@ -87,13 +91,13 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
               {reading === null ? (
                 <input className="pf-input" value={draft.date} onChange={(e) => ctx.updateDraft('date', e.target.value)} placeholder="YYYY-MM-DD" style={{ fontFamily: 'var(--font-mono)' }} />
               ) : (
-                <input data-testid="carried-issue_date" className="pf-input" value={reading.issue_date ?? ''} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
+                <input data-testid="carried-issue_date" className="pf-input" value={reading.issue_date ?? ''} placeholder={dash(reading.issue_date)} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
               )}
             </div>
             {reading !== null && (
               <div>
                 <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Currency</div>
-                <input data-testid="carried-currency" className="pf-input" value={reading.currency ?? ''} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
+                <input data-testid="carried-currency" className="pf-input" value={reading.currency ?? ''} placeholder={dash(reading.currency)} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
               </div>
             )}
           </div>
@@ -106,7 +110,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
               {reading === null ? (
                 <input className="pf-input" value={draft.buyer} onChange={(e) => ctx.updateDraft('buyer', e.target.value)} />
               ) : (
-                <input data-testid="carried-buyer_name" className="pf-input" value={reading.buyer_name ?? ''} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
+                <input data-testid="carried-buyer_name" className="pf-input" value={reading.buyer_name ?? ''} placeholder={dash(reading.buyer_name)} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
               )}
             </div>
             <div>
@@ -114,7 +118,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
               {reading === null ? (
                 <input className="pf-input" value={draft.buyerTin} onChange={(e) => ctx.updateDraft('buyerTin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} />
               ) : (
-                <input data-testid="carried-buyer_tin" className="pf-input" value={reading.buyer_tin ?? ''} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
+                <input data-testid="carried-buyer_tin" className="pf-input" value={reading.buyer_tin ?? ''} placeholder={dash(reading.buyer_tin)} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
               )}
             </div>
           </div>
@@ -159,9 +163,9 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                 ? <div style={{ padding: '9px 12px', fontSize: 13, color: 'var(--fg-3)' }}>No line items were read.</div>
                 : reading.line_items.map((line, i) => (
                     <div key={i} data-testid="carried-line-row" style={{ display: 'grid', gridTemplateColumns: ROW_COLS, gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
-                      <input className="pf-input" value={line.description ?? ''} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
-                      <input className="pf-num" type="text" value={line.quantity ?? ''} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
-                      <input className="pf-num" type="text" value={line.unit_price ?? ''} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
+                      <input className="pf-input" value={line.description ?? ''} placeholder={dash(line.description)} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
+                      <input className="pf-num" type="text" value={line.quantity ?? ''} placeholder={dash(line.quantity)} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
+                      <input className="pf-num" type="text" value={line.unit_price ?? ''} placeholder={dash(line.unit_price)} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
                       <span className="money" style={{ fontSize: 13, textAlign: 'right', fontWeight: 600 }}>
                         {line.line_total ?? '—'}
                         {line.line_tax !== null && <span style={{ display: 'block', fontSize: 11, color: 'var(--fg-3)', fontWeight: 400 }}>Tax {line.line_tax}</span>}

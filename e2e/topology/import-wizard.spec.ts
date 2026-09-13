@@ -7425,11 +7425,37 @@ test('EXTR27-E2E-01: a read document with no number carries its reading into the
     const field = page.getByTestId(`carried-${k}`)
     await expect(field).toHaveValue(reading![k] ?? '')
     await expect(field).not.toBeEditable()
+    // A null reading never becomes an empty box: it shows the same '—' cue as the money cells.
+    if (reading![k] === null) {
+      await expect(field).toHaveAttribute('placeholder', '—')
+    } else {
+      await expect(field).not.toHaveAttribute('placeholder', '—')
+    }
   }
   for (const k of ['subtotal', 'vat', 'total'] as const) {
     await expect(page.getByTestId(`carried-${k}`)).toHaveText(reading![k] ?? '—')
   }
-  await expect(page.getByTestId('carried-line-row')).toHaveCount(reading!.line_items.length)
+  const lineRows = page.getByTestId('carried-line-row')
+  await expect(lineRows).toHaveCount(reading!.line_items.length)
+  // Positional, matching CreateFlow.test.tsx's own line-cell convention: no per-field testid exists.
+  for (let i = 0; i < reading!.line_items.length; i++) {
+    const line = reading!.line_items[i]!
+    const inputs = lineRows.nth(i).locator('input')
+    const cells = [
+      ['description', line.description],
+      ['quantity', line.quantity],
+      ['unit_price', line.unit_price],
+    ] as const
+    for (const [idx, [field, value]] of cells.entries()) {
+      const input = inputs.nth(idx)
+      await expect(input, `carried line ${i} ${field}`).toHaveValue(value ?? '')
+      if (value === null) {
+        await expect(input).toHaveAttribute('placeholder', '—')
+      } else {
+        await expect(input).not.toHaveAttribute('placeholder', '—')
+      }
+    }
+  }
 
   // 4. Taken number refused (AC-5).
   const taken = `EXTR27-TAKEN-${Date.now()}`

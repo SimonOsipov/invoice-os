@@ -645,3 +645,50 @@ func TestRLS_AnUndecodableLayoutAnchorsColumnAbortsATypedCorrection(t *testing.T
 		t.Errorf("control: %d %s row(s), want 1", n, cxEvent)
 	}
 }
+
+// The typed rule write shares the correction's transaction, as the pointed one does
+// (TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit).
+func TestRLS_AFailedTypedRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit(t *testing.T) {
+	ctx := t.Context()
+	f, _, _ := ctJob(t, ctx, "EXTR28-05-ROLLBACK", fxLearnedTypedTotal)
+	body := corBody(ctTotal, "typed", "")
+	op, pageOne := ctReader(t, fxLearnedTypedTotal)
+	drop := clFailAnchorRuleWrites(t, ctx, f.tenantID)
+
+	// The seam writes total before the rule insert, so an unchanged column is a rollback.
+	var seen cxSeamCall
+	w := cxServeWith(t, f.reqCtx, f.jobID, ctField, body, pageOne, nil, cxRecorder(&seen, true), cxAuditor(nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("a failed typed rule write answered %d (body=%q), want 500", w.Code, w.Body.String())
+	}
+	if seen.calls != 1 || op.count() != 1 {
+		t.Fatalf("the invoice seam ran %d time(s) and the page read %d, want 1 each", seen.calls, op.count())
+	}
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 0 {
+		t.Errorf("%d correction row(s) survived a failed typed rule write, want 0", n)
+	}
+	if got := cxTotal(t, ctx, f.invoiceID); got != cxTotalBefore {
+		t.Errorf("invoices.total = %s after a failed typed rule write, want the unchanged %s", got, cxTotalBefore)
+	}
+	if rows := cxCorrectionAudit(t, ctx, f.tenantID); len(rows) != 0 {
+		t.Errorf("%d %s audit row(s) survived a failed typed rule write, want 0", len(rows), cxEvent)
+	}
+
+	drop()
+	w2 := cxServeWith(t, f.reqCtx, f.jobID, ctField, body, pageOne, nil, cxRecorder(&seen, true), cxAuditor(nil))
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("control: with the trigger dropped the same request answered %d (body=%q), want 201", w2.Code, w2.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 1 {
+		t.Errorf("control: %d correction row(s), want 1", n)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: %d anchor rule(s), want 1", n)
+	}
+	if got := cxTotal(t, ctx, f.invoiceID); got != ctTotal {
+		t.Errorf("control: invoices.total = %s, want the posted %s", got, ctTotal)
+	}
+	if rows := cxCorrectionAudit(t, ctx, f.tenantID); len(rows) != 1 {
+		t.Errorf("control: %d %s audit row(s), want 1", len(rows), cxEvent)
+	}
+}

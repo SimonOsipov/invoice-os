@@ -70,6 +70,9 @@ var requiredPDFs = []string{
 	"wild_rc_due_naira.pdf",
 	"wild_stacked_borderless.pdf",
 	"wild_scanned_no_number.pdf",
+	"wild_two_party_bare_tin_asprinted.pdf",
+	"wild_ruled_lines_totals_asprinted.pdf",
+	"wild_stacked_borderless_asprinted.pdf",
 }
 
 var requiredGoldens = []string{
@@ -84,6 +87,9 @@ var requiredGoldens = []string{
 	"wild_rc_due_naira.docling.json",
 	"wild_stacked_borderless.docling.json",
 	"wild_scanned_no_number.docling.json",
+	"wild_two_party_bare_tin_asprinted.docling.json",
+	"wild_ruled_lines_totals_asprinted.docling.json",
+	"wild_stacked_borderless_asprinted.docling.json",
 }
 
 var (

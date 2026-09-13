@@ -237,6 +237,46 @@ var expectByLayout = []struct {
 			"total":          {"1935.00"},
 		},
 	},
+	// The as-printed siblings: each twin's geometry under its source document's printed labels.
+	{
+		file: "wild_two_party_bare_tin_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2201"},
+			"issue_date":     {"2026-06-11"},
+			"buyer_tin":      {"99999999-0802"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1200.00"},
+			"vat":            {"90.00"},
+			"total":          {"1290.00"},
+		},
+	},
+	{
+		file: "wild_ruled_lines_totals_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2202"},
+			"issue_date":     {"2026-06-24"},
+			"buyer_tin":      {"99999999-0902"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"8000.00"},
+			"vat":            {"600.00"},
+			"total":          {"8600.00"},
+		},
+	},
+	{
+		file: "wild_stacked_borderless_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2204"},
+			"issue_date":     {"2026-07-30"},
+			"buyer_tin":      {"99999999-1102"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1500.00"},
+			"vat":            {"112.50"},
+			"total":          {"1612.50"},
+		},
+	},
 }
 
 // eeAbsentCells names every cell the bytes carry no value for, with the reason. A shape-level

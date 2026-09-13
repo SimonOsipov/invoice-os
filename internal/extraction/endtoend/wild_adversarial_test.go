@@ -773,3 +773,59 @@ func TestRLS_EndToEndTheScannedLayoutBindsTheBuyerTIN(t *testing.T) {
 		t.Errorf("%s: supplier_tin = %v, want it to hold %s; without it the exclusion above holds against a field nothing reaches", wildScanned, got["supplier_tin"], supplierTIN)
 	}
 }
+
+// Fails once the supplier's VAT Reg. No. starts filing as the buyer's TIN.
+func TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+	pages := eeTokenPages(t, wildTwoPartyAsPrinted)
+
+	regNo := false
+	for _, o := range extraction.AnchorObservations(pages) {
+		if o.Label == "reg_identifier" && strings.HasPrefix(o.Text, "VAT Reg. No") {
+			regNo = true
+		}
+	}
+	if !regNo {
+		t.Fatalf("%s observes no reg_identifier on VAT Reg. No; the page does not print the label below", wildTwoPartyAsPrinted)
+	}
+
+	buyer := wildResolved(t, wildTwoPartyAsPrinted, "buyer_tin")
+	if distinct := slices.Compact(slices.Sorted(slices.Values(buyer))); !slices.Equal(distinct, []string{buyerTIN}) {
+		t.Errorf("%s: buyer_tin = %v, want only %s", wildTwoPartyAsPrinted, buyer, buyerTIN)
+	}
+	supplier := wildResolved(t, wildTwoPartyAsPrinted, "supplier_tin")
+	if !slices.Contains(supplier, supplierTIN) || slices.Contains(supplier, buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v, want %s and never %s", wildTwoPartyAsPrinted, supplier, supplierTIN, buyerTIN)
+	}
+}
+
+// The letter-spaced label is printed and read, and still no invoice number resolves.
+func TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber(t *testing.T) {
+	const printed = "I N V O I C E N U M B E R"
+	pages := eeTokenPages(t, wildStackedAsPrinted)
+
+	found := false
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if strings.TrimSpace(tok.Text) == printed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("%s reads no %q token; the absence below would be of the label, not of the number", wildStackedAsPrinted, printed)
+	}
+
+	var got []string
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		if c.Field == "invoice_number" {
+			got = append(got, c.Value)
+		}
+	}
+	if len(got) != 0 {
+		t.Errorf("%s resolves invoice_number %v, want none", wildStackedAsPrinted, got)
+	}
+	if twin := wildResolved(t, wildStacked, "invoice_number"); !slices.Equal(twin, []string{wildInvNums[3]}) {
+		t.Errorf("%s resolves invoice_number %v, want exactly [%s] on the same geometry", wildStacked, twin, wildInvNums[3])
+	}
+}

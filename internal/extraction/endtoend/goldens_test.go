@@ -27,6 +27,11 @@ const (
 	wildRCNaira  = "wild_rc_due_naira.pdf"
 	wildStacked  = "wild_stacked_borderless.pdf"
 	wildScanned  = "wild_scanned_no_number.pdf"
+
+	// The as-printed siblings' filenames; the new specs below need them to compile.
+	wildTwoPartyAsPrinted = "wild_two_party_bare_tin_asprinted.pdf"
+	wildRuledAsPrinted    = "wild_ruled_lines_totals_asprinted.pdf"
+	wildStackedAsPrinted  = "wild_stacked_borderless_asprinted.pdf"
 )
 
 // wildTextLayouts carry a real text layer, so pdfium reads them. wildScanned is image-only and

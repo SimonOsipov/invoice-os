@@ -859,7 +859,7 @@ at registration, before any test runs.
 
 ## Adding a layout
 
-Eight edits, no new test:
+Nine edits, no new test:
 
 1. A builder plus an `fxCorpus` entry in `fixtures_test.go`. The files go **flat** in
    `testdata/` with a `corpus_` prefix — `TestFixtures_MatchTheirGenerator` counts
@@ -893,6 +893,9 @@ Eight edits, no new test:
    against a live walk and both accuracy tables against `eeCorpusHits`/`eeCorpusCells`, so a
    table left short a row, or summing right with the numbers in the wrong rows, is a red test.
    Follow **Moving the figure** in that section; the number may only go up.
+9. A new `wild_*` arrangement declares a `wildPairs` row: its as-printed sibling, or an exemption with the reason.
+   `TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption` makes a missing row a red test, and
+   **The as-printed siblings** below records the pair.
 
 Every value in the new row must also be reachable by `Tier1Rules`, or the pair goes in `t1aGaps`
 in `tier1_adversarial_test.go` with the reason. An unreachable expectation with no entry there
@@ -905,12 +908,12 @@ field's shape and fails on a row naming a value the bytes do not carry.
 
 **Not every committed fixture is a layout.** `learned_two_party.pdf` is generated and
 byte-compared exactly like the six layouts, and it is deliberately named *outside* the `corpus_`
-prefix so that none of the eight edits above apply to it. Do not add a `corpusExpect` row, a
+prefix so that none of the nine edits above apply to it. Do not add a `corpusExpect` row, a
 `corpusLayouts` entry or a `corpusTokenFloor` entry for it by reflex — the **Learned rules**
 section below says why. `rich_invoice.pdf` (EXTR-18-01) follows the same pattern for a different
 reason: a ruled table plus a deliberately inconsistent totals block, exercised by
-`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus. The five
-`wild_*.pdf` arrangements (EXTR-21-06, EXTR-21-07) are the same category again: generated, byte-compared and
+`TestFixtures_RichInvoice*` in `fixtures_test.go`, not the anchor-rule corpus. The eight
+`wild_*.pdf` arrangements (EXTR-21-06, EXTR-21-07, and EXTR-33's three as-printed siblings) are the same category again: generated, byte-compared and
 scored by `expectByLayout`, but outside every `corpus_` ratchet, so edits 2, 3 and 4 above do not
 apply to them.
 
@@ -930,18 +933,308 @@ reproduction to add its `corpusExpect` row and watch it fail: the advisory repro
 deliberately carry none, because a scored row would move the denominators EXTR-26's no-regression
 claim is measured against, and the dense source's scored arrangement belongs to EXTR-33 (below).
 
-**The EXTR-33 collision.** EXTR-33 (`Planned`) owns verbatim `wild_<arrangement>_asprinted.pdf`
-siblings, scored beside the eleven. One of its four measured divergences,
-`wild_ruled_lines_totals`, comes from the dense telecoms invoice `advisory_dense.pdf` transcribes:
-`Taxable amount` / `VAT @ 7.5%` / `TOTAL DUE (NGN)`, total filed `1,250,000.00` against a printed
-`3,426,476.50`. EXTR-33's acceptance criterion that its siblings
-turn red on the four divergences before EXTR-24, EXTR-25, EXTR-26 or EXTR-31 land is **unmeetable**
-for that divergence once EXTR-26 merges: on `advisory_dense.pdf` the widened lexicon already decides
-the printed total (`TestAdvisory_TheDenseInvoiceLetsTheRefereeDecide`), so the sibling would pass on
-arrival. The scored arrangement for that source belongs to EXTR-33's sibling, and EXTR-33 must
-prove it red against the **pre-EXTR-26** lexicon instead. `advisory_register.pdf`'s source has no
-EXTR-33 divergence at all, so a scored arrangement for it is **owed and unowned** — EXTR-26 does
-not create one, and does not attribute the gap to EXTR-33 either.
+**The EXTR-33 collision.** `advisory_dense.pdf`'s source, NG-4, is scored on
+`wild_ruled_lines_totals_asprinted.pdf`, and EXTR-26 fixed its `Taxable amount` subtotal (record (a)
+under **The as-printed siblings**). Its total still misses for the ruled twin's own geometric reason,
+owner EXTR-29, because `TOTAL DUE (NGN)` does not fit at the twin's `Total` position.
+`advisory_register.pdf`'s source, NG-3, is divergence (c)'s source, scored on
+`wild_stacked_borderless_asprinted.pdf`, which quarantines. No scored arrangement exists at the
+register's own geometry, and that gap is **owed and unowned**.
+
+## The as-printed siblings
+
+The five documents the `wild_*` arrangements were drawn from are **synthetic mock-ups, not client
+documents**, so transcribing their printed labels verbatim does not breach the 100%-synthetic rule
+at the top of this page. Labels and column headers cross into the repository; the documents' bytes
+never do, and neither does any name, address, TIN, account number or invoice number printed on
+them. The two invoices **The advisory arrangements** transcribes are NG-3 and NG-4 below.
+
+The sources live outside the repository, in the project vault at
+`Simon Vault/Projects/ASComply Africa/User Stories/EXTR/sources/`:
+
+- NG-1 `NG-Invoice-1-Adeola-Steel-classic.pdf`
+- NG-2 `NG-Invoice-2-Rivers-Energy-boxed-header.pdf`
+- NG-3 `NG-Invoice-3-Okonkwo-Advisory-minimal.pdf`
+- NG-4 `NG-Invoice-4-Sahara-Telecoms-dense.pdf`
+- NG-5 `NG-Invoice-5-Ibadan-Goods-scan.pdf`
+
+No test reads that folder, so the inventories below are the durable record of what each source
+prints.
+
+### The pairs
+
+Each lexicon-friendly `wild_*` arrangement declares a `wildPairs` row in
+`internal/extraction/endtoend/goldens_test.go`: its as-printed sibling, or an exemption with the
+reason. `TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption` refuses an arrangement that
+declares neither. The scores are in **Per layout** above.
+
+| Lexicon-friendly | As-printed | Source | Divergence | Verdict |
+|---|---|---|---|---|
+| `wild_two_party_bare_tin.pdf` | `wild_two_party_bare_tin_asprinted.pdf` | `NG-Invoice-2-Rivers-Energy-boxed-header.pdf`, signature label from NG-5 | (d) | not reproduced |
+| `wild_ruled_lines_totals.pdf` | `wild_ruled_lines_totals_asprinted.pdf` | `NG-Invoice-4-Sahara-Telecoms-dense.pdf` | (a), (b) | (a) subtotal fixed by EXTR-26, total the twin's own miss; (b) fixed by EXTR-24 |
+| `wild_stacked_borderless.pdf` | `wild_stacked_borderless_asprinted.pdf` | `NG-Invoice-3-Okonkwo-Advisory-minimal.pdf` | (c) | reproduces |
+| `wild_rc_due_naira.pdf` | exempt: no vocabulary divergence was measured on its source, NG-1 | `NG-Invoice-1-Adeola-Steel-classic.pdf` | none measured | — |
+| `wild_scanned_no_number.pdf` | exempt: its source has no text layer; the OCR path is out of scope | `NG-Invoice-5-Ibadan-Goods-scan.pdf` | none | — |
+
+`wild_rc_due_naira.pdf` has no sibling because no failure was measured on NG-1, although its labels
+differ from the twin's (`Invoice Date:`, `RC No:`, `Subtotal`, `VAT @ 7.5%`, `Total Due`,
+`BILL TO`). `wild_scanned_no_number.pdf` has none because NG-5 is image-only: its failure is an
+absence of text, not of vocabulary.
+
+### Source label inventories
+
+Labels and column headers only, as each source prints them.
+
+- **NG-1 Adeola Steel (classic):**
+  - Header: `TAX INVOICE` (letter-spaced), `Tel:`, `RC No:`, `TIN:`, `Invoice No:`, `Invoice Date:`, `Payment Terms:`, `Due Date:`
+  - Parties: `BILL TO`, `DELIVER TO`, `TIN:`, `RC No:`, `Attn:`
+  - Columns: `#`, `Description`, `Qty`, `Unit Price (₦)`, `Amount (₦)`
+  - Totals: `Subtotal`, `VAT @ 7.5%`, `WHT @ 5% (on services)`, `Total Due`
+  - Footer: `Bank:`, `Account Name:`, `Account No:`, `Amount in words:`
+  - Amounts are ₦-joined; WHT is parenthesised.
+- **NG-2 Rivers Energy (boxed header):**
+  - Header: `Sales Invoice`, `Invoice No.`, `Invoice Date`, `Customer No.`, `Purchase Order`, `Due Date`, `Page`, `Tel`, `Fax`, `VAT Reg. No:`, `RC No:`, `Currency: NGN`
+  - Parties: `INVOICE TO:`, `SITE:`, `TIN:`
+  - Columns: `Code`, `Description`, `Qty`, `Unit Price`, `Line Total`, `VAT Rate`
+  - Totals: `Net Amount`, `VAT @ 7.5%`, `Total NGN`
+  - Footer: `FOR BANK TRANSFERS`, `Bank Name:`, `Account No:`, `Account Name:`, `Sort Code:`, `Branch:`, `Currency: NAIRA`
+- **NG-3 Okonkwo Advisory (minimal, two pages):**
+  - Header: `Invoice`, `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`
+  - Parties: `FROM`, `BILLED TO`, `TIN`, `RC`
+  - Totals: `Subtotal`, `VAT 7.5%`, `Withholding tax 10%`, `Amount payable`
+  - Spacing, as R0 records it: `I N V O I C E   N U M B E R` and `I S S U E D` letter-spaced, the rest unspaced. Amounts are ₦-joined.
+- **NG-4 Sahara Telecoms (dense):**
+  - Title: `MONTHLY SERVICE INVOICE`
+  - Header strip, labels above values: `INVOICE NUMBER`, `BILL PERIOD`, `INVOICE DATE`, `PAYMENT DUE`, `ACCOUNT NUMBER`, `CURRENCY`
+  - Parties: `SUPPLIER`, `CUSTOMER`, `TIN:`, `RC:`, `VAT Registration:`, `Contact:`
+  - Summary box: `SUMMARY`, `Previous balance`, `Current charges`, `VAT`, `Total payable`
+  - Columns: `Item`, `Service description`, `Reference`, `Qty`, `Unit rate ₦`, `Amount ₦`, `VAT ₦`
+  - Totals: `Taxable amount`, `VAT @ 7.5%`, `Previous balance`, `TOTAL DUE (NGN)`
+  - Footer: `Payment instructions.`
+- **NG-5 Ibadan Goods (scan, image only; read off the render):**
+  - Header: `Tel:`, `Mobile:`, `RC No.`, `TIN:`, `SALES INVOICE` (letter-spaced), `Invoice No.:`, `Order Ref.:`, `Date:`, `Terms:`
+  - Parties: `CUSTOMER:`, `TIN:`
+  - Columns: `S/N`, `DESCRIPTION OF GOODS`, `QTY`, `RATE (N)`, `AMOUNT (N)`
+  - Totals: `SUB-TOTAL`, `V.A.T. @ 7.5%`, `DELIVERY`, `TOTAL`
+  - Footer: `Amount in words:`, `Prepared by`, `Customer's Signature`, stamp `PAID`
+
+### Label tables
+
+A sibling keeps its twin's geometry and swaps a twin token's label for the source's printed label
+only when all four hold:
+
+1. The source prints a label for the same role.
+2. It takes the twin's token form: joined to its value in one token, or split into two.
+3. It names the party wherever the twin's label names it.
+4. The built page reads the declared token count and text under pdfium.
+
+Otherwise the twin's label is kept, and the table names the clause that failed. Values stay the
+twin's synthetic values, except the invoice number, which is the twin's plus 100. The "pdfium reads"
+value of every row that is not kept, minus the `Invoice No:` rows, is `wildAsPrintedLabels` in
+`internal/extraction/endtoend/goldens_test.go`; `TestCorpusDoc_CarriesEachSiblingsPrintedLabels`
+holds each one to exactly one token on its sibling's page.
+
+**`wild_two_party_bare_tin_asprinted.pdf`** (source NG-2; 19 tokens)
+
+| Twin token | Sibling token | pdfium reads | Source / reason kept |
+|---|---|---|---|
+| `INVOICE` | `Sales Invoice` | `Sales Invoice` | NG-2 |
+| `Invoice No: INV-2101` | `Invoice No: INV-2201` | same | label kept: NG-2 prints `Invoice No.` with its value in a separate column (clause 2) |
+| `Invoice Date: 2026-06-11` | kept | same | NG-2 prints `Invoice Date` with a separate value (clause 2) |
+| `TIN:` (supplier) | `VAT Reg. No:` | `VAT Reg. No:` | NG-2, as two tokens, the twin's form; joined to its value it loses `supplier_tin` |
+| `Invoice to` | `INVOICE TO:` | `INVOICE TO:` | NG-2 |
+| `Customer No.` | `Customer No.` | same | NG-2, already as printed |
+| `TIN:` (buyer) | `TIN:` | same | NG-2, already as printed |
+| `Buyer's Signature` | `Customer's Signature` | `Customer's Signature` | NG-5: the twin's signature label paraphrases NG-5, and NG-2 prints none |
+| `Currency: NGN` | `Currency: NGN` | same | NG-2, already as printed |
+| `Sub-total` | `Net Amount` | `Net Amount` | NG-2 |
+| `VAT` | `VAT @ 7.5%` | `VAT @ 7.5%` | NG-2 |
+| `Total` | `Total NGN` | `Total NGN` | NG-2 |
+
+Not transcribed, because nothing at the twin's geometry carries them: `Purchase Order`, `Due Date`,
+`Page`, `Tel`, `Fax`, `RC No:`, `SITE:`, the columns `Code` / `Description` / `Qty` / `Unit Price` /
+`Line Total` / `VAT Rate`, and the `FOR BANK TRANSFERS` block.
+
+**`wild_ruled_lines_totals_asprinted.pdf`** (source NG-4; 34 tokens)
+
+| Twin token | Sibling token | pdfium reads | Source / reason kept |
+|---|---|---|---|
+| `INVOICE` | `MONTHLY SERVICE INVOICE` | same | NG-4 |
+| `Invoice No: INV-2102` | `Invoice No: INV-2202` | same | label kept: NG-4 prints `INVOICE NUMBER` above its value (clause 2) |
+| `Invoice Date: …` | kept | same | NG-4's `INVOICE DATE` sits above its value (clause 2) |
+| `Supplier TIN: …` / `Buyer TIN: …` | kept | same | NG-4 prints bare `TIN:` under `SUPPLIER` / `CUSTOMER` headings (clause 3) |
+| `Supplier: …` / `Buyer: …` | kept | same | NG-4's headings sit above the names (clause 2) |
+| `Currency: NGN` | kept | same | NG-4's `CURRENCY` sits above `NGN` (clause 2) |
+| `S/N` | `Item` | `Item` | NG-4 |
+| `DESCRIPTION OF GOODS` | `Service description` | `Service description` | NG-4 |
+| `QTY` | `Qty` | `Qty` | NG-4 |
+| `RATE (N)` | `Unit rate ₦` | `Unit rate ₦` | NG-4 |
+| `Amount ₦` | `Amount ₦` | same | NG-4, already as printed |
+| `Sub-total` | `Taxable amount` | `Taxable amount` | NG-4 |
+| `VAT` | `VAT @ 7.5%` | `VAT @ 7.5%` | NG-4 |
+| `Total` | kept | `Total` | `TOTAL DUE (NGN)` merges with row 3's amount into one token (clause 4) |
+
+Not transcribed: `BILL PERIOD`, `PAYMENT DUE`, `ACCOUNT NUMBER`, the `SUMMARY` box (`Previous balance`,
+`Current charges`, `VAT`, `Total payable`), the `Reference` and `VAT ₦` columns, `Previous balance`
+in the totals block, `RC:`, `VAT Registration:`, `Contact:`, `Payment instructions.` and
+`TOTAL DUE (NGN)`.
+
+**`wild_stacked_borderless_asprinted.pdf`** (source NG-3; 21 tokens)
+
+| Twin token | Sibling token | pdfium reads | Source / reason kept |
+|---|---|---|---|
+| `INVOICE` | `Invoice` | `Invoice` | NG-3 |
+| `Invoice No` | `I N V O I C E N U M B E R` | `I N V O I C E N U M B E R` | NG-3, letter-spaced with one space between words (below) |
+| `Issue Date` | `I S S U E D` | `I S S U E D` | NG-3 |
+| `Buyer` | `BILLED TO` | `BILLED TO` | NG-3 |
+| `Buyer TIN` / `Supplier TIN` | kept | same | NG-3 prints `TIN` joined to its value (clause 2) |
+| `Supplier` | `FROM` | `FROM` | NG-3 |
+| `Currency` | `CURRENCY` | `CURRENCY` | NG-3 |
+| `Sub total` | `Subtotal` | `Subtotal` | NG-3 |
+| `VAT` | `VAT 7.5%` | `VAT 7.5%` | NG-3 |
+| `Total` | `Amount payable` | `Amount payable` | NG-3 |
+
+Not transcribed: `DUE` and its date, `RC`, `Withholding tax 10%` (no row at the twin's geometry), the
+service lines, and the page-2 payment text.
+
+**One space, not three.** The sibling letter-spaces exactly the two labels R0 letter-spaces. R0
+prints `I N V O I C E   N U M B E R` with three spaces between words; with that string the pinned
+docling image keeps the gap pdfium collapses, and `TestWildGoldens_DescribeTheirPDF` fails on the
+token. With one space both readers read `I N V O I C E N U M B E R`, so the sibling prints one.
+pdfium reads the same text from either string, so the scored outcome does not change.
+
+### What each divergence did
+
+Each record carries the production symptom measured on build `d36be21e` on 2026-09-09, its verdict,
+and the probe lines (**The retro-proof** below). `70cc8dcd` is the base this story branched from.
+
+#### (a) `wild_ruled_lines_totals`: the totals labels
+
+NG-4 prints `Taxable amount` / `VAT @ 7.5%` / `TOTAL DUE (NGN)`. On `d36be21e`, subtotal read
+nothing and the invoice filed a total of `1,250,000.00`, line item one's amount, against a printed
+`3,426,476.50`.
+
+Verdict: **fixed by EXTR-26**.
+
+The subtotal half is fixed. `Taxable amount` decides nothing before the EXTR-26 merge and decides
+the subtotal from it on:
+
+```
+d36be21e  wild_ruled_lines_totals_asprinted.pdf  decide subtotal "<nil>" reason="missing"
+cf68c9ad  wild_ruled_lines_totals_asprinted.pdf  decide subtotal "<nil>" reason="missing"   (EXTR-25 merge)
+d6db0e8d  wild_ruled_lines_totals_asprinted.pdf  decide subtotal "8000.00" reason=""        (EXTR-26 merge)
+70cc8dcd  wild_ruled_lines_totals_asprinted.pdf  decide subtotal "8000.00" reason=""
+```
+
+The total half does not reproduce NG-4's mechanism. `TOTAL DUE (NGN)` does not fit at the twin's
+`Total` position, where pdfium merges it with row 3's amount, so the sibling keeps `Total`. Its total
+misses for the ruled twin's own geometric reason: the label continues on the last data row's
+baseline, and a new candidate source is EXTR-29's (`eeRealMisses`).
+
+#### (b) `fxWildRuledHeader`: the index column's header
+
+NG-4 heads its index column `Item`; the twin heads it `S/N`. `liLexicon` maps `item` to the
+description role, and on `d36be21e` twelve line items filed as `01`..`12`.
+
+Verdict: **fixed by EXTR-24**.
+
+`LineItems` over `wild_ruled_lines_totals_asprinted.docling.json` (header `Item` /
+`Service description` / `Qty` / `Unit rate ₦` / `Amount ₦`) files the index as the description
+before the EXTR-24 merge `8acf0879` and the description from it on. `item` has been a weak header
+since: it still takes the description when no strong description column exists, a shape neither
+pair member prints. pdfium yields no tables, so only a docling golden shows (b).
+
+```
+d36be21e  LineItems -> 3 line(s) desc=["1" "2" "3"]
+8acf0879  LineItems -> 3 line(s) desc=["Steel Rods" "Cement Bags" "Roofing Sheets"]   (EXTR-24 merge)
+70cc8dcd  LineItems -> 3 line(s) desc=["Steel Rods" "Cement Bags" "Roofing Sheets"]
+```
+
+#### (c) `wild_stacked_borderless`: the letter-spaced invoice-number label
+
+On `d36be21e`, NG-3 resolved no invoice number and quarantined; the twin resolves `INV-2104` and
+cannot reproduce that.
+
+Verdict: **reproduces**.
+
+The sibling prints `I N V O I C E N U M B E R` directly above its value, at the twin's position, and
+no lexicon entry reaches a letter-spaced word. The document quarantines and scores 0 / 8, while the
+twin reads its number on the same geometry:
+
+```
+d36be21e  wild_stacked_borderless_asprinted.pdf  decide invoice_number "<nil>" reason="missing"
+d36be21e  wild_stacked_borderless.pdf            decide invoice_number "INV-2104" reason=""
+70cc8dcd  wild_stacked_borderless_asprinted.pdf  decide invoice_number "<nil>" reason="missing"
+70cc8dcd  wild_stacked_borderless.pdf            decide invoice_number "INV-2104" reason=""
+```
+
+EXTR-31 Core AC-4 claims this quarantine, and the sibling's eight `eeRealMisses` entries name
+EXTR-31. EXTR-31 plans to widen the value offset, but the measured cause is the label's
+letter-spacing, so geometry alone may not deliver its AC-4. Letter-spaced label matching is owed and
+not created (**Core AC-5 is not delivered on the real register**).
+`TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber` pins the missing candidate.
+
+#### (d) `wild_two_party_bare_tin`: the supplier's registration number as the buyer's TIN
+
+Re-measured after EXTR-22 merged, NG-2 still files the supplier's `VAT Reg. No` as the buyer's TIN,
+and the buyer's printed TIN goes unread.
+
+Verdict: **not reproduced**.
+
+At the twin's geometry with NG-2's labels, both TINs bind to their own party on both builds, and the
+sibling scores 8 / 8:
+
+```
+d36be21e  wild_two_party_bare_tin_asprinted.pdf  decide supplier_tin "99999999-0801"  buyer_tin "99999999-0802"
+70cc8dcd  wild_two_party_bare_tin_asprinted.pdf  decide supplier_tin "99999999-0801"  buyer_tin "99999999-0802"
+```
+
+The production failure needs something the twin's geometry does not carry. pdfium splits the real
+NG-2 page per glyph, so docling's tokenisation of it cannot be measured here, and the cause is
+unmeasured. `TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN` pins the
+non-reproduction and fails once the sibling starts reproducing it.
+
+### The retro-proof
+
+EXTR-24 and EXTR-26 had merged before the siblings existed, so no committed test can show (a)'s
+subtotal or (b) red. The lines above come from a throwaway probe, run once per build in a scratch
+directory outside the repository and never committed:
+
+```
+git archive <build> | tar -x -C <scratch>/<build>
+cp internal/extraction/testdata/wild_*_asprinted.pdf \
+   internal/extraction/testdata/wild_ruled_lines_totals_asprinted.docling.json \
+   <scratch>/<build>/internal/extraction/testdata/
+# <scratch>/<build>/internal/extraction/endtoend/zz_retro04_test.go: per sibling PDF, the PDFium
+# reader -> Resolve(Tier1Rules) -> Reconcile; LineItems over eeGoldenPages(the ruled sibling golden)
+go -C <scratch>/<build>/internal/extraction/endtoend test -count=1 -run '^TestZZRetro04$' -v .
+```
+
+Builds: `d36be21e` (EXTR-23 merge, the production pass), `8acf0879` (EXTR-24), `cf68c9ad`
+(EXTR-25), `d6db0e8d` (EXTR-26) and `70cc8dcd`.
+
+### A paired twin's spec and its sibling
+
+`TestWildPairs_ATwinHitIsASiblingHitOrAnOwnedMiss` holds the expectations mechanically: for every
+pair and written field, a twin hit is a sibling hit or an `eeRealMisses` entry that names its owner.
+
+A spec that asserts a paired twin's resolved value either asserts the sibling too, or this section
+names the sibling cell's owner. These assert mechanisms on a twin's exact tokens and are not
+extended to its sibling:
+
+- `TestWildLayouts_TheRuledTableReproducesACompetingTotal`
+- `TestWildLayouts_TheRuledTableTotalStillTakesTheLineAmount`
+- `TestWildLayouts_ALabelledCurrencyStillHeadsTheRuledTable`
+- `TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling`
+- `TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount`
+- `TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal`
+- `TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty`
+- `TestWildLayouts_TheTwoPartyBuyerNameIsTheName`
+
+The sibling cells that miss, and their owners: `wild_ruled_lines_totals_asprinted.pdf/total`,
+EXTR-29, which its twin misses too; every cell of `wild_stacked_borderless_asprinted.pdf`, EXTR-31.
+The two-party sibling misses nothing. A new spec on a paired twin joins this list or asserts the
+sibling.
 
 ## The advisory arrangements
 

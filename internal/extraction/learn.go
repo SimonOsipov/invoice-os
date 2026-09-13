@@ -9,6 +9,7 @@ package extraction
 import (
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -370,5 +371,67 @@ const (
 // LearnTypedRule learns from a typed value only when it names one page token, LearnRule derives
 // from that token's box, and the rule alone re-reads the page as exactly that value.
 func LearnTypedRule(field, value string, page TokenPage, anchors []AnchorObservation) (LearnedRule, TypedVerdict) {
-	return LearnedRule{}, TypedNoToken
+	// An unknown field or an unreadable value has no reading, so no token carries it.
+	shape, _ := tier1Shape(field)
+	want := shape.Normalize(value)
+	tok, n := locateTypedValue(shape, want, page)
+	if n == 0 {
+		return LearnedRule{}, TypedNoToken
+	}
+	if n > 1 {
+		return LearnedRule{}, TypedSeveralTokens
+	}
+	lr, ok := LearnRule(field, tok.Region, anchors)
+	if !ok {
+		return LearnedRule{}, TypedNotDerived
+	}
+	// The rule alone: Tier-1's own reading of the field would be a second candidate
+	// (TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule).
+	cands, equal := 0, 0
+	for _, c := range Resolve([]TokenPage{page}, RuleSet{Learned: []AnchorRule{{Field: field, Rule: lr.Rule}}}) {
+		if c.Field != field {
+			continue
+		}
+		cands++
+		if slices.Contains(want, c.Value) {
+			equal++
+		}
+	}
+	if cands != 1 || equal != 1 {
+		return LearnedRule{}, TypedSelfCheckRefused
+	}
+	return lr, TypedLearned
+}
+
+// locateTypedValue counts the page tokens that carry a reading in want, each token once however
+// many raw forms match, and returns the last one counted.
+func locateTypedValue(shape Shape, want []string, page TokenPage) (Token, int) {
+	var found Token
+	n := 0
+	for _, tok := range page.Tokens {
+		if tokenCarries(shape, want, tok.Text) {
+			found = tok
+			n++
+		}
+	}
+	return found, n
+}
+
+// tokenCarries reads text whole and as the remainder after each lexicon label: the two raw forms
+// Resolve hands to a shape.
+func tokenCarries(shape Shape, want []string, text string) bool {
+	raws := []string{text}
+	for _, m := range anchorLabelMatchers {
+		if loc := m.RE.FindStringIndex(text); loc != nil {
+			raws = append(raws, sameTokenValue(text, loc))
+		}
+	}
+	for _, raw := range raws {
+		for _, w := range want {
+			if readsAs(shape, raw, w) {
+				return true
+			}
+		}
+	}
+	return false
 }

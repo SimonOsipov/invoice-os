@@ -46,6 +46,7 @@ import {
   rawFetch,
   listInvoices,
   getInvoice,
+  editInvoice,
   rollup,
   createApprovalPolicy,
   putApprovalPolicyDraft,
@@ -816,12 +817,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
       // 2. a never-submitted draft renames, and GET reflects it as still correctable.
       const fresh = `INV-27A2-${freshTin()}`
-      const renameRes = await rawFetch(`/api/invoice/v1/invoices/${draftA.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-        body: { invoice_number: fresh },
-      })
-      expect(renameRes.status, 'a never-submitted draft should rename').toBe(200)
+      // The typed editInvoice, so tsc pins InvoiceEditInput.invoice_number.
+      const renamed = await editInvoice(token, draftA.id, { invoice_number: fresh })
+      expect(renamed.invoice_number, 'the PATCH response should carry the new number').toBe(fresh)
 
       const draftAAfter = await getInvoice(token, draftA.id)
       expect(draftAAfter.invoice_number, 'GET should reflect the renamed number').toBe(fresh)

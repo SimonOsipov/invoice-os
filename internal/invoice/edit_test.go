@@ -39,6 +39,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1487,6 +1488,20 @@ func auditFields(t *testing.T, pool *pgxpool.Pool, tenantID, event string) []str
 		t.Fatalf("unmarshal audit_log payload->'fields' %s into []string: %v", raw, err)
 	}
 	return fields
+}
+
+// auditPayloadMap decodes adversarial_test.go's auditPayload (the newest
+// audit_log row for tenantID+event) as a map -- so a test can assert the
+// exact key SET (e.g. "no previous_invoice_number key at all"), which
+// auditFields' single "fields" projection cannot see.
+func auditPayloadMap(t *testing.T, pool *pgxpool.Pool, tenantID, event string) map[string]any {
+	t.Helper()
+	raw := auditPayload(t, pool, tenantID, event)
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal audit_log payload %s into map: %v", raw, err)
+	}
+	return payload
 }
 
 // T1: a line-only edit (no header fields) on a validated, lined invoice
@@ -2984,5 +2999,417 @@ func TestEdit_CancelRollsBackWithTheEdit(t *testing.T) {
 
 	if n := auditCount(t, app, tenantID, "invoice.approval_cancelled"); n != beforeCancelledAudit {
 		t.Errorf("invoice.approval_cancelled audit rows = %d, want unchanged %d (rolled back with everything else)", n, beforeCancelledAudit)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// EXTR-27-01 (Mode A, RED): renaming a never-submitted draft's invoice_number
+// through Store.Edit / EditBySourceDocumentTx. EditInput.InvoiceNumber exists
+// only as a compile stub today (invoice.go): editTx does not read it, so
+// every test below that expects a rename to succeed instead trips today's
+// step-1 "no fields to update" guard (ErrValidation), never a compile error.
+// ---------------------------------------------------------------------------
+
+// TestStoreEdit_ANumberOnlyInputIsNotEmpty: a number-only EditInput must pass
+// the step-1 guard on both entries; the all-nil input is the control that
+// proves the guard still fires at all.
+func TestStoreEdit_ANumberOnlyInputIsNotEmpty(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 number-only tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 number-only entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EXTR27-N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	newNumber := "EXTR27-N2"
+	got, err := store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if err != nil {
+		t.Fatalf("Edit(number-only): want success, got: %v", err)
+	}
+	if got.InvoiceNumber != newNumber {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, newNumber)
+	}
+
+	f := ebsSeed(t, "EXTR-27-01-EBS-N1")
+	ebsNumber := "EXTR27-EBS-N2"
+	if _, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: &ebsNumber}); err != nil {
+		t.Fatalf("EditBySourceDocumentTx(number-only): want success, got: %v", err)
+	}
+
+	// control: the all-nil input still refuses on Edit -- the reference behaviour.
+	if _, err := store.Edit(c, inv.ID, EditInput{}); !errors.Is(err, ErrValidation) {
+		t.Errorf("control: Edit(all-nil) = %v, want ErrValidation", err)
+	}
+}
+
+// TestStoreEdit_RenamesANeverSubmittedDraft: a never-submitted draft renames.
+func TestStoreEdit_RenamesANeverSubmittedDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 rename tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 rename entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newNumber := "N2"
+	got, err := store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if err != nil {
+		t.Fatalf("Edit (rename a never-submitted draft): want success, got: %v", err)
+	}
+	if got.InvoiceNumber != newNumber {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, newNumber)
+	}
+	if got.Status != StatusDraft {
+		t.Errorf("Status = %q, want %q (a rename never transitions)", got.Status, StatusDraft)
+	}
+	var stored string
+	if err := super.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, inv.ID).Scan(&stored); err != nil {
+		t.Fatalf("read back invoice_number: %v", err)
+	}
+	if stored != newNumber {
+		t.Errorf("invoices.invoice_number = %q, want %q", stored, newNumber)
+	}
+}
+
+// TestStoreEdit_RenameRefusedOnAValidatedInvoice: a validated invoice refuses
+// a rename with ErrNumberFixed, nothing written.
+func TestStoreEdit_RenameRefusedOnAValidatedInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 validated-refused tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 validated-refused entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("pre-hop Transition(-> validated): %v", err)
+	}
+
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+
+	newNumber := "N2"
+	_, err = store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if !errors.Is(err, ErrNumberFixed) {
+		t.Fatalf("Edit(rename a validated invoice) err = %v, want ErrNumberFixed", err)
+	}
+
+	var stored string
+	if err := super.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, inv.ID).Scan(&stored); err != nil {
+		t.Fatalf("read back invoice_number: %v", err)
+	}
+	if stored != "N1" {
+		t.Errorf("invoices.invoice_number = %q, want unchanged %q", stored, "N1")
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated {
+		t.Errorf("audit_log invoice.updated rows = %d, want unchanged %d", n, beforeUpdated)
+	}
+}
+
+// TestStoreEdit_RenameRefusedOnceSubmittedEvenBackAtDraft: a draft whose
+// history shows queued-or-later refuses a rename even once demoted back to
+// draft -- discriminating a status-only check (which would wrongly admit
+// this) from the history-aware one. Control: a sibling draft whose history
+// never left draft/validated renames fine.
+func TestStoreEdit_RenameRefusedOnceSubmittedEvenBackAtDraft(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 history-refused tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 history-refused entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusValidated); err != nil {
+		t.Fatalf("-> validated: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusQueued); err != nil {
+		t.Fatalf("-> queued: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusRejected); err != nil {
+		t.Fatalf("-> rejected: %v", err)
+	}
+	if _, err := store.Transition(c, inv.ID, StatusDraft); err != nil {
+		t.Fatalf("-> draft: %v", err)
+	}
+
+	newNumber := "N2"
+	_, err = store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if !errors.Is(err, ErrNumberFixed) {
+		t.Fatalf("Edit(rename, history reached queued) err = %v, want ErrNumberFixed", err)
+	}
+	var stored string
+	if err := super.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, inv.ID).Scan(&stored); err != nil {
+		t.Fatalf("read back invoice_number: %v", err)
+	}
+	if stored != "N1" {
+		t.Errorf("invoices.invoice_number = %q, want unchanged %q", stored, "N1")
+	}
+
+	// control: a sibling draft whose history never left draft/validated renames fine.
+	sibling, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "SIB1"})
+	if err != nil {
+		t.Fatalf("Create sibling: %v", err)
+	}
+	sibNew := "SIB2"
+	got, err := store.Edit(c, sibling.ID, EditInput{InvoiceNumber: &sibNew})
+	if err != nil {
+		t.Fatalf("control: Edit(sibling draft, no history past draft): want success, got: %v", err)
+	}
+	if got.InvoiceNumber != sibNew {
+		t.Errorf("control: sibling InvoiceNumber = %q, want %q", got.InvoiceNumber, sibNew)
+	}
+}
+
+// TestStoreEdit_RenameToATakenNumberWritesNothing: a rename to another
+// invoice's number refuses ErrNumberTaken, and writes NOTHING -- including a
+// header field sent alongside the rename.
+func TestStoreEdit_RenameToATakenNumberWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 taken-number tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 taken-number entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	first, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1", BuyerName: strPtr("Old Buyer")})
+	if err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N2"}); err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+
+	taken := "N2"
+	_, err = store.Edit(c, first.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("New Buyer")}, InvoiceNumber: &taken})
+	if !errors.Is(err, ErrNumberTaken) {
+		t.Fatalf("Edit(rename to a taken number) err = %v, want ErrNumberTaken", err)
+	}
+
+	var number string
+	var buyerName *string
+	if err := super.QueryRow(ctx, `SELECT invoice_number, buyer_name FROM invoices WHERE id = $1`, first.ID).Scan(&number, &buyerName); err != nil {
+		t.Fatalf("read back first invoice: %v", err)
+	}
+	if number != "N1" {
+		t.Errorf("invoice_number = %q, want unchanged %q", number, "N1")
+	}
+	if buyerName == nil || *buyerName != "Old Buyer" {
+		t.Errorf("buyer_name = %v, want unchanged %q -- a refused rename must write NOTHING, including the header field sent alongside it", buyerName, "Old Buyer")
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated {
+		t.Errorf("audit_log invoice.updated rows = %d, want unchanged %d", n, beforeUpdated)
+	}
+}
+
+// TestStoreEdit_TheSameNumberIsNotARename: resending the stored number is not
+// a rename -- the audit carries no invoice_number field/previous_invoice_number
+// key. Control leg: an ordinary edit with NO InvoiceNumber at all keeps the
+// unchanged branch's payload exactly {fields, id, invoice_number}.
+func TestStoreEdit_TheSameNumberIsNotARename(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 same-number tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 same-number entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	same := "N1"
+	got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("X")}, InvoiceNumber: &same})
+	if err != nil {
+		t.Fatalf("Edit(same number as stored): want success, got: %v", err)
+	}
+	if got.InvoiceNumber != "N1" {
+		t.Errorf("InvoiceNumber = %q, want unchanged %q", got.InvoiceNumber, "N1")
+	}
+	if fields := auditFields(t, app, tenantID, "invoice.updated"); slices.Contains(fields, "invoice_number") {
+		t.Errorf("invoice.updated audit fields = %v, must NOT contain %q -- the same number is not a rename", fields, "invoice_number")
+	}
+	payload := auditPayloadMap(t, app, tenantID, "invoice.updated")
+	if _, ok := payload["previous_invoice_number"]; ok {
+		t.Errorf("invoice.updated payload = %v, must NOT carry previous_invoice_number when the number did not change", payload)
+	}
+
+	// control: an ordinary edit with no InvoiceNumber field at all keeps the
+	// unchanged branch's payload exactly {fields, id, invoice_number}.
+	if _, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("Y")}}); err != nil {
+		t.Fatalf("control Edit(nil number): want success, got: %v", err)
+	}
+	control := auditPayloadMap(t, app, tenantID, "invoice.updated")
+	wantKeys := []string{"fields", "id", "invoice_number"}
+	if len(control) != len(wantKeys) {
+		t.Fatalf("control payload = %v, want exactly the keys %v", control, wantKeys)
+	}
+	for _, k := range wantKeys {
+		if _, ok := control[k]; !ok {
+			t.Errorf("control payload = %v, missing key %q", control, k)
+		}
+	}
+}
+
+// TestStoreEdit_ARenameAuditsBothNumbers: a rename writes exactly one
+// invoice.updated row naming both the new and the previous number.
+func TestStoreEdit_ARenameAuditsBothNumbers(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 audits-both tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 audits-both entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+
+	newNumber := "N2"
+	if _, err := store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber}); err != nil {
+		t.Fatalf("Edit (rename): want success, got: %v", err)
+	}
+
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("audit_log invoice.updated rows = %d, want %d", n, beforeUpdated+1)
+	}
+	payload := auditPayloadMap(t, app, tenantID, "invoice.updated")
+	if got, _ := payload["invoice_number"].(string); got != "N2" {
+		t.Errorf("payload invoice_number = %v, want %q", payload["invoice_number"], "N2")
+	}
+	if got, _ := payload["previous_invoice_number"].(string); got != "N1" {
+		t.Errorf("payload previous_invoice_number = %v, want %q", payload["previous_invoice_number"], "N1")
+	}
+	if fields := auditFields(t, app, tenantID, "invoice.updated"); !slices.Contains(fields, "invoice_number") {
+		t.Errorf("invoice.updated audit fields = %v, want it to contain %q", fields, "invoice_number")
+	}
+	if actor := auditActor(t, app, tenantID, "invoice.updated"); actor != memberSubject {
+		t.Errorf("audit actor = %q, want caller subject %q", actor, memberSubject)
+	}
+}
+
+// TestStoreEdit_ANumberOnlyRenameIsNotANoOp: a rename with no header/line
+// change must NOT take editTx's no-op path -- it returns the NEW number
+// (never the stale `before`), writes exactly one audit row with
+// fields == ["invoice_number"], and the row itself reads the new number.
+// Fails if preFP is taken AFTER the rename write, or if the no-header branch
+// carries `before` forward past the rename.
+func TestStoreEdit_ANumberOnlyRenameIsNotANoOp(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 number-only-rename tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 number-only-rename entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	beforeUpdated := auditCount(t, app, tenantID, "invoice.updated")
+
+	newNumber := "N2"
+	got, err := store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if err != nil {
+		t.Fatalf("Edit (number-only rename): want success, got: %v", err)
+	}
+	if got.InvoiceNumber != "N2" {
+		t.Errorf("returned InvoiceNumber = %q, want %q -- a number-only rename must not carry the stale before value forward", got.InvoiceNumber, "N2")
+	}
+	if n := auditCount(t, app, tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("audit_log invoice.updated rows = %d, want %d -- a number-only rename must not take the no-op path", n, beforeUpdated+1)
+	}
+	if fields := auditFields(t, app, tenantID, "invoice.updated"); !reflect.DeepEqual(fields, []string{"invoice_number"}) {
+		t.Errorf("invoice.updated audit fields = %v, want exactly [\"invoice_number\"]", fields)
+	}
+	payload := auditPayloadMap(t, app, tenantID, "invoice.updated")
+	if got, _ := payload["previous_invoice_number"].(string); got != "N1" {
+		t.Errorf("payload previous_invoice_number = %v, want %q", payload["previous_invoice_number"], "N1")
+	}
+	var stored string
+	if err := super.QueryRow(ctx, `SELECT invoice_number FROM invoices WHERE id = $1`, inv.ID).Scan(&stored); err != nil {
+		t.Fatalf("read back invoice_number: %v", err)
+	}
+	if stored != "N2" {
+		t.Errorf("invoices.invoice_number = %q, want %q", stored, "N2")
+	}
+}
+
+// TestStoreEdit_ARenameStalesAnInFlightValidation (ADDED AC-6, "the draft
+// stays validatable"): a verdict evaluated BEFORE a rename must not stamp the
+// renamed draft -- the fingerprint hashes invoice_number, so a rename in
+// between the evaluation and ApplyValidation must surface ErrStaleValidation,
+// exactly like any other content change would.
+func TestStoreEdit_ARenameStalesAnInFlightValidation(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 rename-stales tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 rename-stales entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "N1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fp := contentFingerprint(inv, inv.LineItems) // taken BEFORE the rename
+
+	newNumber := "N2"
+	renamed, err := store.Edit(c, inv.ID, EditInput{InvoiceNumber: &newNumber})
+	if err != nil {
+		t.Fatalf("Edit (rename): want success, got: %v", err)
+	}
+
+	versionID := seedRuleSetVersionID(t, super)
+	if _, err := store.ApplyValidation(c, inv.ID, nil, versionID, fp); !errors.Is(err, ErrStaleValidation) {
+		t.Fatalf("ApplyValidation(pre-rename fingerprint) err = %v, want ErrStaleValidation -- a rename must invalidate a verdict evaluated before it", err)
+	}
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM invoices WHERE id = $1`, inv.ID).Scan(&status); err != nil {
+		t.Fatalf("read back status: %v", err)
+	}
+	if Status(status) != StatusDraft {
+		t.Errorf("status after the stale ApplyValidation = %q, want unchanged %q", status, StatusDraft)
+	}
+
+	freshFP := contentFingerprint(renamed, renamed.LineItems)
+	got, err := store.ApplyValidation(c, inv.ID, nil, versionID, freshFP)
+	if err != nil {
+		t.Fatalf("ApplyValidation(post-rename fingerprint): want success, got: %v", err)
+	}
+	if got.Status != StatusValidated {
+		t.Errorf("status = %q, want %q", got.Status, StatusValidated)
+	}
+	if got.InvoiceNumber != "N2" {
+		t.Errorf("InvoiceNumber = %q, want %q", got.InvoiceNumber, "N2")
 	}
 }

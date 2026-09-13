@@ -8,6 +8,7 @@ package invoice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -298,5 +299,61 @@ func TestCreateHandler_TwoInvoicesMayNameOneSourceDocument(t *testing.T) {
 		if got == nil || *got != documentID {
 			t.Errorf("%s invoice: source_document_id = %v, want %q", c.label, got, documentID)
 		}
+	}
+}
+
+// TestStoreCreate_ASuppliedNumberNamesItsDocumentInTheAudit (EXTR-27-01, Mode
+// A RED): NumberSupplied widens invoice.created's payload to name the
+// document the number came from; an ordinary create's payload is untouched;
+// a supplied number with no document is refused, nothing written. RED today:
+// CreateInput.NumberSupplied is a compile stub only -- Store.Create neither
+// guards nor audits it, so the "supplied" leg's extra keys never appear and
+// the "nil document" leg succeeds instead of refusing.
+func TestStoreCreate_ASuppliedNumberNamesItsDocumentInTheAudit(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 supplied-number tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 supplied-number entity")
+	documentID := seedDocument(t, super, tenantID)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	if _, err := store.Create(c, CreateInput{
+		EntityID: entityID, InvoiceNumber: "EXTR27-SUP-1",
+		SourceDocumentID: &documentID, NumberSupplied: true,
+	}); err != nil {
+		t.Fatalf("Create (supplied number, real document): want success, got: %v", err)
+	}
+	payload := auditPayloadMap(t, app, tenantID, "invoice.created")
+	if got, _ := payload["invoice_number_supplied"].(bool); !got {
+		t.Errorf("payload = %v, want invoice_number_supplied: true", payload)
+	}
+	if got, _ := payload["document_id"].(string); got != documentID {
+		t.Errorf("payload document_id = %v, want %q", payload["document_id"], documentID)
+	}
+
+	if _, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "EXTR27-SUP-2"}); err != nil {
+		t.Fatalf("Create (ordinary): want success, got: %v", err)
+	}
+	ordinaryPayload := auditPayloadMap(t, app, tenantID, "invoice.created")
+	wantKeys := []string{"id", "invoice_number"}
+	if len(ordinaryPayload) != len(wantKeys) {
+		t.Fatalf("ordinary create payload = %v, want exactly the keys %v", ordinaryPayload, wantKeys)
+	}
+	for _, k := range wantKeys {
+		if _, ok := ordinaryPayload[k]; !ok {
+			t.Errorf("ordinary create payload = %v, missing key %q", ordinaryPayload, k)
+		}
+	}
+
+	const nilDocNumber = "EXTR27-SUP-NILDOC"
+	if _, err := store.Create(c, CreateInput{
+		EntityID: entityID, InvoiceNumber: nilDocNumber, NumberSupplied: true,
+	}); !errors.Is(err, ErrValidation) {
+		t.Errorf("Create (supplied number, nil document) err = %v, want ErrValidation", err)
+	}
+	if n := invoiceCountByNumber(t, super, tenantID, nilDocNumber); n != 0 {
+		t.Errorf("invoices with number %q = %d, want 0 -- a refused supplied-number create must write nothing", nilDocNumber, n)
 	}
 }

@@ -99,6 +99,8 @@ type editReq struct {
 	VAT          *string        `json:"vat"`
 	Total        *string        `json:"total"`
 	LineItems    *[]lineItemReq `json:"line_items"`
+	// InvoiceNumber: not yet read by EditHandler (compile stub, red phase).
+	InvoiceNumber *string `json:"invoice_number"`
 }
 
 // listPagination is the "pagination" object in ListHandler's response
@@ -295,6 +297,10 @@ type getResponse struct {
 	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
 	CanReject                   bool    `json:"can_reject"`
 	RejectBlockedReason         *string `json:"reject_blocked_reason"`
+	// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason: not yet set by
+	// GetHandler (compile stub, red phase).
+	CanCorrectInvoiceNumber    bool    `json:"can_correct_invoice_number"`
+	InvoiceNumberBlockedReason *string `json:"invoice_number_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -303,6 +309,11 @@ type getResponse struct {
 // list, reopening Core AC 4. Separator is an em dash (U+2014) with single
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
+
+// NumberTakenReason / numberFixedReason are editTx's rename refusal sentences.
+// Not yet mapped by statusForErr (compile stubs, red phase).
+const NumberTakenReason = "This invoice number is already in the register for this company. Enter a different number."
+const numberFixedReason = "The invoice number can only be corrected while the invoice is a draft that has never been submitted."
 
 // notApproverTransmitReason is the ONE refusal sentence both transmit doors
 // emit, so a blocked caller's 403 never varies by request shape

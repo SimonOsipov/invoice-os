@@ -360,6 +360,11 @@ func TestGetHandler_ApproveFlagsTrackTheInjectedFacts(t *testing.T) {
 // TestGetHandler_ApproveFlagsAreLastInWireOrder (AC #2/#4): writeJSON marshals with
 // json.NewEncoder, so declaration order IS wire order -- appending the four LAST is
 // what keeps every pre-existing key's position untouched.
+//
+// EXTR-27-01 appends two more keys (can_correct_invoice_number,
+// invoice_number_blocked_reason) after this quartet, so the quartet is no
+// longer the wire's last four keys -- it must now sit immediately BEFORE
+// those two, which take over the tail position.
 func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	rec, _ := doInvoiceGetGated(t, invoiceAtStatusStub(StatusValidated), fixedRoleStub("admin", nil), factsStub(liveRunFacts()), &id, uuid.NewString())
@@ -367,12 +372,17 @@ func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	got := topLevelKeyOrder(t, rec.Body.Bytes())
-	want := []string{"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
-	if len(got) < len(want) {
-		t.Fatalf("top-level key order = %v, want at least %d keys", got, len(want))
+	quartet := []string{"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
+	numberTail := []string{"can_correct_invoice_number", "invoice_number_blocked_reason"}
+	want := len(quartet) + len(numberTail)
+	if len(got) < want {
+		t.Fatalf("top-level key order = %v, want at least %d keys", got, want)
 	}
-	if tail := got[len(got)-len(want):]; !reflect.DeepEqual(tail, want) {
-		t.Errorf("last %d wire keys = %v, want %v (full order = %v)", len(want), tail, want, got)
+	if mid := got[len(got)-want : len(got)-len(numberTail)]; !reflect.DeepEqual(mid, quartet) {
+		t.Errorf("approve/reject quartet = %v, want %v immediately before the number keys (full order = %v)", mid, quartet, got)
+	}
+	if tail := got[len(got)-len(numberTail):]; !reflect.DeepEqual(tail, numberTail) {
+		t.Errorf("last %d wire keys = %v, want %v (full order = %v)", len(numberTail), tail, numberTail, got)
 	}
 }
 

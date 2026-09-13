@@ -132,6 +132,10 @@ type Invoice struct {
 	// (never validated); every other Store method (Create/List/Update/
 	// Edit/Transition/ApplyValidation) leaves it unset.
 	RuleSetVersion *int `json:"-"`
+
+	// EverSubmitted: some history row left draft/validated; filled by getTx
+	// only. Compile stub -- not yet populated (red phase).
+	EverSubmitted bool `json:"-"`
 }
 
 // StatusChange is one invoice_status_history row (task-160/M4-22-01,
@@ -203,6 +207,10 @@ type CreateInput struct {
 	// this invoice; nil for a manual create. Absent from Invoice/invoiceColumns
 	// for the same reason as SourceDocumentID (TestInvoiceColumns_OmitsSourceRows).
 	SourceRows []int
+	// NumberSupplied: the operator typed the number for a stored reading;
+	// audited, never on a wire. Compile stub -- not yet enforced or audited
+	// (red phase).
+	NumberSupplied bool
 }
 
 // ClearText and ClearDate are the third state an UpdateInput member can carry:
@@ -256,6 +264,9 @@ type UpdateInput struct {
 type EditInput struct {
 	UpdateInput
 	LineItems *[]LineItemInput
+	// InvoiceNumber renames a never-submitted draft; nil leaves the number
+	// alone. Compile stub -- not yet read by editTx (red phase).
+	InvoiceNumber *string
 }
 
 // ListFilter is the Store.List query ([D8]): pagination (Limit/Offset) plus
@@ -430,6 +441,12 @@ var (
 	// NOT approval.ErrNotAwaitingApproval, which means the near-inverse
 	// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
 	ErrAwaitingApproval = errors.New("invoice: awaiting approval")
+
+	// ErrNumberTaken / ErrNumberFixed are editTx's rename sentinels (a 23505 on
+	// the number UPDATE, and the canCorrectNumber guard, respectively).
+	// Compile stubs -- not yet returned by any method (red phase).
+	ErrNumberTaken = errors.New("invoice: number taken")
+	ErrNumberFixed = errors.New("invoice: number fixed")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

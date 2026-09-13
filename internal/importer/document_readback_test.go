@@ -701,8 +701,8 @@ func ac1Fixture(t *testing.T, super *pgxpool.Pool, tenantID, documentID, invoice
 
 // AC-1: a document-imported invoice whose read lines do not sum to the printed subtotal is left
 // draft by the REAL gate and carries line-items-sum-subtotal, not line-items-required.
-// Mutation: `LineItems: lineItems` -> `LineItems: nil` in documentCreateInput (document.go) --
-// line-items-required returns and this rule goes silent.
+// Mutation: `LineItems: lineItems` -> `LineItems: nil` in readingCreateInput (document.go, the
+// split moved this line here) -- line-items-required returns and this rule goes silent.
 func TestImportDocumentReadback_LinesThatMissTheSubtotalBlockOnTheSumRule(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

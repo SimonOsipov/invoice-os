@@ -200,6 +200,9 @@ func main() {
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
 	// extraction becomes an invoice with no file/mapping wire at all.
 	app.Mux.HandleFunc("POST /v1/imports/document", importer.CreateDocumentHandler(impSvc.ImportDocument, app.Logger))
+	// A no-number document's stored reading, and filing it under the operator's number (EXTR-27-02).
+	app.Mux.HandleFunc("GET /v1/imports/document/reading", importer.ReadingHandler(impSvc.CarriedReading, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/document/invoice", importer.SupplyNumberHandler(impSvc.SupplyInvoiceNumber, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST

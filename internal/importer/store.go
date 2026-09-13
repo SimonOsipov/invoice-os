@@ -185,6 +185,16 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 	return found, nil
 }
 
+// DocumentHasInvoice reports whether any invoice cites documentID. RLS scopes it to the
+// caller's tenant.
+func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool, error) {
+	var has bool
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE source_document_id = $1)`, documentID).Scan(&has)
+	})
+	return has, err
+}
+
 // EntitySupplier returns the (name, tin) of the business_entities row
 // identified by entityID, for use as an import batch's supplier defaults
 // ([supplier-from-entity]). tin is nullable and scans into a nil *string

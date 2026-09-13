@@ -56,6 +56,14 @@ var wildPairs = []wildPair{
 	{twin: wildScanned, exemption: "its source has no text layer; the OCR path is out of scope"},
 }
 
+// wildAsPrintedLabels is each sibling's printed labels as pdfium reads them: the rows of the
+// corpus page's label tables that are not kept (TestCorpusDoc_CarriesEachSiblingsPrintedLabels).
+var wildAsPrintedLabels = map[string][]string{
+	wildTwoPartyAsPrinted: {"Sales Invoice", "VAT Reg. No:", "INVOICE TO:", "Customer No.", "TIN:", "Customer's Signature", "Currency: NGN", "Net Amount", "VAT @ 7.5%", "Total NGN"},
+	wildRuledAsPrinted:    {"MONTHLY SERVICE INVOICE", "Item", "Service description", "Qty", "Unit rate ₦", "Amount ₦", "Taxable amount", "VAT @ 7.5%"},
+	wildStackedAsPrinted:  {"Invoice", "I N V O I C E N U M B E R", "I S S U E D", "BILLED TO", "FROM", "CURRENCY", "Subtotal", "VAT 7.5%", "Amount payable"},
+}
+
 // --- the pinned synthetic identifier table ------------------------------------------------
 //
 // Every literal below is freshly synthesized, never observed. The same values are declared

@@ -595,6 +595,46 @@ export async function createImportBatch(token: string, entityId: string, invoice
   return body.id
 }
 
+// GET /v1/imports/document/reading and POST /v1/imports/document/invoice. Mirrors
+// internal/importer/handlers_document.go key for key.
+export interface CarriedLine {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
+export interface CarriedReading {
+  document_id: string
+  extraction_job_id: string
+  issue_date: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  line_items: CarriedLine[]
+}
+
+export interface SupplyNumberRequest {
+  entity_id: string
+  document_id: string
+  invoice_number: string
+}
+
+export function getCarriedReading(token: string, documentId: string): Promise<CarriedReading | null> {
+  return apiFetch<{ reading: CarriedReading | null }>(
+    `${apiBase()}/api/invoice/v1/imports/document/reading?document_id=${encodeURIComponent(documentId)}`,
+    { token },
+  ).then((r) => r.reading)
+}
+
+export function supplyInvoiceNumber(token: string, body: SupplyNumberRequest): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body, token })
+}
+
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
 // The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
 // earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.

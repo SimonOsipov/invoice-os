@@ -29,7 +29,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { apiBase, createEntity, getExtractions, login, PERSONAS, type ExtractionJob } from './client'
+import { apiBase, createEntity, getCarriedReading, getExtractions, login, PERSONAS, type ExtractionJob } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 
@@ -42,6 +42,8 @@ const PDF_BYTES = new Uint8Array(readFileSync(PDF_FIXTURE))
 const UPLOAD_PATH = '/api/submission/v1/documents'
 const IMPORT_DOCUMENT_PATH = '/api/invoice/v1/imports/document'
 const PREVIEW_PATH = '/api/invoice/v1/imports/preview'
+const READING_PATH = '/api/invoice/v1/imports/document/reading'
+const SUPPLY_PATH = '/api/invoice/v1/imports/document/invoice'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -135,6 +137,24 @@ async function previewFetch(token: string, body: BlobPart, filename: string, typ
   form.set('file', new Blob([body], { type }), filename)
   return asRawResult(
     await fetch(`${apiBase()}${PREVIEW_PATH}`, { method: 'POST', headers: authHeaders(token), body: form }),
+  )
+}
+
+// EXTR27-API-02's raw seams: the reading and supply routes are asserted on their raw body
+// (400/404 error text), which apiFetch's typed wrapper throws away.
+async function readingFetch(token: string | null, query: string): Promise<RawResult> {
+  return asRawResult(
+    await fetch(`${apiBase()}${READING_PATH}?${query}`, { headers: authHeaders(token) }),
+  )
+}
+
+async function supplyFetch(token: string | null, body: unknown): Promise<RawResult> {
+  return asRawResult(
+    await fetch(`${apiBase()}${SUPPLY_PATH}`, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
   )
 }
 
@@ -402,5 +422,37 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
       typeof (preview.body as Record<string, unknown>).document_id,
       'DOCUP-06: preview stored first, so its 400 carries document_id -- the behaviour this route deliberately does NOT share',
     ).toBe('string')
+  })
+
+  test('EXTR27-API-02: a document with nothing to carry reads null, and a supply against it is refused', async () => {
+    const entity = await createEntity(token, { name: `EXTR-27 supply ${freshTin()}`, tin: freshTin() })
+    const unknown = crypto.randomUUID()
+
+    expect(
+      await getCarriedReading(token, unknown),
+      'EXTR27-API-02: the typed mirror over the wire',
+    ).toBeNull()
+
+    const positive = await readingFetch(token, `document_id=${unknown}`)
+    expect(positive.status, 'EXTR27-API-02: a document with no reading still answers 200').toBe(200)
+    expect(Object.keys(positive.body as Record<string, unknown>)).toEqual(['reading'])
+    expect((positive.body as Record<string, unknown>).reading).toBeNull()
+
+    const malformed = await readingFetch(token, 'document_id=nope')
+    assertErrorEnvelope(malformed, 400, 'EXTR27-API-02 malformed document_id')
+    expect((malformed.body as Record<string, unknown>).error).toBe('document_id must be a well-formed uuid')
+
+    assertErrorEnvelope(await readingFetch(null, `document_id=${unknown}`), 401, 'EXTR27-API-02 no auth')
+
+    const supplyRes = await supplyFetch(token, {
+      entity_id: entity.id,
+      document_id: unknown,
+      invoice_number: `EXTR27-${freshTin()}`,
+    })
+    expect(supplyRes.status, 'EXTR27-API-02: a document with no succeeded extraction refuses 404').toBe(404)
+
+    const blankSupply = await supplyFetch(token, { entity_id: entity.id, document_id: unknown, invoice_number: '   ' })
+    assertErrorEnvelope(blankSupply, 400, 'EXTR27-API-02 blank invoice_number')
+    expect((blankSupply.body as Record<string, unknown>).error).toBe('invoice_number is required')
   })
 })

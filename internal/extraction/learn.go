@@ -389,9 +389,6 @@ func LearnTypedRule(field, value string, page TokenPage, anchors []AnchorObserva
 	// (TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule).
 	cands, equal := 0, 0
 	for _, c := range Resolve([]TokenPage{page}, RuleSet{Learned: []AnchorRule{{Field: field, Rule: lr.Rule}}}) {
-		if c.Field != field {
-			continue
-		}
 		cands++
 		if slices.Contains(want, c.Value) {
 			equal++

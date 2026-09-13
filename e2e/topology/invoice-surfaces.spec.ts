@@ -228,7 +228,7 @@ const MOCK_TIN_PENDING = '99999999-0003'
 // convention, e2e/api/contract-invoice.spec.ts's own note on the same string).
 const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
 
-// handlers.go:317-318's rename-refusal sentences, byte-exact.
+// internal/invoice/handlers.go's NumberTakenReason and numberFixedReason, byte-exact.
 const NUMBER_TAKEN_REASON = 'This invoice number is already in the register for this company. Enter a different number.'
 const NUMBER_FIXED_REASON = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
 
@@ -1565,6 +1565,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(numberInput).toHaveValue(invoiceNumber)
   await expect(numberInput).toBeEnabled()
   await expect(numberInput).not.toBeEditable()
+  await expect(numberInput).toHaveAttribute('readonly')
   await expect(page.getByTestId('edit-invoice')).toContainText(NUMBER_FIXED_REASON)
   await page.getByTestId('edit-cancel').click()
   await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
@@ -1584,9 +1585,8 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// EXTR-27-04, Core AC 4/5/6 -- a never-submitted draft's number is corrected on its own
-// edit form: a taken number is refused in the form's own slot, and a genuinely fresh
-// number renames and triggers exactly one auto re-validate.
+// Core AC 4/5/6: a never-submitted draft's number is corrected on its own edit form. A taken
+// number is refused in the form's own slot; a fresh number renames and re-validates once.
 test("EXTR27-E2E-02: a never-submitted draft's number is corrected on its edit form, a taken number is refused, and validation re-runs", async ({
   page,
 }) => {

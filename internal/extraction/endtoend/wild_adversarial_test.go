@@ -7,10 +7,12 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"maps"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -866,14 +868,125 @@ func wildCommittedArrangements(t *testing.T) []string {
 	return out
 }
 
-func wildPairProblems(committed []string, pairs []wildPair) []string { return nil }
-
-func wildParityProblems(pairs []wildPair, expect wildTableRows, absent, real map[string]string) (problems []string, compared, owned int) {
-	return nil, 0, 0
+// wildPairProblems is pure so TestWildPairs_TheCheckerRefusesAnUndeclaredArrangement can plant its input.
+func wildPairProblems(committed []string, pairs []wildPair) []string {
+	var problems []string
+	for _, p := range pairs {
+		if !slices.Contains(committed, p.twin) {
+			problems = append(problems, fmt.Sprintf("wildPairs names %s, which is not committed", p.twin))
+		}
+		switch {
+		case p.sibling != "" && p.exemption != "":
+			problems = append(problems, fmt.Sprintf("%s declares both a sibling and an exemption", p.twin))
+		case p.sibling == "" && strings.TrimSpace(p.exemption) == "":
+			problems = append(problems, fmt.Sprintf("%s declares neither a sibling nor an exemption reason", p.twin))
+		}
+		if p.sibling == "" {
+			continue
+		}
+		if want := strings.TrimSuffix(p.twin, ".pdf") + wildAsPrintedSuffix; p.sibling != want {
+			problems = append(problems, fmt.Sprintf("%s's sibling is %s, want %s", p.twin, p.sibling, want))
+		} else if !slices.Contains(committed, p.sibling) {
+			problems = append(problems, fmt.Sprintf("%s's sibling %s is not committed", p.twin, p.sibling))
+		}
+	}
+	for _, name := range committed {
+		if strings.HasSuffix(name, wildAsPrintedSuffix) {
+			if !slices.ContainsFunc(pairs, func(p wildPair) bool { return p.sibling == name }) {
+				problems = append(problems, fmt.Sprintf("%s is committed and no wildPairs row names it as a sibling", name))
+			}
+			continue
+		}
+		switch n := len(slices.DeleteFunc(slices.Clone(pairs), func(p wildPair) bool { return p.twin != name })); {
+		case n == 0:
+			problems = append(problems, fmt.Sprintf("%s declares neither a sibling nor an exemption; add a wildPairs row", name))
+		case n > 1:
+			problems = append(problems, fmt.Sprintf("%s has %d wildPairs rows, want one", name, n))
+		}
+	}
+	return problems
 }
 
+// wildParityProblems is pure so TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow can
+// edit copies. compared counts sibling cells checked; owned counts sibling misses naming an owner.
+func wildParityProblems(pairs []wildPair, expect wildTableRows, absent, real map[string]string) (problems []string, compared, owned int) {
+	row := func(file string) (map[string][]string, bool) {
+		i := slices.IndexFunc(expect, func(r wildTableRow) bool { return r.file == file })
+		if i < 0 {
+			return nil, false
+		}
+		return expect[i].fields, true
+	}
+	for _, p := range pairs {
+		if p.sibling == "" {
+			continue
+		}
+		twin, ok := row(p.twin)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("expectByLayout has no row for twin %s", p.twin))
+			continue
+		}
+		sib, ok := row(p.sibling)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("expectByLayout has no row for sibling %s", p.sibling))
+			continue
+		}
+		for _, f := range writtenFields {
+			compared++
+			cell := p.sibling + "/" + f
+			if f == "invoice_number" {
+				if len(sib[f]) == 0 || slices.ContainsFunc(sib[f], func(v string) bool { return slices.Contains(twin[f], v) }) {
+					problems = append(problems, fmt.Sprintf("%s expects %v; a sibling's invoice number is non-empty and never its twin's %v", cell, sib[f], twin[f]))
+				}
+			} else if !slices.Equal(sib[f], twin[f]) {
+				problems = append(problems, fmt.Sprintf("%s expects %v and its twin expects %v; a sibling asserts every fact its twin does", cell, sib[f], twin[f]))
+			}
+			if _, ok := absent[cell]; ok {
+				if _, twinAbsent := absent[p.twin+"/"+f]; !twinAbsent {
+					problems = append(problems, fmt.Sprintf("%s is an absent cell and its twin's is not", cell))
+				}
+			}
+			if reason, ok := real[cell]; ok {
+				if wildOwnerRE.MatchString(reason) {
+					owned++
+				} else {
+					problems = append(problems, fmt.Sprintf("%s misses with no owning story: %q", cell, reason))
+				}
+			}
+		}
+	}
+	return problems, compared, owned
+}
+
+// wildElevenRendering renders every non-sibling expectByLayout cell and miss entry, one sorted line each.
 func wildElevenRendering(expect wildTableRows, absent, real map[string]string) (rendering string, rows, cells int) {
-	return "", 0, 0
+	var b strings.Builder
+	for _, r := range slices.SortedFunc(slices.Values(expect), func(x, y wildTableRow) int { return strings.Compare(x.file, y.file) }) {
+		if strings.HasSuffix(r.file, wildAsPrintedSuffix) {
+			continue
+		}
+		rows++
+		for _, f := range slices.Sorted(maps.Keys(r.fields)) {
+			cells++
+			quoted := make([]string, 0, len(r.fields[f]))
+			for _, v := range r.fields[f] {
+				quoted = append(quoted, strconv.Quote(v))
+			}
+			fmt.Fprintf(&b, "expect %s/%s=%s\n", r.file, f, strings.Join(quoted, "|"))
+		}
+	}
+	for _, tbl := range []struct {
+		name string
+		m    map[string]string
+	}{{"absent", absent}, {"real", real}} {
+		for _, k := range slices.Sorted(maps.Keys(tbl.m)) {
+			if layout, _, _ := strings.Cut(k, "/"); strings.HasSuffix(layout, wildAsPrintedSuffix) {
+				continue
+			}
+			fmt.Fprintf(&b, "%s %s=%s\n", tbl.name, k, strconv.Quote(tbl.m[k]))
+		}
+	}
+	return b.String(), rows, cells
 }
 
 // The pair must be visible, not merely present: a new arrangement cannot land lexicon-friendly-only.

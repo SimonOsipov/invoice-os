@@ -48,7 +48,13 @@ type wildPair struct{ twin, sibling, exemption string }
 
 // wildPairs holds one row per committed lexicon-friendly wild_ arrangement
 // (TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption).
-var wildPairs = []wildPair{}
+var wildPairs = []wildPair{
+	{twin: wildTwoParty, sibling: wildTwoPartyAsPrinted},
+	{twin: wildRuled, sibling: wildRuledAsPrinted},
+	{twin: wildStacked, sibling: wildStackedAsPrinted},
+	{twin: wildRCNaira, exemption: "no vocabulary divergence was measured on its source, NG-1"},
+	{twin: wildScanned, exemption: "its source has no text layer; the OCR path is out of scope"},
+}
 
 // --- the pinned synthetic identifier table ------------------------------------------------
 //

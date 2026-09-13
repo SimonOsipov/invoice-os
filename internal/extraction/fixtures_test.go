@@ -1705,7 +1705,20 @@ func TestFixtures_GeneratorIsDeterministic(t *testing.T) {
 	}
 }
 
-func fxUngenerated(committed []string) []string { return nil }
+// fxUngenerated is every name in committed that no fxCorpus entry builds.
+func fxUngenerated(committed []string) []string {
+	built := map[string]bool{}
+	for _, f := range fxCorpus {
+		built[f.name] = true
+	}
+	var out []string
+	for _, n := range committed {
+		if !built[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 // A committed wild_ PDF with no fxCorpus entry is never byte-compared by TestFixtures_MatchTheirGenerator.
 func TestFixtures_EveryCommittedWildArrangementHasAGenerator(t *testing.T) {

@@ -159,6 +159,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 	if in.EntityID == "" || in.InvoiceNumber == "" {
 		return Invoice{}, fmt.Errorf("%w: entity_id and invoice_number are required", ErrValidation)
 	}
+	if in.NumberSupplied && in.SourceDocumentID == nil {
+		return Invoice{}, fmt.Errorf("%w: a supplied number needs its source document", ErrValidation)
+	}
 
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -269,6 +272,14 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			return err
 		}
 
+		if in.NumberSupplied {
+			return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{
+				"id":                      inv.ID,
+				"invoice_number":          inv.InvoiceNumber,
+				"invoice_number_supplied": true,
+				"document_id":             *in.SourceDocumentID,
+			})
+		}
 		return audit.Record(ctx, tx, id.Subject, "invoice.created", map[string]any{
 			"id":             inv.ID,
 			"invoice_number": inv.InvoiceNumber,
@@ -345,6 +356,14 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 		} else {
 			inv.RuleSetVersion = &v
 		}
+	}
+
+	// EverSubmitted: feeds canCorrectNumber's history-aware half (the rename
+	// gate) -- a status-only check would wrongly re-admit a draft demoted
+	// back from queued/submitted.
+	inv.EverSubmitted, err = everSubmittedTx(ctx, tx, inv.ID)
+	if err != nil {
+		return Invoice{}, err
 	}
 
 	return inv, nil
@@ -1218,7 +1237,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //  1. nothing-to-do guard (checked BEFORE any tx opens, mirroring Store.Update's
 //     own guard, [A7]) -- ErrValidation. WIDENED by INVED-01-04: refused only
 //     when there are no header fields AND no line array was sent, because a
-//     lines-only edit is legitimate.
+//     lines-only edit is legitimate, and so is a number-only one.
 //  2. lock+read `before`: SELECT <invoiceColumns> ... FOR UPDATE, same lock
 //     and error mapping as ApplyValidation/Transition (pgx.ErrNoRows ->
 //     ErrNotFound; 22P02 -> ErrValidation).
@@ -1231,6 +1250,11 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     ApplyValidation's re-check is. beforeLines comes from hydrateLinesTx on
 //     THIS tx: scanInvoice leaves LineItems nil and the fingerprint takes its
 //     lines explicitly ([fingerprint-explicit-lines-param]).
+//     3b. when InvoiceNumber names a genuinely different number: the
+//     canCorrectNumber guard (draft AND never submitted, via everSubmittedTx)
+//     -- else ErrNumberFixed -- then the number UPDATE itself, mapping 23505
+//     to ErrNumberTaken. Runs BEFORE the header/line writes so a refused
+//     rename leaves a header field sent alongside it unapplied too.
 //  5. updateContentTx writes the header content (shared with Store.Update, no
 //     audit of its own) -- but ONLY when header fields were actually sent. It
 //     assumes >= 1 non-nil field, so calling it with an all-nil UpdateInput
@@ -1254,7 +1278,8 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 //     fields array carries what was SUBMITTED (updateContentTx's list), plus
 //     the literal "line_items" whenever an array was sent
 //     ([audit-fields-includes-line-items]), so a lines-only edit audits
-//     fields: ["line_items"].
+//     fields: ["line_items"]. A rename prepends "invoice_number"
+//     and the payload additionally carries previous_invoice_number.
 //  8. demotes to draft whenever the state machine allows before.Status -> draft,
 //     via transitionTx on THIS same tx -- the real
 //     source status, never a hardcoded literal, so the history row's
@@ -1283,7 +1308,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 // end to end through the gate, completely unmodified by M4-05, [A12]).
 func (s *Store) Edit(ctx context.Context, id string, in EditInput) (Invoice, error) {
 	hasHeader := headerFieldsPresent(in.UpdateInput)
-	if !hasHeader && in.LineItems == nil {
+	if !hasHeader && in.LineItems == nil && in.InvoiceNumber == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -1339,16 +1364,42 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 	}
 	preFP := contentFingerprint(before, beforeLines)
 
+	// 3b. the rename write, before the header/line writes so a refused rename
+	// (a still-fixed number, or one already taken) leaves nothing else applied
+	// either -- a header field sent alongside it must not silently land.
+	renamed := in.InvoiceNumber != nil && *in.InvoiceNumber != before.InvoiceNumber
+	base := before
+	if renamed {
+		ever, err := everSubmittedTx(ctx, tx, id)
+		if err != nil {
+			return Invoice{}, err
+		}
+		if !canCorrectNumber(before.Status, ever) {
+			return Invoice{}, ErrNumberFixed
+		}
+		if err := scanInvoice(tx.QueryRow(ctx,
+			`UPDATE invoices SET invoice_number = $1 WHERE id = $2 RETURNING `+invoiceColumns,
+			*in.InvoiceNumber, id,
+		), &base); err != nil {
+			if pgCode(err) == "23505" {
+				return Invoice{}, ErrNumberTaken
+			}
+			return Invoice{}, err
+		}
+	}
+
 	// 5. the header write, shared with Store.Update -- gated on hasHeader
 	// because updateContentTx assumes at least one non-nil field and would
 	// otherwise emit an empty SET clause. A lines-only edit skips it and
-	// carries `before` forward untouched.
+	// carries `before` (or the renamed `base`) forward untouched.
 	var after Invoice
 	var changed []string
 	if hasHeader {
 		if after, changed, err = updateContentTx(ctx, tx, id, in.UpdateInput); err != nil {
 			return Invoice{}, err
 		}
+	} else if renamed {
+		after = base
 	} else {
 		after = before
 	}
@@ -1412,13 +1463,27 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 	if in.LineItems != nil {
 		fields = append(append([]string{}, changed...), "line_items")
 	}
-	// invoice_number is immutable, so before and after agree.
-	if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
-		"id":             id,
-		"fields":         fields,
-		"invoice_number": before.InvoiceNumber,
-	}); err != nil {
-		return Invoice{}, err
+	if renamed {
+		fields = append([]string{"invoice_number"}, fields...)
+	}
+	// a rename is the only change to the number; previous_invoice_number records it.
+	if renamed {
+		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
+			"id":                      id,
+			"fields":                  fields,
+			"invoice_number":          after.InvoiceNumber,
+			"previous_invoice_number": before.InvoiceNumber,
+		}); err != nil {
+			return Invoice{}, err
+		}
+	} else {
+		if err := audit.Record(ctx, tx, callerID.Subject, "invoice.updated", map[string]any{
+			"id":             id,
+			"fields":         fields,
+			"invoice_number": before.InvoiceNumber,
+		}); err != nil {
+			return Invoice{}, err
+		}
 	}
 
 	// 8. demote whenever the state machine allows before.Status -> draft --
@@ -1462,7 +1527,7 @@ func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentI
 	// editTx does not carry Edit's step-1 guard: handed an all-nil EditInput it falls
 	// through to the fingerprint check and returns `before` with no audit row and no
 	// demotion (TestRLS_EditBySourceDocumentTxRefusesAnEmptyEdit).
-	if !headerFieldsPresent(in.UpdateInput) && in.LineItems == nil {
+	if !headerFieldsPresent(in.UpdateInput) && in.LineItems == nil && in.InvoiceNumber == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -1543,6 +1608,24 @@ func canTransition(from, target Status) bool {
 // hand-copied list).
 func canEdit(s Status) bool {
 	return s == StatusDraft || canTransition(s, StatusDraft)
+}
+
+// canCorrectNumber reports whether editTx may rename the invoice's number:
+// only a draft whose history never left draft/validated. A
+// status-only check would wrongly re-admit a draft demoted back from
+// queued/submitted -- everSubmitted closes that gap.
+func canCorrectNumber(s Status, everSubmitted bool) bool { return s == StatusDraft && !everSubmitted }
+
+// everSubmittedTx reports whether id's invoice_status_history shows any
+// transition past draft/validated -- canCorrectNumber's history-aware half.
+func everSubmittedTx(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
+	var ever bool
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM invoice_status_history
+		                WHERE invoice_id = $1 AND to_status NOT IN ('draft', 'validated'))`,
+		id,
+	).Scan(&ever)
+	return ever, err
 }
 
 // canRevalidate reports whether the validation gate may run on status s --

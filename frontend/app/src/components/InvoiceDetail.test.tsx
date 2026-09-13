@@ -104,6 +104,8 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     approve_blocked_reason: null,
     can_reject: false,
     reject_blocked_reason: null,
+    can_correct_invoice_number: true,
+    invoice_number_blocked_reason: null,
     ...over,
   }
 }
@@ -4557,6 +4559,9 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // every scenario that mounts a rule_set_version, so it must be declared here now.
   const BUG_13_TESTIDS = ['compliance-ruleset-version', 'compliance-card']
 
+  // The edit form's invoice number cell.
+  const EXTR_27_TESTIDS = ['edit-invoice-number']
+
   // Deleted by AUDIT-09-02, AUDIT-09-06, BUG-13-01 and BUG-14-02. A resurrection is as much
   // a surface change as a deletion, and `git grep` cannot see one that arrives under a new
   // component.
@@ -4808,11 +4813,11 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
-      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS or BUG_13_TESTIDS.`,
+      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS, BUG_13_TESTIDS or EXTR_27_TESTIDS.`,
     ).toEqual([])
   })
 
@@ -5624,5 +5629,395 @@ describe('InvoiceDetail action cluster: `title` is gated on the wire, not just p
       expect(btn.getAttribute('title'), `${testid} carries its wire sentence`).toBe(expected[testid])
     }
     expect((within(card).getByTestId('resolve-outside') as HTMLButtonElement).getAttribute('title')).toBe(R.resolveOutside)
+  })
+})
+
+// The edit form's own Invoice number cell, gated by can_correct_invoice_number, and the one
+// re-validate a rename triggers.
+describe('InvoiceDetail edit form: the invoice number cell', () => {
+  const ID = 'inv-extr27-1'
+  // Byte-exact copies of internal/invoice/handlers.go's NumberTakenReason and numberFixedReason.
+  const NUMBER_TAKEN_REASON = 'This invoice number is already in the register for this company. Enter a different number.'
+  const NUMBER_FIXED_REASON = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
+
+  function patchCalls(fetchMock: ReturnType<typeof mockDetailFetch>['fetchMock']) {
+    return fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => (init?.method ?? 'GET') === 'PATCH' && String(url).endsWith(`/invoices/${ID}`))
+  }
+
+  function validateCalls(fetchMock: ReturnType<typeof mockDetailFetch>['fetchMock']) {
+    return fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => (init?.method ?? 'GET') === 'POST' && String(url).endsWith('/validate'))
+  }
+
+  function detailGets(fetchMock: ReturnType<typeof mockDetailFetch>['fetchMock']) {
+    return fetchMock.mock.calls.filter(([url, init]: [string, RequestInit?]) => (init?.method ?? 'GET') === 'GET' && String(url).endsWith(`/invoices/${ID}`))
+  }
+
+  it("EXTR27-D1: a correctable draft's number is typed, sent, and validation runs once", async () => {
+    const renamed = detailRecord({ id: ID, invoice_number: 'N2', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true })
+    const revalidated = detailRecord({ id: ID, invoice_number: 'N2', status: 'validated', can_edit: true, can_revalidate: false, can_correct_invoice_number: true })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true }),
+      [],
+      {
+        detailSequence: [renamed, revalidated],
+        editResponse: { ok: true, status: 200, json: () => Promise.resolve(renamed) },
+        revalidateResponse: { ok: true, status: 200, json: () => Promise.resolve(revalidated) },
+      },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const numberInput = screen.getByTestId('edit-invoice-number') as HTMLInputElement
+    expect(numberInput.readOnly).toBe(false)
+    expect(numberInput.value).toBe('N1')
+    fireEvent.change(numberInput, { target: { value: 'N2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patchCalls(fetchMock)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ invoice_number: 'N2' })
+    await waitFor(() => expect(validateCalls(fetchMock)).toHaveLength(1))
+
+    const allCalls = fetchMock.mock.calls
+    const patchIndex = allCalls.indexOf(patchCalls(fetchMock)[0])
+    const validateIndex = allCalls.indexOf(validateCalls(fetchMock)[0])
+    expect(validateIndex).toBeGreaterThan(patchIndex)
+
+    // Awaited: the post-save refetch passes through <Loading/> before the heading re-renders.
+    await waitFor(() => expect(within(screen.getByTestId('invoice-detail')).getByRole('heading', { level: 1 }).textContent).toBe('N2'))
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+
+  it('EXTR27-D2: an unchanged number sends no number and runs no validation', async () => {
+    const afterEdit = detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true, buyer_name: 'Beta Ltd 2' })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { detailSequence: [afterEdit], editResponse: { ok: true, status: 200, json: () => Promise.resolve(afterEdit) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const buyerInput = await screen.findByDisplayValue('Beta Ltd')
+    fireEvent.change(buyerInput, { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // Scoped: the header subtitle (:601) shows the same name, so an unscoped query is ambiguous.
+    await within(screen.getByTestId('invoice-main-column')).findByText('Beta Ltd 2')
+    expect(patchCalls(fetchMock)).toHaveLength(1)
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ buyer_name: 'Beta Ltd 2' })
+    expect(validateCalls(fetchMock)).toHaveLength(0)
+  })
+
+  it('EXTR27-D3: a fixed number is read-only with its reason visible', async () => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: false, invoice_number_blocked_reason: NUMBER_FIXED_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const editForm = await screen.findByTestId('edit-invoice')
+    const input = within(editForm).getByTestId('edit-invoice-number') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    expect(input.getAttribute('aria-readonly')).toBe('true')
+    expect(input.disabled).toBe(false)
+    expect(input.hasAttribute('title')).toBe(false)
+    expect(input.value).toBe('N1')
+    expect(within(editForm).getByText(NUMBER_FIXED_REASON)).toBeTruthy()
+
+    fireEvent.change(input, { target: { value: 'X' } })
+    expect(input.value).toBe('N1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+    expect(patchCalls(fetchMock)).toHaveLength(0)
+  })
+
+  it('EXTR27-D3b: a fixed number with no reason on the wire invents none', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: false, invoice_number_blocked_reason: null }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const input = screen.getByTestId('edit-invoice-number') as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    expect(input.parentElement?.textContent).toBe('Invoice number')
+  })
+
+  it("EXTR27-D4: a taken number is refused in the form's own slot", async () => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { editResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: NUMBER_TAKEN_REASON }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: 'TAKEN-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    const editForm = await screen.findByTestId('edit-invoice')
+    await within(editForm).findByText(NUMBER_TAKEN_REASON)
+    expect((within(editForm).getByTestId('edit-invoice-number') as HTMLInputElement).value).toBe('TAKEN-1')
+    expect(validateCalls(fetchMock)).toHaveLength(0)
+    expect(detailGets(fetchMock)).toHaveLength(1)
+  })
+
+  it('EXTR27-D5: surrounding whitespace is not a rename', async () => {
+    // Leg 1: padding around the unchanged number is not a rename.
+    const { fetchMock: fm1 } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: '  N1  ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+    expect(patchCalls(fm1)).toHaveLength(0)
+    expect(validateCalls(fm1)).toHaveLength(0)
+
+    // Leg 2: padding around a genuinely new number still renames, trimmed.
+    cleanup()
+    const renamed = detailRecord({ id: ID, invoice_number: 'N2', status: 'draft', can_edit: true, can_correct_invoice_number: true })
+    const { fetchMock: fm2 } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { detailSequence: [renamed], editResponse: { ok: true, status: 200, json: () => Promise.resolve(renamed) } },
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: ' N2 ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(patchCalls(fm2)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fm2)[0][1]!.body))).toEqual({ invoice_number: 'N2' })
+
+    // Leg 3: a legacy untrimmed stored number is not silently renamed by an unrelated save.
+    cleanup()
+    const afterBuyerEdit = detailRecord({ id: ID, invoice_number: ' N1', status: 'draft', can_edit: true, can_correct_invoice_number: true, buyer_name: 'Beta Ltd 2' })
+    const { fetchMock: fm3 } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: ' N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { detailSequence: [afterBuyerEdit], editResponse: { ok: true, status: 200, json: () => Promise.resolve(afterBuyerEdit) } },
+    )
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const buyerInput = await screen.findByDisplayValue('Beta Ltd')
+    fireEvent.change(buyerInput, { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(patchCalls(fm3)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fm3)[0][1]!.body))).not.toHaveProperty('invoice_number')
+    expect(validateCalls(fm3)).toHaveLength(0)
+  })
+
+  it('EXTR27-D6: a rename whose validation fails keeps the rename and shows the failure', async () => {
+    const renamed = detailRecord({ id: ID, invoice_number: 'N2', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true }),
+      [],
+      {
+        detailSequence: [renamed],
+        editResponse: { ok: true, status: 200, json: () => Promise.resolve(renamed) },
+        revalidateResponse: { ok: false, status: 502, json: () => Promise.resolve({ error: 'validation service unavailable' }) },
+      },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: 'N2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+    await screen.findByText('validation service unavailable')
+    expect(within(screen.getByTestId('invoice-detail')).getByRole('heading', { level: 1 }).textContent).toBe('N2')
+    expect(validateCalls(fetchMock)).toHaveLength(1)
+  })
+
+  it('EXTR27-D7: a case-only change is a rename', async () => {
+    const renamed = detailRecord({ id: ID, invoice_number: 'INV-A1', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'inv-a1', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true }),
+      [],
+      { detailSequence: [renamed], editResponse: { ok: true, status: 200, json: () => Promise.resolve(renamed) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: 'INV-A1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patchCalls(fetchMock)).toHaveLength(1))
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ invoice_number: 'INV-A1' })
+    await waitFor(() => expect(validateCalls(fetchMock)).toHaveLength(1))
+  })
+
+  // The SPA holds no status set: a rejected invoice edited back to draft is `draft` on the wire
+  // and still fixed, so only can_correct_invoice_number may decide the arm.
+  it.each([
+    { label: 'a validated invoice', status: 'validated' as InvoiceDetailRecord['status'] },
+    { label: 'a rejected invoice edited back to draft', status: 'draft' as InvoiceDetailRecord['status'] },
+  ])('EXTR27-D8: $label shows the number read-only with the wire reason, no title, and sends nothing', async ({ status }) => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status, can_edit: true, can_correct_invoice_number: false, invoice_number_blocked_reason: NUMBER_FIXED_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const input = screen.getByTestId('edit-invoice-number') as HTMLInputElement
+    const cell = input.parentElement as HTMLElement
+    expect(input.readOnly).toBe(true)
+    expect(input.disabled).toBe(false)
+    expect(cell.textContent).toBe(`Invoice number${NUMBER_FIXED_REASON}`)
+    expect(cell.querySelectorAll('[title]')).toHaveLength(0)
+
+    fireEvent.change(input, { target: { value: 'X' } })
+    expect(input.value).toBe('N1')
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+    expect(screen.getByTestId('edit-toggle')).toBeTruthy()
+    expect(patchCalls(fetchMock)).toHaveLength(0)
+    expect(validateCalls(fetchMock)).toHaveLength(0)
+  })
+
+  it('EXTR27-D9: a queued invoice opens no edit form, so no number cell exists to send', async () => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'queued', can_edit: false, can_correct_invoice_number: false, invoice_number_blocked_reason: null }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const toggle = (await screen.findByTestId('edit-toggle')) as HTMLButtonElement
+    expect(toggle.disabled).toBe(true)
+    fireEvent.click(toggle)
+    expect(screen.getByTestId('invoice-detail')).toBeTruthy()
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+    expect(screen.queryByTestId('edit-invoice-number')).toBeNull()
+    expect(patchCalls(fetchMock)).toHaveLength(0)
+  })
+
+  it('EXTR27-D10: a wire with no number gate renders the number read-only', async () => {
+    const { can_correct_invoice_number: _gate, invoice_number_blocked_reason: _reason, ...wire } = detailRecord({
+      id: ID,
+      invoice_number: 'N1',
+      status: 'draft',
+      can_edit: true,
+    })
+    mockDetailFetch(wire as InvoiceDetailRecord)
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const input = screen.getByTestId('edit-invoice-number') as HTMLInputElement
+    expect(input.value).toBe('N1')
+    expect(input.readOnly).toBe(true)
+    expect(input.parentElement?.textContent).toBe('Invoice number')
+  })
+
+  it('EXTR27-D11: a refused rename keeps the typed number and every other edited field, and validates nothing', async () => {
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { editResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: NUMBER_TAKEN_REASON }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: 'TAKEN-1' } })
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    const editForm = await screen.findByTestId('edit-invoice')
+    await within(editForm).findByText(NUMBER_TAKEN_REASON)
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ invoice_number: 'TAKEN-1', buyer_name: 'Beta Ltd 2' })
+    expect((within(editForm).getByTestId('edit-invoice-number') as HTMLInputElement).value).toBe('TAKEN-1')
+    expect(within(editForm).getByDisplayValue('Beta Ltd 2')).toBeTruthy()
+    expect(validateCalls(fetchMock)).toHaveLength(0)
+    expect(detailGets(fetchMock)).toHaveLength(1)
+  })
+
+  it("EXTR27-D12: a cleared number is sent and the server's blank sentence lands in the form", async () => {
+    const BLANK = 'invoice_number must not be blank'
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }),
+      [],
+      { editResponse: { ok: false, status: 400, json: () => Promise.resolve({ error: BLANK }) } },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    const editForm = await screen.findByTestId('edit-invoice')
+    await within(editForm).findByText(BLANK)
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ invoice_number: '' })
+    expect((within(editForm).getByTestId('edit-invoice-number') as HTMLInputElement).value).toBe('')
+    expect(validateCalls(fetchMock)).toHaveLength(0)
+  })
+
+  it('EXTR27-D13: a rename with a header edit sends both in one PATCH and validates once', async () => {
+    const renamed = detailRecord({ id: ID, invoice_number: 'N2', buyer_name: 'Beta Ltd 2', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true })
+    const revalidated = detailRecord({ id: ID, invoice_number: 'N2', buyer_name: 'Beta Ltd 2', status: 'validated', can_edit: true, can_revalidate: false, can_correct_invoice_number: true })
+    const { fetchMock } = mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_revalidate: true, can_correct_invoice_number: true }),
+      [],
+      {
+        detailSequence: [renamed, revalidated],
+        editResponse: { ok: true, status: 200, json: () => Promise.resolve(renamed) },
+        revalidateResponse: { ok: true, status: 200, json: () => Promise.resolve(revalidated) },
+      },
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByTestId('edit-invoice-number'), { target: { value: 'N2' } })
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    // Settle on the refetch that only a completed validate issues: initial, post-save, post-validate.
+    await waitFor(() => expect(detailGets(fetchMock)).toHaveLength(3))
+    await waitFor(() => expect(within(screen.getByTestId('invoice-detail')).getByRole('heading', { level: 1 }).textContent).toBe('N2'))
+    expect(patchCalls(fetchMock)).toHaveLength(1)
+    expect(JSON.parse(String(patchCalls(fetchMock)[0][1]!.body))).toEqual({ invoice_number: 'N2', buyer_name: 'Beta Ltd 2' })
+    expect(validateCalls(fetchMock)).toHaveLength(1)
+  })
+
+  it('EXTR27-D14: the number cell is first and the name/TIN pairs keep their rows', async () => {
+    mockDetailFetch(detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: true }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const grid = (screen.getByTestId('edit-invoice-number').parentElement as HTMLElement).parentElement as HTMLElement
+    expect(grid.style.gridTemplateColumns).toBe('1fr 1fr')
+    // DOM order in a two-track grid: cells 2k and 2k+1 share a row.
+    const labels = Array.from(grid.children).map((cell) => cell.firstElementChild?.textContent)
+    expect(labels).toEqual(['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency'])
+  })
+
+  it('EXTR27-D15: a fixed number uses the Supplier TIN read-only recipe and is never disabled', async () => {
+    mockDetailFetch(
+      detailRecord({ id: ID, invoice_number: 'N1', status: 'draft', can_edit: true, can_correct_invoice_number: false, invoice_number_blocked_reason: NUMBER_FIXED_REASON }),
+    )
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const number = screen.getByTestId('edit-invoice-number') as HTMLInputElement
+    const grid = (number.parentElement as HTMLElement).parentElement as HTMLElement
+    const tinCell = Array.from(grid.children).find((cell) => cell.firstElementChild?.textContent === 'Supplier TIN')
+    expect(tinCell, 'the Supplier TIN sibling must exist to compare against').toBeDefined()
+    const tin = (tinCell as HTMLElement).querySelector('input') as HTMLInputElement
+
+    for (const input of [number, tin]) {
+      expect(input.readOnly).toBe(true)
+      expect(input.getAttribute('aria-readonly')).toBe('true')
+      expect(input.disabled).toBe(false)
+      expect(input.hasAttribute('title')).toBe(false)
+    }
+    expect(number.style.color).toBe('var(--fg-3)')
+    expect(number.style.color).toBe(tin.style.color)
+    expect(number.style.fontFamily).toBe(tin.style.fontFamily)
+    expect(number.className).toBe(tin.className)
+
+    const numberCaption = number.nextElementSibling as HTMLElement
+    const tinCaption = tin.nextElementSibling as HTMLElement
+    expect(numberCaption.textContent).toBe(NUMBER_FIXED_REASON)
+    expect(numberCaption.getAttribute('style')).toBe(tinCaption.getAttribute('style'))
   })
 })

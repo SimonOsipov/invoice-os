@@ -3089,6 +3089,116 @@ func TestStatusForErr_NotFixableIs409(t *testing.T) {
 	}
 }
 
+// TestStatusForErr_NumberSentences: each rename sentinel maps to 409 with its own sentence;
+// ErrDuplicateNumber is the PAR-04 control. TestQA27_EditHandlerRefusalsCarryTheDecidedSentences
+// pins the literal text.
+func TestStatusForErr_NumberSentences(t *testing.T) {
+	if status, msg := statusForErr(ErrNumberTaken); status != http.StatusConflict || msg != NumberTakenReason {
+		t.Errorf("statusForErr(ErrNumberTaken) = (%d, %q), want (409, %q)", status, msg, NumberTakenReason)
+	}
+	if status, msg := statusForErr(ErrNumberFixed); status != http.StatusConflict || msg != numberFixedReason {
+		t.Errorf("statusForErr(ErrNumberFixed) = (%d, %q), want (409, %q)", status, msg, numberFixedReason)
+	}
+	if status, msg := statusForErr(ErrDuplicateNumber); status != http.StatusConflict || msg != "duplicate invoice number" {
+		t.Errorf("statusForErr(ErrDuplicateNumber) = (%d, %q), want (409, %q) -- the store-level duplicate sentence, unchanged (PAR-04)", status, msg, "duplicate invoice number")
+	}
+}
+
+// TestEditHandler_NumberIsTrimmedAndBlankIs400: a number blank after trimming is a 400 and edit
+// never runs; a padded number reaches EditInput trimmed.
+func TestEditHandler_NumberIsTrimmedAndBlankIs400(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	want := Invoice{ID: invoiceID, Status: StatusDraft}
+
+	for _, body := range []string{`{"invoice_number":""}`, `{"invoice_number":"   "}`} {
+		called := false
+		edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+			called = true
+			return want, nil
+		}
+		rec, resp := doInvoiceEdit(t, edit, &id, invoiceID, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body=%s: status = %d, want 400 (body=%s)", body, rec.Code, rec.Body.String())
+		}
+		if resp.Error != "invoice_number must not be blank" {
+			t.Errorf("body=%s: error = %q, want %q", body, resp.Error, "invoice_number must not be blank")
+		}
+		if called {
+			t.Errorf("body=%s: edit must not be called on a blank number", body)
+		}
+	}
+
+	var gotIn EditInput
+	edit := func(ctx context.Context, gotID string, in EditInput) (Invoice, error) {
+		gotIn = in
+		return want, nil
+	}
+	rec, _ := doInvoiceEdit(t, edit, &id, invoiceID, `{"invoice_number":"  N2  "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if gotIn.InvoiceNumber == nil || *gotIn.InvoiceNumber != "N2" {
+		t.Errorf("EditInput.InvoiceNumber = %v, want a non-nil pointer to %q (trimmed)", gotIn.InvoiceNumber, "N2")
+	}
+}
+
+// TestGetHandler_NumberGateFollowsStatusAndHistory: the number gate follows status AND
+// EverSubmitted; the reason is non-null exactly when can_edit && !can_correct_invoice_number.
+func TestGetHandler_NumberGateFollowsStatusAndHistory(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+
+	tests := []struct {
+		name          string
+		status        Status
+		everSubmitted bool
+		wantCorrect   bool
+		wantReasonNil bool
+	}{
+		{"draft_never_submitted", StatusDraft, false, true, true},
+		{"draft_once_submitted", StatusDraft, true, false, false},
+		{"validated", StatusValidated, false, false, false},
+		{"queued_no_reason", StatusQueued, true, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invoiceID := uuid.NewString()
+			want := Invoice{ID: invoiceID, Status: tt.status, EverSubmitted: tt.everSubmitted}
+			get := func(ctx context.Context, gotID string) (Invoice, error) { return want, nil }
+			rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+				t.Fatalf("decode raw body %q: %v", rec.Body.String(), err)
+			}
+			correctRaw, ok := raw["can_correct_invoice_number"]
+			if !ok {
+				t.Fatalf("raw JSON missing can_correct_invoice_number (body=%s)", rec.Body.String())
+			}
+			wantCorrect := "false"
+			if tt.wantCorrect {
+				wantCorrect = "true"
+			}
+			if string(correctRaw) != wantCorrect {
+				t.Errorf("can_correct_invoice_number = %s, want %s (body=%s)", correctRaw, wantCorrect, rec.Body.String())
+			}
+			reasonRaw, ok := raw["invoice_number_blocked_reason"]
+			if !ok {
+				t.Fatalf("raw JSON missing invoice_number_blocked_reason (body=%s)", rec.Body.String())
+			}
+			if tt.wantReasonNil {
+				if string(reasonRaw) != "null" {
+					t.Errorf("invoice_number_blocked_reason = %s, want null (body=%s)", reasonRaw, rec.Body.String())
+				}
+			} else if string(reasonRaw) == "null" || string(reasonRaw) == "" {
+				t.Errorf("invoice_number_blocked_reason = %s, want a non-null quoted sentence (body=%s)", reasonRaw, rec.Body.String())
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // M4-05-03 (task-122) -- QA Mode B adversarial coverage for EditHandler,
 // added post-implementation (commit 7bd2a8c). All 8 Mode A specs above are
@@ -4011,8 +4121,11 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// can_resolve_outside/resolve_outside_blocked_reason join the same way.
 	// APPR-08-06 (task-504): can_approve/approve_blocked_reason/can_reject/
 	// reject_blocked_reason join the same additive set, 37 wire keys -> 41.
+	// EXTR-27-01: can_correct_invoice_number/invoice_number_blocked_reason join
+	// the same way, 41 -> 43.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
-		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
+		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
+		"can_correct_invoice_number", "invoice_number_blocked_reason"}
 
 	tests := []struct {
 		name              string
@@ -4173,6 +4286,9 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// so THESE now land last of all -- one approvalGate call feeds both pairs,
 		// and the approve pair is declared before the reject pair.
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
+		// EXTR-27-01: appended after reject_blocked_reason, so these now land
+		// last of all.
+		"can_correct_invoice_number", "invoice_number_blocked_reason",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())

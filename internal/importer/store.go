@@ -25,6 +25,11 @@ var (
 	// ErrNotFound is returned when a lookup resolves to zero rows under the
 	// caller's tenant (RLS-scoped) — mirrors internal/invoice's sentinel.
 	ErrNotFound = errors.New("importer: not found")
+
+	// ErrReadingNotCarried: the document has a reading, but not one a supplied number can file.
+	ErrReadingNotCarried = errors.New("importer: reading not carried")
+	// ErrDocumentAlreadyFiled: an invoice already cites the document.
+	ErrDocumentAlreadyFiled = errors.New("importer: document already filed")
 )
 
 // RowError is one entry in an import_batches.errors jsonb array — either a
@@ -178,6 +183,16 @@ func (s *Store) ExistingNumbers(ctx context.Context, entityID string, numbers []
 		return nil, err
 	}
 	return found, nil
+}
+
+// DocumentHasInvoice reports whether any invoice cites documentID. RLS scopes it to the
+// caller's tenant.
+func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool, error) {
+	var has bool
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE source_document_id = $1)`, documentID).Scan(&has)
+	})
+	return has, err
 }
 
 // EntitySupplier returns the (name, tin) of the business_entities row

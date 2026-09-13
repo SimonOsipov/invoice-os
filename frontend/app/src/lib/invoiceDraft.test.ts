@@ -17,7 +17,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
-import { draftToCreateRequest, fileDraftGate, fileDraftInvoice, type FileDraftDeps } from './invoiceDraft'
+import {
+  draftToCreateRequest,
+  fileDraftGate,
+  fileDraftInvoice,
+  fileSuppliedNumber,
+  type FileDraftDeps,
+  type FileSuppliedNumberDeps,
+} from './invoiceDraft'
+import type { SupplyNumberRequest } from './importApi'
 import type { Entity } from './portfolio'
 import type { Draft } from '../types'
 
@@ -694,6 +702,58 @@ describe('fileDraftInvoice: the hand-off’s document reaches the create body (H
     expect(bodies).toHaveLength(2)
     expect((bodies[0] as Record<string, unknown>).source_document_id).toBe(HO6_DOCUMENT_ID)
     expect('source_document_id' in (bodies[1] as Record<string, unknown>)).toBe(false)
+  })
+})
+
+const F_TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
+
+describe('fileSuppliedNumber: ordering + refusal (EXTR27-F1, F2)', () => {
+  it('EXTR27-F1: a supplied number files once, affirms only on resolve, and posts only entity, document and number', async () => {
+    const log: string[] = []
+    const { promise, resolve } = deferred<{ id: string }>()
+    const bodies: SupplyNumberRequest[] = []
+    const deps: FileSuppliedNumberDeps = {
+      supply: (req) => {
+        bodies.push(req)
+        return promise
+      },
+      inFlight: { current: false },
+      onPending: (p) => log.push(`pending:${p}`),
+      onError: (e) => log.push(`error:${e === null ? 'null' : e.message}`),
+      onCreated: (id) => log.push(`created:${id}`),
+    }
+
+    const call1 = fileSuppliedNumber('N-1', baseEntity, 'd-1', deps)
+    const call2 = fileSuppliedNumber('N-1', baseEntity, 'd-1', deps)
+
+    expect(log).toEqual(['error:null', 'pending:true'])
+    expect(bodies).toEqual([{ entity_id: baseEntity.id, document_id: 'd-1', invoice_number: 'N-1' }])
+
+    resolve({ id: 'inv-9' })
+    await call1
+    await call2
+
+    expect(log).toEqual(['error:null', 'pending:true', 'created:inv-9', 'pending:false'])
+    expect(bodies, 'a re-entrant call must not reach supply() a second time').toHaveLength(1)
+    expect(deps.inFlight.current).toBe(false)
+  })
+
+  it('EXTR27-F2: a refused supply lands on onError verbatim, never affirms, and the promise resolves', async () => {
+    const err = new ApiError('http', F_TAKEN, 409)
+    const supply = vi.fn(() => Promise.reject(err))
+    const onPending = vi.fn()
+    const onError = vi.fn()
+    const onCreated = vi.fn()
+    const inFlight = { current: false }
+
+    await expect(
+      fileSuppliedNumber('N-1', baseEntity, 'd-1', { supply, inFlight, onPending, onError, onCreated }),
+    ).resolves.toBeUndefined()
+
+    expect(onCreated).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ status: 409, message: F_TAKEN }))
+    expect(onPending).toHaveBeenLastCalledWith(false)
+    expect(inFlight.current).toBe(false)
   })
 })
 

@@ -5,7 +5,7 @@
 // is arithmetic, and lives here.
 import { describe, expect, it } from 'vitest'
 
-import { approvalRun404Dropper, notFoundIdDropper } from './consoleGate'
+import { approvalRun404Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 
 const APPROVAL_404 = 'Failed to load resource: the server responded with a status of 404 ()'
 const APPROVAL_URL = 'https://gw.test/api/invoice/v1/invoices/9f1c7e2a-0000-0000-0000-000000000001/approval'
@@ -129,5 +129,57 @@ describe('notFoundIdDropper (ROUTE-02-07 AC-5)', () => {
     respond(404, `${INVOICES}/${XT_ID}/history`)
     expect(dropper(NOT_FOUND_404, '')).toBe(true)
     expect(dropper(NOT_FOUND_404, undefined), 'the budget is exactly one').toBe(false)
+  })
+})
+
+// The status-parameterised dropper, over the supply URL.
+const SUPPLY_URL = 'https://gw.test/api/invoice/v1/imports/document/invoice'
+const SUPPLY_PATTERN = /\/api\/invoice\/v1\/imports\/document\/invoice$/
+const CONFLICT_409 = 'Failed to load resource: the server responded with a status of 409 ()'
+
+function fakeStatusPage(status: number, pattern: RegExp) {
+  const listeners: ResponseListener[] = []
+  const page = { on: (event: string, fn: ResponseListener) => { if (event === 'response') listeners.push(fn) } }
+  return {
+    dropper: expectedStatusDropper(page as unknown as Parameters<typeof expectedStatusDropper>[0], status, pattern),
+    respond(respStatus: number, url: string) {
+      for (const fn of listeners) fn({ status: () => respStatus, url: () => url })
+    },
+  }
+}
+
+describe('expectedStatusDropper (EXTR27-G1..G3)', () => {
+  it('G1: drops an attributed 409 from its own url', () => {
+    const { dropper } = fakeStatusPage(409, SUPPLY_PATTERN)
+    expect(dropper(CONFLICT_409, SUPPLY_URL)).toBe(true)
+    expect(dropper('Uncaught TypeError: x is not a function', SUPPLY_URL)).toBe(false)
+  })
+
+  it('G2: never drops a 409 from another url, or a 404 from its own', () => {
+    const { dropper } = fakeStatusPage(409, SUPPLY_PATTERN)
+    // Positive control first: the budget/attribution path is live.
+    expect(dropper(CONFLICT_409, SUPPLY_URL)).toBe(true)
+
+    for (const url of [
+      'https://gw.test/api/invoice/v1/imports/document',
+      'https://gw.test/api/invoice/v1/imports/document/reading?document_id=x',
+      'https://gw.test/api/invoice/v1/invoices',
+    ]) {
+      expect(dropper(CONFLICT_409, url), url).toBe(false)
+    }
+    expect(dropper(CONFLICT_409.replace('409', '404'), SUPPLY_URL), 'a 404 from the same url').toBe(false)
+  })
+
+  it('G3: spends a nameless 409 only against observed 409s on its url', () => {
+    const { dropper, respond } = fakeStatusPage(409, SUPPLY_PATTERN)
+    expect(dropper(CONFLICT_409, undefined), 'nothing observed, nothing to spend').toBe(false)
+
+    respond(404, SUPPLY_URL)
+    respond(409, 'https://gw.test/api/invoice/v1/invoices')
+    expect(dropper(CONFLICT_409, undefined), 'neither observed response was a 409 on this url').toBe(false)
+
+    respond(409, SUPPLY_URL)
+    expect(dropper(CONFLICT_409, '')).toBe(true)
+    expect(dropper(CONFLICT_409, undefined), 'the budget is exactly one').toBe(false)
   })
 })

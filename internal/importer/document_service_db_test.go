@@ -709,3 +709,531 @@ func TestServiceImportDocument_PoorScanQuarantineCarriesTheScanQualityMessage(t 
 		t.Errorf("invoices for entity = %d, want 0", got)
 	}
 }
+
+// --- a no-number reading is readable and fileable ------------------------------------------
+
+// docNoNumberValues is the reading a no-number document quarantines with: docCleanValues("")
+// but invoice_number itself absent (unreadable), not the empty string -- the real shape.
+func docNoNumberValues() map[string]*string {
+	values := docCleanValues("")
+	values["invoice_number"] = nil
+	return values
+}
+
+// countInvoicesCitingDocument counts invoices whose source_document_id cites documentID.
+func countInvoicesCitingDocument(t *testing.T, super *pgxpool.Pool, documentID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM invoices WHERE source_document_id = $1`, documentID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count invoices citing document %s: %v", documentID, err)
+	}
+	return n
+}
+
+// extractionJobIDForDocument reads back the newest extraction_jobs id for documentID, so
+// CarriedReading's own ExtractionJobID can be pinned against the real row, not just non-empty.
+func extractionJobIDForDocument(t *testing.T, super *pgxpool.Pool, documentID string) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`SELECT id FROM extraction_jobs WHERE document_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, documentID,
+	).Scan(&id); err != nil {
+		t.Fatalf("read extraction_jobs id for document %s: %v", documentID, err)
+	}
+	return id
+}
+
+// --- CR-01 -----------------------------------------------------------------------------
+
+// CR-01: a no-number reading carries every header value plus its lines, in index order, and a
+// header-only reading still gives a non-nil empty LineItems slice that marshals to [].
+func TestServiceCarriedReading_ANoNumberReadingCarriesEveryValue(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "CR-01 tenant")
+	documentID := docSeedDocument(t, super, tenantID)
+	values := docNoNumberValues()
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].quantity"] = sxPtr("2")
+	values["line_items[1].unit_price"] = sxPtr("10.00")
+	values["line_items[1].line_total"] = sxPtr("20.00")
+	values["line_items[1].line_tax"] = sxPtr("1.50")
+	values["line_items[2].description"] = sxPtr("Gadget")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+	wantJobID := extractionJobIDForDocument(t, super, documentID)
+
+	svc := newTestServiceWithGate(app, &fakeGate{})
+	callCtx := sxIdentity(ctx, tenantID)
+	reading, err := svc.CarriedReading(callCtx, documentID)
+	if err != nil {
+		t.Fatalf("CarriedReading: %v", err)
+	}
+	if reading == nil {
+		t.Fatal("reading = nil, want a carried reading")
+	}
+	if reading.DocumentID != documentID {
+		t.Errorf("DocumentID = %q, want %q", reading.DocumentID, documentID)
+	}
+	if reading.ExtractionJobID != wantJobID {
+		t.Errorf("ExtractionJobID = %q, want %q", reading.ExtractionJobID, wantJobID)
+	}
+	if reading.IssueDate == nil || *reading.IssueDate != "2026-03-01" {
+		t.Errorf("IssueDate = %v, want %q", reading.IssueDate, "2026-03-01")
+	}
+	if reading.BuyerTIN == nil || *reading.BuyerTIN != "87654321-0001" {
+		t.Errorf("BuyerTIN = %v, want %q", reading.BuyerTIN, "87654321-0001")
+	}
+	if reading.BuyerName == nil || *reading.BuyerName != "Clean Buyer Ltd" {
+		t.Errorf("BuyerName = %v, want %q", reading.BuyerName, "Clean Buyer Ltd")
+	}
+	if reading.Currency == nil || *reading.Currency != "NGN" {
+		t.Errorf("Currency = %v, want %q", reading.Currency, "NGN")
+	}
+	if reading.Subtotal == nil || *reading.Subtotal != "1000.00" {
+		t.Errorf("Subtotal = %v, want %q", reading.Subtotal, "1000.00")
+	}
+	if reading.VAT == nil || *reading.VAT != "75.00" {
+		t.Errorf("VAT = %v, want %q", reading.VAT, "75.00")
+	}
+	if reading.Total == nil || *reading.Total != "1075.00" {
+		t.Errorf("Total = %v, want %q", reading.Total, "1075.00")
+	}
+	if len(reading.LineItems) != 2 {
+		t.Fatalf("len(LineItems) = %d, want 2", len(reading.LineItems))
+	}
+	if reading.LineItems[0].Description == nil || *reading.LineItems[0].Description != "Widget" {
+		t.Errorf("LineItems[0].Description = %v, want %q", reading.LineItems[0].Description, "Widget")
+	}
+	if reading.LineItems[0].LineTax == nil || *reading.LineItems[0].LineTax != "1.50" {
+		t.Errorf("LineItems[0].LineTax = %v, want %q", reading.LineItems[0].LineTax, "1.50")
+	}
+	if reading.LineItems[1].Description == nil || *reading.LineItems[1].Description != "Gadget" {
+		t.Errorf("LineItems[1].Description = %v, want %q", reading.LineItems[1].Description, "Gadget")
+	}
+
+	// Second leg: a header-only reading (no lines) still gives a non-nil, empty LineItems slice.
+	documentID2 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID2, docNoNumberValues())
+	reading2, err := svc.CarriedReading(callCtx, documentID2)
+	if err != nil {
+		t.Fatalf("CarriedReading (header-only): %v", err)
+	}
+	if reading2 == nil {
+		t.Fatal("reading2 = nil, want a carried reading")
+	}
+	if reading2.LineItems == nil || len(reading2.LineItems) != 0 {
+		t.Errorf("LineItems = %v, want a non-nil empty slice", reading2.LineItems)
+	}
+	b, jerr := json.Marshal(reading2)
+	if jerr != nil {
+		t.Fatalf("marshal reading: %v", jerr)
+	}
+	if !strings.Contains(string(b), `"line_items":[]`) {
+		t.Errorf("marshalled reading = %s, want a literal [] for line_items, not null", b)
+	}
+}
+
+// --- CR-02 -----------------------------------------------------------------------------
+
+// CR-02: every "not carriable" shape reads (nil, nil) -- never an error, never a real reading.
+// The two-documents control catches a predicate ignoring source_document_id.
+func TestServiceCarriedReading_NothingToCarryIsNil(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	svc := newTestServiceWithGate(app, &fakeGate{})
+
+	tenantID := seedTenant(t, super, "CR-02 tenant")
+	entityID := seedEntity(t, super, tenantID, "CR-02 entity")
+	callCtx := sxIdentity(ctx, tenantID)
+
+	// Positive control: proves this suite's fixtures are not universally nil.
+	controlDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, controlDoc, docNoNumberValues())
+	if reading, err := svc.CarriedReading(callCtx, controlDoc); err != nil || reading == nil {
+		t.Fatalf("control (no-number reading): reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+
+	noJobDoc := docSeedDocument(t, super, tenantID)
+
+	poorScanDoc := docSeedDocument(t, super, tenantID)
+	docSeedPoorScanExtraction(t, super, tenantID, poorScanDoc)
+
+	numberedDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, numberedDoc, docCleanValues("CR-02-N1"))
+
+	badDateDoc := docSeedDocument(t, super, tenantID)
+	badDateValues := docNoNumberValues()
+	badDateValues["issue_date"] = sxPtr("13/02/2026")
+	docSeedExtraction(t, super, tenantID, badDateDoc, badDateValues)
+
+	filedDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, filedDoc, docNoNumberValues())
+	if _, err := invoice.NewStore(app).Create(callCtx, invoice.CreateInput{
+		EntityID: entityID, InvoiceNumber: "CR-02-FILED", SourceDocumentID: &filedDoc,
+	}); err != nil {
+		t.Fatalf("seed a filed invoice for %s: %v", filedDoc, err)
+	}
+
+	cases := []struct {
+		name string
+		doc  string
+	}{
+		{"no job", noJobDoc},
+		{"poor scan", poorScanDoc},
+		{"numbered", numberedDoc},
+		{"bad date", badDateDoc},
+		{"already filed", filedDoc},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reading, err := svc.CarriedReading(callCtx, tc.doc)
+			if err != nil {
+				t.Errorf("err = %v, want nil", err)
+			}
+			if reading != nil {
+				t.Errorf("reading = %+v, want nil", reading)
+			}
+		})
+	}
+
+	// Cross-tenant: tenant B reading tenant A's no-number document.
+	tenantB := seedTenant(t, super, "CR-02 tenant B")
+	if reading, err := svc.CarriedReading(sxIdentity(ctx, tenantB), controlDoc); err != nil || reading != nil {
+		t.Errorf("cross-tenant read: reading=%v err=%v, want (nil, nil)", reading, err)
+	}
+
+	// Two-documents control: doc1 filed, doc2 not -- catches a predicate ignoring source_document_id.
+	doc1 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, doc1, docNoNumberValues())
+	if _, err := invoice.NewStore(app).Create(callCtx, invoice.CreateInput{
+		EntityID: entityID, InvoiceNumber: "CR-02-DOC1", SourceDocumentID: &doc1,
+	}); err != nil {
+		t.Fatalf("seed doc1's filed invoice: %v", err)
+	}
+	doc2 := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, doc2, docNoNumberValues())
+
+	if reading, err := svc.CarriedReading(callCtx, doc1); err != nil || reading != nil {
+		t.Errorf("doc1 (filed): reading=%v err=%v, want (nil, nil)", reading, err)
+	}
+	if reading, err := svc.CarriedReading(callCtx, doc2); err != nil || reading == nil {
+		t.Errorf("doc2 (not filed): reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+}
+
+// --- CR-03 -----------------------------------------------------------------------------
+
+// CR-03: a genuinely failed read (a cancelled context) propagates as an error, never swallowed
+// into (nil, nil) -- that would turn a suspended member's 403 into a null reading.
+func TestServiceCarriedReading_AFailedReadIsAnErrorNotNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "CR-03 tenant")
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	svc := newTestServiceWithGate(app, &fakeGate{})
+	cancelled, cancel := context.WithCancel(sxIdentity(ctx, tenantID))
+	cancel()
+
+	reading, err := svc.CarriedReading(cancelled, documentID)
+	if err == nil {
+		t.Fatal("err = nil, want the cancelled-context failure to propagate")
+	}
+	if reading != nil {
+		t.Errorf("reading = %+v, want nil on a failed read", reading)
+	}
+}
+
+// --- SN-01 -----------------------------------------------------------------------------
+
+// SN-01: SupplyInvoiceNumber files every carried value under the supplied number, mints no
+// batch, runs the gate once, and audits the supply -- then the document is no longer carriable.
+func TestServiceSupplyInvoiceNumber_FilesEveryCarriedValue(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-01 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	values := docNoNumberValues()
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].unit_price"] = sxPtr("10.00")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	g := &fakeGate{}
+	svc := newTestServiceWithGate(app, g)
+	callCtx := sxIdentity(ctx, tenantID)
+
+	inv, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "SN-01-INV")
+	if err != nil {
+		t.Fatalf("SupplyInvoiceNumber: %v", err)
+	}
+	if inv.InvoiceNumber != "SN-01-INV" {
+		t.Errorf("InvoiceNumber = %q, want %q", inv.InvoiceNumber, "SN-01-INV")
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "SN-01-INV"); got != 1 {
+		t.Fatalf("invoices SN-01-INV = %d, want 1", got)
+	}
+	gotDoc, gotBatch := docInvoiceLinks(t, super, inv.ID)
+	if gotDoc != documentID {
+		t.Errorf("source_document_id = %q, want %q", gotDoc, documentID)
+	}
+	if gotBatch != "" {
+		t.Errorf("import_batch_id = %q, want empty (no batch minted)", gotBatch)
+	}
+	if len(inv.LineItems) != 1 || inv.LineItems[0].Description == nil || *inv.LineItems[0].Description != "Widget" {
+		t.Errorf("LineItems = %+v, want one item named %q", inv.LineItems, "Widget")
+	}
+	if g.validateBatchCalls != 1 {
+		t.Errorf("gate.ValidateBatch calls = %d, want 1", g.validateBatchCalls)
+	}
+	if len(g.validateBatchInvs) != 1 || g.validateBatchInvs[0].ID != inv.ID {
+		t.Errorf("gate.ValidateBatch invs = %+v, want exactly [%s]", g.validateBatchInvs, inv.ID)
+	}
+
+	rows := readAuditForInvoice(t, app, tenantID, inv.ID)
+	var found bool
+	for _, r := range rows {
+		if r.event != "invoice.created" {
+			continue
+		}
+		found = true
+		var payload map[string]any
+		if jerr := json.Unmarshal(r.payload, &payload); jerr != nil {
+			t.Fatalf("unmarshal audit payload: %v", jerr)
+		}
+		if payload["invoice_number_supplied"] != true {
+			t.Errorf("payload[invoice_number_supplied] = %v, want true", payload["invoice_number_supplied"])
+		}
+		if payload["document_id"] != documentID {
+			t.Errorf("payload[document_id] = %v, want %q", payload["document_id"], documentID)
+		}
+		if r.actor != memberSubject {
+			t.Errorf("actor = %q, want %q", r.actor, memberSubject)
+		}
+	}
+	if !found {
+		t.Fatal("no invoice.created audit row found for the supplied invoice")
+	}
+
+	if got := countImportBatchesForEntity(t, super, entityID); got != 0 {
+		t.Errorf("import_batches for entity = %d, want 0 (no batch minted)", got)
+	}
+	if reading, rerr := svc.CarriedReading(callCtx, documentID); rerr != nil || reading != nil {
+		t.Errorf("CarriedReading after filing: reading=%v err=%v, want (nil, nil)", reading, rerr)
+	}
+}
+
+// --- SN-02 -----------------------------------------------------------------------------
+
+// SN-02: a number already on the entity's register refuses with no write and no gate call --
+// and the reading survives the collision, so a fresh number still files (no lost work).
+func TestServiceSupplyInvoiceNumber_ATakenNumberWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-02 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-02 entity")
+	callCtx := sxIdentity(ctx, tenantID)
+
+	if _, err := invoice.NewStore(app).Create(callCtx, invoice.CreateInput{EntityID: entityID, InvoiceNumber: "N1"}); err != nil {
+		t.Fatalf("seed invoice N1: %v", err)
+	}
+
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	g := &fakeGate{}
+	svc := newTestServiceWithGate(app, g)
+
+	if _, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "N1"); !errors.Is(err, invoice.ErrDuplicateNumber) {
+		t.Fatalf("SupplyInvoiceNumber(N1) err = %v, want invoice.ErrDuplicateNumber", err)
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 0 {
+		t.Errorf("invoices citing document = %d, want 0", got)
+	}
+	if g.validateBatchCalls != 0 {
+		t.Errorf("gate.ValidateBatch calls = %d, want 0", g.validateBatchCalls)
+	}
+
+	// No lost work: the reading is still carriable, and a fresh number files it.
+	if reading, err := svc.CarriedReading(callCtx, documentID); err != nil || reading == nil {
+		t.Fatalf("CarriedReading after a collision: reading=%v err=%v, want a non-nil reading", reading, err)
+	}
+	inv, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "N2")
+	if err != nil {
+		t.Fatalf("SupplyInvoiceNumber(N2): %v", err)
+	}
+	if inv.InvoiceNumber != "N2" {
+		t.Errorf("InvoiceNumber = %q, want %q", inv.InvoiceNumber, "N2")
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
+		t.Errorf("invoices citing document after the re-supply = %d, want 1", got)
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "N1"); got != 1 {
+		t.Errorf("invoices N1 = %d, want 1 -- the collision must leave the existing invoice alone", got)
+	}
+}
+
+// --- SN-03 -----------------------------------------------------------------------------
+
+// SN-03: an untrimmed number collides with its trimmed twin -- Store.Create's own unique
+// constraint sees the trimmed value either way. Control: an untrimmed but genuinely new number
+// still files trimmed.
+func TestServiceSupplyInvoiceNumber_ASpacedNumberCollidesWithItsTrimmedTwin(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-03 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-03 entity")
+	callCtx := sxIdentity(ctx, tenantID)
+
+	if _, err := invoice.NewStore(app).Create(callCtx, invoice.CreateInput{EntityID: entityID, InvoiceNumber: "N1"}); err != nil {
+		t.Fatalf("seed invoice N1: %v", err)
+	}
+
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	svc := newTestServiceWithGate(app, &fakeGate{})
+	if _, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "  N1  "); !errors.Is(err, invoice.ErrDuplicateNumber) {
+		t.Fatalf("SupplyInvoiceNumber(\"  N1  \") err = %v, want invoice.ErrDuplicateNumber", err)
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 0 {
+		t.Errorf("invoices citing document = %d, want 0", got)
+	}
+
+	inv, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "  N9  ")
+	if err != nil {
+		t.Fatalf("SupplyInvoiceNumber(\"  N9  \"): %v", err)
+	}
+	if inv.InvoiceNumber != "N9" {
+		t.Errorf("InvoiceNumber = %q, want %q (trimmed)", inv.InvoiceNumber, "N9")
+	}
+}
+
+// --- SN-04 -----------------------------------------------------------------------------
+
+// SN-04: every shape SupplyInvoiceNumber must refuse -- poor scan/numbered/all-null (not
+// carried), no job (not found), and a blank-after-trim number (validation) -- writes nothing
+// and never touches the gate.
+func TestServiceSupplyInvoiceNumber_RefusesWhatCannotBeCarried(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-04 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-04 entity")
+	callCtx := sxIdentity(ctx, tenantID)
+
+	poorScanDoc := docSeedDocument(t, super, tenantID)
+	docSeedPoorScanExtraction(t, super, tenantID, poorScanDoc)
+
+	numberedDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, numberedDoc, docCleanValues("SN-04-N1"))
+
+	allNullDoc := docSeedDocument(t, super, tenantID)
+	allNullValues := docNoNumberValues()
+	for k := range allNullValues {
+		if k != "invoice_number" {
+			allNullValues[k] = nil
+		}
+	}
+	docSeedExtraction(t, super, tenantID, allNullDoc, allNullValues)
+
+	noJobDoc := docSeedDocument(t, super, tenantID)
+
+	blankNumberDoc := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, blankNumberDoc, docNoNumberValues())
+
+	g := &fakeGate{}
+	svc := newTestServiceWithGate(app, g)
+
+	cases := []struct {
+		name    string
+		doc     string
+		number  string
+		wantErr error
+	}{
+		{"poor scan", poorScanDoc, "X1", ErrReadingNotCarried},
+		{"numbered", numberedDoc, "X2", ErrReadingNotCarried},
+		{"all-null", allNullDoc, "X3", ErrReadingNotCarried},
+		{"no job", noJobDoc, "X4", ErrNotFound},
+		{"blank number", blankNumberDoc, "   ", ErrValidation},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.SupplyInvoiceNumber(callCtx, entityID, tc.doc, tc.number); !errors.Is(err, tc.wantErr) {
+				t.Errorf("err = %v, want %v", err, tc.wantErr)
+			}
+			if got := countInvoicesCitingDocument(t, super, tc.doc); got != 0 {
+				t.Errorf("invoices citing document = %d, want 0", got)
+			}
+		})
+	}
+	if g.validateBatchCalls != 0 {
+		t.Errorf("gate.ValidateBatch calls = %d, want 0", g.validateBatchCalls)
+	}
+}
+
+// --- SN-05 (carry-once) -----------------------------------------------------------------
+
+// SN-05: a document files once. A second supply, even with a different number, refuses --
+// the first-filed invoice is the only one that ever cites the document.
+func TestServiceSupplyInvoiceNumber_ADocumentFilesOnce(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-05 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-05 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	svc := newTestServiceWithGate(app, &fakeGate{})
+	callCtx := sxIdentity(ctx, tenantID)
+
+	if _, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "N1"); err != nil {
+		t.Fatalf("first supply: %v", err)
+	}
+	if _, err := svc.SupplyInvoiceNumber(callCtx, entityID, documentID, "N2"); !errors.Is(err, ErrDocumentAlreadyFiled) {
+		t.Errorf("second supply err = %v, want ErrDocumentAlreadyFiled", err)
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
+		t.Errorf("invoices citing document = %d, want 1", got)
+	}
+}
+
+// --- SN-06 -----------------------------------------------------------------------------
+
+// SN-06: a gate outage during the post-file re-validate does not roll back the filed invoice --
+// the draft keeps its Re-validate.
+func TestServiceSupplyInvoiceNumber_AGateOutageKeepsTheInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "SN-06 tenant")
+	entityID := seedEntity(t, super, tenantID, "SN-06 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docNoNumberValues())
+
+	g := &fakeGate{validateBatchErr: invoice.ErrUpstream}
+	svc := newTestServiceWithGate(app, g)
+
+	inv, err := svc.SupplyInvoiceNumber(sxIdentity(ctx, tenantID), entityID, documentID, "SN-06-INV")
+	if err != nil {
+		t.Fatalf("SupplyInvoiceNumber during a gate outage: %v", err)
+	}
+	if inv.InvoiceNumber != "SN-06-INV" {
+		t.Errorf("InvoiceNumber = %q, want %q", inv.InvoiceNumber, "SN-06-INV")
+	}
+	if inv.Status != invoice.StatusDraft {
+		t.Errorf("Status = %q, want %q", inv.Status, invoice.StatusDraft)
+	}
+	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
+		t.Errorf("invoices citing document = %d, want 1", got)
+	}
+}

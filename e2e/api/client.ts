@@ -413,6 +413,9 @@ export interface GetInvoiceResult extends Invoice {
   approve_blocked_reason: string | null
   can_reject: boolean
   reject_blocked_reason: string | null
+  // True only for a draft whose history never left draft/validated -- never status alone.
+  can_correct_invoice_number: boolean
+  invoice_number_blocked_reason: string | null
 }
 
 export function getInvoice(token: string, id: string): Promise<GetInvoiceResult> {
@@ -420,9 +423,10 @@ export function getInvoice(token: string, id: string): Promise<GetInvoiceResult>
 }
 
 // InvoiceEditInput mirrors internal/invoice/handlers.go's editReq exactly: the 9
-// optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03) --
-// identity/lifecycle are not the edit's job ([D9]). issue_date is a plain string on
-// the wire (Go *time.Time unmarshals from/marshals to an RFC3339 string).
+// optional header MBS-content fields PATCH /v1/invoices/{id} accepts (M4-05-03), plus
+// invoice_number, which renames a never-submitted draft (blank after trimming is a 400).
+// entity_id is not the edit's job ([D9]). issue_date is a plain string on the wire
+// (Go *time.Time unmarshals from/marshals to an RFC3339 string).
 export interface InvoiceEditInput {
   issue_date?: string
   supplier_tin?: string
@@ -433,6 +437,7 @@ export interface InvoiceEditInput {
   subtotal?: string
   vat?: string
   total?: string
+  invoice_number?: string
   // line_items (INVED-01-08) mirrors editReq.LineItems, a POINTER to a slice on the Go side
   // (editReq.LineItems, `*[]lineItemReq`) -- three states over the wire: the
   // key ABSENT (or `undefined`, which JSON.stringify drops) leaves the stored lines
@@ -588,6 +593,46 @@ export async function createImportBatch(token: string, entityId: string, invoice
     throw new Error(`createImportBatch: import failed (status ${res.status})`)
   }
   return body.id
+}
+
+// GET /v1/imports/document/reading and POST /v1/imports/document/invoice. Mirrors
+// internal/importer/handlers_document.go key for key.
+export interface CarriedLine {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
+export interface CarriedReading {
+  document_id: string
+  extraction_job_id: string
+  issue_date: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  line_items: CarriedLine[]
+}
+
+export interface SupplyNumberRequest {
+  entity_id: string
+  document_id: string
+  invoice_number: string
+}
+
+export function getCarriedReading(token: string, documentId: string): Promise<CarriedReading | null> {
+  return apiFetch<{ reading: CarriedReading | null }>(
+    `${apiBase()}/api/invoice/v1/imports/document/reading?document_id=${encodeURIComponent(documentId)}`,
+    { token },
+  ).then((r) => r.reading)
+}
+
+export function supplyInvoiceNumber(token: string, body: SupplyNumberRequest): Promise<Invoice> {
+  return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body, token })
 }
 
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).

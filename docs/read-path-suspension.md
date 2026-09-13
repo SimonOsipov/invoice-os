@@ -300,6 +300,8 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/imports/preview` | invoice | covered | |
 | `POST /v1/imports/document` | invoice | covered | |
 | `GET /v1/imports/{id}` | invoice | covered | |
+| `GET /v1/imports/document/reading` | invoice | covered | |
+| `POST /v1/imports/document/invoice` | invoice | covered | |
 | `GET /v1/documents/{id}` | invoice | covered | |
 | `GET /v1/documents/{id}/sheet` | invoice | covered | |
 | `GET /v1/workflow-roles` | invoice | covered | |

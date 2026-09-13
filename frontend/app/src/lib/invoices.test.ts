@@ -1190,6 +1190,9 @@ describe('violationSummary (AC-2, Stage 2.5)', () => {
 })
 
 describe('getInvoice', () => {
+  // Byte-exact copy of internal/invoice/handlers.go's numberFixedReason.
+  const NUMBER_FIXED_REASON = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
+
   it('I8: rule_set_version:null AND the key omitted both normalize to null', async () => {
     mockFetchOnce({
       ok: true,
@@ -1249,6 +1252,8 @@ describe('getInvoice', () => {
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: false,
+      invoice_number_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(fiscalInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1282,6 +1287,8 @@ describe('getInvoice', () => {
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: true,
+      invoice_number_blocked_reason: null,
     }
     const { qr_png_base64: _omittedQr, ...withoutQrKey } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutQrKey) })
@@ -1311,6 +1318,8 @@ describe('getInvoice', () => {
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: false,
+      invoice_number_blocked_reason: null,
     }
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(detailInvoice) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -1361,6 +1370,8 @@ describe('getInvoice', () => {
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: false,
+      invoice_number_blocked_reason: null,
     }
     const { can_submit: _omittedCanSubmit, ...withoutCanSubmit } = detailInvoice
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanSubmit) })
@@ -1547,6 +1558,8 @@ describe('getInvoice', () => {
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: true,
+      invoice_number_blocked_reason: null,
     }
     const { can_view_ubl: _omittedCanViewUbl, ...withoutCanViewUbl } = wire
     mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(withoutCanViewUbl) })
@@ -1781,6 +1794,42 @@ describe('getInvoice', () => {
     const approveOnly = await getInvoice(af, base, 'inv-1')
     expect(approveOnly.can_approve).toBe(true)
     expect(approveOnly.can_reject).toBe(false)
+  })
+
+  it('EXTR27-N1: the number gate normalises fail-closed', async () => {
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    // (a) both keys absent on the wire -- must normalize fail-closed, not read undefined.
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice }) })
+    const absent = await getInvoice(af, base, 'inv-1')
+    expect(absent.can_correct_invoice_number).toBe(false)
+    expect(absent.invoice_number_blocked_reason).toBeNull()
+    expect('invoice_number_blocked_reason' in absent).toBe(true)
+
+    // (b) a stringly-typed "true" must not pass a truthiness check.
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ ...draftInvoice, can_correct_invoice_number: 'true' }) })
+    const stringly = await getInvoice(af, base, 'inv-1')
+    expect(stringly.can_correct_invoice_number).toBe(false)
+
+    // (c) true with a null reason passes through untouched.
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_correct_invoice_number: true, invoice_number_blocked_reason: null }),
+    })
+    const correctable = await getInvoice(af, base, 'inv-1')
+    expect(correctable.can_correct_invoice_number).toBe(true)
+    expect(correctable.invoice_number_blocked_reason).toBeNull()
+
+    // (d) false with the fixed-number sentence, byte-identical -- no SPA rewrite.
+    mockFetchOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ...draftInvoice, can_correct_invoice_number: false, invoice_number_blocked_reason: NUMBER_FIXED_REASON }),
+    })
+    const fixed = await getInvoice(af, base, 'inv-1')
+    expect(fixed.can_correct_invoice_number).toBe(false)
+    expect(fixed.invoice_number_blocked_reason).toBe(NUMBER_FIXED_REASON)
   })
 })
 
@@ -2082,6 +2131,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: false,
+      invoice_number_blocked_reason: null,
     }
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -2225,6 +2276,8 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       approve_blocked_reason: null,
       can_reject: false,
       reject_blocked_reason: null,
+      can_correct_invoice_number: false,
+      invoice_number_blocked_reason: null,
     }
 
     const fromList = resolvedOutside(listRow)

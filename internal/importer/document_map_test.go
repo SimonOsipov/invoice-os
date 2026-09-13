@@ -451,23 +451,33 @@ func TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames(t *testing.T) 
 	if err != nil {
 		t.Fatalf("parse document.go: %v", err)
 	}
-	var mapperFn *ast.FuncDecl
+	// documentCreateInput holds the number branch and readingCreateInput the rest, so the floor
+	// is the union of both funcs' literal values[...] keys.
+	wantFuncs := []string{"documentCreateInput", "readingCreateInput"}
+	found := map[string]*ast.FuncDecl{}
 	for _, decl := range f.Decls {
-		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Name.Name == "documentCreateInput" {
-			mapperFn = fd
+		if fd, ok := decl.(*ast.FuncDecl); ok {
+			for _, name := range wantFuncs {
+				if fd.Name.Name == name {
+					found[name] = fd
+				}
+			}
 		}
 	}
-	if mapperFn == nil {
-		t.Fatal("documentCreateInput func decl not found in document.go -- the scan below would be vacuous")
+	var keys []string
+	for _, name := range wantFuncs {
+		fd, ok := found[name]
+		if !ok {
+			t.Fatalf("%s func decl not found in document.go -- the scan below would be vacuous", name)
+		}
+		keys = append(keys, mpValuesIndexKeys(fd)...)
 	}
-
-	keys := mpValuesIndexKeys(mapperFn)
 	if len(keys) < 8 {
-		t.Fatalf("found %d literal values[...] key(s) in documentCreateInput, want at least 8 -- the scan below would be vacuous", len(keys))
+		t.Fatalf("found %d literal values[...] key(s) across documentCreateInput+readingCreateInput, want at least 8 -- the scan below would be vacuous", len(keys))
 	}
 	for _, k := range keys {
 		if !slices.Contains(mapperFieldNames, k) {
-			t.Errorf("documentCreateInput indexes values[%q], which is not in mapperFieldNames -- a header lookup must never name a line-item key literally", k)
+			t.Errorf("documentCreateInput/readingCreateInput indexes values[%q], which is not in mapperFieldNames -- a header lookup must never name a line-item key literally", k)
 		}
 	}
 
@@ -547,6 +557,131 @@ func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testi
 	}
 	if !slices.Equal(mapperNames, extractionNames) {
 		t.Errorf("mapperFieldNames = %v, want %v (element-for-element, in order, matching extraction.HeaderFields)", mapperNames, extractionNames)
+	}
+}
+
+// --- readingCreateInput: the mapper without the number ----------------------------------
+
+// TestReadingCreateInput_IsTheMapperWithoutTheNumber pins the split: readingCreateInput must
+// equal documentCreateInput on the same fields, minus the number. Second leg: a shared RowError
+// (bad date) must come back byte-identical from both funcs, since readingCreateInput owns that
+// branch after the split.
+func TestReadingCreateInput_IsTheMapperWithoutTheNumber(t *testing.T) {
+	fieldsWithoutNumber := []extractedField{
+		{Name: "issue_date", Value: mpPtr("2026-03-01")},
+		{Name: "supplier_tin", Value: mpPtr("12345678-0001")},
+		{Name: "supplier_name", Value: mpPtr("Read Supplier Ltd")},
+		{Name: "buyer_tin", Value: mpPtr("87654321-0001")},
+		{Name: "buyer_name", Value: mpPtr("Read Buyer Ltd")},
+		{Name: "currency", Value: mpPtr("NGN")},
+		{Name: "subtotal", Value: mpPtr("1000.00")},
+		{Name: "vat", Value: mpPtr("75.00")},
+		{Name: "total", Value: mpPtr("1075.00")},
+		{Name: "line_items[1].description", Value: mpPtr("Widget")},
+		{Name: "line_items[1].unit_price", Value: mpPtr("10.00")},
+		{Name: "line_items[2].description", Value: mpPtr("Gadget")},
+	}
+	noNumber := SettledExtraction{Fields: append([]extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+	}, fieldsWithoutNumber...)}
+	withNumber := SettledExtraction{Fields: append([]extractedField{
+		{Name: "invoice_number", Value: mpPtr("N1")},
+	}, fieldsWithoutNumber...)}
+
+	gotReading, readingErr := readingCreateInput("entity-1", "doc-1", noNumber)
+	if readingErr != nil {
+		t.Fatalf("readingCreateInput rowErr = %+v, want nil", readingErr)
+	}
+	wantInvoice, docErr := documentCreateInput("entity-1", "doc-1", withNumber)
+	if docErr != nil {
+		t.Fatalf("documentCreateInput(withNumber) rowErr = %+v, want nil", docErr)
+	}
+	wantInvoice.InvoiceNumber = ""
+	if !reflect.DeepEqual(gotReading, wantInvoice) {
+		t.Errorf("readingCreateInput = %+v, want documentCreateInput(withNumber) with InvoiceNumber cleared: %+v", gotReading, wantInvoice)
+	}
+	// documentCreateInput calls readingCreateInput, so the equality above moves with any body
+	// edit; these literals do not.
+	if gotReading.InvoiceNumber != "" || gotReading.EntityID != "entity-1" ||
+		gotReading.SourceDocumentID == nil || *gotReading.SourceDocumentID != "doc-1" ||
+		gotReading.IssueDate == nil || gotReading.IssueDate.Format("2006-01-02") != "2026-03-01" ||
+		gotReading.BuyerName == nil || *gotReading.BuyerName != "Read Buyer Ltd" ||
+		gotReading.BuyerTIN == nil || *gotReading.BuyerTIN != "87654321-0001" ||
+		gotReading.Currency == nil || *gotReading.Currency != "NGN" ||
+		gotReading.Subtotal == nil || *gotReading.Subtotal != "1000.00" ||
+		gotReading.VAT == nil || *gotReading.VAT != "75.00" ||
+		gotReading.Total == nil || *gotReading.Total != "1075.00" {
+		t.Errorf("readingCreateInput header = %+v, want the fixture's literal values and no number", gotReading)
+	}
+	if len(gotReading.LineItems) != 2 || gotReading.LineItems[0].Description == nil || *gotReading.LineItems[0].Description != "Widget" ||
+		gotReading.LineItems[0].UnitPrice == nil || *gotReading.LineItems[0].UnitPrice != "10.00" ||
+		gotReading.LineItems[1].Description == nil || *gotReading.LineItems[1].Description != "Gadget" {
+		t.Errorf("readingCreateInput lines = %+v, want [Widget 10.00, Gadget]", gotReading.LineItems)
+	}
+
+	// Second leg: an identical bad-date RowError from both funcs.
+	badDate := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("N1")},
+		{Name: "issue_date", Value: mpPtr("13/02/2026")},
+	}}
+	_, wantRowErr := documentCreateInput("entity-1", "doc-1", badDate)
+	if wantRowErr == nil {
+		t.Fatal("documentCreateInput(badDate) rowErr = nil, want a RowError -- the fixture no longer induces one")
+	}
+	_, gotRowErr := readingCreateInput("entity-1", "doc-1", badDate)
+	if gotRowErr == nil || !reflect.DeepEqual(*gotRowErr, *wantRowErr) {
+		t.Errorf("readingCreateInput(badDate) rowErr = %+v, want %+v", gotRowErr, wantRowErr)
+	}
+}
+
+// --- carriedInput: the carry predicate ---------------------------------------------------
+
+// TestCarriedInput_OnlyTheNoNumberQuarantineIsCarried: only a no-number reading with at least
+// one carried value is carriable. The poor-scan and all-null rows each fail alone when their
+// clause is removed.
+func TestCarriedInput_OnlyTheNoNumberQuarantineIsCarried(t *testing.T) {
+	oneLineAllHeadersNull := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+		{Name: "line_items[1].description", Value: mpPtr("Only Line")},
+	}}
+	blankNumberWithValues := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("   ")},
+		{Name: "subtotal", Value: mpPtr("10.00")},
+	}}
+	badDate := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+		{Name: "issue_date", Value: mpPtr("13/02/2026")},
+	}}
+	numberNullEverythingElseNull := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+		{Name: "issue_date", Value: nil},
+		{Name: "buyer_tin", Value: nil},
+	}}
+	numbered := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: mpPtr("N1")},
+	}}
+
+	cases := []struct {
+		name string
+		ex   SettledExtraction
+		want bool
+	}{
+		{"no-number reading", readDocumentNoNumberFieldSet(), true},
+		{"blank number with values", blankNumberWithValues, true},
+		{"one line, all headers null", oneLineAllHeadersNull, true},
+		{"poor scan", poorScanFieldSet(), false},
+		{"numbered", numbered, false},
+		{"bad date", badDate, false},
+		{"zero fields", SettledExtraction{Fields: []extractedField{}}, false},
+		{"number null, everything else null", numberNullEverythingElseNull, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := carriedInput("doc-1", tc.ex)
+			if ok != tc.want {
+				t.Errorf("carriedInput() ok = %v, want %v", ok, tc.want)
+			}
+		})
 	}
 }
 

@@ -69,6 +69,7 @@
 import { ApiError } from '@invoice-os/api-client'
 import type { Session } from '../auth'
 import { isSuspended, isUnauthorized } from './authedFetch'
+import type { InvoiceRecord } from './invoices'
 import type { AuthedFetch } from './portfolio'
 
 export interface ImportPreview {
@@ -392,6 +393,56 @@ export async function importDocument(
     body: { entity_id: req.entityId, document_id: req.documentId },
   })
   return normalizeReport(raw)
+}
+
+// GET /v1/imports/document/reading and POST /v1/imports/document/invoice, key for key
+// (internal/importer/handlers_document.go).
+export interface CarriedLine {
+  description: string | null
+  quantity: string | null
+  unit_price: string | null
+  line_total: string | null
+  line_tax: string | null
+}
+
+export interface CarriedReading {
+  document_id: string
+  extraction_job_id: string
+  issue_date: string | null
+  buyer_tin: string | null
+  buyer_name: string | null
+  currency: string | null
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  line_items: CarriedLine[]
+}
+
+export interface SupplyNumberRequest {
+  entity_id: string
+  document_id: string
+  invoice_number: string
+}
+
+// null when there is nothing to carry: the route answers 200 null, never 404 (importApi.test.ts's EXTR27-W1).
+export async function readingForDocument(
+  authedFetch: AuthedFetch,
+  base: string,
+  documentId: string,
+): Promise<CarriedReading | null> {
+  const res = await authedFetch<{ reading?: CarriedReading | null }>(
+    `${base}/api/invoice/v1/imports/document/reading?document_id=${encodeURIComponent(documentId)}`,
+  )
+  return res?.reading ?? null
+}
+
+// The 201 body is createInvoice's invoice.
+export async function supplyInvoiceNumber(
+  authedFetch: AuthedFetch,
+  base: string,
+  req: SupplyNumberRequest,
+): Promise<InvoiceRecord> {
+  return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

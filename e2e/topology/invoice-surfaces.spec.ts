@@ -37,7 +37,7 @@ import {
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
-import { approvalRun404Dropper, type Dropper, notFoundIdDropper } from './consoleGate'
+import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import { assertFillsColumn, assertSameHeight, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, VALIDATION_EXPECTED } from './targets'
 
@@ -227,6 +227,10 @@ const MOCK_TIN_PENDING = '99999999-0003'
 // page's undecided-state reason (AC-4 below). Own copy, not a cross-spec import (repo
 // convention, e2e/api/contract-invoice.spec.ts's own note on the same string).
 const AWAITING_APPROVAL_REASON = 'This invoice is waiting on approval — it can be submitted once an approver approves it.'
+
+// internal/invoice/handlers.go's NumberTakenReason and numberFixedReason, byte-exact.
+const NUMBER_TAKEN_REASON = 'This invoice number is already in the register for this company. Enter a different number.'
+const NUMBER_FIXED_REASON = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
 
 function submittableInvoiceFields(invoiceNumber: string, buyerTin: string) {
   return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin }
@@ -1554,6 +1558,18 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · Chinedu$/)
   await expect(stripCaption(page, 'validated')).toHaveText('Not reached')
 
+  // AC-4: once submitted, the number stays fixed even back at draft. `not.toBeEditable()`
+  // (enabled + readonly) is the pair that discriminates readonly from disabled.
+  await page.getByTestId('edit-toggle').click()
+  const numberInput = page.getByTestId('edit-invoice-number')
+  await expect(numberInput).toHaveValue(invoiceNumber)
+  await expect(numberInput).toBeEnabled()
+  await expect(numberInput).not.toBeEditable()
+  await expect(numberInput).toHaveAttribute('readonly')
+  await expect(page.getByTestId('edit-invoice')).toContainText(NUMBER_FIXED_REASON)
+  await page.getByTestId('edit-cancel').click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+
   // Re-validate is enabled again ([revalidate-visibility]/AC #2) -- the fixture's numbers
   // were always clean (only the description text changed), so this re-validates green.
   const revalidate = page.getByTestId('revalidate')
@@ -1565,6 +1581,87 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
   // two `-> draft` rows it took is not observable here -- see the note above.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Core AC 4/5/6: a never-submitted draft's number is corrected on its own edit form. A taken
+// number is refused in the form's own slot; a fresh number renames and re-validates once.
+test("EXTR27-E2E-02: a never-submitted draft's number is corrected on its edit form, a taken number is refused, and validation re-runs", async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+
+  const token = await login(PERSONAS.A)
+  const stamp = Date.now()
+  // Sorts after "Okafor & Partners" ([e2e-entity-name-ordering-trap]).
+  const entity = await createEntity(token, { name: `Zz EXTR-27 rename ${stamp}`, tin: freshTin() })
+
+  const numberA = `EXTR27-A-${stamp}`
+  const numberB = `EXTR27-B-${stamp}`
+  const invoiceA = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(numberA) })
+  const invoiceB = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(numberB) })
+
+  const control = await getInvoice(token, invoiceA.id)
+  expect(control.rule_set_version_id, 'a never-validated draft carries no rule-set stamp').toBeNull()
+  expect(control.can_correct_invoice_number, 'a never-submitted draft must be correctable').toBe(true)
+
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, new RegExp(`/api/invoice/v1/invoices/${invoiceA.id}$`)))
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, numberA)
+
+  await page.getByTestId('edit-toggle').click()
+  const numberInput = page.getByTestId('edit-invoice-number')
+  await expect(numberInput).toHaveValue(numberA)
+  await expect(numberInput).toBeEditable()
+
+  // AC-5: invoice B already holds numberB, so the rename is refused 409 in the form itself.
+  await numberInput.fill(numberB)
+  const takenResp = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${invoiceA.id}`),
+  )
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  expect((await takenResp).status()).toBe(409)
+  await expect(page.getByTestId('edit-invoice')).toContainText(NUMBER_TAKEN_REASON)
+  await expect(numberInput).toHaveValue(numberB)
+
+  // AC-4/AC-6: a genuinely fresh number renames, and the rename auto re-validates once.
+  const fresh = `EXTR27-R-${Date.now()}`
+  await numberInput.fill(fresh)
+  const renameResp = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/api/invoice/v1/invoices/${invoiceA.id}`),
+  )
+  const validateResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith(`/invoices/${invoiceA.id}/validate`),
+  )
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  expect((await renameResp).status()).toBe(200)
+  expect((await validateResp).status()).toBe(200)
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  await expect(page.getByTestId('invoice-detail').locator('h1')).toHaveText(fresh)
+  await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
+  await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
+
+  const afterA = await getInvoice(token, invoiceA.id)
+  expect(afterA.invoice_number).toBe(fresh)
+  expect(afterA.status).toBe('validated')
+  expect(afterA.rule_set_version_id, 'the auto re-validate must stamp a rule set').not.toBeNull()
+  const afterB = await getInvoice(token, invoiceB.id)
+  expect(afterB.invoice_number, "invoice B's own number must be untouched by A's rename").toBe(numberB)
+
+  // The 409 wrote nothing -- exactly one rename row exists (TestStoreEdit_RenameToATakenNumberWritesNothing).
+  const log = await getAuditLog(token, { invoice_id: invoiceA.id, event: ['invoice.updated'], limit: 100 })
+  // Scoped server-side to A + invoice.updated: length 1 alone proves the 409 wrote nothing.
+  expect(log.events).toHaveLength(1)
+  const payload = log.events[0].payload as { fields: string[]; invoice_number: string; previous_invoice_number: string }
+  expect(payload.previous_invoice_number).toBe(numberA)
+  expect(payload.invoice_number).toBe(fresh)
+  expect(payload.fields[0]).toBe('invoice_number')
+  // A row's kind is person|system|raw; 'people' is only the filter value.
+  expect(log.events[0].actor_kind).toBe('person')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

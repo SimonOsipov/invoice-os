@@ -1,14 +1,16 @@
 // document.go: the settled-extraction read (EXTR-06-01, task-761), the field-to-CreateInput
 // mapper (EXTR-06-02, task-762), and the document-import orchestration entrypoint
 // (EXTR-06-03, task-763) -- a second entry into internal/importer alongside Import()'s
-// spreadsheet path (service.go). See .ralph/EXTR-06-finalized.md, "The settled-extraction input
-// type".
+// spreadsheet path (service.go). Also carries a no-number reading into manual entry and files
+// it once the operator supplies the number. See .ralph/EXTR-06-finalized.md, "The
+// settled-extraction input type".
 package importer
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,13 +161,9 @@ func isPoorScan(fields []extractedField) bool {
 	return f.Name == "document_text_layer" && f.Reason != nil && *f.Reason == "unreadable"
 }
 
-// documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput.
-// Pure. supplier_tin/supplier_name are never set -- Store.Create overwrites both from the
-// entity on every write (store.go:220-221, Q11), so writing a value here would state a claim
-// the store then silently discards. SourceRows stays nil: the column CHECKs reject both '{}'
-// and any element < 2, so NULL is the only legal value here. Line grouping runs LAST, after the
-// invoice_number quarantine branch below, so a document with lines but no invoice number still
-// quarantines whole.
+// documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput. The
+// number branch runs before readingCreateInput, so a document with lines but no number still
+// quarantines whole (TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole).
 func documentCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
 	values := make(map[string]*string, len(ex.Fields))
 	for _, f := range ex.Fields {
@@ -187,6 +185,25 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 			Field:   "invoice_number",
 			Message: message,
 		}
+	}
+
+	in, rowErr := readingCreateInput(entityID, documentID, ex)
+	if rowErr != nil {
+		return invoice.CreateInput{}, rowErr
+	}
+	in.InvoiceNumber = invoiceNumber
+	return in, nil
+}
+
+// readingCreateInput maps every decided reading except the number. Pure. supplier_tin/
+// supplier_name are never set -- Store.Create overwrites both from the entity on every write
+// (store.go:220-221, Q11), so writing a value here would state a claim the store then silently
+// discards. SourceRows stays nil: the column CHECKs reject both '{}' and any element < 2, so
+// NULL is the only legal value here.
+func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invoice.CreateInput, *RowError) {
+	values := make(map[string]*string, len(ex.Fields))
+	for _, f := range ex.Fields {
+		values[f.Name] = f.Value
 	}
 
 	var issueDate *time.Time
@@ -248,7 +265,6 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 	docID := documentID
 	return invoice.CreateInput{
 		EntityID:         entityID,
-		InvoiceNumber:    invoiceNumber,
 		IssueDate:        issueDate,
 		BuyerTIN:         values["buyer_tin"],
 		BuyerName:        values["buyer_name"],
@@ -259,6 +275,45 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil
+}
+
+// carriedInput is what a supplied number can file: only a document quarantined for having no
+// number, with a readable date and at least one carried value ([empty-reading-not-carried] --
+// an all-null reading would leave the operator unable to type anything into a locked form).
+func carriedInput(documentID string, ex SettledExtraction) (invoice.CreateInput, bool) {
+	if _, rowErr := documentCreateInput("", documentID, ex); rowErr == nil || rowErr.Message != noInvoiceNumberMessage {
+		return invoice.CreateInput{}, false
+	}
+	in, rowErr := readingCreateInput("", documentID, ex)
+	if rowErr != nil {
+		return invoice.CreateInput{}, false
+	}
+	if len(in.LineItems) == 0 && in.IssueDate == nil && in.BuyerTIN == nil && in.BuyerName == nil &&
+		in.Currency == nil && in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+		return invoice.CreateInput{}, false
+	}
+	return in, true
+}
+
+// carriedReading converts a carried CreateInput into the wire shape. The date is formatted
+// YYYY-MM-DD, and LineItems is never nil.
+func carriedReading(documentID, jobID string, in invoice.CreateInput) *CarriedReading {
+	r := &CarriedReading{
+		DocumentID: documentID, ExtractionJobID: jobID, BuyerTIN: in.BuyerTIN, BuyerName: in.BuyerName,
+		Currency: in.Currency, Subtotal: in.Subtotal, VAT: in.VAT, Total: in.Total,
+		LineItems: make([]CarriedLine, 0, len(in.LineItems)),
+	}
+	if in.IssueDate != nil {
+		d := in.IssueDate.Format("2006-01-02")
+		r.IssueDate = &d
+	}
+	for _, li := range in.LineItems {
+		r.LineItems = append(r.LineItems, CarriedLine{
+			Description: li.Description, Quantity: li.Quantity,
+			UnitPrice: li.UnitPrice, LineTotal: li.LineTotal, LineTax: li.LineTax,
+		})
+	}
+	return r
 }
 
 // ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
@@ -351,4 +406,72 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		Errors:            []RowError{},
 		InvoiceViolations: []InvoiceViolations{},
 	}, nil
+}
+
+// CarriedReading answers nil for anything with nothing to carry, including another tenant's
+// document (SettledExtraction is RLS-scoped), so the route is no existence oracle. Only a
+// failed read is an error.
+func (s *Service) CarriedReading(ctx context.Context, documentID string) (*CarriedReading, error) {
+	ex, err := s.batch.SettledExtraction(ctx, documentID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	in, ok := carriedInput(documentID, ex)
+	if !ok {
+		return nil, nil
+	}
+	filed, err := s.batch.DocumentHasInvoice(ctx, documentID)
+	if err != nil {
+		return nil, err
+	}
+	if filed {
+		return nil, nil
+	}
+	return carriedReading(documentID, ex.JobID, in), nil
+}
+
+// SupplyInvoiceNumber files a carried reading under the operator's number. No batch is minted --
+// the quarantined one stays the record of the failed import.
+func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID, number string) (invoice.Invoice, error) {
+	number = strings.TrimSpace(number)
+	if number == "" {
+		return invoice.Invoice{}, fmt.Errorf("%w: invoice_number is required", ErrValidation)
+	}
+	ex, err := s.batch.SettledExtraction(ctx, documentID)
+	if err != nil {
+		return invoice.Invoice{}, err
+	}
+	in, ok := carriedInput(documentID, ex)
+	if !ok {
+		return invoice.Invoice{}, ErrReadingNotCarried
+	}
+	// ceiling: check-then-create race across two tabs; lock the document row if a second invoice is ever seen
+	filed, err := s.batch.DocumentHasInvoice(ctx, documentID)
+	if err != nil {
+		return invoice.Invoice{}, err
+	}
+	if filed {
+		return invoice.Invoice{}, ErrDocumentAlreadyFiled
+	}
+	in.EntityID = entityID
+	in.InvoiceNumber = number
+	in.NumberSupplied = true
+	created, err := s.inv.Create(ctx, in)
+	if err != nil {
+		return invoice.Invoice{}, err
+	}
+	// An outage is not a verdict: the filed draft keeps its Re-validate.
+	if _, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created}); err != nil {
+		slog.WarnContext(ctx, "importer: validate supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
+		return created, nil
+	}
+	got, err := s.inv.Get(ctx, created.ID)
+	if err != nil {
+		slog.WarnContext(ctx, "importer: re-read supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
+		return created, nil
+	}
+	return got, nil
 }

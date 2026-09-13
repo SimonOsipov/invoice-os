@@ -214,6 +214,8 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `view` | yes | all 13 | `correctly-reset` |
 | `draft` | yes | /create | `correctly-reset` |
 | `handOffDocumentId` | yes | none | `correctly-reset` |
+| `handOffReading` | yes | /create | `correctly-reset` |
+| `handOffReadSeq` | yes | none | `correctly-reset` |
 | `createStep` | yes | /create, /imports/<ids>/review | `stale-and-reachable` |
 | `reviewBatchIds` | yes | /create, /imports/<ids>/review | `stale-and-reachable` |
 | `groups` | yes | /create | `correctly-reset` |

@@ -78,8 +78,8 @@ type transitionReq struct {
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
-// createRequest's own (above) minus entity_id/invoice_number -- identity and
-// lifecycle are not the edit's job ([D9]).
+// createRequest's own (above) minus entity_id ([D9]). InvoiceNumber renames a
+// never-submitted draft; EditHandler trims it and refuses a blank one.
 //
 // LineItems (INVED-01-05) is a POINTER to a slice, mirroring
 // EditInput.LineItems, because three states must stay distinguishable
@@ -99,6 +99,8 @@ type editReq struct {
 	VAT          *string        `json:"vat"`
 	Total        *string        `json:"total"`
 	LineItems    *[]lineItemReq `json:"line_items"`
+	// InvoiceNumber: nil leaves the number alone; trimmed by EditHandler.
+	InvoiceNumber *string `json:"invoice_number"`
 }
 
 // listPagination is the "pagination" object in ListHandler's response
@@ -278,6 +280,10 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06)
 // follow the same two rules, appended last of all, and come from ONE
 // approvalGate call -- approve and reject availability are identical.
+//
+// CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
+// appended last of all, from canCorrectNumber (store.go). The reason is non-null
+// exactly when CanEdit && !CanCorrectInvoiceNumber.
 type getResponse struct {
 	Invoice
 	RuleSetVersion              *int    `json:"rule_set_version"`
@@ -295,6 +301,8 @@ type getResponse struct {
 	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
 	CanReject                   bool    `json:"can_reject"`
 	RejectBlockedReason         *string `json:"reject_blocked_reason"`
+	CanCorrectInvoiceNumber     bool    `json:"can_correct_invoice_number"`
+	InvoiceNumberBlockedReason  *string `json:"invoice_number_blocked_reason"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -303,6 +311,11 @@ type getResponse struct {
 // list, reopening Core AC 4. Separator is an em dash (U+2014) with single
 // spaces, matching the copy already on the invoice-detail screen.
 const revalidateBlockedReason = "Only draft invoices can be re-validated — edit this invoice to return it to draft."
+
+// NumberTakenReason / numberFixedReason are editTx's rename refusal sentences,
+// mapped by statusForErr below.
+const NumberTakenReason = "This invoice number is already in the register for this company. Enter a different number."
+const numberFixedReason = "The invoice number can only be corrected while the invoice is a draft that has never been submitted."
 
 // notApproverTransmitReason is the ONE refusal sentence both transmit doors
 // emit, so a blocked caller's 403 never varies by request shape
@@ -531,10 +544,15 @@ func GetHandler(
 			ApproveBlockedReason:        decideReason,
 			CanReject:                   canDecide,
 			RejectBlockedReason:         decideReason,
+			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
 			resp.RevalidateBlockedReason = &reason
+		}
+		if resp.CanEdit && !resp.CanCorrectInvoiceNumber {
+			reason := numberFixedReason // a const is not addressable; copy to a local
+			resp.InvoiceNumberBlockedReason = &reason
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -1008,9 +1026,10 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 // identity-first-401 order as every other handler here, then decodes the
 // snake_case wire body (400 on decode error -- including a line_items whose
 // JSON SHAPE is wrong, which is a decode-time 400, never a 500) into the 9
-// optional header MBS-content fields plus the optional line_items array,
-// builds EditInput 1:1 from the decoded request (identity/lifecycle are not
-// the edit's job, [D9]), and calls edit.
+// optional header MBS-content fields, the optional line_items array and the
+// optional invoice_number (trimmed; blank is a 400), builds EditInput from the
+// decoded request (entity and lifecycle are not the edit's job, [D9]), and
+// calls edit.
 // Errors map via statusForErr -- including the new ErrNotFixable->409 case
 // (Core AC #1) and the existing ErrValidation->400 case for the all-nil
 // guard ([A7]) -- 200 + updated Invoice on success (Core AC #2/#3).
@@ -1056,6 +1075,18 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			lines = &mapped
 		}
 
+		// Trimmed like the document mapper (internal/importer/document.go); a blank
+		// number is refused here, never by the store.
+		var invoiceNumber *string
+		if req.InvoiceNumber != nil {
+			n := strings.TrimSpace(*req.InvoiceNumber)
+			if n == "" {
+				writeError(w, http.StatusBadRequest, "invoice_number must not be blank")
+				return
+			}
+			invoiceNumber = &n
+		}
+
 		inv, err := edit(r.Context(), id, EditInput{UpdateInput: UpdateInput{
 			IssueDate:    req.IssueDate,
 			SupplierTIN:  req.SupplierTIN,
@@ -1066,7 +1097,7 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			Subtotal:     req.Subtotal,
 			VAT:          req.VAT,
 			Total:        req.Total,
-		}, LineItems: lines})
+		}, LineItems: lines, InvoiceNumber: invoiceNumber})
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status >= http.StatusInternalServerError {
@@ -1542,6 +1573,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice changed during validation"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
+	case errors.Is(err, ErrNumberTaken):
+		return http.StatusConflict, NumberTakenReason
+	case errors.Is(err, ErrNumberFixed):
+		return http.StatusConflict, numberFixedReason
 	case errors.Is(err, ErrNotKeepable):
 		return http.StatusConflict, "invoice must be a draft with a blocking violation to be kept as-is"
 	case errors.Is(err, ErrNotPermitted):

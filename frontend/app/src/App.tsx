@@ -7,7 +7,7 @@ import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-cli
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
-import { fileDraftGate, fileDraftInvoice } from './lib/invoiceDraft'
+import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
@@ -37,7 +37,10 @@ import {
   importDocument,
   makeImportAuth,
   previewImport,
+  readingForDocument,
+  supplyInvoiceNumber,
   uploadSourceDocument,
+  type CarriedReading,
   type ImportPreview,
 } from './lib/importApi'
 import {
@@ -341,10 +344,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
   const [draft, setDraft] = useState<Draft>(() => defaultDraft(active))
-  // The document a dead-lettered extraction left behind, recorded by enterByHand so the
-  // invoice typed instead keeps its provenance. Cleared wherever `draft` is reseeded --
-  // it describes THIS draft, not the session.
+  // The document that produced no invoice, recorded by enterByHand so the invoice filed
+  // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
+  // wherever `draft` is reseeded -- it describes THIS draft, not the session.
   const [handOffDocumentId, setHandOffDocumentId] = useState<string | null>(null)
+  const [handOffReading, setHandOffReading] = useState<CarriedReading | null>(null)
+  // Bumped by every hand-off and every clear, so only the latest pending read may land.
+  const handOffReadSeq = useRef(0)
   const [createStep, setCreateStep] = useState<CreateStep>(bootBatchIds.length > 0 ? 'review' : 'form')
   // Widened from a single `reviewBatchId` (BULK-01-05, task-308): a run's `review`
   // route (lib/importRun's routeAfterRun) carries every batch id created in the run.
@@ -712,6 +718,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setSwitcherOpen(false)
     setDraft(defaultDraft(clients.find((c) => c.entityId === id) ?? active))
     setHandOffDocumentId(null)
+    setHandOffReading(null)
+    handOffReadSeq.current += 1
     setCreateStep('form')
     // Same `id`-not-`active` discipline as the scrub above.
     resetImport(id)
@@ -742,6 +750,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setCreateStep('upload')
     setDraft(defaultDraft(active))
     setHandOffDocumentId(null)
+    setHandOffReading(null)
+    handOffReadSeq.current += 1
     setFilingError(null)
     setSwitcherOpen(false)
     resetImport()
@@ -1265,16 +1275,31 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   function skipUpload() {
     setHandOffDocumentId(null)
+    setHandOffReading(null)
+    handOffReadSeq.current += 1
     setCreateStep('form')
   }
 
-  // The route out of a dead-lettered document (EXTR-15-07). Same landing as skipUpload --
-  // the form step -- but it records the stored document first, so the filing below sends
-  // source_document_id. `run` is deliberately left alone: backing out of the form must
-  // return the user to the same failure list (CreateFlow.test.tsx's HO-5b).
+  // The route out of a document that produced no invoice. Lands once, after the read, so a late
+  // reply cannot overwrite typing (App.handOff.test.tsx's EXTR27-A1, EXTR27-A3). `run` is left alone
+  // (enterByHandKeepsTheFailureListIntact).
   function enterByHand(documentId: string) {
-    setHandOffDocumentId(documentId)
-    setCreateStep('form')
+    const seq = ++handOffReadSeq.current
+    const land = (reading: CarriedReading | null) => {
+      if (seq !== handOffReadSeq.current) return
+      setHandOffDocumentId(documentId)
+      setHandOffReading(reading)
+      // A carried filing takes only a number the operator typed, never the seeded one.
+      if (reading !== null) setDraft((d) => ({ ...d, number: '' }))
+      setCreateStep('form')
+    }
+    const base = gatewayBase()
+    if (base == null) {
+      land(null)
+      return
+    }
+    // A failed read lands today's blank form (EXTR27-A6).
+    void readingForDocument(authedFetch, base, documentId).then(land, () => land(null))
   }
 
   // The manual path's one round trip. Replaces the mock approve(), which wrote the draft
@@ -1282,7 +1307,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // in LIVE via "Skip — enter manually", so a production user could complete it and lose
   // the invoice silently.
   //
-  // Everything ordering-sensitive lives in fileDraftInvoice (lib/invoiceDraft.ts), which is
+  // Everything ordering-sensitive lives in fileDraftInvoice and, for a carried reading,
+  // fileSuppliedNumber (lib/invoiceDraft.ts), which are
   // node-testable under the no-jsdom constraint; this is the wiring only. `onCreated` is
   // passed as a BARE function reference so there is no local closure here that could do
   // anything other than navigate, and no branch in which it fires early.
@@ -1295,6 +1321,17 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function fileDraft() {
     const base = gatewayBase()
     if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
+    // A carried reading files through the supply route under the typed number (EXTR27-A4).
+    if (handOffReading !== null && handOffDocumentId !== null) {
+      void fileSuppliedNumber(draft.number, activeEntity, handOffDocumentId, {
+        supply: (req) => supplyInvoiceNumber(authedFetch, base, req),
+        inFlight: reqInFlight,
+        onPending: setFiling,
+        onError: setFilingError,
+        onCreated: openImportedInvoice,
+      })
+      return
+    }
     void fileDraftInvoice(
       draft,
       activeEntity,
@@ -1522,6 +1559,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     connectorMappings,
     filing,
     filingError,
+    handOffReading,
     customRules,
     openRuleKey,
     policies,

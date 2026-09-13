@@ -1325,3 +1325,35 @@ func TestStoreCreate_CrossTenantEntityIDRejectedNoPartialLineItemsWrite(t *testi
 		t.Errorf("audit_log invoice.created rows for tenant A after rejected cross-tenant Create = %d, want 0", n)
 	}
 }
+
+// TestStoreGet_EverSubmittedReadsTheHistory: getTx reads EverSubmitted from the history, not the
+// status -- a draft whose history once reached queued reads true.
+func TestStoreGet_EverSubmittedReadsTheHistory(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "EXTR-27-01 EverSubmitted tenant")
+	entityID := seedEntity(t, super, tenantID, "EXTR-27-01 EverSubmitted entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	neverID := seedInvoice(t, super, tenantID, entityID, "EXTR-27-01-NEVER")
+	got, err := store.Get(c, neverID)
+	if err != nil {
+		t.Fatalf("Get(never queued): %v", err)
+	}
+	if got.EverSubmitted {
+		t.Errorf("EverSubmitted = true for a draft with no history past draft, want false")
+	}
+
+	rejectedID := seedInvoice(t, super, tenantID, entityID, "EXTR-27-01-REJECTED")
+	seedHistoryRow(t, super, tenantID, rejectedID, statusPtr(StatusValidated), StatusQueued, memberSubject, time.Now().UTC())
+
+	got2, err := store.Get(c, rejectedID)
+	if err != nil {
+		t.Fatalf("Get(rejected-back-to-draft): %v", err)
+	}
+	if !got2.EverSubmitted {
+		t.Errorf("EverSubmitted = false for a draft whose history shows queued, want true")
+	}
+}

@@ -1122,7 +1122,7 @@ const (
 	fxWildScannedTotal     = "1,935.00"
 )
 
-// fxBuildWildScannedNoNumber is the scanned arrangement whose read is discarded for a missing
+// fxBuildWildScannedNoNumber is the scanned arrangement whose import quarantines for a missing
 // invoice number: real raster ink OCR can read, and no INVOICE NO line anywhere. It reuses
 // fxBuildDense's canvas so the page lands on pdfium's exact 150-DPI US-Letter grid.
 //

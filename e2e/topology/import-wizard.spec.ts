@@ -7492,7 +7492,8 @@ test('EXTR27-E2E-01: a read document with no number carries its reading into the
   const payload = events[0]!.payload as Record<string, unknown>
   expect(payload.invoice_number_supplied).toBe(true)
   expect(payload.document_id).toBe(documentId)
-  expect(events[0]!.actor_kind).toBe('people')
+  // A row's kind is person|system|raw; 'people' is only the filter value.
+  expect(events[0]!.actor_kind).toBe('person')
 
   // 8.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

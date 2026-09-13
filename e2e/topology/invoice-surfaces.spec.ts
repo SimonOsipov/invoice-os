@@ -1660,7 +1660,8 @@ test("EXTR27-E2E-02: a never-submitted draft's number is corrected on its edit f
   expect(payload.previous_invoice_number).toBe(numberA)
   expect(payload.invoice_number).toBe(fresh)
   expect(payload.fields[0]).toBe('invoice_number')
-  expect(log.events[0].actor_kind).toBe('people')
+  // A row's kind is person|system|raw; 'people' is only the filter value.
+  expect(log.events[0].actor_kind).toBe('person')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

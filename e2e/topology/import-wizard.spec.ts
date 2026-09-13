@@ -64,17 +64,20 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { test, expect, type Locator, type Page, type Request, type Route } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Response, type Route } from '@playwright/test'
 import {
   login,
   apiBase,
   createEntity,
+  createInvoice,
   listInvoices,
   approveUntilClosed,
   firmApproverTokens,
   getAuditLog,
+  getCarriedReading,
   getExtractions,
   getExtractionDetail,
+  getInvoice,
   postFieldCorrection,
   PERSONAS,
   type CorrectionResponse,
@@ -86,7 +89,7 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { approvalRun404Dropper } from './consoleGate'
+import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
@@ -141,12 +144,12 @@ interface MixedImportResponse {
 // (`[title="Tenant verified via /v1/me"]`) is the only proof the
 // /api/tenancy/v1/me round trip resolved against the live backend -- never proceed
 // before it, the classic cold-fleet flake.
-function collectErrors(page: Page): string[] {
+function collectErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
-  const dropApprovalRun404 = approvalRun404Dropper(page)
+  const droppers = [approvalRun404Dropper(page), ...(extra ? [extra] : [])]
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return
-    if (dropApprovalRun404(msg.text(), msg.location().url)) return
+    if (droppers.some((drop) => drop(msg.text(), msg.location().url))) return
     errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
@@ -7354,6 +7357,137 @@ test('EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicke
   expect(source.document!.id, "the hand-off attached the wrong row's document").toBe(documentIds[scannedName])
   expect(source.document!.id, 'the hand-off attached the sibling document').not.toBe(documentIds[denseName])
 
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+const NUMBER_TAKEN_REASON = 'This invoice number is already in the register for this company. Enter a different number.'
+const CARRIED_CAPTION = 'Read from the document. Enter the invoice number to file it.'
+const SUPPLY_URL = /\/api\/invoice\/v1\/imports\/document\/invoice$/
+
+test('EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied', async ({
+  page,
+}) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, SUPPLY_URL))
+
+  const denseName = 'dense_invoice.pdf'
+  // Zz sorts this entity after "Okafor & Partners" (carry note) so later topology specs keep
+  // their own ordering assumptions.
+  const { token, entityId, documentIds, jobs } = await runDocuments(page, 'Zz EXTR-27 carried', [
+    { name: denseName, mimeType: 'application/pdf', buffer: uniqueDensePdfBytes() },
+  ])
+  const documentId = documentIds[denseName]!
+  expect(
+    jobs[denseName]!.state,
+    `the dense page did not settle succeeded (kind ${jobs[denseName]!.failure_kind}, error ${jobs[denseName]!.last_error})`,
+  ).toBe('succeeded')
+
+  // 1. Landing (AC-1).
+  await expect
+    .poll(() => new URL(page.url()).pathname, { timeout: 180_000 })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36}\/review$/)
+
+  const unreadableTab = page.getByRole('button', { name: /^Quarantined documents \(/ })
+  await expect(unreadableTab).toHaveCount(1)
+  await unreadableTab.click()
+
+  const row = page.getByTestId('unreadable-row')
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText(denseName)
+  await expect(row).toContainText('was read, but no invoice number')
+
+  // 2. Non-empty floor — the reading must carry something, or a carried and a blank form
+  // would be indistinguishable below.
+  const reading = await getCarriedReading(token, documentId)
+  expect(reading, 'a read no-number document carried no reading').not.toBeNull()
+  const HEADER = ['issue_date', 'buyer_name', 'buyer_tin', 'currency', 'subtotal', 'vat', 'total'] as const
+  expect(
+    HEADER.filter((k) => reading![k] !== null).length + reading!.line_items.length,
+    'the reading carried nothing, so the row cannot tell a carried form from a blank one',
+  ).toBeGreaterThan(0)
+
+  // 3. Carried form (AC-2).
+  const readingGet = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/document/reading'),
+    { timeout: 60_000 },
+  )
+  const handOff = row.getByRole('button', { name: 'Enter it by hand' })
+  await expect(handOff).toBeEnabled()
+  await handOff.click()
+  expect((await readingGet).status()).toBe(200)
+
+  await expect(page.getByText(CARRIED_CAPTION)).toBeVisible({ timeout: 60_000 })
+  const numberInput = page.getByPlaceholder('INV-0000-00000')
+  await expect(numberInput).toHaveValue('')
+  await expect(page.getByRole('button', { name: 'Invoice number is required' })).toBeDisabled()
+
+  for (const k of ['issue_date', 'buyer_name', 'buyer_tin', 'currency'] as const) {
+    const field = page.getByTestId(`carried-${k}`)
+    await expect(field).toHaveValue(reading![k] ?? '')
+    await expect(field).not.toBeEditable()
+  }
+  for (const k of ['subtotal', 'vat', 'total'] as const) {
+    await expect(page.getByTestId(`carried-${k}`)).toHaveText(reading![k] ?? '—')
+  }
+  await expect(page.getByTestId('carried-line-row')).toHaveCount(reading!.line_items.length)
+
+  // 4. Taken number refused (AC-5).
+  const taken = `EXTR27-TAKEN-${Date.now()}`
+  await createInvoice(token, { entity_id: entityId, invoice_number: taken })
+
+  await numberInput.fill(taken)
+  const fileBtn = page.getByRole('button', { name: 'File invoice' })
+  await expect(fileBtn).toBeEnabled()
+
+  const isSupply = (r: Response) => r.request().method() === 'POST' && SUPPLY_URL.test(new URL(r.url()).pathname)
+  const refused = page.waitForResponse(isSupply, { timeout: 60_000 })
+  await fileBtn.click()
+  expect((await refused).status()).toBe(409)
+
+  await expect(page.getByText(NUMBER_TAKEN_REASON, { exact: true })).toBeVisible()
+  await expect(numberInput).toHaveValue(taken)
+  await expect(fileBtn).toBeEnabled()
+  await expect(page.getByTestId('carried-subtotal')).toHaveText(reading!.subtotal ?? '—')
+  await expect(page.getByTestId('invoice-detail')).toHaveCount(0)
+
+  // 5. Filed (AC-3).
+  const fresh = `EXTR27-${Date.now()}`
+  await numberInput.fill(fresh)
+  const filed = page.waitForResponse(isSupply, { timeout: 60_000 })
+  await fileBtn.click()
+  const res = await filed
+  expect(res.status()).toBe(201)
+  const id = ((await res.json()) as { id?: string }).id
+  expect(id).toMatch(/^[0-9a-fA-F-]{36}$/)
+
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(fresh)
+
+  // 6. Every carried value intact, validation ran (AC-3, AC-6).
+  const inv = await getInvoice(token, id!)
+  expect(inv.invoice_number).toBe(fresh)
+  expect((inv.issue_date ?? '').slice(0, 10) || null).toBe(reading!.issue_date)
+  expect(inv.buyer_name).toBe(reading!.buyer_name)
+  expect(inv.buyer_tin).toBe(reading!.buyer_tin)
+  expect(inv.currency).toBe(reading!.currency)
+  // Money is compared at 2dp: numeric(14,2) reads a whole reading value back padded.
+  const at2 = (v: string | null) => (v === null ? null : Number(v).toFixed(2))
+  for (const k of ['subtotal', 'vat', 'total'] as const) {
+    expect(at2(inv[k])).toBe(at2(reading![k]))
+  }
+  expect((inv.line_items ?? []).length).toBe(reading!.line_items.length)
+  expect(inv.rule_set_version_id, 'the supply filed a draft no rule set ever judged').not.toBeNull()
+  expect((await readSourceDocument(token, id!)).document?.id).toBe(documentId)
+
+  // 7. Audit (AC-7).
+  const { events } = await getAuditLog(token, { invoice_id: id!, event: ['invoice.created'], limit: 100 })
+  expect(events).toHaveLength(1)
+  const payload = events[0]!.payload as Record<string, unknown>
+  expect(payload.invoice_number_supplied).toBe(true)
+  expect(payload.document_id).toBe(documentId)
+  expect(events[0]!.actor_kind).toBe('people')
+
+  // 8.
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

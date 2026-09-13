@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 
-// The one console error the topology gate must ignore.
+// The console errors the topology gate may ignore: a deliberate, URL-scoped non-2xx.
 //
 // The invoice detail page reads its approval run on mount, and that GET answers 404 for
 // an invoice with no run. Chromium logs every failed load as a console error, so without
@@ -18,26 +18,27 @@ import type { Page } from '@playwright/test'
 // fine. So the real 404 RESPONSES are counted too, and at most that many unattributable
 // 404 lines are dropped. A 404 from any other URL still fails the gate, which is the
 // property that matters — this narrows the gate, it does not switch it off.
+// A deliberate 409 in an oracle (a taken invoice number) uses the same two signals.
 //
 // `portfolio.spec.ts` and `personaSession.ts` hold their own `collectErrors` copies and
 // do not need this yet; they can call it if they ever open a detail page.
 const APPROVAL_RUN_URL = /\/api\/invoice\/v1\/invoices\/[^/]+\/approval$/
-const RESOURCE_404 = 'status of 404'
 
 export type Dropper = (text: string, url: string | undefined) => boolean
 
-// The two-signal mechanism above, parameterised by which URLs are allowed to 404.
-// `urlPattern` is the whole narrowing: a 404 from anywhere else still fails the gate.
-export function expected404Dropper(page: Page, urlPattern: RegExp): Dropper {
+// The two-signal mechanism above, parameterised by status and which URLs may answer it.
+// `urlPattern` is the whole narrowing: this status from anywhere else still fails the gate.
+export function expectedStatusDropper(page: Page, status: number, urlPattern: RegExp): Dropper {
   let budget = 0
+  const needle = `status of ${status}`
   page.on('response', (res) => {
-    if (res.status() === 404 && urlPattern.test(res.url())) budget += 1
+    if (res.status() === status && urlPattern.test(res.url())) budget += 1
   })
 
   return (text, url) => {
-    if (!text.includes(RESOURCE_404)) return false
-    // A line that names its resource is judged on that alone, so a 404 from anywhere
-    // else is never masked just because an expected 404 happened to occur too.
+    if (!text.includes(needle)) return false
+    // A line that names its resource is judged on that alone, so this status from
+    // anywhere else is never masked just because an expected one happened to occur too.
     if (url != null && url !== '') return urlPattern.test(url)
     // Nameless line: fall back to the response count, and spend it.
     if (budget === 0) return false
@@ -46,10 +47,8 @@ export function expected404Dropper(page: Page, urlPattern: RegExp): Dropper {
   }
 }
 
-// RED stub (EXTR-27-03/04): 04 reuses this for its own edit URL. The real body
-// generalizes expected404Dropper's, wired once the executor lands the feature.
-export function expectedStatusDropper(_page: Page, _status: number, _urlPattern: RegExp): Dropper {
-  return () => false
+export function expected404Dropper(page: Page, urlPattern: RegExp): Dropper {
+  return expectedStatusDropper(page, 404, urlPattern)
 }
 
 export function approvalRun404Dropper(page: Page): Dropper {

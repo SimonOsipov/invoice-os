@@ -5,7 +5,7 @@
 // The fourth column is EXTR-23's: total joined the doubt scope, and the fourteen values below say
 // the widening moved no corpus cell. Its candidate COUNTS live in total_test.go.
 //
-// Every walk here sources each layout the way bdByLayout does -- pdfium for ten, the committed
+// Every walk here sources each layout the way bdByLayout does -- pdfium for thirteen, the committed
 // docling golden for the image-only one, which reads zero pdfium tokens and would otherwise
 // contribute an empty answer that agrees with any expectation.
 package endtoend
@@ -220,7 +220,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 			}
 		}
 
-		// All four doubtful heads are BELOW reads. A flag set for the rightward relation alone
+		// All five doubtful heads are BELOW reads. A flag set for the rightward relation alone
 		// -- the shape crossesALabel has -- would empty the doubt set and leave every
 		// assertion above vacuously true.
 		for _, want := range dtAmbiguous {

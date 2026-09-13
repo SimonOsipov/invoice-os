@@ -112,9 +112,9 @@ func vsaExact(t *testing.T, id string) string {
 	return ""
 }
 
-// The widening adds no anchor to any committed fixture: on every token text in every docling
-// golden, the widened buyer entries claim the same span the exact spelling did. Measured, not
-// assumed -- every lexicon-friendly golden is what every downstream accuracy number is scored on.
+// The widening adds no anchor to any lexicon-friendly fixture: on every token text in every docling
+// golden but the as-printed siblings', the widened buyer entries claim the same span the exact
+// spelling did. The siblings print the widened words on purpose.
 func TestAnchorLexicon_TheSuffixAddsNoAnchorOnTheCommittedFixtures(t *testing.T) {
 	goldens, err := filepath.Glob(filepath.Join("testdata", "*.docling.json"))
 	if err != nil {
@@ -840,7 +840,7 @@ func TestParty_AFromAloneOnAPageNamesNobody(t *testing.T) {
 	}
 }
 
-// The from arm reaches no token on any committed arrangement: every one claims the span it
+// The from arm reaches no token on any lexicon-friendly arrangement: every one claims the span it
 // claimed before the arm. That is what proves wild_two_party_bare_tin's PartyUnknown -> supplier
 // fallback undisturbed by measurement rather than by inspection.
 func TestAnchorLexicon_TheFromArmAddsNoAnchorOnTheCommittedArrangements(t *testing.T) {

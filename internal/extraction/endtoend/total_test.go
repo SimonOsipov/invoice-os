@@ -2,7 +2,7 @@
 // each arrangement reaches, which value it decides, and -- because "never two" is an ABSENCE --
 // two planted controls that drive the SAME instrument to a positive. No database.
 //
-// Every walk sources each layout the way bdByLayout does: pdfium for ten, the committed docling
+// Every walk sources each layout the way bdByLayout does: pdfium for thirteen, the committed docling
 // golden for the image-only one.
 //
 // The planted rules below are test-local. Resolve takes its RuleSet by value (resolve.go), so

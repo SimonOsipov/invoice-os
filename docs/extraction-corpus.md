@@ -719,7 +719,7 @@ is removed.
 Nothing on this page moved, and the headline stayed at **58 of 88**. EXTR-26 widened six shared
 header-field patterns — the party suffix (`buyer_name`, `buyer_tin`), the `From` guard,
 `Taxable amount`, `Amount payable` and `Issued` — and added one rule-less owning phrase,
-`withholding_tax`. It moved no cell because no scored arrangement prints a spelling the pre-story
+`withholding_tax`. It moved no cell because no arrangement then scored printed a spelling the pre-story
 lexicon missed. Two goldens print a suffix-arm spelling that already matched before EXTR-26:
 `Invoice to` (`wild_two_party_bare_tin.pdf`) and `BILL TO` (`wild_scanned_no_number.pdf`, the
 quarantined 0-of-8 page). Measured, not assumed, on the docling side: the suffix adds no anchor on
@@ -731,7 +731,8 @@ none on any lexicon-friendly docling golden
 one layout through pdfium, not its golden, so the unmoved 58 is the pdfium-side proof.
 `withholding_tax` is listed in `wildUnprintedPhraseIDs`: no scored layout prints the phrase
 either. The words EXTR-26 newly matches are printed on the advisory fixtures, which carry no golden
-and sit outside this ratchet — see **The advisory arrangements** below.
+and sit outside this ratchet — see **The advisory arrangements** below — and on the as-printed
+siblings, which are scored.
 
 ### Moving the figure
 

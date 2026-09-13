@@ -28,7 +28,7 @@ const (
 	wildStacked  = "wild_stacked_borderless.pdf"
 	wildScanned  = "wild_scanned_no_number.pdf"
 
-	// The as-printed siblings' filenames; the new specs below need them to compile.
+	// The as-printed siblings.
 	wildTwoPartyAsPrinted = "wild_two_party_bare_tin_asprinted.pdf"
 	wildRuledAsPrinted    = "wild_ruled_lines_totals_asprinted.pdf"
 	wildStackedAsPrinted  = "wild_stacked_borderless_asprinted.pdf"

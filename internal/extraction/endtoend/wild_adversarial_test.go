@@ -347,7 +347,7 @@ var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
 // wildPartyNames is the party name each layout reads at rank 0, measured through PDFium before
 // the owning-phrase entries. A field a layout is not listed under read no name and is not
 // compared: wild_two_party_bare_tin.pdf carries no supplier heading and reads no supplier name,
-// corpus_totals_block.pdf and wild_stacked_borderless.pdf read no name at all, and
+// corpus_totals_block.pdf and both stacked borderless layouts read no name at all, and
 // wild_scanned_no_number.pdf yields no pdfium token -- its docling golden carries neither
 // owning phrase.
 var wildPartyNames = map[string]map[string]string{

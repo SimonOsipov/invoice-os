@@ -181,7 +181,7 @@ export function startDocumentRun(
         deps.onStage(f.id, { kind: 'processing' })
         const report = await deps.importDocument(documentId)
         deps.onStage(f.id, { kind: 'imported', count: report.ready_invoices })
-        return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report } }
+        return { id: f.id, name: f.name, outcome: { kind: 'imported', batchId: report.id, report, jobId: verdict.jobId } }
       } catch (err) {
         const message = messageOf(err)
         deps.onStage(f.id, { kind: 'failed', reason: message })

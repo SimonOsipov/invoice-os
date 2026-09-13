@@ -175,7 +175,8 @@ import type { ImportPreview, ImportReport, UploadPhase } from './importApi'
 export type FileOutcome =
   | { kind: 'pending' }
   | { kind: 'uploading'; phase: UploadPhase }
-  | { kind: 'imported'; batchId: string; report: ImportReport }
+  // jobId: set by the document run only; a spreadsheet outcome never carries one.
+  | { kind: 'imported'; batchId: string; report: ImportReport; jobId?: string }
   // documentId (EXTR-15-07) is the stored source document the pipeline failed ON, absent
   // only when the upload itself never returned. It is what CreateFlow's hand-off carries
   // into manual entry — pinned by documentRun.test.ts's HO-1 table.
@@ -313,7 +314,11 @@ export function runFileRows(run: ImportRun): RunFileRow[] {
   })
 }
 
-export type RunRoute = { kind: 'single'; invoiceId: string } | { kind: 'review'; batchIds: string[] } | { kind: 'none' }
+export type RunRoute =
+  | { kind: 'single'; invoiceId: string }
+  | { kind: 'extraction'; jobId: string; invoiceId: string }
+  | { kind: 'review'; batchIds: string[] }
+  | { kind: 'none' }
 
 // AC #5, order is load-bearing:
 //  1. No batch ids at all (every file failed) -> 'none'.
@@ -324,6 +329,8 @@ export type RunRoute = { kind: 'single'; invoiceId: string } | { kind: 'review';
 //     (the RUN's own size), never on runBatchIds().length -- a 2-file run where one
 //     file failed and the other alone would have routed 'single' must still fall
 //     through to 'review' (BULK-05-8's "run-size gate").
+//     Inside that branch a truthy outcome.jobId returns 'extraction' with both ids instead;
+//     '' or no jobId stays 'single' (truthiness, the same '' discipline as routeAfterImport).
 //  3. Otherwise -> 'review' with EVERY batch id, in run order -- including a batch
 //     whose own ready_invoices is 0 (BULK-05-10): joining the review is not
 //     conditioned on what routeAfterImport would have said about that one file alone.
@@ -334,7 +341,10 @@ export function routeAfterRun(run: ImportRun, resolvedInvoiceId: string | null):
     const outcome = run.files[0].outcome
     if (outcome.kind === 'imported') {
       const route = routeAfterImport(outcome.report, resolvedInvoiceId)
-      if (route.kind === 'single') return { kind: 'single', invoiceId: route.invoiceId }
+      if (route.kind === 'single') {
+        if (outcome.jobId) return { kind: 'extraction', jobId: outcome.jobId, invoiceId: route.invoiceId }
+        return { kind: 'single', invoiceId: route.invoiceId }
+      }
     }
   }
   return { kind: 'review', batchIds }
@@ -372,10 +382,9 @@ export function markRunFailed(run: ImportRun): ImportRun {
 // and which RunRoute kind calls them -- 'failed' for `none` (every file failed
 // outright), 'idle' here for `review` (at least one batch exists, however it fared).
 //
-// 'single' is NOT given the same treatment and keeps the literal reset (App.tsx's own
-// applyRoute comment explains why): it only ever fires for a one-file run whose one
-// file IMPORTED, and it unmounts the whole create flow, so there is no failure left
-// for it to be dropping.
+// 'single' and 'extraction' are NOT given the same treatment and keep the literal reset
+// (App.tsx's applyRoute comment explains why): both fire only for a one-file run whose one
+// file IMPORTED, and both unmount the whole create flow, so no failure is left to drop.
 export function markRunRouted(run: ImportRun): ImportRun {
   return { ...run, status: 'idle' }
 }

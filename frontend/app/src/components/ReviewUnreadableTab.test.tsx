@@ -71,7 +71,7 @@ describe('EXTR-15-09 SW-4 (AC-4): the unit is a required prop on both review tab
 // RED specs (EXTR-15-11, task-856, Mode A) — "Enter it by hand", from the Unreadable tab.
 //
 // A document too poorly scanned to read mints a quarantined batch and NO invoice, so the
-// extraction review screen (whose only entry point renders on an invoice detail) can never
+// extraction review screen (entered from an import landing or an invoice detail, both of which need an invoice) can never
 // reach it. Subtask 05 gave this tab a sentence saying the invoice can be typed by hand and
 // nothing to click. This is the control.
 //

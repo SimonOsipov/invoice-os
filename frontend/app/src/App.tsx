@@ -376,6 +376,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   const [extractionJobId, setExtractionJobId] = useState<string | null>(
     bootView === 'extraction' ? seed.jobId : null,
   )
+  // Job id -> invoice id for jobs an import landed on their review; the exit reads it.
+  const [extractionInvoices, setExtractionInvoices] = useState<Record<string, string>>({})
   // Header search box's committed term (BUG-01-05) -- InvoicesList reads this as `q`.
   const [invoiceQuery, setInvoiceQuery_] = useState(() => seed.q)
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -732,6 +734,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // A job belongs to ONE entity. Routing makes /extraction reachable by Back, so leaving
     // this set renders the company just left under the incoming company's chrome.
     setExtractionJobId(null)
+    setExtractionInvoices({})
   }
 
   function openCreate() {
@@ -912,12 +915,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // so runIsActive(run) still goes false and CreateFlow's body-swap gate still lets
   // 'review' render in place of ImportProgress.
   //
-  // `single` still resets `run` to a literal empty idle state, deliberately NOT given
-  // the same treatment: openImportedInvoice sets `view` to 'detail', unmounting the
-  // whole create flow (ImportProgress, ReviewBatch, everything that reads `run`) —
-  // and routeAfterRun only ever returns 'single' for a one-file run whose one file
-  // IMPORTED (BULK-05-8's run-size gate), so there is no failure this route could
-  // ever be dropping.
+  // `single` and `extraction` reset `run` to a literal idle state: both leave the create view,
+  // unmounting everything that reads `run`, and fire only for a one-file run whose file imported.
   //
   // `none` (every file in the run failed at the request level) does NOT reset `run`
   // the same way — lib/importRun.ts's markRunFailed (BULK-01-05 QA correction,
@@ -934,6 +933,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       setRun({ files: [], cursor: 0, status: 'idle' })
       return
     }
+    if (route.kind === 'extraction') {
+      setExtractionInvoices((m) => ({ ...m, [route.jobId]: route.invoiceId }))
+      openExtraction(route.jobId)
+      setRun({ files: [], cursor: 0, status: 'idle' })
+      return
+    }
     if (route.kind === 'review') {
       setReviewBatchIds(route.batchIds)
       setCreateStep('review')
@@ -943,10 +948,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     setRun(markRunFailed)
   }
 
-  // Core AC 8's single-invoice shortcut, shared by BOTH runs so the two can never ask a
-  // different question: fired ONLY when the run holds exactly one file that came back
-  // with exactly one ready invoice — any other shape discards the answer in routeAfterRun
-  // anyway, so asking is pure cost.
+  // Core AC 8's single-invoice shortcut. Both runs share this gate; the destination forks in
+  // routeAfterRun, where a document with an identified job opens its review.
   //
   // DEGRADES to null, never setImportError. The import SUCCEEDED and the rows are in the
   // ledger; an error banner here would say "failed" about data that landed. routeAfterRun
@@ -1075,8 +1078,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // [sequential-not-parallel] loop, and legitimately so: ImportDocument never runs the
   // ExistingNumbers precheck that rule protects.
   //
-  // Same landing as the spreadsheet run, through the SAME pair: routeAfterRun then
-  // applyRoute, with the same two arguments. Neither router is touched.
+  // Routes through routeAfterRun then applyRoute, like startRun; a settled document carries
+  // its job id, so it lands on its review.
   //
   // The entity gate is startRun's, for startRun's reason ([entity-picker] step 3 of 3):
   // this IS the commit for a document, so it is where the entity is genuinely required.
@@ -1613,6 +1616,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // not a screen inside it: every surface reads tenant-scoped data and all of it now refuses.
   if (suspended) return <SuspendedNotice onSignOut={onSignOut} />
 
+  // Own-property read: a job id like 'constructor' must not resolve through the prototype.
+  const openReviewedInvoice =
+    extractionJobId !== null && Object.hasOwn(extractionInvoices, extractionJobId)
+      ? () => openImportedInvoice(extractionInvoices[extractionJobId])
+      : null
+
   return (
     <div
       className="asc-app pf-shell"
@@ -1646,7 +1655,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           {view === 'settings' && <SettingsView ctx={ctx} />}
           {view === 'approvals' && <ApprovalsView ctx={ctx} />}
           {view === 'audit' && <AuditView ctx={ctx} />}
-          {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} />}
+          {view === 'extraction' && extractionJobId != null && <ExtractionReview ctx={ctx} jobId={extractionJobId} onOpenInvoice={openReviewedInvoice} />}
         </div>
       </main>
     </div>

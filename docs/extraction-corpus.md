@@ -947,8 +947,13 @@ The five documents the `wild_*` arrangements were drawn from are **synthetic moc
 documents**, so transcribing their printed labels verbatim does not breach the 100%-synthetic rule
 at the top of this page. Labels and column headers cross into the repository; the documents' bytes
 never do, and neither does any address, TIN, account number or invoice number printed on them.
-The only printed names that cross are the short supplier names in the file names below. The two
-invoices **The advisory arrangements** transcribes are NG-3 and NG-4 below.
+Short supplier names in the file names below cross, and so do the full names the advisory
+arrangements print verbatim: `Okonkwo Advisory Partners`, `Honeywell Group Nigeria Plc`, `Access
+Bank Plc`, `Sahara Telecoms Nigeria Plc`, `Bello Construction Nigeria Ltd`, `United Bank for Africa
+Plc` and `Cisco ISR 4331`, all in `fixtures_test.go`. `Honeywell Group` itself predates EXTR-33 as
+the corpus's own generic buyer name; NG-3 printing the longer `Honeywell Group Nigeria Plc` is
+coincidence, not reuse. The two invoices **The advisory arrangements** transcribes are NG-3 and NG-4
+below.
 
 The sources live outside the repository, in the project vault at
 `Simon Vault/Projects/ASComply Africa/User Stories/EXTR/sources/`:

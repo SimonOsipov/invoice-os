@@ -1,7 +1,7 @@
 // learn.go: one correction becomes one rule. LearnRule inverts relatedTokens (resolve.go) from a
-// pointed box; LearnBoxlessRule inverts the RelSameToken arm from token text alone, with no
-// geometry at all. Either way a derived rule fires on the page it was derived from
-// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
+// box, pointed or located by LearnTypedRule; LearnBoxlessRule inverts the RelSameToken arm from
+// token text alone, with no geometry at all. Either way a derived rule fires on the page it was
+// derived from (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
 // TestLearnBoxlessRule_RoundTripsThroughResolve). Pure -- no clock, no database, no network, no
 // goroutine, and no map on the path (resolve_internal_test.go scans for each).
 package extraction

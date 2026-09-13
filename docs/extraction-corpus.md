@@ -982,10 +982,12 @@ name, recorded as gaps and never counted as passes
 ## Learned rules
 
 A learned rule is one tenant's answer to "this producer puts the buyer's TIN *there*". It is
-derived from one correction — a **pointed** one on a document that has geometry, a **typed** one
-on a document that has none — stored against the layout's fingerprint, and read back on every
-later document of that layout. It is the tenant-specific tier; Tier-1 is generic except its one
-shape-only naira fallback (`t1.currency.sweep`).
+derived from one correction — a **pointed** one, or a **typed** one on either layout identity —
+stored against the layout's fingerprint, and read back on every later document of that layout. It
+is the tenant-specific tier; Tier-1 is generic except its one shape-only naira fallback
+(`t1.currency.sweep`). A typed correction on a document that has geometry learns only through a
+self-check: the rule derived from the token the value names must re-read page 1 as exactly that
+value. A pointed correction is never checked (**How a typed value finds its token** below).
 
 ### The two layout identities
 
@@ -1015,14 +1017,18 @@ The two can never collide **within the current generation**: they differ on byte
 `layout_fingerprint` column holds both, and `IsBoxlessFingerprint` tells them apart by prefix —
 true only for the current generation, the way `fingerprint.go:174-178`'s own comment on that
 function now says. A key stored under a retired prefix reads false from that classifier, the same
-as any other non-match: `AnchorRulesFor` (`anchor_store.go:52`) matches by exact equality, so a
+as any other non-match: `AnchorRulesFor` (`anchor_store.go:29`) matches by exact equality, so a
 row keyed under a retired generation is never selected again, raises no error and is logged
 nowhere — and it cannot be deleted either, because `invoice_app` holds `INSERT` and `SELECT` only
-(**A rule is scoped to one tenant and one layout fingerprint** below). A typed correction on a job
-extracted before the bump derives nothing, because the `IsBoxlessFingerprint` gate at
-`handlers_correction.go:315` reads false on that job's stored key; a pointed correction on the
-same job still writes a rule under the retired key, which nothing will ever select again, and
-still records an `AnchorLearned` event for a rule no future extraction can reach.
+(**A rule is scoped to one tenant and one layout fingerprint** below). A correction is keyed to
+its job's stored key, whatever the generation. On a retired geometric key, a pointed correction
+and a typed one that names exactly one page-1 token and passes the self-check each still write a
+rule under that key, which nothing will ever select again, and each still record an
+`AnchorLearned` event for a rule no future extraction can reach
+(`TestRLS_ATypedCorrectionOnARetiredGenerationJobWritesARuleNoExtractionSelects`). On a retired
+boxless key the boxless branch never runs, because `IsBoxlessFingerprint` reads false there, and a
+DOCX job's anchors carry the zero box, so no page is read and nothing is learned
+(`TestRLS_ATypedCorrectionOnAV1KeyedBoxlessJobLearnsNothing`).
 
 Each namespace carries its **own** invalidation lever, and bumping one clears **only its own**
 class. Bumping `FingerprintVersion` retires every geometric rule and leaves every boxless rule
@@ -1039,8 +1045,9 @@ new entry resets only the pages that print the phrase rather than invalidating e
 
 ### How a rule is derived
 
-`LearnRule` (`internal/extraction/learn.go`) takes the corrected field, the box the reviewer
-dragged, and the anchor observations the job's own read recorded. It considers every anchor
+`LearnRule` (`internal/extraction/learn.go`) takes the corrected field, a box — the one the
+reviewer dragged, or the box of the token a typed value names (**How a typed value finds its
+token** below) — and the anchor observations the job's own read recorded. It considers every anchor
 observation **on the corrected box's page**, keeps the ones that stand in a geometric relation to
 that box, and picks the single best one with `betterAnchor`.
 
@@ -1053,9 +1060,12 @@ that box, and picks the single best one with `betterAnchor`.
   box; the cap is what stops one wide drag from teaching a page-wide rule.
 * **The label** is the anchor's own matched text, put through `regexp.QuoteMeta` and wrapped in
   `(?i)` with `\b` word boundaries where the outer bytes allow one (D-3, precision over recall).
-  When a rule is derived, this label is also what lands in the correction row's `anchor_label`,
-  overwriting whatever the wire sent. When no rule is derived, the client's trimmed value stands
-  unchanged — see `TestRLS_APointedCorrectionThatAnchorsToNothingCommitsWithoutARule`.
+  When a pointed correction derives a rule, this label is also what lands in the correction row's
+  `anchor_label`, overwriting whatever the wire sent. When no rule is derived, the client's trimmed
+  value stands unchanged — see `TestRLS_APointedCorrectionThatAnchorsToNothingCommitsWithoutARule`.
+  A typed correction never writes the derived label there, on either identity
+  (`TestRLS_ATypedGeometricLearningWritesNoAnchorLabel`,
+  `TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel`).
 
 The worked example, measured off `learned_two_party.pdf`. Both party blocks are stacked
 (`label` / `name` / bare TIN) in page 1's top half, so the page reads `Supplier`,
@@ -1088,29 +1098,40 @@ with no alternatives — `TestRLS_TheSecondDocumentOfTheSameLayoutResolvesTheLea
 
 ### Which correction produces a rule
 
-A correction carries a method, and the job carries a layout. Two gates, and a correction that
-matches neither writes **zero rules**:
+A correction carries a method, and the job carries a layout. The method picks the learner and the
+layout's namespace picks the arm; a correction that reaches no row below writes **zero rules**:
 
 | Method | Job's `layout_fingerprint` | Derivation | Extra input |
 |---|---|---|---|
 | `pointed`, with a region | any key, provided the job recorded a layout | `LearnRule` | the box, against `layout_anchors` |
 | `typed` | a **boxless** key, `b3:` today — the identity written for a format with no page images | `LearnBoxlessRule` | the page-1 token text in `layout_tokens` |
+| `typed` | any other key, provided `layout_anchors` holds at least one usable box | `LearnTypedRule`: locate, then `LearnRule`, then the self-check | page 1 re-read from the stored document, against `layout_anchors` |
 | `chosen`, `undone` | either | none | — |
 
-Read that middle row as *which namespace the job took*, never as two fixed bytes: the boxless
+Read the boxless row as *which namespace the job took*, never as two fixed bytes: the boxless
 prefix spelled `b1:` before EXTR-22, `b2` before EXTR-26, and spells `b3:` now, and
 `IsBoxlessFingerprint` is what tells the two namespaces apart — see **The two layout identities**
 above.
 
-The method decides, so no one correction enters both. A `typed` correction on a **PDF** — a
-geometric key — writes **zero rules**: there was geometry to point at and the reviewer did not
-point at it.
-A `pointed` correction on a **DOCX** also writes zero rules, but for a different reason — every
-box it could anchor to is the zero box, so `LearnRule` finds no relation to record. The pointed
-gate reads the box, never the namespace: a job that took the boxless identity while carrying real
-geometry can still learn from a pointed correction
-(`TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors`). An `undone` correction writes
-**zero rules** either way.
+The method decides the learner and the namespace decides the arm, so no one correction enters two
+rows. A `typed` correction on a **PDF** — a geometric key — reaches `LearnTypedRule` only when the
+job's stored layout carries a usable anchor box, and it writes a rule only when its value names
+exactly one page-1 token and the self-check passes. **How a typed value finds its token** below
+names every refusal. On `learned_typed_total.pdf` a typed `total` of `14800000.00` learns the same
+rule that pointing at `₦14,800,000.00` learns
+(`TestRLS_ATypedCorrectionTeachesThePointedRuleOnAGeometricLayout`). Its label is `VAT`, not
+`Total`: `betterAnchor` picks the smallest gap, and the `VAT inclusive` token stands nearer the
+amount than `Total` does.
+
+```json
+{"label":"(?i)\\bVAT\\b","relation":{"kind":"right","max_distance":0.13},"shape":"amount"}
+```
+
+A `pointed` correction on a **DOCX** writes zero rules — every box it could anchor to is the zero
+box, so `LearnRule` finds no relation to record. The pointed gate reads the box, never the
+namespace: a job that took the boxless identity while carrying real geometry can still learn from
+a pointed correction (`TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors`). An `undone`
+correction writes **zero rules** either way.
 
 What the boxless path derives is always a **`same_token`** rule. `same_token` is the only
 relation available without geometry — there is no box to stand `right` of or `below` — so a DOCX
@@ -1134,10 +1155,84 @@ times it is corrected.
 
 A correction that **anchors to nothing** — an empty corner of the page, a box no anchor
 observation stands in a relation to, a job that recorded no layout at all, a typed value no
-page-1 token carries under a lexicon label — still commits the correction and still teaches
-nothing. That is an **honest refusal**, not an error: the reviewer's edit is recorded and
-applied, and the system declines to generalise from an input it cannot interpret. `LearnRule` and
-`LearnBoxlessRule` report `ok=false` and the request answers `201` exactly as it otherwise would.
+page-1 token carries — still commits the correction and still teaches nothing. That is an
+**honest refusal**, not an error: the reviewer's edit is recorded and applied, and the system
+declines to generalise from an input it cannot interpret. `LearnRule` and `LearnBoxlessRule`
+report `ok=false`, `LearnTypedRule` returns a verdict other than `TypedLearned`, and the request
+answers `201` exactly as it otherwise would.
+
+### How a typed value finds its token
+
+A typed correction names a value, not a place. On a geometric layout the route turns that value
+into a place, then hands the place to the same `LearnRule` a pointed correction reaches.
+`LearnTypedRule` (`internal/extraction/learn.go`) runs three clauses in order and stops at the
+first refusal.
+
+1. **Locate.** Only page 1 is searched — the fingerprint, the stored anchors and the learner are
+   page 1 only. A token names the value when its whole text, or the remainder after an
+   anchor-lexicon label inside it (`sameTokenValue`, the raw form `Resolve` reads there), shares a
+   reading with the typed value under the field's shape. Both sides pass through that shape, so a
+   typed `14800000.00` names the printed `₦14,800,000.00`
+   (`TestLearnTypedRule_FindsThePrintedNairaAmountThroughTheShape`), so does a typed
+   `₦14,800,000.00` (`TestLearnTypedRule_NormalisesTheTypedSideToo`), and a typed `3225.00` names
+   `Total: NGN 3,225.00` through its remainder (`TestLearnTypedRule_ReadsTheRemainderAfterALabel`).
+   Nothing beyond the shape canonicalises: a typed `3225` names no `3,225.00` token, because the
+   amount shape keeps exactly the fraction digits it is given
+   (`TestLearnTypedRule_AddsNoToleranceTheShapeLacks`). No token gives `TypedNoToken`
+   (`TestLearnTypedRule_RefusesAValueNoTokenCarries`). Two or more distinct tokens give
+   `TypedSeveralTokens`, and one token that two labels read counts once
+   (`TestLearnTypedRule_RefusesAValuePrintedOnSeveralTokens`).
+2. **Derive.** `LearnRule` runs, unchanged, over that token's box and the job's stored anchors. Its
+   refusal gives `TypedNotDerived` (`TestLearnTypedRule_RefusesWhenNoAnchorRelatesToTheToken`).
+3. **Self-check.** The derived rule is re-applied alone, never with Tier-1, to the same page-1
+   tokens through `Resolve`. The rule is learned only when that yields exactly one candidate and
+   the candidate equals the typed value under the field's shape; anything else gives
+   `TypedSelfCheckRefused`
+   (`TestLearnTypedRule_TheSelfCheckRefusesOneCandidateThatIsNotTheTypedValue`). Only
+   `TypedLearned` writes a rule, and the zero verdict is `TypedNoToken`, so an unset verdict
+   refuses (`TestLearnTypedRule_TheZeroVerdictRefuses`).
+
+Where the self-check passes, the typed rule is the rule pointing at the same token teaches, body,
+label and anchor alike (`TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule`). A
+pointed correction is not checked: it keeps teaching every rule `LearnRule` derives, including the
+misfires the self-check refuses — see **When a learned rule misfires** below.
+
+The page comes from the stored document, read again inside the correction request, before its
+transaction, through the same audited opener the extraction worker uses. Each read writes one
+`document.read` audit row attributed to the operator, in its own transaction, so the row commits
+even when nothing is learned (`TestStoreGet_WritesReadAudit`,
+`TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators`,
+`TestRLS_ATypedCorrectionTeachesThePointedRuleOnAGeometricLayout`). The route reads only for a
+`typed` correction on a job the caller can see whose stored layout is not boxless and carries at
+least one usable anchor box (`TestRLS_ATypedCorrectionOnAJobWithNoUsableAnchorReadsNothing`,
+`TestRLS_ChosenAndUndoneNeverReadTheDocumentAndTeachNothing`,
+`TestRLS_ATypedCorrectionOnABoxlessJobNeverReadsTheDocumentAndStillLearns`). Another tenant's job
+answers `404` and reads no document (`TestRLS_ATypedCorrectionOnAnotherTenantsJobReadsNoDocument`).
+
+The read is bounded by `pageOneReadTimeout` (5 s), because it borrows one of the two PDFium
+instances the extraction queue also uses. An open error, a read error, a document with no page 1,
+or the expired bound learns nothing: the route writes one WARN naming the job and the field, never
+the typed value, and the correction still commits with `201`
+(`TestRLS_AFailedPageReadCommitsTheCorrectionAndTeachesNothing`,
+`TestRLS_APageReadIsBoundedAndItsExpiryCommitsTheCorrection`). A refusal at any clause writes no
+log line and no `extraction.anchor.learned` row, and the correction commits with `201`
+(`TestRLS_ATypedRefusalBeforeTheSelfCheckRecordsTheCorrectionAndLogsNothing`,
+`TestRLS_ATypedTINCorrectionOnTheTwoColumnLayoutRefusesAtTheSelfCheck`). An undecodable stored
+`layout_anchors` column is a different posture: the correction aborts with `500` and commits
+nothing (`TestRLS_AnUndecodableLayoutAnchorsColumnAbortsATypedCorrection`). A learned rule is
+written in the correction's own transaction, so a failed rule write rolls back the correction, the
+invoice field and the audit row with it
+(`TestRLS_AFailedTypedRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit`). The correction row
+keeps the trimmed `anchor_label` the client sent, never the derived label
+(`TestRLS_ATypedGeometricLearningWritesNoAnchorLabel`).
+
+The vehicle is the `learned_typed_total.pdf` / `learned_typed_total_twin.pdf` pair: one
+arrangement whose `total` Tier-1 leaves missing on both documents
+(`TestLearnedTypedTotal_Tier1LeavesTotalMissingOnBothDocuments`). A typed `total` on the first
+teaches the rule that makes the twin decide its own `9250000.00`, and deleting that rule turns the
+next document back to `missing` (`TestRLS_ATypedCorrectionTeachesTheNextDocumentOfThatLayout`,
+`TestRLS_DeletingTheTypedRuleRedsTheNextDocument`). A boxless layout keeps its own typed path,
+above, with no page read and no self-check.
 
 ### Undo does not un-teach
 
@@ -1148,16 +1243,16 @@ later document carrying that layout fingerprint. The undo revises what one field
 says; it does not withdraw the claim about *where that field lives on this layout*.
 
 The only way to displace a live rule is a second correction that derives a different one for the
-same field — a **second pointed correction** on a geometric layout, pointing at a distinguishing
-label; a second `typed` correction on a boxless layout, retyping a value some other page-1 token
-carries. Displacement is by **ordering**, never by deletion: the
-`extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds `INSERT` and
-`SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows remain**,
-and `AnchorRulesFor` returns them newest-first. `Resolve` lets the first rule that produces
-anything for a field claim it; an older rule is outranked, never erased.
+same field, such as a **second pointed correction** on a geometric layout, pointing at a
+distinguishing label, or a second `typed` correction on a boxless layout, retyping a value some
+other page-1 token carries. Displacement is by **ordering**, never by
+deletion: the `extraction_anchor_rules` table is **append-only** by grant — `invoice_app` holds
+`INSERT` and `SELECT` and no `UPDATE` or `DELETE` — so after a superseding correction **both rows
+remain**, and `AnchorRulesFor` returns them newest-first. `Resolve` lets the first rule that
+produces anything for a field claim it; an older rule is outranked, never erased.
 
 Two tests hold this:
-`TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes` proves the undo leaves the rule
+`TestRLS_AnUndoDoesNotUnteachAndAPointedCorrectionSupersedes` proves the undo leaves the rule
 both present and *firing*, and that a later pointed correction prepends a superseding row;
 `TestRLS_ASecondPointedCorrectionSupersedesTheFirstOnTheThirdDocument` proves that when **both**
 rules are live and resolve **different** values, the newer one decides — with the reversed
@@ -1241,6 +1336,34 @@ owning-phrase entry needs neither bump. Since
 EXTR-19-02 the same `anchorLabelMatchers` feed `BoxlessFingerprint` too, so a widened pattern and
 a new entry each move a boxless key only on a page that prints a spelling they newly match.
 
+That misfire belongs to the pointed arm, and it stays: a pointed correction is not checked, so
+pointing still teaches the `TIN` rule above. It is one instance of a wider class. Learned rules
+skip the outranking check Tier-1 labels pass, so a learned `Total` also fires inside `Sub-total`
+and a learned `Buyer` inside `Buyer TIN`.
+
+A typed correction refuses that class at the self-check.
+`TestLearnTypedRule_TheSelfCheckRefusesEveryReachableMisfire` types the correct value on seven
+rows — `total` on `corpus_split_labels.pdf`, `corpus_totals_block.pdf` and `rich_invoice.pdf`;
+`buyer_name` on `corpus_split_labels.pdf` and `corpus_inline_labels.pdf`; `buyer_tin` on
+`corpus_two_column.pdf` and `advisory_register.pdf` — and asserts that `LearnRule` derives a rule
+over the located token and that the self-check refuses it. Through the route, typing the buyer's
+`99999999-0402` on `corpus_two_column.pdf` records the correction and writes no rule
+(`TestRLS_ATypedTINCorrectionOnTheTwoColumnLayoutRefusesAtTheSelfCheck`), so typing is no remedy
+for this layout either. On `corpus_split_labels.pdf` the same `2,150.00` token teaches the `Total`
+rule when pointed at and nothing when typed
+(`TestRLS_OnTheSplitLayoutPointingTeachesTheTotalAndTypingItRefuses`). That divergence is the
+chosen trade: where the self-check refuses, typing teaches less than pointing.
+
+The self-check also refuses three rows, and that is the accepted cost: `total` on
+`corpus_inline_labels.pdf`, whose learned rule keeps the next read at `1075.00` with no reason, and
+the ambiguous numeric `issue_date` on `corpus_ambiguous_date.pdf` and on `rich_invoice.pdf`, under
+either reading (`TestLearnTypedRule_TheAcceptedCostRefusals`).
+
+Two limits stay open. The self-check reads page 1 only, the page it located the token on, so a
+rule that misfires only because of a later page's tokens passes it; no committed fixture has that
+shape. And the realistic exposure — a document where Tier-1 decides the field wrong while the right
+value sits within reach of its label, and the reviewer types that value — is unmeasured.
+
 ### learned_two_party.pdf is not a corpus layout
 
 `learned_two_party.pdf` is generated by `fxBuildLearnedTwoParty` and byte-compared by
@@ -1249,11 +1372,20 @@ fixture. It is deliberately named **outside** the `corpus_` prefix, and therefor
 `corpusExpect`, `corpusLayouts`, `corpusTokenFloor`, the Tier-1 recall rate and the Tier-1
 decision rate.
 
-That is the point: it is the **vehicle for the learning chain**, not a measured arrangement, and
+That is the point: it is a **vehicle for the learning chain**, not a measured arrangement, and
 adding it to the corpus would move `EXTR-04`'s accuracy ratchet — which must keep measuring the
 same six layouts it has always measured — for a fixture nobody grades. Its own reserved-TIN scan
 is `TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs`, because
 `TestCorpus_UsesOnlyFreeReservedTINs` quantifies over `corpusLayouts` and cannot see it.
+
+`learned_typed_total.pdf` and `learned_typed_total_twin.pdf` are the second vehicle, for the typed
+path, and sit outside the same ratchets for the same reason. `fxBuildLearnedTypedTotal` generates
+both, `TestFixtures_MatchTheirGenerator` byte-compares them like every other fixture, and neither
+carries a `corpus_` or `wild_` prefix, so no `corpusExpect`, `corpusLayouts`, `corpusTokenFloor` or
+`expectByLayout` row names them. They print no TIN, so no reserved-TIN scan applies. Tier-1 reads
+`vat` as the printed amount on both, because the `VAT inclusive` label stands left of it; that is
+an artefact of the arrangement, and learning leaves every field but `total` unchanged
+(`TestLearnedTypedTotal_TheAmountTokenTeachesARuleTheTwinReads`).
 
 One consequence worth recording, and it inverted at EXTR-22. `supplier_tin` used to read
 `ambiguous` here, because `t1.supplier_tin.sweep` was banded to page 1's top half and claimed

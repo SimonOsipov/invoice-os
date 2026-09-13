@@ -652,7 +652,7 @@ func TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit(t
 // prepend a superseding rule, so arm 2's non-supersession is a decision and not an inability of
 // the write path. R1 is the same_token/TIN rule because the below/Buyer rule resolves to zero
 // candidates on its own page, which would make arm 2's Resolve oracle vacuous.
-func TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes(t *testing.T) {
+func TestRLS_AnUndoDoesNotUnteachAndAPointedCorrectionSupersedes(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C13")
 	fingerprint, pages := clLayout(t, ctx, f.jobID)

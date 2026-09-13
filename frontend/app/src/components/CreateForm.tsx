@@ -30,8 +30,7 @@ import type { PlatformCtx } from '../types'
 
 const ROW_COLS = '1fr 70px 120px 120px 28px'
 
-// A carried read-only input never invents a value: null stays value='', with '—' only as
-// the placeholder cue (matches the Amount cell's own null glyph, CreateForm.tsx:166).
+// A carried null stays value='' and shows the Amount cell's '—' only as a placeholder (EXTR27-C4, EXTR27-C6).
 const dash = (v: string | null) => (v === null ? '—' : undefined)
 
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {

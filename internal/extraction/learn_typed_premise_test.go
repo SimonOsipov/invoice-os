@@ -31,9 +31,8 @@ func lpValue(v *string) string {
 	return `"` + *v + `"`
 }
 
-// AC-3: neither document's printed amount carries a label Tier-1's total shape reaches --
-// the amount reads as vat, and total is left for a human. Floors invoice_number and currency
-// so the fixture pair's identity can't drift under later edits.
+// Neither document's printed amount carries a label Tier-1's total shape reaches, so total
+// is left for a human; invoice_number and currency are floored so the pair's identity can't drift.
 func TestLearnedTypedTotal_Tier1LeavesTotalMissingOnBothDocuments(t *testing.T) {
 	a := rvCorpusPages(t, fxLearnedTypedTotal)
 	b := rvCorpusPages(t, fxLearnedTypedTotalTwin)
@@ -74,8 +73,8 @@ func TestLearnedTypedTotal_Tier1LeavesTotalMissingOnBothDocuments(t *testing.T) 
 	}
 }
 
-// AC-7: one layout, two suppliers -- Fingerprint hashes anchor labels and their column bands in
-// reading order, never values, so the supplier name's text must not move it.
+// One layout, two suppliers: Fingerprint hashes anchor labels and column bands in reading
+// order, never values, so the supplier name's text must not move it.
 func TestLearnedTypedTotal_BothDocumentsShareOneLayoutFingerprint(t *testing.T) {
 	a := rvCorpusPages(t, fxLearnedTypedTotal)
 	b := rvCorpusPages(t, fxLearnedTypedTotalTwin)
@@ -103,8 +102,8 @@ func TestLearnedTypedTotal_BothDocumentsShareOneLayoutFingerprint(t *testing.T) 
 	}
 }
 
-// AC-3: a rule learned from a's printed amount, applied to b's identical layout, fills the
-// total b's own Tier-1 pass left missing -- and touches no other field's decision.
+// A rule learned from a's printed amount, applied to b's identical layout, fills the total
+// b's own Tier-1 pass left missing -- and touches no other field's decision.
 func TestLearnedTypedTotal_TheAmountTokenTeachesARuleTheTwinReads(t *testing.T) {
 	a := rvCorpusPages(t, fxLearnedTypedTotal)
 	b := rvCorpusPages(t, fxLearnedTypedTotalTwin)
@@ -170,8 +169,8 @@ func TestLearnedTypedTotal_TheAmountTokenTeachesARuleTheTwinReads(t *testing.T) 
 	}
 }
 
-// AC-4, AC-5: the exact tokens subtask 02's refusal specs read, including PDFium's measured
-// trailing spaces -- a trim anywhere upstream would make those specs pass for the wrong reason.
+// Includes PDFium's measured trailing spaces exactly as read; trimming them anywhere upstream
+// would make the refusal specs that depend on these tokens pass for the wrong reason.
 func TestLearnedTypedTotal_CarriesTheTokensTheRefusalSpecsNeed(t *testing.T) {
 	a := rvCorpusPages(t, fxLearnedTypedTotal)
 

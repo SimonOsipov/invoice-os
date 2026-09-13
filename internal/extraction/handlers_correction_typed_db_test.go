@@ -262,6 +262,14 @@ func TestRLS_AFailedPageReadCommitsTheCorrectionAndTeachesNothing(t *testing.T) 
 	if warns[0]["job"] != f.jobID || warns[0]["field"] != ctField || warns[0]["err"] != "object store down" {
 		t.Errorf("the WARN record carries job=%v field=%v err=%v, want %s, %s and the read's error", warns[0]["job"], warns[0]["field"], warns[0]["err"], f.jobID, ctField)
 	}
+	for k := range warns[0] {
+		if k != "time" && k != "level" && k != "msg" && k != "job" && k != "field" && k != "err" {
+			t.Errorf("the WARN record carries %q, want only job, field and err", k)
+		}
+	}
+	if strings.Contains(buf.String(), ctTotal) {
+		t.Errorf("the log carries the typed value %q: %s", ctTotal, buf)
+	}
 
 	// A document with no page 1 fails the read without an error.
 	buf.Reset()
@@ -602,4 +610,38 @@ func TestRLS_OnTheSplitLayoutPointingTeachesTheTotalAndTypingItRefuses(t *testin
 		t.Fatalf("pointing at the same token left %d anchor rule(s), want 1", len(rules))
 	}
 	lcRuleBodyIs(t, ctx, rules[0].id, ctSplitRuleBody)
+}
+
+// A corrupt stored column is a data error, not a failed read: 500, nothing commits, no WARN.
+func TestRLS_AnUndecodableLayoutAnchorsColumnAbortsATypedCorrection(t *testing.T) {
+	ctx := t.Context()
+	f, fp, _ := ctJob(t, ctx, "EXTR28-04-UNDECODABLE", fxLearnedTypedTotal)
+	clLayoutRaw(t, ctx, f.jobID, fp, []byte(`[1,2]`))
+
+	buf, log := ctLog()
+	_, pageOne := ctReader(t, fxLearnedTypedTotal)
+	w := cxServeWith(t, f.reqCtx, f.jobID, ctField, corBody(ctTotal, "typed", ""), pageOne, log,
+		cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("an undecodable layout_anchors column answered %d (body=%q), want 500", w.Code, w.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 0 {
+		t.Errorf("%d correction row(s) survived the aborted request, want 0", n)
+	}
+	if n := len(cxCorrectionAudit(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("%d %s row(s) survived the aborted request, want 0", n, cxEvent)
+	}
+	if warns := ctWarns(t, buf); len(warns) != 0 {
+		t.Errorf("an undecodable column logged %d WARN record(s), want 0: %v", len(warns), warns)
+	}
+
+	// Control: the same job with its anchors back commits.
+	lcLayout(t, ctx, f.jobID, fxLearnedTypedTotal)
+	ctPost(t, f, f.jobID, ctField, ctTotal, pageOne, nil)
+	if n := cxCorrectionRows(t, ctx, f.jobID); n != 1 {
+		t.Errorf("control: %d correction row(s), want 1", n)
+	}
+	if n := len(cxCorrectionAudit(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: %d %s row(s), want 1", n, cxEvent)
+	}
 }

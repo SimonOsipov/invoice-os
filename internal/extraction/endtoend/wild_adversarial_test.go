@@ -1122,6 +1122,13 @@ func TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow(t *testing.T
 		{"the twin's invoice number", wildRuledAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
 			wildRowOf(t, x.e, wildRuledAsPrinted)["invoice_number"] = slices.Clone(wildRowOf(t, x.e, wildRuled)["invoice_number"])
 		}},
+		{"an emptied invoice number", wildStackedAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildStackedAsPrinted)["invoice_number"] = []string{}
+			delete(x.r, wildStackedAsPrinted+"/invoice_number")
+		}},
+		{"a removed twin row", wildTwoParty, func(t *testing.T, x *tables) {
+			x.e = slices.DeleteFunc(x.e, func(row wildTableRow) bool { return row.file == wildTwoParty })
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

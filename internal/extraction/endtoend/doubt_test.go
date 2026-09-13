@@ -51,9 +51,8 @@ var dtAmbiguous = []dtCell{
 }
 
 const (
-	// dtDoubtTotal is how many of those rows EXTR-22 adds. Pinned as a number as well as by
-	// name: a seventh doubtful cell must be argued for, not absorbed. The fifth is admitted
-	// because it is the sibling's own doubt on the twin's already-doubted geometry.
+	// dtDoubtTotal is how many of those rows EXTR-22 adds; a seventh cell is argued for, not absorbed.
+	// The fifth is the sibling's own doubt on its twin's already-doubted geometry.
 	dtDoubtTotal = 5
 
 	// The one ambiguous cell that predates the doubt: two readings of one printed date.

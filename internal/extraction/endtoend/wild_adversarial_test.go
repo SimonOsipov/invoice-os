@@ -1,10 +1,13 @@
-// wild_adversarial_test.go: QA's hardening of the four wild_ arrangements -- the pin every
+// wild_adversarial_test.go: QA's hardening of the wild_ arrangements -- the pin every
 // other wild loop borrows its non-emptiness from, the two defects these fixtures do NOT
 // reproduce, and the golden properties nothing else reads. No database.
 package endtoend
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -829,5 +832,236 @@ func TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber(t *testing.T) {
 	}
 	if twin := wildResolved(t, wildStacked, "invoice_number"); !slices.Equal(twin, []string{wildInvNums[3]}) {
 		t.Errorf("%s resolves invoice_number %v, want exactly [%s] on the same geometry", wildStacked, twin, wildInvNums[3])
+	}
+}
+
+// --- every wild_ arrangement declares a sibling or an exemption --------------------------------
+
+const wildAsPrintedSuffix = "_asprinted.pdf"
+
+// wildOwnerRE names an owning story: a sibling miss without one reads exactly like a regression.
+var wildOwnerRE = regexp.MustCompile(`EXTR-[0-9]+`)
+
+type (
+	wildTableRow = struct {
+		file   string
+		fields map[string][]string
+	}
+	wildTableRows = []wildTableRow
+)
+
+// wildCommittedArrangements is every committed testdata/wild_*.pdf, siblings included.
+func wildCommittedArrangements(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(eeFxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", eeFxDir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, "wild_") && strings.HasSuffix(n, ".pdf") {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func wildPairProblems(committed []string, pairs []wildPair) []string { return nil }
+
+func wildParityProblems(pairs []wildPair, expect wildTableRows, absent, real map[string]string) (problems []string, compared, owned int) {
+	return nil, 0, 0
+}
+
+func wildElevenRendering(expect wildTableRows, absent, real map[string]string) (rendering string, rows, cells int) {
+	return "", 0, 0
+}
+
+// The pair must be visible, not merely present: a new arrangement cannot land lexicon-friendly-only.
+func TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption(t *testing.T) {
+	committed := wildCommittedArrangements(t)
+	var arrangements, siblings, exemptions int
+	for _, n := range committed {
+		if strings.HasSuffix(n, wildAsPrintedSuffix) {
+			siblings++
+		} else {
+			arrangements++
+		}
+	}
+	for _, p := range wildPairs {
+		if p.exemption != "" {
+			exemptions++
+		}
+	}
+	if arrangements < 5 || siblings < 3 || exemptions < 2 {
+		t.Fatalf("%d committed arrangement(s), %d sibling(s), %d exemption(s); want at least 5, 3 and 2 -- the check below would pass over nothing", arrangements, siblings, exemptions)
+	}
+	for _, p := range wildPairProblems(committed, wildPairs) {
+		t.Error(p)
+	}
+}
+
+func TestWildPairs_TheCheckerRefusesAnUndeclaredArrangement(t *testing.T) {
+	committed := wildCommittedArrangements(t)
+	if len(wildPairs) == 0 {
+		t.Fatal("wildPairs is empty; every edit below would fatal on a missing row")
+	}
+	if got := wildPairProblems(committed, wildPairs); len(got) != 0 {
+		t.Fatalf("the unplanted input reports %v; every case below would read an extra problem", got)
+	}
+	plus := func(name string) []string { return append(slices.Clone(committed), name) }
+	without := func(name string) []string {
+		return slices.DeleteFunc(slices.Clone(committed), func(n string) bool { return n == name })
+	}
+	edit := func(twin string, change func(*wildPair)) []wildPair {
+		out := slices.Clone(wildPairs)
+		if i := slices.IndexFunc(out, func(p wildPair) bool { return p.twin == twin }); i >= 0 {
+			change(&out[i])
+		}
+		return out
+	}
+	cases := []struct {
+		name, needle string
+		committed    []string
+		pairs        []wildPair
+	}{
+		{"an undeclared arrangement", "wild_planted_arrangement.pdf", plus("wild_planted_arrangement.pdf"), wildPairs},
+		{"an orphan sibling", "wild_planted_asprinted.pdf", plus("wild_planted_asprinted.pdf"), wildPairs},
+		{"a sibling and an exemption", wildRCNaira, plus("wild_rc_due_naira_asprinted.pdf"), edit(wildRCNaira, func(p *wildPair) { p.sibling = "wild_rc_due_naira_asprinted.pdf" })},
+		{"a blank exemption", wildRCNaira, committed, edit(wildRCNaira, func(p *wildPair) { p.exemption = " " })},
+		{"a misnamed sibling", "wild_ruled_asprinted.pdf", append(without(wildRuledAsPrinted), "wild_ruled_asprinted.pdf"), edit(wildRuled, func(p *wildPair) { p.sibling = "wild_ruled_asprinted.pdf" })},
+		{"an uncommitted sibling", wildStackedAsPrinted, without(wildStackedAsPrinted), wildPairs},
+		{"an uncommitted twin", "wild_planted_twin.pdf", committed, append(slices.Clone(wildPairs), wildPair{twin: "wild_planted_twin.pdf", exemption: "planted"})},
+		{"a second row", wildScanned, committed, append(slices.Clone(wildPairs), wildPair{twin: wildScanned, exemption: "planted"})},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := wildPairProblems(c.committed, c.pairs); len(got) != 1 || !strings.Contains(got[0], c.needle) {
+				t.Errorf("reports %v, want exactly one problem naming %s", got, c.needle)
+			}
+		})
+	}
+}
+
+func TestWildPairs_ATwinHitIsASiblingHitOrAnOwnedMiss(t *testing.T) {
+	problems, compared, owned := wildParityProblems(wildPairs, expectByLayout, eeAbsentCells, eeRealMisses)
+	if compared < 3*len(writtenFields) || owned < 1 {
+		t.Fatalf("compared %d sibling cell(s) and %d owned miss(es), want at least %d and 1 -- a parity check over nothing passes", compared, owned, 3*len(writtenFields))
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+// wildCopyTables deep-copies the scored tables so a case edits nothing another case reads.
+func wildCopyTables() (wildTableRows, map[string]string, map[string]string) {
+	expect := make(wildTableRows, len(expectByLayout))
+	for i, r := range expectByLayout {
+		expect[i] = wildTableRow{file: r.file, fields: map[string][]string{}}
+		for k, v := range r.fields {
+			expect[i].fields[k] = slices.Clone(v)
+		}
+	}
+	return expect, maps.Clone(eeAbsentCells), maps.Clone(eeRealMisses)
+}
+
+// wildRowOf is layout's fields in a copy; it fatals rather than edit nothing.
+func wildRowOf(t *testing.T, expect wildTableRows, layout string) map[string][]string {
+	t.Helper()
+	i := slices.IndexFunc(expect, func(r wildTableRow) bool { return r.file == layout })
+	if i < 0 {
+		t.Fatalf("no expectByLayout row for %s", layout)
+	}
+	return expect[i].fields
+}
+
+func TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow(t *testing.T) {
+	e, a, r := wildCopyTables()
+	if got, compared, _ := wildParityProblems(wildPairs, e, a, r); len(got) != 0 || compared == 0 {
+		t.Fatalf("the unedited copy reports %v over %d cell(s); the cases below could not tell their edit from it", got, compared)
+	}
+	type tables struct {
+		e    wildTableRows
+		a, r map[string]string
+	}
+	cases := []struct {
+		name, cell string
+		edit       func(t *testing.T, x *tables)
+	}{
+		{"an unowned miss", wildStackedAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			k := wildStackedAsPrinted + "/invoice_number"
+			x.r[k] = wildOwnerRE.ReplaceAllString(x.r[k], "")
+		}},
+		{"an easier subtotal", wildTwoPartyAsPrinted + "/subtotal", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildTwoPartyAsPrinted)["subtotal"] = []string{"1199.00"}
+		}},
+		{"the total softened to the value read", wildRuledAsPrinted + "/total", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildRuledAsPrinted)["total"] = []string{wildRuledLastLineAmount}
+			delete(x.r, wildRuledAsPrinted+"/total")
+		}},
+		{"a miss listed as absent", wildStackedAsPrinted + "/subtotal", func(t *testing.T, x *tables) {
+			k := wildStackedAsPrinted + "/subtotal"
+			x.a[k] = x.r[k]
+			delete(x.r, k)
+		}},
+		{"a removed sibling row", wildTwoPartyAsPrinted, func(t *testing.T, x *tables) {
+			x.e = slices.DeleteFunc(x.e, func(row wildTableRow) bool { return row.file == wildTwoPartyAsPrinted })
+		}},
+		{"the twin's invoice number", wildRuledAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildRuledAsPrinted)["invoice_number"] = slices.Clone(wildRowOf(t, x.e, wildRuled)["invoice_number"])
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var x tables
+			x.e, x.a, x.r = wildCopyTables()
+			c.edit(t, &x)
+			got, _, _ := wildParityProblems(wildPairs, x.e, x.a, x.r)
+			if len(got) == 0 {
+				t.Fatalf("reports nothing, want a problem naming %s", c.cell)
+			}
+			for _, p := range got {
+				if !strings.Contains(p, c.cell) {
+					t.Errorf("reports %q, which does not name %s", p, c.cell)
+				}
+			}
+		})
+	}
+}
+
+// wildElevenDigest is SHA-256 of wildElevenRendering over the tables as they stood before any sibling.
+const wildElevenDigest = "dba292559ee5fec824222b88f9de0c6e5e45b9f4dd579761df0474ec07cafb2f"
+
+func wildElevenSum(e wildTableRows, a, r map[string]string) (string, int, int) {
+	s, rows, cells := wildElevenRendering(e, a, r)
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:]), rows, cells
+}
+
+func TestWildPairs_TheElevenKeepEveryFactTheyAssert(t *testing.T) {
+	got, rows, cells := wildElevenSum(expectByLayout, eeAbsentCells, eeRealMisses)
+	if rows != 11 || cells != 88 {
+		t.Fatalf("rendered %d row(s) and %d cell(s), want 11 and 88", rows, cells)
+	}
+	if got != wildElevenDigest {
+		t.Errorf("the eleven digest to %s, want %s -- an existing expectation or miss entry changed", got, wildElevenDigest)
+	}
+
+	e, a, r := wildCopyTables()
+	wildRowOf(t, e, wildRuled)["total"] = []string{wildRuledLastLineAmount}
+	if d, _, _ := wildElevenSum(e, a, r); d == got {
+		t.Errorf("a changed %s total left the digest unmoved", wildRuled)
+	}
+	e, a, r = wildCopyTables()
+	k := wildRuled + "/total"
+	a[k] = r[k]
+	delete(r, k)
+	if d, _, _ := wildElevenSum(e, a, r); d == got {
+		t.Errorf("moving %s from eeRealMisses to eeAbsentCells left the digest unmoved", k)
+	}
+	e, a, r = wildCopyTables()
+	e = append(e, wildTableRow{file: "wild_planted_asprinted.pdf", fields: map[string][]string{"total": {"1.00"}}})
+	r["wild_planted_asprinted.pdf/total"] = "planted"
+	if d, _, _ := wildElevenSum(e, a, r); d != got {
+		t.Errorf("appending a sibling row and miss moved the digest to %s", d)
 	}
 }

@@ -1,4 +1,4 @@
-// goldens_test.go: the four wild_* arrangements -- production layouts reproduced as generated
+// goldens_test.go: the wild_* arrangements -- production layouts reproduced as generated
 // fixtures, their committed goldens, and the guards that keep them out of the corpus ratchets.
 // No database.
 //
@@ -42,6 +42,13 @@ var wildTextLayouts = []string{wildTwoParty, wildRuled, wildRCNaira, wildStacked
 // wildLayouts is hard-coded, never a directory walk: a walk cannot see a fixture that is
 // missing, which is the failure Core AC 7 exists to catch.
 var wildLayouts = append(append([]string{}, wildTextLayouts...), wildScanned)
+
+// wildPair declares a lexicon-friendly arrangement's as-printed sibling, or why it has none.
+type wildPair struct{ twin, sibling, exemption string }
+
+// wildPairs holds one row per committed lexicon-friendly wild_ arrangement
+// (TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption).
+var wildPairs = []wildPair{}
 
 // --- the pinned synthetic identifier table ------------------------------------------------
 //

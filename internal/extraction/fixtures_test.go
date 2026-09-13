@@ -1705,6 +1705,31 @@ func TestFixtures_GeneratorIsDeterministic(t *testing.T) {
 	}
 }
 
+func fxUngenerated(committed []string) []string { return nil }
+
+// A committed wild_ PDF with no fxCorpus entry is never byte-compared by TestFixtures_MatchTheirGenerator.
+func TestFixtures_EveryCommittedWildArrangementHasAGenerator(t *testing.T) {
+	entries, err := os.ReadDir(fxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxDir, err)
+	}
+	var wild []string
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, "wild_") && strings.HasSuffix(n, ".pdf") {
+			wild = append(wild, n)
+		}
+	}
+	if len(wild) < 8 {
+		t.Fatalf("%s holds %d wild_*.pdf file(s), want at least 8", fxDir, len(wild))
+	}
+	if missing := fxUngenerated(wild); len(missing) != 0 {
+		t.Errorf("%v committed with no fxCorpus entry", missing)
+	}
+	if got := fxUngenerated(append(slices.Clone(wild), "wild_planted.pdf")); !slices.Equal(got, []string{"wild_planted.pdf"}) {
+		t.Errorf("a planted wild_planted.pdf reports %v, want exactly [wild_planted.pdf]", got)
+	}
+}
+
 // fxImageResRe resolves a page's /Im0 through /Resources. A whole-file scan for
 // "/Subtype /Image" would pass on an image object no page references, and on a page whose ink
 // is drawn by a stream the page never names.

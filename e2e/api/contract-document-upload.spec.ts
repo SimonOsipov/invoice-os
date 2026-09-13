@@ -449,7 +449,9 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
       document_id: unknown,
       invoice_number: `EXTR27-${freshTin()}`,
     })
-    expect(supplyRes.status, 'EXTR27-API-02: a document with no succeeded extraction refuses 404').toBe(404)
+    // The importer's JSON envelope, never the mux's plain-text 404 for an unregistered route.
+    assertErrorEnvelope(supplyRes, 404, 'EXTR27-API-02: a document with no succeeded extraction')
+    expect((supplyRes.body as Record<string, unknown>).error).toBe('not found')
 
     const blankSupply = await supplyFetch(token, { entity_id: entity.id, document_id: unknown, invoice_number: '   ' })
     assertErrorEnvelope(blankSupply, 400, 'EXTR27-API-02 blank invoice_number')

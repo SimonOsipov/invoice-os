@@ -398,7 +398,7 @@ func TestCorpus_HasAllSixNamedLayouts(t *testing.T) {
 // --- EXTR-14-09: the learned-rule fixture and the doc that owns it -------------------------
 
 // E-11. C-07 quantifies over corpusLayouts, so learned_two_party.pdf sits outside its reserved-
-// TIN scan. This closes that gap for the one fixture that is deliberately not a corpus layout.
+// TIN scan. This closes that gap for that fixture.
 // The >=2 floor is what stops a regex or fixture regression from reading as a clean pass.
 func TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs(t *testing.T) {
 	pages, _ := ptRead(t, fxLearnedTwoParty)

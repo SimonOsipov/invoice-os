@@ -23,6 +23,14 @@ func lpFieldByName(t *testing.T, results []extraction.FieldResult, name string) 
 	return extraction.FieldResult{}
 }
 
+// lpValue renders a nullable Value so a failure names the text read, not its pointer.
+func lpValue(v *string) string {
+	if v == nil {
+		return "nil"
+	}
+	return `"` + *v + `"`
+}
+
 // AC-3: neither document's printed amount carries a label Tier-1's total shape reaches --
 // the amount reads as vat, and total is left for a human. Floors invoice_number and currency
 // so the fixture pair's identity can't drift under later edits.
@@ -49,25 +57,25 @@ func TestLearnedTypedTotal_Tier1LeavesTotalMissingOnBothDocuments(t *testing.T) 
 
 	invA := lpFieldByName(t, ra, "invoice_number")
 	if invA.Value == nil || *invA.Value != "INV-1009" {
-		t.Fatalf("a: invoice_number = %v, want INV-1009", invA.Value)
+		t.Fatalf("a: invoice_number = %s, want INV-1009", lpValue(invA.Value))
 	}
 	invB := lpFieldByName(t, rb, "invoice_number")
 	if invB.Value == nil || *invB.Value != "INV-1010" {
-		t.Fatalf("b: invoice_number = %v, want INV-1010", invB.Value)
+		t.Fatalf("b: invoice_number = %s, want INV-1010", lpValue(invB.Value))
 	}
 
 	curA := lpFieldByName(t, ra, "currency")
 	if curA.Value == nil || *curA.Value != "NGN" {
-		t.Fatalf("a: currency = %v, want NGN", curA.Value)
+		t.Fatalf("a: currency = %s, want NGN", lpValue(curA.Value))
 	}
 	curB := lpFieldByName(t, rb, "currency")
 	if curB.Value == nil || *curB.Value != "NGN" {
-		t.Fatalf("b: currency = %v, want NGN", curB.Value)
+		t.Fatalf("b: currency = %s, want NGN", lpValue(curB.Value))
 	}
 }
 
-// AC-7: one layout, two suppliers -- the fingerprint is geometry-only and must not move when
-// only the supplier name's text changes.
+// AC-7: one layout, two suppliers -- Fingerprint hashes anchor labels and their column bands in
+// reading order, never values, so the supplier name's text must not move it.
 func TestLearnedTypedTotal_BothDocumentsShareOneLayoutFingerprint(t *testing.T) {
 	a := rvCorpusPages(t, fxLearnedTypedTotal)
 	b := rvCorpusPages(t, fxLearnedTypedTotalTwin)
@@ -87,11 +95,11 @@ func TestLearnedTypedTotal_BothDocumentsShareOneLayoutFingerprint(t *testing.T) 
 
 	supA := lpFieldByName(t, ra, "supplier_name")
 	if supA.Value == nil || *supA.Value != "Adeyemi Trading Limited" {
-		t.Fatalf("a: supplier_name = %v, want Adeyemi Trading Limited", supA.Value)
+		t.Fatalf("a: supplier_name = %s, want Adeyemi Trading Limited", lpValue(supA.Value))
 	}
 	supB := lpFieldByName(t, rb, "supplier_name")
 	if supB.Value == nil || *supB.Value != "Okafor Industries Limited" {
-		t.Fatalf("b: supplier_name = %v, want Okafor Industries Limited", supB.Value)
+		t.Fatalf("b: supplier_name = %s, want Okafor Industries Limited", lpValue(supB.Value))
 	}
 }
 
@@ -130,7 +138,7 @@ func TestLearnedTypedTotal_TheAmountTokenTeachesARuleTheTwinReads(t *testing.T) 
 
 	taughtTotal := lpFieldByName(t, taughtResults, "total")
 	if taughtTotal.Value == nil || *taughtTotal.Value != "9250000.00" {
-		t.Fatalf("taught: total.Value = %v, want 9250000.00", taughtTotal.Value)
+		t.Fatalf("taught: total.Value = %s, want 9250000.00", lpValue(taughtTotal.Value))
 	}
 	if taughtTotal.Reason != "" {
 		t.Fatalf("taught: total.Reason = %q, want \"\"", taughtTotal.Reason)

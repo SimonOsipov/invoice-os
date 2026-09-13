@@ -355,3 +355,20 @@ func lexiconIndex(label string) int {
 	}
 	return len(anchorLabelMatchers)
 }
+
+// TypedVerdict names the clause that decided a typed correction. The zero value refuses.
+type TypedVerdict int
+
+const (
+	TypedNoToken TypedVerdict = iota
+	TypedSeveralTokens
+	TypedNotDerived
+	TypedSelfCheckRefused
+	TypedLearned
+)
+
+// LearnTypedRule learns from a typed value only when it names one page token, LearnRule derives
+// from that token's box, and the rule alone re-reads the page as exactly that value.
+func LearnTypedRule(field, value string, page TokenPage, anchors []AnchorObservation) (LearnedRule, TypedVerdict) {
+	return LearnedRule{}, TypedNoToken
+}

@@ -59,6 +59,8 @@ function detailRecord(): InvoiceDetailRecord {
     approve_blocked_reason: null,
     can_reject: false,
     reject_blocked_reason: null,
+    can_correct_invoice_number: false,
+    invoice_number_blocked_reason: null,
   }
 }
 

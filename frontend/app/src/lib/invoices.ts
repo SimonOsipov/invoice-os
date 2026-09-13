@@ -290,6 +290,9 @@ export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   // renders two buttons, each needing its own slot.
   can_reject: boolean
   reject_blocked_reason: string | null
+  // Same convention; true only for a draft whose history never left draft/validated.
+  can_correct_invoice_number: boolean
+  invoice_number_blocked_reason: string | null
 }
 
 // GET /v1/invoices response envelope (listResponse, handlers.go:110-113). Exactly two

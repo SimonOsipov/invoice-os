@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -152,7 +153,8 @@ func validMethod(m CorrectionMethod) bool {
 
 // CorrectionHandler returns POST /v1/extractions/{id}/fields/{name}/corrections. Identity is
 // checked FIRST, before any path value or body is read, so an unauthenticated caller learns
-// nothing about which field names exist.
+// nothing about which field names exist. pageOne reads page 1 for a typed correction on a
+// geometric layout, before the transaction.
 func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record RecordFieldCorrected, recordLearned RecordAnchorLearned, pageOne ReadPageOne, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
@@ -216,10 +218,17 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 			value = readings[0]
 		}
 
-		out, err := writeCorrection(r.Context(), pool, correctionWrite{
-			apply: apply, record: record, recordLearned: recordLearned, caller: caller,
-			jobID: parsed.String(), field: field, value: value, req: req,
-		})
+		var page *TokenPage
+		if req.Method == MethodTyped {
+			page, err = typedPageOne(r.Context(), pool, pageOne, log, caller, parsed.String(), field)
+		}
+		var out CorrectionResponse
+		if err == nil {
+			out, err = writeCorrection(r.Context(), pool, correctionWrite{
+				apply: apply, record: record, recordLearned: recordLearned, caller: caller,
+				jobID: parsed.String(), field: field, value: value, req: req, page: page,
+			})
+		}
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -244,6 +253,49 @@ type correctionWrite struct {
 	field         string
 	value         string
 	req           CorrectionRequest
+	// page is page 1 of the job's document, nil when it was not or could not be read.
+	page *TokenPage
+}
+
+// typedPageOne reads page 1 when a typed correction could teach a geometric rule. It runs before the
+// transaction because it fetches an object and borrows a PDFium instance; a failed read only WARNs.
+func typedPageOne(ctx context.Context, pool *pgxpool.Pool, pageOne ReadPageOne, log *slog.Logger, caller auth.Identity, jobID, field string) (*TokenPage, error) {
+	var (
+		documentID string
+		layout     JobLayout
+		ok         bool
+	)
+	err := db.WithinRequestTenantTx(ctx, pool, func(tx pgx.Tx) error {
+		// RLS makes another tenant's job zero rows: no document is read and writeCorrection answers 404.
+		if err := tx.QueryRow(ctx,
+			`SELECT document_id FROM extraction_jobs WHERE id = $1`, jobID).Scan(&documentID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		var err error
+		layout, ok, err = jobLayoutTx(ctx, tx, caller.TenantID, jobID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok || IsBoxlessFingerprint(layout.Fingerprint) || !slices.ContainsFunc(layout.Anchors, func(o AnchorObservation) bool {
+		return usableBox(anchorRegion(o))
+	}) {
+		return nil, nil
+	}
+
+	rctx, cancel := context.WithTimeout(ctx, pageOneReadTimeout)
+	defer cancel()
+	tokens, found, err := pageOne(rctx, documentID)
+	if err != nil || !found {
+		log.WarnContext(ctx, "extraction: read page 1 for a typed correction",
+			slog.String("job", jobID), slog.String("field", field), slog.Any("err", err))
+		return nil, nil
+	}
+	return &tokens, nil
 }
 
 // writeCorrection runs the three writes on ONE transaction, so the correction row, the invoice
@@ -303,10 +355,10 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 			}
 		}
 
-		// A boxless layout has no geometry to point at, so the derivation reads the page-1
-		// token text the job stored instead. Typed only -- D-23. It writes no anchorLabel:
-		// reader.go renders any non-empty label as corrected.where for any method
-		// (TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel).
+		// Typed: a boxless layout derives from the stored page-1 token text, a geometric one from the
+		// page read through LearnTypedRule's self-check. Neither writes an anchorLabel, which reader.go
+		// renders as corrected.where (TestRLS_ABoxlessLearnedCorrectionWritesNoAnchorLabel,
+		// TestRLS_ATypedGeometricLearningWritesNoAnchorLabel).
 		if in.req.Method == MethodTyped {
 			layout, ok, err := jobLayoutTx(ctx, tx, in.caller.TenantID, in.jobID)
 			if err != nil {
@@ -321,6 +373,10 @@ func writeCorrection(ctx context.Context, pool *pgxpool.Pool, in correctionWrite
 					if lr, derived := LearnBoxlessRule(in.field, in.value, tokens); derived {
 						learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
 					}
+				}
+			} else if ok && in.page != nil {
+				if lr, verdict := LearnTypedRule(in.field, in.value, *in.page, layout.Anchors); verdict == TypedLearned {
+					learned, fingerprint, learnedOK = lr, layout.Fingerprint, true
 				}
 			}
 		}

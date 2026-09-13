@@ -1026,9 +1026,10 @@ func ValidateHandler(validate func(ctx context.Context, id string) (Invoice, int
 // identity-first-401 order as every other handler here, then decodes the
 // snake_case wire body (400 on decode error -- including a line_items whose
 // JSON SHAPE is wrong, which is a decode-time 400, never a 500) into the 9
-// optional header MBS-content fields plus the optional line_items array,
-// builds EditInput 1:1 from the decoded request (identity/lifecycle are not
-// the edit's job, [D9]), and calls edit.
+// optional header MBS-content fields, the optional line_items array and the
+// optional invoice_number (trimmed; blank is a 400), builds EditInput from the
+// decoded request (entity and lifecycle are not the edit's job, [D9]), and
+// calls edit.
 // Errors map via statusForErr -- including the new ErrNotFixable->409 case
 // (Core AC #1) and the existing ErrValidation->400 case for the all-nil
 // guard ([A7]) -- 200 + updated Invoice on success (Core AC #2/#3).

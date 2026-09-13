@@ -1190,7 +1190,7 @@ describe('violationSummary (AC-2, Stage 2.5)', () => {
 })
 
 describe('getInvoice', () => {
-  // Byte-exact copy of handlers.go:317-318's rename-refusal sentences.
+  // Byte-exact copy of internal/invoice/handlers.go's numberFixedReason.
   const NUMBER_FIXED_REASON = 'The invoice number can only be corrected while the invoice is a draft that has never been submitted.'
 
   it('I8: rule_set_version:null AND the key omitted both normalize to null', async () => {

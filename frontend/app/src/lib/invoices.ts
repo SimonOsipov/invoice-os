@@ -461,7 +461,8 @@ export interface InvoiceCreateInput {
   source_document_id?: string
 }
 
-// The 9 editable header fields (editReq, handlers.go:70-80, [D9]) -- moved here from
+// The 9 editable header fields (editReq's header keys, [D9]; the invoice number is edited
+// apart from these, InvoiceEditInput) -- moved here from
 // InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
 // component share one definition; EditFieldKey travels with the const it's derived
 // from, not alone.
@@ -847,8 +848,8 @@ export function isBuyerTinMissing(tin: string | null | undefined): boolean {
 // names (the fiscal-outcome migration header's `"path": "supplier_tin"` example is
 // illustrative and wrong about the separator). `null` means "no editable field to
 // flag", never "drop the reason" -- the caller still renders the reason in full
-// (M5-09-05). `invoice_number` -> null is correct: editReq excludes it
-// (handlers.go:70-80), so there is no field to flag; `line_items[...]` and any APP-only
+// (M5-09-05). `invoice_number` -> null is correct: it is not an EditFieldKey (the edit
+// form holds it apart), so there is no field to flag; `line_items[...]` and any APP-only
 // vocabulary (e.g. `customer.taxIdentifier`, which appears only in the synthesized
 // error body) likewise have no SPA edit-form counterpart.
 const MBS_PATH_TO_EDIT_FIELD: Record<string, EditFieldKey> = {

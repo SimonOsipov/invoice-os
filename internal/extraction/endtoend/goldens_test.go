@@ -37,7 +37,7 @@ const (
 // wildTextLayouts carry a real text layer, so pdfium reads them. wildScanned is image-only and
 // reads zero pdfium tokens by construction, which fatals at wildPages -- every pdfium-sourced
 // spec loops this slice and gains a golden-sourced twin for the scanned layout.
-var wildTextLayouts = []string{wildTwoParty, wildRuled, wildRCNaira, wildStacked}
+var wildTextLayouts = []string{wildTwoParty, wildRuled, wildRCNaira, wildStacked, wildTwoPartyAsPrinted, wildRuledAsPrinted, wildStackedAsPrinted}
 
 // wildLayouts is hard-coded, never a directory walk: a walk cannot see a fixture that is
 // missing, which is the failure Core AC 7 exists to catch.
@@ -57,7 +57,7 @@ var wildTINs = []string{
 	"99999999-1201", "99999999-1202", // scanned_no_number
 }
 
-var wildInvNums = []string{"INV-2101", "INV-2102", "INV-2103", "INV-2104"}
+var wildInvNums = []string{"INV-2101", "INV-2102", "INV-2103", "INV-2104", "INV-2201", "INV-2202", "INV-2204"}
 
 const wildRCNumber = "RC-000142"
 
@@ -329,7 +329,7 @@ const (
 
 	// wildCIPathFloor is the changes-filter's committed literal path count. This scan asserts
 	// an ABSENCE, so a ci.yml that stopped naming testdata at all must fail here first.
-	wildCIPathFloor = 22
+	wildCIPathFloor = 34
 )
 
 // AC-3. An unwired fixture skips docling-canary, and the roll-up job counts a skipped job as a
@@ -555,10 +555,13 @@ func TestWildLayouts_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
 // wildTokenFloor is the token count each wild layout read at when it was committed. A floor,
 // not an equality. MEASURE these off the committed fixtures; 0 is unpinned and fails below.
 var wildTokenFloor = map[string]int{
-	wildTwoParty: 19,
-	wildRuled:    34,
-	wildRCNaira:  17,
-	wildStacked:  21,
+	wildTwoParty:          19,
+	wildRuled:             34,
+	wildRCNaira:           17,
+	wildStacked:           21,
+	wildTwoPartyAsPrinted: 19,
+	wildRuledAsPrinted:    34,
+	wildStackedAsPrinted:  21,
 	// The GOLDEN's count: this layout reads zero pdfium tokens.
 	wildScanned: 17,
 }
@@ -674,7 +677,7 @@ func TestWildLayouts_UseOnlySynthesizedIdentifiers(t *testing.T) {
 // wildRequireListPin is the layout count the two require-lists must name once the wild layouts
 // land. Hard-coded, not derived from eeLayoutCount: a list and a denominator that shrink
 // together pass every ratio they feed.
-const wildRequireListPin = 11
+const wildRequireListPin = 14
 
 // AC-8. A fixture the require-list does not name cannot fatal when absent, which is how the
 // suite silently stops scoring a layout. The list can see a missing file; the tree walk sees a

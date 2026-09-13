@@ -318,11 +318,11 @@ the value, inside the anchor's own band, the pair is refused — a label owns wh
 read may not reach past one to take a value that label introduces. `crossesALabel` is the
 predicate; `labelTokens` is the per-page precompute it reads.
 
-**The corpus does not exercise it, and the honest denominator is six, not eleven.** Only **6 of the
-11** layouts admit a rightward anchor/value pair at all — **29** pairs in total — and the other
-five read nothing rightward, so the predicate is never called on them. Those five are named in
-`bdSilentLayouts` rather than left implicit, because "the boundary moved nothing across all eleven
-layouts" is a claim whose effective denominator is six. Of the 29 pairs, **none** crosses a label,
+**The corpus does not exercise it, and the honest denominator is eight, not fourteen.** Only **8 of
+the 14** layouts admit a rightward anchor/value pair at all — **35** pairs in total — and the other
+six read nothing rightward, so the predicate is never called on them. Those six are named in
+`bdSilentLayouts` rather than left implicit, because "the boundary moved nothing across all fourteen
+layouts" is a claim whose effective denominator is eight. Of the 35 pairs, **none** crosses a label,
 which is why the boundary removes zero candidates on the shipped corpus. Read that zero as "no
 shipped arrangement puts a label in the corridor", never as "the boundary does nothing".
 
@@ -388,10 +388,10 @@ column diffs to nothing. Which value gets filed is decided one rung earlier: the
 file `TIN:` on the invoice. The doubt makes that predicate load-bearing.
 
 **`wild_scanned_no_number.pdf` is a live trap for the next author.** It is image-only: pdfium reads
-**zero tokens** off it, so a pdfium-sourced walk over "all eleven layouts" compares an empty set
+**zero tokens** off it, so a pdfium-sourced walk over "all fourteen layouts" compares an empty set
 against an empty expectation on that row and calls it agreement. It must be sourced from its
 committed `wild_scanned_no_number.docling.json` golden — 17 tokens on page 1 — and any walk
-claiming eleven rows must prove each row was read, with a zero token count as a fatal rather than
+claiming fourteen rows must prove each row was read, with a zero token count as a fatal rather than
 a pass.
 
 ## Tier-1 recall and the floor
@@ -597,9 +597,9 @@ reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-10 on `feature/extr-26-a-label-is-read-by-its-word`: a document goes in at the
+Re-measured 2026-09-13 on `feature/extr-33-the-corpus-says-what-the-documents-actually-print`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **58 of 88** cells — **0.6591**. Eleven layouts, eight written fields each.
+the page prints on **73 of 112** cells — **0.6518**. Fourteen layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -611,8 +611,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 30 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (17 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 39 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (26 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -630,31 +630,36 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `wild_rc_due_naira.pdf` | 8 | 8 |
 | `wild_stacked_borderless.pdf` | 2 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
+| `wild_two_party_bare_tin_asprinted.pdf` | 8 | 8 |
+| `wild_ruled_lines_totals_asprinted.pdf` | 7 | 8 |
+| `wild_stacked_borderless_asprinted.pdf` | 0 | 8 |
 
 `wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
 so the import quarantines the document and writes no `invoices` row — the six cells OCR reads
 cleanly off its committed golden score nothing. They reach an invoice only when the operator
 supplies the number (`POST /v1/imports/document/invoice`). A quarantined layout stays in the denominator;
 dropping it would flatter the rate by the exact amount the defect costs.
+`wild_stacked_borderless_asprinted.pdf` scores **0 / 8** the same way: no lexicon entry reads its
+letter-spaced invoice-number label, so it quarantines too.
 
 ### Per field
 
 | Field | Hits | Cells |
 |---|---|---|
-| `invoice_number` | 10 | 11 |
-| `issue_date` | 8 | 11 |
-| `buyer_tin` | 8 | 11 |
-| `buyer_name` | 7 | 11 |
-| `currency` | 5 | 11 |
-| `subtotal` | 6 | 11 |
-| `vat` | 6 | 11 |
-| `total` | 8 | 11 |
+| `invoice_number` | 12 | 14 |
+| `issue_date` | 10 | 14 |
+| `buyer_tin` | 10 | 14 |
+| `buyer_name` | 9 | 14 |
+| `currency` | 7 | 14 |
+| `subtotal` | 8 | 14 |
+| `vat` | 8 | 14 |
+| `total` | 9 | 14 |
 
-`currency` at 5 of 11 is still the worst field on the corpus, and its six misses split four ways:
+`currency` at 7 of 14 is still the worst field on the corpus, and its seven misses split four ways:
 three layouts print the value inside a total with no label to anchor it, one prints no currency at
-all, one offsets the value from a colon-less label, and the last is the quarantined page.
-`buyer_tin` reads 8 of 11: EXTR-22 bound each party's TIN to the heading that owns it, and the
-three cells left are two layouts that carry no buyer block at all and the quarantined page.
+all, one offsets the value from a colon-less label, and the last two are the quarantined pages.
+`buyer_tin` reads 10 of 14: EXTR-22 bound each party's TIN to the heading that owns it, and the
+four cells left are two layouts that carry no buyer block at all and the two quarantined pages.
 
 ### What EXTR-23 changed
 
@@ -667,7 +672,7 @@ headline it left behind was 57 hits, against EXTR-21's frozen baseline of 53. **
 "EXTR-23 merged" as "the ruled-table total is fixed".** It is not.
 
 The referee is **inert on this corpus because no arrangement reaches two competing readings**, not
-because the mechanism cannot reach the defect. Measured across all eleven layouts, `Resolve` emits
+because the mechanism cannot reach the defect. Measured across all fourteen layouts, `Resolve` emits
 zero or one `total` candidate and never two, so the tie the referee breaks never occurs here.
 
 `wild_ruled_lines_totals.pdf/total` is the cell it was written for, and it stays in `eeRealMisses`.
@@ -718,10 +723,10 @@ header-field patterns — the party suffix (`buyer_name`, `buyer_tin`), the `Fro
 lexicon missed. Two goldens print a suffix-arm spelling that already matched before EXTR-26:
 `Invoice to` (`wild_two_party_bare_tin.pdf`) and `BILL TO` (`wild_scanned_no_number.pdf`, the
 quarantined 0-of-8 page). Measured, not assumed, on the docling side: the suffix adds no anchor on
-any committed docling golden (`TestAnchorLexicon_TheSuffixAddsNoAnchorOnTheCommittedFixtures`), the
-three advisory arms add none on the eleven scored arrangements
+any lexicon-friendly docling golden (`TestAnchorLexicon_TheSuffixAddsNoAnchorOnTheCommittedFixtures`), the
+three advisory arms add none on the eleven lexicon-friendly arrangements
 (`TestAnchorLexicon_TheAdvisoryArmsAddNoAnchorOnTheScoredArrangements`), and the `From` arm adds
-none on any committed docling golden
+none on any lexicon-friendly docling golden
 (`TestAnchorLexicon_TheFromArmAddsNoAnchorOnTheCommittedArrangements`). This walk reads all but
 one layout through pdfium, not its golden, so the unmoved 58 is the pdfium-side proof.
 `withholding_tax` is listed in `wildUnprintedPhraseIDs`: no scored layout prints the phrase
@@ -773,14 +778,14 @@ on the mutilation controls instead — `eeCutScore` is what the same corpus scor
 `invoice_number` rule removed, and `eeDecoyBaseHits` is the ranking decoy's base. Read the
 distance dial guarantees off those, never off this rate.
 
-It also cannot see a defect that lives only in a real document. The corpus is eleven **synthetic
-arrangements** — six `corpus_*` layouts plus the five `wild_*` reproductions — not the five real
+It also cannot see a defect that lives only in a real document. The corpus is fourteen **synthetic
+arrangements** — six `corpus_*` layouts, the five `wild_*` reproductions and three as-printed siblings — not the five real
 anonymised PDFs. A production read that fails on paper texture, a scanner's skew or a vendor's
 unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 17 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 26 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live
@@ -805,8 +810,11 @@ reached rows hold a unit price.
 | `wild_rc_due_naira.pdf` | 0 | 0 | 0 |
 | `wild_stacked_borderless.pdf` | 0 | 0 | 0 |
 | `wild_scanned_no_number.pdf` | 0 | 0 | 0 |
+| `wild_two_party_bare_tin_asprinted.pdf` | 0 | 0 | 0 |
+| `wild_ruled_lines_totals_asprinted.pdf` | 0 | 3 | 0 |
+| `wild_stacked_borderless_asprinted.pdf` | 0 | 0 | 0 |
 
-**0 of 3** lines reach any invoice, on the one scored layout that carries a table at all. That
+**0 of 6** lines reach any invoice, on the two scored layouts that carry a table at all. That
 zero is a TEXT-SEAM outcome, not a wiring one. `documentCreateInput` groups
 `line_items[N].<role>` extraction fields onto `invoice.CreateInput.LineItems`, and
 `invoice.Store.Create` writes one `line_items` row per entry, so an extracted line does reach the
@@ -909,10 +917,11 @@ The three advisory arrangements (`advisory_register.pdf`, `advisory_register_uns
 `advisory_dense.pdf` — **The advisory arrangements** below) join this list: generated and
 byte-compared like every other fixture, but outside `requiredPDFs`, `expectByLayout` and every
 `corpus_` ratchet. The spec that reads `wildUnprintedPhraseIDs`
-(`endtoend/wild_adversarial_test.go:454`) walks `expectByLayout` only, so it never reads them.
+(`endtoend/wild_adversarial_test.go:456`) walks `expectByLayout` only, so it never reads them.
 Registering either register fixture in `expectByLayout` must remove `withholding_tax` from that
 list in the same commit, because both print the withholding line; `advisory_dense.pdf` prints
-none. `dense_invoice.pdf` (pre-existing, unrelated to EXTR-26) belongs on this "not a layout" list
+none. `reg_identifier` left the list that way when `wild_two_party_bare_tin_asprinted.pdf`, which
+prints `VAT Reg. No:`, was registered. `dense_invoice.pdf` (pre-existing, unrelated to EXTR-26) belongs on this "not a layout" list
 too and has never been added; named here, not fixed.
 
 This also deviates from **When a client's invoice fails to extract** step 4 below, which asks a

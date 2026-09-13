@@ -79,6 +79,10 @@ var fxCorpus = []struct {
 	{fxWildStacked, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedFriendly) }},
 	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
 	{fxWildScanned, fxBuildWildScannedNoNumber},
+	// Each twin's geometry under its source's printed labels.
+	{fxWildTwoPartyAsPrinted, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyPrinted) }},
+	{fxWildRuledAsPrinted, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledPrinted) }},
+	{fxWildStackedAsPrinted, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedPrinted) }},
 	// EXTR-26-06: faithful transcriptions of two real Nigerian invoices, outside every corpus_
 	// ratchet.
 	{fxAdvisoryRegister, func() []byte { return fxBuildAdvisoryRegister(false) }},
@@ -898,7 +902,7 @@ var (
 	}
 	// NG-3's printed labels, letter-spaced where fxBuildAdvisoryRegister's R0 spaces them.
 	fxWildStackedPrinted = fxWildStackedLabels{
-		title: "Invoice", invoiceNo: `I N V O I C E   N U M B E R`, invNum: fxWildInvStackedAsPrinted, issueDate: `I S S U E D`,
+		title: "Invoice", invoiceNo: `I N V O I C E N U M B E R`, invNum: fxWildInvStackedAsPrinted, issueDate: `I S S U E D`,
 		buyer: "BILLED TO", buyerTIN: "Buyer TIN", supplier: "FROM", supplierTIN: "Supplier TIN", currency: "CURRENCY",
 		subtotal: "Subtotal", vat: "VAT 7.5%", total: "Amount payable",
 	}

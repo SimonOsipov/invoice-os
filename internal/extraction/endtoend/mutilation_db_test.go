@@ -54,7 +54,7 @@ const (
 	// (internal/extraction/accuracy_test.go:52). This suite scores eeCorpusCells cells over the 8 fields
 	// the mapper writes. Different denominator, different table -- pinning 38 here would be a
 	// false pin.
-	eeCutReach = 48
+	eeCutReach = 62
 )
 
 // The reach decoy. The two-branch alternation is load-bearing, not cosmetic: decideField keeps

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -113,12 +114,13 @@ func vsaExact(t *testing.T, id string) string {
 
 // The widening adds no anchor to any committed fixture: on every token text in every docling
 // golden, the widened buyer entries claim the same span the exact spelling did. Measured, not
-// assumed -- the eleven arrangements are what every downstream accuracy number is scored on.
+// assumed -- every lexicon-friendly golden is what every downstream accuracy number is scored on.
 func TestAnchorLexicon_TheSuffixAddsNoAnchorOnTheCommittedFixtures(t *testing.T) {
 	goldens, err := filepath.Glob(filepath.Join("testdata", "*.docling.json"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
+	goldens = vsaLexiconFriendlyGoldens(t, goldens)
 	if len(goldens) == 0 {
 		t.Fatal("no docling golden found; every assertion below would range over nothing")
 	}
@@ -335,7 +337,7 @@ func TestAnchorLexicon_TheAdvisoryArmsSurviveCasingAndSpacing(t *testing.T) {
 	}
 }
 
-// vsaScoredArrangements is the eleven layouts endtoend scores (endtoend/score_test.go's
+// vsaScoredArrangements is the eleven lexicon-friendly layouts endtoend scores (endtoend/score_test.go's
 // expectByLayout). Named rather than globbed: the question this test answers is about the
 // scored corpus, and a glob would silently answer it about whatever else lands in testdata.
 var vsaScoredArrangements = []string{
@@ -846,6 +848,7 @@ func TestAnchorLexicon_TheFromArmAddsNoAnchorOnTheCommittedArrangements(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	paths = vsaLexiconFriendlyGoldens(t, paths)
 	if len(paths) < len(vsaScoredArrangements) {
 		t.Fatalf("%d docling fixture(s) found, want at least the %d scored arrangements", len(paths), len(vsaScoredArrangements))
 	}
@@ -929,4 +932,28 @@ func TestLearn_ALearnedFromLabelLosesTheLeadingGuard(t *testing.T) {
 	if loc := alSpan(prose, "supplier_name"); loc != nil {
 		t.Errorf("supplier_name spans %v on %q; the guard the ceiling says is lost was never there", loc, prose)
 	}
+}
+
+// vsaAsPrintedGoldens are the goldens the two glob specs skip: a sibling prints the widened words on purpose.
+var vsaAsPrintedGoldens = []string{
+	"wild_ruled_lines_totals_asprinted.docling.json",
+	"wild_stacked_borderless_asprinted.docling.json",
+	"wild_two_party_bare_tin_asprinted.docling.json",
+}
+
+// vsaLexiconFriendlyGoldens drops every _asprinted golden, and fatals unless exactly vsaAsPrintedGoldens were dropped.
+func vsaLexiconFriendlyGoldens(t *testing.T, paths []string) []string {
+	t.Helper()
+	var kept, skipped []string
+	for _, p := range paths {
+		if strings.HasSuffix(strings.TrimSuffix(filepath.Base(p), ".docling.json"), "_asprinted") {
+			skipped = append(skipped, filepath.Base(p))
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !slices.Equal(skipped, vsaAsPrintedGoldens) {
+		t.Fatalf("skipped %v, want exactly %v", skipped, vsaAsPrintedGoldens)
+	}
+	return kept
 }

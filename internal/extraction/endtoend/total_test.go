@@ -15,7 +15,7 @@
 //
 // Deliberate overlap with TestWildLayouts_TheRuledTableReproducesACompetingTotal
 // (wild_adversarial_test.go): that spec pins the candidate VALUES on one arrangement, this file
-// pins the COUNT across all eleven. Two angles on one fact, kept on purpose.
+// pins the COUNT across all fourteen. Two angles on one fact, kept on purpose.
 package endtoend
 
 import (
@@ -61,6 +61,9 @@ var ttByLayout = []ttLayoutTotal{
 	{"wild_rc_due_naira.pdf", 1, "2687.50", "t1.total.right"},
 	{"wild_stacked_borderless.pdf", 0, "", ""},
 	{"wild_scanned_no_number.pdf", 1, "1935.00", "t1.total.right"},
+	{"wild_two_party_bare_tin_asprinted.pdf", 1, "1290.00", "t1.total.right"},
+	{"wild_ruled_lines_totals_asprinted.pdf", 1, "1000.00", "t1.total.right"},
+	{"wild_stacked_borderless_asprinted.pdf", 0, "", ""},
 }
 
 // ttMinResolving is how many rows must reach a candidate. A table quietly rewritten to all
@@ -127,7 +130,7 @@ func ttWithoutAddends(cands []extraction.Candidate) []extraction.Candidate {
 	return out
 }
 
-// AC-1. The exact per-layout total candidate count over all eleven arrangements, with the
+// AC-1. The exact per-layout total candidate count over all fourteen arrangements, with the
 // decided value and head rule each count implies. Exact, never <= 1: a layout dropping to 0 REDs
 // as loudly as one reaching 2. The instrument this drives is shown going positive by
 // TestEndToEnd_ThePlantedSecondTotalIsSeenByTheCountWalk.

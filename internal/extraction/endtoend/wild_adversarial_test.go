@@ -16,7 +16,7 @@ import (
 
 // wildLayoutCount pins the arrangement count. Every wild spec loops over wildLayouts without a
 // non-emptiness guard of its own; this is where an emptied slice fails.
-const wildLayoutCount = 5
+const wildLayoutCount = 8
 
 // TestWildLayouts_TheLayoutSetIsPinnedAndCarriedByEveryTable holds the one collection the whole
 // file iterates, and every table that must name each member.
@@ -351,19 +351,21 @@ var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
 // wild_scanned_no_number.pdf yields no pdfium token -- its docling golden carries neither
 // owning phrase.
 var wildPartyNames = map[string]map[string]string{
-	"corpus_inline_labels.pdf":    {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_split_labels.pdf":     {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_stacked_labels.pdf":   {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_two_column.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_ambiguous_date.pdf":   {"supplier_name": "Adeyemi Trading Limited"},
-	"wild_two_party_bare_tin.pdf": {"buyer_name": "Honeywell Group"},
-	"wild_ruled_lines_totals.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"wild_rc_due_naira.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_inline_labels.pdf":              {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_split_labels.pdf":               {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_stacked_labels.pdf":             {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_two_column.pdf":                 {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_ambiguous_date.pdf":             {"supplier_name": "Adeyemi Trading Limited"},
+	"wild_two_party_bare_tin.pdf":           {"buyer_name": "Honeywell Group"},
+	"wild_ruled_lines_totals.pdf":           {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_rc_due_naira.pdf":                 {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_two_party_bare_tin_asprinted.pdf": {"buyer_name": "Honeywell Group"},
+	"wild_ruled_lines_totals_asprinted.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 }
 
 const (
-	wildPartyNameCells   = 14
-	wildPartyNameLayouts = 11
+	wildPartyNameCells   = 17
+	wildPartyNameLayouts = 14
 )
 
 // wildRank0Names is each field's rank-0 value over one layout under rules, or "" where the
@@ -451,7 +453,7 @@ const (
 
 // wildUnprintedPhraseIDs are shipped lexicon ids no layout prints. They are the needle that keeps
 // the declared set derived from what the documents carry rather than from the lexicon.
-var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title", "withholding_tax"}
+var wildUnprintedPhraseIDs = []string{"doc_title", "withholding_tax"}
 
 var wildPrintedPhraseID = regexp.MustCompile(`"([a-z_]+)"`)
 
@@ -621,7 +623,7 @@ func wildNairaProbe() []extraction.TokenPage {
 
 const wildSweepMinCandidates = 3
 
-// AC-3.2. Over the eleven committed layouts plus the planted probe, every t1.currency.sweep
+// AC-3.2. Over the fourteen scored layouts plus the planted probe, every t1.currency.sweep
 // candidate carries the value NGN -- and there are at least three, so a rule that produced
 // nothing could not satisfy the value check below vacuously.
 func TestTier1_TheNairaSweepEmitsOnlyNGN(t *testing.T) {
@@ -677,7 +679,7 @@ var wildSweepFreeTokens = map[string][]string{
 
 const wildSweepMinTokens = 150 // measured 161; the story's earlier >= 300 floor was unmeetable
 
-// AC-3.3. Negative oracle with a control: over the eleven committed layouts, no ₦-free token --
+// AC-3.3. Negative oracle with a control: over the fourteen scored layouts, no ₦-free token --
 // named byte-exact -- produces a t1.currency.sweep candidate, and the same walk over the
 // planted probe finds exactly one, on the ₦ token, so the absence above is the pattern
 // refusing rather than the walk failing to run.
@@ -708,8 +710,8 @@ func TestTier1_TheNairaSweepFindsNoCurrencyInAMoneyTokenWithoutTheSymbol(t *test
 	if tokensRead < wildSweepMinTokens {
 		t.Fatalf("read %d token(s) across the corpus, want at least %d -- the negative assertions below would hold over too small a walk", tokensRead, wildSweepMinTokens)
 	}
-	if sweepTotal != 4 {
-		t.Errorf("the walk produced %d t1.currency.sweep candidate(s), want exactly 4", sweepTotal)
+	if sweepTotal != 6 {
+		t.Errorf("the walk produced %d t1.currency.sweep candidate(s), want exactly 6", sweepTotal)
 	}
 
 	for layout, tokens := range wildSweepFreeTokens {

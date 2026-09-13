@@ -186,5 +186,43 @@ func TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule(t *testin
 		if string(lr.Body) != r.body {
 			t.Errorf("%s %s: typed body = %s, want %s", r.fixture, r.field, lr.Body, r.body)
 		}
+		// The handler writes Field and Anchor.Text beside Body, so the whole rule must be the pointed one.
+		if lr.Field != pointed.Field || lr.Anchor != pointed.Anchor || lr.Rule.Label != pointed.Rule.Label ||
+			lr.Rule.Relation != pointed.Rule.Relation || lr.Rule.Shape != pointed.Rule.Shape {
+			t.Errorf("%s %s: typed rule = {%q %+v %q %+v}, want the pointed {%q %+v %q %+v}", r.fixture, r.field,
+				lr.Field, lr.Anchor, lr.Rule.Label, lr.Rule.Relation, pointed.Field, pointed.Anchor, pointed.Rule.Label, pointed.Rule.Relation)
+		}
+	}
+}
+
+// The route sends issue_date as one ISO reading; a raw ambiguous date keeps both, and either may be printed.
+func TestLearnTypedRule_MatchesEitherReadingOfAnAmbiguousTypedDate(t *testing.T) {
+	const typed = "12/03/2026"
+	if got := extraction.ShapeDate.Normalize(typed); len(got) != 2 {
+		t.Fatalf("premise: %q reads as %v, want two readings", typed, got)
+	}
+	for _, printed := range []string{"12 Mar 2026", "03 Dec 2026"} {
+		pages := rvPage(rvTok("Invoice Date", 0.10, 0.20, 0.25, 0.23), rvTok(printed, 0.30, 0.20, 0.45, 0.23))
+		if _, v := ltLearn(t, pages, "issue_date", typed); v != extraction.TypedLearned {
+			t.Errorf("printed %q: verdict = %d, want TypedLearned", printed, v)
+		}
+	}
+}
+
+// Anchors come from page 1 and LearnRule relates only anchors on the token's own page.
+func TestLearnTypedRule_ATokenOffPageOneDerivesNothing(t *testing.T) {
+	label := rvTok("Total", 0.10, 0.30, 0.20, 0.33)
+	value := rvTok("4,300.00", 0.30, 0.30, 0.45, 0.33)
+	onTwo := value
+	onTwo.Region.Page = 2
+	pages := append(rvPage(label), extraction.TokenPage{Number: 2, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{onTwo}})
+
+	lr, v := extraction.LearnTypedRule("total", "4300.00", pages[1], extraction.AnchorObservations(pages))
+	if v != extraction.TypedNotDerived {
+		t.Errorf("page 2: verdict = %d, want TypedNotDerived", v)
+	}
+	ltZero(t, "page 2", lr)
+	if _, v := ltLearn(t, rvPage(label, value), "total", "4300.00"); v != extraction.TypedLearned {
+		t.Errorf("control on page 1: verdict = %d, want TypedLearned", v)
 	}
 }

@@ -41,6 +41,28 @@ func TestLearnTypedRule_TheSelfCheckRefusesEveryReachableMisfire(t *testing.T) {
 	ltRefusedAtTheSelfCheck(t, rows)
 }
 
+// An anchor token overlapping the typed token derives same_token, which re-reads the anchor's own remainder.
+func TestLearnTypedRule_TheSelfCheckRefusesOneCandidateThatIsNotTheTypedValue(t *testing.T) {
+	pages := rvPage(rvTok("Total: 999.00", 0.10, 0.30, 0.40, 0.33), rvTok("4,300.00", 0.35, 0.31, 0.50, 0.34))
+	derived, ok := extraction.LearnRule("total", rvTokenByText(t, pages, "4,300.00").Region, extraction.AnchorObservations(pages))
+	if !ok {
+		t.Fatal("premise: LearnRule refused the typed token")
+	}
+	var read []string
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Learned: []extraction.AnchorRule{{Field: "total", Rule: derived.Rule}}}) {
+		read = append(read, c.Value)
+	}
+	if len(read) != 1 || read[0] != "999.00" {
+		t.Fatalf("premise: the rule alone reads %v, want exactly [999.00]", read)
+	}
+
+	lr, v := ltLearn(t, pages, "total", "4300.00")
+	if v != extraction.TypedSelfCheckRefused {
+		t.Errorf("verdict = %d, want TypedSelfCheckRefused", v)
+	}
+	ltZero(t, "one candidate, not the typed value", lr)
+}
+
 func TestLearnTypedRule_TheAcceptedCostRefusals(t *testing.T) {
 	rows := []ltRow{
 		{"corpus_inline_labels.pdf", "total", "1075.00", "Total: 1,075.00"},

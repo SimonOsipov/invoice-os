@@ -750,6 +750,12 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			needle: "tier1DropRight",
 			want:   []string{"0.949396", "135.00"},
 		},
+		{
+			file:   acDoc,
+			needle: "wild_stacked_borderless.pdf",
+			// The drop window's measured edges.
+			want: []string{"tier1DropRight", "0.949396", "135.00"},
+		},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			src := acRepoFile(t, c.file)

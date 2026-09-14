@@ -223,3 +223,86 @@ func TestReconcile_AFoundTotalIsReadThroughTheAmountShape(t *testing.T) {
 		}
 	})
 }
+
+// ftAssertFound8600At asserts the F0 total was found at box, with the anchored 1,000.00 kept.
+func ftAssertFound8600At(t *testing.T, results []extraction.FieldResult, box extraction.Region) {
+	t.Helper()
+	got := rtaFind(t, results, "total")
+	if got.Value == nil || *got.Value != "8600.00" || got.Reason != extraction.ReasonAmbiguous {
+		t.Fatalf("total = %v/%q, want 8600.00/ReasonAmbiguous", got.Value, got.Reason)
+	}
+	if got.Region == nil || *got.Region != box {
+		t.Errorf("total.Region = %+v, want %+v", got.Region, box)
+	}
+	wantAlts := []extraction.Field{{Name: "total", Value: rcStr("1000.00"), Region: &ftBoxC, Reason: extraction.ReasonNone}}
+	if !reflect.DeepEqual(got.Alternatives, wantAlts) {
+		t.Errorf("alternatives = %+v, want %+v", got.Alternatives, wantAlts)
+	}
+}
+
+// Only a taught TOTAL silences the pass; a learned addend is the evidence it balances against.
+func TestReconcile_ALearnedAddendDoesNotSilenceTheFoundTotal(t *testing.T) {
+	learnedSub := rcCandAt("subtotal", "8000.00", extraction.TierLearned, 0)
+	learnedSub.Region = &ftBoxA
+	learnedVAT := rcCandAt("vat", "600.00", extraction.TierLearned, 0)
+	learnedVAT.Region = &ftBoxB
+
+	arms := []struct {
+		name  string
+		cands []extraction.Candidate
+	}{
+		{"learned subtotal", []extraction.Candidate{learnedSub, ftVAT(), ftTotalCand()}},
+		{"learned vat", []extraction.Candidate{ftSubtotal(), learnedVAT, ftTotalCand()}},
+	}
+	for _, arm := range arms {
+		t.Run(arm.name, func(t *testing.T) {
+			with := ftRun(arm.cands, nil, ftF0Pages())
+			for _, want := range [][2]string{{"subtotal", "8000.00"}, {"vat", "600.00"}} {
+				if got := rtaFind(t, with, want[0]); got.Value == nil || *got.Value != want[1] || got.Reason != extraction.ReasonNone {
+					t.Fatalf("%s = %v/%q, want %s/ReasonNone -- the addend gate would silence this arm", want[0], got.Value, got.Reason, want[1])
+				}
+			}
+			ftAssertFound8600At(t, with, ftBoxD)
+		})
+	}
+}
+
+// An addend read from a boxless token has no box to exclude; that token is already outside the
+// population, so the printed total is still found.
+func TestReconcile_ABoxlessAddendExcludesNothing(t *testing.T) {
+	cands := []extraction.Candidate{
+		rcAdjacentAt("subtotal", "8000.00", extraction.TierGeneric, 0.03),
+		rcAdjacentAt("vat", "600.00", extraction.TierGeneric, 0.03),
+		ftTotalCand(),
+	}
+	zeroWidth := extraction.Region{Page: 1, X0: 0.60, Y0: 0.70, X1: 0.60, Y1: 0.72}
+	pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{
+		ftTok("8,000.00", zeroWidth), ftTok("600.00", zeroWidth), ftTok("1,000.00", ftBoxC), ftTok("8,600.00", ftBoxD),
+	}}}
+
+	with := ftRun(cands, nil, pages)
+	for _, name := range []string{"subtotal", "vat"} {
+		if got := rtaFind(t, with, name); got.Region != nil || got.Reason != extraction.ReasonNone {
+			t.Fatalf("%s = region %+v/%q, want nil/ReasonNone -- this arm needs a decided boxless addend", name, got.Region, got.Reason)
+		}
+	}
+	ftAssertFound8600At(t, with, ftBoxD)
+}
+
+// A box includes its page: an amount on page 2 at an addend's page-1 coordinates is another token.
+func TestReconcile_AnAddendsBoxOnAnotherPageIsStillEvidence(t *testing.T) {
+	for _, arm := range []struct {
+		name string
+		box  extraction.Region
+	}{{"subtotal", ftBoxA}, {"vat", ftBoxB}} {
+		t.Run(arm.name, func(t *testing.T) {
+			onPage2 := arm.box
+			onPage2.Page = 2
+			pages := []extraction.TokenPage{
+				{Number: 1, Tokens: []extraction.Token{ftTok("8,000.00", ftBoxA), ftTok("600.00", ftBoxB), ftTok("1,000.00", ftBoxC)}},
+				{Number: 2, Tokens: []extraction.Token{ftTok("8,600.00", onPage2)}},
+			}
+			ftAssertFound8600At(t, ftRun(ftF0Candidates(), nil, pages), onPage2)
+		})
+	}
+}

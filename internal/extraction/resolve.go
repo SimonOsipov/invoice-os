@@ -72,6 +72,8 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		before := len(all)
 		// A learned rule is never party-scoped: re-routing one by heading would overrule the
 		// reviewer who pointed at the field.
+		// ceiling: learned rules carry no drop band and LearnRule cannot relate a dropped
+		// value; revisit when a correction on an offset stack must learn
 		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned, 0)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
@@ -141,8 +143,17 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {
 						continue
 					}
+					// A dropped pair also checks the value's own band: a label sitting there
+					// owns the value just as one sitting on the anchor's band would.
+					if bounded && rel.dropped && crossesALabel(page, labels[pi],
+						Region{Page: tok.Region.Page, X0: tok.Region.X0, X1: tok.Region.X1, Y0: value.Region.Y0, Y1: value.Region.Y1},
+						value.Region) {
+						continue
+					}
 					// Adjacent is a constant of this branch, both relations: every value here
 					// came from a token beside the anchor, never from inside it.
+					// ceiling: a dropped value ranks by horizontal gap alone; revisit if a
+					// same-line value loses rank 0 to one
 					dst = appendReadings(dst, rule.Shape, value.Text,
 						usableRegion(value.Region), outField, ruleID, tier, rel.distance, true)
 				}
@@ -256,6 +267,8 @@ func isLabelSep(r rune) bool {
 type relatedToken struct {
 	index    int
 	distance float64
+	// dropped marks a pair the drop band admitted where the line band alone would have refused.
+	dropped bool
 }
 
 // relatedTokens returns every token on page standing in rel's relation to anchor, in reader
@@ -266,8 +279,6 @@ type relatedToken struct {
 // An unusable box on either side relates to nothing: a zero box sits at the page corner and
 // would be falsely adjacent to everything. That predicate also excludes the anchor from its own
 // result, since usableBox forces X0 < X1 and Y0 < Y1.
-//
-// drop is passed to relationClauses, which does not yet act on it.
 func relatedTokens(page TokenPage, anchor Region, rel Relation, drop float64) []relatedToken {
 	if !usableBox(anchor) {
 		return nil
@@ -282,45 +293,46 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation, drop float64) []
 		if !usableBox(b) {
 			continue
 		}
-		if order, distance, overlap := relationClauses(anchor, b, rel, drop); order || distance || overlap {
+		gap, dropped, order, distance, overlap := relationClauses(anchor, b, rel, drop)
+		if order || distance || overlap {
 			continue
 		}
-		var gap float64
-		switch rel.Kind {
-		case RelRight:
-			gap = b.X0 - anchor.X1
-		case RelBelow:
-			gap = b.Y0 - anchor.Y1
-		}
-		out = append(out, relatedToken{index: i, distance: gap})
+		out = append(out, relatedToken{index: i, distance: gap, dropped: dropped})
 	}
 	return out
 }
 
 // relationClauses reports every conjunct that rejects value for anchor under rel, not just the
-// first: TestOffsetStack_PdfiumTwinFailsOnlyTheOverlapClauseOnRight. drop is unread.
-func relationClauses(anchor, value Region, rel Relation, drop float64) (order, distance, overlap bool) {
-	var gap, ov, span float64
+// first: TestOffsetStack_PdfiumTwinFailsOnlyTheOverlapClauseOnRight. gap is the relation's axis
+// gap and dropped marks a right pair the drop band admitted where the line band alone refused;
+// below ignores drop and never sets dropped.
+func relationClauses(anchor, value Region, rel Relation, drop float64) (gap float64, dropped, order, distance, overlap bool) {
+	var ov, span float64
 	switch rel.Kind {
 	case RelRight:
 		order = value.X0 < anchor.X1
 		gap = value.X0 - anchor.X1
 		ov = overlap1D(anchor.Y0, anchor.Y1, value.Y0, value.Y1)
 		span = min(anchor.Y1-anchor.Y0, value.Y1-value.Y0)
+		// A subnormal span halves to zero, so ov >= 0.5*span would admit a zero overlap. The
+		// strict conjunct is what rejects one: TestResolve_RejectsAZeroOverlapUnderASubnormalSpan.
+		lineFails := ov <= 0 || ov < 0.5*span
+		// ceiling: ratio against the label box, whose height pdfium varies with glyphs;
+		// revisit when a label with no descenders misses a dropped value
+		dropped = lineFails && value.Y0 > anchor.Y0 && value.Y0-anchor.Y0 < drop*(anchor.Y1-anchor.Y0)
+		overlap = lineFails && !dropped
 	case RelBelow:
 		order = value.Y0 < anchor.Y1
 		gap = value.Y0 - anchor.Y1
 		ov = overlap1D(anchor.X0, anchor.X1, value.X0, value.X1)
 		span = min(anchor.X1-anchor.X0, value.X1-value.X0)
+		overlap = ov <= 0 || ov < 0.5*span
 	default:
-		return true, true, true
+		return 0, false, true, true, true
 	}
 
 	distance = gap > rel.MaxDistance
-	// A subnormal span halves to zero, so ov >= 0.5*span would admit a zero overlap. The
-	// strict conjunct is what rejects one: TestResolve_RejectsAZeroOverlapUnderASubnormalSpan.
-	overlap = ov <= 0 || ov < 0.5*span
-	return order, distance, overlap
+	return gap, dropped, order, distance, overlap
 }
 
 // overlap1D is the length [a0,a1] and [b0,b1] share, negative when they are disjoint.

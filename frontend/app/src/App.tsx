@@ -30,7 +30,14 @@ import {
 } from './lib/importRun'
 import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
-import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
+import {
+  canSubmitAllMappings,
+  groupByLayout,
+  groupOfFile,
+  rememberMapping,
+  splitOut,
+  type MappingGroup,
+} from './lib/mappingGroups'
 import {
   createImport,
   getExtractions,
@@ -1051,10 +1058,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           try {
             // Each file is sent with its OWN group's toImportMapping(mapping) (AC #7)
             // — never a second, per-file entity field.
+            // ceiling: two edited groups sharing columns in one run save the later-picked file's mapping.
             const report = await createImport(
               importAuth,
               base,
-              { documentId, entityId, mapping: toImportMapping(group.mapping) },
+              {
+                documentId,
+                entityId,
+                mapping: toImportMapping(group.mapping),
+                rememberMapping: rememberMapping(group),
+              },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
                 setRun(localRun)

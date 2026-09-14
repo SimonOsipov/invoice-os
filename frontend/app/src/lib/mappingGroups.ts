@@ -16,7 +16,7 @@
 // selection-half (BULK-01-03).
 
 import { canSubmitMapping, initMappingFromHeaders } from './mapping'
-import type { ImportPreview } from './importApi'
+import type { ImportPreview, SavedMapping } from './importApi'
 import type { Mapping } from '../types'
 
 // The exact, ordered, case-sensitive column list — JSON.stringify of the array, no
@@ -28,12 +28,18 @@ export function columnSignature(columns: string[]): string {
   return JSON.stringify(columns)
 }
 
+export interface RestoredFrom {
+  savedAt: string
+  mapping: Mapping // the placements as restored; a placement still equal to this renders RESTORED
+}
+
 export interface MappingGroup {
   id: string
   signature: string
   fileIds: string[]
   preview: ImportPreview
   mapping: Mapping
+  restored: RestoredFrom | null
 }
 
 // Walks `previewed` in pick order and buckets by columnSignature, preserving
@@ -55,6 +61,7 @@ export function groupByLayout(previewed: { fileId: string; preview: ImportPrevie
       fileIds: [fileId],
       preview,
       mapping: initMappingFromHeaders(preview.columns),
+      restored: null,
     }
     bySignature.set(signature, group)
     groups.push(group)
@@ -83,6 +90,8 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     fileIds: [fileId],
     preview: group.preview,
     mapping: { ...group.mapping },
+    // RED stub (EXTR-37-04): should carry group.restored; filled in by the implementation commit.
+    restored: null,
   }
 
   const next = groups.slice()
@@ -111,10 +120,62 @@ export function groupOfFile(groups: MappingGroup[], fileId: string): MappingGrou
   return groups.find((g) => g.fileIds.includes(fileId)) ?? null
 }
 
+// null -> the same group (today's seed). Otherwise mapping = restoreMapping(preview.columns,
+// saved.mapping) and restored = { savedAt: saved.saved_at, mapping: <that same mapping> }.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function applySavedMapping(group: MappingGroup, saved: SavedMapping | null): MappingGroup {
+  void saved
+  return group
+}
+
+// mapping = initMappingFromHeaders(preview.columns), restored = null; id/fileIds/preview kept.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function returnToAutomatic(group: MappingGroup): MappingGroup {
+  return group
+}
+
+export type PlacementBadge = 'restored' | 'auto' | null
+
+// null unless group.mapping[field] === header; otherwise 'restored' iff
+// group.restored?.mapping[field] === header; otherwise 'auto' iff recognized[field] === header.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
+  void group
+  void field
+  void header
+  void recognized
+  return null
+}
+
+// null when !group.restored; else `Mapping restored from this client's earlier import, saved
+// ${fmtDateTime(savedAt)}.` RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function restoredNotice(group: MappingGroup): string | null {
+  void group
+  return null
+}
+
+// lookup null -> groups unchanged, no call. Otherwise one awaited call per group, in order, with
+// group.preview.document_id; a rejected call leaves that group unchanged. Never rejects.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export async function restoreGroups(
+  groups: MappingGroup[],
+  lookup: ((documentId: string) => Promise<SavedMapping | null>) | null,
+): Promise<MappingGroup[]> {
+  void lookup
+  return groups
+}
+
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only
 // structural gate matching resolveMapping) for EVERY group — no second, parallel gate is
 // introduced. Mirrors lib/importRun.ts's canReadColumnsAll idiom: an empty group list has
 // nothing ready to submit.
 export function canSubmitAllMappings(groups: MappingGroup[]): boolean {
   return groups.length > 0 && groups.every((g) => canSubmitMapping(g.mapping))
+}
+
+// false only when group.restored is set and group.mapping deep-equals group.restored.mapping.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function rememberMapping(group: MappingGroup): boolean {
+  void group
+  return true
 }

@@ -81,3 +81,12 @@ export function toImportMapping(m: Mapping): Record<string, string> {
 export function canSubmitMapping(m: Mapping | null): boolean {
   return m != null && !!m.invoice_number
 }
+
+// Keeps a saved placement only for a canonical field whose header is in this file. Fields
+// the saved mapping left unplaced stay unplaced, even where an alias would match.
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export function restoreMapping(headers: string[], saved: Record<string, string>): Mapping {
+  void headers
+  void saved
+  return {}
+}

@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { CANON } from '../data'
-import { canSubmitMapping, initMappingFromHeaders, recognize, toImportMapping } from './mapping'
+import { canSubmitMapping, initMappingFromHeaders, recognize, restoreMapping, toImportMapping } from './mapping'
 import type { Mapping } from '../types'
 
 // Inlined per M4-08-03 [test-fixture-inlined]: a verbatim copy of the sample
@@ -106,6 +106,54 @@ describe('initMappingFromHeaders', () => {
     expect(map.vat).toBe('VAT')
     expect(map.total).toBe('Total')
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
+  })
+})
+
+// RED specs (EXTR-37-04, Mode A) — pin restoreMapping's contract before the implementation
+// commit fills the body in. Currently red because the stub returns {}.
+describe('restoreMapping', () => {
+  // Inlined per [Stage 1 correction C4]: mapping.ts cannot import e2e/importFixtures.ts.
+  const PERF_COLS = [
+    'Invoice No',
+    'Issue Date',
+    'Buyer TIN',
+    'Buyer',
+    'Currency',
+    'Subtotal',
+    'VAT',
+    'Total',
+    'Item',
+    'Qty',
+    'Unit Price',
+  ]
+
+  it('SM-FE-01: restores exactly the saved placements; an alias does not fill a field the saved mapping left unplaced', () => {
+    const saved = { invoice_number: 'Invoice No', subtotal: 'Subtotal', total: 'Total' }
+    const result = restoreMapping(PERF_COLS, saved)
+
+    expect(result).toEqual({
+      invoice_number: 'Invoice No',
+      issue_date: null,
+      buyer_tin: null,
+      buyer_name: null,
+      currency: null,
+      subtotal: 'Subtotal',
+      vat: null,
+      total: 'Total',
+      line_description: null,
+      line_quantity: null,
+      line_unit_price: null,
+    })
+    expect(Object.keys(result).sort()).toEqual(CANON.map((c) => c.key).sort())
+  })
+
+  it('SM-FE-02: drops a placement whose header is absent, differs only by case, or whose key is not canonical', () => {
+    const saved = { total: 'Grand Total', vat: 'vat', note: 'Total' }
+    const result = restoreMapping(PERF_COLS, saved)
+
+    expect(result.total).toBeNull()
+    expect(result.vat).toBeNull()
+    expect(result).not.toHaveProperty('note')
   })
 })
 

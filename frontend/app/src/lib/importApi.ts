@@ -202,6 +202,7 @@ export interface CreateImportRequest {
   documentId: string
   entityId: string
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
+  rememberMapping: boolean
 }
 
 export type UploadPhase =
@@ -422,6 +423,30 @@ export interface SupplyNumberRequest {
   entity_id: string
   document_id: string
   invoice_number: string
+}
+
+// GET /v1/imports/saved-mapping. Mirrors internal/importer/handlers.go's savedMappingResponse.
+export interface SavedMapping {
+  mapping: Record<string, string>
+  saved_at: string
+}
+
+export interface SavedMappingResponse {
+  saved_mapping: SavedMapping | null
+}
+
+// RED stub (EXTR-37-04): body filled in by the implementation commit.
+export async function getSavedMapping(
+  authedFetch: AuthedFetch,
+  base: string,
+  entityId: string,
+  documentId: string,
+): Promise<SavedMapping | null> {
+  void authedFetch
+  void base
+  void entityId
+  void documentId
+  return null
 }
 
 // null when there is nothing to carry: the route answers 200 null, never 404 (importApi.test.ts's EXTR27-W1).

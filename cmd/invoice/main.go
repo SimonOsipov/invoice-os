@@ -195,7 +195,7 @@ func main() {
 	cancelSeed()
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
-	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
 	// extraction becomes an invoice with no file/mapping wire at all.

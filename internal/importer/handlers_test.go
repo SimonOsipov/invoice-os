@@ -232,7 +232,7 @@ func dbStoredUpload(t *testing.T, app *pgxpool.Pool, tenantID, entityID, mapping
 // doImportCreate builds the POST /v1/imports request (query appended
 // verbatim, e.g. "?dry_run=true"), injects id into the context when non-nil
 // (auth.WithIdentity, mirroring invoice/handlers_test.go's doInvoiceCreate),
-// runs it through CreateHandler(imp, open, nil), and decodes the JSON
+// runs it through CreateHandler(imp, open, noSave, nil), and decodes the JSON
 // response body -- tolerating a completely empty body. Thin wrapper over
 // doImportUpload (handlers_upload_once_test.go) so the specs below keep their
 // two-value call shape.

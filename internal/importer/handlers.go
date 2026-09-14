@@ -181,6 +181,7 @@ func detectFormat(filename, contentType string) string {
 func CreateHandler(
 	imp func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {

@@ -326,7 +326,7 @@ func TestImportRoutes_DocumentAndSpreadsheetDoNotCollide(t *testing.T) {
 	open := newFakeDocOpen("f.csv", "text/csv", []byte("invoice_number\nINV-1\n")).fn()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, nil))
+	mux.HandleFunc("POST /v1/imports", CreateHandler(sheetImp, open, noSave, nil))
 	mux.HandleFunc("POST /v1/imports/document", CreateDocumentHandler(docSpy.fn(), nil))
 
 	id := testIdentity()

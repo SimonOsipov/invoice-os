@@ -167,11 +167,13 @@ func detectFormat(filename, contentType string) string {
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via
 // http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (a MaxBytesError
 // -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping/
-// document_id form values (blank/malformed -> 400, IMP-API-05) -> open (the
-// document's bytes) -> format detection (unrecognized -> 400) -> Decode
-// (undecodable -> 400) -> imp (Service.Import) -> statusForErr -> the shared
-// {"error":"..."} envelope on failure, or a 200 (dry run) / 201 (real)
-// importResponse on success.
+// remember_mapping form values (blank/malformed -> 400, IMP-API-05) ->
+// document_id -> open (the document's bytes) -> format detection
+// (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
+// (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
+// failure, or, on success, save (only when remembered, not a dry run and
+// completed; a save error is logged, never surfaced) -> a 200 (dry run) /
+// 201 (real) importResponse.
 //
 // [upload-once] The file itself no longer crosses this wire: it was stored by
 // POST /v1/imports/preview, and the caller sends that document's id. The read
@@ -218,6 +220,18 @@ func CreateHandler(
 		var mapping map[string]string
 		if err := json.Unmarshal([]byte(rawMapping), &mapping); err != nil {
 			writeError(w, http.StatusBadRequest, "mapping is not valid JSON")
+			return
+		}
+
+		// remember_mapping mirrors dry_run's parse: absent/"true" saves,
+		// "false" skips ([untouched-restore-does-not-save]), anything else 400s.
+		remember := true
+		switch r.FormValue("remember_mapping") {
+		case "", "true":
+		case "false":
+			remember = false
+		default:
+			writeError(w, http.StatusBadRequest, "remember_mapping must be true or false")
 			return
 		}
 
@@ -312,6 +326,13 @@ func CreateHandler(
 			}
 			writeError(w, status, msg)
 			return
+		}
+
+		if remember && !dryRun && res.Status == "completed" {
+			// The invoices are committed; a failed save must not turn a landed import into a 500.
+			if err := save(r.Context(), entityID, header, mapping); err != nil {
+				log.ErrorContext(r.Context(), "importer: save mapping", slog.Any("err", err))
+			}
 		}
 
 		status := http.StatusCreated

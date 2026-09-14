@@ -596,7 +596,7 @@ func TestRLS_EndToEndNoBaselineHitRegresses(t *testing.T) {
 	// is what has been gained since: a story that adds a hit widens the gap, a regression
 	// narrows it.
 	// It is NOT eeBaselineHitCount + eeRealMisses + eeAbsentCells == eeCorpusCells -- that sums
-	// to 84, because the four gained cells are in neither collection.
+	// to 92, because the 20 cells gained since the baseline are in neither collection.
 	if eeBaselineHitCount > eeCorpusHits {
 		t.Fatalf("the frozen baseline holds %d hit(s) and the corpus is pinned at %d; a pin below the baseline records a regression as the shipped number", eeBaselineHitCount, eeCorpusHits)
 	}

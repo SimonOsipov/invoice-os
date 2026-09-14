@@ -2,10 +2,10 @@
 // ReasonAmbiguous, which adjacent heads earn their ReasonNone, and that no in-scope value
 // moves. No database.
 //
-// The fourth column is EXTR-23's: total joined the doubt scope, and the eleven values below say
+// The fourth column is EXTR-23's: total joined the doubt scope, and the fourteen values below say
 // the widening moved no corpus cell. Its candidate COUNTS live in total_test.go.
 //
-// Every walk here sources each layout the way bdByLayout does -- pdfium for ten, the committed
+// Every walk here sources each layout the way bdByLayout does -- pdfium for thirteen, the committed
 // docling golden for the image-only one, which reads zero pdfium tokens and would otherwise
 // contribute an empty answer that agrees with any expectation.
 package endtoend
@@ -38,7 +38,7 @@ type dtCell struct {
 	alts   []string
 }
 
-// dtAmbiguous is EVERY cell the eleven layouts read as ReasonAmbiguous, in walk order. Four are
+// dtAmbiguous is EVERY cell the fourteen layouts read as ReasonAmbiguous, in walk order. Five are
 // EXTR-22's doubt, all buyer_name; corpus_ambiguous_date.pdf's is the pre-existing
 // equal-standing tie between two readings of one printed date, which the doubt never touches.
 var dtAmbiguous = []dtCell{
@@ -47,12 +47,13 @@ var dtAmbiguous = []dtCell{
 	{"corpus_ambiguous_date.pdf", "issue_date", "2026-03-12", []string{"2026-12-03"}},
 	{"wild_two_party_bare_tin.pdf", "buyer_name", "Honeywell Group", []string{"TIN:"}},
 	{"wild_scanned_no_number.pdf", "buyer_name", "7 AWOLOWO ROAD, IKOYI", []string{"TIN: 99999999-1202"}},
+	{"wild_two_party_bare_tin_asprinted.pdf", "buyer_name", "Honeywell Group", []string{"TIN:"}},
 }
 
 const (
-	// dtDoubtTotal is how many of those rows EXTR-22 adds. Pinned as a number as well as by
-	// name: a sixth doubtful cell must be argued for, not absorbed.
-	dtDoubtTotal = 4
+	// dtDoubtTotal is how many of those rows EXTR-22 adds; a seventh cell is argued for, not absorbed.
+	// The fifth is the sibling's own doubt on its twin's already-doubted geometry.
+	dtDoubtTotal = 5
 
 	// The one ambiguous cell that predates the doubt: two readings of one printed date.
 	dtPreExistingLayout = "corpus_ambiguous_date.pdf"
@@ -79,6 +80,9 @@ var dtByLayout = []dtLayoutValues{
 	{"wild_rc_due_naira.pdf", [4]string{"99999999-1002", "Honeywell Group", "187.50", "2687.50"}},
 	{"wild_stacked_borderless.pdf", [4]string{"99999999-1102", "", "", ""}},
 	{"wild_scanned_no_number.pdf", [4]string{"99999999-1202", "7 AWOLOWO ROAD, IKOYI", "135.00", "1935.00"}},
+	{"wild_two_party_bare_tin_asprinted.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
+	{"wild_ruled_lines_totals_asprinted.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "1000.00"}},
+	{"wild_stacked_borderless_asprinted.pdf", [4]string{"99999999-1102", "", "", ""}},
 }
 
 // dtRun is one layout through Resolve and Reconcile, with the token count that proves it was
@@ -156,10 +160,10 @@ func dtAltValues(alts []extraction.Field) []string {
 	return out
 }
 
-// AC-1, AC-2, AC-5. The complete ambiguous set over all eleven layouts, by name and by count,
-// with the value each cell still decides. The count pin is what stops a sixth doubtful cell
+// AC-1, AC-2, AC-5. The complete ambiguous set over all fourteen layouts, by name and by count,
+// with the value each cell still decides. The count pin is what stops a seventh doubtful cell
 // arriving unargued, and the floors are what stop the whole walk agreeing with itself.
-func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
+func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 	if len(dtByLayout) != len(bdByLayout) {
 		t.Fatalf("dtByLayout names %d layout(s) against bdByLayout's %d; the two walks cover different corpora", len(dtByLayout), len(bdByLayout))
 	}
@@ -215,7 +219,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedFive(t *testing.T) {
 			}
 		}
 
-		// All four doubtful heads are BELOW reads. A flag set for the rightward relation alone
+		// All five doubtful heads are BELOW reads. A flag set for the rightward relation alone
 		// -- the shape crossesALabel has -- would empty the doubt set and leave every
 		// assertion above vacuously true.
 		for _, want := range dtAmbiguous {

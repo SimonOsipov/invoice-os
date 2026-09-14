@@ -20,10 +20,10 @@ import (
 const eeReportMarker = "end-to-end field accuracy, document in to invoice row out"
 
 const (
-	// eeWrittenCells is hand-written: 11 layouts x 8 written fields. A deleted expectByLayout
+	// eeWrittenCells is hand-written: 14 layouts x 8 written fields. A deleted expectByLayout
 	// row must fail here rather than flatter the rate by shrinking the denominator.
-	eeWrittenCells = 88
-	eeLayoutCount  = 11
+	eeWrittenCells = 112
+	eeLayoutCount  = 14
 
 	// The cells the six corpus_ layouts carry no value for, plus the one the image-only
 	// arrangement deliberately omits. Pinned so an expectation cannot be silently emptied to
@@ -35,16 +35,16 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the eleven-layout figure, re-measured 2026-09-08 and pinned. Equality, not a
+// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-13 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 30 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 39 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 58
+	eeCorpusHits  = 73
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
@@ -237,6 +237,46 @@ var expectByLayout = []struct {
 			"total":          {"1935.00"},
 		},
 	},
+	// The as-printed siblings: each twin's geometry under its source document's printed labels.
+	{
+		file: "wild_two_party_bare_tin_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2201"},
+			"issue_date":     {"2026-06-11"},
+			"buyer_tin":      {"99999999-0802"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1200.00"},
+			"vat":            {"90.00"},
+			"total":          {"1290.00"},
+		},
+	},
+	{
+		file: "wild_ruled_lines_totals_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2202"},
+			"issue_date":     {"2026-06-24"},
+			"buyer_tin":      {"99999999-0902"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"8000.00"},
+			"vat":            {"600.00"},
+			"total":          {"8600.00"},
+		},
+	},
+	{
+		file: "wild_stacked_borderless_asprinted.pdf",
+		fields: map[string][]string{
+			"invoice_number": {"INV-2204"},
+			"issue_date":     {"2026-07-30"},
+			"buyer_tin":      {"99999999-1102"},
+			"buyer_name":     {"Honeywell Group"},
+			"currency":       {"NGN"},
+			"subtotal":       {"1500.00"},
+			"vat":            {"112.50"},
+			"total":          {"1612.50"},
+		},
+	},
 }
 
 // eeAbsentCells names every cell the bytes carry no value for, with the reason. A shape-level
@@ -288,6 +328,17 @@ var eeRealMisses = map[string]string{
 	"wild_scanned_no_number.pdf/subtotal":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/vat":        "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/total":      "the document quarantines for the missing invoice number, so no invoices row carries this value",
+
+	"wild_ruled_lines_totals_asprinted.pdf/total": "the Total label continues on the last data row's baseline, so no shipped relation reaches the printed total; a new candidate source is EXTR-29's",
+
+	"wild_stacked_borderless_asprinted.pdf/invoice_number": "the label is letter-spaced as printed and no lexicon entry reaches it, so the document quarantines; EXTR-31 Core AC-4 claims the quarantine, and letter-spaced matching is owed and unowned",
+	"wild_stacked_borderless_asprinted.pdf/issue_date":     "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/buyer_tin":      "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/buyer_name":     "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/currency":       "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/subtotal":       "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/vat":            "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
+	"wild_stacked_borderless_asprinted.pdf/total":          "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
 }
 
 // eeCell is one (layout, field) cell -- the unit the rate counts.
@@ -323,7 +374,7 @@ type eeScore struct {
 
 // eeQuarantinedLayouts is every layout the walk must quarantine, in expectByLayout order. An
 // identity, not a count: a walk that quarantined the wrong layout sums the same.
-var eeQuarantinedLayouts = []string{"wild_scanned_no_number.pdf"}
+var eeQuarantinedLayouts = []string{"wild_scanned_no_number.pdf", "wild_stacked_borderless_asprinted.pdf"}
 
 // eeLinesScoredComplete is the walk's line-scoring completeness rule. Pure, so the shape can be
 // falsified without a database.
@@ -901,7 +952,9 @@ func TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer(t *testing.
 	for _, want := range expectByLayout {
 		everyLayout = append(everyLayout, want.file)
 	}
-	q := eeQuarantinedLayouts[0]
+	q, shipped := eeQuarantinedLayouts[0], len(eeQuarantinedLayouts)
+	wrong := slices.Clone(eeQuarantinedLayouts)
+	wrong[0] = wildRuled
 
 	cases := []struct {
 		name        string
@@ -909,13 +962,13 @@ func TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer(t *testing.
 		quarantined []string
 		wantErr     bool
 	}{
-		{"the shipped shape", eeLayoutCount - 1, []string{q}, false},
-		{"the scorer call was silently deleted", 0, []string{q}, true},
-		{"one layout stopped being scored", eeLayoutCount - 2, []string{q}, true},
+		{"the shipped shape", eeLayoutCount - shipped, slices.Clone(eeQuarantinedLayouts), false},
+		{"the scorer call was silently deleted", 0, slices.Clone(eeQuarantinedLayouts), true},
+		{"one layout stopped being scored", eeLayoutCount - shipped - 1, slices.Clone(eeQuarantinedLayouts), true},
 		{"the quarantine term absorbs the deficit", 0, everyLayout, true},
 		{"nothing quarantined", eeLayoutCount, nil, true},
-		{"the wrong layout quarantined", eeLayoutCount - 1, []string{wildRuled}, true},
-		{"the same layout quarantined twice", eeLayoutCount - 1, []string{q, q}, true},
+		{"the wrong layout quarantined", eeLayoutCount - shipped, wrong, true},
+		{"the same layout quarantined twice", eeLayoutCount - shipped, slices.Repeat([]string{q}, shipped), true},
 		{"an empty walk", 0, nil, true},
 	}
 	for _, c := range cases {

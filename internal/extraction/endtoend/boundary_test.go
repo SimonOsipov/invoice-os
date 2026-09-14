@@ -91,17 +91,18 @@ type bdLayout struct {
 
 // bdRightwardTotal is the whole corpus's rightward candidate count. The blast surface, not a
 // summary: the boundary can only ever remove a rightward candidate.
-const bdRightwardTotal = 28
+const bdRightwardTotal = 35
 
 // bdSilentLayouts read no value rightward at all, so crossesALabel is never called on them.
-// Named here because "the boundary moved nothing on all eleven layouts" has an effective
-// denominator of six.
+// Named here because "the boundary moved nothing on all fourteen layouts" has an effective
+// denominator of eight.
 var bdSilentLayouts = []string{
 	"corpus_inline_labels.pdf",
 	"corpus_stacked_labels.pdf",
 	"corpus_two_column.pdf",
 	"corpus_ambiguous_date.pdf",
 	"wild_stacked_borderless.pdf",
+	"wild_stacked_borderless_asprinted.pdf",
 }
 
 // bdByLayout is the pinned table, measured at f707543a with the shipped Tier-1 set.
@@ -152,6 +153,18 @@ var bdByLayout = []bdLayout{
 		bdMake("vat", "135.00", "t1.vat.right", 0.139434),
 		bdMake("total", "1935.00", "t1.total.right", 0.099673),
 	}},
+	{file: "wild_two_party_bare_tin_asprinted.pdf", rows: []bdRow{
+		bdMake("buyer_tin", "99999999-0802", "t1.tin.right", 0.109281),
+		bdMake("subtotal", "1200.00", "t1.subtotal.right", 0.140693),
+		bdMake("vat", "90.00", "t1.vat.right", 0.129791),
+		bdMake("total", "1290.00", "t1.total.right", 0.152693),
+	}},
+	{file: "wild_ruled_lines_totals_asprinted.pdf", rows: []bdRow{
+		bdMake("subtotal", "8000.00", "t1.subtotal.right", 0.056647),
+		bdMake("vat", "600.00", "t1.vat.right", 0.083961),
+		bdMake("total", wildRuledLastLineAmount, "t1.total.right", 0.047611),
+	}},
+	{file: "wild_stacked_borderless_asprinted.pdf"},
 }
 
 // bdGoldenTokenPages replays one layout's committed golden through the real DoclingReader and
@@ -236,8 +249,8 @@ func TestEndToEnd_TheRightwardCandidateSetIsUnmovedByTheBoundary(t *testing.T) {
 		t.Fatalf("walked %d of %d layout(s)", walked, len(bdByLayout))
 	}
 
-	// The named zeros, as a list: five of eleven layouts call crossesALabel not once, so every
-	// "over all eleven layouts" claim about a rightward behaviour has a denominator of six.
+	// The named zeros, as a list: six of fourteen layouts call crossesALabel not once, so every
+	// "over all fourteen layouts" claim about a rightward behaviour has a denominator of eight.
 	if len(slices.Compact(slices.Sorted(slices.Values(bdSilentLayouts)))) != len(bdSilentLayouts) {
 		t.Fatalf("bdSilentLayouts names a layout twice: %v; a repeat keeps the count while leaving a layout unwatched", bdSilentLayouts)
 	}
@@ -246,7 +259,7 @@ func TestEndToEnd_TheRightwardCandidateSetIsUnmovedByTheBoundary(t *testing.T) {
 			t.Errorf("bdSilentLayouts names %s, which the walk does not cover", name)
 		}
 	}
-	if got, want := len(bdByLayout)-len(bdSilentLayouts), 6; got != want {
+	if got, want := len(bdByLayout)-len(bdSilentLayouts), 8; got != want {
 		t.Errorf("%d of %d layouts read something rightward, want %d", got, len(bdByLayout), want)
 	}
 }
@@ -283,7 +296,7 @@ func TestEndToEnd_TheScannedLayoutIsWalkedThroughItsGolden(t *testing.T) {
 	}
 }
 
-// AC-4's discriminator. The eleven-layout walk above reports no difference; run the SAME helper
+// AC-4's discriminator. The fourteen-layout walk above reports no difference; run the SAME helper
 // over an arrangement whose rightward set the boundary MUST shrink, and it has to report one.
 // Without this, "no difference" holds equally against a comparison that can never report one.
 func TestEndToEnd_TheBoundaryComparisonDetectsASingleRemovedCandidate(t *testing.T) {
@@ -307,7 +320,7 @@ func TestEndToEnd_TheBoundaryComparisonDetectsASingleRemovedCandidate(t *testing
 		t.Fatalf("the arrangement produced %s, which it did not before; the difference this spec measures is not the one the boundary makes", bdShow(extra))
 	}
 	if !slices.Equal(missing, []bdRow{blocked}) {
-		t.Errorf("the comparison reports %s missing against the pre-boundary set, want exactly %s; the eleven-layout walk's \"no difference\" holds equally against a comparison that can never report one", bdShow(missing), blocked)
+		t.Errorf("the comparison reports %s missing against the pre-boundary set, want exactly %s; the fourteen-layout walk's \"no difference\" holds equally against a comparison that can never report one", bdShow(missing), blocked)
 	}
 }
 

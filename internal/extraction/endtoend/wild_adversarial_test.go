@@ -1,13 +1,18 @@
-// wild_adversarial_test.go: QA's hardening of the four wild_ arrangements -- the pin every
+// wild_adversarial_test.go: QA's hardening of the wild_ arrangements -- the pin every
 // other wild loop borrows its non-emptiness from, the two defects these fixtures do NOT
 // reproduce, and the golden properties nothing else reads. No database.
 package endtoend
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,7 +21,7 @@ import (
 
 // wildLayoutCount pins the arrangement count. Every wild spec loops over wildLayouts without a
 // non-emptiness guard of its own; this is where an emptied slice fails.
-const wildLayoutCount = 5
+const wildLayoutCount = 8
 
 // TestWildLayouts_TheLayoutSetIsPinnedAndCarriedByEveryTable holds the one collection the whole
 // file iterates, and every table that must name each member.
@@ -347,23 +352,25 @@ var wildPartyNameFields = []string{"supplier_name", "buyer_name"}
 // wildPartyNames is the party name each layout reads at rank 0, measured through PDFium before
 // the owning-phrase entries. A field a layout is not listed under read no name and is not
 // compared: wild_two_party_bare_tin.pdf carries no supplier heading and reads no supplier name,
-// corpus_totals_block.pdf and wild_stacked_borderless.pdf read no name at all, and
+// corpus_totals_block.pdf and both stacked borderless layouts read no name at all, and
 // wild_scanned_no_number.pdf yields no pdfium token -- its docling golden carries neither
 // owning phrase.
 var wildPartyNames = map[string]map[string]string{
-	"corpus_inline_labels.pdf":    {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_split_labels.pdf":     {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_stacked_labels.pdf":   {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_two_column.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"corpus_ambiguous_date.pdf":   {"supplier_name": "Adeyemi Trading Limited"},
-	"wild_two_party_bare_tin.pdf": {"buyer_name": "Honeywell Group"},
-	"wild_ruled_lines_totals.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
-	"wild_rc_due_naira.pdf":       {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_inline_labels.pdf":              {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_split_labels.pdf":               {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_stacked_labels.pdf":             {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_two_column.pdf":                 {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"corpus_ambiguous_date.pdf":             {"supplier_name": "Adeyemi Trading Limited"},
+	"wild_two_party_bare_tin.pdf":           {"buyer_name": "Honeywell Group"},
+	"wild_ruled_lines_totals.pdf":           {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_rc_due_naira.pdf":                 {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
+	"wild_two_party_bare_tin_asprinted.pdf": {"buyer_name": "Honeywell Group"},
+	"wild_ruled_lines_totals_asprinted.pdf": {"supplier_name": "Adeyemi Trading Limited", "buyer_name": "Honeywell Group"},
 }
 
 const (
-	wildPartyNameCells   = 14
-	wildPartyNameLayouts = 11
+	wildPartyNameCells   = 17
+	wildPartyNameLayouts = 14
 )
 
 // wildRank0Names is each field's rank-0 value over one layout under rules, or "" where the
@@ -451,7 +458,7 @@ const (
 
 // wildUnprintedPhraseIDs are shipped lexicon ids no layout prints. They are the needle that keeps
 // the declared set derived from what the documents carry rather than from the lexicon.
-var wildUnprintedPhraseIDs = []string{"reg_identifier", "doc_title", "withholding_tax"}
+var wildUnprintedPhraseIDs = []string{"doc_title", "withholding_tax"}
 
 var wildPrintedPhraseID = regexp.MustCompile(`"([a-z_]+)"`)
 
@@ -621,7 +628,7 @@ func wildNairaProbe() []extraction.TokenPage {
 
 const wildSweepMinCandidates = 3
 
-// AC-3.2. Over the eleven committed layouts plus the planted probe, every t1.currency.sweep
+// AC-3.2. Over the fourteen scored layouts plus the planted probe, every t1.currency.sweep
 // candidate carries the value NGN -- and there are at least three, so a rule that produced
 // nothing could not satisfy the value check below vacuously.
 func TestTier1_TheNairaSweepEmitsOnlyNGN(t *testing.T) {
@@ -677,7 +684,7 @@ var wildSweepFreeTokens = map[string][]string{
 
 const wildSweepMinTokens = 150 // measured 161; the story's earlier >= 300 floor was unmeetable
 
-// AC-3.3. Negative oracle with a control: over the eleven committed layouts, no ₦-free token --
+// AC-3.3. Negative oracle with a control: over the fourteen scored layouts, no ₦-free token --
 // named byte-exact -- produces a t1.currency.sweep candidate, and the same walk over the
 // planted probe finds exactly one, on the ₦ token, so the absence above is the pattern
 // refusing rather than the walk failing to run.
@@ -708,8 +715,8 @@ func TestTier1_TheNairaSweepFindsNoCurrencyInAMoneyTokenWithoutTheSymbol(t *test
 	if tokensRead < wildSweepMinTokens {
 		t.Fatalf("read %d token(s) across the corpus, want at least %d -- the negative assertions below would hold over too small a walk", tokensRead, wildSweepMinTokens)
 	}
-	if sweepTotal != 4 {
-		t.Errorf("the walk produced %d t1.currency.sweep candidate(s), want exactly 4", sweepTotal)
+	if sweepTotal != 6 {
+		t.Errorf("the walk produced %d t1.currency.sweep candidate(s), want exactly 6", sweepTotal)
 	}
 
 	for layout, tokens := range wildSweepFreeTokens {
@@ -771,5 +778,410 @@ func TestRLS_EndToEndTheScannedLayoutBindsTheBuyerTIN(t *testing.T) {
 	}
 	if !slices.Contains(got["supplier_tin"], supplierTIN) {
 		t.Errorf("%s: supplier_tin = %v, want it to hold %s; without it the exclusion above holds against a field nothing reaches", wildScanned, got["supplier_tin"], supplierTIN)
+	}
+}
+
+// Fails once the supplier's VAT Reg. No. starts filing as the buyer's TIN.
+func TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN(t *testing.T) {
+	supplierTIN, buyerTIN := wildTINs[0], wildTINs[1]
+	pages := eeTokenPages(t, wildTwoPartyAsPrinted)
+
+	regNo := false
+	for _, o := range extraction.AnchorObservations(pages) {
+		if o.Label == "reg_identifier" && strings.HasPrefix(o.Text, "VAT Reg. No") {
+			regNo = true
+		}
+	}
+	if !regNo {
+		t.Fatalf("%s observes no reg_identifier on VAT Reg. No; the page does not print the label below", wildTwoPartyAsPrinted)
+	}
+
+	buyer := wildResolved(t, wildTwoPartyAsPrinted, "buyer_tin")
+	if distinct := slices.Compact(slices.Sorted(slices.Values(buyer))); !slices.Equal(distinct, []string{buyerTIN}) {
+		t.Errorf("%s: buyer_tin = %v, want only %s", wildTwoPartyAsPrinted, buyer, buyerTIN)
+	}
+	supplier := wildResolved(t, wildTwoPartyAsPrinted, "supplier_tin")
+	if !slices.Contains(supplier, supplierTIN) || slices.Contains(supplier, buyerTIN) {
+		t.Errorf("%s: supplier_tin = %v, want %s and never %s", wildTwoPartyAsPrinted, supplier, supplierTIN, buyerTIN)
+	}
+}
+
+// The letter-spaced label is printed and read, and still no invoice number resolves.
+func TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber(t *testing.T) {
+	const printed = "I N V O I C E N U M B E R"
+	pages := eeTokenPages(t, wildStackedAsPrinted)
+
+	found := false
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if strings.TrimSpace(tok.Text) == printed {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("%s reads no %q token; the absence below would be of the label, not of the number", wildStackedAsPrinted, printed)
+	}
+
+	var got []string
+	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+		if c.Field == "invoice_number" {
+			got = append(got, c.Value)
+		}
+	}
+	if len(got) != 0 {
+		t.Errorf("%s resolves invoice_number %v, want none", wildStackedAsPrinted, got)
+	}
+	if twin := wildResolved(t, wildStacked, "invoice_number"); !slices.Equal(twin, []string{wildInvNums[3]}) {
+		t.Errorf("%s resolves invoice_number %v, want exactly [%s] on the same geometry", wildStacked, twin, wildInvNums[3])
+	}
+}
+
+// --- every wild_ arrangement declares a sibling or an exemption --------------------------------
+
+const wildAsPrintedSuffix = "_asprinted.pdf"
+
+// wildOwnerRE names an owning story: a sibling miss without one reads exactly like a regression.
+var wildOwnerRE = regexp.MustCompile(`EXTR-[0-9]+`)
+
+type (
+	wildTableRow = struct {
+		file   string
+		fields map[string][]string
+	}
+	wildTableRows = []wildTableRow
+)
+
+// wildCommittedArrangements is every committed testdata/wild_*.pdf, siblings included.
+func wildCommittedArrangements(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(eeFxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", eeFxDir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, "wild_") && strings.HasSuffix(n, ".pdf") {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// wildPairProblems is pure so TestWildPairs_TheCheckerRefusesAnUndeclaredArrangement can plant its input.
+func wildPairProblems(committed []string, pairs []wildPair) []string {
+	var problems []string
+	for _, p := range pairs {
+		if !slices.Contains(committed, p.twin) {
+			problems = append(problems, fmt.Sprintf("wildPairs names %s, which is not committed", p.twin))
+		}
+		switch {
+		case p.sibling != "" && p.exemption != "":
+			problems = append(problems, fmt.Sprintf("%s declares both a sibling and an exemption", p.twin))
+		case p.sibling == "" && strings.TrimSpace(p.exemption) == "":
+			problems = append(problems, fmt.Sprintf("%s declares neither a sibling nor an exemption reason", p.twin))
+		}
+		if p.sibling == "" {
+			continue
+		}
+		if want := strings.TrimSuffix(p.twin, ".pdf") + wildAsPrintedSuffix; p.sibling != want {
+			problems = append(problems, fmt.Sprintf("%s's sibling is %s, want %s", p.twin, p.sibling, want))
+		} else if !slices.Contains(committed, p.sibling) {
+			problems = append(problems, fmt.Sprintf("%s's sibling %s is not committed", p.twin, p.sibling))
+		}
+	}
+	for _, name := range committed {
+		if strings.HasSuffix(name, wildAsPrintedSuffix) {
+			if !slices.ContainsFunc(pairs, func(p wildPair) bool { return p.sibling == name }) {
+				problems = append(problems, fmt.Sprintf("%s is committed and no wildPairs row names it as a sibling", name))
+			}
+			continue
+		}
+		switch n := len(slices.DeleteFunc(slices.Clone(pairs), func(p wildPair) bool { return p.twin != name })); {
+		case n == 0:
+			problems = append(problems, fmt.Sprintf("%s declares neither a sibling nor an exemption; add a wildPairs row", name))
+		case n > 1:
+			problems = append(problems, fmt.Sprintf("%s has %d wildPairs rows, want one", name, n))
+		}
+	}
+	return problems
+}
+
+// wildParityProblems is pure so TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow can
+// edit copies. compared counts sibling cells checked; owned counts sibling misses naming an owner.
+func wildParityProblems(pairs []wildPair, expect wildTableRows, absent, real map[string]string) (problems []string, compared, owned int) {
+	row := func(file string) (map[string][]string, bool) {
+		i := slices.IndexFunc(expect, func(r wildTableRow) bool { return r.file == file })
+		if i < 0 {
+			return nil, false
+		}
+		return expect[i].fields, true
+	}
+	for _, p := range pairs {
+		if p.sibling == "" {
+			continue
+		}
+		twin, ok := row(p.twin)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("expectByLayout has no row for twin %s", p.twin))
+			continue
+		}
+		sib, ok := row(p.sibling)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("expectByLayout has no row for sibling %s", p.sibling))
+			continue
+		}
+		for _, f := range writtenFields {
+			compared++
+			cell := p.sibling + "/" + f
+			if f == "invoice_number" {
+				if len(sib[f]) == 0 || slices.ContainsFunc(sib[f], func(v string) bool { return slices.Contains(twin[f], v) }) {
+					problems = append(problems, fmt.Sprintf("%s expects %v; a sibling's invoice number is non-empty and never its twin's %v", cell, sib[f], twin[f]))
+				}
+			} else if !slices.Equal(sib[f], twin[f]) {
+				problems = append(problems, fmt.Sprintf("%s expects %v and its twin expects %v; a sibling asserts every fact its twin does", cell, sib[f], twin[f]))
+			}
+			if _, ok := absent[cell]; ok {
+				if _, twinAbsent := absent[p.twin+"/"+f]; !twinAbsent {
+					problems = append(problems, fmt.Sprintf("%s is an absent cell and its twin's is not", cell))
+				}
+			}
+			if reason, ok := real[cell]; ok {
+				if wildOwnerRE.MatchString(reason) {
+					owned++
+				} else {
+					problems = append(problems, fmt.Sprintf("%s misses with no owning story: %q", cell, reason))
+				}
+			}
+		}
+	}
+	return problems, compared, owned
+}
+
+// wildElevenRendering renders every non-sibling expectByLayout cell and miss entry, one sorted line each.
+func wildElevenRendering(expect wildTableRows, absent, real map[string]string) (rendering string, rows, cells int) {
+	var b strings.Builder
+	for _, r := range slices.SortedFunc(slices.Values(expect), func(x, y wildTableRow) int { return strings.Compare(x.file, y.file) }) {
+		if strings.HasSuffix(r.file, wildAsPrintedSuffix) {
+			continue
+		}
+		rows++
+		for _, f := range slices.Sorted(maps.Keys(r.fields)) {
+			cells++
+			quoted := make([]string, 0, len(r.fields[f]))
+			for _, v := range r.fields[f] {
+				quoted = append(quoted, strconv.Quote(v))
+			}
+			fmt.Fprintf(&b, "expect %s/%s=%s\n", r.file, f, strings.Join(quoted, "|"))
+		}
+	}
+	for _, tbl := range []struct {
+		name string
+		m    map[string]string
+	}{{"absent", absent}, {"real", real}} {
+		for _, k := range slices.Sorted(maps.Keys(tbl.m)) {
+			if layout, _, _ := strings.Cut(k, "/"); strings.HasSuffix(layout, wildAsPrintedSuffix) {
+				continue
+			}
+			fmt.Fprintf(&b, "%s %s=%s\n", tbl.name, k, strconv.Quote(tbl.m[k]))
+		}
+	}
+	return b.String(), rows, cells
+}
+
+// The pair must be visible, not merely present: a new arrangement cannot land lexicon-friendly-only.
+func TestWildPairs_EveryArrangementDeclaresASiblingOrAnExemption(t *testing.T) {
+	committed := wildCommittedArrangements(t)
+	var arrangements, siblings, exemptions int
+	for _, n := range committed {
+		if strings.HasSuffix(n, wildAsPrintedSuffix) {
+			siblings++
+		} else {
+			arrangements++
+		}
+	}
+	for _, p := range wildPairs {
+		if p.exemption != "" {
+			exemptions++
+		}
+	}
+	if arrangements < 5 || siblings < 3 || exemptions < 2 {
+		t.Fatalf("%d committed arrangement(s), %d sibling(s), %d exemption(s); want at least 5, 3 and 2 -- the check below would pass over nothing", arrangements, siblings, exemptions)
+	}
+	for _, p := range wildPairProblems(committed, wildPairs) {
+		t.Error(p)
+	}
+}
+
+func TestWildPairs_TheCheckerRefusesAnUndeclaredArrangement(t *testing.T) {
+	committed := wildCommittedArrangements(t)
+	if len(wildPairs) == 0 {
+		t.Fatal("wildPairs is empty; every edit below would fatal on a missing row")
+	}
+	if got := wildPairProblems(committed, wildPairs); len(got) != 0 {
+		t.Fatalf("the unplanted input reports %v; every case below would read an extra problem", got)
+	}
+	plus := func(name string) []string { return append(slices.Clone(committed), name) }
+	without := func(name string) []string {
+		return slices.DeleteFunc(slices.Clone(committed), func(n string) bool { return n == name })
+	}
+	edit := func(twin string, change func(*wildPair)) []wildPair {
+		out := slices.Clone(wildPairs)
+		if i := slices.IndexFunc(out, func(p wildPair) bool { return p.twin == twin }); i >= 0 {
+			change(&out[i])
+		}
+		return out
+	}
+	cases := []struct {
+		name, needle string
+		committed    []string
+		pairs        []wildPair
+	}{
+		{"an undeclared arrangement", "wild_planted_arrangement.pdf", plus("wild_planted_arrangement.pdf"), wildPairs},
+		{"an orphan sibling", "wild_planted_asprinted.pdf", plus("wild_planted_asprinted.pdf"), wildPairs},
+		{"a sibling and an exemption", wildRCNaira, plus("wild_rc_due_naira_asprinted.pdf"), edit(wildRCNaira, func(p *wildPair) { p.sibling = "wild_rc_due_naira_asprinted.pdf" })},
+		{"a blank exemption", wildRCNaira, committed, edit(wildRCNaira, func(p *wildPair) { p.exemption = " " })},
+		{"a misnamed sibling", "wild_ruled_asprinted.pdf", append(without(wildRuledAsPrinted), "wild_ruled_asprinted.pdf"), edit(wildRuled, func(p *wildPair) { p.sibling = "wild_ruled_asprinted.pdf" })},
+		{"an uncommitted sibling", wildStackedAsPrinted, without(wildStackedAsPrinted), wildPairs},
+		{"an uncommitted twin", "wild_planted_twin.pdf", committed, append(slices.Clone(wildPairs), wildPair{twin: "wild_planted_twin.pdf", exemption: "planted"})},
+		{"a second row", wildScanned, committed, append(slices.Clone(wildPairs), wildPair{twin: wildScanned, exemption: "planted"})},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := wildPairProblems(c.committed, c.pairs); len(got) != 1 || !strings.Contains(got[0], c.needle) {
+				t.Errorf("reports %v, want exactly one problem naming %s", got, c.needle)
+			}
+		})
+	}
+}
+
+func TestWildPairs_ATwinHitIsASiblingHitOrAnOwnedMiss(t *testing.T) {
+	problems, compared, owned := wildParityProblems(wildPairs, expectByLayout, eeAbsentCells, eeRealMisses)
+	if compared < 3*len(writtenFields) || owned < 1 {
+		t.Fatalf("compared %d sibling cell(s) and %d owned miss(es), want at least %d and 1 -- a parity check over nothing passes", compared, owned, 3*len(writtenFields))
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+}
+
+// wildCopyTables deep-copies the scored tables so a case edits nothing another case reads.
+func wildCopyTables() (wildTableRows, map[string]string, map[string]string) {
+	expect := make(wildTableRows, len(expectByLayout))
+	for i, r := range expectByLayout {
+		expect[i] = wildTableRow{file: r.file, fields: map[string][]string{}}
+		for k, v := range r.fields {
+			expect[i].fields[k] = slices.Clone(v)
+		}
+	}
+	return expect, maps.Clone(eeAbsentCells), maps.Clone(eeRealMisses)
+}
+
+// wildRowOf is layout's fields in a copy; it fatals rather than edit nothing.
+func wildRowOf(t *testing.T, expect wildTableRows, layout string) map[string][]string {
+	t.Helper()
+	i := slices.IndexFunc(expect, func(r wildTableRow) bool { return r.file == layout })
+	if i < 0 {
+		t.Fatalf("no expectByLayout row for %s", layout)
+	}
+	return expect[i].fields
+}
+
+func TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow(t *testing.T) {
+	e, a, r := wildCopyTables()
+	if got, compared, _ := wildParityProblems(wildPairs, e, a, r); len(got) != 0 || compared == 0 {
+		t.Fatalf("the unedited copy reports %v over %d cell(s); the cases below could not tell their edit from it", got, compared)
+	}
+	type tables struct {
+		e    wildTableRows
+		a, r map[string]string
+	}
+	cases := []struct {
+		name, cell string
+		edit       func(t *testing.T, x *tables)
+	}{
+		{"an unowned miss", wildStackedAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			k := wildStackedAsPrinted + "/invoice_number"
+			x.r[k] = wildOwnerRE.ReplaceAllString(x.r[k], "")
+		}},
+		{"an easier subtotal", wildTwoPartyAsPrinted + "/subtotal", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildTwoPartyAsPrinted)["subtotal"] = []string{"1199.00"}
+		}},
+		{"the total softened to the value read", wildRuledAsPrinted + "/total", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildRuledAsPrinted)["total"] = []string{wildRuledLastLineAmount}
+			delete(x.r, wildRuledAsPrinted+"/total")
+		}},
+		{"a miss listed as absent", wildStackedAsPrinted + "/subtotal", func(t *testing.T, x *tables) {
+			k := wildStackedAsPrinted + "/subtotal"
+			x.a[k] = x.r[k]
+			delete(x.r, k)
+		}},
+		{"a removed sibling row", wildTwoPartyAsPrinted, func(t *testing.T, x *tables) {
+			x.e = slices.DeleteFunc(x.e, func(row wildTableRow) bool { return row.file == wildTwoPartyAsPrinted })
+		}},
+		{"the twin's invoice number", wildRuledAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildRuledAsPrinted)["invoice_number"] = slices.Clone(wildRowOf(t, x.e, wildRuled)["invoice_number"])
+		}},
+		{"an emptied invoice number", wildStackedAsPrinted + "/invoice_number", func(t *testing.T, x *tables) {
+			wildRowOf(t, x.e, wildStackedAsPrinted)["invoice_number"] = []string{}
+			delete(x.r, wildStackedAsPrinted+"/invoice_number")
+		}},
+		{"a removed twin row", wildTwoParty, func(t *testing.T, x *tables) {
+			x.e = slices.DeleteFunc(x.e, func(row wildTableRow) bool { return row.file == wildTwoParty })
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var x tables
+			x.e, x.a, x.r = wildCopyTables()
+			c.edit(t, &x)
+			got, _, _ := wildParityProblems(wildPairs, x.e, x.a, x.r)
+			if len(got) == 0 {
+				t.Fatalf("reports nothing, want a problem naming %s", c.cell)
+			}
+			for _, p := range got {
+				if !strings.Contains(p, c.cell) {
+					t.Errorf("reports %q, which does not name %s", p, c.cell)
+				}
+			}
+		})
+	}
+}
+
+// wildElevenDigest is SHA-256 of wildElevenRendering over the tables as they stood before any sibling.
+const wildElevenDigest = "dba292559ee5fec824222b88f9de0c6e5e45b9f4dd579761df0474ec07cafb2f"
+
+func wildElevenSum(e wildTableRows, a, r map[string]string) (string, int, int) {
+	s, rows, cells := wildElevenRendering(e, a, r)
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:]), rows, cells
+}
+
+func TestWildPairs_TheElevenKeepEveryFactTheyAssert(t *testing.T) {
+	got, rows, cells := wildElevenSum(expectByLayout, eeAbsentCells, eeRealMisses)
+	if rows != 11 || cells != 88 {
+		t.Fatalf("rendered %d row(s) and %d cell(s), want 11 and 88", rows, cells)
+	}
+	if got != wildElevenDigest {
+		t.Errorf("the eleven digest to %s, want %s -- an existing expectation or miss entry changed", got, wildElevenDigest)
+	}
+
+	e, a, r := wildCopyTables()
+	wildRowOf(t, e, wildRuled)["total"] = []string{wildRuledLastLineAmount}
+	if d, _, _ := wildElevenSum(e, a, r); d == got {
+		t.Errorf("a changed %s total left the digest unmoved", wildRuled)
+	}
+	e, a, r = wildCopyTables()
+	k := wildRuled + "/total"
+	a[k] = r[k]
+	delete(r, k)
+	if d, _, _ := wildElevenSum(e, a, r); d == got {
+		t.Errorf("moving %s from eeRealMisses to eeAbsentCells left the digest unmoved", k)
+	}
+	e, a, r = wildCopyTables()
+	e = append(e, wildTableRow{file: "wild_planted_asprinted.pdf", fields: map[string][]string{"total": {"1.00"}}})
+	r["wild_planted_asprinted.pdf/total"] = "planted"
+	if d, _, _ := wildElevenSum(e, a, r); d != got {
+		t.Errorf("appending a sibling row and miss moved the digest to %s", d)
 	}
 }

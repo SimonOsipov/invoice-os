@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -71,13 +73,17 @@ var fxCorpus = []struct {
 	{fxRich, fxBuildRichInvoice},
 	// Not corpus_-prefixed on purpose: EXTR-21-06's four production arrangements. Byte-compared
 	// like the rest, outside every corpus_ ratchet.
-	{fxWildTwoParty, fxBuildWildTwoPartyBareTIN},
-	{fxWildRuled, fxBuildWildRuledLinesTotals},
+	{fxWildTwoParty, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyFriendly) }},
+	{fxWildRuled, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledFriendly) }},
 	{fxWildRCNaira, fxBuildWildRCDueNaira},
-	{fxWildStacked, fxBuildWildStackedBorderless},
+	{fxWildStacked, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedFriendly) }},
 	// EXTR-21-07's image-only arrangement: raster ink, no text layer at all.
 	{fxWildScanned, fxBuildWildScannedNoNumber},
-	// EXTR-26-06: faithful transcriptions of two real Nigerian invoices, outside every corpus_
+	// Each twin's geometry under its source's printed labels.
+	{fxWildTwoPartyAsPrinted, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyPrinted) }},
+	{fxWildRuledAsPrinted, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledPrinted) }},
+	{fxWildStackedAsPrinted, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedPrinted) }},
+	// EXTR-26-06: faithful transcriptions of two Nigerian invoice mock-ups, outside every corpus_
 	// ratchet.
 	{fxAdvisoryRegister, func() []byte { return fxBuildAdvisoryRegister(false) }},
 	// R0 with the two letter-spaced header labels unspaced -- the one declared transformation.
@@ -622,6 +628,11 @@ const (
 	fxWildRCNaira  = "wild_rc_due_naira.pdf"
 	fxWildStacked  = "wild_stacked_borderless.pdf"
 	fxWildScanned  = "wild_scanned_no_number.pdf"
+
+	// Each twin's geometry under its source document's printed labels.
+	fxWildTwoPartyAsPrinted = "wild_two_party_bare_tin_asprinted.pdf"
+	fxWildRuledAsPrinted    = "wild_ruled_lines_totals_asprinted.pdf"
+	fxWildStackedAsPrinted  = "wild_stacked_borderless_asprinted.pdf"
 )
 
 // The pinned synthetic identifier table. Every literal is freshly minted, never observed; the
@@ -643,6 +654,11 @@ const (
 	fxWildInvRuled    = "INV-2102"
 	fxWildInvRCNaira  = "INV-2103"
 	fxWildInvStacked  = "INV-2104"
+
+	// A sibling's number is its twin's plus 100.
+	fxWildInvTwoPartyAsPrinted = "INV-2201"
+	fxWildInvRuledAsPrinted    = "INV-2202"
+	fxWildInvStackedAsPrinted  = "INV-2204"
 
 	// An RC (Corporate Affairs Commission registration) number is an "other identifier" under
 	// step 3 of the scrubbing procedure and is replaced like a TIN.
@@ -682,26 +698,49 @@ func fxQuoteTextPage(lines ...fxLine) []byte {
 }
 
 // fxBuildWildTwoPartyBareTIN puts the supplier and buyer blocks side by side, each ending in a
-// bare "TIN:" label whose value is a separate Tj. The buyer block is headed "Invoice to" and
-// carries a fragment-bearing label above ("Customer No.") and below ("Buyer's Signature") its
-// name. The apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
-func fxBuildWildTwoPartyBareTIN() []byte {
-	return fxQuoteTextPage(
-		fxLine{24, 72, 720, "INVOICE"},
-		fxLine{12, 72, 690, "Invoice No: " + fxWildInvTwoParty},
-		fxLine{12, 72, 672, "Invoice Date: 2026-06-11"},
-		fxLine{12, 72, 630, fxWildSupplier},
-		fxLine{12, 72, 614, "TIN:"}, fxLine{12, 160, 614, fxWildTINSupplierTwoParty},
-		fxLine{12, 360, 646, "Invoice to"},
-		fxLine{12, 360, 630, "Customer No."},
-		fxLine{12, 360, 614, fxWildBuyer},
-		fxLine{12, 360, 598, "TIN:"}, fxLine{12, 448, 598, fxWildTINBuyerTwoParty},
-		fxLine{12, 360, 560, "Buyer's Signature"},
-		fxLine{12, 72, 582, "Currency: NGN"},
-		fxLine{12, 72, 240, "Sub-total"}, fxLine{12, 220, 240, "1,200.00"},
-		fxLine{12, 72, 222, "VAT"}, fxLine{12, 220, 222, "90.00"},
-		fxLine{12, 72, 204, "Total"}, fxLine{12, 220, 204, "1,290.00"},
-	)
+// TIN label whose value is a separate Tj. The friendly set labels both "TIN:", heads the buyer
+// block "Invoice to" and puts "Customer No." above and "Buyer's Signature" below its name. The
+// apostrophe is why the page needs fxQuoteFont rather than fxTextPage.
+func fxBuildWildTwoPartyBareTIN(l fxWildTwoPartyLabels) []byte {
+	return fxQuoteTextPage(fxWildTwoPartyLines(l)...)
+}
+
+// fxWildTwoPartyLabels is every label the two-party page prints, plus its invoice number.
+type fxWildTwoPartyLabels struct {
+	title, invoiceNo, invNum, invoiceDate, supplierTIN, invoiceTo, customerNo, buyerTIN, signature, currency, subtotal, vat, total string
+}
+
+var (
+	fxWildTwoPartyFriendly = fxWildTwoPartyLabels{
+		title: "INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvTwoParty, invoiceDate: "Invoice Date: ",
+		supplierTIN: "TIN:", invoiceTo: "Invoice to", customerNo: "Customer No.", buyerTIN: "TIN:",
+		signature: "Buyer's Signature", currency: "Currency: NGN", subtotal: "Sub-total", vat: "VAT", total: "Total",
+	}
+	// NG-2's printed labels. The signature is NG-5's, the source the twin's paraphrase came from.
+	fxWildTwoPartyPrinted = fxWildTwoPartyLabels{
+		title: "Sales Invoice", invoiceNo: "Invoice No: ", invNum: fxWildInvTwoPartyAsPrinted, invoiceDate: "Invoice Date: ",
+		supplierTIN: "VAT Reg. No:", invoiceTo: "INVOICE TO:", customerNo: "Customer No.", buyerTIN: "TIN:",
+		signature: "Customer's Signature", currency: "Currency: NGN", subtotal: "Net Amount", vat: "VAT @ 7.5%", total: "Total NGN",
+	}
+)
+
+func fxWildTwoPartyLines(l fxWildTwoPartyLabels) []fxLine {
+	return []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo + l.invNum},
+		{12, 72, 672, l.invoiceDate + "2026-06-11"},
+		{12, 72, 630, fxWildSupplier},
+		{12, 72, 614, l.supplierTIN}, {12, 160, 614, fxWildTINSupplierTwoParty},
+		{12, 360, 646, l.invoiceTo},
+		{12, 360, 630, l.customerNo},
+		{12, 360, 614, fxWildBuyer},
+		{12, 360, 598, l.buyerTIN}, {12, 448, 598, fxWildTINBuyerTwoParty},
+		{12, 360, 560, l.signature},
+		{12, 72, 582, l.currency},
+		{12, 72, 240, l.subtotal}, {12, 220, 240, "1,200.00"},
+		{12, 72, 222, l.vat}, {12, 220, 222, "90.00"},
+		{12, 72, 204, l.total}, {12, 220, 204, "1,290.00"},
+	}
 }
 
 // fxWildRuledColXs are the five-column table's vertical rule positions (6 boundaries).
@@ -712,7 +751,7 @@ var (
 	fxWildRuledColXs = [6]int{72, 116, 290, 340, 430, 540}
 	fxWildRuledRowYs = [5]int{512, 488, 464, 440, 416}
 
-	// The decoration real Nigerian invoices print. "RATE (N)" is escaped so the balanced
+	// The decoration the Nigerian source mock-ups print. "RATE (N)" is escaped so the balanced
 	// parens in the PDF string literal are explicit; "Amount " + fxNaira must stay one Tj,
 	// because a lone \244 Tj emits no token at all.
 	fxWildRuledHeader = []string{"S/N", "DESCRIPTION OF GOODS", "QTY", `RATE \(N\)`, "Amount " + fxNaira}
@@ -741,34 +780,60 @@ func fxWildRuledRowText(baseline int, cells []string) []fxLine {
 // t1.total.right therefore reaches that row's 1,000.00 and not the printed 8,600.00. The totals
 // corroborate (8,000.00 + 600.00 = 8,600.00) and the line amount does not, so the fixture can
 // tell a corroborated pick from a positional one.
-//
-// The naira here sits on a column header; the currency is sourced from the explicit
-// "Currency: NGN" label. Neither fxTextPage nor fxNairaTextPage builds a naira font AND rules,
-// so the objects are assembled directly: fxAssemble numbers by slice index, so the CMap is 6.
-func fxBuildWildRuledLinesTotals() []byte {
-	lines := []fxLine{
-		{24, 72, 720, "INVOICE"},
-		{12, 72, 690, "Invoice No: " + fxWildInvRuled},
-		{12, 72, 672, "Invoice Date: 2026-06-24"},
-		{12, 72, 654, "Supplier TIN: " + fxWildTINSupplierRuled},
-		{12, 72, 636, "Supplier: " + fxWildSupplier},
-		{12, 72, 618, "Buyer TIN: " + fxWildTINBuyerRuled},
-		{12, 72, 600, "Buyer: " + fxWildBuyer},
-		{12, 72, 582, "Currency: NGN"},
+func fxBuildWildRuledLinesTotals(l fxWildRuledLabels) []byte {
+	return fxWildRuledPage(fxWildRuledLines(l)...)
+}
+
+// fxWildRuledLabels is every label the ruled page prints, plus its invoice number.
+type fxWildRuledLabels struct {
+	title, invoiceNo, invNum, invoiceDate, supplierTIN, supplier, buyerTIN, buyer, currency string
+	header                                                                                  []string
+	subtotal, vat, total                                                                    string
+}
+
+var (
+	fxWildRuledFriendly = fxWildRuledLabels{
+		title: "INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvRuled, invoiceDate: "Invoice Date: ",
+		supplierTIN: "Supplier TIN: ", supplier: "Supplier: ", buyerTIN: "Buyer TIN: ", buyer: "Buyer: ", currency: "Currency: NGN",
+		header: fxWildRuledHeader, subtotal: "Sub-total", vat: "VAT", total: "Total",
 	}
-	lines = append(lines, fxWildRuledRowText(500, fxWildRuledHeader)...)
+	// NG-4's printed labels. Total stays: TOTAL DUE (NGN) merges with row 3's amount here.
+	fxWildRuledPrinted = fxWildRuledLabels{
+		title: "MONTHLY SERVICE INVOICE", invoiceNo: "Invoice No: ", invNum: fxWildInvRuledAsPrinted, invoiceDate: "Invoice Date: ",
+		supplierTIN: "Supplier TIN: ", supplier: "Supplier: ", buyerTIN: "Buyer TIN: ", buyer: "Buyer: ", currency: "Currency: NGN",
+		header:   []string{"Item", "Service description", "Qty", "Unit rate " + fxNaira, "Amount " + fxNaira},
+		subtotal: "Taxable amount", vat: "VAT @ 7.5%", total: "Total",
+	}
+)
+
+func fxWildRuledLines(l fxWildRuledLabels) []fxLine {
+	lines := []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo + l.invNum},
+		{12, 72, 672, l.invoiceDate + "2026-06-24"},
+		{12, 72, 654, l.supplierTIN + fxWildTINSupplierRuled},
+		{12, 72, 636, l.supplier + fxWildSupplier},
+		{12, 72, 618, l.buyerTIN + fxWildTINBuyerRuled},
+		{12, 72, 600, l.buyer + fxWildBuyer},
+		{12, 72, 582, l.currency},
+	}
+	lines = append(lines, fxWildRuledRowText(500, l.header)...)
 	lines = append(lines, fxWildRuledRowText(476, fxWildRuledBody[0])...)
 	lines = append(lines, fxWildRuledRowText(452, fxWildRuledBody[1])...)
 	lines = append(lines, fxWildRuledRowText(428, fxWildRuledBody[2])...)
-	lines = append(lines,
-		fxLine{12, 380, 404, "Sub-total"}, fxLine{12, 500, 404, "8,000.00"},
-		fxLine{12, 380, 386, "VAT"}, fxLine{12, 500, 386, "600.00"},
+	return append(lines,
+		fxLine{12, 380, 404, l.subtotal}, fxLine{12, 500, 404, "8,000.00"},
+		fxLine{12, 380, 386, l.vat}, fxLine{12, 500, 386, "600.00"},
 		// The Total label continues on the last data row's own baseline, so t1.total.right
 		// reaches the line amount beside it and the printed 8,600.00 falls outside every
 		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
-		fxLine{12, 380, 428, "Total"}, fxLine{12, 500, 368, "8,600.00"},
+		fxLine{12, 380, 428, l.total}, fxLine{12, 500, 368, "8,600.00"},
 	)
+}
 
+// fxWildRuledPage draws lines over the ruled table's rules; neither fxTextPage nor
+// fxNairaTextPage builds a naira font AND rules, so the objects are assembled directly (CMap is 6).
+func fxWildRuledPage(lines ...fxLine) []byte {
 	// H before V, matching fxBuildTable's own loop shape.
 	var rules bytes.Buffer
 	for _, y := range fxWildRuledRowYs {
@@ -818,24 +883,60 @@ func fxBuildWildRCDueNaira() []byte {
 // punctuation, and offsets every value 8pt below its label in a second column so neither
 // same_token, right nor below binds.
 //
-// One field stays readable on purpose: "Invoice No" over its value at the same x, the aligned
-// stack fxBuildCorpusStackedLabels proves. A layout that quarantines is never line-scored, and
-// lines_db_test.go's linesScored == eeLayoutCount would red on it.
-func fxBuildWildStackedBorderless() []byte {
-	return fxTextPage(
-		fxLine{24, 72, 720, "INVOICE"},
-		fxLine{12, 72, 690, "Invoice No"},
-		fxLine{12, 72, 674, fxWildInvStacked},
-		fxLine{12, 72, 620, "Issue Date"}, fxLine{12, 300, 612, "2026-07-30"},
-		fxLine{12, 72, 596, "Buyer"}, fxLine{12, 300, 588, fxWildBuyer},
-		fxLine{12, 72, 572, "Buyer TIN"}, fxLine{12, 300, 564, fxWildTINBuyerStacked},
-		fxLine{12, 72, 548, "Supplier"}, fxLine{12, 300, 540, fxWildSupplier},
-		fxLine{12, 72, 524, "Supplier TIN"}, fxLine{12, 300, 516, fxWildTINSupplierStacked},
-		fxLine{12, 72, 500, "Currency"}, fxLine{12, 300, 492, "NGN"},
-		fxLine{12, 72, 260, "Sub total"}, fxLine{12, 300, 252, "1,500.00"},
-		fxLine{12, 72, 236, "VAT"}, fxLine{12, 300, 228, "112.50"},
-		fxLine{12, 72, 212, "Total"}, fxLine{12, 300, 204, "1,612.50"},
-	)
+// The friendly set keeps "Invoice No" readable on purpose, over its value at the same x
+// (fxBuildCorpusStackedLabels); the as-printed set letter-spaces it as NG-3 prints it.
+func fxBuildWildStackedBorderless(l fxWildStackedLabels) []byte {
+	return fxTextPage(fxWildStackedLines(l)...)
+}
+
+// fxWildStackedLabels is every label the stacked page prints, plus its invoice number.
+type fxWildStackedLabels struct {
+	title, invoiceNo, invNum, issueDate, buyer, buyerTIN, supplier, supplierTIN, currency, subtotal, vat, total string
+}
+
+var (
+	fxWildStackedFriendly = fxWildStackedLabels{
+		title: "INVOICE", invoiceNo: "Invoice No", invNum: fxWildInvStacked, issueDate: "Issue Date",
+		buyer: "Buyer", buyerTIN: "Buyer TIN", supplier: "Supplier", supplierTIN: "Supplier TIN", currency: "Currency",
+		subtotal: "Sub total", vat: "VAT", total: "Total",
+	}
+	// NG-3's printed labels, letter-spaced where fxBuildAdvisoryRegister's R0 spaces them.
+	fxWildStackedPrinted = fxWildStackedLabels{
+		title: "Invoice", invoiceNo: `I N V O I C E N U M B E R`, invNum: fxWildInvStackedAsPrinted, issueDate: `I S S U E D`,
+		buyer: "BILLED TO", buyerTIN: "Buyer TIN", supplier: "FROM", supplierTIN: "Supplier TIN", currency: "CURRENCY",
+		subtotal: "Subtotal", vat: "VAT 7.5%", total: "Amount payable",
+	}
+)
+
+func fxWildStackedLines(l fxWildStackedLabels) []fxLine {
+	return []fxLine{
+		{24, 72, 720, l.title},
+		{12, 72, 690, l.invoiceNo},
+		{12, 72, 674, l.invNum},
+		{12, 72, 620, l.issueDate}, {12, 300, 612, "2026-07-30"},
+		{12, 72, 596, l.buyer}, {12, 300, 588, fxWildBuyer},
+		{12, 72, 572, l.buyerTIN}, {12, 300, 564, fxWildTINBuyerStacked},
+		{12, 72, 548, l.supplier}, {12, 300, 540, fxWildSupplier},
+		{12, 72, 524, l.supplierTIN}, {12, 300, 516, fxWildTINSupplierStacked},
+		{12, 72, 500, l.currency}, {12, 300, 492, "NGN"},
+		{12, 72, 260, l.subtotal}, {12, 300, 252, "1,500.00"},
+		{12, 72, 236, l.vat}, {12, 300, 228, "112.50"},
+		{12, 72, 212, l.total}, {12, 300, 204, "1,612.50"},
+	}
+}
+
+// fxWildSibling is an as-printed sibling: its builder, and the page both members draw on.
+type fxWildSibling struct {
+	name, twin string
+	build      func() []byte
+	page       func(lines ...fxLine) []byte
+}
+
+// fxWildSiblings are the three as-printed siblings. TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry.
+var fxWildSiblings = []fxWildSibling{
+	{fxWildTwoPartyAsPrinted, fxWildTwoParty, func() []byte { return fxBuildWildTwoPartyBareTIN(fxWildTwoPartyPrinted) }, fxQuoteTextPage},
+	{fxWildRuledAsPrinted, fxWildRuled, func() []byte { return fxBuildWildRuledLinesTotals(fxWildRuledPrinted) }, fxWildRuledPage},
+	{fxWildStackedAsPrinted, fxWildStacked, func() []byte { return fxBuildWildStackedBorderless(fxWildStackedPrinted) }, fxTextPage},
 }
 
 // --- the raster half --------------------------------------------------------
@@ -1168,7 +1269,7 @@ func fxBuildWildScannedNoNumber() []byte {
 
 // --- the advisory arrangements (NOT corpus layouts) -------------------------
 
-// Faithful transcriptions of two real Nigerian invoices (arch-26-06 Appendix C), TINs swapped
+// Faithful transcriptions of two Nigerian invoice mock-ups (arch-26-06 Appendix C), TINs swapped
 // into the free reserved block. Neither is registered in requiredPDFs, expectByLayout,
 // corpusExpect, corpusLayouts or corpusTokenFloor -- no score constant and no doc table moves.
 const (
@@ -1203,8 +1304,8 @@ func fxNairaTextPages(withCMap bool, pages ...[]fxLine) []byte {
 	return fxAssemble(objs)
 }
 
-// fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the real advisory register transcribed
-// faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
+// fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the NG-3 advisory register mock-up
+// transcribed faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
 // (D-26-06 -- neither issue_date nor total resolves on R0; R1 proves Issued resolves without
 // touching geometry, and total stays missing on both).
 func fxBuildAdvisoryRegister(unspaced bool) []byte {
@@ -1601,6 +1702,44 @@ func TestFixtures_GeneratorIsDeterministic(t *testing.T) {
 				t.Errorf("%s generated %d byte(s) then %d byte(s) in one process -- AC-3 needs the same PDF twice to be byte-identical, and a corpus built on a timestamp or a map walk is worthless", f.name, len(first), len(second))
 			}
 		})
+	}
+}
+
+// fxUngenerated is every name in committed that no fxCorpus entry builds.
+func fxUngenerated(committed []string) []string {
+	built := map[string]bool{}
+	for _, f := range fxCorpus {
+		built[f.name] = true
+	}
+	var out []string
+	for _, n := range committed {
+		if !built[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// A committed wild_ PDF with no fxCorpus entry is never byte-compared by TestFixtures_MatchTheirGenerator.
+func TestFixtures_EveryCommittedWildArrangementHasAGenerator(t *testing.T) {
+	entries, err := os.ReadDir(fxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxDir, err)
+	}
+	var wild []string
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasPrefix(n, "wild_") && strings.HasSuffix(n, ".pdf") {
+			wild = append(wild, n)
+		}
+	}
+	if len(wild) < 8 {
+		t.Fatalf("%s holds %d wild_*.pdf file(s), want at least 8", fxDir, len(wild))
+	}
+	if missing := fxUngenerated(wild); len(missing) != 0 {
+		t.Errorf("%v committed with no fxCorpus entry", missing)
+	}
+	if got := fxUngenerated(append(slices.Clone(wild), "wild_planted.pdf")); !slices.Equal(got, []string{"wild_planted.pdf"}) {
+		t.Errorf("a planted wild_planted.pdf reports %v, want exactly [wild_planted.pdf]", got)
 	}
 }
 
@@ -2235,5 +2374,209 @@ func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
 	}
 	if fxWildRuledHeader[0] != "S/N" {
 		t.Errorf("fxWildRuledHeader[0] = %q, want %q -- the two arrangements must stay distinguishable", fxWildRuledHeader[0], "S/N")
+	}
+}
+
+// --- the as-printed siblings ------------------------------------------------
+
+var (
+	// The last block's newline is optional: fxContent trims the stream's trailing EOL.
+	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 (\d+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
+	fxAmountRe    = regexp.MustCompile(`[0-9][0-9,]*\.[0-9]{2}`)
+)
+
+// fxDrawnLines parses a built one-page PDF back into the lines it draws, each text the literal
+// the builder wrote. outside is every object with the content stream's text blocks removed.
+func fxDrawnLines(t *testing.T, raw []byte) (lines []fxLine, outside map[int]string) {
+	t.Helper()
+
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) != 1 {
+		t.Fatalf("parsed %d page(s), want 1", len(pages))
+	}
+	content := string(fxContent(t, objs, pages[0]))
+	for _, m := range fxTextBlockRe.FindAllStringSubmatch(content, -1) {
+		size, _ := strconv.Atoi(m[1])
+		x, _ := strconv.Atoi(m[2])
+		y, _ := strconv.Atoi(m[3])
+		lines = append(lines, fxLine{size, x, y, m[4]})
+	}
+	if n := strings.Count(content, "BT\n"); n != len(lines) || n == 0 {
+		t.Fatalf("parsed %d of %d text block(s)", len(lines), n)
+	}
+
+	contents := fxContentsRe.FindSubmatch(pages[0])
+	num, _ := strconv.Atoi(string(contents[1]))
+	outside = map[int]string{}
+	for n, body := range objs {
+		outside[n] = string(body)
+	}
+	outside[num] = fxTextBlockRe.ReplaceAllString(content, "")
+	return lines, outside
+}
+
+// fxGeometryProblems reports each line whose size or origin differs between twin and sibling,
+// and each text that differs where changed does not declare it, or matches where it does.
+func fxGeometryProblems(twin, sibling []fxLine, changed []int) []string {
+	if len(twin) != len(sibling) {
+		return []string{fmt.Sprintf("the sibling draws %d line(s), its twin %d", len(sibling), len(twin))}
+	}
+	var out []string
+	for i, a := range twin {
+		b := sibling[i]
+		if a.size != b.size || a.x != b.x || a.y != b.y {
+			out = append(out, fmt.Sprintf("line %d moved: %dpt (%d,%d) -> %dpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
+		}
+		if declared := slices.Contains(changed, i); declared != (a.text != b.text) {
+			out = append(out, fmt.Sprintf("line %d: %q -> %q, declared changed=%v", i, a.text, b.text, declared))
+		}
+	}
+	return out
+}
+
+// fxLabelProblems reports a token count other than want, a label that is not the trimmed text
+// of exactly one token, and a token carrying two labels or a label beside an amount.
+func fxLabelProblems(texts []string, want int, labels []string) []string {
+	var out []string
+	if len(texts) != want {
+		out = append(out, fmt.Sprintf("read %d token(s), want %d", len(texts), want))
+	}
+	for _, label := range labels {
+		n := 0
+		for _, text := range texts {
+			if strings.TrimSpace(text) == label {
+				n++
+			}
+		}
+		if n != 1 {
+			out = append(out, fmt.Sprintf("%q is the whole text of %d token(s), want 1", label, n))
+		}
+	}
+	for _, text := range texts {
+		var carried []string
+		for _, label := range labels {
+			if strings.Contains(text, label) {
+				carried = append(carried, label)
+			}
+		}
+		if len(carried) > 1 {
+			out = append(out, fmt.Sprintf("token %q carries %q", text, carried))
+		}
+		if len(carried) > 0 && fxAmountRe.MatchString(text) {
+			out = append(out, fmt.Sprintf("token %q glues %q to an amount", text, carried))
+		}
+	}
+	return out
+}
+
+// fxWildSiblingNamed is a runtime lookup, so an unregistered sibling fails its own subtest.
+func fxWildSiblingNamed(t *testing.T, name string) fxWildSibling {
+	t.Helper()
+	for _, s := range fxWildSiblings {
+		if s.name == name {
+			return s
+		}
+	}
+	t.Fatalf("fxWildSiblings registers no %s", name)
+	return fxWildSibling{}
+}
+
+func fxCorpusBuilder(t *testing.T, name string) func() []byte {
+	t.Helper()
+	for _, f := range fxCorpus {
+		if f.name == name {
+			return f.build
+		}
+	}
+	t.Fatalf("fxCorpus has no %s", name)
+	return nil
+}
+
+func TestFixtures_EachAsPrintedSiblingKeepsItsTwinsGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		changed []int // label lines and the invoice-number line
+	}{
+		{"wild_two_party_bare_tin_asprinted.pdf", []int{0, 1, 4, 6, 11, 13, 15, 17}},
+		{"wild_ruled_lines_totals_asprinted.pdf", []int{0, 1, 8, 9, 10, 11, 28, 30}},
+		{"wild_stacked_borderless_asprinted.pdf", []int{0, 1, 2, 3, 5, 9, 13, 15, 17, 19}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			twin, twinOutside := fxDrawnLines(t, fxCorpusBuilder(t, s.twin)())
+			lines, outside := fxDrawnLines(t, s.build())
+
+			if p := fxGeometryProblems(twin, lines, tc.changed); len(p) > 0 {
+				t.Errorf("%s drifts from %s:\n%s", tc.name, s.twin, strings.Join(p, "\n"))
+			}
+			if !maps.Equal(twinOutside, outside) {
+				t.Errorf("%s differs from %s outside its text: rules, fonts or CMap", tc.name, s.twin)
+			}
+
+			moved := slices.Clone(lines)
+			moved[5].y++
+			if p := fxGeometryProblems(lines, moved, nil); len(p) != 1 || !strings.HasPrefix(p[0], "line 5 moved") {
+				t.Errorf("a 1pt move at line 5 reported %q, want exactly that line", p)
+			}
+		})
+	}
+}
+
+func TestFixtures_EachAsPrintedSiblingReadsItsDeclaredLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tokens int
+		labels []string // the label tables' "pdfium reads" values
+	}{
+		{"wild_two_party_bare_tin_asprinted.pdf", 19, []string{"Sales Invoice", "VAT Reg. No:", "INVOICE TO:", "Customer No.", "TIN:", "Customer's Signature", "Currency: NGN", "Net Amount", "VAT @ 7.5%", "Total NGN"}},
+		{"wild_ruled_lines_totals_asprinted.pdf", 34, []string{"MONTHLY SERVICE INVOICE", "Item", "Service description", "Qty", "Unit rate ₦", "Amount ₦", "Taxable amount", "VAT @ 7.5%"}},
+		{"wild_stacked_borderless_asprinted.pdf", 21, []string{"Invoice", "I N V O I C E N U M B E R", "I S S U E D", "BILLED TO", "FROM", "CURRENCY", "Subtotal", "VAT 7.5%", "Amount payable"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			if p := fxLabelProblems(fxTexts(fxTokens(t, s.build())), tc.tokens, tc.labels); len(p) > 0 {
+				t.Errorf("%s:\n%s", tc.name, strings.Join(p, "\n"))
+			}
+		})
+	}
+
+	t.Run("control: TOTAL DUE (NGN) on the Total line", func(t *testing.T) {
+		s := fxWildSiblingNamed(t, "wild_ruled_lines_totals_asprinted.pdf")
+		lines, _ := fxDrawnLines(t, s.build())
+		if !bytes.Equal(s.page(lines...), s.build()) {
+			t.Fatal("the parsed lines do not rebuild the sibling's bytes; the control would read another page")
+		}
+		i := slices.IndexFunc(lines, func(l fxLine) bool { return l.text == "Total" })
+		if i < 0 {
+			t.Fatal("the ruled sibling draws no Total line")
+		}
+		lines[i].text = `TOTAL DUE \(NGN\)`
+		p := fxLabelProblems(fxTexts(fxTokens(t, s.page(lines...))), 34, []string{"TOTAL DUE (NGN)"})
+		if !slices.ContainsFunc(p, func(msg string) bool { return strings.Contains(msg, "glues") }) {
+			t.Errorf("the merged label reported %q, want a label glued to an amount", p)
+		}
+	})
+}
+
+// A sibling's number is its twin's plus 100 behind the twin's own label, so the pair stays distinct.
+func TestFixtures_EachAsPrintedSiblingDrawsItsTwinsNumberPlus100(t *testing.T) {
+	for _, tc := range []struct{ name, twinText, text string }{
+		{"wild_two_party_bare_tin_asprinted.pdf", "Invoice No: INV-2101", "Invoice No: INV-2201"},
+		{"wild_ruled_lines_totals_asprinted.pdf", "Invoice No: INV-2102", "Invoice No: INV-2202"},
+		{"wild_stacked_borderless_asprinted.pdf", "INV-2104", "INV-2204"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fxWildSiblingNamed(t, tc.name)
+			twin, _ := fxDrawnLines(t, fxCorpusBuilder(t, s.twin)())
+			lines, _ := fxDrawnLines(t, s.build())
+			i := slices.IndexFunc(twin, func(l fxLine) bool { return l.text == tc.twinText })
+			if i < 0 || i >= len(lines) {
+				t.Fatalf("%s draws no %q", s.twin, tc.twinText)
+			}
+			if lines[i].text != tc.text {
+				t.Errorf("line %d draws %q, want %q", i, lines[i].text, tc.text)
+			}
+		})
 	}
 }

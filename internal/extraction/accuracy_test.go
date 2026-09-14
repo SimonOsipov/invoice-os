@@ -745,6 +745,11 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			// 0.087 / 0.027. The measured margin is 0.087010 / 0.009111 = 9.55x.
 			unwant: []string{"3.3x"},
 		},
+		{
+			file:   "internal/extraction/tier1.go",
+			needle: "tier1DropRight",
+			want:   []string{"0.949396", "135.00"},
+		},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			src := acRepoFile(t, c.file)

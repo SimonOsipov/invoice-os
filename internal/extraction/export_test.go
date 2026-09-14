@@ -109,6 +109,11 @@ const (
 	Tier1MaxDistanceBelowForTest = tier1MaxDistanceBelow
 )
 
+// Tier1DropRightForTest exposes the drop-band dial so
+// TestTier1_TheDropBandStaysInsideItsMeasuredWindow bounds the production constant rather than a
+// copy of it.
+const Tier1DropRightForTest = tier1DropRight
+
 // RightGapForTest mirrors relatedTokens' right-relation gap for a pair outside the dial, where
 // Resolve mints no Distance to read. TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
 func RightGapForTest(anchor, value Region) float64 { return value.X0 - anchor.X1 }

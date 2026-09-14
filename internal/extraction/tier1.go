@@ -51,6 +51,10 @@ const (
 	tier1MaxDistanceBelowJSON = "0.06"
 )
 
+// tier1DropRight is a Stage 2.5 stub; TestTier1_TheDropBandStaysInsideItsMeasuredWindow pins the
+// real dial.
+const tier1DropRight = 0
+
 // tier1TINSweepLabel matches a bare TIN token whole, so the label IS the value
 // (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped: the party block the token
 // sits in tells the supplier's TIN from the buyer's, and reads no box

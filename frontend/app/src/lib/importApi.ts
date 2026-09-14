@@ -344,6 +344,7 @@ export async function createImport(
   form.append('entity_id', req.entityId)
   form.append('mapping', JSON.stringify(req.mapping))
   form.append('document_id', req.documentId)
+  form.append('remember_mapping', req.rememberMapping ? 'true' : 'false')
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
@@ -435,18 +436,16 @@ export interface SavedMappingResponse {
   saved_mapping: SavedMapping | null
 }
 
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export async function getSavedMapping(
   authedFetch: AuthedFetch,
   base: string,
   entityId: string,
   documentId: string,
 ): Promise<SavedMapping | null> {
-  void authedFetch
-  void base
-  void entityId
-  void documentId
-  return null
+  const res = await authedFetch<SavedMappingResponse>(
+    `${base}/api/invoice/v1/imports/saved-mapping?entity_id=${encodeURIComponent(entityId)}&document_id=${encodeURIComponent(documentId)}`,
+  )
+  return res?.saved_mapping ?? null
 }
 
 // null when there is nothing to carry: the route answers 200 null, never 404 (importApi.test.ts's EXTR27-W1).

@@ -15,9 +15,10 @@
 // lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
 // selection-half (BULK-01-03).
 
-import { canSubmitMapping, initMappingFromHeaders } from './mapping'
+import { canSubmitMapping, initMappingFromHeaders, restoreMapping } from './mapping'
 import type { ImportPreview, SavedMapping } from './importApi'
 import type { Mapping } from '../types'
+import { fmtDateTime } from './format'
 
 // The exact, ordered, case-sensitive column list — JSON.stringify of the array, no
 // sorting, no case-folding. Two files share a group IFF their signatures are equal
@@ -90,8 +91,7 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     fileIds: [fileId],
     preview: group.preview,
     mapping: { ...group.mapping },
-    // RED stub (EXTR-37-04): should carry group.restored; filled in by the implementation commit.
-    restored: null,
+    restored: group.restored,
   }
 
   const next = groups.slice()
@@ -122,47 +122,52 @@ export function groupOfFile(groups: MappingGroup[], fileId: string): MappingGrou
 
 // null -> the same group (today's seed). Otherwise mapping = restoreMapping(preview.columns,
 // saved.mapping) and restored = { savedAt: saved.saved_at, mapping: <that same mapping> }.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export function applySavedMapping(group: MappingGroup, saved: SavedMapping | null): MappingGroup {
-  void saved
-  return group
+  if (!saved) return group
+  const mapping = restoreMapping(group.preview.columns, saved.mapping)
+  return { ...group, mapping, restored: { savedAt: saved.saved_at, mapping } }
 }
 
 // mapping = initMappingFromHeaders(preview.columns), restored = null; id/fileIds/preview kept.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export function returnToAutomatic(group: MappingGroup): MappingGroup {
-  return group
+  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
 }
 
 export type PlacementBadge = 'restored' | 'auto' | null
 
 // null unless group.mapping[field] === header; otherwise 'restored' iff
 // group.restored?.mapping[field] === header; otherwise 'auto' iff recognized[field] === header.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
-  void group
-  void field
-  void header
-  void recognized
+  if (group.mapping[field] !== header) return null
+  if (group.restored?.mapping[field] === header) return 'restored'
+  if (recognized[field] === header) return 'auto'
   return null
 }
 
 // null when !group.restored; else `Mapping restored from this client's earlier import, saved
-// ${fmtDateTime(savedAt)}.` RED stub (EXTR-37-04): body filled in by the implementation commit.
+// ${fmtDateTime(savedAt)}.`
 export function restoredNotice(group: MappingGroup): string | null {
-  void group
-  return null
+  if (!group.restored) return null
+  return `Mapping restored from this client's earlier import, saved ${fmtDateTime(group.restored.savedAt)}.`
 }
 
 // lookup null -> groups unchanged, no call. Otherwise one awaited call per group, in order, with
 // group.preview.document_id; a rejected call leaves that group unchanged. Never rejects.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export async function restoreGroups(
   groups: MappingGroup[],
   lookup: ((documentId: string) => Promise<SavedMapping | null>) | null,
 ): Promise<MappingGroup[]> {
-  void lookup
-  return groups
+  if (!lookup) return groups
+  const result: MappingGroup[] = []
+  for (const group of groups) {
+    try {
+      const saved = await lookup(group.preview.document_id)
+      result.push(applySavedMapping(group, saved))
+    } catch {
+      result.push(group)
+    }
+  }
+  return result
 }
 
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only
@@ -174,8 +179,17 @@ export function canSubmitAllMappings(groups: MappingGroup[]): boolean {
 }
 
 // false only when group.restored is set and group.mapping deep-equals group.restored.mapping.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export function rememberMapping(group: MappingGroup): boolean {
-  void group
+  if (!group.restored) return true
+  return !mappingsEqual(group.mapping, group.restored.mapping)
+}
+
+// Mapping is flat (Record<string, string | null>) and both sides always carry every CANON
+// key, so a per-key compare over the union of keys is an exact equality check.
+function mappingsEqual(a: Mapping, b: Mapping): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const k of keys) {
+    if (a[k] !== b[k]) return false
+  }
   return true
 }

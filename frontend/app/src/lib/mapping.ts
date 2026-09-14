@@ -84,9 +84,11 @@ export function canSubmitMapping(m: Mapping | null): boolean {
 
 // Keeps a saved placement only for a canonical field whose header is in this file. Fields
 // the saved mapping left unplaced stay unplaced, even where an alias would match.
-// RED stub (EXTR-37-04): body filled in by the implementation commit.
 export function restoreMapping(headers: string[], saved: Record<string, string>): Mapping {
-  void headers
-  void saved
-  return {}
+  const map: Mapping = {}
+  CANON.forEach((c) => {
+    const v = saved[c.key]
+    map[c.key] = typeof v === 'string' && headers.includes(v) ? v : null
+  })
+  return map
 }

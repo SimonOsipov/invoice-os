@@ -265,7 +265,7 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function supplyInvoiceNumber(',
     floor: 3,
   },
-  // EXTR-37-03/04 — the saved-mapping lookup (internal/importer/saved_mapping.go, handlers.go).
+  // The saved-mapping lookup (internal/importer/saved_mapping.go, handlers.go).
   {
     ts: 'SavedMapping',
     go: 'SavedMapping',

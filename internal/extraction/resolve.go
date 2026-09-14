@@ -72,7 +72,7 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		before := len(all)
 		// A learned rule is never party-scoped: re-routing one by heading would overrule the
 		// reviewer who pointed at the field.
-		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned, 0)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
 		}
@@ -82,7 +82,7 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		if r.Fallback {
 			tier = TierFallback
 		}
-		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, tier)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, tier, r.Drop)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -108,7 +108,9 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 // scoped routes the candidate to the field the ANCHOR's party owns rather than to field. The
 // anchor, never the value: on a below relation the value can sit past a block boundary, and
 // reading its party there would let it steal the other party's field.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier) []Candidate {
+//
+// drop is the Tier-1 right-relation drop dial; a learned call always passes 0.
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier, drop float64) []Candidate {
 	if rule.re == nil {
 		return dst
 	}
@@ -134,7 +136,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
 				bounded := tier != TierLearned && rule.Relation.Kind == RelRight
-				for _, rel := range relatedTokens(page, tok.Region, rule.Relation) {
+				for _, rel := range relatedTokens(page, tok.Region, rule.Relation, drop) {
 					value := page.Tokens[rel.index]
 					if bounded && crossesALabel(page, labels[pi], tok.Region, value.Region) {
 						continue
@@ -264,7 +266,9 @@ type relatedToken struct {
 // An unusable box on either side relates to nothing: a zero box sits at the page corner and
 // would be falsely adjacent to everything. That predicate also excludes the anchor from its own
 // result, since usableBox forces X0 < X1 and Y0 < Y1.
-func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
+//
+// drop is passed to relationClauses, which does not yet act on it.
+func relatedTokens(page TokenPage, anchor Region, rel Relation, drop float64) []relatedToken {
 	if !usableBox(anchor) {
 		return nil
 	}
@@ -278,7 +282,7 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 		if !usableBox(b) {
 			continue
 		}
-		if order, distance, overlap := relationClauses(anchor, b, rel, 0); order || distance || overlap {
+		if order, distance, overlap := relationClauses(anchor, b, rel, drop); order || distance || overlap {
 			continue
 		}
 		var gap float64

@@ -27,7 +27,7 @@ func TestRelatedTokens_AdmitsExactlyWhenNoClauseFails(t *testing.T) {
 
 	for _, rel := range []Relation{{Kind: RelRight, MaxDistance: 0.35}, {Kind: RelBelow, MaxDistance: 0.06}} {
 		t.Run(string(rel.Kind), func(t *testing.T) {
-			got := relatedTokens(page, relAnchor, rel)
+			got := relatedTokens(page, relAnchor, rel, 0)
 			if len(got) == 0 {
 				t.Fatal("the grid admitted nothing; the equivalence below would hold against a relatedTokens that admits nothing")
 			}
@@ -89,7 +89,7 @@ func TestRelationClauses_HalfOverlapIsTheStrictBoundary(t *testing.T) {
 			}
 
 			page := TokenPage{Number: 1, Tokens: []Token{{Text: "half", Region: tc.half}, {Text: "under", Region: tc.under}}}
-			got := relatedTokens(page, tc.anchor, Relation{Kind: tc.kind, MaxDistance: maxDistance})
+			got := relatedTokens(page, tc.anchor, Relation{Kind: tc.kind, MaxDistance: maxDistance}, 0)
 			if len(got) != 1 || got[0].index != 0 {
 				t.Errorf("relatedTokens = %+v, want exactly the half token (index 0)", got)
 			}
@@ -100,12 +100,12 @@ func TestRelationClauses_HalfOverlapIsTheStrictBoundary(t *testing.T) {
 // Only right and below are geometric: any other kind relates to nothing and fails a clause.
 func TestRelatedTokens_AnUnknownKindRelatesToNothing(t *testing.T) {
 	value := Region{Page: 1, X0: 0.60, Y0: 0.40, X1: 0.70, Y1: 0.43}
-	if got := relatedTokens(relOnePage(value), relAnchor, Relation{Kind: RelRight, MaxDistance: 0.35}); len(got) != 1 {
+	if got := relatedTokens(relOnePage(value), relAnchor, Relation{Kind: RelRight, MaxDistance: 0.35}, 0); len(got) != 1 {
 		t.Fatalf("control: right relates %d token(s), want 1; the zeros below would prove nothing", len(got))
 	}
 
 	for _, kind := range []RelationKind{RelSameToken, "diagonal", ""} {
-		if got := relatedTokens(relOnePage(value), relAnchor, Relation{Kind: kind, MaxDistance: 0.35}); len(got) != 0 {
+		if got := relatedTokens(relOnePage(value), relAnchor, Relation{Kind: kind, MaxDistance: 0.35}, 0); len(got) != 0 {
 			t.Errorf("kind %q relates %d token(s), want 0", kind, len(got))
 		}
 		if order, distance, overlap := RelationClausesForTest(relAnchor, value, kind, 0.35, 0); !order && !distance && !overlap {
@@ -118,7 +118,7 @@ func TestRelatedTokens_AnUnknownKindRelatesToNothing(t *testing.T) {
 func TestRelatedTokens_SkipsAnUnusableBoxTheClausesAdmit(t *testing.T) {
 	rel := Relation{Kind: RelRight, MaxDistance: 0.35}
 	good := Region{Page: 1, X0: 0.60, Y0: 0.40, X1: 0.70, Y1: 0.43}
-	if got := relatedTokens(relOnePage(good), relAnchor, rel); len(got) != 1 {
+	if got := relatedTokens(relOnePage(good), relAnchor, rel, 0); len(got) != 1 {
 		t.Fatalf("control: a usable pair relates %d token(s), want 1", len(got))
 	}
 
@@ -135,7 +135,7 @@ func TestRelatedTokens_SkipsAnUnusableBoxTheClausesAdmit(t *testing.T) {
 			if order, distance, overlap := RelationClausesForTest(tc.anchor, tc.value, rel.Kind, rel.MaxDistance, 0); order || distance || overlap {
 				t.Fatalf("order=%v distance=%v overlap=%v; a clause rejects this pair, so the usableBox guard is not what it reaches", order, distance, overlap)
 			}
-			if got := relatedTokens(relOnePage(tc.value), tc.anchor, rel); len(got) != 0 {
+			if got := relatedTokens(relOnePage(tc.value), tc.anchor, rel, 0); len(got) != 0 {
 				t.Errorf("relates %d token(s), want 0", len(got))
 			}
 		})

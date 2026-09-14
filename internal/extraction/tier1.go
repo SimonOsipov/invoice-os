@@ -21,6 +21,11 @@ type Tier1Rule struct {
 	// Fallback marks a rule that recognises a value by its shape alone, with no label to
 	// corroborate it -- shipped only by t1.currency.sweep, the bare naira symbol.
 	Fallback bool
+
+	// Drop is the right relation's drop-band admission dial: a value whose top sits below the
+	// label's top by less than Drop times the label's height is admitted alongside the line
+	// band. Zero on every shipped rule; below never reads it.
+	Drop float64
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon

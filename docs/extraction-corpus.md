@@ -353,20 +353,33 @@ vocabulary — measured: adding `subtotal`, and adding an inert misspelling, bot
 suite. A ten-field behavioural partition and an order-blind source-level set pin close it, and both
 are needed.
 
-Four cells on the shipped corpus read as doubtful, all `buyer_name`, and every one of the four
-values is unchanged from EXTR-21's baseline. Widening the scope to `total` moved none of them — no
-shipped layout reaches a second distinct reading of `total` at all under an adjacent generic head.
-Under the widening the head competes with *every* reading of its field, at any tier and any
-distance, so the group it would have to tie with is not the narrow one:
+`dtAmbiguous` pins every cell the fourteen layouts read as ambiguous, eight in all
+(`TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedEight`). One is `corpus_ambiguous_date.pdf`'s
+`issue_date`, a tie between two readings of one printed date that predates the doubt. The other
+seven are doubtful cells in this scope.
 
-| Layout | Value, unchanged | The alternative offered |
-|---|---|---|
-| `corpus_stacked_labels.pdf` | `Honeywell Group` | `99999999-0302` |
-| `corpus_two_column.pdf` | `Honeywell Group` | `TIN: 99999999-0402` |
-| `wild_two_party_bare_tin.pdf` | `Honeywell Group` | `TIN:` |
-| `wild_scanned_no_number.pdf` | `7 AWOLOWO ROAD, IKOYI` | `TIN: 99999999-1202` |
+Five of the seven are `buyer_name`, and the doubt moves none of their values (the same spec checks
+every scoped value per layout). Widening the scope to `total` changed none of the five: no shipped
+layout reaches a second distinct reading of `total` under an adjacent generic head. Under the
+widening the head competes with *every* reading of its field, at any tier and any distance, so the
+group it would have to tie with is not the narrow one.
 
-**Three of those four alternatives are TIN fragments offered under a *name* field, and that is
+The other two are `total`, on the ruled table and its as-printed sibling. They come from EXTR-29's
+found total, not from the widening: the value is the printed `8600.00` that arithmetic found, and
+the anchored `1000.00` is kept as its alternative (**What EXTR-29 changed**, under **End-to-end
+field accuracy**).
+
+| Layout | Field | Value | The alternative offered |
+|---|---|---|---|
+| `corpus_stacked_labels.pdf` | `buyer_name` | `Honeywell Group` | `99999999-0302` |
+| `corpus_two_column.pdf` | `buyer_name` | `Honeywell Group` | `TIN: 99999999-0402` |
+| `wild_two_party_bare_tin.pdf` | `buyer_name` | `Honeywell Group` | `TIN:` |
+| `wild_ruled_lines_totals.pdf` | `total` | `8600.00` | `1000.00` |
+| `wild_scanned_no_number.pdf` | `buyer_name` | `7 AWOLOWO ROAD, IKOYI` | `TIN: 99999999-1202` |
+| `wild_two_party_bare_tin_asprinted.pdf` | `buyer_name` | `Honeywell Group` | `TIN:` |
+| `wild_ruled_lines_totals_asprinted.pdf` | `total` | `8600.00` | `1000.00` |
+
+**Four of the five `buyer_name` alternatives are TIN fragments offered under a *name* field, and that is
 accepted rather than overlooked.** An ambiguous field renders a chip picker and **no free-text
 input** (`ExtractionFields.tsx` gates the picker on `reason === 'ambiguous'` and a non-empty
 alternatives list), so a reviewer correcting the doubtful buyer name on
@@ -663,6 +676,9 @@ four cells left are two layouts that carry no buyer block at all and the two qua
 
 ### What EXTR-23 changed
 
+*Historical, recorded when EXTR-23 merged. EXTR-29 later found the ruled-table total this
+subsection records as missed (`TestRLS_EndToEndScoresTheCorpus`); see **What EXTR-29 changed**.*
+
 Nothing on this page, and that is the finding rather than an omission. EXTR-23 ships an arithmetic
 referee: when a `total` cell arrives ambiguous and exactly one of its competing readings equals the
 decided `subtotal` plus the decided `vat` to within a kobo, that reading is taken and the doubt is
@@ -733,6 +749,79 @@ one layout through pdfium, not its golden, so the unmoved 58 is the pdfium-side 
 either. The words EXTR-26 newly matches are printed on the advisory fixtures, which carry no golden
 and sit outside this ratchet — see **The advisory arrangements** below — and on the as-printed
 siblings, which are scored.
+
+### What EXTR-29 changed
+
+The headline moved from 73 hits to 75, on exactly two cells: `wild_ruled_lines_totals.pdf/total`
+and `wild_ruled_lines_totals_asprinted.pdf/total` now file the printed `8600.00`, and
+`eeRealMisses` loses those two entries (`TestRLS_EndToEndScoresTheCorpus`). Both layouts read 8 of
+8 and `total` reads 11 of 14 in the tables above; every other row is unchanged
+(`TestRLS_EndToEndDocRecordsTheMeasuredTables`). EXTR-21's frozen baseline stays 53
+(`TestRLS_EndToEndNoBaselineHitRegresses`).
+
+EXTR-29 adds `findTotal` to `Reconcile`, after EXTR-23's referee. It runs only when:
+
+- `subtotal` and `vat` are both decided (`TestReconcile_AnUndecidedAddendFindsNothing`);
+- at least one anchored `total` reading exists, so a total no label reaches stays missing
+  (`TestReconcile_AMissingTotalIsNotFilledByArithmetic`);
+- no anchored `total` reading already equals `subtotal + vat` within a kobo, because EXTR-23
+  decides that case (`TestReconcile_ACorroboratedAnchoredTotalIsNeverReDecided`);
+- no `total` reading comes from a learned rule
+  (`TestReconcile_ALearnedTotalIsNeverOverriddenByArithmetic`).
+
+It then counts the tokens on every page (`TestReconcile_FindTotalReadsEveryPage`; through the
+worker, `TestRLS_EndToEndAFoundTotalOnALaterPageReachesTheInvoiceRow`) that carry a usable box and
+read as one amount through `ShapeAmount` (`TestReconcile_AFoundTotalIsReadThroughTheAmountShape`)
+equal to `subtotal + vat`. The tolerance is one kobo, inclusive, so `8,600.01` beside `8,600.00`
+is a second match (`TestReconcile_TwoAmountsInsideOneKoboFindNothing`). The decided `subtotal` and
+`vat` cells' own tokens do not count, matched by box
+(`TestReconcile_AnAddendsOwnTokenIsNeverItsTotal`). Exactly one match becomes the total. No match,
+or two or more, finds nothing, and a grand total printed twice is two matches
+(`TestReconcile_TwoUnrelatedBalancingAmountsFindNothing`,
+`TestReconcile_AGrandTotalPrintedTwiceFindsNothing`). A document the pass cannot help keeps
+EXTR-23's header results exactly, with no new reason code
+(`TestReconcile_ADocumentFindTotalCannotHelpIsLeftExactlyAsEXTR23LeftIt`).
+
+A found total presents doubtful (0.6d gate, Q1): reason `ambiguous` at rank 0 with the found value,
+and the anchored reading kept as its alternative. On the ruled table that is `8600.00` over
+`1000.00`, under the pdfium reader and the docling golden alike, and the `invoices` row takes
+`8600.00` (`TestRLS_EndToEndTheFoundTotalReachesTheInvoiceRow`). Extraction review renders an
+ambiguous field as chips with no input (`ExtractionFields.test.tsx`, "renders one chip per
+candidate and no input, and its neighbour keeps its input"), so `total` on such a document is a
+chooser where it was an input. The doubt counts once toward the audit row's `flagged_count`
+(`TestReconcile_AFoundTotalIsCountedOnceByTheFlaggedCount`), and `flagged_count` equals the rank-0
+rows carrying a reason (`TestRLS_ExtractWorkerAuditCountsAgreeWithTheRowsItWrote`).
+
+It fires on no other committed arrangement. With pages, only the ruled pair's header results move,
+under the pdfium walk and under every layout's docling golden
+(`TestEndToEnd_FindTotalMovesExactlyTheRuledPair`). A token without a usable box is not evidence
+(`usableBox` in `resolve.go`, `TestReconcile_ATokenWithNoUsableBoxIsNotEvidence`), and a DOCX
+reading carries the zero box on every token (`TestDoclingGolden_BoxlessPairIsBoxless`), so the pass
+is structurally silent on a DOCX.
+
+On a withholding-tax invoice (0.6d gate, Q2, Option A) no withholding label holds the pass off. If
+the gross `subtotal + vat` is printed once and the anchored total is the net payable, the gross is
+found and the net payable becomes its alternative. If the gross is not printed, the net payable
+stays decided (`TestReconcile_AWithholdingNetPayableIsNotCondemned`). No scored layout prints a
+withholding phrase (`wildUnprintedPhraseIDs`), so that in-memory spec is the only grade.
+
+**Known limit.** With `vat` at `0.00`, a second printed copy of the subtotal value counts: only the
+decided subtotal's own box is left out, and the copy equals `subtotal + vat`. If the anchored total
+fails the identity, that copy is found and presented doubtful. The pass reads positions, not
+labels, so the copy and a real grand total are the same input. The arm "vat 0.00 with a printed
+grand total: that token is found" of `TestReconcile_AnAddendsOwnTokenIsNeverItsTotal` files exactly
+that shape.
+
+On `advisory_dense.pdf`, the dense register's replica, the pass is unnecessary. The referee already
+decides the anchored `3426476.50`, which equals `3187420.00 + 239056.50`
+(`TestAdvisory_TheDenseInvoiceLetsTheRefereeDecide`, run without pages), and a balancing anchored
+reading holds `findTotal` off (`TestReconcile_ACorroboratedAnchoredTotalIsNeverReDecided`).
+
+**Two synthetic arrangements are not evidence about real documents.** The move above is one ruled
+geometry printed with two label sets. On the two real documents re-measured since EXTR-22, the
+boxed-header invoice and the dense register (production read on `d36be21e`, 2026-09-09, no
+oracle), the pass is either unnecessary or unable to fire. Whether arithmetic finds a total on a
+real document is unmeasured.
 
 ### Moving the figure
 
@@ -935,8 +1024,9 @@ claim is measured against, and the dense source's scored arrangement belongs to 
 
 **The EXTR-33 collision.** `advisory_dense.pdf`'s source, NG-4, is scored on
 `wild_ruled_lines_totals_asprinted.pdf`, and EXTR-26 fixed its `Taxable amount` subtotal (record (a)
-under **The as-printed siblings**). Its total still misses for the ruled twin's own geometric reason,
-owner EXTR-29, because `TOTAL DUE (NGN)` does not fit at the twin's `Total` position.
+under **The as-printed siblings**). Its total missed for the ruled twin's own geometric reason,
+because `TOTAL DUE (NGN)` does not fit at the twin's `Total` position, and EXTR-29's arithmetic
+pass now finds it (`TestRLS_EndToEndScoresTheCorpus`).
 `advisory_register.pdf`'s source, NG-3, is divergence (c)'s source, scored on
 `wild_stacked_borderless_asprinted.pdf`, which quarantines. No scored arrangement exists at the
 register's own geometry, and that gap is **owed and unowned**.
@@ -977,7 +1067,7 @@ declares neither. The scores are in **Per layout** above.
 | Lexicon-friendly | As-printed | Source | Divergence | Verdict |
 |---|---|---|---|---|
 | `wild_two_party_bare_tin.pdf` | `wild_two_party_bare_tin_asprinted.pdf` | `NG-Invoice-2-Rivers-Energy-boxed-header.pdf`, signature label from NG-5 | (d) | not reproduced |
-| `wild_ruled_lines_totals.pdf` | `wild_ruled_lines_totals_asprinted.pdf` | `NG-Invoice-4-Sahara-Telecoms-dense.pdf` | (a), (b) | (a) subtotal fixed by EXTR-26, total the twin's own miss; (b) fixed by EXTR-24 |
+| `wild_ruled_lines_totals.pdf` | `wild_ruled_lines_totals_asprinted.pdf` | `NG-Invoice-4-Sahara-Telecoms-dense.pdf` | (a), (b) | (a) subtotal fixed by EXTR-26, total found by EXTR-29; (b) fixed by EXTR-24 |
 | `wild_stacked_borderless.pdf` | `wild_stacked_borderless_asprinted.pdf` | `NG-Invoice-3-Okonkwo-Advisory-minimal.pdf` | (c) | reproduces |
 | `wild_rc_due_naira.pdf` | exempt: no vocabulary divergence was measured on its source, NG-1 | `NG-Invoice-1-Adeola-Steel-classic.pdf` | none measured | — |
 | `wild_scanned_no_number.pdf` | exempt: its source has no text layer; the OCR path is out of scope | `NG-Invoice-5-Ibadan-Goods-scan.pdf` | none | — |
@@ -1135,8 +1225,9 @@ d6db0e8d  wild_ruled_lines_totals_asprinted.pdf  decide subtotal "8000.00" reaso
 
 The total half does not reproduce NG-4's mechanism. `TOTAL DUE (NGN)` does not fit at the twin's
 `Total` position, where pdfium merges it with row 3's amount, so the sibling keeps `Total`. Its total
-misses for the ruled twin's own geometric reason: the label continues on the last data row's
-baseline, and a new candidate source is EXTR-29's (`eeRealMisses`).
+missed for the ruled twin's own geometric reason, the label continuing on the last data row's
+baseline. EXTR-29's arithmetic pass now files the printed `8,600.00` on both
+(`TestRLS_EndToEndScoresTheCorpus`).
 
 #### (b) `fxWildRuledHeader`: the index column's header
 
@@ -1239,10 +1330,9 @@ extended to its sibling:
 - `TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty`
 - `TestWildLayouts_TheTwoPartyBuyerNameIsTheName`
 
-The sibling cells that miss, and their owners: `wild_ruled_lines_totals_asprinted.pdf/total`,
-EXTR-29, which its twin misses too; every cell of `wild_stacked_borderless_asprinted.pdf`, EXTR-31.
-The two-party sibling misses nothing. A new spec on a paired twin joins this list or asserts the
-sibling.
+The sibling cells that miss, and their owners: every cell of `wild_stacked_borderless_asprinted.pdf`,
+EXTR-31. The two-party sibling misses nothing, and since EXTR-29 neither does the ruled sibling. A
+new spec on a paired twin joins this list or asserts the sibling.
 
 ## The advisory arrangements
 

@@ -1,6 +1,5 @@
-// drop_band_test.go: EXTR-31-03, the Tier-1 right drop band's production dial, measured and
-// pinned inside its window from both sides. External package: reading the pdfium twin builds
-// the pdfium pool.
+// drop_band_test.go: the Tier-1 right drop band's dial, pinned inside its measured window. External
+// package: reading the pdfium twin builds the pdfium pool.
 package extraction_test
 
 import (
@@ -18,10 +17,10 @@ const (
 	dbTwinGolden = "wild_stacked_borderless.docling.json"
 )
 
-// dbScannedGolden is the upper arm's fixture: SUBTOTAL's own value sits just below VAT's.
+// dbScannedGolden is the upper arm's fixture: VAT's 135.00 starts exactly at SUBTOTAL's bottom edge.
 const dbScannedGolden = "wild_scanned_no_number.docling.json"
 
-// The drop band's measured window. Lower and upper edges: [bound-set-by-pdfium], [dial-0.97].
+// The drop band's measured window.
 const (
 	dbDropLower     = 0.9494 // the pdfium twin's VAT needs t > 0.949395917528841
 	dbDropTooNarrow = 0.9493 // the pdfium twin's vat loses 112.50
@@ -29,10 +28,8 @@ const (
 	dbDropMerges    = 1.0001 // the scanned golden's subtotal reaches VAT's 135.00
 )
 
-// dbWithDrop clones the shipped set and sets Drop on every right rule. Struct copy only, no
-// re-parse, so a variant never forks the rule the fingerprint is built from (mirrors
-// acWithDistance). Shipped rules carry Drop == 0 until subtask 04 wires the dial, so every arm
-// here builds its own variant regardless of what tier1DropRight currently holds.
+// dbWithDrop clones the shipped set and sets Drop on every right rule; struct copy, no re-parse, as
+// in acWithDistance. It fatals only on no right rule: a shipped rule may already carry drop.
 func dbWithDrop(t *testing.T, drop float64) []extraction.Tier1Rule {
 	t.Helper()
 
@@ -71,8 +68,7 @@ func dbHasCandidateAt(cs []extraction.Candidate, value, ruleID string, distance 
 	return false
 }
 
-// dbTwinFields is the twin's six labelled fields, label -> printed value, both readers agree on
-// (measured at HEAD 5d21771a).
+// dbTwinFields is the twin's six labelled fields and the value both readers print for each.
 var dbTwinFields = []struct{ field, value, ruleID string }{
 	{"issue_date", "2026-07-30", "t1.issue_date.right"},
 	{"buyer_name", "Honeywell Group", "t1.buyer_name.right"},
@@ -82,10 +78,8 @@ var dbTwinFields = []struct{ field, value, ruleID string }{
 	{"total", "1612.50", "t1.total.right"},
 }
 
-// dbAdjacentPage is the twin-proportioned page 03-T5 needs: a Sub total anchor whose own value
-// sits in the drop band, and a second label on the anchor's own band with a competing amount
-// beyond it. label2 "VAT" is a recognised anchor label and blocks the rightward read
-// (crossesALabel); "Memo" is not and does not.
+// dbAdjacentPage puts label2 on the Sub total anchor's band, with a competing dropped amount beyond
+// it. "VAT" is an anchor label and blocks the rightward read (crossesALabel); "Memo" does not.
 func dbAdjacentPage(label2 string) []extraction.TokenPage {
 	return rvPage(
 		rvTok("Sub total", 0.10, 0.500, 0.18, 0.511),
@@ -95,17 +89,15 @@ func dbAdjacentPage(label2 string) []extraction.TokenPage {
 	)
 }
 
-// AC-1, AC-2, AC-3, AC-5. tier1DropRight sits inside the window from both sides, and the four
-// arms that measured its edges.
+// tier1DropRight sits inside its measured window; each edge is pinned by the value that sets it.
 func TestTier1_TheDropBandStaysInsideItsMeasuredWindow(t *testing.T) {
-	// Explicit float64: Tier1DropRightForTest is an untyped constant and := would default an
-	// integral value (e.g. the Stage 2.5 stub, 0) to int.
+	// Explicit float64: the seam is an untyped constant, and := would make an integral dial an int.
 	var drop float64 = extraction.Tier1DropRightForTest
 	if drop < dbDropLower || drop >= dbDropUpper {
 		t.Errorf("tier1DropRight is %v, outside the measured window [%v, %v)", drop, dbDropLower, dbDropUpper)
 	}
 
-	// 03-T2. A guard: explicit dials on subtask 02's band, independent of tier1DropRight.
+	// Explicit dials, independent of tier1DropRight.
 	t.Run("lower_bound", func(t *testing.T) {
 		pages := rvCorpusPages(t, dbTwinPDF)
 
@@ -122,8 +114,7 @@ func TestTier1_TheDropBandStaysInsideItsMeasuredWindow(t *testing.T) {
 		}
 	})
 
-	// 03-T3. "At the dial" reads extraction.Tier1DropRightForTest, so this arm is red at the
-	// Stage 2.5 stub (0) and turns green once the dial is set.
+	// "At the dial" reads extraction.Tier1DropRightForTest.
 	t.Run("at_the_dial", func(t *testing.T) {
 		rules := extraction.RuleSet{Tier1: dbWithDrop(t, drop)}
 
@@ -149,8 +140,7 @@ func TestTier1_TheDropBandStaysInsideItsMeasuredWindow(t *testing.T) {
 		}
 	})
 
-	// 03-T4. A guard: dbDropUpper and dbDropMerges are explicit literals, independent of
-	// tier1DropRight. It bites once the dial is set to 0.97.
+	// 1.0 stays clean only because the band is strict; dbDropMerges proves 135.00 is in reach.
 	t.Run("upper_bound", func(t *testing.T) {
 		_, pages, _ := dcServeGolden(t, dcReadNamedGolden(t, dbScannedGolden))
 
@@ -176,8 +166,8 @@ func TestTier1_TheDropBandStaysInsideItsMeasuredWindow(t *testing.T) {
 		}
 	})
 
-	// 03-T5. No rvFloor before the first assertion: the page resolves nothing at Drop 0, so a
-	// floor here would fatal with the wrong message rather than the exact-equality mismatch.
+	// No rvFloor before the equality check: at Drop 0 the page resolves nothing, and a floor would
+	// fatal before the mismatch prints.
 	t.Run("adjacent_column", func(t *testing.T) {
 		own := dbAdjacentPage("VAT")
 		got := extraction.Resolve(own, extraction.RuleSet{Tier1: dbWithDrop(t, drop)})
@@ -203,9 +193,8 @@ func TestTier1_TheDropBandStaysInsideItsMeasuredWindow(t *testing.T) {
 	})
 }
 
-// 03-T7, AC-2. resolve.go compares the offset (value.Y0 - anchor.Y0) against the product
-// (drop * height), not a sum -- a rewrite into either sum form refuses this fixture where the
-// offset form admits it, on both fused and unfused arithmetic.
+// The band compares the offset value.Y0-anchor.Y0 against drop*height, not a sum: both sum forms,
+// fused or not, refuse this value where the offset form admits it.
 func TestResolve_TheDropBandComparesTheOffsetNotTheSum(t *testing.T) {
 	const drop = 0.97
 	label := extraction.Region{Page: 1, X0: 0.10, Y0: 0.500, X1: 0.18, Y1: 0.511}

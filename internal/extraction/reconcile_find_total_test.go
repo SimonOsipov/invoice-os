@@ -645,6 +645,205 @@ func ftWHTPages() []extraction.TokenPage {
 	}}}
 }
 
+// EXTR-29-02 AC-1..3. The decided subtotal and vat cells' own tokens are evidence, never a total
+// candidate: without the exclusion, a zero addend makes the OTHER addend's own token equal
+// subtotal + vat, and the pass would file that evidence as its own conclusion.
+func TestReconcile_AnAddendsOwnTokenIsNeverItsTotal(t *testing.T) {
+	// assertAddendsDecided is the non-vacuity floor every arm below shares: the silence (or find)
+	// must come from the exclusion, never from an undecided addend or the learned gate.
+	assertAddendsDecided := func(t *testing.T, cands []extraction.Candidate, with []extraction.FieldResult, subtotal, vat string) {
+		t.Helper()
+		if slices.ContainsFunc(cands, func(c extraction.Candidate) bool { return c.Tier == extraction.TierLearned }) {
+			t.Fatal("a TierLearned candidate is present -- this arm would test the learned gate, not the exclusion")
+		}
+		got := rtaFind(t, with, "subtotal")
+		if got.Value == nil || *got.Value != subtotal || got.Reason != extraction.ReasonNone {
+			t.Fatalf("subtotal = %v/%q, want %s/ReasonNone -- this arm never reached a decided addend", got.Value, got.Reason, subtotal)
+		}
+		got = rtaFind(t, with, "vat")
+		if got.Value == nil || *got.Value != vat || got.Reason != extraction.ReasonNone {
+			t.Fatalf("vat = %v/%q, want %s/ReasonNone -- this arm never reached a decided addend", got.Value, got.Reason, vat)
+		}
+	}
+
+	t.Run("vat 0.00: the subtotal token is not the total", func(t *testing.T) {
+		sub := rcAdjacentAt("subtotal", "1000.00", extraction.TierGeneric, 0.03)
+		sub.Region = &ftBoxA
+		vat := rcAdjacentAt("vat", "0.00", extraction.TierGeneric, 0.03)
+		vat.Region = &ftBoxB
+		total := rcAdjacentAt("total", "950.00", extraction.TierGeneric, 0.047611)
+		total.Region = &ftBoxC
+		cands := []extraction.Candidate{sub, vat, total}
+		pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{
+			ftTok("1,000.00", ftBoxA), ftTok("0.00", ftBoxB), ftTok("950.00", ftBoxC),
+		}}}
+
+		without, with := ftRun(cands, nil, nil), ftRun(cands, nil, pages)
+		assertAddendsDecided(t, cands, with, "1000.00", "0.00")
+
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "950.00" || got.Reason != extraction.ReasonNone {
+			t.Errorf("total = %v/%q, want 950.00/ReasonNone -- the subtotal's own token must not become its total", got.Value, got.Reason)
+		}
+		if got.Region == nil || *got.Region != ftBoxC {
+			t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxC)
+		}
+		if got.Alternatives == nil || len(got.Alternatives) != 0 {
+			t.Errorf("alternatives = %v, want a non-nil empty slice", got.Alternatives)
+		}
+		if diff := ftHeaderDiff(t, without, with); diff != nil {
+			t.Errorf("ftHeaderDiff = %v, want none -- the subtotal's own token must not move any header cell", diff)
+		}
+	})
+
+	// Fire control for the arm above: the same page, plus a genuine printed grand total. That
+	// token alone is found, proving the silence above is the exclusion's, not a dead pass.
+	t.Run("vat 0.00 with a printed grand total: that token is found", func(t *testing.T) {
+		sub := rcAdjacentAt("subtotal", "1000.00", extraction.TierGeneric, 0.03)
+		sub.Region = &ftBoxA
+		vat := rcAdjacentAt("vat", "0.00", extraction.TierGeneric, 0.03)
+		vat.Region = &ftBoxB
+		total := rcAdjacentAt("total", "950.00", extraction.TierGeneric, 0.047611)
+		total.Region = &ftBoxC
+		cands := []extraction.Candidate{sub, vat, total}
+		pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{
+			ftTok("1,000.00", ftBoxA), ftTok("0.00", ftBoxB), ftTok("950.00", ftBoxC), ftTok("1,000.00", ftBoxG),
+		}}}
+
+		with := ftRun(cands, nil, pages)
+		assertAddendsDecided(t, cands, with, "1000.00", "0.00")
+
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "1000.00" {
+			t.Fatalf("total = %v, want %q", got.Value, "1000.00")
+		}
+		if got.Region == nil || *got.Region != ftBoxG {
+			t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxG)
+		}
+		if got.Reason != extraction.ReasonAmbiguous {
+			t.Errorf("total.Reason = %q, want ReasonAmbiguous", got.Reason)
+		}
+		wantAlts := []extraction.Field{{Name: "total", Value: rcStr("950.00"), Region: &ftBoxC, Reason: extraction.ReasonNone}}
+		if !reflect.DeepEqual(got.Alternatives, wantAlts) {
+			t.Errorf("alternatives = %+v, want %+v", got.Alternatives, wantAlts)
+		}
+	})
+
+	t.Run("subtotal 0.00: the vat token is not the total", func(t *testing.T) {
+		sub := rcAdjacentAt("subtotal", "0.00", extraction.TierGeneric, 0.03)
+		sub.Region = &ftBoxA
+		vat := rcAdjacentAt("vat", "75.00", extraction.TierGeneric, 0.03)
+		vat.Region = &ftBoxB
+		total := rcAdjacentAt("total", "70.00", extraction.TierGeneric, 0.047611)
+		total.Region = &ftBoxC
+		cands := []extraction.Candidate{sub, vat, total}
+		pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{
+			ftTok("0.00", ftBoxA), ftTok("75.00", ftBoxB), ftTok("70.00", ftBoxC),
+		}}}
+
+		without, with := ftRun(cands, nil, nil), ftRun(cands, nil, pages)
+		assertAddendsDecided(t, cands, with, "0.00", "75.00")
+
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "70.00" || got.Reason != extraction.ReasonNone {
+			t.Errorf("total = %v/%q, want 70.00/ReasonNone -- the vat's own token must not become its total", got.Value, got.Reason)
+		}
+		if got.Alternatives == nil || len(got.Alternatives) != 0 {
+			t.Errorf("alternatives = %v, want a non-nil empty slice", got.Alternatives)
+		}
+		if diff := ftHeaderDiff(t, without, with); diff != nil {
+			t.Errorf("ftHeaderDiff = %v, want none -- the vat's own token must not move any header cell", diff)
+		}
+	})
+
+	// Fire control for the arm above.
+	t.Run("subtotal 0.00 with a printed grand total: that token is found", func(t *testing.T) {
+		sub := rcAdjacentAt("subtotal", "0.00", extraction.TierGeneric, 0.03)
+		sub.Region = &ftBoxA
+		vat := rcAdjacentAt("vat", "75.00", extraction.TierGeneric, 0.03)
+		vat.Region = &ftBoxB
+		total := rcAdjacentAt("total", "70.00", extraction.TierGeneric, 0.047611)
+		total.Region = &ftBoxC
+		cands := []extraction.Candidate{sub, vat, total}
+		pages := []extraction.TokenPage{{Number: 1, Tokens: []extraction.Token{
+			ftTok("0.00", ftBoxA), ftTok("75.00", ftBoxB), ftTok("70.00", ftBoxC), ftTok("75.00", ftBoxH),
+		}}}
+
+		with := ftRun(cands, nil, pages)
+		assertAddendsDecided(t, cands, with, "0.00", "75.00")
+
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "75.00" {
+			t.Fatalf("total = %v, want %q", got.Value, "75.00")
+		}
+		if got.Region == nil || *got.Region != ftBoxH {
+			t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxH)
+		}
+		if got.Reason != extraction.ReasonAmbiguous {
+			t.Errorf("total.Reason = %q, want ReasonAmbiguous", got.Reason)
+		}
+		wantAlts := []extraction.Field{{Name: "total", Value: rcStr("70.00"), Region: &ftBoxC, Reason: extraction.ReasonNone}}
+		if !reflect.DeepEqual(got.Alternatives, wantAlts) {
+			t.Errorf("alternatives = %+v, want %+v", got.Alternatives, wantAlts)
+		}
+	})
+}
+
+// EXTR-29-02 AC-4. A TierLearned total candidate is the tenant's own taught answer; arithmetic
+// must never override it, even when a unique balancing token sits on the page.
+func TestReconcile_ALearnedTotalIsNeverOverriddenByArithmetic(t *testing.T) {
+	if slices.ContainsFunc(ftF0Candidates(), func(c extraction.Candidate) bool { return c.Tier == extraction.TierLearned }) {
+		t.Fatal("ftF0Candidates carries a TierLearned candidate -- EXTR-29-01's fixtures must stay explicit TierGeneric")
+	}
+	if slices.ContainsFunc(ftWHTCandidates(), func(c extraction.Candidate) bool { return c.Tier == extraction.TierLearned }) {
+		t.Fatal("ftWHTCandidates carries a TierLearned candidate -- EXTR-29-01's fixtures must stay explicit TierGeneric")
+	}
+
+	t.Run("a learned total stands", func(t *testing.T) {
+		learned := rcCandAt("total", "1000.00", extraction.TierLearned, 0)
+		learned.Region = &ftBoxC
+		cands := []extraction.Candidate{ftSubtotal(), ftVAT(), learned}
+
+		without, with := ftRun(cands, nil, nil), ftRun(cands, nil, ftF0Pages())
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "1000.00" || got.Reason != extraction.ReasonNone {
+			t.Errorf("total = %v/%q, want 1000.00/ReasonNone -- a taught total must never be overridden by arithmetic", got.Value, got.Reason)
+		}
+		if got.Region == nil || *got.Region != ftBoxC {
+			t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxC)
+		}
+		if got.Alternatives == nil || len(got.Alternatives) != 0 {
+			t.Errorf("alternatives = %v, want a non-nil empty slice", got.Alternatives)
+		}
+		if diff := ftHeaderDiff(t, without, with); diff != nil {
+			t.Errorf("ftHeaderDiff = %v, want none -- a unique balancing token must not move a taught total", diff)
+		}
+	})
+
+	// Control: the same fixture, untaught -- proves the arm above is held by the learned gate,
+	// not by some other silence.
+	t.Run("control: the same total untaught is found", func(t *testing.T) {
+		generic := rcCandAt("total", "1000.00", extraction.TierGeneric, 0)
+		generic.Region = &ftBoxC
+		cands := []extraction.Candidate{ftSubtotal(), ftVAT(), generic}
+
+		got := rtaFind(t, ftRun(cands, nil, ftF0Pages()), "total")
+		if got.Value == nil || *got.Value != "8600.00" {
+			t.Fatalf("total = %v, want %q -- the untaught control must still be found", got.Value, "8600.00")
+		}
+		if got.Region == nil || *got.Region != ftBoxD {
+			t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxD)
+		}
+		if got.Reason != extraction.ReasonAmbiguous {
+			t.Errorf("total.Reason = %q, want ReasonAmbiguous", got.Reason)
+		}
+		wantAlts := []extraction.Field{{Name: "total", Value: rcStr("1000.00"), Region: &ftBoxC, Reason: extraction.ReasonNone}}
+		if !reflect.DeepEqual(got.Alternatives, wantAlts) {
+			t.Errorf("alternatives = %+v, want %+v", got.Alternatives, wantAlts)
+		}
+	})
+}
+
 // AC-9. A withholding-tax invoice's anchored net payable is not condemned when the gross is
 // nowhere printed; where the gross IS printed once, it is found and the net payable becomes its
 // alternative -- there is no withholding-label gate (0.6d gate, Q2 = Option A).

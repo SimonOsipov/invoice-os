@@ -99,7 +99,7 @@ func dtRun(t *testing.T, l bdLayout) ([]extraction.Candidate, []extraction.Field
 		t.Fatalf("%s read 0 token(s); every reason it reports is the reason of an empty page", l.file)
 	}
 	cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
-	return cands, extraction.Reconcile(extraction.Input{Candidates: cands}), tokens
+	return cands, extraction.Reconcile(extraction.Input{Candidates: cands, Pages: pages}), tokens
 }
 
 // dtLayout finds one row of the walk table by name, so a spec naming a layout the table dropped

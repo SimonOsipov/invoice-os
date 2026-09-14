@@ -4,6 +4,7 @@ package extraction_test
 
 import (
 	"go/ast"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -182,4 +183,43 @@ func TestReconcile_FindTotalIsWiredForTotalAlone(t *testing.T) {
 	if want := []string{"total"}; !slices.Equal(diff, want) {
 		t.Errorf("ftHeaderDiff = %v, want %v -- findTotal must only ever move the header total", diff, want)
 	}
+}
+
+// Page tokens are read through ShapeAmount: a currency prefix and a comma-less spelling are each a
+// reading, and two spellings of one value at two positions are two matches.
+func TestReconcile_AFoundTotalIsReadThroughTheAmountShape(t *testing.T) {
+	cands := ftF0Candidates()
+	pagesWith := func(extra ...extraction.Token) []extraction.TokenPage {
+		toks := []extraction.Token{ftTok("8,000.00", ftBoxA), ftTok("600.00", ftBoxB), ftTok("1,000.00", ftBoxC)}
+		return []extraction.TokenPage{{Number: 1, Tokens: append(toks, extra...)}}
+	}
+	wantAlts := []extraction.Field{{Name: "total", Value: rcStr("1000.00"), Region: &ftBoxC, Reason: extraction.ReasonNone}}
+
+	for _, text := range []string{"₦8,600.00", "8600.00"} {
+		t.Run("found alone: "+text, func(t *testing.T) {
+			got := rtaFind(t, ftRun(cands, nil, pagesWith(ftTok(text, ftBoxD))), "total")
+			if got.Value == nil || *got.Value != "8600.00" || got.Reason != extraction.ReasonAmbiguous {
+				t.Fatalf("total = %v/%q, want 8600.00/ReasonAmbiguous", got.Value, got.Reason)
+			}
+			if got.Region == nil || *got.Region != ftBoxD {
+				t.Errorf("total.Region = %+v, want %+v", got.Region, ftBoxD)
+			}
+			if !reflect.DeepEqual(got.Alternatives, wantAlts) {
+				t.Errorf("alternatives = %+v, want %+v", got.Alternatives, wantAlts)
+			}
+		})
+	}
+
+	// Each spelling alone is found above, so this silence is the count, not a rejected spelling.
+	t.Run("two spellings at two positions", func(t *testing.T) {
+		without := ftRun(cands, nil, nil)
+		with := ftRun(cands, nil, pagesWith(ftTok("8600.00", ftBoxD), ftTok("8,600.00", ftBoxE)))
+		got := rtaFind(t, with, "total")
+		if got.Value == nil || *got.Value != "1000.00" || got.Reason != extraction.ReasonNone {
+			t.Errorf("total = %v/%q, want 1000.00/ReasonNone", got.Value, got.Reason)
+		}
+		if diff := ftHeaderDiff(t, without, with); diff != nil {
+			t.Errorf("ftHeaderDiff = %v, want none", diff)
+		}
+	})
 }

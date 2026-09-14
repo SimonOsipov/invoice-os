@@ -14,7 +14,7 @@ type Input struct {
 	Candidates []Candidate // Resolve's output, already grouped and ordered
 	Lines      []DocLine   // LineItems' output; nil when the reader found no table
 	Entity     Entity      // the signed-in business entity, for the Q11 supplier check (EXTR-05-05)
-	Pages      []TokenPage // the pages Resolve read; nil finds nothing (EXTR-29-01)
+	Pages      []TokenPage // the pages Resolve read; nil finds nothing
 }
 
 // Entity is the signed-in business_entities row as the supplier check reads it. TIN is the

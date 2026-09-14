@@ -203,8 +203,8 @@ func main() {
 	// A no-number document's stored reading, and filing it under the operator's number.
 	app.Mux.HandleFunc("GET /v1/imports/document/reading", importer.ReadingHandler(impSvc.CarriedReading, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/document/invoice", importer.SupplyNumberHandler(impSvc.SupplyInvoiceNumber, app.Logger))
-	// GET /v1/imports/saved-mapping -- a later import's lookup for the mapping a
-	// completed one saved (EXTR-37-03). The literal path beats {id} below it.
+	// A later import's lookup for a saved mapping. The literal path beats {id} below it
+	// (TestImportRoutes_SavedMappingIsNotSwallowedByBatchID).
 	app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(docSvc.Open, impStore.SavedMapping, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on

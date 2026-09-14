@@ -58,11 +58,8 @@ func (s *Store) SaveMapping(ctx context.Context, entityID string, header []strin
 	})
 }
 
-// SavedMapping returns the row for (entityID, columnSignature(header)) under RLS, or nil.
-//
-//	SELECT mapping, saved_at FROM import_mappings WHERE entity_id = $1 AND column_signature = $2
-//
-// pgx.ErrNoRows -> (nil, nil); 22P02 -> ErrValidation (GetBatch's mapping, store.go:286-293).
+// SavedMapping returns the row for (entityID, columnSignature(header)) under RLS, or nil on a miss.
+// 22P02 -> ErrValidation, mirroring GetBatch's mapping.
 func (s *Store) SavedMapping(ctx context.Context, entityID string, header []string) (*SavedMapping, error) {
 	signature := columnSignature(header)
 

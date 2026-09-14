@@ -240,12 +240,8 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 }
 
-// TestInvoiceMain_RegistersTheSavedMappingRoute (EXTR-37-03 AC #5): GET
-// /v1/imports/saved-mapping must be mounted beside GET /v1/imports/{id}, dispatching
-// to importer.SavedMappingHandler(docSvc.Open, impStore.SavedMapping, ...). AST, so
-// gofmt cannot break the anchor (part (c) of TestInvoiceMain_WiresTheApprovalsEnforcedFlag's
-// idiom). The GET /v1/imports/{id} needle is a control: it proves the walk finds a real,
-// already-shipped registration before trusting a negative result for the new one.
+// AST, so gofmt cannot break the anchor. The GET /v1/imports/{id} needle proves the walk
+// finds a shipped registration before a negative result is trusted.
 func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {

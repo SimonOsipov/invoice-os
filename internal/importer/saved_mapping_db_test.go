@@ -1,5 +1,5 @@
-// Store.SaveMapping and its CreateHandler wiring, DB-backed through dbTestPools,
-// seedTenant and memberSubject.
+// Store.SaveMapping, Store.SavedMapping and their handler wiring, DB-backed through
+// dbTestPools, seedTenant and memberSubject.
 package importer
 
 import (
@@ -386,10 +386,6 @@ func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 	}
 }
 
-// --- Store.SavedMapping / SavedMappingHandler (SM-DB-06/07) ------------------
-
-// TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader: a hit only for the exact
-// (entity, header) pair the caller's tenant saved; a miss for everything else.
 func TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -492,8 +488,18 @@ func TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader(t *testing.T) {
 		otherTenantID := seedTenant(t, super, "SM-DB-06 other tenant")
 		bEntityID := seedEntity(t, super, otherTenantID, "SM-DB-06 tenant B entity")
 		cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: otherTenantID})
-		if err := store.SaveMapping(cB, bEntityID, header, map[string]string{"invoice_number": "Ref"}); err != nil {
+		bMapping := map[string]string{"invoice_number": "Ref"}
+		if err := store.SaveMapping(cB, bEntityID, header, bMapping); err != nil {
 			t.Fatalf("tenant B SaveMapping: %v", err)
+		}
+
+		// Control: the owning tenant finds the row, so tenant A's nil below is RLS, not a miss.
+		owned, err := store.SavedMapping(cB, bEntityID, header)
+		if err != nil {
+			t.Fatalf("tenant B SavedMapping: %v", err)
+		}
+		if owned == nil || !reflect.DeepEqual(owned.Mapping, bMapping) {
+			t.Fatalf("control: tenant B SavedMapping = %v, want mapping %v", owned, bMapping)
 		}
 
 		got, err := store.SavedMapping(c, bEntityID, header)
@@ -503,10 +509,15 @@ func TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader(t *testing.T) {
 		if got != nil {
 			t.Errorf("SavedMapping = %v, want nil -- tenant A must not see tenant B's entity", got)
 		}
-	})
 
-	// Control: the store CAN return a row -- proved above by "hit" -- so every
-	// nil-returning subtest above is a genuine miss, not a store that always misses.
+		mine, err := store.SavedMapping(c, entityID, header)
+		if err != nil {
+			t.Fatalf("tenant A SavedMapping: %v", err)
+		}
+		if mine == nil || !reflect.DeepEqual(mine.Mapping, mapping) {
+			t.Errorf("tenant A SavedMapping = %v, want its own mapping %v, not tenant B's", mine, mapping)
+		}
+	})
 
 	t.Run("malformed entity id", func(t *testing.T) {
 		_, err := store.SavedMapping(c, "not-a-uuid", header)
@@ -516,11 +527,7 @@ func TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader(t *testing.T) {
 	})
 }
 
-// TestSavedMappingHandler_FindsTheMappingACompletedImportSaved wires the real
-// CreateHandler and SavedMappingHandler on one mux: a completed import of doc1
-// lands a mapping, and a SECOND stored document (doc2) with the same header
-// finds it through the saved-mapping route -- the second-import case this
-// story exists for. docSvc is built exactly as SM-DB-08 above.
+// A second stored document with the same header finds the mapping the first import saved.
 func TestSavedMappingHandler_FindsTheMappingACompletedImportSaved(t *testing.T) {
 	super, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})

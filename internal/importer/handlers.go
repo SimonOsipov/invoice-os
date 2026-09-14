@@ -713,9 +713,8 @@ type savedMappingResponse struct {
 	SavedMapping *SavedMapping `json:"saved_mapping"`
 }
 
-// SavedMappingHandler is GET /v1/imports/saved-mapping?entity_id=&document_id=: the server
-// decodes the stored document's header with Decode, the same way the save path does, so the
-// lookup key equals the save key by construction.
+// SavedMappingHandler is GET /v1/imports/saved-mapping. It decodes the stored document's header
+// with Decode, as the save path does, so the lookup key equals the save key.
 func SavedMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),

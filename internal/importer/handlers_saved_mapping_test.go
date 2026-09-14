@@ -1,5 +1,5 @@
-// CreateHandler's save branching, fake-driven: imp, open and save are all doubles.
-// Also SavedMappingHandler's GET /v1/imports/saved-mapping specs (SM-GET/SM-MUX).
+// CreateHandler's save branching and SavedMappingHandler's lookup, fake-driven: imp, open,
+// save and lookup are all doubles.
 package importer
 
 import (
@@ -397,8 +397,6 @@ func TestCreateHandler_MalformedRememberMapping400BeforeOpen(t *testing.T) {
 	})
 }
 
-// --- SavedMappingHandler (SM-GET / SM-MUX) ----------------------------------
-
 // lookupCall records one Store.SavedMapping-shaped call for the assertions below.
 type lookupCall struct {
 	entityID string
@@ -443,7 +441,6 @@ func doSavedMappingRequest(t *testing.T, open openSpec, lookup func(ctx context.
 	return rec, raw, resp
 }
 
-// SM-GET-01: no identity 401s before open or lookup ever runs.
 func TestSavedMappingHandler_NoIdentityIs401BeforeOpenAndLookup(t *testing.T) {
 	entityID := uuid.NewString()
 	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Ref"}, nil))
@@ -469,7 +466,6 @@ func TestSavedMappingHandler_NoIdentityIs401BeforeOpenAndLookup(t *testing.T) {
 	}
 }
 
-// SM-GET-02: entity_id absent or malformed 400s before open or lookup ever runs.
 func TestSavedMappingHandler_EntityIDRequiredAndWellFormed(t *testing.T) {
 	documentID := uuid.NewString()
 
@@ -525,7 +521,6 @@ func TestSavedMappingHandler_EntityIDRequiredAndWellFormed(t *testing.T) {
 	})
 }
 
-// SM-GET-03: document_id absent or malformed 400s before open or lookup ever runs.
 func TestSavedMappingHandler_DocumentIDRequiredAndWellFormed(t *testing.T) {
 	entityID := uuid.NewString()
 
@@ -581,7 +576,6 @@ func TestSavedMappingHandler_DocumentIDRequiredAndWellFormed(t *testing.T) {
 	})
 }
 
-// SM-GET-04: open's two named errors map exactly like CreateHandler's; lookup never runs.
 func TestSavedMappingHandler_OpenRefusalsMapLikeCreate(t *testing.T) {
 	entityID := uuid.NewString()
 	documentID := uuid.NewString()
@@ -633,8 +627,7 @@ func TestSavedMappingHandler_OpenRefusalsMapLikeCreate(t *testing.T) {
 	})
 }
 
-// SM-GET-05: lookup receives the DECODED header, never a query-param substitute -- a
-// quoted comma in one column name means a naive split would disagree with Decode.
+// A quoted comma in one column name makes a naive split disagree with Decode.
 func TestSavedMappingHandler_LookupReceivesTheDecodedHeader(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -666,7 +659,6 @@ func TestSavedMappingHandler_LookupReceivesTheDecodedHeader(t *testing.T) {
 	}
 }
 
-// SM-GET-06: a miss renders an explicit JSON null, never an absent key or a 404.
 func TestSavedMappingHandler_MissIsExplicitNull(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -690,7 +682,6 @@ func TestSavedMappingHandler_MissIsExplicitNull(t *testing.T) {
 	}
 }
 
-// SM-GET-07: a hit carries exactly mapping and saved_at, the latter as RFC 3339.
 func TestSavedMappingHandler_HitCarriesMappingAndSavedAt(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -744,8 +735,7 @@ func TestSavedMappingHandler_HitCarriesMappingAndSavedAt(t *testing.T) {
 	}
 }
 
-// SM-GET-08: lookup's error maps through statusForErr -- 403 with no log record,
-// or 500 with exactly one logged record.
+// A 403 logs nothing; a 500 logs exactly one record.
 func TestSavedMappingHandler_LookupErrorMapping(t *testing.T) {
 	entityID := uuid.NewString()
 
@@ -792,7 +782,6 @@ func TestSavedMappingHandler_LookupErrorMapping(t *testing.T) {
 	})
 }
 
-// SM-GET-09: an unrecognized document format 400s before lookup ever runs.
 func TestSavedMappingHandler_UnrecognizedFormatIs400(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -816,8 +805,7 @@ func TestSavedMappingHandler_UnrecognizedFormatIs400(t *testing.T) {
 	}
 }
 
-// SM-GET-10: a suspended caller at open() is 403 through statusForErr, not the
-// switch's default 500 arm; any other open error is a logged 500.
+// open's default arm maps through statusForErr, so a suspended caller is 403, not 500.
 func TestSavedMappingHandler_SuspendedCallerAtOpenIs403(t *testing.T) {
 	entityID := uuid.NewString()
 	documentID := uuid.NewString()
@@ -868,7 +856,6 @@ func TestSavedMappingHandler_SuspendedCallerAtOpenIs403(t *testing.T) {
 	})
 }
 
-// SM-GET-11: a stored file that fails Decode 400s before lookup ever runs.
 func TestSavedMappingHandler_UndecodableFileIs400(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -892,8 +879,6 @@ func TestSavedMappingHandler_UndecodableFileIs400(t *testing.T) {
 	}
 }
 
-// SM-GET-12: a non-conformant open() handing back a nil body 500s, guarded like
-// Decode's own nil-dereference guard elsewhere in the package.
 func TestSavedMappingHandler_NilObjectBodyIs500(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -921,8 +906,7 @@ func TestSavedMappingHandler_NilObjectBodyIs500(t *testing.T) {
 	}
 }
 
-// SM-MUX-01: the literal /saved-mapping route must win over the {id} pattern
-// registered beside it, exactly as main.go registers both.
+// Registers both routes as main.go does: the literal path must win over {id}.
 func TestImportRoutes_SavedMappingIsNotSwallowedByBatchID(t *testing.T) {
 	id := testIdentity()
 

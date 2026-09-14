@@ -75,3 +75,93 @@ func TestRLS_EndToEndADoubtfulFieldStillReachesTheInvoiceRow(t *testing.T) {
 		t.Errorf("the invoices row holds %s = %q, want %q -- the importer reads Value, so a doubtful field still lands", dtDBField, got[dtDBField], dtDBValue)
 	}
 }
+
+// AC-2: the found total outranks the anchored addend under both readers, and the winning value
+// reaches the invoices row. Each reader gets its own subtest: eeExtract registers its client Stop
+// on the t it is given, and two live clients would race for the same extraction queue.
+func TestRLS_EndToEndTheFoundTotalReachesTheInvoiceRow(t *testing.T) {
+	eeRequire(t)
+	ctx := t.Context()
+	const layout = "wild_ruled_lines_totals.pdf"
+	eeRequireFixtures(t, []string{layout, wildGolden(layout)})
+
+	check := func(t *testing.T, w eeWorld, jobID string) {
+		rows := eeFieldResults(t, ctx, jobID)
+		if len(rows) == 0 {
+			t.Fatalf("extraction job %s wrote no field-result row for %s; every clause below reads an empty table", jobID, layout)
+		}
+
+		var totals []eeRow
+		for _, r := range rows {
+			if r.name == "total" {
+				totals = append(totals, r)
+			}
+		}
+		if len(totals) == 0 {
+			t.Fatalf("%s wrote no total row at all", layout)
+		}
+		if len(totals) != 2 {
+			t.Errorf("%s wrote %d total row(s): %s, want 2 -- rank 0 the found 8600.00, rank 1 the anchored 1000.00", layout, len(totals), eeShowRows(totals))
+		}
+
+		var rank0Present, rank1Present bool
+		var rank0Value, rank1Value string
+		var rank0Reason, rank1Reason *string
+		for _, r := range totals {
+			switch r.rank {
+			case 0:
+				rank0Present = true
+				if r.value != nil {
+					rank0Value = *r.value
+				}
+				rank0Reason = r.reason
+			case 1:
+				rank1Present = true
+				if r.value != nil {
+					rank1Value = *r.value
+				}
+				rank1Reason = r.reason
+			}
+		}
+
+		if !rank0Present || rank0Value != "8600.00" {
+			t.Errorf("%s rank-0 total holds %q, want %q -- the found total must outrank the anchored addend", layout, rank0Value, "8600.00")
+		}
+		rank0ReasonStr := "<NULL>"
+		if rank0Reason != nil {
+			rank0ReasonStr = *rank0Reason
+		}
+		if rank0ReasonStr != string(extraction.ReasonAmbiguous) {
+			t.Errorf("%s rank-0 total holds reason_code %s, want %q", layout, rank0ReasonStr, extraction.ReasonAmbiguous)
+		}
+		if rank1Present {
+			if rank1Value != "1000.00" {
+				t.Errorf("%s rank-1 total holds %q, want %q -- the anchored addend, still reachable one rank down", layout, rank1Value, "1000.00")
+			}
+			if rank1Reason != nil {
+				t.Errorf("%s rank-1 total holds reason_code %q, want NULL", layout, *rank1Reason)
+			}
+		}
+
+		eeImport(t, ctx, w)
+		got := eeWrittenRow(t, ctx, w.documentID)
+		if got == nil {
+			t.Fatalf("%s wrote no invoices row; the total assertion below has nothing to read", layout)
+		}
+		if got["total"] != "8600.00" {
+			t.Errorf("the invoices row holds total = %q, want %q", got["total"], "8600.00")
+		}
+	}
+
+	t.Run("pdfium", func(t *testing.T) {
+		w := eeSeed(t, ctx, layout)
+		jobID := eeExtract(t, ctx, w, layout)
+		check(t, w, jobID)
+	})
+
+	t.Run("docling", func(t *testing.T) {
+		w := eeSeed(t, ctx, layout)
+		jobID := eeExtract(t, ctx, w, layout, eeWithText(eeGoldenReader(t, wildGolden(layout))))
+		check(t, w, jobID)
+	})
+}

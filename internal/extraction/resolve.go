@@ -268,6 +268,9 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 	if !usableBox(anchor) {
 		return nil
 	}
+	if rel.Kind != RelRight && rel.Kind != RelBelow {
+		return nil
+	}
 
 	var out []relatedToken
 	for i, tok := range page.Tokens {
@@ -275,32 +278,15 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 		if !usableBox(b) {
 			continue
 		}
-
-		var gap, ov, span float64
+		if order, distance, overlap := relationClauses(anchor, b, rel, 0); order || distance || overlap {
+			continue
+		}
+		var gap float64
 		switch rel.Kind {
 		case RelRight:
-			if b.X0 < anchor.X1 {
-				continue
-			}
 			gap = b.X0 - anchor.X1
-			ov = overlap1D(anchor.Y0, anchor.Y1, b.Y0, b.Y1)
-			span = min(anchor.Y1-anchor.Y0, b.Y1-b.Y0)
 		case RelBelow:
-			if b.Y0 < anchor.Y1 {
-				continue
-			}
 			gap = b.Y0 - anchor.Y1
-			ov = overlap1D(anchor.X0, anchor.X1, b.X0, b.X1)
-			span = min(anchor.X1-anchor.X0, b.X1-b.X0)
-		default:
-			return nil
-		}
-
-		// A subnormal span halves to zero, so ov >= 0.5*span would admit a zero overlap. The
-		// strict conjunct is what rejects one:
-		// TestResolve_RejectsAZeroOverlapUnderASubnormalSpan.
-		if gap > rel.MaxDistance || ov <= 0 || ov < 0.5*span {
-			continue
 		}
 		out = append(out, relatedToken{index: i, distance: gap})
 	}
@@ -308,10 +294,32 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 }
 
 // relationClauses reports, independently, whether the order, distance and overlap conjuncts
-// reject value as a match for anchor under rel. Not yet wired into relatedTokens: it always
-// reports no failure until the caller is rewired onto it. drop is unread here.
+// reject value as a match for anchor under rel. gap, ov and span are all computed regardless of
+// which clauses already fail, so a caller can tell "order alone failed" from "order and overlap
+// both failed" -- relatedTokens' old first-failing-test continue could not. drop is unread here;
+// it becomes live in the story's next subtask.
 func relationClauses(anchor, value Region, rel Relation, drop float64) (order, distance, overlap bool) {
-	return false, false, false
+	var gap, ov, span float64
+	switch rel.Kind {
+	case RelRight:
+		order = value.X0 < anchor.X1
+		gap = value.X0 - anchor.X1
+		ov = overlap1D(anchor.Y0, anchor.Y1, value.Y0, value.Y1)
+		span = min(anchor.Y1-anchor.Y0, value.Y1-value.Y0)
+	case RelBelow:
+		order = value.Y0 < anchor.Y1
+		gap = value.Y0 - anchor.Y1
+		ov = overlap1D(anchor.X0, anchor.X1, value.X0, value.X1)
+		span = min(anchor.X1-anchor.X0, value.X1-value.X0)
+	default:
+		return true, true, true
+	}
+
+	distance = gap > rel.MaxDistance
+	// A subnormal span halves to zero, so ov >= 0.5*span would admit a zero overlap. The
+	// strict conjunct is what rejects one: TestResolve_RejectsAZeroOverlapUnderASubnormalSpan.
+	overlap = ov <= 0 || ov < 0.5*span
+	return order, distance, overlap
 }
 
 // overlap1D is the length [a0,a1] and [b0,b1] share, negative when they are disjoint.

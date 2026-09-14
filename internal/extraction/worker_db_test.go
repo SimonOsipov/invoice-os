@@ -3532,7 +3532,7 @@ func TestRLS_ABoxlessIdentityOverRealGeometryStoresUsableAnchors(t *testing.T) {
 
 // wkOurRefRule is a same_token rule over a label anchorLexicon does not carry. Both halves are
 // load-bearing. same_token is the only relation that can fire on a boxless document: right and
-// below die at relatedTokens' usableBox(anchor) guard (resolve.go:185-187) because every DOCX
+// below die at relatedTokens' usableBox(anchor) guard because every DOCX
 // token carries the zero box. And the non-lexicon label means no Tier-1 rule can produce the
 // same candidate -- extraction_field_results has no tier column, so a value Tier-1 could also
 // reach would attribute to nothing.

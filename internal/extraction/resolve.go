@@ -293,11 +293,8 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 	return out
 }
 
-// relationClauses reports, independently, whether the order, distance and overlap conjuncts
-// reject value as a match for anchor under rel. gap, ov and span are all computed regardless of
-// which clauses already fail, so a caller can tell "order alone failed" from "order and overlap
-// both failed" -- relatedTokens' old first-failing-test continue could not. drop is unread here;
-// it becomes live in the story's next subtask.
+// relationClauses reports every conjunct that rejects value for anchor under rel, not just the
+// first: TestOffsetStack_PdfiumTwinFailsOnlyTheOverlapClauseOnRight. drop is unread.
 func relationClauses(anchor, value Region, rel Relation, drop float64) (order, distance, overlap bool) {
 	var gap, ov, span float64
 	switch rel.Kind {

@@ -152,3 +152,39 @@ func TestOffsetStack_DoclingTwinFailsOnlyTheOverlapClauseOnRight(t *testing.T) {
 	_, tokens, _ := dcServeGolden(t, golden)
 	stkAssertVerdicts(t, tokens, "docling")
 }
+
+// The weld in the other direction: each pair a clause rejects also yields nothing through
+// Resolve, beside a control pair that clears every clause and resolves.
+func TestOffsetStack_EachRejectingClauseAlsoRejectsThroughResolve(t *testing.T) {
+	anchor := rvTok("Invoice No:", 0.10, 0.10, 0.25, 0.13)
+	rules := extraction.RuleSet{Learned: []extraction.AnchorRule{
+		rvLearned(t, "rule-1", "invoice_number", rvLabelInvoiceNo, extraction.RelRight, 0.35, extraction.ShapeInvoiceNumber),
+	}}
+
+	control := rvTok("INV-001", 0.30, 0.10, 0.40, 0.13)
+	if order, distance, overlap := extraction.RelationClausesForTest(anchor.Region, control.Region, extraction.RelRight, 0.35, 0); order || distance || overlap {
+		t.Fatalf("control: order=%v distance=%v overlap=%v, want all false", order, distance, overlap)
+	}
+	rvControl(t, extraction.Resolve(rvPage(anchor, control), rules), "a right pair that clears every clause")
+
+	cases := []struct {
+		name                              string
+		value                             extraction.Token
+		wantOrder, wantDistance, wantOver bool
+	}{
+		{"order", rvTok("INV-001", 0.05, 0.10, 0.09, 0.13), true, false, false},
+		{"distance", rvTok("INV-001", 0.60001, 0.10, 0.70, 0.13), false, true, false},
+		{"overlap", rvTok("INV-001", 0.30, 0.16, 0.40, 0.19), false, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			order, distance, overlap := extraction.RelationClausesForTest(anchor.Region, tc.value.Region, extraction.RelRight, 0.35, 0)
+			if order != tc.wantOrder || distance != tc.wantDistance || overlap != tc.wantOver {
+				t.Fatalf("order=%v distance=%v overlap=%v, want %v %v %v", order, distance, overlap, tc.wantOrder, tc.wantDistance, tc.wantOver)
+			}
+			if got := extraction.Resolve(rvPage(anchor, tc.value), rules); len(got) != 0 {
+				t.Errorf("got %d candidate(s) for a pair only the %s clause rejects, want 0: %+v", len(got), tc.name, got)
+			}
+		})
+	}
+}

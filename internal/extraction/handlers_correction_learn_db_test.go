@@ -918,7 +918,7 @@ func clSettle(t *testing.T, ctx context.Context, tenantID, documentID string, ri
 
 // C-14. A DOCX job now carries a layout, so jobLayoutTx answers ok=true where it used to answer
 // false -- a path nothing on this route reached before EXTR-19-04. It still teaches nothing:
-// every boxless anchor carries the zero box and usableBox refuses it (resolve.go:277-291), so no
+// every boxless anchor carries the zero box and relatedTokens' usableBox guard refuses it, so no
 // candidate qualifies.
 //
 // The PDF arm runs FIRST and posts the SAME body against a job settled the SAME way, so the only

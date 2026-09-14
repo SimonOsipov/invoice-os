@@ -343,6 +343,62 @@ func ttResultsEqual(t *testing.T, with, without []extraction.FieldResult) bool {
 	return equal
 }
 
+// ttResultsEqual sees every component it compares, not only the value the ruled pair moves.
+func TestEndToEnd_TheHeaderComparatorSeesEveryComponent(t *testing.T) {
+	str := func(v string) *string { return &v }
+	box := func(x float64) *extraction.Region {
+		return &extraction.Region{Page: 1, X0: x, Y0: 0.1, X1: x + 0.1, Y1: 0.2}
+	}
+	build := func() []extraction.FieldResult {
+		var out []extraction.FieldResult
+		for _, name := range extraction.HeaderFields {
+			out = append(out, extraction.FieldResult{
+				Field: extraction.Field{Name: name, Value: str("1.00"), Region: box(0.1), Reason: extraction.ReasonAmbiguous},
+				Alternatives: []extraction.Field{
+					{Name: name, Value: str("2.00"), Region: box(0.3), Reason: extraction.ReasonNone},
+					{Name: name, Value: str("3.00"), Region: box(0.5), Reason: extraction.ReasonNone},
+				},
+			})
+		}
+		return out
+	}
+	// Separate builds share no pointer, so equality here is by value.
+	if !ttResultsEqual(t, build(), build()) {
+		t.Fatalf("two identical result sets built separately compare unequal")
+	}
+
+	edits := []struct {
+		name string
+		edit func(r *extraction.FieldResult)
+	}{
+		{"value", func(r *extraction.FieldResult) { r.Value = str("9.00") }},
+		{"region", func(r *extraction.FieldResult) { r.Region = box(0.7) }},
+		{"nil region", func(r *extraction.FieldResult) { r.Region = nil }},
+		{"reason", func(r *extraction.FieldResult) { r.Reason = extraction.ReasonNone }},
+		{"alternative value", func(r *extraction.FieldResult) { r.Alternatives[1].Value = str("9.00") }},
+		{"alternative region", func(r *extraction.FieldResult) { r.Alternatives[1].Region = box(0.7) }},
+		{"alternative reason", func(r *extraction.FieldResult) { r.Alternatives[1].Reason = extraction.ReasonAmbiguous }},
+		{"alternatives order", func(r *extraction.FieldResult) {
+			r.Alternatives[0], r.Alternatives[1] = r.Alternatives[1], r.Alternatives[0]
+		}},
+		{"alternative count", func(r *extraction.FieldResult) { r.Alternatives = r.Alternatives[:1] }},
+	}
+	last := len(extraction.HeaderFields) - 1
+	for _, e := range edits {
+		for _, onWith := range []bool{true, false} {
+			with, without := build(), build()
+			if onWith {
+				e.edit(&with[last])
+			} else {
+				e.edit(&without[last])
+			}
+			if ttResultsEqual(t, with, without) {
+				t.Errorf("a %s change (on the with side: %v) compares equal", e.name, onWith)
+			}
+		}
+	}
+}
+
 // AC-1. Arithmetic finds the ruled table's printed total -- at the printed token's own box --
 // under both readers, and only when Pages is present.
 func TestEndToEnd_ArithmeticFindsTheRuledTablesPrintedTotalUnderBothReaders(t *testing.T) {

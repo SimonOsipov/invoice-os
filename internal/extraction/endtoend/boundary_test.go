@@ -103,7 +103,7 @@ var bdSilentLayouts = []string{
 	"corpus_ambiguous_date.pdf",
 }
 
-// bdByLayout is the pinned table, measured at f707543a with the shipped Tier-1 set.
+// bdByLayout is the pinned table, measured with the shipped Tier-1 set.
 var bdByLayout = []bdLayout{
 	{file: "corpus_inline_labels.pdf"},
 	{file: "corpus_split_labels.pdf", rows: []bdRow{

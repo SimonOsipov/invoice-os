@@ -259,9 +259,8 @@ func TestEndToEnd_ThePlantedTieIsBrokenByArithmeticOnTheRuledTable(t *testing.T)
 	}
 }
 
-// AC-4. The twin's total sits below its label's line; right's drop band reads it
-// (TestTier1_TheDropBandStaysInsideItsMeasuredWindow). The buyer_tin floor is what stops "one
-// total candidate" meaning "no candidate at all".
+// The twin's total sits below its label's line; right's drop band reads it
+// (TestTier1_TheDropBandStaysInsideItsMeasuredWindow).
 func TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal(t *testing.T) {
 	const layout, tin = "wild_stacked_borderless.pdf", "99999999-1102"
 	cands, res, tokens := dtRun(t, dtLayout(t, layout))

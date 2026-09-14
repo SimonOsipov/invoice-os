@@ -48,8 +48,7 @@ func t1Defective(r Tier1Rule) string {
 		return fmt.Sprintf("max_distance %v on a %q rule, want %v", r.Rule.Relation.MaxDistance, r.Rule.Relation.Kind, want)
 	}
 
-	// The drop band is a right-only dial: every shipped right rule must carry it, and no other
-	// relation may, or below would silently start reading a field it never admits.
+	// The drop band is a right-only dial: every shipped right rule carries it, and no other relation does.
 	wantDrop := 0.0
 	if r.Rule.Relation.Kind == RelRight {
 		wantDrop = tier1DropRight

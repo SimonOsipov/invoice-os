@@ -1,6 +1,5 @@
-// drop_band_test.go: the shipped-vs-zero-Drop differential over every required layout (AC-2).
-// requiredPDFs/requiredGoldens (harness_db_test.go:61-92) are this package's own name lists;
-// reused here rather than copied, so the two stay in sync by construction. No database.
+// drop_band_test.go: the shipped-vs-zero-Drop differential over requiredPDFs and requiredGoldens,
+// both readers, no database.
 package endtoend
 
 import (
@@ -15,14 +14,12 @@ const (
 	dbTwinPDF    = "wild_stacked_borderless.pdf"
 	dbSiblingPDF = "wild_stacked_borderless_asprinted.pdf"
 
-	// dbScannedLayout is image-only: it reads zero tokens under pdfium, and possibly zero
-	// pages too. eeTokenPages fatals on zero pages, so this layout gets its own direct read.
+	// dbScannedLayout is image-only: pdfium reads zero tokens off it, so it gets its own read
+	// that asserts the zero instead of eeTokenPages' fatal.
 	dbScannedLayout = "wild_scanned_no_number.pdf"
 
-	// ddDropRight mirrors tier1DropRight (internal/extraction/tier1.go). The export_test.go
-	// seam (Tier1DropRightForTest) is invisible from this package -- a different test binary --
-	// so the control below needs its own literal, kept honest by
-	// TestTier1_TheDropBandStaysInsideItsMeasuredWindow pinning the same value in-package.
+	// ddDropRight mirrors tier1DropRight for the control; Tier1DropRightForTest is unreachable
+	// from this package. Nothing pins the two equal.
 	ddDropRight = 0.97
 )
 
@@ -33,7 +30,7 @@ type dbFieldAdd struct {
 	pdfiumDist, doclingDist float64
 }
 
-// dbTwinAdditions is the twin's nine, measured 2026-09-14 (.ralph/scratch/arch-04/attached/probe.log).
+// dbTwinAdditions is the twin's nine, measured 2026-09-14 under the shipped dial.
 var dbTwinAdditions = []dbFieldAdd{
 	{"issue_date", "2026-07-30", "t1.issue_date.right", 0.280118, 0.278824},
 	{"supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902, 0.263588},
@@ -46,9 +43,8 @@ var dbTwinAdditions = []dbFieldAdd{
 	{"total", "1612.50", "t1.total.right", 0.332255, 0.328961},
 }
 
-// dbSiblingAdditions is the twin's eight without issue_date: the sibling's letter-spaced label
-// matches no lexicon entry (EXTR-35). Its own distances -- the sibling's page prints the same
-// fields at different offsets.
+// dbSiblingAdditions is the twin's nine without issue_date: the sibling's letter-spaced label
+// matches no lexicon entry. The sibling prints the same fields at its own offsets.
 var dbSiblingAdditions = []dbFieldAdd{
 	{"supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902, 0.263588},
 	{"supplier_name", "Adeyemi Trading Limited", "t1.supplier_name.right", 0.316510, 0.314824},
@@ -116,8 +112,7 @@ func ddWithDrop(drop float64) []extraction.Tier1Rule {
 	return out
 }
 
-// ddScannedRead reads the image-only layout directly, skipping eeTokenPages' zero-page fatal:
-// this layout may yield zero pages as well as zero tokens under pdfium.
+// ddScannedRead reads the image-only layout without eeTokenPages' zero-page fatal.
 func ddScannedRead(t *testing.T) []extraction.TokenPage {
 	t.Helper()
 	var pages []extraction.TokenPage
@@ -136,8 +131,7 @@ func ddTokenCount(pages []extraction.TokenPage) int {
 	return n
 }
 
-// AC-2. Attaching the drop band must add candidates on the stacked pair alone -- never remove
-// one anywhere, and never add one on any other required layout, through either reader.
+// The drop band adds candidates on the stacked pair alone, on both readers, and removes none.
 func TestTier1_TheDropBandAddsOnlyTheStackedPairsReads(t *testing.T) {
 	if len(requiredPDFs) != len(requiredGoldens) {
 		t.Fatalf("requiredPDFs holds %d name(s), requiredGoldens holds %d; the two readers would not cover the same layouts", len(requiredPDFs), len(requiredGoldens))

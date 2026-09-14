@@ -318,13 +318,16 @@ the value, inside the anchor's own band, the pair is refused — a label owns wh
 read may not reach past one to take a value that label introduces. `crossesALabel` is the
 predicate; `labelTokens` is the per-page precompute it reads.
 
-**The corpus does not exercise it, and the honest denominator is eight, not fourteen.** Only **8 of
-the 14** layouts admit a rightward anchor/value pair at all — **35** pairs in total — and the other
-six read nothing rightward, so the predicate is never called on them. Those six are named in
-`bdSilentLayouts` rather than left implicit, because "the boundary moved nothing across all fourteen
-layouts" is a claim whose effective denominator is eight. Of the 35 pairs, **none** crosses a label,
-which is why the boundary removes zero candidates on the shipped corpus. Read that zero as "no
-shipped arrangement puts a label in the corridor", never as "the boundary does nothing".
+**The corpus does not exercise it, and the honest denominator is ten, not fourteen.** Only **10 of
+the 14** layouts admit a rightward anchor/value pair at all — **52** pairs in total, 17 of them
+dropped pairs on the stacked twin and sibling — and the other four read nothing rightward, so the
+predicate is never called on them. Those four are named in `bdSilentLayouts` rather than left
+implicit, because "the boundary moved nothing across all fourteen layouts" is a claim whose
+effective denominator is ten. Of the 35 same-line pairs, **none** crosses a label, which is why the
+boundary removes zero candidates on the shipped corpus. Read that zero as "no shipped arrangement
+puts a label in the corridor", never as "the boundary does nothing". The 17 dropped pairs were
+first measured with the boundary in place, so they show what it admits, not what it would remove.
+Whether the boundary removes a dropped pair on the corpus is unmeasured; do not claim it.
 
 Two properties of the predicate have no behavioural oracle and are held by structural ones
 instead. The per-page precompute must not degenerate into a per-pair lexicon scan: the two produce
@@ -612,9 +615,9 @@ reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-14 on `feature/extr-29-a-total-no-label-points-at-can-still-be-found`: a document goes in at the
+Re-measured 2026-09-14 on `feature/extr-31-a-label-above-its-value-still-names-it`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **75 of 112** cells — **0.6696**. Fourteen layouts, eight written fields each.
+the page prints on **81 of 112** cells — **0.7232**. Fourteen layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -626,8 +629,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 37 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (24 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -643,7 +646,7 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `wild_two_party_bare_tin.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals.pdf` | 8 | 8 |
 | `wild_rc_due_naira.pdf` | 8 | 8 |
-| `wild_stacked_borderless.pdf` | 2 | 8 |
+| `wild_stacked_borderless.pdf` | 8 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 | `wild_two_party_bare_tin_asprinted.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals_asprinted.pdf` | 8 | 8 |
@@ -662,17 +665,17 @@ letter-spaced invoice-number label, so it quarantines too.
 | Field | Hits | Cells |
 |---|---|---|
 | `invoice_number` | 12 | 14 |
-| `issue_date` | 10 | 14 |
+| `issue_date` | 11 | 14 |
 | `buyer_tin` | 10 | 14 |
-| `buyer_name` | 9 | 14 |
-| `currency` | 7 | 14 |
-| `subtotal` | 8 | 14 |
-| `vat` | 8 | 14 |
-| `total` | 11 | 14 |
+| `buyer_name` | 10 | 14 |
+| `currency` | 8 | 14 |
+| `subtotal` | 9 | 14 |
+| `vat` | 9 | 14 |
+| `total` | 12 | 14 |
 
-`currency` at 7 of 14 is still the worst field on the corpus, and its seven misses split four ways:
+`currency` at 8 of 14 is still the worst field on the corpus, and its six misses split three ways:
 three layouts print the value inside a total with no label to anchor it, one prints no currency at
-all, one offsets the value from a colon-less label, and the last two are the quarantined pages.
+all, and the last two are the quarantined pages.
 `buyer_tin` reads 10 of 14: EXTR-22 bound each party's TIN to the heading that owns it, and the
 four cells left are two layouts that carry no buyer block at all and the two quarantined pages.
 
@@ -878,7 +881,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 24 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live

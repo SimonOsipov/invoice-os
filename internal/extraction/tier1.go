@@ -24,7 +24,8 @@ type Tier1Rule struct {
 
 	// Drop is the right relation's drop-band admission dial: a value whose top sits below the
 	// label's top by less than Drop times the label's height is admitted alongside the line
-	// band. Zero on every shipped rule; below never reads it.
+	// band. tier1DropRight on every shipped right rule, zero elsewhere
+	// (TestTier1_EveryRuleHasACompiledMatcher); below never reads it.
 	Drop float64
 }
 
@@ -111,6 +112,12 @@ func buildTier1Rules() []Tier1Rule {
 				mustTier1PartyRule("t1.tin.right", bare, RelRight, tier1MaxDistanceRightJSON),
 				mustTier1PartyRule("t1.tin.below", bare, RelBelow, tier1MaxDistanceBelowJSON),
 			)
+		}
+	}
+
+	for i := range out {
+		if out[i].Rule.Relation.Kind == RelRight {
+			out[i].Drop = tier1DropRight
 		}
 	}
 

@@ -60,11 +60,11 @@ var ttByLayout = []ttLayoutTotal{
 	{"wild_two_party_bare_tin.pdf", 1, "1290.00", "t1.total.right"},
 	{ttRuled, 1, "8600.00", "t1.total.right"},
 	{"wild_rc_due_naira.pdf", 1, "2687.50", "t1.total.right"},
-	{"wild_stacked_borderless.pdf", 0, "", ""},
+	{"wild_stacked_borderless.pdf", 1, "1612.50", "t1.total.right"},
 	{"wild_scanned_no_number.pdf", 1, "1935.00", "t1.total.right"},
 	{"wild_two_party_bare_tin_asprinted.pdf", 1, "1290.00", "t1.total.right"},
 	{"wild_ruled_lines_totals_asprinted.pdf", 1, "8600.00", "t1.total.right"},
-	{"wild_stacked_borderless_asprinted.pdf", 0, "", ""},
+	{"wild_stacked_borderless_asprinted.pdf", 1, "1612.50", "t1.total.right"},
 }
 
 // ttMinResolving is how many rows must reach a candidate. A table quietly rewritten to all

@@ -66,8 +66,8 @@ const (
 )
 
 // dtLayoutValues is one layout's decided value for each dtColumnFields field. "" is ReasonMissing.
-// The doubt moves no value, and the found total moves only the total column; this is the walk
-// that says so over every cell in its blast surface.
+// The doubt moves no value, the found total moves only the total column, and the drop band moves
+// the stacked pair's rows; this is the walk that says so over every cell in its blast surface.
 type dtLayoutValues struct {
 	file   string
 	values [4]string
@@ -83,11 +83,11 @@ var dtByLayout = []dtLayoutValues{
 	{"wild_two_party_bare_tin.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
 	{"wild_ruled_lines_totals.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "8600.00"}},
 	{"wild_rc_due_naira.pdf", [4]string{"99999999-1002", "Honeywell Group", "187.50", "2687.50"}},
-	{"wild_stacked_borderless.pdf", [4]string{"99999999-1102", "", "", ""}},
+	{"wild_stacked_borderless.pdf", [4]string{"99999999-1102", "Honeywell Group", "112.50", "1612.50"}},
 	{"wild_scanned_no_number.pdf", [4]string{"99999999-1202", "7 AWOLOWO ROAD, IKOYI", "135.00", "1935.00"}},
 	{"wild_two_party_bare_tin_asprinted.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
 	{"wild_ruled_lines_totals_asprinted.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "8600.00"}},
-	{"wild_stacked_borderless_asprinted.pdf", [4]string{"99999999-1102", "", "", ""}},
+	{"wild_stacked_borderless_asprinted.pdf", [4]string{"99999999-1102", "Honeywell Group", "112.50", "1612.50"}},
 }
 
 // dtRun is one layout through Resolve and Reconcile, with the token count that proves it was

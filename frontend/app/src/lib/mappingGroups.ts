@@ -120,23 +120,22 @@ export function groupOfFile(groups: MappingGroup[], fileId: string): MappingGrou
   return groups.find((g) => g.fileIds.includes(fileId)) ?? null
 }
 
-// null -> the same group (today's seed). Otherwise mapping = restoreMapping(preview.columns,
-// saved.mapping) and restored = { savedAt: saved.saved_at, mapping: <that same mapping> }.
+// The snapshot shares the restored object: App's assign/unmap replace group.mapping, never
+// write into it, so the snapshot stays as restored.
 export function applySavedMapping(group: MappingGroup, saved: SavedMapping | null): MappingGroup {
   if (!saved) return group
   const mapping = restoreMapping(group.preview.columns, saved.mapping)
   return { ...group, mapping, restored: { savedAt: saved.saved_at, mapping } }
 }
 
-// mapping = initMappingFromHeaders(preview.columns), restored = null; id/fileIds/preview kept.
+// No undo: the restored snapshot is dropped.
 export function returnToAutomatic(group: MappingGroup): MappingGroup {
   return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
 }
 
 export type PlacementBadge = 'restored' | 'auto' | null
 
-// null unless group.mapping[field] === header; otherwise 'restored' iff
-// group.restored?.mapping[field] === header; otherwise 'auto' iff recognized[field] === header.
+// RESTORED wins over AUTO. A placement moved off its restored header loses RESTORED.
 export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
   if (group.mapping[field] !== header) return null
   if (group.restored?.mapping[field] === header) return 'restored'
@@ -144,15 +143,13 @@ export function placementBadge(group: MappingGroup, field: string, header: strin
   return null
 }
 
-// null when !group.restored; else `Mapping restored from this client's earlier import, saved
-// ${fmtDateTime(savedAt)}.`
+// Survives edits; only returnToAutomatic clears it.
 export function restoredNotice(group: MappingGroup): string | null {
   if (!group.restored) return null
   return `Mapping restored from this client's earlier import, saved ${fmtDateTime(group.restored.savedAt)}.`
 }
 
-// lookup null -> groups unchanged, no call. Otherwise one awaited call per group, in order, with
-// group.preview.document_id; a rejected call leaves that group unchanged. Never rejects.
+// One lookup at a time, in group order. A failed lookup leaves that group on today's seed.
 export async function restoreGroups(
   groups: MappingGroup[],
   lookup: ((documentId: string) => Promise<SavedMapping | null>) | null,
@@ -178,14 +175,14 @@ export function canSubmitAllMappings(groups: MappingGroup[]): boolean {
   return groups.length > 0 && groups.every((g) => canSubmitMapping(g.mapping))
 }
 
-// false only when group.restored is set and group.mapping deep-equals group.restored.mapping.
+// An untouched restore skips the save, so it cannot overwrite an edited copy posted earlier in
+// the run.
 export function rememberMapping(group: MappingGroup): boolean {
   if (!group.restored) return true
   return !mappingsEqual(group.mapping, group.restored.mapping)
 }
 
-// Mapping is flat (Record<string, string | null>) and both sides always carry every CANON
-// key, so a per-key compare over the union of keys is an exact equality check.
+// Flat values; the key union also catches a key present on one side only.
 function mappingsEqual(a: Mapping, b: Mapping): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)])
   for (const k of keys) {

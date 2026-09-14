@@ -426,7 +426,8 @@ export interface SupplyNumberRequest {
   invoice_number: string
 }
 
-// GET /v1/imports/saved-mapping. Mirrors internal/importer/handlers.go's savedMappingResponse.
+// GET /v1/imports/saved-mapping. Mirrors internal/importer/saved_mapping.go's SavedMapping
+// and handlers.go's savedMappingResponse.
 export interface SavedMapping {
   mapping: Record<string, string>
   saved_at: string

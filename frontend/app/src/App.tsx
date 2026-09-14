@@ -1058,7 +1058,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           try {
             // Each file is sent with its OWN group's toImportMapping(mapping) (AC #7)
             // — never a second, per-file entity field.
-            // ceiling: two edited groups sharing columns in one run save the later-picked file's mapping.
+            // ceiling: groups sharing columns in one run all save, bar an untouched restore; the last-picked completed file wins.
             const report = await createImport(
               importAuth,
               base,

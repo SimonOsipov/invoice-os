@@ -86,9 +86,8 @@ function mkGroup(fileIds: string[], mapping: Mapping, columns: string[] = LAGOS_
   }
 }
 
-// Builds a restored group directly, WITHOUT calling applySavedMapping — same reasoning as
-// mkGroup: a failure in one of these tests must be attributable to the function under test.
-// `documentId` overrides mkPreview's fixed id, so restoreGroups specs can tell groups apart.
+// A literal, not applySavedMapping, so a failure points at the function under test.
+// `documentId` overrides mkPreview's fixed id so lookups can be told apart.
 function mkRestored(
   fileIds: string[],
   cols: string[],
@@ -104,9 +103,7 @@ function mkRestored(
   }
 }
 
-// A client's earlier import placed only these two fields — invoice_number is never an alias
-// (mapping.ts's ALIAS table), and `subtotal` on 'Total' is a placement a fresh seed would NOT
-// produce (recognize() maps 'Total' to the `total` field, never `subtotal`).
+// A fresh seed produces neither placement: invoice_number has no alias, and 'Total' seeds `total`.
 const LAGOS_SAVE = { mapping: { invoice_number: 'Invoice No', subtotal: 'Total' }, saved_at: '2026-09-01T10:15:00Z' }
 
 describe('columnSignature', () => {
@@ -165,8 +162,6 @@ describe('groupByLayout', () => {
     expect(groups[1].fileIds).toEqual(['f2'])
   })
 
-  // SM-FE-03 (EXTR-37-04) — falsification: an impl that leaves `restored` undefined instead of
-  // seeding it null, which would break the "today's seed when nothing restores" contract.
   it('SM-FE-03: groupByLayout sets restored to null on every group', () => {
     const groups = groupByLayout([
       { fileId: 'f1', preview: mkPreview(LAGOS_COLS) },
@@ -246,8 +241,6 @@ describe('splitOut', () => {
     expect(result).toEqual([lone])
   })
 
-  // SM-FE-07 (EXTR-37-04) — falsification: an impl whose split literal hardcodes
-  // `restored: null` instead of copying the shared group's restored state.
   it('SM-FE-07: a split carries the restored state', () => {
     const edited: Mapping = { ...LAGOS_SAVE.mapping, invoice_number: 'Invoice No' }
     const shared = mkRestored(['f1', 'f2'], LAGOS_COLS, edited, LAGOS_SAVE.saved_at)
@@ -296,23 +289,12 @@ describe('canSubmitAllMappings', () => {
   })
 })
 
-// ============================================================================
-// RED specs (EXTR-37-04, Mode A) — the saved-mapping restore/mark/discard
-// contract. Every function below is a stub (identity/null/true) until the
-// implementation commit; these currently fail on their target assertion.
-// ============================================================================
-
 describe('applySavedMapping', () => {
-  // SM-FE-04 — falsification: an impl that returns `{...group}` (a new object) instead of the
-  // identical reference when there is nothing to restore.
   it('SM-FE-04: with no saved mapping returns the same group object', () => {
     const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     expect(applySavedMapping(group, null)).toBe(group)
   })
 
-  // SM-FE-05 — falsification: an impl that overlays the save on initMappingFromHeaders instead
-  // of restoreMapping's exact-placements rule, or one that snapshots a mapping other than the
-  // one it just restored, or that mutates its input.
   it('SM-FE-05: applySavedMapping restores the saved placements and snapshots them', () => {
     const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     const result = applySavedMapping(group, LAGOS_SAVE)
@@ -330,8 +312,6 @@ describe('applySavedMapping', () => {
 })
 
 describe('returnToAutomatic', () => {
-  // SM-FE-06 — falsification: an impl that keeps `restored` set, blanks the mapping instead of
-  // reseeding it, or issues a new group id.
   it('SM-FE-06: reseeds from the column names and clears the restored state', () => {
     const seed = initMappingFromHeaders(LAGOS_COLS)
     const moved: Mapping = { ...seed, total: null, subtotal: 'Total' }
@@ -352,9 +332,6 @@ describe('returnToAutomatic', () => {
 describe('placementBadge', () => {
   const cols = ['Invoice No', 'Subtotal', 'Total', 'VAT']
 
-  // SM-FE-08 — falsification: badge precedence swapped (checks AUTO before RESTORED), the
-  // `group.mapping[field] === header` guard dropped (a stale header would read RESTORED), or a
-  // restored group never falling through to 'auto' for a field the saved mapping never touched.
   it('SM-FE-08: RESTORED wins over AUTO, a moved placement loses it, and a hand placement on an alias reads AUTO', () => {
     const recognized = recognize(cols)
     const restoredSnapshot: Mapping = { invoice_number: 'Invoice No', total: 'Total' }
@@ -385,10 +362,6 @@ describe('placementBadge', () => {
 describe('restoredNotice', () => {
   const SAVED_AT = '2026-09-01T10:15:00Z'
 
-  // SM-FE-09 — falsification: an impl that renders the notice unconditionally
-  // ([notice-is-conditional] forbids it), or that prints the raw ISO string instead of
-  // fmtDateTime's rendering, or that drops the notice once the group is edited
-  // ([notice-survives-edits]).
   it('SM-FE-09: names the save time, only on a restored group, and survives edits', () => {
     // control: fmtDateTime actually transforms the ISO string
     const formatted = fmtDateTime(SAVED_AT)
@@ -419,10 +392,6 @@ describe('restoreGroups', () => {
     return { promise, resolve }
   }
 
-  // SM-FE-10 — falsification: an impl that fires every lookup with Promise.all (all three
-  // `start:` events would appear before any resolves), that keys the lookup by fileId or group
-  // id instead of the group's own document id, or that calls the lookup once per file instead
-  // of once per group.
   it("SM-FE-10: looks up one group at a time, in group order, by each group's document id", async () => {
     const a = mkRestored(['f1', 'f2'], LAGOS_COLS, {}, '2026-01-01T00:00:00Z', 'doc-a')
     const b: MappingGroup = { ...mkGroup(['f3'], initMappingFromHeaders(TILL_COLS), TILL_COLS), preview: { ...mkPreview(TILL_COLS), document_id: 'doc-b' } }
@@ -458,9 +427,6 @@ describe('restoreGroups', () => {
     expect(result[2].restored?.savedAt).toBe('2026-03-01T00:00:00Z')
   })
 
-  // SM-FE-11 — falsification: an impl that wraps the whole loop in one try/catch (a rejection
-  // would abort every later group), that breaks out of the loop on a rejection instead of
-  // continuing, or that lets a rejection propagate out of restoreGroups.
   it('SM-FE-11: a rejected lookup leaves that group on today\'s seed and the run continues', async () => {
     const a = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     const b = mkGroup(['f2'], initMappingFromHeaders(TILL_COLS), TILL_COLS)
@@ -482,8 +448,6 @@ describe('restoreGroups', () => {
     expect(result[2].restored?.savedAt).toBe(saveC.saved_at)
   })
 
-  // SM-FE-12 — green by construction: the stub ignores `lookup` entirely and returns `groups`
-  // unchanged, which is exactly this spec's contract.
   it('SM-FE-12: with no entity, restoreGroups makes no call and returns the groups unchanged', async () => {
     const a = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     const b = mkGroup(['f2'], initMappingFromHeaders(TILL_COLS), TILL_COLS)
@@ -497,9 +461,6 @@ describe('restoreGroups', () => {
 })
 
 describe('rememberMapping', () => {
-  // SM-FE-15 — falsification: an impl that always returns true (misses the untouched-restore
-  // case), that compares by reference instead of by value (the revert leg would wrongly read
-  // true), or that compares only invoice_number instead of the whole mapping.
   it('SM-FE-15: only an untouched restored group opts out of remembering', () => {
     const fresh = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     expect(rememberMapping(fresh)).toBe(true)
@@ -526,8 +487,6 @@ describe('rememberMapping', () => {
     expect(rememberMapping(revertedBack)).toBe(false)
   })
 
-  // SM-FE-16 — falsification: an impl that reads a dirty flag set once at restore time instead
-  // of comparing each copy's CURRENT mapping against its own restored snapshot independently.
   it('SM-FE-16: after a split, each copy of a restored group decides for itself', () => {
     const snapshot: Mapping = { ...LAGOS_SAVE.mapping }
     const shared = mkRestored(['fB', 'fA'], LAGOS_COLS, snapshot, LAGOS_SAVE.saved_at)

@@ -109,10 +109,8 @@ describe('initMappingFromHeaders', () => {
   })
 })
 
-// RED specs (EXTR-37-04, Mode A) — pin restoreMapping's contract before the implementation
-// commit fills the body in. Currently red because the stub returns {}.
 describe('restoreMapping', () => {
-  // Inlined per [Stage 1 correction C4]: mapping.ts cannot import e2e/importFixtures.ts.
+  // e2e/importFixtures.ts's PERF_HEADER, inlined: the app cannot import from e2e/.
   const PERF_COLS = [
     'Invoice No',
     'Issue Date',

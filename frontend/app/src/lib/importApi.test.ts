@@ -364,8 +364,8 @@ describe('previewImport', () => {
 describe('createImport', () => {
   // Amended for upload-once: the `file` part is now REJECTED by the endpoint with a 400,
   // so sending it is a live defect, not surplus.
-  // [update-existing-tests] (EXTR-37-04): retargeted — the SPA now states, per file, whether
-  // the import remembers its mapping.
+  // [update-existing-tests]: retargeted — the SPA now states, per file, whether the import
+  // remembers its mapping.
   it('IMPAPI-04: FormData carries exactly entity_id, mapping, document_id, remember_mapping; mapping === JSON.stringify(req.mapping)', async () => {
     const req = makeReq()
     const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)
@@ -970,9 +970,7 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
   })
 })
 
-// RED specs (EXTR-37-04, Mode A) — getSavedMapping's stub returns null unconditionally, so
-// each spec below fails on the first real assertion, not on an import/reference error.
-describe('getSavedMapping (EXTR-37-04)', () => {
+describe('getSavedMapping', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })

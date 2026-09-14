@@ -87,8 +87,8 @@ const (
 )
 
 // purgeGuards open the purge transaction. 'origin' is set explicitly because
-// the bypass suppresses referential integrity transaction-wide: every purged
-// table's delete must stay checked, so a future reorder of purgeTables fails
+// the bypass suppresses referential integrity transaction-wide: every delete
+// but audit_log's must stay checked, so a future reorder of purgeTables fails
 // loudly instead of silently orphaning rows. The purge runs at gateway boot, so
 // the two timeouts make it fail rather than hold the boot open behind someone
 // else's lock.

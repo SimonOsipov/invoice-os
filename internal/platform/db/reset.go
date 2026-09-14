@@ -128,9 +128,10 @@ func ResetEnabled(environment, flag string) bool {
 //	                          so both empty even if a future migration weakens
 //	                          that FK.
 //	business_entities         the 90-vs-21 pollution PR-110 measured directly.
-//	                          invoices.entity_id (RESTRICT) and
-//	                          import_batches.entity_id (CASCADE) both reference
-//	                          it, so both must truncate in the SAME statement.
+//	                          invoices.entity_id (RESTRICT),
+//	                          import_batches.entity_id (CASCADE) and
+//	                          import_mappings.entity_id (CASCADE) all reference
+//	                          it, so all must truncate in the SAME statement.
 //	import_batches            references business_entities; invoices.
 //	                          import_batch_id references IT (ON DELETE SET
 //	                          NULL, so invoices alone wouldn't strictly need

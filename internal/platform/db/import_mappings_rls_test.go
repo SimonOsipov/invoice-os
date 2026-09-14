@@ -25,7 +25,7 @@ import (
 const imInsert = `INSERT INTO import_mappings (id, tenant_id, entity_id, column_signature, mapping)
 	VALUES ($1, $2, $3, $4, $5::jsonb)`
 
-// imUpsert is the statement EXTR-37-02 runs; IM-RLS-09/13 exercise it directly.
+// imUpsert is the save path's upsert, run here verbatim.
 const imUpsert = `INSERT INTO import_mappings (tenant_id, entity_id, column_signature, mapping)
 	VALUES ($1, $2, $3, $4::jsonb)
 	ON CONFLICT (tenant_id, entity_id, column_signature)
@@ -223,10 +223,15 @@ func TestRLS_ImportMappingsMissingContextFailsClosed(t *testing.T) {
 	defer cleanupEntityA()
 	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "IM No-Context B Co")
 	defer cleanupEntityB()
-	_, cleanupA := seedImportMapping(t, h.tenantA, entityA, docHash(), imMapping)
+	rowA, cleanupA := seedImportMapping(t, h.tenantA, entityA, docHash(), imMapping)
 	defer cleanupA()
-	_, cleanupB := seedImportMapping(t, h.tenantB, entityB, docHash(), imMapping)
+	rowB, cleanupB := seedImportMapping(t, h.tenantB, entityB, docHash(), imMapping)
 	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM import_mappings WHERE id = ANY($1)`, []string{rowA, rowB}); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
 
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
@@ -396,6 +401,9 @@ func TestRLS_ImportMappingsChecksRefuseMalformedRows(t *testing.T) {
 		{"an uppercase-hex signature", strings.Repeat("A", 64), imMapping, "import_mappings_column_signature_check"},
 		{"a mapping whose key names are array elements", strings.Repeat("a", 64),
 			`["invoice_number"]`, "import_mappings_mapping_check"},
+		// ? also matches a scalar string, so only the typeof conjunct refuses; an array-only
+		// exclusion would admit it.
+		{"a scalar-string mapping", strings.Repeat("a", 64), `"invoice_number"`, "import_mappings_mapping_check"},
 		{"a mapping missing invoice_number", strings.Repeat("a", 64), `{"total":"T"}`, "import_mappings_mapping_check"},
 	} {
 		id := uuid.NewString()
@@ -624,5 +632,53 @@ func TestRLS_ImportMappingsGrantMatrix(t *testing.T) {
 				"SELECT, INSERT, UPDATE to invoice_app and nothing to invoice_tenant_reader",
 				c.role, c.priv, got, c.want)
 		}
+	}
+}
+
+// NOT NULL is the only guard on these columns: a CHECK admits NULL, a composite FK skips a
+// NULL member, and UNIQUE treats NULLs as distinct.
+func TestRLS_ImportMappingsNullColumnsRefused(t *testing.T) {
+	h := requireHarness(t)
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IM Null Columns Co")
+	defer cleanupEntityA()
+
+	const insertAll = `INSERT INTO import_mappings (id, tenant_id, entity_id, column_signature, mapping, saved_at)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6)`
+
+	var probes []string
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM import_mappings WHERE id = ANY($1)`, probes)
+	}()
+
+	now := time.Now()
+	for _, c := range []struct {
+		column                              string
+		entity, signature, mapping, savedAt any
+	}{
+		{"entity_id", nil, docHash(), imMapping, now},
+		{"column_signature", entityA, nil, imMapping, now},
+		{"mapping", entityA, docHash(), nil, now},
+		{"saved_at", entityA, docHash(), imMapping, nil},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := imAsApp(t, h.tenantA, insertAll, id, h.tenantA, c.entity, c.signature, c.mapping, c.savedAt)
+		imAssertPGCode(t, err, "23502", "", "a row with a NULL "+c.column)
+		if got := earColumnName(err); got != c.column {
+			t.Errorf("a NULL %s: the not-null violation names column %q", c.column, got)
+		}
+		if n := imRowCount(t, id); n != 0 {
+			t.Errorf("rows after the refused NULL %s = %d, want 0", c.column, n)
+		}
+	}
+
+	okID := uuid.NewString()
+	probes = append(probes, okID)
+	if err := imAsApp(t, h.tenantA, insertAll, okID, h.tenantA, entityA, docHash(), imMapping, now); err != nil {
+		t.Fatalf("a well-formed control row through the same statement: want success, got: %v", err)
+	}
+	if n := imRowCount(t, okID); n != 1 {
+		t.Errorf("rows after the control insert = %d, want 1", n)
 	}
 }

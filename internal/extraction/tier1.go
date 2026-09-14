@@ -51,9 +51,10 @@ const (
 	tier1MaxDistanceBelowJSON = "0.06"
 )
 
-// tier1DropRight is a Stage 2.5 stub; TestTier1_TheDropBandStaysInsideItsMeasuredWindow pins the
-// real dial.
-const tier1DropRight = 0
+// tier1DropRight bounds the drop band as a share of the label's height: the pdfium twin's VAT
+// needs 0.949396; above 1.0 the scanned SUBTOTAL reaches 135.00 (TestTier1_TheDropBandStaysInsideItsMeasuredWindow).
+// ceiling: a 1.053x window, tight against glyph height; revisit when a real document's label has no descenders over a dropped value
+const tier1DropRight = 0.97
 
 // tier1TINSweepLabel matches a bare TIN token whole, so the label IS the value
 // (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped: the party block the token

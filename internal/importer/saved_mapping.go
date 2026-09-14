@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -63,5 +64,29 @@ func (s *Store) SaveMapping(ctx context.Context, entityID string, header []strin
 //
 // pgx.ErrNoRows -> (nil, nil); 22P02 -> ErrValidation (GetBatch's mapping, store.go:286-293).
 func (s *Store) SavedMapping(ctx context.Context, entityID string, header []string) (*SavedMapping, error) {
-	return nil, nil
+	signature := columnSignature(header)
+
+	var rawMapping []byte
+	var savedAt time.Time
+	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT mapping, saved_at FROM import_mappings WHERE entity_id = $1 AND column_signature = $2`,
+			entityID, signature,
+		).Scan(&rawMapping, &savedAt)
+	})
+	if txErr != nil {
+		if errors.Is(txErr, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if pgCode(txErr) == "22P02" {
+			return nil, ErrValidation
+		}
+		return nil, txErr
+	}
+
+	var mapping map[string]string
+	if err := json.Unmarshal(rawMapping, &mapping); err != nil {
+		return nil, err
+	}
+	return &SavedMapping{Mapping: mapping, SavedAt: savedAt}, nil
 }

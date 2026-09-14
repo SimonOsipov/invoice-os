@@ -725,7 +725,86 @@ func SavedMappingHandler(
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		entityIDRaw := r.URL.Query().Get("entity_id")
+		if entityIDRaw == "" {
+			writeError(w, http.StatusBadRequest, "entity_id is required")
+			return
+		}
+		entityID, err := uuid.Parse(entityIDRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "entity_id must be a well-formed uuid")
+			return
+		}
+
+		documentIDRaw := r.URL.Query().Get("document_id")
+		if documentIDRaw == "" {
+			writeError(w, http.StatusBadRequest, "document_id is required")
+			return
+		}
+		documentID, err := uuid.Parse(documentIDRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		doc, obj, err := open(r.Context(), documentID.String(), "")
+		if err != nil {
+			// Mapped here, not through statusForErr: errors.Is(document.ErrNotFound,
+			// ErrNotFound) is false, so a cross-tenant id would 500.
+			switch {
+			case errors.Is(err, document.ErrNotFound):
+				writeError(w, http.StatusNotFound, "not found")
+			case errors.Is(err, document.ErrValidation):
+				writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			default:
+				status, msg := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				}
+				writeError(w, status, msg)
+			}
+			return
+		}
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
+
+		// Decode nil-dereferences inside io.ReadAll, so the read is guarded
+		// like CreateHandler's own.
+		if obj.Body == nil {
+			log.ErrorContext(r.Context(), "importer: source document opened with no body")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		format := detectFormat(derefOr(doc.Filename, ""), derefOr(doc.DeclaredContentType, ""))
+		if format == "" {
+			writeError(w, http.StatusBadRequest, "unrecognized file format")
+			return
+		}
+
+		header, _, _, err := Decode(obj.Body, format)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			return
+		}
+
+		saved, err := lookup(r.Context(), entityID.String(), header)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: lookup saved mapping", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, savedMappingResponse{SavedMapping: saved})
 	}
 }
 

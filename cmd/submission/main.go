@@ -190,7 +190,8 @@ func main() {
 	// audits the pair (TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators).
 	app.Mux.HandleFunc("POST /v1/extractions/{id}/fields/{name}/corrections",
 		extraction.CorrectionHandler(pool, newInvoiceFieldApplier(invStore.EditBySourceDocumentTx),
-			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(), app.Logger))
+			newFieldCorrectedAuditor(), newAnchorLearnedAuditor(),
+			extraction.PageOneReader(newDocumentOpener(docSvc.Open), extraction.NewPDFiumReader()), app.Logger))
 
 	// POST /v1/extractions/{id}/line-items -- the same transaction shape as the correction
 	// route, replacing the invoice's whole line set
@@ -219,8 +220,8 @@ type documentOpen func(ctx context.Context, id, rangeHeader string) (document.Do
 
 // newDocumentOpener adapts the document service to the extraction seam: whole object, no
 // range, capped read, body closed exactly once on every path. ctx is forwarded untouched --
-// the worker has already put the job's tenant on it, and RLS scopes the row lookup by that
-// identity (TestNewDocumentOpener_ForwardsContextVerbatim).
+// the worker or the correction route has already put the tenant identity on it, and RLS scopes
+// the row lookup by that identity (TestNewDocumentOpener_ForwardsContextVerbatim).
 func newDocumentOpener(open documentOpen) extraction.OpenDocument {
 	return func(ctx context.Context, documentID string) (extraction.Document, error) {
 		doc, obj, err := open(ctx, documentID, "")

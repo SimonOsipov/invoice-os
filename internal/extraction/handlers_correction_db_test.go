@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -142,10 +143,27 @@ func cxAuditor(fail error) extraction.RecordFieldCorrected {
 	}
 }
 
-// cxServe drives the handler once over the real app pool. The variadic learning recorder
-// defaults to one that writes nothing, so only a case that names it can see an anchor.learned
-// row; laLearnedAuditor is what writes a real one.
+// cxServe drives the handler once over the real app pool, with a page reader that fails the test
+// when called. The variadic learning recorder defaults to one that writes nothing, so only a case
+// that names it can see an anchor.learned row; laLearnedAuditor is what writes a real one.
 func cxServe(t *testing.T, ctx context.Context, jobID, field, body string,
+	apply extraction.ApplyFieldToInvoice, record extraction.RecordFieldCorrected,
+	learned ...extraction.RecordAnchorLearned) *httptest.ResponseRecorder {
+	t.Helper()
+	return cxServeWith(t, ctx, jobID, field, body, cxNoPageRead(t), nil, apply, record, learned...)
+}
+
+// cxNoPageRead is the default page reader: a spec that expects a document read names its own.
+func cxNoPageRead(t *testing.T) extraction.ReadPageOne {
+	return func(context.Context, string) (extraction.TokenPage, bool, error) {
+		t.Errorf("unexpected document read")
+		return extraction.TokenPage{}, false, errors.New("cxNoPageRead: no document read was expected")
+	}
+}
+
+// cxServeWith is cxServe over the caller's page reader and logger; a nil logger is slog.Default.
+func cxServeWith(t *testing.T, ctx context.Context, jobID, field, body string,
+	pageOne extraction.ReadPageOne, log *slog.Logger,
 	apply extraction.ApplyFieldToInvoice, record extraction.RecordFieldCorrected,
 	learned ...extraction.RecordAnchorLearned) *httptest.ResponseRecorder {
 	t.Helper()
@@ -153,7 +171,7 @@ func cxServe(t *testing.T, ctx context.Context, jobID, field, body string,
 	if len(learned) == 1 {
 		recordLearned = learned[0]
 	} else if len(learned) > 1 {
-		t.Fatalf("cxServe was handed %d learning recorders, want at most 1", len(learned))
+		t.Fatalf("cxServeWith was handed %d learning recorders, want at most 1", len(learned))
 	}
 	r := httptest.NewRequest(http.MethodPost,
 		"/v1/extractions/"+jobID+"/fields/"+field+"/corrections", strings.NewReader(body))
@@ -161,7 +179,7 @@ func cxServe(t *testing.T, ctx context.Context, jobID, field, body string,
 	r.SetPathValue(corPathName, field)
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
-	extraction.CorrectionHandler(stRequire(t).app, apply, record, recordLearned, nil)(w, r)
+	extraction.CorrectionHandler(stRequire(t).app, apply, record, recordLearned, pageOne, log)(w, r)
 	return w
 }
 

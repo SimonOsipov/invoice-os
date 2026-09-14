@@ -1,7 +1,7 @@
 // learn.go: one correction becomes one rule. LearnRule inverts relatedTokens (resolve.go) from a
-// pointed box; LearnBoxlessRule inverts the RelSameToken arm from token text alone, with no
-// geometry at all. Either way a derived rule fires on the page it was derived from
-// (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
+// box, pointed or located by LearnTypedRule; LearnBoxlessRule inverts the RelSameToken arm from
+// token text alone, with no geometry at all. Either way a derived rule fires on the page it was
+// derived from (TestLearnRule_R17_DerivedRuleRoundTripsThroughResolve,
 // TestLearnBoxlessRule_RoundTripsThroughResolve). Pure -- no clock, no database, no network, no
 // goroutine, and no map on the path (resolve_internal_test.go scans for each).
 package extraction
@@ -9,6 +9,7 @@ package extraction
 import (
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -29,9 +30,10 @@ type candidate struct {
 	gap  float64
 }
 
-// LearnRule derives one rule from a pointed correction. ok is false when no anchor stands in a
-// relation to region -- an honest refusal; the correction is still recorded. The field lock
-// (invoice_number, supplier_tin, supplier_name) lives in the handler's refuseField, not here.
+// LearnRule derives one rule from a box, pointed or located by LearnTypedRule. ok is false when
+// no anchor stands in a relation to region -- an honest refusal; the correction is still recorded.
+// The field lock (invoice_number, supplier_tin, supplier_name) lives in the handler's refuseField,
+// not here.
 func LearnRule(field string, region Region, anchors []AnchorObservation) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
 	if !ok {
@@ -354,4 +356,80 @@ func lexiconIndex(label string) int {
 		}
 	}
 	return len(anchorLabelMatchers)
+}
+
+// TypedVerdict names the clause that decided a typed correction. The zero value refuses.
+type TypedVerdict int
+
+const (
+	TypedNoToken TypedVerdict = iota
+	TypedSeveralTokens
+	TypedNotDerived
+	TypedSelfCheckRefused
+	TypedLearned
+)
+
+// LearnTypedRule learns from a typed value only when it names one page token, LearnRule derives
+// from that token's box, and the rule alone re-reads the page as exactly that value.
+func LearnTypedRule(field, value string, page TokenPage, anchors []AnchorObservation) (LearnedRule, TypedVerdict) {
+	// An unknown field or an unreadable value has no reading, so no token carries it.
+	shape, _ := tier1Shape(field)
+	want := shape.Normalize(value)
+	tok, n := locateTypedValue(shape, want, page)
+	if n == 0 {
+		return LearnedRule{}, TypedNoToken
+	}
+	if n > 1 {
+		return LearnedRule{}, TypedSeveralTokens
+	}
+	lr, ok := LearnRule(field, tok.Region, anchors)
+	if !ok {
+		return LearnedRule{}, TypedNotDerived
+	}
+	// The rule alone: Tier-1's own reading of the field would be a second candidate
+	// (TestLearnTypedRule_WhereTheSelfCheckPassesItTeachesThePointedRule).
+	cands, equal := 0, 0
+	for _, c := range Resolve([]TokenPage{page}, RuleSet{Learned: []AnchorRule{{Field: field, Rule: lr.Rule}}}) {
+		cands++
+		if slices.Contains(want, c.Value) {
+			equal++
+		}
+	}
+	if cands != 1 || equal != 1 {
+		return LearnedRule{}, TypedSelfCheckRefused
+	}
+	return lr, TypedLearned
+}
+
+// locateTypedValue counts the page tokens that carry a reading in want, each token once however
+// many raw forms match, and returns the last one counted.
+func locateTypedValue(shape Shape, want []string, page TokenPage) (Token, int) {
+	var found Token
+	n := 0
+	for _, tok := range page.Tokens {
+		if tokenCarries(shape, want, tok.Text) {
+			found = tok
+			n++
+		}
+	}
+	return found, n
+}
+
+// tokenCarries reads text whole and as the remainder after each lexicon label: the two raw forms
+// Resolve hands to a shape.
+func tokenCarries(shape Shape, want []string, text string) bool {
+	raws := []string{text}
+	for _, m := range anchorLabelMatchers {
+		if loc := m.RE.FindStringIndex(text); loc != nil {
+			raws = append(raws, sameTokenValue(text, loc))
+		}
+	}
+	for _, raw := range raws {
+		for _, w := range want {
+			if readsAs(shape, raw, w) {
+				return true
+			}
+		}
+	}
+	return false
 }

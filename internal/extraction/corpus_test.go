@@ -398,7 +398,7 @@ func TestCorpus_HasAllSixNamedLayouts(t *testing.T) {
 // --- EXTR-14-09: the learned-rule fixture and the doc that owns it -------------------------
 
 // E-11. C-07 quantifies over corpusLayouts, so learned_two_party.pdf sits outside its reserved-
-// TIN scan. This closes that gap for the one fixture that is deliberately not a corpus layout.
+// TIN scan. This closes that gap for that fixture.
 // The >=2 floor is what stops a regex or fixture regression from reading as a clean pass.
 func TestCorpus_TheLearnedRuleFixtureUsesOnlyFreeReservedTINs(t *testing.T) {
 	pages, _ := ptRead(t, fxLearnedTwoParty)
@@ -454,6 +454,7 @@ var cldSubsections = []struct {
 			// masks the boxless spelling and is the guard that actually pins it.
 			"namespace", "isboxlessfingerprint", "boxlessfingerprintversion", "fingerprintversion",
 			"<label>:<placement>", "band", "only its own",
+			"TestRLS_ATypedCorrectionOnARetiredGenerationJobWritesARuleNoExtractionSelects",
 		},
 		why: "an operator who bumps FingerprintVersion and expects every stored rule gone is wrong, and a reader who cannot compose a b1: key cannot predict which documents share one",
 	},
@@ -474,6 +475,7 @@ var cldSubsections = []struct {
 			"boxless", "isboxlessfingerprint", "layout_tokens", "learnboxlessrule",
 			// What the boxless path derives, and the refusal that is not the no-hit one.
 			"same_token", "ambiguous",
+			"learntypedrule", "self-check", "stored document",
 		},
 		why: "the method and the layout namespace are both inputs; a reader who thinks only a gesture teaches will point at the wrong thing on a DOCX, and a reader who never learns which relation the boxless path derives cannot predict what it will do",
 	},
@@ -481,7 +483,7 @@ var cldSubsections = []struct {
 		heading: "Undo does not un-teach",
 		needles: []string{
 			"stays live", "append-only", "both rows remain", "ordering",
-			"TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes",
+			"TestRLS_AnUndoDoesNotUnteachAndAPointedCorrectionSupersedes",
 		},
 		why: "D-17 is the sharp edge of this feature, and a caveat nobody wrote down is a support call",
 	},
@@ -495,13 +497,32 @@ var cldSubsections = []struct {
 		needles: []string{
 			"corpus owner", "corpus_two_column.pdf", "99999999-0401", "ambiguous",
 			"second pointed correction", "fingerprintversion",
+			"TestLearnTypedRule_TheSelfCheckRefusesEveryReachableMisfire",
+			"TestRLS_ATypedTINCorrectionOnTheTwoColumnLayoutRefusesAtTheSelfCheck",
+			"TestRLS_OnTheSplitLayoutPointingTeachesTheTotalAndTypingItRefuses",
+			"TestLearnTypedRule_TheAcceptedCostRefusals", "later page", "unmeasured",
 		},
 		why: "a response path with no name on it is a response path nobody runs, and the two-column case is the canonical misfire",
 	},
 	{
 		heading: "learned_two_party.pdf is not a corpus layout",
-		needles: []string{"corpusexpect", "corpuslayouts", "corpustokenfloor", "extr-04"},
-		why:     "the next author will otherwise add a corpusExpect row for it by reflex and drag the ratchet with it",
+		needles: []string{
+			"corpusexpect", "corpuslayouts", "corpustokenfloor", "extr-04",
+			"learned_typed_total.pdf", "learned_typed_total_twin.pdf",
+		},
+		why: "the next author will otherwise add a corpusExpect row for it by reflex and drag the ratchet with it",
+	},
+	{
+		// Last: cldSubsection fatals on a missing heading, so the entries above report first.
+		heading: "How a typed value finds its token",
+		needles: []string{
+			"learntypedrule", "page 1", "sametokenvalue", "both sides",
+			"TestLearnTypedRule_AddsNoToleranceTheShapeLacks", "exactly one candidate",
+			"pointed correction is not checked", "document.read", "pageonereadtimeout", "never the typed value", "anchor_label",
+			"typednotoken", "typedseveraltokens", "typednotderived", "typedselfcheckrefused", "typedlearned",
+			"learned_typed_total.pdf", "TestRLS_ATypedCorrectionOnAnotherTenantsJobReadsNoDocument",
+		},
+		why: "a reader who cannot tell which clause refused a typed value cannot predict what typing teaches, or that pointing is never checked",
 	},
 }
 

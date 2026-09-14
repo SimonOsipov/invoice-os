@@ -12,8 +12,8 @@ import (
 	"github.com/klippa-app/go-pdfium/webassembly"
 )
 
-// Matches MaxWorkers for QueueName in cmd/submission/main.go, so a third concurrent instance
-// can never be needed (TestPDFiumMaxTotalMatchesTheQueueWorkerCount).
+// Matches MaxWorkers for QueueName in cmd/submission/main.go (TestPDFiumMaxTotalMatchesTheQueueWorkerCount).
+// The correction route shares the pool: it waits up to pageOneReadTimeout, and a worker may wait on it too.
 const pdfiumMaxTotal = 2
 
 // Entries into the once-func, read by TestPDFiumPool_BuiltAtMostOnce.

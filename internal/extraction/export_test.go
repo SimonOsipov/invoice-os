@@ -23,6 +23,9 @@ func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID stri
 	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
 }
 
+// PageOneReadTimeoutForTest hands the external handler specs the page-read bound.
+const PageOneReadTimeoutForTest = pageOneReadTimeout
+
 // NewExtractArgsForTest builds the args EnqueueTx takes. The return type is river.JobArgs, so
 // the caller never writes the concrete name.
 func NewExtractArgsForTest(tenantID, documentID, key string) river.JobArgs {

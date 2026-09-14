@@ -1,5 +1,6 @@
-// handlers_correction_learn_db_test.go: what a correction teaches -- pointed on a v1: layout,
-// typed on a b1: one (EXTR-19-08, the block at "what a TYPED correction teaches"). Shares
+// handlers_correction_learn_db_test.go: what a correction teaches -- pointed on a geometric
+// layout, typed on a boxless one (the block at "what a TYPED correction teaches"); typed on a
+// geometric layout is handlers_correction_typed_db_test.go. Shares
 // handlers_correction_db_test.go's cx* harness and store_db_test.go's pools, so this file adds
 // no second skip site.
 //
@@ -264,11 +265,14 @@ func TestRLS_PointedCorrectionWritesOneAnchorRuleKeyedToTheJobsFingerprint(t *te
 		t.Errorf("the rule carries schema version %d, want %d -- AnchorRulesFor errors on any other", r.version, extraction.RuleSchemaVersion)
 	}
 
-	// The control on the SAME job: a typed correction teaches nothing HERE -- this job carries
-	// a v1: key and layout_tokens NULL, so the boxless branch refuses twice over -- and the
-	// count above is discriminating rather than "this route writes a rule for every
-	// correction". TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule is the b1: case.
-	w2 := cxServe(t, f.reqCtx, f.jobID, clField, corBody(clTINValue, "typed", ""),
+	// The control on the SAME job: a typed value no page-1 token carries teaches nothing, so the
+	// count above is discriminating rather than "this route writes a rule for every correction".
+	const unprinted = "99999999-0499"
+	if v := ctVerdict(t, pages, clField, unprinted); v != extraction.TypedNoToken {
+		t.Fatalf("control premise: LearnTypedRule(%s, %q) = %d on %s, want TypedNoToken", clField, unprinted, v, clCorpus)
+	}
+	_, pageOne := ctReader(t, clCorpus)
+	w2 := cxServeWith(t, f.reqCtx, f.jobID, clField, corBody(unprinted, "typed", ""), pageOne, nil,
 		cxApplier(false, nil), cxAuditor(nil))
 	if w2.Code != http.StatusCreated {
 		t.Fatalf("control: the typed correction answered %d (body=%q), want 201", w2.Code, w2.Body.String())
@@ -348,25 +352,23 @@ func TestRLS_AClientSuppliedAnchorLabelNeverBeatsTheServersOwn(t *testing.T) {
 	}
 }
 
-// --- C-04 / C-05 / C-06 / AC-2: on a v1: layout, only a pointed correction learns ----------
+// --- C-05 / C-06 / AC-2: on a geometric layout, chosen and undone learn nothing ------------
 
 // One layout-bearing job, so a zero count is a refusal to learn rather than a job that could
-// never teach anything. The pointed control at the end is what makes the three zeros mean
+// never teach anything. The pointed control at the end is what makes the two zeros mean
 // something. Undo's full invoice semantics stay owned by
 // TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue.
 //
-// Since EXTR-19-08 the typed arm's zero is specific to this fixture, not general: clLayout
-// stamps a v1: key and leaves layout_tokens NULL, so two of the boxless branch's three
-// conjuncts are false. On a b1: job a typed correction DOES teach --
-// TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule.
-func TestRLS_OnAV1LayoutOnlyAPointedCorrectionLearnsARule(t *testing.T) {
+// clLayout stamps the current geometric key. A typed correction on it may teach:
+// TestRLS_ATypedCorrectionTeachesThePointedRuleOnAGeometricLayout.
+func TestRLS_OnAGeometricLayoutChosenAndUndoneLearnNothing(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C0456")
 	_, pages := clLayout(t, ctx, f.jobID)
 	cxReading(t, ctx, f.tenantID, f.jobID, clField, 0, cxStr(clReadingTIN))
 
 	var seen cxSeamCall
-	for _, method := range []string{"typed", "chosen", "undone"} {
+	for _, method := range []string{"chosen", "undone"} {
 		w := cxServe(t, f.reqCtx, f.jobID, clField, corBody(clTINValue, method, ""),
 			cxClearingApplier(&seen), cxAuditor(nil))
 		if w.Code != http.StatusCreated {
@@ -390,7 +392,7 @@ func TestRLS_OnAV1LayoutOnlyAPointedCorrectionLearnsARule(t *testing.T) {
 		t.Fatalf("control: the pointed correction answered %d (body=%q), want 201", w.Code, w.Body.String())
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
-		t.Errorf("control: the pointed correction on the same job left %d anchor rule(s), want 1 -- the three zeros above prove nothing without it", n)
+		t.Errorf("control: the pointed correction on the same job left %d anchor rule(s), want 1 -- the two zeros above prove nothing without it", n)
 	}
 }
 
@@ -650,7 +652,7 @@ func TestRLS_AFailedAnchorRuleWriteRollsBackTheCorrectionTheInvoiceAndTheAudit(t
 // prepend a superseding rule, so arm 2's non-supersession is a decision and not an inability of
 // the write path. R1 is the same_token/TIN rule because the below/Buyer rule resolves to zero
 // candidates on its own page, which would make arm 2's Resolve oracle vacuous.
-func TestRLS_AnUndoDoesNotUnteachAndOnAV1LayoutOnlyAPointedCorrectionSupersedes(t *testing.T) {
+func TestRLS_AnUndoDoesNotUnteachAndAPointedCorrectionSupersedes(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C13")
 	fingerprint, pages := clLayout(t, ctx, f.jobID)
@@ -1199,13 +1201,14 @@ func TestRLS_ATypedCorrectionOnABoxlessJobLearnsARule(t *testing.T) {
 	}
 }
 
-// --- AC-3: a typed correction on a PDF job learns nothing ----------------------------------
+// --- AC-3: a typed correction on a PDF job never enters the boxless branch ----------------
 
-// The PDF arm runs FIRST, so its count is an absolute zero rather than a delta. It varies six
-// things at once against the control -- format, content type, tokens, anchors, fingerprint
-// namespace and layout_tokens presence -- which is exactly why AC-8 sits beside it and varies
-// one.
-func TestRLS_ATypedCorrectionOnAPdfJobLearnsNothing(t *testing.T) {
+// The PDF arm runs FIRST, so its count is an absolute zero rather than a delta. Each typed POST
+// reads page 1 once and 4300.00 is printed nowhere on it, so the geometric arm refuses at
+// TypedNoToken and the zero is the boxless branch's. It varies six things at once against the
+// control -- format, content type, tokens, anchors, fingerprint namespace and layout_tokens
+// presence -- which is exactly why AC-8 sits beside it and varies one.
+func TestRLS_ATypedCorrectionOnAPdfJobNeverEntersTheBoxlessBranch(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR19-08-AC3")
 	wkCleanupInfra(t, f.tenantID)
@@ -1217,14 +1220,21 @@ func TestRLS_ATypedCorrectionOnAPdfJobLearnsNothing(t *testing.T) {
 			pdfFP, extraction.FingerprintVersion)
 	}
 
+	if v := ctVerdict(t, rvCorpusPages(t, dcCorpusFixture), blField, blValue); v != extraction.TypedNoToken {
+		t.Fatalf("LearnTypedRule(%s, %q) = %d on %s, want TypedNoToken -- the zero below would then not be the boxless branch's", blField, blValue, v, dcCorpusFixture)
+	}
+	op, pageOne := ctReader(t, dcCorpusFixture)
 	learned := &blLearnRecorder{}
-	w := cxServe(t, f.reqCtx, pdfJobID, blField, blTyped(blValue),
+	w := cxServeWith(t, f.reqCtx, pdfJobID, blField, blTyped(blValue), pageOne, nil,
 		cxApplier(false, nil), cxAuditor(nil), learned.record)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
 	}
+	if n := op.count(); n != 1 {
+		t.Errorf("the typed correction on a PDF job read the document %d time(s), want 1", n)
+	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
-		t.Errorf("a typed correction on a PDF job left %d anchor rule(s), want 0 -- the boxless derivation reads token text with no geometry and owns only the b1: namespace", n)
+		t.Errorf("a typed correction on a PDF job left %d anchor rule(s), want 0 -- the value is printed nowhere on it, and the boxless derivation owns only the boxless namespace", n)
 	}
 	if n := len(learned.events()); n != 0 {
 		t.Errorf("the PDF arm emitted %d anchor.learned event(s), want 0", n)
@@ -1260,9 +1270,12 @@ func TestRLS_ATypedCorrectionOnAPdfJobLearnsNothing(t *testing.T) {
 	if got := wtDecode(t, "the re-stamped PDF job", wtTokens(t, ctx, pdfJobID)); !slices.Equal(got, wtDecode(t, "the boxless control job", tokens)) {
 		t.Fatalf("the PDF job carries %#v after the stamp, want the DOCX job's own text", got)
 	}
-	w3 := cxServe(t, f.reqCtx, pdfJobID, blField, blTyped(blValue), cxApplier(false, nil), cxAuditor(nil))
+	w3 := cxServeWith(t, f.reqCtx, pdfJobID, blField, blTyped(blValue), pageOne, nil, cxApplier(false, nil), cxAuditor(nil))
 	if w3.Code != http.StatusCreated {
 		t.Fatalf("the PDF job carrying derivable tokens answered %d (body=%q), want 201", w3.Code, w3.Body.String())
+	}
+	if n := op.count(); n != 2 {
+		t.Errorf("after the second typed correction on the PDF job the document was read %d time(s), want 2", n)
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
 		t.Errorf("a typed correction on a v1:-keyed job carrying the very tokens that just taught left %d anchor rule(s), want the control's 1 -- the namespace is then not what refuses", n)
@@ -1433,11 +1446,17 @@ func TestRLS_ATypedCorrectionOnAV1KeyedBoxlessJobLearnsNothing(t *testing.T) {
 		t.Fatalf("re-keying the job also moved %+v to %+v; the arms would differ in more than the fingerprint", before, after)
 	}
 
+	// Every DOCX anchor carries the zero box, so the geometric key reads no document.
+	op := &wkOpener{body: fxRead(t, dxFixture), contentType: wkDocxContentType}
 	learned := &blLearnRecorder{}
-	w := cxServe(t, f.reqCtx, jobID, blField, blTyped(blValue),
+	w := cxServeWith(t, f.reqCtx, jobID, blField, blTyped(blValue),
+		extraction.PageOneReader(op.open, extraction.NewPDFiumReader()), nil,
 		cxApplier(false, nil), cxAuditor(nil), learned.record)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := op.count(); n != 0 {
+		t.Errorf("a typed correction on a DOCX job re-keyed into the %q namespace read the document %d time(s), want 0", extraction.FingerprintVersion, n)
 	}
 	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
 		t.Errorf("a typed correction on a job re-keyed into the %q namespace left %d anchor rule(s), want 0 -- the derivation owns the boxless namespace and only it",

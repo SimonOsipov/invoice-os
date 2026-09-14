@@ -35,6 +35,10 @@ const (
 	fcActor       = "e5b10007-0000-4000-8000-000000000001"
 	fcPoolArg     = "pool"
 	fcLoggerArg   = "app.Logger"
+	fcPageOneFn   = "extraction.PageOneReader"
+	fcOpenerFn    = "newDocumentOpener"
+	fcOpenerArg   = "docSvc.Open"
+	fcPDFiumFn    = "extraction.NewPDFiumReader"
 
 	// The method every row here posts. Named so a later undo-specific row reads as the
 	// deliberate other half rather than as a typo.
@@ -95,8 +99,8 @@ func TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators(t *testing.T)
 			// Both adapters are unit-tested over injected seams below, so only this scan can say
 			// the handler is built over the REAL pool, store and audit module. A nil collaborator
 			// compiles and fails on the first correction.
-			if len(handlerCall.Args) != 5 {
-				t.Errorf("extraction.CorrectionHandler is called with %d argument(s), want 5 (pool, apply, record, recordLearned, logger)", len(handlerCall.Args))
+			if len(handlerCall.Args) != 6 {
+				t.Errorf("extraction.CorrectionHandler is called with %d argument(s), want 6 (pool, apply, record, recordLearned, pageOne, logger)", len(handlerCall.Args))
 				return true
 			}
 			if c, ok := handlerCall.Args[1].(*ast.CallExpr); !ok || wtCallName(c.Fun) != fcApplierFn {
@@ -118,7 +122,19 @@ func TestSubmissionMain_WiresTheCorrectionRouteAndItsCollaborators(t *testing.T)
 			if c, ok := handlerCall.Args[3].(*ast.CallExpr); !ok || wtCallName(c.Fun) != alAdapterFn {
 				t.Errorf("CorrectionHandler's recordLearned argument is %s, want a %s(...) call", wtRender(handlerCall.Args[3]), alAdapterFn)
 			}
-			if got := wtRender(handlerCall.Args[4]); got != fcLoggerArg {
+			// The page read must go through the audited opener, which writes document.read, and
+			// through PDFium, the reader that recorded the stored anchors.
+			if c, ok := handlerCall.Args[4].(*ast.CallExpr); !ok || wtCallName(c.Fun) != fcPageOneFn || len(c.Args) != 2 {
+				t.Errorf("CorrectionHandler's pageOne argument is %s, want a %s(...) call with 2 arguments", wtRender(handlerCall.Args[4]), fcPageOneFn)
+			} else {
+				if open, ok := c.Args[0].(*ast.CallExpr); !ok || wtCallName(open.Fun) != fcOpenerFn || len(open.Args) != 1 || wtRender(open.Args[0]) != fcOpenerArg {
+					t.Errorf("%s's opener is %s, want %s(%s)", fcPageOneFn, wtRender(c.Args[0]), fcOpenerFn, fcOpenerArg)
+				}
+				if rd, ok := c.Args[1].(*ast.CallExpr); !ok || wtCallName(rd.Fun) != fcPDFiumFn || len(rd.Args) != 0 {
+					t.Errorf("%s's reader is %s, want %s()", fcPageOneFn, wtRender(c.Args[1]), fcPDFiumFn)
+				}
+			}
+			if got := wtRender(handlerCall.Args[5]); got != fcLoggerArg {
 				t.Errorf("CorrectionHandler's logger argument is %s, want %s", got, fcLoggerArg)
 			}
 		}

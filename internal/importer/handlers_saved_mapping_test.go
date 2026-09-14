@@ -464,6 +464,13 @@ func TestSavedMappingHandler_NoIdentityIs401BeforeOpenAndLookup(t *testing.T) {
 	if len(lookup.calls) != 0 {
 		t.Errorf("lookup calls = %d, want 0", len(lookup.calls))
 	}
+
+	t.Run("before the id guards", func(t *testing.T) {
+		rec, raw, _ := doSavedMappingRequest(t, open.fn(), lookup.fn(), nil, nil, "")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401 ahead of the entity_id guard (body=%s)", rec.Code, raw)
+		}
+	})
 }
 
 func TestSavedMappingHandler_EntityIDRequiredAndWellFormed(t *testing.T) {
@@ -657,6 +664,30 @@ func TestSavedMappingHandler_LookupReceivesTheDecodedHeader(t *testing.T) {
 	if len(open.ranges) != 1 || open.ranges[0] != "" {
 		t.Errorf("open ranges = %v, want exactly [\"\"] -- the full document, no Range header", open.ranges)
 	}
+	if open.body.closes != 1 {
+		t.Errorf("body closes = %d, want 1", open.body.closes)
+	}
+}
+
+// uuid.Parse accepts non-canonical forms; only the canonical id travels on.
+func TestSavedMappingHandler_PassesCanonicalIDsDownstream(t *testing.T) {
+	id := testIdentity()
+	entityID := uuid.NewString()
+	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Ref"}, nil))
+	lookup := &lookupSpy{}
+
+	query := "?entity_id=urn:uuid:" + strings.ToUpper(entityID) + "&document_id=urn:uuid:" + strings.ToUpper(open.doc.ID)
+	rec, raw, _ := doSavedMappingRequest(t, open.fn(), lookup.fn(), nil, &id, query)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if len(open.ids) != 1 || open.ids[0] != open.doc.ID {
+		t.Errorf("open ids = %v, want exactly [%s]", open.ids, open.doc.ID)
+	}
+	if len(lookup.calls) != 1 || lookup.calls[0].entityID != entityID {
+		t.Errorf("lookup calls = %+v, want one call with entity_id %s", lookup.calls, entityID)
+	}
 }
 
 func TestSavedMappingHandler_MissIsExplicitNull(t *testing.T) {
@@ -815,8 +846,10 @@ func TestSavedMappingHandler_SuspendedCallerAtOpenIs403(t *testing.T) {
 		open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Ref"}, nil))
 		open.err = fmt.Errorf("wrap: %w", db.ErrNotActiveMember)
 		lookup := &lookupSpy{}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-		rec, raw, _ := doSavedMappingRequest(t, open.fn(), lookup.fn(), nil, &id, "?entity_id="+entityID+"&document_id="+documentID)
+		rec, raw, _ := doSavedMappingRequest(t, open.fn(), lookup.fn(), logger, &id, "?entity_id="+entityID+"&document_id="+documentID)
 
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, raw)
@@ -830,6 +863,9 @@ func TestSavedMappingHandler_SuspendedCallerAtOpenIs403(t *testing.T) {
 		}
 		if len(lookup.calls) != 0 {
 			t.Errorf("lookup calls = %d, want 0", len(lookup.calls))
+		}
+		if logged := buf.String(); logged != "" {
+			t.Errorf("expected no log record for a 403, got: %s", logged)
 		}
 	})
 
@@ -903,6 +939,22 @@ func TestSavedMappingHandler_NilObjectBodyIs500(t *testing.T) {
 	}
 	if len(lookup.calls) != 0 {
 		t.Errorf("lookup calls = %d, want 0", len(lookup.calls))
+	}
+}
+
+func TestSavedMappingHandler_NilBodyOutranksUnrecognizedFormat(t *testing.T) {
+	id := testIdentity()
+	docID := uuid.NewString()
+	filename, contentType := "scan.pdf", "application/pdf"
+	open := func(ctx context.Context, _, rangeHeader string) (document.Document, document.Object, error) {
+		return document.Document{ID: docID, Filename: &filename, DeclaredContentType: &contentType},
+			document.Object{}, nil
+	}
+
+	rec, raw, _ := doSavedMappingRequest(t, open, (&lookupSpy{}).fn(), nil, &id, "?entity_id="+uuid.NewString()+"&document_id="+docID)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 from the nil-body guard, not 400 from detectFormat (body=%s)", rec.Code, raw)
 	}
 }
 

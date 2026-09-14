@@ -307,6 +307,13 @@ func relatedTokens(page TokenPage, anchor Region, rel Relation) []relatedToken {
 	return out
 }
 
+// relationClauses reports, independently, whether the order, distance and overlap conjuncts
+// reject value as a match for anchor under rel. Not yet wired into relatedTokens: it always
+// reports no failure until the caller is rewired onto it. drop is unread here.
+func relationClauses(anchor, value Region, rel Relation, drop float64) (order, distance, overlap bool) {
+	return false, false, false
+}
+
 // overlap1D is the length [a0,a1] and [b0,b1] share, negative when they are disjoint.
 func overlap1D(a0, a1, b0, b1 float64) float64 {
 	return min(a1, b1) - max(a0, b0)

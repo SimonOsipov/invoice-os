@@ -113,6 +113,12 @@ const (
 // Resolve mints no Distance to read. TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
 func RightGapForTest(anchor, value Region) float64 { return value.X0 - anchor.X1 }
 
+// RelationClausesForTest wraps the production clause predicate so external specs assert the
+// clause production applies rather than a reimplementation of the conjuncts.
+func RelationClausesForTest(anchor, value Region, kind RelationKind, maxDistance, drop float64) (order, distance, overlap bool) {
+	return relationClauses(anchor, value, Relation{Kind: kind, MaxDistance: maxDistance}, drop)
+}
+
 // MaxUploadBytesForTest exposes the request-body cap so the 413 spec asserts the production
 // constant rather than a copy of it.
 const MaxUploadBytesForTest = maxUploadBytes

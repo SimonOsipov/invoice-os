@@ -1329,7 +1329,7 @@ extended to its sibling:
 - `TestWildLayouts_ALabelledCurrencyStillHeadsTheRuledTable`
 - `TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling`
 - `TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount`
-- `TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal`
+- `TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal`
 - `TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty`
 - `TestWildLayouts_TheTwoPartyBuyerNameIsTheName`
 

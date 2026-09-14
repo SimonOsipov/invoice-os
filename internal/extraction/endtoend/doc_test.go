@@ -201,7 +201,7 @@ var eeDocClass2Specs = []string{
 	"TestWildLayouts_ALabelledCurrencyStillHeadsTheRuledTable",
 	"TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling",
 	"TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount",
-	"TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal",
+	"TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal",
 	"TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty",
 	"TestWildLayouts_TheTwoPartyBuyerNameIsTheName",
 }

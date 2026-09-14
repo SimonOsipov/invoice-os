@@ -3,6 +3,8 @@
 package endtoend
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -164,4 +166,86 @@ func TestRLS_EndToEndTheFoundTotalReachesTheInvoiceRow(t *testing.T) {
 		jobID := eeExtract(t, ctx, w, layout, eeWithText(eeGoldenReader(t, wildGolden(layout))))
 		check(t, w, jobID)
 	})
+}
+
+// eeLaterPageTotal moves every 8,600.00 token onto one extra page after the last.
+type eeLaterPageTotal struct {
+	extraction.PageReader
+	moved *atomic.Int32
+}
+
+func (r eeLaterPageTotal) Read(ctx context.Context, doc extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	var moved []extraction.Token
+	var next extraction.Page
+	res, err := r.PageReader.Read(ctx, doc, func(p extraction.Page) error {
+		kept := make([]extraction.Token, 0, len(p.Tokens))
+		for _, tok := range p.Tokens {
+			if tok.Text == "8,600.00" {
+				moved = append(moved, tok)
+				continue
+			}
+			kept = append(kept, tok)
+		}
+		p.Tokens = kept
+		next = extraction.Page{Number: p.Number + 1, WidthPt: p.WidthPt, HeightPt: p.HeightPt}
+		return onPage(p)
+	})
+	if err != nil {
+		return res, err
+	}
+	for i := range moved {
+		moved[i].Region.Page = next.Number
+	}
+	next.Tokens = moved
+	r.moved.Store(int32(len(moved)))
+	res.Pages++
+	return res, onPage(next)
+}
+
+// The worker must pass every page it read, not only the first: the total sits on page 2.
+func TestRLS_EndToEndAFoundTotalOnALaterPageReachesTheInvoiceRow(t *testing.T) {
+	h := eeRequire(t)
+	ctx := t.Context()
+	const layout = "wild_ruled_lines_totals.pdf"
+	eeRequireFixtures(t, []string{layout, wildGolden(layout)})
+
+	var moved atomic.Int32
+	w := eeSeed(t, ctx, layout)
+	jobID := eeExtract(t, ctx, w, layout, eeWithText(eeLaterPageTotal{PageReader: eeGoldenReader(t, wildGolden(layout)), moved: &moved}))
+	if n := moved.Load(); n != 1 {
+		t.Fatalf("the reader moved %d 8,600.00 token(s) to page 2, want 1", n)
+	}
+
+	var value, reason *string
+	var page int
+	if err := h.super.QueryRow(ctx,
+		`SELECT value, reason_code, coalesce(page, 0) FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = 'total' AND candidate_rank = 0`,
+		jobID).Scan(&value, &reason, &page); err != nil {
+		t.Fatalf("read the rank-0 total for job %s: %v", jobID, err)
+	}
+	show := func(s *string) string {
+		if s == nil {
+			return "<NULL>"
+		}
+		return *s
+	}
+	if value == nil || *value != "8600.00" {
+		t.Errorf("rank-0 total holds %s, want 8600.00", show(value))
+	}
+	if page != 2 {
+		t.Errorf("rank-0 total holds page %d, want 2", page)
+	}
+	if reason == nil || *reason != string(extraction.ReasonAmbiguous) {
+		t.Errorf("rank-0 total holds reason_code %s, want %q", show(reason), extraction.ReasonAmbiguous)
+	}
+
+	eeImport(t, ctx, w)
+	got := eeWrittenRow(t, ctx, w.documentID)
+	if got == nil {
+		t.Fatalf("%s wrote no invoices row", layout)
+	}
+	if got["total"] != "8600.00" {
+		t.Errorf("the invoices row holds total = %q, want %q", got["total"], "8600.00")
+	}
 }

@@ -240,6 +240,78 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 }
 
+// TestInvoiceMain_RegistersTheSavedMappingRoute (EXTR-37-03 AC #5): GET
+// /v1/imports/saved-mapping must be mounted beside GET /v1/imports/{id}, dispatching
+// to importer.SavedMappingHandler(docSvc.Open, impStore.SavedMapping, ...). AST, so
+// gofmt cannot break the anchor (part (c) of TestInvoiceMain_WiresTheApprovalsEnforcedFlag's
+// idiom). The GET /v1/imports/{id} needle is a control: it proves the walk finds a real,
+// already-shipped registration before trusting a negative result for the new one.
+func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+
+	var foundBatchGet, foundSavedMapping bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		switch strings.Trim(lit.Value, `"`) {
+		case "GET /v1/imports/{id}":
+			foundBatchGet = true
+		case "GET /v1/imports/saved-mapping":
+			foundSavedMapping = true
+
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Errorf("GET /v1/imports/saved-mapping's second argument is %T, want a call expression", call.Args[1])
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "SavedMappingHandler" {
+				t.Error("GET /v1/imports/saved-mapping's handler call is not ....SavedMappingHandler(...)")
+				return true
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "importer" {
+				t.Error("GET /v1/imports/saved-mapping's handler is not importer.SavedMappingHandler(...)")
+			}
+			if len(handlerCall.Args) != 3 {
+				t.Fatalf("importer.SavedMappingHandler has %d argument(s), want 3 (open, lookup, logger)", len(handlerCall.Args))
+			}
+			openArg, ok := handlerCall.Args[0].(*ast.SelectorExpr)
+			if !ok || openArg.Sel.Name != "Open" {
+				t.Errorf("SavedMappingHandler's first argument is not ....Open, got %#v", handlerCall.Args[0])
+			} else if recv, ok := openArg.X.(*ast.Ident); !ok || recv.Name != "docSvc" {
+				t.Errorf("SavedMappingHandler's first argument is not docSvc.Open")
+			}
+			lookupArg, ok := handlerCall.Args[1].(*ast.SelectorExpr)
+			if !ok || lookupArg.Sel.Name != "SavedMapping" {
+				t.Errorf("SavedMappingHandler's second argument is not ....SavedMapping, got %#v", handlerCall.Args[1])
+			} else if recv, ok := lookupArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
+				t.Errorf("SavedMappingHandler's second argument is not impStore.SavedMapping")
+			}
+		}
+		return true
+	})
+
+	if !foundBatchGet {
+		t.Fatal("control needle: no GET /v1/imports/{id} registration found -- the AST walk itself is broken, so the assertions below are vacuous")
+	}
+	if !foundSavedMapping {
+		t.Error(`no app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+}
+
 // callSiteIndex returns the first index of name+"(" that is not its own
 // declaration, so an anchor cannot silently resolve to `func name(`.
 func callSiteIndex(src, name string) int {

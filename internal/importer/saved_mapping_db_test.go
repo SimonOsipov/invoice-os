@@ -385,3 +385,232 @@ func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 		t.Errorf("stored mapping = %v, want M2 %v -- the unremembered import must not overwrite it", got, m2)
 	}
 }
+
+// --- Store.SavedMapping / SavedMappingHandler (SM-DB-06/07) ------------------
+
+// TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader: a hit only for the exact
+// (entity, header) pair the caller's tenant saved; a miss for everything else.
+func TestStoreSavedMapping_ReturnsOnlyTheExactEntityAndHeader(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "SM-DB-06 tenant")
+	entityID := seedEntity(t, super, tenantID, "SM-DB-06 entity")
+	otherEntityID := seedEntity(t, super, tenantID, "SM-DB-06 other entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	store := NewStore(app)
+	header := []string{"Invoice No", "Total"}
+	mapping := map[string]string{"invoice_number": "Invoice No", "total": "Total"}
+	if err := store.SaveMapping(c, entityID, header, mapping); err != nil {
+		t.Fatalf("SaveMapping: %v", err)
+	}
+
+	// Backdated so a lookup that reads e.g. now() instead of the stored column cannot pass.
+	backdate := time.Now().Add(-3 * time.Hour).Truncate(time.Second)
+	if _, err := super.Exec(ctx, `UPDATE import_mappings SET saved_at = $1 WHERE entity_id = $2`, backdate, entityID); err != nil {
+		t.Fatalf("backdate saved_at: %v", err)
+	}
+
+	t.Run("hit", func(t *testing.T) {
+		got, err := store.SavedMapping(c, entityID, header)
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got == nil {
+			t.Fatal("SavedMapping = nil, want a hit")
+		}
+		if !reflect.DeepEqual(got.Mapping, mapping) {
+			t.Errorf("Mapping = %v, want %v", got.Mapping, mapping)
+		}
+		if !got.SavedAt.Equal(backdate) {
+			t.Errorf("SavedAt = %s, want the backdated %s", got.SavedAt, backdate)
+		}
+	})
+
+	t.Run("another entity of the same tenant", func(t *testing.T) {
+		got, err := store.SavedMapping(c, otherEntityID, header)
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for an entity with no saved row", got)
+		}
+	})
+
+	t.Run("header reordered", func(t *testing.T) {
+		got, err := store.SavedMapping(c, entityID, []string{"Total", "Invoice No"})
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for a reordered header", got)
+		}
+	})
+
+	t.Run("header recased", func(t *testing.T) {
+		got, err := store.SavedMapping(c, entityID, []string{"invoice no", "total"})
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for a recased header", got)
+		}
+	})
+
+	t.Run("column added", func(t *testing.T) {
+		got, err := store.SavedMapping(c, entityID, []string{"Invoice No", "Total", "VAT"})
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for a header with a column added", got)
+		}
+	})
+
+	t.Run("column removed", func(t *testing.T) {
+		got, err := store.SavedMapping(c, entityID, []string{"Invoice No"})
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for a header with a column removed", got)
+		}
+	})
+
+	t.Run("entity with no rows", func(t *testing.T) {
+		emptyEntityID := seedEntity(t, super, tenantID, "SM-DB-06 empty entity")
+		got, err := store.SavedMapping(c, emptyEntityID, header)
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil for an entity with no rows", got)
+		}
+	})
+
+	t.Run("another tenant's entity", func(t *testing.T) {
+		otherTenantID := seedTenant(t, super, "SM-DB-06 other tenant")
+		bEntityID := seedEntity(t, super, otherTenantID, "SM-DB-06 tenant B entity")
+		cB := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: otherTenantID})
+		if err := store.SaveMapping(cB, bEntityID, header, map[string]string{"invoice_number": "Ref"}); err != nil {
+			t.Fatalf("tenant B SaveMapping: %v", err)
+		}
+
+		got, err := store.SavedMapping(c, bEntityID, header)
+		if err != nil {
+			t.Fatalf("SavedMapping: %v", err)
+		}
+		if got != nil {
+			t.Errorf("SavedMapping = %v, want nil -- tenant A must not see tenant B's entity", got)
+		}
+	})
+
+	// Control: the store CAN return a row -- proved above by "hit" -- so every
+	// nil-returning subtest above is a genuine miss, not a store that always misses.
+
+	t.Run("malformed entity id", func(t *testing.T) {
+		_, err := store.SavedMapping(c, "not-a-uuid", header)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("SavedMapping err = %v, want ErrValidation", err)
+		}
+	})
+}
+
+// TestSavedMappingHandler_FindsTheMappingACompletedImportSaved wires the real
+// CreateHandler and SavedMappingHandler on one mux: a completed import of doc1
+// lands a mapping, and a SECOND stored document (doc2) with the same header
+// finds it through the saved-mapping route -- the second-import case this
+// story exists for. docSvc is built exactly as SM-DB-08 above.
+func TestSavedMappingHandler_FindsTheMappingACompletedImportSaved(t *testing.T) {
+	super, app := dbTestPools(t)
+	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
+	store := NewStore(app)
+	docSvc := document.NewService(document.NewStore(app), newMemObjects())
+
+	tenantID := seedTenant(t, super, "SM-DB-07 tenant")
+	entityID := seedEntity(t, super, tenantID, "SM-DB-07 entity")
+	entityID2 := seedEntity(t, super, tenantID, "SM-DB-07 entity 2")
+	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
+
+	header := []string{"Inv No", "Total, NGN"}
+	mapping := map[string]string{"invoice_number": "Inv No", "total": "Total, NGN"}
+	mappingJSON := mustMappingJSON(t, mapping)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/imports", CreateHandler(svc.Import, docSvc.Open, store.SaveMapping, nil))
+	mux.HandleFunc("GET /v1/imports/saved-mapping", SavedMappingHandler(docSvc.Open, store.SavedMapping, nil))
+
+	// Import doc1: a completed import saves the mapping for entityID.
+	doc1 := storeDocumentAs(t, docSvc, tenantID, "data1.csv", "", csvBody(t, header, [][]string{{"SM-DB-07-1", "119.00"}}))
+	body1, ct1 := buildImportForm(t, entityID, mappingJSON, doc1.ID)
+	r1 := httptest.NewRequest("POST", "/v1/imports", body1)
+	r1.Header.Set("Content-Type", ct1)
+	r1 = r1.WithContext(auth.WithIdentity(r1.Context(), id))
+	rec1 := httptest.NewRecorder()
+	mux.ServeHTTP(rec1, r1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, want 201 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	// doc2: a DIFFERENT stored document than the one that saved the mapping,
+	// same header -- the case a restore has to solve.
+	doc2 := storeDocumentAs(t, docSvc, tenantID, "data2.csv", "", csvBody(t, header, [][]string{{"SM-DB-07-2", "220.00"}}))
+
+	t.Run("hit: doc2's header matches doc1's saved mapping", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/v1/imports/saved-mapping?entity_id="+entityID+"&document_id="+doc2.ID, nil)
+		r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		var resp savedMappingResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body.Bytes(), err)
+		}
+		if resp.SavedMapping == nil {
+			t.Fatal("saved_mapping = nil, want the mapping doc1's import saved")
+		}
+		if !reflect.DeepEqual(resp.SavedMapping.Mapping, mapping) {
+			t.Errorf("mapping = %v, want the posted mapping %v", resp.SavedMapping.Mapping, mapping)
+		}
+	})
+
+	t.Run("miss: doc3's header is reordered", func(t *testing.T) {
+		doc3 := storeDocumentAs(t, docSvc, tenantID, "data3.csv", "", csvBody(t, []string{"Total, NGN", "Inv No"}, [][]string{{"220.00", "SM-DB-07-3"}}))
+		r := httptest.NewRequest("GET", "/v1/imports/saved-mapping?entity_id="+entityID+"&document_id="+doc3.ID, nil)
+		r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		var resp savedMappingResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body.Bytes(), err)
+		}
+		if resp.SavedMapping != nil {
+			t.Errorf("saved_mapping = %v, want nil for a reordered header", resp.SavedMapping)
+		}
+	})
+
+	t.Run("miss: a second entity of the same tenant", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/v1/imports/saved-mapping?entity_id="+entityID2+"&document_id="+doc2.ID, nil)
+		r = r.WithContext(auth.WithIdentity(r.Context(), id))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, r)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		var resp savedMappingResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body.Bytes(), err)
+		}
+		if resp.SavedMapping != nil {
+			t.Errorf("saved_mapping = %v, want nil for a different entity", resp.SavedMapping)
+		}
+	})
+}

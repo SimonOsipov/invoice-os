@@ -707,6 +707,28 @@ func SheetHandler(
 	}
 }
 
+// savedMappingResponse is GET /v1/imports/saved-mapping's body. A miss is an explicit null,
+// never a 404, so the route is no existence oracle.
+type savedMappingResponse struct {
+	SavedMapping *SavedMapping `json:"saved_mapping"`
+}
+
+// SavedMappingHandler is GET /v1/imports/saved-mapping?entity_id=&document_id=: the server
+// decodes the stored document's header with Decode, the same way the save path does, so the
+// lookup key equals the save key by construction.
+func SavedMappingHandler(
+	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),
+	log *slog.Logger,
+) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // statusForErr maps a service error to the HTTP status + message this
 // handler writes to the response, mirroring internal/invoice's own
 // statusForErr: db.ErrNotActiveMember is 403, ErrValidation is 400 with the

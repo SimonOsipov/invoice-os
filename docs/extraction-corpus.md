@@ -955,8 +955,10 @@ reproducible in this repo and never will be.
 the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. The 18-of-40 production
-pass above is unrepeatable. And the `below` sweep and docling's 0.720721 in **What EXTR-31
-changed** were measured once, by a planning sweep that is not committed. Everything else in these
+pass above is unrepeatable. And the planning figures in **What EXTR-31 changed** were measured
+once, by a probe and a sweep that are not committed: the `below` sweep's counts, the drop band
+reaching nothing outside the pair at any dial up to 1.0 (the tests hold only 0.97 and the window's
+two edges), docling's 0.720721, and the box heights 0.014015 and 0.010879. Everything else in these
 two sections is parsed and compared against a live measurement.
 
 ## Line-item outcome

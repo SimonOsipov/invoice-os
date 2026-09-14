@@ -35,16 +35,16 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-13 and pinned. Equality, not a
+// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-14 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 39 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 37 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 73
+	eeCorpusHits  = 75
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
@@ -308,8 +308,6 @@ var eeRealMisses = map[string]string{
 	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_ambiguous_date.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
 
-	"wild_ruled_lines_totals.pdf/total": "the Total label continues on the last data row's baseline, so t1.total.right reaches that row's 1,000.00 and never the printed 8,600.00",
-
 	"wild_stacked_borderless.pdf/issue_date": "the value is offset 8pt below its label in a second column, so neither same_token, right nor below binds",
 	"wild_stacked_borderless.pdf/buyer_name": "the value is offset from its label, and the label carries no colon",
 	"wild_stacked_borderless.pdf/currency":   "the value is offset from its label, and the label carries no colon",
@@ -328,8 +326,6 @@ var eeRealMisses = map[string]string{
 	"wild_scanned_no_number.pdf/subtotal":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/vat":        "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/total":      "the document quarantines for the missing invoice number, so no invoices row carries this value",
-
-	"wild_ruled_lines_totals_asprinted.pdf/total": "the Total label continues on the last data row's baseline, so no shipped relation reaches the printed total; a new candidate source is EXTR-29's",
 
 	"wild_stacked_borderless_asprinted.pdf/invoice_number": "the label is letter-spaced as printed and no lexicon entry reaches it, so the document quarantines; EXTR-31 Core AC-4 claims the quarantine, and letter-spaced matching is owed and unowned",
 	"wild_stacked_borderless_asprinted.pdf/issue_date":     "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",

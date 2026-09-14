@@ -597,9 +597,9 @@ reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-13 on `feature/extr-33-the-corpus-says-what-the-documents-actually-print`: a document goes in at the
+Re-measured 2026-09-14 on `feature/extr-29-a-total-no-label-points-at-can-still-be-found`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **73 of 112** cells — **0.6518**. Fourteen layouts, eight written fields each.
+the page prints on **75 of 112** cells — **0.6696**. Fourteen layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -611,8 +611,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 39 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (26 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 37 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (24 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -626,12 +626,12 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `corpus_ambiguous_date.pdf` | 3 | 8 |
 | `corpus_totals_block.pdf` | 4 | 8 |
 | `wild_two_party_bare_tin.pdf` | 8 | 8 |
-| `wild_ruled_lines_totals.pdf` | 7 | 8 |
+| `wild_ruled_lines_totals.pdf` | 8 | 8 |
 | `wild_rc_due_naira.pdf` | 8 | 8 |
 | `wild_stacked_borderless.pdf` | 2 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 | `wild_two_party_bare_tin_asprinted.pdf` | 8 | 8 |
-| `wild_ruled_lines_totals_asprinted.pdf` | 7 | 8 |
+| `wild_ruled_lines_totals_asprinted.pdf` | 8 | 8 |
 | `wild_stacked_borderless_asprinted.pdf` | 0 | 8 |
 
 `wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
@@ -653,7 +653,7 @@ letter-spaced invoice-number label, so it quarantines too.
 | `currency` | 7 | 14 |
 | `subtotal` | 8 | 14 |
 | `vat` | 8 | 14 |
-| `total` | 9 | 14 |
+| `total` | 11 | 14 |
 
 `currency` at 7 of 14 is still the worst field on the corpus, and its seven misses split four ways:
 three layouts print the value inside a total with no label to anchor it, one prints no currency at
@@ -786,7 +786,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 26 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 24 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
 pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live

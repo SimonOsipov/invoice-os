@@ -249,6 +249,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 					Candidates: Resolve(textTokens, RuleSet{Learned: learned, Tier1: Tier1Rules}),
 					Lines:      LineItems(textPages),
 					Entity:     Entity{},
+					Pages:      textTokens,
 				})
 			}
 		}

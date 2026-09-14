@@ -71,6 +71,54 @@ func TestExtractWorker_FlaggedCountIgnoresAlternatives(t *testing.T) {
 	}
 }
 
+// EXTR-29-01 AC-13. A found total is counted once by flaggedCount: the new ReasonAmbiguous cell
+// adds exactly one to the tally, and every other result is untouched.
+func TestReconcile_AFoundTotalIsCountedOnceByTheFlaggedCount(t *testing.T) {
+	boxA := Region{Page: 1, X0: 0.1, Y0: 0.10, X1: 0.2, Y1: 0.12}
+	boxB := Region{Page: 1, X0: 0.1, Y0: 0.20, X1: 0.2, Y1: 0.22}
+	boxC := Region{Page: 1, X0: 0.1, Y0: 0.30, X1: 0.2, Y1: 0.32}
+	boxD := Region{Page: 1, X0: 0.1, Y0: 0.40, X1: 0.2, Y1: 0.42}
+
+	cands := []Candidate{
+		{Field: "subtotal", Value: "8000.00", Region: &boxA, Reason: ReasonNone, Tier: TierGeneric, Distance: 0.03, Adjacent: true},
+		{Field: "vat", Value: "600.00", Region: &boxB, Reason: ReasonNone, Tier: TierGeneric, Distance: 0.03, Adjacent: true},
+		{Field: "total", Value: "1000.00", Region: &boxC, Reason: ReasonNone, Tier: TierGeneric, Distance: 0.047611, Adjacent: true},
+	}
+	pages := []TokenPage{{Number: 1, Tokens: []Token{
+		{Text: "8,000.00", Region: boxA},
+		{Text: "600.00", Region: boxB},
+		{Text: "1,000.00", Region: boxC},
+		{Text: "8,600.00", Region: boxD},
+	}}}
+
+	without := Reconcile(Input{Candidates: cands})
+	with := Reconcile(Input{Candidates: cands, Pages: pages})
+
+	const wantFloor = 8 // 7 missing header fields (every non-money member) + line_items missing
+	if got := flaggedCount(without); got != wantFloor {
+		t.Fatalf("flaggedCount(without Pages) = %d, want %d -- the delta below was measured off a wrong floor", got, wantFloor)
+	}
+	if got, want := flaggedCount(with), flaggedCount(without)+1; got != want {
+		t.Errorf("flaggedCount(with Pages) = %d, want %d -- a found total must add exactly one to the count", got, want)
+	}
+
+	if len(without) != len(with) {
+		t.Fatalf("len(without)=%d len(with)=%d -- findTotal must not add or drop a result", len(without), len(with))
+	}
+	diffs := 0
+	for i := range without {
+		if !reflect.DeepEqual(without[i], with[i]) {
+			diffs++
+			if without[i].Name != "total" {
+				t.Errorf("result %d (%s) differs with Pages set; only total may move", i, without[i].Name)
+			}
+		}
+	}
+	if diffs != 1 {
+		t.Errorf("%d result(s) differ with Pages set, want exactly 1 (total)", diffs)
+	}
+}
+
 // River resolves cmp.Or(workUnit.Timeout(), clientJobTimeout), so a per-worker Timeout wins
 // over the client default without raising it for SubmitWorker and PollWorker too.
 func TestExtractWorker_TimeoutExceedsRiverDefault(t *testing.T) {

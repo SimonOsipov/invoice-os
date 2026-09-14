@@ -14,6 +14,7 @@ type Input struct {
 	Candidates []Candidate // Resolve's output, already grouped and ordered
 	Lines      []DocLine   // LineItems' output; nil when the reader found no table
 	Entity     Entity      // the signed-in business entity, for the Q11 supplier check (EXTR-05-05)
+	Pages      []TokenPage // the pages Resolve read; nil finds nothing (EXTR-29-01)
 }
 
 // Entity is the signed-in business_entities row as the supplier check reads it. TIN is the
@@ -211,6 +212,7 @@ func Reconcile(in Input) []FieldResult {
 	for i := range out {
 		if out[i].Name == totalField {
 			out[i] = corroborateTotal(out[i], out)
+			out[i] = findTotal(out[i], out, in.Candidates, in.Pages)
 			break
 		}
 	}
@@ -332,4 +334,10 @@ func corroborateTotal(res FieldResult, decided []FieldResult) FieldResult {
 	winner := won[0]
 	value := *winner.Value // copied: the emitted cell never aliases the competing set
 	return FieldResult{Field: Field{Name: res.Name, Value: &value, Region: winner.Region, Reason: ReasonNone}, Alternatives: []Field{}}
+}
+
+// findTotal is EXTR-29-01's arithmetic pass; stubbed here as a no-op RED placeholder (EXTR-29-01
+// implements it).
+func findTotal(res FieldResult, _ []FieldResult, _ []Candidate, _ []TokenPage) FieldResult {
+	return res
 }

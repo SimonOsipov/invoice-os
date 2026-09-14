@@ -365,8 +365,21 @@ func findTotal(res FieldResult, decided []FieldResult, cands []Candidate, pages 
 		if c.Field != totalField {
 			continue
 		}
+		if c.Tier == TierLearned {
+			return res // a taught total is the tenant's own answer
+		}
 		if got, ok := parseMoney(&c.Value); ok && !exceedsTolerance(want.Sub(got).Abs()) {
 			return res // an anchored candidate already balances; findTotal only fills a gap
+		}
+	}
+
+	var subBox, vatBox *Region // the addends' own tokens are evidence, never the total
+	for _, cell := range decided {
+		switch cell.Name {
+		case "subtotal":
+			subBox = cell.Region
+		case "vat":
+			vatBox = cell.Region
 		}
 	}
 
@@ -376,6 +389,12 @@ func findTotal(res FieldResult, decided []FieldResult, cands []Candidate, pages 
 	for _, p := range pages {
 		for _, tok := range p.Tokens {
 			if !usableBox(tok.Region) {
+				continue
+			}
+			if subBox != nil && *subBox == tok.Region {
+				continue
+			}
+			if vatBox != nil && *vatBox == tok.Region {
 				continue
 			}
 			rs := ShapeAmount.Normalize(tok.Text)

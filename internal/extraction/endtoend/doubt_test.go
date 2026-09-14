@@ -230,7 +230,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedEight(t *testing.T) {
 			cells++
 			f := dtResult(t, res, field)
 			if want := dtByLayout[i].values[fi]; dtValue(f) != want {
-				t.Errorf("%s reads %s = %q, want %q; the doubt moves no value, and the found total moves only the total column", l.file, field, dtValue(f), want)
+				t.Errorf("%s reads %s = %q, want %q; the doubt moves no value, the found total moves only the total column, and the drop band moves only the stacked pair's rows", l.file, field, dtValue(f), want)
 			}
 		}
 

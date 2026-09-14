@@ -757,6 +757,9 @@ siblings, which are scored.
 
 ### What EXTR-29 changed
 
+*Historical, recorded when EXTR-29 merged. EXTR-31 later moved `total` to 12 of 14 with the stacked
+layout's offset total (`TestRLS_EndToEndScoresTheCorpus`); see **What EXTR-31 changed**.*
+
 The headline moved from 73 hits to 75, on exactly two cells: `wild_ruled_lines_totals.pdf/total`
 and `wild_ruled_lines_totals_asprinted.pdf/total` now file the printed `8600.00`, and
 `eeRealMisses` loses those two entries (`TestRLS_EndToEndScoresTheCorpus`). Both layouts read 8 of
@@ -829,6 +832,74 @@ boxed-header invoice and the dense register (production read on `d36be21e`, 2026
 oracle), the pass is either unnecessary or unable to fire. Whether arithmetic finds a total on a
 real document is unmeasured.
 
+### What EXTR-31 changed
+
+The headline moved from 75 hits to 81, on six cells of `wild_stacked_borderless.pdf`: `issue_date`,
+`buyer_name`, `currency`, `subtotal`, `vat` and `total` now file the printed value, and
+`eeRealMisses` loses those six entries (`TestRLS_EndToEndScoresTheCorpus`). The layout reads 8 of
+8, each of those six fields gains one cell in the per-field table, and every other row is unchanged
+(`TestRLS_EndToEndDocRecordsTheMeasuredTables`). EXTR-21's frozen baseline stays 53
+(`TestRLS_EndToEndNoBaselineHitRegresses`).
+
+**Why `right` and not `below`.** Each of the six values is printed to the right of its label and a
+little lower, in a line tall enough that the two boxes still overlap vertically by a sliver. On both
+readers `below` refuses all six twice over: the value's top sits above the label's bottom, which
+fails its ordering test `b.Y0 < anchor.Y1`, and the two boxes share no horizontal span. `right`
+passes its ordering test and its 0.35 reach, and refuses each value only because the vertical
+overlap is under half the shorter height
+(`TestOffsetStack_PdfiumTwinFailsOnlyTheOverlapClauseOnRight`,
+`TestOffsetStack_DoclingTwinFailsOnlyTheOverlapClauseOnRight`). EXTR-31 therefore leaves `below`
+untouched and gives Tier-1 `right` a drop band.
+
+**The drop band.** A `right` pair the line band refuses is still admitted when the value's top sits
+below the label's top by less than `tier1DropRight` times the label's height:
+`b.Y0 > anchor.Y0` and `b.Y0 - anchor.Y0 < tier1DropRight * (anchor.Y1 - anchor.Y0)`
+(`TestResolve_TheDropBandComparesTheOffsetNotTheSum`). `Distance` stays the horizontal gap, so a
+dropped value ranks like any `right` candidate. A label printed between the anchor and a dropped
+value on the anchor's line still blocks the read, so a neighbouring column's amount is not taken
+(the `adjacent_column` arm of `TestTier1_TheDropBandStaysInsideItsMeasuredWindow`). For a dropped
+pair, a label printed on the value's own line blocks it too
+(`TestResolve_ALabelOnTheValuesBandBlocksADroppedRead`,
+`TestResolve_AValueBandLabelBlocksOnlyADroppedRead`). Every shipped Tier-1
+`right` rule carries the band and no other shipped rule does
+(`TestTier1_EveryRuleHasACompiledMatcher`). A learned rule gets none, and `below` ignores it.
+
+**The measured window.** The dial is a share of the label's height, and its window has two measured
+edges. The lower edge is 0.949396: the pdfium read of this layout's `VAT` label needs a dial above
+it to reach `112.50`. The upper edge is 1.0: on the docling golden of `wild_scanned_no_number.pdf`,
+`SUBTOTAL` reaches `VAT`'s `135.00` at exactly 1.000000, so any dial above 1.0 reads a subtotal off
+the VAT line. `tier1DropRight` is 0.97, 0.0206 above the lower edge and 0.03 below the upper.
+`TestTier1_TheDropBandStaysInsideItsMeasuredWindow` holds the dial inside [0.9494, 1.0): at 0.9493
+the pdfium twin's `vat` loses `112.50`, at 0.9494 it reads it, and at 1.0001 the scanned golden's
+`subtotal` gains `135.00`. The window is narrow: 1.0 / 0.949396 = 1.053x, against the 11.77x
+window of `below`'s reach on `corpus_stacked_labels.pdf` (**The six layouts**).
+
+pdfium sets the lower edge, not docling. Docling gives every label and value on this layout one
+height (0.014015), so every stacked value there needs only 0.720721. pdfium's boxes vary with their
+glyphs, and its `VAT` box is 0.010879 high, so the same drop is a larger share of it. The score on
+this page reads pdfium, so pdfium's need is the edge.
+
+**What moves and what does not.** Against the same rules with every drop zeroed, the shipped band
+adds candidates only on `wild_stacked_borderless.pdf` and `wild_stacked_borderless_asprinted.pdf`,
+removes none, and moves nothing on the other twelve layouts, through pdfium and through every
+committed golden alike (`TestTier1_TheDropBandAddsOnlyTheStackedPairsReads`). The twin also gains
+`supplier_name`, `supplier_tin` and `buyer_tin` candidates. The first two are not written fields,
+and `buyer_tin` already read `99999999-1102` through `t1.tin.sweep`, so no scored cell moves for
+them. The sibling gains the same candidates except `issue_date`, whose letter-spaced label matches
+no lexicon entry, and still scores 0 / 8: it quarantines on its letter-spaced invoice-number label
+(`TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber`), and its eight `eeRealMisses` entries are
+unchanged. The end-to-end score does not guard the drop dial either (**What this number cannot
+see**); the window test and the differential do.
+
+**Why not widen `below`.** A planning sweep over 31 reads (the 14 scored layouts through pdfium,
+their 14 docling goldens and the three advisory PDFs) removed `below`'s ordering and overlap tests.
+At a reach of 0.337, just over the stacked values' widest gap of 0.336667, it changed 41 decided
+results outside the stacked pair, a value or the doubt on it; `corpus_split_labels.pdf`'s invoice
+number became `99999999-0201`. At a reach of 0.35 it admitted 120 label-value pairs outside the
+stacked pair that the shipped `below` does not. The drop band reaches nothing outside the pair at
+any dial up to 1.0: the nearest outside read is the scanned golden's `135.00` at exactly 1.000000.
+That sweep was a copy of `Resolve` and is not committed, so no test re-measures its figures.
+
 ### Moving the figure
 
 The number lives in `internal/extraction/endtoend/score_test.go` as two pinned integers,
@@ -880,12 +951,13 @@ mock-ups. A production read that fails on paper texture, a scanner's skew or a v
 unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
 reproducible in this repo and never will be.
 
-**Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
+**Four claims in this section have no honest oracle, and are recorded as having none.** Why each of
 the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
-line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
-pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live
-measurement.
+line-item zero is source fact, stated below rather than scanned for. The 18-of-40 production
+pass above is unrepeatable. And the `below` sweep and docling's 0.720721 in **What EXTR-31
+changed** were measured once, by a planning sweep that is not committed. Everything else in these
+two sections is parsed and compared against a live measurement.
 
 ## Line-item outcome
 

@@ -265,7 +265,7 @@ func TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal(t *testi
 	const layout, tin = "wild_stacked_borderless.pdf", "99999999-1102"
 	cands, res, tokens := dtRun(t, dtLayout(t, layout))
 	if got := dtValue(dtResult(t, res, "buyer_tin")); got != tin {
-		t.Fatalf("%s reads %d token(s) and decides buyer_tin = %q, want %q; a page that resolved nothing satisfies the assertions below for free", layout, tokens, got, tin)
+		t.Fatalf("%s reads %d token(s) and decides buyer_tin = %q, want %q; a page that resolved nothing would fail the total checks below for the wrong reason", layout, tokens, got, tin)
 	}
 
 	totals := dtFor(cands, ttField)

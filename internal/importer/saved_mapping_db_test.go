@@ -1,6 +1,5 @@
-// Store.SaveMapping and its CreateHandler wiring (SM-DB-01..05, SM-DB-08),
-// DB-backed -- mirrors store_test.go's dbTestPools/seedTenant/seedEntity
-// harness and handlers_test.go's TestCreateHandler_201 idiom.
+// Store.SaveMapping and its CreateHandler wiring, DB-backed through dbTestPools,
+// seedTenant and memberSubject.
 package importer
 
 import (
@@ -13,14 +12,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// --- SM-DB-01 ----------------------------------------------------------
+// countImportMappings counts entityID's rows as the superuser, so RLS hides none.
+func countImportMappings(t *testing.T, super *pgxpool.Pool, entityID string) int {
+	t.Helper()
+	var n int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count import_mappings rows: %v", err)
+	}
+	return n
+}
 
-// TestStoreSaveMapping_InsertsRowForCallersTenant (SM-DB-01, AC #2).
 func TestStoreSaveMapping_InsertsRowForCallersTenant(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -44,12 +55,8 @@ func TestStoreSaveMapping_InsertsRowForCallersTenant(t *testing.T) {
 		t.Fatalf("read back import_mappings row: %v", err)
 	}
 
-	var count int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID).Scan(&count); err != nil {
-		t.Fatalf("count import_mappings rows: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("row count = %d, want 1", count)
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("row count = %d, want 1", n)
 	}
 	if want := columnSignature(header); signature != want {
 		t.Errorf("column_signature = %q, want %q", signature, want)
@@ -67,12 +74,8 @@ func TestStoreSaveMapping_InsertsRowForCallersTenant(t *testing.T) {
 	}
 }
 
-// --- SM-DB-02 ------------------------------------------------------------
-
-// TestStoreSaveMapping_SecondSaveReplacesAndMovesSavedAt (SM-DB-02, AC #2,
-// [saved-at-is-last-save]). Backdates saved_at before the second save: without
-// that, a DO UPDATE missing "saved_at = now()" would leave the value equal and
-// the "not earlier" check would pass vacuously.
+// TestStoreSaveMapping_SecondSaveReplacesAndMovesSavedAt backdates saved_at first,
+// so an upsert that leaves saved_at alone cannot pass on equality.
 func TestStoreSaveMapping_SecondSaveReplacesAndMovesSavedAt(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -105,12 +108,8 @@ func TestStoreSaveMapping_SecondSaveReplacesAndMovesSavedAt(t *testing.T) {
 		t.Fatalf("second SaveMapping: %v", err)
 	}
 
-	var count int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID).Scan(&count); err != nil {
-		t.Fatalf("count rows: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("row count = %d, want 1 -- the second save must replace, not insert a second row", count)
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("row count = %d, want 1 -- the second save must replace, not insert a second row", n)
 	}
 
 	var id, mappingJSON string
@@ -140,9 +139,6 @@ func TestStoreSaveMapping_SecondSaveReplacesAndMovesSavedAt(t *testing.T) {
 	}
 }
 
-// --- SM-DB-03 ------------------------------------------------------------
-
-// TestStoreSaveMapping_OtherTenantsEntityIsValidation (SM-DB-03).
 func TestStoreSaveMapping_OtherTenantsEntityIsValidation(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -159,21 +155,57 @@ func TestStoreSaveMapping_OtherTenantsEntityIsValidation(t *testing.T) {
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("SaveMapping err = %v, want ErrValidation", err)
 	}
-
-	var count int
-	if err := super.QueryRow(ctx, `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, otherEntityID).Scan(&count); err != nil {
-		t.Fatalf("count rows: %v", err)
+	if n := countImportMappings(t, super, otherEntityID); n != 0 {
+		t.Fatalf("row count = %d, want 0 -- another tenant's entity must not accept a save", n)
 	}
-	if count != 0 {
-		t.Errorf("row count = %d, want 0 -- another tenant's entity must not accept a save", count)
+
+	// Control: the owning tenant's save lands a row the same count sees.
+	owner := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: otherTenantID})
+	if err := store.SaveMapping(owner, otherEntityID, header, mapping); err != nil {
+		t.Fatalf("owner SaveMapping: %v", err)
+	}
+	if n := countImportMappings(t, super, otherEntityID); n != 1 {
+		t.Fatalf("control: row count = %d, want 1", n)
 	}
 }
 
-// --- SM-DB-04 --------------------------------------------------------------
+// TestStoreSaveMapping_SuspendedMemberIsRefused: the save rides the request seam's
+// membership gate, so a suspended caller writes nothing.
+func TestStoreSaveMapping_SuspendedMemberIsRefused(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "save mapping suspended tenant")
+	entityID := seedEntity(t, super, tenantID, "save mapping suspended entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	store := NewStore(app)
+	mapping := map[string]string{"invoice_number": "Invoice No"}
 
-// TestCreateHandler_SavesMappingOnCompletedImport (SM-DB-04, AC #3): the real
-// svc.Import and store.SaveMapping, built directly -- doImportUpload passes
-// noSave, so this and SM-DB-05/08 cannot go through it.
+	// Control: while active, the caller's save lands a row the same count sees.
+	if err := store.SaveMapping(c, entityID, []string{"Invoice No"}, mapping); err != nil {
+		t.Fatalf("active SaveMapping: %v", err)
+	}
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("control: row count = %d, want 1", n)
+	}
+
+	if _, err := super.Exec(ctx,
+		`UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1 AND user_id = $2`, tenantID, memberSubject,
+	); err != nil {
+		t.Fatalf("suspend caller: %v", err)
+	}
+
+	// A different header, so a save that slipped past the gate would add a second row.
+	err := store.SaveMapping(c, entityID, []string{"Invoice No", "Total"}, mapping)
+	if !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("SaveMapping err = %v, want db.ErrNotActiveMember", err)
+	}
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Errorf("row count = %d, want 1 -- a suspended caller must write nothing", n)
+	}
+}
+
+// TestCreateHandler_SavesMappingOnCompletedImport builds the handler directly over
+// the real svc.Import and store.SaveMapping: doImportUpload passes noSave.
 func TestCreateHandler_SavesMappingOnCompletedImport(t *testing.T) {
 	super, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
@@ -211,16 +243,11 @@ func TestCreateHandler_SavesMappingOnCompletedImport(t *testing.T) {
 	if resp.Status != "completed" {
 		t.Fatalf("status = %q, want %q", resp.Status, "completed")
 	}
-
-	var count int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID).Scan(&count); err != nil {
-		t.Fatalf("count import_mappings rows: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("import_mappings rows for entity = %d, want exactly 1", count)
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("import_mappings rows for entity = %d, want exactly 1", n)
 	}
 
-	// A dry run into a SECOND entity must save nothing.
+	// A dry run into a second entity must save nothing.
 	entityID2 := seedEntity(t, super, tenantID, "SM-DB-04 entity (dry run)")
 	body2, ct2, open2 := dbStoredUpload(t, app, tenantID, entityID2, string(mappingJSON), "data.csv", "", csvBody(t, header, rows))
 	r2 := httptest.NewRequest("POST", "/v1/imports?dry_run=true", body2)
@@ -232,19 +259,11 @@ func TestCreateHandler_SavesMappingOnCompletedImport(t *testing.T) {
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("dry-run status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
 	}
-	var count2 int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID2).Scan(&count2); err != nil {
-		t.Fatalf("count import_mappings rows for dry-run entity: %v", err)
-	}
-	if count2 != 0 {
-		t.Errorf("import_mappings rows for the dry-run entity = %d, want 0", count2)
+	if n := countImportMappings(t, super, entityID2); n != 0 {
+		t.Errorf("import_mappings rows for the dry-run entity = %d, want 0", n)
 	}
 }
 
-// --- SM-DB-05 (green by construction against the Stage 2.5 stub) -----------
-
-// TestCreateHandler_HeaderOnlyImportSavesNothing (SM-DB-05, AC #3,
-// [completed-means-status-completed]).
 func TestCreateHandler_HeaderOnlyImportSavesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
@@ -278,21 +297,21 @@ func TestCreateHandler_HeaderOnlyImportSavesNothing(t *testing.T) {
 	if resp.Status != "failed" {
 		t.Fatalf("status = %q, want %q for a header-only file", resp.Status, "failed")
 	}
-
-	var count int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID).Scan(&count); err != nil {
-		t.Fatalf("count import_mappings rows: %v", err)
+	if n := countImportMappings(t, super, entityID); n != 0 {
+		t.Fatalf("import_mappings rows = %d, want 0 for a failed batch", n)
 	}
-	if count != 0 {
-		t.Errorf("import_mappings rows = %d, want 0 for a failed batch", count)
+
+	// Control: a save for the same entity and header is visible to the same count.
+	if err := store.SaveMapping(auth.WithIdentity(context.Background(), id), entityID, header, mapping); err != nil {
+		t.Fatalf("control SaveMapping: %v", err)
+	}
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("control: import_mappings rows = %d, want 1", n)
 	}
 }
 
-// --- SM-DB-08 ----------------------------------------------------------
-
-// TestCreateHandler_UnrememberedImportLeavesEarlierMapping (SM-DB-08, AC #3,
-// [untouched-restore-does-not-save]). dbStoredUpload takes no extra parts, so
-// import 2's request is built directly from storeDocumentAs + buildImportForm.
+// TestCreateHandler_UnrememberedImportLeavesEarlierMapping builds import 2 from
+// storeDocumentAs and buildImportForm: dbStoredUpload takes no extra parts.
 func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 	super, app := dbTestPools(t)
 	svc := NewService(NewStore(app), invoice.NewStore(app), &fakeGate{})
@@ -347,12 +366,8 @@ func TestCreateHandler_UnrememberedImportLeavesEarlierMapping(t *testing.T) {
 		t.Fatalf("import 2 status = %q, want %q", resp2.Status, "completed")
 	}
 
-	var count int
-	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM import_mappings WHERE entity_id = $1`, entityID).Scan(&count); err != nil {
-		t.Fatalf("count import_mappings rows: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("import_mappings rows = %d, want 1", count)
+	if n := countImportMappings(t, super, entityID); n != 1 {
+		t.Fatalf("import_mappings rows = %d, want 1", n)
 	}
 
 	var mappingJSON string

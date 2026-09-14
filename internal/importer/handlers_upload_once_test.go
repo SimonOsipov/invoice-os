@@ -179,8 +179,8 @@ func doPreviewUpload(t *testing.T, store storeSpec, id *auth.Identity, contentTy
 }
 
 // importPart is one extra multipart part buildImportForm appends after the
-// three contract fields — used to send the RETIRED "file" part and to pad a
-// request past the whole-request cap.
+// three contract fields — used to send the RETIRED "file" part, the optional
+// remember_mapping field, and to pad a request past the whole-request cap.
 type importPart struct {
 	field    string
 	filename string // non-empty makes it a file part

@@ -1,5 +1,4 @@
-// CreateHandler's save branching (SM-SAVE-01..07), fake-driven -- imp/open/save
-// are all doubles, mirroring handlers_upload_once_test.go's idiom.
+// CreateHandler's save branching, fake-driven: imp, open and save are all doubles.
 package importer
 
 import (
@@ -44,9 +43,7 @@ func (s *saveSpy) fn() saveFunc {
 	}
 }
 
-// doImportSave is doImportUpload's (handlers_upload_once_test.go) twin that
-// injects a save double instead of hardcoding noSave -- doImportUpload's own
-// callers do not care what save received, these specs do.
+// doImportSave is doImportUpload with an injected save double and logger.
 func doImportSave(t *testing.T, imp importFunc, open openSpec, save saveFunc, log *slog.Logger, id *auth.Identity, query, contentType string, body io.Reader) (*httptest.ResponseRecorder, []byte, importBatchBody) {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/imports"+query, body)
@@ -74,9 +71,6 @@ func completedImp() importFunc {
 	}
 }
 
-// --- SM-SAVE-01 --------------------------------------------------------
-
-// TestCreateHandler_SavesMappingAfterCompletedImport (SM-SAVE-01, AC #3).
 func TestCreateHandler_SavesMappingAfterCompletedImport(t *testing.T) {
 	id := testIdentity()
 	entityID := uuid.NewString()
@@ -115,52 +109,69 @@ func TestCreateHandler_SavesMappingAfterCompletedImport(t *testing.T) {
 	}
 }
 
-// --- SM-SAVE-02 (green by construction against the Stage 2.5 stub) -----
-
-// TestCreateHandler_DryRunDoesNotSave (SM-SAVE-02, AC #3): the imp double
-// still answers "completed" on the dry-run call, matching a real dry run's
-// shape closely enough to red a save gated on Status alone but not on dryRun.
+// TestCreateHandler_DryRunDoesNotSave: the imp double answers "completed" on the
+// dry run too, so only the dry-run clause can refuse the save.
 func TestCreateHandler_DryRunDoesNotSave(t *testing.T) {
-	id := testIdentity()
-	entityID := uuid.NewString()
-	mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
-	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
-	body, ct := buildImportForm(t, entityID, mappingJSON, open.doc.ID, importPart{field: "remember_mapping", content: []byte("true")})
-	spy := &saveSpy{}
-
-	rec, raw, _ := doImportSave(t, completedImp(), open.fn(), spy.fn(), nil, &id, "?dry_run=true", ct, body)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 for a dry run (body=%s)", rec.Code, raw)
+	cases := []struct {
+		name       string
+		query      string
+		wantStatus int
+		wantCalls  int
+	}{
+		{"dry run", "?dry_run=true", http.StatusOK, 0},
+		{"control: real import", "", http.StatusCreated, 1},
 	}
-	if len(spy.calls) != 0 {
-		t.Fatalf("save calls = %d, want 0 for a dry run", len(spy.calls))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := testIdentity()
+			mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
+			open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
+			body, ct := buildImportForm(t, uuid.NewString(), mappingJSON, open.doc.ID, importPart{field: "remember_mapping", content: []byte("true")})
+			spy := &saveSpy{}
+
+			rec, raw, _ := doImportSave(t, completedImp(), open.fn(), spy.fn(), nil, &id, tc.query, ct, body)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, raw)
+			}
+			if len(spy.calls) != tc.wantCalls {
+				t.Fatalf("save calls = %d, want %d", len(spy.calls), tc.wantCalls)
+			}
+		})
 	}
 }
 
-// --- SM-SAVE-03 (green by construction against the Stage 2.5 stub) -----
-
-// TestCreateHandler_RefusedRequestDoesNotSave (SM-SAVE-03, AC #3).
 func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
-	t.Run("imp returns ErrValidation", func(t *testing.T) {
-		id := testIdentity()
-		entityID := uuid.NewString()
-		mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
-		imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
-			return BatchResult{Status: "completed"}, ErrValidation
-		}
-		body, ct, open := storedUpload(t, entityID, mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
-		spy := &saveSpy{}
+	// The double answers "completed" alongside the error, so only the error check refuses the save.
+	impCases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCalls  int
+	}{
+		{"imp returns ErrValidation", ErrValidation, http.StatusBadRequest, 0},
+		{"control: imp returns nil", nil, http.StatusCreated, 1},
+	}
+	for _, tc := range impCases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := testIdentity()
+			mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
+			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+				return BatchResult{Status: "completed"}, tc.err
+			}
+			body, ct, open := storedUpload(t, uuid.NewString(), mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
+			spy := &saveSpy{}
 
-		rec, raw, _ := doImportSave(t, imp, open.fn(), spy.fn(), nil, &id, "", ct, body)
+			rec, raw, _ := doImportSave(t, imp, open.fn(), spy.fn(), nil, &id, "", ct, body)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
-		}
-		if len(spy.calls) != 0 {
-			t.Fatalf("save calls = %d, want 0 when imp fails", len(spy.calls))
-		}
-	})
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.wantStatus, raw)
+			}
+			if len(spy.calls) != tc.wantCalls {
+				t.Fatalf("save calls = %d, want %d", len(spy.calls), tc.wantCalls)
+			}
+		})
+	}
 
 	t.Run("missing mapping", func(t *testing.T) {
 		id := testIdentity()
@@ -225,35 +236,39 @@ func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
 	})
 }
 
-// --- SM-SAVE-04 (green by construction against the Stage 2.5 stub) -----
-
-// TestCreateHandler_FailedBatchDoesNotSave (SM-SAVE-04, AC #3, [completed-means-status-completed]).
 func TestCreateHandler_FailedBatchDoesNotSave(t *testing.T) {
-	id := testIdentity()
-	entityID := uuid.NewString()
-	mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
-		return BatchResult{ID: "b1", Status: "failed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
+	cases := []struct {
+		status    string
+		wantCalls int
+	}{
+		{"failed", 0},
+		{"completed", 1}, // control: the same request and spy record a save
 	}
-	body, ct, open := storedUpload(t, entityID, mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, nil))
-	spy := &saveSpy{}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			id := testIdentity()
+			mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
+			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+				return BatchResult{ID: "b1", Status: tc.status, Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
+			}
+			body, ct, open := storedUpload(t, uuid.NewString(), mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, nil))
+			spy := &saveSpy{}
 
-	rec, raw, resp := doImportSave(t, imp, open.fn(), spy.fn(), nil, &id, "", ct, body)
+			rec, raw, resp := doImportSave(t, imp, open.fn(), spy.fn(), nil, &id, "", ct, body)
 
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, raw)
-	}
-	if resp.Status != "failed" {
-		t.Errorf("status = %q, want %q", resp.Status, "failed")
-	}
-	if len(spy.calls) != 0 {
-		t.Fatalf("save calls = %d, want 0 for a failed batch", len(spy.calls))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, raw)
+			}
+			if resp.Status != tc.status {
+				t.Errorf("status = %q, want %q", resp.Status, tc.status)
+			}
+			if len(spy.calls) != tc.wantCalls {
+				t.Fatalf("save calls = %d, want %d for a %s batch", len(spy.calls), tc.wantCalls, tc.status)
+			}
+		})
 	}
 }
 
-// --- SM-SAVE-05 ----------------------------------------------------------
-
-// TestCreateHandler_SaveErrorLogsAndKeeps201Body (SM-SAVE-05, AC #5).
 func TestCreateHandler_SaveErrorLogsAndKeeps201Body(t *testing.T) {
 	entityID := uuid.NewString()
 	mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No", "total": "Total"})
@@ -289,10 +304,6 @@ func TestCreateHandler_SaveErrorLogsAndKeeps201Body(t *testing.T) {
 	}
 }
 
-// --- SM-SAVE-06 ------------------------------------------------------------
-
-// TestCreateHandler_RememberMappingFalseSkipsSave (SM-SAVE-06, AC #3, [untouched-restore-does-not-save]).
-// The "false" subtest is green by construction against the Stage 2.5 stub.
 func TestCreateHandler_RememberMappingFalseSkipsSave(t *testing.T) {
 	entityID := uuid.NewString()
 	mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
@@ -330,9 +341,6 @@ func TestCreateHandler_RememberMappingFalseSkipsSave(t *testing.T) {
 	})
 }
 
-// --- SM-SAVE-07 ------------------------------------------------------------
-
-// TestCreateHandler_MalformedRememberMapping400BeforeOpen (SM-SAVE-07, AC #4).
 func TestCreateHandler_MalformedRememberMapping400BeforeOpen(t *testing.T) {
 	cases := []struct{ name, value string }{
 		{"yes", "yes"},
@@ -362,4 +370,24 @@ func TestCreateHandler_MalformedRememberMapping400BeforeOpen(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("control: true reaches open and saves", func(t *testing.T) {
+		id := testIdentity()
+		mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
+		open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
+		body, ct := buildImportForm(t, uuid.NewString(), mappingJSON, open.doc.ID, importPart{field: "remember_mapping", content: []byte("true")})
+		spy := &saveSpy{}
+
+		rec, raw, _ := doImportSave(t, completedImp(), open.fn(), spy.fn(), nil, &id, "", ct, body)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, raw)
+		}
+		if len(open.ids) != 1 {
+			t.Errorf("open calls = %d, want 1", len(open.ids))
+		}
+		if len(spy.calls) != 1 {
+			t.Errorf("save calls = %d, want 1", len(spy.calls))
+		}
+	})
 }

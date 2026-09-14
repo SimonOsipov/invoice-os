@@ -1,4 +1,4 @@
-// Pure columnSignature specs (SM-KEY-01..06). No DB, no HTTP.
+// Pure columnSignature specs. No DB, no HTTP.
 package importer
 
 import (
@@ -11,9 +11,8 @@ import (
 
 var hex64RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// assertHex64 pins AC #1's shape. Against the not-implemented stub (always
-// ""), a bare inequality check on two equal empty strings would not tell
-// "not implemented" from "implemented but wrong" -- this closes that gap.
+// assertHex64 pins the key's shape: two equal non-hex strings would satisfy an
+// inequality check alone.
 func assertHex64(t *testing.T, s string) {
 	t.Helper()
 	if !hex64RE.MatchString(s) {
@@ -21,7 +20,6 @@ func assertHex64(t *testing.T, s string) {
 	}
 }
 
-// TestColumnSignature_EqualHeadersSignEqualAs64LowerHex (SM-KEY-01, AC #1).
 func TestColumnSignature_EqualHeadersSignEqualAs64LowerHex(t *testing.T) {
 	a := columnSignature([]string{"Invoice No", "Total"})
 	b := columnSignature([]string{"Invoice No", "Total"})
@@ -32,7 +30,6 @@ func TestColumnSignature_EqualHeadersSignEqualAs64LowerHex(t *testing.T) {
 	assertHex64(t, b)
 }
 
-// TestColumnSignature_OrderChangesTheSignature (SM-KEY-02).
 func TestColumnSignature_OrderChangesTheSignature(t *testing.T) {
 	a := columnSignature([]string{"Invoice No", "Total"})
 	b := columnSignature([]string{"Total", "Invoice No"})
@@ -43,7 +40,6 @@ func TestColumnSignature_OrderChangesTheSignature(t *testing.T) {
 	assertHex64(t, b)
 }
 
-// TestColumnSignature_CaseChangesTheSignature (SM-KEY-03).
 func TestColumnSignature_CaseChangesTheSignature(t *testing.T) {
 	a := columnSignature([]string{"Total"})
 	b := columnSignature([]string{"total"})
@@ -54,7 +50,6 @@ func TestColumnSignature_CaseChangesTheSignature(t *testing.T) {
 	assertHex64(t, b)
 }
 
-// TestColumnSignature_AddedColumnChangesTheSignature (SM-KEY-04).
 func TestColumnSignature_AddedColumnChangesTheSignature(t *testing.T) {
 	a := columnSignature([]string{"A", "B"})
 	b := columnSignature([]string{"A", "B", "C"})
@@ -65,7 +60,6 @@ func TestColumnSignature_AddedColumnChangesTheSignature(t *testing.T) {
 	assertHex64(t, b)
 }
 
-// TestColumnSignature_RemovedColumnOrTrailingSpaceChangesTheSignature (SM-KEY-05).
 func TestColumnSignature_RemovedColumnOrTrailingSpaceChangesTheSignature(t *testing.T) {
 	t.Run("removed column", func(t *testing.T) {
 		a := columnSignature([]string{"A", "B", "C"})
@@ -87,7 +81,7 @@ func TestColumnSignature_RemovedColumnOrTrailingSpaceChangesTheSignature(t *test
 	})
 }
 
-// wantColumnSignature computes AC #1's formula independently of columnSignature.
+// wantColumnSignature computes hex(sha256(json.Marshal(header))) independently of columnSignature.
 func wantColumnSignature(t *testing.T, header []string) string {
 	t.Helper()
 	b, err := json.Marshal(header)
@@ -98,16 +92,16 @@ func wantColumnSignature(t *testing.T, header []string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestColumnSignature_IsHexSHA256OfJSONMarshal (SM-KEY-06, AC #1): pins the
-// exact formula -- SM-KEY-01..05 alone pass for any order/case/length
-// sensitive digest, e.g. strings.Join.
+// TestColumnSignature_IsHexSHA256OfJSONMarshal pins the exact formula. A comma
+// join passes the order, case and length specs; "a,b" separates it. A header
+// holding <, > and & separates json.Marshal from an encoder that skips HTML escaping.
 func TestColumnSignature_IsHexSHA256OfJSONMarshal(t *testing.T) {
 	h1 := []string{"a,b"}
 	h2 := []string{"a", "b"}
 	if a, b := columnSignature(h1), columnSignature(h2); a == b {
 		t.Errorf("signature unchanged for %v vs %v: %q", h1, h2, a)
 	}
-	for _, h := range [][]string{h1, h2} {
+	for _, h := range [][]string{h1, h2, {"Qty <5 & >0", "Total"}} {
 		want := wantColumnSignature(t, h)
 		got := columnSignature(h)
 		if got != want {

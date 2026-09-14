@@ -166,9 +166,10 @@ func detectFormat(filename, contentType string) string {
 // CreateHandler factory: a closure over the injected Service.Import method ->
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via
 // http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (a MaxBytesError
-// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping/
-// remember_mapping form values (blank/malformed -> 400, IMP-API-05) ->
-// document_id -> open (the document's bytes) -> format detection
+// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping form
+// values (blank/malformed -> 400, IMP-API-05) -> remember_mapping (anything but
+// absent, "true" or "false" -> 400) -> document_id -> open (the document's
+// bytes) -> format detection
 // (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
 // (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
 // failure, or, on success, save (only when remembered, not a dry run and
@@ -223,8 +224,8 @@ func CreateHandler(
 			return
 		}
 
-		// remember_mapping mirrors dry_run's parse: absent/"true" saves,
-		// "false" skips ([untouched-restore-does-not-save]), anything else 400s.
+		// Absent or "true" saves. "false" skips, so a restored mapping the user
+		// left untouched cannot overwrite a later edit. Strict like dry_run.
 		remember := true
 		switch r.FormValue("remember_mapping") {
 		case "", "true":

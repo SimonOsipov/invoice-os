@@ -390,13 +390,15 @@ different story's scope. It is recorded here because it is invisible from the co
 `reconcile.go` says an alternative must be a plausible name. Alternative-chip plausibility, and
 free-text entry on a doubtful field, are **owed**.
 
-**No stored value moves.** `documentCreateInput` maps `f.Value` and never `f.Reason`, so a cell
+**A reason moves no stored value.** `documentCreateInput` maps `f.Value` and never `f.Reason`, so a cell
 flagged `ambiguous` still writes its value to the `invoices` row — which is also why
 `corpus_ambiguous_date.pdf`'s long-standing ambiguous `issue_date` has always scored as a hit.
 (The importer reads a reason in exactly one place, `isPoorScan`, and that predicate is over the
-whole field set rather than one field, so no header field's reason can reach it.) Over 110 cells
-before and after, four lines change and every one of them is a reason or an alternative; the value
-column diffs to nothing. Which value gets filed is decided one rung earlier: the read of
+whole field set rather than one field, so no header field's reason can reach it.) When EXTR-22
+measured it, over 110 cells before and after, four lines change and every one of them is a reason
+or an alternative; the value column diffs to nothing. EXTR-29's found total does move a value,
+because it changes the rank-0 reading: the ruled pair's `invoices` total goes from `1000.00` to
+`8600.00` (see "What EXTR-29 changed"). Which value gets filed is decided one rung earlier: the read of
 `extraction_field_results` carries `candidate_rank = 0`, and without it a rank-1 alternative would
 file `TIN:` on the invoice. The doubt makes that predicate load-bearing.
 
@@ -775,8 +777,9 @@ read as one amount through `ShapeAmount` (`TestReconcile_AFoundTotalIsReadThroug
 equal to `subtotal + vat`. The tolerance is one kobo, inclusive, so `8,600.01` beside `8,600.00`
 is a second match (`TestReconcile_TwoAmountsInsideOneKoboFindNothing`). The decided `subtotal` and
 `vat` cells' own tokens do not count, matched by box
-(`TestReconcile_AnAddendsOwnTokenIsNeverItsTotal`). Exactly one match becomes the total. No match,
-or two or more, finds nothing, and a grand total printed twice is two matches
+(`TestReconcile_AnAddendsOwnTokenIsNeverItsTotal`). Exactly one match becomes the total. No match
+finds nothing (`TestReconcile_AWithholdingNetPayableIsNotCondemned`, arm 1). Two or more find
+nothing either, and a grand total printed twice is two matches
 (`TestReconcile_TwoUnrelatedBalancingAmountsFindNothing`,
 `TestReconcile_AGrandTotalPrintedTwiceFindsNothing`). A document the pass cannot help keeps
 EXTR-23's header results exactly, with no new reason code
@@ -792,7 +795,7 @@ chooser where it was an input. The doubt counts once toward the audit row's `fla
 (`TestReconcile_AFoundTotalIsCountedOnceByTheFlaggedCount`), and `flagged_count` equals the rank-0
 rows carrying a reason (`TestRLS_ExtractWorkerAuditCountsAgreeWithTheRowsItWrote`).
 
-It fires on no other committed arrangement. With pages, only the ruled pair's header results move,
+It fires on no other scored arrangement. With pages, only the ruled pair's header results move,
 under the pdfium walk and under every layout's docling golden
 (`TestEndToEnd_FindTotalMovesExactlyTheRuledPair`). A token without a usable box is not evidence
 (`usableBox` in `resolve.go`, `TestReconcile_ATokenWithNoUsableBoxIsNotEvidence`), and a DOCX

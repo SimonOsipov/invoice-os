@@ -2,8 +2,8 @@
 // ReasonAmbiguous, which adjacent heads earn their ReasonNone, and that no in-scope value
 // moves. No database.
 //
-// The fourth column is EXTR-23's: total joined the doubt scope, and the fourteen values below say
-// the widening moved no corpus cell. Its candidate COUNTS live in total_test.go.
+// The fourth column is EXTR-23's: total joined the doubt scope; EXTR-29's found total is the one
+// value it moves, on the two ruled fixtures below. Its candidate COUNTS live in total_test.go.
 //
 // Every walk here sources each layout the way bdByLayout does -- pdfium for thirteen, the committed
 // docling golden for the image-only one, which reads zero pdfium tokens and would otherwise
@@ -19,9 +19,9 @@ import (
 )
 
 // dtColumnFields is the whole doubt scope, one dtByLayout column each, in that order. total's
-// column is measured, never idealised: wild_ruled_lines_totals.pdf reads the line amount, and
-// score_test.go's expectByLayout pins the printed 8,600.00 it should read instead. The six
-// corpus_* rows have a twin in another package -- corpusPinned, reconcile_corpus_test.go.
+// column is measured, never idealised: the ruled rows read the printed 8,600.00, arithmetic's
+// found total, matching score_test.go's expectByLayout pin. The six corpus_* rows have a twin in
+// another package -- corpusPinned, reconcile_corpus_test.go.
 var dtColumnFields = [4]string{"buyer_tin", "buyer_name", "vat", "total"}
 
 // dtBelowSuffix and dtRightSuffix name the two beside-the-label relations by rule id.
@@ -38,16 +38,18 @@ type dtCell struct {
 	alts   []string
 }
 
-// dtAmbiguous is EVERY cell the fourteen layouts read as ReasonAmbiguous, in walk order. Five are
-// EXTR-22's doubt, all buyer_name; corpus_ambiguous_date.pdf's is the pre-existing
-// equal-standing tie between two readings of one printed date, which the doubt never touches.
+// dtAmbiguous is EVERY cell the fourteen layouts read as ReasonAmbiguous, in walk order: five
+// buyer_name doubts (EXTR-22), one pre-existing date tie (corpus_ambiguous_date.pdf, untouched by
+// the doubt), and two found totals (EXTR-29, arithmetic on the ruled fixtures).
 var dtAmbiguous = []dtCell{
 	{"corpus_stacked_labels.pdf", "buyer_name", "Honeywell Group", []string{"99999999-0302"}},
 	{"corpus_two_column.pdf", "buyer_name", "Honeywell Group", []string{"TIN: 99999999-0402"}},
 	{"corpus_ambiguous_date.pdf", "issue_date", "2026-03-12", []string{"2026-12-03"}},
 	{"wild_two_party_bare_tin.pdf", "buyer_name", "Honeywell Group", []string{"TIN:"}},
+	{"wild_ruled_lines_totals.pdf", "total", "8600.00", []string{"1000.00"}},
 	{"wild_scanned_no_number.pdf", "buyer_name", "7 AWOLOWO ROAD, IKOYI", []string{"TIN: 99999999-1202"}},
 	{"wild_two_party_bare_tin_asprinted.pdf", "buyer_name", "Honeywell Group", []string{"TIN:"}},
+	{"wild_ruled_lines_totals_asprinted.pdf", "total", "8600.00", []string{"1000.00"}},
 }
 
 const (
@@ -55,14 +57,17 @@ const (
 	// The fifth is the sibling's own doubt on its twin's already-doubted geometry.
 	dtDoubtTotal = 5
 
+	// dtFoundTotal is EXTR-29's found total: one per ruled fixture, arithmetic's own doubt.
+	dtFoundTotal = 2
+
 	// The one ambiguous cell that predates the doubt: two readings of one printed date.
 	dtPreExistingLayout = "corpus_ambiguous_date.pdf"
 	dtPreExistingField  = "issue_date"
 )
 
 // dtLayoutValues is one layout's decided value for each dtColumnFields field. "" is ReasonMissing.
-// The doubt moves a reason and adds an alternative; it can move no value, and this is the
-// walk that says so over every cell in its blast surface.
+// The doubt moves no value, and the found total moves only the total column; this is the walk
+// that says so over every cell in its blast surface.
 type dtLayoutValues struct {
 	file   string
 	values [4]string
@@ -76,12 +81,12 @@ var dtByLayout = []dtLayoutValues{
 	{"corpus_ambiguous_date.pdf", [4]string{"", "", "", "4300.00"}},
 	{"corpus_totals_block.pdf", [4]string{"", "", "375.00", "5375.00"}},
 	{"wild_two_party_bare_tin.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
-	{"wild_ruled_lines_totals.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "1000.00"}},
+	{"wild_ruled_lines_totals.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "8600.00"}},
 	{"wild_rc_due_naira.pdf", [4]string{"99999999-1002", "Honeywell Group", "187.50", "2687.50"}},
 	{"wild_stacked_borderless.pdf", [4]string{"99999999-1102", "", "", ""}},
 	{"wild_scanned_no_number.pdf", [4]string{"99999999-1202", "7 AWOLOWO ROAD, IKOYI", "135.00", "1935.00"}},
 	{"wild_two_party_bare_tin_asprinted.pdf", [4]string{"99999999-0802", "Honeywell Group", "90.00", "1290.00"}},
-	{"wild_ruled_lines_totals_asprinted.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "1000.00"}},
+	{"wild_ruled_lines_totals_asprinted.pdf", [4]string{"99999999-0902", "Honeywell Group", "600.00", "8600.00"}},
 	{"wild_stacked_borderless_asprinted.pdf", [4]string{"99999999-1102", "", "", ""}},
 }
 
@@ -161,9 +166,9 @@ func dtAltValues(alts []extraction.Field) []string {
 }
 
 // AC-1, AC-2, AC-5. The complete ambiguous set over all fourteen layouts, by name and by count,
-// with the value each cell still decides. The count pin is what stops a seventh doubtful cell
+// with the value each cell still decides. The count pin is what stops a ninth doubtful cell
 // arriving unargued, and the floors are what stop the whole walk agreeing with itself.
-func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
+func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedEight(t *testing.T) {
 	if len(dtByLayout) != len(bdByLayout) {
 		t.Fatalf("dtByLayout names %d layout(s) against bdByLayout's %d; the two walks cover different corpora", len(dtByLayout), len(bdByLayout))
 	}
@@ -181,8 +186,17 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 	if pre != 1 {
 		t.Fatalf("the pinned set names the pre-existing %s/%s %d time(s), want 1", dtPreExistingLayout, dtPreExistingField, pre)
 	}
-	if got := len(dtAmbiguous) - pre; got != dtDoubtTotal {
-		t.Fatalf("the pinned set holds %d doubtful cell(s) beside %s/%s, want %d", got, dtPreExistingLayout, dtPreExistingField, dtDoubtTotal)
+	if got := len(dtAmbiguous) - pre; got != dtDoubtTotal+dtFoundTotal {
+		t.Fatalf("the pinned set holds %d doubtful cell(s) beside %s/%s, want %d", got, dtPreExistingLayout, dtPreExistingField, dtDoubtTotal+dtFoundTotal)
+	}
+	found := 0
+	for _, c := range dtAmbiguous {
+		if c.field == ttField {
+			found++
+		}
+	}
+	if found != dtFoundTotal {
+		t.Fatalf("the pinned set holds %d found-total cell(s), want %d; the doubt total and the found total cannot absorb one another", found, dtFoundTotal)
 	}
 	for i, c := range dtAmbiguous {
 		for _, d := range dtAmbiguous[i+1:] {
@@ -202,9 +216,10 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 			if r.Reason != extraction.ReasonAmbiguous {
 				continue
 			}
-			// AC-2. Structurally impossible today -- one assignment site, behind the
-			// len(deduped) < 2 gate -- and the review screen depends on it
-			// (frontend/app/src/components/ExtractionFields.tsx renders chips, not an input).
+			// AC-2. Two assignment sites can reach this today -- decideField behind the
+			// len(deduped) < 2 gate, findTotal behind matches == 1 -- and the review screen
+			// depends on it (frontend/app/src/components/ExtractionFields.tsx renders chips, not
+			// an input).
 			if len(r.Alternatives) == 0 {
 				t.Errorf("%s reads %s ambiguous with no alternative; the reviewer is asked to choose between one thing", l.file, r.Name)
 			}
@@ -215,7 +230,7 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 			cells++
 			f := dtResult(t, res, field)
 			if want := dtByLayout[i].values[fi]; dtValue(f) != want {
-				t.Errorf("%s reads %s = %q, want %q; the doubt moves a reason and adds an alternative, never a value", l.file, field, dtValue(f), want)
+				t.Errorf("%s reads %s = %q, want %q; the doubt moves no value, and the found total moves only the total column", l.file, field, dtValue(f), want)
 			}
 		}
 
@@ -223,7 +238,18 @@ func TestEndToEnd_TheDoubtfulCellsAreExactlyThePinnedSix(t *testing.T) {
 		// -- the shape crossesALabel has -- would empty the doubt set and leave every
 		// assertion above vacuously true.
 		for _, want := range dtAmbiguous {
-			if want.layout != l.file || want.field == dtPreExistingField {
+			if want.layout != l.file {
+				continue
+			}
+			if want.field == ttField {
+				// The found total is arithmetic over the whole page, not a below/rightward
+				// adjacent read: its only reachable candidate is the anchored rival in alts.
+				totals := dtFor(cands, want.field)
+				if len(totals) != 1 || len(want.alts) != 1 || totals[0].Value != want.alts[0] {
+					t.Errorf("%s/%s reaches %d total candidate(s) %v, want exactly 1 matching alternative %v", l.file, want.field, len(totals), dtDistinct(totals), want.alts)
+				}
+			}
+			if want.field == dtPreExistingField || want.field == ttField {
 				continue
 			}
 			below, rightward := 0, 0

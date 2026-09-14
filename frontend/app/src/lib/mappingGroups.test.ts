@@ -654,3 +654,50 @@ describe('coverageSentence — missing name lookup (QA Mode B)', () => {
     expect(sentence).toContain('f9-unlisted')
   })
 })
+
+describe('saved-mapping helpers — adversarial (QA Mode B)', () => {
+  it("SM-FE-QA-1: applySavedMapping leaves the input group's mapping untouched", () => {
+    const seed = initMappingFromHeaders(LAGOS_COLS)
+    const before = { ...seed }
+    const group = mkGroup(['f1'], seed)
+
+    const result = applySavedMapping(group, LAGOS_SAVE)
+
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+    expect(group.mapping).toEqual(before)
+    expect(group.mapping.invoice_number).toBeNull()
+  })
+
+  it('SM-FE-QA-2: with no lookup it resolves the very same array; with no groups it makes no call', async () => {
+    const groups = [mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))]
+    expect(await restoreGroups(groups, null)).toBe(groups)
+
+    const lookup = vi.fn()
+    expect(await restoreGroups([], lookup)).toEqual([])
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('SM-FE-QA-3: a mapping that lost a key the snapshot placed still remembers', () => {
+    const untouched = mkRestored(['f1'], LAGOS_COLS, { ...LAGOS_SAVE.mapping }, LAGOS_SAVE.saved_at)
+    const lostKey: MappingGroup = { ...untouched, mapping: { invoice_number: untouched.mapping.invoice_number } }
+
+    expect(rememberMapping(untouched)).toBe(false)
+    expect(rememberMapping(lostKey)).toBe(true)
+  })
+
+  it('SM-FE-QA-4: a group restored through restoreGroups reads RESTORED and opts out until edited', async () => {
+    const recognized = recognize(LAGOS_COLS)
+    const [restored] = await restoreGroups([mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))], async () => LAGOS_SAVE)
+
+    expect(placementBadge(restored, 'invoice_number', 'Invoice No', recognized)).toBe('restored')
+    expect(placementBadge(restored, 'subtotal', 'Total', recognized)).toBe('restored')
+    const notice = `Mapping restored from this client's earlier import, saved ${fmtDateTime(LAGOS_SAVE.saved_at)}.`
+    expect(restoredNotice(restored)).toBe(notice)
+    expect(rememberMapping(restored)).toBe(false)
+
+    const edited: MappingGroup = { ...restored, mapping: { ...restored.mapping, subtotal: null, total: 'Total' } }
+    expect(placementBadge(edited, 'total', 'Total', recognized)).toBe('auto')
+    expect(restoredNotice(edited)).toBe(notice)
+    expect(rememberMapping(edited)).toBe(true)
+  })
+})

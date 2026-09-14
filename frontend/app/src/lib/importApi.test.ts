@@ -1002,6 +1002,21 @@ describe('getSavedMapping', () => {
     expect(resultB).toBeNull()
     expect(fetchMockB).toHaveBeenCalledTimes(1)
   })
+
+  // restoreGroups owns the catch; a null here would read as "no saved mapping".
+  it('QA-15: a refusal rejects ApiError unchanged, never resolves null', async () => {
+    mockFetchOnce({ ok: false, status: 500, statusText: 'Internal Server Error', json: () => Promise.reject(new Error('no body')) })
+    const err500 = await captureRejection(() => getSavedMapping(createAuthedFetch(() => 'tok', vi.fn()), base, 'e1', 'd1'))
+    expect(err500).toBeInstanceOf(ApiError)
+    expect((err500 as ApiError).status).toBe(500)
+
+    const onUnauthorized = vi.fn()
+    mockFetchOnce({ ok: false, status: 401, statusText: 'Unauthorized', json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const err401 = await captureRejection(() => getSavedMapping(createAuthedFetch(() => 'tok', onUnauthorized), base, 'e1', 'd1'))
+    expect(err401).toBeInstanceOf(ApiError)
+    expect((err401 as ApiError).status).toBe(401)
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
 })
 
 // readingForDocument/supplyInvoiceNumber: the reading GET and the number-supply POST.

@@ -137,6 +137,10 @@ func ResetEnabled(environment, flag string) bool {
 //	                          it) -- included for the same
 //	                          don't-rely-on-a-specific-ON-DELETE-clause reason
 //	                          as line_items/invoice_status_history above.
+//	import_mappings           composite FK (tenant_id, entity_id) ON DELETE
+//	                          CASCADE against business_entities; TRUNCATE
+//	                          does not follow a CASCADE, so omitting it makes
+//	                          TRUNCATE business_entities raise 0A000.
 //	submission_jobs           composite FK (tenant_id, invoice_id) -> invoices,
 //	                          ON DELETE RESTRICT. Must truncate alongside
 //	                          invoices.
@@ -320,6 +324,7 @@ func ResetEnabled(environment, flag string) bool {
 //	                          rules/rule_set_versions exclusion above.
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
+	import_mappings,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
 	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
 	extraction_page_images, extraction_anchor_rules,

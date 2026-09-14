@@ -56,7 +56,7 @@ changed, and it changed for the four tenants above only.
 
 ## What a deploy resets
 
-Twenty-two tables, deleted leaf-first so every foreign key stays enforced. The order is the
+Twenty-three tables, deleted leaf-first so every foreign key stays enforced. The order is the
 reverse of `db/seed.dev.sql`'s parent-first inserts.
 
 | # | Table | Why it is purged |
@@ -70,19 +70,20 @@ reverse of `db/seed.dev.sql`'s parent-first inserts.
 | 7 | `invoice_status_history` | the demo invoice's transitions, which would otherwise describe a previous demo's invoice |
 | 8 | `invoices` | the demo register itself — the curated portfolio the seed re-creates |
 | 9 | `import_batches` | demo import runs; nothing re-links them, so a survivor would point at deleted invoices |
-| 10 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
-| 11 | `extraction_anchor_rules` | the anchor rules a demo tenant's corrections taught the extractor; nothing re-seeds them, so a survivor would keep steering reads of documents the seed has just replaced |
-| 12 | `extraction_field_results` | the per-field results of a demo document read, meaningless once their job is gone. Purged **before** `extraction_jobs`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
-| 13 | `extraction_field_corrections` | the append-only record of every field a demo persona corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
-| 14 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
-| 15 | `extraction_page_images` | the rendered-page inventory of a demo document, regenerable and meaningless once its document is gone. The rows go and the stored PNGs do not: the purge issues SQL only, exactly as for `documents` below |
-| 16 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
-| 17 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
-| 18 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
-| 19 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
-| 20 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
-| 21 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
-| 22 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
+| 10 | `import_mappings` | the column mapping a demo client's last spreadsheet import saved; nothing re-seeds it. Purged **before** `business_entities`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
+| 11 | `business_entities` | the curated demo supplier portfolio, re-inserted by the seed |
+| 12 | `extraction_anchor_rules` | the anchor rules a demo tenant's corrections taught the extractor; nothing re-seeds them, so a survivor would keep steering reads of documents the seed has just replaced |
+| 13 | `extraction_field_results` | the per-field results of a demo document read, meaningless once their job is gone. Purged **before** `extraction_jobs`: the foreign key is `ON DELETE CASCADE`, so purging the parent first would take these rows silently and report a count of 0 |
+| 14 | `extraction_field_corrections` | the append-only record of every field a demo persona corrected by hand; the seed re-creates none of them, so a survivor would claim a correction on an invoice that no longer exists. Purged **before** `extraction_jobs` for the same reason as the row above |
+| 15 | `extraction_jobs` | one row per demo document read; nothing re-links a survivor, and its RESTRICT foreign key would otherwise block the `documents` delete below |
+| 16 | `extraction_page_images` | the rendered-page inventory of a demo document, regenerable and meaningless once its document is gone. The rows go and the stored PNGs do not: the purge issues SQL only, exactly as for `documents` below |
+| 17 | `documents` | the source-document records; `internal/demodocs` rebuilds them on the next invoice-service boot (see the checklist below). The purge issues SQL only, so the stored object itself is left in the bucket — the row goes, the bytes do not |
+| 18 | `idempotency_keys` | the demo dedupe ledger; a surviving key would make a re-run of a demo submission a silent no-op |
+| 19 | `submission_rate_limits` | the demo per-tenant rate window, which would otherwise carry the last demo's budget forward |
+| 20 | `invitations` | the seed inserts none, so **zero is their seeded state**; an invitation a demo created must not outlive it |
+| 21 | `workflow_role_members` | demo staffing; `db.Seed` restores all 13 rows in the same `Provision` call |
+| 22 | `workflow_roles` | demo seats; `db.Seed` restores all 14 under their literal seeded ids |
+| 23 | `audit_log` | every audit row the four demo tenants accumulated — see the reading note at the bottom of this page |
 
 This list is deliberately **wider** than `db.Reset`'s, which spares `invitations`,
 `workflow_roles` and `workflow_role_members`. It can be wider precisely because `db.Seed`
@@ -92,7 +93,7 @@ follows the purge inside the same `Provision` call and restores all three.
 `session_replication_role = 'replica'`. Its append-only trigger refuses a `DELETE` even
 from a superuser, and the bypass is transaction-wide while it is on, so the window opens
 around that one statement and closes again. Referential integrity stays enforced for the
-other twenty-one deletes.
+other twenty-two deletes.
 
 `TestPurgeTableListCoversEveryTenantOwnedTable` asserts that this list plus the four
 exclusions below equals the live schema's full set of `tenant_id`-bearing tables — so a

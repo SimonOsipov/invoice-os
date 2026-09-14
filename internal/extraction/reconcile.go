@@ -14,6 +14,7 @@ type Input struct {
 	Candidates []Candidate // Resolve's output, already grouped and ordered
 	Lines      []DocLine   // LineItems' output; nil when the reader found no table
 	Entity     Entity      // the signed-in business entity, for the Q11 supplier check (EXTR-05-05)
+	Pages      []TokenPage // the pages Resolve read; nil finds nothing
 }
 
 // Entity is the signed-in business_entities row as the supplier check reads it. TIN is the
@@ -211,6 +212,7 @@ func Reconcile(in Input) []FieldResult {
 	for i := range out {
 		if out[i].Name == totalField {
 			out[i] = corroborateTotal(out[i], out)
+			out[i] = findTotal(out[i], out, in.Candidates, in.Pages)
 			break
 		}
 	}
@@ -332,4 +334,86 @@ func corroborateTotal(res FieldResult, decided []FieldResult) FieldResult {
 	winner := won[0]
 	value := *winner.Value // copied: the emitted cell never aliases the competing set
 	return FieldResult{Field: Field{Name: res.Name, Value: &value, Region: winner.Region, Reason: ReasonNone}, Alternatives: []Field{}}
+}
+
+// findTotal runs when no anchored total candidate satisfied the identity: it looks for exactly
+// one printed page amount that equals subtotal + vat and, if found, presents it doubtful with
+// the anchored readings kept as alternatives.
+func findTotal(res FieldResult, decided []FieldResult, cands []Candidate, pages []TokenPage) FieldResult {
+	rivals := make([]Field, 0, 1+len(res.Alternatives))
+	if res.Value != nil {
+		v := *res.Value
+		rivals = append(rivals, Field{Name: res.Name, Value: &v, Region: res.Region, Reason: ReasonNone})
+	}
+	for _, a := range res.Alternatives {
+		v := *a.Value
+		rivals = append(rivals, Field{Name: res.Name, Value: &v, Region: a.Region, Reason: ReasonNone})
+	}
+	if len(rivals) == 0 {
+		return res
+	}
+	sub, ok := decidedMoney(decided, "subtotal")
+	if !ok {
+		return res
+	}
+	vat, ok := decidedMoney(decided, "vat")
+	if !ok {
+		return res
+	}
+	want := sub.Add(vat)
+	for _, c := range cands {
+		if c.Field != totalField {
+			continue
+		}
+		if c.Tier == TierLearned {
+			return res // a taught total is the tenant's own answer
+		}
+		if got, ok := parseMoney(&c.Value); ok && !exceedsTolerance(want.Sub(got).Abs()) {
+			return res // an anchored candidate already balances; findTotal only fills a gap
+		}
+	}
+
+	var subBox, vatBox *Region // the addends' own tokens are evidence, never the total
+	for _, cell := range decided {
+		switch cell.Name {
+		case "subtotal":
+			subBox = cell.Region
+		case "vat":
+			vatBox = cell.Region
+		}
+	}
+
+	matches := 0
+	var foundText string
+	var foundRegion Region
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if !usableBox(tok.Region) {
+				continue
+			}
+			if subBox != nil && *subBox == tok.Region {
+				continue
+			}
+			if vatBox != nil && *vatBox == tok.Region {
+				continue
+			}
+			rs := ShapeAmount.Normalize(tok.Text)
+			if len(rs) != 1 {
+				continue
+			}
+			amount, err := decimal.NewFromString(rs[0])
+			if err != nil {
+				continue
+			}
+			if !exceedsTolerance(want.Sub(amount).Abs()) {
+				matches++
+				foundText, foundRegion = rs[0], tok.Region
+			}
+		}
+	}
+	if matches != 1 {
+		return res // zero or multiple balancing tokens: no single amount to point at
+	}
+
+	return FieldResult{Field: Field{Name: res.Name, Value: &foundText, Region: usableRegion(foundRegion), Reason: ReasonAmbiguous}, Alternatives: rivals}
 }

@@ -1149,7 +1149,7 @@ func TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow(t *testing.T
 }
 
 // wildElevenDigest is SHA-256 of wildElevenRendering over the tables as they stood before any sibling.
-const wildElevenDigest = "dba292559ee5fec824222b88f9de0c6e5e45b9f4dd579761df0474ec07cafb2f"
+const wildElevenDigest = "4bdbd3b2f386e216995ba8832c2f8c9ea903a2dcbfbe87e52c83e00452ba84e7"
 
 func wildElevenSum(e wildTableRows, a, r map[string]string) (string, int, int) {
 	s, rows, cells := wildElevenRendering(e, a, r)

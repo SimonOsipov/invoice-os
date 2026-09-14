@@ -338,17 +338,27 @@ func TestReconcile_TheEqualStandingGroupStillKeysOnTierAndDistance(t *testing.T)
 	}
 }
 
-// --- EXTR-22: AC-2 is structural, not merely tested ------------------------------------
+// --- ReasonAmbiguous is set at exactly two sites, each behind its own alternatives gate --------
 //
-// decideField names ReasonAmbiguous at exactly one site, and that site sits behind the "fewer
-// than two distinct values" return, so the alternatives list is non-empty by the time the reason
-// is set. The review screen renders chips in place of an input on the strength of that
-// (frontend/app/src/components/ExtractionFields.tsx, the `candidates` gate). A second assignment
-// site, or the gate moving below one, breaks the invariant while every behavioural spec keeps
-// passing on the inputs the corpus supplies.
+// decideField and findTotal each name ReasonAmbiguous once, always behind the length check that
+// guarantees a non-empty alternatives list -- the review screen renders chips on that strength.
 
-// riTwoValueGate matches decideField's own `if len(x) < 2 { return ... }`.
-func riTwoValueGate(stmt ast.Stmt) bool {
+// riAmbiguousGate is one function's own {operator, bound} length gate: decideField's
+// `len(x) < 2`, findTotal's `len(x) == 0`.
+type riAmbiguousGate struct {
+	fn    string
+	op    token.Token
+	bound string
+}
+
+var riAmbiguousGates = []riAmbiguousGate{
+	{"decideField", token.LSS, "2"},
+	{"findTotal", token.EQL, "0"},
+}
+
+// riLenGate matches a single-statement `if len(x) OP bound { return ... }` gate. Operator- and
+// bound-specific: a gate using the wrong comparison or the wrong literal does not match.
+func riLenGate(stmt ast.Stmt, op token.Token, bound string) bool {
 	ifs, ok := stmt.(*ast.IfStmt)
 	if !ok || ifs.Body == nil || len(ifs.Body.List) != 1 {
 		return false
@@ -357,7 +367,7 @@ func riTwoValueGate(stmt ast.Stmt) bool {
 		return false
 	}
 	cmp, ok := ifs.Cond.(*ast.BinaryExpr)
-	if !ok || cmp.Op != token.LSS {
+	if !ok || cmp.Op != op {
 		return false
 	}
 	call, ok := cmp.X.(*ast.CallExpr)
@@ -369,7 +379,7 @@ func riTwoValueGate(stmt ast.Stmt) bool {
 		return false
 	}
 	lit, ok := cmp.Y.(*ast.BasicLit)
-	return ok && lit.Value == "2"
+	return ok && lit.Value == bound
 }
 
 func riNamesAmbiguous(n ast.Node) bool {
@@ -383,9 +393,10 @@ func riNamesAmbiguous(n ast.Node) bool {
 	return found
 }
 
-// riAmbiguousSites counts the places f names ReasonAmbiguous and reports whether the two-value
-// gate precedes every one of them inside decideField. found is the floor: a renamed decideField
-// must fail loudly rather than let gateFirst read true over nothing.
+// riAmbiguousSites counts the places f names ReasonAmbiguous and reports whether every gate in
+// riAmbiguousGates precedes every ReasonAmbiguous site inside its own function. found is the
+// floor: a missing or renamed gate function must fail loudly rather than let gateFirst read true
+// over nothing.
 func riAmbiguousSites(f *ast.File) (sites int, gateFirst, found bool) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		if id, ok := n.(*ast.Ident); ok && id.Name == "ReasonAmbiguous" {
@@ -395,37 +406,41 @@ func riAmbiguousSites(f *ast.File) (sites int, gateFirst, found bool) {
 	})
 
 	gateFirst = true
-	for _, d := range f.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "decideField" || fn.Body == nil {
-			continue
-		}
-		found = true
-		gated := false
-		for _, stmt := range fn.Body.List {
-			if riTwoValueGate(stmt) {
-				gated = true
+	declared := 0
+	for _, spec := range riAmbiguousGates {
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != spec.fn || fn.Body == nil {
+				continue
 			}
-			if riNamesAmbiguous(stmt) && !gated {
-				gateFirst = false
+			declared++
+			gated := false
+			for _, stmt := range fn.Body.List {
+				if riLenGate(stmt, spec.op, spec.bound) {
+					gated = true
+				}
+				if riNamesAmbiguous(stmt) && !gated {
+					gateFirst = false
+				}
 			}
 		}
 	}
+	found = declared == len(riAmbiguousGates)
 	return sites, gateFirst, found
 }
 
-// AC-2. A field is never ReasonAmbiguous with an empty alternatives list, and it is the shape of
-// decideField that says so rather than the inputs the corpus happens to supply.
-func TestReconcile_AmbiguousIsSetAtOneSiteBehindTheTwoValueGate(t *testing.T) {
+// AC-11. A field is never ReasonAmbiguous with an empty alternatives list, and it is the shape
+// of decideField and findTotal that says so rather than the inputs the corpus happens to supply.
+func TestReconcile_AmbiguousIsSetAtTwoSitesEachBehindItsAlternativesGate(t *testing.T) {
 	sites, gateFirst, found := riAmbiguousSites(riParse(t, "reconcile.go", nil))
 	if !found {
-		t.Fatal("reconcile.go declares no decideField; the ordering below was measured over nothing")
+		t.Fatal("reconcile.go does not declare both decideField and findTotal; the ordering below was measured over nothing")
 	}
-	if sites != 1 {
-		t.Errorf("reconcile.go names ReasonAmbiguous at %d site(s), want 1 -- a second site can set the reason without passing the gate that fills the alternatives", sites)
+	if sites != 2 {
+		t.Errorf("reconcile.go names ReasonAmbiguous at %d site(s), want 2 -- a missing or extra site can set the reason without passing the gate that fills the alternatives", sites)
 	}
 	if !gateFirst {
-		t.Error("decideField names ReasonAmbiguous ahead of its `len(...) < 2` return; an ambiguous field with an empty alternatives list becomes constructible")
+		t.Error("a ReasonAmbiguous site runs ahead of its function's own length gate; an ambiguous field with an empty alternatives list becomes constructible")
 	}
 
 	const needle = `package p
@@ -439,9 +454,18 @@ func decideField() Field {
 	result.Reason = ReasonAmbiguous
 	return result
 }
+
+func findTotal() Field {
+	result := Field{}
+	if len(rivals) == 0 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
 `
-	if s, g, ok := riAmbiguousSites(riParse(t, "needle.go", needle)); !ok || s != 2 || g {
-		t.Errorf("the needle source names ReasonAmbiguous twice, once ahead of the gate, and the scan read found=%v sites=%d gateFirst=%v; the all-clear above proves nothing", ok, s, g)
+	if s, g, ok := riAmbiguousSites(riParse(t, "needle.go", needle)); !ok || s != 3 || g {
+		t.Errorf("the needle source names ReasonAmbiguous ahead of decideField's own gate, and the scan read found=%v sites=%d gateFirst=%v; the all-clear above proves nothing", ok, s, g)
 	}
 
 	const control = `package p
@@ -454,8 +478,80 @@ func decideField() Field {
 	result.Reason = ReasonAmbiguous
 	return result
 }
+
+func findTotal() Field {
+	result := Field{}
+	if len(rivals) == 0 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
 `
-	if s, g, ok := riAmbiguousSites(riParse(t, "control.go", control)); !ok || s != 1 || !g {
+	if s, g, ok := riAmbiguousSites(riParse(t, "control.go", control)); !ok || s != 2 || !g {
 		t.Errorf("the control source is the shipped shape and the scan read found=%v sites=%d gateFirst=%v; the scan is not specific", ok, s, g)
+	}
+
+	const prematureFindTotal = `package p
+
+func decideField() Field {
+	result := Field{}
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+
+func findTotal() Field {
+	result := Field{}
+	result.Reason = ReasonAmbiguous
+	if len(rivals) == 0 {
+		return result
+	}
+	return result
+}
+`
+	if s, g, ok := riAmbiguousSites(riParse(t, "premature.go", prematureFindTotal)); !ok || s != 2 || g {
+		t.Errorf("findTotal names ReasonAmbiguous ahead of its own len(rivals) == 0 gate, and the scan read found=%v sites=%d gateFirst=%v", ok, s, g)
+	}
+
+	const wrongOperator = `package p
+
+func decideField() Field {
+	result := Field{}
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+
+func findTotal() Field {
+	result := Field{}
+	if len(rivals) != 0 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+`
+	if s, g, ok := riAmbiguousSites(riParse(t, "wrongop.go", wrongOperator)); !ok || s != 2 || g {
+		t.Errorf("findTotal's gate uses != rather than ==, and the scan read found=%v sites=%d gateFirst=%v; the matcher is not operator-specific", ok, s, g)
+	}
+
+	const missingFindTotal = `package p
+
+func decideField() Field {
+	result := Field{}
+	if len(deduped) < 2 {
+		return result
+	}
+	result.Reason = ReasonAmbiguous
+	return result
+}
+`
+	if _, _, ok := riAmbiguousSites(riParse(t, "missingfn.go", missingFindTotal)); ok {
+		t.Error("the source declares no findTotal and the scan read found=true; the floor is not a floor")
 	}
 }

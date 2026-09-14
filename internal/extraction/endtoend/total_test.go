@@ -20,6 +20,7 @@ package endtoend
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"testing"
 
@@ -30,9 +31,9 @@ const (
 	ttField = "total"
 
 	// ttRuled is the arrangement EXTR-23 exists for, and the only one whose addends are both
-	// decided AND sum to a DIFFERENT number than the decided total: subtotal 8000.00 +
-	// vat 600.00 = 8600.00, while total reads the last line amount 1000.00. That gap is what
-	// makes it the one layout able to drive corroborateTotal to a positive.
+	// decided AND sum to a DIFFERENT number than the anchored total: subtotal 8000.00 +
+	// vat 600.00 = 8600.00, while the anchored candidate reads the last line amount 1000.00.
+	// With Pages wired, EXTR-29 decides this cell by arithmetic (findTotal), never a referee pick.
 	ttRuled = "wild_ruled_lines_totals.pdf"
 
 	// ttPlantedRuleID is the pure twin of eeDecoyRule / eeRefereeRule
@@ -40,7 +41,7 @@ const (
 	ttPlantedRuleID = "ee.planted.total"
 )
 
-// ttLayoutTotal is one arrangement's total reality, measured at d294e337. count is pinned
+// ttLayoutTotal is one arrangement's total reality, measured at f6c0406c. count is pinned
 // EXACTLY, never as an upper bound: 1 -> 0 is as much a change as 1 -> 2.
 type ttLayoutTotal struct {
 	file   string
@@ -57,12 +58,12 @@ var ttByLayout = []ttLayoutTotal{
 	{"corpus_ambiguous_date.pdf", 1, "4300.00", "t1.total.same_token"},
 	{"corpus_totals_block.pdf", 1, "5375.00", "t1.total.right"},
 	{"wild_two_party_bare_tin.pdf", 1, "1290.00", "t1.total.right"},
-	{ttRuled, 1, "1000.00", "t1.total.right"},
+	{ttRuled, 1, "8600.00", "t1.total.right"},
 	{"wild_rc_due_naira.pdf", 1, "2687.50", "t1.total.right"},
 	{"wild_stacked_borderless.pdf", 0, "", ""},
 	{"wild_scanned_no_number.pdf", 1, "1935.00", "t1.total.right"},
 	{"wild_two_party_bare_tin_asprinted.pdf", 1, "1290.00", "t1.total.right"},
-	{"wild_ruled_lines_totals_asprinted.pdf", 1, "1000.00", "t1.total.right"},
+	{"wild_ruled_lines_totals_asprinted.pdf", 1, "8600.00", "t1.total.right"},
 	{"wild_stacked_borderless_asprinted.pdf", 0, "", ""},
 }
 
@@ -84,14 +85,21 @@ func ttComplain(want ttLayoutTotal, totals []extraction.Candidate, decided extra
 	if got := dtValue(decided); got != want.value {
 		out = append(out, fmt.Sprintf("%s decides total = %q, want %q", want.file, got, want.value))
 	}
-	// decideField returns ReasonMissing only when the field reached no candidate at all, so
-	// this clause and the count clause are two readings of one fact and must agree.
+	// dtAmbiguous is the one table that owns which cells are doubtful: count==0 means missing, a
+	// listed cell means ambiguous with its alternatives, otherwise none.
 	wantReason := extraction.ReasonNone
+	var wantAlts []string
 	if want.count == 0 {
 		wantReason = extraction.ReasonMissing
+	} else if i := slices.IndexFunc(dtAmbiguous, func(c dtCell) bool { return c.layout == want.file && c.field == ttField }); i >= 0 {
+		wantReason = extraction.ReasonAmbiguous
+		wantAlts = dtAmbiguous[i].alts
 	}
 	if decided.Reason != wantReason {
 		out = append(out, fmt.Sprintf("%s reads total with reason %q, want %q", want.file, decided.Reason, wantReason))
+	}
+	if got := dtAltValues(decided.Alternatives); !slices.Equal(got, wantAlts) {
+		out = append(out, fmt.Sprintf("%s offers %q as total alternatives, want %q", want.file, got, wantAlts))
 	}
 	return out
 }
@@ -268,5 +276,305 @@ func TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal(t *testing.T) {
 	f := dtResult(t, res, ttField)
 	if f.Value != nil || f.Reason != extraction.ReasonMissing {
 		t.Errorf("%s reads total = %q reason %q, want no value and %q", layout, dtValue(f), f.Reason, extraction.ReasonMissing)
+	}
+}
+
+// ttValueEqual compares two *string by dereferenced value; both nil counts as equal.
+func ttValueEqual(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// ttRegionEqual compares two *extraction.Region by value; both nil counts as equal.
+func ttRegionEqual(a, b *extraction.Region) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// ttFieldEqual compares one Field by value, region and reason -- never by identity.
+func ttFieldEqual(a, b extraction.Field) bool {
+	return ttValueEqual(a.Value, b.Value) && ttRegionEqual(a.Region, b.Region) && a.Reason == b.Reason
+}
+
+// ttCandidateEqual compares one Candidate by the fields a plant must leave untouched: Field,
+// Value, RuleID, Tier, Adjacent, Distance, Region. Not Reason -- Resolve never sets it.
+func ttCandidateEqual(a, b extraction.Candidate) bool {
+	return a.Field == b.Field && a.Value == b.Value && a.RuleID == b.RuleID &&
+		a.Tier == b.Tier && a.Adjacent == b.Adjacent && a.Distance == b.Distance &&
+		ttRegionEqual(a.Region, b.Region)
+}
+
+// ttFind looks up one named field in a FieldResult slice. A missing name is a floor failure:
+// the caller cannot compare against a zero value and call that agreement.
+func ttFind(t *testing.T, res []extraction.FieldResult, name string) extraction.FieldResult {
+	t.Helper()
+	for _, r := range res {
+		if r.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("no %s in the result set; the floor over extraction.HeaderFields cannot be met", name)
+	return extraction.FieldResult{}
+}
+
+// ttResultsEqual is AC-2's comparator: every extraction.HeaderFields name, decided value/region/
+// reason plus alternatives element-wise. Both sides must carry all ten names, or this fatals
+// rather than silently comparing a hole to a zero value.
+func ttResultsEqual(t *testing.T, with, without []extraction.FieldResult) bool {
+	t.Helper()
+	equal := true
+	for _, name := range extraction.HeaderFields {
+		a, b := ttFind(t, with, name), ttFind(t, without, name)
+		if !ttFieldEqual(a.Field, b.Field) || len(a.Alternatives) != len(b.Alternatives) {
+			equal = false
+			continue
+		}
+		for i := range a.Alternatives {
+			if !ttFieldEqual(a.Alternatives[i], b.Alternatives[i]) {
+				equal = false
+				break
+			}
+		}
+	}
+	return equal
+}
+
+// ttResultsEqual sees every component it compares, not only the value the ruled pair moves.
+func TestEndToEnd_TheHeaderComparatorSeesEveryComponent(t *testing.T) {
+	str := func(v string) *string { return &v }
+	box := func(x float64) *extraction.Region {
+		return &extraction.Region{Page: 1, X0: x, Y0: 0.1, X1: x + 0.1, Y1: 0.2}
+	}
+	build := func() []extraction.FieldResult {
+		var out []extraction.FieldResult
+		for _, name := range extraction.HeaderFields {
+			out = append(out, extraction.FieldResult{
+				Field: extraction.Field{Name: name, Value: str("1.00"), Region: box(0.1), Reason: extraction.ReasonAmbiguous},
+				Alternatives: []extraction.Field{
+					{Name: name, Value: str("2.00"), Region: box(0.3), Reason: extraction.ReasonNone},
+					{Name: name, Value: str("3.00"), Region: box(0.5), Reason: extraction.ReasonNone},
+				},
+			})
+		}
+		return out
+	}
+	// Separate builds share no pointer, so equality here is by value.
+	if !ttResultsEqual(t, build(), build()) {
+		t.Fatalf("two identical result sets built separately compare unequal")
+	}
+
+	edits := []struct {
+		name string
+		edit func(r *extraction.FieldResult)
+	}{
+		{"value", func(r *extraction.FieldResult) { r.Value = str("9.00") }},
+		{"region", func(r *extraction.FieldResult) { r.Region = box(0.7) }},
+		{"nil region", func(r *extraction.FieldResult) { r.Region = nil }},
+		{"reason", func(r *extraction.FieldResult) { r.Reason = extraction.ReasonNone }},
+		{"alternative value", func(r *extraction.FieldResult) { r.Alternatives[1].Value = str("9.00") }},
+		{"alternative region", func(r *extraction.FieldResult) { r.Alternatives[1].Region = box(0.7) }},
+		{"alternative reason", func(r *extraction.FieldResult) { r.Alternatives[1].Reason = extraction.ReasonAmbiguous }},
+		{"alternatives order", func(r *extraction.FieldResult) {
+			r.Alternatives[0], r.Alternatives[1] = r.Alternatives[1], r.Alternatives[0]
+		}},
+		{"alternative count", func(r *extraction.FieldResult) { r.Alternatives = r.Alternatives[:1] }},
+	}
+	last := len(extraction.HeaderFields) - 1
+	for _, e := range edits {
+		for _, onWith := range []bool{true, false} {
+			with, without := build(), build()
+			if onWith {
+				e.edit(&with[last])
+			} else {
+				e.edit(&without[last])
+			}
+			if ttResultsEqual(t, with, without) {
+				t.Errorf("a %s change (on the with side: %v) compares equal", e.name, onWith)
+			}
+		}
+	}
+}
+
+// AC-1. Arithmetic finds the ruled table's printed total -- at the printed token's own box --
+// under both readers, and only when Pages is present.
+func TestEndToEnd_ArithmeticFindsTheRuledTablesPrintedTotalUnderBothReaders(t *testing.T) {
+	readers := []struct {
+		name   string
+		pages  func(t *testing.T, layout string) []extraction.TokenPage
+		wantY0 float64
+	}{
+		{"pdfium", eeTokenPages, 0.524702},
+		{"docling", bdGoldenTokenPages, 0.524475},
+	}
+	layouts := []string{ttRuled, "wild_ruled_lines_totals_asprinted.pdf"}
+
+	for _, r := range readers {
+		for _, l := range layouts {
+			t.Run(r.name+"/"+l, func(t *testing.T) {
+				pages := r.pages(t, l)
+				tokens := 0
+				for _, p := range pages {
+					tokens += len(p.Tokens)
+				}
+				if tokens == 0 {
+					t.Fatalf("%s via %s read 0 token(s)", l, r.name)
+				}
+
+				var found extraction.Token
+				count := 0
+				for _, p := range pages {
+					for _, tok := range p.Tokens {
+						if tok.Text == "8,600.00" {
+							found = tok
+							count++
+						}
+					}
+				}
+				if count != 1 {
+					t.Fatalf("%s via %s carries %d page token(s) reading \"8,600.00\", want exactly 1", l, r.name, count)
+				}
+
+				cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+				if got := dtDistinct(dtFor(cands, ttField)); !slices.Equal(got, []string{"1000.00"}) {
+					t.Fatalf("%s via %s resolves total to %v, want exactly [\"1000.00\"]", l, r.name, got)
+				}
+
+				with := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: cands, Pages: pages}), ttField)
+				if dtValue(with) != "8600.00" || with.Reason != extraction.ReasonAmbiguous {
+					t.Fatalf("%s via %s decides total = %q reason %q, want \"8600.00\" ambiguous", l, r.name, dtValue(with), with.Reason)
+				}
+				if got := dtAltValues(with.Alternatives); !slices.Equal(got, []string{"1000.00"}) {
+					t.Errorf("%s via %s offers %v as alternatives, want [\"1000.00\"]", l, r.name, got)
+				}
+				for _, a := range with.Alternatives {
+					if a.Reason != extraction.ReasonNone {
+						t.Errorf("%s via %s alternative reads reason %q, want %q", l, r.name, a.Reason, extraction.ReasonNone)
+					}
+				}
+				if with.Region == nil || *with.Region != found.Region {
+					t.Fatalf("%s via %s region %v, want the printed token's own box %v", l, r.name, with.Region, found.Region)
+				}
+				if with.Region.Page != 1 {
+					t.Errorf("%s via %s region page %d, want 1", l, r.name, with.Region.Page)
+				}
+				if diff := math.Abs(with.Region.Y0 - r.wantY0); diff > 1e-6 {
+					t.Errorf("%s via %s region Y0 = %v, want %v within 1e-6 (diff %v)", l, r.name, with.Region.Y0, r.wantY0, diff)
+				}
+
+				without := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: cands}), ttField)
+				if dtValue(without) != "1000.00" || without.Reason != extraction.ReasonNone || len(without.Alternatives) != 0 {
+					t.Errorf("%s via %s decides total = %q reason %q alts %v without Pages, want \"1000.00\" none, no alternatives", l, r.name, dtValue(without), without.Reason, dtAltValues(without.Alternatives))
+				}
+			})
+		}
+	}
+}
+
+// AC-2. Twice over every arrangement -- once through dtRun's own walk (pdfium for thirteen, the
+// docling golden for the fourteenth, exactly how the worker will run it) and once through every
+// layout's docling golden directly -- Pages moves exactly the ruled pair's header results and
+// nothing else moves. The walk half is why this spec is RED before Stage 3: dtRun stays
+// page-less until then.
+func TestEndToEnd_FindTotalMovesExactlyTheRuledPair(t *testing.T) {
+	type ttComparedRun struct {
+		key           string
+		with, without []extraction.FieldResult
+	}
+	var runs []ttComparedRun
+
+	for _, l := range bdByLayout {
+		cands, with, _ := dtRun(t, l)
+		without := extraction.Reconcile(extraction.Input{Candidates: cands})
+		runs = append(runs, ttComparedRun{"walk/" + l.file, with, without})
+	}
+	for _, l := range bdByLayout {
+		pages := bdGoldenTokenPages(t, l.file)
+		tokens := 0
+		for _, p := range pages {
+			tokens += len(p.Tokens)
+		}
+		if tokens == 0 {
+			t.Fatalf("%s's docling golden read 0 token(s); every reason it reports is the reason of an empty page", l.file)
+		}
+		cands := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+		with := extraction.Reconcile(extraction.Input{Candidates: cands, Pages: pages})
+		without := extraction.Reconcile(extraction.Input{Candidates: cands})
+		runs = append(runs, ttComparedRun{"golden/" + l.file, with, without})
+	}
+
+	if want := 2 * len(bdByLayout); len(runs) != want {
+		t.Fatalf("compared %d run(s), want %d", len(runs), want)
+	}
+
+	var differing []string
+	for _, r := range runs {
+		if !ttResultsEqual(t, r.with, r.without) {
+			differing = append(differing, r.key)
+		}
+	}
+	slices.Sort(differing)
+	want := []string{
+		"golden/wild_ruled_lines_totals.pdf",
+		"golden/wild_ruled_lines_totals_asprinted.pdf",
+		"walk/wild_ruled_lines_totals.pdf",
+		"walk/wild_ruled_lines_totals_asprinted.pdf",
+	}
+	if !slices.Equal(differing, want) {
+		t.Fatalf("Pages moves %v, want exactly %v", differing, want)
+	}
+}
+
+// AC-3. A planted second token that also balances silences the ruled table entirely: the arm's
+// result equals the page-less run. The unplanted control still finds.
+func TestEndToEnd_APlantedSecondBalancingAmountSilencesTheRuledTable(t *testing.T) {
+	pages := eeTokenPages(t, ttRuled)
+
+	planted := slices.Clone(pages)
+	for i := range planted {
+		planted[i].Tokens = slices.Clone(planted[i].Tokens)
+	}
+	plantBox := extraction.Region{Page: 1, X0: 0.05, Y0: 0.95, X1: 0.12, Y1: 0.96}
+	for i := range planted {
+		if planted[i].Number == 1 {
+			planted[i].Tokens = append(planted[i].Tokens, extraction.Token{Text: "8,600.00", Region: plantBox})
+			break
+		}
+	}
+
+	if plantBox.Page < 1 || plantBox.X0 < 0 || plantBox.X0 >= plantBox.X1 || plantBox.X1 > 1 ||
+		plantBox.Y0 < 0 || plantBox.Y0 >= plantBox.Y1 || plantBox.Y1 > 1 {
+		t.Fatalf("the plant box %+v fails usableBox's own bounds", plantBox)
+	}
+	for _, p := range pages {
+		for _, tok := range p.Tokens {
+			if tok.Region == plantBox {
+				t.Fatalf("an existing token already carries the plant box %+v; the plant is not new evidence", plantBox)
+			}
+		}
+	}
+
+	before := extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	after := extraction.Resolve(planted, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+	if !slices.EqualFunc(before, after, ttCandidateEqual) {
+		t.Fatalf("planting the box moves Resolve's own candidate set; the plant is not evidence-only")
+	}
+
+	bare := extraction.Reconcile(extraction.Input{Candidates: before})
+	arm := extraction.Reconcile(extraction.Input{Candidates: after, Pages: planted})
+	if !ttResultsEqual(t, arm, bare) {
+		t.Fatalf("the plant does not silence the ruled table; the arm's result differs from the page-less run")
+	}
+	tot := dtResult(t, arm, ttField)
+	if dtValue(tot) != "1000.00" || tot.Reason != extraction.ReasonNone || len(tot.Alternatives) != 0 {
+		t.Errorf("with the plant, total decides %q reason %q alts %v, want \"1000.00\" none, no alternatives", dtValue(tot), tot.Reason, dtAltValues(tot.Alternatives))
+	}
+
+	control := dtResult(t, extraction.Reconcile(extraction.Input{Candidates: before, Pages: pages}), ttField)
+	if dtValue(control) != "8600.00" || control.Reason != extraction.ReasonAmbiguous {
+		t.Errorf("the unplanted control decides total = %q reason %q, want \"8600.00\" ambiguous", dtValue(control), control.Reason)
 	}
 }

@@ -38,7 +38,7 @@ type Tier1Rule struct {
 // naira sweep.
 const tier1RuleCount = 35
 
-// The set's only distance dials; nothing else reads a distance. Distance is the box GAP, so
+// The set's only distance dials; RowReach reads past the right one. Distance is the box GAP, so
 // both are bounded on both sides: right must reach 0.2060 and must not reach
 // 0.465497 (two_column's buyer column); below must reach 0.009111 and must not reach 0.107212
 // (the next stacked group's value, with the buyer's name behind it at 0.321571). Both upper
@@ -46,8 +46,8 @@ const tier1RuleCount = 35
 // rightward merge at any width, so 0.465497 is measured on a synthetic page carrying
 // two_column's own edges. TestTier1_DialsStayInsideTheirMeasuredWindow holds both.
 //
-// Only the three amount right rules read past the right dial, through RowReach
-// (TestTier1_TheRowReachAddsNothingOnTheScoredLayouts).
+// RowReach ships no dial: the register needs 0.614732, and a line item labelled VAT sits nearer,
+// at 0.498444, so only the bare-label clause refuses it (TestAdvisory_TheLineItemLabelledVATIsNotTheVAT).
 //
 // Each float is paired with its JSON spelling because strconv is outside this file's import
 // allowlist. TestTier1_EveryRuleHasACompiledMatcher checks every shipped rule's parsed distance

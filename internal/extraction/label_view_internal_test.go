@@ -272,3 +272,52 @@ func TestAnchorLexicon_NoEntryMatchesSpacedLettersAsPrinted(t *testing.T) {
 		t.Errorf("%d label forms matched a lexicon entry: %v", len(labelHits), labelHits)
 	}
 }
+
+// Any unicode.IsSpace rune separates, any unicode.IsLetter unit counts, and each letter keeps its case.
+func TestLabelView_JoinsOnUnicodeSpaceAndKeepsEachLetter(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"I S S U E D", "ISSUED"},
+		{"I n v o i c e   N u m b e r", "InvoiceNumber"},
+		{"É T É", "ÉTÉ"},
+	}
+	for _, tt := range tests {
+		if got := labelView(tt.in); got != tt.want {
+			t.Errorf("labelView(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestLabelView_ALowerCaseOrWideGapLabelMatchesItsWord(t *testing.T) {
+	tests := []struct {
+		spaced, word string
+		want         []string
+	}{
+		{"i n v o i c e   n u m b e r", "invoice number", []string{"invoice_no"}},
+		{"I   S   S   U   E   D", "ISSUED", []string{"issue_date"}},
+	}
+	for _, tt := range tests {
+		wordIDs := lvIDs(t, tt.word)
+		if !slices.Equal(wordIDs, tt.want) {
+			t.Fatalf("lvIDs(%q) = %v, want %v", tt.word, wordIDs, tt.want)
+		}
+		if got := lvIDs(t, labelView(tt.spaced)); !slices.Equal(got, wordIDs) {
+			t.Errorf("lvIDs(labelView(%q)) = %v, want %v", tt.spaced, got, wordIDs)
+		}
+	}
+}
+
+// A unit carrying punctuation or a symbol is no letter, so the token reads as printed (Ceilings).
+func TestLabelView_AttachedPunctuationOrASymbolReadsAsPrinted(t *testing.T) {
+	if ids := lvIDs(t, "ISSUED:"); !slices.Contains(ids, "issue_date") {
+		t.Fatalf("the positive control matched nothing: lvIDs(%q) = %v, want issue_date", "ISSUED:", ids)
+	}
+	for _, in := range []string{"I S S U E D:", "₦ N G N"} {
+		got := labelView(in)
+		if got != in {
+			t.Errorf("labelView(%q) = %q, want %q (byte-identical)", in, got, in)
+		}
+		if ids := lvIDs(t, got); len(ids) > 0 {
+			t.Errorf("lvIDs(labelView(%q)) = %v, want none", in, ids)
+		}
+	}
+}

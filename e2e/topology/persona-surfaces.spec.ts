@@ -27,10 +27,11 @@
 // Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
 // A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { createEntity, createInvoice, listInvoices, login, rollup, validateInvoice, PERSONAS } from '../api/client'
+import { createEntity, createInvoice, getInvoice, listInvoices, login, rollup, validateInvoice, PERSONAS } from '../api/client'
+import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { collectErrors, sidebarRoster, signInAs } from '../personaSession'
-import { WIDE_WIDTHS } from './layout'
+import { rectsOverlap, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // cleanInvoiceFields(): a local copy of invoice-surfaces.spec.ts:127-141 (that file exports
@@ -90,13 +91,14 @@ async function createValidatedInvoice(
   entityId: string,
   invoiceNumber: string,
   fields: ReturnType<typeof cleanInvoiceFields> = cleanInvoiceFields(invoiceNumber),
-): Promise<void> {
+): Promise<string> {
   const created = await createInvoice(token, { entity_id: entityId, ...fields })
   const validated = await validateInvoice(token, created.id)
   expect(
     validated.status,
     `the clean fixture must promote draft->validated; if this fails the rule set moved under cleanInvoiceFields()`,
   ).toBe('validated')
+  return created.id
 }
 
 function sidebar(page: Page) {
@@ -470,6 +472,87 @@ test('sidebar roster: the firm and in-house personas render different, exact nav
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// cornerRadii(): all four computed corner radii together, so a uniform token proves itself
+// uniform rather than being asserted from one corner alone (BUG-17-06).
+async function cornerRadii(loc: Locator): Promise<{ tl: string; tr: string; bl: string; br: string }> {
+  return loc.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return { tl: cs.borderTopLeftRadius, tr: cs.borderTopRightRadius, bl: cs.borderBottomLeftRadius, br: cs.borderBottomRightRadius }
+  })
+}
+
+// ---------------------------------------------------------------------------------------
+// Test -- the company card, firm switcher vs in-house chip (BUG-17-06, Core AC A-4)
+// ---------------------------------------------------------------------------------------
+// The switcher carries no `pf-btn` class (Sidebar.tsx's own comment: its `!important` pill
+// radius would beat `--radius-input`) -- proving that, and that the global rule still bites
+// on the Sign out button that DOES carry it despite its own inline `--radius-sm`, is what
+// makes "the chip matches the switcher" a claim about a shared token rather than a
+// coincidence of two rounded boxes.
+test("company card: the firm switcher renders the in-house chip's corner, and the button rule still makes pills", async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+
+  await signInAs(page, 'firm')
+
+  const switcher = page.getByTestId('company-switcher')
+  const switcherBox = await switcher.boundingBox()
+  expect(switcherBox, 'company-switcher never rendered').toBeTruthy()
+  const switcherRadii = await cornerRadii(switcher)
+  const switcherCornerValues = Object.values(switcherRadii)
+  const [firstCorner, ...restCorners] = switcherCornerValues
+  for (const corner of restCorners) {
+    expect(corner, `company-switcher corners must be uniform: ${JSON.stringify(switcherRadii)}`).toBe(firstCorner)
+  }
+  const switcherRadiusPx = parseFloat(firstCorner)
+  expect(switcherRadiusPx, 'company-switcher radius did not parse to a finite px value').toBeGreaterThanOrEqual(0)
+  expect(
+    switcherRadiusPx,
+    `the switcher's corner (${switcherRadiusPx}px) must be less than half its own height (${switcherBox!.height}px) -- it must not render as a pill`,
+  ).toBeLessThan(switcherBox!.height / 2)
+
+  const signOut = page.getByRole('button', { name: 'Sign out' })
+  const signOutBox = await signOut.boundingBox()
+  expect(signOutBox, 'the Sign out button never rendered').toBeTruthy()
+  const signOutRadii = await cornerRadii(signOut)
+  const signOutRadiusPx = parseFloat(signOutRadii.tl)
+  expect(
+    signOutRadiusPx,
+    `Sign out's corner (${signOutRadiusPx}px) must be at least half its height (${signOutBox!.height}px) -- the global .pf-btn rule still renders a pill over its own inline --radius-sm`,
+  ).toBeGreaterThanOrEqual(signOutBox!.height / 2)
+
+  const closedBorder = await switcher.evaluate((el) => getComputedStyle(el).borderTopColor)
+  await switcher.click()
+  await expect(page.getByTestId('company-switcher-option').first()).toBeVisible()
+  // border-color transitions over --dur-fast; a bare read right after the click can still
+  // catch the closed value mid-transition.
+  await expect
+    .poll(() => switcher.evaluate((el) => getComputedStyle(el).borderTopColor), {
+      message: 'the switcher border colour never transitioned away from its closed value',
+    })
+    .not.toBe(closedBorder)
+  await switcher.click()
+
+  await signInAs(page, 'inhouse')
+  const chip = page.getByTestId('company-chip')
+  const chipBox = await chip.boundingBox()
+  expect(chipBox, 'company-chip never rendered').toBeTruthy()
+  const chipRadii = await cornerRadii(chip)
+  expect(chipRadii, "the in-house chip's corners must equal the firm switcher's").toEqual(switcherRadii)
+  expect(
+    Math.abs(chipBox!.width - switcherBox!.width),
+    `chip width (${chipBox!.width}) and switcher width (${switcherBox!.width}) must match within 1px`,
+  ).toBeLessThanOrEqual(1)
+  // Heights are not asserted equal -- a <button> and a <div> resolve `line-height: normal`
+  // against different font metrics (control font vs --font-sans), so equal height is not
+  // guaranteed on a correct build. Attached so the numbers outlive the run.
+  await testInfo.attach('company-card-heights.json', {
+    body: JSON.stringify({ switcherHeight: switcherBox!.height, chipHeight: chipBox!.height }),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // ---------------------------------------------------------------------------------------
 // Test 4 -- entity scoping differs by persona (Core AC 7, clause 2)
 // ---------------------------------------------------------------------------------------
@@ -622,12 +705,11 @@ const BUYER_TRACK = 2
 const FIXED_TRACKS = [0, 1, 3, 4, 5, 6]
 
 // gridCells(): the x and width of each of a grid container's seven direct children, in
-// track order. The count assertion is load-bearing twice over -- it is what makes an
-// index-by-index comparison meaningful at all, and a row that rendered a blocked-reason
-// node would carry an eighth child on an implicit second grid line (see Test 7's header).
-// Track 0 measures the CHECKBOX, a replaced element that aligns to the track start instead
-// of stretching to it, so its width is the control's, not the 24px track's -- invariant
-// either way, which is all the claims below need.
+// track order. The count assertion is load-bearing: it is what makes an index-by-index
+// comparison meaningful at all. Track 0 is the bare CHECKBOX in the head, but a row's
+// stretched approval-select-cell wrapper (BUG-17-04/05) -- invariant either way, which is
+// all the claims below need. A blocked row's reason renders inside track 1, never as an
+// eighth child (see Test 7's header).
 async function gridCells(container: Locator, label: string): Promise<Array<{ x: number; width: number }>> {
   const cells = container.locator('> *')
   await expect(cells, `${label}: a grid built from APPROVALS_GRID_COLUMNS renders exactly ${APPROVALS_TRACKS} cells`).toHaveCount(APPROVALS_TRACKS)
@@ -639,6 +721,211 @@ async function gridCells(container: Locator, label: string): Promise<Array<{ x: 
   }
   return measured
 }
+
+// centerY(): the vertical midpoint of a Playwright boundingBox() rect.
+function centerY(box: { y: number; height: number }): number {
+  return box.y + box.height / 2
+}
+
+// elementFromPointMatches(): true when the element painting at (x, y) is `testId` itself or
+// a descendant -- the only honest oracle for paint order/clipping (demo-persona.spec.ts's
+// own elementFromPoint idiom).
+async function elementFromPointMatches(page: Page, x: number, y: number, testId: string): Promise<boolean> {
+  return page.evaluate(
+    ({ x, y, testId }) => document.elementFromPoint(x, y)?.closest(`[data-testid="${testId}"]`) != null,
+    { x, y, testId },
+  )
+}
+
+// ---------------------------------------------------------------------------------------
+// Test -- a firm row this seat cannot approve (BUG-17-06, Core AC A-2/A-3). Declared
+// immediately before Test 7, which must stay last by declaration.
+// ---------------------------------------------------------------------------------------
+// PERSONAS.A (subject ...0001) holds only cfo on the firm tenant (db/seed.dev.sql); the
+// firm plan arms fin_mgr then compliance below its ₦250m/₦1bn conditions
+// (demopolicy.go:132-146), so a below-threshold fixture leaves this seat blocked at the
+// first step without ever reaching one it holds. ensureFirmPolicyActive restores the
+// seeded policy first -- roles.spec.ts/workflows.spec.ts run in the same serial suite and
+// may have deleted or drafted over it.
+test('firm Approvals: a row the seat cannot approve shows the reason icon, no sentence line, and opens its invoice', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  await ensureFirmPolicyActive(token)
+  const stamp = Date.now()
+  const entity = await createEntity(token, { name: `BUG-17 reason icon ${stamp}`, tin: freshTin() })
+  const number = `INV-B17-REASON-${stamp}`
+  const id = await createValidatedInvoice(token, entity.id, number)
+
+  // --- fixture guard, at the wire, before the browser is driven --------------------------
+  const wire = await getInvoice(token, id)
+  expect(
+    wire.can_approve,
+    `${number} must be blocked for this seat; if this fails ensureFirmPolicyActive did not restore the seeded policy`,
+  ).toBe(false)
+  const reason = wire.approve_blocked_reason
+  expect(reason, `${number} must carry a blocked reason`).toBeTruthy()
+  expect(reason!.length, 'the reason sentence must be a real message, not a stub').toBeGreaterThanOrEqual(20)
+  expect((await awaitingNumbers(token)).has(number), `${number} must be awaiting approval`).toBe(true)
+
+  await signInAs(page, 'firm')
+  await selectEntity(page, entity.name)
+  await goTo(page, 'Approvals')
+  const row = approvalRowByNumber(page, number)
+  await expect(row.getByTestId('approval-select-row')).toBeDisabled()
+
+  // --- no sentence line, one grid line ----------------------------------------------------
+  const list = page.getByTestId('approvals-list')
+  const headCellCount = await list.locator('.pf-list-head').locator('> *').count()
+  expect(headCellCount, 'the list head rendered no cells').toBeGreaterThan(0)
+  await expect(row.locator('> *')).toHaveCount(headCellCount)
+  // innerText, not textContent: the always-mounted, hidden tip keeps the sentence in
+  // textContent even while closed.
+  expect(await row.innerText(), 'the blocked sentence must never render as visible text').not.toContain(reason!)
+
+  const rowCellsLoc = row.locator('> *')
+  const rowCellCount = await rowCellsLoc.count()
+  const cellHeights: number[] = []
+  for (let i = 0; i < rowCellCount; i++) {
+    const box = await rowCellsLoc.nth(i).boundingBox()
+    expect(box, `cell ${i} never rendered`).toBeTruthy()
+    cellHeights.push(box!.height)
+  }
+  const tallestCell = Math.max(...cellHeights)
+  const rowBox = await row.boundingBox()
+  expect(rowBox, 'the row never rendered').toBeTruthy()
+  const rowMetrics = await row.evaluate((el) => {
+    const cs = getComputedStyle(el)
+    return { paddingTop: parseFloat(cs.paddingTop), paddingBottom: parseFloat(cs.paddingBottom), borderBottom: parseFloat(cs.borderBottomWidth) }
+  })
+  const contentHeight = rowBox!.height - rowMetrics.paddingTop - rowMetrics.paddingBottom - rowMetrics.borderBottom
+  expect(
+    Math.abs(contentHeight - tallestCell),
+    `the row must hold a single grid line: content height ${contentHeight} vs tallest cell ${tallestCell}`,
+  ).toBeLessThanOrEqual(1)
+
+  // --- icon placement, inside the Invoice # cell, clear of the truncating number ----------
+  const icon = row.getByTestId('approval-blocked-icon')
+  await expect(icon).toBeVisible()
+  const num = row.getByText(number, { exact: true })
+  const cell1 = row.locator('> *').nth(1)
+  expect(
+    await num.evaluate((e) => e.scrollWidth > e.clientWidth),
+    `${number} must overflow its track, or the placement claims below are vacuous`,
+  ).toBe(true)
+
+  let iconBox = await icon.boundingBox()
+  const numBox = await num.boundingBox()
+  const cell1Box = await cell1.boundingBox()
+  expect(iconBox, 'the icon never rendered').toBeTruthy()
+  expect(numBox, 'the number span never rendered').toBeTruthy()
+  expect(cell1Box, 'the Invoice # cell never rendered').toBeTruthy()
+  expect(iconBox!.x, "the icon must sit at or after the number's right edge").toBeGreaterThanOrEqual(numBox!.x + numBox!.width - 0.5)
+  expect(rectsOverlap(iconBox!, numBox!), 'the icon must not overlap the truncating number').toBe(false)
+  expect(Math.abs(centerY(iconBox!) - centerY(numBox!)), "the icon must sit on the number's own line").toBeLessThanOrEqual(1)
+  expect(iconBox!.x + iconBox!.width, 'the icon must stay inside the Invoice # cell').toBeLessThanOrEqual(cell1Box!.x + cell1Box!.width + 0.5)
+  expect(
+    await elementFromPointMatches(page, iconBox!.x + iconBox!.width / 2, centerY(iconBox!), 'approval-blocked-icon'),
+    'the icon must not be covered by the truncating text',
+  ).toBe(true)
+
+  // --- screen reader -----------------------------------------------------------------------
+  await expect(icon).toHaveAccessibleDescription(reason!)
+
+  // --- mouse, below --------------------------------------------------------------------------
+  await icon.hover()
+  const tip = row.getByTestId('approval-blocked-tip')
+  await expect(tip).toBeVisible()
+  await expect(tip).toHaveText(reason!)
+  const viewport = page.viewportSize()
+  expect(viewport, 'no viewport size available').toBeTruthy()
+  let tipBox = await tip.boundingBox()
+  expect(tipBox, 'the tip never rendered').toBeTruthy()
+  expect(tipBox!.x, 'the tip must sit inside the viewport').toBeGreaterThanOrEqual(0)
+  expect(tipBox!.y, 'the tip must sit inside the viewport').toBeGreaterThanOrEqual(0)
+  expect(tipBox!.x + tipBox!.width, 'the tip must sit inside the viewport').toBeLessThanOrEqual(viewport!.width + 0.5)
+  expect(tipBox!.y + tipBox!.height, 'the tip must sit inside the viewport').toBeLessThanOrEqual(viewport!.height + 0.5)
+  expect(tipBox!.y, 'the tip must render below the icon').toBeGreaterThanOrEqual(iconBox!.y + iconBox!.height - 0.5)
+  expect(
+    await elementFromPointMatches(page, tipBox!.x + tipBox!.width / 2, centerY(tipBox!), 'approval-blocked-tip'),
+    'the queue list must not clip the tip',
+  ).toBe(true)
+  const tipHeight = tipBox!.height
+  await page.mouse.move(0, 0)
+  await expect(tip).toBeHidden()
+
+  // --- mouse, flip above when the viewport ends 8px under the icon ------------------------
+  expect(iconBox!.y, 'the icon must sit far enough down the page for the flip to be provable').toBeGreaterThan(tipHeight + 8)
+  const entryViewport = page.viewportSize()
+  expect(entryViewport, 'no entry viewport available').toBeTruthy()
+  try {
+    await page.setViewportSize({ width: entryViewport!.width, height: Math.ceil(iconBox!.y + iconBox!.height + 8) })
+    await icon.hover()
+    await expect(tip).toBeVisible()
+    iconBox = await icon.boundingBox()
+    expect(iconBox, 'the icon vanished after the resize').toBeTruthy()
+    tipBox = await tip.boundingBox()
+    expect(tipBox, 'the tip never rendered after the resize').toBeTruthy()
+    expect(
+      tipBox!.y + tipBox!.height,
+      'a broken flip leaves the tip below, past the viewport bottom',
+    ).toBeLessThanOrEqual(iconBox!.y + 0.5)
+    expect(tipBox!.y, 'the flipped tip must still sit inside the viewport').toBeGreaterThanOrEqual(0)
+    expect(
+      await elementFromPointMatches(page, tipBox!.x + tipBox!.width / 2, centerY(tipBox!), 'approval-blocked-tip'),
+      'the flipped tip must not be clipped',
+    ).toBe(true)
+  } finally {
+    await page.setViewportSize(entryViewport!)
+  }
+
+  // --- keyboard: Tab reaches the icon, the disabled checkbox before it is skipped ---------
+  await page.mouse.move(0, 0)
+  await expect(tip).toBeHidden()
+  await icon.focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(icon).not.toBeFocused()
+  await expect(row.getByTestId('approval-select-row'), 'the disabled checkbox must never take focus').not.toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(icon).toBeFocused()
+  await expect(tip).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(tip).toBeHidden()
+
+  // --- non-navigation: the icon and the select cell's own area never open the invoice ----
+  await icon.click()
+  await expect(page).toHaveURL(/\/approvals$/)
+
+  const selectCell = row.getByTestId('approval-select-cell')
+  const selectCheckbox = row.getByTestId('approval-select-row')
+  const selectCellBox = await selectCell.boundingBox()
+  const checkboxBox = await selectCheckbox.boundingBox()
+  expect(selectCellBox, 'the select cell never rendered').toBeTruthy()
+  expect(checkboxBox, 'the checkbox never rendered').toBeTruthy()
+  const clickX = selectCellBox!.x + selectCellBox!.width - 2
+  const clickY = selectCellBox!.y + selectCellBox!.height / 2
+  expect(clickX, 'the click point must sit outside the checkbox').toBeGreaterThan(checkboxBox!.x + checkboxBox!.width + 1)
+  expect(
+    await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('data-testid'), { x: clickX, y: clickY }),
+    'the click point must resolve to the select cell, not the checkbox',
+  ).toBe('approval-select-cell')
+  // A real Chromium click on a disabled checkbox fires no listener at all -- this click
+  // lands on the select cell's own area, which is the only oracle for its stopPropagation.
+  await page.mouse.click(clickX, clickY)
+  await expect(page.getByTestId('approvals-list')).toBeVisible()
+  await expect(page).toHaveURL(/\/approvals$/)
+
+  // --- the Buyer cell opens the invoice, and Back returns ---------------------------------
+  await row.locator('> *').nth(BUYER_TRACK).click()
+  await expect(page).toHaveURL(new RegExp(`/invoices/${id}$`))
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/\/approvals$/)
+  await expect(row).toBeVisible()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
 
 // ---------------------------------------------------------------------------------------
 // Test 7 -- the in-house approval queue journey, and the APPROVALS_GRID_COLUMNS layout
@@ -669,22 +956,19 @@ async function gridCells(container: Locator, label: string): Promise<Array<{ x: 
 // Test 2's oracle for the rest of that deployment's life. Rows are ticked individually, by
 // their own aria-label.
 //
-// DEFERRED, deliberately: the blocked-reason node's `gridColumn: '2 / -1'` span
-// (ApprovalsView.tsx) has no rendered oracle in this suite. demopolicy's in-house ACTIVE plan
-// has exactly one approval step, targeting `fin_dir`, and db/seed.dev.sql staffs this subject
-// into it, so every armed row here is approvable and `approval-blocked-reason` never renders;
-// the firm queue (Test 6) is empty. [topology-never-publishes] forbids publishing the
-// second policy that would manufacture a blocked row, so the span stays on the unit suite's
-// coverage until a story arms one. That is also why the grids below are asserted to hold
-// exactly 7 children: a blocked row would add an eighth on an implicit second grid line.
+// The reason renders inside track 1 (BlockedReason, ApprovalsView.tsx), never as an eighth
+// child -- so the grid claims below hold at exactly 7 children whether or not a row is
+// blocked. Blocked-row coverage lives in the firm test above and this test's own Emeka leg
+// below (BUG-17-06); this journey's own armed rows stay approvable throughout the sweep.
 //
 // Cannot be run locally, same as Test 5: every Playwright config in this package is
 // deliberately webServer-less and points at deployed URLs, so its first real run -- red or
 // green -- is the post-deploy gate (dev-env.yml).
 test('in-house Approvals: the queue narrows, bulk approve settles per item, and the refetch confirms it', async ({ page }, testInfo) => {
   // Four fixtures with their own validate round trips, four viewport sweeps and a
-  // two-request fan-out. Same in-file headroom precedent as Tests 1 and 4.
-  test.setTimeout(120_000)
+  // two-request fan-out, plus BUG-17-06's row-open/seat-switch extension. Same in-file
+  // headroom precedent as Tests 1 and 4.
+  test.setTimeout(150_000)
 
   const errors = collectErrors(page)
 
@@ -697,9 +981,13 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   const untickedNumber = `INV-A12-UNTICKED-${stamp}`
   const belowThresholdNumber = `INV-A12-BELOW-${stamp}`
   const onQueue = [...approveNumbers, untickedNumber]
+  const idsByNumber = new Map<string, string>()
   for (const number of onQueue) {
-    await createValidatedInvoice(token, entity.id, number, approvableInvoiceFields(number))
+    const created = await createValidatedInvoice(token, entity.id, number, approvableInvoiceFields(number))
+    idsByNumber.set(number, created)
   }
+  const untickedId = idsByNumber.get(untickedNumber)
+  if (!untickedId) throw new Error(`${untickedNumber} was created but its id was not captured`)
   await createValidatedInvoice(token, entity.id, belowThresholdNumber)
 
   // --- The fixture guard, at the wire, before the browser is driven ----------------------
@@ -824,6 +1112,9 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   for (const number of approveNumbers) {
     await approvalRowByNumber(page, number).getByLabel(selectRowLabel(number), { exact: true }).check()
   }
+  // An enabled checkbox click reaches the row's own handler in jsdom (B17-D3's premise) but
+  // must never navigate in the real browser -- the wrapper's stopPropagation is what stops it.
+  await expect(page).toHaveURL(/\/approvals$/)
   const bar = page.getByTestId('approvals-bulk-bar')
   await expect(bar).toBeVisible()
   // This run's OWN selection, not a fixture-volume count.
@@ -870,6 +1161,53 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
     expect(queuedAfter.has(number), `${number} must have left the server's awaiting_approval set, not just the DOM`).toBe(false)
   }
   expect(queuedAfter.has(untickedNumber), `${untickedNumber} must still be awaiting approval on the server`).toBe(true)
+
+  // --- Core AC D-1/D-3 (BUG-17-06): the unticked approvable row opens its own invoice ------
+  const untickedRow = approvalRowByNumber(page, untickedNumber)
+  await expect(untickedRow).toBeVisible()
+  await expect(untickedRow.getByTestId('approval-blocked-icon'), 'an approvable row shows no reason icon').toHaveCount(0)
+  await untickedRow.locator('> *').nth(BUYER_TRACK).click()
+  await expect(page).toHaveURL(new RegExp(`/invoices/${untickedId}$`))
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/\/approvals$/)
+  await expect(untickedRow).toBeVisible()
+
+  // Recorded here, right before the switch: the approvable row this run created, at the
+  // entry viewport, is the only same-row comparison a firm-only fixture can't offer.
+  const approvableHeightBox = await untickedRow.boundingBox()
+  expect(approvableHeightBox, 'the unticked row never rendered before the seat switch').toBeTruthy()
+
+  // --- Core AC D-1 (BUG-17-06): switch the demo seat to one this row IS blocked for --------
+  // Emeka Uzowulu holds only line_mgr (db/seed.dev.sql), never the in-house plan's fin_dir
+  // (demopolicy.go:156) -- the only way to reach an in-house blocked row without publishing
+  // a second policy ([topology-never-publishes]). No restore: standIn is never persisted
+  // (App.tsx), every Playwright test gets a fresh context, and this is the last test.
+  await page.getByTestId('persona-trigger').click()
+  await expect(page.getByTestId('persona-row-list')).toBeVisible()
+  await page.getByTestId('persona-row').filter({ hasText: 'Emeka Uzowulu' }).click()
+  await expect(page.getByTestId('persona-toast-title')).toBeVisible()
+  await page.getByTestId('persona-toast-dismiss').click()
+  await expect(page.getByTestId('persona-name')).toHaveText('Emeka Uzowulu')
+
+  await goTo(page, 'Approvals')
+  const blockedRow = approvalRowByNumber(page, untickedNumber)
+  await expect(blockedRow).toBeVisible()
+  await expect(blockedRow.getByTestId('approval-select-row'), 'the seat really is blocked').toBeDisabled()
+  await expect(blockedRow.getByTestId('approval-blocked-icon')).toBeVisible()
+  const blockedHeightBox = await blockedRow.boundingBox()
+  expect(blockedHeightBox, 'the blocked row never rendered after the seat switch').toBeTruthy()
+  expect(
+    Math.abs(blockedHeightBox!.height - approvableHeightBox!.height),
+    `the blocked row (${blockedHeightBox!.height}px) must stand the same height as the approvable row it replaced (${approvableHeightBox!.height}px)`,
+  ).toBeLessThanOrEqual(1)
+
+  await blockedRow.locator('> *').nth(BUYER_TRACK).click()
+  await expect(page).toHaveURL(new RegExp(`/invoices/${untickedId}$`))
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/\/approvals$/)
+  await expect(blockedRow).toBeVisible()
 
   // A07-7
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

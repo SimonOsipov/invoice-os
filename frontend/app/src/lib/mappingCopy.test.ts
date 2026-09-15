@@ -35,7 +35,10 @@ describe('mappingCopy', () => {
       expect(src.includes(n), n).toBe(true)
     }
 
-    const lastIdx = src.indexOf(needles[2]!)
-    expect(src.indexOf('>RESTORED</span>', lastIdx), 'RESTORED must render after the reworded sentence').toBeGreaterThan(lastIdx)
+    const after = src.slice(src.indexOf(needles[2]!) + needles[2]!.length).replace(/^\{' '\}\s*/, '')
+    expect(
+      after.startsWith(`<span className="mono" style={{ fontSize: 10, color: 'var(--action)' }}>RESTORED</span>.`),
+      'the RESTORED span, in the action colour, must close the reworded sentence',
+    ).toBe(true)
   })
 })

@@ -898,8 +898,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         // Functional form, not the `files` snapshot: a file removed while the previews
         // were in flight must stay removed, not be resurrected by a stale array.
         setPickedFiles((cur) => attachDocumentIds(cur, previewed))
-        // ceiling: a click before the entity list resolves snapshots a null target, so
-        // it makes no lookup and that import opens unrestored.
+        // ceiling: a click before the entity list resolves snapshots a null target, so that import
+        // opens unrestored; revisit if a returning client's import is reported unrestored.
         const lookup = target ? (documentId: string) => getSavedMapping(authedFetch, base, target, documentId) : null
         setGroups(await restoreGroups(groupByLayout(previewed), lookup))
         setGroupIndex(0)

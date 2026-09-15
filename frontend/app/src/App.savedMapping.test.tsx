@@ -1,14 +1,5 @@
 // @vitest-environment jsdom
-// vitest.config.ts stays `environment: 'node'` for every other suite.
-//
-// SMAPP-01..09 pin the saved-mapping restore wired into readAllColumns: the
-// lookup after preview, remember_mapping per group, the RESTORED badge/notice/
-// return control, and a failed lookup's fallback. Harness is
-// App.routeReviewHash.test.tsx's: the real <App/>, a session in a stubbed
-// localStorage, ctx captured through a mocked Sidebar. The lookup goes through
-// fetch (authedFetch), never the XHR transport preview/createImport use, so
-// routeFetch's saved-mapping branch answers it and FakeXhr only ever serves
-// preview/createImport.
+// The lookup goes through fetch, so routeFetch answers it; FakeXhr serves only preview and createImport.
 
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -89,9 +80,7 @@ async function openCreateAndWaitForEntity() {
   await waitFor(() => expect(requireCtx().entityId, 'the click-time entity never resolved').toBe(ENTITY_A))
 }
 
-// Extends App.routeReviewHash.test.tsx's no-op stub: open/send must actually
-// capture what the saved-mapping wiring needs to assert on (createImport's
-// multipart body).
+// Records createImport's multipart body so remember_mapping can be asserted.
 class FakeXhr {
   static instances: FakeXhr[] = []
   status = 0
@@ -221,7 +210,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   return { promise, resolve }
 }
 
-describe('EXTR-37-05: opening the Map step restores a saved mapping', () => {
+describe('opening the Map step restores a saved mapping', () => {
   it("SMAPP-01: after preview the App looks up each group's saved mapping in group order with the click-time entity", async () => {
     FakeXhr.instances = []
     await bootAtWithGateway({ 'doc-a': okAnswer(SAVE_A), 'doc-b': okAnswer(null) })
@@ -488,6 +477,7 @@ describe('EXTR-37-05: opening the Map step restores a saved mapping', () => {
       expect(badges[0]!.tagName, `${header}'s badge must be a SPAN`).toBe('SPAN')
       expect(badges[0]!.classList.contains('mono'), `${header}'s badge must carry the mono class`).toBe(true)
       expect(badges[0]!.textContent, `${header}'s badge must read RESTORED`).toBe('RESTORED')
+      expect((badges[0] as HTMLElement).style.color, `${header}'s badge must use the action colour`).toBe('var(--action)')
     }
     expect(badgesByHeader.get('Subtotal') ?? [], 'Subtotal must carry no badge').toHaveLength(0)
 
@@ -660,4 +650,110 @@ describe('EXTR-37-05: opening the Map step restores a saved mapping', () => {
       expect(body.get('remember_mapping'), 'a group that was never restored must be saved').toBe('true')
     },
   )
+
+  it('SMAPP-10: the notice and badges follow the active group, so an unrestored second group shows neither', async () => {
+    FakeXhr.instances = []
+    await bootAtWithGateway({ 'doc-a': okAnswer(SAVE_A), 'doc-b': okAnswer(null) })
+    await openCreateAndWaitForEntity()
+
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', LAYOUT_A), csvFile('b.csv', LAYOUT_B)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control').toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-a', LAYOUT_A))
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control').toHaveLength(2))
+    act(() => {
+      FakeXhr.instances[1]!.respond(200, previewReply('doc-b', LAYOUT_B))
+    })
+    await waitFor(() => expect(requireCtx().createStep, 'preview never landed on the mapping step').toBe('mapping'))
+
+    expect(document.querySelector('[data-testid="map-restored-notice"]'), 'control: restored group 0 renders the notice').not.toBeNull()
+    const nextButton = Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Continue to next file')
+    expect(nextButton, 'a restored group that is not the last must read Continue to next file').not.toBeUndefined()
+    expect(nextButton!.disabled, 'a restored group that is not the last must leave Continue enabled').toBe(false)
+
+    act(() => {
+      requireCtx().continueMapping()
+    })
+    expect(requireCtx().groupIndex, 'sanity: an untouched restored group 0 must advance to group 1').toBe(1)
+
+    expect(document.querySelector('[data-testid="map-restored-notice"]'), 'an unrestored active group must render no notice').toBeNull()
+    expect(document.querySelectorAll('[data-testid="map-restored-badge"]'), 'an unrestored active group must render no badge').toHaveLength(0)
+    const totalCol = Array.from(document.querySelectorAll('[data-testid="map-column"]')).find(
+      (col) => col.querySelector('div.mono')?.textContent === 'Total',
+    )
+    expect(totalCol, "group 1's Total column must render").not.toBeUndefined()
+    const totalTagTexts = Array.from(totalCol!.querySelectorAll('.mono')).map((n) => n.textContent ?? '')
+    expect(totalTagTexts.some((t) => t.includes('AUTO')), "group 1's recognised Total must read AUTO").toBe(true)
+  })
+
+  it('SMAPP-11: a failed first lookup still restores the second group, and Use automatic suggestions there resets only that group', async () => {
+    FakeXhr.instances = []
+    await bootAtWithGateway({
+      'doc-a': () => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }),
+      'doc-b': okAnswer(SAVE_B),
+    })
+    await openCreateAndWaitForEntity()
+
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', LAYOUT_A), csvFile('b.csv', LAYOUT_B)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control').toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-a', LAYOUT_A))
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control').toHaveLength(2))
+    act(() => {
+      FakeXhr.instances[1]!.respond(200, previewReply('doc-b', LAYOUT_B))
+    })
+    await waitFor(() => expect(requireCtx().createStep, 'preview never landed on the mapping step').toBe('mapping'))
+
+    expect(lookupUrls, 'a failed first lookup must not stop the second').toHaveLength(2)
+    expect(requireCtx().importError, 'a failed lookup must not surface an import error').toBeNull()
+    expect(requireCtx().groups[0]?.restored, 'the failed lookup must leave group 0 unrestored').toBeNull()
+    expect(requireCtx().groups[1]?.restored, 'group 1 must be restored from SAVE_B').toEqual({
+      savedAt: SAVE_B.saved_at,
+      mapping: restoreMapping(LAYOUT_B, SAVE_B.mapping),
+    })
+    expect(document.querySelector('[data-testid="map-restored-notice"]'), 'unrestored group 0 must render no notice').toBeNull()
+
+    act(() => {
+      requireCtx().armField('invoice_number')
+    })
+    act(() => {
+      requireCtx().clickCol('Invoice No')
+    })
+    act(() => {
+      requireCtx().continueMapping()
+    })
+    expect(requireCtx().groupIndex, 'sanity: group 0 must advance once invoice_number is placed').toBe(1)
+    const group0Snapshot = requireCtx().groups[0]
+    expect(group0Snapshot?.mapping.invoice_number, 'sanity: group 0 keeps its hand placement').toBe('Invoice No')
+
+    const notice = document.querySelector('[data-testid="map-restored-notice"]')
+    expect(notice, "restored group 1 must render the notice").not.toBeNull()
+    expect(notice!.querySelector('p')?.textContent, "the notice must name group 1's saved-at time").toBe(
+      `Mapping restored from this client's earlier import, saved ${fmtDateTime(SAVE_B.saved_at)}.`,
+    )
+    const refCol = Array.from(document.querySelectorAll('[data-testid="map-column"]')).find(
+      (col) => col.querySelector('div.mono')?.textContent === 'Ref',
+    )
+    expect(refCol, "group 1's Ref column must render").not.toBeUndefined()
+    expect(refCol!.querySelectorAll('[data-testid="map-restored-badge"]'), 'Ref must hold the restored invoice_number badge').toHaveLength(1)
+
+    fireEvent.click(notice!.querySelector('button')!)
+
+    expect(requireCtx().groups[1]?.restored, 'the control must drop the active group 1 snapshot').toBeNull()
+    expect(requireCtx().groups[1]?.mapping, 'group 1 must reseed from automatic suggestions').toEqual(initMappingFromHeaders(LAYOUT_B))
+    expect(requireCtx().groups[0], 'the control must leave group 0 exactly as it was').toEqual(group0Snapshot)
+    expect(document.querySelector('[data-testid="map-restored-notice"]'), 'the notice must be gone once reset').toBeNull()
+  })
 })

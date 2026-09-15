@@ -743,6 +743,16 @@ func TestAdvisory_TheRegisterReadsItsFarRightAmounts(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("control: without the row reach R1's three are missing", func(t *testing.T) {
+		cands := extraction.Resolve(rvCorpusPages(t, fxAdvisoryRegisterUnspaced), extraction.RuleSet{Tier1: rrWithoutRowReach()})
+		out := extraction.Reconcile(extraction.Input{Candidates: cands})
+		for _, a := range rrRegisterAmounts {
+			if r, ok := rcFind(out, a.field); !ok || r.Reason != extraction.ReasonMissing {
+				t.Errorf("R1 %s without the row reach = %s / %q (ok=%v), want Reason %q", a.field, advStr(r.Value), r.Reason, ok, extraction.ReasonMissing)
+			}
+		}
+	})
 }
 
 func TestAdvisory_TheLineItemLabelledVATIsNotTheVAT(t *testing.T) {

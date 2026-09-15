@@ -753,10 +753,10 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	oParties := [][]Party{partyOrder(outrankedPages[0])}
 	oLabels := [][]bool{labelTokens(outrankedPages[0])}
 
-	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.fallback.outranked", TierFallback, 0); len(got) != 0 {
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.fallback.outranked", TierFallback, 0, false); len(got) != 0 {
 		t.Errorf("fallback candidate over %q = %+v, want none: a Fallback rule must be outranked exactly like a generic one", outrankedText, got)
 	}
-	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.learned.outranked", TierLearned, 0); len(got) != 1 {
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.learned.outranked", TierLearned, 0, false); len(got) != 1 {
 		t.Errorf("learned candidate over %q = %+v, want exactly one: a learned rule is never outranked by the shipped lexicon", outrankedText, got)
 	}
 
@@ -774,10 +774,10 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	bParties := [][]Party{partyOrder(boundaryPages[0])}
 	bLabels := [][]bool{labelTokens(boundaryPages[0])}
 
-	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.boundary", TierFallback, 0); len(got) != 0 {
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.boundary", TierFallback, 0, false); len(got) != 0 {
 		t.Errorf("fallback candidate crossing the intervening Total label = %+v, want none: a Fallback rightward read must stop at a label exactly like a generic one", got)
 	}
-	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.learned.boundary", TierLearned, 0); len(got) != 1 {
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.learned.boundary", TierLearned, 0, false); len(got) != 1 {
 		t.Errorf("learned candidate crossing the same intervening label = %+v, want exactly one: a learned rightward read never stops at a label", got)
 	}
 
@@ -790,7 +790,7 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	dParties := [][]Party{partyOrder(droppedPages[0])}
 	dLabels := [][]bool{labelTokens(droppedPages[0])}
 
-	if got := appendRuleCandidates(nil, droppedPages, dParties, dLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped", TierFallback, 0.97); len(got) != 0 {
+	if got := appendRuleCandidates(nil, droppedPages, dParties, dLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped", TierFallback, 0.97, false); len(got) != 0 {
 		t.Errorf("fallback candidate crossing a label on the dropped value's own band = %+v, want none", got)
 	}
 
@@ -802,7 +802,7 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	mParties := [][]Party{partyOrder(memoPages[0])}
 	mLabels := [][]bool{labelTokens(memoPages[0])}
 
-	if got := appendRuleCandidates(nil, memoPages, mParties, mLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped.control", TierFallback, 0.97); len(got) != 1 {
+	if got := appendRuleCandidates(nil, memoPages, mParties, mLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped.control", TierFallback, 0.97, false); len(got) != 1 {
 		t.Errorf("fallback candidate over the same geometry with a non-label word = %+v, want exactly one: the control fatals if it reaches nothing", got)
 	}
 }

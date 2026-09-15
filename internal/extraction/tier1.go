@@ -27,6 +27,10 @@ type Tier1Rule struct {
 	// band. tier1DropRight on every shipped right rule, zero elsewhere
 	// (TestTier1_EveryRuleHasACompiledMatcher); below never reads it.
 	Drop float64
+
+	// RowReach lets an amount label read the first token on its own line past the right dial
+	// (TestResolve_TheRowReachReadsTheFirstTokenOnTheLine).
+	RowReach bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon

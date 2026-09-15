@@ -74,7 +74,7 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		// reviewer who pointed at the field.
 		// ceiling: learned rules carry no drop band and LearnRule cannot relate a dropped
 		// value; revisit when a correction on an offset stack must learn
-		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned, 0)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, BandAnywhere, false, r.Field, r.ID, TierLearned, 0, false)
 		if len(all) > before {
 			claimed = append(claimed, r.Field)
 		}
@@ -84,7 +84,7 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 		if r.Fallback {
 			tier = TierFallback
 		}
-		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, tier, r.Drop)
+		all = appendRuleCandidates(all, pages, parties, labels, r.Rule, r.Band, r.PartyScoped, r.Field, r.Key, tier, r.Drop, r.RowReach)
 	}
 
 	out := make([]Candidate, 0, len(HeaderFields))
@@ -111,8 +111,8 @@ func Resolve(pages []TokenPage, rules RuleSet) []Candidate {
 // anchor, never the value: on a below relation the value can sit past a block boundary, and
 // reading its party there would let it steal the other party's field.
 //
-// drop is the Tier-1 right-relation drop dial; a learned call always passes 0.
-func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier, drop float64) []Candidate {
+// drop and rowReach are the Tier-1 right-relation dials; a learned call passes 0 and false.
+func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party, labels [][]bool, rule Rule, band PageBand, scoped bool, field, ruleID string, tier Tier, drop float64, rowReach bool) []Candidate {
 	if rule.re == nil {
 		return dst
 	}

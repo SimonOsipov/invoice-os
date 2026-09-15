@@ -1479,3 +1479,76 @@ describe('B17-D5: the reason icon and its tip never open the invoice', () => {
     expect(spy).toHaveBeenCalledWith('inv-blocked')
   })
 })
+
+describe('B17-D6: every cell outside the checkbox cell and the reason icon opens its own row', () => {
+  it('each cell, and each marker inside one, calls openImportedInvoice exactly once with its row id, in both workspaces', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const workspaces: Array<{ mode?: 'firm' | 'inhouse'; entityId?: string | null }> = [{}, { mode: 'inhouse', entityId: null }]
+    for (const over of workspaces) {
+      const spy = vi.fn()
+      const ok = approvalRow({
+        id: 'inv-ok',
+        invoice_number: 'INV-OK',
+        approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, due_at: null, overdue: true },
+      })
+      const blocked = approvalRow({
+        id: 'inv-bl',
+        invoice_number: 'INV-BL',
+        can_approve: false,
+        approve_blocked_reason: reason,
+        approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Controller', pending_holder_warn: false, due_at: '2026-07-10T00:00:00Z', overdue: false },
+      })
+      mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+      render(<ApprovalsView ctx={approvalsCtx({ ...over, openImportedInvoice: spy })} />)
+      await screen.findByText('INV-OK')
+
+      const targets: Array<[string, Element, string]> = []
+      for (const [number, id] of [['INV-OK', 'inv-ok'], ['INV-BL', 'inv-bl']] as const) {
+        const row = screen.getByText(number).closest('[data-testid="approval-row"]') as HTMLElement
+        const cells = Array.from(row.children)
+        expect(cells, `${number}: the row must keep seven grid cells`).toHaveLength(7)
+        targets.push(
+          [`${number} row padding`, row, id],
+          [`${number} invoice # cell`, cells[1], id],
+          [`${number} invoice # text`, within(row).getByText(number), id],
+          [`${number} buyer cell`, cells[2], id],
+          [`${number} amount cell`, cells[3], id],
+          [`${number} step cell`, cells[4], id],
+          [`${number} role cell`, cells[5], id],
+          [`${number} role label`, cells[5].firstElementChild as Element, id],
+          [`${number} due cell`, cells[6], id],
+        )
+      }
+      const okRow = screen.getByText('INV-OK').closest('[data-testid="approval-row"]') as HTMLElement
+      targets.push(
+        ['INV-OK unstaffed warning', within(okRow).getByTestId('approval-unstaffed-warning'), 'inv-ok'],
+        ['INV-OK overdue marker', within(okRow).getByTestId('approval-overdue'), 'inv-ok'],
+      )
+
+      for (const [label, el, id] of targets) {
+        const before = spy.mock.calls.length
+        fireEvent.click(el)
+        expect(spy.mock.calls.slice(before), `mode ${over.mode ?? 'firm'}: ${label} must open ${id} exactly once`).toEqual([[id]])
+      }
+
+      cleanup()
+    }
+  })
+})
+
+describe('B17-D7: the checkbox cell fills the row height', () => {
+  it('declares align-self stretch on approvable and blocked rows', async () => {
+    const ok = approvalRow({ id: 'inv-ok', invoice_number: 'INV-OK' })
+    const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const cells = screen.getAllByTestId('approval-select-cell')
+    expect(cells, 'one select cell per row').toHaveLength(2)
+    // jsdom has no layout; the rendered extent is a deployed concern.
+    for (const cell of cells) expect(cell.style.alignSelf).toBe('stretch')
+  })
+})

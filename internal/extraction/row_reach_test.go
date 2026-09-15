@@ -6,6 +6,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -678,5 +679,139 @@ func TestResolve_TheRowReachBareLabelCountsOnlyLetters(t *testing.T) {
 		if got := total("Total (NGN)"); len(got) != 0 {
 			t.Errorf("total = %v, want none: NGN is letters outside the match", rvValues(got))
 		}
+	})
+}
+
+// 02-T1..T3, T8: the register's far-right amounts, once RowReach is attached to the three
+// amount .right rules.
+
+// rrWithoutRowReach clones the shipped set with RowReach cleared on every rule.
+func rrWithoutRowReach() []extraction.Tier1Rule {
+	out := slices.Clone(extraction.Tier1Rules)
+	for i := range out {
+		out[i].RowReach = false
+	}
+	return out
+}
+
+// rrRegisterAmounts is the register's three far-right amounts, as pdfium prints and measures them.
+var rrRegisterAmounts = []struct {
+	field, value, ruleID, printed string
+	gap                           float64
+}{
+	{"subtotal", "14800000.00", "t1.subtotal.right", "14,800,000.00", 0.6147},
+	{"vat", "1110000.00", "t1.vat.right", "1,110,000.00", 0.6133},
+	{"total", "14430000.00", "t1.total.right", "₦14,430,000.00", 0.4604},
+}
+
+func rrHasNear(cs []extraction.Candidate, field, value, ruleID string, gap float64) bool {
+	return slices.ContainsFunc(cs, func(c extraction.Candidate) bool {
+		return c.Field == field && c.Value == value && c.RuleID == ruleID && math.Abs(c.Distance-gap) <= 5e-5
+	})
+}
+
+// rrDecides fails unless every rrRegisterAmounts field decided ReasonNone at its pinned value,
+// with no alternative.
+func rrDecides(t *testing.T, what string, out []extraction.FieldResult) {
+	t.Helper()
+	for _, a := range rrRegisterAmounts {
+		r, ok := rcFind(out, a.field)
+		if !ok || r.Reason != extraction.ReasonNone || !advSameValue(r.Value, rcStr(a.value)) || len(r.Alternatives) != 0 {
+			t.Errorf("%s: %s = %s / %q with %d alternative(s) (ok=%v), want %s / ReasonNone with none", what, a.field, advStr(r.Value), r.Reason, len(r.Alternatives), ok, a.value)
+		}
+	}
+}
+
+func TestAdvisory_TheRegisterReadsItsFarRightAmounts(t *testing.T) {
+	for _, fx := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
+		rrDecides(t, fx, advReconcile(t, fx))
+		cands := advResolve(t, fx)
+		for _, a := range rrRegisterAmounts {
+			if !rrHasNear(cands, a.field, a.value, a.ruleID, a.gap) {
+				t.Errorf("%s: %s carries no %s from %s at %v: %+v", fx, a.field, a.value, a.ruleID, a.gap, rvFor(cands, a.field))
+			}
+		}
+	}
+
+	// 02-T2: the control that the reach, not something else, moved the three fields.
+	t.Run("control: without the row reach all three are missing", func(t *testing.T) {
+		cands := extraction.Resolve(rvCorpusPages(t, fxAdvisoryRegister), extraction.RuleSet{Tier1: rrWithoutRowReach()})
+		out := extraction.Reconcile(extraction.Input{Candidates: cands})
+		for _, a := range rrRegisterAmounts {
+			if r, ok := rcFind(out, a.field); !ok || r.Reason != extraction.ReasonMissing {
+				t.Errorf("R0 %s without the row reach = %s / %q (ok=%v), want Reason %q", a.field, advStr(r.Value), r.Reason, ok, extraction.ReasonMissing)
+			}
+		}
+	})
+}
+
+func TestAdvisory_TheLineItemLabelledVATIsNotTheVAT(t *testing.T) {
+	for _, fx := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
+		if slices.Contains(rvValues(rvFor(advResolve(t, fx), "vat")), "2850000.00") {
+			t.Errorf("%s: a vat candidate carries the line item's 2850000.00", fx)
+		}
+	}
+
+	// Control: the line item IS in reach once bare, so the register's silence above is the
+	// lexicon match refusing it, not the reach failing to fire at all.
+	pages := advRewriteToken(t, rvCorpusPages(t, fxAdvisoryRegister), "VAT compliance health check", "VAT")
+	if vat := rvFor(extraction.Resolve(pages, rvGeneric()), "vat"); !rrHasNear(vat, "vat", "2850000.00", "t1.vat.right", 0.4984) {
+		t.Errorf("vat lacks 2850000.00 from t1.vat.right at 0.4984 after rewriting the label to VAT: %+v", vat)
+	}
+}
+
+// rrSplitNaira rebuilds the register's three amount tokens, splitting the glued naira symbol off
+// the target amount (joined=false) or joining a bare naira onto it (joined=true). Every inserted
+// token copies the target's own Page, Y0 and Y1; X-coordinates come from the target's measured box.
+func rrSplitNaira(t *testing.T, pages []extraction.TokenPage, joined bool) []extraction.TokenPage {
+	t.Helper()
+	out := make([]extraction.TokenPage, len(pages))
+	hits := 0
+	for i, p := range pages {
+		toks := make([]extraction.Token, 0, len(p.Tokens)+len(rrRegisterAmounts))
+		for _, tok := range p.Tokens {
+			target := false
+			for _, a := range rrRegisterAmounts {
+				if tok.Text == a.printed {
+					target = true
+				}
+			}
+			if !target {
+				toks = append(toks, tok)
+				continue
+			}
+			hits++
+			digits := strings.TrimPrefix(tok.Text, "₦")
+			switch {
+			case joined:
+				tok.Text = "₦ " + digits
+				toks = append(toks, tok)
+			case digits != tok.Text:
+				naira, amount := tok, tok
+				naira.Text, naira.Region.X1 = "₦", tok.Region.X0+0.007
+				amount.Text, amount.Region.X0 = digits, tok.Region.X0+0.010
+				toks = append(toks, naira, amount)
+			default:
+				naira := tok
+				naira.Text, naira.Region.X0, naira.Region.X1 = "₦", tok.Region.X0-0.010, tok.Region.X0-0.003
+				toks = append(toks, naira, tok)
+			}
+		}
+		out[i] = extraction.TokenPage{Number: p.Number, WidthPt: p.WidthPt, HeightPt: p.HeightPt, Tokens: toks}
+	}
+	if hits != len(rrRegisterAmounts) {
+		t.Fatalf("rebuilt %d amount token(s), want %d", hits, len(rrRegisterAmounts))
+	}
+	return out
+}
+
+func TestAdvisory_ASplitNairaStillReadsTheRegistersAmounts(t *testing.T) {
+	t.Run("R0 with a split naira", func(t *testing.T) {
+		pages := rrSplitNaira(t, rvCorpusPages(t, fxAdvisoryRegister), false)
+		rrDecides(t, "R0 with a split naira", extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric())}))
+	})
+	t.Run("control: R0 with a joined naira", func(t *testing.T) {
+		pages := rrSplitNaira(t, rvCorpusPages(t, fxAdvisoryRegister), true)
+		rrDecides(t, "R0 with a joined naira", extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric())}))
 	})
 }

@@ -56,6 +56,12 @@ func t1Defective(r Tier1Rule) string {
 	if r.Drop != wantDrop {
 		return fmt.Sprintf("drop %v on a %q rule, want %v", r.Drop, r.Rule.Relation.Kind, wantDrop)
 	}
+
+	// RowReach is true exactly on the amount right rules.
+	wantReach := r.Rule.Relation.Kind == RelRight && r.Rule.Shape == ShapeAmount
+	if r.RowReach != wantReach {
+		return fmt.Sprintf("row_reach %v on a %q %q rule, want %v", r.RowReach, r.Rule.Relation.Kind, r.Rule.Shape, wantReach)
+	}
 	return ""
 }
 
@@ -96,6 +102,18 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 	belowWithDrop.Drop = tier1DropRight
 	if why := t1Defective(belowWithDrop); why == "" {
 		t.Error("a RelBelow rule carrying tier1DropRight was reported sound; the invariant would not catch Drop leaking onto a rule that ignores it")
+	}
+
+	// Near-miss control: a non-amount right rule with RowReach forced true. Only the three
+	// amount right rules may carry the reach.
+	i := slices.IndexFunc(Tier1Rules, func(r Tier1Rule) bool { return r.Key == "t1.currency.right" })
+	if i < 0 {
+		t.Fatal("Tier1Rules carries no t1.currency.right rule; the near-miss control below has nothing to copy")
+	}
+	nonAmountReach := Tier1Rules[i]
+	nonAmountReach.RowReach = true
+	if why := t1Defective(nonAmountReach); why == "" {
+		t.Error("a non-amount right rule with RowReach forced true was reported sound; the invariant would not catch the reach leaking onto a rule that should not carry it")
 	}
 }
 

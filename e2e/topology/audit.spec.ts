@@ -17,9 +17,12 @@
 // a containment, or a comparison against a live read taken in the same test.
 import { test, expect, type Locator, type Page } from '@playwright/test'
 
+import { createEntity, createInvoice, getAuditLog, login, PERSONAS } from '../api/client'
+import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
+import { approvalRun404Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, rectsOverlap, WIDE_WIDTHS } from './layout'
-import { FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
+import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // Mirrors frontend/app/src/components/AuditRow.tsx's AUDIT_TABLE_MIN_WIDTH. Hand-kept:
 // e2e/ has no import path into the SPA's source, the same way every other wire mirror in
@@ -106,6 +109,25 @@ async function openBundleDrawer(page: Page): Promise<string> {
   await page.getByTestId('evidence-period-30d').click({ timeout: 15_000 })
   await expect(page.getByTestId('evidence-confirm-block')).toBeVisible({ timeout: 30_000 })
   return chosen
+}
+
+// cleanInvoiceFields(): a local copy of persona-surfaces.spec.ts:43-57 (audit.spec.ts has no
+// invoice builder of its own). Fires zero violations, so it is never validated -- this file
+// only needs the invoice.created event it writes, not a submittable invoice.
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
 }
 
 test.describe('Audit screen', () => {
@@ -957,5 +979,163 @@ test.describe('Audit screen', () => {
     }
     expect(measured.length, 'the toast/panel overlap sweep measured nothing').toBe(WIDE_WIDTHS.length)
     await test.info().attach('audit-bundle-toast-overlap', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  })
+
+  // Core AC E-1/E-2 and F: the System avatar against the person avatar (shape shared, glyph
+  // distinct), and the range/actor-kind pills against the Activity card's own reference chip.
+  test('audit_systemIconAndFilterPillsMatchTheirReferences', async ({ page }) => {
+    test.setTimeout(90_000)
+
+    const token = await login(PERSONAS.B)
+
+    // System floor, over the screen's own 30-day default (InvoiceActivityCard.tsx:45-47 --
+    // the server carries no window of its own): the boot backlog seeds it before sign-in
+    // ([premise-f-system-rows]), so this can be read before the fixture exists.
+    const from = new Date(Date.now() - 30 * 864e5).toISOString()
+    const systemFloor = await getAuditLog(token, { actor_kind: 'system', from, limit: 1 })
+    expect(systemFloor.total, 'no System-actor row in the last 30 days -- the boot backlog seed is the oracle for this').toBeGreaterThan(0)
+
+    const stamp = Date.now()
+    const entity = await createEntity(token, { name: `BUG-17 audit ${stamp}`, tin: freshTin() })
+    const invoiceNumber = `INV-BUG17-AUDIT-${stamp}`
+    const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+    // People floor, scoped to this fixture's own company: a workspace-wide read could land
+    // on a free-text actor (backfill-source-rows) that resolves to no initials at all.
+    const peopleFloor = await getAuditLog(token, { actor_kind: 'people', company: entity.id, limit: 1 })
+    expect(peopleFloor.total, "no person-actor row on the fixture's own company").toBeGreaterThan(0)
+
+    // The fixture is never validated, so LiveInvoiceDetail's approval-run GET 404s on mount
+    // (docs/e2e-convention.md) -- dropped locally, the invoice-surfaces.spec.ts:60-72 shape.
+    // Registered before signInAs: a listener attached after navigation misses what already fired.
+    const errors: string[] = []
+    const dropApprovalRun404 = approvalRun404Dropper(page)
+    page.on('console', (msg) => {
+      if (msg.type() !== 'error') return
+      if (dropApprovalRun404(msg.text(), msg.location().url)) return
+      errors.push(msg.text())
+    })
+    page.on('pageerror', (err) => {
+      errors.push(`pageerror: ${err.message}`)
+    })
+
+    await signInAs(page, 'inhouse')
+    await page.goto(`${APP_URL}/invoices/${inv.id}`)
+    await expect(page, 'the invoice detail must settle on its own URL').toHaveURL(new RegExp(`/invoices/${inv.id}$`))
+    await expect(page.getByTestId('invoice-activity')).toBeVisible()
+
+    // Reference chip (F): unpressed, because the default chip is 'all' (InvoiceActivityCard.tsx:42).
+    const ref = page.getByTestId('activity-chip-invoices')
+    await expect(ref).toBeEnabled()
+    await expect(ref).toHaveAttribute('aria-pressed', 'false')
+    const refStyle = await ref.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return {
+        fontFamily: cs.fontFamily,
+        fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight,
+        borderTopWidth: cs.borderTopWidth,
+        borderTopStyle: cs.borderTopStyle,
+        borderTopColor: cs.borderTopColor,
+        backgroundColor: cs.backgroundColor,
+        color: cs.color,
+      }
+    })
+    const refBox = await ref.boundingBox()
+    expect(refBox, 'the reference chip never rendered').not.toBeNull()
+
+    // Pill (F): every computed value must equal the reference's.
+    await openAudit(page)
+    const pill = page.getByTestId('audit-pill-range')
+    await expect(pill).toBeVisible()
+    const pillStyle = await pill.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return {
+        fontFamily: cs.fontFamily,
+        fontSize: cs.fontSize,
+        fontWeight: cs.fontWeight,
+        borderTopWidth: cs.borderTopWidth,
+        borderTopStyle: cs.borderTopStyle,
+        borderTopColor: cs.borderTopColor,
+        backgroundColor: cs.backgroundColor,
+        color: cs.color,
+        radius: cs.borderTopLeftRadius,
+      }
+    })
+    const pillBox = await pill.boundingBox()
+    expect(pillBox, 'the range pill never rendered').not.toBeNull()
+
+    expect(pillStyle.fontFamily, "the range pill must share the reference chip's font family").toBe(refStyle.fontFamily)
+    expect(pillStyle.fontSize, "the range pill must share the reference chip's font size").toBe(refStyle.fontSize)
+    expect(pillStyle.fontWeight, "the range pill must share the reference chip's font weight").toBe(refStyle.fontWeight)
+    expect(pillStyle.borderTopWidth, "the range pill must share the reference chip's border width").toBe(refStyle.borderTopWidth)
+    expect(pillStyle.borderTopStyle, "the range pill must share the reference chip's border style").toBe(refStyle.borderTopStyle)
+    expect(pillStyle.borderTopColor, "the range pill must share the reference chip's border color").toBe(refStyle.borderTopColor)
+    expect(pillStyle.backgroundColor, "the range pill must share the reference chip's fill").toBe(refStyle.backgroundColor)
+    expect(pillStyle.color, "the range pill must share the reference chip's text color").toBe(refStyle.color)
+    if (refBox && pillBox) {
+      expect(Math.abs(pillBox.height - refBox.height), "the range pill must stand the reference chip's height").toBeLessThanOrEqual(0.5)
+      expect(parseFloat(pillStyle.radius), 'the pill must stay fully rounded').toBeGreaterThanOrEqual(pillBox.height / 2)
+    }
+
+    // Who column (E-1): the header span every avatar below is measured against.
+    const head = page.getByTestId('audit-table-head')
+    const whoHead = head.getByText('Who', { exact: true })
+    await expect(whoHead).toBeVisible()
+    const whoHeadBox = await whoHead.boundingBox()
+    expect(whoHeadBox, 'the Who header never rendered').not.toBeNull()
+
+    // Actor -> System only ([e-by-actor-kind]).
+    await page.getByTestId('audit-actor-trigger').click()
+    await page.getByTestId('audit-actor-kind-system').click()
+    await page.keyboard.press('Escape')
+    // Exact-string toHaveText would fail here: every pill in this row renders its own "x"
+    // remove glyph flush against the label with no separating whitespace (AuditFilterCard.tsx,
+    // the same shape audit-pill-invoice already routes around at auth.spec.ts:480), so this
+    // matches the sibling pill's own convention rather than the plan's literal quoted string.
+    await expect(page.getByTestId('audit-pill-actorKind')).toHaveText(/^System only/)
+
+    const sysRow = page.getByTestId('audit-row').first()
+    await expect(sysRow).toBeVisible()
+    await expect(sysRow.getByTestId('actor-bolt')).toHaveCount(1)
+    await expect(sysRow.getByTestId('actor-initials')).toHaveCount(0)
+    const sys = sysRow.getByTestId('actor-bolt').locator('xpath=..')
+    const sysBox = await sys.boundingBox()
+    const sysRadius = await sys.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)
+    expect(sysBox, 'the System avatar never rendered').not.toBeNull()
+
+    // Actor -> People only. Targeted by the fixture's own company, not `.first()`: under
+    // People only the server admits any non-system actor, including a free-text row that
+    // resolves to no initials at all ([e-by-actor-kind]).
+    await page.getByTestId('audit-actor-trigger').click()
+    await page.getByTestId('audit-actor-kind-people').click()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('audit-pill-actorKind')).toHaveText(/^People only/)
+
+    const personRow = page
+      .getByTestId('audit-row')
+      .filter({ has: page.getByTestId('audit-company').filter({ hasText: entity.name }) })
+      .first()
+    await expect(personRow).toBeVisible()
+    await expect(personRow.getByTestId('actor-initials')).toHaveCount(1)
+    await expect(personRow.getByTestId('actor-initials')).toHaveText(/^[A-Z?]{1,2}$/)
+    await expect(personRow.getByTestId('actor-bolt')).toHaveCount(0)
+    const person = personRow.getByTestId('actor-initials').locator('xpath=..')
+    const personBox = await person.boundingBox()
+    const personRadius = await person.evaluate((el) => getComputedStyle(el).borderTopLeftRadius)
+    expect(personBox, 'the person avatar never rendered').not.toBeNull()
+
+    if (sysBox && personBox && whoHeadBox) {
+      expect(sysRadius, 'System and person avatars must share the same computed corner').toBe(personRadius)
+      expect(Math.abs(sysBox.width - personBox.width), 'the two avatars must share the same width').toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sysBox.height - personBox.height), 'the two avatars must share the same height').toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sysBox.x - personBox.x), 'the two avatars must sit at the same x').toBeLessThanOrEqual(1)
+      for (const [name, box] of [['System', sysBox] as const, ['person', personBox] as const]) {
+        expect(box.x, `the ${name} avatar must sit inside the Who column`).toBeGreaterThanOrEqual(whoHeadBox.x - 1)
+        expect(box.x, `the ${name} avatar must sit inside the Who column`).toBeLessThanOrEqual(whoHeadBox.x + whoHeadBox.width)
+      }
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 })

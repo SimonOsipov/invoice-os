@@ -1963,6 +1963,13 @@ function uniqueDensePdfBytes(): Buffer {
   return Buffer.concat([DENSE_INVOICE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// A copy of internal/extraction/testdata/advisory_register.pdf (fxE2ECopies). Same recipe.
+const ADVISORY_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'advisory_register.pdf'))
+
+function uniqueAdvisoryRegisterPdfBytes(): Buffer {
+  return Buffer.concat([ADVISORY_REGISTER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -8519,6 +8526,66 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
 
   const lines = wireLines(detail)
   expect(lines.length, 'the OCR read fewer than 2 line rows').toBeGreaterThanOrEqual(2)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("EXTR34-E2E-01 (AC-6): the register's far-right amounts reach the manual-entry hand-off while it still quarantines", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const AMOUNTS = { subtotal: '14800000.00', vat: '1110000.00', total: '14430000.00' }
+
+  const registerName = 'advisory_register.pdf'
+  const { token, documentIds, jobs } = await runDocuments(page, 'Zz EXTR-34 register', [
+    { name: registerName, mimeType: 'application/pdf', buffer: uniqueAdvisoryRegisterPdfBytes() },
+  ])
+  const job = jobs[registerName]!
+  expect(job.state, `the register did not settle succeeded (kind ${job.failure_kind}, error ${job.last_error})`).toBe('succeeded')
+
+  // Attached before any assertion: the only record of what the deployed docling read.
+  const detail = await getExtractionDetail(token, job.id)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+  const read = ['invoice_number', 'issue_date', 'subtotal', 'vat', 'total'].map((k) => wire.get(k) ?? { name: k, absent: true })
+  await testInfo.attach('register-fields.json', { body: JSON.stringify(read, null, 2), contentType: 'application/json' })
+  const drift = 'the deployed docling read differs from local pdfium (TestAdvisory_AFreshenedRegisterStillReadsItsAmounts); see register-fields.json'
+  for (const k of ['subtotal', 'vat', 'total'] as const) {
+    const f = wire.get(k)
+    expect({ value: f?.value ?? null, reason: f?.reason ?? null }, `${k}: ${drift}`).toEqual({ value: AMOUNTS[k], reason: '' })
+  }
+  expect(wire.get('invoice_number')?.value ?? null, `invoice_number resolved, so the register files: ${drift}`).toBeNull()
+
+  await expect
+    .poll(() => new URL(page.url()).pathname, { timeout: 180_000 })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36}\/review$/)
+
+  const quarantined = page.getByRole('button', { name: /^Quarantined documents \(/ })
+  await expect(quarantined).toHaveCount(1)
+  await quarantined.click()
+  const row = page.getByTestId('unreadable-row')
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText(registerName)
+  // Flips to a filed invoice once the letter-spaced invoice-number label matches.
+  await expect(row).toContainText('was read, but no invoice number')
+
+  const reading = await getCarriedReading(token, documentIds[registerName]!)
+  expect(reading, 'the quarantined register carried no reading').not.toBeNull()
+  expect({ subtotal: reading!.subtotal, vat: reading!.vat, total: reading!.total }).toEqual(AMOUNTS)
+
+  const readingGet = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/document/reading'),
+    { timeout: 60_000 },
+  )
+  const handOff = row.getByRole('button', { name: 'Enter it by hand' })
+  await expect(handOff).toBeEnabled()
+  await handOff.click()
+  expect((await readingGet).status()).toBe(200)
+
+  await expect(page.getByText(CARRIED_CAPTION)).toBeVisible({ timeout: 60_000 })
+  for (const k of ['subtotal', 'vat', 'total'] as const) {
+    await expect(page.getByTestId(`carried-${k}`)).toHaveText(AMOUNTS[k])
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

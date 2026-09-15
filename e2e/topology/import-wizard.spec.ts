@@ -8367,9 +8367,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
 
 // --- EXTR-18-07 · the deployed proof: docling's real reading, not the mock's fixed shape ---
 //
-// Cannot run before EXTRACTOR=docling is set on production and this PR leaves draft (D-35) --
-// dev-env.yml gates the whole deployed e2e job on `pull_request.draft == false`. Authored and
-// pushed now; their first real run is that deploy gate, not this pass.
+// First real run is the PR deploy gate: dev-env.yml runs deployed e2e only on a non-draft PR.
 
 test("EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number", async ({ page }) => {
   test.setTimeout(300_000)
@@ -8530,15 +8528,16 @@ test('EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable', asy
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("EXTR34-E2E-01 (AC-6): the register's far-right amounts reach the manual-entry hand-off while it still quarantines", async ({
+test('EXTR35-E2E-01 (AC-8): the letter-spaced register files its invoice instead of quarantining', async ({
   page,
 }, testInfo) => {
   test.setTimeout(600_000)
   const errors = collectErrors(page)
   const AMOUNTS = { subtotal: '14800000.00', vat: '1110000.00', total: '14430000.00' }
+  const REGISTER_READ = { invoice_number: 'OAP/2026/0088', issue_date: '2026-09-01' }
 
   const registerName = 'advisory_register.pdf'
-  const { token, documentIds, jobs } = await runDocuments(page, 'Zz EXTR-34 register', [
+  const { token, entityId, jobs } = await runDocuments(page, 'Zz EXTR-35 register', [
     { name: registerName, mimeType: 'application/pdf', buffer: uniqueAdvisoryRegisterPdfBytes() },
   ])
   const job = jobs[registerName]!
@@ -8550,42 +8549,31 @@ test("EXTR34-E2E-01 (AC-6): the register's far-right amounts reach the manual-en
   const read = ['invoice_number', 'issue_date', 'subtotal', 'vat', 'total'].map((k) => wire.get(k) ?? { name: k, absent: true })
   await testInfo.attach('register-fields.json', { body: JSON.stringify(read, null, 2), contentType: 'application/json' })
   const drift = 'the deployed docling read differs from local pdfium (TestAdvisory_AFreshenedRegisterStillReadsItsAmounts); see register-fields.json'
+  for (const k of ['invoice_number', 'issue_date'] as const) {
+    const f = wire.get(k)
+    expect({ value: f?.value ?? null, reason: f?.reason ?? null }, `${k}: ${drift}`).toEqual({ value: REGISTER_READ[k], reason: '' })
+  }
   for (const k of ['subtotal', 'vat', 'total'] as const) {
     const f = wire.get(k)
     expect({ value: f?.value ?? null, reason: f?.reason ?? null }, `${k}: ${drift}`).toEqual({ value: AMOUNTS[k], reason: '' })
   }
-  expect(wire.get('invoice_number')?.value ?? null, `invoice_number resolved, so the register files: ${drift}`).toBeNull()
 
   await expect
-    .poll(() => new URL(page.url()).pathname, { timeout: 180_000 })
-    .toMatch(/^\/imports\/[0-9a-fA-F-]{36}\/review$/)
+    .poll(() => new URL(page.url()).pathname, { message: 'a filed register lands on its extraction review', timeout: 180_000 })
+    .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+  const exit = page.getByTestId('extraction-open-invoice')
+  await expect(exit, 'the review must offer the exit to the filed invoice').toBeVisible({ timeout: 60_000 })
+  await exit.click()
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(REGISTER_READ.invoice_number)
 
-  const quarantined = page.getByRole('button', { name: /^Quarantined documents \(/ })
-  await expect(quarantined).toHaveCount(1)
-  await quarantined.click()
-  const row = page.getByTestId('unreadable-row')
-  await expect(row).toHaveCount(1)
-  await expect(row).toContainText(registerName)
-  // Flips to a filed invoice once the letter-spaced invoice-number label matches.
-  await expect(row).toContainText('was read, but no invoice number')
-
-  const reading = await getCarriedReading(token, documentIds[registerName]!)
-  expect(reading, 'the quarantined register carried no reading').not.toBeNull()
-  expect({ subtotal: reading!.subtotal, vat: reading!.vat, total: reading!.total }).toEqual(AMOUNTS)
-
-  const readingGet = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/document/reading'),
-    { timeout: 60_000 },
-  )
-  const handOff = row.getByRole('button', { name: 'Enter it by hand' })
-  await expect(handOff).toBeEnabled()
-  await handOff.click()
-  expect((await readingGet).status()).toBe(200)
-
-  await expect(page.getByText(CARRIED_CAPTION)).toBeVisible({ timeout: 60_000 })
-  for (const k of ['subtotal', 'vat', 'total'] as const) {
-    await expect(page.getByTestId(`carried-${k}`)).toHaveText(AMOUNTS[k])
-  }
+  const { invoices } = await listInvoices(token, { entity_id: entityId, limit: 50 })
+  expect(invoices.map((i) => i.invoice_number), 'the fresh entity must hold exactly the filed register').toEqual([REGISTER_READ.invoice_number])
+  const inv = invoices[0]
+  expect((inv.issue_date ?? '').slice(0, 10)).toBe(REGISTER_READ.issue_date)
+  // Money is compared at 2dp: numeric(14,2) reads a whole value back padded.
+  const at2 = (v: string | null) => (v === null ? null : Number(v).toFixed(2))
+  expect({ subtotal: at2(inv.subtotal), vat: at2(inv.vat), total: at2(inv.total) }).toEqual(AMOUNTS)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

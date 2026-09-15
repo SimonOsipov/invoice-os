@@ -758,6 +758,19 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			// The drop window's measured edges.
 			want: []string{"tier1DropRight", "0.949396", "135.00"},
 		},
+		{
+			file:   "internal/extraction/tier1.go",
+			needle: "RowReach",
+			// The row reach's measured record: the register's need and the nearer line item.
+			want: []string{"0.614732", "0.498444"},
+		},
+		{
+			file:   acDoc,
+			needle: "## The advisory arrangements",
+			want:   []string{"`RowReach`", "0.614732", "0.498444", "0.465497"},
+			// The far-right totals gap the row reach closed, and the dial line it cited.
+			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both"},
+		},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			src := acRepoFile(t, c.file)

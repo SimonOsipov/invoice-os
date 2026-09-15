@@ -39,7 +39,7 @@
 // POST /v1/documents (EXTR-09) mints them too, from the submission service --
 // contract-document-upload.spec.ts owns that route.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, apiBase, PERSONAS } from './client'
+import { login, createEntity, apiBase, getSavedMapping, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 
@@ -120,12 +120,15 @@ async function uploadDocument(token: string, csv: string, filename = 'import.csv
   return id as string
 }
 
-// buildForm(): the POST /v1/imports body -- three text fields, no file.
-function buildForm(entityId: string, documentId: string): FormData {
+// buildForm(): the POST /v1/imports body -- three text fields, no file. The optional third
+// param lets the saved-mapping suite send a non-default mapping and/or remember_mapping
+// without a fourth ad hoc FormData builder; every existing 2-arg caller is unaffected.
+function buildForm(entityId: string, documentId: string, opts?: { mapping?: Record<string, string>; remember?: 'true' | 'false' }): FormData {
   const f = new FormData()
   f.set('entity_id', entityId)
-  f.set('mapping', JSON.stringify(IMPORT_MAPPING))
+  f.set('mapping', JSON.stringify(opts?.mapping ?? IMPORT_MAPPING))
   f.set('document_id', documentId)
+  if (opts?.remember !== undefined) f.set('remember_mapping', opts.remember)
   return f
 }
 
@@ -288,6 +291,217 @@ test.describe('import contract (API E2E, over the deployed gateway)', () => {
     expect(body.errors, 'errors should contain the against-store duplicate hit').toContainEqual(
       expect.objectContaining({ rule_key: 'no-duplicate-invoice-number', severity: 'error' }),
     )
+  })
+})
+
+test.describe('saved mapping contract (API E2E, over the deployed gateway)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+  })
+
+  // NO_VAT: IMPORT_MAPPING with `vat` dropped -- SM-API-08/10's second import, so the two
+  // completed imports send genuinely different mappings.
+  const NO_VAT = { ...IMPORT_MAPPING }
+  delete NO_VAT.vat
+
+  // csvWith(): a header variant's one data row, reusing buildCleanCsv's own values keyed by
+  // column name -- SM-API-07's four probes only preview the document, so a value only needs
+  // to be decodable, never correct.
+  const CLEAN_VALUE_BY_HEADER: Record<string, string> = Object.fromEntries(
+    IMPORT_HEADER.split(',').map((h, i) => [h, buildCleanCsv('_').split('\n')[1].split(',')[i]]),
+  )
+  function csvWith(header: string[], num: string): string {
+    const row = header.map((h) => (h.toLowerCase() === 'invoice no' ? num : (CLEAN_VALUE_BY_HEADER[h] ?? 'x')))
+    return `${header.join(',')}\n${row.join(',')}`
+  }
+
+  // savedMappingFetch(): the raw seam for SM-API-09's refusal legs -- getSavedMapping throws
+  // ApiError on non-2xx (it wraps apiFetch), so a 401/400/404 needs a raw fetch instead,
+  // adapted through asRawResult like this file's own downloadFetch siblings.
+  async function savedMappingFetch(tok: string | null, query: string): Promise<RawResult> {
+    const headers: Record<string, string> = {}
+    if (tok) headers.Authorization = `Bearer ${tok}`
+    const res = await fetch(`${apiBase()}/api/invoice/v1/imports/saved-mapping${query}`, { headers })
+    return asRawResult(res)
+  }
+
+  test('SM-API-01: a completed import saves its mapping and the lookup answers exactly saved_mapping, mapping and saved_at', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    expect(imported.status, 'the seeding import should complete').toBe(201)
+    expect((imported.body as Record<string, unknown>).status, 'the seeding import should finalize completed').toBe('completed')
+
+    const res = await getSavedMapping(token, entity.id, documentId)
+    expect(Object.keys(res)).toEqual(['saved_mapping'])
+    expect(res.saved_mapping, 'a completed import must save a mapping').not.toBeNull()
+    const saved = res.saved_mapping!
+    expect(Object.keys(saved).sort()).toEqual(['mapping', 'saved_at'])
+    expect(saved.mapping).toEqual(IMPORT_MAPPING)
+    expect(Number.isNaN(Date.parse(saved.saved_at)), 'saved_at must parse as a date').toBe(false)
+  })
+
+  test('SM-API-02: a document that was only previewed has no saved mapping', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+
+    const res = await getSavedMapping(token, entity.id, documentId)
+    expect(res.saved_mapping, 'a preview-only document must not have saved a mapping').toBeNull()
+
+    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    expect(imported.status).toBe(201)
+    const control = await getSavedMapping(token, entity.id, documentId)
+    expect(control.saved_mapping, 'control: a real import of the same document must save').not.toBeNull()
+  })
+
+  test('SM-API-03: a refused import saves nothing', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const refused = await importFetch(token, buildForm(entity.id, documentId, { mapping: { ...IMPORT_MAPPING, total: 'Grand Total' } }))
+    assertErrorEnvelope(refused, 400, 'refused import (mapped header absent from the document)')
+
+    const res = await getSavedMapping(token, entity.id, documentId)
+    expect(res.saved_mapping, 'a refused import must not save a mapping').toBeNull()
+
+    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    expect(imported.status).toBe(201)
+    const control = await getSavedMapping(token, entity.id, documentId)
+    expect(control.saved_mapping, 'control: a real import of the same document must save').not.toBeNull()
+  })
+
+  test('SM-API-04: a dry run saves nothing', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const dryRun = await importFetch(token, buildForm(entity.id, documentId), '?dry_run=true')
+    expect(dryRun.status, 'a dry-run import must return 200').toBe(200)
+    expect((dryRun.body as Record<string, unknown>).id, 'a dry run writes nothing').toBeUndefined()
+
+    const res = await getSavedMapping(token, entity.id, documentId)
+    expect(res.saved_mapping, 'a dry run must not save a mapping').toBeNull()
+
+    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    expect(imported.status).toBe(201)
+    const control = await getSavedMapping(token, entity.id, documentId)
+    expect(control.saved_mapping, 'control: a real import of the same document must save').not.toBeNull()
+  })
+
+  test('SM-API-05: an import that finalizes failed saves nothing', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const headerOnlyId = await uploadDocument(token, IMPORT_HEADER, 'header-only.csv')
+    const failed = await importFetch(token, buildForm(entity.id, headerOnlyId))
+    expect(failed.status, 'a zero-data-row real import still creates an auditable batch').toBe(201)
+    expect((failed.body as Record<string, unknown>).status, 'zero data rows finalize failed').toBe('failed')
+
+    const res = await getSavedMapping(token, entity.id, headerOnlyId)
+    expect(res.saved_mapping, 'a failed import must not save a mapping').toBeNull()
+
+    // The control also proves the lookup reads a header-only file's own signature: a clean
+    // document sharing that header, looked up back through the header-only document's id.
+    const cleanId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const completed = await importFetch(token, buildForm(entity.id, cleanId))
+    expect(completed.status).toBe(201)
+    const control = await getSavedMapping(token, entity.id, headerOnlyId)
+    expect(control.saved_mapping, 'control: a completed import with the same header must show up via the header-only document too').not.toBeNull()
+  })
+
+  test('SM-API-06: another entity of the same tenant gets no saved mapping', async () => {
+    const entityA = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const imported = await importFetch(token, buildForm(entityA.id, documentId))
+    expect(imported.status).toBe(201)
+
+    const control = await getSavedMapping(token, entityA.id, documentId)
+    expect(control.saved_mapping, 'control: entity A must have a saved mapping').not.toBeNull()
+
+    const entityB = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const res = await getSavedMapping(token, entityB.id, documentId)
+    expect(res.saved_mapping, 'a different entity of the same tenant must get no saved mapping').toBeNull()
+  })
+
+  test('SM-API-07: a reordered, recased, extended or shortened header gets no saved mapping', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const imported = await importFetch(token, buildForm(entity.id, documentId))
+    expect(imported.status).toBe(201)
+
+    const control = await getSavedMapping(token, entity.id, documentId)
+    expect(control.saved_mapping, 'control: the exact header must restore').not.toBeNull()
+
+    const cols = IMPORT_HEADER.split(',')
+    const variants: [string, string[]][] = [
+      ['reordered', [cols[1], cols[0], ...cols.slice(2)]],
+      ['recased', [cols[0].toLowerCase(), ...cols.slice(1)]],
+      ['extended', [...cols, 'Note']],
+      ['shortened', cols.filter((h) => h !== 'Unit Price')],
+    ]
+    let legs = 0
+    for (const [label, header] of variants) {
+      legs += 1
+      const variantDocId = await uploadDocument(token, csvWith(header, `INV-${freshTin()}`), `${label}.csv`)
+      const res = await getSavedMapping(token, entity.id, variantDocId)
+      expect(res.saved_mapping, `${label} header must get no saved mapping`).toBeNull()
+    }
+    expect(legs, 'all four header-variant legs must run').toBe(4)
+  })
+
+  test('SM-API-08: the latest completed import replaces the saved mapping', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const doc1 = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const doc2 = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+
+    const import1 = await importFetch(token, buildForm(entity.id, doc1))
+    expect(import1.status).toBe(201)
+    const first = await getSavedMapping(token, entity.id, doc1)
+    expect(first.saved_mapping, 'the first import must save a mapping').not.toBeNull()
+
+    const import2 = await importFetch(token, buildForm(entity.id, doc2, { mapping: NO_VAT }))
+    expect(import2.status).toBe(201)
+
+    // Looked up through doc1, not doc2 -- the key is the header signature, not the document.
+    const after = await getSavedMapping(token, entity.id, doc1)
+    expect(after.saved_mapping, 'the second import must have replaced the saved mapping').not.toBeNull()
+    expect(after.saved_mapping!.mapping).toEqual(NO_VAT)
+    expect(Date.parse(after.saved_mapping!.saved_at)).toBeGreaterThanOrEqual(Date.parse(first.saved_mapping!.saved_at))
+  })
+
+  test('SM-API-09: the lookup refuses no token, no entity, a malformed document id and an unknown document', async () => {
+    const noAuth = await savedMappingFetch(null, '')
+    assertErrorEnvelope(noAuth, 401, 'no token, no query -- identity is checked before any id guard')
+
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+
+    const noEntity = await savedMappingFetch(token, '')
+    assertErrorEnvelope(noEntity, 400, 'no entity_id')
+    expect((noEntity.body as Record<string, unknown>).error).toBe('entity_id is required')
+
+    const badDoc = await savedMappingFetch(token, `?entity_id=${crypto.randomUUID()}&document_id=nope`)
+    assertErrorEnvelope(badDoc, 400, 'malformed document_id')
+    expect((badDoc.body as Record<string, unknown>).error).toBe('document_id must be a well-formed uuid')
+
+    const unknownDoc = await savedMappingFetch(token, `?entity_id=${entity.id}&document_id=${crypto.randomUUID()}`)
+    assertErrorEnvelope(unknownDoc, 404, 'unknown document_id')
+    expect((unknownDoc.body as Record<string, unknown>).error).toBe('not found')
+  })
+
+  test('SM-API-10: an import sent with remember_mapping false leaves the saved mapping unchanged', async () => {
+    const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
+    const doc1 = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+    const doc2 = await uploadDocument(token, buildCleanCsv(`INV-${freshTin()}`))
+
+    const import1 = await importFetch(token, buildForm(entity.id, doc1))
+    expect(import1.status).toBe(201)
+    const first = await getSavedMapping(token, entity.id, doc1)
+    expect(first.saved_mapping, 'the first import must save a mapping').not.toBeNull()
+
+    const import2 = await importFetch(token, buildForm(entity.id, doc2, { mapping: NO_VAT, remember: 'false' }))
+    expect(import2.status).toBe(201)
+
+    const after = await getSavedMapping(token, entity.id, doc1)
+    expect(after.saved_mapping, 'the saved mapping must still exist').not.toBeNull()
+    expect(after.saved_mapping!.mapping).toEqual(IMPORT_MAPPING)
+    expect(after.saved_mapping!.saved_at).toBe(first.saved_mapping!.saved_at)
   })
 })
 

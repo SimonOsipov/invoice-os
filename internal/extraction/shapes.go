@@ -171,6 +171,7 @@ func normalizeName(raw string) []string {
 // is the label that introduces a value, never the value. The match must span value, so a
 // trading name that merely opens with a label word ("Supplier Services Limited") survives.
 func isBareAnchorLabel(value string) bool {
+	value = labelView(value)
 	for _, m := range anchorLabelMatchers {
 		if loc := m.RE.FindStringIndex(value); loc != nil && loc[0] == 0 && loc[1] == len(value) {
 			return true

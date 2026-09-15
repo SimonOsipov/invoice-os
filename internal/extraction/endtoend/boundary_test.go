@@ -91,7 +91,7 @@ type bdLayout struct {
 
 // bdRightwardTotal is the whole corpus's rightward candidate count. The blast surface, not a
 // summary: the boundary can only ever remove a rightward candidate.
-const bdRightwardTotal = 52
+const bdRightwardTotal = 53
 
 // bdSilentLayouts read no value rightward at all, so crossesALabel is never called on them.
 // Named here because "the boundary moved nothing on all fourteen layouts" has an effective
@@ -173,6 +173,7 @@ var bdByLayout = []bdLayout{
 		bdMake("total", wildRuledLastLineAmount, "t1.total.right", 0.047611),
 	}},
 	{file: "wild_stacked_borderless_asprinted.pdf", rows: []bdRow{
+		bdMake("issue_date", "2026-07-30", "t1.issue_date.right", 0.273745),
 		bdMake("supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902),
 		bdMake("supplier_name", "Adeyemi Trading Limited", "t1.supplier_name.right", 0.316510),
 		bdMake("buyer_tin", "99999999-1102", "t1.buyer_tin.right", 0.286608),

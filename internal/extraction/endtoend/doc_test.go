@@ -213,7 +213,7 @@ var eeDocVerdicts = []struct {
 }{
 	{"a", "fixed by EXTR-26", []string{"EXTR-29", "`TOTAL DUE (NGN)`"}},
 	{"b", "fixed by EXTR-24", []string{"8acf0879"}},
-	{"c", "reproduces", []string{"EXTR-31", "TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber"}},
+	{"c", "reproduces", []string{"EXTR-31", "TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber"}},
 	{"d", "not reproduced", []string{"unmeasured", "TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN"}},
 }
 

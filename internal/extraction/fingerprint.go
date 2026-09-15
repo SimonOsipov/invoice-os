@@ -108,13 +108,14 @@ func AnchorObservations(pages []TokenPage) []AnchorObservation {
 			continue
 		}
 		for _, tok := range page.Tokens {
+			text := labelView(tok.Text)
 			for _, m := range anchorLabelMatchers {
-				if !m.RE.MatchString(tok.Text) {
+				if !m.RE.MatchString(text) {
 					continue
 				}
 				out = append(out, AnchorObservation{
 					Label: m.ID,
-					Text:  capAnchorLabelBytes(m.RE.FindString(tok.Text)),
+					Text:  capAnchorLabelBytes(m.RE.FindString(text)),
 					Page:  page.Number,
 					Band:  columnBand(tok.Region),
 					X0:    tok.Region.X0,
@@ -210,9 +211,10 @@ func BoxlessFingerprint(pages []TokenPage) string {
 			continue
 		}
 		for _, tok := range page.Tokens {
+			text := labelView(tok.Text)
 			for _, m := range anchorLabelMatchers {
-				if loc := m.RE.FindStringIndex(tok.Text); loc != nil {
-					elems = append(elems, m.ID+":"+labelPlacement(tok.Text, loc))
+				if loc := m.RE.FindStringIndex(text); loc != nil {
+					elems = append(elems, m.ID+":"+labelPlacement(text, loc))
 				}
 			}
 		}
@@ -231,7 +233,7 @@ func BoxlessFingerprint(pages []TokenPage) string {
 func AnchorLabelText(o AnchorObservation, tok Token) string {
 	for _, m := range anchorLabelMatchers {
 		if m.ID == o.Label {
-			return capAnchorLabelBytes(m.RE.FindString(tok.Text))
+			return capAnchorLabelBytes(m.RE.FindString(labelView(tok.Text)))
 		}
 	}
 	return ""

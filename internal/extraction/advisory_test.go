@@ -27,18 +27,6 @@ func advReconcile(t *testing.T, fixture string) []extraction.FieldResult {
 	return extraction.Reconcile(extraction.Input{Candidates: advResolve(t, fixture)})
 }
 
-// advObserved reports whether page 1 carries an AnchorObservation for label; AnchorObservations
-// reads no other page.
-func advObserved(t *testing.T, fixture, label string) bool {
-	t.Helper()
-	for _, o := range extraction.AnchorObservations(rvCorpusPages(t, fixture)) {
-		if o.Label == label {
-			return true
-		}
-	}
-	return false
-}
-
 // advDistance returns Resolve's Distance for field/value read from a neighbouring token, or fatals
 // unless every such candidate carries the same one (the dense line amount is read twice).
 func advDistance(t *testing.T, cands []extraction.Candidate, field, value string) float64 {
@@ -110,30 +98,6 @@ func advSameValue(a, b *string) bool {
 		return false
 	}
 	return a == nil || *a == *b
-}
-
-// --- T-06.1 -------------------------------------------------------------------
-
-// T-06.1: the faithful register's letter-spaced header resolves no issue_date, pinned as a known gap
-// by name and never counted as a pass. TestAdvisory_TheRegisterReadsItsFarRightAmounts owns the totals.
-func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
-	out := advReconcile(t, fxAdvisoryRegister)
-
-	// known gap: letter-spaced label -- "I S S U E D" matches no anchor-lexicon entry.
-	issueDate, ok := rcFind(out, "issue_date")
-	if !ok || issueDate.Reason != extraction.ReasonMissing {
-		t.Errorf("R0 issue_date = %+v (ok=%v), want Reason %q -- known gap: letter-spaced label", issueDate, ok, extraction.ReasonMissing)
-	}
-	if advObserved(t, fxAdvisoryRegister, "issue_date") {
-		t.Errorf("R0 carries an issue_date AnchorObservation; the letter-spaced-label gap claims it has none")
-	}
-
-	// R1 unspaces only the header labels, so issue_date resolves.
-	out1 := advReconcile(t, fxAdvisoryRegisterUnspaced)
-	issueDate1, ok := rcFind(out1, "issue_date")
-	if !ok || issueDate1.Reason != extraction.ReasonNone || !advSameValue(issueDate1.Value, rcStr("2026-09-01")) {
-		t.Errorf("R1 issue_date = %+v (ok=%v), want ReasonNone / %q", issueDate1, ok, "2026-09-01")
-	}
 }
 
 // --- 02-T1 ----------------------------------------------------------------------
@@ -305,10 +269,11 @@ var advArms = map[string]*regexp.Regexp{
 var advNewFields = []string{"buyer_tin", "buyer_name", "issue_date", "subtotal", "total", "supplier_name", "withholding_tax"}
 
 // advDeclared is field x fixture -> matched. An absent cell is declared false: that covers
-// buyer_tin, which neither source prints, and the letter-spaced "I S S U E D" on R0.
+// buyer_tin, which neither source prints.
 var advDeclared = map[[2]string]bool{
 	{"buyer_name", fxAdvisoryRegister}:              true,
 	{"buyer_name", fxAdvisoryRegisterUnspaced}:      true,
+	{"issue_date", fxAdvisoryRegister}:              true,
 	{"issue_date", fxAdvisoryRegisterUnspaced}:      true,
 	{"subtotal", fxAdvisoryDense}:                   true,
 	{"total", fxAdvisoryRegister}:                   true,
@@ -357,12 +322,12 @@ func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 		}
 	}
 
-	// issue_date: R0 known gap (missing), R1 resolved.
-	if id, ok := rcFind(r0, "issue_date"); !ok || id.Reason != extraction.ReasonMissing {
-		t.Errorf("R0 issue_date = %+v (ok=%v), want Reason %q", id, ok, extraction.ReasonMissing)
-	}
-	if id, ok := rcFind(r1, "issue_date"); !ok || id.Reason != extraction.ReasonNone || !advSameValue(id.Value, rcStr("2026-09-01")) {
-		t.Errorf("R1 issue_date = %+v (ok=%v), want ReasonNone / %q", id, ok, "2026-09-01")
+	// issue_date: R0 and R1 both resolved.
+	for _, o := range named {
+		id, ok := rcFind(o.out, "issue_date")
+		if !ok || id.Reason != extraction.ReasonNone || !advSameValue(id.Value, rcStr("2026-09-01")) {
+			t.Errorf("%s issue_date = %+v (ok=%v), want ReasonNone / %q", o.name, id, ok, "2026-09-01")
+		}
 	}
 
 	// subtotal: D0 resolved.

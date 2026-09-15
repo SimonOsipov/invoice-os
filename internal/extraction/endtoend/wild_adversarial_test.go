@@ -806,40 +806,8 @@ func TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN(t *tes
 	}
 }
 
-// The letter-spaced label is printed and read, and still no invoice number resolves.
-func TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber(t *testing.T) {
-	const printed = "I N V O I C E N U M B E R"
-	pages := eeTokenPages(t, wildStackedAsPrinted)
-
-	found := false
-	for _, p := range pages {
-		for _, tok := range p.Tokens {
-			if strings.TrimSpace(tok.Text) == printed {
-				found = true
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("%s reads no %q token; the absence below would be of the label, not of the number", wildStackedAsPrinted, printed)
-	}
-
-	var got []string
-	for _, c := range extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
-		if c.Field == "invoice_number" {
-			got = append(got, c.Value)
-		}
-	}
-	if len(got) != 0 {
-		t.Errorf("%s resolves invoice_number %v, want none", wildStackedAsPrinted, got)
-	}
-	if twin := wildResolved(t, wildStacked, "invoice_number"); !slices.Equal(twin, []string{wildInvNums[3]}) {
-		t.Errorf("%s resolves invoice_number %v, want exactly [%s] on the same geometry", wildStacked, twin, wildInvNums[3])
-	}
-}
-
-// 02-T11. Replaces TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber (above, retired in
-// Stage 3): once the label view is wired, the letter-spaced sibling resolves its own invoice
-// number, through both pdfium and its golden, and the twin still resolves its own.
+// Once the label view is wired, the letter-spaced sibling resolves its own invoice number,
+// through both pdfium and its golden, and the twin still resolves its own.
 func TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber(t *testing.T) {
 	const printed = "I N V O I C E N U M B E R"
 
@@ -1106,9 +1074,9 @@ func TestWildPairs_TheCheckerRefusesAnUndeclaredArrangement(t *testing.T) {
 }
 
 func TestWildPairs_ATwinHitIsASiblingHitOrAnOwnedMiss(t *testing.T) {
-	problems, compared, owned := wildParityProblems(wildPairs, expectByLayout, eeAbsentCells, eeRealMisses)
-	if compared < 3*len(writtenFields) || owned < 1 {
-		t.Fatalf("compared %d sibling cell(s) and %d owned miss(es), want at least %d and 1 -- a parity check over nothing passes", compared, owned, 3*len(writtenFields))
+	problems, compared, _ := wildParityProblems(wildPairs, expectByLayout, eeAbsentCells, eeRealMisses)
+	if compared < 3*len(writtenFields) {
+		t.Fatalf("compared %d sibling cell(s), want at least %d -- a parity check over nothing passes; TestWildPairs_TheParityCheckRefusesAnUnownedMissAndAnEasierRow is the oracle for the owner branch", compared, 3*len(writtenFields))
 	}
 	for _, p := range problems {
 		t.Error(p)

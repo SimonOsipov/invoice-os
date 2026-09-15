@@ -118,11 +118,13 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 	}
 	for pi, page := range pages {
 		for ti, tok := range page.Tokens {
-			loc := rule.re.FindStringIndex(tok.Text)
+			// loc indexes the view, so every read of loc takes text (TestResolve_ASpacedLabelReadsAsItsWord).
+			text := labelView(tok.Text)
+			loc := rule.re.FindStringIndex(text)
 			if loc == nil {
 				continue
 			}
-			if tier != TierLearned && anchorOutranked(tok.Text, loc) {
+			if tier != TierLearned && anchorOutranked(text, loc) {
 				continue
 			}
 			if !inBand(band, page.Number, tok.Region) {
@@ -134,7 +136,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 			}
 			switch rule.Relation.Kind {
 			case RelSameToken:
-				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
+				dst = appendReadings(dst, rule.Shape, sameTokenValue(text, loc),
 					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
 				bounded := tier != TierLearned && rule.Relation.Kind == RelRight
@@ -159,7 +161,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 				}
 				// ceiling: a label carrying other letters, e.g. "Total (NGN)", gets no row reach; revisit when a far-right total with a suffixed label misses
 				// ceiling: a dropped far value gets no row reach; revisit when an offset far-right total misses
-				if rowReach && bounded && bareLabel(tok.Text, loc) {
+				if rowReach && bounded && bareLabel(text, loc) {
 					if vi, gap, ok := rowReachToken(page, tok.Region, rule.Relation); ok && !ownedBelow(page, labels[pi], page.Tokens[vi].Region) {
 						value := page.Tokens[vi]
 						dst = appendReadings(dst, rule.Shape, value.Text,
@@ -218,8 +220,9 @@ func labelView(text string) string {
 func labelTokens(page TokenPage) []bool {
 	out := make([]bool, len(page.Tokens))
 	for i, tok := range page.Tokens {
+		text := labelView(tok.Text)
 		for _, m := range anchorLabelMatchers {
-			if m.RE.MatchString(tok.Text) {
+			if m.RE.MatchString(text) {
 				out[i] = true
 				break
 			}

@@ -321,13 +321,13 @@ not call it: a label between sits before the value, so the value is never the fi
 line and the reach cannot take it (**The row reach**, under **The advisory arrangements**).
 
 **The corpus does not exercise it, and the honest denominator is ten, not fourteen.** Only **10 of
-the 14** layouts admit a rightward anchor/value pair at all — **52** pairs in total, 17 of them
+the 14** layouts admit a rightward anchor/value pair at all — **53** pairs in total, 18 of them
 dropped pairs on the stacked twin and sibling — and the other four read nothing rightward, so the
 predicate is never called on them. Those four are named in `bdSilentLayouts` rather than left
 implicit, because "the boundary moved nothing across all fourteen layouts" is a claim whose
 effective denominator is ten. Of the 35 same-line pairs, **none** crosses a label, which is why the
 boundary removes zero candidates on the shipped corpus. Read that zero as "no shipped arrangement
-puts a label in the corridor", never as "the boundary does nothing". The 17 dropped pairs were
+puts a label in the corridor", never as "the boundary does nothing". The 18 dropped pairs were
 first measured with the boundary in place, so they show what it admits, not what it would remove.
 Whether the boundary removes a dropped pair on the corpus is unmeasured; do not claim it.
 
@@ -620,9 +620,9 @@ reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-14 on `feature/extr-31-a-label-above-its-value-still-names-it`: a document goes in at the
+Re-measured 2026-09-15 on `feature/extr-35-a-letter-spaced-label-is-still-a-label`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **81 of 112** cells — **0.7232**. Fourteen layouts, eight written fields each.
+the page prints on **89 of 112** cells — **0.7946**. Fourteen layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -634,8 +634,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 23 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (10 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -655,34 +655,32 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 | `wild_two_party_bare_tin_asprinted.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals_asprinted.pdf` | 8 | 8 |
-| `wild_stacked_borderless_asprinted.pdf` | 0 | 8 |
+| `wild_stacked_borderless_asprinted.pdf` | 8 | 8 |
 
 `wild_scanned_no_number.pdf` scores a full **0 / 8**. The page prints no invoice number at all,
 so the import quarantines the document and writes no `invoices` row — the six cells OCR reads
 cleanly off its committed golden score nothing. They reach an invoice only when the operator
 supplies the number (`POST /v1/imports/document/invoice`). A quarantined layout stays in the denominator;
 dropping it would flatter the rate by the exact amount the defect costs.
-`wild_stacked_borderless_asprinted.pdf` scores **0 / 8** the same way: no lexicon entry reads its
-letter-spaced invoice-number label, so it quarantines too.
 
 ### Per field
 
 | Field | Hits | Cells |
 |---|---|---|
-| `invoice_number` | 12 | 14 |
-| `issue_date` | 11 | 14 |
-| `buyer_tin` | 10 | 14 |
-| `buyer_name` | 10 | 14 |
-| `currency` | 8 | 14 |
-| `subtotal` | 9 | 14 |
-| `vat` | 9 | 14 |
-| `total` | 12 | 14 |
+| `invoice_number` | 13 | 14 |
+| `issue_date` | 12 | 14 |
+| `buyer_tin` | 11 | 14 |
+| `buyer_name` | 11 | 14 |
+| `currency` | 9 | 14 |
+| `subtotal` | 10 | 14 |
+| `vat` | 10 | 14 |
+| `total` | 13 | 14 |
 
-`currency` at 8 of 14 is still the worst field on the corpus, and its six misses split three ways:
+`currency` at 9 of 14 is still the worst field on the corpus, and its five misses split three ways:
 three layouts print the value inside a total with no label to anchor it, one prints no currency at
-all, and the last two are the quarantined pages.
-`buyer_tin` reads 10 of 14: EXTR-22 bound each party's TIN to the heading that owns it, and the
-four cells left are two layouts that carry no buyer block at all and the two quarantined pages.
+all, and the last is the quarantined page.
+`buyer_tin` reads 11 of 14: EXTR-22 bound each party's TIN to the heading that owns it, and the
+three cells left are two layouts that carry no buyer block at all and the quarantined page.
 
 ### What EXTR-23 changed
 
@@ -957,7 +955,7 @@ unmodelled block moves nothing here. The manual production pass that read 18 of 
 reproducible in this repo and never will be.
 
 **Four claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+the 10 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. The 18-of-40 production
 pass above is unrepeatable. And the planning figures in **What EXTR-31 changed** were measured
@@ -1355,7 +1353,7 @@ EXTR-31 Core AC-4 claims this quarantine, and the sibling's eight `eeRealMisses`
 EXTR-31. EXTR-31 plans to widen the value offset, but the measured cause is the label's
 letter-spacing, so geometry alone may not deliver its AC-4. Letter-spaced label matching is owed and
 not created (**Core AC-5 is not delivered on the real register**).
-`TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber` pins the missing candidate.
+`TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber` pins the missing candidate.
 
 #### (d) `wild_two_party_bare_tin`: the supplier's registration number as the buyer's TIN
 
@@ -1465,7 +1463,7 @@ Through the local docling canary, before the row reach, `invoice_number`, `issue
 
 Letter-spaced label matching does not exist; that follow-up is **owed and not created**. On the
 faithful fixture, `issue_date` is a known gap by name, recorded as a gap and never counted as a
-pass (`TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName`).
+pass (`TestAdvisory_TheRegisterReadsItsLetterSpacedHeader`).
 
 ### The row reach
 

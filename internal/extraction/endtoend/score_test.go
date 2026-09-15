@@ -35,16 +35,16 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-14 and pinned. Equality, not a
+// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-15 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 31 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 23 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 81
+	eeCorpusHits  = 89
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
@@ -319,15 +319,6 @@ var eeRealMisses = map[string]string{
 	"wild_scanned_no_number.pdf/subtotal":   "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/vat":        "the document quarantines for the missing invoice number, so no invoices row carries this value",
 	"wild_scanned_no_number.pdf/total":      "the document quarantines for the missing invoice number, so no invoices row carries this value",
-
-	"wild_stacked_borderless_asprinted.pdf/invoice_number": "the label is letter-spaced as printed and no lexicon entry reaches it, so the document quarantines; EXTR-31 Core AC-4 claims the quarantine, and letter-spaced matching is owed and unowned",
-	"wild_stacked_borderless_asprinted.pdf/issue_date":     "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/buyer_tin":      "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/buyer_name":     "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/currency":       "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/subtotal":       "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/vat":            "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
-	"wild_stacked_borderless_asprinted.pdf/total":          "the document quarantines for its letter-spaced invoice-number label (EXTR-31 Core AC-4), so no invoices row carries this value",
 }
 
 // eeCell is one (layout, field) cell -- the unit the rate counts.
@@ -363,7 +354,7 @@ type eeScore struct {
 
 // eeQuarantinedLayouts is every layout the walk must quarantine, in expectByLayout order. An
 // identity, not a count: a walk that quarantined the wrong layout sums the same.
-var eeQuarantinedLayouts = []string{"wild_scanned_no_number.pdf", "wild_stacked_borderless_asprinted.pdf"}
+var eeQuarantinedLayouts = []string{"wild_scanned_no_number.pdf"}
 
 // eeLinesScoredComplete is the walk's line-scoring completeness rule. Pure, so the shape can be
 // falsified without a database.
@@ -957,7 +948,7 @@ func TestEndToEnd_TheWidenedLineScoredCheckStillCatchesASilentScorer(t *testing.
 		{"the quarantine term absorbs the deficit", 0, everyLayout, true},
 		{"nothing quarantined", eeLayoutCount, nil, true},
 		{"the wrong layout quarantined", eeLayoutCount - shipped, wrong, true},
-		{"the same layout quarantined twice", eeLayoutCount - shipped, slices.Repeat([]string{q}, shipped), true},
+		{"the same layout quarantined twice", eeLayoutCount - shipped - 1, slices.Repeat([]string{q}, shipped+1), true},
 		{"an empty walk", 0, nil, true},
 	}
 	for _, c := range cases {

@@ -383,6 +383,77 @@ func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing
 	}
 }
 
+// A letter-spaced label moves the layout fingerprint only on the pages that print one:
+// R0 becomes byte-identical to its unspaced twin R1, and the sibling moves in both namespaces
+// (pdfium and its golden). Every pinned corpus and fixture digest stays put.
+func TestFingerprint_ALetterSpacedLabelMovesOnlyThePagesThatPrintIt(t *testing.T) {
+	if len(corpusLayouts) != 6 || len(fpCorpusPinned) != 6 {
+		t.Fatalf("corpusLayouts names %d layout(s) and fpCorpusPinned pins %d; want 6 each", len(corpusLayouts), len(fpCorpusPinned))
+	}
+	for _, name := range corpusLayouts {
+		if got := extraction.Fingerprint(rvCorpusPages(t, name)); got != fpCorpusPinned[name] {
+			t.Errorf("Fingerprint(%s) = %q, want %q unchanged -- the view must not reach a page that prints no spaced label", name, got, fpCorpusPinned[name])
+		}
+	}
+	if len(bxFixturePinned) != 3 {
+		t.Fatalf("bxFixturePinned pins %d fixture(s), want 3", len(bxFixturePinned))
+	}
+	for _, c := range bxFixturePinned {
+		if got := extraction.BoxlessFingerprint(bxOnePage(bxPage1(t, c.golden))); got != c.want {
+			t.Errorf("BoxlessFingerprint(%s) = %q, want %q unchanged", c.golden, got, c.want)
+		}
+	}
+
+	// Before/after pairs are literal pins; the guard below only proves each pair differs.
+	const (
+		r0GeoBefore = "v3:556ee22826e0417398d21baa08e0752ffca2ee666c146f7d3ecd788e8d4385c0"
+		r0GeoAfter  = "v3:d89450d1d00688a442c17a083f9ab9b832d152ee249c671ff6ac17146a2a4bee" // R1's own geometric digest
+		r0BoxBefore = "b3:6a995ad4229ba287fac979eac00cf07bb0585af76a9c6586491d3db0a7b73602"
+		r0BoxAfter  = "b3:efc31921876182d8d57db872aa36eccba8d9c7f75aa004ec3f6e6bd113a8c207" // R1's own boxless digest
+
+		sibGeoBefore = "v3:799a53b580aa2520c6ab83fa4faa0448bb2fb0979563ae52e66d71cef2e0b464"
+		sibGeoAfter  = "v3:35b987486b33ea8af6db58e1dc41dde4cff59cd837441779e1e4478652eaa668"
+		sibBoxBefore = "b3:27c2e8d52740130cc732264b25b65e643f3376f65bbd7fc2803d134907541a6c"
+		sibBoxAfter  = "b3:6b161385cd2e35e08abb13463b245aca2527caff176cec8deead2766c1f61f33"
+
+		sibGoldenBoxBefore = "b3:477f700f5f59146a7d970bef2da4941e19eb378c900490c5d0de81a56d7a36ef"
+		sibGoldenBoxAfter  = "b3:8b86d88950093dfccc25c278a419686a13ab71faee8510fdf589721d4b187a71"
+	)
+	for _, pair := range [][2]string{{r0GeoBefore, r0GeoAfter}, {r0BoxBefore, r0BoxAfter}, {sibGeoBefore, sibGeoAfter}, {sibBoxBefore, sibBoxAfter}, {sibGoldenBoxBefore, sibGoldenBoxAfter}} {
+		if pair[0] == pair[1] {
+			t.Fatalf("a before-pin equals its after-pin (%q); the assertion it guards could not tell a move from a stall", pair[0])
+		}
+	}
+
+	if got := extraction.Fingerprint(rvCorpusPages(t, fxAdvisoryRegister)); got != r0GeoAfter {
+		t.Errorf("Fingerprint(%s) = %q, want R1's %q", fxAdvisoryRegister, got, r0GeoAfter)
+	}
+	if got := extraction.Fingerprint(rvCorpusPages(t, fxAdvisoryRegisterUnspaced)); got != r0GeoAfter {
+		t.Errorf("Fingerprint(%s) = %q, want %q", fxAdvisoryRegisterUnspaced, got, r0GeoAfter)
+	}
+	if got := extraction.BoxlessFingerprint(rvCorpusPages(t, fxAdvisoryRegister)); got != r0BoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want R1's %q", fxAdvisoryRegister, got, r0BoxAfter)
+	}
+	if got := extraction.BoxlessFingerprint(rvCorpusPages(t, fxAdvisoryRegisterUnspaced)); got != r0BoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q", fxAdvisoryRegisterUnspaced, got, r0BoxAfter)
+	}
+
+	const sibling = "wild_stacked_borderless_asprinted.pdf"
+	sib := rvCorpusPages(t, sibling)
+	if got := extraction.Fingerprint(sib); got != sibGeoAfter {
+		t.Errorf("Fingerprint(%s) = %q, want %q (before %q)", sibling, got, sibGeoAfter, sibGeoBefore)
+	}
+	if got := extraction.BoxlessFingerprint(sib); got != sibBoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q (before %q)", sibling, got, sibBoxAfter, sibBoxBefore)
+	}
+
+	const siblingGolden = "wild_stacked_borderless_asprinted.docling.json"
+	sibGolden := bxOnePage(bxPage1(t, siblingGolden))
+	if got := extraction.BoxlessFingerprint(sibGolden); got != sibGoldenBoxAfter {
+		t.Errorf("BoxlessFingerprint(%s) = %q, want %q (before %q)", siblingGolden, got, sibGoldenBoxAfter, sibGoldenBoxBefore)
+	}
+}
+
 // fpBodiesAtCF68C9AD is every pinned digest's hex BODY -- the SHA-256 with no generation prefix
 // -- measured on cf68c9ad, this story's base. Deliberately prefix-less: a generation bump's
 // re-point is a mechanical prefix-only sweep, so a reference carrying no prefix is the one site

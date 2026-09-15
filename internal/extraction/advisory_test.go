@@ -27,18 +27,6 @@ func advReconcile(t *testing.T, fixture string) []extraction.FieldResult {
 	return extraction.Reconcile(extraction.Input{Candidates: advResolve(t, fixture)})
 }
 
-// advObserved reports whether page 1 carries an AnchorObservation for label; AnchorObservations
-// reads no other page.
-func advObserved(t *testing.T, fixture, label string) bool {
-	t.Helper()
-	for _, o := range extraction.AnchorObservations(rvCorpusPages(t, fixture)) {
-		if o.Label == label {
-			return true
-		}
-	}
-	return false
-}
-
 // advDistance returns Resolve's Distance for field/value read from a neighbouring token, or fatals
 // unless every such candidate carries the same one (the dense line amount is read twice).
 func advDistance(t *testing.T, cands []extraction.Candidate, field, value string) float64 {
@@ -112,27 +100,76 @@ func advSameValue(a, b *string) bool {
 	return a == nil || *a == *b
 }
 
-// --- T-06.1 -------------------------------------------------------------------
+// --- 02-T1 ----------------------------------------------------------------------
 
-// T-06.1: the faithful register's letter-spaced header resolves no issue_date, pinned as a known gap
-// by name and never counted as a pass. TestAdvisory_TheRegisterReadsItsFarRightAmounts owns the totals.
-func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
+// R0 decides both header fields through its letter-spaced labels, in either spacing, and R1
+// decides them as before.
+func TestAdvisory_TheRegisterReadsItsLetterSpacedHeader(t *testing.T) {
 	out := advReconcile(t, fxAdvisoryRegister)
 
-	// known gap: letter-spaced label -- "I S S U E D" matches no anchor-lexicon entry.
-	issueDate, ok := rcFind(out, "issue_date")
-	if !ok || issueDate.Reason != extraction.ReasonMissing {
-		t.Errorf("R0 issue_date = %+v (ok=%v), want Reason %q -- known gap: letter-spaced label", issueDate, ok, extraction.ReasonMissing)
+	inv, ok := rcFind(out, "invoice_number")
+	gotInv := "missing"
+	if inv.Value != nil {
+		gotInv = *inv.Value
 	}
-	if advObserved(t, fxAdvisoryRegister, "issue_date") {
-		t.Errorf("R0 carries an issue_date AnchorObservation; the letter-spaced-label gap claims it has none")
+	if !ok || inv.Reason != extraction.ReasonNone || gotInv != "OAP/2026/0088" || len(inv.Alternatives) != 0 {
+		t.Errorf("R0 invoice_number = %s, want OAP/2026/0088, ReasonNone, 0 alternatives", gotInv)
+	}
+	id, ok := rcFind(out, "issue_date")
+	gotID := "missing"
+	if id.Value != nil {
+		gotID = *id.Value
+	}
+	if !ok || id.Reason != extraction.ReasonNone || gotID != "2026-09-01" || len(id.Alternatives) != 0 {
+		t.Errorf("R0 issue_date = %s, want 2026-09-01, ReasonNone, 0 alternatives", gotID)
 	}
 
-	// R1 unspaces only the header labels, so issue_date resolves.
+	if d := advDistance(t, advResolve(t, fxAdvisoryRegister), "invoice_number", "OAP/2026/0088"); math.Abs(d-0.014216) > 5e-5 {
+		t.Errorf("R0 invoice_number distance = %.6f, want within 5e-5 of 0.014216", d)
+	}
+	if d := advDistance(t, advResolve(t, fxAdvisoryRegister), "issue_date", "2026-09-01"); math.Abs(d-0.014602) > 5e-5 {
+		t.Errorf("R0 issue_date distance = %.6f, want within 5e-5 of 0.014602", d)
+	}
+
+	var invText, dateText string
+	for _, o := range extraction.AnchorObservations(rvCorpusPages(t, fxAdvisoryRegister)) {
+		if o.Label == "invoice_no" {
+			invText = o.Text
+		}
+		if o.Label == "issue_date" {
+			dateText = o.Text
+		}
+	}
+	if invText != "INVOICENUMBER" {
+		t.Errorf("R0 invoice_no observation Text = %q, want %q", invText, "INVOICENUMBER")
+	}
+	if dateText != "ISSUED" {
+		t.Errorf("R0 issue_date observation Text = %q, want %q", dateText, "ISSUED")
+	}
+
+	// R0's three-space source form (the pdfium token is found first; advRewriteToken fatals
+	// otherwise) decides the same two values.
+	rewritten := advRewriteToken(t, rvCorpusPages(t, fxAdvisoryRegister),
+		"I N V O I C E N U M B E R", "I N V O I C E   N U M B E R")
+	rewrittenOut := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(rewritten, rvGeneric())})
+	rInv, ok := rcFind(rewrittenOut, "invoice_number")
+	if !ok || rInv.Reason != extraction.ReasonNone || !advSameValue(rInv.Value, rcStr("OAP/2026/0088")) {
+		t.Errorf("R0 (three-space header) invoice_number = %+v (ok=%v), want OAP/2026/0088, ReasonNone", rInv, ok)
+	}
+	rDate, ok := rcFind(rewrittenOut, "issue_date")
+	if !ok || rDate.Reason != extraction.ReasonNone || !advSameValue(rDate.Value, rcStr("2026-09-01")) {
+		t.Errorf("R0 (three-space header) issue_date = %+v (ok=%v), want 2026-09-01, ReasonNone", rDate, ok)
+	}
+
+	// Constraint: R1 keeps resolving both exactly as today.
 	out1 := advReconcile(t, fxAdvisoryRegisterUnspaced)
-	issueDate1, ok := rcFind(out1, "issue_date")
-	if !ok || issueDate1.Reason != extraction.ReasonNone || !advSameValue(issueDate1.Value, rcStr("2026-09-01")) {
-		t.Errorf("R1 issue_date = %+v (ok=%v), want ReasonNone / %q", issueDate1, ok, "2026-09-01")
+	inv1, ok := rcFind(out1, "invoice_number")
+	if !ok || inv1.Reason != extraction.ReasonNone || !advSameValue(inv1.Value, rcStr("OAP/2026/0088")) {
+		t.Errorf("R1 invoice_number = %+v (ok=%v), want OAP/2026/0088, ReasonNone", inv1, ok)
+	}
+	id1, ok := rcFind(out1, "issue_date")
+	if !ok || id1.Reason != extraction.ReasonNone || !advSameValue(id1.Value, rcStr("2026-09-01")) {
+		t.Errorf("R1 issue_date = %+v (ok=%v), want 2026-09-01, ReasonNone", id1, ok)
 	}
 }
 
@@ -231,10 +268,11 @@ var advArms = map[string]*regexp.Regexp{
 var advNewFields = []string{"buyer_tin", "buyer_name", "issue_date", "subtotal", "total", "supplier_name", "withholding_tax"}
 
 // advDeclared is field x fixture -> matched. An absent cell is declared false: that covers
-// buyer_tin, which neither source prints, and the letter-spaced "I S S U E D" on R0.
+// buyer_tin, which neither source prints.
 var advDeclared = map[[2]string]bool{
 	{"buyer_name", fxAdvisoryRegister}:              true,
 	{"buyer_name", fxAdvisoryRegisterUnspaced}:      true,
+	{"issue_date", fxAdvisoryRegister}:              true,
 	{"issue_date", fxAdvisoryRegisterUnspaced}:      true,
 	{"subtotal", fxAdvisoryDense}:                   true,
 	{"total", fxAdvisoryRegister}:                   true,
@@ -283,12 +321,12 @@ func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 		}
 	}
 
-	// issue_date: R0 known gap (missing), R1 resolved.
-	if id, ok := rcFind(r0, "issue_date"); !ok || id.Reason != extraction.ReasonMissing {
-		t.Errorf("R0 issue_date = %+v (ok=%v), want Reason %q", id, ok, extraction.ReasonMissing)
-	}
-	if id, ok := rcFind(r1, "issue_date"); !ok || id.Reason != extraction.ReasonNone || !advSameValue(id.Value, rcStr("2026-09-01")) {
-		t.Errorf("R1 issue_date = %+v (ok=%v), want ReasonNone / %q", id, ok, "2026-09-01")
+	// issue_date: R0 and R1 both resolved.
+	for _, o := range named {
+		id, ok := rcFind(o.out, "issue_date")
+		if !ok || id.Reason != extraction.ReasonNone || !advSameValue(id.Value, rcStr("2026-09-01")) {
+			t.Errorf("%s issue_date = %+v (ok=%v), want ReasonNone / %q", o.name, id, ok, "2026-09-01")
+		}
 	}
 
 	// subtotal: D0 resolved.

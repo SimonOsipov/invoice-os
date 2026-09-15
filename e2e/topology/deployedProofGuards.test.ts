@@ -217,6 +217,29 @@ describe('[deployed-proof] EXTR34-E2E-01 sits inside the EXTR-18-07 block', () =
   })
 })
 
+describe('[deployed-proof] EXTR34-E2E-01 uploads and expects what its Go oracle reads', () => {
+  // Drift here reds the deploy gate as "docling differs from pdfium" when it does not.
+  const goTest = readFileSync(join(REPO_ROOT, 'internal/extraction/row_reach_test.go'), 'utf8')
+  const goBody = /func TestAdvisory_AFreshenedRegisterStillReadsItsAmounts\(t \*testing\.T\) \{([\s\S]*?)\n\}/.exec(goTest)
+
+  it('the helper freshens the Go-guarded copy with the suffix the Go test appends', () => {
+    expect(goBody, 'TestAdvisory_AFreshenedRegisterStillReadsItsAmounts is gone from row_reach_test.go').not.toBeNull()
+    expect(goBody![1]).toMatch(/fxRead\(t, fxAdvisoryRegister\), \[\]byte\("%e2e-[0-9a-f-]{36}\\n"\)/)
+    expect(source).toContain("const ADVISORY_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'advisory_register.pdf'))")
+    const helper = /function uniqueAdvisoryRegisterPdfBytes\(\): Buffer \{([\s\S]*?)\n\}/.exec(source)
+    expect(helper, 'uniqueAdvisoryRegisterPdfBytes() is gone from import-wizard.spec.ts').not.toBeNull()
+    expect(helper![1]).toContain("Buffer.concat([ADVISORY_REGISTER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\\n`, 'utf8')])")
+  })
+
+  it("the spec's amounts are the Go test's", () => {
+    const spec = /const AMOUNTS = \{ subtotal: '([^']+)', vat: '([^']+)', total: '([^']+)' \}/.exec(source)
+    const go = /map\[string\]string\{"subtotal": "([^"]+)", "vat": "([^"]+)", "total": "([^"]+)"\}/.exec(goBody?.[1] ?? '')
+    expect(spec, 'no AMOUNTS literal in import-wizard.spec.ts').not.toBeNull()
+    expect(go, 'no amounts map in TestAdvisory_AFreshenedRegisterStillReadsItsAmounts').not.toBeNull()
+    expect(spec!.slice(1)).toEqual(go!.slice(1))
+  })
+})
+
 // --- EXTR-15-12 (task-836): the EXTR-15 deployed-proof span --------------------------------
 //
 // Same two failure modes the EXTR-18-07 guard above covers, over the span that carries the

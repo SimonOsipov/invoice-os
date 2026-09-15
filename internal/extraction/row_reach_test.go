@@ -317,22 +317,22 @@ func TestResolve_TheRowReachIsTier1RightOnly(t *testing.T) {
 	})
 
 	t.Run("01-T9 the reach ignores the drop band", func(t *testing.T) {
-		rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
-
 		dropped := rvPage(
 			rvTok("Total", 0.10, 0.500, 0.18, 0.511),
 			rvTok("9,999.00", 0.80, 0.510, 0.87, 0.523),
 		)
-		got := extraction.Resolve(dropped, rules)
+		got := extraction.Resolve(dropped, extraction.RuleSet{Tier1: rrWithRowReach(t)})
 		if total := rvFor(got, "total"); len(total) != 0 {
 			t.Errorf("total = %v, want none: the reach's line band ignores the drop dial", rvValues(total))
 		}
+	})
 
+	t.Run("01-T9 control: the same value on the line reaches", func(t *testing.T) {
 		onLine := rvPage(
 			rvTok("Total", 0.10, 0.500, 0.18, 0.511),
 			rvTok("9,999.00", 0.80, 0.500, 0.87, 0.511),
 		)
-		got = extraction.Resolve(onLine, rules)
+		got := extraction.Resolve(onLine, extraction.RuleSet{Tier1: rrWithRowReach(t)})
 		total := rvFor(got, "total")
 		if want := []string{"9999.00"}; !slices.Equal(rvValues(total), want) {
 			t.Fatalf("total = %v, want %v", rvValues(total), want)
@@ -432,6 +432,251 @@ func TestResolve_TheRowReachPassesOverABareNaira(t *testing.T) {
 		got := extraction.Resolve(page, rules)
 		if vat := rvFor(got, "vat"); len(vat) != 0 {
 			t.Errorf("vat = %v, want none: an em dash is not passed over like a bare naira", rvValues(vat))
+		}
+	})
+}
+
+// rrOn is rvTok on page n.
+func rrOn(n int, text string, x0, y0, x1, y1 float64) extraction.Token {
+	tok := rvTok(text, x0, y0, x1, y1)
+	tok.Region.Page = n
+	return tok
+}
+
+// rrSubtotalReads fails unless subtotal is exactly [9999.00] from t1.subtotal.right at 0.65.
+func rrSubtotalReads(t *testing.T, got []extraction.Candidate) []extraction.Candidate {
+	t.Helper()
+	sub := rvFor(got, "subtotal")
+	if want := []string{"9999.00"}; !slices.Equal(rvValues(sub), want) {
+		t.Fatalf("subtotal = %v, want %v", rvValues(sub), want)
+	}
+	if !dbHasCandidateAt(sub, "9999.00", "t1.subtotal.right", 0.65) {
+		t.Errorf("subtotal candidate = %+v, want Distance 0.65 from t1.subtotal.right", sub)
+	}
+	return sub
+}
+
+func TestResolve_TheRowReachStartsPastTheDial(t *testing.T) {
+	withReach := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+	shipped := extraction.RuleSet{Tier1: extraction.Tier1Rules}
+
+	t.Run("a value exactly at the dial is the shipped path's alone", func(t *testing.T) {
+		// 0.60 - 0.25 is exactly 0.35 in float64; the shipped assertion below holds that.
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.25, 0.710),
+			rvTok("9,999.00", 0.60, 0.700, 0.66, 0.710),
+		)
+		want := extraction.Resolve(page, shipped)
+		if sub := rvFor(want, "subtotal"); len(sub) != 1 || sub[0].Distance != 0.35 {
+			t.Fatalf("shipped subtotal = %+v, want one candidate at exactly 0.35", sub)
+		}
+		if got := extraction.Resolve(page, withReach); !reflect.DeepEqual(got, want) {
+			t.Errorf("with the reach = %+v, want the shipped result %+v", got, want)
+		}
+	})
+
+	t.Run("a value one ulp past the dial is the reach's", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.25, 0.710),
+			rvTok("9,999.00", math.Nextafter(0.60, 1), 0.700, 0.66, 0.710),
+		)
+		if sub := rvFor(extraction.Resolve(page, shipped), "subtotal"); len(sub) != 0 {
+			t.Fatalf("shipped subtotal = %+v, want none: the value must sit past the dial", sub)
+		}
+		sub := rvFor(extraction.Resolve(page, withReach), "subtotal")
+		if want := []string{"9999.00"}; !slices.Equal(rvValues(sub), want) {
+			t.Fatalf("subtotal = %v, want %v", rvValues(sub), want)
+		}
+		if sub[0].RuleID != "t1.subtotal.right" || !(sub[0].Distance > 0.35) {
+			t.Errorf("subtotal candidate = %+v, want t1.subtotal.right past 0.35", sub[0])
+		}
+	})
+
+	t.Run("a first token inside the dial ends the reach", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Total", 0.10, 0.700, 0.15, 0.710),
+			rvTok("1,500.00", 0.35, 0.700, 0.41, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		got := extraction.Resolve(page, withReach)
+		if total := rvFor(got, "total"); !slices.Equal(rvValues(total), []string{"1500.00"}) {
+			t.Fatalf("total = %v, want [1500.00]: 9999.00 sits behind the first token", rvValues(total))
+		}
+		if want := extraction.Resolve(page, shipped); !reflect.DeepEqual(got, want) {
+			t.Errorf("with the reach = %+v, want the shipped result %+v", got, want)
+		}
+	})
+}
+
+func TestResolve_TheRowReachBreaksAnX0TieByReaderOrder(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+
+	t.Run("the amount earlier in reader order is read", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+			rvTok("Memo", 0.80, 0.700, 0.86, 0.710),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+
+	t.Run("the word earlier in reader order ends the reach", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("Memo", 0.80, 0.700, 0.86, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		if sub := rvFor(extraction.Resolve(page, rules), "subtotal"); len(sub) != 0 {
+			t.Errorf("subtotal = %v, want none: Memo wins the tie", rvValues(sub))
+		}
+	})
+}
+
+func TestResolve_TheRowReachIsScopedToItsOwnPage(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+	pages := func(page1 ...extraction.Token) []extraction.TokenPage {
+		return []extraction.TokenPage{
+			{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: page1},
+			{Number: 2, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+				rrOn(2, "Subtotal", 0.10, 0.700, 0.15, 0.710),
+				rrOn(2, "9,999.00", 0.80, 0.700, 0.86, 0.710),
+			}},
+		}
+	}
+
+	t.Run("page 2 reads its own line, not page 1's", func(t *testing.T) {
+		sub := rrSubtotalReads(t, extraction.Resolve(pages(rrOn(1, "1,000.00", 0.55, 0.700, 0.61, 0.710)), rules))
+		if want := rrOn(2, "", 0.80, 0.700, 0.86, 0.710).Region; sub[0].Region == nil || *sub[0].Region != want {
+			t.Errorf("Region = %v, want the value's own box %v", sub[0].Region, want)
+		}
+	})
+
+	t.Run("a label stacked at the same spot on page 1 owns nothing on page 2", func(t *testing.T) {
+		rrSubtotalReads(t, extraction.Resolve(pages(rrOn(1, "Date", 0.80, 0.685, 0.86, 0.695)), rules))
+	})
+}
+
+func TestResolve_TheRowReachOwnerSitsDirectlyAboveTheValue(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+
+	t.Run("a label beyond the below dial owns nothing", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("Date", 0.80, 0.590, 0.86, 0.600),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+
+	t.Run("a label under the value owns nothing", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+			rvTok("Date", 0.80, 0.715, 0.86, 0.725),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+
+	t.Run("a label with an unusable box owns nothing", func(t *testing.T) {
+		nan := math.NaN()
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+			rvTok("Date", nan, nan, nan, nan),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+}
+
+func TestResolve_TheRowReachNeedsUsableBoxes(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+	nan := math.NaN()
+
+	t.Run("an unusable anchor box reaches nothing", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", nan, nan, nan, nan),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		if sub := rvFor(extraction.Resolve(page, rules), "subtotal"); len(sub) != 0 {
+			t.Errorf("subtotal = %+v, want none: a NaN anchor fails every clause's comparison", sub)
+		}
+	})
+
+	t.Run("control: the same anchor with a usable box reaches", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+
+	t.Run("an unusable token earlier in reader order is passed over", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("Memo", nan, nan, nan, nan),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+}
+
+func TestResolve_TheRowReachPassesOverOnlyABareNaira(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+	line := func(between ...extraction.Token) []extraction.TokenPage {
+		toks := append([]extraction.Token{rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710)}, between...)
+		return rvPage(append(toks, rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710))...)
+	}
+
+	t.Run("a bare naira inside the dial does not end the reach", func(t *testing.T) {
+		rrSubtotalReads(t, extraction.Resolve(line(rvTok("₦", 0.30, 0.700, 0.31, 0.710)), rules))
+	})
+
+	t.Run("two bare nairas are both passed over", func(t *testing.T) {
+		rrSubtotalReads(t, extraction.Resolve(line(
+			rvTok("₦", 0.70, 0.700, 0.71, 0.710),
+			rvTok("₦", 0.75, 0.700, 0.76, 0.710),
+		), rules))
+	})
+
+	t.Run("a padded bare naira is passed over", func(t *testing.T) {
+		rrSubtotalReads(t, extraction.Resolve(line(rvTok(" ₦ ", 0.70, 0.700, 0.71, 0.710)), rules))
+	})
+
+	t.Run("a naira glued to the amount is the amount", func(t *testing.T) {
+		page := rvPage(
+			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
+			rvTok("₦9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		rrSubtotalReads(t, extraction.Resolve(page, rules))
+	})
+}
+
+// Only a letter outside the match refuses the reach: punctuation and a symbol do not.
+func TestResolve_TheRowReachBareLabelCountsOnlyLetters(t *testing.T) {
+	rules := extraction.RuleSet{Tier1: rrWithRowReach(t)}
+	total := func(label string) []extraction.Candidate {
+		page := rvPage(
+			rvTok(label, 0.10, 0.700, 0.15, 0.710),
+			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
+		)
+		return rvFor(extraction.Resolve(page, rules), "total")
+	}
+
+	for _, label := range []string{"Total:", "Total ₦"} {
+		t.Run(label+" reaches", func(t *testing.T) {
+			got := total(label)
+			if !slices.Equal(rvValues(got), []string{"9999.00"}) {
+				t.Fatalf("total = %v, want [9999.00]", rvValues(got))
+			}
+			if !dbHasCandidateAt(got, "9999.00", "t1.total.right", 0.65) {
+				t.Errorf("total candidate = %+v, want Distance 0.65 from t1.total.right", got)
+			}
+		})
+	}
+
+	t.Run("Total (NGN) gets no reach, the pinned ceiling", func(t *testing.T) {
+		if got := total("Total (NGN)"); len(got) != 0 {
+			t.Errorf("total = %v, want none: NGN is letters outside the match", rvValues(got))
 		}
 	})
 }

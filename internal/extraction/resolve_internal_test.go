@@ -632,6 +632,25 @@ func TestResolve_TheBoundaryPredicateCallsNothingThatReadsTheLexicon(t *testing.
 	}
 }
 
+// The row reach runs per anchor, so its helpers read the per-page labels slice, never the lexicon.
+func TestResolve_TheRowReachHelpersReadNoLexicon(t *testing.T) {
+	const lexicon = "anchorLabelMatchers"
+
+	self := rvParse(t, "resolve.go", nil)
+	readers := rvLexiconReaders(self, lexicon)
+	if !slices.Contains(readers, "labelTokens") {
+		t.Fatalf("the lexicon closure is %v and does not hold labelTokens; the all-clear below proves nothing", readers)
+	}
+	for _, name := range []string{"bareLabel", "rowReachToken", "ownedBelow"} {
+		if rvFuncNamed(self, name) == nil {
+			t.Fatalf("resolve.go declares no %s; the scan checks nothing", name)
+		}
+		if slices.Contains(readers, name) {
+			t.Errorf("%s reaches %s; the closure is %v", name, lexicon, readers)
+		}
+	}
+}
+
 // rvBelowGrid is a fixed grid of pages at every combination of column and row: an anchor, a
 // label and an amount on the anchor's own band, and a label just above a second amount on a
 // lower band. The first three give the rightward control something to block; the last two are

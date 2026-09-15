@@ -27,6 +27,10 @@ type Tier1Rule struct {
 	// band. tier1DropRight on every shipped right rule, zero elsewhere
 	// (TestTier1_EveryRuleHasACompiledMatcher); below never reads it.
 	Drop float64
+
+	// RowReach lets an amount label read the first token on its own line past the right dial
+	// (TestResolve_TheRowReachReadsTheFirstTokenOnTheLine).
+	RowReach bool
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon
@@ -34,13 +38,16 @@ type Tier1Rule struct {
 // naira sweep.
 const tier1RuleCount = 35
 
-// The set's only distance dials; nothing else reads a distance. Distance is the box GAP, so
+// The set's only distance dials; RowReach reads past the right one. Distance is the box GAP, so
 // both are bounded on both sides: right must reach 0.2060 and must not reach
 // 0.465497 (two_column's buyer column); below must reach 0.009111 and must not reach 0.107212
 // (the next stacked group's value, with the buyer's name behind it at 0.321571). Both upper
 // bounds used to be a bare LABEL, which since EXTR-16 is not a value; the corpus keeps no
 // rightward merge at any width, so 0.465497 is measured on a synthetic page carrying
 // two_column's own edges. TestTier1_DialsStayInsideTheirMeasuredWindow holds both.
+//
+// RowReach ships no dial: the register needs 0.614732, and a line item labelled VAT sits nearer,
+// at 0.498444, so only the bare-label clause refuses it (TestAdvisory_TheLineItemLabelledVATIsNotTheVAT).
 //
 // Each float is paired with its JSON spelling because strconv is outside this file's import
 // allowlist. TestTier1_EveryRuleHasACompiledMatcher checks every shipped rule's parsed distance
@@ -118,6 +125,8 @@ func buildTier1Rules() []Tier1Rule {
 	for i := range out {
 		if out[i].Rule.Relation.Kind == RelRight {
 			out[i].Drop = tier1DropRight
+			// Amounts only: on any other field the reach merges two_column's columns (right_upper_bound).
+			out[i].RowReach = out[i].Rule.Shape == ShapeAmount
 		}
 	}
 

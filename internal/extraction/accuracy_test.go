@@ -232,12 +232,14 @@ func acRenderReport(s acScore) string {
 // acWithDistance clones the shipped set and retunes every rule of kind. A struct copy keeps the
 // compiled matcher and the lexicon-sourced label, so a variant never re-parses a rule and forks
 // the pattern the fingerprint is built from (G-14).
+// RowReach is cleared so the window measures the dial alone; the reach would rescue right_lower_bound's pair.
 func acWithDistance(t *testing.T, kind extraction.RelationKind, maxDistance float64) []extraction.Tier1Rule {
 	t.Helper()
 
 	out := slices.Clone(extraction.Tier1Rules)
 	n := 0
 	for i := range out {
+		out[i].RowReach = false
 		if out[i].Rule.Relation.Kind != kind {
 			continue
 		}
@@ -755,6 +757,23 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			needle: "wild_stacked_borderless.pdf",
 			// The drop window's measured edges.
 			want: []string{"tier1DropRight", "0.949396", "135.00"},
+		},
+		{
+			file:   "internal/extraction/tier1.go",
+			needle: "RowReach",
+			// The row reach's measured record: the register's need and the nearer line item.
+			want: []string{"0.614732", "0.498444"},
+			// The dial comment's claim the row reach made false.
+			unwant: []string{"nothing else reads a distance"},
+		},
+		{
+			file:   acDoc,
+			needle: "## The advisory arrangements",
+			// The published record, blocker 2 closed, and the issue_date gap still recorded.
+			want: []string{"`RowReach`", "0.614732", "0.613281", "0.460405", "0.498444", "0.465497",
+				"**Closed on both fixtures**", "`issue_date` is a known gap by name"},
+			// The far-right totals gap the row reach closed, and the dial line it cited.
+			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both"},
 		},
 	} {
 		t.Run(c.file, func(t *testing.T) {

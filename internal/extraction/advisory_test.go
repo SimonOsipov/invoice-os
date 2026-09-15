@@ -114,8 +114,8 @@ func advSameValue(a, b *string) bool {
 
 // --- T-06.1 -------------------------------------------------------------------
 
-// T-06.1: the faithful register resolves neither filing blocker, so both are pinned as known gaps
-// by name and never counted as passes.
+// T-06.1: the faithful register's letter-spaced header resolves no issue_date, pinned as a known gap
+// by name and never counted as a pass. TestAdvisory_TheRegisterReadsItsFarRightAmounts owns the totals.
 func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 	out := advReconcile(t, fxAdvisoryRegister)
 
@@ -128,24 +128,11 @@ func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 		t.Errorf("R0 carries an issue_date AnchorObservation; the letter-spaced-label gap claims it has none")
 	}
 
-	// known gap: value beyond tier1MaxDistanceRight -- the label matches, only the value is too far.
-	total, ok := rcFind(out, "total")
-	if !ok || total.Reason != extraction.ReasonMissing {
-		t.Errorf("R0 total = %+v (ok=%v), want Reason %q -- known gap: value beyond tier1MaxDistanceRight", total, ok, extraction.ReasonMissing)
-	}
-	if !advObserved(t, fxAdvisoryRegister, "total") {
-		t.Errorf("R0 carries no total AnchorObservation; \"Amount payable\" should still match the label")
-	}
-
-	// R1 unspaces only the header labels, so issue_date resolves and the totals gap stays.
+	// R1 unspaces only the header labels, so issue_date resolves.
 	out1 := advReconcile(t, fxAdvisoryRegisterUnspaced)
 	issueDate1, ok := rcFind(out1, "issue_date")
 	if !ok || issueDate1.Reason != extraction.ReasonNone || !advSameValue(issueDate1.Value, rcStr("2026-09-01")) {
 		t.Errorf("R1 issue_date = %+v (ok=%v), want ReasonNone / %q", issueDate1, ok, "2026-09-01")
-	}
-	total1, ok := rcFind(out1, "total")
-	if !ok || total1.Reason != extraction.ReasonMissing {
-		t.Errorf("R1 total = %+v (ok=%v), want Reason %q -- unspacing the header labels does not touch the totals column", total1, ok, extraction.ReasonMissing)
 	}
 }
 
@@ -210,14 +197,14 @@ func TestAdvisory_TheRefereeIsWhatMovedIt(t *testing.T) {
 
 // --- T-06.4 -------------------------------------------------------------------
 
-// T-06.4: characterisation only. The register's withholding value sits outside the right dial, so
-// vat never reaches it; TestResolve_AWithholdingLineIsNotTheVAT is the owning phrase's oracle.
+// T-06.4: withholding_tax outranks vat on its token, and the row reach needs a bare label
+// (TestResolve_TheRowReachNeedsABareLabel). TestResolve_AWithholdingLineIsNotTheVAT owns the phrase.
 func TestAdvisory_TheWithholdingLineIsNotTheVAT(t *testing.T) {
 	for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
 		out := advReconcile(t, fixture)
 		vat, ok := rcFind(out, "vat")
-		if !ok || vat.Reason != extraction.ReasonMissing {
-			t.Errorf("%s: vat = %+v (ok=%v), want Reason %q", fixture, vat, ok, extraction.ReasonMissing)
+		if !ok || vat.Reason != extraction.ReasonNone || !advSameValue(vat.Value, rcStr("1110000.00")) {
+			t.Errorf("%s: vat = %s / %q (ok=%v), want ReasonNone / %q", fixture, advStr(vat.Value), vat.Reason, ok, "1110000.00")
 		}
 		for _, c := range advResolve(t, fixture) {
 			if c.Field == "vat" && strings.Contains(c.Value, "1480000") {
@@ -309,11 +296,11 @@ func TestAdvisory_EveryNewlyMatchedLabelReportsWhetherItResolved(t *testing.T) {
 		t.Errorf("D0 subtotal = %+v (ok=%v), want ReasonNone / %q", s, ok, "3187420.00")
 	}
 
-	// total: R0/R1 known gap -- value beyond tier1MaxDistanceRight.
+	// total: R0/R1 resolved, read past the right dial by the row reach.
 	for _, o := range named {
 		tot, ok := rcFind(o.out, "total")
-		if !ok || tot.Reason != extraction.ReasonMissing {
-			t.Errorf("%s total = %+v (ok=%v), want Reason %q", o.name, tot, ok, extraction.ReasonMissing)
+		if !ok || tot.Reason != extraction.ReasonNone || !advSameValue(tot.Value, rcStr("14430000.00")) {
+			t.Errorf("%s total = %s / %q (ok=%v), want ReasonNone / %q", o.name, advStr(tot.Value), tot.Reason, ok, "14430000.00")
 		}
 	}
 
@@ -351,8 +338,8 @@ func TestAdvisory_TheLabelValueGapsAreRecorded(t *testing.T) {
 			t.Errorf("gap %v exceeds its dial %v", got, dial)
 		}
 	}
-	// outOfDial reads a pair Resolve never relates, so it measures with RightGapForTest; the weld
-	// subtest below holds that helper to Resolve's own formula.
+	// outOfDial measures a pair past the right dial with RightGapForTest; the weld subtest below
+	// holds that helper to Resolve's own formula.
 	outOfDial := func(t *testing.T, labelText, valueText string, want float64) {
 		t.Helper()
 		for _, fixture := range []string{fxAdvisoryRegister, fxAdvisoryRegisterUnspaced} {
@@ -406,7 +393,15 @@ func TestAdvisory_TheLabelValueGapsAreRecorded(t *testing.T) {
 		inDial(t, advDistance(t, dense, "total", "1250000.00"), 0.0524, extraction.Tier1MaxDistanceBelowForTest)
 	})
 
-	t.Run("total Amount payable to value, R0+R1, right, KNOWN GAP, real doc 0.3932", func(t *testing.T) {
+	t.Run("subtotal Subtotal to value, R0+R1, right past the dial, read by the row reach, real doc 0.5880", func(t *testing.T) {
+		outOfDial(t, "Subtotal", "14,800,000.00", 0.6147)
+	})
+
+	t.Run("vat VAT 7.5% to value, R0+R1, right past the dial, read by the row reach, real doc 0.5871", func(t *testing.T) {
+		outOfDial(t, "VAT 7.5%", "1,110,000.00", 0.6133)
+	})
+
+	t.Run("total Amount payable to value, R0+R1, right past the dial, read by the row reach, real doc 0.3932", func(t *testing.T) {
 		outOfDial(t, "Amount payable", "₦14,430,000.00", 0.4604)
 	})
 

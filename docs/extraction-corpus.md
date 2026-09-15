@@ -316,7 +316,9 @@ fires: `Billed total` is no buyer label, because `to` must end a word
 A rightward read stops at an intervening label. When a labelled token sits between the anchor and
 the value, inside the anchor's own band, the pair is refused — a label owns what follows it, so the
 read may not reach past one to take a value that label introduces. `crossesALabel` is the
-predicate; `labelTokens` is the per-page precompute it reads.
+predicate; `labelTokens` is the per-page precompute it reads. The row reach past the right dial does
+not call it: a label between sits before the value, so the value is never the first token on the
+line and the reach cannot take it (**The row reach**, under **The advisory arrangements**).
 
 **The corpus does not exercise it, and the honest denominator is ten, not fourteen.** Only **10 of
 the 14** layouts admit a rightward anchor/value pair at all — **52** pairs in total, 17 of them
@@ -487,7 +489,10 @@ in the rate by design.
 One thing the rate can **never** catch: an over-wide distance dial. Widening a dial only adds
 candidates, so the rate is monotone non-decreasing in both — it goes up as the rules get
 sloppier. `TestTier1_DialsStayInsideTheirMeasuredWindow` is the only guard on that side, and it
-names the wrong candidate each widened dial produces.
+names the wrong candidate each widened dial produces. The row reach is not a dial, and the rate
+cannot see it either: it reads past the right dial on the three amount rules, and
+`TestTier1_TheRowReachAddsNothingOnTheScoredLayouts` is its guard (**The row reach**, under
+**The advisory arrangements**).
 
 Since EXTR-16 a bare label is not a value, and both upper bounds used to rest on one. The
 `below` bound was re-measured on the same layout against the next group's *value*, 0.107212 down
@@ -1429,8 +1434,9 @@ and the printed words; only the bytes are generated.
 R0's header labels print letter-spaced — `I S S U E D`, `I N V O I C E   N U M B E R` — and no
 lexicon entry reaches a letter-spaced word. That evidence is the **local docling 1.10.0 canary,
 not the deployed sidecar**. R1 exists to isolate that one variable: it unspaces those two labels
-and changes nothing else, so `issue_date` resolves on R1 while `total` stays missing on both, and
-the two blockers below are measured apart. `Amount payable`
+and changes nothing else, so `issue_date` resolves on R1 and stays missing on R0, while `subtotal`,
+`vat` and `total` decide the same on both (**The row reach** below), and the two blockers below are
+measured apart. `Amount payable`
 is evidenced **split**, with no `(NGN)` beside it, by the same local canary
 (`TestAdvisory_TheFixturesTokeniseTheWayTheyDeclare` pins each newly matched label's declared
 tokenisation — split label-and-value or joined into one token — against the built PDF).
@@ -1448,17 +1454,96 @@ not a label-matching one, and it is **owed**, not fixed here
 
 ### Core AC-5 is not delivered on the real register
 
-Through the local docling canary, `invoice_number`, `issue_date`, `subtotal`, `vat` and `total`
-all decide `missing` on the real advisory register. Two blockers, both **owed**:
+Through the local docling canary, before the row reach, `invoice_number`, `issue_date`, `subtotal`,
+`vat` and `total` all decided `missing` on the real advisory register. It had two blockers:
 
-1. The header labels are letter-spaced (above).
-2. The totals sit 0.3932–0.5880 right of their labels — pdfium R0's own `Amount payable` gap
-   measures 0.4604 — against `tier1MaxDistanceRight = 0.35` (`tier1.go:43`).
+1. The header labels are letter-spaced (above). **Owed.**
+2. The totals sit 0.3932–0.5880 right of their labels, against `tier1MaxDistanceRight = 0.35`.
+   **Closed on both fixtures** by the row reach (below): R0 and R1 decide `subtotal`, `vat` and
+   `total` (`TestAdvisory_TheRegisterReadsItsFarRightAmounts`). No test in this repo reads the real
+   register, so what it decides through the row reach has no oracle here.
 
-Neither letter-spaced label matching nor a far-right totals column exists; both follow-ups are
-**owed and not created**. On the faithful fixture, `issue_date` and `total` are known gaps by
-name, recorded as gaps and never counted as passes
-(`TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName`).
+Letter-spaced label matching does not exist; that follow-up is **owed and not created**. On the
+faithful fixture, `issue_date` is a known gap by name, recorded as a gap and never counted as a
+pass (`TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName`).
+
+### The row reach
+
+`tier1MaxDistanceRight` stays 0.35. Widened to the register's need it would reach two_column's buyer
+column at 0.465497 (`TestTier1_DialsStayInsideTheirMeasuredWindow`, `right_upper_bound`), so the
+register's amounts are read by a second path. `Tier1Rule.RowReach` is set on exactly
+`t1.subtotal.right`, `t1.vat.right` and `t1.total.right` (`TestTier1_EveryRuleHasACompiledMatcher`).
+A learned rule and a `below` rule never read it (`TestResolve_TheRowReachIsTier1RightOnly`). A rule
+carrying it reads the first token on its label's line past the rule's own dial when every clause
+holds:
+
+- **The first token on the line.** The value is the usable token with the smallest left edge on the
+  label's line, by the line band `right` already applies. A word, a label or a letterless
+  placeholder there ends the reach (`TestResolve_TheRowReachReadsTheFirstTokenOnTheLine`,
+  `TestResolve_TheRowReachStopsAtAnotherColumnsValue`, `TestResolve_TheRowReachPassesOverABareNaira`).
+  So does a first token inside the dial, so the reach never repeats the dial's read
+  (`TestResolve_TheRowReachStartsPastTheDial`). A dropped value gets no row reach; the drop band
+  keeps the dial as its reach (`TestResolve_TheRowReachIsTier1RightOnly`).
+- **A bare `₦` is passed over.** A token whose trimmed text is exactly `₦` is never the first token
+  (`TestResolve_TheRowReachPassesOverOnlyABareNaira`). pdfium reads the real NG-3 with each `₦` as
+  its own token, and R0 rebuilt that way still decides all three amounts
+  (`TestAdvisory_ASplitNairaStillReadsTheRegistersAmounts`). Ceiling: a bare `NGN` or `N` before
+  the amount still ends the reach.
+- **A bare label.** The label token carries no letter outside its label match
+  (`TestResolve_TheRowReachNeedsABareLabel`, `TestResolve_TheRowReachBareLabelCountsOnlyLetters`).
+  Ceiling: `Total (NGN)` gets no row reach.
+- **No stacked owner.** A value any label reaches through `below` at `tier1MaxDistanceBelow` is that
+  label's. A same-field label stacked there loses nothing, because `below` reads the value; a
+  non-amount label there leaves the field `missing`, the accepted ceiling
+  (`TestResolve_TheRowReachStopsAtAnotherColumnsValue`,
+  `TestResolve_TheRowReachOwnerSitsDirectlyAboveTheValue`).
+
+**The measured record.** No numeric bound ships with the reach. Each figure is a pdfium gap on the
+committed fixtures:
+
+| Figure | Gap | Pair | Held by |
+|---|---|---|---|
+| The need | 0.614732 | `Subtotal` → `14,800,000.00` | R0 to 6dp: `TestTier1_TheRowReachAddsNothingOnTheScoredLayouts`, register control. R0 and R1 to 4dp: `TestAdvisory_TheRegisterReadsItsFarRightAmounts` |
+| | 0.613281 | `VAT 7.5%` → `1,110,000.00` | the same two |
+| | 0.460405 | `Amount payable` → `₦14,430,000.00` | the same two |
+| First wrong candidate without the bare-label clause | 0.498444 | the line item `VAT compliance health check` → `2,850,000.00` | to 4dp: `TestAdvisory_TheLineItemLabelledVATIsNotTheVAT` |
+| First wrong candidate on every field | 0.465497 | `acRightColumnPage` `Supplier` → `Honeywell Group` | to 6dp: `right_merge` in `TestTier1_TheRecordedDistancesAreTheMeasuredDistances`; absent from the shipped set: `right_upper_bound` |
+
+`TestAdvisory_TheLabelValueGapsAreRecorded` also records the three register gaps past the dial, to
+4dp on R0 and R1; its row names carry the local docling canary's real-register gaps, 0.5880, 0.5871
+and 0.3932, as provenance and assert none of them. No docling golden of either register fixture
+exists.
+
+The line item sits nearer than the need, so no bound on the reach can take the register's `vat` and
+refuse the line item: the bare-label clause does. `acRightColumnPage`'s buyer name sits nearer
+still, so the reach is scoped to the three amount rules, and `t1Defective` holds that scope. With
+every clause the reach has no dial, so the shipped reach is the unbounded one. Against the same rules
+with `RowReach` cleared it adds and removes no candidate on the 13 readable scored layouts through
+pdfium, their 14 docling goldens and `advisory_dense.pdf` (29 reads are walked; the scanned layout's
+pdfium read is asserted empty), while `advisory_register.pdf` gains exactly its three amounts
+(`TestTier1_TheRowReachAddsNothingOnTheScoredLayouts`). A dial between 0.614732 and the page edge
+would have no wrong candidate at its upper edge to measure, so it would be a hand-picked constant.
+The advisory fixtures are not scored, so the end-to-end headline does not move.
+
+`acWithDistance` clears `RowReach`, so `TestTier1_DialsStayInsideTheirMeasuredWindow` still measures
+the dial alone: with the reach left on, `right_lower_bound`'s narrowed variant would read its pair
+through the reach and bound nothing.
+
+**Figures with no oracle.** A planning sweep and the local docling canary measured these once;
+neither is committed, and no test re-measures them:
+
+- the real register's canary gaps 0.5880, 0.5871 and 0.3932;
+- pdfium's read of the real NG-3, which draws each of its seven `₦` as its own token;
+- the sweep's 32 reads (the 14 scored layouts through pdfium, their 14 docling goldens, the three
+  advisory PDFs and `acRightColumnPage`); the committed differential walks 29 plus the register
+  control;
+- every alternative the sweep rejected, with its counts and verdicts: a wider amount dial, a totals
+  band right of the page's middle, and a first-token reach without the bare-label clause each read
+  the line item as a second `vat`; with only a label able to block, `advisory_dense.pdf`'s VAT note
+  reaches `0.00` at 0.455932; and a wider amount dial with the bare-label clause read clean but has
+  no measured upper edge.
+
+Every other figure in this subsection is held by the test named beside it.
 
 ## Learned rules
 

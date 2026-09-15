@@ -1312,8 +1312,8 @@ func fxNairaTextPages(withCMap bool, pages ...[]fxLine) []byte {
 
 // fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the NG-3 advisory register mock-up
 // transcribed faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
-// (D-26-06 -- neither issue_date nor total resolves on R0; R1 proves Issued resolves without
-// touching geometry, and total stays missing on both).
+// (D-26-06 -- issue_date does not resolve on R0; R1 proves Issued resolves without touching
+// geometry).
 func fxBuildAdvisoryRegister(unspaced bool) []byte {
 	invoiceNumberLabel := `I N V O I C E   N U M B E R`
 	issuedLabel := `I S S U E D`
@@ -2028,7 +2028,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

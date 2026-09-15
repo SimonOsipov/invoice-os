@@ -190,6 +190,11 @@ func anchorOutranked(text string, loc []int) bool {
 	return false
 }
 
+// labelView is text as a label reads it: a token made only of single letters spaced apart
+// ("I N V O I C E") reads as those letters joined. Every other token reads as printed.
+// ceiling: word gaps are dropped too, so a spaced label whose pattern needs a word boundary ("T O T A L   D U E") misses; revisit when one does
+func labelView(text string) string { return text }
+
 // labelTokens is one bool per token in the page's own order: does this token carry any
 // anchor-lexicon label. Computed once per page, like partyOrder: crossesALabel runs per candidate
 // pair, so reading the lexicon inside it costs orders of magnitude more than one whole Resolve on

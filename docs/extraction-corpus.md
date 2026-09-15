@@ -317,8 +317,8 @@ A rightward read stops at an intervening label. When a labelled token sits betwe
 the value, inside the anchor's own band, the pair is refused — a label owns what follows it, so the
 read may not reach past one to take a value that label introduces. `crossesALabel` is the
 predicate; `labelTokens` is the per-page precompute it reads. The row reach past the right dial does
-not call it: a label between is the first token on the line, and that ends the reach
-(**The row reach**, under **The advisory arrangements**).
+not call it: a label between sits before the value, so the value is never the first token on the
+line and the reach cannot take it (**The row reach**, under **The advisory arrangements**).
 
 **The corpus does not exercise it, and the honest denominator is ten, not fourteen.** Only **10 of
 the 14** layouts admit a rightward anchor/value pair at all — **52** pairs in total, 17 of them

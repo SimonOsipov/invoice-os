@@ -918,8 +918,8 @@ entries (`TestRLS_EndToEndScoresTheCorpus`). Every other row is unchanged
 `wild_scanned_no_number.pdf`, and EXTR-21's frozen baseline stays 53
 (`TestRLS_EndToEndNoBaselineHitRegresses`).
 
-**The rule.** `labelView` (`resolve.go`) is the text every lexicon read sees. A token whose text
-splits on whitespace into two or more units, each exactly one letter, reads as those letters
+**The rule.** `labelView` (`resolve.go`) is the text all but two lexicon reads see. A token whose
+text splits on whitespace into two or more units, each exactly one letter, reads as those letters
 joined: `I N V O I C E N U M B E R` and `I N V O I C E   N U M B E R` both read `INVOICENUMBER`.
 Every other token reads as printed (`TestLabelView_JoinsASpacedLabelWhateverTheWordGap`,
 `TestLabelView_ReadsEveryOtherTokenAsPrinted`). The view never edits a pattern, the lexicon's
@@ -932,7 +932,7 @@ party and is refused as a name as its word is (`TestResolve_ASpacedLabelReadsAsI
 nothing (`TestResolve_SpacedTextThatIsNoLabelAnchorsNothing`).
 
 **Learning reads as printed.** `LearnBoxlessRule` and `tokenCarries` (`learn.go`) do not take the
-view. Both read a value only from what follows a label match inside one token, and on a
+view. Each uses a label match only to read what follows it inside the same token, and on a
 letters-only view every lexicon match spans the whole text
 (`TestAnchorLexicon_EveryMatchOnALettersOnlyViewSpansIt`), so neither could find a value there.
 `LearnRule` learns from observations, which carry the view, so a rule learned on the one-space
@@ -965,8 +965,8 @@ is orphaned, as it would be under a bump.
 Because R0 now shares R1's identity, a rule learned on R1 reaches R0 where its label matches the
 view: R1's `Issued` rule reads R0's date, and R1's `Invoice number` rule reads nothing on R0
 (`TestLearnRule_ARuleLearnedOnTheUnspacedTwinReadsTheSpacedRegister`). The reverse holds too: a
-correction pointed on R0 learns the joined label, and that rule reads nothing on R1; it was
-measured once, and no test pins it.
+correction pointed on R0 learns the joined label, so R0's `ISSUED` rule reads R1's date and R0's
+`INVOICENUMBER` rule reads nothing on R1. The reverse was measured once, and no test pins it.
 
 **Ceilings.** A spaced label with punctuation (`I N V O I C E N O :`) or mixed with a whole word
 (`INVOICE N O`) reads as printed (`TestLabelView_ReadsEveryOtherTokenAsPrinted`). Word gaps are
@@ -975,8 +975,8 @@ dropped, so a spaced label whose pattern needs a boundary between words, such as
 phrase is observed; both were measured once when the rule was designed, and no test pins them. A
 label the reader splits across two tokens is not joined. A spaced label printed in the same token
 as its value reads nothing (`TestResolve_ASpacedLabelJoinedToItsValueReadsNothing`). A pointed
-correction on a spaced label stores the joined text as its anchor label, so review shows `Taken
-from INVOICENUMBER` (`handlers_correction.go`, `extractionReview.ts`); no test pins that
+correction on a spaced label stores the joined text as its anchor label, so review shows
+`Taken from INVOICENUMBER` (`handlers_correction.go`, `extractionReview.ts`); no test pins that
 rendering. The `ceiling:` line on `labelView` says when to revisit.
 
 **The deployed read.** This walk reads the sibling through pdfium; the register's deployed docling
@@ -1039,15 +1039,17 @@ mock-ups. A production read that fails on paper texture, a scanner's skew or a v
 unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
 reproducible in this repo and never will be.
 
-**Four claims in this section have no honest oracle, and are recorded as having none.** Why each of
+**Five claims in this section have no honest oracle, and are recorded as having none.** Why each of
 the 10 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
 line-item zero is source fact, stated below rather than scanned for. The 18-of-40 production
 pass above is unrepeatable. And the planning figures in **What EXTR-31 changed** were measured
 once, by a probe and a sweep that are not committed: the `below` sweep's counts, the drop band
 reaching nothing outside the pair at any dial up to 1.0 (the tests hold only 0.97 and the window's
-two edges), docling's 0.720721, and the box heights 0.014015 and 0.010879. Everything else in these
-two sections is parsed and compared against a live measurement.
+two edges), docling's 0.720721, and the box heights 0.014015 and 0.010879. The statements
+**What EXTR-35 changed** marks as measured once or pinned by no test have none: the reverse learned
+rule, two ceilings and the review label. Everything else in these two sections is parsed and
+compared against a live measurement.
 
 ## Line-item outcome
 
@@ -1423,9 +1425,9 @@ cannot reproduce that.
 
 Verdict: **fixed by EXTR-35**.
 
-The sibling prints `I N V O I C E N U M B E R` directly above its value, at the twin's position. Before EXTR-35 no
-lexicon entry matched a token of spaced single letters, so the sibling resolved no invoice number,
-quarantined and scored 0 / 8, while the twin read its number on the same geometry:
+The sibling prints `I N V O I C E N U M B E R` directly above its value, at the twin's position.
+Before EXTR-35 no lexicon entry matched spaced single letters, so the sibling resolved no invoice
+number, quarantined and scored 0 / 8, while the twin read its number on the same geometry:
 
 ```
 d36be21e  wild_stacked_borderless_asprinted.pdf  decide invoice_number "<nil>" reason="missing"
@@ -1434,7 +1436,7 @@ d36be21e  wild_stacked_borderless.pdf            decide invoice_number "INV-2104
 70cc8dcd  wild_stacked_borderless.pdf            decide invoice_number "INV-2104" reason=""
 ```
 
-EXTR-35 reads every lexicon match through the label view (**What EXTR-35 changed**). The sibling
+EXTR-35 matches letter-spaced labels through the label view (**What EXTR-35 changed**). The sibling
 now resolves exactly `INV-2204` through `t1.invoice_number.below`, on pdfium and on its docling
 golden, and the twin still resolves `INV-2104`
 (`TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber`). The layout files all eight cells
@@ -1540,7 +1542,9 @@ not a label-matching one, and it is **owed**, not fixed here
 Through the local docling canary, before the row reach, `invoice_number`, `issue_date`, `subtotal`,
 `vat` and `total` all decided `missing` on the real advisory register. It had two blockers:
 
-1. The header labels are letter-spaced (above). **Closed on both fixtures** by the label view: R0 and R1 decide `invoice_number` and `issue_date` (`TestAdvisory_TheRegisterReadsItsLetterSpacedHeader`).
+1. The header labels are letter-spaced (above). **Closed on both fixtures** by the label view:
+   R0 and R1 decide `invoice_number` and `issue_date`
+   (`TestAdvisory_TheRegisterReadsItsLetterSpacedHeader`).
 2. The totals sit 0.3932–0.5880 right of their labels, against `tier1MaxDistanceRight = 0.35`.
    **Closed on both fixtures** by the row reach (below): R0 and R1 decide `subtotal`, `vat` and
    `total` (`TestAdvisory_TheRegisterReadsItsFarRightAmounts`). No test in this repo reads the real

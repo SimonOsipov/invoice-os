@@ -66,6 +66,9 @@ func NewDoclingExtractorWithReaderForTest(r PageReader) *DoclingExtractor {
 // assert the production thirds rather than a reimplementation of them.
 func ColumnBandForTest(r Region) int { return columnBand(r) }
 
+// LabelViewForTest hands external specs the production label view.
+func LabelViewForTest(text string) string { return labelView(text) }
+
 // AnchorLabelIDsForTest returns every anchorLexicon ID whose pattern matches text.
 func AnchorLabelIDsForTest(text string) []string {
 	var ids []string

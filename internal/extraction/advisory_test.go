@@ -136,6 +136,80 @@ func TestAdvisory_TheRegisterFilingBlockersAreKnownGapsByName(t *testing.T) {
 	}
 }
 
+// --- 02-T1 ----------------------------------------------------------------------
+
+// 02-T1: once the label view is wired, R0 decides both header fields -- T-06.1's known gap is
+// retired in the same commit. Also holds over R0's three-space source form, and confirms R1 is
+// unaffected (Constraint).
+func TestAdvisory_TheRegisterReadsItsLetterSpacedHeader(t *testing.T) {
+	out := advReconcile(t, fxAdvisoryRegister)
+
+	inv, ok := rcFind(out, "invoice_number")
+	gotInv := "missing"
+	if inv.Value != nil {
+		gotInv = *inv.Value
+	}
+	if !ok || inv.Reason != extraction.ReasonNone || gotInv != "OAP/2026/0088" || len(inv.Alternatives) != 0 {
+		t.Errorf("R0 invoice_number = %s, want OAP/2026/0088, ReasonNone, 0 alternatives", gotInv)
+	}
+	id, ok := rcFind(out, "issue_date")
+	gotID := "missing"
+	if id.Value != nil {
+		gotID = *id.Value
+	}
+	if !ok || id.Reason != extraction.ReasonNone || gotID != "2026-09-01" || len(id.Alternatives) != 0 {
+		t.Errorf("R0 issue_date = %s, want 2026-09-01, ReasonNone, 0 alternatives", gotID)
+	}
+
+	if d := advDistance(t, advResolve(t, fxAdvisoryRegister), "invoice_number", "OAP/2026/0088"); math.Abs(d-0.014216) > 5e-5 {
+		t.Errorf("R0 invoice_number distance = %.6f, want within 5e-5 of 0.014216", d)
+	}
+	if d := advDistance(t, advResolve(t, fxAdvisoryRegister), "issue_date", "2026-09-01"); math.Abs(d-0.014602) > 5e-5 {
+		t.Errorf("R0 issue_date distance = %.6f, want within 5e-5 of 0.014602", d)
+	}
+
+	var invText, dateText string
+	for _, o := range extraction.AnchorObservations(rvCorpusPages(t, fxAdvisoryRegister)) {
+		if o.Label == "invoice_no" {
+			invText = o.Text
+		}
+		if o.Label == "issue_date" {
+			dateText = o.Text
+		}
+	}
+	if invText != "INVOICENUMBER" {
+		t.Errorf("R0 invoice_no observation Text = %q, want %q", invText, "INVOICENUMBER")
+	}
+	if dateText != "ISSUED" {
+		t.Errorf("R0 issue_date observation Text = %q, want %q", dateText, "ISSUED")
+	}
+
+	// R0's three-space source form (the pdfium token is found first; advRewriteToken fatals
+	// otherwise) decides the same two values.
+	rewritten := advRewriteToken(t, rvCorpusPages(t, fxAdvisoryRegister),
+		"I N V O I C E N U M B E R", "I N V O I C E   N U M B E R")
+	rewrittenOut := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(rewritten, rvGeneric())})
+	rInv, ok := rcFind(rewrittenOut, "invoice_number")
+	if !ok || rInv.Reason != extraction.ReasonNone || !advSameValue(rInv.Value, rcStr("OAP/2026/0088")) {
+		t.Errorf("R0 (three-space header) invoice_number = %+v (ok=%v), want OAP/2026/0088, ReasonNone", rInv, ok)
+	}
+	rDate, ok := rcFind(rewrittenOut, "issue_date")
+	if !ok || rDate.Reason != extraction.ReasonNone || !advSameValue(rDate.Value, rcStr("2026-09-01")) {
+		t.Errorf("R0 (three-space header) issue_date = %+v (ok=%v), want 2026-09-01, ReasonNone", rDate, ok)
+	}
+
+	// Constraint: R1 keeps resolving both exactly as today.
+	out1 := advReconcile(t, fxAdvisoryRegisterUnspaced)
+	inv1, ok := rcFind(out1, "invoice_number")
+	if !ok || inv1.Reason != extraction.ReasonNone || !advSameValue(inv1.Value, rcStr("OAP/2026/0088")) {
+		t.Errorf("R1 invoice_number = %+v (ok=%v), want OAP/2026/0088, ReasonNone", inv1, ok)
+	}
+	id1, ok := rcFind(out1, "issue_date")
+	if !ok || id1.Reason != extraction.ReasonNone || !advSameValue(id1.Value, rcStr("2026-09-01")) {
+		t.Errorf("R1 issue_date = %+v (ok=%v), want 2026-09-01, ReasonNone", id1, ok)
+	}
+}
+
 // --- T-06.2 -------------------------------------------------------------------
 
 // T-06.2: Core AC-3 -- once "Taxable amount" decides subtotal, the referee picks the printed total

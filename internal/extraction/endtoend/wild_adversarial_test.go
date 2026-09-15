@@ -837,6 +837,56 @@ func TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber(t *testing.T) {
 	}
 }
 
+// 02-T11. Replaces TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber (above, retired in
+// Stage 3): once the label view is wired, the letter-spaced sibling resolves its own invoice
+// number, through both pdfium and its golden, and the twin still resolves its own.
+func TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber(t *testing.T) {
+	const printed = "I N V O I C E N U M B E R"
+
+	for _, rd := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"pdfium", eeTokenPages(t, wildStackedAsPrinted)},
+		{"golden", bdGoldenTokenPages(t, wildStackedAsPrinted)},
+	} {
+		found := false
+		for _, p := range rd.pages {
+			for _, tok := range p.Tokens {
+				if strings.TrimSpace(tok.Text) == printed {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s (%s) reads no %q token; the absence below would be of the label, not of the number", wildStackedAsPrinted, rd.name, printed)
+		}
+
+		var got []extraction.Candidate
+		for _, c := range extraction.Resolve(rd.pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}) {
+			if c.Field == "invoice_number" {
+				got = append(got, c)
+			}
+		}
+		var values []string
+		for _, c := range got {
+			values = append(values, c.Value)
+		}
+		if !slices.Equal(values, []string{wildInvNums[6]}) {
+			t.Errorf("%s (%s) resolves invoice_number %v, want [%s]", wildStackedAsPrinted, rd.name, values, wildInvNums[6])
+		}
+		for _, c := range got {
+			if c.RuleID != "t1.invoice_number.below" {
+				t.Errorf("%s (%s) invoice_number candidate %+v, want rule t1.invoice_number.below", wildStackedAsPrinted, rd.name, c)
+			}
+		}
+	}
+
+	if twin := wildResolved(t, wildStacked, "invoice_number"); !slices.Equal(twin, []string{wildInvNums[3]}) {
+		t.Errorf("%s resolves invoice_number %v, want exactly [%s] on the same geometry", wildStacked, twin, wildInvNums[3])
+	}
+}
+
 // --- every wild_ arrangement declares a sibling or an exemption --------------------------------
 
 const wildAsPrintedSuffix = "_asprinted.pdf"

@@ -68,14 +68,14 @@ func TestResolve_TheRowReachReadsTheFirstTokenOnTheLine(t *testing.T) {
 		}
 	})
 
-	t.Run("01-T1 control: the shipped set has no candidate", func(t *testing.T) {
+	t.Run("01-T1 control: without the row reach there is no candidate", func(t *testing.T) {
 		page := rvPage(
 			rvTok("Subtotal", 0.10, 0.700, 0.15, 0.710),
 			rvTok("9,999.00", 0.80, 0.700, 0.86, 0.710),
 		)
-		got := extraction.Resolve(page, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+		got := extraction.Resolve(page, extraction.RuleSet{Tier1: rrWithoutRowReach()})
 		if sub := rvFor(got, "subtotal"); len(sub) != 0 {
-			t.Errorf("subtotal = %v, want none: the shipped dial does not reach 0.65", rvValues(sub))
+			t.Errorf("subtotal = %v, want none: the dial alone does not reach 0.65", rvValues(sub))
 		}
 	})
 
@@ -349,10 +349,10 @@ func TestResolve_TheRowReachIsTier1RightOnly(t *testing.T) {
 			rvTok("1,500.00", 0.35, 0.700, 0.41, 0.710),
 		)
 		withReach := extraction.Resolve(page, extraction.RuleSet{Tier1: rrWithRowReach(t)})
-		shipped := extraction.Resolve(page, extraction.RuleSet{Tier1: extraction.Tier1Rules})
+		shipped := extraction.Resolve(page, extraction.RuleSet{Tier1: rrWithoutRowReach()})
 
 		if !reflect.DeepEqual(withReach, shipped) {
-			t.Errorf("Resolve with the reach enabled = %+v, want the same as the shipped set %+v", withReach, shipped)
+			t.Errorf("Resolve with the reach enabled = %+v, want the same as the set without the reach %+v", withReach, shipped)
 		}
 		total := rvFor(shipped, "total")
 		if len(total) != 1 {
@@ -459,20 +459,20 @@ func rrSubtotalReads(t *testing.T, got []extraction.Candidate) []extraction.Cand
 
 func TestResolve_TheRowReachStartsPastTheDial(t *testing.T) {
 	withReach := extraction.RuleSet{Tier1: rrWithRowReach(t)}
-	shipped := extraction.RuleSet{Tier1: extraction.Tier1Rules}
+	noReach := extraction.RuleSet{Tier1: rrWithoutRowReach()}
 
-	t.Run("a value exactly at the dial is the shipped path's alone", func(t *testing.T) {
+	t.Run("a value exactly at the dial is the dial's alone", func(t *testing.T) {
 		// 0.60 - 0.25 is exactly 0.35 in float64; the shipped assertion below holds that.
 		page := rvPage(
 			rvTok("Subtotal", 0.10, 0.700, 0.25, 0.710),
 			rvTok("9,999.00", 0.60, 0.700, 0.66, 0.710),
 		)
-		want := extraction.Resolve(page, shipped)
+		want := extraction.Resolve(page, noReach)
 		if sub := rvFor(want, "subtotal"); len(sub) != 1 || sub[0].Distance != 0.35 {
 			t.Fatalf("shipped subtotal = %+v, want one candidate at exactly 0.35", sub)
 		}
 		if got := extraction.Resolve(page, withReach); !reflect.DeepEqual(got, want) {
-			t.Errorf("with the reach = %+v, want the shipped result %+v", got, want)
+			t.Errorf("with the reach = %+v, want the result without the reach %+v", got, want)
 		}
 	})
 
@@ -481,7 +481,7 @@ func TestResolve_TheRowReachStartsPastTheDial(t *testing.T) {
 			rvTok("Subtotal", 0.10, 0.700, 0.25, 0.710),
 			rvTok("9,999.00", math.Nextafter(0.60, 1), 0.700, 0.66, 0.710),
 		)
-		if sub := rvFor(extraction.Resolve(page, shipped), "subtotal"); len(sub) != 0 {
+		if sub := rvFor(extraction.Resolve(page, noReach), "subtotal"); len(sub) != 0 {
 			t.Fatalf("shipped subtotal = %+v, want none: the value must sit past the dial", sub)
 		}
 		sub := rvFor(extraction.Resolve(page, withReach), "subtotal")
@@ -503,8 +503,8 @@ func TestResolve_TheRowReachStartsPastTheDial(t *testing.T) {
 		if total := rvFor(got, "total"); !slices.Equal(rvValues(total), []string{"1500.00"}) {
 			t.Fatalf("total = %v, want [1500.00]: 9999.00 sits behind the first token", rvValues(total))
 		}
-		if want := extraction.Resolve(page, shipped); !reflect.DeepEqual(got, want) {
-			t.Errorf("with the reach = %+v, want the shipped result %+v", got, want)
+		if want := extraction.Resolve(page, noReach); !reflect.DeepEqual(got, want) {
+			t.Errorf("with the reach = %+v, want the result without the reach %+v", got, want)
 		}
 	})
 }

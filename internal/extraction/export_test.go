@@ -114,8 +114,8 @@ const (
 // copy of it.
 const Tier1DropRightForTest = tier1DropRight
 
-// RightGapForTest mirrors relatedTokens' right-relation gap for a pair outside the dial, where
-// Resolve mints no Distance to read. TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
+// RightGapForTest mirrors the right relation's box gap for a pair past the dial.
+// TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
 func RightGapForTest(anchor, value Region) float64 { return value.X0 - anchor.X1 }
 
 // RelationClausesForTest wraps the production clause predicate so external specs assert the

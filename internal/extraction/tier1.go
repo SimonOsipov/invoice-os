@@ -46,6 +46,9 @@ const tier1RuleCount = 35
 // rightward merge at any width, so 0.465497 is measured on a synthetic page carrying
 // two_column's own edges. TestTier1_DialsStayInsideTheirMeasuredWindow holds both.
 //
+// Only the three amount right rules read past the right dial, through RowReach
+// (TestTier1_TheRowReachAddsNothingOnTheScoredLayouts).
+//
 // Each float is paired with its JSON spelling because strconv is outside this file's import
 // allowlist. TestTier1_EveryRuleHasACompiledMatcher checks every shipped rule's parsed distance
 // against the float, so the pair cannot drift.
@@ -122,6 +125,8 @@ func buildTier1Rules() []Tier1Rule {
 	for i := range out {
 		if out[i].Rule.Relation.Kind == RelRight {
 			out[i].Drop = tier1DropRight
+			// Amounts only: on any other field the reach merges two_column's columns (right_upper_bound).
+			out[i].RowReach = out[i].Rule.Shape == ShapeAmount
 		}
 	}
 

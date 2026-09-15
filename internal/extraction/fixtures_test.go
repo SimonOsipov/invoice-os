@@ -1312,8 +1312,8 @@ func fxNairaTextPages(withCMap bool, pages ...[]fxLine) []byte {
 
 // fxBuildAdvisoryRegister is R0 (arch-26-06 Appendix C), the NG-3 advisory register mock-up
 // transcribed faithful. unspaced=true builds R1: the ONLY difference is the two letter-spaced header labels
-// (D-26-06 -- neither issue_date nor total resolves on R0; R1 proves Issued resolves without
-// touching geometry, and total stays missing on both).
+// (D-26-06 -- issue_date does not resolve on R0; R1 proves Issued resolves without touching
+// geometry).
 func fxBuildAdvisoryRegister(unspaced bool) []byte {
 	invoiceNumberLabel := `I N V O I C E   N U M B E R`
 	issuedLabel := `I S S U E D`

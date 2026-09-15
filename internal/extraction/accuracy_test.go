@@ -232,12 +232,14 @@ func acRenderReport(s acScore) string {
 // acWithDistance clones the shipped set and retunes every rule of kind. A struct copy keeps the
 // compiled matcher and the lexicon-sourced label, so a variant never re-parses a rule and forks
 // the pattern the fingerprint is built from (G-14).
+// RowReach is cleared so the window measures the dial alone; the reach would rescue right_lower_bound's pair.
 func acWithDistance(t *testing.T, kind extraction.RelationKind, maxDistance float64) []extraction.Tier1Rule {
 	t.Helper()
 
 	out := slices.Clone(extraction.Tier1Rules)
 	n := 0
 	for i := range out {
+		out[i].RowReach = false
 		if out[i].Rule.Relation.Kind != kind {
 			continue
 		}

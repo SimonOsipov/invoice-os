@@ -21,6 +21,9 @@ const blockStart = source.indexOf(BLOCK_START)
 if (blockStart === -1) throw new Error(`start marker not found in import-wizard.spec.ts: ${JSON.stringify(BLOCK_START)}`)
 const block = source.slice(blockStart)
 
+const EXTR34_E2E_01 =
+  "EXTR34-E2E-01 (AC-6): the register's far-right amounts reach the manual-entry hand-off while it still quarantines"
+
 // EXTR-15-12 (task-836). The EXTR-15 deployed-proof span runs from its own marker to
 // EXTR-18-07's, and is scanned SEPARATELY: two of its documents are DOCX, which no
 // unique*PdfBytes() helper mints, so it needs its own allowlist. The rest of
@@ -177,6 +180,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
     'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
     'EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied',
+    EXTR34_E2E_01,
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -202,6 +206,15 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
       ).toBeGreaterThanOrEqual(300_000)
     })
   }
+})
+
+describe('[deployed-proof] EXTR34-E2E-01 sits inside the EXTR-18-07 block', () => {
+  // Above the EXTR-15 marker no freshness guard scans its upload.
+  it('its title is found past the block marker', () => {
+    const at = source.indexOf(EXTR34_E2E_01)
+    expect(at, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR34_E2E_01)}`).toBeGreaterThan(-1)
+    expect(at, 'EXTR34-E2E-01 sits above the EXTR-18-07 marker').toBeGreaterThan(blockStart)
+  })
 })
 
 // --- EXTR-15-12 (task-836): the EXTR-15 deployed-proof span --------------------------------

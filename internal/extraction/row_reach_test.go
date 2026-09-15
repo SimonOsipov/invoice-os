@@ -825,3 +825,23 @@ func TestAdvisory_ASplitNairaStillReadsTheRegistersAmounts(t *testing.T) {
 		rrDecides(t, "R0 with a joined naira", extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric())}))
 	})
 }
+
+// The deployed spec uploads a freshened copy; its trailing comment must not move the read.
+func TestAdvisory_AFreshenedRegisterStillReadsItsAmounts(t *testing.T) {
+	freshened := slices.Concat(fxRead(t, fxAdvisoryRegister), []byte("%e2e-00000000-0000-4000-8000-000000000000\n"))
+	var pages []extraction.TokenPage
+	doc := extraction.Document{Bytes: freshened, ContentType: "application/pdf"}
+	if _, err := extraction.NewPDFiumReader().Read(t.Context(), doc, extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("read a freshened %s: %v", fxAdvisoryRegister, err)
+	}
+	got := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric())})
+	for field, want := range map[string]string{"subtotal": "14800000.00", "vat": "1110000.00", "total": "14430000.00"} {
+		r, ok := rcFind(got, field)
+		if !ok || r.Reason != extraction.ReasonNone || !advSameValue(r.Value, rcStr(want)) {
+			t.Errorf("freshened R0 %s = %s / %q (ok=%v), want %s / ReasonNone", field, advStr(r.Value), r.Reason, ok, want)
+		}
+	}
+	if r, ok := rcFind(got, "invoice_number"); !ok || r.Reason != extraction.ReasonMissing {
+		t.Errorf("freshened R0 invoice_number = %s / %q (ok=%v), want missing: EXTR34-E2E-01 expects a quarantine", advStr(r.Value), r.Reason, ok)
+	}
+}

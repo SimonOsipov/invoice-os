@@ -499,7 +499,7 @@ export function WorkflowRolePills({ roles, held, onToggle, idPrefix }: {
 // --shadow-elegant so the app's two popovers cannot drift apart. Promoting it to a real
 // token means editing the shared stylesheet and the design-system doc — flagged, not done
 // inside a table subtask.
-const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
+export const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
 
 export type MenuAction = {
   label: string

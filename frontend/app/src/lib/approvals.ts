@@ -232,6 +232,21 @@ export function approvalSelectRowLabel(invoiceNumber: string): string {
   return `Select invoice ${invoiceNumber}`
 }
 
+// Pure placement for BlockedReason's tip (BUG-17-03, AC-6) -- jsdom has no layout, so this
+// arithmetic is unit-tested here rather than proven only on the deploy gate.
+// Below the anchor when it fits, else above; left clamped into the viewport.
+export function reasonTipPosition(
+  anchor: { left: number; top: number; bottom: number },
+  tip: { width: number; height: number },
+  viewport: { width: number; height: number },
+): { left: number; top: number } {
+  const below = anchor.bottom + tip.height <= viewport.height - 8
+  return {
+    left: Math.max(8, Math.min(anchor.left, viewport.width - 8 - tip.width)),
+    top: below ? anchor.bottom : anchor.top - tip.height,
+  }
+}
+
 // Static chrome only -- count-dependent copy lives on ApprovalsBarView instead.
 //
 // eyebrow/h1/subtitle through overdue (G2, APPR-12-03): the queue's own chrome --
@@ -267,6 +282,7 @@ export const APPROVALS_COPY = {
   emptyPageMessage: 'Go back to see the rest of the queue.',
   unstaffedSeat: 'Unstaffed seat',
   overdue: 'Overdue',
+  blockedReasonLabel: "Why you can't approve this invoice",
 } as const
 
 // ---- Approval-run wire types (APPR-13-01), mirrored key-for-key from

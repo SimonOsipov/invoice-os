@@ -16,10 +16,11 @@
 //   - nothing is optimistic: list.run() after settle is the affirmation, and no badge is
 //     derived from a decision response.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
+import { alertCircleGlyph } from '../glyphs'
 import {
   APPROVALS_COPY,
   approvableIds,
@@ -32,6 +33,7 @@ import {
   approveInvoices,
   listAwaitingApproval,
   pruneApprovalSelection,
+  reasonTipPosition,
   type ApprovalPhase,
   type ApprovalResultRow,
 } from '../lib/approvals'
@@ -46,7 +48,9 @@ import {
   type InvoiceListResponse,
 } from '../lib/invoices'
 import { bulkPhaseReducer } from '../lib/reviewBatch'
+import { useDismiss } from '../lib/useDismiss'
 import type { PlatformCtx } from '../types'
+import { POPOVER_SHADOW } from './MemberParts'
 import { Pager } from './Pager'
 
 // Owed topology assertion: A07-5/A07-6 (APPR-12-07, assertFillsColumn over WIDE_WIDTHS)
@@ -412,7 +416,15 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                       disarm()
                     }}
                   />
-                  <span className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)' }}>{r.invoice_number}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    <span
+                      className="mono"
+                      style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--fg-1)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {r.invoice_number}
+                    </span>
+                    {reason != null && <BlockedReason id={reasonId} reason={reason} />}
+                  </span>
                   <span style={{ fontSize: 13.5, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.buyer_name}</span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{av.stepLabel}</span>
@@ -432,14 +444,6 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                   <span className="mono" style={{ fontSize: 12, color: av.overdue ? 'var(--status-red-text)' : 'var(--fg-3)' }}>
                     {av.overdue ? <span data-testid="approval-overdue">{APPROVALS_COPY.overdue}</span> : av.dueAt != null ? fmtDate(av.dueAt) : '—'}
                   </span>
-                  {/* Layer 3 of disabled-with-reason: the visible sibling a screenshot, a
-                      keyboard user and a text assertion can all reach. An implicit second
-                      grid row, so the seven cells above keep their positions. */}
-                  {reason != null && (
-                    <span id={reasonId} data-testid="approval-blocked-reason" style={{ gridColumn: '2 / -1', fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-                      {reason}
-                    </span>
-                  )}
                 </div>
               )
             })}
@@ -457,5 +461,93 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
         </>
       )}
     </div>
+  )
+}
+
+// The (!) icon after the invoice number, and its hover/focus tooltip (BUG-17-03). Declared
+// below ApprovalsView so LIB-SCAN-A's `return (` anchor never reaches this JSX -- AC-8's
+// rendered guards (empty icon text, exact tip text) cover that gap instead.
+function BlockedReason({ id, reason }: { id: string; reason: string }) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const iconRef = useRef<HTMLButtonElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, close)
+
+  // Below the anchor when it fits, else above -- reasonTipPosition itself is unit-tested.
+  useLayoutEffect(() => {
+    if (!open || iconRef.current == null || tipRef.current == null) return
+    const anchor = iconRef.current.getBoundingClientRect()
+    const tip = tipRef.current.getBoundingClientRect()
+    setPos(reasonTipPosition(anchor, tip, { width: window.innerWidth, height: window.innerHeight }))
+  }, [open])
+
+  // A fixed tip would otherwise drift off its row on a scroll or resize.
+  useEffect(() => {
+    if (!open) return
+    function dismiss() {
+      setOpen(false)
+    }
+    window.addEventListener('scroll', dismiss, true)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      window.removeEventListener('scroll', dismiss, true)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [open])
+
+  return (
+    <span style={{ flex: 'none', display: 'inline-flex' }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button
+        ref={iconRef}
+        type="button"
+        data-testid="approval-blocked-icon"
+        aria-label={APPROVALS_COPY.blockedReasonLabel}
+        aria-describedby={id}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        style={{ display: 'inline-flex', padding: 0, border: 0, background: 'transparent', color: 'var(--fg-3)', borderRadius: '50%', cursor: 'help' }}
+      >
+        {alertCircleGlyph}
+      </button>
+      {/* Always mounted so aria-describedby always resolves; display alone gates visibility. */}
+      <span
+        ref={tipRef}
+        id={id}
+        role="tooltip"
+        data-testid="approval-blocked-tip"
+        style={{
+          position: 'fixed',
+          zIndex: 70,
+          display: open ? 'block' : 'none',
+          visibility: pos ? 'visible' : 'hidden',
+          left: pos?.left ?? 0,
+          top: pos?.top ?? 0,
+          padding: '6px 0',
+        }}
+      >
+        <span
+          style={{
+            display: 'block',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line-2)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: POPOVER_SHADOW,
+            padding: '8px 10px',
+            maxWidth: 300,
+            fontSize: 12,
+            lineHeight: 1.5,
+            fontWeight: 400,
+            color: 'var(--fg-2)',
+            whiteSpace: 'normal',
+            textAlign: 'left',
+            cursor: 'default',
+          }}
+        >
+          {reason}
+        </span>
+      </span>
+    </span>
   )
 }

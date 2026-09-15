@@ -763,11 +763,15 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			needle: "RowReach",
 			// The row reach's measured record: the register's need and the nearer line item.
 			want: []string{"0.614732", "0.498444"},
+			// The dial comment's claim the row reach made false.
+			unwant: []string{"nothing else reads a distance"},
 		},
 		{
 			file:   acDoc,
 			needle: "## The advisory arrangements",
-			want:   []string{"`RowReach`", "0.614732", "0.498444", "0.465497"},
+			// The published record, blocker 2 closed, and the issue_date gap still recorded.
+			want: []string{"`RowReach`", "0.614732", "0.613281", "0.460405", "0.498444", "0.465497",
+				"**Closed on both fixtures**", "`issue_date` is a known gap by name"},
 			// The far-right totals gap the row reach closed, and the dial line it cited.
 			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both"},
 		},

@@ -70,7 +70,7 @@ import { SEVERITY_TONE } from './RulePills'
 
 const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 200px'
 
-// Same box as the status pill beside it, minus the dot (System Design B).
+// Same box as the status pill beside it, minus the dot.
 function MarkerPill({ testId, tone, label }: { testId: string; tone: { bg: string; border: string; text: string }; label: string }) {
   return (
     <span data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '3px 9px' }}>

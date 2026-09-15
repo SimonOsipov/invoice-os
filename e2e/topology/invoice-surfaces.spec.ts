@@ -620,7 +620,7 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 // browser-only (docs/e2e-convention.md, "Target surface").
 //
 // Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
-// container's first child (InvoicesList.tsx:553-554), so an in-container offset is 0 in both
+// container's first child (InvoicesList.tsx:565-566), so an in-container offset is 0 in both
 // filter states and the assertion would be vacuous. The defect moved the container itself.
 //
 // Two open story findings shape this fixture, which avoids both by construction:

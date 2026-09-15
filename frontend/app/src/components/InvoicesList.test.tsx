@@ -795,7 +795,7 @@ describe('InvoicesList: resolved-failed marker', () => {
   })
 
   // QA adversarial: resolvedOutside and hasBlockingViolation gate independently, so a
-  // resolved failed row can still carry a blocking violation -- both markers must stack
+  // resolved failed row can still carry a blocking violation -- both markers must render
   // without either swallowing the other. Uses .toContain, not a \b-anchored regex: the
   // two chips are adjacent sibling spans with no text separator between them, so
   // textContent reads "...1 ERRORRESOLVED OUTSIDE" and a trailing \b on /1 ERROR\b/ never matches.
@@ -2400,12 +2400,8 @@ describe('ROUTE-04-06 AC-6: a search term with no matches renders the honest mis
   })
 })
 
-// RED specs (task-1048, BUG-17-02, Stage 2.5/Mode A) -- the error count and the
-// RESOLVED OUTSIDE marker do not yet render as status-pill-shaped pills, and the Status
-// track is still 130px, so the assertions below fail on the row's actual markup, not on
-// an import/compile error. AC-3/AC-4/AC-5 specs read the status cell as row.children[5]
-// (System Design B / Stage 1), never as badge.parentElement, since those specs derive
-// the cell from the thing under test.
+// The status cell is row.children[5], never badge.parentElement: that would derive the
+// cell from the thing under test.
 describe('BUG-17-02 register status markers', () => {
   it('registerMarkers_errorCountIsARedPillBesideTheStatusPill', async () => {
     const blocked = row({
@@ -2588,12 +2584,41 @@ describe('BUG-17-02 register status markers', () => {
 
     const statusCell = screen.getByTestId('invoice-row').children[5]
     const style = statusCell.getAttribute('style') ?? ''
+    expect(style).toMatch(/^display: flex;/)
     expect(style).toContain('flex-wrap: wrap')
     expect(style).toContain('align-items: center')
     expect(style).toContain('gap: 4px 6px')
     expect(style).not.toContain('flex-direction: column')
     for (const child of Array.from(statusCell.children)) {
       expect(['invoice-status-badge', 'invoice-error-marker', 'invoice-resolved-marker'], 'no loose text child').toContain(child.getAttribute('data-testid'))
+    }
+  })
+
+  it('registerMarkers_pillTextAndBoxMatchTheStatusPill', async () => {
+    const both = row({
+      id: 'reg-type-1',
+      invoice_number: 'INV-REG-TYPE-1',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([both], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-TYPE-1')
+
+    const [badge, ...pills] = Array.from(screen.getByTestId('invoice-row').children[5].children)
+    expect(pills.map((p) => p.getAttribute('data-testid'))).toEqual(['invoice-error-marker', 'invoice-resolved-marker'])
+    const withoutColor = (el: Element) => (el.getAttribute('style') ?? '').replace(/color: [^;]+;\s*/, '')
+    const badgeText = badge.lastElementChild!
+    // Anchor, so a shared edit to both texts still fails.
+    expect(withoutColor(badgeText)).toBe('font-size: 10px; font-weight: 600; letter-spacing: 0.04em;')
+    for (const pill of pills) {
+      const id = pill.getAttribute('data-testid')
+      expect(pill.getAttribute('style'), `${id} box`).toMatch(/^display: inline-flex; align-items: center;/)
+      expect(pill.children, `${id} has no dot`).toHaveLength(1)
+      expect(pill.firstElementChild!.className, `${id} text is mono`).toBe(badgeText.className)
+      expect(withoutColor(pill.firstElementChild!), `${id} text size, weight and tracking`).toBe(withoutColor(badgeText))
     }
   })
 })

@@ -29,6 +29,13 @@ function renderCard(state: AuditFilterState = AUDIT_FILTER_DEFAULT, customFacets
   return { ...utils, onChange }
 }
 
+// Raw style attribute, not .style.*: jsdom's CSSStyleDeclaration can drop var() shorthands.
+function styleValue(el: Element, prop: string): string | null {
+  const style = el.getAttribute('style') ?? ''
+  const match = style.match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))
+  return match ? match[1].trim() : null
+}
+
 describe('AuditFilterCard: search', () => {
   it('auditSearch_appliesOnEnterNotPerKeystroke', async () => {
     const user = userEvent.setup()
@@ -1171,5 +1178,44 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
     expect(resolvedPill.style.fontFamily, 'control needle: a resolved actor pill must not be mono').not.toContain(
       'font-mono',
     )
+  })
+
+  it('auditPills_renderAsTheStandardUnselectedChip', () => {
+    renderCard(AUDIT_FILTER_DEFAULT)
+    const pill = screen.getByTestId('audit-pill-range')
+
+    // [pill-class]: the standard unselected chip carries pf-chip only, never pf-btn.
+    expect(pill.className.split(/\s+/).filter(Boolean)).toEqual(['pf-chip'])
+    expect(styleValue(pill, 'display')).toBe('inline-flex')
+    expect(styleValue(pill, 'align-items')).toBe('center')
+    expect(styleValue(pill, 'height')).toBe('28px')
+    expect(styleValue(pill, 'padding')).toBe('0px 12px')
+    expect(styleValue(pill, 'font-family')).toBe('var(--font-sans)')
+    expect(styleValue(pill, 'font-size')).toBe('12.5px')
+    expect(styleValue(pill, 'font-weight')).toBe('500')
+    expect(styleValue(pill, 'border')).toBe('1px solid var(--line-2)')
+    expect(styleValue(pill, 'background')).toBe('var(--bg-1)')
+    expect(styleValue(pill, 'color')).toBe('var(--fg-2)')
+  })
+
+  it('auditPills_removeGlyphIsFg3', () => {
+    renderCard(AUDIT_FILTER_DEFAULT)
+    const pill = screen.getByTestId('audit-pill-range')
+    const glyph = pill.querySelector('span[aria-hidden]') as HTMLElement
+    expect(styleValue(glyph, 'color')).toBe('var(--fg-3)')
+  })
+
+  it('auditPills_fontFamilyFollowsMono', () => {
+    const state: AuditFilterState = { ...AUDIT_FILTER_DEFAULT, actors: ['u-raw', 'u-resolved'] }
+    const f: AuditFacets = { ...facets(), actor: [{ value: 'u-resolved', name: 'Musa Danjuma', kind: 'people', count: 2 }] }
+    renderCard(state, f)
+
+    const rawPill = screen.getByTestId('audit-pill-actor:u-raw')
+    const resolvedPill = screen.getByTestId('audit-pill-actor:u-resolved')
+    const rangePill = screen.getByTestId('audit-pill-range')
+
+    expect(styleValue(rawPill, 'font-family')).toBe('var(--font-mono)')
+    expect(styleValue(resolvedPill, 'font-family')).toBe('var(--font-sans)')
+    expect(styleValue(rangePill, 'font-family')).toBe('var(--font-sans)')
   })
 })

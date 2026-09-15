@@ -193,7 +193,18 @@ func anchorOutranked(text string, loc []int) bool {
 // labelView is text as a label reads it: a token made only of single letters spaced apart
 // ("I N V O I C E") reads as those letters joined. Every other token reads as printed.
 // ceiling: word gaps are dropped too, so a spaced label whose pattern needs a word boundary ("T O T A L   D U E") misses; revisit when one does
-func labelView(text string) string { return text }
+func labelView(text string) string {
+	units := strings.Fields(text)
+	if len(units) < 2 {
+		return text
+	}
+	for _, u := range units {
+		if r := []rune(u); len(r) != 1 || !unicode.IsLetter(r[0]) {
+			return text
+		}
+	}
+	return strings.Join(units, "")
+}
 
 // labelTokens is one bool per token in the page's own order: does this token carry any
 // anchor-lexicon label. Computed once per page, like partyOrder: crossesALabel runs per candidate

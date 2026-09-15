@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 // First jsdom coverage of either nav badge. Mirrors DashboardActive.test.tsx's fetch-mock
 // + ctx-cast idiom (single-endpoint mock: Sidebar fires only getRollup).
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -290,5 +294,92 @@ describe('Sidebar footer, characterization pin', () => {
     expect(footer.outerHTML).toBe(
       '<div style="flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line-1); display: flex; align-items: center; gap: 10px;"><span style="flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; background: var(--slate-800); color: var(--text-on-dark); display: grid; place-items: center; font-size: 11px; font-weight: 600;">CO</span><div style="flex: 1 1 0%; min-width: 0;"><div style="font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chinedu Okafor</div><div class="mono" style="display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--fg-3); white-space: nowrap; overflow: hidden;"><span style="flex: 0 0 auto; width: 5px; height: 5px; border-radius: 99px; background: var(--status-green-text);" title="Tenant verified via /v1/me"></span><span style="overflow: hidden; text-overflow: ellipsis;">OKAFOR &amp; PARTNERS</span></div></div><button class="pf-btn pf-signout" aria-label="Sign out" title="Sign out" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0px; border: 0px; border-radius: var(--radius-sm); background: transparent; cursor: pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg></button></div>',
     )
+  })
+})
+
+// BUG-17-01: the firm switcher's `pf-btn` !important pill radius (app-layer.css:192-205)
+// beats the inline radius-input -- this is a separate corner-declaration surface from
+// the badge/footer specs above.
+describe('BUG-17-01 company switcher corner', () => {
+  const TOKENS_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/design-tokens/app-layer.css'), 'utf8')
+
+  // Raw style attribute, not .style.*: jsdom's CSSStyleDeclaration can drop var() shorthands.
+  function borderRadiusOf(el: HTMLElement): string | null {
+    return el.getAttribute('style')?.match(/border-radius:\s*([^;]+)/)?.[1].trim() ?? null
+  }
+
+  // entity.needs_attention == totals.needs_attention so renderSidebar's findByText settles
+  // regardless of which bucket the firm branch resolves to.
+  const FIRM_EVEN_ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1, entity: { validated: 1, awaitingApproval: 1, needsAttention: 1 } })
+
+  it('switcher_carriesNoPillButtonClass', async () => {
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+
+    const switcher = screen.getByTestId('company-switcher')
+    expect(switcher.className.split(/\s+/).filter(Boolean)).not.toContain('pf-btn')
+    expect(switcher.getAttribute('style')).toContain('border-radius: var(--radius-input)')
+  })
+
+  it('companyChip_declaresTheSwitchersCorner', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    const chip = screen.queryByTestId('company-chip')
+    expect(chip, 'company-chip testid').not.toBeNull()
+    const chipRadius = borderRadiusOf(chip!)
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+    const switcherRadius = borderRadiusOf(screen.getByTestId('company-switcher'))
+
+    expect(switcherRadius).toBe(chipRadius)
+    expect(switcherRadius).toBe('var(--radius-input)')
+  })
+
+  it('switcher_declaresBorderAndBackgroundTransitions', async () => {
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+
+    // The switcher's OWN style, not a descendant: the chevron span carries its own
+    // `transition: transform 160ms`.
+    const style = screen.getByTestId('company-switcher').getAttribute('style') ?? ''
+    expect(style).toContain('background var(--dur-fast) var(--ease-out)')
+    expect(style).toContain('border-color var(--dur-fast) var(--ease-out)')
+  })
+
+  it('switcher_openStateBorderIsAction', async () => {
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+    expect(screen.getByTestId('company-switcher').getAttribute('style')).toContain('border: 1px solid var(--action)')
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    const closedCtx = firmCtx({ switcherOpen: false })
+    await renderSidebar(FIRM_EVEN_ROLLUP, closedCtx)
+    const switcher = screen.getByTestId('company-switcher')
+    expect(switcher.getAttribute('style')).toContain('border: 1px solid var(--line-2)')
+
+    switcher.click()
+    expect(closedCtx.toggleSwitcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('pfBtnRule_stillForcesThePill', () => {
+    const noComments = TOKENS_CSS.replace(/\/\*[\s\S]*?\*\//g, '')
+    const blocks = noComments.match(/[^{}]+\{[^{}]*\}/g) ?? []
+    // Exact selector-token match, not substring: the :active block at app-layer.css:202-205
+    // also contains the substring ".asc-app .pf-btn" but carries no radius.
+    const pillRule = blocks.find((b) =>
+      b
+        .slice(0, b.indexOf('{'))
+        .split(',')
+        .map((s) => s.trim())
+        .includes('.asc-app .pf-btn'),
+    )
+    expect(pillRule, '.asc-app .pf-btn rule block (not its :active sibling)').toBeDefined()
+    expect(pillRule).toContain('border-radius: var(--radius-pill) !important')
+  })
+
+  it('signOut_keepsPfBtn', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    expect(screen.getByRole('button', { name: 'Sign out' }).className).toContain('pf-btn')
   })
 })

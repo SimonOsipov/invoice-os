@@ -60,11 +60,11 @@ var ttByLayout = []ttLayoutTotal{
 	{"wild_two_party_bare_tin.pdf", 1, "1290.00", "t1.total.right"},
 	{ttRuled, 1, "8600.00", "t1.total.right"},
 	{"wild_rc_due_naira.pdf", 1, "2687.50", "t1.total.right"},
-	{"wild_stacked_borderless.pdf", 0, "", ""},
+	{"wild_stacked_borderless.pdf", 1, "1612.50", "t1.total.right"},
 	{"wild_scanned_no_number.pdf", 1, "1935.00", "t1.total.right"},
 	{"wild_two_party_bare_tin_asprinted.pdf", 1, "1290.00", "t1.total.right"},
 	{"wild_ruled_lines_totals_asprinted.pdf", 1, "8600.00", "t1.total.right"},
-	{"wild_stacked_borderless_asprinted.pdf", 0, "", ""},
+	{"wild_stacked_borderless_asprinted.pdf", 1, "1612.50", "t1.total.right"},
 }
 
 // ttMinResolving is how many rows must reach a candidate. A table quietly rewritten to all
@@ -259,23 +259,25 @@ func TestEndToEnd_ThePlantedTieIsBrokenByArithmeticOnTheRuledTable(t *testing.T)
 	}
 }
 
-// AC-4. The stacked-borderless arrangement's exclusion from the story's measurement AC is a
-// measured fact here, not a sentence: it resolves NO total candidate, so ReasonMissing is
-// decideField's len(peers) == 0 arm and nothing else. The buyer_tin floor is what stops "no
-// total candidate" meaning "no candidate at all".
-func TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal(t *testing.T) {
+// The twin's total sits below its label's line; right's drop band reads it
+// (TestTier1_TheDropBandStaysInsideItsMeasuredWindow).
+func TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal(t *testing.T) {
 	const layout, tin = "wild_stacked_borderless.pdf", "99999999-1102"
 	cands, res, tokens := dtRun(t, dtLayout(t, layout))
 	if got := dtValue(dtResult(t, res, "buyer_tin")); got != tin {
-		t.Fatalf("%s reads %d token(s) and decides buyer_tin = %q, want %q; a page that resolved nothing satisfies the assertions below for free", layout, tokens, got, tin)
+		t.Fatalf("%s reads %d token(s) and decides buyer_tin = %q, want %q; a page that resolved nothing would fail the total checks below for the wrong reason", layout, tokens, got, tin)
 	}
 
-	if got := dtFor(cands, ttField); len(got) != 0 {
-		t.Errorf("%s resolves %d total candidate(s) %v, want none", layout, len(got), dtDistinct(got))
+	totals := dtFor(cands, ttField)
+	if got := dtDistinct(totals); !slices.Equal(got, []string{"1612.50"}) {
+		t.Fatalf("%s resolves %d total candidate(s) %v, want [1612.50]", layout, len(totals), got)
+	}
+	if totals[0].RuleID != "t1.total.right" {
+		t.Errorf("%s reads its head total via %s, want t1.total.right", layout, totals[0].RuleID)
 	}
 	f := dtResult(t, res, ttField)
-	if f.Value != nil || f.Reason != extraction.ReasonMissing {
-		t.Errorf("%s reads total = %q reason %q, want no value and %q", layout, dtValue(f), f.Reason, extraction.ReasonMissing)
+	if dtValue(f) != "1612.50" || f.Reason != extraction.ReasonNone || len(f.Alternatives) != 0 {
+		t.Errorf("%s decides total = %q reason %q alts %v, want \"1612.50\" none, no alternatives", layout, dtValue(f), f.Reason, dtAltValues(f.Alternatives))
 	}
 }
 

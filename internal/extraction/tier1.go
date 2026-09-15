@@ -21,6 +21,12 @@ type Tier1Rule struct {
 	// Fallback marks a rule that recognises a value by its shape alone, with no label to
 	// corroborate it -- shipped only by t1.currency.sweep, the bare naira symbol.
 	Fallback bool
+
+	// Drop is the right relation's drop-band admission dial: a value whose top sits below the
+	// label's top by less than Drop times the label's height is admitted alongside the line
+	// band. tier1DropRight on every shipped right rule, zero elsewhere
+	// (TestTier1_EveryRuleHasACompiledMatcher); below never reads it.
+	Drop float64
 }
 
 // tier1RuleCount is the shipped set's size: three relations over each of the ten anchor-lexicon
@@ -45,6 +51,11 @@ const (
 	tier1MaxDistanceBelow     = 0.06
 	tier1MaxDistanceBelowJSON = "0.06"
 )
+
+// tier1DropRight bounds the drop band as a share of the label's height: the pdfium twin's VAT
+// needs 0.949396; above 1.0 the scanned SUBTOTAL reaches 135.00 (TestTier1_TheDropBandStaysInsideItsMeasuredWindow).
+// ceiling: a 1.053x window, tight against glyph height; revisit when a real document's label has no descenders over a dropped value
+const tier1DropRight = 0.97
 
 // tier1TINSweepLabel matches a bare TIN token whole, so the label IS the value
 // (TestResolve_SameTokenKeepsALabelThatIsItsOwnValue). Party-scoped: the party block the token
@@ -101,6 +112,12 @@ func buildTier1Rules() []Tier1Rule {
 				mustTier1PartyRule("t1.tin.right", bare, RelRight, tier1MaxDistanceRightJSON),
 				mustTier1PartyRule("t1.tin.below", bare, RelBelow, tier1MaxDistanceBelowJSON),
 			)
+		}
+	}
+
+	for i := range out {
+		if out[i].Rule.Relation.Kind == RelRight {
+			out[i].Drop = tier1DropRight
 		}
 	}
 

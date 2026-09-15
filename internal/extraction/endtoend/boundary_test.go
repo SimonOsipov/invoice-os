@@ -91,21 +91,19 @@ type bdLayout struct {
 
 // bdRightwardTotal is the whole corpus's rightward candidate count. The blast surface, not a
 // summary: the boundary can only ever remove a rightward candidate.
-const bdRightwardTotal = 35
+const bdRightwardTotal = 52
 
 // bdSilentLayouts read no value rightward at all, so crossesALabel is never called on them.
 // Named here because "the boundary moved nothing on all fourteen layouts" has an effective
-// denominator of eight.
+// denominator of ten.
 var bdSilentLayouts = []string{
 	"corpus_inline_labels.pdf",
 	"corpus_stacked_labels.pdf",
 	"corpus_two_column.pdf",
 	"corpus_ambiguous_date.pdf",
-	"wild_stacked_borderless.pdf",
-	"wild_stacked_borderless_asprinted.pdf",
 }
 
-// bdByLayout is the pinned table, measured at f707543a with the shipped Tier-1 set.
+// bdByLayout is the pinned table, measured with the shipped Tier-1 set.
 var bdByLayout = []bdLayout{
 	{file: "corpus_inline_labels.pdf"},
 	{file: "corpus_split_labels.pdf", rows: []bdRow{
@@ -147,7 +145,17 @@ var bdByLayout = []bdLayout{
 		bdMake("vat", "187.50", "t1.vat.right", 0.203967),
 		bdMake("total", "2687.50", "t1.total.right", 0.199556),
 	}},
-	{file: "wild_stacked_borderless.pdf"},
+	{file: "wild_stacked_borderless.pdf", rows: []bdRow{
+		bdMake("issue_date", "2026-07-30", "t1.issue_date.right", 0.280118),
+		bdMake("supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902),
+		bdMake("supplier_name", "Adeyemi Trading Limited", "t1.supplier_name.right", 0.300922),
+		bdMake("buyer_tin", "99999999-1102", "t1.buyer_tin.right", 0.286608),
+		bdMake("buyer_name", "Honeywell Group", "t1.buyer_name.right", 0.322863),
+		bdMake("currency", "NGN", "t1.currency.right", 0.294725),
+		bdMake("subtotal", "1500.00", "t1.subtotal.right", 0.298451),
+		bdMake("vat", "112.50", "t1.vat.right", 0.336667),
+		bdMake("total", "1612.50", "t1.total.right", 0.332255),
+	}},
 	{file: "wild_scanned_no_number.pdf", golden: true, rows: []bdRow{
 		bdMake("subtotal", "1800.00", "t1.subtotal.right", 0.100218),
 		bdMake("vat", "135.00", "t1.vat.right", 0.139434),
@@ -164,7 +172,16 @@ var bdByLayout = []bdLayout{
 		bdMake("vat", "600.00", "t1.vat.right", 0.083961),
 		bdMake("total", wildRuledLastLineAmount, "t1.total.right", 0.047611),
 	}},
-	{file: "wild_stacked_borderless_asprinted.pdf"},
+	{file: "wild_stacked_borderless_asprinted.pdf", rows: []bdRow{
+		bdMake("supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902),
+		bdMake("supplier_name", "Adeyemi Trading Limited", "t1.supplier_name.right", 0.316510),
+		bdMake("buyer_tin", "99999999-1102", "t1.buyer_tin.right", 0.286608),
+		bdMake("buyer_name", "Honeywell Group", "t1.buyer_name.right", 0.274569),
+		bdMake("currency", "NGN", "t1.currency.right", 0.263216),
+		bdMake("subtotal", "1500.00", "t1.subtotal.right", 0.303902),
+		bdMake("vat", "112.50", "t1.vat.right", 0.287020),
+		bdMake("total", "1612.50", "t1.total.right", 0.233627),
+	}},
 }
 
 // bdGoldenTokenPages replays one layout's committed golden through the real DoclingReader and
@@ -249,8 +266,8 @@ func TestEndToEnd_TheRightwardCandidateSetIsUnmovedByTheBoundary(t *testing.T) {
 		t.Fatalf("walked %d of %d layout(s)", walked, len(bdByLayout))
 	}
 
-	// The named zeros, as a list: six of fourteen layouts call crossesALabel not once, so every
-	// "over all fourteen layouts" claim about a rightward behaviour has a denominator of eight.
+	// The named zeros, as a list: four of fourteen layouts call crossesALabel not once, so every
+	// "over all fourteen layouts" claim about a rightward behaviour has a denominator of ten.
 	if len(slices.Compact(slices.Sorted(slices.Values(bdSilentLayouts)))) != len(bdSilentLayouts) {
 		t.Fatalf("bdSilentLayouts names a layout twice: %v; a repeat keeps the count while leaving a layout unwatched", bdSilentLayouts)
 	}
@@ -259,7 +276,7 @@ func TestEndToEnd_TheRightwardCandidateSetIsUnmovedByTheBoundary(t *testing.T) {
 			t.Errorf("bdSilentLayouts names %s, which the walk does not cover", name)
 		}
 	}
-	if got, want := len(bdByLayout)-len(bdSilentLayouts), 8; got != want {
+	if got, want := len(bdByLayout)-len(bdSilentLayouts), 10; got != want {
 		t.Errorf("%d of %d layouts read something rightward, want %d", got, len(bdByLayout), want)
 	}
 }

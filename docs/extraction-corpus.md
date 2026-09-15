@@ -318,13 +318,16 @@ the value, inside the anchor's own band, the pair is refused — a label owns wh
 read may not reach past one to take a value that label introduces. `crossesALabel` is the
 predicate; `labelTokens` is the per-page precompute it reads.
 
-**The corpus does not exercise it, and the honest denominator is eight, not fourteen.** Only **8 of
-the 14** layouts admit a rightward anchor/value pair at all — **35** pairs in total — and the other
-six read nothing rightward, so the predicate is never called on them. Those six are named in
-`bdSilentLayouts` rather than left implicit, because "the boundary moved nothing across all fourteen
-layouts" is a claim whose effective denominator is eight. Of the 35 pairs, **none** crosses a label,
-which is why the boundary removes zero candidates on the shipped corpus. Read that zero as "no
-shipped arrangement puts a label in the corridor", never as "the boundary does nothing".
+**The corpus does not exercise it, and the honest denominator is ten, not fourteen.** Only **10 of
+the 14** layouts admit a rightward anchor/value pair at all — **52** pairs in total, 17 of them
+dropped pairs on the stacked twin and sibling — and the other four read nothing rightward, so the
+predicate is never called on them. Those four are named in `bdSilentLayouts` rather than left
+implicit, because "the boundary moved nothing across all fourteen layouts" is a claim whose
+effective denominator is ten. Of the 35 same-line pairs, **none** crosses a label, which is why the
+boundary removes zero candidates on the shipped corpus. Read that zero as "no shipped arrangement
+puts a label in the corridor", never as "the boundary does nothing". The 17 dropped pairs were
+first measured with the boundary in place, so they show what it admits, not what it would remove.
+Whether the boundary removes a dropped pair on the corpus is unmeasured; do not claim it.
 
 Two properties of the predicate have no behavioural oracle and are held by structural ones
 instead. The per-page precompute must not degenerate into a per-pair lexicon scan: the two produce
@@ -612,9 +615,9 @@ reach limit closed by another route needs neither bump either.
 
 ## End-to-end field accuracy
 
-Re-measured 2026-09-14 on `feature/extr-29-a-total-no-label-points-at-can-still-be-found`: a document goes in at the
+Re-measured 2026-09-14 on `feature/extr-31-a-label-above-its-value-still-names-it`: a document goes in at the
 extraction worker and an `invoices` row comes out the other side, and that row carries the value
-the page prints on **75 of 112** cells — **0.6696**. Fourteen layouts, eight written fields each.
+the page prints on **81 of 112** cells — **0.7232**. Fourteen layouts, eight written fields each.
 This is the first number on this page measured **end to end**: not what Tier-1 can reach, not
 what the pipeline decides, but what a user would find in the database.
 
@@ -626,8 +629,8 @@ the five arrangements added by EXTR-21 — so all three read 44/44 while eleven 
 sat between the decision and the row.
 
 **This number is bad on purpose.** EXTR-21 fixes none of those defects; it builds the oracle
-EXTR-22…EXTR-28 are graded against. Every one of the 37 misses is named cell by cell, with its
-reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (24 cells
+EXTR-22…EXTR-28 are graded against. Every one of the 31 misses is named cell by cell, with its
+reason, in `eeAbsentCells` (13 cells the page carries no value for) and `eeRealMisses` (18 cells
 the page does carry and the row does not). Nothing is hidden behind the green.
 
 ### Per layout
@@ -643,7 +646,7 @@ the page does carry and the row does not). Nothing is hidden behind the green.
 | `wild_two_party_bare_tin.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals.pdf` | 8 | 8 |
 | `wild_rc_due_naira.pdf` | 8 | 8 |
-| `wild_stacked_borderless.pdf` | 2 | 8 |
+| `wild_stacked_borderless.pdf` | 8 | 8 |
 | `wild_scanned_no_number.pdf` | 0 | 8 |
 | `wild_two_party_bare_tin_asprinted.pdf` | 8 | 8 |
 | `wild_ruled_lines_totals_asprinted.pdf` | 8 | 8 |
@@ -662,17 +665,17 @@ letter-spaced invoice-number label, so it quarantines too.
 | Field | Hits | Cells |
 |---|---|---|
 | `invoice_number` | 12 | 14 |
-| `issue_date` | 10 | 14 |
+| `issue_date` | 11 | 14 |
 | `buyer_tin` | 10 | 14 |
-| `buyer_name` | 9 | 14 |
-| `currency` | 7 | 14 |
-| `subtotal` | 8 | 14 |
-| `vat` | 8 | 14 |
-| `total` | 11 | 14 |
+| `buyer_name` | 10 | 14 |
+| `currency` | 8 | 14 |
+| `subtotal` | 9 | 14 |
+| `vat` | 9 | 14 |
+| `total` | 12 | 14 |
 
-`currency` at 7 of 14 is still the worst field on the corpus, and its seven misses split four ways:
+`currency` at 8 of 14 is still the worst field on the corpus, and its six misses split three ways:
 three layouts print the value inside a total with no label to anchor it, one prints no currency at
-all, one offsets the value from a colon-less label, and the last two are the quarantined pages.
+all, and the last two are the quarantined pages.
 `buyer_tin` reads 10 of 14: EXTR-22 bound each party's TIN to the heading that owns it, and the
 four cells left are two layouts that carry no buyer block at all and the two quarantined pages.
 
@@ -754,6 +757,9 @@ siblings, which are scored.
 
 ### What EXTR-29 changed
 
+*Historical, recorded when EXTR-29 merged. EXTR-31 later moved `total` to 12 of 14 with the stacked
+layout's offset total (`TestRLS_EndToEndScoresTheCorpus`); see **What EXTR-31 changed**.*
+
 The headline moved from 73 hits to 75, on exactly two cells: `wild_ruled_lines_totals.pdf/total`
 and `wild_ruled_lines_totals_asprinted.pdf/total` now file the printed `8600.00`, and
 `eeRealMisses` loses those two entries (`TestRLS_EndToEndScoresTheCorpus`). Both layouts read 8 of
@@ -826,6 +832,74 @@ boxed-header invoice and the dense register (production read on `d36be21e`, 2026
 oracle), the pass is either unnecessary or unable to fire. Whether arithmetic finds a total on a
 real document is unmeasured.
 
+### What EXTR-31 changed
+
+The headline moved from 75 hits to 81, on six cells of `wild_stacked_borderless.pdf`: `issue_date`,
+`buyer_name`, `currency`, `subtotal`, `vat` and `total` now file the printed value, and
+`eeRealMisses` loses those six entries (`TestRLS_EndToEndScoresTheCorpus`). The layout reads 8 of
+8, each of those six fields gains one cell in the per-field table, and every other row is unchanged
+(`TestRLS_EndToEndDocRecordsTheMeasuredTables`). EXTR-21's frozen baseline stays 53
+(`TestRLS_EndToEndNoBaselineHitRegresses`).
+
+**Why `right` and not `below`.** Each of the six values is printed to the right of its label and a
+little lower, in a line tall enough that the two boxes still overlap vertically by a sliver. On both
+readers `below` refuses all six twice over: the value's top sits above the label's bottom, which
+fails its ordering test `b.Y0 < anchor.Y1`, and the two boxes share no horizontal span. `right`
+passes its ordering test and its 0.35 reach, and refuses each value only because the vertical
+overlap is under half the shorter height
+(`TestOffsetStack_PdfiumTwinFailsOnlyTheOverlapClauseOnRight`,
+`TestOffsetStack_DoclingTwinFailsOnlyTheOverlapClauseOnRight`). EXTR-31 therefore leaves `below`
+untouched and gives Tier-1 `right` a drop band.
+
+**The drop band.** A `right` pair the line band refuses is still admitted when the value's top sits
+below the label's top by less than `tier1DropRight` times the label's height:
+`b.Y0 > anchor.Y0` and `b.Y0 - anchor.Y0 < tier1DropRight * (anchor.Y1 - anchor.Y0)`
+(`TestResolve_TheDropBandComparesTheOffsetNotTheSum`). `Distance` stays the horizontal gap, so a
+dropped value ranks like any `right` candidate. A label printed between the anchor and a dropped
+value on the anchor's line still blocks the read, so a neighbouring column's amount is not taken
+(the `adjacent_column` arm of `TestTier1_TheDropBandStaysInsideItsMeasuredWindow`). For a dropped
+pair, a label printed on the value's own line blocks it too
+(`TestResolve_ALabelOnTheValuesBandBlocksADroppedRead`,
+`TestResolve_AValueBandLabelBlocksOnlyADroppedRead`). Every shipped Tier-1
+`right` rule carries the band and no other shipped rule does
+(`TestTier1_EveryRuleHasACompiledMatcher`). A learned rule gets none, and `below` ignores it.
+
+**The measured window.** The dial is a share of the label's height, and its window has two measured
+edges. The lower edge is 0.949396: the pdfium read of this layout's `VAT` label needs a dial above
+it to reach `112.50`. The upper edge is 1.0: on the docling golden of `wild_scanned_no_number.pdf`,
+`SUBTOTAL` reaches `VAT`'s `135.00` at exactly 1.000000, so any dial above 1.0 reads a subtotal off
+the VAT line. `tier1DropRight` is 0.97, 0.0206 above the lower edge and 0.03 below the upper.
+`TestTier1_TheDropBandStaysInsideItsMeasuredWindow` holds the dial inside [0.9494, 1.0): at 0.9493
+the pdfium twin's `vat` loses `112.50`, at 0.9494 it reads it, and at 1.0001 the scanned golden's
+`subtotal` gains `135.00`. The window is narrow: 1.0 / 0.949396 = 1.053x, against the 11.77x
+window of `below`'s reach on `corpus_stacked_labels.pdf` (**The six layouts**).
+
+pdfium sets the lower edge, not docling. Docling gives every label and value on this layout one
+height (0.014015), so every stacked value there needs only 0.720721. pdfium's boxes vary with their
+glyphs, and its `VAT` box is 0.010879 high, so the same drop is a larger share of it. The score on
+this page reads pdfium, so pdfium's need is the edge.
+
+**What moves and what does not.** Against the same rules with every drop zeroed, the shipped band
+adds candidates only on `wild_stacked_borderless.pdf` and `wild_stacked_borderless_asprinted.pdf`,
+removes none, and moves nothing on the other twelve layouts, through pdfium and through every
+committed golden alike (`TestTier1_TheDropBandAddsOnlyTheStackedPairsReads`). The twin also gains
+`supplier_name`, `supplier_tin` and `buyer_tin` candidates. The first two are not written fields,
+and `buyer_tin` already read `99999999-1102` through `t1.tin.sweep`, so no scored cell moves for
+them. The sibling gains the same candidates except `issue_date`, whose letter-spaced label matches
+no lexicon entry, and still scores 0 / 8: it quarantines on its letter-spaced invoice-number label
+(`TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber`), and its eight `eeRealMisses` entries are
+unchanged. The end-to-end score does not guard the drop dial either (**What this number cannot
+see**); the window test and the differential do.
+
+**Why not widen `below`.** A planning sweep over 31 reads (the 14 scored layouts through pdfium,
+their 14 docling goldens and the three advisory PDFs) removed `below`'s ordering and overlap tests.
+At a reach of 0.337, just over the stacked values' widest gap of 0.336667, it changed 41 decided
+results outside the stacked pair, a value or the doubt on it; `corpus_split_labels.pdf`'s invoice
+number became `99999999-0201`. At a reach of 0.35 it admitted 120 label-value pairs outside the
+stacked pair that the shipped `below` does not. The drop band reaches nothing outside the pair at
+any dial up to 1.0: the nearest outside read is the scanned golden's `135.00` at exactly 1.000000.
+That sweep was a copy of `Resolve` and is not committed, so no test re-measures its figures.
+
 ### Moving the figure
 
 The number lives in `internal/extraction/endtoend/score_test.go` as two pinned integers,
@@ -877,12 +951,15 @@ mock-ups. A production read that fails on paper texture, a scanner's skew or a v
 unmodelled block moves nothing here. The manual production pass that read 18 of 40 fields is not
 reproducible in this repo and never will be.
 
-**Three claims in this section have no honest oracle, and are recorded as having none.** Why each of
-the 24 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
+**Four claims in this section have no honest oracle, and are recorded as having none.** Why each of
+the 18 real misses exists is prose here and pinned in `eeRealMisses`, which carries its own weld
 to the walk — a second copy would be a competing source of truth. The cause of the permanent
-line-item zero is source fact, stated below rather than scanned for. And the 18-of-40 production
-pass above is unrepeatable. Everything else in these two sections is parsed and compared against a live
-measurement.
+line-item zero is source fact, stated below rather than scanned for. The 18-of-40 production
+pass above is unrepeatable. And the planning figures in **What EXTR-31 changed** were measured
+once, by a probe and a sweep that are not committed: the `below` sweep's counts, the drop band
+reaching nothing outside the pair at any dial up to 1.0 (the tests hold only 0.97 and the window's
+two edges), docling's 0.720721, and the box heights 0.014015 and 0.010879. Everything else in these
+two sections is parsed and compared against a live measurement.
 
 ## Line-item outcome
 
@@ -1329,7 +1406,7 @@ extended to its sibling:
 - `TestWildLayouts_ALabelledCurrencyStillHeadsTheRuledTable`
 - `TestRLS_EndToEndTheRuledLayoutReachesTheInvoiceUnderDocling`
 - `TestLineItems_TheRuledWildFixtureNowMapsRateAndAmount`
-- `TestEndToEnd_TheStackedBorderlessArrangementResolvesNoTotal`
+- `TestEndToEnd_TheStackedBorderlessArrangementResolvesItsOffsetTotal`
 - `TestWildLayouts_TheTwoPartyTINsBindToTheirOwnParty`
 - `TestWildLayouts_TheTwoPartyBuyerNameIsTheName`
 

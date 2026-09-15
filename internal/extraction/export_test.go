@@ -109,9 +109,21 @@ const (
 	Tier1MaxDistanceBelowForTest = tier1MaxDistanceBelow
 )
 
+// Tier1DropRightForTest exposes the drop-band dial so
+// TestTier1_TheDropBandStaysInsideItsMeasuredWindow bounds the production constant rather than a
+// copy of it.
+const Tier1DropRightForTest = tier1DropRight
+
 // RightGapForTest mirrors relatedTokens' right-relation gap for a pair outside the dial, where
 // Resolve mints no Distance to read. TestAdvisory_TheLabelValueGapsAreRecorded welds it to Resolve.
 func RightGapForTest(anchor, value Region) float64 { return value.X0 - anchor.X1 }
+
+// RelationClausesForTest wraps the production clause predicate so external specs assert the
+// clause production applies rather than a reimplementation of the conjuncts.
+func RelationClausesForTest(anchor, value Region, kind RelationKind, maxDistance, drop float64) (order, distance, overlap bool) {
+	_, _, order, distance, overlap = relationClauses(anchor, value, Relation{Kind: kind, MaxDistance: maxDistance}, drop)
+	return order, distance, overlap
+}
 
 // MaxUploadBytesForTest exposes the request-body cap so the 413 spec asserts the production
 // constant rather than a copy of it.

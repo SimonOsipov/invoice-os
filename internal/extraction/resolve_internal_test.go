@@ -674,13 +674,13 @@ func TestResolve_NoBelowPairCanSatisfyTheRightwardCorridor(t *testing.T) {
 	for _, page := range rvBelowGrid() {
 		labels := labelTokens(page)
 		anchor := page.Tokens[0].Region
-		for _, r := range relatedTokens(page, anchor, below) {
+		for _, r := range relatedTokens(page, anchor, below, 0) {
 			belowPairs++
 			if crossesALabel(page, labels, anchor, page.Tokens[r.index].Region) {
 				t.Fatalf("a below pair satisfied the rightward corridor: anchor %v value %v; the RelRight conjunct in bounded is load-bearing after all and this spec is the wrong shape", anchor, page.Tokens[r.index].Region)
 			}
 		}
-		for _, r := range relatedTokens(page, anchor, right) {
+		for _, r := range relatedTokens(page, anchor, right, 0) {
 			rightPairs++
 			if crossesALabel(page, labels, anchor, page.Tokens[r.index].Region) {
 				rightBlocked++
@@ -753,10 +753,10 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	oParties := [][]Party{partyOrder(outrankedPages[0])}
 	oLabels := [][]bool{labelTokens(outrankedPages[0])}
 
-	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.fallback.outranked", TierFallback); len(got) != 0 {
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.fallback.outranked", TierFallback, 0); len(got) != 0 {
 		t.Errorf("fallback candidate over %q = %+v, want none: a Fallback rule must be outranked exactly like a generic one", outrankedText, got)
 	}
-	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.learned.outranked", TierLearned); len(got) != 1 {
+	if got := appendRuleCandidates(nil, outrankedPages, oParties, oLabels, supplierNameRule, BandAnywhere, false, "supplier_name", "t.test.learned.outranked", TierLearned, 0); len(got) != 1 {
 		t.Errorf("learned candidate over %q = %+v, want exactly one: a learned rule is never outranked by the shipped lexicon", outrankedText, got)
 	}
 
@@ -774,10 +774,35 @@ func TestResolve_AFallbackRuleKeepsTheShippedPosture(t *testing.T) {
 	bParties := [][]Party{partyOrder(boundaryPages[0])}
 	bLabels := [][]bool{labelTokens(boundaryPages[0])}
 
-	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.boundary", TierFallback); len(got) != 0 {
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.boundary", TierFallback, 0); len(got) != 0 {
 		t.Errorf("fallback candidate crossing the intervening Total label = %+v, want none: a Fallback rightward read must stop at a label exactly like a generic one", got)
 	}
-	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.learned.boundary", TierLearned); len(got) != 1 {
+	if got := appendRuleCandidates(nil, boundaryPages, bParties, bLabels, vatRule, BandAnywhere, false, "vat", "t.test.learned.boundary", TierLearned, 0); len(got) != 1 {
 		t.Errorf("learned candidate crossing the same intervening label = %+v, want exactly one: a learned rightward read never stops at a label", got)
+	}
+
+	// A dropped pair stops at a label on the value's own band, exactly as a same-line pair does.
+	droppedPages := []TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		{Text: "VAT", Region: Region{Page: 1, X0: 0.10, Y0: 0.700, X1: 0.16, Y1: 0.720}},
+		{Text: "Total", Region: Region{Page: 1, X0: 0.30, Y0: 0.715, X1: 0.38, Y1: 0.735}},
+		{Text: "2,687.50", Region: Region{Page: 1, X0: 0.45, Y0: 0.715, X1: 0.58, Y1: 0.735}},
+	}}}
+	dParties := [][]Party{partyOrder(droppedPages[0])}
+	dLabels := [][]bool{labelTokens(droppedPages[0])}
+
+	if got := appendRuleCandidates(nil, droppedPages, dParties, dLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped", TierFallback, 0.97); len(got) != 0 {
+		t.Errorf("fallback candidate crossing a label on the dropped value's own band = %+v, want none", got)
+	}
+
+	memoPages := []TokenPage{{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []Token{
+		droppedPages[0].Tokens[0],
+		{Text: "Memo", Region: droppedPages[0].Tokens[1].Region},
+		droppedPages[0].Tokens[2],
+	}}}
+	mParties := [][]Party{partyOrder(memoPages[0])}
+	mLabels := [][]bool{labelTokens(memoPages[0])}
+
+	if got := appendRuleCandidates(nil, memoPages, mParties, mLabels, vatRule, BandAnywhere, false, "vat", "t.test.fallback.dropped.control", TierFallback, 0.97); len(got) != 1 {
+		t.Errorf("fallback candidate over the same geometry with a non-label word = %+v, want exactly one: the control fatals if it reaches nothing", got)
 	}
 }

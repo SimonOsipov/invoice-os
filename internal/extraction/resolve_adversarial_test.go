@@ -675,3 +675,183 @@ func TestResolve_TheBandHalvesTheShorterOfTheTwoHeights(t *testing.T) {
 		t.Errorf("vat with a short LABEL one tenth the anchor's height between = [%s], want none; the two arrangements differ only in the middle token's text, and halving the anchor's own height would keep this read", rvbShow(got))
 	}
 }
+
+// --- EXTR-31-02: the Tier-1 right drop band, boundary arms ------------------
+
+// AC-1, AC-2. The drop band's boundary is exact at a binary fraction: exactly Drop times the
+// label's height admits nothing, one ULP inside it admits the value.
+func TestResolve_TheDropBandBoundaryIsExactInFloat64(t *testing.T) {
+	const drop = 0.9375
+	label := extraction.Region{Page: 1, X0: 0.10, Y0: 0.5, X1: 0.18, Y1: 0.53125}
+	const boundaryY0 = 0.529296875
+	const valueY1 = 0.544921875
+
+	if got, want := rvaFloat(boundaryY0)-rvaFloat(label.Y0), drop*(label.Y1-label.Y0); got != want {
+		t.Fatalf("value.Y0-label.Y0 = %v, want exactly %v -- the boundary is no longer exact in float64", got, want)
+	}
+	labelHeight, valueHeight := label.Y1-label.Y0, rvaFloat(valueY1)-rvaFloat(boundaryY0)
+	if ov, span := min(label.Y1, valueY1)-max(label.Y0, boundaryY0), min(labelHeight, valueHeight); ov <= 0 || ov >= 0.5*span {
+		t.Fatalf("the value at the boundary overlaps the label by %v against a half-span of %v; the line band must fail here for this spec to target the drop boundary", ov, 0.5*span)
+	}
+
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = drop
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+
+	page := func(vy0 float64) []extraction.TokenPage {
+		return rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: extraction.Region{Page: 1, X0: 0.40, Y0: vy0, X1: 0.47, Y1: vy0 + valueHeight}})
+	}
+
+	if got := extraction.Resolve(page(boundaryY0), rules); len(got) != 0 {
+		t.Errorf("got %d candidate(s) at exactly Drop times the label's height, want 0 -- the boundary is strict: %+v", len(got), got)
+	}
+
+	nextY0 := math.Nextafter(boundaryY0, 0)
+	if got := extraction.Resolve(page(nextY0), rules); len(got) != 1 {
+		t.Errorf("got %d candidate(s) one ULP inside the boundary, want exactly 1: %+v", len(got), got)
+	}
+}
+
+// AC-2. A value whose top sits at or below the label's bottom is refused, whatever Drop allows.
+func TestResolve_TheDropBandRefusesAValueTouchingTheLabelsBottom(t *testing.T) {
+	label := rvBox(0.10, 0.500, 0.18, 0.511)
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	touching := rvBox(0.40, 0.511, 0.47, 0.524)
+	if got := extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: touching}), rules); len(got) != 0 {
+		t.Errorf("got %d candidate(s) for a value starting exactly at the label's bottom, want 0: %+v", len(got), got)
+	}
+
+	sameLine := rvBox(0.40, 0.500, 0.47, 0.511)
+	rvControl(t, extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: sameLine}), rules), "the same label with a value on its own line")
+}
+
+// AC-2. A value raised above the label's own top is refused: the drop band requires the value's
+// top to sit BELOW the label's, whatever small overlap the pair otherwise carries.
+func TestResolve_TheDropBandRefusesARaisedValue(t *testing.T) {
+	label := rvBox(0.10, 0.500, 0.18, 0.511)
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	raised := rvBox(0.40, 0.490, 0.47, 0.501)
+	if got := extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: raised}), rules); len(got) != 0 {
+		t.Errorf("got %d candidate(s) for a value raised above the label, want 0: %+v", len(got), got)
+	}
+
+	sameLine := rvBox(0.40, 0.500, 0.47, 0.511)
+	rvControl(t, extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: sameLine}), rules), "the same label with a value on its own line")
+}
+
+// AC-4. The drop band cannot admit a zero overlap even where Drop times a subnormal height
+// rounds back to the height itself: the boundary is a strict less-than.
+func TestResolve_TheDropBandRejectsAZeroOverlapUnderASubnormalSpan(t *testing.T) {
+	tiny := rvaFloat(math.SmallestNonzeroFloat64)
+	if got := 0.97 * tiny; got != tiny {
+		t.Fatalf("0.97*%v is %v, not %v; the rounding this spec targets no longer holds", tiny, got, tiny)
+	}
+
+	rule := rvTier1(t, "t1.invoice_number.right", "invoice_number", rvLabelInvoiceNo, extraction.RelRight, 0.35, extraction.ShapeInvoiceNumber)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	anchor := rvaTokOn(1, "Invoice No:", 0.10, 0, 0.20, tiny)
+	value := rvaTokOn(1, "INV-001", 0.30, tiny, 0.40, 0.5)
+	if got := extraction.Resolve(rvaPages([]extraction.Token{anchor, value}), rules); len(got) != 0 {
+		t.Errorf("got %d candidate(s) for bands that touch at a point under a non-zero Drop, want 0: %+v", len(got), got)
+	}
+
+	normal := rvPage(rvTok("Invoice No:", 0.10, 0.10, 0.20, 0.13), rvTok("INV-001", 0.30, 0.10, 0.40, 0.13))
+	rvControl(t, extraction.Resolve(normal, rules), "the same rule over a normal line band")
+}
+
+// The value-band label check belongs to a dropped pair only. The same VAT, clear of the anchor's
+// band, must leave a line-band read alone and block a dropped one.
+func TestResolve_AValueBandLabelBlocksOnlyADroppedRead(t *testing.T) {
+	label := rvBox(0.10, 0.500, 0.18, 0.520)
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+	vat := extraction.Token{Text: "VAT", Region: rvBox(0.30, 0.515, 0.34, 0.535)}
+	sameLine := rvBox(0.40, 0.509, 0.47, 0.529)
+	dropped := rvBox(0.40, 0.519, 0.47, 0.539)
+
+	if order, distance, overlap := extraction.RelationClausesForTest(label, sameLine, extraction.RelRight, 0.35, 0); order || distance || overlap {
+		t.Fatalf("order=%v distance=%v overlap=%v at Drop 0, want all false: the same-line value must pass the line band", order, distance, overlap)
+	}
+	if _, _, overlap := extraction.RelationClausesForTest(label, dropped, extraction.RelRight, 0.35, 0); !overlap {
+		t.Fatal("the dropped value passes the line band at Drop 0; only the drop band may admit it")
+	}
+
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	got := extraction.Resolve(rvPage(labelTok, vat, extraction.Token{Text: "1,500.00", Region: sameLine}), rules)
+	if len(got) != 1 || got[0].Value != "1500.00" {
+		t.Errorf("same-line value with VAT on its band only = %v, want [1500.00]", rvValues(got))
+	}
+
+	if got := extraction.Resolve(rvPage(labelTok, vat, extraction.Token{Text: "1,500.00", Region: dropped}), rules); len(got) != 0 {
+		t.Errorf("dropped value behind the same VAT = %v, want none", rvValues(got))
+	}
+	memo := extraction.Token{Text: "Memo", Region: vat.Region}
+	rvControl(t, extraction.Resolve(rvPage(labelTok, memo, extraction.Token{Text: "1,500.00", Region: dropped}), rules), "the dropped value with a non-label word in VAT's slot")
+}
+
+// A tall label covering a short dropped value blocks it though the label misses the anchor's
+// band: the value's band is the value's own full height.
+func TestResolve_ATallLabelBelowTheAnchorsBandBlocksADroppedRead(t *testing.T) {
+	label := rvBox(0.10, 0.500, 0.18, 0.520)
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+	value := rvBox(0.40, 0.516, 0.47, 0.526)
+	valueTok := extraction.Token{Text: "1,500.00", Region: value}
+	slot := rvBox(0.30, 0.5195, 0.34, 0.5495)
+
+	if order, distance, overlap := extraction.RelationClausesForTest(label, value, extraction.RelRight, 0.35, 0.97); order || distance || overlap {
+		t.Fatalf("order=%v distance=%v overlap=%v at Drop 0.97, want all false", order, distance, overlap)
+	}
+	if _, _, overlap := extraction.RelationClausesForTest(label, value, extraction.RelRight, 0.35, 0); !overlap {
+		t.Fatal("the value passes the line band at Drop 0; this spec needs a dropped pair")
+	}
+
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	if got := extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "VAT", Region: slot}, valueTok), rules); len(got) != 0 {
+		t.Errorf("dropped value under a tall VAT = %v, want none", rvValues(got))
+	}
+	rvControl(t, extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "Memo", Region: slot}, valueTok), rules), "the same page with a non-label word in VAT's slot")
+}
+
+// The drop band relaxes only the line band: a dropped value still needs order and distance.
+func TestResolve_ADroppedValueStillNeedsOrderAndDistance(t *testing.T) {
+	label := rvBox(0.10, 0.500, 0.18, 0.511)
+	labelTok := extraction.Token{Text: "Sub total", Region: label}
+	far := rvBox(0.60, 0.510, 0.67, 0.523)
+	left := rvBox(0.01, 0.510, 0.08, 0.523)
+
+	if order, distance, overlap := extraction.RelationClausesForTest(label, far, extraction.RelRight, 0.35, 0.97); order || !distance || overlap {
+		t.Fatalf("far: order=%v distance=%v overlap=%v, want only distance true", order, distance, overlap)
+	}
+	if order, distance, overlap := extraction.RelationClausesForTest(label, left, extraction.RelRight, 0.35, 0.97); !order || distance || overlap {
+		t.Fatalf("left: order=%v distance=%v overlap=%v, want only order true", order, distance, overlap)
+	}
+
+	rule := rvTier1(t, "t1.subtotal.right", "subtotal", rvaLabelSubtotal, extraction.RelRight, 0.35, extraction.ShapeAmount)
+	rule.Drop = 0.97
+	rules := extraction.RuleSet{Tier1: []extraction.Tier1Rule{rule}}
+
+	if got := extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: far}), rules); len(got) != 0 {
+		t.Errorf("dropped value past MaxDistance = %v, want none", rvValues(got))
+	}
+	if got := extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: left}), rules); len(got) != 0 {
+		t.Errorf("dropped value left of the label = %v, want none", rvValues(got))
+	}
+	near := rvBox(0.40, 0.510, 0.47, 0.523)
+	rvControl(t, extraction.Resolve(rvPage(labelTok, extraction.Token{Text: "1,500.00", Region: near}), rules), "the same dropped value right of the label within MaxDistance")
+}

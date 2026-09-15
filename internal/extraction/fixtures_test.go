@@ -886,8 +886,8 @@ func fxBuildWildRCDueNaira() []byte {
 }
 
 // fxBuildWildStackedBorderless stacks labels and values with no rules and no "Label:"
-// punctuation, and offsets every value 8pt below its label in a second column so neither
-// same_token, right nor below binds.
+// punctuation, and offsets every value 8pt below its label in a second column; only right's
+// drop band reaches the six offset values (TestTier1_TheDropBandStaysInsideItsMeasuredWindow).
 //
 // The friendly set keeps "Invoice No" readable on purpose, over its value at the same x
 // (fxBuildCorpusStackedLabels); the as-printed set letter-spaces it as NG-3 prints it.

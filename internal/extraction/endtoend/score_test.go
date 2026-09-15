@@ -38,13 +38,13 @@ const (
 // eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-14 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
-// The 37 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
+// The 31 misses are named cell by cell in eeAbsentCells and eeRealMisses, and
 // TestRLS_EndToEndScoresTheCorpus holds the score to that exact set.
 //
 // eeCorpusFloor is a VIEW of those two integers, never a second number: written as their
 // quotient so the float compared at run time is bit-identical to the measurement.
 const (
-	eeCorpusHits  = 75
+	eeCorpusHits  = 81
 	eeCorpusCells = eeWrittenCells
 	eeCorpusFloor = float64(eeCorpusHits) / float64(eeCorpusCells)
 )
@@ -307,13 +307,6 @@ var eeRealMisses = map[string]string{
 	"corpus_stacked_labels.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_two_column.pdf/currency":     "NGN is printed inside the total, with no currency label to anchor it",
 	"corpus_ambiguous_date.pdf/currency": "NGN is printed inside the total, with no currency label to anchor it",
-
-	"wild_stacked_borderless.pdf/issue_date": "the value is offset 8pt below its label in a second column, so neither same_token, right nor below binds",
-	"wild_stacked_borderless.pdf/buyer_name": "the value is offset from its label, and the label carries no colon",
-	"wild_stacked_borderless.pdf/currency":   "the value is offset from its label, and the label carries no colon",
-	"wild_stacked_borderless.pdf/subtotal":   "the value is offset from its label, and the label carries no colon",
-	"wild_stacked_borderless.pdf/vat":        "the value is offset from its label, and the label carries no colon",
-	"wild_stacked_borderless.pdf/total":      "the value is offset from its label, and the label carries no colon",
 
 	// Six cells the raster page carries in ink and OCR reads cleanly, lost together: with no
 	// invoice number the import quarantines the document and writes no invoices row at all.

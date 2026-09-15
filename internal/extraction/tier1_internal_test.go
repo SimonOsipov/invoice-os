@@ -47,6 +47,15 @@ func t1Defective(r Tier1Rule) string {
 	if r.Rule.Relation.MaxDistance != want {
 		return fmt.Sprintf("max_distance %v on a %q rule, want %v", r.Rule.Relation.MaxDistance, r.Rule.Relation.Kind, want)
 	}
+
+	// The drop band is a right-only dial: every shipped right rule carries it, and no other relation does.
+	wantDrop := 0.0
+	if r.Rule.Relation.Kind == RelRight {
+		wantDrop = tier1DropRight
+	}
+	if r.Drop != wantDrop {
+		return fmt.Sprintf("drop %v on a %q rule, want %v", r.Drop, r.Rule.Relation.Kind, wantDrop)
+	}
 	return ""
 }
 
@@ -72,6 +81,21 @@ func TestTier1_EveryRuleHasACompiledMatcher(t *testing.T) {
 	}
 	if why := t1Defective(control); why == "" {
 		t.Error("the near-miss control (a composite-literal Rule, no compiled matcher) was reported sound; t1Defective cannot fail, so every rule above passed vacuously")
+	}
+
+	// Near-miss control: a sound RelRight rule left at Drop 0. Every shipped .right rule must
+	// carry tier1DropRight, so this rule -- clean on every other axis -- must still be reported.
+	rightNoDrop := mustTier1Rule("control.right_no_drop", "total", `(?i)\btotal\b`, RelRight, tier1MaxDistanceRightJSON, ShapeAmount, BandAnywhere)
+	if why := t1Defective(rightNoDrop); why == "" {
+		t.Error("a RelRight rule at Drop 0 was reported sound; the invariant would not catch a shipped .right rule that never got the dial")
+	}
+
+	// Near-miss control: a RelBelow rule carrying the drop dial. below never reads Drop, and no
+	// relation but right may carry it.
+	belowWithDrop := mustTier1Rule("control.below_with_drop", "total", `(?i)\btotal\b`, RelBelow, tier1MaxDistanceBelowJSON, ShapeAmount, BandAnywhere)
+	belowWithDrop.Drop = tier1DropRight
+	if why := t1Defective(belowWithDrop); why == "" {
+		t.Error("a RelBelow rule carrying tier1DropRight was reported sound; the invariant would not catch Drop leaking onto a rule that ignores it")
 	}
 }
 

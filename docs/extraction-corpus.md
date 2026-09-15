@@ -890,7 +890,7 @@ committed golden alike (`TestTier1_TheDropBandAddsOnlyTheStackedPairsReads`). Th
 and `buyer_tin` already read `99999999-1102` through `t1.tin.sweep`, so no scored cell moves for
 them. The sibling gains the same candidates except `issue_date`, whose letter-spaced label matches
 no lexicon entry, and still scores 0 / 8: it quarantines on its letter-spaced invoice-number label
-(`TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber`), and its eight `eeRealMisses` entries are
+(`TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber`), and its eight `eeRealMisses` entries are
 unchanged. The end-to-end score does not guard the drop dial either (**What this number cannot
 see**); the window test and the differential do.
 

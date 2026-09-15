@@ -806,8 +806,8 @@ func TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN(t *tes
 	}
 }
 
-// Once the label view is wired, the letter-spaced sibling resolves its own invoice number,
-// through both pdfium and its golden, and the twin still resolves its own.
+// The letter-spaced sibling resolves its own invoice number through pdfium and its golden, and
+// the twin still resolves its own.
 func TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber(t *testing.T) {
 	const printed = "I N V O I C E N U M B E R"
 

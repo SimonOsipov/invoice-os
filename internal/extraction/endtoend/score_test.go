@@ -35,7 +35,7 @@ const (
 	eeQuarantineLayout = "scanned_invoice.pdf"
 )
 
-// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-14 and pinned. Equality, not a
+// eeCorpusHits is the fourteen-layout figure, re-measured 2026-09-15 and pinned. Equality, not a
 // floor: an unrecorded improvement must red too. EXTR-21-09 owns the ratchet.
 //
 // The 23 misses are named cell by cell in eeAbsentCells and eeRealMisses, and

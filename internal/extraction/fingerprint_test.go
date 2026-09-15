@@ -383,7 +383,7 @@ func TestFingerprint_TheLexiconResetIsScopedToPagesThatPrintThePhrase(t *testing
 	}
 }
 
-// 02-T10. A letter-spaced label moves the layout fingerprint only on the pages that print one:
+// A letter-spaced label moves the layout fingerprint only on the pages that print one:
 // R0 becomes byte-identical to its unspaced twin R1, and the sibling moves in both namespaces
 // (pdfium and its golden). Every pinned corpus and fixture digest stays put.
 func TestFingerprint_ALetterSpacedLabelMovesOnlyThePagesThatPrintIt(t *testing.T) {
@@ -404,8 +404,7 @@ func TestFingerprint_ALetterSpacedLabelMovesOnlyThePagesThatPrintIt(t *testing.T
 		}
 	}
 
-	// Before/after pairs are LITERAL pins, never a live comparison -- the guard below only
-	// checks that the two constants genuinely differ, so it holds at every stage.
+	// Before/after pairs are literal pins; the guard below only proves each pair differs.
 	const (
 		r0GeoBefore = "v3:556ee22826e0417398d21baa08e0752ffca2ee666c146f7d3ecd788e8d4385c0"
 		r0GeoAfter  = "v3:d89450d1d00688a442c17a083f9ab9b832d152ee249c671ff6ac17146a2a4bee" // R1's own geometric digest

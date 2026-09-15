@@ -91,7 +91,8 @@ func TestResolve_ASpacedLabelReadsAsItsWord(t *testing.T) {
 
 // --- 02-T3 ---------------------------------------------------------------------------------
 
-// Letter-spaced text that is no label anchors nothing: neither a candidate nor an observation.
+// Letter-spaced text that is no label anchors nothing: no candidate, no observation, and no
+// fingerprint input.
 func TestResolve_SpacedTextThatIsNoLabelAnchorsNothing(t *testing.T) {
 	const value = "OAP/2026/0088"
 	const control = "I N V O I C E N O"
@@ -100,6 +101,11 @@ func TestResolve_SpacedTextThatIsNoLabelAnchorsNothing(t *testing.T) {
 	ctl := rvFor(extraction.Resolve(lsLabelPage(control, value), extraction.RuleSet{Tier1: extraction.Tier1Rules}), "invoice_number")
 	if len(ctl) == 0 || ctl[0].Value != value {
 		t.Fatalf("%q anchored nothing (got %v); the negative rows below would hold against a Resolve that never returns anything", control, ctl)
+	}
+	valueOnly := rvPage(rvTok(value, 0.10, 0.222, 0.22, 0.232))
+	ctlPages := lsLabelPage(control, value)
+	if extraction.BoxlessFingerprint(ctlPages) == extraction.BoxlessFingerprint(valueOnly) || extraction.Fingerprint(ctlPages) == extraction.Fingerprint(valueOnly) {
+		t.Fatalf("%q fingerprints as the value-only page; the identity rows below would prove nothing", control)
 	}
 
 	for _, label := range []string{
@@ -114,6 +120,31 @@ func TestResolve_SpacedTextThatIsNoLabelAnchorsNothing(t *testing.T) {
 		}
 		if obs := extraction.AnchorObservations(pages); len(obs) != 0 {
 			t.Errorf("%q carries AnchorObservation(s) %+v, want none", label, obs)
+		}
+		if extraction.BoxlessFingerprint(pages) != extraction.BoxlessFingerprint(valueOnly) || extraction.Fingerprint(pages) != extraction.Fingerprint(valueOnly) {
+			t.Errorf("%q moves a layout fingerprint off the value-only page's, want neither", label)
+		}
+	}
+}
+
+// A spaced label printed in one token with its value reads as printed: the view never lifts a
+// value out of it.
+func TestResolve_ASpacedLabelJoinedToItsValueReadsNothing(t *testing.T) {
+	const value = "OAP/2026/0088"
+	resolve := func(text string) ([]extraction.Candidate, []extraction.AnchorObservation) {
+		pages := rvPage(rvTok(text, 0.10, 0.200, 0.40, 0.210))
+		return rvFor(extraction.Resolve(pages, extraction.RuleSet{Tier1: extraction.Tier1Rules}), "invoice_number"), extraction.AnchorObservations(pages)
+	}
+	for _, c := range []struct{ unspaced, spaced string }{
+		{"INVOICE NO " + value, "I N V O I C E N O " + value},
+		{"INVOICE NO: " + value, "I N V O I C E N O : " + value},
+	} {
+		// control, fatal: the unspaced token reads its own value through same_token.
+		if cs, _ := resolve(c.unspaced); len(cs) != 1 || cs[0].Value != value {
+			t.Fatalf("%q resolves invoice_number %v, want exactly [%s]", c.unspaced, rvValues(cs), value)
+		}
+		if cs, obs := resolve(c.spaced); len(cs) != 0 || len(obs) != 0 {
+			t.Errorf("%q resolves invoice_number %v with %d observation(s), want none", c.spaced, rvValues(cs), len(obs))
 		}
 	}
 }
@@ -294,8 +325,8 @@ func lsCorpusReads(t *testing.T) map[string][]extraction.TokenPage {
 	return reads
 }
 
-// lsImageOnly is every read with no text layer at all -- the only reads 02-T8's token-count
-// floor exempts.
+// lsImageOnly is every read with no text layer at all -- the only reads the token-count floor
+// exempts.
 var lsImageOnly = map[string]bool{
 	"pdfium:dense_invoice.pdf":            true,
 	"pdfium:scanned_invoice.pdf":          true,
@@ -315,8 +346,8 @@ type lsAdd struct {
 	distance             float64
 }
 
-// lsWantAdditions is the corpus differential's only predicted change: three reads gain the two
-// header fields a letter-spaced label was blocking. Everything else is unchanged (P18).
+// lsWantAdditions is the corpus differential's only change: three reads gain the two header
+// fields their letter-spaced labels introduce. Every other read is unchanged.
 var lsWantAdditions = map[string][]lsAdd{
 	"pdfium:advisory_register.pdf": {
 		{"invoice_number", "OAP/2026/0088", "t1.invoice_number.below", 0.014216},
@@ -481,8 +512,8 @@ func TestLearnRule_ARuleLearnedOnOneSpaceReadsThreeSpaces(t *testing.T) {
 // --- 02-T13 --------------------------------------------------------------------------------
 
 // A rule learned on the unspaced twin R1 reads the spaced register R0, because R0 shares R1's
-// layout identity once the view is wired -- and only where the learned label itself is a single
-// word: the multi-word invoice-number rule reaches nothing on R0 ([r0-shares-r1-identity]).
+// layout identity -- but only where the learned label is a single word: the multi-word
+// invoice-number rule reaches nothing on R0.
 func TestLearnRule_ARuleLearnedOnTheUnspacedTwinReadsTheSpacedRegister(t *testing.T) {
 	r1 := rvCorpusPages(t, fxAdvisoryRegisterUnspaced)
 	r0 := rvCorpusPages(t, fxAdvisoryRegister)

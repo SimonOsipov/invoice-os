@@ -102,9 +102,8 @@ func advSameValue(a, b *string) bool {
 
 // --- 02-T1 ----------------------------------------------------------------------
 
-// 02-T1: once the label view is wired, R0 decides both header fields -- T-06.1's known gap is
-// retired in the same commit. Also holds over R0's three-space source form, and confirms R1 is
-// unaffected (Constraint).
+// R0 decides both header fields through its letter-spaced labels, in either spacing, and R1
+// decides them as before.
 func TestAdvisory_TheRegisterReadsItsLetterSpacedHeader(t *testing.T) {
 	out := advReconcile(t, fxAdvisoryRegister)
 

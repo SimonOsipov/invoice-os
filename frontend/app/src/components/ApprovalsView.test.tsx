@@ -666,9 +666,9 @@ describe("A04-9: a disabled row states the SERVER's own why through its reason i
     // Layer 4: the icon and the checkbox both describe the SAME tooltip node, by a
     // per-row unique id -- the icon's accessible name is the static copy key.
     const icon = within(row).getByTestId('approval-blocked-icon')
-    const iconLabel = (APPROVALS_COPY as unknown as Record<string, string | undefined>).blockedReasonLabel
-    expect(iconLabel, 'APPROVALS_COPY.blockedReasonLabel is not exported yet').toBeDefined()
-    expect(icon.getAttribute('aria-label')).toBe(iconLabel)
+    expect(icon.tagName).toBe('BUTTON')
+    expect(icon.getAttribute('type'), 'the icon must never submit an enclosing form').toBe('button')
+    expect(icon.getAttribute('aria-label')).toBe(APPROVALS_COPY.blockedReasonLabel)
 
     const describedbyId = icon.getAttribute('aria-describedby')
     expect(describedbyId).not.toBeNull()
@@ -699,7 +699,7 @@ describe("A04-9: a disabled row states the SERVER's own why through its reason i
     expect(document.getElementById(iconIds[0] as string)?.textContent).toBe(reasonA)
     expect(document.getElementById(iconIds[1] as string)?.textContent).toBe(reasonB)
 
-    // AC-5: the checkbox keeps naming the same per-row id as its own icon.
+    // The checkbox names the same per-row id as its own icon.
     const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
     const checkboxIds = checkboxes.map((c) => c.getAttribute('aria-describedby'))
     expect(checkboxIds).toEqual(iconIds)
@@ -740,7 +740,10 @@ describe('B17-C2: the icon follows the invoice number on a blocked row only', ()
     expect(blockedCell.children.length, 'the invoice # cell must hold exactly the number span and the icon wrapper').toBe(2)
     const numberSpan = blockedCell.children[0] as HTMLElement
     expect(numberSpan.textContent).toBe('INV-BLOCKED')
-    expect(numberSpan.getAttribute('style'), 'the number span must truncate with an ellipsis').toContain('text-overflow: ellipsis')
+    const numberStyle = numberSpan.getAttribute('style')
+    expect(numberStyle, 'the number span must truncate with an ellipsis').toContain('text-overflow: ellipsis')
+    expect(numberStyle, 'without nowrap the number wraps onto a second line').toContain('white-space: nowrap')
+    expect(numberStyle, 'text-overflow draws no ellipsis while overflow is visible').toMatch(/(?:^|; )overflow: hidden/)
     expect(blockedCell.children[1].contains(icon), 'the icon must sit inside the wrapper that follows the number').toBe(true)
 
     const okRow = screen.getByText('INV-OK').closest('[data-testid="approval-row"]') as HTMLElement
@@ -763,7 +766,6 @@ describe('B17-C2b: the reason icon authors no copy of its own (AC-8)', () => {
     expect(icon.textContent, 'the icon renders a glyph, never its own text').toBe('')
     const tip = screen.getByTestId('approval-blocked-tip')
     expect(tip.textContent).toBe(reason)
-    // T5: BlockedReason as a whole authors no text beyond the reason.
     expect(icon.parentElement!.textContent, 'BlockedReason must render no text of its own outside the reason').toBe(reason)
   })
 })
@@ -779,14 +781,13 @@ describe('B17-C3: hover reveals the server sentence byte-identically', () => {
 
     const icon = screen.getByTestId('approval-blocked-icon')
     const tip = screen.getByTestId('approval-blocked-tip')
-    // T1: the tip must start hidden -- an initially-open tip would otherwise pass below.
+    // An initially-open tip would pass every assertion below.
     expect(tip.getAttribute('style'), 'the tip must be hidden before any interaction').toContain('display: none')
 
     fireEvent.mouseEnter(icon.parentElement as HTMLElement)
     expect(tip.getAttribute('style'), 'hover must reveal the tip').not.toContain('display: none')
     expect(tip.textContent).toBe(reason)
-    // T1: a position must already be stored -- an effect that never measures would leave
-    // the tip permanently visibility:hidden.
+    // An effect that never stores a position leaves the tip visibility:hidden forever.
     expect(tip.getAttribute('style'), 'a position must be stored once the tip is shown').not.toContain('visibility: hidden')
 
     fireEvent.mouseLeave(icon.parentElement as HTMLElement)
@@ -818,8 +819,7 @@ describe('B17-C3b: keyboard focus reveals it and Escape or blur hides it', () =>
     fireEvent.blur(icon)
     expect(tip.getAttribute('style'), 'blur must hide it').toContain('display: none')
 
-    // T2: a hover-opened tip has no focus on the button, so Escape must reach it through
-    // the window (useDismiss, D1) -- not only a button onKeyDown.
+    // A hover-opened tip has no focused button, so Escape must arrive through the window.
     fireEvent.mouseEnter(wrapper)
     expect(tip.getAttribute('style')).not.toContain('display: none')
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -844,11 +844,61 @@ describe('B17-C3c: a scroll closes an open tip', () => {
     fireEvent.scroll(window)
     expect(tip.getAttribute('style'), 'a scroll must hide an open tip').toContain('display: none')
 
-    // T3: AC-3 also names resize -- no earlier spec drove it.
     fireEvent.focus(icon)
     expect(tip.getAttribute('style')).not.toContain('display: none')
     fireEvent(window, new Event('resize'))
     expect(tip.getAttribute('style'), 'a resize must hide an open tip').toContain('display: none')
+  })
+
+  it('a scroll inside a nested container closes it too, though scroll does not bubble', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    // The app scrolls inside .pf-scroll, not the window, so only a capture-phase listener hears it.
+    fireEvent.scroll(screen.getByTestId('approvals-list'), { bubbles: false })
+    expect(tip.getAttribute('style'), 'a nested scroll must hide an open tip').toContain('display: none')
+  })
+})
+
+describe('B17-C3d: a reopened tip is measured from an unpositioned box', () => {
+  it('the second open measures the tip at left 0, not at its last position', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    const styleAtMeasure: string[] = []
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, x: left, y: top, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this !== tip) return rect(600, 100, 14, 14)
+      styleAtMeasure.push(this.getAttribute('style') ?? '')
+      return rect(0, 0, 300, 60)
+    })
+    try {
+      fireEvent.focus(icon)
+      expect(tip.getAttribute('style'), 'control: the first open stores a non-zero left').toContain('left: 600px')
+      fireEvent.blur(icon)
+      fireEvent.focus(icon)
+      expect(styleAtMeasure).toHaveLength(2)
+      // A fixed box shrinks to fit from its left, so a stale left skews the measured size.
+      expect(styleAtMeasure[1], 'the reopen must measure the tip from left 0').toContain('left: 0px')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

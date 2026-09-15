@@ -464,9 +464,8 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
   )
 }
 
-// The (!) icon after the invoice number, and its hover/focus tooltip (BUG-17-03). Declared
-// below ApprovalsView so LIB-SCAN-A's `return (` anchor never reaches this JSX -- AC-8's
-// rendered guards (empty icon text, exact tip text) cover that gap instead.
+// Stays below ApprovalsView: A04-11's text-node scan never reaches this JSX, so
+// "B17-C2b: the reason icon authors no copy of its own" guards its copy instead.
 function BlockedReason({ id, reason }: { id: string; reason: string }) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
@@ -475,9 +474,14 @@ function BlockedReason({ id, reason }: { id: string; reason: string }) {
   const close = useCallback(() => setOpen(false), [])
   useDismiss(open, close)
 
-  // Below the anchor when it fits, else above -- reasonTipPosition itself is unit-tested.
+  // Measured before paint from an unpositioned box: a stale left narrows a fixed tip and
+  // skews the flip and the clamp.
   useLayoutEffect(() => {
-    if (!open || iconRef.current == null || tipRef.current == null) return
+    if (!open) {
+      setPos(null)
+      return
+    }
+    if (iconRef.current == null || tipRef.current == null) return
     const anchor = iconRef.current.getBoundingClientRect()
     const tip = tipRef.current.getBoundingClientRect()
     setPos(reasonTipPosition(anchor, tip, { width: window.innerWidth, height: window.innerHeight }))

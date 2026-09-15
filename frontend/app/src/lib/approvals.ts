@@ -232,9 +232,8 @@ export function approvalSelectRowLabel(invoiceNumber: string): string {
   return `Select invoice ${invoiceNumber}`
 }
 
-// Pure placement for BlockedReason's tip (BUG-17-03, AC-6) -- jsdom has no layout, so this
-// arithmetic is unit-tested here rather than proven only on the deploy gate.
 // Below the anchor when it fits, else above; left clamped into the viewport.
+// Pure so vitest can pin the arithmetic that jsdom cannot lay out.
 export function reasonTipPosition(
   anchor: { left: number; top: number; bottom: number },
   tip: { width: number; height: number },

@@ -90,7 +90,6 @@ describe('BUG-14: the scan population', () => {
   })
 
   it('control: the out-of-scope sibling reason testids are still found', () => {
-    // BUG-17-03 replaced the sentence line with the tip; retargeted off approval-blocked-reason.
     for (const id of ['approval-blocked-tip', 'delegation-blocked-reason', 'pager-blocked-reason']) {
       expect(filesContaining(id).length, `the surviving sibling ${id} is unreachable -- the absence claims are vacuous`).toBeGreaterThan(0)
     }

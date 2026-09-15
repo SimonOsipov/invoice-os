@@ -95,12 +95,13 @@ function approvalRow(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 // (Implementation Notes, CTX section) -- narrowing idiom matches InvoicesList.test.tsx's
 // listCtx(). `entityId: undefined` (default) leaves it unset so in-house callers can omit
 // it without a stray `null` in the fixture.
-function approvalsCtx(over: { mode?: 'firm' | 'inhouse'; entityId?: string | null } = {}): PlatformCtx {
+function approvalsCtx(over: { mode?: 'firm' | 'inhouse'; entityId?: string | null; openImportedInvoice?: (id: string) => void } = {}): PlatformCtx {
   const ctx = {
     mode: over.mode ?? 'firm',
     active: { entityId: over.entityId === undefined ? 'ent-1' : over.entityId },
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    openImportedInvoice: over.openImportedInvoice ?? vi.fn(),
   }
   return ctx as unknown as PlatformCtx
 }
@@ -643,8 +644,8 @@ describe('A04-8: select-all never reports "all" on a page with zero approvable r
   })
 })
 
-describe("A04-9: a disabled row states the SERVER's own why, in all four layers (G-04-C)", () => {
-  it('the real disabled attribute, a visible sibling carrying the reason byte-identically, and a per-row aria-describedby id', async () => {
+describe("A04-9: a disabled row states the SERVER's own why through its reason icon (G-04-C)", () => {
+  it('the real disabled attribute, the checkbox title, and the icon/checkbox aria-describedby resolving to the tooltip', async () => {
     const reason = 'Only a validated invoice can be approved or rejected.'
     const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
     mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
@@ -660,16 +661,24 @@ describe("A04-9: a disabled row states the SERVER's own why, in all four layers 
     checkbox.focus()
     expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
 
-    // Layer 3: a VISIBLE sibling node carrying the server's sentence byte-identically --
-    // the layer a screenshot, a keyboard user and a text assertion can all reach.
-    expect(screen.getByText(reason), "the SPA must render the server's own sentence, not a substitute").toBeTruthy()
+    // Layer 2: the checkbox keeps its own title, byte-identical to the reason.
+    expect(checkbox.title, "the checkbox's title must still carry the server's sentence").toBe(reason)
 
-    // Layer 4: aria-describedby points at that node, by a PER-ROW unique id.
-    const describedbyId = checkbox.getAttribute('aria-describedby')
+    // Layer 4: the icon and the checkbox both describe the SAME tooltip node, by a
+    // per-row unique id -- the icon's accessible name is the static copy key.
+    const icon = within(row).getByTestId('approval-blocked-icon')
+    expect(icon.tagName).toBe('BUTTON')
+    expect(icon.getAttribute('type'), 'the icon must never submit an enclosing form').toBe('button')
+    expect(icon.getAttribute('aria-label')).toBe(APPROVALS_COPY.blockedReasonLabel)
+
+    const describedbyId = icon.getAttribute('aria-describedby')
     expect(describedbyId).not.toBeNull()
     expect(describedbyId).toBe('approve-blocked-reason-inv-blocked')
-    const reasonEl = document.getElementById(describedbyId as string)
-    expect(reasonEl?.textContent, 'aria-describedby must point at the SAME text as the visible sentence').toBe(reason)
+    expect(checkbox.getAttribute('aria-describedby'), 'the checkbox must point at the same tooltip id as the icon').toBe(describedbyId)
+
+    const tip = document.getElementById(describedbyId as string)
+    expect(tip?.getAttribute('role')).toBe('tooltip')
+    expect(tip?.textContent, 'aria-describedby must resolve to the exact reason text').toBe(reason)
   })
 
   it('two blocked rows on the same page get distinct per-row reason ids, each pointing at its own text', async () => {
@@ -682,15 +691,235 @@ describe("A04-9: a disabled row states the SERVER's own why, in all four layers 
     render(<ApprovalsView ctx={approvalsCtx()} />)
     await screen.findByText('INV-A')
 
-    const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
-    expect(checkboxes).toHaveLength(2)
-    const ids = checkboxes.map((c) => c.getAttribute('aria-describedby'))
-    expect(ids[0]).not.toBeNull()
-    expect(ids[1]).not.toBeNull()
-    expect(ids[0]).not.toBe(ids[1])
+    const icons = screen.getAllByTestId('approval-blocked-icon')
+    expect(icons).toHaveLength(2)
+    const iconIds = icons.map((i) => i.getAttribute('aria-describedby'))
+    expect(iconIds[0]).not.toBeNull()
+    expect(iconIds[1]).not.toBeNull()
+    expect(iconIds[0]).not.toBe(iconIds[1])
+    expect(document.getElementById(iconIds[0] as string)?.textContent).toBe(reasonA)
+    expect(document.getElementById(iconIds[1] as string)?.textContent).toBe(reasonB)
 
-    expect(document.getElementById(ids[0] as string)?.textContent).toBe(reasonA)
-    expect(document.getElementById(ids[1] as string)?.textContent).toBe(reasonB)
+    // The checkbox names the same per-row id as its own icon.
+    const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
+    const checkboxIds = checkboxes.map((c) => c.getAttribute('aria-describedby'))
+    expect(checkboxIds).toEqual(iconIds)
+  })
+})
+
+describe('B17-C1: a blocked row prints no sentence line and stays one grid line', () => {
+  it('renders no approval-blocked-reason node, and the row keeps the same child count as the head', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    expect(screen.queryByTestId('approval-blocked-reason'), 'the sentence line must be gone').toBeNull()
+
+    const head = document.querySelector('.pf-list-head')
+    const row = screen.getByTestId('approval-row')
+    expect(head, 'lost anchor on the list head').not.toBeNull()
+    expect(row.children.length, 'a blocked row must sit on one grid line, at the head width').toBe(head!.children.length)
+  })
+})
+
+describe('B17-C2: the icon follows the invoice number on a blocked row only', () => {
+  it('the blocked row cell holds the number then the icon wrapper; the approvable row has neither icon nor tip', async () => {
+    const ok = approvalRow({ id: 'inv-ok', invoice_number: 'INV-OK', can_approve: true })
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: 'Only a validated invoice can be approved or rejected.', approval: null })
+    mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const blockedRow = screen.getByText('INV-BLOCKED').closest('[data-testid="approval-row"]') as HTMLElement
+    const blockedCell = blockedRow.children[1] as HTMLElement
+    const icon = within(blockedCell).getByTestId('approval-blocked-icon')
+
+    expect(blockedCell.children.length, 'the invoice # cell must hold exactly the number span and the icon wrapper').toBe(2)
+    const numberSpan = blockedCell.children[0] as HTMLElement
+    expect(numberSpan.textContent).toBe('INV-BLOCKED')
+    const numberStyle = numberSpan.getAttribute('style')
+    expect(numberStyle, 'the number span must truncate with an ellipsis').toContain('text-overflow: ellipsis')
+    expect(numberStyle, 'without nowrap the number wraps onto a second line').toContain('white-space: nowrap')
+    expect(numberStyle, 'text-overflow draws no ellipsis while overflow is visible').toMatch(/(?:^|; )overflow: hidden/)
+    expect(blockedCell.children[1].contains(icon), 'the icon must sit inside the wrapper that follows the number').toBe(true)
+
+    const okRow = screen.getByText('INV-OK').closest('[data-testid="approval-row"]') as HTMLElement
+    expect(okRow.querySelector('[data-testid="approval-blocked-icon"]'), 'an approvable row must show no icon').toBeNull()
+    const okNumberSpan = (okRow.children[1] as HTMLElement).children[0] as HTMLElement
+    expect(okNumberSpan.getAttribute('style'), 'every row truncates its number, not only blocked ones').toContain('text-overflow: ellipsis')
+  })
+})
+
+describe('B17-C2b: the reason icon authors no copy of its own (AC-8)', () => {
+  it("the icon carries no text and the tip's text is exactly the reason", async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    expect(icon.textContent, 'the icon renders a glyph, never its own text').toBe('')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.textContent).toBe(reason)
+    expect(icon.parentElement!.textContent, 'BlockedReason must render no text of its own outside the reason').toBe(reason)
+  })
+})
+
+describe('B17-C3: hover reveals the server sentence byte-identically', () => {
+  it('mouseEnter shows the tip; mouseLeave hides it again', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    // An initially-open tip would pass every assertion below.
+    expect(tip.getAttribute('style'), 'the tip must be hidden before any interaction').toContain('display: none')
+
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    expect(tip.getAttribute('style'), 'hover must reveal the tip').not.toContain('display: none')
+    expect(tip.textContent).toBe(reason)
+    // An effect that never stores a position leaves the tip visibility:hidden forever.
+    expect(tip.getAttribute('style'), 'a position must be stored once the tip is shown').not.toContain('visibility: hidden')
+
+    fireEvent.mouseLeave(icon.parentElement as HTMLElement)
+    expect(tip.getAttribute('style'), 'leaving the wrapper must hide the tip again').toContain('display: none')
+  })
+})
+
+describe('B17-C3b: keyboard focus reveals it and Escape or blur hides it', () => {
+  it('focus shows the tip; Escape or blur hides it; a hover-opened tip also closes on a window Escape', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    const wrapper = icon.parentElement as HTMLElement
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style'), 'focus must reveal the tip').not.toContain('display: none')
+
+    fireEvent.keyDown(icon, { key: 'Escape' })
+    expect(tip.getAttribute('style'), 'Escape on the icon must hide it').toContain('display: none')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.blur(icon)
+    expect(tip.getAttribute('style'), 'blur must hide it').toContain('display: none')
+
+    // A hover-opened tip has no focused button, so Escape must arrive through the window.
+    fireEvent.mouseEnter(wrapper)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(tip.getAttribute('style'), 'a hover-opened tip must also close on a window Escape').toContain('display: none')
+  })
+})
+
+describe('B17-C3c: a scroll closes an open tip', () => {
+  it('scroll and resize both close an open tip', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.scroll(window)
+    expect(tip.getAttribute('style'), 'a scroll must hide an open tip').toContain('display: none')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent(window, new Event('resize'))
+    expect(tip.getAttribute('style'), 'a resize must hide an open tip').toContain('display: none')
+  })
+
+  it('a scroll inside a nested container closes it too, though scroll does not bubble', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    // The app scrolls inside .pf-scroll, not the window, so only a capture-phase listener hears it.
+    fireEvent.scroll(screen.getByTestId('approvals-list'), { bubbles: false })
+    expect(tip.getAttribute('style'), 'a nested scroll must hide an open tip').toContain('display: none')
+  })
+})
+
+describe('B17-C3d: a reopened tip is measured from an unpositioned box', () => {
+  it('the second open measures the tip at left 0, not at its last position', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    const styleAtMeasure: string[] = []
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, x: left, y: top, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this !== tip) return rect(600, 100, 14, 14)
+      styleAtMeasure.push(this.getAttribute('style') ?? '')
+      return rect(0, 0, 300, 60)
+    })
+    try {
+      fireEvent.focus(icon)
+      expect(tip.getAttribute('style'), 'control: the first open stores a non-zero left').toContain('left: 600px')
+      fireEvent.blur(icon)
+      fireEvent.focus(icon)
+      expect(styleAtMeasure).toHaveLength(2)
+      // A fixed box shrinks to fit from its left, so a stale left skews the measured size.
+      expect(styleAtMeasure[1], 'the reopen must measure the tip from left 0').toContain('left: 0px')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe('B17-C6: the tip escapes the list overflow', () => {
+  it('the tip is position: fixed while approvals-list itself still clips', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    // control: the list still clips -- this is why the tip must escape it.
+    const list = screen.getByTestId('approvals-list')
+    expect(list.getAttribute('style'), 'control: approvals-list must still declare overflow: hidden').toContain('overflow: hidden')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.getAttribute('style'), 'the open tip must declare position: fixed so the list clip cannot cut it').toContain('position: fixed')
   })
 })
 
@@ -929,12 +1158,12 @@ describe("QA adversarial: a blocked row's reason survives characters that would 
     render(<ApprovalsView ctx={approvalsCtx()} />)
     await screen.findByText('INV-BLOCKED')
 
-    const reasonNode = screen.getByTestId('approval-blocked-reason')
-    expect(reasonNode.textContent, 'the server sentence must render byte-identically, including quotes/angle-brackets/em-dash').toBe(reason)
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.textContent, 'the server sentence must render byte-identically, including quotes/angle-brackets/em-dash').toBe(reason)
     // React text children are never parsed as markup, but this pins that no consumer
     // downgrades to dangerouslySetInnerHTML later: an <owner> substring must not become a
     // real (empty) child element.
-    expect(reasonNode.querySelector('owner'), 'the "<owner>" substring must render as literal text, never as a child element').toBeNull()
+    expect(tip.querySelector('owner'), 'the "<owner>" substring must render as literal text, never as a child element').toBeNull()
   })
 })
 
@@ -1103,5 +1332,223 @@ describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager fre
     await screen.findByTestId('approvals-results')
     await waitFor(() => expect(nextBtn().disabled, 'the pager must re-enable once settled').toBe(false))
     expect(prevBtn().disabled).toBe(false)
+  })
+})
+
+// --- BUG-17-04 (task-1050, Mode A) -- RED specs for the row-opens-invoice wiring: no row
+// onClick exists yet, and neither the select cell nor the BlockedReason wrapper stop
+// propagation. Each negative spec ends with a positive control on the SAME row/ctx (click
+// the buyer text) so a build with no handler at all cannot pass by never calling anything.
+
+describe('B17-D1: clicking a row opens its invoice', () => {
+  it("a click on the second row's buyer text calls openImportedInvoice once with that row's id", async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-1', invoice_number: 'INV-1' })
+    const b = approvalRow({ id: 'inv-2', invoice_number: 'INV-2' })
+    mockBulkFetch([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-1')
+
+    const row2 = screen.getByText('INV-2').closest('[data-testid="approval-row"]') as HTMLElement
+    fireEvent.click(within(row2).getByText('Beta Ltd'))
+
+    expect(spy, "a click on the SECOND row must call openImportedInvoice once with THAT row's id, not the first").toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-2')
+  })
+})
+
+describe('B17-D1b: a blocked row opens too, in both workspaces', () => {
+  it('firm then in-house: clicking the amount cell and the invoice-number text both open the blocked row', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const workspaces: Array<{ mode?: 'firm' | 'inhouse'; entityId?: string | null }> = [{}, { mode: 'inhouse', entityId: null }]
+    for (const over of workspaces) {
+      const spy = vi.fn()
+      const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+      mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+      render(<ApprovalsView ctx={approvalsCtx({ ...over, openImportedInvoice: spy })} />)
+      await screen.findByText('INV-BLOCKED')
+
+      const row = screen.getByTestId('approval-row')
+      fireEvent.click(within(row).getByText(fmt(1075)))
+      fireEvent.click(within(row).getByText('INV-BLOCKED'))
+
+      expect(spy, `mode ${over.mode ?? 'firm'}: both clicks must open the blocked row's own invoice`).toHaveBeenCalledTimes(2)
+      expect(spy).toHaveBeenNthCalledWith(1, 'inv-blocked')
+      expect(spy).toHaveBeenNthCalledWith(2, 'inv-blocked')
+
+      cleanup()
+    }
+  })
+})
+
+describe('B17-D2: an enabled checkbox click selects and never opens', () => {
+  it('toggles selection and shows the bulk bar, but never calls the spy; a click elsewhere on the row still opens it', async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-A')
+
+    const row = screen.getByTestId('approval-row')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(checkbox)
+
+    expect(spy, 'an enabled checkbox click must never open the invoice').toHaveBeenCalledTimes(0)
+    expect(checkbox.checked, 'the click must still toggle selection').toBe(true)
+    expect(screen.getByTestId('approvals-bulk-bar'), 'the bulk bar must show the selection').toBeTruthy()
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-a')
+  })
+})
+
+describe('B17-D3: a disabled checkbox click never opens', () => {
+  it('never calls the spy for a disabled checkbox; a click elsewhere on the row still opens it', async () => {
+    const spy = vi.fn()
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const row = screen.getByTestId('approval-row')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(checkbox)
+
+    // No selection assertion: jsdom fires React onChange on a disabled checkbox, which
+    // Chromium does not -- this spec is about propagation only (premise-d-disabled-dispatch).
+    expect(spy, 'a disabled checkbox click must never open the invoice').toHaveBeenCalledTimes(0)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-blocked')
+  })
+})
+
+describe('B17-D4: the checkbox cell is a no-navigation zone', () => {
+  it('a click inside approval-select-cell never opens the invoice and leaves the checkbox unchecked', async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-A')
+
+    const row = screen.getByTestId('approval-row')
+    const cell = within(row).getByTestId('approval-select-cell')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(cell)
+
+    expect(spy, 'a click inside approval-select-cell outside the box must never open the invoice').toHaveBeenCalledTimes(0)
+    expect(checkbox.checked, 'a click on the cell itself, not the box, must not toggle selection').toBe(false)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-a')
+  })
+})
+
+describe('B17-D5: the reason icon and its tip never open the invoice', () => {
+  it("clicking the icon, the tip, and the tip's inner span never opens the invoice", async () => {
+    const spy = vi.fn()
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const row = screen.getByTestId('approval-row')
+    const icon = within(row).getByTestId('approval-blocked-icon')
+    fireEvent.click(icon)
+
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    const tip = within(row).getByTestId('approval-blocked-tip')
+    fireEvent.click(tip)
+    fireEvent.click(tip.firstElementChild as HTMLElement)
+
+    expect(spy, 'the icon and its tip, including the inner text span, must never open the invoice').toHaveBeenCalledTimes(0)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-blocked')
+  })
+})
+
+describe('B17-D6: every cell outside the checkbox cell and the reason icon opens its own row', () => {
+  it('each cell, and each marker inside one, calls openImportedInvoice exactly once with its row id, in both workspaces', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const workspaces: Array<{ mode?: 'firm' | 'inhouse'; entityId?: string | null }> = [{}, { mode: 'inhouse', entityId: null }]
+    for (const over of workspaces) {
+      const spy = vi.fn()
+      const ok = approvalRow({
+        id: 'inv-ok',
+        invoice_number: 'INV-OK',
+        approval: { run_state: 'open', pending_ord: 0, pending_role_title: 'Reviewer', pending_holder_warn: true, due_at: null, overdue: true },
+      })
+      const blocked = approvalRow({
+        id: 'inv-bl',
+        invoice_number: 'INV-BL',
+        can_approve: false,
+        approve_blocked_reason: reason,
+        approval: { run_state: 'open', pending_ord: 1, pending_role_title: 'Controller', pending_holder_warn: false, due_at: '2026-07-10T00:00:00Z', overdue: false },
+      })
+      mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+      render(<ApprovalsView ctx={approvalsCtx({ ...over, openImportedInvoice: spy })} />)
+      await screen.findByText('INV-OK')
+
+      const targets: Array<[string, Element, string]> = []
+      for (const [number, id] of [['INV-OK', 'inv-ok'], ['INV-BL', 'inv-bl']] as const) {
+        const row = screen.getByText(number).closest('[data-testid="approval-row"]') as HTMLElement
+        const cells = Array.from(row.children)
+        expect(cells, `${number}: the row must keep seven grid cells`).toHaveLength(7)
+        targets.push(
+          [`${number} row padding`, row, id],
+          [`${number} invoice # cell`, cells[1], id],
+          [`${number} invoice # text`, within(row).getByText(number), id],
+          [`${number} buyer cell`, cells[2], id],
+          [`${number} amount cell`, cells[3], id],
+          [`${number} step cell`, cells[4], id],
+          [`${number} role cell`, cells[5], id],
+          [`${number} role label`, cells[5].firstElementChild as Element, id],
+          [`${number} due cell`, cells[6], id],
+        )
+      }
+      const okRow = screen.getByText('INV-OK').closest('[data-testid="approval-row"]') as HTMLElement
+      targets.push(
+        ['INV-OK unstaffed warning', within(okRow).getByTestId('approval-unstaffed-warning'), 'inv-ok'],
+        ['INV-OK overdue marker', within(okRow).getByTestId('approval-overdue'), 'inv-ok'],
+      )
+
+      for (const [label, el, id] of targets) {
+        const before = spy.mock.calls.length
+        fireEvent.click(el)
+        expect(spy.mock.calls.slice(before), `mode ${over.mode ?? 'firm'}: ${label} must open ${id} exactly once`).toEqual([[id]])
+      }
+
+      cleanup()
+    }
+  })
+})
+
+describe('B17-D7: the checkbox cell fills the row height', () => {
+  it('declares align-self stretch on approvable and blocked rows', async () => {
+    const ok = approvalRow({ id: 'inv-ok', invoice_number: 'INV-OK' })
+    const blocked = approvalRow({ id: 'inv-bl', invoice_number: 'INV-BL', can_approve: false, approve_blocked_reason: 'Blocked.', approval: null })
+    mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const cells = screen.getAllByTestId('approval-select-cell')
+    expect(cells, 'one select cell per row').toHaveLength(2)
+    // jsdom has no layout; the rendered extent is a deployed concern.
+    for (const cell of cells) expect(cell.style.alignSelf).toBe('stretch')
   })
 })

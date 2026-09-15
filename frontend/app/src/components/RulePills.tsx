@@ -4,7 +4,7 @@
 
 import type { RuleSeverity } from '../lib/rules'
 
-const SEVERITY_TONE: Record<RuleSeverity, { bg: string; border: string; text: string; label: string }> = {
+export const SEVERITY_TONE: Record<RuleSeverity, { bg: string; border: string; text: string; label: string }> = {
   error: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'ERROR' },
   warn: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'WARN' },
   info: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'INFO' },

@@ -1,7 +1,7 @@
 // The Who column. Three actor shapes exist in audit_log: a resolved person, the literal
 // "system", and free text such as backfill-source-rows (internal/importer/backfill.go).
-// Shape AND colour differ between them, so the distinction survives greyscale -- a round
-// avatar for a person, a square tile for a process.
+// A person and System share the round 26px avatar; initials and the bolt tell them apart.
+// Free text stays a flat square.
 //
 // The wire already carries actor_name/actor_kind (internal/actor/resolve.go), so this always
 // passes the resolved pair to actorLabel: its APP_PERSONAS fall-through holds both tenants'
@@ -27,10 +27,9 @@ export function actorAvatar(kind: ActorKind): ActorAvatarStyle {
     return { ...base, borderRadius: '50%', background: 'var(--bg-4)', color: 'var(--fg-1)' }
   }
   if (kind === 'system') {
-    return { ...base, borderRadius: 'var(--radius-xs)', background: 'var(--status-muted-bg)', color: 'var(--fg-2)' }
+    return { ...base, borderRadius: '50%', background: 'var(--status-muted-bg)', color: 'var(--fg-2)' }
   }
-  // Free text and absent: square like a process, but flatter than the system tile -- it is
-  // not a named process either, and must not read as one.
+  // Free text and absent: a flat square with no fill or glyph -- neither a person nor System.
   return { ...base, borderRadius: 'var(--radius-xs)', background: 'transparent', color: 'var(--fg-3)' }
 }
 

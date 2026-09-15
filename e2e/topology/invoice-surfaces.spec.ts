@@ -262,6 +262,193 @@ function invoiceRowByNumber(page: Page, invoiceNumber: string) {
   return page.getByTestId('invoice-row').filter({ has: page.getByText(invoiceNumber, { exact: true }) })
 }
 
+// assertMarkerBesideStatus() (B-5/B-6): the shared geometry oracle for both marker pills --
+// same line as the status badge, beside it, contained in the cell, matching height/radius/
+// border, opaque fill -- plus a 390px collapse pass. Returns what it measured so the two
+// callers below can attach the numbers.
+type MarkerRect = { x: number; y: number; width: number; height: number }
+
+interface MarkerRelations {
+  width: number
+  centerYDelta: number
+  besideGap: number
+  containedOverflow: number
+  heightDelta: number
+  radiusMatches: boolean
+  borderMatches: boolean
+  backgroundOpaque: boolean
+}
+
+interface MarkerNarrowRelations extends MarkerRelations {
+  cellSlack: number
+  overlaps: boolean
+}
+
+interface MarkerMeasurements {
+  plexLoaded: boolean
+  plexFaceCount: number
+  wide: MarkerRelations[]
+  narrow: MarkerNarrowRelations | null
+}
+
+async function assertMarkerBesideStatus(page: Page, row: Locator, markerTestId: string, label: string): Promise<MarkerMeasurements> {
+  const entry = page.viewportSize()
+  const badge = row.getByTestId('invoice-status-badge')
+  const marker = row.getByTestId(markerTestId)
+  const cell = badge.locator('xpath=..')
+
+  async function boxes(): Promise<{ badge: MarkerRect; marker: MarkerRect; cell: MarkerRect } | null> {
+    const [b, m, c] = await Promise.all([badge.boundingBox(), marker.boundingBox(), cell.boundingBox()])
+    if (!b || !m || !c) return null
+    return { badge: b, marker: m, cell: c }
+  }
+
+  async function styles(): Promise<{ markerRadius: string; markerBorder: string; markerBg: string; badgeRadius: string; badgeBorder: string }> {
+    const [ms, bs] = await Promise.all([
+      marker.evaluate((el) => {
+        const cs = getComputedStyle(el)
+        return { radius: cs.borderTopLeftRadius, border: cs.borderTopWidth, bg: cs.backgroundColor }
+      }),
+      badge.evaluate((el) => {
+        const cs = getComputedStyle(el)
+        return { radius: cs.borderTopLeftRadius, border: cs.borderTopWidth }
+      }),
+    ])
+    return { markerRadius: ms.radius, markerBorder: ms.border, markerBg: ms.bg, badgeRadius: bs.radius, badgeBorder: bs.border }
+  }
+
+  const wide: MarkerRelations[] = []
+  let narrow: MarkerNarrowRelations | null = null
+
+  try {
+    // document.fonts.ready precedent: e2e/smoke/landing-consent.spec.ts:187.
+    await page.evaluate(() => document.fonts.ready.then(() => true))
+    // Recorded, not asserted -- both font states fit the 200px track ([premise-b-evidence-widths]),
+    // so a font-CDN outage cannot turn the geometry checks below red on its own.
+    const plexLoaded = await page.evaluate(() => document.fonts.check('600 10px "IBM Plex Mono"'))
+    const plexFaceCount = await page.evaluate(
+      () => [...document.fonts].filter((f) => f.family.replace(/"/g, '') === 'IBM Plex Mono' && f.status === 'loaded').length,
+    )
+
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      await expect
+        .poll(async () => {
+          const b = await boxes()
+          return b ? Math.abs(b.marker.y + b.marker.height / 2 - (b.badge.y + b.badge.height / 2)) : null
+        }, { message: `${label}: marker must sit on the status pill's line at ${width}px`, timeout: 10_000 })
+        .toBeLessThanOrEqual(1)
+      await expect
+        .poll(async () => {
+          const b = await boxes()
+          return b ? b.marker.x - (b.badge.x + b.badge.width) : null
+        }, { message: `${label}: marker must sit beside the status pill at ${width}px`, timeout: 10_000 })
+        .toBeGreaterThanOrEqual(0)
+      await expect
+        .poll(async () => {
+          const b = await boxes()
+          return b ? b.marker.x + b.marker.width - (b.cell.x + b.cell.width) : null
+        }, { message: `${label}: marker must stay inside the status cell at ${width}px`, timeout: 10_000 })
+        .toBeLessThanOrEqual(0.5)
+      await expect
+        .poll(async () => {
+          const b = await boxes()
+          return b ? Math.abs(b.marker.height - b.badge.height) : null
+        }, { message: `${label}: marker must stand the badge's height at ${width}px`, timeout: 10_000 })
+        .toBeLessThanOrEqual(1)
+
+      const settled = await boxes()
+      const style = await styles()
+      if (!settled) throw new Error(`${label}: the marker, badge or cell vanished after settling at ${width}px`)
+
+      expect(style.markerRadius, `${label}: marker radius must match the badge's at ${width}px`).toBe(style.badgeRadius)
+      expect(style.markerBorder, `${label}: marker border must match the badge's at ${width}px`).toBe(style.badgeBorder)
+      expect(style.markerBg, `${label}: marker fill must not be transparent at ${width}px`).not.toBe('rgba(0, 0, 0, 0)')
+
+      wide.push({
+        width,
+        centerYDelta: Math.abs(settled.marker.y + settled.marker.height / 2 - (settled.badge.y + settled.badge.height / 2)),
+        besideGap: settled.marker.x - (settled.badge.x + settled.badge.width),
+        containedOverflow: settled.marker.x + settled.marker.width - (settled.cell.x + settled.cell.width),
+        heightDelta: Math.abs(settled.marker.height - settled.badge.height),
+        radiusMatches: style.markerRadius === style.badgeRadius,
+        borderMatches: style.markerBorder === style.badgeBorder,
+        backgroundOpaque: style.markerBg !== 'rgba(0, 0, 0, 0)',
+      })
+    }
+
+    // Non-vacuity, before the narrow pass extends it: the wide sweep must have measured
+    // every WIDE_WIDTHS entry, in order.
+    expect(wide.map((m) => m.width), `${label}: the wide sweep measured nothing`).toEqual([...WIDE_WIDTHS])
+
+    // The 390px collapse pass -- the 480px !important block (platform.css:307-327) is
+    // narrow-only, so the WIDE_WIDTHS sweep above cannot see a regression it introduces.
+    await page.setViewportSize({ width: 390, height: 844 })
+    await expect
+      .poll(() => page.evaluate(() => window.innerWidth), { message: `${label}: the viewport must settle at 390px`, timeout: 10_000 })
+      .toBe(390)
+    await row.scrollIntoViewIfNeeded()
+
+    await expect
+      .poll(async () => {
+        const b = await boxes()
+        return b ? b.cell.width - (b.badge.width + 6 + b.marker.width) : null
+      }, { message: `${label}: the collapsed cell must still fit both pills at 390px`, timeout: 10_000 })
+      .toBeGreaterThanOrEqual(0)
+    await expect
+      .poll(async () => {
+        const b = await boxes()
+        return b ? Math.abs(b.marker.y + b.marker.height / 2 - (b.badge.y + b.badge.height / 2)) : null
+      }, { message: `${label}: marker must sit on the status pill's line at 390px`, timeout: 10_000 })
+      .toBeLessThanOrEqual(1)
+    await expect
+      .poll(async () => {
+        const b = await boxes()
+        return b ? b.marker.x - (b.badge.x + b.badge.width) : null
+      }, { message: `${label}: marker must sit beside the status pill at 390px`, timeout: 10_000 })
+      .toBeGreaterThanOrEqual(0)
+    await expect
+      .poll(async () => {
+        const b = await boxes()
+        return b ? b.marker.x + b.marker.width - (b.cell.x + b.cell.width) : null
+      }, { message: `${label}: marker must stay inside the status cell at 390px`, timeout: 10_000 })
+      .toBeLessThanOrEqual(0.5)
+    await expect
+      .poll(async () => {
+        const b = await boxes()
+        return b ? Math.abs(b.marker.height - b.badge.height) : null
+      }, { message: `${label}: marker must stand the badge's height at 390px`, timeout: 10_000 })
+      .toBeLessThanOrEqual(1)
+
+    const narrowBoxes = await boxes()
+    const narrowStyle = await styles()
+    if (!narrowBoxes) throw new Error(`${label}: the marker, badge or cell vanished at 390px`)
+
+    expect(rectsOverlap(narrowBoxes.marker, narrowBoxes.badge), `${label}: marker and badge must not overlap at 390px`).toBe(false)
+    expect(narrowStyle.markerRadius, `${label}: marker radius must match the badge's at 390px`).toBe(narrowStyle.badgeRadius)
+    expect(narrowStyle.markerBorder, `${label}: marker border must match the badge's at 390px`).toBe(narrowStyle.badgeBorder)
+    expect(narrowStyle.markerBg, `${label}: marker fill must not be transparent at 390px`).not.toBe('rgba(0, 0, 0, 0)')
+
+    narrow = {
+      width: 390,
+      centerYDelta: Math.abs(narrowBoxes.marker.y + narrowBoxes.marker.height / 2 - (narrowBoxes.badge.y + narrowBoxes.badge.height / 2)),
+      besideGap: narrowBoxes.marker.x - (narrowBoxes.badge.x + narrowBoxes.badge.width),
+      containedOverflow: narrowBoxes.marker.x + narrowBoxes.marker.width - (narrowBoxes.cell.x + narrowBoxes.cell.width),
+      heightDelta: Math.abs(narrowBoxes.marker.height - narrowBoxes.badge.height),
+      radiusMatches: narrowStyle.markerRadius === narrowStyle.badgeRadius,
+      borderMatches: narrowStyle.markerBorder === narrowStyle.badgeBorder,
+      backgroundOpaque: narrowStyle.markerBg !== 'rgba(0, 0, 0, 0)',
+      cellSlack: narrowBoxes.cell.width - (narrowBoxes.badge.width + 6 + narrowBoxes.marker.width),
+      overlaps: rectsOverlap(narrowBoxes.marker, narrowBoxes.badge),
+    }
+
+    return { plexLoaded, plexFaceCount, wide, narrow }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
 // listFetchOn(): the register's list GET, matched by its `needs_attention` search param --
 // the same predicate the list-surface test writes inline at :478-483/:490-495.
 // [waitForResponse-on-the-list-is-poll-ambiguous] does not bite here: shouldPollList needs a
@@ -513,7 +700,11 @@ test('list surface: real rows render with real status badges, and Needs attentio
 // exist yet. Reuses the same blocked/clean fixture shape as the list-surface test above
 // (badInvoiceFields fires exactly one error-severity violation, vat-standard-rate; the
 // invoice stays draft).
-test('register-disclosure: a blocked draft and a clean draft render differently', async ({ page }) => {
+test('register-disclosure: a blocked draft and a clean draft render differently', async ({ page }, testInfo) => {
+  // A create+validate round trip x2, sign-in, an entity switch and a four-width-plus-390px
+  // marker sweep.
+  test.setTimeout(90_000)
+
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -540,6 +731,15 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
   // a re-derivation of needs_attention or a status arm.
   await expect(blockedRow).toContainText(/1 ERROR\b/)
   await expect(cleanRow).not.toContainText(/\d+ ERRORS?\b/)
+
+  // B-5: the error marker's own text, and its geometry beside the status badge.
+  await expect(blockedRow.getByTestId('invoice-error-marker')).toHaveText('1 ERROR')
+  const markerNumbers = await assertMarkerBesideStatus(page, blockedRow, 'invoice-error-marker', 'register-disclosure blocked row')
+  await testInfo.attach('register-error-marker.json', { body: JSON.stringify(markerNumbers, null, 2), contentType: 'application/json' })
+
+  // Positive control above proves the marker CAN render -- this is what makes its absence
+  // on the clean row meaningful rather than vacuous.
+  await expect(cleanRow.getByTestId('invoice-error-marker')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -620,7 +820,7 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 // browser-only (docs/e2e-convention.md, "Target surface").
 //
 // Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
-// container's first child (InvoicesList.tsx:553-554), so an in-container offset is 0 in both
+// container's first child (InvoicesList.tsx:565-566), so an in-container offset is 0 in both
 // filter states and the assertion would be vacuous. The defect moved the container itself.
 //
 // Two open story findings shape this fixture, which avoids both by construction:
@@ -1835,7 +2035,11 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('resolve/unresolve loop: marking a failed invoice resolved drops it from needs-attention without re-driving it, and undo reverses that', async ({ page }) => {
+test('resolve/unresolve loop: marking a failed invoice resolved drops it from needs-attention without re-driving it, and undo reverses that', async ({ page }, testInfo) => {
+  // An approval chain to closed, two transitions, sign-in, an entity switch and a
+  // four-width-plus-390px marker sweep on top of the existing resolve/undo round trip.
+  test.setTimeout(120_000)
+
   const errors = collectErrors(page)
 
   const token = await login(PERSONAS.A)
@@ -1892,6 +2096,12 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
   await unfilteredResp
   await expect(row).toBeVisible()
   await expect(row.getByTestId('invoice-resolved-marker')).toBeVisible()
+  // B-6: this row is the widest legal one-marker combination (FAILED + RESOLVED OUTSIDE,
+  // 198.8px of the 200px track, [status-track-200]) -- the same-line assertion at every
+  // width is the oracle for that track.
+  await expect(row.getByTestId('invoice-resolved-marker')).toHaveText('RESOLVED OUTSIDE')
+  const markerNumbers = await assertMarkerBesideStatus(page, row, 'invoice-resolved-marker', 'resolve/unresolve loop row')
+  await testInfo.attach('register-resolved-marker.json', { body: JSON.stringify(markerNumbers, null, 2), contentType: 'application/json' })
 
   // Undo, then re-apply the filter: the round trip reverses cleanly (Core AC #5).
   await openInvoiceRow(page, invoiceNumber)

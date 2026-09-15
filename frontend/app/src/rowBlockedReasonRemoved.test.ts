@@ -45,7 +45,8 @@ describe('BUG-09: the row blocked-reason node stays deleted', () => {
   })
 
   it('control: the out-of-scope sibling *-blocked-reason testids are still found', () => {
-    expect(filesContaining('approval-blocked-reason').length).toBeGreaterThan(0)
+    // Anchored on the production home: this corpus includes specs, whose literals would satisfy a bare count.
+    expect(filesContaining('approval-blocked-tip').some((p) => p.endsWith('ApprovalsView.tsx'))).toBe(true)
     // Retargeted off submit-blocked-reason, which BUG-14 deleted ([control-needle-delegation]).
     // Anchored on the PRODUCTION home: another spec's literal must not satisfy this control.
     expect(filesContaining('delegation-blocked-reason').some((p) => p.endsWith('WorkflowInspector.tsx'))).toBe(true)

@@ -165,11 +165,11 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
         {/* company switcher (firm mode) */}
         {isFirm && (
           <div style={{ position: 'relative' }}>
+            {/* no pf-btn: its !important pill radius beats radius-input (switcher_carriesNoPillButtonClass) */}
             <button
               onClick={ctx.toggleSwitcher}
               data-testid="company-switcher"
-              className="pf-btn"
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left' }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: `1px solid ${switcherOpen ? 'var(--action)' : 'var(--line-2)'}`, borderRadius: 'var(--radius-input)', padding: '8px 10px', cursor: 'pointer', textAlign: 'left', transition: 'background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out)' }}
             >
               <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
               <span style={{ flex: 1, minWidth: 0 }}>
@@ -215,7 +215,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
 
         {/* in-house mode: single company, no switching */}
         {isInhouse && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}>
+          <div data-testid="company-chip" style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-1)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-input)', padding: '8px 10px' }}>
             <span style={{ flex: 'none', width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{active.initials}</span>
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={{ display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{active.short}</span>

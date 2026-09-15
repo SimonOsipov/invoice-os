@@ -14,17 +14,65 @@ const RAW = { actor: 'backfill-source-rows', actor_name: 'backfill-source-rows',
 
 afterEach(cleanup)
 
+// Raw style attribute, not .style.*: jsdom's CSSStyleDeclaration can drop var() shorthands.
+function styleValue(el: Element, prop: string): string | null {
+  const style = el.getAttribute('style') ?? ''
+  const match = style.match(new RegExp(`(?:^|;\\s*)${prop}:\\s*([^;]+)`))
+  return match ? match[1].trim() : null
+}
+
 describe('ActorCell', () => {
-  it('actorCell_personIsRoundSystemIsSquare', () => {
+  it('actorCell_personAndSystemShareTheRoundAvatar', () => {
     const person = actorAvatar('person')
     const system = actorAvatar('system')
-    // Shape AND colour both differ, so the distinction survives greyscale.
-    expect(person.borderRadius).not.toBe(system.borderRadius)
+    // Round for both now -- background and glyph tell person and System apart, not shape.
+    expect(person.borderRadius).toBe('50%')
+    expect(system.borderRadius).toBe('50%')
     expect(person.background).not.toBe(system.background)
-    // The design pins both at 26px; a square that is not square would read as a circle.
+    // The design pins both at 26px.
     expect(person.width).toBe(26)
+    expect(person.height).toBe(26)
     expect(system.width).toBe(26)
-    expect(system.borderRadius).not.toContain('50%')
+    expect(system.height).toBe(26)
+  })
+
+  it('actorCell_systemKeepsBoltAndFillPersonKeepsInitials', () => {
+    const { unmount } = render(<ActorCell {...SYSTEM} />)
+    const systemAvatar = screen.getByTestId('actor-bolt').parentElement as HTMLElement
+    expect(screen.queryByTestId('actor-initials')).toBeNull()
+    expect(styleValue(systemAvatar, 'background')).toBe('var(--status-muted-bg)')
+    unmount()
+
+    render(<ActorCell {...PERSON} />)
+    expect(screen.getByTestId('actor-initials').textContent).toBe('CO')
+    const personAvatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
+    expect(styleValue(personAvatar, 'background')).toBe('var(--bg-4)')
+  })
+
+  it('actorCell_freeTextAvatarIsUnchanged', () => {
+    expect(actorAvatar('raw')).toEqual({
+      width: 26,
+      height: 26,
+      borderRadius: 'var(--radius-xs)',
+      background: 'transparent',
+      color: 'var(--fg-3)',
+    })
+  })
+
+  it('actorCell_renderedSystemAndPersonAvatarsShareCornerAndSize', () => {
+    const props = ['border-radius', 'width', 'height', 'color']
+    const { unmount } = render(<ActorCell {...SYSTEM} />)
+    const systemAvatar = screen.getByTestId('actor-bolt').parentElement as HTMLElement
+    const system = props.map((p) => styleValue(systemAvatar, p))
+    unmount()
+
+    render(<ActorCell {...PERSON} />)
+    const personAvatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
+    const person = props.map((p) => styleValue(personAvatar, p))
+
+    // Reads the rendered span: an inline key after the actorAvatar spread would override it.
+    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
+    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-1)'])
   })
 
   it('actorCell_freeTextActorIsNotAPerson', () => {

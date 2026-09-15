@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { chevDownGlyph } from '../glyphs'
 import { useDismiss } from '../lib/useDismiss'
 
-// MemberParts.tsx doesn't export this -- copied, not imported (MoreMenu's own comment).
+// Duplicates MemberParts.tsx's exported POPOVER_SHADOW.
 const POPOVER_SHADOW = '0 16px 40px -16px oklch(20% .02 210 / 0.28)'
 
 export interface FilterPopoverProps {

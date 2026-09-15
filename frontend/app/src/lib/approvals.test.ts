@@ -35,6 +35,7 @@ import {
   listAwaitingApproval,
   pendingApprovalStep,
   pruneApprovalSelection,
+  reasonTipPosition,
   type ApprovalRun,
   type ApprovalRunStep,
   type ApproveResult,
@@ -1398,5 +1399,37 @@ describe('prototype-pollution guard: inherited Object.prototype keys never resol
 
   it('approvalRunStateView("toString") falls through to the raw string', () => {
     expect(approvalRunStateView('toString')).toEqual({ label: 'toString', tone: 'muted' })
+  })
+})
+
+// Rendered placement belongs to the deploy gate; these pin the flip and clamp arithmetic.
+describe('reasonTipPosition (AC-6)', () => {
+  it('reasonTipPosition_belowWhenItFits', () => {
+    const result = reasonTipPosition({ left: 100, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 214 })
+  })
+
+  it('reasonTipPosition_flipsAboveAtTheBottom', () => {
+    const result = reasonTipPosition({ left: 100, top: 760, bottom: 774 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 700 })
+  })
+
+  it('reasonTipPosition_belowAtTheExactBoundary', () => {
+    // 732 + 60 = 792 = 800 - 8 still fits.
+    const result = reasonTipPosition({ left: 100, top: 718, bottom: 732 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 732 })
+  })
+
+  it('reasonTipPosition_flipsOnePixelPastTheMargin', () => {
+    // 733 + 60 = 793 > 792; with belowAtTheExactBoundary this pins both `<=` and the 8px margin.
+    const result = reasonTipPosition({ left: 100, top: 719, bottom: 733 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 659 })
+  })
+
+  it('reasonTipPosition_clampsIntoTheViewport', () => {
+    const right = reasonTipPosition({ left: 1100, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(right.left).toBe(972)
+    const left = reasonTipPosition({ left: 2, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(left.left).toBe(8)
   })
 })

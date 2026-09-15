@@ -638,14 +638,21 @@ export function AuditFilterCard({ state, facets, busy, onChange }: AuditFilterCa
             key={pill.key}
             type="button"
             data-testid={`audit-pill-${pill.key}`}
-            className="pf-chip pf-btn"
+            className="pf-chip"
             onClick={() => onChange(pill.onRemove(state))}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 8,
+              height: 28,
+              padding: '0 12px',
+              fontFamily: pill.mono ? 'var(--font-mono)' : 'var(--font-sans)',
+              fontSize: 12.5,
+              fontWeight: 500,
+              border: '1px solid var(--line-2)',
+              background: 'var(--bg-1)',
+              color: 'var(--fg-2)',
               cursor: 'pointer',
-              fontFamily: pill.mono ? 'var(--font-mono)' : undefined,
             }}
           >
             {pill.label}

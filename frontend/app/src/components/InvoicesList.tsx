@@ -66,8 +66,20 @@ import { BULK_COPY, bulkBarView, bulkPhaseReducer, type BulkPhase } from '../lib
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import type { PlatformCtx } from '../types'
 import { Pager } from './Pager'
+import { SEVERITY_TONE } from './RulePills'
 
-const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 130px'
+const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 200px'
+
+// Same box as the status pill beside it, minus the dot (System Design B).
+function MarkerPill({ testId, tone, label }: { testId: string; tone: { bg: string; border: string; text: string }; label: string }) {
+  return (
+    <span data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 999, padding: '3px 9px' }}>
+      <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>
+        {label}
+      </span>
+    </span>
+  )
+}
 
 // Tags the envelope with the entity it was fetched for, so staleness is read off the response itself rather than inferred from row count (row count alone can't tell a stale envelope apart from a poll that legitimately emptied the page).
 type FetchedInvoiceList = InvoiceListResponse & { fetchedEntityId: string | undefined }
@@ -612,7 +624,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                   </span>
                   <span className="money" style={{ fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{r.total != null ? fmt(Number(r.total)) : '—'}</span>
                   <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>{fmtDate(r.issue_date ?? r.created_at)}</span>
-                  <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                  <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 6px', minWidth: 0 }}>
                     <span
                       data-testid="invoice-status-badge"
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: st.bg, border: `1px solid ${st.border}`, borderRadius: 999, padding: '3px 9px' }}
@@ -621,14 +633,10 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text, letterSpacing: '0.04em' }}>{st.label}</span>
                     </span>
                     {hasBlockingViolation(r) && (
-                      <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-red-text)', letterSpacing: '0.04em' }}>
-                        {errorCount} ERROR{errorCount === 1 ? '' : 'S'}
-                      </span>
+                      <MarkerPill testId="invoice-error-marker" tone={SEVERITY_TONE.error} label={`${errorCount} ERROR${errorCount === 1 ? '' : 'S'}`} />
                     )}
                     {resolvedOutside(r) != null && (
-                      <span data-testid="invoice-resolved-marker" className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)', letterSpacing: '0.04em' }}>
-                        RESOLVED
-                      </span>
+                      <MarkerPill testId="invoice-resolved-marker" tone={SEVERITY_TONE.warn} label="RESOLVED OUTSIDE" />
                     )}
                   </span>
                 </div>

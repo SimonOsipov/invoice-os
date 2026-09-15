@@ -643,8 +643,8 @@ describe('A04-8: select-all never reports "all" on a page with zero approvable r
   })
 })
 
-describe("A04-9: a disabled row states the SERVER's own why, in all four layers (G-04-C)", () => {
-  it('the real disabled attribute, a visible sibling carrying the reason byte-identically, and a per-row aria-describedby id', async () => {
+describe("A04-9: a disabled row states the SERVER's own why through its reason icon (G-04-C)", () => {
+  it('the real disabled attribute, the checkbox title, and the icon/checkbox aria-describedby resolving to the tooltip', async () => {
     const reason = 'Only a validated invoice can be approved or rejected.'
     const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
     mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
@@ -660,16 +660,24 @@ describe("A04-9: a disabled row states the SERVER's own why, in all four layers 
     checkbox.focus()
     expect(document.activeElement, 'a disabled control must be genuinely out of the tab order').not.toBe(checkbox)
 
-    // Layer 3: a VISIBLE sibling node carrying the server's sentence byte-identically --
-    // the layer a screenshot, a keyboard user and a text assertion can all reach.
-    expect(screen.getByText(reason), "the SPA must render the server's own sentence, not a substitute").toBeTruthy()
+    // Layer 2: the checkbox keeps its own title, byte-identical to the reason.
+    expect(checkbox.title, "the checkbox's title must still carry the server's sentence").toBe(reason)
 
-    // Layer 4: aria-describedby points at that node, by a PER-ROW unique id.
-    const describedbyId = checkbox.getAttribute('aria-describedby')
+    // Layer 4: the icon and the checkbox both describe the SAME tooltip node, by a
+    // per-row unique id -- the icon's accessible name is the static copy key.
+    const icon = within(row).getByTestId('approval-blocked-icon')
+    const iconLabel = (APPROVALS_COPY as unknown as Record<string, string | undefined>).blockedReasonLabel
+    expect(iconLabel, 'APPROVALS_COPY.blockedReasonLabel is not exported yet').toBeDefined()
+    expect(icon.getAttribute('aria-label')).toBe(iconLabel)
+
+    const describedbyId = icon.getAttribute('aria-describedby')
     expect(describedbyId).not.toBeNull()
     expect(describedbyId).toBe('approve-blocked-reason-inv-blocked')
-    const reasonEl = document.getElementById(describedbyId as string)
-    expect(reasonEl?.textContent, 'aria-describedby must point at the SAME text as the visible sentence').toBe(reason)
+    expect(checkbox.getAttribute('aria-describedby'), 'the checkbox must point at the same tooltip id as the icon').toBe(describedbyId)
+
+    const tip = document.getElementById(describedbyId as string)
+    expect(tip?.getAttribute('role')).toBe('tooltip')
+    expect(tip?.textContent, 'aria-describedby must resolve to the exact reason text').toBe(reason)
   })
 
   it('two blocked rows on the same page get distinct per-row reason ids, each pointing at its own text', async () => {
@@ -682,15 +690,185 @@ describe("A04-9: a disabled row states the SERVER's own why, in all four layers 
     render(<ApprovalsView ctx={approvalsCtx()} />)
     await screen.findByText('INV-A')
 
-    const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
-    expect(checkboxes).toHaveLength(2)
-    const ids = checkboxes.map((c) => c.getAttribute('aria-describedby'))
-    expect(ids[0]).not.toBeNull()
-    expect(ids[1]).not.toBeNull()
-    expect(ids[0]).not.toBe(ids[1])
+    const icons = screen.getAllByTestId('approval-blocked-icon')
+    expect(icons).toHaveLength(2)
+    const iconIds = icons.map((i) => i.getAttribute('aria-describedby'))
+    expect(iconIds[0]).not.toBeNull()
+    expect(iconIds[1]).not.toBeNull()
+    expect(iconIds[0]).not.toBe(iconIds[1])
+    expect(document.getElementById(iconIds[0] as string)?.textContent).toBe(reasonA)
+    expect(document.getElementById(iconIds[1] as string)?.textContent).toBe(reasonB)
 
-    expect(document.getElementById(ids[0] as string)?.textContent).toBe(reasonA)
-    expect(document.getElementById(ids[1] as string)?.textContent).toBe(reasonB)
+    // AC-5: the checkbox keeps naming the same per-row id as its own icon.
+    const checkboxes = screen.getAllByTestId('approval-select-row') as HTMLInputElement[]
+    const checkboxIds = checkboxes.map((c) => c.getAttribute('aria-describedby'))
+    expect(checkboxIds).toEqual(iconIds)
+  })
+})
+
+describe('B17-C1: a blocked row prints no sentence line and stays one grid line', () => {
+  it('renders no approval-blocked-reason node, and the row keeps the same child count as the head', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    expect(screen.queryByTestId('approval-blocked-reason'), 'the sentence line must be gone').toBeNull()
+
+    const head = document.querySelector('.pf-list-head')
+    const row = screen.getByTestId('approval-row')
+    expect(head, 'lost anchor on the list head').not.toBeNull()
+    expect(row.children.length, 'a blocked row must sit on one grid line, at the head width').toBe(head!.children.length)
+  })
+})
+
+describe('B17-C2: the icon follows the invoice number on a blocked row only', () => {
+  it('the blocked row cell holds the number then the icon wrapper; the approvable row has neither icon nor tip', async () => {
+    const ok = approvalRow({ id: 'inv-ok', invoice_number: 'INV-OK', can_approve: true })
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: 'Only a validated invoice can be approved or rejected.', approval: null })
+    mockBulkFetch([listResponse([ok, blocked], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-OK')
+
+    const blockedRow = screen.getByText('INV-BLOCKED').closest('[data-testid="approval-row"]') as HTMLElement
+    const blockedCell = blockedRow.children[1] as HTMLElement
+    const icon = within(blockedCell).getByTestId('approval-blocked-icon')
+
+    expect(blockedCell.children.length, 'the invoice # cell must hold exactly the number span and the icon wrapper').toBe(2)
+    const numberSpan = blockedCell.children[0] as HTMLElement
+    expect(numberSpan.textContent).toBe('INV-BLOCKED')
+    expect(numberSpan.getAttribute('style'), 'the number span must truncate with an ellipsis').toContain('text-overflow: ellipsis')
+    expect(blockedCell.children[1].contains(icon), 'the icon must sit inside the wrapper that follows the number').toBe(true)
+
+    const okRow = screen.getByText('INV-OK').closest('[data-testid="approval-row"]') as HTMLElement
+    expect(okRow.querySelector('[data-testid="approval-blocked-icon"]'), 'an approvable row must show no icon').toBeNull()
+    const okNumberSpan = (okRow.children[1] as HTMLElement).children[0] as HTMLElement
+    expect(okNumberSpan.getAttribute('style'), 'every row truncates its number, not only blocked ones').toContain('text-overflow: ellipsis')
+  })
+})
+
+describe('B17-C2b: the reason icon authors no copy of its own (AC-8)', () => {
+  it("the icon carries no text and the tip's text is exactly the reason", async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    expect(icon.textContent, 'the icon renders a glyph, never its own text').toBe('')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.textContent).toBe(reason)
+    // T5: BlockedReason as a whole authors no text beyond the reason.
+    expect(icon.parentElement!.textContent, 'BlockedReason must render no text of its own outside the reason').toBe(reason)
+  })
+})
+
+describe('B17-C3: hover reveals the server sentence byte-identically', () => {
+  it('mouseEnter shows the tip; mouseLeave hides it again', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    // T1: the tip must start hidden -- an initially-open tip would otherwise pass below.
+    expect(tip.getAttribute('style'), 'the tip must be hidden before any interaction').toContain('display: none')
+
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    expect(tip.getAttribute('style'), 'hover must reveal the tip').not.toContain('display: none')
+    expect(tip.textContent).toBe(reason)
+    // T1: a position must already be stored -- an effect that never measures would leave
+    // the tip permanently visibility:hidden.
+    expect(tip.getAttribute('style'), 'a position must be stored once the tip is shown').not.toContain('visibility: hidden')
+
+    fireEvent.mouseLeave(icon.parentElement as HTMLElement)
+    expect(tip.getAttribute('style'), 'leaving the wrapper must hide the tip again').toContain('display: none')
+  })
+})
+
+describe('B17-C3b: keyboard focus reveals it and Escape or blur hides it', () => {
+  it('focus shows the tip; Escape or blur hides it; a hover-opened tip also closes on a window Escape', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+    const wrapper = icon.parentElement as HTMLElement
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style'), 'focus must reveal the tip').not.toContain('display: none')
+
+    fireEvent.keyDown(icon, { key: 'Escape' })
+    expect(tip.getAttribute('style'), 'Escape on the icon must hide it').toContain('display: none')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.blur(icon)
+    expect(tip.getAttribute('style'), 'blur must hide it').toContain('display: none')
+
+    // T2: a hover-opened tip has no focus on the button, so Escape must reach it through
+    // the window (useDismiss, D1) -- not only a button onKeyDown.
+    fireEvent.mouseEnter(wrapper)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(tip.getAttribute('style'), 'a hover-opened tip must also close on a window Escape').toContain('display: none')
+  })
+})
+
+describe('B17-C3c: a scroll closes an open tip', () => {
+  it('scroll and resize both close an open tip', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    const tip = screen.getByTestId('approval-blocked-tip')
+
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent.scroll(window)
+    expect(tip.getAttribute('style'), 'a scroll must hide an open tip').toContain('display: none')
+
+    // T3: AC-3 also names resize -- no earlier spec drove it.
+    fireEvent.focus(icon)
+    expect(tip.getAttribute('style')).not.toContain('display: none')
+    fireEvent(window, new Event('resize'))
+    expect(tip.getAttribute('style'), 'a resize must hide an open tip').toContain('display: none')
+  })
+})
+
+describe('B17-C6: the tip escapes the list overflow', () => {
+  it('the tip is position: fixed while approvals-list itself still clips', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx()} />)
+    await screen.findByText('INV-BLOCKED')
+
+    // control: the list still clips -- this is why the tip must escape it.
+    const list = screen.getByTestId('approvals-list')
+    expect(list.getAttribute('style'), 'control: approvals-list must still declare overflow: hidden').toContain('overflow: hidden')
+
+    const icon = screen.getByTestId('approval-blocked-icon')
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.getAttribute('style'), 'the open tip must declare position: fixed so the list clip cannot cut it').toContain('position: fixed')
   })
 })
 
@@ -929,12 +1107,12 @@ describe("QA adversarial: a blocked row's reason survives characters that would 
     render(<ApprovalsView ctx={approvalsCtx()} />)
     await screen.findByText('INV-BLOCKED')
 
-    const reasonNode = screen.getByTestId('approval-blocked-reason')
-    expect(reasonNode.textContent, 'the server sentence must render byte-identically, including quotes/angle-brackets/em-dash').toBe(reason)
+    const tip = screen.getByTestId('approval-blocked-tip')
+    expect(tip.textContent, 'the server sentence must render byte-identically, including quotes/angle-brackets/em-dash').toBe(reason)
     // React text children are never parsed as markup, but this pins that no consumer
     // downgrades to dangerouslySetInnerHTML later: an <owner> substring must not become a
     // real (empty) child element.
-    expect(reasonNode.querySelector('owner'), 'the "<owner>" substring must render as literal text, never as a child element').toBeNull()
+    expect(tip.querySelector('owner'), 'the "<owner>" substring must render as literal text, never as a child element').toBeNull()
   })
 })
 

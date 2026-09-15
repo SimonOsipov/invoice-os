@@ -39,6 +39,9 @@ import {
   type ApprovalRunStep,
   type ApproveResult,
 } from './approvals'
+// Namespace import for reasonTipPosition (BUG-17-03, AC-6), which does not exist yet --
+// glyphs.test.ts:60-63's own idiom: a named import would be a tsc error, not a RED.
+import * as approvalsNS from './approvals'
 import { fmtDate } from './format'
 import type { InvoiceApproval, InvoiceRecord, ListInvoicesOptions } from './invoices'
 import type { AuthedFetch } from './portfolio'
@@ -1398,5 +1401,52 @@ describe('prototype-pollution guard: inherited Object.prototype keys never resol
 
   it('approvalRunStateView("toString") falls through to the raw string', () => {
     expect(approvalRunStateView('toString')).toEqual({ label: 'toString', tone: 'muted' })
+  })
+})
+
+// BUG-17-03, AC-6: pure placement arithmetic for the reason tip. jsdom has no layout, so
+// this is the only place the flip/clamp math is provable locally -- the rendered geometry
+// itself is 06's deploy-gate topology spec.
+type ReasonTipPositionFn = (
+  anchor: { left: number; top: number; bottom: number },
+  tip: { width: number; height: number },
+  viewport: { width: number; height: number },
+) => { left: number; top: number }
+
+describe('reasonTipPosition (AC-6)', () => {
+  function fn(): ReasonTipPositionFn {
+    const f = (approvalsNS as unknown as Record<string, ReasonTipPositionFn | undefined>).reasonTipPosition
+    expect(f, 'reasonTipPosition is not exported by lib/approvals.ts yet').toBeDefined()
+    return f as ReasonTipPositionFn
+  }
+
+  it('reasonTipPosition_belowWhenItFits', () => {
+    const result = fn()({ left: 100, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 214 })
+  })
+
+  it('reasonTipPosition_flipsAboveAtTheBottom', () => {
+    const result = fn()({ left: 100, top: 760, bottom: 774 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 700 })
+  })
+
+  it('reasonTipPosition_belowAtTheExactBoundary', () => {
+    // 732 + 60 = 792 <= 800 - 8: the <= boundary itself counts as "fits", so it stays below.
+    const result = fn()({ left: 100, top: 718, bottom: 732 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 732 })
+  })
+
+  it('reasonTipPosition_flipsOnePixelPastTheMargin', () => {
+    // 733 + 60 = 793 > 792: one pixel past the boundary above must flip above, pinning the
+    // <= (not <) and the 8px margin against an implementation that tests raw viewport.height.
+    const result = fn()({ left: 100, top: 719, bottom: 733 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(result).toEqual({ left: 100, top: 659 })
+  })
+
+  it('reasonTipPosition_clampsIntoTheViewport', () => {
+    const right = fn()({ left: 1100, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(right.left).toBe(972)
+    const left = fn()({ left: 2, top: 200, bottom: 214 }, { width: 300, height: 60 }, { width: 1280, height: 800 })
+    expect(left.left).toBe(8)
   })
 })

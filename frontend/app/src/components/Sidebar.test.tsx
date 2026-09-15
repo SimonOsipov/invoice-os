@@ -41,10 +41,9 @@ function clientRow(f: BucketFixture): RollupClient {
   }
 }
 
-// The three numbers below are kept MUTUALLY DISTINCT in every fixture: a badge wired to
-// the wrong field then renders a different string, never a coincidentally equal one. When
-// `entity` is supplied its three are distinct from the totals' three as well, so a badge
-// reading the wrong SCOPE is as visible as one reading the wrong field.
+// Badge-spec fixtures keep the three numbers MUTUALLY DISTINCT, and an `entity`'s three
+// distinct from the totals': a badge reading the wrong field or SCOPE then renders a
+// different string. The footer pin and FIRM_EVEN_ROLLUP assert no badge value, so they don't.
 function rollup(f: BucketFixture & { entity?: BucketFixture }): Rollup {
   return {
     totals: {
@@ -381,5 +380,40 @@ describe('BUG-17-01 company switcher corner', () => {
   it('signOut_keepsPfBtn', async () => {
     await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
     expect(screen.getByRole('button', { name: 'Sign out' }).className).toContain('pf-btn')
+  })
+
+  // Bans every class, not only pf-btn: v2-btn, ops-btn, dev-btn and pf-chip force the same !important pill.
+  it('switcher_carriesNoClassAtAll', async () => {
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+    expect(screen.getByTestId('company-switcher').getAttribute('class') ?? '').toBe('')
+  })
+
+  it('companyChipAndSwitcher_areModeExclusive', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    expect(screen.queryByTestId('company-chip')).not.toBeNull()
+    expect(screen.queryByTestId('company-switcher')).toBeNull()
+
+    cleanup()
+    vi.unstubAllGlobals()
+
+    await renderSidebar(FIRM_EVEN_ROLLUP, firmCtx())
+    expect(screen.queryByTestId('company-switcher')).not.toBeNull()
+    expect(screen.queryByTestId('company-chip')).toBeNull()
+  })
+
+  it('switcher_borderAndClientListFollowSwitcherOpen', async () => {
+    const ctx = firmCtx({ switcherOpen: false })
+    const view = await renderSidebar(FIRM_EVEN_ROLLUP, ctx)
+    const switcherStyle = () => screen.getByTestId('company-switcher').getAttribute('style') ?? ''
+    expect(switcherStyle()).toContain('border: 1px solid var(--line-2)')
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(0)
+
+    view.rerender(<Sidebar ctx={{ ...ctx, switcherOpen: true }} />)
+    expect(switcherStyle()).toContain('border: 1px solid var(--action)')
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(1)
+
+    view.rerender(<Sidebar ctx={ctx} />)
+    expect(switcherStyle()).toContain('border: 1px solid var(--line-2)')
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(0)
   })
 })

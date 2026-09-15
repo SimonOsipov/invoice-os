@@ -111,9 +111,7 @@ async function openBundleDrawer(page: Page): Promise<string> {
   return chosen
 }
 
-// cleanInvoiceFields(): a local copy of persona-surfaces.spec.ts:43-57 (audit.spec.ts has no
-// invoice builder of its own). Fires zero violations, so it is never validated -- this file
-// only needs the invoice.created event it writes, not a submittable invoice.
+// Zero violations and never validated: only its invoice.created event is read.
 function cleanInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,
@@ -996,7 +994,8 @@ test.describe('Audit screen', () => {
     expect(systemFloor.total, 'no System-actor row in the last 30 days -- the boot backlog seed is the oracle for this').toBeGreaterThan(0)
 
     const stamp = Date.now()
-    const entity = await createEntity(token, { name: `BUG-17 audit ${stamp}`, tin: freshTin() })
+    // Sorts after "Honeywell Group": in-house has no switcher, so its active entity is the first by name.
+    const entity = await createEntity(token, { name: `Zenith BUG-17 audit ${stamp}`, tin: freshTin() })
     const invoiceNumber = `INV-BUG17-AUDIT-${stamp}`
     const inv = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
 
@@ -1089,10 +1088,7 @@ test.describe('Audit screen', () => {
     await page.getByTestId('audit-actor-trigger').click()
     await page.getByTestId('audit-actor-kind-system').click()
     await page.keyboard.press('Escape')
-    // Exact-string toHaveText would fail here: every pill in this row renders its own "x"
-    // remove glyph flush against the label with no separating whitespace (AuditFilterCard.tsx,
-    // the same shape audit-pill-invoice already routes around at auth.spec.ts:480), so this
-    // matches the sibling pill's own convention rather than the plan's literal quoted string.
+    // Prefix regex: the pill's remove glyph abuts its label (AuditFilterCard.tsx), as at auth.spec.ts:480.
     await expect(page.getByTestId('audit-pill-actorKind')).toHaveText(/^System only/)
 
     const sysRow = page.getByTestId('audit-row').first()

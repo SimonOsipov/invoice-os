@@ -472,8 +472,7 @@ test('sidebar roster: the firm and in-house personas render different, exact nav
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// cornerRadii(): all four computed corner radii together, so a uniform token proves itself
-// uniform rather than being asserted from one corner alone (BUG-17-06).
+// cornerRadii(): all four computed corners, so a uniform radius is checked, not assumed from one.
 async function cornerRadii(loc: Locator): Promise<{ tl: string; tr: string; bl: string; br: string }> {
   return loc.evaluate((el) => {
     const cs = getComputedStyle(el)
@@ -482,13 +481,10 @@ async function cornerRadii(loc: Locator): Promise<{ tl: string; tr: string; bl: 
 }
 
 // ---------------------------------------------------------------------------------------
-// Test -- the company card, firm switcher vs in-house chip (BUG-17-06, Core AC A-4)
+// Test -- the company card: firm switcher vs in-house chip (Core AC A-1, A-3, A-4; A-2's open border)
 // ---------------------------------------------------------------------------------------
-// The switcher carries no `pf-btn` class (Sidebar.tsx's own comment: its `!important` pill
-// radius would beat `--radius-input`) -- proving that, and that the global rule still bites
-// on the Sign out button that DOES carry it despite its own inline `--radius-sm`, is what
-// makes "the chip matches the switcher" a claim about a shared token rather than a
-// coincidence of two rounded boxes.
+// Sign out is the control: it declares --radius-sm inline and still renders a pill, so the
+// global .pf-btn rule is intact while the switcher renders the chip's corner.
 test("company card: the firm switcher renders the in-house chip's corner, and the button rule still makes pills", async ({ page }, testInfo) => {
   const errors = collectErrors(page)
 
@@ -542,9 +538,8 @@ test("company card: the firm switcher renders the in-house chip's corner, and th
     Math.abs(chipBox!.width - switcherBox!.width),
     `chip width (${chipBox!.width}) and switcher width (${switcherBox!.width}) must match within 1px`,
   ).toBeLessThanOrEqual(1)
-  // Heights are not asserted equal -- a <button> and a <div> resolve `line-height: normal`
-  // against different font metrics (control font vs --font-sans), so equal height is not
-  // guaranteed on a correct build. Attached so the numbers outlive the run.
+  // Heights are attached, not compared: the button's text takes the control font and the
+  // chip's takes --font-sans, so `line-height: normal` can differ on a correct build.
   await testInfo.attach('company-card-heights.json', {
     body: JSON.stringify({ switcherHeight: switcherBox!.height, chipHeight: chipBox!.height }),
     contentType: 'application/json',
@@ -705,31 +700,28 @@ const BUYER_TRACK = 2
 const FIXED_TRACKS = [0, 1, 3, 4, 5, 6]
 
 // gridCells(): the x and width of each of a grid container's seven direct children, in
-// track order. The count assertion is load-bearing: it is what makes an index-by-index
-// comparison meaningful at all. Track 0 is the bare CHECKBOX in the head, but a row's
-// stretched approval-select-cell wrapper (BUG-17-04/05) -- invariant either way, which is
-// all the claims below need. A blocked row's reason renders inside track 1, never as an
-// eighth child (see Test 7's header).
+// track order. The count assertion makes the index-by-index comparison meaningful. Track 0
+// is measured by its checkbox: bare in the head, but inside a row's stretched
+// approval-select-cell, whose left edge sits the checkbox's 4px margin further left.
 async function gridCells(container: Locator, label: string): Promise<Array<{ x: number; width: number }>> {
   const cells = container.locator('> *')
   await expect(cells, `${label}: a grid built from APPROVALS_GRID_COLUMNS renders exactly ${APPROVALS_TRACKS} cells`).toHaveCount(APPROVALS_TRACKS)
   const measured: Array<{ x: number; width: number }> = []
   for (let i = 0; i < APPROVALS_TRACKS; i++) {
-    const box = await cells.nth(i).boundingBox()
+    const cell = i === 0 ? cells.nth(0).locator('xpath=descendant-or-self::input[@type="checkbox"]') : cells.nth(i)
+    const box = await cell.boundingBox()
     expect(box, `${label}: track ${i} never rendered`).toBeTruthy()
     measured.push({ x: box!.x, width: box!.width })
   }
   return measured
 }
 
-// centerY(): the vertical midpoint of a Playwright boundingBox() rect.
 function centerY(box: { y: number; height: number }): number {
   return box.y + box.height / 2
 }
 
-// elementFromPointMatches(): true when the element painting at (x, y) is `testId` itself or
-// a descendant -- the only honest oracle for paint order/clipping (demo-persona.spec.ts's
-// own elementFromPoint idiom).
+// elementFromPointMatches(): true when the element painted at (x, y) is `testId` or inside it,
+// so covering and clipping fail where a bounding box would not.
 async function elementFromPointMatches(page: Page, x: number, y: number, testId: string): Promise<boolean> {
   return page.evaluate(
     ({ x, y, testId }) => document.elementFromPoint(x, y)?.closest(`[data-testid="${testId}"]`) != null,
@@ -738,15 +730,12 @@ async function elementFromPointMatches(page: Page, x: number, y: number, testId:
 }
 
 // ---------------------------------------------------------------------------------------
-// Test -- a firm row this seat cannot approve (BUG-17-06, Core AC A-2/A-3). Declared
-// immediately before Test 7, which must stay last by declaration.
+// Test -- a firm row this seat cannot approve (Core AC C-1..C-4, D-1..D-3). Declared
+// immediately before Test 7, which must stay last.
 // ---------------------------------------------------------------------------------------
-// PERSONAS.A (subject ...0001) holds only cfo on the firm tenant (db/seed.dev.sql); the
-// firm plan arms fin_mgr then compliance below its ₦250m/₦1bn conditions
-// (demopolicy.go:132-146), so a below-threshold fixture leaves this seat blocked at the
-// first step without ever reaching one it holds. ensureFirmPolicyActive restores the
-// seeded policy first -- roles.spec.ts/workflows.spec.ts run in the same serial suite and
-// may have deleted or drafted over it.
+// PERSONAS.A holds only cfo (db/seed.dev.sql); for a 1,075 total the firm plan arms fin_mgr
+// then compliance (demopolicy.go firmPlan), so this seat is blocked. Policy tables survive
+// the per-deploy reset, so ensureFirmPolicyActive restores the seeded policy first.
 test('firm Approvals: a row the seat cannot approve shows the reason icon, no sentence line, and opens its invoice', async ({ page }) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
@@ -956,18 +945,17 @@ test('firm Approvals: a row the seat cannot approve shows the reason icon, no se
 // Test 2's oracle for the rest of that deployment's life. Rows are ticked individually, by
 // their own aria-label.
 //
-// The reason renders inside track 1 (BlockedReason, ApprovalsView.tsx), never as an eighth
-// child -- so the grid claims below hold at exactly 7 children whether or not a row is
-// blocked. Blocked-row coverage lives in the firm test above and this test's own Emeka leg
-// below (BUG-17-06); this journey's own armed rows stay approvable throughout the sweep.
+// A blocked row's reason icon sits inside track 1, so every row keeps exactly 7 children.
+// This journey's rows stay approvable through the sweep; the firm test above and the Emeka
+// leg below cover blocked rows.
 //
 // Cannot be run locally, same as Test 5: every Playwright config in this package is
 // deliberately webServer-less and points at deployed URLs, so its first real run -- red or
 // green -- is the post-deploy gate (dev-env.yml).
 test('in-house Approvals: the queue narrows, bulk approve settles per item, and the refetch confirms it', async ({ page }, testInfo) => {
-  // Four fixtures with their own validate round trips, four viewport sweeps and a
-  // two-request fan-out, plus BUG-17-06's row-open/seat-switch extension. Same in-file
-  // headroom precedent as Tests 1 and 4.
+  // Four fixtures with their own validate round trips, four viewport sweeps, a two-request
+  // fan-out, two invoice opens and a seat switch. Same in-file headroom precedent as Tests 1
+  // and 4.
   test.setTimeout(150_000)
 
   const errors = collectErrors(page)
@@ -1112,8 +1100,7 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   for (const number of approveNumbers) {
     await approvalRowByNumber(page, number).getByLabel(selectRowLabel(number), { exact: true }).check()
   }
-  // An enabled checkbox click reaches the row's own handler in jsdom (B17-D3's premise) but
-  // must never navigate in the real browser -- the wrapper's stopPropagation is what stops it.
+  // Core AC D-2: without the select cell's stopPropagation, a checkbox click opens the invoice.
   await expect(page).toHaveURL(/\/approvals$/)
   const bar = page.getByTestId('approvals-bulk-bar')
   await expect(bar).toBeVisible()
@@ -1162,7 +1149,7 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   }
   expect(queuedAfter.has(untickedNumber), `${untickedNumber} must still be awaiting approval on the server`).toBe(true)
 
-  // --- Core AC D-1/D-3 (BUG-17-06): the unticked approvable row opens its own invoice ------
+  // --- Core AC C-2, D-1, D-3: the approvable row shows no icon and opens its invoice ------
   const untickedRow = approvalRowByNumber(page, untickedNumber)
   await expect(untickedRow).toBeVisible()
   await expect(untickedRow.getByTestId('approval-blocked-icon'), 'an approvable row shows no reason icon').toHaveCount(0)
@@ -1173,16 +1160,14 @@ test('in-house Approvals: the queue narrows, bulk approve settles per item, and 
   await expect(page).toHaveURL(/\/approvals$/)
   await expect(untickedRow).toBeVisible()
 
-  // Recorded here, right before the switch: the approvable row this run created, at the
-  // entry viewport, is the only same-row comparison a firm-only fixture can't offer.
+  // Core AC C-1: this row's approvable height, compared once it is blocked at the same viewport.
   const approvableHeightBox = await untickedRow.boundingBox()
   expect(approvableHeightBox, 'the unticked row never rendered before the seat switch').toBeTruthy()
 
-  // --- Core AC D-1 (BUG-17-06): switch the demo seat to one this row IS blocked for --------
-  // Emeka Uzowulu holds only line_mgr (db/seed.dev.sql), never the in-house plan's fin_dir
-  // (demopolicy.go:156) -- the only way to reach an in-house blocked row without publishing
-  // a second policy ([topology-never-publishes]). No restore: standIn is never persisted
-  // (App.tsx), every Playwright test gets a fresh context, and this is the last test.
+  // --- Core AC C-1, C-2, C-4, D-1, D-3: the same row, blocked for another seat ------------
+  // Emeka Uzowulu holds only line_mgr (db/seed.dev.sql); the in-house plan's one step is
+  // fin_dir (demopolicy.go inhousePlan). A seat switch yields a blocked row without publishing
+  // a policy. No restore: the stand-in is never persisted and each test gets a fresh context.
   await page.getByTestId('persona-trigger').click()
   await expect(page.getByTestId('persona-row-list')).toBeVisible()
   await page.getByTestId('persona-row').filter({ hasText: 'Emeka Uzowulu' }).click()

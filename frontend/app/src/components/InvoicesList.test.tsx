@@ -798,7 +798,7 @@ describe('InvoicesList: resolved-failed marker', () => {
   // resolved failed row can still carry a blocking violation -- both markers must stack
   // without either swallowing the other. Uses .toContain, not a \b-anchored regex: the
   // two chips are adjacent sibling spans with no text separator between them, so
-  // textContent reads "...1 ERRORRESOLVED" and a trailing \b on /1 ERROR\b/ never matches.
+  // textContent reads "...1 ERRORRESOLVED OUTSIDE" and a trailing \b on /1 ERROR\b/ never matches.
   it('a resolved failed row with a blocking violation renders both markers', async () => {
     const both = row({
       id: 'both-1',
@@ -816,7 +816,7 @@ describe('InvoicesList: resolved-failed marker', () => {
 
     const text = screen.getByTestId('invoice-row').textContent
     expect(text, 'the ERROR chip must still render alongside the resolved mark').toContain('1 ERROR')
-    expect(screen.getByTestId('invoice-resolved-marker').textContent, 'the resolved marker itself must not fold into the ERROR count').toBe('RESOLVED')
+    expect(screen.getByTestId('invoice-resolved-marker').textContent, 'the resolved marker itself must not fold into the ERROR count').toBe('RESOLVED OUTSIDE')
     expect(screen.getAllByTestId('invoice-resolved-marker'), 'exactly one resolved marker, not one per violation').toHaveLength(1)
   })
 })
@@ -1226,7 +1226,7 @@ describe('BUG-09 QA: the deleted line cannot come back through a blind spot', ()
     const rowEl = screen.getByTestId('invoice-row')
     const statusCell = rowEl.children[REGISTER_CELLS - 1]
     // Non-vacuity: this row really does carry both extras. No `\b` after ERROR -- the
-    // marker abuts the chip, so the row reads "1 ERRORRESOLVED".
+    // marker abuts the chip, so the row reads "1 ERRORRESOLVED OUTSIDE".
     expect(rowEl.textContent, 'the fixture must really raise an ERROR chip').toContain('1 ERROR')
     const marker = screen.getByTestId('invoice-resolved-marker')
 
@@ -2397,5 +2397,203 @@ describe('ROUTE-04-06 AC-6: a search term with no matches renders the honest mis
     expect(urlParams(fetchMock.mock.calls[0]![0] as string).get('q'), 'the wire must carry the term that missed').toBe('zzz')
     expect(empty, 'a q miss is not needs_attention -- it renders the generic empty state, not -filtered').toBeTruthy()
     expect(screen.queryByTestId('invoices-empty-filtered'), 'needsAttention is off, so the filtered testid must not appear').toBeNull()
+  })
+})
+
+// RED specs (task-1048, BUG-17-02, Stage 2.5/Mode A) -- the error count and the
+// RESOLVED OUTSIDE marker do not yet render as status-pill-shaped pills, and the Status
+// track is still 130px, so the assertions below fail on the row's actual markup, not on
+// an import/compile error. AC-3/AC-4/AC-5 specs read the status cell as row.children[5]
+// (System Design B / Stage 1), never as badge.parentElement, since those specs derive
+// the cell from the thing under test.
+describe('BUG-17-02 register status markers', () => {
+  it('registerMarkers_errorCountIsARedPillBesideTheStatusPill', async () => {
+    const blocked = row({
+      id: 'reg-err-1',
+      invoice_number: 'INV-REG-ERR-1',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-ERR-1')
+
+    const badge = screen.getByTestId('invoice-status-badge')
+    const marker = screen.queryByTestId('invoice-error-marker')
+    expect(marker, 'invoice-error-marker').not.toBeNull()
+    expect(marker!.textContent).toBe('1 ERROR')
+    expect(marker!.parentElement, 'the error pill sits beside the status pill, in the same cell').toBe(badge.parentElement)
+    const cellChildren = Array.from(badge.parentElement!.children)
+    expect(cellChildren.indexOf(badge), 'the status pill precedes the error pill').toBeLessThan(cellChildren.indexOf(marker!))
+    const style = marker!.getAttribute('style') ?? ''
+    expect(style).toContain('background: var(--status-red-bg)')
+    expect(style).toContain('border: 1px solid var(--status-red-border)')
+    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('padding: 3px 9px')
+    const inner = marker!.querySelector('span')
+    expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-red-text)')
+  })
+
+  it('registerMarkers_pluralErrorPill', async () => {
+    const blocked = row({
+      id: 'reg-err-2',
+      invoice_number: 'INV-REG-ERR-2',
+      violations: [
+        { rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' },
+        { rule_key: 'supplier-tin-required', severity: 'error', message: 'missing tin' },
+      ],
+    })
+    mockFetchSequence([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-ERR-2')
+
+    const marker = screen.queryByTestId('invoice-error-marker')
+    expect(marker, 'invoice-error-marker').not.toBeNull()
+    expect(marker!.textContent).toBe('2 ERRORS')
+  })
+
+  it('registerMarkers_resolvedOutsideIsAnAmberPill', async () => {
+    const resolved = row({
+      id: 'reg-res-1',
+      invoice_number: 'INV-REG-RES-1',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually with FIRS',
+    })
+    mockFetchSequence([listResponse([resolved], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-RES-1')
+
+    const marker = screen.queryByTestId('invoice-resolved-marker')
+    expect(marker, 'invoice-resolved-marker').not.toBeNull()
+    expect(marker!.textContent).toBe('RESOLVED OUTSIDE')
+    const style = marker!.getAttribute('style') ?? ''
+    expect(style).toContain('background: var(--status-amber-bg)')
+    expect(style).toContain('border: 1px solid var(--status-amber-border)')
+    expect(style).toContain('border-radius: 999px')
+    expect(style).toContain('padding: 3px 9px')
+    const inner = marker!.querySelector('span')
+    expect(inner?.getAttribute('style') ?? '').toContain('color: var(--status-amber-text)')
+    expect(screen.getByTestId('invoice-status-badge').textContent).toMatch(/FAILED/)
+  })
+
+  it('registerMarkers_cleanRowHasOnlyItsStatusPill', async () => {
+    const clean = row({ id: 'reg-clean-1', invoice_number: 'INV-REG-CLEAN-1', violations: [] })
+    mockFetchSequence([listResponse([clean], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-CLEAN-1')
+
+    const statusCell = screen.getByTestId('invoice-row').children[5]
+    expect(statusCell.children, 'the status cell holds only the badge').toHaveLength(1)
+    expect(statusCell.children[0]?.getAttribute('data-testid')).toBe('invoice-status-badge')
+    expect(screen.queryByTestId('invoice-error-marker'), 'no marker testid anywhere in the row').toBeNull()
+    expect(screen.queryByTestId('invoice-resolved-marker')).toBeNull()
+  })
+
+  it('registerMarkers_statusPillStyleUnchanged', async () => {
+    mockFetchSequence([listResponse([row({ id: 'reg-draft-1', invoice_number: 'INV-REG-DRAFT-1' })], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-DRAFT-1')
+
+    const badge = screen.getByTestId('invoice-status-badge')
+    expect(badge.getAttribute('style')).toBe(
+      'display: inline-flex; align-items: center; gap: 6px; background: var(--status-muted-bg); border: 1px solid var(--status-muted-border); border-radius: 999px; padding: 3px 9px;',
+    )
+  })
+
+  it('registerMarkers_bothMarkersAreTwoPillsInOrder', async () => {
+    const both = row({
+      id: 'reg-both-1',
+      invoice_number: 'INV-REG-BOTH-1',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Filed manually with FIRS',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([both], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-BOTH-1')
+
+    const statusCell = screen.getByTestId('invoice-row').children[5]
+    const testids = Array.from(statusCell.children).map((c) => c.getAttribute('data-testid'))
+    expect(testids).toEqual(['invoice-status-badge', 'invoice-error-marker', 'invoice-resolved-marker'])
+  })
+
+  it('registerMarkers_gatesAreUnchanged', async () => {
+    const warnOnly = row({
+      id: 'reg-warn-1',
+      invoice_number: 'INV-REG-WARN-1',
+      violations: [{ rule_key: 'r', severity: 'warning', message: 'm' }],
+    })
+    const keptDraftWithError = row({
+      id: 'reg-kept-1',
+      invoice_number: 'INV-REG-KEPT-1',
+      status: 'draft',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Client accepted as-is',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([warnOnly, keptDraftWithError], { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-WARN-1')
+
+    const rows = screen.getAllByTestId('invoice-row')
+    const warnRow = rows.find((r) => r.textContent?.includes('INV-REG-WARN-1'))
+    const keptRow = rows.find((r) => r.textContent?.includes('INV-REG-KEPT-1'))
+
+    expect(warnRow?.querySelector('[data-testid="invoice-error-marker"]'), 'a warn-only row gets no error pill').toBeNull()
+    // Positive control: a kept draft still raises its error pill -- the resolved pill's
+    // absence below is a real gate (status !== 'failed'), not a fixture that never had one.
+    expect(keptRow?.querySelector('[data-testid="invoice-error-marker"]'), 'a kept draft with an error still gets its error pill').not.toBeNull()
+    expect(keptRow?.querySelector('[data-testid="invoice-resolved-marker"]'), 'a kept draft (status draft, not failed) gets no resolved pill').toBeNull()
+  })
+
+  it('registerGrid_statusTrackIs200px', async () => {
+    const rows2 = [row({ id: 'reg-grid-1', invoice_number: 'INV-REG-GRID-1' }), row({ id: 'reg-grid-2', invoice_number: 'INV-REG-GRID-2' })]
+    mockFetchSequence([listResponse(rows2, { limit: 50, offset: 0, total: 2 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-GRID-1')
+
+    const head = screen.getByTestId('invoices-list').querySelector('.pf-list-head')
+    expect(head?.getAttribute('style')).toContain('grid-template-columns: 24px 150px 1fr 140px 120px 200px')
+    for (const r of screen.getAllByTestId('invoice-row')) {
+      expect(r.getAttribute('style')).toContain('grid-template-columns: 24px 150px 1fr 140px 120px 200px')
+    }
+  })
+
+  it('registerMarkers_statusCellWrapsAsARow', async () => {
+    const busiest = row({
+      id: 'reg-busy-1',
+      invoice_number: 'INV-REG-BUSY-1',
+      status: 'failed',
+      kept_as_is_at: '2026-08-01T00:00:00Z',
+      kept_as_is_by: 'user-1',
+      kept_as_is_reason: 'Client accepted as-is',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+    })
+    mockFetchSequence([listResponse([busiest], { limit: 50, offset: 0, total: 1 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-REG-BUSY-1')
+
+    const statusCell = screen.getByTestId('invoice-row').children[5]
+    const style = statusCell.getAttribute('style') ?? ''
+    expect(style).toContain('flex-wrap: wrap')
+    expect(style).toContain('align-items: center')
+    expect(style).toContain('gap: 4px 6px')
+    expect(style).not.toContain('flex-direction: column')
+    for (const child of Array.from(statusCell.children)) {
+      expect(['invoice-status-badge', 'invoice-error-marker', 'invoice-resolved-marker'], 'no loose text child').toContain(child.getAttribute('data-testid'))
+    }
   })
 })

@@ -59,6 +59,22 @@ describe('ActorCell', () => {
     })
   })
 
+  it('actorCell_renderedSystemAndPersonAvatarsShareCornerAndSize', () => {
+    const props = ['border-radius', 'width', 'height', 'color']
+    const { unmount } = render(<ActorCell {...SYSTEM} />)
+    const systemAvatar = screen.getByTestId('actor-bolt').parentElement as HTMLElement
+    const system = props.map((p) => styleValue(systemAvatar, p))
+    unmount()
+
+    render(<ActorCell {...PERSON} />)
+    const personAvatar = screen.getByTestId('actor-initials').parentElement as HTMLElement
+    const person = props.map((p) => styleValue(personAvatar, p))
+
+    // Reads the rendered span: an inline key after the actorAvatar spread would override it.
+    expect(system).toEqual(['50%', '26px', '26px', 'var(--fg-2)'])
+    expect(person).toEqual(['50%', '26px', '26px', 'var(--fg-1)'])
+  })
+
   it('actorCell_freeTextActorIsNotAPerson', () => {
     render(<ActorCell {...RAW} />)
     expect(screen.getByText('backfill-source-rows')).toBeTruthy()

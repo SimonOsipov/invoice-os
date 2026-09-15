@@ -1218,4 +1218,55 @@ describe('AuditFilterCard: pills row adversarial coverage (AUDIT-07-07)', () => 
     expect(styleValue(resolvedPill, 'font-family')).toBe('var(--font-sans)')
     expect(styleValue(rangePill, 'font-family')).toBe('var(--font-sans)')
   })
+
+  it('auditPills_everyPillKindCarriesTheChipStyle', () => {
+    const eventId = Object.keys(AUDIT_EVENTS)[0]
+    const state: AuditFilterState = {
+      ...AUDIT_FILTER_DEFAULT,
+      q: 'vat',
+      events: [eventId],
+      actorKind: 'people',
+      actors: ['u-raw', 'u-resolved'],
+      company: { mode: 'workspace' },
+      invoiceId: 'inv-1',
+      invoiceNumber: 'INV-1',
+    }
+    const f: AuditFacets = { ...facets(), actor: [{ value: 'u-resolved', name: 'Musa Danjuma', kind: 'people', count: 2 }] }
+    renderCard(state, f)
+
+    const pills = screen.getAllByTestId(/^audit-pill-/)
+    expect(pills.map((p) => p.dataset.testid)).toEqual([
+      'audit-pill-range',
+      'audit-pill-q',
+      `audit-pill-event:${eventId}`,
+      'audit-pill-actorKind',
+      'audit-pill-actor:u-raw',
+      'audit-pill-actor:u-resolved',
+      'audit-pill-company',
+      'audit-pill-invoice',
+    ])
+    const props = ['display', 'align-items', 'gap', 'height', 'padding', 'font-size', 'font-weight', 'border', 'background', 'color']
+    for (const pill of pills) {
+      const id = pill.dataset.testid
+      expect(pill.className.split(/\s+/).filter(Boolean), id).toEqual(['pf-chip'])
+      expect(Object.fromEntries(props.map((p) => [p, styleValue(pill, p)])), id).toEqual({
+        display: 'inline-flex',
+        'align-items': 'center',
+        gap: '8px',
+        height: '28px',
+        padding: '0px 12px',
+        'font-size': '12.5px',
+        'font-weight': '500',
+        border: '1px solid var(--line-2)',
+        background: 'var(--bg-1)',
+        color: 'var(--fg-2)',
+      })
+      expect(styleValue(pill, 'font-family'), id).toBe(id === 'audit-pill-actor:u-raw' ? 'var(--font-mono)' : 'var(--font-sans)')
+      // Absent is fine: .pf-chip (platform.css) supplies pointer; any other inline value overrides it.
+      expect([null, 'pointer'], id).toContain(styleValue(pill, 'cursor'))
+      const glyph = pill.querySelector('span[aria-hidden]')
+      expect(glyph?.textContent, id).toBe('×')
+      expect(glyph && styleValue(glyph, 'color'), id).toBe('var(--fg-3)')
+    }
+  })
 })

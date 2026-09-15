@@ -15,9 +15,10 @@
 // lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
 // selection-half (BULK-01-03).
 
-import { canSubmitMapping, initMappingFromHeaders } from './mapping'
-import type { ImportPreview } from './importApi'
+import { canSubmitMapping, initMappingFromHeaders, restoreMapping } from './mapping'
+import type { ImportPreview, SavedMapping } from './importApi'
 import type { Mapping } from '../types'
+import { fmtDateTime } from './format'
 
 // The exact, ordered, case-sensitive column list — JSON.stringify of the array, no
 // sorting, no case-folding. Two files share a group IFF their signatures are equal
@@ -28,12 +29,18 @@ export function columnSignature(columns: string[]): string {
   return JSON.stringify(columns)
 }
 
+export interface RestoredFrom {
+  savedAt: string
+  mapping: Mapping // the placements as restored; a placement still equal to this renders RESTORED
+}
+
 export interface MappingGroup {
   id: string
   signature: string
   fileIds: string[]
   preview: ImportPreview
   mapping: Mapping
+  restored: RestoredFrom | null
 }
 
 // Walks `previewed` in pick order and buckets by columnSignature, preserving
@@ -55,6 +62,7 @@ export function groupByLayout(previewed: { fileId: string; preview: ImportPrevie
       fileIds: [fileId],
       preview,
       mapping: initMappingFromHeaders(preview.columns),
+      restored: null,
     }
     bySignature.set(signature, group)
     groups.push(group)
@@ -83,6 +91,7 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     fileIds: [fileId],
     preview: group.preview,
     mapping: { ...group.mapping },
+    restored: group.restored,
   }
 
   const next = groups.slice()
@@ -111,10 +120,73 @@ export function groupOfFile(groups: MappingGroup[], fileId: string): MappingGrou
   return groups.find((g) => g.fileIds.includes(fileId)) ?? null
 }
 
+// The snapshot shares the restored object: App's assign/unmap replace group.mapping, never
+// write into it, so the snapshot stays as restored.
+export function applySavedMapping(group: MappingGroup, saved: SavedMapping | null): MappingGroup {
+  if (!saved) return group
+  const mapping = restoreMapping(group.preview.columns, saved.mapping)
+  return { ...group, mapping, restored: { savedAt: saved.saved_at, mapping } }
+}
+
+// No undo: the restored snapshot is dropped.
+export function returnToAutomatic(group: MappingGroup): MappingGroup {
+  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
+}
+
+export type PlacementBadge = 'restored' | 'auto' | null
+
+// RESTORED wins over AUTO. A placement moved off its restored header loses RESTORED.
+export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
+  if (group.mapping[field] !== header) return null
+  if (group.restored?.mapping[field] === header) return 'restored'
+  if (recognized[field] === header) return 'auto'
+  return null
+}
+
+// Survives edits; only returnToAutomatic clears it.
+export function restoredNotice(group: MappingGroup): string | null {
+  if (!group.restored) return null
+  return `Mapping restored from this client's earlier import, saved ${fmtDateTime(group.restored.savedAt)}.`
+}
+
+// One lookup at a time, in group order. A failed lookup leaves that group on today's seed.
+export async function restoreGroups(
+  groups: MappingGroup[],
+  lookup: ((documentId: string) => Promise<SavedMapping | null>) | null,
+): Promise<MappingGroup[]> {
+  if (!lookup) return groups
+  const result: MappingGroup[] = []
+  for (const group of groups) {
+    try {
+      const saved = await lookup(group.preview.document_id)
+      result.push(applySavedMapping(group, saved))
+    } catch {
+      result.push(group)
+    }
+  }
+  return result
+}
+
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only
 // structural gate matching resolveMapping) for EVERY group — no second, parallel gate is
 // introduced. Mirrors lib/importRun.ts's canReadColumnsAll idiom: an empty group list has
 // nothing ready to submit.
 export function canSubmitAllMappings(groups: MappingGroup[]): boolean {
   return groups.length > 0 && groups.every((g) => canSubmitMapping(g.mapping))
+}
+
+// An untouched restore skips the save, so it cannot overwrite an edited copy posted earlier in
+// the run.
+export function rememberMapping(group: MappingGroup): boolean {
+  if (!group.restored) return true
+  return !mappingsEqual(group.mapping, group.restored.mapping)
+}
+
+// Flat values; the key union also catches a key present on one side only.
+function mappingsEqual(a: Mapping, b: Mapping): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const k of keys) {
+    if (a[k] !== b[k]) return false
+  }
+  return true
 }

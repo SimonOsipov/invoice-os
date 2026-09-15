@@ -265,6 +265,27 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function supplyInvoiceNumber(',
     floor: 3,
   },
+  // The saved-mapping lookup (internal/importer/saved_mapping.go, handlers.go).
+  {
+    ts: 'SavedMapping',
+    go: 'SavedMapping',
+    goPath: 'internal/importer/saved_mapping.go',
+    goAnchor: 'func columnSignature(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function getSavedMapping(',
+    e2eAnchor: 'export function getSavedMapping(',
+    floor: 2,
+  },
+  {
+    ts: 'SavedMappingResponse',
+    go: 'savedMappingResponse',
+    goPath: 'internal/importer/handlers.go',
+    goAnchor: 'func SavedMappingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function getSavedMapping(',
+    e2eAnchor: 'export function getSavedMapping(',
+    floor: 1,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -388,6 +409,8 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'CarriedReading',
       'CarriedLine',
       'SupplyNumberRequest',
+      'SavedMapping',
+      'SavedMappingResponse',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })

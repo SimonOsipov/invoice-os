@@ -635,6 +635,24 @@ export function supplyInvoiceNumber(token: string, body: SupplyNumberRequest): P
   return apiFetch<Invoice>(`${apiBase()}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body, token })
 }
 
+// GET /v1/imports/saved-mapping. Mirrors internal/importer/saved_mapping.go's SavedMapping
+// and handlers.go's savedMappingResponse.
+export interface SavedMapping {
+  mapping: Record<string, string>
+  saved_at: string
+}
+
+export interface SavedMappingResponse {
+  saved_mapping: SavedMapping | null
+}
+
+export function getSavedMapping(token: string, entityId: string, documentId: string): Promise<SavedMappingResponse> {
+  return apiFetch<SavedMappingResponse>(
+    `${apiBase()}/api/invoice/v1/imports/saved-mapping?entity_id=${encodeURIComponent(entityId)}&document_id=${encodeURIComponent(documentId)}`,
+    { token },
+  )
+}
+
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
 // The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
 // earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.

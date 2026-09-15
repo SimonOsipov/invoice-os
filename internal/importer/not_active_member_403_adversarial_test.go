@@ -132,7 +132,7 @@ func TestImport_403DoesNotLog(t *testing.T) {
 	r.Header.Set("Content-Type", contentType)
 	r = r.WithContext(auth.WithIdentity(r.Context(), id))
 	rec := httptest.NewRecorder()
-	CreateHandler(imp, open.fn(), logger).ServeHTTP(rec, r)
+	CreateHandler(imp, open.fn(), noSave, logger).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())

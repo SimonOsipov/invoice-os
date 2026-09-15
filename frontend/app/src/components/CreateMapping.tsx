@@ -3,7 +3,7 @@
 //
 // One spreadsheet row is one invoice LINE ITEM; rows group into invoices by the
 // column mapped to `invoice_number`. Recognised columns arrive pre-placed and
-// badged AUTO — except the invoice number, which is never guessed.
+// badged AUTO — except the invoice number, which is never guessed, only restored from this client's earlier import.
 //
 // Every column, sample cell and file fact on this screen now comes from the SERVER's
 // preview response (M4-08-04, Core AC2) — the browser never parses the file. The whole
@@ -16,7 +16,7 @@
 import { CANON } from '../data'
 import { recognize } from '../lib/mapping'
 import { previewColumns } from '../lib/importFlow'
-import { coverageSentence } from '../lib/mappingGroups'
+import { coverageSentence, placementBadge, restoredNotice } from '../lib/mappingGroups'
 import { runFailures, runIsActive } from '../lib/importRun'
 import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
@@ -34,6 +34,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   const activeGroup = groups[groupIndex] ?? null
   const names: Record<string, string> = Object.fromEntries(pickedFiles.map((pf) => [pf.id, pf.file.name]))
   const sentence = activeGroup ? coverageSentence(activeGroup, names) : ''
+  const notice = activeGroup ? restoredNotice(activeGroup) : null
   // A short, honest label for the header row below — the full statement of which files
   // this mapping covers lives in the coverage-sentence block, not here. Falls back to
   // the first picked file's own name (BULK-01-05 deleted the `importFile` shim this used
@@ -59,11 +60,14 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
   // stricter-than-server gate.
   const columns = previewColumns(preview, 3).map((col) => {
     const fk = colField[col.header] || null
-    const isAuto = !!fk && recognized[fk] === col.header
+    const badge = activeGroup && fk ? placementBadge(activeGroup, fk, col.header, recognized) : null
+    const isAuto = badge === 'auto'
+    const isRestored = badge === 'restored'
     return {
       ...col,
       field: fk,
       isAuto,
+      isRestored,
       colBg: fk ? (isAuto ? 'var(--action-tint)' : 'var(--action-tint)') : 'var(--bg-2)',
       tagBg: isAuto ? 'var(--status-green-bg)' : 'var(--action-tint)',
       tagBorder: isAuto ? 'var(--status-green-border)' : 'var(--action)',
@@ -142,7 +146,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     : invNumArmed
       ? { text: 'invoice_number is armed — click the column that holds it. Nothing continues until you place it by hand.', color: 'var(--action)' }
       : !invNumMapped
-        ? { text: 'Drag invoice_number onto a column to continue — the invoice number is never guessed for you.', color: 'var(--status-red-text)' }
+        ? { text: "Drag invoice_number onto a column to continue — the invoice number is never guessed, only restored from this client's earlier import.", color: 'var(--status-red-text)' }
         : optionalUnmapped > 0
           ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
           : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
@@ -183,7 +187,8 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>
               Drag each field onto the column that holds its data — or click a field, then a column. One spreadsheet row is a single line item; rows group into invoices by the column mapped to{' '}
               <span className="mono" style={{ fontSize: 11 }}>invoice_number</span>. Supplier details come from {active.short}, not the file. Recognised columns are pre-placed and marked{' '}
-              <span className="mono" style={{ fontSize: 10, color: 'var(--status-green-text)' }}>AUTO</span> — the invoice number is never guessed.
+              <span className="mono" style={{ fontSize: 10, color: 'var(--status-green-text)' }}>AUTO</span> — the invoice number is never guessed, only restored from this client's earlier import and marked{' '}
+              <span className="mono" style={{ fontSize: 10, color: 'var(--action)' }}>RESTORED</span>.
             </p>
           </div>
           {allPlaced ? (
@@ -241,6 +246,19 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
               </span>
             )}
           </div>
+          {notice && (
+            <div data-testid="map-restored-notice" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+              <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>{notice}</p>
+              <button
+                type="button"
+                onClick={() => ctx.resetGroupToAutomatic()}
+                className="pf-btn"
+                style={{ fontSize: 11.5, fontWeight: 600, padding: '5px 10px', borderRadius: 'var(--radius-input)', background: 'var(--bg-1)', border: '1px solid var(--line-2)', color: 'var(--fg-2)', cursor: 'pointer' }}
+              >
+                Use automatic suggestions
+              </button>
+            </div>
+          )}
           {/* Split is a no-op on a single-file group (lib/mappingGroups.ts's splitOut),
               so the control renders only where it can do something. */}
           {activeGroup.fileIds.length > 1 && (
@@ -287,6 +305,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                 // duplicates are preserved, so a header key would collide and
                 // mis-associate drop targets between two columns of the same name.
                 key={ci}
+                data-testid="map-column"
                 onDrop={
                   col.mappable
                     ? (e) => {
@@ -325,6 +344,9 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                       <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: col.tagColor, letterSpacing: '0.01em', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.field}</span>
                       {col.isAuto && (
                         <span className="mono" style={{ flex: 'none', fontSize: 7.5, fontWeight: 700, color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '0 3px' }}>AUTO</span>
+                      )}
+                      {col.isRestored && (
+                        <span className="mono" data-testid="map-restored-badge" style={{ flex: 'none', fontSize: 7.5, fontWeight: 700, color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 'var(--radius-sm)', padding: '0 3px' }}>RESTORED</span>
                       )}
                       <span
                         onClick={(e) => {

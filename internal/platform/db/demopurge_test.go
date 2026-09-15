@@ -215,6 +215,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	pageImageID := uuid.NewString()
 	anchorRuleID := uuid.NewString()
 	batchID := uuid.NewString()
+	mappingID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
 	exchangeID := uuid.NewString()
@@ -277,6 +278,10 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO import_batches (id, tenant_id, entity_id, status, rows_total, rows_valid, rows_invalid, filename, document_id)
 		 VALUES ($1,$2,$3,'completed',1,1,0,'doc.csv',$4)`,
 		batchID, tenantID, entityID, documentID)
+	plant("import_mappings", "id", mappingID,
+		`INSERT INTO import_mappings (id, tenant_id, entity_id, column_signature, mapping)
+		 VALUES ($1,$2,$3,$4,$5::jsonb)`,
+		mappingID, tenantID, entityID, contentHash, `{"invoice_number":"Invoice No"}`)
 	plant("invoices", "id", invoiceID,
 		`INSERT INTO invoices (id, tenant_id, entity_id, import_batch_id, invoice_number, status, currency, total)
 		 VALUES ($1,$2,$3,$4,'PURGE-WITNESS-1','draft','NGN',100.00)`,
@@ -694,7 +699,7 @@ func TestPurgeRemovesEveryTenantOwnedRowForADemoTenant(t *testing.T) {
 // ---- Obligation 3: a non-demo tenant survives, witnessed in every table ----
 
 // TestPurgeLeavesANonDemoTenantUntouched (obligation 3, AC-2): the throwaway
-// tenant holds a row in all twenty-one purged tables; every one must survive the
+// tenant holds a row in every purged table; each row must survive the
 // purge with identical column values.
 func TestPurgeLeavesANonDemoTenantUntouched(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
@@ -874,7 +879,7 @@ func TestPurgeReplicaWindowHoldsExactlyOneStatement(t *testing.T) {
 		}
 	}
 	if replicaCount != 1 {
-		t.Fatalf("the purge switched session_replication_role to 'replica' %d time(s), want exactly 1 — the bypass suppresses referential integrity transaction-wide, so a second window (or none) changes what the other twenty deletes are checked against\ntraced: %v", replicaCount, stmts)
+		t.Fatalf("the purge switched session_replication_role to 'replica' %d time(s), want exactly 1 — the bypass suppresses referential integrity transaction-wide, so a second window (or none) changes what the other deletes are checked against\ntraced: %v", replicaCount, stmts)
 	}
 	if closeAt == -1 {
 		t.Fatalf("session_replication_role is never set back to 'origin' after the replica window opens\ntraced: %v", stmts)
@@ -927,8 +932,8 @@ func TestPurgeRestoresOriginBeforeCommit(t *testing.T) {
 	}
 }
 
-// TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement (AC-3): the twenty
-// non-audit_log deletes must run under 'origin', so a future reordering of
+// TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement (AC-3): every
+// non-audit_log delete must run under 'origin', so a future reordering of
 // purgeTables fails loudly instead of silently orphaning rows.
 func TestPurgeDeleteOrderRunsUnderFullForeignKeyEnforcement(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)

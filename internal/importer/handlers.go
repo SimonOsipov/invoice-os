@@ -166,12 +166,15 @@ func detectFormat(filename, contentType string) string {
 // CreateHandler factory: a closure over the injected Service.Import method ->
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via
 // http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (a MaxBytesError
-// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping/
-// document_id form values (blank/malformed -> 400, IMP-API-05) -> open (the
-// document's bytes) -> format detection (unrecognized -> 400) -> Decode
-// (undecodable -> 400) -> imp (Service.Import) -> statusForErr -> the shared
-// {"error":"..."} envelope on failure, or a 200 (dry run) / 201 (real)
-// importResponse on success.
+// -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping form
+// values (blank/malformed -> 400, IMP-API-05) -> remember_mapping (anything but
+// absent, "true" or "false" -> 400) -> document_id -> open (the document's
+// bytes) -> format detection
+// (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
+// (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
+// failure, or, on success, save (only when remembered, not a dry run and
+// completed; a save error is logged, never surfaced) -> a 200 (dry run) /
+// 201 (real) importResponse.
 //
 // [upload-once] The file itself no longer crosses this wire: it was stored by
 // POST /v1/imports/preview, and the caller sends that document's id. The read
@@ -181,6 +184,7 @@ func detectFormat(filename, contentType string) string {
 func CreateHandler(
 	imp func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
 	log *slog.Logger,
 ) http.HandlerFunc {
 	if log == nil {
@@ -217,6 +221,18 @@ func CreateHandler(
 		var mapping map[string]string
 		if err := json.Unmarshal([]byte(rawMapping), &mapping); err != nil {
 			writeError(w, http.StatusBadRequest, "mapping is not valid JSON")
+			return
+		}
+
+		// Absent or "true" saves. "false" skips, so a restored mapping the user
+		// left untouched cannot overwrite a later edit. Strict like dry_run.
+		remember := true
+		switch r.FormValue("remember_mapping") {
+		case "", "true":
+		case "false":
+			remember = false
+		default:
+			writeError(w, http.StatusBadRequest, "remember_mapping must be true or false")
 			return
 		}
 
@@ -311,6 +327,13 @@ func CreateHandler(
 			}
 			writeError(w, status, msg)
 			return
+		}
+
+		if remember && !dryRun && res.Status == "completed" {
+			// The invoices are committed; a failed save must not turn a landed import into a 500.
+			if err := save(r.Context(), entityID, header, mapping); err != nil {
+				log.ErrorContext(r.Context(), "importer: save mapping", slog.Any("err", err))
+			}
 		}
 
 		status := http.StatusCreated
@@ -681,6 +704,106 @@ func SheetHandler(
 			RowsReturned: len(out),
 			Truncated:    total > maxSheetRows,
 		})
+	}
+}
+
+// savedMappingResponse is GET /v1/imports/saved-mapping's body. A miss is an explicit null,
+// never a 404, so the route is no existence oracle.
+type savedMappingResponse struct {
+	SavedMapping *SavedMapping `json:"saved_mapping"`
+}
+
+// SavedMappingHandler is GET /v1/imports/saved-mapping. It decodes the stored document's header
+// with Decode, as the save path does, so the lookup key equals the save key.
+func SavedMappingHandler(
+	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
+	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),
+	log *slog.Logger,
+) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		entityIDRaw := r.URL.Query().Get("entity_id")
+		if entityIDRaw == "" {
+			writeError(w, http.StatusBadRequest, "entity_id is required")
+			return
+		}
+		entityID, err := uuid.Parse(entityIDRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "entity_id must be a well-formed uuid")
+			return
+		}
+
+		documentIDRaw := r.URL.Query().Get("document_id")
+		if documentIDRaw == "" {
+			writeError(w, http.StatusBadRequest, "document_id is required")
+			return
+		}
+		documentID, err := uuid.Parse(documentIDRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			return
+		}
+
+		doc, obj, err := open(r.Context(), documentID.String(), "")
+		if err != nil {
+			// Mapped here, not through statusForErr: errors.Is(document.ErrNotFound,
+			// ErrNotFound) is false, so a cross-tenant id would 500.
+			switch {
+			case errors.Is(err, document.ErrNotFound):
+				writeError(w, http.StatusNotFound, "not found")
+			case errors.Is(err, document.ErrValidation):
+				writeError(w, http.StatusBadRequest, "document_id must be a well-formed uuid")
+			default:
+				status, msg := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "importer: open source document", slog.Any("err", err))
+				}
+				writeError(w, status, msg)
+			}
+			return
+		}
+		if obj.Body != nil {
+			defer func() { _ = obj.Body.Close() }()
+		}
+
+		// Decode nil-dereferences inside io.ReadAll, so the read is guarded
+		// like CreateHandler's own.
+		if obj.Body == nil {
+			log.ErrorContext(r.Context(), "importer: source document opened with no body")
+			writeError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+
+		format := detectFormat(derefOr(doc.Filename, ""), derefOr(doc.DeclaredContentType, ""))
+		if format == "" {
+			writeError(w, http.StatusBadRequest, "unrecognized file format")
+			return
+		}
+
+		header, _, _, err := Decode(obj.Body, format)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			return
+		}
+
+		saved, err := lookup(r.Context(), entityID.String(), header)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "importer: lookup saved mapping", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, savedMappingResponse{SavedMapping: saved})
 	}
 }
 

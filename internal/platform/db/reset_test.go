@@ -164,7 +164,8 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities), plus one independent row in each of
+// import_batches -> business_entities; import_mappings -> business_entities),
+// plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
 // nothing — the assertion is that db.Reset empties ALL of it, so there is
@@ -187,6 +188,14 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID,
 	); err != nil {
 		t.Fatalf("seed import_batches fixture: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO import_mappings (tenant_id, entity_id, column_signature, mapping)
+		 VALUES ($1, $2, $3, $4::jsonb)`,
+		tenantID, entityID, strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), `{"invoice_number":"Invoice No"}`,
+	); err != nil {
+		t.Fatalf("seed import_mappings fixture: %v", err)
 	}
 
 	var invoiceID string

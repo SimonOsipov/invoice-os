@@ -669,9 +669,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
 
   await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
 
-  // Run 2: the identical bytes, into the SAME entity. resetImport() (App.tsx, wired
-  // through openCreate(), the "New invoice" handler) wipes files/mapping/run state, so
-  // this is a genuinely fresh wizard pass, not a resubmission of run 1's in-memory state.
+  // Run 2 re-imports the same header into the same entity, so it opens RESTORED, not blank.
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
     .locator('input[type="file"]#pf-import-file')
@@ -683,6 +681,11 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   )
   await page.getByRole('button', { name: 'Read columns' }).click()
   await preview2
+
+  // Discard the restore, so run 2 stays a hand-placed pass; its point is the re-import split below.
+  await expect(page.getByTestId('map-restored-notice')).toBeVisible()
+  await page.getByRole('button', { name: 'Use automatic suggestions' }).click()
+  await expect(page.getByTestId('map-restored-notice')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
@@ -972,12 +975,19 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
   await expect(page.getByText('No linked business entity', { exact: true }), 'no refusal — in-house has a resolved entity now').toHaveCount(0)
 
   const invoiceNumber = `INH-IMP-${Date.now()}`
+  // A distinct header per attempt, so a retry or an e2e-job re-run never restores this
+  // seeded entity's mapping from a prior attempt.
+  const runStamp = Date.now()
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
 
   await page
     .locator('input[type="file"]#pf-import-file')
-    .setInputFiles({ name: 'inhouse.csv', mimeType: 'text/csv', buffer: Buffer.from(`Invoice No,Subtotal\n${invoiceNumber},100\n`, 'utf8') })
+    .setInputFiles({
+      name: 'inhouse.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(`Invoice No,Subtotal,Run ${runStamp}\n${invoiceNumber},100,x\n`, 'utf8'),
+    })
   await expect(readColumnsBtn, 'arms on the file alone').toBeEnabled()
 
   const previewResp = page.waitForResponse(
@@ -6884,8 +6894,11 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   await page.getByRole('button', { name: 'Read columns' }).click()
   await rejectedPreview
 
-  await page.getByRole('button', { name: 'invoice_number' }).click()
-  await page.getByText('Invoice No', { exact: true }).click()
+  // Import 1 saved this same PERF_HEADER's mapping; import 2 restores it instead of
+  // re-mapping by hand.
+  await expect(
+    page.getByTestId('map-column').filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) }).getByTestId('map-restored-badge'),
+  ).toHaveCount(1)
 
   const rejectedImport = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
@@ -6909,6 +6922,256 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   expect(rejectedScreen, "B4's document arm reached a spreadsheet run").not.toContain(
     'nothing invoice-shaped could be found in it',
   )
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Above the EXTR-15 marker: that span requires fresh bytes per upload, and all three imports
+// here must share one file so the saved mapping keys on the same header.
+test('EXTR37-E2E-01: the second import of a file for the same client opens mapped, and opens unmapped without the lookup', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `Zz EXTR-37 restore ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+
+  // One file for all three imports: the saved mapping keys on the decoded header.
+  const csv = buildSingleInvoiceCsv(`INV-E2E-EXTR37-${Date.now()}`)
+
+  const lookupPredicate = (r: Response) =>
+    r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/saved-mapping')
+  const notice = page.getByTestId('map-restored-notice')
+  const badges = page.getByTestId('map-restored-badge')
+  const invoiceNoColumn = page.getByTestId('map-column').filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) })
+  const chip = page.getByRole('button', { name: 'invoice_number' })
+  const backToAuto = notice.getByRole('button', { name: 'Use automatic suggestions' })
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  const blockedBtn = page.getByRole('button', { name: 'Map invoice number to continue' })
+
+  // --- import 1: nothing saved yet for this client -- the lookup answers null -------------
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'extr37-1.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+
+  const preview1 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  const lookup1 = page.waitForResponse(lookupPredicate, { timeout: 60_000 })
+  await page.getByRole('button', { name: 'Read columns' }).click()
+
+  const documentId1 = ((await (await preview1).json()) as { document_id?: string }).document_id
+  const look1 = await lookup1
+  expect(look1.status(), 'the saved-mapping lookup must answer 200').toBe(200)
+  const look1Url = new URL(look1.url())
+  expect(look1Url.searchParams.get('entity_id')).toBe(entity.id)
+  expect(look1Url.searchParams.get('document_id')).toBe(documentId1)
+  expect((await look1.json()).saved_mapping, "import 1 is this client's first import -- nothing saved yet").toBeNull()
+
+  await expect(chip, 'the Map step must settle before any placement').toBeVisible()
+  await expect(notice).toHaveCount(0)
+  await expect(badges).toHaveCount(0)
+
+  // --- import 1 lands: hand-placed, saved because remember_mapping defaults true ----------
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await page.getByRole('button', { name: 'subtotal' }).click()
+  await page.getByText('Subtotal', { exact: true }).click()
+
+  const import1Req = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  const import1Resp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  expect(requestBody(await import1Req), 'an untouched-vs-touched run is only provable if remember_mapping is on the wire').toMatch(
+    /name="remember_mapping"\r\n\r\ntrue\r\n/,
+  )
+  expect((await import1Resp).status()).toBe(201)
+  await expect(page.getByTestId('invoice-detail'), 'N=1 routes to the real detail').toBeVisible({ timeout: 30_000 })
+
+  // --- import 2: the identical bytes -- the lookup must answer the saved mapping ----------
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'extr37-2.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+
+  const preview2 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  const lookup2 = page.waitForResponse(lookupPredicate, { timeout: 60_000 })
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await preview2
+
+  const look2 = await lookup2
+  expect(look2.status()).toBe(200)
+  const saved = ((await look2.json()) as { saved_mapping: { mapping: Record<string, string>; saved_at: string } | null }).saved_mapping
+  expect(saved, 'import 2 must restore what import 1 saved').not.toBeNull()
+  expect(saved!.mapping.invoice_number).toBe('Invoice No')
+  expect(saved!.mapping.subtotal).toBe('Subtotal')
+
+  await expect(notice).toBeVisible()
+  await expect(notice).toContainText("Mapping restored from this client's earlier import")
+  await expect(backToAuto).toBeVisible()
+  await expect(backToAuto).toBeEnabled()
+
+  await expect(invoiceNoColumn.getByTestId('map-restored-badge')).toHaveCount(1)
+  await expect(invoiceNoColumn.getByTestId('map-restored-badge')).toHaveText('RESTORED')
+  // Every restored field carries the badge -- 7 auto-aliased plus the 2 hand-placed above.
+  await expect(badges).toHaveCount(Object.keys(saved!.mapping).length)
+  await expect(chip, 'a restored field is no longer an unplaced palette chip').toHaveCount(0)
+  await expect(blockedBtn).toHaveCount(0)
+  await expect(importBtn).toBeEnabled()
+
+  // --- EXTR37-LAYOUT-01: containment only, at every WIDE_WIDTHS entry, before import 2 lands
+  {
+    const entryViewport = page.viewportSize()
+    const measured: { width: number; columns: number }[] = []
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 1080 })
+        await expect(notice).toBeVisible()
+
+        const badgedColumns = page.getByTestId('map-column').filter({ has: page.getByTestId('map-restored-badge') })
+        // count() first: boundingBox() on a zero-match locator would wait out the whole test.
+        const n = await badgedColumns.count()
+        expect(n, `every restored column must carry its badge at ${width}px`).toBe(Object.keys(saved!.mapping).length)
+
+        for (let i = 0; i < n; i++) {
+          const col = badgedColumns.nth(i)
+          const badge = col.getByTestId('map-restored-badge')
+          const tag = badge.locator('xpath=..')
+          const field = badge.locator('xpath=preceding-sibling::span[1]')
+          const glyph = badge.locator('xpath=following-sibling::span[1]')
+
+          const boxes = await settledRead(async () => {
+            const [colBox, tagBox, badgeBox, fieldBox, glyphBox] = await Promise.all([
+              col.boundingBox(),
+              tag.boundingBox(),
+              badge.boundingBox(),
+              field.boundingBox(),
+              glyph.boundingBox(),
+            ])
+            return { colBox, tagBox, badgeBox, fieldBox, glyphBox }
+          }, `restored column ${i} geometry at ${width}px`)
+          expect(
+            boxes.colBox && boxes.tagBox && boxes.badgeBox && boxes.fieldBox && boxes.glyphBox,
+            `column ${i}'s tag, badge, field name and glyph must all render at ${width}px`,
+          ).toBeTruthy()
+
+          const tagInCol = gaps(boxes.tagBox as Rect, boxes.colBox as Rect)
+          const badgeInTag = gaps(boxes.badgeBox as Rect, boxes.tagBox as Rect)
+          expect(Math.min(tagInCol.left, tagInCol.right), `column ${i}'s tag must stay inside its column at ${width}px`).toBeGreaterThanOrEqual(-0.5)
+          expect(
+            Math.min(badgeInTag.left, badgeInTag.right),
+            `column ${i}'s badge must stay inside its tag at ${width}px`,
+          ).toBeGreaterThanOrEqual(-0.5)
+          expect(
+            rectsOverlap(boxes.badgeBox as Rect, boxes.fieldBox as Rect),
+            `column ${i}'s badge must not sit over its field name at ${width}px`,
+          ).toBe(false)
+          expect(
+            rectsOverlap(boxes.badgeBox as Rect, boxes.glyphBox as Rect),
+            `column ${i}'s badge must not sit over its unmap glyph at ${width}px`,
+          ).toBe(false)
+        }
+
+        const noticeBoxes = await settledRead(async () => {
+          const [buttonBox, noticeBox, cardBox] = await Promise.all([
+            backToAuto.boundingBox(),
+            notice.boundingBox(),
+            notice.locator('xpath=..').boundingBox(),
+          ])
+          return { buttonBox, noticeBox, cardBox }
+        }, `restored notice geometry at ${width}px`)
+        expect(
+          noticeBoxes.buttonBox && noticeBoxes.noticeBox && noticeBoxes.cardBox,
+          `the notice, its button and its card must all render at ${width}px`,
+        ).toBeTruthy()
+        const buttonInNotice = gaps(noticeBoxes.buttonBox as Rect, noticeBoxes.noticeBox as Rect)
+        const noticeInCard = gaps(noticeBoxes.noticeBox as Rect, noticeBoxes.cardBox as Rect)
+        expect(
+          Math.min(buttonInNotice.left, buttonInNotice.right),
+          `the return-to-automatic button must stay inside the notice at ${width}px`,
+        ).toBeGreaterThanOrEqual(-0.5)
+        expect(
+          Math.min(noticeInCard.left, noticeInCard.right),
+          `the notice must stay inside its card at ${width}px`,
+        ).toBeGreaterThanOrEqual(-0.5)
+
+        measured.push({ width, columns: n })
+      }
+    } finally {
+      if (entryViewport) await page.setViewportSize(entryViewport)
+    }
+    expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+    await testInfo.attach('extr37-layout.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
+  }
+
+  // --- import 2 submitted untouched: remember_mapping=false, and 0 new invoices ------------
+  const import2Req = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  const import2Resp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  expect(requestBody(await import2Req), 'an untouched restore must post remember_mapping=false').toMatch(/name="remember_mapping"\r\n\r\nfalse\r\n/)
+  expect((await import2Resp).status()).toBe(201)
+  // Import 2 repeats import 1's invoice number, so it creates 0 invoices and routes to the
+  // batch surface, not a second invoice detail.
+  await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
+
+  // --- import 3, under an intercepted lookup: the Map step must return to today's seed ----
+  await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page
+    .locator('input[type="file"]#pf-import-file')
+    .setInputFiles({ name: 'extr37-3.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+
+  const LOOKUP_GLOB = '**/api/invoice/v1/imports/saved-mapping*'
+  let hits = 0
+  const realBodies: { saved_mapping: { mapping: Record<string, string> } | null }[] = []
+  await page.route(LOOKUP_GLOB, async (route) => {
+    hits += 1
+    const real = await route.fetch()
+    realBodies.push(await real.json())
+    // The real headers keep CORS; the two body headers would describe the real body, not this
+    // one. An abort or a 5xx would log a console error and trip collectErrors below.
+    const headers = real.headers()
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({ status: real.status(), headers, json: { saved_mapping: null } })
+  })
+
+  const preview3 = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
+    { timeout: 60_000 },
+  )
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await preview3
+  await expect(chip).toBeVisible()
+
+  await expect.poll(() => hits, { message: 'the intercepted lookup must fire exactly once' }).toBe(1)
+  // The row still exists -- only this test's answer to the SPA differs from the real one.
+  expect(realBodies[0]?.saved_mapping?.mapping.invoice_number, 'control: the real lookup still returns the saved row').toBe('Invoice No')
+
+  await expect(notice).toHaveCount(0)
+  await expect(badges).toHaveCount(0)
+  await expect(blockedBtn).toBeVisible()
+
+  await page.unroute(LOOKUP_GLOB)
+  // Import 3 is never submitted -- its only purpose is proving the dependency on the lookup.
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

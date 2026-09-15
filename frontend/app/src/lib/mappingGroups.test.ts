@@ -28,19 +28,26 @@
 // coverageSentence/groupOfFile/canSubmitAllMappings's stub bodies throw
 // new Error('not implemented') before ever returning anything — that IS the correct RED
 // reason (assertion / not-implemented), not an import/compile error.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { initMappingFromHeaders } from './mapping'
+import { fmtDateTime } from './format'
+import { initMappingFromHeaders, recognize, restoreMapping } from './mapping'
 import {
+  applySavedMapping,
   canSubmitAllMappings,
   columnSignature,
   coverageSentence,
   groupByLayout,
   groupOfFile,
+  placementBadge,
+  rememberMapping,
+  restoreGroups,
+  restoredNotice,
+  returnToAutomatic,
   splitOut,
   type MappingGroup,
 } from './mappingGroups'
-import type { ImportPreview } from './importApi'
+import type { ImportPreview, SavedMapping } from './importApi'
 import type { Mapping } from '../types'
 
 // Fixture filenames deliberately avoid the two single-quoted CreateStep-literal words
@@ -75,8 +82,29 @@ function mkGroup(fileIds: string[], mapping: Mapping, columns: string[] = LAGOS_
     fileIds,
     preview: mkPreview(columns),
     mapping,
+    restored: null,
   }
 }
+
+// A literal, not applySavedMapping, so a failure points at the function under test.
+// `documentId` overrides mkPreview's fixed id so lookups can be told apart.
+function mkRestored(
+  fileIds: string[],
+  cols: string[],
+  mapping: Mapping,
+  savedAt: string,
+  documentId?: string,
+): MappingGroup {
+  const preview = mkPreview(cols)
+  return {
+    ...mkGroup(fileIds, mapping, cols),
+    restored: { savedAt, mapping: { ...mapping } },
+    preview: documentId ? { ...preview, document_id: documentId } : preview,
+  }
+}
+
+// A fresh seed produces neither placement: invoice_number has no alias, and 'Total' seeds `total`.
+const LAGOS_SAVE = { mapping: { invoice_number: 'Invoice No', subtotal: 'Total' }, saved_at: '2026-09-01T10:15:00Z' }
 
 describe('columnSignature', () => {
   // BULK-04-3 — falsification: an impl that sorts columns before signing, which would
@@ -132,6 +160,16 @@ describe('groupByLayout', () => {
     expect(groups).toHaveLength(2)
     expect(groups[0].fileIds).toEqual(['f1', 'f3'])
     expect(groups[1].fileIds).toEqual(['f2'])
+  })
+
+  it('SM-FE-03: groupByLayout sets restored to null on every group', () => {
+    const groups = groupByLayout([
+      { fileId: 'f1', preview: mkPreview(LAGOS_COLS) },
+      { fileId: 'f2', preview: mkPreview(TILL_COLS) },
+      { fileId: 'f3', preview: mkPreview(LAGOS_COLS) },
+    ])
+    expect(groups).toHaveLength(2)
+    groups.forEach((g) => expect(g.restored).toBeNull())
   })
 })
 
@@ -202,6 +240,19 @@ describe('splitOut', () => {
     expect(result).toHaveLength(1)
     expect(result).toEqual([lone])
   })
+
+  it('SM-FE-07: a split carries the restored state', () => {
+    const edited: Mapping = { ...LAGOS_SAVE.mapping, invoice_number: 'Invoice No' }
+    const shared = mkRestored(['f1', 'f2'], LAGOS_COLS, edited, LAGOS_SAVE.saved_at)
+
+    const result = splitOut([shared], 'f2')
+    const remaining = result.find((g) => g.fileIds.includes('f1'))!
+    const split = result.find((g) => g.fileIds.includes('f2'))!
+
+    expect(split.restored).toEqual(shared.restored)
+    expect(split.mapping).toEqual(shared.mapping)
+    expect(remaining.restored).toEqual(shared.restored)
+  })
 })
 
 describe('groupOfFile', () => {
@@ -235,6 +286,226 @@ describe('canSubmitAllMappings', () => {
 
     // Positive companion: invoice_number ALONE is sufficient — no second gate.
     expect(canSubmitAllMappings([mkGroup(['f3'], { invoice_number: 'Invoice No' })])).toBe(true)
+  })
+})
+
+describe('applySavedMapping', () => {
+  it('SM-FE-04: with no saved mapping returns the same group object', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    expect(applySavedMapping(group, null)).toBe(group)
+  })
+
+  it('SM-FE-05: applySavedMapping restores the saved placements and snapshots them', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const result = applySavedMapping(group, LAGOS_SAVE)
+
+    expect(result.mapping).toEqual(restoreMapping(LAGOS_COLS, LAGOS_SAVE.mapping))
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+    expect(result.mapping.total).toBeNull()
+    expect(result.restored).toEqual({ savedAt: LAGOS_SAVE.saved_at, mapping: result.mapping })
+    expect(result.id).toBe(group.id)
+    expect(result.signature).toBe(group.signature)
+    expect(result.fileIds).toBe(group.fileIds)
+    expect(result.preview).toBe(group.preview)
+    expect(group.restored).toBeNull()
+  })
+})
+
+describe('returnToAutomatic', () => {
+  it('SM-FE-06: reseeds from the column names and clears the restored state', () => {
+    const seed = initMappingFromHeaders(LAGOS_COLS)
+    const moved: Mapping = { ...seed, total: null, subtotal: 'Total' }
+    const restored = mkRestored(['f1'], LAGOS_COLS, moved, LAGOS_SAVE.saved_at)
+
+    const result = returnToAutomatic(restored)
+
+    expect(result.mapping).toEqual(initMappingFromHeaders(LAGOS_COLS))
+    expect(result.restored).toBeNull()
+    expect(result.id).toBe(restored.id)
+    expect(result.signature).toBe(restored.signature)
+    expect(result.fileIds).toBe(restored.fileIds)
+    expect(result.preview).toBe(restored.preview)
+    expect(restored.restored).not.toBeNull()
+  })
+})
+
+describe('placementBadge', () => {
+  const cols = ['Invoice No', 'Subtotal', 'Total', 'VAT']
+
+  it('SM-FE-08: RESTORED wins over AUTO, a moved placement loses it, and a hand placement on an alias reads AUTO', () => {
+    const recognized = recognize(cols)
+    const restoredSnapshot: Mapping = { invoice_number: 'Invoice No', total: 'Total' }
+    const restoredGroup = mkRestored(['f1'], cols, restoredSnapshot, LAGOS_SAVE.saved_at)
+
+    // moved off the restored placement: neither the old nor the new header reads restored
+    const movedTotal: MappingGroup = { ...restoredGroup, mapping: { ...restoredGroup.mapping, total: 'Subtotal' } }
+    expect(placementBadge(movedTotal, 'total', 'Subtotal', recognized)).toBeNull()
+    expect(placementBadge(movedTotal, 'total', 'Total', recognized)).toBeNull()
+
+    // a fresh group's hand placement on invoice_number (no alias) reads neither badge
+    const freshGroup = mkGroup(['f2'], { invoice_number: 'Invoice No', total: 'Total' }, cols)
+    expect(placementBadge(freshGroup, 'invoice_number', 'Invoice No', recognized)).toBeNull()
+
+    // a fresh group's alias placement reads AUTO
+    expect(placementBadge(freshGroup, 'total', 'Total', recognized)).toBe('auto')
+
+    // a field the saved mapping never touched, hand-placed after restore, reads AUTO
+    const withHandVat: MappingGroup = { ...restoredGroup, mapping: { ...restoredGroup.mapping, vat: 'VAT' } }
+    expect(placementBadge(withHandVat, 'vat', 'VAT', recognized)).toBe('auto')
+
+    // the restored group's own placements read RESTORED, even where an alias also matches
+    expect(placementBadge(restoredGroup, 'invoice_number', 'Invoice No', recognized)).toBe('restored')
+    expect(placementBadge(restoredGroup, 'total', 'Total', recognized)).toBe('restored')
+  })
+})
+
+describe('restoredNotice', () => {
+  const SAVED_AT = '2026-09-01T10:15:00Z'
+
+  it('SM-FE-09: names the save time, only on a restored group, and survives edits', () => {
+    // control: fmtDateTime actually transforms the ISO string
+    const formatted = fmtDateTime(SAVED_AT)
+    expect(formatted).not.toBe(SAVED_AT)
+    expect(formatted).not.toBe('—')
+
+    const freshGroup = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    expect(restoredNotice(freshGroup)).toBeNull()
+
+    const restoredGroup = mkRestored(['f1'], LAGOS_COLS, { invoice_number: 'Invoice No' }, SAVED_AT)
+    expect(restoredNotice(restoredGroup)).toBe(`Mapping restored from this client's earlier import, saved ${formatted}.`)
+
+    const editedGroup: MappingGroup = { ...restoredGroup, mapping: { ...restoredGroup.mapping, total: 'Total' } }
+    expect(restoredNotice(editedGroup)).toBe(`Mapping restored from this client's earlier import, saved ${formatted}.`)
+
+    expect(restoredNotice(returnToAutomatic(restoredGroup))).toBeNull()
+  })
+})
+
+describe('restoreGroups', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  function deferred(): { promise: Promise<SavedMapping | null>; resolve: (v: SavedMapping | null) => void } {
+    let resolve!: (v: SavedMapping | null) => void
+    const promise = new Promise<SavedMapping | null>((res) => {
+      resolve = res
+    })
+    return { promise, resolve }
+  }
+
+  it("SM-FE-10: looks up one group at a time, in group order, by each group's document id", async () => {
+    const a = mkRestored(['f1', 'f2'], LAGOS_COLS, {}, '2026-01-01T00:00:00Z', 'doc-a')
+    const b: MappingGroup = { ...mkGroup(['f3'], initMappingFromHeaders(TILL_COLS), TILL_COLS), preview: { ...mkPreview(TILL_COLS), document_id: 'doc-b' } }
+    const c = mkRestored(['f4'], ['A', 'B'], {}, '2026-01-01T00:00:00Z', 'doc-c')
+
+    const events: string[] = []
+    const pending = new Map<string, ReturnType<typeof deferred>>()
+    const lookup = (documentId: string) => {
+      events.push(`start:${documentId}`)
+      const d = deferred()
+      pending.set(documentId, d)
+      return d.promise
+    }
+
+    const resultPromise = restoreGroups([a, b, c], lookup)
+
+    await flush()
+    expect(events).toEqual(['start:doc-a'])
+    pending.get('doc-a')!.resolve({ mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-02-01T00:00:00Z' })
+
+    await flush()
+    expect(events).toEqual(['start:doc-a', 'start:doc-b'])
+    pending.get('doc-b')!.resolve(null)
+
+    await flush()
+    expect(events).toEqual(['start:doc-a', 'start:doc-b', 'start:doc-c'])
+    pending.get('doc-c')!.resolve({ mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-03-01T00:00:00Z' })
+
+    const result = await resultPromise
+    expect(events).toHaveLength(3)
+    expect(result[0].restored?.savedAt).toBe('2026-02-01T00:00:00Z')
+    expect(result[1]).toBe(b)
+    expect(result[2].restored?.savedAt).toBe('2026-03-01T00:00:00Z')
+  })
+
+  it('SM-FE-11: a rejected lookup leaves that group on today\'s seed and the run continues', async () => {
+    const a = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const b = mkGroup(['f2'], initMappingFromHeaders(TILL_COLS), TILL_COLS)
+    const c = mkGroup(['f3'], initMappingFromHeaders(LAGOS_COLS))
+    const saveA = { mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-01-01T00:00:00Z' }
+    const saveC = { mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-02-01T00:00:00Z' }
+
+    const lookup = vi
+      .fn()
+      .mockResolvedValueOnce(saveA)
+      .mockRejectedValueOnce(new Error('network'))
+      .mockResolvedValueOnce(saveC)
+
+    const result = await restoreGroups([a, b, c], lookup)
+
+    expect(result).toHaveLength(3)
+    expect(result[0].restored?.savedAt).toBe(saveA.saved_at)
+    expect(result[1]).toBe(b)
+    expect(result[2].restored?.savedAt).toBe(saveC.saved_at)
+  })
+
+  it('SM-FE-12: with no entity, restoreGroups makes no call and returns the groups unchanged', async () => {
+    const a = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const b = mkGroup(['f2'], initMappingFromHeaders(TILL_COLS), TILL_COLS)
+
+    const result = await restoreGroups([a, b], null)
+
+    expect(result).toHaveLength(2)
+    expect(result[0]).toBe(a)
+    expect(result[1]).toBe(b)
+  })
+})
+
+describe('rememberMapping', () => {
+  it('SM-FE-15: only an untouched restored group opts out of remembering', () => {
+    const fresh = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    expect(rememberMapping(fresh)).toBe(true)
+
+    const untouched = mkRestored(['f1'], LAGOS_COLS, { ...LAGOS_SAVE.mapping }, LAGOS_SAVE.saved_at)
+
+    const moved: MappingGroup = { ...untouched, mapping: { ...untouched.mapping, subtotal: null } }
+    expect(rememberMapping(moved)).toBe(true)
+
+    const newlyPlaced: MappingGroup = { ...untouched, mapping: { ...untouched.mapping, total: 'Total' } }
+    expect(rememberMapping(newlyPlaced)).toBe(true)
+
+    expect(rememberMapping(returnToAutomatic(untouched))).toBe(true)
+
+    const invoiceNumberMoved: MappingGroup = { ...untouched, mapping: { ...untouched.mapping, invoice_number: null } }
+    expect(rememberMapping(invoiceNumberMoved)).toBe(true)
+
+    // the untouched restore itself opts out
+    expect(rememberMapping(untouched)).toBe(false)
+
+    // edited then reverted to the exact saved values: still opts out
+    const midEdit: MappingGroup = { ...untouched, mapping: { ...untouched.mapping, subtotal: null } }
+    const revertedBack: MappingGroup = { ...midEdit, mapping: { ...midEdit.mapping, subtotal: 'Total' } }
+    expect(rememberMapping(revertedBack)).toBe(false)
+  })
+
+  it('SM-FE-16: after a split, each copy of a restored group decides for itself', () => {
+    const snapshot: Mapping = { ...LAGOS_SAVE.mapping }
+    const shared = mkRestored(['fB', 'fA'], LAGOS_COLS, snapshot, LAGOS_SAVE.saved_at)
+
+    const split1 = splitOut([shared], 'fB')
+    const groupB1 = split1.find((g) => g.fileIds.includes('fB'))!
+    const groupA1 = split1.find((g) => g.fileIds.includes('fA'))!
+    const editedB: MappingGroup = { ...groupB1, mapping: { ...groupB1.mapping, subtotal: null } }
+    expect(rememberMapping(editedB)).toBe(true)
+
+    const split2 = splitOut([shared], 'fB')
+    const groupA2 = split2.find((g) => g.fileIds.includes('fA'))!
+    const groupB2 = split2.find((g) => g.fileIds.includes('fB'))!
+    const editedA: MappingGroup = { ...groupA2, mapping: { ...groupA2.mapping, subtotal: null } }
+    expect(rememberMapping(editedA)).toBe(true)
+
+    // the untouched copy in each split keeps opting out
+    expect(rememberMapping(groupA1)).toBe(false)
+    expect(rememberMapping(groupB2)).toBe(false)
   })
 })
 
@@ -381,5 +652,52 @@ describe('coverageSentence — missing name lookup (QA Mode B)', () => {
     const sentence = coverageSentence(group, {})
     expect(sentence).not.toContain('undefined')
     expect(sentence).toContain('f9-unlisted')
+  })
+})
+
+describe('saved-mapping helpers — adversarial (QA Mode B)', () => {
+  it("SM-FE-QA-1: applySavedMapping leaves the input group's mapping untouched", () => {
+    const seed = initMappingFromHeaders(LAGOS_COLS)
+    const before = { ...seed }
+    const group = mkGroup(['f1'], seed)
+
+    const result = applySavedMapping(group, LAGOS_SAVE)
+
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+    expect(group.mapping).toEqual(before)
+    expect(group.mapping.invoice_number).toBeNull()
+  })
+
+  it('SM-FE-QA-2: with no lookup it resolves the very same array; with no groups it makes no call', async () => {
+    const groups = [mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))]
+    expect(await restoreGroups(groups, null)).toBe(groups)
+
+    const lookup = vi.fn()
+    expect(await restoreGroups([], lookup)).toEqual([])
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('SM-FE-QA-3: a mapping that lost a key the snapshot placed still remembers', () => {
+    const untouched = mkRestored(['f1'], LAGOS_COLS, { ...LAGOS_SAVE.mapping }, LAGOS_SAVE.saved_at)
+    const lostKey: MappingGroup = { ...untouched, mapping: { invoice_number: untouched.mapping.invoice_number } }
+
+    expect(rememberMapping(untouched)).toBe(false)
+    expect(rememberMapping(lostKey)).toBe(true)
+  })
+
+  it('SM-FE-QA-4: a group restored through restoreGroups reads RESTORED and opts out until edited', async () => {
+    const recognized = recognize(LAGOS_COLS)
+    const [restored] = await restoreGroups([mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))], async () => LAGOS_SAVE)
+
+    expect(placementBadge(restored, 'invoice_number', 'Invoice No', recognized)).toBe('restored')
+    expect(placementBadge(restored, 'subtotal', 'Total', recognized)).toBe('restored')
+    const notice = `Mapping restored from this client's earlier import, saved ${fmtDateTime(LAGOS_SAVE.saved_at)}.`
+    expect(restoredNotice(restored)).toBe(notice)
+    expect(rememberMapping(restored)).toBe(false)
+
+    const edited: MappingGroup = { ...restored, mapping: { ...restored.mapping, subtotal: null, total: 'Total' } }
+    expect(placementBadge(edited, 'total', 'Total', recognized)).toBe('auto')
+    expect(restoredNotice(edited)).toBe(notice)
+    expect(rememberMapping(edited)).toBe(true)
   })
 })

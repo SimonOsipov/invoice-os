@@ -43,6 +43,13 @@ type storeSpec = func(ctx context.Context, filename, contentType string, size in
 
 type openSpec = func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error)
 
+// saveFunc is the exact signature CreateHandler's save parameter expects.
+type saveFunc = func(ctx context.Context, entityID string, header []string, mapping map[string]string) error
+
+// noSave is a save double that never persists, for every spec that does not
+// care about the mapping save.
+func noSave(context.Context, string, []string, map[string]string) error { return nil }
+
 // errStoreBoom / errOpenBoom stand in for an unreachable object store. Their
 // text is asserted ABSENT from every response body — a 500 must not leak.
 var (
@@ -172,8 +179,8 @@ func doPreviewUpload(t *testing.T, store storeSpec, id *auth.Identity, contentTy
 }
 
 // importPart is one extra multipart part buildImportForm appends after the
-// three contract fields — used to send the RETIRED "file" part and to pad a
-// request past the whole-request cap.
+// three contract fields — used to send the RETIRED "file" part, the optional
+// remember_mapping field, and to pad a request past the whole-request cap.
 type importPart struct {
 	field    string
 	filename string // non-empty makes it a file part
@@ -231,7 +238,7 @@ func doImportUpload(t *testing.T, imp importFunc, open openSpec, id *auth.Identi
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateHandler(imp, open, nil).ServeHTTP(rec, r)
+	CreateHandler(imp, open, noSave, nil).ServeHTTP(rec, r)
 
 	raw := rec.Body.Bytes()
 	var resp importBatchBody

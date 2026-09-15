@@ -128,15 +128,20 @@ func ResetEnabled(environment, flag string) bool {
 //	                          so both empty even if a future migration weakens
 //	                          that FK.
 //	business_entities         the 90-vs-21 pollution PR-110 measured directly.
-//	                          invoices.entity_id (RESTRICT) and
-//	                          import_batches.entity_id (CASCADE) both reference
-//	                          it, so both must truncate in the SAME statement.
+//	                          invoices.entity_id (RESTRICT),
+//	                          import_batches.entity_id (CASCADE) and
+//	                          import_mappings.entity_id (CASCADE) all reference
+//	                          it, so all must truncate in the SAME statement.
 //	import_batches            references business_entities; invoices.
 //	                          import_batch_id references IT (ON DELETE SET
 //	                          NULL, so invoices alone wouldn't strictly need
 //	                          it) -- included for the same
 //	                          don't-rely-on-a-specific-ON-DELETE-clause reason
 //	                          as line_items/invoice_status_history above.
+//	import_mappings           composite FK (tenant_id, entity_id) ON DELETE
+//	                          CASCADE against business_entities; TRUNCATE
+//	                          does not follow a CASCADE, so omitting it makes
+//	                          TRUNCATE business_entities raise 0A000.
 //	submission_jobs           composite FK (tenant_id, invoice_id) -> invoices,
 //	                          ON DELETE RESTRICT. Must truncate alongside
 //	                          invoices.
@@ -320,6 +325,7 @@ func ResetEnabled(environment, flag string) bool {
 //	                          rules/rule_set_versions exclusion above.
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
+	import_mappings,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
 	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
 	extraction_page_images, extraction_anchor_rules,

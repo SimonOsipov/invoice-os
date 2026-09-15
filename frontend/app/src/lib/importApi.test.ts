@@ -62,6 +62,7 @@ import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch } from './authedFetch'
 import {
   createImport,
   getImportBatch,
+  getSavedMapping,
   makeImportAuth,
   normalizeReport,
   previewImport,
@@ -74,6 +75,7 @@ import {
   type ImportAuth,
   type ImportPreview,
   type ImportReport,
+  type SavedMapping,
   type SupplyNumberRequest,
   type UploadPhase,
   type XhrCtor,
@@ -183,6 +185,7 @@ function makeReq(): CreateImportRequest {
     documentId: DOC_ID,
     entityId: 'entity-1',
     mapping: { invoice_number: 'Invoice No', issue_date: 'Issue Date' },
+    rememberMapping: true,
   }
 }
 
@@ -361,7 +364,9 @@ describe('previewImport', () => {
 describe('createImport', () => {
   // Amended for upload-once: the `file` part is now REJECTED by the endpoint with a 400,
   // so sending it is a live defect, not surplus.
-  it('IMPAPI-04: FormData carries exactly entity_id, mapping, document_id; mapping === JSON.stringify(req.mapping)', async () => {
+  // [update-existing-tests]: retargeted — the SPA now states, per file, whether the import
+  // remembers its mapping.
+  it('IMPAPI-04: FormData carries exactly entity_id, mapping, document_id, remember_mapping; mapping === JSON.stringify(req.mapping)', async () => {
     const req = makeReq()
     const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)
     FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
@@ -369,10 +374,25 @@ describe('createImport', () => {
 
     const xhr = FakeXhr.last()!
     const entries = Array.from(xhr.body!.entries())
-    expect(entries.map(([k]) => k).sort()).toEqual(['document_id', 'entity_id', 'mapping'])
+    expect(entries.map(([k]) => k).sort()).toEqual(['document_id', 'entity_id', 'mapping', 'remember_mapping'])
     expect(xhr.body!.get('entity_id')).toBe(req.entityId)
     expect(xhr.body!.get('mapping')).toBe(JSON.stringify(req.mapping))
     expect(xhr.body!.get('document_id')).toBe(req.documentId)
+    expect(xhr.body!.get('remember_mapping')).toBe('true')
+    expect(xhr.body!.getAll('remember_mapping')).toHaveLength(1)
+  })
+
+  it('IMPAPI-28: rememberMapping false is sent as the string \'false\', never dropped', async () => {
+    const req = { ...makeReq(), rememberMapping: false }
+    const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    const xhr = FakeXhr.last()!
+    const entries = Array.from(xhr.body!.entries())
+    expect(entries.map(([k]) => k).sort()).toEqual(['document_id', 'entity_id', 'mapping', 'remember_mapping'])
+    expect(xhr.body!.get('remember_mapping')).toBe('false')
+    expect(xhr.body!.getAll('remember_mapping')).toHaveLength(1)
   })
 
   // The `file` part is not merely surplus — the endpoint 400s on its presence, so a
@@ -947,6 +967,55 @@ describe('getImportBatch (AC-2, Stage 2.5)', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).kind).toBe('http')
     expect((err as ApiError).status).toBe(500)
+  })
+})
+
+describe('getSavedMapping', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('IMPAPI-26: GETs the saved-mapping route with both ids encoded and resolves the saved mapping', async () => {
+    const saved: SavedMapping = { mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-09-01T10:15:00Z' }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ saved_mapping: saved }) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await getSavedMapping(af, base, 'e 1', 'd/2')
+    expect(result).toEqual(saved)
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://gw/api/invoice/v1/imports/saved-mapping?entity_id=e%201&document_id=d%2F2')
+    expect(init.method).toBe('GET')
+  })
+
+  it('IMPAPI-27: a miss and a body with no saved_mapping key both resolve null', async () => {
+    const fetchMockA = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({ saved_mapping: null }) })
+    const afA = createAuthedFetch(() => 'tok', vi.fn())
+    const resultA = await getSavedMapping(afA, base, 'e1', 'd1')
+    expect(resultA).toBeNull()
+    expect(fetchMockA, 'getSavedMapping must GET the saved-mapping route').toHaveBeenCalledTimes(1)
+
+    const fetchMockB = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const afB = createAuthedFetch(() => 'tok', vi.fn())
+    const resultB = await getSavedMapping(afB, base, 'e1', 'd1')
+    expect(resultB).toBeNull()
+    expect(fetchMockB).toHaveBeenCalledTimes(1)
+  })
+
+  // restoreGroups owns the catch; a null here would read as "no saved mapping".
+  it('QA-15: a refusal rejects ApiError unchanged, never resolves null', async () => {
+    mockFetchOnce({ ok: false, status: 500, statusText: 'Internal Server Error', json: () => Promise.reject(new Error('no body')) })
+    const err500 = await captureRejection(() => getSavedMapping(createAuthedFetch(() => 'tok', vi.fn()), base, 'e1', 'd1'))
+    expect(err500).toBeInstanceOf(ApiError)
+    expect((err500 as ApiError).status).toBe(500)
+
+    const onUnauthorized = vi.fn()
+    mockFetchOnce({ ok: false, status: 401, statusText: 'Unauthorized', json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const err401 = await captureRejection(() => getSavedMapping(createAuthedFetch(() => 'tok', onUnauthorized), base, 'e1', 'd1'))
+    expect(err401).toBeInstanceOf(ApiError)
+    expect((err401 as ApiError).status).toBe(401)
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
 })
 

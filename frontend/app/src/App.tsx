@@ -30,10 +30,20 @@ import {
 } from './lib/importRun'
 import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './lib/documentRun'
 import type { DocumentRowState } from './lib/documentRun'
-import { canSubmitAllMappings, groupByLayout, groupOfFile, splitOut, type MappingGroup } from './lib/mappingGroups'
+import {
+  canSubmitAllMappings,
+  groupByLayout,
+  groupOfFile,
+  rememberMapping,
+  restoreGroups,
+  returnToAutomatic,
+  splitOut,
+  type MappingGroup,
+} from './lib/mappingGroups'
 import {
   createImport,
   getExtractions,
+  getSavedMapping,
   importDocument,
   makeImportAuth,
   previewImport,
@@ -865,6 +875,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // Snapshotted once, same discipline as the old readColumns closing over a fixed
     // `importFile`: this run previews exactly the files picked at click time.
     const files = pickedFiles
+    const target = entityId
 
     void (async () => {
       try {
@@ -887,7 +898,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         // Functional form, not the `files` snapshot: a file removed while the previews
         // were in flight must stay removed, not be resurrected by a stale array.
         setPickedFiles((cur) => attachDocumentIds(cur, previewed))
-        setGroups(groupByLayout(previewed))
+        // ceiling: a click before the entity list resolves snapshots a null target, so that import
+        // opens unrestored; revisit if a returning client's import is reported unrestored.
+        const lookup = target ? (documentId: string) => getSavedMapping(authedFetch, base, target, documentId) : null
+        setGroups(await restoreGroups(groupByLayout(previewed), lookup))
         setGroupIndex(0)
         setCreateStep('mapping')
         // A fresh mapping cycle must not carry a PREVIOUS run's leftovers onto it.
@@ -1051,10 +1065,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
           try {
             // Each file is sent with its OWN group's toImportMapping(mapping) (AC #7)
             // — never a second, per-file entity field.
+            // ceiling: groups sharing columns in one run all save, bar an untouched restore; the last-picked completed file wins.
             const report = await createImport(
               importAuth,
               base,
-              { documentId, entityId, mapping: toImportMapping(group.mapping) },
+              {
+                documentId,
+                entityId,
+                mapping: toImportMapping(group.mapping),
+                rememberMapping: rememberMapping(group),
+              },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
                 setRun(localRun)
@@ -1220,6 +1240,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // `groupIndex` (and therefore the screen the operator is currently on) is unaffected.
   function splitOutFile(fileId: string) {
     setGroups((gs) => splitOut(gs, fileId))
+  }
+
+  function resetGroupToAutomatic() {
+    setGroups((gs) => gs.map((g, i) => (i === groupIndex ? returnToAutomatic(g) : g)))
   }
 
   // The continue control used to swallow the click outright when invoice_number was
@@ -1615,6 +1639,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     readAllColumns,
     startDocumentRun,
     splitOutFile,
+    resetGroupToAutomatic,
     backToImport,
     restartImport,
     skipUpload,

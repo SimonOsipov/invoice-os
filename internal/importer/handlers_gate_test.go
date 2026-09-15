@@ -76,7 +76,7 @@ func doImportCreateGate(t *testing.T, imp importFunc, open openSpec, id *auth.Id
 		r = r.WithContext(auth.WithIdentity(r.Context(), *id))
 	}
 	rec := httptest.NewRecorder()
-	CreateHandler(imp, open, nil).ServeHTTP(rec, r)
+	CreateHandler(imp, open, noSave, nil).ServeHTTP(rec, r)
 
 	var resp importBatchBodyGate
 	if len(rec.Body.Bytes()) > 0 {

@@ -202,6 +202,7 @@ export interface CreateImportRequest {
   documentId: string
   entityId: string
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
+  rememberMapping: boolean
 }
 
 export type UploadPhase =
@@ -343,6 +344,7 @@ export async function createImport(
   form.append('entity_id', req.entityId)
   form.append('mapping', JSON.stringify(req.mapping))
   form.append('document_id', req.documentId)
+  form.append('remember_mapping', req.rememberMapping ? 'true' : 'false')
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
@@ -422,6 +424,29 @@ export interface SupplyNumberRequest {
   entity_id: string
   document_id: string
   invoice_number: string
+}
+
+// GET /v1/imports/saved-mapping. Mirrors internal/importer/saved_mapping.go's SavedMapping
+// and handlers.go's savedMappingResponse.
+export interface SavedMapping {
+  mapping: Record<string, string>
+  saved_at: string
+}
+
+export interface SavedMappingResponse {
+  saved_mapping: SavedMapping | null
+}
+
+export async function getSavedMapping(
+  authedFetch: AuthedFetch,
+  base: string,
+  entityId: string,
+  documentId: string,
+): Promise<SavedMapping | null> {
+  const res = await authedFetch<SavedMappingResponse>(
+    `${base}/api/invoice/v1/imports/saved-mapping?entity_id=${encodeURIComponent(entityId)}&document_id=${encodeURIComponent(documentId)}`,
+  )
+  return res?.saved_mapping ?? null
 }
 
 // null when there is nothing to carry: the route answers 200 null, never 404 (importApi.test.ts's EXTR27-W1).

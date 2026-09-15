@@ -670,7 +670,6 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   await page.getByRole('button', { name: 'Finish · go to invoices' }).click()
 
   // Run 2 re-imports the same header into the same entity, so it opens RESTORED, not blank.
-  // [bug08-uses-return-control]
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page
     .locator('input[type="file"]#pf-import-file')
@@ -683,8 +682,7 @@ test('BUG08-E2E-1/2/3/4/5/7 (AC-1..6, task-408/409): a re-import splits genuine 
   await page.getByRole('button', { name: 'Read columns' }).click()
   await preview2
 
-  // Discard the restore via the return control, so this stays the same fresh hand-placed
-  // pass E2E-04 already proved -- run 2's own point is the re-import split below, not restore.
+  // Discard the restore, so run 2 stays a hand-placed pass; its point is the re-import split below.
   await expect(page.getByTestId('map-restored-notice')).toBeVisible()
   await page.getByRole('button', { name: 'Use automatic suggestions' }).click()
   await expect(page.getByTestId('map-restored-notice')).toHaveCount(0)
@@ -978,7 +976,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 
   const invoiceNumber = `INH-IMP-${Date.now()}`
   // A distinct header per attempt, so a retry or an e2e-job re-run never restores this
-  // seeded entity's mapping from a prior attempt. [inhouse-gets-a-run-column]
+  // seeded entity's mapping from a prior attempt.
   const runStamp = Date.now()
   const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
   await expect(readColumnsBtn, 'disabled before any file is chosen').toBeDisabled()
@@ -6897,7 +6895,7 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   await rejectedPreview
 
   // Import 1 saved this same PERF_HEADER's mapping; import 2 restores it instead of
-  // re-mapping by hand. [extr15-relies-on-restore]
+  // re-mapping by hand.
   await expect(
     page.getByTestId('map-column').filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) }).getByTestId('map-restored-badge'),
   ).toHaveCount(1)
@@ -6928,12 +6926,8 @@ test('EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// EXTR-37-06 (task-1042). Above the EXTR-15 marker below -- deliberately outside
-// deployedProofGuards.test.ts's fresh-per-call-helper span, since these three imports are
-// CSV (no extraction enqueued) and must reuse ONE fixed csv byte string across all three
-// uploads for the saved mapping to key on the same header. A self-imposed 300s budget: not
-// required by that guard's testNames floor, but three full wizard passes on a cold fleet
-// warrant it anyway.
+// Above the EXTR-15 marker: that span requires fresh bytes per upload, and all three imports
+// here must share one file so the saved mapping keys on the same header.
 test('EXTR37-E2E-01: the second import of a file for the same client opens mapped, and opens unmapped without the lookup', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
@@ -6944,9 +6938,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await signInFirm(page)
   await selectEntity(page, entity.name)
 
-  // Fixed across all three imports: the saved-mapping key is the decoded header, so the
-  // same bytes must reach the server three times for import 2 to restore and import 3 (under
-  // the intercepted lookup) to prove it depends on that GET.
+  // One file for all three imports: the saved mapping keys on the decoded header.
   const csv = buildSingleInvoiceCsv(`INV-E2E-EXTR37-${Date.now()}`)
 
   const lookupPredicate = (r: Response) =>
@@ -7134,10 +7126,10 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
     { timeout: 60_000 },
   )
   await importBtn.click()
-  expect(requestBody(await import2Req), '[untouched-restore-does-not-save]').toMatch(/name="remember_mapping"\r\n\r\nfalse\r\n/)
+  expect(requestBody(await import2Req), 'an untouched restore must post remember_mapping=false').toMatch(/name="remember_mapping"\r\n\r\nfalse\r\n/)
   expect((await import2Resp).status()).toBe(201)
-  // Import 2 repeats import 1's own invoice number, so it creates 0 new invoices and routes
-  // to the batch surface, not a second invoice-detail (BUG08's own idiom).
+  // Import 2 repeats import 1's invoice number, so it creates 0 invoices and routes to the
+  // batch surface, not a second invoice detail.
   await expect(page.getByRole('button', { name: /^Invoices \(\d+\)$/ })).toBeVisible({ timeout: 60_000 })
 
   // --- import 3, under an intercepted lookup: the Map step must return to today's seed ----
@@ -7154,9 +7146,12 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
     hits += 1
     const real = await route.fetch()
     realBodies.push(await real.json())
-    // Keeps the gateway's own headers (CORS included) and swaps only the body -- an abort
-    // or a 5xx would log a console error and trip collectErrors below.
-    await route.fulfill({ response: real, json: { saved_mapping: null } })
+    // The real headers keep CORS; the two body headers would describe the real body, not this
+    // one. An abort or a 5xx would log a console error and trip collectErrors below.
+    const headers = real.headers()
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({ status: real.status(), headers, json: { saved_mapping: null } })
   })
 
   const preview3 = page.waitForResponse(
@@ -7169,7 +7164,7 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
 
   await expect.poll(() => hits, { message: 'the intercepted lookup must fire exactly once' }).toBe(1)
   // The row still exists -- only this test's answer to the SPA differs from the real one.
-  expect(realBodies[0]?.saved_mapping?.mapping.invoice_number, '[lookup-disabled-in-spec] control').toBe('Invoice No')
+  expect(realBodies[0]?.saved_mapping?.mapping.invoice_number, 'control: the real lookup still returns the saved row').toBe('Invoice No')
 
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)

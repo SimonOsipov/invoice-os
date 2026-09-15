@@ -120,9 +120,8 @@ async function uploadDocument(token: string, csv: string, filename = 'import.csv
   return id as string
 }
 
-// buildForm(): the POST /v1/imports body -- three text fields, no file. The optional third
-// param lets the saved-mapping suite send a non-default mapping and/or remember_mapping
-// without a fourth ad hoc FormData builder; every existing 2-arg caller is unaffected.
+// buildForm(): the POST /v1/imports body -- three text fields, no file. `opts` overrides the
+// mapping and adds remember_mapping; with no `remember`, no part is sent and the server saves.
 function buildForm(entityId: string, documentId: string, opts?: { mapping?: Record<string, string>; remember?: 'true' | 'false' }): FormData {
   const f = new FormData()
   f.set('entity_id', entityId)
@@ -301,14 +300,12 @@ test.describe('saved mapping contract (API E2E, over the deployed gateway)', () 
     token = await login(PERSONAS.A)
   })
 
-  // NO_VAT: IMPORT_MAPPING with `vat` dropped -- SM-API-08/10's second import, so the two
-  // completed imports send genuinely different mappings.
+  // A second, different mapping, so a replaced or a kept save is observable.
   const NO_VAT = { ...IMPORT_MAPPING }
   delete NO_VAT.vat
 
-  // csvWith(): a header variant's one data row, reusing buildCleanCsv's own values keyed by
-  // column name -- SM-API-07's four probes only preview the document, so a value only needs
-  // to be decodable, never correct.
+  // One data row per header variant, from buildCleanCsv's values by column name. The variants
+  // are only previewed, so a value must decode, not validate.
   const CLEAN_VALUE_BY_HEADER: Record<string, string> = Object.fromEntries(
     IMPORT_HEADER.split(',').map((h, i) => [h, buildCleanCsv('_').split('\n')[1].split(',')[i]]),
   )
@@ -317,9 +314,7 @@ test.describe('saved mapping contract (API E2E, over the deployed gateway)', () 
     return `${header.join(',')}\n${row.join(',')}`
   }
 
-  // savedMappingFetch(): the raw seam for SM-API-09's refusal legs -- getSavedMapping throws
-  // ApiError on non-2xx (it wraps apiFetch), so a 401/400/404 needs a raw fetch instead,
-  // adapted through asRawResult like this file's own downloadFetch siblings.
+  // getSavedMapping throws on a non-2xx, so the refusal legs read the envelope through a raw fetch.
   async function savedMappingFetch(tok: string | null, query: string): Promise<RawResult> {
     const headers: Record<string, string> = {}
     if (tok) headers.Authorization = `Bearer ${tok}`
@@ -467,8 +462,9 @@ test.describe('saved mapping contract (API E2E, over the deployed gateway)', () 
   })
 
   test('SM-API-09: the lookup refuses no token, no entity, a malformed document id and an unknown document', async () => {
+    // The gateway's verifier answers this 401, so the handler's own identity-first order is Go-tested only.
     const noAuth = await savedMappingFetch(null, '')
-    assertErrorEnvelope(noAuth, 401, 'no token, no query -- identity is checked before any id guard')
+    assertErrorEnvelope(noAuth, 401, 'no token -- the gateway refuses before the route runs')
 
     const entity = await createEntity(token, { name: `Zz EXTR-37 sm ${freshTin()}`, tin: freshTin() })
 

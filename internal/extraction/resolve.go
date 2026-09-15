@@ -157,6 +157,15 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 					dst = appendReadings(dst, rule.Shape, value.Text,
 						usableRegion(value.Region), outField, ruleID, tier, rel.distance, true)
 				}
+				// ceiling: a label carrying other letters, e.g. "Total (NGN)", gets no row reach; revisit when a far-right total with a suffixed label misses
+				// ceiling: a dropped far value gets no row reach; revisit when an offset far-right total misses
+				if rowReach && bounded && bareLabel(tok.Text, loc) {
+					if vi, gap, ok := rowReachToken(page, tok.Region, rule.Relation); ok && !ownedBelow(page, labels[pi], page.Tokens[vi].Region) {
+						value := page.Tokens[vi]
+						dst = appendReadings(dst, rule.Shape, value.Text,
+							usableRegion(value.Region), outField, ruleID, tier, gap, true)
+					}
+				}
 			}
 		}
 	}
@@ -226,6 +235,56 @@ func crossesALabel(page TokenPage, labels []bool, anchor, value Region) bool {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+// bareLabel reports whether text carries no letter outside its label match.
+func bareLabel(text string, loc []int) bool {
+	return !strings.ContainsFunc(text[:loc[0]], unicode.IsLetter) &&
+		!strings.ContainsFunc(text[loc[1]:], unicode.IsLetter)
+}
+
+// rowReachToken is the first token on anchor's line to its right, when it sits past rel's dial.
+func rowReachToken(page TokenPage, anchor Region, rel Relation) (index int, gap float64, ok bool) {
+	if !usableBox(anchor) {
+		return 0, 0, false
+	}
+	line := Relation{Kind: RelRight, MaxDistance: math.Inf(1)}
+	index = -1
+	for i, tok := range page.Tokens {
+		if !usableBox(tok.Region) {
+			continue
+		}
+		// ceiling: only a bare "₦" is passed over; a bare "NGN" or "N" before the amount still ends the reach
+		if strings.TrimSpace(tok.Text) == "₦" {
+			continue
+		}
+		g, _, order, _, overlap := relationClauses(anchor, tok.Region, line, 0)
+		if order || overlap {
+			continue
+		}
+		if index < 0 || tok.Region.X0 < page.Tokens[index].Region.X0 {
+			index, gap = i, g
+		}
+	}
+	if index < 0 || gap <= rel.MaxDistance {
+		return 0, 0, false
+	}
+	return index, gap, true
+}
+
+// A value stacked under another label is that label's (TestResolve_TheRowReachStopsAtAnotherColumnsValue).
+// ceiling: any label stacked over the value refuses the row reach, even one whose own rule rejects it; revisit when a far-right amount under a non-amount column header misses
+func ownedBelow(page TokenPage, labels []bool, value Region) bool {
+	below := Relation{Kind: RelBelow, MaxDistance: tier1MaxDistanceBelow}
+	for i, tok := range page.Tokens {
+		if !labels[i] || !usableBox(tok.Region) {
+			continue
+		}
+		if _, _, order, distance, overlap := relationClauses(tok.Region, value, below, 0); !order && !distance && !overlap {
+			return true
+		}
 	}
 	return false
 }

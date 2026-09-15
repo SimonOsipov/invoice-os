@@ -2,9 +2,8 @@
 // plus its bulk-approve bar. InvoicesList's structural sibling: own useAsync, own entity
 // gate, envelope kept whole, shared Pager fed the response's echoed pagination. No poll:
 // this queue is always status='validated' (store.go:691), never queued|submitted, so
-// shouldPollList would be provably always false here -- reusing it would be dead code. No
-// whole-row click either (G6) -- detail navigation out of the queue is APPR-13's scope,
-// deliberately omitted here.
+// shouldPollList would be provably always false here -- reusing it would be dead code.
+// Whole-row click opens the invoice; the checkbox cell and the reason icon stop propagation.
 //
 // Bulk approve (APPR-12-04): arm, then confirm INLINE inside the same bar -- never a
 // modal ([no-modal]). bulkPhaseReducer is imported from lib/reviewBatch and driven
@@ -398,24 +397,27 @@ export function ApprovalsView({ ctx }: { ctx: PlatformCtx }) {
                   data-testid="approval-row"
                   className="pf-row pf-list-row"
                   style={{ display: 'grid', gridTemplateColumns: APPROVALS_GRID_COLUMNS, gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
+                  onClick={() => ctx.openImportedInvoice(r.id)}
                 >
-                  <input
-                    type="checkbox"
-                    data-testid="approval-select-row"
-                    aria-label={approvalSelectRowLabel(r.invoice_number)}
-                    checked={selected.includes(r.id)}
-                    // The server's own answer, fail-closed -- no client-side conjunct.
-                    disabled={!av.approvable}
-                    title={reason ?? undefined}
-                    aria-describedby={reason != null ? reasonId : undefined}
-                    // Disabled-only: on an enabled control this would kill the legitimate
-                    // hover affordance platform.css leaves unguarded.
-                    style={av.approvable ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
-                    onChange={() => {
-                      setSelected((sel) => toggleSelection(sel, r.id))
-                      disarm()
-                    }}
-                  />
+                  <span data-testid="approval-select-cell" onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', alignSelf: 'stretch' }}>
+                    <input
+                      type="checkbox"
+                      data-testid="approval-select-row"
+                      aria-label={approvalSelectRowLabel(r.invoice_number)}
+                      checked={selected.includes(r.id)}
+                      // The server's own answer, fail-closed -- no client-side conjunct.
+                      disabled={!av.approvable}
+                      title={reason ?? undefined}
+                      aria-describedby={reason != null ? reasonId : undefined}
+                      // Disabled-only: on an enabled control this would kill the legitimate
+                      // hover affordance platform.css leaves unguarded.
+                      style={av.approvable ? undefined : { cursor: 'not-allowed', opacity: 0.5 }}
+                      onChange={() => {
+                        setSelected((sel) => toggleSelection(sel, r.id))
+                        disarm()
+                      }}
+                    />
+                  </span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     <span
                       className="mono"
@@ -502,7 +504,12 @@ function BlockedReason({ id, reason }: { id: string; reason: string }) {
   }, [open])
 
   return (
-    <span style={{ flex: 'none', display: 'inline-flex' }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <span
+      style={{ flex: 'none', display: 'inline-flex' }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
         ref={iconRef}
         type="button"

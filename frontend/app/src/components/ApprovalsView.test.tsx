@@ -95,12 +95,13 @@ function approvalRow(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
 // (Implementation Notes, CTX section) -- narrowing idiom matches InvoicesList.test.tsx's
 // listCtx(). `entityId: undefined` (default) leaves it unset so in-house callers can omit
 // it without a stray `null` in the fixture.
-function approvalsCtx(over: { mode?: 'firm' | 'inhouse'; entityId?: string | null } = {}): PlatformCtx {
+function approvalsCtx(over: { mode?: 'firm' | 'inhouse'; entityId?: string | null; openImportedInvoice?: (id: string) => void } = {}): PlatformCtx {
   const ctx = {
     mode: over.mode ?? 'firm',
     active: { entityId: over.entityId === undefined ? 'ent-1' : over.entityId },
     user: { tenantName: 'Acme Co' },
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
+    openImportedInvoice: over.openImportedInvoice ?? vi.fn(),
   }
   return ctx as unknown as PlatformCtx
 }
@@ -1331,5 +1332,150 @@ describe('A16-4: unmount aborts the fan-out at a row boundary, and the pager fre
     await screen.findByTestId('approvals-results')
     await waitFor(() => expect(nextBtn().disabled, 'the pager must re-enable once settled').toBe(false))
     expect(prevBtn().disabled).toBe(false)
+  })
+})
+
+// --- BUG-17-04 (task-1050, Mode A) -- RED specs for the row-opens-invoice wiring: no row
+// onClick exists yet, and neither the select cell nor the BlockedReason wrapper stop
+// propagation. Each negative spec ends with a positive control on the SAME row/ctx (click
+// the buyer text) so a build with no handler at all cannot pass by never calling anything.
+
+describe('B17-D1: clicking a row opens its invoice', () => {
+  it("a click on the second row's buyer text calls openImportedInvoice once with that row's id", async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-1', invoice_number: 'INV-1' })
+    const b = approvalRow({ id: 'inv-2', invoice_number: 'INV-2' })
+    mockBulkFetch([listResponse([a, b], { limit: 50, offset: 0, total: 2 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-1')
+
+    const row2 = screen.getByText('INV-2').closest('[data-testid="approval-row"]') as HTMLElement
+    fireEvent.click(within(row2).getByText('Beta Ltd'))
+
+    expect(spy, "a click on the SECOND row must call openImportedInvoice once with THAT row's id, not the first").toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-2')
+  })
+})
+
+describe('B17-D1b: a blocked row opens too, in both workspaces', () => {
+  it('firm then in-house: clicking the amount cell and the invoice-number text both open the blocked row', async () => {
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const workspaces: Array<{ mode?: 'firm' | 'inhouse'; entityId?: string | null }> = [{}, { mode: 'inhouse', entityId: null }]
+    for (const over of workspaces) {
+      const spy = vi.fn()
+      const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+      mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+      render(<ApprovalsView ctx={approvalsCtx({ ...over, openImportedInvoice: spy })} />)
+      await screen.findByText('INV-BLOCKED')
+
+      const row = screen.getByTestId('approval-row')
+      fireEvent.click(within(row).getByText(fmt(1075)))
+      fireEvent.click(within(row).getByText('INV-BLOCKED'))
+
+      expect(spy, `mode ${over.mode ?? 'firm'}: both clicks must open the blocked row's own invoice`).toHaveBeenCalledTimes(2)
+      expect(spy).toHaveBeenNthCalledWith(1, 'inv-blocked')
+      expect(spy).toHaveBeenNthCalledWith(2, 'inv-blocked')
+
+      cleanup()
+    }
+  })
+})
+
+describe('B17-D2: an enabled checkbox click selects and never opens', () => {
+  it('toggles selection and shows the bulk bar, but never calls the spy; a click elsewhere on the row still opens it', async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-A')
+
+    const row = screen.getByTestId('approval-row')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(checkbox)
+
+    expect(spy, 'an enabled checkbox click must never open the invoice').toHaveBeenCalledTimes(0)
+    expect(checkbox.checked, 'the click must still toggle selection').toBe(true)
+    expect(screen.getByTestId('approvals-bulk-bar'), 'the bulk bar must show the selection').toBeTruthy()
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-a')
+  })
+})
+
+describe('B17-D3: a disabled checkbox click never opens', () => {
+  it('never calls the spy for a disabled checkbox; a click elsewhere on the row still opens it', async () => {
+    const spy = vi.fn()
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const row = screen.getByTestId('approval-row')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(checkbox)
+
+    // No selection assertion: jsdom fires React onChange on a disabled checkbox, which
+    // Chromium does not -- this spec is about propagation only (premise-d-disabled-dispatch).
+    expect(spy, 'a disabled checkbox click must never open the invoice').toHaveBeenCalledTimes(0)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-blocked')
+  })
+})
+
+describe('B17-D4: the checkbox cell is a no-navigation zone', () => {
+  it('a click inside approval-select-cell never opens the invoice and leaves the checkbox unchecked', async () => {
+    const spy = vi.fn()
+    const a = approvalRow({ id: 'inv-a', invoice_number: 'INV-A' })
+    mockBulkFetch([listResponse([a], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-A')
+
+    const row = screen.getByTestId('approval-row')
+    const cell = within(row).getByTestId('approval-select-cell')
+    const checkbox = within(row).getByTestId('approval-select-row') as HTMLInputElement
+    fireEvent.click(cell)
+
+    expect(spy, 'a click inside approval-select-cell outside the box must never open the invoice').toHaveBeenCalledTimes(0)
+    expect(checkbox.checked, 'a click on the cell itself, not the box, must not toggle selection').toBe(false)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-a')
+  })
+})
+
+describe('B17-D5: the reason icon and its tip never open the invoice', () => {
+  it("clicking the icon, the tip, and the tip's inner span never opens the invoice", async () => {
+    const spy = vi.fn()
+    const reason = 'Only a validated invoice can be approved or rejected.'
+    const blocked = approvalRow({ id: 'inv-blocked', invoice_number: 'INV-BLOCKED', can_approve: false, approve_blocked_reason: reason, approval: null })
+    mockBulkFetch([listResponse([blocked], { limit: 50, offset: 0, total: 1 })])
+
+    render(<ApprovalsView ctx={approvalsCtx({ openImportedInvoice: spy })} />)
+    await screen.findByText('INV-BLOCKED')
+
+    const row = screen.getByTestId('approval-row')
+    const icon = within(row).getByTestId('approval-blocked-icon')
+    fireEvent.click(icon)
+
+    fireEvent.mouseEnter(icon.parentElement as HTMLElement)
+    const tip = within(row).getByTestId('approval-blocked-tip')
+    fireEvent.click(tip)
+    fireEvent.click(tip.firstElementChild as HTMLElement)
+
+    expect(spy, 'the icon and its tip, including the inner text span, must never open the invoice').toHaveBeenCalledTimes(0)
+
+    fireEvent.click(within(row).getByText('Beta Ltd'))
+    expect(spy, 'positive control: a click elsewhere on the same row must still open it').toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-blocked')
   })
 })

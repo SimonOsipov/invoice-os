@@ -1,18 +1,15 @@
-// fingerprint_goldens_moved_test.go: closes the one-sided half of AC-8 -- the frozen-baseline
-// guard in fingerprint_goldens_test.go never asserts the two Chrome rows actually moved. Own file
-// so an edit to either golden table's Chrome rows shows up named in the PR's changed-file list.
+// fingerprint_goldens_moved_test.go: the half AC-8 leaves open -- the frozen-baseline guard in
+// fingerprint_goldens_test.go permits the two Chrome rows to differ but never asserts they do.
+// Own file so an edit to the pinned value is named in the PR's changed-file list.
 package extraction_test
 
 import "testing"
 
-// frozenChromeRow is chrome_register.pdf's and chrome_register_twin.pdf's value before
-// EXTR-36-03's word stage, pinned a second time here so the frozen table cannot drift unnoticed.
+// The two Chrome rows' value before the word stage, pinned a second time so a one-file
+// "refresh" of the frozen table cannot pass unnoticed.
 const frozenChromeRow = "v3:8f353f4c92d9135c022a096463ddd2cca5c355397a19ee95e422f65bc35fda72"
 
-// AC-3's missing half: the two Chrome rows must actually differ from the frozen baseline, not
-// merely be permitted to by TestFingerprint_OnlyTheChromeRowsMayDifferFromTheFrozenBaseline.
-// Pass-on-arrival, not red-first -- a guard, not a driver; proven by a mutation control that
-// "refreshes" a frozen Chrome row to its live value.
+// The frozen Chrome rows still hold the pre-merge value, and the live rows moved off it.
 func TestFingerprint_TheTwoChromeRowsDidMoveFromTheFrozenBaseline(t *testing.T) {
 	for _, name := range []string{chrRegister, chrRegisterTwin} {
 		pre, ok := fingerprintGoldensPreMerge[name]

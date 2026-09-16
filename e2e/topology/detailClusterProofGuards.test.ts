@@ -84,6 +84,20 @@ describe('[bug-14-04] the action-cluster geometry proof keeps its controls above
     expect(body).not.toMatch(/toHaveCSS\(\s*['"](height|width)['"]/)
     expect(body).not.toMatch(/\.(height|width)\s*\)\s*\.toBe\(/)
   })
+
+  it('the geometry proof declares exactly the five controls the column holds', () => {
+    // The declaration sits outside the test body, so no needle above reads it; a sixth entry reds only on the deploy gate.
+    const open = soleIndex(source, 'const CLUSTER_CONTROLS = [', file)
+    const close = source.indexOf(']', open)
+    expect(close, `${file}: the CLUSTER_CONTROLS declaration never closes`).toBeGreaterThan(open)
+    expect(source.slice(open, close).match(/'[^']*'/g), 'the control set, in render order').toEqual([
+      `'detail-approve'`,
+      `'detail-reject'`,
+      `'edit-toggle'`,
+      `'revalidate'`,
+      `'detail-submit'`,
+    ])
+  })
 })
 
 describe('[bug-14-04] the role-axis claim keeps its controls above its wire read', () => {

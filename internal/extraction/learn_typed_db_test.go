@@ -111,7 +111,7 @@ func tlTeachChrome(t *testing.T, ctx context.Context, number string, riverJobID 
 }
 
 // AC-4: the twin's buyer_name VALUE is identical taught and untaught -- only the reason moves,
-// ambiguous -> none -- so the oracle below is the reason, per the Implementation Notes.
+// ambiguous -> none -- so the oracle is the reason and the rule the seam served, never the value.
 func TestRLS_AChromePrintedTwinReadsTheLearnedBuyer(t *testing.T) {
 	ctx := t.Context()
 	f, job1 := tlTeachChrome(t, ctx, "EXTR36-05-TWIN", 928601)
@@ -133,10 +133,24 @@ func TestRLS_AChromePrintedTwinReadsTheLearnedBuyer(t *testing.T) {
 	}
 	wpAssertRankZero(t, bare, chtField, stPtr(chtValue), stPtr(string(extraction.ReasonAmbiguous)))
 
-	// wkAssertOnlyFieldDiffers does not hold here (Implementation Notes' EXECUTOR RISK): the
-	// taught run's self-check adds a third buyer_name candidate the untaught run never writes,
-	// so the row sets differ by rank count, not only by the taught field's own value.
-	if got, want := wpRankZeroNames(taught), wpRankZeroNames(bare); !slices.Equal(got, want) {
-		t.Errorf("taught rank-0 fields = %v, untaught rank-0 fields = %v, want the same set", got, want)
+	// Teaching buyer_name must move buyer_name and nothing else. Not wkAssertOnlyFieldDiffers:
+	// the untaught run writes a buyer_name alternative the taught run does not, so the full row
+	// sets differ by more than the taught field.
+	others := func(rows []wpRow) []string {
+		var out []string
+		for _, r := range rows {
+			if r.rank == 0 && r.name != chtField {
+				out = append(out, r.String())
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	got, want := others(taught), others(bare)
+	if len(want) < 2 {
+		t.Fatalf("only %d decided field(s) besides %s; the comparison is vacuous", len(want), chtField)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the taught run decided %v, the untaught run %v; the learned rule must move %s and nothing else", got, want, chtField)
 	}
 }

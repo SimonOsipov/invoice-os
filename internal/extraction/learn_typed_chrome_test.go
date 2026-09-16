@@ -1,6 +1,6 @@
-// learn_typed_chrome_test.go: EXTR-36-05. A typed correction only learns from the merged
-// Chrome print -- pre-merge, per-glyph rects give LearnTypedRule nothing to find. No DB;
-// helpers use a cht* prefix.
+// learn_typed_chrome_test.go: a typed correction only learns from the merged Chrome print --
+// pre-merge, per-glyph rects give LearnTypedRule nothing to find. No DB; helpers use a cht*
+// prefix.
 package extraction_test
 
 import (
@@ -28,9 +28,8 @@ func chtPreMergePage1(t *testing.T, name string) extraction.TokenPage {
 	return extraction.TokenPage{Number: 1, Tokens: page1}
 }
 
-// AC-1 + AC-2: the word stage is what makes the layout learnable at all. Pre-merge, chrome_
-// register.pdf carries 1 usable anchor and no token reads the typed value; post-merge, 14
-// anchors and the derivation succeeds with the pinned BILLED TO body.
+// AC-1 + AC-2: the word stage is what makes the layout learnable at all -- 1 usable anchor and
+// no token carrying the typed value before it, 14 anchors and a derived rule after.
 func TestChromeRegister_TheWordStageMakesItsLayoutLearnable(t *testing.T) {
 	post := rvCorpusPages(t, chrRegister)
 	postAnchors := extraction.AnchorObservations(post)
@@ -55,10 +54,8 @@ func TestChromeRegister_TheWordStageMakesItsLayoutLearnable(t *testing.T) {
 	}
 }
 
-// AC-1 + AC-5: every refusal on the merged page names its own clause, never a bare ok/nil check.
-// total is TypedNotDerived (no row-reach rule for a far-right amount, learn.go:226-235) and
-// TypedNoToken (a value the page never prints); buyer_name's address line qualifies a token and
-// derives, but fails the self-check.
+// AC-1 + AC-5: every refusal names its own clause, never a bare ok/nil check. A far-right amount
+// sits past capDistance(RelRight), so no amount field on this page is derivable.
 func TestChromeRegister_EachTypedRefusalNamesItsClause(t *testing.T) {
 	pages := rvCorpusPages(t, chrRegister)
 	for _, c := range []struct {

@@ -1653,7 +1653,7 @@ func TestRLS_AnUndecodableLayoutTokensColumnAbortsTheCorrectionAndCommitsNothing
 	}
 }
 
-// --- EXTR-36-05 AC-3: a typed correction on a Chrome-printed layout writes its rule ------
+// --- AC-3: a typed correction on a Chrome-printed layout writes its rule ------------------
 
 func TestRLS_ATypedCorrectionOnAChromePrintWritesItsRule(t *testing.T) {
 	ctx := t.Context()

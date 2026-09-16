@@ -1984,6 +1984,19 @@ function uniqueChromeRegisterTwinPdfBytes(): Buffer {
   return Buffer.concat([CHROME_REGISTER_TWIN_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// A correction applies to the invoice filed from the document, which commits AFTER the
+// extraction job reports succeeded -- posting on that signal alone races it and 409s
+// (ErrNoInvoiceForDocument, handlers.go).
+async function settledInvoiceFor(token: string, entityId: string): Promise<void> {
+  await expect
+    .poll(async () => (await listInvoices(token, { entity_id: entityId, limit: 5 })).invoices.length, {
+      message: 'no invoice was filed from the register -- a correction would have nothing to apply to',
+      timeout: 120_000,
+      intervals: [1_000],
+    })
+    .toBeGreaterThan(0)
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -8603,7 +8616,7 @@ test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twi
   test.setTimeout(900_000)
   const errors = collectErrors(page)
 
-  const { token, jobs } = await runDocuments(page, 'Zz EXTR-36 chrome', [
+  const { token, entityId, jobs } = await runDocuments(page, 'Zz EXTR-36 chrome', [
     { name: 'chrome_register.pdf', mimeType: 'application/pdf', buffer: uniqueChromeRegisterPdfBytes() },
   ])
   const job = jobs['chrome_register.pdf']!
@@ -8612,6 +8625,8 @@ test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twi
   // Attached before any assertion: the only record of what the deployed docling read.
   const detail = await getExtractionDetail(token, job.id)
   await testInfo.attach('chrome-register-detail.json', { body: JSON.stringify(detail, null, 2), contentType: 'application/json' })
+
+  await settledInvoiceFor(token, entityId)
 
   // Typed, no anchor_label, no region -- a pointed payload with no region 400s
   // (handlers_correction.go:201-203).
@@ -8655,7 +8670,7 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
-  const { token, jobs } = await runDocuments(page, 'Zz EXTR-36 anchors', [
+  const { token, entityId, jobs } = await runDocuments(page, 'Zz EXTR-36 anchors', [
     { name: 'chrome_register.pdf', mimeType: 'application/pdf', buffer: uniqueChromeRegisterPdfBytes() },
   ])
   const job = jobs['chrome_register.pdf']!
@@ -8663,6 +8678,8 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
 
   const detail = await getExtractionDetail(token, job.id)
   await testInfo.attach('chrome-register-anchor-detail.json', { body: JSON.stringify(detail, null, 2), contentType: 'application/json' })
+
+  await settledInvoiceFor(token, entityId)
 
   // Sourced, never invented: a box matching no anchor 200s with corrected.where === null --
   // the correction applies and nothing is taught, silently.

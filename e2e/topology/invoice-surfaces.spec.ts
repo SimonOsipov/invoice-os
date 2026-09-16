@@ -4889,7 +4889,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
 // mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
 // and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
-const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card']
+const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card', 'ubl-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
@@ -4941,7 +4941,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   )
   expect(
     order,
-    "the rail's cards in document order: Fiscal record -> Approvals -> Source document, with Compliance no longer among them",
+    "the rail's cards in document order: Fiscal record -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
   ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the
@@ -4956,6 +4956,121 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   await expect(page.getByTestId('compliance-card')).toBeVisible()
   await expect(rail.getByTestId('compliance-card')).toHaveCount(0)
   await expect(page.getByTestId('invoice-main-column').getByTestId('compliance-card')).toHaveCount(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The UBL document card's place in the rail, as relationships at every wide width. The jsdom
+// twins prove DOM order; only a browser proves the card lands flush beneath Source document.
+test("detail surface: the UBL document card is the rail's last card, beneath Source document, at every wide width", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  // Sorts after every seeded entity name, so it never becomes another spec's default client.
+  const entity = await createEntity(token, { name: `Zenith UBL card ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-BUG18-UBLCARD-${Date.now()}`
+  await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  const rail = page.getByTestId('invoice-rail')
+  // Both testids sit on the padded body; the card is its parent.
+  const ublBody = page.getByTestId('ubl-document-card')
+  const sourceBody = page.getByTestId('source-document-card')
+  const ublCard = ublBody.locator('xpath=..')
+  const sourceCard = sourceBody.locator('xpath=..')
+
+  // Positive controls: both cards settled, and the UBL card offering its actions.
+  await expect(page.getByTestId('ubl-card-view')).toBeVisible()
+  await expect(page.getByTestId('ubl-card-download')).toBeVisible()
+  await expect(page.getByTestId('why-no-source-document')).toBeVisible()
+
+  // Order does not vary with width, so it is read once.
+  const order = await rail.evaluate((el) => {
+    const last = el.lastElementChild
+    return {
+      lastHoldsUbl: last?.querySelector(':scope > [data-testid="ubl-document-card"]') != null,
+      previousHoldsSource: last?.previousElementSibling?.querySelector(':scope > [data-testid="source-document-card"]') != null,
+    }
+  })
+  expect(order, "the UBL card is the rail's last child, directly after Source document").toEqual({
+    lastHoldsUbl: true,
+    previousHoldsSource: true,
+  })
+
+  type UblCardFit = { width: number; xDelta: number; widthDelta: number; gap: number; rowGap: number }
+  const measured: UblCardFit[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      const rowGap = await rail.evaluate((el) => Number.parseFloat(getComputedStyle(el).rowGap))
+      expect(Number.isFinite(rowGap), `the rail's row-gap must resolve to a length at ${width}px`).toBe(true)
+
+      const boxes = await Promise.all([
+        ublBody.boundingBox(),
+        sourceBody.boundingBox(),
+        ublCard.boundingBox(),
+        sourceCard.boundingBox(),
+        page.getByTestId('ubl-card-filename').boundingBox(),
+        page.getByTestId('ubl-card-view').boundingBox(),
+        page.getByTestId('ubl-card-download').boundingBox(),
+      ])
+      for (const [i, box] of boxes.entries()) {
+        expect(box, `box ${i} must render at ${width}px`).toBeTruthy()
+        expect(box!.height, `box ${i} must have real height at ${width}px`).toBeGreaterThan(0)
+      }
+      const [ublBox, sourceBox, ublCardBox, sourceCardBox, filenameBox, viewBox, downloadBox] = boxes.map((b) => b!)
+
+      // (a) the same left edge and width as Source document's body.
+      const xDelta = Math.abs(ublBox.x - sourceBox.x)
+      const widthDelta = Math.abs(ublBox.width - sourceBox.width)
+      expect(xDelta, `the UBL card must share Source document's left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(widthDelta, `the UBL card must match Source document's width at ${width}px`).toBeLessThanOrEqual(1)
+
+      // (b) directly beneath: the space between the two cards is the rail's own row-gap.
+      const gap = ublCardBox.y - (sourceCardBox.y + sourceCardBox.height)
+      expect(Math.abs(gap - rowGap), `the UBL card must sit one row-gap below Source document at ${width}px`).toBeLessThanOrEqual(1)
+
+      // (d) nothing in the card spills past its body horizontally.
+      for (const [name, box] of [
+        ['ubl-card-filename', filenameBox],
+        ['ubl-card-view', viewBox],
+        ['ubl-card-download', downloadBox],
+      ] as const) {
+        const g = gaps(box, ublBox)
+        expect(g.left, `${name} must not start left of the card body at ${width}px`).toBeGreaterThanOrEqual(-1)
+        expect(g.right, `${name} must not end right of the card body at ${width}px`).toBeGreaterThanOrEqual(-1)
+      }
+
+      measured.push({ width, xDelta, widthDelta, gap, rowGap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  expect(measured.map((m) => m.width), 'the sweep measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+
+  // (c) the card fills the rail. assertFillsColumn bounds only a too-narrow card; overflow reads
+  // as a negative gap, bounded below.
+  const fit = await assertFillsColumn(page, ublCard, rail, 'ubl document card vs rail', 1)
+  expect(fit.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+  for (const entry of fit) {
+    expect(entry.left, `the UBL card must not overflow the rail's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.right, `the UBL card must not overflow the rail's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+  }
+
+  await testInfo.attach('ubl-document-card-geometry.json', {
+    body: JSON.stringify({ entity: entity.name, invoiceNumber, measured, fit }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

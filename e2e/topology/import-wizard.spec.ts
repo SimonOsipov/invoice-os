@@ -1970,6 +1970,33 @@ function uniqueAdvisoryRegisterPdfBytes(): Buffer {
   return Buffer.concat([ADVISORY_REGISTER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// Copies of internal/extraction/testdata/chrome_register.pdf and its twin (fxE2ECopies). Both
+// share advisory_register.pdf's fingerprint by design (EXTR-36) -- see the ordering note on
+// EXTR36-E2E-02 below. Same recipe.
+const CHROME_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'chrome_register.pdf'))
+const CHROME_REGISTER_TWIN_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'chrome_register_twin.pdf'))
+
+function uniqueChromeRegisterPdfBytes(): Buffer {
+  return Buffer.concat([CHROME_REGISTER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+function uniqueChromeRegisterTwinPdfBytes(): Buffer {
+  return Buffer.concat([CHROME_REGISTER_TWIN_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// A correction applies to the invoice filed from the document, which commits AFTER the
+// extraction job reports succeeded -- posting on that signal alone races it and 409s
+// (ErrNoInvoiceForDocument, handlers.go).
+async function settledInvoiceFor(token: string, entityId: string): Promise<void> {
+  await expect
+    .poll(async () => (await listInvoices(token, { entity_id: entityId, limit: 5 })).invoices.length, {
+      message: 'no invoice was filed from the register -- a correction would have nothing to apply to',
+      timeout: 120_000,
+      intervals: [1_000],
+    })
+    .toBeGreaterThan(0)
+}
+
 // A file named *.pdf whose bytes are NOT a PDF: classification is extension-only and
 // upload only hashes+PUTs bytes (classify.go / service.go), so this sails through
 // selection and upload, then fails pdfium.OpenDocument on every one of River's 3
@@ -8577,3 +8604,114 @@ test('EXTR35-E2E-01 (AC-8): the letter-spaced register files its invoice instead
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
+
+// These two and EXTR35-E2E-01 upload documents sharing ONE fingerprint, all as PERSONAS.A, and
+// rules key on tenant+fingerprint only -- so a rule taught by one is live for every later
+// upload. Order is the oracle here; deployedProofGuards.test.ts pins it.
+test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twin', async ({
+  page,
+}, testInfo) => {
+  // Two runDocuments calls, so twice runDocumentsIn's own 120s+240s poll budget. 600_000 is
+  // under that worst case, and a timeout here retries into an already-taught tenant.
+  test.setTimeout(900_000)
+  const errors = collectErrors(page)
+
+  const { token, entityId, jobs } = await runDocuments(page, 'Zz EXTR-36 chrome', [
+    { name: 'chrome_register.pdf', mimeType: 'application/pdf', buffer: uniqueChromeRegisterPdfBytes() },
+  ])
+  const job = jobs['chrome_register.pdf']!
+  expect(job.state, `the register did not settle succeeded (kind ${job.failure_kind}, error ${job.last_error})`).toBe('succeeded')
+
+  // Attached before any assertion: the only record of what the deployed docling read.
+  const detail = await getExtractionDetail(token, job.id)
+  await testInfo.attach('chrome-register-detail.json', { body: JSON.stringify(detail, null, 2), contentType: 'application/json' })
+
+  await settledInvoiceFor(token, entityId)
+
+  // Typed, no anchor_label, no region -- a pointed payload with no region 400s
+  // (handlers_correction.go:201-203).
+  const typed = await postFieldCorrection(token, job.id, 'buyer_name', { value: 'Honeywell Group Nigeria Plc', method: 'typed' })
+
+  // A SEPARATE runDocuments call: no-duplicate-invoice-number is scoped per entity
+  // (internal/importer/service.go), so the twin needs its own.
+  const twin = await runDocuments(page, 'Zz EXTR-36 twin', [
+    { name: 'chrome_register_twin.pdf', mimeType: 'application/pdf', buffer: uniqueChromeRegisterTwinPdfBytes() },
+  ])
+  const twinJob = twin.jobs['chrome_register_twin.pdf']!
+  expect(twinJob.state, `the twin did not settle succeeded (kind ${twinJob.failure_kind}, error ${twinJob.last_error})`).toBe('succeeded')
+
+  const twinDetail = await getExtractionDetail(twin.token, twinJob.id)
+  await testInfo.attach('chrome-register-twin-detail.json', { body: JSON.stringify(twinDetail, null, 2), contentType: 'application/json' })
+
+  // Primary oracle: the audit event, not the twin's reading -- the twin's buyer_name routes
+  // through docling's Resolve, a different token source from this story's. The count is exact,
+  // so a retry (whose first attempt already taught) reds instead of passing -- deliberate.
+  const audit = await getAuditLog(token, { event: ['extraction.anchor.learned'], limit: 100 })
+  // Tied to this register's invoice, not the tenant: another buyer_name learn must not stand in for this one.
+  const learned = audit.events.filter((e) => {
+    const p = e.payload as { field?: string; invoice_id?: string }
+    return p.field === 'buyer_name' && p.invoice_id === typed.invoice_id
+  })
+  expect(
+    learned.length,
+    `recorded ${learned.length} extraction.anchor.learned event(s) for buyer_name, want exactly 1. More than one means either a retry of this spec or a re-run over a database db.Reset did not clear (it runs at gateway boot, not per workflow run). Events: ${JSON.stringify(learned.map((e) => ({ at: e.created_at, payload: e.payload })))}`,
+  ).toBe(1)
+
+  // The reason, never the value: an untaught twin reads the SAME value with reason 'ambiguous'
+  // (TestRLS_AChromePrintedTwinReadsTheLearnedBuyer), so only the reason discriminates.
+  const twinBuyerName = twinDetail.fields.find((f) => f.name === 'buyer_name')
+  expect(
+    twinBuyerName?.reason,
+    `the twin's buyer_name is undecided -- the learned rule did not reach it. Field: ${JSON.stringify(twinBuyerName)}`,
+  ).toBe('')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed labels', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+
+  const { token, entityId, jobs } = await runDocuments(page, 'Zz EXTR-36 anchors', [
+    { name: 'chrome_register.pdf', mimeType: 'application/pdf', buffer: uniqueChromeRegisterPdfBytes() },
+  ])
+  const job = jobs['chrome_register.pdf']!
+  expect(job.state, `the register did not settle succeeded (kind ${job.failure_kind}, error ${job.last_error})`).toBe('succeeded')
+
+  const detail = await getExtractionDetail(token, job.id)
+  await testInfo.attach('chrome-register-anchor-detail.json', { body: JSON.stringify(detail, null, 2), contentType: 'application/json' })
+
+  await settledInvoiceFor(token, entityId)
+
+  // Sourced, never invented: a box matching no anchor 200s with corrected.where === null --
+  // the correction applies and nothing is taught, silently.
+  const buyerName = detail.fields.find((f) => f.name === 'buyer_name')
+  const region = buyerName?.region
+  if (!region) {
+    throw new Error(
+      `buyer_name carries no region on the deployed read; a pointed correction needs one. Field: ${JSON.stringify(buyerName)}`,
+    )
+  }
+
+  // No anchor_label: handlers_correction.go seeds it from the client and only overrides it with
+  // the server-derived label when LearnRule actually derives a rule -- sending it would make a
+  // failed learn look identical to a successful one.
+  await postFieldCorrection(token, job.id, 'buyer_name', {
+    value: 'Honeywell Group Nigeria Plc',
+    method: 'pointed',
+    region,
+  })
+
+  const after = await getExtractionDetail(token, job.id)
+  await testInfo.attach('chrome-register-corrected-detail.json', { body: JSON.stringify(after, null, 2), contentType: 'application/json' })
+  const corrected = after.fields.find((f) => f.name === 'buyer_name')
+  expect(
+    corrected?.corrected?.where,
+    `corrected.where did not derive a rule -- the region matched no anchor. Field: ${JSON.stringify(corrected)}`,
+  ).toBe('BILLED TO')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+

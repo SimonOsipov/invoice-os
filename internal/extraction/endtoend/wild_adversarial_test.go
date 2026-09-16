@@ -1203,3 +1203,38 @@ func TestWildPairs_TheElevenKeepEveryFactTheyAssert(t *testing.T) {
 		t.Errorf("appending a sibling row and miss moved the digest to %s", d)
 	}
 }
+
+// --- AC-5: the Chrome fixtures are not a scored layout ---------------------------------------
+
+// AC-5. requiredPDFs, requiredGoldens and expectByLayout are this package's own, unexported and
+// reachable directly; the four corpus_ ratchets live in package extraction_test and are reached
+// through wildVarBody exactly as TestWildLayouts_DoNotEnterTheCorpusRatchets reaches them for
+// wild_ layouts.
+func TestChromeFixtures_AreNotScoredLayouts(t *testing.T) {
+	isChrome := func(s string) bool { return strings.HasPrefix(s, "chrome_") }
+	if len(requiredPDFs) == 0 || len(requiredGoldens) == 0 || len(expectByLayout) == 0 {
+		t.Fatalf("requiredPDFs/requiredGoldens/expectByLayout hold %d/%d/%d entr(ies) -- the absence checks below would pass vacuously", len(requiredPDFs), len(requiredGoldens), len(expectByLayout))
+	}
+
+	if slices.ContainsFunc(requiredPDFs, isChrome) {
+		t.Errorf("requiredPDFs names a chrome_ fixture")
+	}
+	if slices.ContainsFunc(requiredGoldens, isChrome) {
+		t.Errorf("requiredGoldens names a chrome_ fixture")
+	}
+	if slices.ContainsFunc(expectByLayout, func(r struct {
+		file   string
+		fields map[string][]string
+	}) bool {
+		return isChrome(r.file)
+	}) {
+		t.Errorf("expectByLayout names a chrome_ fixture")
+	}
+
+	for _, r := range wildRatchets {
+		body := wildVarBody(t, wildReadFile(t, r.file), r.decl, r.file)
+		if strings.Contains(body, "chrome_") {
+			t.Errorf("%s's %q names a chrome_ layout; a Chrome layout in a corpus ratchet moves the Tier-1 denominators", r.file, r.decl)
+		}
+	}
+}

@@ -610,3 +610,82 @@ func TestCorpusDoc_EachPrintedLabelIsInItsSourceInventory(t *testing.T) {
 		t.Errorf("with the signature row's source moved to NG-2 the checker reports %q, want exactly one problem naming it", got)
 	}
 }
+
+// --- AC-6: the Chrome fixtures print only NG-3's own labels -----------------------------------
+
+const chromeRegisterFixture = "chrome_register.pdf"
+
+// chromeRegisterLabels is the 13 label-shaped tokens chrome_register.pdf prints -- declared here
+// rather than derived, so a party name or an amount swept up by mistake cannot inflate the list.
+var chromeRegisterLabels = []string{
+	"Invoice", "Invoice number", "Issued", "DUE", "CURRENCY", "FROM", "TIN", "RC", "BILLED TO",
+	"Subtotal", "VAT 7.5%", "Withholding tax 10%", "Amount payable",
+}
+
+// chromeDocNG3Inventory is NG-3's own block inside "### Source label inventories" -- the
+// inventories run one source per top-level bullet, so this walks until the next "- **NG-" line.
+func chromeDocNG3Inventory(t *testing.T, section string) string {
+	t.Helper()
+	sub := eeDocSubsection(t, section, "### Source label inventories")
+	var lines []string
+	in := false
+	for _, line := range strings.Split(sub, "\n") {
+		if m := eeDocInventoryRE.FindStringSubmatch(line); m != nil {
+			in = m[1] == "NG-3"
+		}
+		if in {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		t.Fatalf("%q carries no NG-3 inventory block", eeDocSiblingSection)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// chromeDocLabelProblems reports a chromeRegisterLabels entry NG-3's inventory does not name,
+// whitespace-collapsed since a letter-spaced source label reads unspaced through the shipped
+// merge.
+func chromeDocLabelProblems(ng3 string) []string {
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	flatNG3 := flat(ng3)
+	var problems []string
+	for _, l := range chromeRegisterLabels {
+		if !strings.Contains(flatNG3, "`"+flat(l)+"`") {
+			problems = append(problems, fmt.Sprintf("NG-3's inventory never names %q, which %s prints", l, chromeRegisterFixture))
+		}
+	}
+	return problems
+}
+
+// Core AC-6. Every label chrome_register.pdf prints occurs in a merged token on its own page --
+// through the production PDFium reader, not a duplicate merge -- and NG-3's inventory names it.
+func TestCorpusDoc_TheChromeFixturesPrintOnlyNG3sLabels(t *testing.T) {
+	if len(chromeRegisterLabels) != 13 {
+		t.Fatalf("chromeRegisterLabels holds %d label(s), want 13", len(chromeRegisterLabels))
+	}
+
+	texts := wildTokenTexts(wildPDFiumPages(t, chromeRegisterFixture))
+	if len(texts) == 0 {
+		t.Fatalf("%s produced no merged token; the inventory check below would hold vacuously", chromeRegisterFixture)
+	}
+	flat := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	for _, l := range chromeRegisterLabels {
+		if !slices.ContainsFunc(texts, func(tok string) bool { return strings.Contains(flat(tok), flat(l)) }) {
+			t.Fatalf("%s carries no merged token containing %q; the inventory check below would pass vacuously", chromeRegisterFixture, l)
+		}
+	}
+
+	section := eeDocSection(t, wildReadFile(t, eeDocFile), eeDocSiblingSection)
+	ng3 := chromeDocNG3Inventory(t, section)
+	for _, p := range chromeDocLabelProblems(ng3) {
+		t.Error(p)
+	}
+
+	// Control: blanking the sentence-case clause AC-6's own fix added reports exactly the two
+	// labels it names.
+	blanked := strings.Replace(ng3, "`Invoice number` and `Issued`", "", 1)
+	if got := chromeDocLabelProblems(blanked); len(got) != 2 {
+		t.Errorf("with the sentence-case clause blanked the checker reports %q, want exactly two problems", got)
+	}
+}

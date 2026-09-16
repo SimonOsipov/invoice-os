@@ -143,7 +143,8 @@ func main() {
 	}
 
 	// ExtractWorker has no Queue field, so unlike sw/pw it needs no backfill. PageStore.Reader
-	// stays go-pdfium whatever EXTRACTOR selects: it renders page images, not text.
+	// stays go-pdfium whatever EXTRACTOR selects: it yields both the page images and the
+	// tokens Fingerprint and AnchorObservations are built from.
 	docSvc := document.NewService(document.NewStore(pool), docObjects)
 	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
 	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in

@@ -5,8 +5,13 @@ package extraction
 
 import (
 	"context"
+	"fmt"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/klippa-app/go-pdfium"
+	"github.com/klippa-app/go-pdfium/requests"
+	"github.com/klippa-app/go-pdfium/responses"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -154,3 +159,122 @@ func JobLayoutTokensForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID stri
 const MaxLayoutTokensJSONForTest = maxLayoutTokensJSON
 
 func LayoutTokensStorableForTest(tokens []string) ([]byte, bool) { return layoutTokensStorable(tokens) }
+
+// PDFiumStructuredPageForTest is one page's raw rects and chars at whatever mode the caller
+// requested. Raw, not converted to Token: the charsIn specs need PointPosition in chars' own
+// unflipped space, which a normalised Region cannot carry back. WidthPt/HeightPt let a caller
+// drive PDFiumWordsForTest without a second read of the same document.
+type PDFiumStructuredPageForTest struct {
+	Number            int
+	WidthPt, HeightPt float64
+	Rects             []*responses.GetPageTextStructuredRect
+	Chars             []*responses.GetPageTextStructuredChar
+}
+
+// PDFiumStructuredTextForTest reads every page of doc through the same request shape Read
+// issues, at an explicit mode ("rect" or "both"), so the mode-comparison control and the charsIn
+// specs can each choose the mode they need rather than trusting Read's own choice. mode is a
+// plain string so the external test package needs no go-pdfium/requests import.
+func PDFiumStructuredTextForTest(ctx context.Context, doc Document, mode string) ([]PDFiumStructuredPageForTest, error) {
+	var pages []PDFiumStructuredPageForTest
+	err := withPDFiumInstance(ctx, func(inst pdfium.Pdfium) error {
+		opened, err := inst.OpenDocument(&requests.OpenDocument{File: &doc.Bytes})
+		if err != nil {
+			return fmt.Errorf("pdfium: open document: %w", err)
+		}
+		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
+
+		count, err := inst.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: opened.Document})
+		if err != nil {
+			return fmt.Errorf("pdfium: page count: %w", err)
+		}
+
+		for i := range count.PageCount {
+			ref := requests.Page{ByIndex: &requests.PageByIndex{Document: opened.Document, Index: i}}
+			size, err := inst.FPDF_GetPageSizeByIndex(&requests.FPDF_GetPageSizeByIndex{Document: opened.Document, Index: i})
+			if err != nil {
+				return fmt.Errorf("pdfium: page %d size: %w", i+1, err)
+			}
+			text, err := inst.GetPageTextStructured(&requests.GetPageTextStructured{
+				Page: ref,
+				Mode: requests.GetPageTextStructuredMode(mode),
+			})
+			if err != nil {
+				return fmt.Errorf("pdfium: page %d text: %w", i+1, err)
+			}
+			pages = append(pages, PDFiumStructuredPageForTest{
+				Number: i + 1, WidthPt: size.Width, HeightPt: size.Height,
+				Rects: text.Rects, Chars: text.Chars,
+			})
+		}
+		return nil
+	})
+	return pages, err
+}
+
+// CharsInForTest hands the external test package the char-to-box helper the ModeBoth merge
+// seam (subtask 03) will consume. Unexported because production has no caller for it yet.
+func CharsInForTest(chars []*responses.GetPageTextStructuredChar, box responses.CharPosition) string {
+	return charsIn(chars, box)
+}
+
+// PdfiumSplitGapForTest exposes the word-join dial so the window specs bound the production
+// constant rather than a copy of it (subtask 03).
+const PdfiumSplitGapForTest = pdfiumSplitGap
+
+// PDFiumGapForTest is one same-line, adjacent-fragment gap -- stage 1 (lines) + stage 2
+// (fragments), before stage 3 decides whether to join it. Line groups gaps from the same visual
+// line together; within a line they arrive in ascending (left-to-right) fragment order, so a
+// caller can walk consecutive gaps to reconstruct a fragment run.
+type PDFiumGapForTest struct {
+	Line        int
+	Ratio       float64
+	Left, Right string
+}
+
+// PDFiumGapsForTest exposes stage 1+2's own fragment gaps -- the same gaps stage 3
+// (pdfiumWords) divides by -- so the window specs never reimplement the grouping. Depends on
+// pdfiumFragmentGaps, which subtask 03's merge (pdfium.go) adds alongside pdfiumWords.
+func PDFiumGapsForTest(rects []*responses.GetPageTextStructuredRect, chars []*responses.GetPageTextStructuredChar) []PDFiumGapForTest {
+	raw := pdfiumFragmentGaps(rects)
+	out := make([]PDFiumGapForTest, len(raw))
+	for i, g := range raw {
+		out[i] = PDFiumGapForTest{Line: g.line, Ratio: g.ratio, Left: charsIn(chars, g.left), Right: charsIn(chars, g.right)}
+	}
+	return out
+}
+
+// PDFiumWordsForTest runs the merge at an explicit splitGap and returns the group count too, so
+// a vanished token is visible. textChars is computed independently of pdfiumTokens' own
+// signature (which subtask 03 may or may not change): non-whitespace runes of the input rects,
+// never of merged token text -- Section A's invariant, TestPDFiumReader_TextCharsUnchanged's oracle.
+func PDFiumWordsForTest(rects []*responses.GetPageTextStructuredRect, chars []*responses.GetPageTextStructuredChar,
+	page int, widthPt, heightPt, splitGap float64) (tokens []Token, textChars int, groups int) {
+	for _, rect := range rects {
+		if rect == nil || rect.Text == "" {
+			continue
+		}
+		for _, r := range rect.Text {
+			if !unicode.IsSpace(r) {
+				textChars++
+			}
+		}
+	}
+
+	words := pdfiumWords(rects, chars, splitGap)
+	groups = len(words)
+	tokens = make([]Token, 0, len(words))
+	for _, w := range words {
+		tokens = append(tokens, Token{
+			Text: w.text,
+			Region: Region{
+				Page: page,
+				X0:   w.box.Left / widthPt,
+				Y0:   (heightPt - w.box.Top) / heightPt,
+				X1:   w.box.Right / widthPt,
+				Y1:   (heightPt - w.box.Bottom) / heightPt,
+			},
+		})
+	}
+	return tokens, textChars, groups
+}

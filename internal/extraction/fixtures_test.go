@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"maps"
 	"os"
 	"path/filepath"
@@ -95,6 +97,9 @@ var fxCorpus = []struct {
 	// R0 with the two letter-spaced header labels unspaced -- the one declared transformation.
 	{fxAdvisoryRegisterUnspaced, func() []byte { return fxBuildAdvisoryRegister(true) }},
 	{fxAdvisoryDense, fxBuildAdvisoryDense},
+	// EXTR-36-01: R0 re-set one Tj per glyph, Chrome/Skia's own shape.
+	{fxChromeRegister, fxBuildChromeRegister},
+	{fxChromeRegisterTwin, fxBuildChromeRegisterTwin},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -832,7 +837,7 @@ func fxWildRuledLines(l fxWildRuledLabels) []fxLine {
 		fxLine{12, 380, 386, l.vat}, fxLine{12, 500, 386, "600.00"},
 		// The Total label continues on the last data row's own baseline, so t1.total.right
 		// reaches the line amount beside it and the printed 8,600.00 falls outside every
-		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
+		// total relation. TestWildLayouts_TheRuledTableTotalStillTakesTheLineAmount.
 		fxLine{12, 380, 428, l.total}, fxLine{12, 500, 368, "8,600.00"},
 	)
 }
@@ -1282,6 +1287,8 @@ const (
 	fxAdvisoryRegister         = "advisory_register.pdf"
 	fxAdvisoryRegisterUnspaced = "advisory_register_unspaced.pdf"
 	fxAdvisoryDense            = "advisory_dense.pdf"
+	fxChromeRegister           = "chrome_register.pdf"
+	fxChromeRegisterTwin       = "chrome_register_twin.pdf"
 )
 
 // fxNairaTextPages is fxNairaTextPage generalised to N pages sharing one naira font -- the
@@ -1514,6 +1521,161 @@ func fxBuildAdvisoryDense() []byte {
 		{7, 517, 376, `3,426,476.50`},
 	}
 	return fxNairaTextPage(true, lines...)
+}
+
+// --- the Chrome-shaped register (EXTR-36-01) --------------------------------
+
+// fxGlyphLine is one line emitted one Tj per glyph at Helvetica's own advances -- Chrome/Skia's
+// shape, which pdfium reads as one rect per glyph. tight scales the advance that FOLLOWS the
+// named rune index, so the next glyph's ink box overlaps and pdfium reports both characters for
+// both rects.
+type fxGlyphLine struct {
+	size  int
+	x, y  float64
+	text  string
+	tight map[int]float64
+}
+
+// fxHelvWidths is the Helvetica AFM advance width table, 1000-unit em, for the runes this
+// corpus's advisory text uses. A rune missing here fails the build (fxHelvAdvance) rather than
+// silently advancing 0, which would collapse two glyphs onto one point.
+var fxHelvWidths = map[rune]int{
+	' ': 278, ',': 278, '.': 278, '-': 333, '/': 278, ';': 278, '%': 889,
+	'0': 556, '1': 556, '2': 556, '3': 556, '4': 556, '5': 556, '6': 556, '7': 556, '8': 556, '9': 556,
+	'A': 667, 'B': 667, 'C': 722, 'D': 722, 'E': 667, 'F': 611, 'G': 778, 'H': 722, 'I': 278, 'J': 500,
+	'K': 667, 'L': 556, 'M': 833, 'N': 722, 'O': 778, 'P': 667, 'Q': 778, 'R': 722, 'S': 667, 'T': 611,
+	'U': 722, 'V': 667, 'W': 944, 'X': 667, 'Y': 667, 'Z': 611,
+	'a': 556, 'b': 556, 'c': 500, 'd': 556, 'e': 556, 'f': 278, 'g': 556, 'h': 556, 'i': 222, 'j': 222,
+	'k': 500, 'l': 222, 'm': 833, 'n': 556, 'o': 556, 'p': 556, 'q': 556, 'r': 333, 's': 500, 't': 278,
+	'u': 556, 'v': 500, 'w': 722, 'x': 500, 'y': 500, 'z': 500,
+}
+
+func fxHelvAdvance(r rune) int {
+	w, ok := fxHelvWidths[r]
+	if !ok {
+		panic(fmt.Sprintf("fixtures: no Helvetica AFM width for %q", r))
+	}
+	return w
+}
+
+// fxGlyphText emits one BT/Tj/ET per non-space rune, advancing by Helvetica's own metrics --
+// Chrome/Skia's positioning, not fxText's one-Tj-per-line. A space advances and draws nothing.
+func fxGlyphText(lines ...fxGlyphLine) []byte {
+	var b bytes.Buffer
+	for _, l := range lines {
+		x := l.x
+		for i, r := range l.text {
+			if r != ' ' {
+				fmt.Fprintf(&b, "BT\n/F1 %d Tf\n%s %s Td\n(%c) Tj\nET\n",
+					l.size, strconv.FormatFloat(x, 'f', 2, 64), strconv.FormatFloat(l.y, 'f', 2, 64), r)
+			}
+			adv := float64(fxHelvAdvance(r)) * float64(l.size) / 1000
+			if scale, ok := l.tight[i]; ok {
+				adv *= scale
+			}
+			x += adv
+		}
+	}
+	return b.Bytes()
+}
+
+// fxGlyphPages assembles N pages of glyph-level text sharing one plain Helvetica font -- no
+// CMap, no naira encoding. Object numbering follows fxNairaTextPages: page p's content sits at
+// object 2+2p, the shared font at 2+2n+1.
+func fxGlyphPages(pages ...[]fxGlyphLine) []byte {
+	fontObj := 2 + 2*len(pages) + 1
+
+	objs := make([]fxObject, 2, 2*len(pages)+3)
+	kids := make([]string, len(pages))
+	for p, lines := range pages {
+		pageObj := 3 + 2*p
+		kids[p] = fmt.Sprintf("%d 0 R", pageObj)
+		objs = append(objs, fxPage(fxFontRes(fontObj), pageObj+1), fxStream(fxGlyphText(lines...)))
+	}
+	objs[0] = fxObject("<< /Type /Catalog /Pages 2 0 R >>")
+	objs[1] = fxObject(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages)))
+	objs = append(objs, fxObject(fxHelvetica))
+	return fxAssemble(objs)
+}
+
+// fxChromeRegisterLines is R0's page-1 arrangement re-set at Chrome's per-glyph advances.
+// invoiceNo and amounts are the only fields the twin changes; the two bled lines (the supplier
+// name and the VAT label) are common to both, since their text never moves.
+//
+// The two bleeds are load-bearing, not decorative: a strict one-rect-per-glyph page anchors
+// nothing at all (no single character matches the lexicon), so without them AC-4's vat-only
+// reading would be unreachable. tight[4]=0.95 on the supplier name overlaps the second K/W pair;
+// tight[0..1]=0.90 on "VAT 7.5%" overlaps V/A and A/T, reassembling "VAT " as one rect.
+func fxChromeRegisterLines(invoiceNo string, amounts [7]string) []fxGlyphLine {
+	return []fxGlyphLine{
+		{10, 65, 721, "OKONKWO ADVISORY PARTNERS", map[int]float64{4: 0.95}},
+		{26, 65, 657, "Invoice", nil},
+		{6, 65, 610, "Invoice number", nil},
+		{9, 65, 592, invoiceNo, nil},
+		{6, 224, 610, "Issued", nil},
+		{9, 224, 592, "2026-09-01", nil},
+		{6, 383, 610, "DUE", nil},
+		{9, 383, 592, "2026-09-15", nil},
+		{6, 65, 553, "CURRENCY", nil},
+		{9, 65, 536, "NGN", nil},
+		{6, 65, 497, "FROM", nil},
+		{9, 65, 479, "Okonkwo Advisory Partners", nil},
+		{7, 65, 461, "4th Floor, Alfred Rewane Road", nil},
+		{7, 65, 443, "Ikoyi, Lagos", nil},
+		{7, 65, 425, "TIN 99999999-1311", nil},
+		{7, 65, 407, "RC 1667402", nil},
+		{6, 262, 497, "BILLED TO", nil},
+		{9, 262, 479, "Honeywell Group Nigeria Plc", nil},
+		{7, 262, 461, "Finance Department", nil},
+		{7, 262, 443, "2 Adeyemo Alakija Street, Victoria Island", nil},
+		{7, 262, 425, "Lagos", nil},
+		{7, 262, 407, "TIN 99999999-1312", nil},
+		{8, 65, 358, "Transfer pricing documentation review", nil},
+		{7, 65, 344, "Engagement TP-2026-14 - 62 hours", nil},
+		{8, 473, 358, amounts[0], nil},
+		{8, 65, 312, "FIRS audit representation", nil},
+		{7, 65, 297, "Three sittings, Lagos tax office", nil},
+		{8, 473, 312, amounts[1], nil},
+		{8, 65, 265, "VAT compliance health check", nil},
+		{7, 65, 252, "FY2025 and Q1-Q2 2026", nil},
+		{8, 473, 265, amounts[2], nil},
+		{8, 65, 205, "Subtotal", nil},
+		{8, 467, 205, amounts[3], nil},
+		{8, 65, 181, "VAT 7.5%", map[int]float64{0: 0.90, 1: 0.90}},
+		{8, 473, 181, amounts[4], nil},
+		{8, 65, 158, "Withholding tax 10%", nil},
+		{8, 467, 158, amounts[5], nil},
+		{12, 65, 117, "Amount payable", nil},
+		{12, 433, 117, amounts[6], nil},
+	}
+}
+
+// fxChromeRegisterPage2 is R0's page 2, unchanged between the register and its twin.
+func fxChromeRegisterPage2() []fxGlyphLine {
+	return []fxGlyphLine{
+		{7, 65, 730, "Payment to Access Bank Plc - 0745118820 - Okonkwo Advisory Partners.", nil},
+		{7, 65, 716, "Withholding tax has been deducted at source; please furnish the WHT credit note within 30 days.", nil},
+		{7, 65, 701, "Professional services rendered are VATable at the standard rate of 7.5% under the Nigeria Tax Act 2025.", nil},
+	}
+}
+
+// fxBuildChromeRegister is chrome_register.pdf: R0's arrangement, one Tj per glyph.
+func fxBuildChromeRegister() []byte {
+	amounts := [7]string{
+		"7,750,000.00", "4,200,000.00", "2,850,000.00",
+		"14,800,000.00", "1,110,000.00", "-1,480,000.00", "14,430,000.00",
+	}
+	return fxGlyphPages(fxChromeRegisterLines("OAP/2026/0088", amounts), fxChromeRegisterPage2())
+}
+
+// fxBuildChromeRegisterTwin is chrome_register_twin.pdf: the same arrangement and labels, a
+// different invoice number and amounts.
+func fxBuildChromeRegisterTwin() []byte {
+	amounts := [7]string{
+		"6,400,000.00", "3,100,000.00", "2,050,000.00",
+		"11,550,000.00", "866,250.00", "-1,155,000.00", "11,261,250.00",
+	}
+	return fxGlyphPages(fxChromeRegisterLines("OAP/2026/0091", amounts), fxChromeRegisterPage2())
 }
 
 // --- reading a fixture back -------------------------------------------------
@@ -2027,7 +2189,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}
@@ -2583,5 +2745,99 @@ func TestFixtures_EachAsPrintedSiblingDrawsItsTwinsNumberPlus100(t *testing.T) {
 				t.Errorf("line %d draws %q, want %q", i, lines[i].text, tc.text)
 			}
 		})
+	}
+}
+
+// --- AC-7: a comment must not cite a test that does not exist -------------------------------
+
+// fxCiteRE matches one cited name inside a comment: the literal four-letter prefix this package's
+// test funcs all share, plus four or more further word runes. Every helper below is named to
+// avoid carrying a match of its own pattern in its own name.
+var fxCiteRE = regexp.MustCompile(`Test[A-Za-z0-9_]{4,}`)
+
+// fxCitedNames is every distinct name fxCiteRE matches in path's comments (AST comment groups
+// only, so a t.Errorf format string naming a test is not scanned as a citation).
+func fxCitedNames(t *testing.T, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	seen := map[string]bool{}
+	for _, cg := range f.Comments {
+		for _, m := range fxCiteRE.FindAllString(cg.Text(), -1) {
+			seen[m] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// fxDeclaredFuncs is every func Test... declared under internal/extraction and its endtoend
+// package -- a source scan, since a test binary cannot import another package's _test.go files.
+func fxDeclaredFuncs(t *testing.T) map[string]bool {
+	t.Helper()
+	declRE := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
+	var paths []string
+	for _, glob := range []string{"*_test.go", "endtoend/*_test.go"} {
+		found, err := filepath.Glob(glob)
+		if err != nil {
+			t.Fatalf("glob %s: %v", glob, err)
+		}
+		paths = append(paths, found...)
+	}
+	if len(paths) < 50 {
+		t.Fatalf("found %d _test.go file(s) under internal/extraction and endtoend, want at least 50 -- a missing declared name would read as undeclared for the wrong reason", len(paths))
+	}
+	declared := map[string]bool{}
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		for _, m := range declRE.FindAllStringSubmatch(string(src), -1) {
+			declared[m[1]] = true
+		}
+	}
+	if len(declared) < 1000 {
+		t.Fatalf("found %d declared Test... func(s), want at least 1000 -- the lookup below would report every name undeclared", len(declared))
+	}
+	return declared
+}
+
+// fxUndeclaredNames reports every name declared holds false for.
+func fxUndeclaredNames(names []string, declared map[string]bool) []string {
+	var out []string
+	for _, n := range names {
+		if !declared[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// AC-7. Scoped to this one file: a package-wide version reds on four pre-existing comments
+// elsewhere -- three deliberate "Replaces X" citations and one line-wrap artefact.
+func TestFixtures_EveryTestNamedInACommentIsDeclared(t *testing.T) {
+	names := fxCitedNames(t, "fixtures_test.go")
+	if len(names) == 0 {
+		t.Fatalf("fixtures_test.go carries no Test... name in a comment; the loop below would check nothing")
+	}
+	declared := fxDeclaredFuncs(t)
+
+	if got := fxUndeclaredNames(names, declared); len(got) != 0 {
+		t.Errorf("fixtures_test.go cites %v in a comment, declared by no func Test... under internal/extraction or its endtoend package", got)
+	}
+
+	// Controls: a name nothing declares is caught; a name everything real declares is not.
+	if got := fxUndeclaredNames([]string{"TestNoSuchNameAnywhereInTheRepository"}, declared); len(got) != 1 {
+		t.Errorf("a name no source declares reports %q, want exactly one undeclared name", got)
+	}
+	const known = "TestFixtures_MatchTheirGenerator"
+	if !declared[known] {
+		t.Fatalf("declared[%s] is false; the positive control below is invalid", known)
+	}
+	if got := fxUndeclaredNames([]string{known}, declared); len(got) != 0 {
+		t.Errorf("a genuinely declared name reports %q, want none", got)
 	}
 }

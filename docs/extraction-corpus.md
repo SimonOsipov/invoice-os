@@ -22,11 +22,16 @@ it may read a clock, a random source, or a map in iteration order.
 
 ## The six layouts
 
-One `fxLine` is one PDF `Tj` operator is one pdfium token. That is the whole lever the author
-has over token granularity: a label and its value on one `fxLine` arrive as a single token, and
-on two `fxLine` values as two. pdfium appends a trailing space to a text rect that is followed
-by another on the same line, so a split label reads `"Invoice No "` and not `"Invoice No"`;
-compare trimmed.
+One `fxLine` is one PDF `Tj` operator is one pdfium token, for the six layouts below. That is the
+whole lever the author has over token granularity there: a label and its value on one `fxLine`
+arrive as a single token, and on two `fxLine` values as two. pdfium appends a trailing space to a
+text rect that is followed by another on the same line, so a split label reads `"Invoice No "` and
+not `"Invoice No"`; compare trimmed.
+
+That chain does not hold for `chrome_register.pdf` and `chrome_register_twin.pdf`
+(**The Chrome-shaped arrangement** below): each emits one `Tj` **per glyph**, not per line -- 802
+and 800 rects respectively, merging through the shipped word stage to 42 tokens each. Neither
+fixture carries an `fxLine`, and the token-granularity lever above does not apply to them.
 
 | Layout | What it exercises | Tokens | Bytes |
 |---|---|---|---|
@@ -163,8 +168,9 @@ answer that question.
 `Supplier` inside `Supplier TIN: 99999999-0101` owns nothing on that token, so no `supplier_name`
 rule may fire there. `partyHeading` deliberately does **not** consult it, and must not.
 
-Measured over the eleven scored layouts: adding the qualifier silences **14 of the 31 party
-headings** and moves **18** token assignments. **Twelve** of the fourteen are `Supplier TIN: …` /
+Measured at EXTR-22, over the then-eleven scored layouts: adding the qualifier silences **14 of
+the 31 party headings** and moves **18** token assignments. **Twelve** of the fourteen are
+`Supplier TIN: …` /
 `Buyer TIN …`-shaped tokens whose party-name span sits strictly inside the party-TIN span; the other
 two are `wild_two_party_bare_tin.pdf`'s `Customer No.` and `Buyer's Signature`, silenced by the
 owning phrases of **Labels that own their token** below rather than by a TIN span — and those two
@@ -939,7 +945,7 @@ letters-only view every lexicon match spans the whole text
 label reads the three-space label (`TestLearnRule_ARuleLearnedOnOneSpaceReadsThreeSpaces`).
 
 **Where it applies.** Across every testdata PDF read through pdfium and every committed docling
-golden (47 reads today), six tokens qualify, on three reads: `advisory_register.pdf` through
+golden (49 reads today), six tokens qualify, on three reads: `advisory_register.pdf` through
 pdfium, and `wild_stacked_borderless_asprinted.pdf` through pdfium and its golden. Each prints the
 invoice-number label and `I S S U E D`, with one space between words, and none matches a lexicon
 entry as printed. Against the same reads with those tokens' spaces replaced, the view adds exactly
@@ -1187,6 +1193,13 @@ none. `reg_identifier` left the list that way when `wild_two_party_bare_tin_aspr
 prints `VAT Reg. No:`, was registered. `dense_invoice.pdf` (pre-existing, unrelated to EXTR-26) belongs on this "not a layout" list
 too and has never been added; named here, not fixed.
 
+The two Chrome fixtures (`chrome_register.pdf`, `chrome_register_twin.pdf` -- **The Chrome-shaped
+arrangement** below) join this list too: generated and byte-compared like every other fixture, but
+outside `requiredPDFs`, `expectByLayout` and every `corpus_` ratchet. They carry no committed
+golden either, so `requiredGoldens` never names them. `TestChromeFixtures_AreNotScoredLayouts`
+(`endtoend/wild_adversarial_test.go`) is their own guard, the same shape as
+`TestWildLayouts_DoNotEnterTheCorpusRatchets` above it.
+
 This also deviates from **When a client's invoice fails to extract** step 4 below, which asks a
 reproduction to add its `corpusExpect` row and watch it fail: the advisory reproductions
 deliberately carry none, because a scored row would move the denominators EXTR-26's no-regression
@@ -1268,7 +1281,7 @@ Labels and column headers only, as each source prints them.
   - Header: `Invoice`, `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`
   - Parties: `FROM`, `BILLED TO`, `TIN`, `RC`
   - Totals: `Subtotal`, `VAT 7.5%`, `Withholding tax 10%`, `Amount payable`
-  - Spacing: `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`, `FROM` and `BILLED TO` print letter-spaced, the rest unspaced. R0 letter-spaces only `I N V O I C E   N U M B E R` and `I S S U E D`. Amounts are ₦-joined.
+  - Spacing: `INVOICE NUMBER`, `ISSUED`, `DUE`, `CURRENCY`, `FROM` and `BILLED TO` print letter-spaced, the rest unspaced. R0 letter-spaces only `I N V O I C E   N U M B E R` and `I S S U E D`. R1 and the two Chrome fixtures (`chrome_register.pdf`, `chrome_register_twin.pdf` -- **The Chrome-shaped arrangement** below) print those same two fields unspaced *and* recased -- `Invoice number` and `Issued`, sentence case rather than this bullet's own upper case. Amounts are ₦-joined.
 - **NG-4 Sahara Telecoms (dense):**
   - Title: `MONTHLY SERVICE INVOICE`
   - Header strip, labels above values: `INVOICE NUMBER`, `BILL PERIOD`, `INVOICE DATE`, `PAYMENT DUE`, `ACCOUNT NUMBER`, `CURRENCY`
@@ -1506,7 +1519,12 @@ list or asserts the sibling.
 
 ## The advisory arrangements
 
-Three fixtures transcribe two of the Nigerian invoice mock-ups, NG-3 and NG-4, TINs swapped into the reserved block.
+Three fixtures in this section transcribe two of the Nigerian invoice mock-ups, NG-3 and NG-4,
+TINs swapped into the reserved block; two more, `chrome_register.pdf` and
+`chrome_register_twin.pdf`, transcribe NG-3 again, at Chrome's own per-glyph advances
+(**The Chrome-shaped arrangement** below). NG-3 is also the source the
+`wild_stacked_borderless*.pdf` pair rewrites (**The pairs** above), on the looser terms that
+paragraph describes.
 `advisory_register.pdf` (R0, faithful, two pages) and `advisory_register_unspaced.pdf` (R1, exactly
 one declared transformation) transcribe the advisory-firm register EXTR-26 was written against;
 `advisory_dense.pdf` (D0, faithful) transcribes the dense telecoms invoice. The `wild_*` layouts
@@ -1519,9 +1537,10 @@ and the printed words; only the bytes are generated.
 R0's header labels print letter-spaced — `I S S U E D`, `I N V O I C E   N U M B E R` — as NG-3
 prints them. On the **local docling 1.10.0 canary, not the deployed sidecar**, no lexicon entry
 matched them. Since EXTR-35 the label view reads each as its letters joined (**What EXTR-35
-changed**), so R0 decides both fields exactly as R1 does. R1 still isolates the one variable: it
-unspaces those two labels and changes nothing else, and `subtotal`, `vat` and `total` decide the
-same on both (**The row reach** below). `Amount payable`
+changed**), so R0 decides both fields exactly as R1 does. R1 isolates letter-spacing as its one
+variable, but not case: it unspaces `INVOICE NUMBER`/`ISSUED` to `Invoice number`/`Issued` --
+recased as well as unspaced -- and changes nothing else, and `subtotal`, `vat` and `total` decide
+the same on both (**The row reach** below). `Amount payable`
 is evidenced **split**, with no `(NGN)` beside it, by the same local canary
 (`TestAdvisory_TheFixturesTokeniseTheWayTheyDeclare` pins each newly matched label's declared
 tokenisation — split label-and-value or joined into one token — against the built PDF).
@@ -1630,6 +1649,93 @@ neither is committed, and no test re-measures them:
   no measured upper edge.
 
 Every other figure in this subsection is held by the test named beside it.
+
+## The Chrome-shaped arrangement
+
+Two more fixtures transcribe NG-3,
+`Simon Vault/Projects/ASComply Africa/User Stories/EXTR/sources/NG-Invoice-3-Okonkwo-Advisory-minimal.pdf`
+-- the same source **The advisory arrangements** above transcribes as `advisory_register.pdf` (R0)
+and `advisory_register_unspaced.pdf` (R1). This section obeys the corpus's standing rule stated at
+the top of this page: the source's bytes do not cross into the repository, the arrangement does.
+`chrome_register.pdf` and `chrome_register_twin.pdf` copy R0's positions and party content, and
+R1's two header labels -- they print `Invoice number` and `Issued` unspaced and sentence-cased,
+as R1 does, not R0's letter-spaced forms. Otherwise only the byte-level rendering changes.
+
+Where R0 and R1 emit one `Tj` per printed line (**The six layouts** above), `chrome_register.pdf`
+and `chrome_register_twin.pdf` emit one `Tj` **per glyph** -- the shape Chrome/Skia's own PDF
+export produces, built by `fxGlyphText`/`fxChromeRegisterLines` (`fixtures_test.go`). Read raw,
+`chrome_register.pdf` carries 802 rects across two pages (577 on page 1, 225 on page 2);
+`chrome_register_twin.pdf` carries 800 (575 + 225) -- an order of magnitude more than a
+word-level fixture of the same content. Merged through the shipped word stage (`pdfiumWords`,
+EXTR-36-03), both collapse back to 42 tokens each (39 on page 1, 3 on page 2) -- the same count,
+and the same anchor-label multiset, as `advisory_register.pdf`
+(`TestChromeRegister_AnchorsMatchItsGeneratedTwin`).
+
+`FingerprintVersion` stays `v3`: neither fixture bumps it, nor `BoxlessFingerprintVersion`.
+`fingerprintGoldens` (`fingerprint_goldens_test.go`) is what holds that promise -- both Chrome rows
+are pinned to the exact same `v3:` digest as `advisory_register.pdf`, since the merge makes the
+per-glyph print and its word-level twin one arrangement
+(`TestChromeRegister_TheTwinSharesItsFingerprint`,
+`TestFingerprint_GoldensHoldForEveryCommittedFixture`).
+
+### How thin a real page's own text can run
+
+*Historical, measured against the project vault sources at
+`Simon Vault/Projects/ASComply Africa/User Stories/EXTR/sources/` when this subtask merged. No
+test reads that folder (**The as-printed siblings** above), so these figures are not
+machine-checkable here and are not re-derived at test time.*
+
+| Source | Page-1 tokens | ≤2-rune tokens | Share |
+|---|---|---|---|
+| NG-1 | 637 | 613 | 96% |
+| NG-2 | 642 | 564 | 88% |
+| NG-3 | 572 | 569 | 99% |
+| NG-4 | 1382 | 1353 | 98% |
+| NG-5 | 0 (image-only) | -- | -- |
+
+Every committed fixture reads far below that: `advisory_dense.pdf` 18%, both
+`wild_ruled_lines_totals*.pdf` 18%, `table_invoice.pdf` 15%, `rich_invoice.pdf` 10%, every other
+0%. A real producer's own tokenisation runs far thinner than any committed fixture reproduces,
+which is what the per-glyph Chrome fixtures exist to close from the other end: not thinner labels,
+but the same labels read through a real renderer's own token boundaries.
+
+### The bleed boundary
+
+Two figures bound where an overlapping pair of glyph rects reads as one character instead of two,
+and they measure different things.
+
+*Historical, from a hand-built probe (not committed), establishing the mechanism.* At an
+inter-glyph advance producing a 0.07 pt overlap, two adjacent rects both read `"KW"` -- pdfium
+reports the same two characters for both boxes. At a 0.13 pt gap the same pair reads cleanly as
+`"K"` and `"W"`.
+
+*The fixture's own measured extremes, re-derived at test time
+(`TestCorpusDoc_RecordsTheBleedBoundary`).* `chrome_register.pdf` page 1 carries exactly three
+overlapping consecutive pairs. The shallowest is 0.1300 pt, the `"KW"`|`"KW"` pair inside
+`OKONKWO` (rect 4) -- the supplier name's own bleed, load-bearing per `fxChromeRegisterLines`'s
+own comment: without it no character on the page matches the lexicon at all. The other two are
+the `VAT 7.5%` line's engineered overlaps, deeper at 0.2640 pt and 0.3200 pt. The narrowest gap
+that does not bleed is 0.0790 pt, between `"/"` and `"2"` inside `OAP/2026/0088` (rect 46), so
+the fixture's own boundary sits between 0.0790 pt apart and 0.1300 pt overlapped.
+
+### splitGap's measured window
+
+`chrome_register.pdf` also re-measures the word-level merge boundary, `pdfiumSplitGap`
+(`pdfium.go`, shipped at 0.60) -- the ratio, in line heights, below which two same-line fragments
+join into one word.
+
+| Figure | Value (line heights) | Fixture | Between | Held by |
+|---|---|---|---|---|
+| Floor | 0.585395 | `chrome_register.pdf` | `Three sittings,` / `Lagos tax office` | `TestPDFiumWords_SplitGapStaysInsideItsMeasuredWindow`, `pdwFloor` |
+| Ceiling | 0.624267 | `wild_ruled_lines_totals.pdf` | `500.00` / `Total` | same test, `pdwCeiling` |
+
+The window `(0.585395, 0.624267]` is 0.038871 line heights wide -- about 0.04, and narrow enough
+to record as its own residual: `[splitgap-window-is-narrow]`. The shipped constant, `0.600000`,
+clears the floor by 0.014605 and the ceiling by 0.024267.
+`TestCorpusDoc_RecordsTheSplitGapWindow` holds this section to that same live measurement.
+
+Neither Chrome fixture is a scored layout -- see **Adding a layout** above, "Not every committed
+fixture is a layout."
 
 ## Learned rules
 

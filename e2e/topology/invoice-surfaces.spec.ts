@@ -3356,12 +3356,10 @@ test('detail surface: the armed decision block and approval card, plus their lay
   await expect(approvalCard).not.toContainText('Finance Manager')
   await expect(page.getByTestId('approval-empty')).toHaveCount(0)
 
-  // AC-1: containment -- decision block inside its action column, the file's own idiom
-  // verbatim (:1626-1632). NOT assertFillsColumn here: the decision block right-aligns
-  // and is legitimately narrower than its column, so a fill check would fail on correct
-  // code. detail-decision-actions has no testid'd wrapper of its own (InvoiceDetail.tsx:
-  // 633), so its parent is read via xpath, this file's own idiom for a testid-less
-  // ancestor (roles.spec.ts:339).
+  // AC-1: containment -- decision block inside its action column. NOT assertFillsColumn here:
+  // the decision block right-aligns and is legitimately narrower than its column, so a fill
+  // check would fail on correct code. The column carries no testid, so it is read as the
+  // decision block's parent via xpath.
   const decisionBlock = page.getByTestId('detail-decision-actions')
   const actionColumn = decisionBlock.locator('xpath=..')
   const actions = page.getByTestId('invoice-actions')

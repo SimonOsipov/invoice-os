@@ -19,7 +19,7 @@
 // internal/invoice/payload.go's MBSPayload nests it again before the engine
 // evaluates, so a flat createInvoice + POST .../validate round-trips the verdict
 // fixtures.ts's BAD_INVOICE_KEYS pins.
-import { test, expect, type Locator, type Page, type Request } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import {
   login,
   createEntity,
@@ -1002,7 +1002,7 @@ test('register empty state: a filter that matches nothing says so, and offers th
 // BUG-14-02's QA gated every `title` on its control's own wire flag, so a title now appears
 // on a DISABLED control only -- asserting one on an enabled control would correctly fail.
 
-/** The right-aligned action column: view-ubl, detail-decision-actions and invoice-actions. */
+/** The right-aligned action column: detail-decision-actions and invoice-actions. */
 function actionCluster(page: Page): Locator {
   return page.getByTestId('invoice-actions').locator('xpath=..')
 }
@@ -1155,7 +1155,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   // The draft->validated row this click just wrote: ApplyValidation stamps the JWT caller
   // (store.go actorFromContext), which is this page's persona.
   await expect(stripCaption(page, 'validated')).toHaveText(/^\d\d:\d\d · Chinedu$/)
@@ -1209,7 +1209,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await revalidate.click({ force: true })
   await expect(noValidate).rejects.toThrow()
   expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1427,7 +1427,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
 
   // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
   // page now shows the ACTIVE entity's OWN scoped total, not the tenant-wide count that
@@ -1777,7 +1777,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await revalidate.click()
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
   // two `-> draft` rows it took is not observable here -- see the note above.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
@@ -2011,22 +2011,16 @@ test('submission surface: a failed invoice is an honest dead end', async ({ page
   await expect(page.getByRole('button', { name: /submit/i })).toHaveCount(1)
   await expect(page.getByRole('button', { name: /submit/i })).toBeDisabled()
 
-  // BUG-04-07 (story AC1): the UBL control sits OUTSIDE that bar
-  // ([ubl-button-outside-invoice-actions]) because can_view_ubl tracks CONTENT, not
-  // lifecycle -- and `failed` is exactly where a compliance user needs the document most.
-  // Free-riding on this fixture: cleanInvoiceFields is UBL-complete, so View UBL is enabled
-  // here while every control in the bar above is disabled -- that contrast is the claim.
-  await expect(page.getByTestId('view-ubl')).toBeVisible()
-  await expect(page.getByTestId('view-ubl')).toBeEnabled()
-  // [absence-assertions-replaced] (BUG-14-04): this was a toHaveCount(0) on
-  // view-ubl-blocked-reason, a node BUG-14-02 deleted -- an absence claim about something
-  // that can never render again passes on any code at all. Same fact, stated against nodes
-  // that still exist: nothing blocks UBL here, so the wire carries no reason and the
-  // control carries no `title` (BUG-14-02's QA gated every title on its own wire flag, so
-  // an enabled control never has one).
+  // can_view_ubl tracks content, not lifecycle: the rail's UBL card still offers this
+  // UBL-complete document while every control in the bar above is disabled.
+  await expect(page.getByTestId('ubl-document-card')).toBeVisible()
+  for (const testid of ['ubl-card-view', 'ubl-card-download'] as const) {
+    await expect(page.getByTestId(testid), `${testid} must be offered on a failed invoice`).toBeVisible()
+    await expect(page.getByTestId(testid), `${testid} must be live on a failed invoice`).toBeEnabled()
+  }
   const failedWire = await getInvoice(token, inv.id)
   expect(failedWire.ubl_blocked_reason, 'a UBL-complete invoice must be unblocked on the wire').toBeNull()
-  await expect(page.getByTestId('view-ubl'), 'an unblocked control carries no reason').not.toHaveAttribute('title', /./)
+  await expect(page.getByTestId('ubl-card-blocked'), 'an unblocked card prints no refusal').toHaveCount(0)
 
   // resolve-outside is the one ENABLED control on this dead-end card, and it lives in the
   // card, not in the disabled actions bar above.
@@ -3129,11 +3123,11 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
 // ESM hoists import declarations, so the position is style only.
 import { readFileSync } from 'node:fs'
 
-test("invoice detail: View UBL/XML renders the server's own document, and Download saves exactly those bytes", async ({
+test("invoice detail: the UBL document card fetches nothing on open, Download saves the server's own bytes, and View renders the same document", async ({
   page,
 }) => {
   // Cold-fleet headroom, matching this file's own 90s precedent -- one sign-in, one detail
-  // round trip, one UBL fetch and one download.
+  // round trip, two UBL fetches and two downloads.
   test.setTimeout(90_000)
 
   const errors = collectErrors(page)
@@ -3149,77 +3143,92 @@ test("invoice detail: View UBL/XML renders the server's own document, and Downlo
   await signInFirm(page)
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // Armed before the row opens, so a fetch on mount is recorded too.
+  const ublRequests: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/ubl')) ublRequests.push(r.url())
+  })
+  // Scoped to THIS invoice's id so nothing else on the page can satisfy the predicate.
+  const isThisUbl = (r: Response) =>
+    r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}/ubl`)
+
   await openInvoiceRow(page, invoiceNumber)
 
-  // AC1. cleanInvoiceFields carries an issue date, a currency, a buyer name and one line
-  // item, and supplier_name is entity-derived ([supplier-from-entity]) -- so ubl.Missing is
-  // empty and the control is live.
-  const viewUbl = page.getByTestId('view-ubl')
-  await expect(viewUbl).toBeVisible()
-  await expect(viewUbl).toBeEnabled()
-  await expect(viewUbl).toContainText('View UBL/XML')
-  // [absence-assertions-replaced] (BUG-14-04): was a toHaveCount(0) on the deleted
-  // view-ubl-blocked-reason node, which can never render again and so could not fail. Same
-  // fact against nodes that still exist -- the wire says unblocked, and an enabled control
-  // carries no title (BUG-14-02's QA gated every title on its own wire flag).
+  // cleanInvoiceFields carries an issue date, a currency, a buyer name and one line item, and
+  // supplier_name is entity-derived ([supplier-from-entity]) -- so ubl.Missing is empty.
+  await expect(page.getByTestId('ubl-document-card')).toBeVisible()
+  await expect(page.getByTestId('ubl-card-filename')).toHaveText(`${invoiceNumber}.xml`)
   const ublWire = await getInvoice(token, inv.id)
   expect(ublWire.ubl_blocked_reason, 'a UBL-complete invoice must be unblocked on the wire').toBeNull()
-  await expect(viewUbl, 'an unblocked control carries no reason').not.toHaveAttribute('title', /./)
+  const viewButton = page.getByTestId('ubl-card-view')
+  const downloadButton = page.getByTestId('ubl-card-download')
+  await expect(viewButton).toBeEnabled()
+  await expect(downloadButton).toBeEnabled()
+  // Source document is read on mount too; once it settles, a mount-time UBL fetch has had its chance.
+  await expect(page.getByTestId('why-no-source-document')).toBeVisible()
+  expect(ublRequests, 'opening an invoice must not fetch its UBL document').toEqual([])
 
-  // AC2. Armed BEFORE the click that causes it, and scoped to THIS invoice's id so nothing
-  // else on the page can satisfy the predicate.
-  const ublResponse = page.waitForResponse(
-    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}/ubl`),
-    { timeout: 30_000 },
-  )
-  await viewUbl.click()
-  const served = await ublResponse
+  // Download first, with no viewer mounted. It must read the FILE: downloadUbl revokes the
+  // object URL right after a.click(), and a premature revoke still fires the event.
+  const downloadResponse = page.waitForResponse(isThisUbl, { timeout: 30_000 })
+  const downloadEvent = page.waitForEvent('download', { timeout: 30_000 })
+  await downloadButton.click()
+  const served = await downloadResponse
   expect(served.status(), 'the UBL route must answer 200 for a complete invoice').toBe(200)
-  // Task AC #3. The exact header string is pinned in e2e/api/contract-ubl.spec.ts, where the
-  // fetch seam is ours; here it only has to be XML.
+  // The exact header string is pinned in e2e/api/contract-ubl.spec.ts; here it only has to be XML.
   expect(served.headers()['content-type'], 'the document must arrive as XML').toMatch(/^application\/xml/)
   const servedXml = await served.text()
-  // Without this floor the two equalities below would both pass on a pair of empty strings.
+  // Without this floor every equality below would pass on empty strings.
   expect(servedXml.length, 'the served document must be non-empty').toBeGreaterThan(0)
   expect(servedXml, 'the served body must be the UBL render, not an error envelope').toContain(
     `<cbc:ID>${invoiceNumber}</cbc:ID>`,
   )
-
-  await expect(page.getByTestId('ubl-modal')).toBeVisible()
-  const pre = page.getByTestId('ubl-xml')
-  await expect(pre).toBeVisible()
-  // textContent + toBe, never toHaveText: toHaveText NORMALIZES WHITESPACE, which would erase
-  // the indentation this equality exists to pin. A client-assembled document fails here. Safe
-  // as a one-shot read -- the <pre> is committed in one render, so once it is visible its
-  // text is final.
-  expect(await pre.textContent(), 'the <pre> must be the server body verbatim').toBe(servedXml)
-
-  // AC6, ASCII substring only.
-  await expect(page.getByTestId('ubl-provenance')).toContainText(
-    'It is not a copy of what was transmitted to the access point.',
-  )
-
-  // AC3, and it must read the FILE. downloadUbl revokes the object URL synchronously one
-  // statement after a.click() (XmlModal.tsx:34-35); a premature revoke surfaces as a
-  // zero-byte or truncated saved file while the download event still fires, so an
-  // event-only or presence-only assertion would pass on that bug. jsdom has no download
-  // pipeline, so no unit row can observe it -- this is the only layer that can.
-  const downloadEvent = page.waitForEvent('download', { timeout: 15_000 })
-  await page.getByTestId('download-ubl').click()
   const download = await downloadEvent
   expect(await download.failure(), 'the download must complete').toBeNull()
   expect(download.suggestedFilename()).toBe(`${invoiceNumber}.xml`)
   const saved = readFileSync(await download.path(), 'utf8')
-  expect(saved.length, 'a revoked object URL saves an empty file').toBeGreaterThan(0)
   expect(saved, 'the saved file must be the bytes the server served').toBe(servedXml)
+  expect(ublRequests, 'Download must fetch the document exactly once').toHaveLength(1)
+  await expect(downloadButton).toBeEnabled()
+  await expect(page.getByTestId('ubl-card-download-error')).toHaveCount(0)
+  await expect(page.getByTestId('ubl-modal'), 'Download must not mount the viewer').toHaveCount(0)
 
-  // AC4 -- a deployed-bundle spot check, not the oracle: the retired copy's absence is
-  // proven by the BUG-04-06 source scan. Non-vacuous, the node exists and carries text.
-  // ASCII substring only; the retired sentence's own quotes are U+201C/U+201D.
+  // View issues its own fetch and renders the bytes the file holds.
+  const viewResponse = page.waitForResponse(isThisUbl, { timeout: 30_000 })
+  await viewButton.click()
+  const viewed = await viewResponse
+  expect(viewed.status(), 'the viewer fetch must answer 200').toBe(200)
+  const viewedXml = await viewed.text()
+  await expect(page.getByTestId('ubl-modal')).toBeVisible()
+  const pre = page.getByTestId('ubl-xml')
+  await expect(pre).toBeVisible()
+  // textContent + toBe, never toHaveText: toHaveText NORMALIZES WHITESPACE, which would erase
+  // the indentation this equality pins. The <pre> is committed in one render.
+  expect(await pre.textContent(), 'the <pre> must be the server body verbatim').toBe(viewedXml)
+  expect(viewedXml, 'View must render the document Download saved').toBe(saved)
+  expect(ublRequests, 'View must issue its own single fetch').toHaveLength(2)
+
+  // ASCII substring only.
+  await expect(page.getByTestId('ubl-provenance')).toContainText(
+    'It is not a copy of what was transmitted to the access point.',
+  )
+
+  // The viewer's own Download saves the document it renders.
+  const modalDownloadEvent = page.waitForEvent('download', { timeout: 15_000 })
+  await page.getByTestId('download-ubl').click()
+  const modalDownload = await modalDownloadEvent
+  expect(await modalDownload.failure(), 'the download must complete').toBeNull()
+  expect(modalDownload.suggestedFilename()).toBe(`${invoiceNumber}.xml`)
+  const modalSaved = readFileSync(await modalDownload.path(), 'utf8')
+  expect(modalSaved, 'the viewer must save the bytes it renders').toBe(viewedXml)
+
+  // A deployed-bundle spot check, not the oracle: a source scan proves the retired copy's
+  // absence. ASCII substring only; the retired sentence's own quotes are U+201C/U+201D.
   await expect(page.getByTestId('ubl-modal')).not.toContainText('View XML')
 
   // Never click the `ubl-modal` locator to dismiss -- it resolves the SCRIM, which carries
-  // onClick={onClose} (XmlModal.tsx:82), so it would pass for the wrong reason.
+  // onClick={onClose}, so it would pass for the wrong reason.
   await page.getByTestId('ubl-modal-close').click()
   await expect(page.getByTestId('ubl-modal')).toHaveCount(0)
   await expect(page.getByTestId('invoice-detail')).toBeVisible()
@@ -3227,7 +3236,7 @@ test("invoice detail: View UBL/XML renders the server's own document, and Downlo
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carrying the server's own reason", async ({
+test("invoice detail: an incomplete invoice's UBL document card prints the server's own reason and offers no action", async ({
   page,
 }) => {
   test.setTimeout(90_000)
@@ -3255,29 +3264,33 @@ test("invoice detail: an incomplete invoice shows a disabled View UBL/XML carryi
   await signInFirm(page)
   await selectEntity(page, entity.name)
   await goToInvoices(page)
+
+  // Armed before the row opens, so a fetch on mount is recorded too.
+  const isUbl = (r: Request) => r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/ubl')
+  const ublRequests: string[] = []
+  page.on('request', (r) => {
+    if (isUbl(r)) ublRequests.push(r.url())
+  })
+
   await openInvoiceRow(page, invoiceNumber)
 
-  // AC5. Visible first: a click target that does not exist would make everything below
-  // vacuous.
-  const viewUbl = page.getByTestId('view-ubl')
-  await expect(viewUbl).toBeVisible()
   // Substring only, never the em dash literal -- an encoding hazard through a CI shell.
-  // BUG-14-02 deleted the rendered node, so the sentence is on the wire and in `title`.
   const gapWire = await getInvoice(token, gapInvoice.id)
-  expect(gapWire.ubl_blocked_reason, "the backend still names the gap in its own words").toContain('at least one line item')
-  await expectBlockedAndUnprinted(page, 'view-ubl', gapWire.ubl_blocked_reason, 'View UBL on an incomplete invoice')
+  expect(gapWire.ubl_blocked_reason, 'the backend still names the gap in its own words').toContain('at least one line item')
+  const reason = gapWire.ubl_blocked_reason!
+
+  // Positive controls before any absence: the card is up and prints the wire's own sentence.
+  await expect(page.getByTestId('ubl-document-card')).toBeVisible()
+  await expect(page.getByTestId('ubl-card-blocked')).toContainText(reason)
+  await expect(page.getByTestId('ubl-card-view'), 'a refused card offers no View').toHaveCount(0)
+  await expect(page.getByTestId('ubl-card-download'), 'a refused card offers no Download').toHaveCount(0)
+  // The refusal lives in the card; the header column prints none of it.
+  await expect(actionCluster(page)).toBeVisible()
+  await expect(actionCluster(page), 'the action column must not print the UBL refusal').not.toContainText(reason)
 
   // Two independent oracles: nothing left the browser, and nothing mounted.
-  const noUbl = page.waitForRequest((r) => r.method() === 'GET' && new URL(r.url()).pathname.endsWith('/ubl'), {
-    timeout: 2_000,
-  })
-  // force:true bypasses Playwright's actionability pre-checks, which would otherwise refuse a
-  // disabled element and TIME OUT rather than assert -- but the real HTML `disabled`
-  // attribute still suppresses the browser's click event, so React's onClick never runs.
-  // Never dispatchEvent('click'): it bypasses that suppression and proves the opposite
-  // guarantee (:556-561).
-  await viewUbl.click({ force: true })
-  await expect(noUbl).rejects.toThrow()
+  await expect(page.waitForRequest(isUbl, { timeout: 2_000 })).rejects.toThrow()
+  expect(ublRequests, 'a refused document must never be fetched').toEqual([])
   await expect(page.getByTestId('ubl-modal')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -3343,35 +3356,41 @@ test('detail surface: the armed decision block and approval card, plus their lay
   await expect(approvalCard).not.toContainText('Finance Manager')
   await expect(page.getByTestId('approval-empty')).toHaveCount(0)
 
-  // AC-1: containment -- decision block inside its action column, the file's own idiom
-  // verbatim (:1626-1632). NOT assertFillsColumn here: the decision block right-aligns
-  // and is legitimately narrower than its column, so a fill check would fail on correct
-  // code. detail-decision-actions has no testid'd wrapper of its own (InvoiceDetail.tsx:
-  // 633), so its parent is read via xpath, this file's own idiom for a testid-less
-  // ancestor (roles.spec.ts:339).
+  // AC-1: containment -- decision block inside its action column. NOT assertFillsColumn here:
+  // the decision block right-aligns and is legitimately narrower than its column, so a fill
+  // check would fail on correct code. The column carries no testid, so it is read as the
+  // decision block's parent via xpath.
   const decisionBlock = page.getByTestId('detail-decision-actions')
   const actionColumn = decisionBlock.locator('xpath=..')
-  const viewUbl = page.getByTestId('view-ubl')
+  const actions = page.getByTestId('invoice-actions')
+  await expect(actions).toBeVisible()
+  // The right-edge equality below only means something between siblings of one column.
+  expect(
+    await actions.evaluate((el) => el.parentElement === document.querySelector('[data-testid="detail-decision-actions"]')?.parentElement),
+    'invoice-actions and the decision block must share the flex-end column',
+  ).toBe(true)
   const entryViewport = page.viewportSize()
   try {
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
-      const [blockBox, columnBox, ublBox] = await Promise.all([
+      const [blockBox, columnBox, actionsBox] = await Promise.all([
         decisionBlock.boundingBox(),
         actionColumn.boundingBox(),
-        viewUbl.boundingBox(),
+        actions.boundingBox(),
       ])
-      expect(blockBox && columnBox && ublBox, `decision block, its column and View UBL must all render at ${width}px`).toBeTruthy()
+      expect(blockBox && columnBox && actionsBox, `decision block, its column and invoice-actions must all render at ${width}px`).toBeTruthy()
       const g = gaps(blockBox!, columnBox!)
       expect(g.left, `decision block must not start left of its column at ${width}px`).toBeGreaterThanOrEqual(0)
       expect(g.right, `decision block must not extend right of its column at ${width}px`).toBeGreaterThanOrEqual(0)
 
-      // Both are direct children of the same alignItems:'flex-end' column, each emitted
-      // as a fragment rather than a wrapper (InvoiceDetail.tsx:633/681-838) -- a wrapping
-      // div in place of either fragment would break this.
+      // Both are direct children of the same alignItems:'flex-end' column; a wrapping div
+      // around either would break this.
       const blockRight = blockBox!.x + blockBox!.width
-      const ublRight = ublBox!.x + ublBox!.width
-      expect(Math.abs(blockRight - ublRight), `decision block's right edge must equal View UBL's at ${width}px`).toBeLessThanOrEqual(1)
+      const actionsRight = actionsBox!.x + actionsBox!.width
+      expect(
+        Math.abs(blockRight - actionsRight),
+        `decision block's right edge must equal invoice-actions' at ${width}px`,
+      ).toBeLessThanOrEqual(1)
     }
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
@@ -4193,17 +4212,17 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
 // a file of its own -- invoice detail IS this file's capability (docs/e2e-convention.md).
 //
 // SCOPE: the firm ADMIN seat, at two statuses. The ROLE axis (AC-3: a caller who can do
-// nothing sees six disabled controls, never a shorter cluster) is demo-persona.spec.ts's
+// nothing sees five disabled controls, never a shorter cluster) is demo-persona.spec.ts's
 // T17, where the persona switcher lives; splitting it there keeps this block off a
 // switcher journey it would otherwise have to reimplement.
 //
 // A width is never pinned, only a relationship (layout.ts's file header). The measurements
 // are attached so the numbers outlive the run.
 test.describe.serial("detail surface: the action cluster's geometry (firm admin)", () => {
-  // The closed control set, in render order: row 1 View UBL, row 2 the decision pair, row 3
-  // the Edit / Re-validate / Submit bar (InvoiceDetail.tsx).
-  const CLUSTER_CONTROLS = ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
-  const ROW_THREE = ['edit-toggle', 'revalidate', 'detail-submit'] as const
+  // The closed control set, in render order: row 1 the decision pair, row 2 the Edit /
+  // Re-validate / Submit bar (InvoiceDetail.tsx).
+  const CLUSTER_CONTROLS = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
+  const ROW_TWO = ['edit-toggle', 'revalidate', 'detail-submit'] as const
   // One can_edit-true status and one can_edit-false one. The pair IS the claim -- a fixture
   // that drifted into two editable invoices would make every assertion below vacuous, which
   // is what the enabled/disabled controls guard against.
@@ -4248,7 +4267,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     columnGapLeft: number
     columnGapRight: number
     rightEdgeSpread: number
-    rowThreeSpread: number
+    rowTwoSpread: number
   }
 
   /**
@@ -4270,7 +4289,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
     return bands
   }
 
-  test('R1-R6: the same six controls, in three right-aligned rows, at a can_edit-true and a can_edit-false status', async ({
+  test('R1-R6: the same five controls, in two right-aligned rows, at a can_edit-true and a can_edit-false status', async ({
     page,
   }, testInfo) => {
     // Two fixtures already built, one sign-in, two detail round trips and two four-width
@@ -4311,7 +4330,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
       }
 
       const actions = page.getByTestId('invoice-actions')
-      const viewUbl = page.getByTestId('view-ubl')
       const decision = page.getByTestId('detail-decision-actions')
 
       const entryViewport = page.viewportSize()
@@ -4326,7 +4344,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
             ...CLUSTER_CONTROLS.map((t) => page.getByTestId(t).boundingBox()),
             actions.boundingBox(),
             cluster.boundingBox(),
-            viewUbl.boundingBox(),
             decision.boundingBox(),
           ])
           // A null or zero-height box is a control that never laid out; comparing them
@@ -4336,12 +4353,12 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
             expect(box!.height, `box ${i} must have real height at ${width}px on a ${status} invoice`).toBeGreaterThan(0)
           }
           const controlBoxes = boxes.slice(0, CLUSTER_CONTROLS.length).map((b) => b!)
-          const [actionsBox, columnBox, ublBox, decisionBox] = boxes.slice(CLUSTER_CONTROLS.length).map((b) => b!)
+          const [actionsBox, columnBox, decisionBox] = boxes.slice(CLUSTER_CONTROLS.length).map((b) => b!)
 
-          // R2 -- row-count stability. Exactly three bands is the geometric form of "the
+          // R2 -- row-count stability. Exactly two bands is the geometric form of "the
           // set does not reflow as the user moves between invoices".
           const bands = bandCount(controlBoxes.map((b) => b.y))
-          expect(bands, `the six controls must stand in three rows at ${width}px on a ${status} invoice`).toBe(3)
+          expect(bands, `the five controls must stand in two rows at ${width}px on a ${status} invoice`).toBe(2)
 
           // R3 -- containment, not fill: a right-aligned block is legitimately narrower
           // than its column, so assertFillsColumn would fail on correct code (this file's
@@ -4350,19 +4367,19 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
           expect(g.left, `the bar must not start left of its column at ${width}px on a ${status} invoice`).toBeGreaterThanOrEqual(0)
           expect(g.right, `the bar must not extend right of its column at ${width}px on a ${status} invoice`).toBeGreaterThanOrEqual(0)
 
-          // R4 -- one right edge for all three rows. Each is a direct child of the same
-          // alignItems:'flex-end' column, emitted as a fragment rather than a wrapper
-          // (InvoiceDetail.tsx); a wrapping div in place of any fragment breaks this.
-          const rights = [actionsBox, ublBox, decisionBox].map((b) => b.x + b.width)
+          // R4 -- one right edge for both rows. Each is a direct child of the same
+          // alignItems:'flex-end' column (InvoiceDetail.tsx); a wrapping div around either
+          // breaks this.
+          const rights = [actionsBox, decisionBox].map((b) => b.x + b.width)
           const rightEdgeSpread = Math.max(...rights) - Math.min(...rights)
-          expect(rightEdgeSpread, `the three rows must share a right edge at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
+          expect(rightEdgeSpread, `the two rows must share a right edge at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
 
           // R5 -- the Edit / Re-validate / Submit row never folds onto a second line. This
           // is the real "uncrowded" oracle, and the one BUG-14-01's always-mounted bar puts
           // at risk at every status rather than three of seven.
-          const rowThreeYs = ROW_THREE.map((t) => controlBoxes[CLUSTER_CONTROLS.indexOf(t)].y)
-          const rowThreeSpread = Math.max(...rowThreeYs) - Math.min(...rowThreeYs)
-          expect(rowThreeSpread, `the action row must not wrap at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
+          const rowTwoYs = ROW_TWO.map((t) => controlBoxes[CLUSTER_CONTROLS.indexOf(t)].y)
+          const rowTwoSpread = Math.max(...rowTwoYs) - Math.min(...rowTwoYs)
+          expect(rowTwoSpread, `the action row must not wrap at ${width}px on a ${status} invoice`).toBeLessThanOrEqual(1)
 
           measured.push({
             status,
@@ -4371,7 +4388,7 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
             columnGapLeft: g.left,
             columnGapRight: g.right,
             rightEdgeSpread,
-            rowThreeSpread,
+            rowTwoSpread,
           })
         }
       } finally {
@@ -4386,7 +4403,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
       const reasons = [
         wire.revalidate_blocked_reason,
         wire.submit_blocked_reason,
-        wire.ubl_blocked_reason,
         wire.approve_blocked_reason,
         wire.reject_blocked_reason,
       ].filter((r): r is string => r != null && r.length >= 20)
@@ -4410,9 +4426,9 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
       ).toEqual([...WIDE_WIDTHS])
     }
 
-    // R1's cross-status half: the same set, not merely six controls each time.
+    // R1's cross-status half: the same set, not merely five controls each time.
     expect(seen.validated, 'the control set must not change with can_edit').toEqual(seen.failed)
-    expect(seen.validated, 'the control set must be the closed six').toEqual([...CLUSTER_CONTROLS])
+    expect(seen.validated, 'the control set must be the closed five').toEqual([...CLUSTER_CONTROLS])
 
     await testInfo.attach('detail-action-cluster-geometry.json', {
       body: JSON.stringify({ entity: entityName, numbers, measured }, null, 2),
@@ -4444,13 +4460,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
 // detail-reject are DISABLED for the signed-in persona, with the AXIS-2 sentence on screen.
 // Validation and submission ARE driven from the browser. What this block asserts is that
 // three surfaces agree on one fact, which is a claim about the reader, not the writer.
-//
-// AC-2 CORRECTION, recorded rather than coded around. The story says "after validation:
-// node 2 `done`". It cannot be: NODE_OF_STATUS['validated'] is 2 and spineNode gives
-// k === cursor the state 'current' (frontend/app/src/lib/invoiceStrip.ts;
-// invoiceStrip.test.ts:150 pins n2:'current' for status validated). Node 2 turns `done`
-// only once the cursor passes it -- which the FIRS-rejection leg below does assert.
-// Writing `done` at the validation stop would red this gate on correct code.
 test.describe.serial('detail surface: the deployed journey -- strip, approval card, feed and hand-off', () => {
   // StatusStrip renders tickGlyph11 on `done` and crossGlyph on `failed` (glyphs.tsx). The
   // `d` is what tells them apart in the DOM -- data-state alone is the tone, not the mark.
@@ -4564,9 +4573,9 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await page.getByTestId('revalidate').click()
     await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
-    // See the AC-2 CORRECTION in this block's header for why node 2 is `current`, not `done`.
-    await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'current', queued: 'unreached', accepted: 'unreached' })
+    await expectStripStates(page, { draft: 'done', validated: 'done', approved: 'current', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'draft', TICK_PATH), 'node 1 must carry the tick, not just the green tone').toHaveCount(1)
+    await expect(stripGlyph(page, 'validated', TICK_PATH), 'a passed validation carries the tick, like node 1').toHaveCount(1)
     // Node 2 is attributed too, being reached; this pins node 1 so the `done` above cannot
     // pass on a node that rendered no attribution at all.
     await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · \S+/)
@@ -4664,7 +4673,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await openInvoiceRow(page, invoiceNumber)
 
     // Reading 1 of 3 -- the strip.
-    await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'done', queued: 'unreached', accepted: 'unreached' })
+    await expectStripStates(page, { draft: 'done', validated: 'done', approved: 'done', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'approved', TICK_PATH), 'node 3 must carry the tick').toHaveCount(1)
     await expect(stripGlyph(page, 'approved', CROSS_PATH), 'node 3 must no longer carry the cross').toHaveCount(0)
     // A closed run stamps closed_at, so node 3 must caption a time -- an em dash here means
@@ -4699,8 +4708,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   // Leg 4 -- AC-5 / D-AC-2's other half. A FIRS rejection redens the FINAL node and
   // relabels it, and must not touch node 3. Fails on: node 5 keeping the accepted label, a
   // FIRS verdict leaking onto the approval node (the conflation D-AC-2 forbids), and node 2
-  // never turning `done` once the cursor passes it -- the state AC-2 asked for, asserted
-  // where it is actually true.
+  // losing its `done` once the cursor passes it.
   //
   // The submit is driven from the register, this file's own proven path
   // (submitSelected). SUBMIT-SITE NOTE: this adds one entry to
@@ -4897,7 +4905,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
 // `accepted`, because Fiscal record is the rail's first member and shouldShowFiscalRecord
 // mounts it only on `accepted` with a real IRN. BUG-13-02 moved Compliance out of the rail
 // and gave it `compliance-card`, so it is watched-and-absent here rather than a member.
-const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card']
+const RAIL_ORDER = ['fiscal-record-card', 'approval-card', 'source-document-card', 'ubl-document-card']
 // Wider than RAIL_ORDER on purpose: `status-history` is the card AUDIT-09-02 retired, and
 // failed-dead-end / rejection-reasons are the two rail members an accepted invoice
 // suppresses. Any of them mounting lands in the read below and breaks the equality, so
@@ -4949,7 +4957,7 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   )
   expect(
     order,
-    "the rail's cards in document order: Fiscal record -> Approvals -> Source document, with Compliance no longer among them",
+    "the rail's cards in document order: Fiscal record -> Approvals -> Source document -> UBL document, with Compliance no longer among them",
   ).toEqual(RAIL_ORDER)
 
   // The page-wide half of the absence: the retired card must not have come back outside the
@@ -4964,6 +4972,128 @@ test('detail surface: the untouched rail order is unchanged', async ({ page }) =
   await expect(page.getByTestId('compliance-card')).toBeVisible()
   await expect(rail.getByTestId('compliance-card')).toHaveCount(0)
   await expect(page.getByTestId('invoice-main-column').getByTestId('compliance-card')).toHaveCount(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The UBL document card's place in the rail, as relationships at every wide width. The jsdom
+// twins prove DOM order; only a browser proves the card lands flush beneath Source document.
+test("detail surface: the UBL document card is the rail's last card, beneath Source document, at every wide width", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  // Sorts after every seeded entity name, so it never becomes another spec's default client.
+  const entity = await createEntity(token, { name: `Zenith UBL card ${Date.now()}`, tin: freshTin() })
+  const invoiceNumber = `INV-BUG18-UBLCARD-${Date.now()}`
+  await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(invoiceNumber) })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+
+  const rail = page.getByTestId('invoice-rail')
+  // Both testids sit on the padded body; the card is its parent.
+  const ublBody = page.getByTestId('ubl-document-card')
+  const sourceBody = page.getByTestId('source-document-card')
+  const ublCard = ublBody.locator('xpath=..')
+
+  // Positive controls: both cards settled, and the UBL card offering its actions.
+  await expect(page.getByTestId('ubl-card-view')).toBeVisible()
+  await expect(page.getByTestId('ubl-card-download')).toBeVisible()
+  await expect(page.getByTestId('why-no-source-document')).toBeVisible()
+
+  // Order does not vary with width, so it is read once.
+  const order = await rail.evaluate((el) => {
+    const last = el.lastElementChild
+    return {
+      lastHoldsUbl: last?.querySelector(':scope > [data-testid="ubl-document-card"]') != null,
+      previousHoldsSource: last?.previousElementSibling?.querySelector(':scope > [data-testid="source-document-card"]') != null,
+    }
+  })
+  expect(order, "the UBL card is the rail's last child, directly after Source document").toEqual({
+    lastHoldsUbl: true,
+    previousHoldsSource: true,
+  })
+
+  type UblCardFit = { width: number; xDelta: number; widthDelta: number; gap: number; rowGap: number }
+  const measured: UblCardFit[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect.poll(() => page.evaluate(() => window.innerWidth), { timeout: 5_000 }).toBe(width)
+
+      // Both outer-card rects and the rail's row-gap in ONE round trip, so a layout shift
+      // between separate boundingBox() reads can't be misread as the gap.
+      const { ublTop, sourceBottom, rowGap } = await rail.evaluate((el) => {
+        const ublOuter = el.querySelector('[data-testid="ubl-document-card"]')!.parentElement!
+        const sourceOuter = el.querySelector('[data-testid="source-document-card"]')!.parentElement!
+        return {
+          ublTop: ublOuter.getBoundingClientRect().top,
+          sourceBottom: sourceOuter.getBoundingClientRect().bottom,
+          rowGap: Number.parseFloat(getComputedStyle(el).rowGap),
+        }
+      })
+      expect(Number.isFinite(rowGap), `the rail's row-gap must resolve to a length at ${width}px`).toBe(true)
+
+      const boxes = await Promise.all([
+        ublBody.boundingBox(),
+        sourceBody.boundingBox(),
+        page.getByTestId('ubl-card-filename').boundingBox(),
+        page.getByTestId('ubl-card-view').boundingBox(),
+        page.getByTestId('ubl-card-download').boundingBox(),
+      ])
+      for (const [i, box] of boxes.entries()) {
+        expect(box, `box ${i} must render at ${width}px`).toBeTruthy()
+        expect(box!.height, `box ${i} must have real height at ${width}px`).toBeGreaterThan(0)
+      }
+      const [ublBox, sourceBox, filenameBox, viewBox, downloadBox] = boxes.map((b) => b!)
+
+      // (a) the same left edge and width as Source document's body.
+      const xDelta = Math.abs(ublBox.x - sourceBox.x)
+      const widthDelta = Math.abs(ublBox.width - sourceBox.width)
+      expect(xDelta, `the UBL card must share Source document's left edge at ${width}px`).toBeLessThanOrEqual(1)
+      expect(widthDelta, `the UBL card must match Source document's width at ${width}px`).toBeLessThanOrEqual(1)
+
+      // (b) directly beneath: the space between the two cards is the rail's own row-gap.
+      const gap = ublTop - sourceBottom
+      expect(Math.abs(gap - rowGap), `the UBL card must sit one row-gap below Source document at ${width}px`).toBeLessThanOrEqual(1)
+
+      // (d) nothing in the card spills past its body horizontally.
+      for (const [name, box] of [
+        ['ubl-card-filename', filenameBox],
+        ['ubl-card-view', viewBox],
+        ['ubl-card-download', downloadBox],
+      ] as const) {
+        const g = gaps(box, ublBox)
+        expect(g.left, `${name} must not start left of the card body at ${width}px`).toBeGreaterThanOrEqual(-1)
+        expect(g.right, `${name} must not end right of the card body at ${width}px`).toBeGreaterThanOrEqual(-1)
+      }
+
+      measured.push({ width, xDelta, widthDelta, gap, rowGap })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  expect(measured.map((m) => m.width), 'the sweep measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+
+  // (c) the card fills the rail. assertFillsColumn bounds only a too-narrow card; overflow reads
+  // as a negative gap, bounded below.
+  const fit = await assertFillsColumn(page, ublCard, rail, 'ubl document card vs rail', 1)
+  expect(fit.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
+  for (const entry of fit) {
+    expect(entry.left, `the UBL card must not overflow the rail's left edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+    expect(entry.right, `the UBL card must not overflow the rail's right edge at ${entry.width}px`).toBeGreaterThanOrEqual(-1)
+  }
+
+  await testInfo.attach('ubl-document-card-geometry.json', {
+    body: JSON.stringify({ entity: entity.name, invoiceNumber, measured, fit }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

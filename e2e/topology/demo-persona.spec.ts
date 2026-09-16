@@ -449,10 +449,10 @@ const NOT_APPROVER_TRANSMIT_REASON = 'Only an admin or a reviewer can submit an 
 // renders at every status and for every role, disabled rather than absent. Folake's subject
 // is db/seed.dev.sql:42 -- her own token is what makes the wire read below HER refusal
 // rather than the seat's ([gates-on-the-wire]).
-const CLUSTER_CONTROLS = ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
+const CLUSTER_CONTROLS = ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit'] as const
 const FOLAKE_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
 
-/** The right-aligned action column: view-ubl, detail-decision-actions and invoice-actions. */
+/** The right-aligned action column: detail-decision-actions and invoice-actions. */
 function actionCluster(page: Page): Locator {
   return page.getByTestId('invoice-actions').locator('xpath=..')
 }
@@ -605,17 +605,18 @@ test('deployed app: as a preparer, the server refuses the same approval it allow
 
   // BUG-14-04, R1b (AC-3/AC-6): the ROLE axis of the story's stable-control-set claim,
   // which the geometry block in invoice-surfaces.spec.ts cannot make -- that block only
-  // ever holds the admin seat. The cluster is the SAME six controls for a preparer as for
+  // ever holds the admin seat. The cluster is the SAME five controls for a preparer as for
   // the seat; what changes is which ones answer.
   for (const testid of CLUSTER_CONTROLS) {
     await expect(page.getByTestId(testid), `${testid} must still resolve for a preparer`).toHaveCount(1)
   }
+  // The rail's UBL card renders for every role: can_view_ubl reads content, never the caller.
+  await expect(page.getByTestId('ubl-document-card'), 'the UBL document card must render for a preparer').toHaveCount(1)
   // The role-gated controls, and only those: approvalGate and submitGate are the two gates
   // in the cluster that read the caller's role, so a role switch can only move these three
-  // (detail-submit is asserted disabled with its own sentence above). can_edit and
-  // can_view_ubl are status- and content-derived (handlers.go, ubl.Missing) and are
-  // deliberately NOT asserted disabled here -- a preparer may legitimately edit a validated
-  // invoice and read a complete one's UBL, and claiming otherwise would red on correct code.
+  // (detail-submit is asserted disabled with its own sentence above). can_edit is
+  // status-derived (handlers.go) and deliberately NOT asserted disabled here -- a preparer
+  // may legitimately edit a validated invoice, and claiming otherwise would red on correct code.
   for (const testid of ['detail-approve', 'detail-reject'] as const) {
     await expect(page.getByTestId(testid), `${testid} must be disabled for a preparer`).toBeDisabled()
   }

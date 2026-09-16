@@ -369,6 +369,28 @@ describe('StatusStrip: glyphs', () => {
     }
     expect([...seen].sort(), 'every state chose a glyph branch').toEqual([...ALL_STATES].sort())
   })
+
+  it('a passed validation renders exactly like the Draft node beside it', () => {
+    const tick = glyphHtml(tickGlyph11)
+    const els = nodesOf(renderStrip(stripNodes(HISTORY_TO_QUEUED, null, 'validated')))
+    const draft = iconOf(els[0])
+    const validated = iconOf(els[1])
+    expect(validated.style.background).toBe(draft.style.background)
+    expect(validated.style.border).toBe(draft.style.border)
+    expect(validated.style.color).toBe(draft.style.color)
+    expect(draft.style.background, 'both green, not both amber').toBe(TONE.done.bg)
+    for (const icon of [draft, validated]) {
+      expect(icon.querySelector('svg path[d="M20 6 9 17l-5-5"]')).not.toBeNull()
+      expect(icon.querySelector('svg')?.outerHTML).toBe(tick)
+      expect(icon.firstElementChild?.tagName.toLowerCase(), 'no 8px dot').toBe('svg')
+    }
+
+    // Control: an open step still draws the dot and no tick.
+    cleanup()
+    const open = iconOf(nodesOf(renderStrip(stripNodes(HISTORY_TO_QUEUED, null, 'draft')))[0])
+    expect(open.querySelector('svg')).toBeNull()
+    expect((open.firstElementChild as HTMLElement).style.width).toBe('8px')
+  })
 })
 
 describe('StatusStrip: attribution', () => {

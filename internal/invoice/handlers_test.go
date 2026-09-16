@@ -5993,8 +5993,8 @@ func TestGetHandler_UBLGateIsStatusIndependentWhenBlocked(t *testing.T) {
 
 // AC #3/#4, deferred here from task-398 (it could not compile there --
 // ubl_blocked_reason did not exist): the /ubl 409's error value and the detail
-// payload's ubl_blocked_reason are the SAME string, so the SPA's tooltip and
-// the route's refusal can never say different things.
+// payload's ubl_blocked_reason are the SAME string, so the UBL card's printed
+// refusal and the route's refusal can never say different things.
 func TestUBLHandler_409BodyEqualsTheDetailPayloadReason(t *testing.T) {
 	inv := ublInvoiceMissingLines(t, "INV-CROSSENDPOINT")
 	id := ublTestIdentity()

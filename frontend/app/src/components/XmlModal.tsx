@@ -19,14 +19,14 @@ const PROVENANCE =
 // ErrorState prints error.message, and the wire message on this route is an internal
 // sentinel ('invoice: validation', 'internal server error') — so the generic arm re-wraps
 // with fixed copy and drops `body`, which carries the same sentence.
-const LOAD_FAILED = 'This document could not be loaded.'
+export const LOAD_FAILED = 'This document could not be loaded.'
 
-function ublFilename(invoiceNumber: string): string {
+export function ublFilename(invoiceNumber: string): string {
   const safe = invoiceNumber.replace(/[^A-Za-z0-9._-]/g, '-')
   return `${safe || 'invoice'}.xml`
 }
 
-function downloadUbl(xml: string, invoiceNumber: string): void {
+export function downloadUbl(xml: string, invoiceNumber: string): void {
   const url = URL.createObjectURL(new Blob([xml], { type: 'application/xml' }))
   const a = document.createElement('a')
   a.href = url

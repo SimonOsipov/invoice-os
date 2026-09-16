@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"image/png"
+	"strings"
 	"sync/atomic"
 	"unicode"
 
@@ -99,7 +100,7 @@ func (r *PDFiumReader) Read(ctx context.Context, doc Document, onPage func(Page)
 			ref := requests.Page{ByIndex: &requests.PageByIndex{Document: opened.Document, Index: i}}
 			text, err := inst.GetPageTextStructured(&requests.GetPageTextStructured{
 				Page: ref,
-				Mode: requests.GetPageTextStructuredModeRects,
+				Mode: requests.GetPageTextStructuredModeBoth,
 			})
 			if err != nil {
 				return fmt.Errorf("pdfium: page %d text: %w", i+1, err)
@@ -193,4 +194,23 @@ func pdfiumTokens(rects []*responses.GetPageTextStructuredRect, page int, widthP
 		})
 	}
 	return tokens, chars
+}
+
+// charsIn returns the text of the chars whose boxes centre inside box, in char-stream order (rects
+// and chars share one stream, so no sort is needed). \r and \n are skipped: pdfium's line breaks
+// carry a degenerate box landing inside a neighbouring rect. Centre, not overlap or full
+// containment, is the only test that stays correct once box is a union of several rects that abut.
+func charsIn(chars []*responses.GetPageTextStructuredChar, box responses.CharPosition) string {
+	var b strings.Builder
+	for _, c := range chars {
+		if c == nil || c.Text == "\r" || c.Text == "\n" {
+			continue
+		}
+		cx := (c.PointPosition.Left + c.PointPosition.Right) / 2
+		cy := (c.PointPosition.Top + c.PointPosition.Bottom) / 2
+		if cx >= box.Left && cx <= box.Right && cy >= box.Bottom && cy <= box.Top {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
 }

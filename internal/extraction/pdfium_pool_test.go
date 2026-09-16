@@ -58,6 +58,7 @@ var pxAllowedImports = map[string]bool{
 	"encoding/hex":  true,
 	"fmt":           true,
 	"image/png":     true,
+	"strings":       true,
 	"sync":          true,
 	"sync/atomic":   true,
 	"unicode":       true,

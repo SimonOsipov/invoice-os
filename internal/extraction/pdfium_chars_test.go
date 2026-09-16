@@ -9,6 +9,10 @@
 package extraction_test
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"slices"
 	"sort"
@@ -232,6 +236,79 @@ func TestPDFiumText_ModeBothReturnsTheSameRects(t *testing.T) {
 	if totalRects < pdcMinTotalRects {
 		t.Fatalf("scanned %d rect(s) across %d fixture(s), want at least %d -- the loops above would have passed vacuously", totalRects, len(names), pdcMinTotalRects)
 	}
+}
+
+// TestPDFiumReader_ProductionCallSiteRequestsModeBoth closes a gap the control above cannot:
+// PDFiumStructuredTextForTest takes an explicit mode argument, so it reads ModeBoth regardless of
+// what Read's own literal passes -- PDFium honours ModeBoth either way. This parses pdfium.go and
+// asserts Read's own GetPageTextStructured{...} sets Mode: requests.GetPageTextStructuredModeBoth,
+// so reverting that one line -- and nothing else -- fails here.
+func TestPDFiumReader_ProductionCallSiteRequestsModeBoth(t *testing.T) {
+	const file = "pdfium.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+
+	var modeExpr ast.Expr
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Read" || fn.Recv == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "GetPageTextStructured" || len(call.Args) != 1 {
+				return true
+			}
+			unary, ok := call.Args[0].(*ast.UnaryExpr)
+			if !ok || unary.Op != token.AND {
+				return true
+			}
+			lit, ok := unary.X.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			for _, elt := range lit.Elts {
+				if kv, ok := elt.(*ast.KeyValueExpr); ok {
+					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Mode" {
+						modeExpr = kv.Value
+					}
+				}
+			}
+			return false
+		})
+	}
+
+	if modeExpr == nil {
+		t.Fatalf("%s: found no GetPageTextStructured{...} call inside PDFiumReader.Read with a Mode field", file)
+	}
+	sel, ok := modeExpr.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("%s: Read's GetPageTextStructured.Mode is %s, want requests.GetPageTextStructuredModeBoth", file, ptcRender(modeExpr))
+	}
+	if pkg, isIdent := sel.X.(*ast.Ident); !isIdent || pkg.Name != "requests" || sel.Sel.Name != "GetPageTextStructuredModeBoth" {
+		t.Errorf("%s: Read's GetPageTextStructured.Mode is %s, want requests.GetPageTextStructuredModeBoth", file, ptcRender(modeExpr))
+	}
+}
+
+// ptcRender renders a Mode expression for a failure message. Only Ident and SelectorExpr occur
+// in a Mode field's value on this call site, so the fallback is a type name, not a general printer.
+func ptcRender(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := x.X.(*ast.Ident); ok {
+			return pkg.Name + "." + x.Sel.Name
+		}
+	}
+	return fmt.Sprintf("%T", e)
 }
 
 // --- AC-3: charsIn reproduces every rect's own text on a word-level page --------------------

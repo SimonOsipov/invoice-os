@@ -8630,7 +8630,7 @@ test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twi
 
   // Typed, no anchor_label, no region -- a pointed payload with no region 400s
   // (handlers_correction.go:201-203).
-  await postFieldCorrection(token, job.id, 'buyer_name', { value: 'Honeywell Group Nigeria Plc', method: 'typed' })
+  const typed = await postFieldCorrection(token, job.id, 'buyer_name', { value: 'Honeywell Group Nigeria Plc', method: 'typed' })
 
   // A SEPARATE runDocuments call: no-duplicate-invoice-number is scoped per entity
   // (internal/importer/service.go), so the twin needs its own.
@@ -8647,7 +8647,11 @@ test('EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twi
   // through docling's Resolve, a different token source from this story's. The count is exact,
   // so a retry (whose first attempt already taught) reds instead of passing -- deliberate.
   const audit = await getAuditLog(token, { event: ['extraction.anchor.learned'], limit: 100 })
-  const learned = audit.events.filter((e) => (e.payload as { field?: string }).field === 'buyer_name')
+  // Tied to this register's invoice, not the tenant: another buyer_name learn must not stand in for this one.
+  const learned = audit.events.filter((e) => {
+    const p = e.payload as { field?: string; invoice_id?: string }
+    return p.field === 'buyer_name' && p.invoice_id === typed.invoice_id
+  })
   expect(
     learned.length,
     `recorded ${learned.length} extraction.anchor.learned event(s) for buyer_name, want exactly 1. More than one means either a retry of this spec or a re-run over a database db.Reset did not clear (it runs at gateway boot, not per workflow run). Events: ${JSON.stringify(learned.map((e) => ({ at: e.created_at, payload: e.payload })))}`,

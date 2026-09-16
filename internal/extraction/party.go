@@ -61,7 +61,7 @@ func partyOrder(page TokenPage) []Party {
 	for i, tok := range page.Tokens {
 		// Only a heading moves the block. An unconditional assignment would clear it at every
 		// ordinary token and leave the partition holding headings alone.
-		if p := partyHeading(tok.Text); p != PartyUnknown {
+		if p := partyHeading(labelView(tok.Text)); p != PartyUnknown {
 			current = p
 		}
 		out[i] = current

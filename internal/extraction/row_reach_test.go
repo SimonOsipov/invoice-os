@@ -841,7 +841,10 @@ func TestAdvisory_AFreshenedRegisterStillReadsItsAmounts(t *testing.T) {
 			t.Errorf("freshened R0 %s = %s / %q (ok=%v), want %s / ReasonNone", field, advStr(r.Value), r.Reason, ok, want)
 		}
 	}
-	if r, ok := rcFind(got, "invoice_number"); !ok || r.Reason != extraction.ReasonMissing {
-		t.Errorf("freshened R0 invoice_number = %s / %q (ok=%v), want missing: EXTR34-E2E-01 expects a quarantine", advStr(r.Value), r.Reason, ok)
+	for field, want := range map[string]string{"invoice_number": "OAP/2026/0088", "issue_date": "2026-09-01"} {
+		r, ok := rcFind(got, field)
+		if !ok || r.Reason != extraction.ReasonNone || !advSameValue(r.Value, rcStr(want)) {
+			t.Errorf("freshened R0 %s = %s / %q (ok=%v), want %s / ReasonNone", field, advStr(r.Value), r.Reason, ok, want)
+		}
 	}
 }

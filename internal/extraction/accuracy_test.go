@@ -769,11 +769,11 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 		{
 			file:   acDoc,
 			needle: "## The advisory arrangements",
-			// The published record, blocker 2 closed, and the issue_date gap still recorded.
+			// The published record: both blockers closed.
 			want: []string{"`RowReach`", "0.614732", "0.613281", "0.460405", "0.498444", "0.465497",
-				"**Closed on both fixtures**", "`issue_date` is a known gap by name"},
-			// The far-right totals gap the row reach closed, and the dial line it cited.
-			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both"},
+				"**Closed on both fixtures**", "R0 and R1 decide `invoice_number` and `issue_date`"},
+			// The far-right totals gap, the dial line it cited, and the letter-spaced gap the label view closed.
+			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both", "`issue_date` is a known gap by name"},
 		},
 	} {
 		t.Run(c.file, func(t *testing.T) {

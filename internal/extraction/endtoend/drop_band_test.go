@@ -43,9 +43,9 @@ var dbTwinAdditions = []dbFieldAdd{
 	{"total", "1612.50", "t1.total.right", 0.332255, 0.328961},
 }
 
-// dbSiblingAdditions is the twin's nine without issue_date: the sibling's letter-spaced label
-// matches no lexicon entry. The sibling prints the same fields at its own offsets.
+// dbSiblingAdditions is the twin's nine at the sibling's own offsets.
 var dbSiblingAdditions = []dbFieldAdd{
+	{"issue_date", "2026-07-30", "t1.issue_date.right", 0.273745, 0.272294},
 	{"supplier_tin", "99999999-1101", "t1.supplier_tin.right", 0.265902, 0.263588},
 	{"supplier_name", "Adeyemi Trading Limited", "t1.supplier_name.right", 0.316510, 0.314824},
 	{"buyer_tin", "99999999-1102", "t1.buyer_tin.right", 0.286608, 0.284294},

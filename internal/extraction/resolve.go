@@ -118,11 +118,13 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 	}
 	for pi, page := range pages {
 		for ti, tok := range page.Tokens {
-			loc := rule.re.FindStringIndex(tok.Text)
+			// loc indexes the view, so every read of loc takes text (TestResolve_ASpacedLabelReadsAsItsWord).
+			text := labelView(tok.Text)
+			loc := rule.re.FindStringIndex(text)
 			if loc == nil {
 				continue
 			}
-			if tier != TierLearned && anchorOutranked(tok.Text, loc) {
+			if tier != TierLearned && anchorOutranked(text, loc) {
 				continue
 			}
 			if !inBand(band, page.Number, tok.Region) {
@@ -134,7 +136,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 			}
 			switch rule.Relation.Kind {
 			case RelSameToken:
-				dst = appendReadings(dst, rule.Shape, sameTokenValue(tok.Text, loc),
+				dst = appendReadings(dst, rule.Shape, sameTokenValue(text, loc),
 					usableRegion(tok.Region), outField, ruleID, tier, 0, false)
 			case RelRight, RelBelow:
 				bounded := tier != TierLearned && rule.Relation.Kind == RelRight
@@ -159,7 +161,7 @@ func appendRuleCandidates(dst []Candidate, pages []TokenPage, parties [][]Party,
 				}
 				// ceiling: a label carrying other letters, e.g. "Total (NGN)", gets no row reach; revisit when a far-right total with a suffixed label misses
 				// ceiling: a dropped far value gets no row reach; revisit when an offset far-right total misses
-				if rowReach && bounded && bareLabel(tok.Text, loc) {
+				if rowReach && bounded && bareLabel(text, loc) {
 					if vi, gap, ok := rowReachToken(page, tok.Region, rule.Relation); ok && !ownedBelow(page, labels[pi], page.Tokens[vi].Region) {
 						value := page.Tokens[vi]
 						dst = appendReadings(dst, rule.Shape, value.Text,
@@ -190,6 +192,22 @@ func anchorOutranked(text string, loc []int) bool {
 	return false
 }
 
+// labelView is text as a label reads it: a token made only of single letters spaced apart
+// ("I N V O I C E") reads as those letters joined. Every other token reads as printed.
+// ceiling: word gaps are dropped too, so a spaced label whose pattern needs a word boundary ("T O T A L   D U E") misses; revisit when one does
+func labelView(text string) string {
+	units := strings.Fields(text)
+	if len(units) < 2 {
+		return text
+	}
+	for _, u := range units {
+		if r := []rune(u); len(r) != 1 || !unicode.IsLetter(r[0]) {
+			return text
+		}
+	}
+	return strings.Join(units, "")
+}
+
 // labelTokens is one bool per token in the page's own order: does this token carry any
 // anchor-lexicon label. Computed once per page, like partyOrder: crossesALabel runs per candidate
 // pair, so reading the lexicon inside it costs orders of magnitude more than one whole Resolve on
@@ -202,8 +220,9 @@ func anchorOutranked(text string, loc []int) bool {
 func labelTokens(page TokenPage) []bool {
 	out := make([]bool, len(page.Tokens))
 	for i, tok := range page.Tokens {
+		text := labelView(tok.Text)
 		for _, m := range anchorLabelMatchers {
-			if m.RE.MatchString(tok.Text) {
+			if m.RE.MatchString(text) {
 				out[i] = true
 				break
 			}

@@ -168,6 +168,33 @@ func TestCorpusDoc_RecordsTheDialBlindness(t *testing.T) {
 	}
 }
 
+// The label view's record: what moved, and why no fingerprint version is bumped.
+func TestCorpusDoc_RecordsWhatTheLabelViewChanged(t *testing.T) {
+	const heading = "### What EXTR-35 changed"
+	acc := eeDocSection(t, wildReadFile(t, eeDocFile), eeDocAccSection)
+	misses := regexp.MustCompile(`[0-9]+ real misses`)
+	if len(misses.FindAllString(acc, -1)) == 0 {
+		t.Fatalf("%q carries no \"N real misses\" phrase; the absence scan below would pass on any text", eeDocAccSection)
+	}
+	if n := strings.Count(acc, "\n"+heading+"\n"); n != 1 {
+		t.Fatalf("%q carries %d %q subsection(s), want exactly 1", eeDocAccSection, n, heading)
+	}
+	sub := eeDocSubsection(t, acc, heading)
+	if strings.TrimSpace(sub) == "" {
+		t.Fatalf("%q is empty", heading)
+	}
+	for _, needle := range []string{"`labelView`", "from 81 hits to 89", "`FingerprintVersion`", "`BoxlessFingerprintVersion`",
+		"`TestFingerprint_ALetterSpacedLabelMovesOnlyThePagesThatPrintIt`", "`TestResolve_TheLetterSpacedViewReadsOnlyTheSpacedLabels`",
+		"`TestAnchorLexicon_NoEntryMatchesSpacedLettersAsPrinted`", "EXTR35-E2E-01"} {
+		if !strings.Contains(sub, needle) {
+			t.Errorf("%q never says %s", heading, needle)
+		}
+	}
+	if m := misses.FindAllString(sub, -1); len(m) != 0 {
+		t.Errorf("%q carries %q; TestCorpusDoc_RealMissCountMatchesEeRealMisses allows exactly one in %q", heading, m, eeDocAccSection)
+	}
+}
+
 // --- the as-printed siblings --------------------------------------------------
 
 const (
@@ -213,7 +240,7 @@ var eeDocVerdicts = []struct {
 }{
 	{"a", "fixed by EXTR-26", []string{"EXTR-29", "`TOTAL DUE (NGN)`"}},
 	{"b", "fixed by EXTR-24", []string{"8acf0879"}},
-	{"c", "reproduces", []string{"EXTR-31", "TestWildLayouts_TheStackedSiblingReadsNoInvoiceNumber"}},
+	{"c", "fixed by EXTR-35", []string{"EXTR-35", "INV-2204", "TestWildLayouts_TheStackedSiblingReadsItsInvoiceNumber"}},
 	{"d", "not reproduced", []string{"unmeasured", "TestWildLayouts_TheTwoPartySiblingDoesNotReproduceTheRegNoAsBuyerTIN"}},
 }
 
@@ -222,7 +249,10 @@ var (
 	eeDocVerdictRE = regexp.MustCompile(`(?m)^Verdict: \*\*([^*]+)\*\*\.$`)
 	eeDocTINRE     = regexp.MustCompile(`\b[0-9]{8}-[0-9]{4}\b`)
 	eeDocPairsHead = regexp.MustCompile(`(?m)^\| Lexicon-friendly \|`)
-	eeDocStale     = []string{"EXTR-33 (`Planned`)", "has no EXTR-33 divergence", "The five `wild_*.pdf` arrangements"}
+	eeDocStale     = []string{"EXTR-33 (`Planned`)", "has no EXTR-33 divergence", "The five `wild_*.pdf` arrangements",
+		"Letter-spaced label matching does not exist", "Letter-spaced label matching is owed",
+		"EXTR-31 Core AC-4 claims this quarantine", "no lexicon entry reaches a letter-spaced word",
+		"every cell of `wild_stacked_borderless_asprinted.pdf`, EXTR-31"}
 )
 
 // eeDocSubsection is heading's body inside section, cut at the next "### ".
@@ -470,7 +500,7 @@ func TestCorpusDoc_RecordsWhatEachDivergenceDid(t *testing.T) {
 	}
 
 	// Controls: (c) and (d) swap verdicts; (a) is recorded twice.
-	swapped := strings.NewReplacer("Verdict: **reproduces**.", "Verdict: **not reproduced**.", "Verdict: **not reproduced**.", "Verdict: **reproduces**.").Replace(sub)
+	swapped := strings.NewReplacer("Verdict: **fixed by EXTR-35**.", "Verdict: **not reproduced**.", "Verdict: **not reproduced**.", "Verdict: **fixed by EXTR-35**.").Replace(sub)
 	if got := eeDocDivergenceProblems(swapped); len(got) != 2 || !strings.Contains(got[0], "(c)") || !strings.Contains(got[1], "(d)") {
 		t.Errorf("swapped verdicts report %q, want one problem for (c) then one for (d)", got)
 	}

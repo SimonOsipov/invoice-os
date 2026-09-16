@@ -1,8 +1,7 @@
-// EXTR-18-07 (task-851) local guard. The three deployed-proof specs cannot run locally --
-// they need EXTRACTOR=docling on production, still a pending operator action (D-35). This
-// scans import-wizard.spec.ts and e2e/ as source text and proves the two failure modes that
-// ARE checkable without a deployment: a per-tenant content-hash collision silently reusing a
-// stale job, and a negation that passes on a reachable-but-empty sidecar.
+// EXTR-18-07 (task-851) local guard. The deployed-proof specs need a deployed docling sidecar
+// and cannot run locally. This scans import-wizard.spec.ts and e2e/ as source text for the two
+// failure modes checkable without one: a content-hash collision reusing a stale job, and a
+// negation that passes on a reachable-but-empty sidecar.
 import { describe, expect, it } from 'vitest'
 import { unzipSync } from 'fflate'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -21,8 +20,7 @@ const blockStart = source.indexOf(BLOCK_START)
 if (blockStart === -1) throw new Error(`start marker not found in import-wizard.spec.ts: ${JSON.stringify(BLOCK_START)}`)
 const block = source.slice(blockStart)
 
-const EXTR34_E2E_01 =
-  "EXTR34-E2E-01 (AC-6): the register's far-right amounts reach the manual-entry hand-off while it still quarantines"
+const EXTR35_E2E_01 = 'EXTR35-E2E-01 (AC-8): the letter-spaced register files its invoice instead of quarantining'
 
 // EXTR-15-12 (task-836). The EXTR-15 deployed-proof span runs from its own marker to
 // EXTR-18-07's, and is scanned SEPARATELY: two of its documents are DOCX, which no
@@ -180,7 +178,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
     'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
     'EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied',
-    EXTR34_E2E_01,
+    EXTR35_E2E_01,
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -208,16 +206,28 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
   }
 })
 
-describe('[deployed-proof] EXTR34-E2E-01 sits inside the EXTR-18-07 block', () => {
+describe('[deployed-proof] EXTR35-E2E-01 sits inside the EXTR-18-07 block', () => {
   // Above the EXTR-15 marker no freshness guard scans its upload.
   it('its title is found past the block marker', () => {
-    const at = source.indexOf(EXTR34_E2E_01)
-    expect(at, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR34_E2E_01)}`).toBeGreaterThan(-1)
-    expect(at, 'EXTR34-E2E-01 sits above the EXTR-18-07 marker').toBeGreaterThan(blockStart)
+    const at = source.indexOf(EXTR35_E2E_01)
+    expect(at, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
+    expect(at, 'EXTR35-E2E-01 sits above the EXTR-18-07 marker').toBeGreaterThan(blockStart)
   })
 })
 
-describe('[deployed-proof] EXTR34-E2E-01 uploads and expects what its Go oracle reads', () => {
+describe('[deployed-proof] EXTR35-E2E-01 replaced EXTR34-E2E-01 in place', () => {
+  // Booleans, not toContain: a failure would print all of import-wizard.spec.ts.
+  it('control: the spec names EXTR35-E2E-01', () => {
+    expect(source.includes('EXTR35-E2E-01'), 'EXTR35-E2E-01 not in import-wizard.spec.ts -- the absence check below proves nothing').toBe(true)
+  })
+
+  // A kept EXTR34-E2E-01 asserts a quarantine the register no longer produces.
+  it('EXTR34-E2E-01 is gone', () => {
+    expect(source.includes('EXTR34-E2E-01'), 'EXTR34-E2E-01 still in import-wizard.spec.ts').toBe(false)
+  })
+})
+
+describe('[deployed-proof] EXTR35-E2E-01 uploads and expects what its Go oracle reads', () => {
   // Drift here reds the deploy gate as "docling differs from pdfium" when it does not.
   const goTest = readFileSync(join(REPO_ROOT, 'internal/extraction/row_reach_test.go'), 'utf8')
   const goBody = /func TestAdvisory_AFreshenedRegisterStillReadsItsAmounts\(t \*testing\.T\) \{([\s\S]*?)\n\}/.exec(goTest)
@@ -236,6 +246,14 @@ describe('[deployed-proof] EXTR34-E2E-01 uploads and expects what its Go oracle 
     const go = /map\[string\]string\{"subtotal": "([^"]+)", "vat": "([^"]+)", "total": "([^"]+)"\}/.exec(goBody?.[1] ?? '')
     expect(spec, 'no AMOUNTS literal in import-wizard.spec.ts').not.toBeNull()
     expect(go, 'no amounts map in TestAdvisory_AFreshenedRegisterStillReadsItsAmounts').not.toBeNull()
+    expect(spec!.slice(1)).toEqual(go!.slice(1))
+  })
+
+  it("the spec's number and date are the Go test's", () => {
+    const spec = /const REGISTER_READ = \{ invoice_number: '([^']+)', issue_date: '([^']+)' \}/.exec(source)
+    const go = /map\[string\]string\{"invoice_number": "([^"]+)", "issue_date": "([^"]+)"\}/.exec(goBody?.[1] ?? '')
+    expect(spec, 'no REGISTER_READ literal in import-wizard.spec.ts').not.toBeNull()
+    expect(go, 'no invoice_number/issue_date map in TestAdvisory_AFreshenedRegisterStillReadsItsAmounts').not.toBeNull()
     expect(spec!.slice(1)).toEqual(go!.slice(1))
   })
 })

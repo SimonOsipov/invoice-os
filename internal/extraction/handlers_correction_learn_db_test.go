@@ -1652,3 +1652,37 @@ func TestRLS_AnUndecodableLayoutTokensColumnAbortsTheCorrectionAndCommitsNothing
 		t.Errorf("control: invoices.buyer_tin = %s, want the corrected %q", cxShowValue(got), blValue)
 	}
 }
+
+// --- EXTR-36-05 AC-3: a typed correction on a Chrome-printed layout writes its rule ------
+
+func TestRLS_ATypedCorrectionOnAChromePrintWritesItsRule(t *testing.T) {
+	ctx := t.Context()
+	f, fp, pages := ctJob(t, ctx, "EXTR36-05-CHROME", chrRegister)
+	if v := ctVerdict(t, pages, chtField, chtValue); v != extraction.TypedLearned {
+		t.Fatalf("LearnTypedRule(%s, %q) = %d on %s, want TypedLearned", chtField, chtValue, v, chrRegister)
+	}
+
+	op, pageOne := ctReader(t, chrRegister)
+	learned := &blLearnRecorder{}
+	ctPost(t, f, f.jobID, chtField, chtValue, pageOne, nil, learned.record)
+
+	rules := clRules(t, ctx, f.tenantID)
+	if len(rules) != 1 {
+		t.Fatalf("a typed correction on the Chrome print left %d anchor rule(s), want 1", len(rules))
+	}
+	if rules[0].fingerprint != fp {
+		t.Errorf("the rule is keyed to %q, want the job's own %q", rules[0].fingerprint, fp)
+	}
+	lcRuleBodyIs(t, ctx, rules[0].id, chtRuleBody)
+
+	evs := learned.events()
+	if len(evs) != 1 {
+		t.Fatalf("the typed correction emitted %d anchor.learned event(s), want 1", len(evs))
+	}
+	if evs[0].RuleID != rules[0].id || evs[0].LayoutFingerprint != fp {
+		t.Errorf("the emit is rule %q under %q, want %q under %q", evs[0].RuleID, evs[0].LayoutFingerprint, rules[0].id, fp)
+	}
+	if n := op.count(); n != 1 {
+		t.Errorf("the typed correction read the document %d time(s), want 1", n)
+	}
+}

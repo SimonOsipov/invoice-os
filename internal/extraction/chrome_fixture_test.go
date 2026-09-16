@@ -5,7 +5,11 @@
 package extraction_test
 
 import (
+	"maps"
+	"regexp"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -261,5 +265,138 @@ func TestChromeRegister_GapsMatchARealChromePrint(t *testing.T) {
 	}
 	if narrowest < 10.0 {
 		t.Errorf("narrowest cross-column gap ratio = %.4f, want >= 10.0", narrowest)
+	}
+}
+
+// --- byte-level oracles: durable across reader changes ----------------------
+
+// chrGlyphRe matches one emitted glyph: its Td origin and its Tj operand. No fixture text
+// carries a parenthesis, so the operand needs no escape handling.
+var chrGlyphRe = regexp.MustCompile(`([-0-9.]+) ([-0-9.]+) Td\n\(([^)]*)\) Tj`)
+
+// chrPage1Stream is the committed page-1 content stream, read from the file rather than from the
+// generator, so a hand-edited fixture is visible here.
+func chrPage1Stream(t *testing.T, name string) []byte {
+	t.Helper()
+	objs := fxObjects(fxRead(t, name))
+	pages := fxPages(t, objs)
+	if len(pages) == 0 {
+		t.Fatalf("%s declares no page", name)
+	}
+	return fxContent(t, objs, pages[0])
+}
+
+// AC-1/AC-5 at the byte layer. TestChromeRegister_FragmentsIntoGlyphs and
+// ..._IsNotAWordLevelBuild both measure the READER, so a later subtask that merges glyphs into
+// words turns them red on a fixture that never moved. This one reads the emitted operators, so
+// only the generator can move it.
+func TestChromeRegister_TheContentStreamEmitsOneTjPerGlyph(t *testing.T) {
+	for _, name := range []string{chrRegister, chrRegisterTwin} {
+		t.Run(name, func(t *testing.T) {
+			ops := chrGlyphRe.FindAllStringSubmatch(string(chrPage1Stream(t, name)), -1)
+			if len(ops) < 500 {
+				t.Fatalf("page 1 emits %d glyph Tj operator(s), want at least 500 -- a word-level stream wearing a Chrome name", len(ops))
+			}
+			for _, m := range ops {
+				if n := utf8.RuneCountInString(m[3]); n != 1 {
+					t.Errorf("Tj operand %q carries %d rune(s), want 1 -- the stream is not one Tj per glyph", m[3], n)
+				}
+			}
+		})
+	}
+}
+
+// chrRowsByY reconstructs page-1 text per Td ordinate, in emission order.
+func chrRowsByY(t *testing.T, name string) map[string]string {
+	t.Helper()
+	ops := chrGlyphRe.FindAllStringSubmatch(string(chrPage1Stream(t, name)), -1)
+	if len(ops) == 0 {
+		t.Fatalf("%s page 1 emits no glyph", name)
+	}
+	rows := map[string]string{}
+	for _, m := range ops {
+		rows[m[2]] += m[3]
+	}
+	return rows
+}
+
+// chrStripNumerals removes the characters an amount or an invoice number is free to change.
+var chrStripNumerals = strings.NewReplacer(
+	"0", "", "1", "", "2", "", "3", "", "4", "", "5", "", "6", "", "7", "", "8", "", "9", "", ",", "")
+
+// AC-2. TestFixtures_MatchTheirGenerator only pins the twin's bytes against the generator that
+// wrote them, so it cannot see a twin whose LABELS drift. Strip the digits and the two files
+// must be the same document.
+func TestChromeRegisterTwin_ChangesOnlyTheNumberAndTheAmounts(t *testing.T) {
+	primary, twin := chrRowsByY(t, chrRegister), chrRowsByY(t, chrRegisterTwin)
+	if len(primary) < 20 {
+		t.Fatalf("%s page 1 carries %d text row(s), want at least 20", chrRegister, len(primary))
+	}
+	if !slices.Equal(slices.Sorted(maps.Keys(primary)), slices.Sorted(maps.Keys(twin))) {
+		t.Fatalf("the two fixtures place text on different ordinates -- the arrangement is not shared")
+	}
+
+	differing := 0
+	for y, want := range primary {
+		if got := twin[y]; got != want {
+			differing++
+		}
+		if got, want := chrStripNumerals.Replace(twin[y]), chrStripNumerals.Replace(want); got != want {
+			t.Errorf("at y=%s the twin reads %q and the register %q once digits are stripped -- the labels must be identical", y, got, want)
+		}
+	}
+	if differing == 0 {
+		t.Errorf("no row differs between %s and %s -- the twin is a copy, not a second invoice", chrRegister, chrRegisterTwin)
+	}
+}
+
+// The width table must cover every rune the committed fixtures actually emit, and must refuse an
+// unknown one rather than advancing 0 and stacking two glyphs on one point.
+func TestChromeRegister_TheWidthTableCoversEveryEmittedGlyph(t *testing.T) {
+	seen := map[rune]bool{}
+	for _, name := range []string{chrRegister, chrRegisterTwin} {
+		for _, m := range chrGlyphRe.FindAllStringSubmatch(string(chrPage1Stream(t, name)), -1) {
+			for _, r := range m[3] {
+				seen[r] = true
+			}
+		}
+	}
+	if len(seen) < 30 {
+		t.Fatalf("the two fixtures emit %d distinct rune(s), want at least 30", len(seen))
+	}
+	for r := range seen {
+		if _, ok := fxHelvWidths[r]; !ok {
+			t.Errorf("fxHelvWidths has no advance for %q, which the committed stream emits", r)
+		}
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Errorf("fxHelvAdvance('₦') returned instead of panicking -- an unknown rune would advance 0")
+		}
+	}()
+	fxHelvAdvance('₦')
+}
+
+// The gap oracle's own machinery: overlapping rects collapse to one fragment, disjoint ones keep
+// their gap. Without this, TestChromeRegister_GapsMatchARealChromePrint could be measuring a
+// helper that merges everything and reports one fragment.
+func TestChromeGeometry_FragmentsMergeOverlapsAndKeepGaps(t *testing.T) {
+	overlapping := []chrRect{{0, 0, 10, 8}, {9, 0, 19, 8}, {18, 0, 28, 8}}
+	if got := chrFragmentsForLine(overlapping); len(got) != 1 {
+		t.Errorf("three overlapping rects collapse to %d fragment(s), want 1", len(got))
+	}
+
+	spaced := []chrRect{{0, 0, 10, 8}, {14, 0, 24, 8}}
+	frags := chrFragmentsForLine(spaced)
+	if len(frags) != 2 {
+		t.Fatalf("two disjoint rects collapse to %d fragment(s), want 2", len(frags))
+	}
+	if got := (frags[1].x0 - frags[0].x1) / frags[1].tallest; got != 0.5 {
+		t.Errorf("gap ratio = %v, want 0.5", got)
+	}
+
+	if got := len(chrGroupLines(append(slices.Clone(overlapping), chrRect{0, 100, 10, 108}))); got != 2 {
+		t.Errorf("rects on two vertical bands group into %d line(s), want 2", got)
 	}
 }

@@ -96,8 +96,8 @@ func TestFingerprint_GoldenTableCoversEveryCommittedFixture(t *testing.T) {
 			committed = append(committed, n)
 		}
 	}
-	if len(committed) < 27 {
-		t.Fatalf("%s holds %d .pdf file(s), want at least 27", fxDir, len(committed))
+	if len(committed) < fgGoldenFloor {
+		t.Fatalf("%s holds %d .pdf file(s), want at least %d", fxDir, len(committed), fgGoldenFloor)
 	}
 
 	if missing := fpUngoldened(committed); len(missing) != 0 {
@@ -144,5 +144,25 @@ func TestFingerprint_TheFrozenBaselineIsTheSameShapeAsTheLiveTable(t *testing.T)
 
 	if !slices.Equal(live, pre) {
 		t.Errorf("the live and frozen key sets differ:\nlive:     %v\npremerge: %v", live, pre)
+	}
+}
+
+// Fingerprint is the sha256 of the joined observation list, so a fixture that anchors NOTHING
+// fingerprints to the hash of the empty string -- a row that pins no reading at all. Three
+// image-only rows legitimately hold it; the two Chrome rows must not, or AC-4's vat-only pin and
+// AC-8's baseline would both be satisfied by a fixture the reader cannot see.
+func TestFingerprint_TheChromeRowsAreNotTheEmptyObservationHash(t *testing.T) {
+	empty := extraction.Fingerprint(nil)
+	if !strings.HasSuffix(empty, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
+		t.Fatalf("Fingerprint(nil) = %s, want the sha256 of the empty string -- this guard is comparing against the wrong value", empty)
+	}
+
+	for _, name := range []string{chrRegister, chrRegisterTwin} {
+		if fingerprintGoldens[name] == empty {
+			t.Errorf("%s's golden row is the empty-observation fingerprint -- the fixture anchors nothing and pins nothing", name)
+		}
+		if fingerprintGoldensPreMerge[name] == empty {
+			t.Errorf("%s's frozen row is the empty-observation fingerprint", name)
+		}
 	}
 }

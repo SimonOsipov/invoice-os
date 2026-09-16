@@ -16,7 +16,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { DEMO_MODE } from '../demo/flag'
 import { BlockedByRoleNote } from '../demo/BlockedByRoleNote'
-import { closeGlyph, docGlyph2, plusGlyph } from '../glyphs'
+import { closeGlyph, plusGlyph } from '../glyphs'
 import { actorLabel } from '../lib/actor'
 import { newestJob } from '../lib/documentRun'
 import {
@@ -76,6 +76,7 @@ import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
 import { SourceDocumentModal } from './SourceDocumentModal'
 import { StatusStrip } from './StatusStrip'
+import { UblDocumentCard } from './UblDocumentCard'
 import { ViolationsTable } from './ViolationsTable'
 import { XmlModal } from './XmlModal'
 import type { PlatformCtx } from '../types'
@@ -197,6 +198,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const openPreview = useCallback(() => setPreviewOpen(true), [])
   const [ublOpen, setUblOpen] = useState(false)
   const closeUbl = useCallback(() => setUblOpen(false), [])
+  const openUbl = useCallback(() => setUblOpen(true), [])
 
   // M5-09-07 live-refresh overlay ([poll-overlay-not-rerun]) -- HOISTED above the status
   // ladder below: hooks can't be called from inside a conditional branch, and `inv` (the
@@ -614,41 +616,15 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
               the bar being mounted. */}
           {(!editing || submitSkipped != null || submitError != null) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, maxWidth: 320 }}>
-              {/* The canonical document, always offered -- and OUTSIDE the bar below
-                  ([ubl-button-outside-invoice-actions]): can_view_ubl tracks CONTENT
-                  completeness, not lifecycle, so it does not follow the bar's flags on
-                  queued/submitted/accepted/failed, where every action in that bar is
-                  disabled. Same two disabled layers as Re-validate below, minus
-                  `filter: 'none'` -- `.v2-btn-ghost`'s :hover (app-layer.css:215) sets no
-                  filter. Hidden while `editing` ([ubl-hidden-while-editing]): the form is
-                  dirty and the server would render the STORED record. */}
-              {!editing && (
-                <button
-                  type="button"
-                  data-testid="view-ubl"
-                  onClick={() => setUblOpen(true)}
-                  disabled={!inv.can_view_ubl}
-                  title={!inv.can_view_ubl ? (inv.ubl_blocked_reason ?? undefined) : undefined}
-                  className="v2-btn v2-btn-ghost pf-btn"
-                  style={{
-                    height: 32,
-                    padding: '0 14px',
-                    fontSize: 13,
-                    ...(!inv.can_view_ubl ? { background: 'var(--bg-3)', color: 'var(--fg-4)', cursor: 'not-allowed' } : null),
-                  }}
-                >
-                  <span style={{ display: 'inline-flex' }}>{docGlyph2}</span> View UBL/XML
-                </button>
-              )}
-              {/* The decision pair, gated on `!editing` alone like View UBL above -- NOT
+              {/* The decision pair, gated on `!editing` alone -- NOT
                   `can_edit` (task-554, AC-1/AC-2): approve/reject must survive on statuses
                   where `can_edit` is false (queued, submitted, failed, ...), and a decision
-                  is taken on the STORED record for the same reason UBL is hidden while
-                  editing. A row wrapper (`detail-decision-actions`), not bare siblings --
+                  is taken on the STORED record, never on a dirty edit form.
+                  A row wrapper (`detail-decision-actions`), not bare siblings --
                   two buttons side by side need a flex row, same pattern as
                   `invoice-actions`'s own inner row below -- but the wrapper itself sits
                   outside `invoice-actions`, never inside it, so it survives that div's
-                  disappearance. Same two disabled layers as View UBL/Re-validate/Submit;
+                  disappearance. Same two disabled layers as Re-validate/Submit;
                   Approve additionally needs `filter: 'none'` (`.v2-btn-primary`), Reject
                   (ghost) does not. */}
               {!editing && (
@@ -1246,6 +1222,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
             {/* Not titled "Audit trail" (the design's name): import-wizard.spec.ts:576 pins
                 zero matches. */}
             <SourceDocumentCard meta={source} onOpen={openPreview} extraction={extraction} onOpenExtraction={ctx.openExtraction} />
+            <UblDocumentCard ctx={ctx} base={base} invoiceId={invoiceId} invoiceNumber={inv.invoice_number} canView={inv.can_view_ubl} blockedReason={inv.ubl_blocked_reason} editing={editing} onView={openUbl} />
           </div>
         </div>
 

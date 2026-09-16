@@ -80,13 +80,26 @@ describe('BUG-14: the scan population', () => {
 
   // The DECLARATION form here, not the bare value: `revalidate` is a substring of
   // `inv.can_revalidate`, so the bare needle could never fail for that control.
-  it('control: the six control testids are still declared', () => {
-    for (const id of ['view-ubl', 'detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']) {
+  it('control: the five control testids are still declared', () => {
+    for (const id of ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']) {
       expect(
         filesContaining(`data-testid="${id}"`).length,
         `the control testid ${id} vanished -- the scanner finds nothing`,
       ).toBeGreaterThan(0)
     }
+  })
+
+  // The UBL control left the header for the rail's card, under new testids.
+  it('the retired view-ubl control is declared in no production file', () => {
+    expect(filesContaining('data-testid="view-ubl"')).toEqual([])
+  })
+
+  // BUG-18-03 AC-8: the glyph left with the header control, and the viewer keeps one mount site.
+  it('InvoiceDetail.tsx no longer names docGlyph2, and XmlModal mounts from it alone', () => {
+    expect(filesContaining('docGlyph2'), 'floor: the glyph still has a user').toContain('components/UblDocumentCard.tsx')
+    expect(detailSource().length, 'floor: InvoiceDetail.tsx was read').toBeGreaterThan(1000)
+    expect(detailSource(), 'InvoiceDetail.tsx names docGlyph2').not.toContain('docGlyph2')
+    expect(filesContaining('<XmlModal'), 'the viewer mount sites').toEqual(['components/InvoiceDetail.tsx'])
   })
 
   it('control: the out-of-scope sibling reason testids are still found', () => {
@@ -130,12 +143,6 @@ describe('BUG-14: the six blocked-reason testids live in exactly their declared 
 describe('BUG-14: no control in the detail action cluster wires aria-describedby', () => {
   // Both edges pinned per control, so a match that stopped short cannot read as absent.
   const CONTROLS: Array<{ id: string; first: string; last: string; title: string | null }> = [
-    {
-      id: 'view-ubl',
-      first: 'onClick={() => setUblOpen(true)}',
-      last: '...(!inv.can_view_ubl ?',
-      title: 'title={!inv.can_view_ubl ? (inv.ubl_blocked_reason ?? undefined) : undefined}',
-    },
     {
       id: 'detail-approve',
       first: "onClick={() => toApprovePhase({ type: 'arm' })}",

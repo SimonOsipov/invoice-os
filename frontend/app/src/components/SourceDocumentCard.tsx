@@ -1,4 +1,4 @@
-// The invoice-detail right-rail entry point, and the last card in the rail. Card recipe is
+// The invoice-detail right-rail entry point. Card recipe is
 // the rail's universal one (--bg-2 / --line-1 / --radius-md) so the stack reads as one.
 //
 // It carries no row or column count: the card never fetches the sheet, neither count is

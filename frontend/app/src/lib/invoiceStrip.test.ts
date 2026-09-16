@@ -147,7 +147,7 @@ interface StatusRow {
 // no row is written for it. Transcribed from arch §3e's table.
 const STATUS_TABLE: Record<InvoiceStatus, StatusRow> = {
   draft: { cursor: 1, n1: 'current', n2: 'unreached', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
-  validated: { cursor: 2, n1: 'done', n2: 'current', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
+  validated: { cursor: 2, n1: 'done', n2: 'done', n4: 'unreached', n5: 'unreached', n5label: 'Accepted by FIRS' },
   queued: { cursor: 4, n1: 'done', n2: 'done', n4: 'current', n5: 'unreached', n5label: 'Accepted by FIRS' },
   submitted: { cursor: 4, n1: 'done', n2: 'done', n4: 'current', n5: 'unreached', n5label: 'Accepted by FIRS' },
   accepted: { cursor: 5, n1: 'done', n2: 'done', n4: 'done', n5: 'done', n5label: 'Accepted by FIRS' },
@@ -214,6 +214,48 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
         )
       }
     }
+  })
+
+  it('S-44: the node the invoice sits on is done once its step passed, on every history x run x status', () => {
+    const AT_CURSOR: Record<InvoiceStatus, StripState> = {
+      draft: 'current',
+      validated: 'done',
+      queued: 'current',
+      submitted: 'current',
+      accepted: 'done',
+      rejected: 'failed',
+      failed: 'failed',
+    }
+    const INDEX_OF_NODE = { 1: 0, 2: 1, 4: 3, 5: 4 } as const
+    const histories: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+    ]
+
+    let cases = 0
+    let currentAtCursor = 0
+    let doneAtCursor = 0
+    for (const [hName, history] of histories) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          const where = `${hName}/${rName}/${status}`
+          const nodes = strip(history, run, status)
+          const at = nodes[INDEX_OF_NODE[STATUS_TABLE[status].cursor]]
+          expect(at.state, where).toBe(AT_CURSOR[status])
+          const spine = [nodes[0], nodes[1], nodes[3], nodes[4]]
+          expect(spine.filter((n) => n.state === 'current').length, `${where} currents`).toBeLessThanOrEqual(1)
+          if (at.state === 'current') currentAtCursor += 1
+          if (at.state === 'done') doneAtCursor += 1
+          cases += 1
+        }
+      }
+    }
+    expect(cases).toBe(histories.length * ALL_RUNS.length * ALL_STATUSES.length)
+    expect(cases).toBe(231) // 3 x 11 x 7
+    // Anti-vacuity: both outcomes at the cursor are reached.
+    expect(currentAtCursor).toBeGreaterThan(0)
+    expect(doneAtCursor).toBeGreaterThan(0)
   })
 
   it('S-4 (invoiceStrip_submittedSharesTheQueuedNode): submitted is current on node 4 and captions the queued row, exactly as queued does', () => {
@@ -468,7 +510,7 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
 
   it('S-16 (invoiceStrip_loopKeepsFiveNodesAndLatestActor): the loop keeps five nodes and takes the latest row per node', () => {
     // AMENDED from the story (arch §7 row 5): assert the `at`/`actor` FIELDS. Node 2 is
-    // `current` at the end of this journey, and still renders the row it holds.
+    // `done` at the end of this journey (the validation passed) and renders the row it holds.
     const nodes = strip(LOOP, mkRun('cancelled', { closed_at: '2026-07-01T10:30:00' }), 'validated')
 
     expect(nodes[0].state).toBe('done')
@@ -476,10 +518,10 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
     expect(nodes[0].actor?.text).toBe('Bola Adeyemi')
     expect(nodes[0].caption).toBe('11:00 · Bola')
 
-    expect(nodes[1].state).toBe('current')
+    expect(nodes[1].state).toBe('done')
     expect(nodes[1].at).toBe('2026-07-01T11:45:00') // row 6, NOT the 09:30 first validation
     expect(nodes[1].actor?.text).toBe('Chidi Nwosu')
-    expect(nodes[1].caption).toBe('11:45 · Chidi') // a current node renders its own row
+    expect(nodes[1].caption).toBe('11:45 · Chidi') // the latest row, not the first
 
     // Node 4 saw a queueing at 10:00 and node 5 a rejection at 10:30, but the cursor is
     // back at 2, so both are demoted with no residue (arch §6.8).
@@ -575,23 +617,23 @@ describe('stripNodes: history supplies at and actor only, arch §4', () => {
 
 describe('stripNodes: a reached node captions its attribution', () => {
   it('S-35: the node under the cursor captions its own time and actor, on every status', () => {
-    // Cursor -> node index: draft 0, validated 1, queued and submitted 3.
-    const cases: Array<[InvoiceStatus, number, string]> = [
-      ['draft', 0, '09:00 · Ada'],
-      ['validated', 1, '10:15 · Ada'],
-      ['queued', 3, '11:30 · Ada'],
+    // Cursor -> node index: draft 0, validated 1, queued and submitted 3. A passed step is done.
+    const cases: Array<[InvoiceStatus, number, StripState, string]> = [
+      ['draft', 0, 'current', '09:00 · Ada'],
+      ['validated', 1, 'done', '10:15 · Ada'],
+      ['queued', 3, 'current', '11:30 · Ada'],
     ]
     expect(cases.length).toBeGreaterThan(0)
 
-    for (const [status, idx, caption] of cases) {
+    for (const [status, idx, state, caption] of cases) {
       const nodes = strip(HISTORY_TO_QUEUED, null, status)
-      expect(nodes[idx].state, status).toBe('current')
+      expect(nodes[idx].state, status).toBe(state)
       expect(nodes[idx].at, status).not.toBeNull()
       expect(nodes[idx].caption, status).toBe(caption)
     }
 
-    // Control: the `done` node beside the current one takes the SAME shape, so the
-    // assertions above cannot be passing on a caption only `done` nodes ever receive.
+    // Control: a node behind the cursor takes the SAME shape, so the captions above are not a
+    // shape only the node under the cursor receives.
     const atValidated = strip(HISTORY_TO_QUEUED, null, 'validated')
     expect(atValidated[0].state).toBe('done')
     expect(atValidated[0].caption).toBe('09:00 · Ada')
@@ -618,12 +660,16 @@ describe('stripNodes: a reached node captions its attribution', () => {
   it('S-37: current and done stay distinct by state alone, once their captions agree', () => {
     // Both rows carry the same time and actor, so the captions are identical and `state`
     // is the only thing left telling the two nodes apart.
-    const nodes = strip([h('draft', T_DRAFT), h('validated', T_DRAFT, { from_status: 'draft' })], null, 'validated')
-    expect(nodes[0].state).toBe('done')
-    expect(nodes[1].state).toBe('current')
-    expect(nodes[0].state).not.toBe(nodes[1].state)
-    expect(nodes[0].caption).toBe('09:00 · Ada')
-    expect(nodes[1].caption).toBe(nodes[0].caption)
+    const nodes = strip(
+      [h('draft', T_DRAFT), h('validated', T_VALIDATED, { from_status: 'draft' }), h('queued', T_VALIDATED, { from_status: 'validated' })],
+      null,
+      'queued',
+    )
+    expect(nodes[1].state).toBe('done')
+    expect(nodes[3].state).toBe('current')
+    expect(nodes[1].state).not.toBe(nodes[3].state)
+    expect(nodes[1].caption).toBe('10:15 · Ada')
+    expect(nodes[3].caption).toBe(nodes[1].caption)
 
     // No sixth state was added to carry the difference the caption stopped carrying. The
     // Record fails the typecheck if StripState gains or loses a member.
@@ -635,7 +681,7 @@ describe('stripNodes: a reached node captions its attribution', () => {
       'not-required': true,
     }
     expect(Object.keys(STATES)).toHaveLength(5)
-    expect(Object.keys(STATES)).toContain(nodes[1].state)
+    expect(Object.keys(STATES)).toContain(nodes[3].state)
   })
 
   it('S-38: node 5 and node 3 are outside the change', () => {
@@ -694,10 +740,9 @@ describe('stripNodes: a reached node captions its attribution', () => {
     // one history, two statuses, the node's caption must not move when the cursor passes.
     const cases: Array<[number, InvoiceStatus, InvoiceStatus]> = [
       [0, 'draft', 'validated'],
-      [1, 'validated', 'queued'],
       [3, 'queued', 'accepted'],
     ]
-    expect(cases.length).toBeGreaterThan(0)
+    expect(cases.length).toBe(2)
 
     for (const [idx, whileCurrent, whileDone] of cases) {
       const where = `node${idx} ${whileCurrent}->${whileDone}`
@@ -749,6 +794,45 @@ describe('stripNodes: a reached node captions its attribution', () => {
     // Anti-vacuity: both arms of the biconditional are actually reached.
     expect(bothSet).toBeGreaterThan(0)
     expect(bothNull).toBeGreaterThan(0)
+  })
+
+  it('S-46: only an unreached node reads Not reached; a reached node captions its row or the em-dash, on every history x run x status', () => {
+    const histories: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+    ]
+    const INDEX_OF_NODE = { 1: 0, 2: 1, 4: 3, 5: 4 } as const
+
+    let cases = 0
+    let passedAtCursorNoRow = 0
+    let passedAtCursorWithRow = 0
+    for (const [hName, history] of histories) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          const nodes = strip(history, run, status)
+          for (const idx of [0, 1, 3, 4]) {
+            const n = nodes[idx]
+            const where = `${hName}/${rName}/${status} ${n.key}`
+            if (n.state === 'unreached') {
+              expect(n.caption, where).toBe('Not reached')
+            } else if (n.at === null) {
+              expect(n.caption, where).toBe('—')
+            } else {
+              expect(n.caption, where).toMatch(/^\d\d:\d\d · \S/)
+            }
+          }
+          const atCursor = nodes[INDEX_OF_NODE[STATUS_TABLE[status].cursor]]
+          if (atCursor.state === 'done' && atCursor.at === null) passedAtCursorNoRow += 1
+          if (atCursor.state === 'done' && atCursor.at !== null) passedAtCursorWithRow += 1
+          cases += 1
+        }
+      }
+    }
+    expect(cases).toBe(231)
+    // Anti-vacuity: a passed step under the cursor is swept both with and without its row.
+    expect(passedAtCursorNoRow).toBeGreaterThan(0)
+    expect(passedAtCursorWithRow).toBeGreaterThan(0)
   })
 })
 
@@ -1124,8 +1208,8 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     expect(count(bare, "'Waiting'")).toBe(approvalWaiting)
     expect(count(spine, "'Waiting'")).toBe(0)
 
-    // The caption is one expression with no per-status arm. The state and label ternaries
-    // above it keep their own `status ===` and sit outside the slice.
+    // The caption is one expression with no per-status arm. The label ternary above it keeps
+    // its own `status ===` and sits outside the slice.
     const capStart = spine.indexOf('const caption')
     const capEnd = spine.indexOf('return', capStart)
     expect(capStart).toBeGreaterThanOrEqual(0)
@@ -1135,7 +1219,7 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     expect(caption).not.toContain('KEY_OF') // bounded: it stops before the return
     expect(caption).not.toMatch(/status\s*===/)
     expect(caption).not.toContain("'Waiting'")
-    // Control: the same regex DOES match the state ternary the slice excludes.
+    // Control: the same regex DOES match the label ternary the slice excludes.
     expect(spine.slice(0, capStart)).toMatch(/status\s*===/)
 
     // Scoped, not over-broad: one more 'Waiting' planted in approvalNode leaves this green.
@@ -1149,5 +1233,44 @@ describe('stripNodes: the scope fence (AC-7)', () => {
     const mentioned = bare.replace(spine, () => `${spine}  // the old arm said 'Waiting'\n`)
     expect(count(fnBody(mentioned, 'spineNode'), "'Waiting'")).toBe(1) // raw: the mention counts
     expect(count(fnBody(stripComments(mentioned), 'spineNode'), "'Waiting'")).toBe(0)
+  })
+
+  it('S-45: the state at the cursor names no status -- one map says whether a step passed', () => {
+    const bare = stripComments(readFileSync(join(SRC_DIR, 'lib', 'invoiceStrip.ts'), 'utf8'))
+    const fnStart = bare.indexOf('function spineNode(')
+    const fnEnd = bare.indexOf('function approvalNode(')
+    expect(fnStart).toBeGreaterThanOrEqual(0)
+    expect(fnEnd).toBeGreaterThan(fnStart)
+    const spine = bare.slice(fnStart, fnEnd)
+    const from = spine.indexOf('const state')
+    const to = spine.indexOf('const at', from)
+    expect(from).toBeGreaterThanOrEqual(0)
+    expect(to).toBeGreaterThan(from)
+    const state = spine.slice(from, to)
+
+    // Floors: the slice is the whole state expression and stops before the actor line.
+    expect(state).toContain("'unreached'")
+    expect(state).not.toContain('actorLabel(')
+
+    // Control: a per-status arm planted in the slice is found by the same regex.
+    const planted = state.replace('const state: StripState =', "const state: StripState = k === 2 && status === 'validated' ? 'done' :")
+    expect(planted).not.toBe(state)
+    expect(planted).toMatch(/status\s*===/)
+
+    expect(state).not.toMatch(/status\s*===/)
+    expect(state).toContain('[status]')
+
+    // Stricter: one read of the map, and `status` named nowhere else in any spelling.
+    const READ = 'STEP_OF_STATUS[status]'
+    const named = /\bstatus\b/
+    expect(state.split(READ)).toHaveLength(2)
+    expect(state.replace(READ, '')).not.toMatch(named)
+    // Control: a reversed-operand arm evades the `status ===` regex but not this one.
+    const reversed = state.replace('const state: StripState =', "const state: StripState = k === 2 && 'validated' === status ? 'done' :")
+    expect(reversed).not.toBe(state)
+    expect(reversed).not.toMatch(/status\s*===/)
+    expect(reversed.replace(READ, '')).toMatch(named)
+    // Total over InvoiceStatus: a new status fails the typecheck until it declares its outcome.
+    expect(bare).toMatch(/const STEP_OF_STATUS: Record<InvoiceStatus,/)
   })
 })

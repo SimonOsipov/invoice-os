@@ -162,8 +162,11 @@ same as being covered by them. Submission/transmit is real (M5-09): it is covere
 invoices **list**'s batch-select-and-submit path (`invoice-surfaces.spec.ts`), and via that
 same file's "detail surface: submit one invoice from its own page" test, which covers a
 single invoice submitted straight from its own **detail** page. The XML/UBL viewer is real
-too (BUG-04): it stays a non-nav surface with no coverage cell, and is covered by that same
-file's two `View UBL/XML` tests plus `api/contract-ubl.spec.ts`.
+too (BUG-04): it stays a non-nav surface with no coverage cell. It opens from the detail
+rail's UBL document card, and is covered by that same file's "invoice detail: the UBL
+document card fetches nothing on open, Download saves the server's own bytes, and View
+renders the same document" and "invoice detail: an incomplete invoice's UBL document card
+prints the server's own reason and offers no action" tests, plus `api/contract-ubl.spec.ts`.
 
 **What "smoke only" covered, and still does.** Render checks, plus client-side behaviour
 that has no other harness. That was always a floor rather than a licence for per-screen

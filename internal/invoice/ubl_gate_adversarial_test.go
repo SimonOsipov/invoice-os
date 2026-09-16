@@ -121,8 +121,8 @@ func TestGetHandler_UBLGateTreatsWhitespaceOnlyFieldsAsMissing(t *testing.T) {
 				t.Errorf("ubl_blocked_reason = %q (raw %s), want %q", got, reasonRaw, wantReason)
 			}
 
-			// The endpoint must agree, or the SPA's tooltip and the download
-			// would disagree on whitespace exactly where trimming happens.
+			// The endpoint must agree, or the UBL card's printed refusal and
+			// the download would disagree on whitespace exactly where trimming happens.
 			ublRec := doUBL(t, ublGetOK(inv), &id, inv.ID)
 			if ublRec.Code != http.StatusConflict {
 				t.Errorf("GET /ubl status = %d, want 409 (body=%s)", ublRec.Code, ublRec.Body.String())

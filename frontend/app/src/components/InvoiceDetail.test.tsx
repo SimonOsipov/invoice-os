@@ -2852,7 +2852,7 @@ describe('InvoiceDetail View UBL/XML control (task-401, BUG-04-05, [ubl-button-o
 
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     fireEvent.click(await screen.findByTestId('view-ubl'))
-    // The only 'PEPPOL' in src/ (XmlModal.tsx:63). getByText matches direct text children,
+    // Scoped to the modal: the UBL card also prints 'PEPPOL'. getByText matches direct text children,
     // so no ancestor of the subtitle competes for it.
     const subtitle = () => within(screen.getByTestId('ubl-modal')).getByText(/^PEPPOL BIS 3\.0 ·/).textContent
 

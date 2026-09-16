@@ -795,7 +795,7 @@ func TestPDFiumWords_TheFallbackIsDeadOnTheChromeFixtures(t *testing.T) {
 	}
 }
 
-// --- EXTR-36-06 / AC-3: the window recorded in docs/extraction-corpus.md --------------------
+// --- AC-3: the window recorded in docs/extraction-corpus.md ---------------------------------
 
 // AC-3. The doc must carry the live-measured floor, ceiling, shipped constant and window width,
 // each formatted to the same precision the window test itself uses, plus the fixtures, the two

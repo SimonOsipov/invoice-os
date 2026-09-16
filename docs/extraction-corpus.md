@@ -1521,8 +1521,10 @@ list or asserts the sibling.
 
 Three fixtures in this section transcribe two of the Nigerian invoice mock-ups, NG-3 and NG-4,
 TINs swapped into the reserved block; two more, `chrome_register.pdf` and
-`chrome_register_twin.pdf`, transcribe NG-3 a fourth and fifth time, at Chrome's own per-glyph
-advances (**The Chrome-shaped arrangement** below).
+`chrome_register_twin.pdf`, transcribe NG-3 again, at Chrome's own per-glyph advances
+(**The Chrome-shaped arrangement** below). NG-3 is also the source the
+`wild_stacked_borderless*.pdf` pair rewrites (**The pairs** above), on the looser terms that
+paragraph describes.
 `advisory_register.pdf` (R0, faithful, two pages) and `advisory_register_unspaced.pdf` (R1, exactly
 one declared transformation) transcribe the advisory-firm register EXTR-26 was written against;
 `advisory_dense.pdf` (D0, faithful) transcribes the dense telecoms invoice. The `wild_*` layouts
@@ -1655,8 +1657,9 @@ Two more fixtures transcribe NG-3,
 -- the same source **The advisory arrangements** above transcribes as `advisory_register.pdf` (R0)
 and `advisory_register_unspaced.pdf` (R1). This section obeys the corpus's standing rule stated at
 the top of this page: the source's bytes do not cross into the repository, the arrangement does.
-`chrome_register.pdf` and `chrome_register_twin.pdf` copy R0's own labels, positions and party
-content; only the byte-level rendering changes.
+`chrome_register.pdf` and `chrome_register_twin.pdf` copy R0's positions and party content, and
+R1's two header labels -- they print `Invoice number` and `Issued` unspaced and sentence-cased,
+as R1 does, not R0's letter-spaced forms. Otherwise only the byte-level rendering changes.
 
 Where R0 and R1 emit one `Tj` per printed line (**The six layouts** above), `chrome_register.pdf`
 and `chrome_register_twin.pdf` emit one `Tj` **per glyph** -- the shape Chrome/Skia's own PDF
@@ -1707,12 +1710,13 @@ reports the same two characters for both boxes. At a 0.13 pt gap the same pair r
 `"K"` and `"W"`.
 
 *The fixture's own measured extremes, re-derived at test time
-(`TestChromeRegister_BleedsAnOverlappingPair`).* The deepest overlap on `chrome_register.pdf` is
-0.1300 pt, the `"KW"`|`"KW"` pair inside `OKONKWO` (rect 4) -- the supplier name's own bleed,
-load-bearing per `fxChromeRegisterLines`'s own comment: without it no character on the page
-matches the lexicon at all. The narrowest gap that does not bleed is 0.0790 pt, between `"/"` and
-`"2"` inside `OAP/2026/0088` (rect 46). 0.1300 pt is the fixture's *shallowest* bleed, not its
-deepest: the `VAT 7.5%` line's own two engineered overlaps reach -0.264 pt and -0.320 pt.
+(`TestCorpusDoc_RecordsTheBleedBoundary`).* `chrome_register.pdf` page 1 carries exactly three
+overlapping consecutive pairs. The shallowest is 0.1300 pt, the `"KW"`|`"KW"` pair inside
+`OKONKWO` (rect 4) -- the supplier name's own bleed, load-bearing per `fxChromeRegisterLines`'s
+own comment: without it no character on the page matches the lexicon at all. The other two are
+the `VAT 7.5%` line's engineered overlaps, deeper at 0.2640 pt and 0.3200 pt. The narrowest gap
+that does not bleed is 0.0790 pt, between `"/"` and `"2"` inside `OAP/2026/0088` (rect 46), so
+the fixture's own boundary sits between 0.0790 pt apart and 0.1300 pt overlapped.
 
 ### splitGap's measured window
 
@@ -1730,7 +1734,7 @@ to record as its own residual: `[splitgap-window-is-narrow]`. The shipped consta
 clears the floor by 0.014605 and the ceiling by 0.024267.
 `TestCorpusDoc_RecordsTheSplitGapWindow` holds this section to that same live measurement.
 
-Neither Chrome fixture is a scored layout -- see **Adding a layout** below, "Not every committed
+Neither Chrome fixture is a scored layout -- see **Adding a layout** above, "Not every committed
 fixture is a layout."
 
 ## Learned rules

@@ -611,7 +611,7 @@ func TestCorpusDoc_EachPrintedLabelIsInItsSourceInventory(t *testing.T) {
 	}
 }
 
-// --- EXTR-36-06 / AC-6: the Chrome fixtures print only NG-3's own labels ----------------------
+// --- AC-6: the Chrome fixtures print only NG-3's own labels -----------------------------------
 
 const chromeRegisterFixture = "chrome_register.pdf"
 

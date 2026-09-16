@@ -2817,8 +2817,7 @@ func fxUndeclaredNames(names []string, declared map[string]bool) []string {
 }
 
 // AC-7. Scoped to this one file: a package-wide version reds on four pre-existing comments
-// elsewhere (three deliberate "Replaces X" historical citations, one line-wrap artefact),
-// which is scope this subtask does not own.
+// elsewhere -- three deliberate "Replaces X" citations and one line-wrap artefact.
 func TestFixtures_EveryTestNamedInACommentIsDeclared(t *testing.T) {
 	names := fxCitedNames(t, "fixtures_test.go")
 	if len(names) == 0 {

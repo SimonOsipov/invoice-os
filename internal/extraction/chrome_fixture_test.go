@@ -6,6 +6,7 @@ package extraction_test
 
 import (
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
@@ -489,7 +490,7 @@ func TestChromeRegister_ADifferentLayoutDoesNotShareIt(t *testing.T) {
 	}
 }
 
-// --- EXTR-36-06 / AC-1, AC-2, AC-4, AC-5 (doc half) --------------------------------------------
+// --- AC-1, AC-2, AC-4, AC-5 (doc half) ---------------------------------------------------------
 
 const chrDocHeading = "## The Chrome-shaped arrangement"
 
@@ -555,5 +556,69 @@ func TestCorpusDoc_RecordsTheChromeArrangement(t *testing.T) {
 		if !strings.Contains(adding, needle) {
 			t.Errorf("%s's %q section never names %s", acDoc, addingHeading, needle)
 		}
+	}
+}
+
+// chrPage1Gaps is every consecutive, vertically-overlapping rect pair on chrome_register.pdf
+// page 1, as the signed horizontal distance between them: negative is a bleed. Located by
+// predicate, never by index -- a regeneration renumbers rects.
+func chrPage1Gaps(t *testing.T) (overlaps map[int]float64, narrowest float64, narrowestLeft int) {
+	t.Helper()
+	page1 := pdcPage1(t, pdcStructured(t, chrRegister))
+	overlaps, narrowest, narrowestLeft = map[int]float64{}, math.Inf(1), -1
+	for i := 1; i < len(page1.Rects); i++ {
+		prev, cur := page1.Rects[i-1], page1.Rects[i]
+		if prev == nil || cur == nil {
+			continue
+		}
+		if min(prev.PointPosition.Top, cur.PointPosition.Top)-max(prev.PointPosition.Bottom, cur.PointPosition.Bottom) <= 0 {
+			continue
+		}
+		switch gap := cur.PointPosition.Left - prev.PointPosition.Right; {
+		case gap < 0:
+			overlaps[i-1] = -gap
+		case gap < narrowest:
+			narrowest, narrowestLeft = gap, i-1
+		}
+	}
+	if len(overlaps) == 0 || narrowestLeft < 0 {
+		t.Fatalf("page 1 yields %d overlap(s) and narrowest-gap rect %d -- the doc checks below would hold vacuously", len(overlaps), narrowestLeft)
+	}
+	return overlaps, narrowest, narrowestLeft
+}
+
+// The bleed-boundary figures the doc's "### The bleed boundary" prints: every overlap depth, the
+// narrowest non-bleeding gap, and both rects named by index. Re-derived, so a regeneration that
+// moves any of them reds rather than leaving the page stale.
+func TestCorpusDoc_RecordsTheBleedBoundary(t *testing.T) {
+	overlaps, narrowest, narrowestLeft := chrPage1Gaps(t)
+	if len(overlaps) != 3 {
+		t.Errorf("page 1 carries %d overlapping pair(s), want 3", len(overlaps))
+	}
+
+	section := acDocSectionText(t, acRepoFile(t, acDoc), chrDocHeading)
+	shallowestAt, shallowest := -1, math.Inf(1)
+	for left, depth := range overlaps {
+		if needle := strconv.FormatFloat(depth, 'f', 4, 64); !strings.Contains(section, needle) {
+			t.Errorf("%s's %q section never says %q, the overlap at rect %d", acDoc, chrDocHeading, needle, left)
+		}
+		if depth < shallowest {
+			shallowestAt, shallowest = left, depth
+		}
+	}
+	for _, needle := range []string{
+		strconv.FormatFloat(narrowest, 'f', 4, 64),
+		"(rect " + strconv.Itoa(narrowestLeft) + ")",
+		"(rect " + strconv.Itoa(shallowestAt) + ")",
+	} {
+		if !strings.Contains(section, needle) {
+			t.Errorf("%s's %q section never says %q", acDoc, chrDocHeading, needle)
+		}
+	}
+
+	// The page calls the KW bleed the SHALLOWEST of the three; that only reads true while the
+	// VAT line's two engineered overlaps stay deeper.
+	if !strings.Contains(section, "The shallowest is "+strconv.FormatFloat(shallowest, 'f', 4, 64)+" pt") {
+		t.Errorf("%s's %q section does not name %.4f pt as the shallowest overlap", acDoc, chrDocHeading, shallowest)
 	}
 }

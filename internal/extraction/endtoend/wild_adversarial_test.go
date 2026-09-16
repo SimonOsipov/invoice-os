@@ -1204,7 +1204,7 @@ func TestWildPairs_TheElevenKeepEveryFactTheyAssert(t *testing.T) {
 	}
 }
 
-// --- EXTR-36-06 / AC-5: the Chrome fixtures are not a scored layout --------------------------
+// --- AC-5: the Chrome fixtures are not a scored layout ---------------------------------------
 
 // AC-5. requiredPDFs, requiredGoldens and expectByLayout are this package's own, unexported and
 // reachable directly; the four corpus_ ratchets live in package extraction_test and are reached

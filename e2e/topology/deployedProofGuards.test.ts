@@ -21,6 +21,8 @@ if (blockStart === -1) throw new Error(`start marker not found in import-wizard.
 const block = source.slice(blockStart)
 
 const EXTR35_E2E_01 = 'EXTR35-E2E-01 (AC-8): the letter-spaced register files its invoice instead of quarantining'
+const EXTR36_E2E_02 = 'EXTR36-E2E-02 (AC-3): a typed correction on a Chrome print teaches its twin'
+const EXTR36_E2E_01 = 'EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed labels'
 
 // EXTR-15-12 (task-836). The EXTR-15 deployed-proof span runs from its own marker to
 // EXTR-18-07's, and is scanned SEPARATELY: two of its documents are DOCX, which no
@@ -179,6 +181,8 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
     'EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied',
     EXTR35_E2E_01,
+    EXTR36_E2E_02,
+    EXTR36_E2E_01,
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -395,5 +399,45 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
     expect(arms.length, 'the named arms of deadLetterRefusal are no longer readable').toBe(6)
     const also = arms.filter(([, , sentence]) => sentence.includes(opening)).map(([, kind]) => kind)
     expect(also, `the opening also appears in: ${also.join(', ')}`).toEqual([])
+  })
+})
+
+describe('[extr-36] declaration order is load-bearing', () => {
+  // The three register fixtures share one fingerprint and all run PERSONAS.A, so a rule taught
+  // by an earlier test is live for every later upload. Each failure message below names it.
+
+  it('EXTR36-E2E-02 is declared after EXTR35-E2E-01', () => {
+    const at35 = source.indexOf(EXTR35_E2E_01)
+    const at02 = source.indexOf(EXTR36_E2E_02)
+    expect(at35, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
+    expect(at02, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
+    expect(
+      at02,
+      "EXTR36-E2E-02 sits above EXTR35-E2E-01 -- advisory_register.pdf shares chrome_register.pdf's fingerprint v3:d89450d1..., and both run as PERSONAS.A, so a rule EXTR35-E2E-01 could write would already be live for EXTR36-E2E-02's upload",
+    ).toBeGreaterThan(at35)
+  })
+
+  it('EXTR36-E2E-01 is declared after EXTR36-E2E-02', () => {
+    const at02 = source.indexOf(EXTR36_E2E_02)
+    const at01 = source.indexOf(EXTR36_E2E_01)
+    expect(at02, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_02)}`).toBeGreaterThan(-1)
+    expect(at01, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR36_E2E_01)}`).toBeGreaterThan(-1)
+    expect(
+      at01,
+      "EXTR36-E2E-01 sits above EXTR36-E2E-02 -- both upload documents sharing fingerprint v3:d89450d1..., both run as PERSONAS.A, so the buyer_name rule EXTR36-E2E-01 teaches would already be live when EXTR36-E2E-02 uploads its supposedly untaught twin",
+    ).toBeGreaterThan(at02)
+  })
+
+  // Declaration order IS execution order only while the suite stays serial. Flip either dial
+  // and the two assertions above keep passing while meaning nothing. Comments stripped first:
+  // the config's own prose quotes both settings.
+  it('the topology run is still serial, so declaration order is execution order', () => {
+    const config = stripLineComments(readFileSync(join(E2E_ROOT, 'playwright.topology.config.ts'), 'utf8'))
+    expect(config, 'playwright.topology.config.ts no longer sets fullyParallel: false').toMatch(/fullyParallel:\s*false/)
+    expect(config, 'playwright.topology.config.ts no longer sets workers: 1').toMatch(/workers:\s*1\b/)
+    expect(
+      stripLineComments(source).includes('describe.configure'),
+      'import-wizard.spec.ts now calls describe.configure -- a parallel or reordering mode undoes the declaration order above',
+    ).toBe(false)
   })
 })

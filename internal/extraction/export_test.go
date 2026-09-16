@@ -5,8 +5,12 @@ package extraction
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/klippa-app/go-pdfium"
+	"github.com/klippa-app/go-pdfium/requests"
+	"github.com/klippa-app/go-pdfium/responses"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 )
@@ -154,3 +158,52 @@ func JobLayoutTokensForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID stri
 const MaxLayoutTokensJSONForTest = maxLayoutTokensJSON
 
 func LayoutTokensStorableForTest(tokens []string) ([]byte, bool) { return layoutTokensStorable(tokens) }
+
+// PDFiumStructuredPageForTest is one page's raw rects and chars at whatever mode the caller
+// requested. Raw, not converted to Token: the charsIn specs need PointPosition in chars' own
+// unflipped space, which a normalised Region cannot carry back.
+type PDFiumStructuredPageForTest struct {
+	Number int
+	Rects  []*responses.GetPageTextStructuredRect
+	Chars  []*responses.GetPageTextStructuredChar
+}
+
+// PDFiumStructuredTextForTest reads every page of doc through the same request shape Read
+// issues, at an explicit mode ("rect" or "both"), so the mode-comparison control and the charsIn
+// specs can each choose the mode they need rather than trusting Read's own choice. mode is a
+// plain string so the external test package needs no go-pdfium/requests import.
+func PDFiumStructuredTextForTest(ctx context.Context, doc Document, mode string) ([]PDFiumStructuredPageForTest, error) {
+	var pages []PDFiumStructuredPageForTest
+	err := withPDFiumInstance(ctx, func(inst pdfium.Pdfium) error {
+		opened, err := inst.OpenDocument(&requests.OpenDocument{File: &doc.Bytes})
+		if err != nil {
+			return fmt.Errorf("pdfium: open document: %w", err)
+		}
+		defer inst.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: opened.Document})
+
+		count, err := inst.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: opened.Document})
+		if err != nil {
+			return fmt.Errorf("pdfium: page count: %w", err)
+		}
+
+		for i := range count.PageCount {
+			ref := requests.Page{ByIndex: &requests.PageByIndex{Document: opened.Document, Index: i}}
+			text, err := inst.GetPageTextStructured(&requests.GetPageTextStructured{
+				Page: ref,
+				Mode: requests.GetPageTextStructuredMode(mode),
+			})
+			if err != nil {
+				return fmt.Errorf("pdfium: page %d text: %w", i+1, err)
+			}
+			pages = append(pages, PDFiumStructuredPageForTest{Number: i + 1, Rects: text.Rects, Chars: text.Chars})
+		}
+		return nil
+	})
+	return pages, err
+}
+
+// CharsInForTest hands the external test package the char-to-box helper the ModeBoth merge
+// seam (subtask 03) will consume. Unexported because production has no caller for it yet.
+func CharsInForTest(chars []*responses.GetPageTextStructuredChar, box responses.CharPosition) string {
+	return charsIn(chars, box)
+}

@@ -2611,9 +2611,7 @@ function actionColumn(): HTMLElement {
 // The UBL document card as the page mounts it. Card-only states live in UblDocumentCard.test.tsx.
 describe('InvoiceDetail UBL document card (task-401, BUG-04-05)', () => {
   const ID = 'inv-ubl-1'
-  // The backend's own copy (internal/ubl/ubl.go:16 + :149) -- em dash U+2014, single
-  // spaces. Asserted with toBe so a client-side re-authoring of it cannot pass
-  // ([ubl-reason-copy-is-server-authored]).
+  // The backend's own copy (internal/ubl/ubl.go:16 + :149) -- em dash U+2014, single spaces.
   const REASON = 'This invoice cannot be rendered as a UBL document — it is missing at least one line item.'
   const editable = { status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: false, can_submit: true }
 
@@ -2865,9 +2863,8 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     })
   }
 
-  // KILLS: `invoiceId={'other'}`. No T-row pinned WHICH invoice the viewer addresses --
-  // T16 pins only the number, which is a prop. `invoiceId` is the sole document selector,
-  // and the ONLY one once BUG-04-06 swaps the transitional getInvoice for getInvoiceUbl.
+  // KILLS: `invoiceId={'other'}` on the XmlModal mount. T03-6 pins only the number, which is a
+  // prop; `invoiceId` is the sole document selector.
   it('Q1/AC6: every request the viewer issues addresses THIS invoice', async () => {
     const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, ...editable }))
 
@@ -3044,9 +3041,9 @@ describe('InvoiceDetail View UBL/XML control -- QA adversarial coverage (task-40
     }
   })
 
-  // Closes task-401 §I-2: T2's literal lags silently if the union grows. A source scan is
-  // the only oracle -- the union is erased at runtime. cwd, never import.meta.url (T17).
-  it('Q11/AC2: T2 loops the WHOLE InvoiceStatus union, not a literal that has drifted', () => {
+  // ALL_STATUSES (looped by T03-1 and T03-4) lags silently if the union grows. A source scan
+  // is the only oracle -- the union is erased at runtime. cwd, never import.meta.url (T17).
+  it('Q11/AC2: ALL_STATUSES is the WHOLE InvoiceStatus union, not a literal that has drifted', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/lib/invoices.ts'), 'utf8')
     const block = src.match(/export type InvoiceStatus =\n((?:\s*\|\s*'[a-z_]+'\n)+)/)
     expect(block, 'the union no longer parses -- re-derive ALL_STATUSES by hand').toBeTruthy()

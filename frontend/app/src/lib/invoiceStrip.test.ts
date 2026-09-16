@@ -795,6 +795,45 @@ describe('stripNodes: a reached node captions its attribution', () => {
     expect(bothSet).toBeGreaterThan(0)
     expect(bothNull).toBeGreaterThan(0)
   })
+
+  it('S-46: only an unreached node reads Not reached; a reached node captions its row or the em-dash, on every history x run x status', () => {
+    const histories: Array<[string, StatusChange[]]> = [
+      ['empty', []],
+      ['toQueued', HISTORY_TO_QUEUED],
+      ['afterFailureLoop', HISTORY_AFTER_FAILURE_LOOP],
+    ]
+    const INDEX_OF_NODE = { 1: 0, 2: 1, 4: 3, 5: 4 } as const
+
+    let cases = 0
+    let passedAtCursorNoRow = 0
+    let passedAtCursorWithRow = 0
+    for (const [hName, history] of histories) {
+      for (const [rName, run] of ALL_RUNS) {
+        for (const status of ALL_STATUSES) {
+          const nodes = strip(history, run, status)
+          for (const idx of [0, 1, 3, 4]) {
+            const n = nodes[idx]
+            const where = `${hName}/${rName}/${status} ${n.key}`
+            if (n.state === 'unreached') {
+              expect(n.caption, where).toBe('Not reached')
+            } else if (n.at === null) {
+              expect(n.caption, where).toBe('—')
+            } else {
+              expect(n.caption, where).toMatch(/^\d\d:\d\d · \S/)
+            }
+          }
+          const atCursor = nodes[INDEX_OF_NODE[STATUS_TABLE[status].cursor]]
+          if (atCursor.state === 'done' && atCursor.at === null) passedAtCursorNoRow += 1
+          if (atCursor.state === 'done' && atCursor.at !== null) passedAtCursorWithRow += 1
+          cases += 1
+        }
+      }
+    }
+    expect(cases).toBe(231)
+    // Anti-vacuity: a passed step under the cursor is swept both with and without its row.
+    expect(passedAtCursorNoRow).toBeGreaterThan(0)
+    expect(passedAtCursorWithRow).toBeGreaterThan(0)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1220,5 +1259,18 @@ describe('stripNodes: the scope fence (AC-7)', () => {
 
     expect(state).not.toMatch(/status\s*===/)
     expect(state).toContain('[status]')
+
+    // Stricter: one read of the map, and `status` named nowhere else in any spelling.
+    const READ = 'STEP_OF_STATUS[status]'
+    const named = /\bstatus\b/
+    expect(state.split(READ)).toHaveLength(2)
+    expect(state.replace(READ, '')).not.toMatch(named)
+    // Control: a reversed-operand arm evades the `status ===` regex but not this one.
+    const reversed = state.replace('const state: StripState =', "const state: StripState = k === 2 && 'validated' === status ? 'done' :")
+    expect(reversed).not.toBe(state)
+    expect(reversed).not.toMatch(/status\s*===/)
+    expect(reversed.replace(READ, '')).toMatch(named)
+    // Total over InvoiceStatus: a new status fails the typecheck until it declares its outcome.
+    expect(bare).toMatch(/const STEP_OF_STATUS: Record<InvoiceStatus,/)
   })
 })

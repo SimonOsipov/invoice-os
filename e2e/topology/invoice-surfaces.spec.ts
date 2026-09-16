@@ -1155,7 +1155,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(violationsTable).toContainText(`rule-set v${VALIDATION_EXPECTED.ruleSetVersion}`)
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   // The draft->validated row this click just wrote: ApplyValidation stamps the JWT caller
   // (store.go actorFromContext), which is this page's persona.
   await expect(stripCaption(page, 'validated')).toHaveText(/^\d\d:\d\d · Chinedu$/)
@@ -1209,7 +1209,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   await revalidate.click({ force: true })
   await expect(noValidate).rejects.toThrow()
   expect(validatePosts, 'a disabled Re-validate must issue no request').toHaveLength(2)
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -1427,7 +1427,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await page.getByTestId('revalidate').click()
   await expect(violationsTable).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
 
   // 7a. Dashboard rollup ready state (Gap 1). [dashboard-scope-per-client] means this
   // page now shows the ACTIVE entity's OWN scoped total, not the tenant-wide count that
@@ -1777,7 +1777,7 @@ test('detail surface: a rejected invoice is edited back to draft with its reason
   await revalidate.click()
   await expect(page.getByTestId('violations-table')).toContainText('Passes all rules')
   await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
-  await expectStripStates(page, { draft: 'done', validated: 'current' })
+  await expectStripStates(page, { draft: 'done', validated: 'done' })
   // The SHAPE, never a value: node 1 stays attributed across the re-validate. Which of the
   // two `-> draft` rows it took is not observable here -- see the note above.
   await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · /)
@@ -4444,13 +4444,6 @@ test.describe.serial("detail surface: the action cluster's geometry (firm admin)
 // detail-reject are DISABLED for the signed-in persona, with the AXIS-2 sentence on screen.
 // Validation and submission ARE driven from the browser. What this block asserts is that
 // three surfaces agree on one fact, which is a claim about the reader, not the writer.
-//
-// AC-2 CORRECTION, recorded rather than coded around. The story says "after validation:
-// node 2 `done`". It cannot be: NODE_OF_STATUS['validated'] is 2 and spineNode gives
-// k === cursor the state 'current' (frontend/app/src/lib/invoiceStrip.ts;
-// invoiceStrip.test.ts:150 pins n2:'current' for status validated). Node 2 turns `done`
-// only once the cursor passes it -- which the FIRS-rejection leg below does assert.
-// Writing `done` at the validation stop would red this gate on correct code.
 test.describe.serial('detail surface: the deployed journey -- strip, approval card, feed and hand-off', () => {
   // StatusStrip renders tickGlyph11 on `done` and crossGlyph on `failed` (glyphs.tsx). The
   // `d` is what tells them apart in the DOM -- data-state alone is the tone, not the mark.
@@ -4564,9 +4557,9 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await page.getByTestId('revalidate').click()
     await expect(page.getByTestId('invoice-status-badge')).toContainText('VALIDATED')
 
-    // See the AC-2 CORRECTION in this block's header for why node 2 is `current`, not `done`.
-    await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'current', queued: 'unreached', accepted: 'unreached' })
+    await expectStripStates(page, { draft: 'done', validated: 'done', approved: 'current', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'draft', TICK_PATH), 'node 1 must carry the tick, not just the green tone').toHaveCount(1)
+    await expect(stripGlyph(page, 'validated', TICK_PATH), 'a passed validation carries the tick, like node 1').toHaveCount(1)
     // Node 2 is attributed too, being reached; this pins node 1 so the `done` above cannot
     // pass on a node that rendered no attribution at all.
     await expect(stripCaption(page, 'draft')).toHaveText(/^\d\d:\d\d · \S+/)
@@ -4664,7 +4657,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
     await openInvoiceRow(page, invoiceNumber)
 
     // Reading 1 of 3 -- the strip.
-    await expectStripStates(page, { draft: 'done', validated: 'current', approved: 'done', queued: 'unreached', accepted: 'unreached' })
+    await expectStripStates(page, { draft: 'done', validated: 'done', approved: 'done', queued: 'unreached', accepted: 'unreached' })
     await expect(stripGlyph(page, 'approved', TICK_PATH), 'node 3 must carry the tick').toHaveCount(1)
     await expect(stripGlyph(page, 'approved', CROSS_PATH), 'node 3 must no longer carry the cross').toHaveCount(0)
     // A closed run stamps closed_at, so node 3 must caption a time -- an em dash here means
@@ -4699,8 +4692,7 @@ test.describe.serial('detail surface: the deployed journey -- strip, approval ca
   // Leg 4 -- AC-5 / D-AC-2's other half. A FIRS rejection redens the FINAL node and
   // relabels it, and must not touch node 3. Fails on: node 5 keeping the accepted label, a
   // FIRS verdict leaking onto the approval node (the conflation D-AC-2 forbids), and node 2
-  // never turning `done` once the cursor passes it -- the state AC-2 asked for, asserted
-  // where it is actually true.
+  // losing its `done` once the cursor passes it.
   //
   // The submit is driven from the register, this file's own proven path
   // (submitSelected). SUBMIT-SITE NOTE: this adds one entry to

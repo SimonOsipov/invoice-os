@@ -13,16 +13,16 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// chrome_register.pdf and chrome_register_twin.pdf are TBD: EXTR-36-01's own generator step
-// (fxBuildChromeRegister) has not run yet, so their real Fingerprint is unmeasured here on
-// purpose -- copying the architect's candidate-build number without rebuilding it would be the
-// same false-green risk this table exists to catch.
+// chrome_register.pdf and chrome_register_twin.pdf: computed on the fixture built by
+// fxBuildChromeRegister/fxBuildChromeRegisterTwin, before the word stage exists. Both fixtures
+// carry the same "vat"-only anchor list (identical labels, only the invoice number and amounts
+// differ), so both rows hold the same value.
 var fingerprintGoldens = map[string]string{
 	"advisory_dense.pdf":                    "v3:fe469d7afac0a666956002d69238ca46fc252def84fe910cb24820ec432e311b",
 	"advisory_register.pdf":                 "v3:d89450d1d00688a442c17a083f9ab9b832d152ee249c671ff6ac17146a2a4bee",
 	"advisory_register_unspaced.pdf":        "v3:d89450d1d00688a442c17a083f9ab9b832d152ee249c671ff6ac17146a2a4bee",
-	"chrome_register.pdf":                   "TBD",
-	"chrome_register_twin.pdf":              "TBD",
+	"chrome_register.pdf":                   "v3:8f353f4c92d9135c022a096463ddd2cca5c355397a19ee95e422f65bc35fda72",
+	"chrome_register_twin.pdf":              "v3:8f353f4c92d9135c022a096463ddd2cca5c355397a19ee95e422f65bc35fda72",
 	"corpus_ambiguous_date.pdf":             "v3:aa3c59add58181ab233b5b690b57dee82ef1fdd1428daa1b2aba85a439161207",
 	"corpus_inline_labels.pdf":              "v3:8570015f135eac949cd519b49f47c985fe0f310b717d1a36909f7dd6a4e73945",
 	"corpus_split_labels.pdf":               "v3:4b916b2c1aa4239089ee79cda743da1bec379a6385bb85a5b82609cf3059bcf1",

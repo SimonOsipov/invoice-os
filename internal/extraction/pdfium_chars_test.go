@@ -50,7 +50,7 @@ func pdcStructured(t *testing.T, name string) []extraction.PDFiumStructuredPageF
 	return pages
 }
 
-// pdcPage1 selects the page numbered 1, matching chrPage1's own rule (chrome_fixture_test.go).
+// pdcPage1 selects the page numbered 1, not slice position 0.
 func pdcPage1(t *testing.T, pages []extraction.PDFiumStructuredPageForTest) extraction.PDFiumStructuredPageForTest {
 	t.Helper()
 	for _, p := range pages {
@@ -251,7 +251,50 @@ func TestPDFiumReader_ProductionCallSiteRequestsModeBoth(t *testing.T) {
 		t.Fatalf("parse %s: %v", file, err)
 	}
 
+	// isGetPageTextStructured reports whether call is GetPageTextStructured(&T{...}) and, if so,
+	// returns that composite literal's Mode field value.
+	isGetPageTextStructured := func(call *ast.CallExpr) (ast.Expr, bool) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "GetPageTextStructured" || len(call.Args) != 1 {
+			return nil, false
+		}
+		unary, ok := call.Args[0].(*ast.UnaryExpr)
+		if !ok || unary.Op != token.AND {
+			return nil, false
+		}
+		lit, ok := unary.X.(*ast.CompositeLit)
+		if !ok {
+			return nil, false
+		}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Mode" {
+					return kv.Value, true
+				}
+			}
+		}
+		return nil, true
+	}
+
+	// Every such call anywhere in the file: closes the gap where a second call, inside or
+	// outside Read, would silently keep only the last match.
+	var everywhere []ast.Expr
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if mode, ok := isGetPageTextStructured(call); ok {
+			everywhere = append(everywhere, mode)
+		}
+		return true
+	})
+	if len(everywhere) != 1 {
+		t.Fatalf("%s: found %d GetPageTextStructured(...) call(s), want exactly 1 (all reads must share Read's own ModeBoth call)", file, len(everywhere))
+	}
+
 	var modeExpr ast.Expr
+	var inRead bool
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name.Name != "Read" || fn.Recv == nil {
@@ -262,31 +305,20 @@ func TestPDFiumReader_ProductionCallSiteRequestsModeBoth(t *testing.T) {
 			if !ok {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "GetPageTextStructured" || len(call.Args) != 1 {
-				return true
+			if mode, found := isGetPageTextStructured(call); found {
+				inRead = true
+				modeExpr = mode
+				return false
 			}
-			unary, ok := call.Args[0].(*ast.UnaryExpr)
-			if !ok || unary.Op != token.AND {
-				return true
-			}
-			lit, ok := unary.X.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			for _, elt := range lit.Elts {
-				if kv, ok := elt.(*ast.KeyValueExpr); ok {
-					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Mode" {
-						modeExpr = kv.Value
-					}
-				}
-			}
-			return false
+			return true
 		})
 	}
 
+	if !inRead {
+		t.Fatalf("%s: the sole GetPageTextStructured(...) call is not inside PDFiumReader.Read", file)
+	}
 	if modeExpr == nil {
-		t.Fatalf("%s: found no GetPageTextStructured{...} call inside PDFiumReader.Read with a Mode field", file)
+		t.Fatalf("%s: Read's GetPageTextStructured{...} call sets no Mode field", file)
 	}
 	sel, ok := modeExpr.(*ast.SelectorExpr)
 	if !ok {
@@ -487,10 +519,14 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 
 // --- AC-6: no behaviour moves -- still one token per rect -----------------------------------
 
-func TestPDFiumTokens_StillOneTokenPerRect(t *testing.T) {
-	names := slices.Sorted(maps.Keys(fingerprintGoldens))
-	if len(names) < fgGoldenFloor {
-		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
+// AC-6 (re-pointed for EXTR-36-03): the merge collapses per-glyph rects into words, so "one
+// token per rect" only holds on the 27 word-level fixtures now. chrome_register.pdf's 802 rects
+// merge to 42 tokens, the twin's 800 to 42 as well -- each checked against its own rect count,
+// not against the other's.
+func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
+	names := pdcNonChromeFixtures(t)
+	if len(names) != 27 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 27", len(names))
 	}
 
 	totalTokens := 0
@@ -509,12 +545,36 @@ func TestPDFiumTokens_StillOneTokenPerRect(t *testing.T) {
 			}
 
 			if tokens != rects {
-				t.Errorf("%d token(s), %d rect(s) -- pdfiumTokens must still emit one token per rect", tokens, rects)
+				t.Errorf("%d token(s), %d rect(s) -- a word-level fixture must still emit one token per rect", tokens, rects)
 			}
 			totalTokens += tokens
 		})
 	}
-	if totalTokens < pdcMinTotalRects {
-		t.Fatalf("scanned %d token(s) across %d fixture(s), want at least %d", totalTokens, len(names), pdcMinTotalRects)
+	if totalTokens < pdcMinNonChromeRects {
+		t.Fatalf("scanned %d token(s) across %d fixture(s), want at least %d", totalTokens, len(names), pdcMinNonChromeRects)
+	}
+
+	advisoryPages, _ := ptRead(t, fxAdvisoryRegister)
+	wantChromeTokens := len(ptTokens(advisoryPages))
+	if wantChromeTokens == 0 {
+		t.Fatalf("%s carries no token; the Chrome comparison below would be vacuous", fxAdvisoryRegister)
+	}
+
+	for _, name := range []string{chrRegister, chrRegisterTwin} {
+		t.Run(name, func(t *testing.T) {
+			rectPages, err := extraction.PDFiumStructuredTextForTest(t.Context(), ptDoc(t, name), "both")
+			if err != nil {
+				t.Fatalf("PDFiumStructuredTextForTest(both): %v", err)
+			}
+			rects, tokens := 0, 0
+			for _, p := range rectPages {
+				rects += len(p.Rects)
+				tk, _, _ := extraction.PDFiumWordsForTest(p.Rects, p.Chars, p.Number, p.WidthPt, p.HeightPt, extraction.PdfiumSplitGapForTest)
+				tokens += len(tk)
+			}
+			if tokens != wantChromeTokens {
+				t.Errorf("%s merges %d rect(s) to %d token(s), want %d (advisory_register.pdf's own word-level count)", name, rects, tokens, wantChromeTokens)
+			}
+		})
 	}
 }

@@ -21,89 +21,136 @@ const (
 	chrRegisterTwin = "chrome_register_twin.pdf"
 )
 
-// chrPage1 selects the page numbered 1, not slice position 0, matching AnchorObservations' own
-// selection rule.
-func chrPage1(t *testing.T, pages []extraction.TokenPage) extraction.TokenPage {
-	t.Helper()
+// AC-1 (re-pointed from _FragmentsIntoGlyphs; EXPECTED RED, see task-1063's Implementation
+// Notes): the merge reduces the per-glyph page back to real words. Measured: page 1 emits
+// exactly 39 tokens, page 2 exactly 3; the shortest is "DUE" at 3 runes, so 0 of 42 are <=2.
+func TestChromeRegister_MergesIntoWords(t *testing.T) {
+	pages := pdcStructured(t, chrRegister)
+	if len(pages) != 2 {
+		t.Fatalf("%s carries %d page(s), want 2", chrRegister, len(pages))
+	}
+
+	var all []extraction.Token
+	counts := map[int]int{}
 	for _, p := range pages {
-		if p.Number == 1 {
-			return p
+		tokens, _, _ := extraction.PDFiumWordsForTest(p.Rects, p.Chars, p.Number, p.WidthPt, p.HeightPt, extraction.PdfiumSplitGapForTest)
+		counts[p.Number] = len(tokens)
+		all = append(all, tokens...)
+	}
+	if counts[1] != 39 {
+		t.Errorf("page 1 emits %d token(s), want exactly 39", counts[1])
+	}
+	if counts[2] != 3 {
+		t.Errorf("page 2 emits %d token(s), want exactly 3", counts[2])
+	}
+
+	shortRunes, shortest, shortCount := 100, "", 0
+	for _, tok := range all {
+		if n := utf8.RuneCountInString(tok.Text); n <= 2 {
+			shortCount++
+		} else if n < shortRunes {
+			shortRunes, shortest = n, tok.Text
 		}
 	}
-	t.Fatalf("no page numbered 1 among %d page(s)", len(pages))
-	return extraction.TokenPage{}
-}
-
-// AC-4: today's reader fragments a per-glyph page into mostly 1-2 rune tokens.
-func TestChromeRegister_FragmentsIntoGlyphs(t *testing.T) {
-	page1 := chrPage1(t, rvCorpusPages(t, chrRegister))
-	if len(page1.Tokens) == 0 {
-		t.Fatalf("page 1 carries no tokens")
+	if shortCount != 0 {
+		t.Errorf("%d of %d merged token(s) are <= 2 runes, want 0", shortCount, len(all))
 	}
-
-	short := 0
-	for _, tok := range page1.Tokens {
-		if utf8.RuneCountInString(tok.Text) <= 2 {
-			short++
-		}
-	}
-	if ratio := float64(short) / float64(len(page1.Tokens)); ratio < 0.90 {
-		t.Errorf("%d/%d (%.4f) page-1 tokens are <=2 runes, want >= 0.90", short, len(page1.Tokens), ratio)
+	if shortest != "DUE" || shortRunes != 3 {
+		t.Errorf("shortest merged token (over 2 runes) = %q (%d rune(s)), want %q (3 runes)", shortest, shortRunes, "DUE")
 	}
 }
 
-// AC-4: a negatively-advanced glyph pair reads back as one bleeding rect per glyph -- equal
-// text, overlapping boxes -- scanned in token order the way pdfium emits them.
+// AC-4 (re-pointed): a bled overlapping pair is a raw-rect fact of the generator, independent of
+// any later merge. Exactly one such consecutive pair exists on page 1 (the KW/KW bleed), and the
+// merged token holding it reads the whole name once.
 func TestChromeRegister_BleedsAnOverlappingPair(t *testing.T) {
-	page1 := chrPage1(t, rvCorpusPages(t, chrRegister))
-	if len(page1.Tokens) < 2 {
-		t.Fatalf("page 1 carries %d token(s), want at least 2 to scan consecutive pairs", len(page1.Tokens))
+	page1 := pdcPage1(t, pdcStructured(t, chrRegister))
+	if len(page1.Rects) < 2 {
+		t.Fatalf("page 1 carries %d rect(s), want at least 2 to scan consecutive pairs", len(page1.Rects))
 	}
 
 	found := 0
-	for i := 1; i < len(page1.Tokens); i++ {
-		prev, cur := page1.Tokens[i-1], page1.Tokens[i]
-		if prev.Text == cur.Text && cur.Region.X0 < prev.Region.X1 {
+	for i := 1; i < len(page1.Rects); i++ {
+		prev, cur := page1.Rects[i-1], page1.Rects[i]
+		if prev == nil || cur == nil {
+			continue
+		}
+		if prev.Text == cur.Text && cur.PointPosition.Left < prev.PointPosition.Right {
 			found++
 		}
 	}
-	if found == 0 {
-		t.Errorf("no consecutive pair carries equal text with an overlapping box -- the Chrome-shaped bleed never appears")
+	if found != 1 {
+		t.Errorf("found %d consecutive equal-text overlapping rect pair(s) on page 1, want exactly 1 (the KW/KW bleed)", found)
+	}
+
+	tokens, _, _ := extraction.PDFiumWordsForTest(page1.Rects, page1.Chars, page1.Number, page1.WidthPt, page1.HeightPt, extraction.PdfiumSplitGapForTest)
+	want := "OKONKWO ADVISORY PARTNERS"
+	occurrences := 0
+	for _, tok := range tokens {
+		if tok.Text == want {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Errorf("merged tokens contain %q %d time(s), want exactly 1", want, occurrences)
 	}
 }
 
-// AC-4: this is AC-1's pre-fix pin. A one-rect-per-glyph page yields zero anchors (no single
-// character matches the lexicon), so the fixture must also carry a bleed that reassembles at
-// least "VAT " -- read against the word-level twin's own list for context on failure.
-func TestChromeRegister_TodayAnchorsOnlyVAT(t *testing.T) {
-	obs := extraction.AnchorObservations(rvCorpusPages(t, chrRegister))
+// AC-8 (re-pointed from _TodayAnchorsOnlyVAT): once merged, chrome_register.pdf's anchor labels
+// equal advisory_register.pdf's own multiset -- the per-glyph print reads no differently from
+// its word-level twin.
+func TestChromeRegister_AnchorsMatchItsGeneratedTwin(t *testing.T) {
+	chromeObs := extraction.AnchorObservations(pdwMergedTokenPages(t, chrRegister))
+	advisoryObs := extraction.AnchorObservations(rvCorpusPages(t, fxAdvisoryRegister))
 
-	if len(obs) != 1 || obs[0].Label != "vat" {
-		got := make([]string, len(obs))
-		for i, o := range obs {
-			got[i] = o.Label
-		}
-		twinObs := extraction.AnchorObservations(rvCorpusPages(t, fxAdvisoryRegister))
-		twinLabels := make([]string, len(twinObs))
-		for i, o := range twinObs {
-			twinLabels[i] = o.Label
-		}
-		t.Errorf("AnchorObservations = %v, want exactly [vat] -- the word-level twin %s yields %v", got, fxAdvisoryRegister, twinLabels)
+	chromeLabels := make([]string, len(chromeObs))
+	for i, o := range chromeObs {
+		chromeLabels[i] = o.Label
+	}
+	advisoryLabels := make([]string, len(advisoryObs))
+	for i, o := range advisoryObs {
+		advisoryLabels[i] = o.Label
+	}
+	sort.Strings(chromeLabels)
+	sort.Strings(advisoryLabels)
+
+	if len(advisoryLabels) == 0 {
+		t.Fatalf("%s yields no anchor observation; the comparison below would be vacuous", fxAdvisoryRegister)
+	}
+	if !slices.Equal(chromeLabels, advisoryLabels) {
+		t.Errorf("chrome_register.pdf anchor labels = %v, want %s's own %v", chromeLabels, fxAdvisoryRegister, advisoryLabels)
 	}
 }
 
-// AC-5: the fixture must not be a word-level build wearing a new name -- its page-1 token count
-// has to clear the word-level twin's own by an order of magnitude.
+// AC-5 (re-pointed): the RAW RECT ratio, not the token ratio the merge is about to collapse.
+// Page 1: 577 rects vs advisory_register.pdf's 39 = 14.8x. Whole doc: 802 vs 42 = 19.1x.
 func TestChromeRegister_IsNotAWordLevelBuild(t *testing.T) {
-	chromeTokens := len(chrPage1(t, rvCorpusPages(t, chrRegister)).Tokens)
-	wordTokens := len(chrPage1(t, rvCorpusPages(t, fxAdvisoryRegister)).Tokens)
-	if wordTokens == 0 {
-		t.Fatalf("%s page 1 carries no tokens; the ratio below would divide by zero", fxAdvisoryRegister)
+	chromePages := pdcStructured(t, chrRegister)
+	advisoryPages := pdcStructured(t, fxAdvisoryRegister)
+
+	chromePage1 := pdcPage1(t, chromePages)
+	advisoryPage1 := pdcPage1(t, advisoryPages)
+	if len(advisoryPage1.Rects) == 0 {
+		t.Fatalf("%s page 1 carries no rect; the ratio below would divide by zero", fxAdvisoryRegister)
+	}
+	if ratio := float64(len(chromePage1.Rects)) / float64(len(advisoryPage1.Rects)); ratio < 10 {
+		t.Errorf("chrome_register.pdf reads %d page-1 rect(s) against %s's %d (%.1fx) -- want at least an order of magnitude (10x)",
+			len(chromePage1.Rects), fxAdvisoryRegister, len(advisoryPage1.Rects), ratio)
 	}
 
-	if ratio := float64(chromeTokens) / float64(wordTokens); ratio < 10 {
-		t.Errorf("chrome_register.pdf reads %d page-1 token(s) against %s's %d (%.1fx) -- want at least an order of magnitude (10x)",
-			chromeTokens, fxAdvisoryRegister, wordTokens, ratio)
+	chromeTotal, advisoryTotal := 0, 0
+	for _, p := range chromePages {
+		chromeTotal += len(p.Rects)
+	}
+	for _, p := range advisoryPages {
+		advisoryTotal += len(p.Rects)
+	}
+	if advisoryTotal == 0 {
+		t.Fatalf("%s carries no rect; the whole-doc ratio would divide by zero", fxAdvisoryRegister)
+	}
+	if ratio := float64(chromeTotal) / float64(advisoryTotal); ratio < 10 {
+		t.Errorf("chrome_register.pdf reads %d rect(s) against %s's %d (%.1fx) -- want at least an order of magnitude (10x)",
+			chromeTotal, fxAdvisoryRegister, advisoryTotal, ratio)
 	}
 }
 
@@ -210,14 +257,27 @@ func chrFragmentsForLine(line []chrRect) []chrFragment {
 // the story's Section F.
 const chrJoinCeiling = 5.0
 
-// AC-1: the fixture's advances have to come from real Chrome/Skia metrics, not from a generator
-// choosing its own comfortable grid -- the widest gap a word or a run of prose ever needs to
-// stay joined, and the narrowest gap that actually crosses into a different placed run.
+// AC-1 (re-pointed to raw rects, per architecture Section E: reading tokens made this spec
+// merge-owned; on the RAW rects it is merge-proof): the fixture's advances have to come from
+// real Chrome/Skia metrics, not from a generator choosing its own comfortable grid -- the widest
+// gap a word or a run of prose ever needs to stay joined, and the narrowest gap that actually
+// crosses into a different placed run. Every asserted number is unchanged, since tokens == rects
+// before the merge exists.
 func TestChromeRegister_GapsMatchARealChromePrint(t *testing.T) {
-	page1 := chrPage1(t, rvCorpusPages(t, chrRegister))
-	rects := chrRectsForPage(page1)
+	page1 := pdcPage1(t, pdcStructured(t, chrRegister))
+	if len(page1.Rects) == 0 {
+		t.Fatalf("page 1 carries no rect")
+	}
+	rects := make([]chrRect, 0, len(page1.Rects))
+	for _, r := range page1.Rects {
+		if r == nil {
+			continue
+		}
+		p := r.PointPosition
+		rects = append(rects, chrRect{x0: p.Left, x1: p.Right, y0: p.Bottom, y1: p.Top})
+	}
 	if len(rects) == 0 {
-		t.Fatalf("page 1 carries no tokens")
+		t.Fatalf("page 1 carries no non-nil rect")
 	}
 
 	lines := chrGroupLines(rects)
@@ -286,10 +346,9 @@ func chrPage1Stream(t *testing.T, name string) []byte {
 	return fxContent(t, objs, pages[0])
 }
 
-// AC-1/AC-5 at the byte layer. TestChromeRegister_FragmentsIntoGlyphs and
-// ..._IsNotAWordLevelBuild both measure the READER, so a later subtask that merges glyphs into
-// words turns them red on a fixture that never moved. This one reads the emitted operators, so
-// only the generator can move it.
+// AC-1/AC-5 at the byte layer. TestChromeRegister_MergesIntoWords and ..._IsNotAWordLevelBuild
+// both measure the READER, so subtask 03's merge turns the former red on a fixture that never
+// moved. This one reads the emitted operators, so only the generator can move it.
 func TestChromeRegister_TheContentStreamEmitsOneTjPerGlyph(t *testing.T) {
 	for _, name := range []string{chrRegister, chrRegisterTwin} {
 		t.Run(name, func(t *testing.T) {

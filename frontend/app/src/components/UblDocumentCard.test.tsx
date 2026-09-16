@@ -88,7 +88,7 @@ function readBlob(blob: Blob): Promise<string> {
   })
 }
 
-function sourceMeta(): SourceDocumentAsync {
+function sourceMeta(withDocument = true): SourceDocumentAsync {
   const document: SourceDocumentRecord = {
     id: 'doc-1',
     filename: 'june-sales.pdf',
@@ -100,7 +100,7 @@ function sourceMeta(): SourceDocumentAsync {
     invoices_created: 1,
     other_invoice_rows: [],
   }
-  const data: SourceDocumentResponse = { invoice_id: ID, source_rows: [1], document }
+  const data: SourceDocumentResponse = { invoice_id: ID, source_rows: [1], document: withDocument ? document : null }
   return { status: 'ready', data, error: null, run: vi.fn() }
 }
 
@@ -251,9 +251,9 @@ describe('UblDocumentCard', () => {
 
   it('T02-9: a refused document with no reason prints nothing extra', () => {
     renderCard({ canView: false, blockedReason: null })
+    expect(body().textContent, 'floor: identity row').toBe(FILENAME + META)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
-    expect(body().textContent).toBe(FILENAME + META)
   })
 
   it('T02-10: a contradictory wire follows canView', () => {
@@ -299,5 +299,119 @@ describe('UblDocumentCard', () => {
     })
     expect(btn.disabled).toBe(false)
     expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  it('T02-13: the identity row, refusal block, disabled Download and error copy the Source card', async () => {
+    const withDoc = render(<SourceDocumentCard meta={sourceMeta()} onOpen={vi.fn()} extraction={{ jobId: null, loading: false, failed: true }} onOpenExtraction={vi.fn()} />)
+    const srcBody = within(withDoc.container).getByTestId('source-document-card')
+    const srcRow = srcBody.firstElementChild as HTMLElement
+    const srcDisabled = within(withDoc.container).getByTestId('open-extraction-review') as HTMLButtonElement
+    const srcReason = srcDisabled.nextElementSibling as HTMLElement
+    expect(srcDisabled.disabled, 'floor: the Source control is disabled').toBe(true)
+    const noDoc = render(<SourceDocumentCard meta={sourceMeta(false)} onOpen={vi.fn()} extraction={{ jobId: null, loading: false, failed: false }} onOpenExtraction={vi.fn()} />)
+    const srcDashed = within(noDoc.container).getByTestId('source-document-card').firstElementChild as HTMLElement
+    expect(srcDashed.getAttribute('style'), 'floor: the Source dashed block').toContain('dashed')
+
+    const refused = render(
+      <UblDocumentCard ctx={cardCtx()} base={BASE} invoiceId={ID} invoiceNumber={NUMBER} canView={false} blockedReason={REASON} editing={false} onView={vi.fn()} />,
+    )
+    const blocked = within(refused.container).getByTestId('ubl-card-blocked')
+    expect(blocked.getAttribute('style')).toBe(`margin-top: 12px; ${srcDashed.getAttribute('style')}`)
+    const reasonDiv = blocked.firstElementChild as HTMLElement
+    expect(reasonDiv.textContent).toBe(REASON)
+    expect(reasonDiv.style.fontSize).toBe('12.5px')
+    expect(reasonDiv.style.lineHeight).toBe('1.55')
+    expect(reasonDiv.style.color).toBe('var(--fg-3)')
+    refused.unmount()
+
+    const mock = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', mock)
+    renderCard()
+    const row = body().firstElementChild as HTMLElement
+    expect(row.getAttribute('style')).toBe(srcRow.getAttribute('style'))
+    const tile = row.firstElementChild as HTMLElement
+    const srcTile = srcRow.firstElementChild as HTMLElement
+    for (const prop of ['flex', 'width', 'height', 'border-radius', 'display', 'place-items']) {
+      expect(tile.style.getPropertyValue(prop), prop).toBe(srcTile.style.getPropertyValue(prop))
+    }
+    expect(tile.style.width).toBe('38px')
+    expect(tile.style.background).toBe('var(--bg-3)')
+    expect(tile.style.color).toBe('var(--action)')
+    expect(tile.querySelector('svg'), 'the tile holds the document glyph').not.toBeNull()
+    expect(screen.getByTestId('ubl-card-filename').getAttribute('style')).toBe((srcRow.children[1].firstElementChild as HTMLElement).getAttribute('style'))
+    expect(screen.getByTestId('ubl-card-filename').style.wordBreak).toBe('break-all')
+    expect(screen.getByTestId('ubl-card-meta').getAttribute('style')).toBe(within(withDoc.container).getByTestId('source-document-card-meta').getAttribute('style'))
+
+    const btn = screen.getByTestId('ubl-card-download') as HTMLButtonElement
+    const idle = btn.getAttribute('style')
+    expect(idle).toBe((within(withDoc.container).getByTestId('view-source-document') as HTMLElement).getAttribute('style'))
+    fireEvent.click(btn)
+    expect(mock).toHaveBeenCalledTimes(1)
+    expect(btn.disabled).toBe(true)
+    expect(btn.getAttribute('style')).toBe(srcDisabled.getAttribute('style'))
+    cleanup()
+    vi.unstubAllGlobals()
+
+    stubFail(500, 'internal server error')
+    renderCard()
+    fireEvent.click(screen.getByTestId('ubl-card-download'))
+    await settle()
+    const error = screen.getByTestId('ubl-card-download-error')
+    expect(error.textContent).toBe(LOAD_FAILED)
+    expect(error.getAttribute('style')).toBe(srcReason.getAttribute('style'))
+    expect(screen.getByTestId('ubl-card-download').nextElementSibling).toBe(error)
+  })
+
+  it('T02-14: a failed Download re-arms the button, and a retry that succeeds clears the error and saves once', async () => {
+    const fail = stubFail(500, 'internal server error')
+    const create = vi.spyOn(URL, 'createObjectURL')
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    renderCard()
+    const btn = screen.getByTestId('ubl-card-download') as HTMLButtonElement
+
+    fireEvent.click(btn)
+    await settle()
+    expect(fail).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('ubl-card-download-error').textContent).toBe(LOAD_FAILED)
+    expect(btn.disabled, 'a failure re-enables Download').toBe(false)
+
+    const ok = stubOk(DOC)
+    fireEvent.click(btn)
+    await settle()
+    expect(ok, 'the retry reached the wire').toHaveBeenCalledTimes(1)
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(await readBlob(create.mock.calls[0][0] as Blob)).toBe(DOC)
+    expect(screen.queryAllByTestId('ubl-card-download-error'), 'the old error is cleared').toHaveLength(0)
+    expect(btn.disabled).toBe(false)
+  })
+
+  it('T02-15: Download saves the exact bytes, line endings and edges included', async () => {
+    const doc = '<?xml version="1.0" encoding="UTF-8"?>\r\n<Invoice>\r\n  <Note>₦ Ọ̀yọ́ 🇳🇬</Note>\r\n</Invoice>\n'
+    stubOk(doc)
+    const create = vi.spyOn(URL, 'createObjectURL')
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    renderCard()
+
+    fireEvent.click(screen.getByTestId('ubl-card-download'))
+    await settle()
+
+    expect(create).toHaveBeenCalledTimes(1)
+    // readAsText strips a leading BOM, so compare raw bytes.
+    const bytes = await new Promise<number[]>((resolve, reject) => {
+      const fr = new FileReader()
+      fr.onload = () => resolve(Array.from(new Uint8Array(fr.result as ArrayBuffer)))
+      fr.onerror = () => reject(fr.error)
+      fr.readAsArrayBuffer(create.mock.calls[0][0] as Blob)
+    })
+    const want = Array.from(new TextEncoder().encode(doc))
+    expect(want.length, 'floor: the fixture has bytes').toBeGreaterThan(doc.length)
+    expect(bytes).toEqual(want)
+  })
+
+  it('T02-16: editing hides the actions even when the wire also sends a reason', () => {
+    renderCard({ editing: true, canView: true, blockedReason: REASON })
+    expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
+    expect(outer().querySelectorAll('button')).toHaveLength(0)
+    expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
   })
 })

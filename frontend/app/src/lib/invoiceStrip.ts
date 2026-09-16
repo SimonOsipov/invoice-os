@@ -32,6 +32,19 @@ const NODE_OF_STATUS: Record<InvoiceStatus, SpineNode> = {
   failed: 5,
 }
 
+// What each status says about the step it sits on. A step that finished and passed is done.
+const STEP_OF_STATUS: Record<InvoiceStatus, 'open' | 'passed' | 'failed'> = {
+  draft: 'open',
+  validated: 'passed',
+  queued: 'open',
+  submitted: 'open',
+  accepted: 'passed',
+  rejected: 'failed',
+  failed: 'failed',
+}
+
+const STATE_AT_CURSOR = { open: 'current', passed: 'done', failed: 'failed' } as const
+
 const SOURCES: Record<SpineNode, InvoiceStatus[]> = {
   1: ['draft'],
   2: ['validated'],
@@ -75,16 +88,7 @@ function attribution(at: string | null, actor: ActorLabel | null): string | null
 function spineNode(k: SpineNode, cursor: SpineNode, history: StatusChange[], status: InvoiceStatus): StripNode {
   const row = latestInto(history, SOURCES[k])
   const entered = k <= cursor
-  const state: StripState =
-    k < cursor
-      ? 'done'
-      : k > cursor
-        ? 'unreached'
-        : k === 5 && status === 'accepted'
-          ? 'done'
-          : k === 5 && (status === 'rejected' || status === 'failed')
-            ? 'failed'
-            : 'current'
+  const state: StripState = k < cursor ? 'done' : k > cursor ? 'unreached' : STATE_AT_CURSOR[STEP_OF_STATUS[status]]
   const at = entered && row !== null ? row.changed_at : null
   const actor = entered && row !== null ? actorLabel(row.actor, { name: row.actor_name, kind: row.actor_kind }) : null
   const label =

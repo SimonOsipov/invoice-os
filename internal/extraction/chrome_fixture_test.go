@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -485,5 +486,74 @@ func TestChromeRegister_ADifferentLayoutDoesNotShareIt(t *testing.T) {
 	}
 	if chrome == dense {
 		t.Errorf("%s and %s share fingerprint %s -- the merge has flattened two different arrangements", chrRegister, fxAdvisoryDense, chrome)
+	}
+}
+
+// --- EXTR-36-06 / AC-1, AC-2, AC-4, AC-5 (doc half) --------------------------------------------
+
+const chrDocHeading = "## The Chrome-shaped arrangement"
+
+// chrRectCount sums a fixture's raw rects across every page.
+func chrRectCount(t *testing.T, name string) int {
+	t.Helper()
+	n := 0
+	for _, p := range pdcStructured(t, name) {
+		n += len(p.Rects)
+	}
+	return n
+}
+
+// chrTokenCount sums a fixture's merged tokens across every page.
+func chrTokenCount(t *testing.T, name string) int {
+	t.Helper()
+	n := 0
+	for _, p := range pdwMergedTokenPages(t, name) {
+		n += len(p.Tokens)
+	}
+	return n
+}
+
+// AC-1, AC-2, AC-4, AC-5 (doc half). docs/extraction-corpus.md gains a Chrome-shaped
+// arrangements section; every fact below that the shipped reader can answer is re-derived here
+// rather than trusted, so the doc cannot drift from what the code actually does.
+func TestCorpusDoc_RecordsTheChromeArrangement(t *testing.T) {
+	doc := acRepoFile(t, acDoc)
+	if n := strings.Count(doc, "\n"+chrDocHeading); n != 1 {
+		t.Fatalf("%s carries %d %q heading(s), want exactly 1", acDoc, n, chrDocHeading)
+	}
+	section := acDocSectionText(t, doc, chrDocHeading)
+	if strings.TrimSpace(section) == "" {
+		t.Fatalf("%s's %q section is empty", acDoc, chrDocHeading)
+	}
+
+	registerRects, twinRects := chrRectCount(t, chrRegister), chrRectCount(t, chrRegisterTwin)
+	registerTokens, twinTokens := chrTokenCount(t, chrRegister), chrTokenCount(t, chrRegisterTwin)
+	if registerRects == 0 || twinRects == 0 || registerTokens == 0 || twinTokens == 0 {
+		t.Fatalf("register/twin rects = %d/%d, tokens = %d/%d -- every count must be positive or the presence checks below hold vacuously", registerRects, twinRects, registerTokens, twinTokens)
+	}
+
+	for _, needle := range []string{
+		chrRegister,
+		chrRegisterTwin,
+		strconv.Itoa(registerRects),
+		strconv.Itoa(twinRects),
+		strconv.Itoa(registerTokens),
+		strconv.Itoa(twinTokens),
+		"NG-3",
+		"bytes do not cross into the repository",
+		extraction.FingerprintVersion,
+		"fingerprintGoldens",
+	} {
+		if !strings.Contains(section, needle) {
+			t.Errorf("%s's %q section never says %q", acDoc, chrDocHeading, needle)
+		}
+	}
+
+	const addingHeading = "## Adding a layout"
+	adding := acDocSectionText(t, doc, addingHeading)
+	for _, needle := range []string{chrRegister, chrRegisterTwin} {
+		if !strings.Contains(adding, needle) {
+			t.Errorf("%s's %q section never names %s", acDoc, addingHeading, needle)
+		}
 	}
 }

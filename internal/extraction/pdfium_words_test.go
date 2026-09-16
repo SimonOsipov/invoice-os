@@ -8,6 +8,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -791,5 +792,52 @@ func TestPDFiumWords_TheFallbackIsDeadOnTheChromeFixtures(t *testing.T) {
 				t.Errorf("no merged token checked on %s", name)
 			}
 		})
+	}
+}
+
+// --- EXTR-36-06 / AC-3: the window recorded in docs/extraction-corpus.md --------------------
+
+// AC-3. The doc must carry the live-measured floor, ceiling, shipped constant and window width,
+// each formatted to the same precision the window test itself uses, plus the fixtures, the two
+// tokens the ceiling sits between, and the residual name the window's narrowness earns.
+func TestCorpusDoc_RecordsTheSplitGapWindow(t *testing.T) {
+	floor := pdwFloor(t)
+	ceiling, ceilFixture, ceilLeft, ceilRight := pdwCeiling(t)
+	if ceiling <= floor {
+		t.Fatalf("ceiling %.17g is not above floor %.17g -- the window is empty", ceiling, floor)
+	}
+	width := ceiling - floor
+
+	const wantCeilFixture = "wild_ruled_lines_totals.pdf"
+	if ceilFixture != wantCeilFixture {
+		t.Fatalf("pdwCeiling's source fixture is %s, want %s -- the doc below would name the wrong one", ceilFixture, wantCeilFixture)
+	}
+	if got := strings.TrimSpace(ceilLeft); got != "500.00" {
+		t.Fatalf("pdwCeiling's left token is %q, want \"500.00\"", ceilLeft)
+	}
+	if got := strings.TrimSpace(ceilRight); got != "Total" {
+		t.Fatalf("pdwCeiling's right token is %q, want \"Total\"", ceilRight)
+	}
+
+	doc := acRepoFile(t, acDoc)
+	section := acDocSectionText(t, doc, chrDocHeading)
+
+	fmt6 := func(v float64) string { return strconv.FormatFloat(v, 'f', 6, 64) }
+	for _, needle := range []string{
+		fmt6(floor),
+		fmt6(ceiling),
+		fmt6(extraction.PdfiumSplitGapForTest),
+		fmt6(width),
+		chrRegister,
+		"Three sittings,",
+		"Lagos tax office",
+		wantCeilFixture,
+		"500.00",
+		"Total",
+		"[splitgap-window-is-narrow]",
+	} {
+		if !strings.Contains(section, needle) {
+			t.Errorf("%s's %q section never says %q", acDoc, chrDocHeading, needle)
+		}
 	}
 }

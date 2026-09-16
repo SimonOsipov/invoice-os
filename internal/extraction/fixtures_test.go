@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"maps"
 	"os"
 	"path/filepath"
@@ -835,7 +837,7 @@ func fxWildRuledLines(l fxWildRuledLabels) []fxLine {
 		fxLine{12, 380, 386, l.vat}, fxLine{12, 500, 386, "600.00"},
 		// The Total label continues on the last data row's own baseline, so t1.total.right
 		// reaches the line amount beside it and the printed 8,600.00 falls outside every
-		// total relation. TestWildLayouts_TheRuledTableCompetingLineAmountIsATotalCandidate.
+		// total relation. TestWildLayouts_TheRuledTableTotalStillTakesTheLineAmount.
 		fxLine{12, 380, 428, l.total}, fxLine{12, 500, 368, "8,600.00"},
 	)
 }
@@ -2743,5 +2745,100 @@ func TestFixtures_EachAsPrintedSiblingDrawsItsTwinsNumberPlus100(t *testing.T) {
 				t.Errorf("line %d draws %q, want %q", i, lines[i].text, tc.text)
 			}
 		})
+	}
+}
+
+// --- AC-7: a comment must not cite a test that does not exist -------------------------------
+
+// fxCiteRE matches one cited name inside a comment: the literal four-letter prefix this package's
+// test funcs all share, plus four or more further word runes. Every helper below is named to
+// avoid carrying a match of its own pattern in its own name.
+var fxCiteRE = regexp.MustCompile(`Test[A-Za-z0-9_]{4,}`)
+
+// fxCitedNames is every distinct name fxCiteRE matches in path's comments (AST comment groups
+// only, so a t.Errorf format string naming a test is not scanned as a citation).
+func fxCitedNames(t *testing.T, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	seen := map[string]bool{}
+	for _, cg := range f.Comments {
+		for _, m := range fxCiteRE.FindAllString(cg.Text(), -1) {
+			seen[m] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
+// fxDeclaredFuncs is every func Test... declared under internal/extraction and its endtoend
+// package -- a source scan, since a test binary cannot import another package's _test.go files.
+func fxDeclaredFuncs(t *testing.T) map[string]bool {
+	t.Helper()
+	declRE := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
+	var paths []string
+	for _, glob := range []string{"*_test.go", "endtoend/*_test.go"} {
+		found, err := filepath.Glob(glob)
+		if err != nil {
+			t.Fatalf("glob %s: %v", glob, err)
+		}
+		paths = append(paths, found...)
+	}
+	if len(paths) < 50 {
+		t.Fatalf("found %d _test.go file(s) under internal/extraction and endtoend, want at least 50 -- a missing declared name would read as undeclared for the wrong reason", len(paths))
+	}
+	declared := map[string]bool{}
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		for _, m := range declRE.FindAllStringSubmatch(string(src), -1) {
+			declared[m[1]] = true
+		}
+	}
+	if len(declared) < 1000 {
+		t.Fatalf("found %d declared Test... func(s), want at least 1000 -- the lookup below would report every name undeclared", len(declared))
+	}
+	return declared
+}
+
+// fxUndeclaredNames reports every name declared holds false for.
+func fxUndeclaredNames(names []string, declared map[string]bool) []string {
+	var out []string
+	for _, n := range names {
+		if !declared[n] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// AC-7. Scoped to this one file: a package-wide version reds on four pre-existing comments
+// elsewhere (three deliberate "Replaces X" historical citations, one line-wrap artefact),
+// which is scope this subtask does not own.
+func TestFixtures_EveryTestNamedInACommentIsDeclared(t *testing.T) {
+	names := fxCitedNames(t, "fixtures_test.go")
+	if len(names) == 0 {
+		t.Fatalf("fixtures_test.go carries no Test... name in a comment; the loop below would check nothing")
+	}
+	declared := fxDeclaredFuncs(t)
+
+	if got := fxUndeclaredNames(names, declared); len(got) != 0 {
+		t.Errorf("fixtures_test.go cites %v in a comment, declared by no func Test... under internal/extraction or its endtoend package", got)
+	}
+
+	// Controls: a name nothing declares is caught; a name everything real declares is not.
+	if got := fxUndeclaredNames([]string{"TestNoSuchNameAnywhereInTheRepository"}, declared); len(got) != 1 {
+		t.Errorf("a name no source declares reports %q, want exactly one undeclared name", got)
+	}
+	const known = "TestFixtures_MatchTheirGenerator"
+	if !declared[known] {
+		t.Fatalf("declared[%s] is false; the positive control below is invalid", known)
+	}
+	if got := fxUndeclaredNames([]string{known}, declared); len(got) != 0 {
+		t.Errorf("a genuinely declared name reports %q, want none", got)
 	}
 }

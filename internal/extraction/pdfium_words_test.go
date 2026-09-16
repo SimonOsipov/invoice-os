@@ -42,6 +42,32 @@ func pdwMergedTokenPages(t *testing.T, name string) []extraction.TokenPage {
 	return pages
 }
 
+// pdwPreMergeTokens rebuilds the PRE-merge reader output -- one token per non-empty rect, in
+// stream order, with pdfium.go's own bottom-to-top flip -- straight from the raw rects. It never
+// calls Read(), which now merges, so a comparison against it measures invariance and not
+// determinism. Repaired here by QA: sourcing "before" from ptRead made every such comparison a
+// post-merge value against itself.
+func pdwPreMergeTokens(t *testing.T, name string) []extraction.Token {
+	t.Helper()
+	var out []extraction.Token
+	for _, p := range pdcStructured(t, name) {
+		for _, r := range p.Rects {
+			if r == nil || r.Text == "" {
+				continue
+			}
+			pos := r.PointPosition
+			out = append(out, extraction.Token{Text: r.Text, Region: extraction.Region{
+				Page: p.Number,
+				X0:   pos.Left / p.WidthPt,
+				Y0:   (p.HeightPt - pos.Top) / p.HeightPt,
+				X1:   pos.Right / p.WidthPt,
+				Y1:   (p.HeightPt - pos.Bottom) / p.HeightPt,
+			}})
+		}
+	}
+	return out
+}
+
 func pdwTexts(tokens []extraction.Token) []string {
 	out := make([]string, len(tokens))
 	for i, tok := range tokens {
@@ -257,8 +283,11 @@ func TestPDFiumWords_AHyphenStaysInsideItsTIN(t *testing.T) {
 // --- AC-2: fragments ------------------------------------------------------------------------
 
 // AC-2: a maximal run of pairwise box-overlapping rects on one line is one fragment; a
-// non-overlapping repeated glyph must not be swallowed into it. splitGap 0 disables stage 3
-// entirely, isolating stage 2's own predicate.
+// non-overlapping repeated glyph must not be swallowed into it.
+//
+// The token assertions alone cannot see stage 2: an overlapping pair stage 2 fails to fragment
+// still has a NEGATIVE gap, so stage 3 rejoins it and the tokens come out identical. The gap
+// list is stage 1+2's own output and is the only oracle here that binds stage 2's predicate.
 func TestPDFiumWords_AnOverlappingRunIsOneFragment(t *testing.T) {
 	rect := func(text string, left, right float64) *responses.GetPageTextStructuredRect {
 		return &responses.GetPageTextStructuredRect{Text: text, PointPosition: responses.CharPosition{Left: left, Right: right, Top: 10, Bottom: 0}}
@@ -266,12 +295,26 @@ func TestPDFiumWords_AnOverlappingRunIsOneFragment(t *testing.T) {
 	char := func(text string, left, right float64) *responses.GetPageTextStructuredChar {
 		return &responses.GetPageTextStructuredChar{Text: text, PointPosition: responses.CharPosition{Left: left, Right: right, Top: 10, Bottom: 0}}
 	}
-	rects := []*responses.GetPageTextStructuredRect{rect("K", 0, 8), rect("W", 6, 14), rect("R", 30, 38), rect("R", 40, 48)}
-	chars := []*responses.GetPageTextStructuredChar{char("K", 0, 8), char("W", 6, 14), char("R", 30, 38), char("R", 40, 48)}
+	// S sits 1 pt past the second R: close enough that a predicate which joined NEAR-touching
+	// rects would swallow it, far enough that strict overlap does not.
+	rects := []*responses.GetPageTextStructuredRect{rect("K", 0, 8), rect("W", 6, 14), rect("R", 30, 38), rect("R", 40, 48), rect("S", 49, 57)}
+	chars := []*responses.GetPageTextStructuredChar{char("K", 0, 8), char("W", 6, 14), char("R", 30, 38), char("R", 40, 48), char("S", 49, 57)}
+
+	// Stage 1+2 alone: K+W is one fragment; R, R and S are three more; so the line carries
+	// exactly three adjacent-fragment gaps. Only the gap list binds stage 2 -- see the note above.
+	gaps := extraction.PDFiumGapsForTest(rects, chars)
+	if len(gaps) != 3 {
+		t.Fatalf("stage 2 formed %d gap(s) (%d fragment(s)), want 3 (4 fragments: KW, R, R, S)", len(gaps), len(gaps)+1)
+	}
+	for i, want := range [3][2]string{{"KW", "R"}, {"R", "R"}, {"R", "S"}} {
+		if gaps[i].Left != want[0] || gaps[i].Right != want[1] {
+			t.Errorf("gap %d spans %q|%q, want %q|%q", i, gaps[i].Left, gaps[i].Right, want[0], want[1])
+		}
+	}
 
 	tokens, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, 0)
-	if groups != 3 {
-		t.Fatalf("%d group(s), want 3 (K+W merged, then two separate R's)", groups)
+	if groups != 4 {
+		t.Fatalf("%d group(s), want 4 (K+W merged, then two separate R's and an S)", groups)
 	}
 	texts := pdwTexts(tokens)
 	if !slices.Contains(texts, "KW") {
@@ -356,10 +399,11 @@ func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 27", len(names))
 	}
 
+	compared := 0
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			pages, _ := ptRead(t, name)
-			before := ptTokens(pages)
+			before := pdwPreMergeTokens(t, name)
+			compared += len(before)
 
 			after, _, groups := pdwMerged(t, name, extraction.PdfiumSplitGapForTest)
 			if groups != len(before) {
@@ -378,12 +422,23 @@ func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 			}
 		})
 	}
+	if compared < pdcMinNonChromeRects {
+		t.Fatalf("compared %d pre-merge token(s) across %d fixture(s), want at least %d -- the loop above checked too little", compared, len(names), pdcMinNonChromeRects)
+	}
 }
 
 // AC-12 IS WRONG in the story (see architecture note H): under the relative rule at 0.60, zero
 // of the 27 generator-built fixtures move. Only the two Chrome fixtures do, and each collapses to
 // exactly advisory_register.pdf's own word-level count -- the two fixtures become one layout.
+//
+// "before" is the RAW rect count, never Read(): Read() now merges, so sourcing it from there
+// compared the merged result against itself and could not fail.
 func TestPDFiumWords_OnlyTheTwoChromeFixturesMove(t *testing.T) {
+	// AC-12 wants each moving fixture named with its before and after count. Before is
+	// structural -- one non-empty rect, one pre-merge token -- and the content-stream pins
+	// (TestChromeRegister_TheContentStreamEmitsOneTjPerGlyph) hold these two numbers still.
+	chromeBefore := map[string]int{chrRegister: 802, chrRegisterTwin: 800}
+
 	names := slices.Sorted(maps.Keys(fingerprintGoldens))
 	if len(names) < fgGoldenFloor {
 		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(names), fgGoldenFloor)
@@ -397,8 +452,7 @@ func TestPDFiumWords_OnlyTheTwoChromeFixturesMove(t *testing.T) {
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
-			beforePages, _ := ptRead(t, name)
-			before := len(ptTokens(beforePages))
+			before := len(pdwPreMergeTokens(t, name))
 
 			after, _, groups := pdwMerged(t, name, extraction.PdfiumSplitGapForTest)
 			if groups != len(after) {
@@ -407,15 +461,18 @@ func TestPDFiumWords_OnlyTheTwoChromeFixturesMove(t *testing.T) {
 
 			switch name {
 			case chrRegister, chrRegisterTwin:
+				if want := chromeBefore[name]; before != want {
+					t.Errorf("%s: pre-merge token count = %d, want %d -- the fixture itself moved", name, before, want)
+				}
 				if len(after) != wantChromeAfter {
 					t.Errorf("%s: merged token count = %d, want %d (advisory_register.pdf's own word-level count)", name, len(after), wantChromeAfter)
 				}
-				if len(after) == before {
-					t.Errorf("%s: merged token count unchanged at %d -- the merge did nothing", name, before)
+				if len(after) >= before {
+					t.Errorf("%s: %d rect(s) merged to %d token(s) -- the merge did nothing", name, before, len(after))
 				}
 			default:
 				if len(after) != before {
-					t.Errorf("%s: merged token count moved %d -> %d, want unchanged", name, before, len(after))
+					t.Errorf("%s: %d rect(s) merged to %d token(s), want one token per rect (the merge is identity on a word-level PDF)", name, before, len(after))
 				}
 			}
 		})
@@ -540,6 +597,198 @@ func TestPDFiumWords_AMergedTokensCharsAreAContiguousStreamRun(t *testing.T) {
 				if checked == 0 {
 					t.Errorf("%s page %d: no multi-char merged token found to check", name, p.Number)
 				}
+			}
+		})
+	}
+}
+
+// --- QA additions (EXTR-36-03 verification) --------------------------------------------------
+
+// pdwRect / pdwChar build one synthetic box in pdfium's own bottom-up space.
+func pdwRect(text string, left, right, bottom, top float64) *responses.GetPageTextStructuredRect {
+	return &responses.GetPageTextStructuredRect{Text: text, PointPosition: responses.CharPosition{Left: left, Right: right, Bottom: bottom, Top: top}}
+}
+
+func pdwChar(text string, left, right, bottom, top float64) *responses.GetPageTextStructuredChar {
+	return &responses.GetPageTextStructuredChar{Text: text, PointPosition: responses.CharPosition{Left: left, Right: right, Bottom: bottom, Top: top}}
+}
+
+// AC-1: the line tolerance is a production number, and the window spec above asserts the literal
+// 0 against bounds computed from raw geometry -- it never reads what pdfiumLineGroups actually
+// uses. These two arms do: each fails if production's tolerance crosses its measured bound.
+//
+// Measured bounds (architecture Section C): a 7 pt hyphen overlaps its line by 0.6300 pt and MUST
+// still join; advisory_dense.pdf's two closest lines sit 0.1620 pt apart and MUST stay apart.
+func TestPDFiumWords_TheLineToleranceBindsAtBothMeasuredBounds(t *testing.T) {
+	t.Run("must_not_merge_at_0.1620pt_apart", func(t *testing.T) {
+		rects := []*responses.GetPageTextStructuredRect{
+			pdwRect("AA", 0, 10, 10, 20),
+			pdwRect("BB", 11, 21, 20.162, 30.162),
+		}
+		chars := []*responses.GetPageTextStructuredChar{
+			pdwChar("AA", 0, 10, 10, 20),
+			pdwChar("BB", 11, 21, 20.162, 30.162),
+		}
+		tokens, _, _ := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if got := pdwTexts(tokens); !slices.Equal(got, []string{"AA", "BB"}) {
+			t.Errorf("tokens = %v, want [AA BB] -- two rows 0.1620 pt apart joined into one line, so the tolerance has gone positive", got)
+		}
+	})
+
+	t.Run("must_join_at_0.6300pt_of_overlap", func(t *testing.T) {
+		rects := []*responses.GetPageTextStructuredRect{
+			pdwRect("CC", 0, 10, 10, 20),
+			pdwRect("DD", 11, 21, 19.37, 29.37),
+		}
+		chars := []*responses.GetPageTextStructuredChar{
+			pdwChar("CC", 0, 10, 10, 20),
+			pdwChar("DD", 11, 21, 19.37, 29.37),
+		}
+		tokens, _, _ := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if got := pdwTexts(tokens); !slices.Equal(got, []string{"CCDD"}) {
+			t.Errorf("tokens = %v, want [CCDD] -- a 0.6300 pt overlap (the 7 pt hyphen) no longer joins its line", got)
+		}
+	})
+}
+
+// Section A's emission rule: ascending first-member stream index, NOT line-then-X. The two rects
+// below are on one line in right-to-left stream order, so the two orderings disagree -- and no
+// fingerprint can tell them apart, since Fingerprint sorts its own observations.
+func TestPDFiumWords_EmissionFollowsStreamOrderNotVisualOrder(t *testing.T) {
+	rects := []*responses.GetPageTextStructuredRect{
+		pdwRect("RIGHT", 30, 38, 0, 10),
+		pdwRect("LEFT", 0, 8, 0, 10),
+	}
+	chars := []*responses.GetPageTextStructuredChar{
+		pdwChar("RIGHT", 30, 38, 0, 10),
+		pdwChar("LEFT", 0, 8, 0, 10),
+	}
+	tokens, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+	if groups != 2 {
+		t.Fatalf("%d group(s), want 2 (the gap is 2.2 line heights, far past splitGap)", groups)
+	}
+	if got := pdwTexts(tokens); !slices.Equal(got, []string{"RIGHT", "LEFT"}) {
+		t.Errorf("tokens = %v, want [RIGHT LEFT] -- emission must follow first-member stream index, not left-to-right", got)
+	}
+}
+
+// The two hand-rolled insertion sorts (pdfiumSortRects, pdfiumSortWordsByFirst) exist because
+// pdfium.go may not import sort or slices. Their edge cases have no other oracle.
+func TestPDFiumWords_DegenerateInputIsHandled(t *testing.T) {
+	t.Run("nil_and_empty", func(t *testing.T) {
+		for _, rects := range [][]*responses.GetPageTextStructuredRect{nil, {}} {
+			tokens, _, groups := extraction.PDFiumWordsForTest(rects, nil, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+			if len(tokens) != 0 || groups != 0 {
+				t.Errorf("%d token(s) / %d group(s) from an empty page, want 0 / 0", len(tokens), groups)
+			}
+		}
+	})
+
+	t.Run("a_nil_or_empty_rect_never_reaches_grouping", func(t *testing.T) {
+		rects := []*responses.GetPageTextStructuredRect{nil, pdwRect("", 0, 10, 0, 10), pdwRect("ONLY", 0, 10, 0, 10)}
+		chars := []*responses.GetPageTextStructuredChar{pdwChar("ONLY", 0, 10, 0, 10)}
+		tokens, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if groups != 1 || len(tokens) != 1 || tokens[0].Text != "ONLY" {
+			t.Errorf("%d group(s), tokens = %v, want 1 group reading [ONLY]", groups, pdwTexts(tokens))
+		}
+	})
+
+	t.Run("equal_sort_keys_keep_stream_order", func(t *testing.T) {
+		box := [4]float64{0, 10, 0, 10}
+		rects := []*responses.GetPageTextStructuredRect{
+			pdwRect("X", box[0], box[1], box[2], box[3]),
+			pdwRect("Y", box[0], box[1], box[2], box[3]),
+			pdwRect("Z", box[0], box[1], box[2], box[3]),
+		}
+		chars := []*responses.GetPageTextStructuredChar{
+			pdwChar("X", 0, 10, 0, 10), pdwChar("Y", 0, 10, 0, 10), pdwChar("Z", 0, 10, 0, 10),
+		}
+		first, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if groups != 1 {
+			t.Fatalf("%d group(s) from three identical boxes, want 1", groups)
+		}
+		if got := pdwTexts(first); !slices.Equal(got, []string{"XYZ"}) {
+			t.Errorf("tokens = %v, want [XYZ] -- three identical boxes must collapse in stream order", got)
+		}
+		second, _, _ := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if !slices.Equal(pdwTexts(first), pdwTexts(second)) {
+			t.Errorf("two runs over equal sort keys disagree: %v vs %v -- the comparator is not a total order", pdwTexts(first), pdwTexts(second))
+		}
+	})
+
+	t.Run("a_mutually_overlapping_line_is_one_fragment", func(t *testing.T) {
+		rects := []*responses.GetPageTextStructuredRect{
+			pdwRect("AB", 0, 10, 0, 10), pdwRect("CD", 5, 15, 0, 10), pdwRect("EF", 8, 20, 0, 10),
+		}
+		chars := []*responses.GetPageTextStructuredChar{
+			pdwChar("AB", 0, 10, 0, 10), pdwChar("CD", 5, 15, 0, 10), pdwChar("EF", 8, 20, 0, 10),
+		}
+		if gaps := extraction.PDFiumGapsForTest(rects, chars); len(gaps) != 0 {
+			t.Errorf("%d gap(s) across a mutually overlapping line, want 0 (one fragment)", len(gaps))
+		}
+		tokens, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if groups != 1 || len(tokens) != 1 || tokens[0].Text != "ABCDEF" {
+			t.Errorf("%d group(s), tokens = %v, want 1 reading [ABCDEF]", groups, pdwTexts(tokens))
+		}
+	})
+
+	// An inverted rect (Top < Bottom) can never join a line -- the overlap test is strictly
+	// negative against every box including its own twin -- so no union box is ever inverted.
+	// Each inverted rect still emits its own token rather than vanishing.
+	t.Run("inverted_boxes_still_emit_their_own_text", func(t *testing.T) {
+		rects := []*responses.GetPageTextStructuredRect{
+			pdwRect("UP", 0, 10, 10, 0), pdwRect("DOWN", 6, 16, 10, 0),
+		}
+		tokens, _, groups := extraction.PDFiumWordsForTest(rects, nil, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+		if groups != 2 {
+			t.Fatalf("%d group(s) from two inverted boxes, want 2 (an inverted box overlaps nothing)", groups)
+		}
+		if got := pdwTexts(tokens); !slices.Equal(got, []string{"UP", "DOWN"}) {
+			t.Errorf("tokens = %v, want [UP DOWN] -- an inverted box must not swallow or drop text", got)
+		}
+	})
+}
+
+// AC-4 companion to _AnEmptyCharsInFallsBackToTheRectText: the fallback must fire on a chars
+// slice that is present but misses the union box -- the genuine-bug shape, not just a nil slice.
+func TestPDFiumWords_CharsThatMissTheUnionBoxStillFallBack(t *testing.T) {
+	rects := []*responses.GetPageTextStructuredRect{
+		pdwRect("AB", 0, 10, 0, 10), pdwRect("CD", 6, 16, 0, 10),
+	}
+	chars := []*responses.GetPageTextStructuredChar{pdwChar("ZZ", 0, 10, 90, 100)} // another line entirely
+
+	tokens, _, groups := extraction.PDFiumWordsForTest(rects, chars, 1, 1000, 1000, extraction.PdfiumSplitGapForTest)
+	if groups != 1 || len(tokens) != 1 {
+		t.Fatalf("%d group(s) / %d token(s), want 1 / 1", groups, len(tokens))
+	}
+	if tokens[0].Text != "AB" {
+		t.Errorf("merged token text = %q, want %q -- charsIn returned nothing and the fallback did not fire", tokens[0].Text, "AB")
+	}
+}
+
+// Section D records the fallback as dead code on the corpus. That claim only holds if charsIn
+// returns something for every merged token on the two fixtures whose groups are all multi-rect.
+func TestPDFiumWords_TheFallbackIsDeadOnTheChromeFixtures(t *testing.T) {
+	for _, name := range []string{chrRegister, chrRegisterTwin} {
+		t.Run(name, func(t *testing.T) {
+			checked := 0
+			for _, p := range pdcStructured(t, name) {
+				tokens, _, _ := extraction.PDFiumWordsForTest(p.Rects, p.Chars, p.Number, p.WidthPt, p.HeightPt, extraction.PdfiumSplitGapForTest)
+				for _, tok := range tokens {
+					box := responses.CharPosition{
+						Left:   tok.Region.X0 * p.WidthPt,
+						Right:  tok.Region.X1 * p.WidthPt,
+						Top:    p.HeightPt - tok.Region.Y0*p.HeightPt,
+						Bottom: p.HeightPt - tok.Region.Y1*p.HeightPt,
+					}
+					if extraction.CharsInForTest(p.Chars, box) == "" {
+						t.Errorf("token %q: charsIn over its own box returns %q -- the fallback fired here, so it is not dead code", tok.Text, "")
+					}
+					checked++
+				}
+			}
+			if checked == 0 {
+				t.Errorf("no merged token checked on %s", name)
 			}
 		})
 	}

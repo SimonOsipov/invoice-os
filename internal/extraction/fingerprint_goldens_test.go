@@ -13,10 +13,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// chrome_register.pdf and chrome_register_twin.pdf: computed on the fixture built by
-// fxBuildChromeRegister/fxBuildChromeRegisterTwin, before the word stage exists. Both fixtures
-// carry the same "vat"-only anchor list (identical labels, only the invoice number and amounts
-// differ), so both rows hold the same value.
+// chrome_register.pdf and chrome_register_twin.pdf: since EXTR-36-03's word stage both read as
+// advisory_register.pdf's own layout -- the per-glyph print and its word-level twin are one
+// arrangement. The pre-merge value (a "vat"-only anchor list) is kept in
+// fingerprintGoldensPreMerge. The twin differs only in the invoice number and the amounts, so
+// both Chrome rows hold one value.
 var fingerprintGoldens = map[string]string{
 	"advisory_dense.pdf":                    "v3:fe469d7afac0a666956002d69238ca46fc252def84fe910cb24820ec432e311b",
 	"advisory_register.pdf":                 "v3:d89450d1d00688a442c17a083f9ab9b832d152ee249c671ff6ac17146a2a4bee",

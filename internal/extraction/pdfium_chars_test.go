@@ -517,7 +517,7 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 	}
 }
 
-// --- AC-6: no behaviour moves -- still one token per rect -----------------------------------
+// --- AC-6: one token per rect, on the word-level fixtures only ------------------------------
 
 // AC-6 (re-pointed for EXTR-36-03): the merge collapses per-glyph rects into words, so "one
 // token per rect" only holds on the 27 word-level fixtures now. chrome_register.pdf's 802 rects

@@ -261,8 +261,8 @@ const chrJoinCeiling = 5.0
 // merge-owned; on the RAW rects it is merge-proof): the fixture's advances have to come from
 // real Chrome/Skia metrics, not from a generator choosing its own comfortable grid -- the widest
 // gap a word or a run of prose ever needs to stay joined, and the narrowest gap that actually
-// crosses into a different placed run. Every asserted number is unchanged, since tokens == rects
-// before the merge exists.
+// crosses into a different placed run. Reading raw rects keeps every asserted number where it was
+// before the merge existed.
 func TestChromeRegister_GapsMatchARealChromePrint(t *testing.T) {
 	page1 := pdcPage1(t, pdcStructured(t, chrRegister))
 	if len(page1.Rects) == 0 {
@@ -457,5 +457,33 @@ func TestChromeGeometry_FragmentsMergeOverlapsAndKeepGaps(t *testing.T) {
 
 	if got := len(chrGroupLines(append(slices.Clone(overlapping), chrRect{0, 100, 10, 108}))); got != 2 {
 		t.Errorf("rects on two vertical bands group into %d line(s), want 2", got)
+	}
+}
+
+// AC-9. The golden table already carries all three literals, but nothing asserts the RELATION
+// between them: a future edit that moved both Chrome rows in lockstep would keep every golden
+// green while the twin stopped sharing its layout. These two read Fingerprint live.
+func TestChromeRegister_TheTwinSharesItsFingerprint(t *testing.T) {
+	primary := extraction.Fingerprint(pdwMergedTokenPages(t, chrRegister))
+	twin := extraction.Fingerprint(pdwMergedTokenPages(t, chrRegisterTwin))
+	if primary == extraction.Fingerprint(nil) {
+		t.Fatalf("%s fingerprints to the empty-observation hash -- it anchors nothing and the comparison below is vacuous", chrRegister)
+	}
+	if primary != twin {
+		t.Errorf("%s = %s, %s = %s -- the twin must share one layout identity", chrRegister, primary, chrRegisterTwin, twin)
+	}
+	if advisory := extraction.Fingerprint(rvCorpusPages(t, fxAdvisoryRegister)); primary != advisory {
+		t.Errorf("%s = %s, %s = %s -- the merged Chrome print must read as its word-level twin's layout", chrRegister, primary, fxAdvisoryRegister, advisory)
+	}
+}
+
+func TestChromeRegister_ADifferentLayoutDoesNotShareIt(t *testing.T) {
+	chrome := extraction.Fingerprint(pdwMergedTokenPages(t, chrRegister))
+	dense := extraction.Fingerprint(rvCorpusPages(t, fxAdvisoryDense))
+	if dense == extraction.Fingerprint(nil) {
+		t.Fatalf("%s fingerprints to the empty-observation hash -- any two layouts would differ from it", fxAdvisoryDense)
+	}
+	if chrome == dense {
+		t.Errorf("%s and %s share fingerprint %s -- the merge has flattened two different arrangements", chrRegister, fxAdvisoryDense, chrome)
 	}
 }

@@ -4750,6 +4750,32 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
     expect(rail.lastElementChild, "the card's outer element is the rail's last child").toBe(outer)
     expect(outer.previousElementSibling?.contains(screen.getByTestId('source-document-card')), 'Source document sits directly above it').toBe(true)
   })
+
+  // The rail's status-dependent members (rejection card, failed dead end) must all land above it.
+  it('invoiceDetail_ublCardIsTheRailsLastCardAtEveryStatus', async () => {
+    const seen: InvoiceStatus[] = []
+    for (const status of ALL_STATUSES) {
+      mockDetailFetch(
+        detailRecord({
+          id: ID,
+          status,
+          rejection_reasons: [{ code: 'NGE-4102', message: 'Buyer TIN failed validation' }],
+          ...(status === 'accepted' ? { irn: 'IRN-2026-0001', csid: 'CSID-2026-0001', rule_set_version: 3, rule_set_version_id: 'rsv-3' } : null),
+        }),
+      )
+      render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+      const rail = await screen.findByTestId('invoice-rail')
+      if (status !== 'accepted') expect(within(rail).queryAllByTestId('rejection-reasons'), `floor: ${status} mounts the rejection card in the rail`).toHaveLength(1)
+      if (status === 'failed') expect(within(rail).queryAllByTestId('failed-dead-end'), 'floor: failed mounts its dead end in the rail').toHaveLength(1)
+      const outer = within(rail).getByTestId('ubl-document-card').parentElement!
+      expect(rail.lastElementChild, `${status}: the card's outer element is the rail's last child`).toBe(outer)
+      expect(outer.previousElementSibling?.contains(screen.getByTestId('source-document-card')), `${status}: Source document sits directly above it`).toBe(true)
+      seen.push(status)
+      cleanup()
+    }
+    expect(seen, 'floor: every status rendered').toEqual(ALL_STATUSES)
+  })
 })
 
 // RED specs (BUG-14-01, Mode A). The bar was gated `inv.can_edit && !editing` when these

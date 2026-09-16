@@ -386,7 +386,8 @@ describe('UblDocumentCard', () => {
   })
 
   it('T02-15: Download saves the exact bytes, line endings and edges included', async () => {
-    const doc = '<?xml version="1.0" encoding="UTF-8"?>\r\n<Invoice>\r\n  <Note>₦ Ọ̀yọ́ 🇳🇬</Note>\r\n</Invoice>\n'
+    // `e\u0301` is NFD: a normalising save would change its bytes.
+    const doc = '<?xml version="1.0" encoding="UTF-8"?>\r\n<Invoice>\r\n  <Note>₦ Ọ̀yọ́ Ade\u0301 🇳🇬</Note>\r\n</Invoice>\n'
     stubOk(doc)
     const create = vi.spyOn(URL, 'createObjectURL')
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
@@ -404,6 +405,7 @@ describe('UblDocumentCard', () => {
       fr.readAsArrayBuffer(create.mock.calls[0][0] as Blob)
     })
     const want = Array.from(new TextEncoder().encode(doc))
+    expect(doc.normalize('NFC'), 'floor: the fixture is not NFC').not.toBe(doc)
     expect(want.length, 'floor: the fixture has bytes').toBeGreaterThan(doc.length)
     expect(bytes).toEqual(want)
   })
@@ -413,5 +415,11 @@ describe('UblDocumentCard', () => {
     expect(screen.getByTestId('ubl-card-filename').textContent, 'floor: identity row').toBe(FILENAME)
     expect(outer().querySelectorAll('button')).toHaveLength(0)
     expect(screen.queryAllByTestId('ubl-card-blocked')).toHaveLength(0)
+  })
+
+  it('T02-17: the two actions carry their labels', () => {
+    renderCard()
+    expect(screen.getByRole('button', { name: 'View UBL/XML' }).getAttribute('data-testid')).toBe('ubl-card-view')
+    expect(screen.getByRole('button', { name: 'Download .xml' }).getAttribute('data-testid')).toBe('ubl-card-download')
   })
 })

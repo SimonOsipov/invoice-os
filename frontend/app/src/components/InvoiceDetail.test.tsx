@@ -2701,6 +2701,50 @@ describe('InvoiceDetail UBL document card (task-401, BUG-04-05)', () => {
     }
   })
 
+  // A live submit banner keeps the header column mounted while editing; the card's gate must
+  // read `editing` alone.
+  it.each<[string, MockResponse, string]>([
+    [
+      'skip',
+      { ok: true, status: 200, json: () => Promise.resolve({ results: [{ invoice_id: ID, enqueued: false, status: 'validated', reason: 'not_validated' }] }) },
+      'detail-submit-skipped',
+    ],
+    ['error', { ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }, 'detail-submit-error'],
+  ])('T7/AC2: while editing with a live submit %s banner the card offers no action', async (_label, response, banner) => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }), [], { submitResponses: [response] })
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+    await screen.findByTestId(banner)
+    expect(screen.getByTestId('ubl-card-view'), 'anchor: offered with the banner up').toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+
+    expect(screen.getByTestId(banner), 'the banner still holds the column').toBeTruthy()
+    expect(screen.getByTestId('edit-invoice'), 'floor: the editor is open').toBeTruthy()
+    expect(screen.queryAllByTestId('ubl-document-card')).toHaveLength(1)
+    for (const id of ['ubl-card-view', 'ubl-card-download']) {
+      expect(screen.queryAllByTestId(id), `${id} while editing`).toHaveLength(0)
+    }
+  })
+
+  // KILLS: a muted inline style on an enabled action, which also overrides `.v2-btn-ghost:hover`.
+  it('T11/AC4: the enabled card actions carry no muted style', async () => {
+    mockDetailFetch(detailRecord({ id: ID, ...editable }))
+
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const actions = [await screen.findByTestId('ubl-card-view'), screen.getByTestId('ubl-card-download')] as HTMLButtonElement[]
+
+    for (const btn of actions) {
+      const id = btn.getAttribute('data-testid')
+      expect(btn.disabled, `floor: ${id} is enabled`).toBe(false)
+      for (const prop of ['background', 'color', 'cursor', 'filter'] as const) {
+        expect(btn.style[prop], `enabled ${id} must not set ${prop}`).toBe('')
+      }
+    }
+  })
+
   it('T03-5: opening an invoice issues no UBL request', async () => {
     const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, ...editable }))
 

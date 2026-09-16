@@ -94,6 +94,14 @@ describe('BUG-14: the scan population', () => {
     expect(filesContaining('data-testid="view-ubl"')).toEqual([])
   })
 
+  // BUG-18-03 AC-8: the glyph left with the header control, and the viewer keeps one mount site.
+  it('InvoiceDetail.tsx no longer names docGlyph2, and XmlModal mounts from it alone', () => {
+    expect(filesContaining('docGlyph2'), 'floor: the glyph still has a user').toContain('components/UblDocumentCard.tsx')
+    expect(detailSource().length, 'floor: InvoiceDetail.tsx was read').toBeGreaterThan(1000)
+    expect(detailSource(), 'InvoiceDetail.tsx names docGlyph2').not.toContain('docGlyph2')
+    expect(filesContaining('<XmlModal'), 'the viewer mount sites').toEqual(['components/InvoiceDetail.tsx'])
+  })
+
   it('control: the out-of-scope sibling reason testids are still found', () => {
     for (const id of ['approval-blocked-tip', 'delegation-blocked-reason', 'pager-blocked-reason']) {
       expect(filesContaining(id).length, `the surviving sibling ${id} is unreachable -- the absence claims are vacuous`).toBeGreaterThan(0)

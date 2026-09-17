@@ -57,7 +57,7 @@ type config struct {
 type Client struct {
 	cfg    config
 	http   *http.Client
-	logger *slog.Logger // unused until AIR-02-03
+	logger *slog.Logger
 }
 
 func newClient(cfg config, logger *slog.Logger) *Client {
@@ -65,8 +65,11 @@ func newClient(cfg config, logger *slog.Logger) *Client {
 }
 
 // Call sends req and returns the parsed answer, retrying within the budget.
+// One log line per call, whatever the outcome.
 func (c *Client) Call(ctx context.Context, req Request) (map[string]any, error) {
+	start := c.cfg.now()
 	r := c.call(ctx, req)
+	c.logCall(ctx, req, r, c.cfg.now().Sub(start))
 	return r.answer, r.err
 }
 

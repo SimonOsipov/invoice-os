@@ -545,7 +545,14 @@ func aitCheckCorpusRows(key aitKey, corpusKeyPath string) error {
 			if !wantOK {
 				return fmt.Errorf("corpus key %s: %s field %s is outside the committed corpus fields", corpusKeyPath, file, field)
 			}
-			if kf := doc.Fields[field]; !aitStringListsEqual(kf.Values, want) {
+			// Presence is checked separately from value equality: a missing map entry and a
+			// present-but-empty one both zero-value to nil Values, so equality alone would
+			// miss a dropped field whose committed value is [].
+			kf, exists := doc.Fields[field]
+			if !exists {
+				return fmt.Errorf("corpus key %s: %s field %s is missing from the answer key", corpusKeyPath, file, field)
+			}
+			if !aitStringListsEqual(kf.Values, want) {
 				return fmt.Errorf("corpus key %s: %s field %s disagrees with the answer key (committed %v, key %v)", corpusKeyPath, file, field, want, kf.Values)
 			}
 		}

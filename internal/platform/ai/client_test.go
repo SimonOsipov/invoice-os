@@ -1177,21 +1177,32 @@ func TestCall_ASpentBudgetRefusesBeforeTheFirstAnswer(t *testing.T) {
 	}
 }
 
-// backwardClock hands out one reading earlier than the previous one.
+// backwardClock hands out one reading earlier than the previous one, once,
+// right after the first HTTP attempt has been served — independent of how
+// many times production code happens to read the clock before that.
 type backwardClock struct {
-	mu    sync.Mutex
-	t     time.Time
-	calls int
+	mu     sync.Mutex
+	t      time.Time
+	armed  bool
+	jumped bool
 }
 
 func (b *backwardClock) now() time.Time {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.calls++
-	if b.calls == 2 {
+	if b.armed && !b.jumped {
+		b.jumped = true
 		return b.t.Add(-time.Second)
 	}
 	return b.t
+}
+
+// arm marks that the first HTTP attempt has been served; the clock's next
+// reading jumps backward.
+func (b *backwardClock) arm() {
+	b.mu.Lock()
+	b.armed = true
+	b.mu.Unlock()
 }
 
 func (b *backwardClock) sleep(ctx context.Context, d time.Duration) error {
@@ -1206,13 +1217,14 @@ func (b *backwardClock) sleep(ctx context.Context, d time.Duration) error {
 
 func TestCall_AClockThatGoesBackwardsStillEndsTheLoop(t *testing.T) {
 	var hits atomic.Int32
+	bc := &backwardClock{t: time.Unix(0, 0)}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
+		bc.arm()
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
 
-	bc := &backwardClock{t: time.Unix(0, 0)}
 	c := newClient(config{key: "k", endpoint: srv.URL, budget: time.Second, now: bc.now, sleep: bc.sleep}, nil)
 
 	_, err := callWithin(t, c, t.Context(), baseReq(), 5*time.Second)

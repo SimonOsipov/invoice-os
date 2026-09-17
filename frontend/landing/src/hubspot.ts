@@ -15,7 +15,7 @@ const normaliseHost = (hostname: string): string => hostname.trim().toLowerCase(
 /** Null when either var is unset or blank — mirrors auth.ts's resolveBase contract. */
 export function hubspotTarget(): HubSpotTarget | null {
   // Read inside the body, never at module scope: a module-scope read is baked at
-  // import time and cannot be driven by vi.stubEnv (auth.ts's resolveBase).
+  // import time and cannot be driven by vi.stubEnv (auth.ts's appBase/opsBase/supportBase).
   const portalId = (import.meta.env.VITE_HUBSPOT_PORTAL_ID ?? '').trim()
   const formGuid = (import.meta.env.VITE_HUBSPOT_FORM_GUID ?? '').trim()
   if (!portalId || !formGuid) return null

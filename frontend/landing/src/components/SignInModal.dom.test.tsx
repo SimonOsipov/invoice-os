@@ -6,6 +6,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { LANDING_PERSONAS } from '../auth'
 import { SignInModal } from './SignInModal'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -158,11 +159,23 @@ describe('removed chrome', () => {
   it('T01-8: the picker has no password or SSO footer', async () => {
     await mount()
     const d = dialog()
+    expect(d.textContent).toContain('Choose an account')
     expect(d.querySelectorAll('a').length).toBe(0)
     for (const s of FOOTER_TEXT) {
       expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
     }
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('persona data', () => {
+  it('QA-1: personas carry no email or destLabel', () => {
+    expect(LANDING_PERSONAS.map((p) => p.id)).toEqual(['developer', 'support', 'firm', 'inhouse'])
+    for (const p of LANDING_PERSONAS) {
+      expect(Object.keys(p)).toContain('target')
+      expect(Object.keys(p)).not.toContain('email')
+      expect(Object.keys(p)).not.toContain('destLabel')
+    }
   })
 })
 

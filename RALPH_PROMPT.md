@@ -340,7 +340,7 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - **Replay the rows yourself** when QA returns: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl` from the worktree root, with no other agent running. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back to QA. A row a subagent wrote is a claim, and the replay is the evidence. EXTR-07 passed its debate, then mutation found six false greens.
 - When a test asserts over a collection, assert the collection is not empty. An empty collection satisfies every assertion inside the loop.
 - Prove every source scan fails for the right reason. A source scan is a test that reads source text: a grep, a source walk, a forbidden-string guard, a count of sites. Every source scan, positive or absence, follows three rules:
-  1. It strips comments before it matches, with the shared helper `COMMENT_HELPER_PATH`. M4-22's presence guard passed on its own comment.
+  1. It strips comments before it matches. A TypeScript scan uses `stripComments` from `@invoice-os/api-client/strip-comments`. A Go scan parses with `go/ast` or strips comments before it matches. M4-22's presence guard passed on its own comment.
   2. It reads only the function or block it guards, not the whole file. BUG-14's whole-file scan stayed green when broken, because the test file held the needle.
   3. It matches every letter case, unless case is the point. Then a comment beside the needle says so. LAND-02's case-sensitive `FIRS` needle cost a fix cycle.
 

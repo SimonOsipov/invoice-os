@@ -30,8 +30,8 @@ const (
 	PurposeSpreadsheet Purpose = "spreadsheet"
 )
 
-// Request is one call's input. FakeHint is read only by the fake transport;
-// it is never sent on the wire and never logged.
+// Request is one call's input. FakeHint is read only in fake mode; it is
+// never sent on the wire and never logged.
 type Request struct {
 	Purpose    Purpose
 	System     string
@@ -80,7 +80,7 @@ type usage struct {
 type result struct {
 	answer   map[string]any
 	err      error
-	outcome  string // "ok" | "unavailable" | "refused"
+	outcome  string // "ok" | "unavailable" | "refused" | "off" | "fake"
 	attempts int
 	usage    usage
 }
@@ -96,7 +96,8 @@ type responseEnvelope struct {
 	Error json.RawMessage `json:"error"`
 }
 
-// call runs validation, the wire request, and the retry loop.
+// call runs the mode order off, validation, schema, fake, then the wire
+// request and the retry loop.
 func (c *Client) call(ctx context.Context, req Request) result {
 	if !c.Enabled() {
 		return result{err: ErrOff, outcome: "off"}

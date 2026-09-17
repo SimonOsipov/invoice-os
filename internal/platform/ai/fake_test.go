@@ -704,8 +704,8 @@ func TestFake_RefusesASchemaWhosePropertiesIsNotAnObject(t *testing.T) {
 	assertFakeRefused(t, req)
 }
 
-// TestCall_OffAndFakeSetTheOutcomeAndAttempts reads the internal result:
-// AIR-02-03 logs outcome and attempts, and nothing else asserts them.
+// TestCall_OffAndFakeSetTheOutcomeAndAttempts reads the internal result; the
+// same values as they reach the log line are TestLog_OutcomePerPath's.
 func TestCall_OffAndFakeSetTheOutcomeAndAttempts(t *testing.T) {
 	cases := map[string]struct {
 		client       func(*testing.T) *Client

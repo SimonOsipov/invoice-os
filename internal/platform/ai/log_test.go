@@ -1,10 +1,11 @@
-// log_test.go: T01-T08 for AIR-02-03. Red until Stage 3 wires logCall into
-// Call -- every test below fails at "0 log lines, want 1" or its equivalent.
+// log_test.go: the one log line per call. T01-T08 are the acceptance specs;
+// the adversarial rows below them cover the edges those specs do not reach.
 package ai
 
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -496,5 +498,353 @@ func TestLog_MissingUsageLogsZero(t *testing.T) {
 				t.Errorf("cost = %v, want %v", line["cost"], tc.wantCost)
 			}
 		})
+	}
+}
+
+// -- adversarial: the logger itself --
+
+// errHandler forwards to Handler and then reports a failure, which slog
+// discards (logger.go does `_ = Handle(...)`).
+type errHandler struct {
+	slog.Handler
+	calls atomic.Int32
+}
+
+func (h *errHandler) Handle(ctx context.Context, r slog.Record) error {
+	h.calls.Add(1)
+	_ = h.Handler.Handle(ctx, r)
+	return errors.New("handler refused the record")
+}
+
+func TestLog_AFailingHandlerLeavesTheAnswerAndErrorAlone(t *testing.T) {
+	buf := &bytes.Buffer{}
+	eh := &errHandler{Handler: slog.NewJSONHandler(buf, nil)}
+	logger := slog.New(eh)
+
+	okSrv, _ := okServer(t, validContent)
+	answer, err := newClient(config{key: "k", endpoint: okSrv.URL, budget: budget, now: time.Now, sleep: realSleep}, logger).
+		Call(t.Context(), baseReq())
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if got := answer["currency"]; got != "NGN" {
+		t.Errorf("answer[currency] = %v, want NGN", got)
+	}
+
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(badSrv.Close)
+	if _, err := newClient(config{key: "k", endpoint: badSrv.URL, budget: budget, now: time.Now, sleep: realSleep}, logger).
+		Call(t.Context(), baseReq()); err == nil {
+		t.Fatal("err = nil, want the refusal")
+	}
+
+	if got := eh.calls.Load(); got != 2 {
+		t.Errorf("handler calls = %d, want 2", got)
+	}
+	if got := len(lines(t, buf)); got != 2 {
+		t.Errorf("log lines = %d, want 2", got)
+	}
+}
+
+// -- adversarial: one client, two calls --
+
+func TestLog_TwoCallsOnOneClientSumIndependently(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		if n == 1 {
+			_, _ = w.Write([]byte(envelope(validContent, `{"prompt_tokens":10,"completion_tokens":2,"cost":0.001}`)))
+			return
+		}
+		_, _ = w.Write([]byte(envelope(validContent, `{"prompt_tokens":20,"completion_tokens":3,"cost":0.002}`)))
+	}))
+	t.Cleanup(srv.Close)
+	c, buf := logClient(t, config{key: "k", endpoint: srv.URL, budget: budget, now: time.Now, sleep: realSleep})
+
+	for i := range 2 {
+		if _, err := c.Call(t.Context(), baseReq()); err != nil {
+			t.Fatalf("Call() %d err = %v, want nil", i+1, err)
+		}
+	}
+
+	ls := lines(t, buf)
+	if len(ls) != 2 {
+		t.Fatalf("got %d log lines, want 2: %v", len(ls), ls)
+	}
+	want := []struct{ in, out, cost float64 }{{10, 2, 0.001}, {20, 3, 0.002}}
+	for i, w := range want {
+		if got, _ := ls[i]["input_tokens"].(float64); got != w.in {
+			t.Errorf("line %d input_tokens = %v, want %v (no carry-over from the other call)", i+1, ls[i]["input_tokens"], w.in)
+		}
+		if got, _ := ls[i]["output_tokens"].(float64); got != w.out {
+			t.Errorf("line %d output_tokens = %v, want %v", i+1, ls[i]["output_tokens"], w.out)
+		}
+		if got, _ := ls[i]["cost"].(float64); math.Abs(got-w.cost) > 1e-9 {
+			t.Errorf("line %d cost = %v, want %v", i+1, ls[i]["cost"], w.cost)
+		}
+		if got, _ := ls[i]["attempts"].(float64); got != 1 {
+			t.Errorf("line %d attempts = %v, want 1", i+1, ls[i]["attempts"])
+		}
+	}
+}
+
+// -- adversarial: what the usage object says --
+
+func TestLog_UsageIsLoggedVerbatim(t *testing.T) {
+	cases := map[string]struct {
+		usageJSON                 string
+		wantOutcome               string
+		wantIn, wantOut, wantCost float64
+	}{
+		"integer_cost":        {`{"prompt_tokens":1,"completion_tokens":1,"cost":2}`, "ok", 1, 1, 2},
+		"negative_and_absurd": {`{"prompt_tokens":-5,"completion_tokens":2147483647,"cost":-1.5}`, "ok", -5, 2147483647, -1.5},
+		// A usage field of the wrong JSON type fails the whole envelope decode,
+		// so the attempt is retried and the line reports no usage at all.
+		"cost_as_string": {`{"prompt_tokens":1,"completion_tokens":1,"cost":"free"}`, "unavailable", 0, 0, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(envelope(validContent, tc.usageJSON)))
+			}))
+			t.Cleanup(srv.Close)
+			fc := &fakeClock{t: time.Unix(0, 0)}
+			c, buf := logClient(t, config{key: "k", endpoint: srv.URL, budget: 15 * time.Second, now: fc.now, sleep: fc.sleep})
+
+			_, _ = callWithin(t, c, t.Context(), baseReq(), 5*time.Second)
+
+			line := only(t, buf)
+			if line["outcome"] != tc.wantOutcome {
+				t.Errorf("outcome = %v, want %v", line["outcome"], tc.wantOutcome)
+			}
+			if got, _ := line["input_tokens"].(float64); got != tc.wantIn {
+				t.Errorf("input_tokens = %v, want %v (nothing clamps it)", line["input_tokens"], tc.wantIn)
+			}
+			if got, _ := line["output_tokens"].(float64); got != tc.wantOut {
+				t.Errorf("output_tokens = %v, want %v", line["output_tokens"], tc.wantOut)
+			}
+			if got, _ := line["cost"].(float64); math.Abs(got-tc.wantCost) > 1e-9 {
+				t.Errorf("cost = %v, want %v", line["cost"], tc.wantCost)
+			}
+		})
+	}
+}
+
+// -- adversarial: a clock that runs backwards across the whole call --
+
+// scriptedClock hands out readings in order and then repeats the last one.
+type scriptedClock struct {
+	mu    sync.Mutex
+	at    []time.Time
+	reads int
+}
+
+func (s *scriptedClock) now() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	return s.at[min(s.reads-1, len(s.at)-1)]
+}
+
+func (s *scriptedClock) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads
+}
+
+func TestLog_ABackwardClockLogsANegativeLatency(t *testing.T) {
+	// The off path reads no clock, so Call's own two readings are the only
+	// ones: the second lands as the end of the call. Nothing clamps the
+	// subtraction, so latency_ms goes negative. Deployed code reads time.Now,
+	// whose monotonic reading cannot go backwards; a test clock can.
+	t0 := time.Unix(0, 0)
+	sc := &scriptedClock{at: []time.Time{t0, t0.Add(-2 * time.Second)}}
+	buf := &bytes.Buffer{}
+	c := newClient(config{endpoint: noDialServer(t).URL, budget: budget, now: sc.now, sleep: realSleep},
+		slog.New(slog.NewJSONHandler(buf, nil)))
+
+	noDials(t, func() { _, _ = c.Call(t.Context(), baseReq()) })
+
+	line := only(t, buf)
+	if line["outcome"] != "off" {
+		t.Fatalf("outcome = %v, want off", line["outcome"])
+	}
+	if got, _ := line["latency_ms"].(float64); got != -2000 {
+		t.Errorf("latency_ms = %v, want -2000", line["latency_ms"])
+	}
+	if got := sc.count(); got != 2 {
+		t.Errorf("clock reads = %d, want 2: the off path adds none of its own", got)
+	}
+}
+
+// -- adversarial: an identity on a call that is cancelled --
+
+func TestLog_ACancelledCallWithAnIdentityStillCarriesTheTenant(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	c, buf := logClient(t, config{key: "k", endpoint: srv.URL, budget: 15 * time.Second, now: time.Now, sleep: realSleep})
+
+	ctx, cancel := context.WithCancel(auth.WithIdentity(t.Context(), auth.Identity{TenantID: "t-9"}))
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := c.Call(ctx, baseReq()); err == nil {
+		t.Fatal("err = nil, want the cancelled caller's error")
+	}
+
+	raw := buf.String()
+	line := only(t, buf)
+	if line["tenant_id"] != "t-9" {
+		t.Errorf("tenant_id = %v, want t-9", line["tenant_id"])
+	}
+	if line["outcome"] != "unavailable" {
+		t.Errorf("outcome = %v, want unavailable", line["outcome"])
+	}
+	if n := strings.Count(raw, `"tenant_id"`); n != 1 {
+		t.Errorf(`buffer contains %d occurrences of "tenant_id", want 1`, n)
+	}
+}
+
+// -- adversarial: what purpose carries --
+
+func TestLog_PurposeIsLoggedVerbatim(t *testing.T) {
+	cases := map[string]string{
+		"long":              strings.Repeat("p", 300),
+		"non_ascii":         "фактура-ọdún-发票",
+		"quote_and_newline": "doc\"ument\nsecond line",
+	}
+	for name, purpose := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, hits := okServer(t, validContent)
+			c, buf := logClient(t, config{key: "k", endpoint: srv.URL, budget: budget, now: time.Now, sleep: realSleep})
+			req := baseReq()
+			req.Purpose = Purpose(purpose)
+
+			if _, err := c.Call(t.Context(), req); err == nil {
+				t.Fatal("err = nil, want the refusal an unsupported purpose earns")
+			}
+
+			line := only(t, buf)
+			if line["purpose"] != purpose {
+				t.Errorf("purpose = %q, want %q", line["purpose"], purpose)
+			}
+			if line["outcome"] != "refused" {
+				t.Errorf("outcome = %v, want refused", line["outcome"])
+			}
+			if got := hits.Load(); got != 0 {
+				t.Errorf("hits = %d, want 0: an unsupported purpose is refused before the wire", got)
+			}
+		})
+	}
+}
+
+// -- adversarial: an off client asked for nothing --
+
+func TestLog_AnOffCallWithAZeroRequestStillCarriesTheContract(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := offClientWithLogger(t, slog.New(slog.NewJSONHandler(buf, nil)))
+
+	noDials(t, func() { _, _ = c.Call(t.Context(), Request{}) })
+
+	line := only(t, buf)
+	if line["model"] != Model {
+		t.Errorf("model = %v, want %q", line["model"], Model)
+	}
+	if line["outcome"] != "off" {
+		t.Errorf("outcome = %v, want off", line["outcome"])
+	}
+	if got, ok := line["purpose"]; !ok || got != "" {
+		t.Errorf("purpose = %v (present = %v), want an empty string", got, ok)
+	}
+	for _, key := range []string{"time", "level", "msg", "model", "purpose", "input_tokens", "output_tokens", "cost", "latency_ms", "attempts", "outcome"} {
+		if _, ok := line[key]; !ok {
+			t.Errorf("missing key %q", key)
+		}
+	}
+	if _, ok := line["tenant_id"]; ok {
+		t.Errorf("tenant_id = %v, want absent", line["tenant_id"])
+	}
+}
+
+// -- adversarial: the fake path --
+
+func TestLog_AFakeAnsweredCallLogsFakeWithNoUsage(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := fakeModeClientWithLogger(t, slog.New(slog.NewJSONHandler(buf, nil)))
+	req := baseReq()
+	req.Text = answerMarker(validContent)
+
+	var answer map[string]any
+	noDials(t, func() {
+		var err error
+		if answer, err = c.Call(t.Context(), req); err != nil {
+			t.Fatalf("Call() err = %v, want nil", err)
+		}
+	})
+	if got := answer["currency"]; got != "NGN" {
+		t.Errorf("answer[currency] = %v, want NGN", got)
+	}
+
+	line := only(t, buf)
+	if line["outcome"] != "fake" {
+		t.Errorf("outcome = %v, want fake", line["outcome"])
+	}
+	if got, _ := line["attempts"].(float64); got != 1 {
+		t.Errorf("attempts = %v, want 1", line["attempts"])
+	}
+	for _, key := range []string{"input_tokens", "output_tokens", "cost"} {
+		if got, _ := line[key].(float64); got != 0 {
+			t.Errorf("%s = %v, want 0: a fake call spends nothing", key, line[key])
+		}
+	}
+}
+
+func TestLog_CarriesNeitherPageBytesNorAFakeAnswer(t *testing.T) {
+	// The two content needles T04 cannot reach: the page bytes, and the fake
+	// path's answer, which never passes through a server.
+	page := []byte("PAGE-4c19")
+	buf := &bytes.Buffer{}
+	logger := slog.New(slog.NewJSONHandler(buf, nil))
+
+	req := baseReq()
+	req.Text = "TXT-4c19 " + answerMarker(`{"total":"ANS-4c19","vat":null,"currency":"NGN","n":1}`)
+	req.FakeHint = "HINT-4c19"
+	req.Pages = [][]byte{page}
+
+	noDials(t, func() {
+		if _, err := fakeModeClientWithLogger(t, logger).Call(t.Context(), req); err != nil {
+			t.Fatalf("fake Call() err = %v, want nil", err)
+		}
+	})
+
+	wireSrv, hits := okServer(t, `{"total":"ANS2-4c19","vat":null,"currency":"NGN","n":2}`)
+	wireReq := baseReq()
+	wireReq.Text = "TXT2-4c19"
+	wireReq.Pages = [][]byte{page}
+	if _, err := newClient(config{key: "k", endpoint: wireSrv.URL, budget: budget, now: time.Now, sleep: realSleep}, logger).
+		Call(t.Context(), wireReq); err != nil {
+		t.Fatalf("wire Call() err = %v, want nil", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("hits = %d, want 1", got)
+	}
+
+	raw := buf.String()
+	// Control first, so the needle checks cannot pass on an empty buffer.
+	for _, want := range []string{`"outcome":"fake"`, `"outcome":"ok"`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("log buffer missing %s; got %q", want, raw)
+		}
+	}
+	needles := []string{"PAGE-4c19", base64.StdEncoding.EncodeToString(page), "TXT-4c19", "TXT2-4c19", "ANS-4c19", "ANS2-4c19", "HINT-4c19"}
+	for _, needle := range needles {
+		if strings.Contains(raw, needle) {
+			t.Errorf("log buffer contains %q, want absent", needle)
+		}
 	}
 }

@@ -1178,7 +1178,7 @@ func TestCall_ASpentBudgetRefusesBeforeTheFirstAnswer(t *testing.T) {
 }
 
 // backwardClock hands out one reading earlier than the previous one, once,
-// right after the first HTTP attempt has been served — independent of how
+// right after the HTTP attempt the caller arms it on — independent of how
 // many times production code happens to read the clock before that.
 type backwardClock struct {
 	mu     sync.Mutex
@@ -1197,12 +1197,19 @@ func (b *backwardClock) now() time.Time {
 	return b.t
 }
 
-// arm marks that the first HTTP attempt has been served; the clock's next
-// reading jumps backward.
+// arm makes the clock's next reading jump backward.
 func (b *backwardClock) arm() {
 	b.mu.Lock()
 	b.armed = true
 	b.mu.Unlock()
+}
+
+// didJump reports whether the backward reading was actually handed out, so a
+// run that armed nothing cannot pass as a run that absorbed a jump.
+func (b *backwardClock) didJump() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.jumped
 }
 
 func (b *backwardClock) sleep(ctx context.Context, d time.Duration) error {
@@ -1215,24 +1222,62 @@ func (b *backwardClock) sleep(ctx context.Context, d time.Duration) error {
 	return nil
 }
 
-func TestCall_AClockThatGoesBackwardsStillEndsTheLoop(t *testing.T) {
+// backwardClockRun is one 503-only Call under a backward clock.
+type backwardClockRun struct {
+	attempts int
+	hits     int32
+	jumped   bool
+	err      error
+}
+
+// runUnderBackwardClock retries a 503 server until the budget ends the loop,
+// arming the backward jump right after hit armAfter (0 never arms). It reads
+// the attempt count off the log line: the round the jump buys dials nothing,
+// because the widened budget hands that attempt an already-expired context.
+func runUnderBackwardClock(t *testing.T, armAfter int32) backwardClockRun {
+	t.Helper()
 	var hits atomic.Int32
 	bc := &backwardClock{t: time.Unix(0, 0)}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		bc.arm()
+		if n := hits.Add(1); n == armAfter {
+			bc.arm()
+		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
 
-	c := newClient(config{key: "k", endpoint: srv.URL, budget: time.Second, now: bc.now, sleep: bc.sleep}, nil)
-
+	c, buf := logClient(t, config{key: "k", endpoint: srv.URL, budget: time.Second, now: bc.now, sleep: bc.sleep})
 	_, err := callWithin(t, c, t.Context(), baseReq(), 5*time.Second)
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("err = %v, want ErrUnavailable", err)
+	attempts, _ := only(t, buf)["attempts"].(float64)
+	return backwardClockRun{attempts: int(attempts), hits: hits.Load(), jumped: bc.didJump(), err: err}
+}
+
+func TestCall_AClockThatGoesBackwardsStillEndsTheLoop(t *testing.T) {
+	// The control run fixes where the jump goes: the last attempt's deadline
+	// check is the one whose decision a one-second backward reading flips.
+	// Arm it anywhere earlier and the jump changes nothing, which is how this
+	// test used to pass with no backward reading at all.
+	control := runUnderBackwardClock(t, 0)
+	if !errors.Is(control.err, ErrUnavailable) {
+		t.Fatalf("control err = %v, want ErrUnavailable", control.err)
 	}
-	if hits.Load() < 2 {
-		t.Errorf("hits = %d, want >= 2", hits.Load())
+	if control.jumped {
+		t.Fatal("the control clock jumped backward, want it forward-only")
+	}
+	if control.hits < 2 {
+		t.Fatalf("control hits = %d, want >= 2", control.hits)
+	}
+
+	jumped := runUnderBackwardClock(t, int32(control.attempts))
+	if !errors.Is(jumped.err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", jumped.err)
+	}
+	if !jumped.jumped {
+		t.Fatal("the clock never handed out its backward reading; the run proves nothing")
+	}
+	if jumped.attempts != control.attempts+1 {
+		t.Errorf("attempts = %d, want %d: the loop absorbs the backward second and ends one round later",
+			jumped.attempts, control.attempts+1)
 	}
 }
 

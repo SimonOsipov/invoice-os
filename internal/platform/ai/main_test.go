@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -23,10 +24,31 @@ func (l loopbackOnly) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
+// dials counts every RoundTrip through this package's test binary, refused
+// hosts included. Unlocked, so no test in this package may call t.Parallel.
+var dials atomic.Int32
+
+type countingTransport struct{ base http.RoundTripper }
+
+func (c countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	dials.Add(1)
+	return c.base.RoundTrip(req)
+}
+
 func TestMain(m *testing.M) {
 	orig := http.DefaultTransport
-	http.DefaultTransport = loopbackOnly{orig}
+	http.DefaultTransport = countingTransport{loopbackOnly{orig}}
 	os.Exit(m.Run())
+}
+
+// noDials fails the test if fn dialled anything.
+func noDials(t *testing.T, fn func()) {
+	t.Helper()
+	before := dials.Load()
+	fn()
+	if after := dials.Load() - before; after != 0 {
+		t.Errorf("%d dial(s) during the call, want 0", after)
+	}
 }
 
 // T17

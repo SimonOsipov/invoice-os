@@ -1,11 +1,13 @@
 // env.go reads the client's on/off/fake mode from the process environment.
-// Stage 3 (AIR-02-02) fills in the bodies below; today they are stubs so the
-// package compiles ahead of the red tests in env_test.go.
 package ai
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
+	"time"
 )
 
 const (
@@ -16,19 +18,32 @@ const (
 // ErrOff marks a call on a client with no key and no fake mode.
 var ErrOff = errors.New("ai: off")
 
-// parseFake reads AI_FAKE. Stub: Stage 3 fills this in.
+// parseFake reads AI_FAKE. Unset and empty are false; anything else must
+// parse, because the permissive state is "not fake" and a typo would reopen
+// real calls.
 func parseFake(raw string) (bool, error) {
-	return false, errors.New("ai: not implemented")
+	if raw == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(raw)
 }
 
-// FromEnv never exits the process; its only error is an unparseable AI_FAKE.
-// Stub: Stage 3 fills this in.
+// FromEnv never exits the process. Its only error is an unparseable AI_FAKE.
 func FromEnv(logger *slog.Logger) (*Client, error) {
-	return nil, errors.New("ai: not implemented")
+	fake, err := parseFake(os.Getenv(EnvFake))
+	if err != nil {
+		return nil, fmt.Errorf("ai: %s: %v", EnvFake, err)
+	}
+	return newClient(config{
+		key:      os.Getenv(EnvKey),
+		endpoint: endpoint,
+		fake:     fake,
+		budget:   budget,
+		now:      time.Now,
+		sleep:    realSleep,
+	}, logger), nil
 }
 
-// Enabled is false when no key is set and fake mode is off. Stub: Stage 3
-// fills this in.
-func (c *Client) Enabled() bool {
-	return false
-}
+// Enabled is false when no key is set and fake mode is off. Callers skip the
+// step.
+func (c *Client) Enabled() bool { return c.cfg.key != "" || c.cfg.fake }

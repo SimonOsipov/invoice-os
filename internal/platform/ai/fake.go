@@ -1,12 +1,12 @@
 // fake.go answers a Call without a network call, steered by a marker in the
-// request. Stage 3 (AIR-02-02) wires fakeCall into client.go's call() and
-// fills in the bodies below; today they are stubs so the package compiles
-// ahead of the red tests in fake_test.go.
+// request.
 package ai
 
 import (
-	"errors"
+	"encoding/base64"
+	"fmt"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -19,18 +19,45 @@ const (
 var markerRe = regexp.MustCompile(`AIFAKE-(?:UNAVAILABLE|ANSWER-[A-Za-z0-9_-]+)`)
 
 // fakeMarker returns the first marker in Text, else the first in FakeHint.
-// Stub: Stage 3 fills this in.
 func fakeMarker(req Request) string {
-	return ""
+	if m := markerRe.FindString(req.Text); m != "" {
+		return m
+	}
+	return markerRe.FindString(req.FakeHint)
 }
 
-// blankAnswer is every top-level property set to null (D3). Stub: Stage 3
-// fills this in.
+// blankAnswer is every top-level property set to null (D3).
 func blankAnswer(schema map[string]any) map[string]any {
-	return nil
+	props, _ := schema["properties"].(map[string]any)
+	blank := make(map[string]any, len(props))
+	for key := range props {
+		blank[key] = nil
+	}
+	return blank
 }
 
-// fakeCall answers without a network call. Stub: Stage 3 fills this in.
+// fakeCall answers without a network call. Attempts is 1.
 func (c *Client) fakeCall(req Request, schema map[string]any) result {
-	return result{err: errors.New("ai: not implemented")}
+	res := result{outcome: "fake", attempts: 1}
+	m := fakeMarker(req)
+	switch {
+	case m == "":
+		res.answer = blankAnswer(schema)
+	case m == markerUnavailable:
+		res.err = fmt.Errorf("%w (fake)", ErrUnavailable)
+	default: // markerAnswerPrefix
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(m, markerAnswerPrefix))
+		if err == nil {
+			var answer map[string]any
+			if answer, err = decodeAnswer(string(raw)); err == nil {
+				if err = checkAnswer(schema, answer); err == nil {
+					res.answer = answer
+				}
+			}
+		}
+		if err != nil {
+			res.err = fmt.Errorf("ai: fake answer: %v", err)
+		}
+	}
+	return res
 }

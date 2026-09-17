@@ -30,8 +30,8 @@ const (
 	PurposeSpreadsheet Purpose = "spreadsheet"
 )
 
-// Request is one call's input. FakeHint is read only by the fake transport
-// added in AIR-02-02; it is never sent on the wire and never logged.
+// Request is one call's input. FakeHint is read only by the fake transport;
+// it is never sent on the wire and never logged.
 type Request struct {
 	Purpose    Purpose
 	System     string
@@ -48,7 +48,7 @@ var ErrUnavailable = errors.New("ai: unavailable")
 type config struct {
 	key      string
 	endpoint string
-	fake     bool // unused until AIR-02-02
+	fake     bool
 	budget   time.Duration
 	now      func() time.Time
 	sleep    func(ctx context.Context, d time.Duration) error
@@ -98,12 +98,18 @@ type responseEnvelope struct {
 
 // call runs validation, the wire request, and the retry loop.
 func (c *Client) call(ctx context.Context, req Request) result {
+	if !c.Enabled() {
+		return result{err: ErrOff, outcome: "off"}
+	}
 	if err := validateRequest(req); err != nil {
 		return result{err: err, outcome: "refused"}
 	}
 	schema, err := checkSchema(req.Schema)
 	if err != nil {
 		return result{err: fmt.Errorf("ai: invalid request: %v", err), outcome: "refused"}
+	}
+	if c.cfg.fake {
+		return c.fakeCall(req, schema)
 	}
 
 	body, err := json.Marshal(buildWireRequest(req))

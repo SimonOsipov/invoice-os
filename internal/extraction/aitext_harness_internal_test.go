@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -292,23 +293,15 @@ func aitReadTextlessDumps(t *testing.T, out string) []docDump {
 	return dumps
 }
 
-// aitAnyConfirmed reports whether doc carries at least one confirmed field -- an entirely
-// unconfirmed key row is harmless if it matches nothing (it would never score anyway).
-func aitAnyConfirmed(doc aitKeyDoc) bool {
-	for _, f := range doc.Fields {
-		if f.Confirmed {
-			return true
-		}
-	}
-	return false
-}
-
 // aitCheckKeyManifestCoverage fails before a cell is written on either side of a key/manifest
 // mismatch. Direction 1: a non-textless dump with no key row -- aitScoreConfirmed's own loop
 // drops that document with no trace at all (not a cell, not unconfirmed, not textless, not
-// not_read). Direction 2: a confirmed key row matching no dumped, textless or not-scored
-// document -- a stale or mistyped row that never surfaces otherwise (QA D2). A textless dump
-// needs no row (it is listed regardless of the key), and an unconfirmed-only row is inert.
+// not_read). Direction 2: a key row matching no dumped, textless or not-scored document -- a
+// stale or mistyped row that never surfaces otherwise, confirmed or not: an unconfirmed-only
+// ghost is still a key error, and letting it pass silently skips it out of `unconfirmed` too
+// (QA D2, N2). A textless dump needs no row (it is listed regardless of the key). The failure
+// never names a file -- a ghost is usually a user invoice -- except corpus stems, which the
+// exported corpus key already makes public (Data handling boundaries, QA N1).
 func aitCheckKeyManifestCoverage(t *testing.T, key aitKey, dumps []docDump, notScored []notScoredEntry) {
 	t.Helper()
 	accounted := map[string]bool{}
@@ -333,14 +326,20 @@ func aitCheckKeyManifestCoverage(t *testing.T, key aitKey, dumps []docDump, notS
 		t.Fatalf("%d scored document(s) have no key row; aitScoreConfirmed would drop them silently", missing)
 	}
 
-	var ghosts []string
+	var ghostCount int
+	var corpusStems []string
 	for file, doc := range key.Docs {
-		if aitAnyConfirmed(doc) && !accounted[file] {
-			ghosts = append(ghosts, file)
+		if accounted[file] {
+			continue
+		}
+		ghostCount++
+		if doc.Set == "corpus" {
+			corpusStems = append(corpusStems, aitStem(file))
 		}
 	}
-	if len(ghosts) > 0 {
-		t.Fatalf("confirmed key row(s) match no dumped, textless or not-scored document: %v", ghosts)
+	if ghostCount > 0 {
+		sort.Strings(corpusStems)
+		t.Fatalf("%d key row(s) match no dumped, textless or not-scored document (corpus: %v)", ghostCount, corpusStems)
 	}
 	t.Logf("key/manifest coverage checked: %d scored document(s), %d key document(s)", scored, len(key.Docs))
 }

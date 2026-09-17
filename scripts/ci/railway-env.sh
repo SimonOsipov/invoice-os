@@ -1971,7 +1971,7 @@ cmd_reconcile_fork() {
 # inlined at each call site, not a constant: it must be visible inside
 # cmd_set_approvals_enforced's own body, not one hop away.
 
-# service_id_by_name <settle-response-json> <service-name> <context-label>
+# service_id_by_name <settle-response-json> <service-name> <context-label> [not-set-label]
 # Pure: no token, no network. Echoes the serviceId on stdout on exactly one
 # match. Every refusal goes to stderr and leaves stdout EMPTY — the caller
 # captures stdout into a service id, so a leak here would upsert against
@@ -2008,7 +2008,7 @@ service_id_by_name() {
     '.data.environment.serviceInstances.edges[]?.node | select(.serviceName == $n) | .serviceId'
 }
 
-# assert_environment_is_ephemeral <env-id>
+# assert_environment_is_ephemeral <env-id> [not-set-label]
 # Second guard alongside cmd_set_approvals_enforced's literal id compare: this
 # one survives a rename or a drifted RAILWAY_DEV_ENVIRONMENT_ID — the class of
 # failure that broke the dispatch path when `development` was renamed

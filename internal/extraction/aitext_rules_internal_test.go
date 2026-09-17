@@ -683,9 +683,9 @@ func TestAIText_KeyCorpusRowsEqualTheCommittedTable(t *testing.T) {
 	}
 	corpusKeyRow := func(total string) map[string]any {
 		return map[string]any{
-			"invoice_number": "INV-100", "issue_date": "2026-03-01",
-			"buyer_tin": "11111111-0001", "buyer_name": "BUYER LIMITED",
-			"currency": "NGN", "subtotal": "900.00", "vat": "67.50", "total": total,
+			"invoice_number": []string{"INV-100"}, "issue_date": []string{"2026-03-01"},
+			"buyer_tin": []string{"11111111-0001"}, "buyer_name": []string{"BUYER LIMITED"},
+			"currency": []string{"NGN"}, "subtotal": []string{"900.00"}, "vat": []string{"67.50"}, "total": []string{total},
 		}
 	}
 	keyPath := writeJSONFile(t, "key.json", map[string]any{

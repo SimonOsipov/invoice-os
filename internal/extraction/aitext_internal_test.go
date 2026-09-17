@@ -118,7 +118,8 @@ func aitRuleJoinedRow(field, raw string, pages []TokenPage) (bool, Region) {
 	}
 
 	for _, p := range pages {
-		for _, row := range aitGroupRows(p.Tokens) {
+		for seed := range p.Tokens {
+			row := aitRowFor(p.Tokens, seed)
 			if len(row) < 2 {
 				continue // a lone token is already covered by aitRuleInLine
 			}
@@ -152,44 +153,18 @@ func aitRuleJoinedRow(field, raw string, pages []TokenPage) (bool, Region) {
 	return false, Region{}
 }
 
-// aitGroupRows clusters same-page tokens into rows: two tokens share a row when their vertical
-// extents overlap by at least half the smaller height. Sorted by X0 within each row.
-func aitGroupRows(tokens []Token) [][]Token {
-	n := len(tokens)
-	parent := make([]int, n)
-	for i := range parent {
-		parent[i] = i
-	}
-	var find func(int) int
-	find = func(i int) int {
-		for parent[i] != i {
-			parent[i] = parent[parent[i]]
-			i = parent[i]
-		}
-		return i
-	}
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if aitSameRow(tokens[i].Region, tokens[j].Region) {
-				ri, rj := find(i), find(j)
-				if ri != rj {
-					parent[ri] = rj
-				}
-			}
-		}
-	}
-
-	groups := map[int][]Token{}
+// aitRowFor is one seed token's own row: same-page tokens whose vertical extent overlaps the
+// seed's by at least half the smaller height, sorted by X0. Never a transitive chain (task-1073
+// Stage 1 validation): two tokens both overlapping a third, but not each other, share no row.
+func aitRowFor(tokens []Token, seed int) []Token {
+	var row []Token
 	for i, tk := range tokens {
-		r := find(i)
-		groups[r] = append(groups[r], tk)
+		if i == seed || aitSameRow(tokens[seed].Region, tk.Region) {
+			row = append(row, tk)
+		}
 	}
-	rows := make([][]Token, 0, len(groups))
-	for _, g := range groups {
-		sort.Slice(g, func(i, j int) bool { return g[i].Region.X0 < g[j].Region.X0 })
-		rows = append(rows, g)
-	}
-	return rows
+	sort.Slice(row, func(i, j int) bool { return row[i].Region.X0 < row[j].Region.X0 })
+	return row
 }
 
 func aitSameRow(a, b Region) bool {
@@ -251,6 +226,11 @@ func aitClassify(field string, answer *string, key []string) string {
 			return "right"
 		}
 		return "blank"
+	}
+	// D-A15: a shape-refused answer is wrong outright, never right by loose-reading luck
+	// against an equally refused key value.
+	if shape, ok := tier1Shape(field); ok && len(shape.Normalize(*answer)) == 0 {
+		return "wrong"
 	}
 	answerReadings := aitReadings(field, *answer)
 	for _, k := range key {
@@ -340,10 +320,10 @@ type aitKey struct {
 
 // aitScoreConfirmed lists which (document, field) cells are eligible to score: a textless
 // document (Core AC 8) or a not-read one scores nothing, and an unconfirmed field is listed but
-// not scored (Core AC 3). answers is accepted for the caller's future classification pass; this
-// stage only decides eligibility.
+// not scored (Core AC 3). A confirmed field gets one cell per answer run for that document
+// (cells.json is one row per document x run x field): a document with no answer runs at all
+// contributes no cells for it.
 func aitScoreConfirmed(key aitKey, dumps []docDump, answers []docAnswer, notScored []notScoredEntry) aitScoreResult {
-	_ = answers
 	result := aitScoreResult{NotRead: append([]notScoredEntry(nil), notScored...)}
 
 	for _, d := range dumps {
@@ -360,11 +340,28 @@ func aitScoreConfirmed(key aitKey, dumps []docDump, answers []docAnswer, notScor
 			fields = append(fields, f)
 		}
 		sort.Strings(fields)
+
+		var runs []docAnswer
+		for _, a := range answers {
+			if a.File == d.File {
+				runs = append(runs, a)
+			}
+		}
+		sort.Slice(runs, func(i, j int) bool { return runs[i].Run < runs[j].Run })
+
 		for _, field := range fields {
-			if doc.Fields[field].Confirmed {
-				result.Cells = append(result.Cells, cellFixture{File: d.File, Field: field})
-			} else {
+			kf := doc.Fields[field]
+			if !kf.Confirmed {
 				result.Unconfirmed = append(result.Unconfirmed, fieldRef{File: d.File, Field: field})
+				continue
+			}
+			for _, run := range runs {
+				var ans *string
+				if v, ok := run.Fields[field]; ok {
+					ans = &v
+				}
+				verdict := aitClassify(field, ans, kf.Values)
+				result.Cells = append(result.Cells, cellFixture{File: d.File, Run: run.Run, Field: field, AI: verdict})
 			}
 		}
 	}
@@ -488,13 +485,14 @@ func aitLoadKey(path string) (aitKey, error) {
 }
 
 // aitCheckCorpusRows refuses a key whose corpus rows (source: expectByLayout) disagree with the
-// committed corpus_key.json, or omit a layout it holds -- Core AC 2's "no retyping" guarantee.
+// committed corpus_key.json, or drop a field it holds -- Core AC 2's "no retyping" guarantee.
+// corpus_key.json's values are list-form, matching expectByLayout's empty and two-reading cells.
 func aitCheckCorpusRows(key aitKey, corpusKeyPath string) error {
 	raw, err := os.ReadFile(corpusKeyPath)
 	if err != nil {
 		return fmt.Errorf("read corpus key %s: %w", corpusKeyPath, err)
 	}
-	var rows map[string]map[string]string
+	var rows map[string]map[string][]string
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return fmt.Errorf("parse corpus key %s: %w", corpusKeyPath, err)
 	}
@@ -513,19 +511,40 @@ func aitCheckCorpusRows(key aitKey, corpusKeyPath string) error {
 		if !ok {
 			return fmt.Errorf("corpus key %s carries no row for %s, a corpus layout the answer key holds", corpusKeyPath, file)
 		}
-		fields := make([]string, 0, len(doc.Fields))
-		for f := range doc.Fields {
+		// Walk the committed row's own fields, not the key's: a field the key dropped must
+		// still be caught, not silently skipped.
+		fields := make([]string, 0, len(row))
+		for f := range row {
 			fields = append(fields, f)
 		}
 		sort.Strings(fields)
 		for _, field := range fields {
-			want, ok := row[field]
-			if !ok || !containsString(doc.Fields[field].Values, want) {
-				return fmt.Errorf("corpus key %s: %s field %s disagrees with the answer key (committed %q, key %v)", corpusKeyPath, file, field, want, doc.Fields[field].Values)
+			want := row[field]
+			kf, ok := doc.Fields[field]
+			if !ok || !aitStringListsEqual(kf.Values, want) {
+				return fmt.Errorf("corpus key %s: %s field %s disagrees with the answer key (committed %v, key %v)", corpusKeyPath, file, field, want, kf.Values)
 			}
 		}
 	}
 	return nil
+}
+
+// aitStringListsEqual compares two readings lists as sets, ignoring order: the committed table
+// and a hand-drafted key transcribe the same values, not necessarily in the same sequence.
+func aitStringListsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	ac := append([]string(nil), a...)
+	bc := append([]string(nil), b...)
+	sort.Strings(ac)
+	sort.Strings(bc)
+	for i := range ac {
+		if ac[i] != bc[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type aitAnswerRecordJSON struct {

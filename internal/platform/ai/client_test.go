@@ -104,6 +104,76 @@ func realClient(t *testing.T, url string, b time.Duration) *Client {
 	return newClient(config{key: "k", endpoint: url, budget: b, now: time.Now, sleep: realSleep}, nil)
 }
 
+// callWithin fails the test if Call has not returned after d, so a loop that
+// never ends reds in seconds instead of at the package timeout.
+func callWithin(t *testing.T, c *Client, ctx context.Context, req Request, d time.Duration) (map[string]any, error) {
+	t.Helper()
+	type outcome struct {
+		answer map[string]any
+		err    error
+	}
+	ch := make(chan outcome, 1)
+	go func() {
+		answer, err := c.Call(ctx, req)
+		ch <- outcome{answer, err}
+	}()
+	select {
+	case got := <-ch:
+		return got.answer, got.err
+	case <-time.After(d):
+		t.Fatalf("Call did not return within %v", d)
+		return nil, nil
+	}
+}
+
+// okServer always answers 200 with content wrapped in a valid envelope.
+func okServer(t *testing.T, content string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(envelope(content, "")))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+// retryServer answers hit 1 with hit1Body and every later hit with okContent.
+func retryServer(t *testing.T, hit1Body, okContent string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		if n == 1 {
+			_, _ = w.Write([]byte(hit1Body))
+			return
+		}
+		_, _ = w.Write([]byte(envelope(okContent, "")))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &hits
+}
+
+// assertRefusedBeforeTheWire runs req against a healthy server and requires
+// that nothing was sent.
+func assertRefusedBeforeTheWire(t *testing.T, req Request) {
+	t.Helper()
+	srv, hits := okServer(t, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	_, err := c.Call(t.Context(), req)
+	if hits.Load() != 0 {
+		t.Fatalf("hits = %d, want 0", hits.Load())
+	}
+	if err == nil {
+		t.Fatal("err = nil, want non-nil")
+	}
+	if errors.Is(err, ErrUnavailable) {
+		t.Errorf("err wraps ErrUnavailable, want a validation error")
+	}
+}
+
 // -- T01 --
 
 func TestCall_SendsOneChatCompletionForTheModel(t *testing.T) {
@@ -541,7 +611,8 @@ func TestCall_SlowAttemptTimesOutWithinTheBudget(t *testing.T) {
 	c := realClient(t, srv.URL, 300*time.Millisecond)
 
 	start := time.Now()
-	_, err := c.Call(t.Context(), baseReq())
+	// Bounded: an attempt with no deadline of its own never returns here.
+	_, err := callWithin(t, c, t.Context(), baseReq(), 2*time.Second)
 	wall := time.Since(start)
 
 	if !errors.Is(err, ErrUnavailable) {
@@ -753,5 +824,467 @@ func TestCall_CallerDeadlineShorterThanBudgetWins(t *testing.T) {
 	}
 	if hits.Load() != 1 {
 		t.Errorf("hits = %d, want 1", hits.Load())
+	}
+}
+
+// -- adversarial: schema refusals --
+
+func TestCall_RefusesABannedKeywordAnywhereInTheSchema(t *testing.T) {
+	cases := map[string]string{
+		"on_items":               `{"type":"object","additionalProperties":false,"required":["rows"],"properties":{"rows":{"type":"array","items":{"type":"string","minLength":1}}}}`,
+		"under_items_properties": `{"type":"object","properties":{"rows":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string","pattern":"^N"}}}}}}`,
+		"two_levels_down":        `{"type":"object","properties":{"a":{"type":"object","properties":{"b":{"type":"object","properties":{"c":{"type":"string","format":"date"}}}}}}}`,
+		"nested_bad_type":        `{"type":"object","properties":{"a":{"type":"date"}}}`,
+		"nested_additional_true": `{"type":"object","additionalProperties":false,"properties":{"a":{"type":"object","additionalProperties":true}}}`,
+		"items_not_an_object":    `{"type":"object","properties":{"rows":{"type":"array","items":[{"type":"string"}]}}}`,
+		"type_is_a_number":       `{"type":"object","properties":{"a":{"type":1}}}`,
+	}
+	for name, schema := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := baseReq()
+			req.Schema = json.RawMessage(schema)
+			assertRefusedBeforeTheWire(t, req)
+		})
+	}
+}
+
+// -- adversarial: deep answer checking --
+
+var nestedSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["buyer"],"properties":{"buyer":{"type":"object","additionalProperties":false,"required":["tin"],"properties":{"tin":{"type":"string"}}}}}`)
+
+const nestedContent = `{"buyer":{"tin":"12345"}}`
+
+func TestCall_AcceptsAnAnswerMatchingADeepSchema(t *testing.T) {
+	srv, hits := okServer(t, nestedContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Schema = nestedSchema
+
+	got, err := c.Call(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("hits = %d, want 1", hits.Load())
+	}
+	want := map[string]any{"buyer": map[string]any{"tin": "12345"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Call() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCall_RetriesAnAnswerThatFailsDeepInsideANestedObject(t *testing.T) {
+	cases := map[string]string{
+		"deep_wrong_type":   `{"buyer":{"tin":7}}`,
+		"deep_missing_key":  `{"buyer":{}}`,
+		"deep_extra_key":    `{"buyer":{"tin":"1","x":1}}`,
+		"branch_not_object": `{"buyer":"1"}`,
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, hits := retryServer(t, envelope(bad, ""), nestedContent)
+			c, _ := fakeClient(t, srv.URL, 15*time.Second)
+			req := baseReq()
+			req.Schema = nestedSchema
+
+			if _, err := c.Call(t.Context(), req); err != nil {
+				t.Fatalf("Call() err = %v, want nil", err)
+			}
+			if hits.Load() != 2 {
+				t.Fatalf("hits = %d, want 2", hits.Load())
+			}
+		})
+	}
+}
+
+func TestCall_ChecksEveryArrayElementAgainstItems(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["rows"],"properties":{"rows":{"type":"array","items":{"type":"string"}}}}`)
+
+	t.Run("last_element_wrong", func(t *testing.T) {
+		srv, hits := retryServer(t, envelope(`{"rows":["a","b",3]}`, ""), `{"rows":["a","b"]}`)
+		c, _ := fakeClient(t, srv.URL, 15*time.Second)
+		req := baseReq()
+		req.Schema = schema
+
+		if _, err := c.Call(t.Context(), req); err != nil {
+			t.Fatalf("Call() err = %v, want nil", err)
+		}
+		if hits.Load() != 2 {
+			t.Fatalf("hits = %d, want 2", hits.Load())
+		}
+	})
+
+	t.Run("empty_array_is_accepted", func(t *testing.T) {
+		srv, hits := okServer(t, `{"rows":[]}`)
+		c, _ := fakeClient(t, srv.URL, 15*time.Second)
+		req := baseReq()
+		req.Schema = schema
+
+		if _, err := c.Call(t.Context(), req); err != nil {
+			t.Fatalf("Call() err = %v, want nil", err)
+		}
+		if hits.Load() != 1 {
+			t.Fatalf("hits = %d, want 1", hits.Load())
+		}
+	})
+}
+
+func TestCall_EnumOfNumbersComparesByJSONValue(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["n"],"properties":{"n":{"type":"integer","enum":[1,2,3]}}}`)
+	srv, hits := retryServer(t, envelope(`{"n":5}`, ""), `{"n":2}`)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Schema = schema
+
+	got, err := c.Call(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("hits = %d, want 2", hits.Load())
+	}
+	if got["n"] != json.Number("2") {
+		t.Errorf("n = %#v, want json.Number(2)", got["n"])
+	}
+}
+
+func TestCall_RequiredKeyMissingFromPropertiesIsStillRequired(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","required":["n","ghost"],"properties":{"n":{"type":"integer"}}}`)
+	srv, hits := retryServer(t, envelope(`{"n":1}`, ""), `{"n":1,"ghost":"x"}`)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Schema = schema
+
+	got, err := c.Call(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("hits = %d, want 2", hits.Load())
+	}
+	if got["ghost"] != "x" {
+		t.Errorf("ghost = %#v, want x", got["ghost"])
+	}
+}
+
+func TestCall_RetriesANonIntegerWhereIntegerIsRequired(t *testing.T) {
+	srv, hits := retryServer(t, envelope(`{"total":"1","vat":null,"currency":"NGN","n":3.5}`, ""), validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	if _, err := c.Call(t.Context(), baseReq()); err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("hits = %d, want 2", hits.Load())
+	}
+}
+
+func TestCall_AcceptsAFractionWhereNumberIsAllowed(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["n"],"properties":{"n":{"type":"number"}}}`)
+	srv, hits := okServer(t, `{"n":3.5}`)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Schema = schema
+
+	got, err := c.Call(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("hits = %d, want 1", hits.Load())
+	}
+	if got["n"] != json.Number("3.5") {
+		t.Errorf("n = %#v, want json.Number(3.5)", got["n"])
+	}
+}
+
+// -- adversarial: response envelope --
+
+func TestCall_RetriesContentThatIsNotOneJSONObject(t *testing.T) {
+	cases := map[string]string{
+		"array":       `[{"total":"1","vat":null,"currency":"NGN","n":1}]`,
+		"bare_string": `"1935.00"`,
+		"bare_number": `5`,
+		"json_null":   `null`,
+		"empty":       ``,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, hits := retryServer(t, envelope(content, ""), validContent)
+			c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+			if _, err := c.Call(t.Context(), baseReq()); err != nil {
+				t.Fatalf("Call() err = %v, want nil", err)
+			}
+			if hits.Load() != 2 {
+				t.Fatalf("hits = %d, want 2", hits.Load())
+			}
+		})
+	}
+}
+
+func TestCall_ANullErrorKeyIsNotAnError(t *testing.T) {
+	content, _ := json.Marshal(validContent)
+	body := `{"choices":[{"message":{"content":` + string(content) + `}}],"error":null}`
+
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	got, err := c.Call(t.Context(), baseReq())
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("hits = %d, want 1", hits.Load())
+	}
+	if got["currency"] != "NGN" {
+		t.Errorf("currency = %#v, want NGN", got["currency"])
+	}
+}
+
+func TestCall_AnOddUsageObjectDoesNotFailTheCall(t *testing.T) {
+	cases := map[string]string{
+		"partially_null":  `{"prompt_tokens":5,"completion_tokens":null,"cost":null}`,
+		"null_usage":      `null`,
+		"empty_object":    `{}`,
+		"fractional_cost": `{"prompt_tokens":5,"completion_tokens":7,"cost":0.00042}`,
+	}
+	for name, usageJSON := range cases {
+		t.Run(name, func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(envelope(validContent, usageJSON)))
+			}))
+			t.Cleanup(srv.Close)
+
+			c, _ := fakeClient(t, srv.URL, 15*time.Second)
+			got, err := c.Call(t.Context(), baseReq())
+			if err != nil {
+				t.Fatalf("Call() err = %v, want nil", err)
+			}
+			if hits.Load() != 1 {
+				t.Fatalf("hits = %d, want 1", hits.Load())
+			}
+			if got["currency"] != "NGN" {
+				t.Errorf("currency = %#v, want NGN", got["currency"])
+			}
+		})
+	}
+}
+
+func TestCall_RedirectStatusIsRefused(t *testing.T) {
+	// No Location header, so net/http hands the 3xx back instead of following it.
+	for _, status := range []int{301, 303, 304} {
+		t.Run(fmt.Sprintf("status_%d", status), func(t *testing.T) {
+			var hits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				w.WriteHeader(status)
+			}))
+			t.Cleanup(srv.Close)
+
+			c, _ := fakeClient(t, srv.URL, 15*time.Second)
+			_, err := c.Call(t.Context(), baseReq())
+			if hits.Load() != 1 {
+				t.Fatalf("hits = %d, want 1", hits.Load())
+			}
+			if err == nil {
+				t.Fatal("err = nil, want non-nil")
+			}
+			if errors.Is(err, ErrUnavailable) {
+				t.Errorf("err wraps ErrUnavailable, want a distinct refusal error")
+			}
+		})
+	}
+}
+
+// -- adversarial: wire shape --
+
+func TestCall_SendsManyPagesInOrderIncludingAnEmptyOne(t *testing.T) {
+	var rec capture
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(envelope(validContent, "")))
+	}))
+	t.Cleanup(srv.Close)
+
+	pages := make([][]byte, 12)
+	for i := range pages {
+		pages[i] = []byte{0x89, 'P', 'N', 'G', byte(i)}
+	}
+	pages[3] = []byte{}
+
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Pages = pages
+	if _, err := c.Call(t.Context(), req); err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+
+	_, body, _ := rec.snapshot()
+	messages, _ := body["messages"].([]any)
+	user, _ := messages[1].(map[string]any)
+	parts, _ := user["content"].([]any)
+	if len(parts) != len(pages)+1 {
+		t.Fatalf("len(parts) = %d, want %d", len(parts), len(pages)+1)
+	}
+	for i, page := range pages {
+		part, _ := parts[i+1].(map[string]any)
+		imgURL, _ := part["image_url"].(map[string]any)
+		want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(page)
+		if imgURL["url"] != want {
+			t.Errorf("parts[%d].image_url.url = %v, want %v", i+1, imgURL["url"], want)
+		}
+	}
+}
+
+func TestCall_FakeHintAloneIsNotInput(t *testing.T) {
+	req := baseReq()
+	req.Text = ""
+	req.Pages = nil
+	req.FakeHint = "HINT-7f3a"
+	assertRefusedBeforeTheWire(t, req)
+}
+
+// -- adversarial: budget and clock --
+
+func TestCall_ASpentBudgetRefusesBeforeTheFirstAnswer(t *testing.T) {
+	for name, b := range map[string]time.Duration{"zero": 0, "negative": -time.Second} {
+		t.Run(name, func(t *testing.T) {
+			srv, hits := okServer(t, validContent)
+			c, _ := fakeClient(t, srv.URL, b)
+
+			_, err := callWithin(t, c, t.Context(), baseReq(), 2*time.Second)
+			if !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("err = %v, want ErrUnavailable", err)
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("err wraps context.DeadlineExceeded, want it distinct from a caller deadline")
+			}
+			if hits.Load() > 1 {
+				t.Errorf("hits = %d, want <= 1", hits.Load())
+			}
+		})
+	}
+}
+
+// backwardClock hands out one reading earlier than the previous one.
+type backwardClock struct {
+	mu    sync.Mutex
+	t     time.Time
+	calls int
+}
+
+func (b *backwardClock) now() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.calls++
+	if b.calls == 2 {
+		return b.t.Add(-time.Second)
+	}
+	return b.t
+}
+
+func (b *backwardClock) sleep(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.t = b.t.Add(d)
+	b.mu.Unlock()
+	return nil
+}
+
+func TestCall_AClockThatGoesBackwardsStillEndsTheLoop(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	bc := &backwardClock{t: time.Unix(0, 0)}
+	c := newClient(config{key: "k", endpoint: srv.URL, budget: time.Second, now: bc.now, sleep: bc.sleep}, nil)
+
+	_, err := callWithin(t, c, t.Context(), baseReq(), 5*time.Second)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if hits.Load() < 2 {
+		t.Errorf("hits = %d, want >= 2", hits.Load())
+	}
+}
+
+// -- adversarial: the caller's context --
+
+// errCtx reports an error but has no Done channel, so the HTTP attempt itself
+// is never aborted and only the post-attempt caller-ctx check can see it.
+type errCtx struct{ context.Context }
+
+func (errCtx) Done() <-chan struct{} { return nil }
+
+func (errCtx) Err() error { return context.Canceled }
+
+func TestCall_ACancelledCallerBeatsASuccessfulAnswer(t *testing.T) {
+	srv, hits := okServer(t, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	got, err := callWithin(t, c, errCtx{t.Context()}, baseReq(), 2*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if errors.Is(err, ErrUnavailable) {
+		t.Errorf("err wraps ErrUnavailable, want it distinct from a caller cancellation")
+	}
+	if got != nil {
+		t.Errorf("answer = %#v, want nil", got)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1 (the attempt is sent before the check)", hits.Load())
+	}
+}
+
+func TestCall_AnErrorObjectBesideAValidChoiceIsRetried(t *testing.T) {
+	content, _ := json.Marshal(validContent)
+	hit1 := `{"choices":[{"message":{"content":` + string(content) + `}}],"error":{"code":502,"message":"x"}}`
+	srv, hits := retryServer(t, hit1, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+
+	if _, err := c.Call(t.Context(), baseReq()); err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 2 {
+		t.Fatalf("hits = %d, want 2", hits.Load())
+	}
+}
+
+// The documented schedule for a 15s budget: 0.25, 0.5, 1, then 2 capped,
+// which leaves 1.25s before the 10th wait and ends the loop at 10 hits.
+func TestCall_BackoffIsCappedSoTheBudgetFitsTenAttempts(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, fc := fakeClient(t, srv.URL, 15*time.Second)
+	if _, err := callWithin(t, c, t.Context(), baseReq(), 5*time.Second); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if got := hits.Load(); got != 10 {
+		t.Errorf("hits = %d, want 10", got)
+	}
+	if got := fc.now().Sub(time.Unix(0, 0)); got != 13750*time.Millisecond {
+		t.Errorf("slept %v in total, want 13.75s", got)
 	}
 }

@@ -17,14 +17,14 @@
 
 import { resolveTarget } from './targets'
 
-// The four landing personas (frontend/landing/src/auth.ts:17). These ids are WIRE VALUES:
+// The four landing personas (frontend/landing/src/auth.ts's LandingPersona.id). These ids are WIRE VALUES:
 // each one is the `?persona=` param the landing hands off with, and the destination SPA's
 // session gate checks it verbatim. Not to be conflated with frontend/app/src/auth.ts:14's
 // unrelated, two-member `PersonaId` (firm | inhouse) — different package, different job.
 export type PersonaId = 'developer' | 'support' | 'firm' | 'inhouse'
 
 // The three deployed SPAs a persona can be routed to. Mirrors LandingPersona.target
-// (frontend/landing/src/auth.ts:29) — `ops` is the ops-console service, and the `developer`
+// (frontend/landing/src/auth.ts) — `ops` is the ops-console service, and the `developer`
 // persona opening it is the wire-value/display-name split documented there, not a mistake.
 export type Destination = 'app' | 'ops' | 'support'
 
@@ -171,7 +171,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
   },
 }
 
-// LANDING_PERSONAS' own order (frontend/landing/src/auth.ts:34-87).
+// LANDING_PERSONAS' own order (frontend/landing/src/auth.ts).
 export const PERSONA_IDS: readonly PersonaId[] = ['developer', 'support', 'firm', 'inhouse']
 
 export const DESTINATIONS: readonly Destination[] = ['app', 'ops', 'support']

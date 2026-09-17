@@ -101,8 +101,8 @@ type aitTextlessJSON struct {
 // --- Stage B: TestAIText_Dump --------------------------------------------------------------
 
 // aitReadDoclingFile replays one Docling JSON file (a live Stage A read, or a committed
-// golden) through the real DoclingReader and the worker's own readText call (worker.go:68,
-// the call worker.go:187 makes) -- never a hand-rolled decode of the wire JSON.
+// golden) through the real DoclingReader and the worker's own readText call -- never a
+// hand-rolled decode of the wire JSON.
 func aitReadDoclingFile(t *testing.T, path string) ([]Page, []TokenPage, PageResult) {
 	t.Helper()
 	body, err := os.ReadFile(path)

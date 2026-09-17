@@ -896,3 +896,71 @@ func TestAIText_AShapeRefusedAnswerIsWrongEvenAgainstAnEqualKey(t *testing.T) {
 		}
 	}
 }
+
+// aitCorpusKeyFixture is one committed corpus row plus a key that transcribes it exactly.
+func aitCorpusKeyFixture(t *testing.T) (map[string][]string, map[string]aitKeyField, string) {
+	t.Helper()
+	committed := map[string][]string{
+		"invoice_number": {"INV-1005"}, "issue_date": {"2026-03-12", "2026-12-03"},
+		"buyer_tin": {}, "buyer_name": {}, "currency": {"NGN"},
+		"subtotal": {}, "vat": {}, "total": {"4300.00"},
+	}
+	keyFields := map[string]aitKeyField{}
+	for f, v := range committed {
+		keyFields[f] = aitKeyField{Values: v, Confirmed: true}
+	}
+	path := writeJSONFile(t, "corpus_key.json", map[string]any{
+		"corpus_ambiguous_date.pdf": committed,
+		"corpus_inline_labels.pdf":  committed,
+	})
+	return committed, keyFields, path
+}
+
+// D1: an extra reading on a committed cell would score an AI value the table never held.
+func TestAIText_CorpusRowsRefuseAKeyWithAnExtraReading(t *testing.T) {
+	_, keyFields, path := aitCorpusKeyFixture(t)
+	widened := map[string]aitKeyField{}
+	for f, v := range keyFields {
+		widened[f] = v
+	}
+	widened["total"] = aitKeyField{Values: []string{"4300.00", "9999.00"}, Confirmed: true}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: widened},
+		"corpus_inline_labels.pdf":  {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_ambiguous_date.pdf") || !strings.Contains(err.Error(), "total") {
+		t.Errorf("aitCheckCorpusRows(extra total reading) err = %v, want an error naming corpus_ambiguous_date.pdf and total", err)
+	}
+}
+
+// D1: D-A07 and Stage C - corpus rows carry the 8 written fields only, no supplier values.
+func TestAIText_CorpusRowsRefuseAKeyThatAddsAField(t *testing.T) {
+	_, keyFields, path := aitCorpusKeyFixture(t)
+	added := map[string]aitKeyField{}
+	for f, v := range keyFields {
+		added[f] = v
+	}
+	added["supplier_name"] = aitKeyField{Values: []string{"INVENTED SUPPLIER LIMITED"}, Confirmed: true}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: added},
+		"corpus_inline_labels.pdf":  {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_ambiguous_date.pdf") || !strings.Contains(err.Error(), "supplier_name") {
+		t.Errorf("aitCheckCorpusRows(key adds supplier_name) err = %v, want an error naming corpus_ambiguous_date.pdf and supplier_name", err)
+	}
+}
+
+// D1: Stage E step 2 and D-A08 - the key holds every committed corpus row; a dropped layout goes unscored.
+func TestAIText_CorpusRowsRefuseAKeyThatOmitsACorpusLayout(t *testing.T) {
+	_, keyFields, path := aitCorpusKeyFixture(t)
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+		"user_invoice.pdf":          {Set: "user", Source: "drafted", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_inline_labels.pdf") {
+		t.Errorf("aitCheckCorpusRows(key omits corpus_inline_labels.pdf) err = %v, want an error naming that layout", err)
+	}
+}

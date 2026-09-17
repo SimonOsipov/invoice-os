@@ -531,6 +531,9 @@ func TestCall_BudgetNotAttemptCountEndsTheLoop(t *testing.T) {
 
 func TestCall_SlowAttemptTimesOutWithinTheBudget(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain so Go's server arms the background read that notices the
+		// client disconnect; an unread body leaves r.Context() un-cancelable.
+		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
 	t.Cleanup(srv.Close)
@@ -556,6 +559,9 @@ func TestCall_SlowAttemptTimesOutWithinTheBudget(t *testing.T) {
 
 func TestCall_CancelledContextStopsAtOnce(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain so Go's server arms the background read that notices the
+		// client disconnect; an unread body leaves r.Context() un-cancelable.
+		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
 	t.Cleanup(srv.Close)
@@ -720,6 +726,9 @@ func TestCall_CallerDeadlineShorterThanBudgetWins(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
+		// Drain so Go's server arms the background read that notices the
+		// client disconnect; an unread body leaves r.Context() un-cancelable.
+		io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
 	t.Cleanup(srv.Close)

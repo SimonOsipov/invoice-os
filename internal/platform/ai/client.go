@@ -3,11 +3,16 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -60,7 +65,6 @@ func newClient(cfg config, logger *slog.Logger) *Client {
 }
 
 // Call sends req and returns the parsed answer, retrying within the budget.
-// Not implemented yet (AIR-02-03).
 func (c *Client) Call(ctx context.Context, req Request) (map[string]any, error) {
 	r := c.call(ctx, req)
 	return r.answer, r.err
@@ -81,10 +85,84 @@ type result struct {
 	usage    usage
 }
 
-// call carries validation, the wire request, and the retry loop. Stubbed
-// until AIR-02-03.
+// responseEnvelope is OpenRouter's chat-completion response shape.
+type responseEnvelope struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Usage *usage          `json:"usage"`
+	Error json.RawMessage `json:"error"`
+}
+
+// call runs validation, the wire request, and the retry loop.
 func (c *Client) call(ctx context.Context, req Request) result {
-	return result{err: errors.New("ai: not implemented")}
+	if err := validateRequest(req); err != nil {
+		return result{err: err, outcome: "refused"}
+	}
+	schema, err := checkSchema(req.Schema)
+	if err != nil {
+		return result{err: fmt.Errorf("ai: invalid request: %v", err), outcome: "refused"}
+	}
+
+	body, err := json.Marshal(buildWireRequest(req))
+	if err != nil {
+		return result{err: fmt.Errorf("ai: %v", err), outcome: "refused"}
+	}
+
+	var res result
+	start := c.cfg.now()
+	deadline := start.Add(c.cfg.budget)
+	var last error
+
+	for attempt := 1; ; attempt++ {
+		actx, cancel := context.WithTimeout(ctx, deadline.Sub(c.cfg.now()))
+		status, respBody, postErr := c.post(actx, body)
+		cancel()
+		res.attempts = attempt
+
+		if env, ok := decodeEnvelope(respBody); ok && env.Usage != nil {
+			res.usage.PromptTokens += env.Usage.PromptTokens
+			res.usage.CompletionTokens += env.Usage.CompletionTokens
+			res.usage.Cost += env.Usage.Cost
+		}
+
+		// The caller's ctx, never actx: actx expiring is just this attempt's
+		// timeout, not the caller giving up.
+		if ctx.Err() != nil {
+			res.err = fmt.Errorf("ai: %w", ctx.Err())
+			res.outcome = "unavailable"
+			return res
+		}
+
+		switch out, answer, cause := classify(status, respBody, postErr, schema); out {
+		case classifyOK:
+			res.answer = answer
+			res.outcome = "ok"
+			return res
+		case classifyRefused:
+			res.err = cause
+			res.outcome = "refused"
+			return res
+		default:
+			last = cause
+		}
+
+		wait := min(250*time.Millisecond<<(attempt-1), 2*time.Second)
+		if deadline.Sub(c.cfg.now()) <= wait {
+			// %v, not %w: last may itself wrap context.DeadlineExceeded,
+			// and an unavailable error must not match that.
+			res.err = fmt.Errorf("%w (last: %v)", ErrUnavailable, last)
+			res.outcome = "unavailable"
+			return res
+		}
+		if err := c.cfg.sleep(ctx, wait); err != nil {
+			res.err = fmt.Errorf("ai: %w", err)
+			res.outcome = "unavailable"
+			return res
+		}
+	}
 }
 
 func realSleep(ctx context.Context, d time.Duration) error {
@@ -99,7 +177,139 @@ func realSleep(ctx context.Context, d time.Duration) error {
 }
 
 func validateRequest(req Request) error {
-	return errors.New("ai: not implemented")
+	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet {
+		return fmt.Errorf("ai: invalid request: unsupported purpose %q", req.Purpose)
+	}
+	if req.Text == "" && len(req.Pages) == 0 {
+		return errors.New("ai: invalid request: no text or pages")
+	}
+	if req.SchemaName == "" {
+		return errors.New("ai: invalid request: schema name is required")
+	}
+	if _, err := checkSchema(req.Schema); err != nil {
+		return fmt.Errorf("ai: invalid request: %v", err)
+	}
+	return nil
+}
+
+func buildWireRequest(req Request) wireRequest {
+	var parts []wirePart
+	if req.Text != "" {
+		parts = append(parts, wirePart{Type: "text", Text: req.Text})
+	}
+	for _, page := range req.Pages {
+		parts = append(parts, wirePart{
+			Type:     "image_url",
+			ImageURL: &wireURL{URL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(page)},
+		})
+	}
+	return wireRequest{
+		Model: Model,
+		Messages: []wireMessage{
+			{Role: "system", Content: req.System},
+			{Role: "user", Content: parts},
+		},
+		ResponseFormat: wireFormat{
+			Type: "json_schema",
+			JSONSchema: wireSchema{
+				Name:   req.SchemaName,
+				Strict: true,
+				Schema: req.Schema,
+			},
+		},
+		Provider: wireProvider{RequireParameters: true},
+	}
+}
+
+// post sends one attempt and returns its status and raw body. err is a
+// transport-level failure (network, attempt timeout); the caller decides
+// what to do with a non-2xx status.
+func (c *Client) post(ctx context.Context, body []byte) (status int, respBody []byte, err error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+c.cfg.key)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, respBody, nil
+}
+
+type classifyOutcome int
+
+const (
+	classifyRetry classifyOutcome = iota
+	classifyOK
+	classifyRefused
+)
+
+// classify turns one attempt's raw result into a retry decision.
+func classify(status int, body []byte, postErr error, schema map[string]any) (classifyOutcome, map[string]any, error) {
+	if postErr != nil {
+		return classifyRetry, nil, postErr
+	}
+	if status == http.StatusTooManyRequests || (status >= 500 && status <= 599) {
+		return classifyRetry, nil, fmt.Errorf("ai: HTTP %d", status)
+	}
+	if status < 200 || status > 299 {
+		return classifyRefused, nil, fmt.Errorf("ai: refused: HTTP %d", status)
+	}
+
+	env, ok := decodeEnvelope(body)
+	if !ok {
+		return classifyRetry, nil, errors.New("ai: malformed response body")
+	}
+	if len(env.Error) > 0 && string(env.Error) != "null" {
+		return classifyRetry, nil, errors.New("ai: response contained an error object")
+	}
+	if len(env.Choices) == 0 {
+		return classifyRetry, nil, errors.New("ai: response had no choices")
+	}
+
+	answer, err := decodeAnswer(env.Choices[0].Message.Content)
+	if err != nil {
+		return classifyRetry, nil, fmt.Errorf("ai: response content is not a JSON object: %v", err)
+	}
+	if err := checkAnswer(schema, answer); err != nil {
+		return classifyRetry, nil, fmt.Errorf("ai: response failed schema check: %v", err)
+	}
+	return classifyOK, answer, nil
+}
+
+func decodeEnvelope(body []byte) (responseEnvelope, bool) {
+	var env responseEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return responseEnvelope{}, false
+	}
+	return env, true
+}
+
+// decodeAnswer parses content as exactly one JSON object, numbers as
+// json.Number so integer/enum checks stay exact.
+func decodeAnswer(content string) (map[string]any, error) {
+	dec := json.NewDecoder(strings.NewReader(content))
+	dec.UseNumber()
+	var v map[string]any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("trailing data after JSON value")
+		}
+		return nil, err
+	}
+	return v, nil
 }
 
 type wireRequest struct {

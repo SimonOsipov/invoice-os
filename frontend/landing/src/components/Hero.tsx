@@ -37,7 +37,7 @@ export function Hero({ onBookDemo, onSignIn }: { onBookDemo: () => void; onSignI
             <button onClick={onBookDemo} className="v2-btn v2-btn-primary" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
               Book a demo →
             </button>
-            {/* Same hand-off as the nav CTA: the persona picker → OTP → workspace. */}
+            {/* Same hand-off as the nav CTA: persona picker → workspace. */}
             <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 46, padding: '0 22px', fontSize: 15, cursor: 'pointer' }}>
               Explore the platform
             </button>

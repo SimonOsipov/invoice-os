@@ -693,8 +693,8 @@ test('landing consent: Escape, an outside click and an in-notice click all leave
 })
 
 // C8 — under either modal the notice stays mounted, inert and keyboard-unreachable.
-// SignInModal is the load-bearing case: its only onKeyDown is the OTP handler, so it has
-// no Tab trap of its own.
+// SignInModal is the load-bearing case: it handles only Escape, on window, so it has no
+// Tab trap of its own.
 test('landing consent: keyboard focus cannot reach the notice while a modal is open', async ({ page }) => {
   test.setTimeout(60_000) // 2 modals x 30 Tab presses, each press read back over the wire
   const { errors, card } = await openLanding(page)

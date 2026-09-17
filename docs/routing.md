@@ -93,8 +93,8 @@ is written down here rather than left as a silent exception, which is how the ne
 a bug against correct behaviour: what omits is a defaulted *query* param, never the tab segment.
 
 **R3 — The parse is total and never produces an unrenderable state.** An unknown settings
-tab resolves to `members` in `parseLocation`; an unavailable one (`company` outside an
-in-house workspace) is clamped the same way by `availableSettingsTab`. A non-UUID `invoice`
+tab resolves to `members` in `parseLocation`; an unavailable one (`company` when `mode` is
+not `inhouse`) is clamped the same way by `availableSettingsTab`. A non-UUID `invoice`
 is dropped — the audit reader 400s on a malformed id, so forwarding it would render an error
 state where the ordinary empty state is correct. An over-long `q` goes through
 `clampFilterText` (200 UTF-8 bytes, the server's cap). Every string in the world yields a
@@ -136,7 +136,7 @@ query, never a hash. State and the address bar come from one object, so they can
 No path writer reads `window.location.search`. This is a security fence, not a style choice:
 `App.tsx` once left `?persona=` in the URL after sign-in, which turned it into a
 credential-free sign-in link — Back to that history entry walked back into the workspace
-with no OTP. R1 keeps that fence intact now that URLs carry a query: the writer never echoes
+with no sign-in. R1 keeps that fence intact now that URLs carry a query: the writer never echoes
 the live search, it re-serialises only the params the codec owns, and `persona` is owned by
 no view.
 

@@ -2,7 +2,7 @@
 // Placed at src/, NOT src/components/, mirroring auth.ts: it is the landing's other
 // module that resolves VITE_* and exports a null-when-unset contract. Config
 // resolution stays INSIDE function bodies, never at module scope, so `vi.stubEnv`
-// can drive it in tests (auth.ts:89-99's resolveBase convention). This module
+// can drive it in tests (auth.ts's resolveBase convention). This module
 // imports nothing from src/components/ — CONSENT_TEXT is passed in as an argument.
 
 /** The hostnames that ARE the real production landing site. Exact match only. */
@@ -15,7 +15,7 @@ const normaliseHost = (hostname: string): string => hostname.trim().toLowerCase(
 /** Null when either var is unset or blank — mirrors auth.ts's resolveBase contract. */
 export function hubspotTarget(): HubSpotTarget | null {
   // Read inside the body, never at module scope: a module-scope read is baked at
-  // import time and cannot be driven by vi.stubEnv (auth.ts:93-96).
+  // import time and cannot be driven by vi.stubEnv (auth.ts's appBase/opsBase/supportBase).
   const portalId = (import.meta.env.VITE_HUBSPOT_PORTAL_ID ?? '').trim()
   const formGuid = (import.meta.env.VITE_HUBSPOT_FORM_GUID ?? '').trim()
   if (!portalId || !formGuid) return null

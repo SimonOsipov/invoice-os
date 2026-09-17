@@ -1874,7 +1874,7 @@ export default function App() {
 
   // Drop the consumed ?persona= from the URL. The param is a one-shot hand-off, and leaving
   // it behind made it a credential-free sign-in link: after Sign out, Back to the
-  // `?persona=firm` history entry walked straight into the workspace again with no OTP —
+  // `?persona=firm` history entry walked straight into the workspace again with no sign-in —
   // which reads as "logging out doesn't work". Stripping it also removes the stale-leftover
   // case that used to justify letting a stored session beat the param, so a plain reload now
   // resolves through the stored session instead of re-minting.

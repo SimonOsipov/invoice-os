@@ -171,8 +171,7 @@ export function Nav({
           })}
         </nav>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Opens the mock persona picker → OTP → routes to the workspace the
-              chosen role may open (task-21). */}
+          {/* Opens the persona picker; a pick routes to the workspace the chosen role may open. */}
           <button onClick={onSignIn} className="v2-btn v2-btn-ghost" style={{ height: 38, cursor: 'pointer' }}>
             Explore the platform
           </button>

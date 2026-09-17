@@ -145,18 +145,9 @@ jobs:
           go-version-file: go.mod
           # No dependencies / go.sum yet — nothing to cache. Enable in M2.
           cache: false
+      # Same target RALPH's local suite runs, so the two cannot drift.
       - name: Format (gofmt agreement + no smart-quoted SQL literals)
-        run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt: not formatted:"; echo "$unformatted"; gofmt -d $unformatted; exit 1
-          fi
-          # U+201C/U+201D in Go source is always gofmt eating a '' SQL empty string (bf1856b).
-          # LC_ALL=C.UTF-8 pins UTF-8 decoding so the bracket expression can't byte-split
-          # under a byte-oriented locale and false-positive on an em-dash.
-          if LC_ALL=C.UTF-8 grep -rn $'[“”]' --include='*.go' . ; then
-            echo "::error::smart quote in Go source — a '' SQL literal was reformatted away"; exit 1
-          fi
+        run: make fmt-check
       - name: Build
         run: go build ./...
       # The shared Dockerfile builds every service with cgo off. Without this step a cgo

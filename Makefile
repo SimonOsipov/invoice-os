@@ -45,7 +45,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive
+.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -109,29 +109,36 @@ dev-db-reset: ## Wipe the local dev Postgres (drop the data volume) and rebuild 
 	docker compose down -v
 	$(MAKE) dev-db
 
+fmt-check: ## Fail on gofmt drift or a smart quote in Go source (ci.yml's Format step runs this)
+	@files="$$(git ls-files -co --exclude-standard '*.go')"; \
+	unformatted="$$(printf '%s\n' $$files | xargs gofmt -l)"; \
+	if [ -n "$$unformatted" ]; then echo "gofmt: not formatted:"; echo "$$unformatted"; printf '%s\n' $$unformatted | xargs gofmt -d; exit 1; fi; \
+	if printf '%s\n' $$files | xargs grep -nE '“|”'; then echo "smart quote in Go source: gofmt turned a '' SQL literal into curly quotes"; exit 1; fi
+
+# -p 1 on every DB target: packages running in parallel against one Postgres race on role bootstrap.
 test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
-	go test -count=1 -run TestRLS ./internal/platform/db/...
+	go test -p 1 -count=1 -run TestRLS ./internal/platform/db/...
 
 test-queue: ## Run the M2-08 smoke + M2-09 exactly-once queue suites against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
-	go test -count=1 ./internal/submission/...
+	go test -p 1 -count=1 ./internal/submission/...
 
 test-audit: ## Run the M2-10 audit immutability/atomicity suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
-	go test -count=1 ./internal/audit/...
+	go test -p 1 -count=1 ./internal/audit/...
 
 test-reconciliation: ## Run the M5-06 reconciliation sweep suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
-	go test -count=1 -run TestRLS ./internal/reconciliation/...
+	go test -p 1 -count=1 -run TestRLS ./internal/reconciliation/...
 
 test-approvals: ## Run the workflow-roles + staffing suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \

@@ -454,7 +454,7 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
   const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
   await pick.focus()
   await expect(pick, 'the persona button did not take focus').toBeFocused()
-  // Armed with the press: Enter navigates synchronously, before press() resolves.
+  // Armed before the press: the navigation can start before press() resolves.
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL)),
     page.keyboard.press('Enter'),

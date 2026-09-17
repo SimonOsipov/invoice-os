@@ -18,6 +18,23 @@
 // They read geometry the same way an assertion reads text.
 import { expect, type Locator, type Page } from '@playwright/test'
 
+/**
+ * Waits until every finite animation on each element and its ancestors has finished.
+ * A rect read mid-animation is the animation's geometry, and an ancestor's slide moves its children.
+ */
+export async function settleAnimations(...targets: Locator[]): Promise<void> {
+  for (const target of targets) {
+    await target.evaluate((el) => {
+      const running = el.ownerDocument.getAnimations().filter((a) => {
+        const on = (a.effect as KeyframeEffect | null)?.target
+        // An infinite loop (spinner, shimmer) never finishes.
+        return on?.contains(el) && a.effect?.getComputedTiming().endTime !== Infinity
+      })
+      return Promise.all(running.map((a) => a.finished.catch(() => undefined))).then(() => undefined)
+    })
+  }
+}
+
 /** Widest first — see the file header for why the order is load-bearing. */
 export const WIDE_WIDTHS = [2560, 1920, 1440, 1280] as const
 
@@ -87,9 +104,8 @@ export function overlapOf(a: Rect, b: Rect): Rect {
  * is not a dimension bound in disguise: the defect this exists to catch strands
  * hundreds of pixels, so the passing and failing cases are nowhere near it.
  *
- * The measurement is taken through `expect.poll`, so a React re-render triggered
- * by the resize is waited out rather than raced. The entry viewport is restored
- * afterwards, so a caller's later assertions see the size they were written for.
+ * Each read settles animations first, and `expect.poll` waits out a re-render
+ * triggered by the resize. The entry viewport is restored afterwards.
  */
 export async function assertFillsColumn(
   page: Page,
@@ -106,6 +122,7 @@ export async function assertFillsColumn(
       await page.setViewportSize({ width, height: 1080 })
 
       const read = async (): Promise<ColumnFit | null> => {
+        await settleAnimations(inner, outer)
         const [innerBox, outerBox] = await Promise.all([inner.boundingBox(), outer.boundingBox()])
         if (!innerBox || !outerBox) return null
         const g = gaps(innerBox, outerBox)
@@ -136,10 +153,8 @@ export async function assertFillsColumn(
  * Asserts `a` and `b` stand the same height at every width in WIDE_WIDTHS, and
  * returns what it measured so the caller can attach the numbers.
  *
- * A boundingBox() read straight after setViewportSize can report a transform
- * mid-animation rather than settled layout, so the comparison goes through
- * expect.poll and re-reads until the re-render settles. A null or zero-height
- * box fails the matcher rather than passing as a match.
+ * Each read settles animations first, and `expect.poll` waits out a re-render.
+ * A null or zero-height box fails the matcher rather than passing as a match.
  */
 export async function assertSameHeight(
   page: Page,
@@ -156,6 +171,7 @@ export async function assertSameHeight(
       await page.setViewportSize({ width, height: 1080 })
 
       const read = async (): Promise<HeightPair | null> => {
+        await settleAnimations(a, b)
         const [aBox, bBox] = await Promise.all([a.boundingBox(), b.boundingBox()])
         if (!aBox || !bBox) return null
         if (aBox.height <= 0 || bBox.height <= 0) return null

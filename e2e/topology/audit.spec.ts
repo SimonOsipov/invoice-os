@@ -21,7 +21,7 @@ import { createEntity, createInvoice, getAuditLog, login, PERSONAS } from '../ap
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { approvalRun404Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, rectsOverlap, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // Mirrors frontend/app/src/components/AuditRow.tsx's AUDIT_TABLE_MIN_WIDTH. Hand-kept:
@@ -76,16 +76,10 @@ async function pickCountedEvent(page: Page): Promise<{ id: string; label: string
 // The panel's width is never asserted as a number. It is read live from the viewport instead --
 // a width assertion passes on the very bug it should catch (layout.ts's header, BUG-03-05).
 
-// The panel slides in on `pfDrawer` (translateX(24px) -> none, 200ms) and the scrim fades on
-// `pfFade`. Geometry read before those settle is the ANIMATION's, not the layout's: the first
-// deploy-gate run measured a 24px right gap -- exactly the keyframe's start offset -- and 7.56px
-// on the retry. Waiting on the elements' own animations is deterministic where a sleep is not.
+// The panel slides in on `pfDrawer` and the scrim fades on `pfFade`. Children measured later
+// inherit the panel's slide, so both settle before any read.
 async function settleDrawerAnimation(page: Page): Promise<void> {
-  for (const id of ['evidence-bundle-drawer', 'evidence-bundle-scrim']) {
-    await page
-      .getByTestId(id)
-      .evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => undefined))
-  }
+  await settleAnimations(page.getByTestId('evidence-bundle-drawer'), page.getByTestId('evidence-bundle-scrim'))
 }
 
 // The company rows carry an entity uuid this suite cannot know, so they are reached by testid

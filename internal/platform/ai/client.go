@@ -186,9 +186,6 @@ func validateRequest(req Request) error {
 	if req.SchemaName == "" {
 		return errors.New("ai: invalid request: schema name is required")
 	}
-	if _, err := checkSchema(req.Schema); err != nil {
-		return fmt.Errorf("ai: invalid request: %v", err)
-	}
 	return nil
 }
 

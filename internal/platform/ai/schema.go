@@ -3,6 +3,7 @@
 package ai
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +15,14 @@ var allowedSchemaTypes = map[string]bool{
 	"boolean": true, "array": true, "null": true,
 }
 
-// checkSchema parses and validates the caller's schema subset.
+// checkSchema parses and validates the caller's schema subset. It decodes
+// with UseNumber so a schema enum's numbers are json.Number, the same type
+// decodeAnswer produces, and so compare equal (TestCall_EnumOfNumbersComparesByJSONValue).
 func checkSchema(raw json.RawMessage) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("invalid schema JSON: %v", err)
 	}
 	if err := validateSchemaNode(m, true); err != nil {
@@ -214,14 +219,15 @@ func matchesType(t string, v any) bool {
 	}
 }
 
-// equalJSON compares two decoded JSON values, treating json.Number by its
-// string form so a schema-parsed number and a UseNumber-decoded one match.
+// equalJSON compares two decoded JSON values. checkSchema and decodeAnswer
+// both use UseNumber, so a schema-parsed number and a decoded answer number
+// are both json.Number and compare equal on matching digits
+// (TestCall_EnumOfNumbersComparesByJSONValue).
 func equalJSON(a, b any) bool {
-	if n, ok := a.(json.Number); ok {
-		a = n.String()
-	}
-	if n, ok := b.(json.Number); ok {
-		b = n.String()
+	an, aIsNum := a.(json.Number)
+	bn, bIsNum := b.(json.Number)
+	if aIsNum || bIsNum {
+		return aIsNum && bIsNum && an == bn
 	}
 	return reflect.DeepEqual(a, b)
 }

@@ -2234,7 +2234,7 @@ ai_fake_self_test() {
   # F2 empty key passes.
   ai_expect_pass F2 '{"data":{"variables":{"AI_FAKE":"true","OPENROUTER_API_KEY":""}}}'
   # F3 a present key refuses and must not leak it.
-  ai_expect_refusal F3 '{"data":{"variables":{"OPENROUTER_API_KEY":"sk-or-v1-fixture-not-a-real-key"}}}' "sk-or-v1-fixture-not-a-real-key"
+  ai_expect_refusal F3 '{"data":{"variables":{"OPENROUTER_API_KEY":"a-present-key-fixture"}}}' "a-present-key-fixture"
   # F4 whitespace-only key refuses (non-empty != "").
   ai_expect_refusal F4 '{"data":{"variables":{"OPENROUTER_API_KEY":" \t "}}}'
   # F5 an unrendered ${{ }} reference refuses and must not leak it.
@@ -2251,7 +2251,7 @@ ai_fake_self_test() {
   # operator must not have to guess which happened.
   local msg_f6 msg_f3
   msg_f6=$(ai_key_verdict '{"data":{"variables":null}}' "submission" 2>&1) || true
-  msg_f3=$(ai_key_verdict '{"data":{"variables":{"OPENROUTER_API_KEY":"sk-or-v1-fixture-not-a-real-key"}}}' "submission" 2>&1) || true
+  msg_f3=$(ai_key_verdict '{"data":{"variables":{"OPENROUTER_API_KEY":"a-present-key-fixture"}}}' "submission" 2>&1) || true
   if [ "$msg_f6" = "$msg_f3" ]; then
     echo "::error::self-test F9 FAILED: the unreadable and key-present refusals produced the SAME message"
     failures=$((failures + 1))

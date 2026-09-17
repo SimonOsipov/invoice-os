@@ -113,7 +113,7 @@ func TestSetAIFakeSelfTestNeverPrintsAKeyValue(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0: a token being present must not change --self-test's outcome; stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	for _, leak := range []string{sentinel, "sk-or-v1-fixture-not-a-real-key", "pw-fixture"} {
+	for _, leak := range []string{sentinel, "a-present-key-fixture", "pw-fixture"} {
 		if strings.Contains(stdout, leak) {
 			t.Errorf("stdout leaked %q; stdout = %q", leak, stdout)
 		}
@@ -227,7 +227,7 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 	needles := []string{
 		`"AI_FAKE":"true"}}}`,        // F1: absent key passes
 		`"OPENROUTER_API_KEY":""`,    // F2/F10: empty key passes
-		"sk-or-v1-fixture",           // F3: a present key refuses
+		"a-present-key-fixture",      // F3: a present key refuses
 		`\t`,                         // F4: a whitespace-only key refuses
 		"secrets.OPENROUTER_API_KEY", // F5: an unrendered reference refuses
 		`"variables":null`,           // F6: a null variables map refuses

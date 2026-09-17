@@ -544,6 +544,17 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-approvals-enforced "$ENV_ID"
 
+      # PR ONLY, same reasoning as the step above: on push/dispatch the target
+      # is the persistent environment, whose OpenRouter key is an operator's
+      # and must never be blanked by CI. No continue-on-error: a silent
+      # failure would leave a PR environment holding a usable key.
+      - name: Force AI fake mode and blank the AI key in the fork (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The

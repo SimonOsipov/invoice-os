@@ -1088,7 +1088,7 @@ test.describe('Audit screen', () => {
     await page.getByTestId('audit-actor-trigger').click()
     await page.getByTestId('audit-actor-kind-system').click()
     await page.keyboard.press('Escape')
-    // Prefix regex: the pill's remove glyph abuts its label (AuditFilterCard.tsx), as at auth.spec.ts:480.
+    // Prefix regex: the pill's remove glyph abuts its label (AuditFilterCard.tsx), as in auth.spec.ts's FILTER deep-link test.
     await expect(page.getByTestId('audit-pill-actorKind')).toHaveText(/^System only/)
 
     const sysRow = page.getByTestId('audit-row').first()

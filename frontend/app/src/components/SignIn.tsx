@@ -1,8 +1,7 @@
 // The Platform app's bare sign-in (M2-13, "deliberately minimal UI"). It gates the
 // workspace: pick a seeded persona and App runs the real round trip (mint a JWT via the
-// gateway, GET /api/tenancy/v1/me) before revealing the app. The full landing →
-// persona-picker → OTP flow lives on the landing page (task-21) and deep-links here
-// with ?persona=<id>, which auto-drives this same sign-in.
+// gateway, GET /api/tenancy/v1/me) before revealing the app. The landing's persona picker
+// deep-links here with ?persona=<id>, which auto-drives this same sign-in.
 
 import { BrandMark } from '../icons'
 import { APP_PERSONAS, type Persona, type PersonaId } from '../auth'

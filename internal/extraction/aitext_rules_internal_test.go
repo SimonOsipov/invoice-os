@@ -117,10 +117,12 @@ type fieldRef struct {
 	Field string
 }
 
-// cellFixture is the row shape a scored cell is checked against: one document x field.
+// cellFixture is the row shape a scored cell is checked against: one document x run x field.
 type cellFixture struct {
 	File  string
+	Run   int
 	Field string
+	AI    string // aitClassify verdict of that run's answer
 }
 
 type promptSegment struct {
@@ -774,5 +776,123 @@ func TestAIText_ErroredOrFieldlessAnswersNeverScore(t *testing.T) {
 	}
 	if got := len(result.Cells); got != 1 {
 		t.Errorf("cells = %d, want exactly 1 (the good record only)", got)
+	}
+}
+
+// --- QA defect pins (red until the helpers are fixed) ---------------------------------------
+
+// D1: expectByLayout (endtoend/score_test.go) holds empty cells and a two-reading date; key.draft.json rows carry them as values lists.
+func TestAIText_CorpusRowsAcceptTheCommittedTableShape(t *testing.T) {
+	fields := map[string][]string{
+		"invoice_number": {"INV-1005"}, "issue_date": {"2026-03-12", "2026-12-03"},
+		"buyer_tin": {}, "buyer_name": {}, "currency": {"NGN"},
+		"subtotal": {}, "vat": {}, "total": {"4300.00"},
+	}
+	keyFields := map[string]aitKeyField{}
+	for f, v := range fields {
+		keyFields[f] = aitKeyField{Values: v, Confirmed: true}
+	}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	corpusKey := writeJSONFile(t, "corpus_key.json", map[string]any{"corpus_ambiguous_date.pdf": fields})
+
+	if err := aitCheckCorpusRows(key, corpusKey); err != nil {
+		t.Errorf("aitCheckCorpusRows(key equal to the committed row) = %v, want nil", err)
+	}
+}
+
+// D1: a key row must hold every committed field (expectByLayout writes 8 per layout); a dropped one goes unscored.
+func TestAIText_CorpusRowsRefuseAKeyThatDropsAField(t *testing.T) {
+	committed := map[string][]string{
+		"invoice_number": {"INV-1001"}, "issue_date": {"2026-03-04"},
+		"buyer_tin": {"99999999-0102"}, "buyer_name": {"Honeywell Group"}, "currency": {"NGN"},
+		"subtotal": {"1000.00"}, "vat": {"75.00"}, "total": {"1075.00"},
+	}
+	keyFields := map[string]aitKeyField{}
+	for f, v := range committed {
+		if f != "total" {
+			keyFields[f] = aitKeyField{Values: v, Confirmed: true}
+		}
+	}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_inline_labels.pdf": {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	corpusKey := writeJSONFile(t, "corpus_key.json", map[string]any{"corpus_inline_labels.pdf": committed})
+
+	err := aitCheckCorpusRows(key, corpusKey)
+	if err == nil || !strings.Contains(err.Error(), "corpus_inline_labels.pdf") || !strings.Contains(err.Error(), "total") {
+		t.Errorf("aitCheckCorpusRows(key without total) err = %v, want an error naming corpus_inline_labels.pdf and total", err)
+	}
+}
+
+// D2: task-1073 Stage 1 validation - row(t) is the tokens overlapping seed t itself, never a chain.
+func TestAIText_JoinedRowRuleDoesNotChainOverlapsIntoOneRow(t *testing.T) {
+	pages := onePage(1,
+		tok("Honeywell", 1, 0.10, 0.300, 0.19, 0.310),
+		tok("xx", 1, 0.80, 0.305, 0.85, 0.315),
+		tok("yy", 1, 0.86, 0.310, 0.90, 0.320),
+		tok("Group", 1, 0.20, 0.315, 0.26, 0.325),
+	)
+	if found, box := aitRuleJoinedRow("buyer_name", "Honeywell Group", pages); found {
+		t.Errorf("rule C joined Honeywell and Group through a chain of overlaps (box %+v); neither overlaps the other", box)
+	}
+}
+
+// D3: cells.json is one row per document x run x field (Stage E), built from good answer records, so
+// Core AC 4 and D-A11 report per-run totals whose denominator is the good-record count.
+func TestAIText_ScoresOneCellPerDocumentRunAndField(t *testing.T) {
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"doc.pdf": {Fields: map[string]aitKeyField{
+			"total":          {Values: []string{"1935.00"}, Confirmed: true},
+			"invoice_number": {Values: []string{"INV-1"}, Confirmed: true},
+		}},
+		"unanswered.pdf": {Fields: map[string]aitKeyField{
+			"total": {Values: []string{"1.00"}, Confirmed: true},
+		}},
+	}}
+	dumps := []docDump{{File: "doc.pdf", TextChars: 100}, {File: "unanswered.pdf", TextChars: 100}}
+	answers := []docAnswer{
+		{File: "doc.pdf", Run: 1, Fields: map[string]string{"total": "1,935.00", "invoice_number": "INV-1"}},
+		{File: "doc.pdf", Run: 2, Fields: map[string]string{"total": "1800.00", "invoice_number": "INV-1"}},
+		{File: "doc.pdf", Run: 3, Fields: map[string]string{"invoice_number": "INV-1"}},
+	}
+
+	result := aitScoreConfirmed(key, dumps, answers, nil)
+
+	if got := len(result.Cells); got != 6 {
+		t.Errorf("cells = %d, want 6 (3 good runs x 2 confirmed fields, none for a document with no answer)", got)
+	}
+	want := map[int]string{1: "right", 2: "wrong", 3: "blank"}
+	for run, verdict := range want {
+		n := 0
+		for _, c := range result.Cells {
+			if c.File == "doc.pdf" && c.Field == "total" && c.Run == run {
+				n++
+				if c.AI != verdict {
+					t.Errorf("run %d total AI = %q, want %q", run, c.AI, verdict)
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("run %d total cells = %d, want 1", run, n)
+		}
+	}
+}
+
+// D4: D-A15 - a value the shape refuses is wrong, not blank, even when the key holds the same text.
+func TestAIText_AShapeRefusedAnswerIsWrongEvenAgainstAnEqualKey(t *testing.T) {
+	cases := []struct{ field, value string }{
+		{"buyer_tin", "1234567-0001"},
+		{"total", "1,935.00 naira"},
+	}
+	for _, c := range cases {
+		if shape, _ := tier1Shape(c.field); len(shape.Normalize(c.value)) != 0 {
+			t.Fatalf("precondition failed: %s shape accepts %q", c.field, c.value)
+		}
+		v := c.value
+		if got := aitClassify(c.field, &v, []string{c.value}); got != "wrong" {
+			t.Errorf("aitClassify(%s, %q, [%q]) = %q, want wrong", c.field, c.value, c.value, got)
+		}
 	}
 }

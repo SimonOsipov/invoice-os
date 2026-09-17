@@ -113,7 +113,8 @@ func TestAIText_AConfirmedEmptyKeyFieldIsScored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aitLoadKey: %v", err)
 	}
-	result := aitScoreConfirmed(key, []docDump{{File: "doc.pdf", TextChars: 100}}, nil, nil)
+	answers := []docAnswer{{File: "doc.pdf", Run: 1, Fields: map[string]string{}}}
+	result := aitScoreConfirmed(key, []docDump{{File: "doc.pdf", TextChars: 100}}, answers, nil)
 	if !hasCellForField(result.Cells, "doc.pdf", "vat") {
 		t.Errorf("cells = %v, want a cell for the confirmed empty vat entry", result.Cells)
 	}

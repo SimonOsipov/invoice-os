@@ -210,6 +210,10 @@ func aitReadings(field, raw string) []string {
 	}
 	if shape, ok := tier1Shape(field); ok {
 		if r := shape.Normalize(raw); len(r) > 0 {
+			// Printed double spaces do not make a different reading.
+			for i := range r {
+				r[i] = strings.Join(strings.Fields(r[i]), " ")
+			}
 			return r
 		}
 	}

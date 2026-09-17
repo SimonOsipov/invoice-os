@@ -403,6 +403,8 @@ func TestAIText_ClassifiesAnAnswerAgainstTheKey(t *testing.T) {
 		{"a value on an empty key", "invoice_number", strPtr("INV-1"), []string{}, "wrong"},
 		{"an ambiguous date key, second reading", "issue_date", strPtr("2026-12-03"), []string{"2026-03-12", "2026-12-03"}, "right"},
 		{"a comma amount against its digit key", "total", strPtr("1,935.00"), []string{"1935.00"}, "right"},
+		{"a name printed with double spaces", "buyer_name", strPtr("ADA  &  OBI VENTURES"), []string{"ADA & OBI VENTURES"}, "right"},
+		{"a different name", "buyer_name", strPtr("ADA & OBI STORES"), []string{"ADA & OBI VENTURES"}, "wrong"},
 	}
 	if len(cases) == 0 {
 		t.Fatal("no cases")

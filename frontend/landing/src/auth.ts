@@ -1,12 +1,5 @@
-// Landing sign-in personas + cross-SPA routing (task-21). The full mock flow —
-// persona picker → 6-digit OTP → route to the workspace the role is allowed to open —
-// is a faithful port of the sign-in prototype. Routing is plain navigation to the
-// already-deployed sibling SPA; no backend call happens here. The destination Platform
-// app performs the real JWT mint + /v1/me round trip on arrival (M2-13), so the two
-// stories share one mechanism.
-
-// The demo one-time code, matching the prototype. Client-side theater only.
-export const DEMO_CODE = '481920'
+// Landing sign-in personas and cross-SPA routing. A pick navigates to the sibling SPA the role may open;
+// no backend call happens here — the destination app mints the session from ?persona=<id>.
 
 export interface LandingPersona {
   // The persona id is the ROLE, and it is what the destination SPA's session gate checks
@@ -18,10 +11,8 @@ export interface LandingPersona {
   name: string
   title: string
   org: string
-  email: string
   initials: string
   access: string
-  destLabel: string
   // The Railway SERVICE the persona opens. `ops` is the ops-console service (which serves
   // the Ops Console) and `support` is the support-console service. The `developer` id
   // mapping to the `ops` target is the wire-value/display-name split noted above, not a
@@ -37,10 +28,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     name: 'Amara Okafor',
     title: 'Integration developer',
     org: 'Zephyr Pay',
-    email: 'a.okafor@zephyrpay.com',
     initials: 'AO',
     access: 'OPS CONSOLE',
-    destLabel: 'Ops Console',
     target: 'ops',
     avBg: 'var(--slate-900)',
     avColor: 'var(--text-on-dark)',
@@ -50,10 +39,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     name: 'Emeka Iroha',
     title: 'Support engineer',
     org: 'ASComply Operations',
-    email: 'e.iroha@ascomply.com',
     initials: 'EI',
     access: 'SUPPORT CONSOLE',
-    destLabel: 'Support Console',
     target: 'support',
     avBg: 'var(--slate-900)',
     avColor: 'var(--text-on-dark)',
@@ -63,10 +50,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     name: 'Chinedu Okafor',
     title: 'Firm accountant',
     org: 'Okafor & Partners',
-    email: 'c.okafor@okafor.ng',
     initials: 'CO',
     access: 'PLATFORM · FIRM',
-    destLabel: 'firm workspace',
     target: 'app',
     avBg: 'var(--action-tint)',
     avColor: 'var(--action)',
@@ -76,10 +61,8 @@ export const LANDING_PERSONAS: LandingPersona[] = [
     name: 'Ngozi Balogun',
     title: 'In-house accountant',
     org: 'Honeywell Group · Finance',
-    email: 'n.balogun@honeywell.ng',
     initials: 'NB',
     access: 'PLATFORM · IN-HOUSE',
-    destLabel: 'in-house workspace',
     target: 'app',
     avBg: 'var(--action-tint)',
     avColor: 'var(--action)',
@@ -115,9 +98,4 @@ const BASE_BY_TARGET: Record<LandingPersona['target'], () => string | null> = {
 export function destUrl(p: LandingPersona): string | null {
   const base = BASE_BY_TARGET[p.target]()
   return base ? `${base}?persona=${p.id}` : null
-}
-
-// maskedEmail hides the local part except its first character, e.g. c•••@okafor.ng.
-export function maskedEmail(email: string): string {
-  return email.replace(/^(.).*(@.*)$/, '$1•••$2')
 }

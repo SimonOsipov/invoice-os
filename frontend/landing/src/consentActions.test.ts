@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-// Four files, not the whole tree: SignInModal.tsx:81 legitimately carries
+// Four files, not the whole tree: SignInModal.tsx legitimately carries
 // `window.location.href = dest`, so a tree-wide scan false-positives on shipped
 // code. App.tsx is in the set because onChoose is where a reload would most
 // naturally be smuggled back in.

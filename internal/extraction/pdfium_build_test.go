@@ -221,7 +221,7 @@ func TestCI_BuildsWithCgoDisabled(t *testing.T) {
 	if !strings.Contains(joined, "go vet ./...") {
 		t.Fatalf("the Vet step parsed with no go vet command; run bodies are not being read, so the verdict below means nothing")
 	}
-	if strings.Contains(joined, "gofmt -l") {
+	if strings.Contains(joined, "make fmt-check") {
 		t.Fatalf("the Vet step carries the Format step's command; the steps are being merged, so the verdict below means nothing")
 	}
 

@@ -56,7 +56,7 @@ Cannot output `ALL_TASKS_COMPLETE` until BOTH (a) the aggregate **`CI`** check p
 gh pr checks [PR_NUMBER]
 # Aggregate per-push check (ci.yml): CI  — rolls up: go, frontend, clean-clone,
 #   migrations, docker-canary, rls, queue, audit (each gated on `changes`).
-# Deploy gate (dev-env.yml, fires when the PR is marked ready): await-ci +
+# Deploy gate (dev-env.yml, runs on a push to a ready PR; Phase 3.5 step 2): await-ci +
 #   prepare-env (parallel, creates — or reuses — the PR's own ephemeral Railway
 #   env by forking `development`) → deploy-gateway (migrator) → health-gate →
 #   deploy-context ×7 + deploy-spas ×3 → fleet-gate → e2e (smoke + api +
@@ -149,7 +149,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    git -C "$MAIN_CHECKOUT" worktree add -b "$BRANCH" "$WORKTREE_PATH" origin/main
    ```
 
-4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored (`.gitignore:43`), so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
+4. **Symlink the repo `CLAUDE.md` into the worktree** (best-effort, never fails the run). `CLAUDE.md` is gitignored, so `git worktree add` never creates it — every subagent running with `CWD=$WORKTREE_PATH` would otherwise see NO project instructions at all (verified absent in `m4-21`, `m4-06`, `m4-08-map-step` before this fix; Decision `[claude-md-symlink]`):
    ```bash
    [ -f "$MAIN_CHECKOUT/CLAUDE.md" ] && ln -sfn "$MAIN_CHECKOUT/CLAUDE.md" "$WORKTREE_PATH/CLAUDE.md"
    ```
@@ -169,6 +169,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
    (cd "$WORKTREE_PATH" && DEV_DB_PORT=<unused-port> make dev-db) &
    wait
    ```
+   Record the chosen port as `DEV_DB_PORT`. Every DB-backed suite in this run passes it. A `make test-*` call without it runs against port 5432, which may be another worktree's database.
 
 6. **All subsequent shell commands run inside `$WORKTREE_PATH`.** Pass it as CWD to subagents.
 
@@ -186,6 +187,8 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 - **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
 - **A story that changes a layout constant ships a layout assertion.** A layout constant is a width, a grid track, a clearance, an overflow or an alignment. When a subtask adds or changes one, name a topology layout assertion as that subtask's deliverable. The instrument already exists: `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560 / 1920 / 1440 / 1280), and `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Phase 3.5 states what such an assertion must claim — the relationship the constant encodes, never the raw dimension. Planning it here is what puts it in the FIRST deploy-gate run. The deployed environment is this project's only renderer, so an assertion written after that run costs a whole extra one. A 26px input, a label overflowing its pill and a 360px menu clearance all shipped from stories whose ACs never mentioned layout.
 - **Re-measure every fact the story asserts.** A basic story states facts, not only goals: a root cause, a mechanism, a count, another PR's shipped state, a precedent's preconditions, whether the prescribed fix can work. Treat each one as a hypothesis. Re-measure it inside the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`. Cite what you ran, never the conclusion alone. BUG-02 asserted three mechanisms and all three proved wrong; APPR-04's ground truth was wrong in thirteen places. When a corrected premise carries the story's scope, Phase 0.6d stops the run for it.
+- **Measure a fact about the deployed app on the deployed app.** This covers the story's facts and the architect's own predictions: what a browser logs, what the sidecar returns, what production holds. The worktree cannot answer these. Measure on the live app with the Playwright MCP, or read Railway logs. Paste the output into the same `premise —` entry. Do not escalate a premise to the user before you measure it. APPR-13 predicted Chromium's console output wrong and cost 22 red tests; EXTR-18 escalated "OCR is broken" from two log lines, and it was false.
+- **An AC that already holds at head is not work.** Record the test that proves it in `## Decisions` and write no subtask for it. ROUTE-06 planned five fixes; two had already shipped.
 - It rewrites the story file in Obsidian to final state: system design, **## Implementation Subtasks** (`[<STORY-ID>-NN]` with Category / Dependencies / Description / Acceptance Criteria / Order / Test-first classification + Test Specs tables for `Test-first: yes`), and a **## Decisions** section appending every assumption it made where the story was silent.
 - **Traceability rule (hard):** every derived AC and subtask must trace to the Objective or a Core AC (or the milestone's "Ships when true"). Nothing in Out of Scope may appear in any subtask.
 - **Checkpoint:** `STORY_FINALIZED`
@@ -201,16 +204,18 @@ Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside 
 - Execute the `/subtask-generator` logic for the finalized story, passing the story explicitly: spawn parallel `product-architecture-spec` agents → one Backlog task per subtask (description, acceptance_criteria, implementation_plan, references, labels `["story:<slug>", ...]`), then wire dependencies between the created task IDs.
 - Move all created subtasks to "In Progress".
 - Topo-sort by dependencies → linear execution order. **Log the plan**: story title, branch slug, ordered subtask list, count of Decisions + conservative-default dispositions.
+- Do not emit `SUBTASKS_READY` while a fact the story asserts has no `premise —` entry with a pasted command and its output.
 - **Checkpoint:** `SUBTASKS_READY`
 
 #### d. Critical-fork gate — the ONE place the run stops
 
-A conservative default is right for a technical fork and wrong for a policy one. It is also wrong for a fact that turned out false. Before any code exists, test every entry in `## Decisions` — the QA-debate conservative defaults and Phase 0.6a's `premise —` entries included — against four questions:
+A conservative default is right for a technical fork and wrong for a policy one. It is also wrong for a fact that turned out false. Before any code exists, test every entry in `## Decisions` — the QA-debate conservative defaults and Phase 0.6a's `premise —` entries included — against five questions:
 
 - Does it decide **who is allowed** to do something?
 - Does it decide **what the system claims** to an outside party: the authority, the customer, the audit record?
 - Does it let the system **silently override a human's action**?
 - Does a **corrected premise** take away something this story's scope needs: a shipped screen, an endpoint, a merged PR, a seeded row?
+- Does it change the **meaning of a Core AC**, or of a subtask AC taken from one? A rewording that keeps the meaning is not a fork. AUDIT-09's architecture pass rewrote three AC texts and filed them as "not blockers".
 
 Any "yes" makes that fork **critical**. Everything else proceeds untouched. The test is deliberately narrow — expect zero to two per story. BUG-07 tripped two of twenty-five: who may mark an invoice resolved outside the system, and whether the authority's verdict wipes that mark. M4-03 would have tripped the fourth: its QA debate recorded "PR #54 is OPEN, not shipped", graded it MECHANICAL, softened three provenance labels, and shipped a feature the user could not reach.
 
@@ -242,6 +247,8 @@ Then proceed to Phase 1 exactly as for a pre-planned story.
 ### Phase 1: Sequential Subtask Execution
 
 For each subtask, in dependency order, execute the stages below. Delegate to subagents — never implement code directly.
+
+Run one stage agent at a time. Do not spawn a second agent for a stage while its first agent still runs. Run no suite while a stage agent runs. Agents in one worktree share its files and its dev Postgres: EXTR-25's lead and QA ran `go test` together and read a false 53/88.
 
 #### Subagent Mapping (MANDATORY)
 | Stage | Subagent Type | Model | Usage |
@@ -276,9 +283,11 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 #### Stage 2: Explore Verification
 - Spawn `Explore`, passing `$WORKTREE_PATH` as CWD.
 - Verify referenced files exist; Go package layout, imports, and placement match; the `internal/platform` seams (config, `WithinTenantTx`, queue, audit) are used correctly.
-- **For any Go signature/API change:** grep callers across `cmd/` and `internal/` and enumerate every caller + test that must be updated as a deliverable of this subtask.
-- **For any change to a JSON wire shape**, extend that grep to `e2e/` and the SPA wire mirrors (`frontend/*/src/lib/*.ts`). A response struct has hand-maintained TypeScript copies that no compiler links to it: adding a Go field does not break `pnpm -r typecheck` on a mirror that merely lacks it, so the per-subtask suite cannot catch the drift. Enumerate every mirror as a deliverable — `e2e/api/client.ts` is the one that gets forgotten.
-- **For any UI-touching subtask:** grep `e2e/` (smoke + topology) for the changed routes/testids/labels and enumerate every matching spec as a required-update deliverable.
+- **Search with `breaklist`.** Every break list below comes from `go run ./internal/tools/breaklist '<Go regexp>' [path ...]`, run from the worktree root. Paste the command and its `TOTAL` line into the plan. Do not replace it with `grep` or `git grep`, and do not pipe it through `head`. Those drop NUL-byte files, ignore `\b` and truncate without a warning. A search finds only code that names the thing. It does not find a test that depends on the behaviour without naming it.
+- **For any Go signature/API change:** search callers across `cmd/` and `internal/` and enumerate every caller + test that must be updated as a deliverable of this subtask.
+- **For any change to a JSON wire shape**, extend that search to `e2e/` and the SPA wire mirrors (`frontend/*/src/lib/*.ts`). A response struct has hand-maintained TypeScript copies that no compiler links to it: adding a Go field does not break `pnpm -r typecheck` on a mirror that merely lacks it, so the per-subtask suite cannot catch the drift. Enumerate every mirror as a deliverable — `e2e/api/client.ts` is the one that gets forgotten.
+- **For any UI-touching subtask:** search `e2e/` (smoke + topology) for the changed routes/testids/labels and enumerate every matching spec as a required-update deliverable.
+- **A backend change to a value the frontend branches on is UI-touching.** Such values include a reason code, a doubt scope, an enum value and a URL parameter. First find the frontend code that reads the value. Then search `e2e/` for the testids that code renders. A search for the identifiers in the diff finds nothing, because no identifier changed. EXTR-23 changed a reason code, the screen swapped an input for a chooser, and three plans had said "no e2e exposure".
 - If gaps found, update the Backlog task's implementation_notes.
 - **Checkpoint:** `EXPLORE_DONE`
 
@@ -295,17 +304,23 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - For `Test-first: yes` subtasks, drive the Stage 2.5 red tests to green without weakening, skipping, or deleting any (if a test itself is wrong, flag it). Author no *new* tests (QA adds those in Stage 4).
 - **Migrations:** goose is timestamp-ordered (no Alembic-style `down_revision` to hand-set). Scaffold with `make migrate-create name=<slug>` **inside the worktree** so the timestamp is fresh relative to `main`; every tenant-owned table is born with `tenant_id` + the FORCE-RLS policy template; write a working `-- +goose Down`. The gateway applies migrations on deploy — a bad migration crash-loops the PR's own environment's backend, so verify `make migrate-up` + the reversibility round-trip locally first.
 - The executor handles all reads/edits/creation inside the worktree, commits, and (per its FIRST/MIDDLE/FINAL `Order` logic) handles `git push` and the PR draft/ready transitions.
+- **A line number in a plan is a pointer, not a location.** Before the executor edits or deletes at a planned line range, it finds the range's text with a search and confirms the first and last line. RMV-01 filed wrong deletion ranges nine times, and two would have broken the build.
+- **The executor re-runs every `breaklist` command in the plan before it edits.** A `TOTAL` different from the plan's stops the subtask until the list is reconciled.
+- **A spec copies a backend value from its Go constant.** When an e2e spec asserts a reason code, an enum value or a wire string, copy the literal from the Go source and name the constant beside it. EXTR-27 asserted `'people'` where the wire sends `'person'`.
 - After the executor finishes, run the relevant suites inside the worktree. Send each suite's output to a log, never into this context:
   ```bash
   L="$WORKTREE_PATH/.ralph"; mkdir -p "$L"
+  (cd "$WORKTREE_PATH" && scripts/dev/wait-go-test-idle.sh .)                   > "$L/wait.log" 2>&1; echo "wait=$?"  # wait=1: stop, do not run the suites
+  (cd "$WORKTREE_PATH" && make fmt-check)                                        > "$L/fmt.log"  2>&1; echo "fmt=$?"
   (cd "$WORKTREE_PATH" && go build ./... && go vet ./... && go test ./...)      > "$L/go.log"   2>&1; echo "go=$?"
-  (cd "$WORKTREE_PATH" && make test-rls && make test-queue && make test-audit)  > "$L/db.log"   2>&1; echo "db=$?"   # DB-backed; needs `make dev-db`
+  (cd "$WORKTREE_PATH" && make test-rls test-queue test-audit DEV_DB_PORT="$DEV_DB_PORT") > "$L/db.log" 2>&1; echo "db=$?"   # DB-backed; needs `make dev-db`
   (cd "$WORKTREE_PATH" && pnpm -r typecheck && pnpm -r build)                   > "$L/spa.log"  2>&1; echo "spa=$?"  # SPAs
   # 2265 unit tests, ~13s. `pnpm -r test` alone would launch Playwright, because
   # e2e's `test` script IS the browser suite — hence the exclusion and test:unit.
   (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit) > "$L/unit.log" 2>&1; echo "unit=$?"
   grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
   ```
+  Never kill a running suite. A killed DB suite skips its `t.Cleanup` and leaves an orphan tenant and a stuck `river_job` that fail later, unrelated tests. Run the block in the background and poll its logs; a foreground Bash call that reaches its timeout kills the suite.
   A zero exit and its summary line are the pass evidence. Read a full log only when its suite exited non-zero. A suite transcript pasted into this context is re-read by every later request in the session, which is the one avoidable cost that grows with session length.
   Run them yourself. Do not accept a subagent's report of a suite as the suite's
   result: BUG-06 had two subagents report 1466 unit tests from the main checkout
@@ -317,9 +332,20 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - Spawn `product-qa-spec` (Mode B) in its default critique disposition (skeptical, anchors on acceptance criteria not the diff, cites evidence per verdict).
 - Pass: acceptance criteria, implementation plan, changed files, Definition of Done.
 - For `Test-first: yes` subtasks, confirm the Stage 2.5 AC tests are now green and still meaningful (would fail if behavior regressed), then *add* adversarial / edge / negative coverage (including a cross-tenant RLS refusal assertion for any new tenant-owned table).
-- Prove every AC test can fail. Change one source line so the behaviour breaks. Run that test. Record `<file:line changed> -> FAIL <TestName>` in the QA findings, one row per AC. A test that stays green under its own mutation does not prove its AC. Report that test as a QA failure. Mode-B tests need this most: nothing gave them a red phase.
+- Prove every AC test can fail, one row per item the AC lists. An item is a value, a role, a state, an exit or an input class. For each item, break the production code the AC names and name the test that must go red. Never break a test helper. For a value AC, change the value; do not remove it. Mode-B tests need this most: nothing gave them a red phase. ROUTE-03's AC named five exits and its tests drove two. Append each row to `$WORKTREE_PATH/.ralph/mutations-<SUBTASK-ID>.jsonl`:
+  ```json
+  {"ac": "AC-2 / exit via back button", "file": "frontend/app/src/lib/route.ts", "find": "<exact text, once in the file>", "replace": "<broken text>", "test_file": "frontend/app/src/lib/route.test.ts", "test": "<test name>"}
+  ```
+  An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for the Phase 3.5 run instead, and write no row.
+- **Replay the rows yourself** when QA returns: `go run ./internal/tools/mutationreplay .ralph/mutations-<SUBTASK-ID>.jsonl` from the worktree root, with no other agent running. It edits source in place and restores the exact bytes. Any `NOT-PROVEN` or `INVALID` row fails QA; send it back to QA. A row a subagent wrote is a claim, and the replay is the evidence. EXTR-07 passed its debate, then mutation found six false greens.
 - When a test asserts over a collection, assert the collection is not empty. An empty collection satisfies every assertion inside the loop.
-- Prove any scan that reports an ABSENCE can still find something. A grep, a source walk or a forbidden-string guard that stops matching returns zero hits, and zero hits reads exactly like a clean repo. Defend it two ways, both already used here: a **control needle** that must be found (`filename_removed_test.go` searches for `func NewStore(` beside the banned symbol), and a **floor** on the population scanned (`envPosture.test.ts` requires at least 20 files). A scan asserting a POSITIVE — exactly N sites, this anchor exists — proves itself and needs neither. Offer no "zero hits" as evidence until you have shown that same command finding a planted hit. M4-04 burned five instruments this way, each blind to a different dimension, and every green was false.
+- Prove every source scan fails for the right reason. A source scan is a test that reads source text: a grep, a source walk, a forbidden-string guard, a count of sites. Every source scan, positive or absence, follows three rules:
+  1. It strips comments before it matches. A TypeScript scan uses `stripComments` from `@invoice-os/api-client/strip-comments`. A Go scan parses with `go/ast` or strips comments before it matches. M4-22's presence guard passed on its own comment.
+  2. It reads only the function or block it guards, not the whole file. BUG-14's whole-file scan stayed green when broken, because the test file held the needle.
+  3. It matches every letter case, unless case is the point. Then a comment beside the needle says so. LAND-02's case-sensitive `FIRS` needle cost a fix cycle.
+
+  Prove it with one break: delete the guarded code, keep its comment, and run the scan. It must go red. Record that break as a mutation row.
+- A scan that reports an ABSENCE also needs two defences. Zero hits reads exactly like a clean repo. Add a **control needle** that must be found (`filename_removed_test.go` searches for `func NewStore(` beside the banned symbol). Add a **floor** on the population scanned (`envPosture.test.ts` requires at least 20 files). Offer no "zero hits" as evidence until the same command has found a planted hit. M4-04 burned five instruments this way, and every green was false.
 - Re-read every comment and doc your change made false. Fix them in the same commit. "It still says what it said" is not the test. The test is whether it is still TRUE. Sweep three places, in cost order:
   1. Comments your diff did not edit, in files it did. `git diff main...HEAD -U15` lists them. BUG-02 swept all 12 sites it rewrote and still shipped a false 22P02 claim, which CodeRabbit caught.
   2. Comments in files you never opened. No diff shows these, and they cost the most. Name the FACT your change altered. Grep the whole tree for that fact. The 2026-07-28 per-PR database reset touched 8 files, none of them a test, and left 25 e2e comments describing the world it had just replaced.
@@ -328,10 +354,17 @@ Retry the Task call up to **twice** (fresh spawns; transient API/credit errors o
 - State a shared fact in one place and cite that place. Do not copy the fact into every comment that depends on it. Twenty-five comments each holding a copy of "the dev database is never reset" is why one change produced twenty-five falsehoods.
 - Backend: verify tests pass, model/schema/RLS correctness. Frontend: Playwright MCP visual verification against the deployed dev SPA once available.
 - If issues found: spawn product-executor to fix, then re-verify.
+- **A fix to a false comment deletes the false clause and adds no new clause.** A new claim that is truly needed names the test or command that proves it. At re-verify, QA lists every comment line the fix added. An added claim without a named test or command fails re-verify. EXTR-33's first fix cycle added a false "because" clause, and the second cycle removed it.
 - Update the Backlog task's implementation_notes with QA findings.
 - **Checkpoint:** `QA_VERIFIED`
 
-After each subtask, pick the next in dependency order and repeat stages 1–4.
+After each subtask, wait for `CI` on the pushed commit before you pick the next one:
+```bash
+SHA="$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
+RUN_ID="$(gh run list --workflow ci.yml --commit "$SHA" --limit 1 --json databaseId -q '.[0].databaseId')"
+gh run watch "$RUN_ID" --exit-status
+```
+An empty `RUN_ID` means GitHub has not registered the push yet; poll again. A red run stops the next subtask until it is green (CI Monitoring Protocol). EXTR-22 built thirteen commits on a red `CI`. Then pick the next subtask in dependency order and repeat stages 1–4.
 
 ### Phase 2: PR Lifecycle
 
@@ -339,7 +372,7 @@ The PR is managed by `product-executor` via the subtask `Order` field — the or
 
 - Order = "1 of N (FIRST)" → executor pushes the branch and creates the **DRAFT** PR (draft PRs skip `dev-env.yml`, so the dev env isn't touched mid-story).
 - Order = "K of N" (middle) → executor pushes only; PR stays draft.
-- Order = "N of N (FINAL)" → executor pushes, runs `gh pr ready` (this fires `dev-env.yml` — see Phase 3.5).
+- Order = "N of N (FINAL)" → executor runs `git fetch origin`, merges `origin/main` if the branch is behind, pushes, then runs `gh pr ready`. BUG-05, MEMB-01 and ROUTE-02 each had to merge `main` after marking the PR ready. `gh pr ready` does not reliably start `dev-env.yml`; Phase 3.5 step 2 finds the run.
 
 The orchestrator never runs `git checkout -b`, `gh pr create`, or `gh pr ready` directly.
 
@@ -359,34 +392,40 @@ After the FINAL subtask's Stage 4 completes:
 
 ### Phase 3.5: Story-Level Deploy Gate
 
-Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` fires automatically when the PR is marked ready and deploys the whole coherent fleet to the PR's own ephemeral Railway environment, running smoke + topology (and any milestone demo script) E2E in CI.
+Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` runs on a push to a ready PR and deploys the whole coherent fleet to the PR's own ephemeral Railway environment, running smoke + topology (and any milestone demo script) E2E in CI.
 
 1. **Read the original acceptance criteria** — NOT the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria from `sysmap_feature_show`, which are standing invariants and are exactly what must hold on the deployed fleet. `STORY_SOURCE=obsidian`: the Obsidian parent story's original objective, plus the milestone's "Ships when true" bullets from the build plan.
-2. **Ensure the deploy gate fires.** Marking the PR ready (Phase 2 FINAL) triggers `dev-env.yml` (event `ready_for_review`). If it didn't fire (e.g. the PR was already ready), re-trigger by pushing a commit, or dispatch manually:
+2. **Find the deploy gate run on HEAD.** Take only a `pull_request` run on the head commit that was not skipped:
    ```bash
    BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
-   gh workflow run dev-env.yml --ref "$BRANCH"
+   SHA="$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
+   RUN_ID="$(gh run list --workflow dev-env.yml --commit "$SHA" --limit 10 --json databaseId,event,conclusion \
+     -q '[.[] | select(.event == "pull_request" and .conclusion != "skipped")][0].databaseId')"
    ```
-   - **The dispatch fallback is not equivalent to the PR gate.** A `workflow_dispatch` run
+   - `gh pr ready` does not reliably start a run. It has started nothing, and it has run the previous commit. When `RUN_ID` is still empty after one poll, push an empty commit: `git -C "$WORKTREE_PATH" commit --allow-empty -m "ci: run the deploy gate" && git -C "$WORKTREE_PATH" push`. It starts the gate because GitHub applies the path filter to the whole PR diff.
+   - A `skipped` run is a run on a draft. It is neither a failure nor a pass.
+   - `gh workflow run dev-env.yml --ref "$BRANCH"` is for diagnosis only. A `workflow_dispatch` run
      targets `development`, not this PR's environment, so a green dispatch run does not
-     prove the PR's fleet deploys. Use it only to diagnose; the gate is the `pull_request`
-     run.
+     prove the PR's fleet deploys. The gate is the `pull_request` run.
    - **`dev-env.yml` is paths-filtered** (`frontend/ packages/ e2e/ cmd/ internal/
      migrations/ db/ tools/prenv/ scripts/ci/`, go.mod/sum, Dockerfile, Caddyfile,
      package.json, pnpm-*, `.github/workflows/dev-env.yml`). `docs/**` and this file are
      NOT listed, so a docs-only PR never fires the gate at all — do not dispatch-fake it
      green; escalate to the user instead.
    - **Freshness check (mandatory):** `git -C "$WORKTREE_PATH" fetch origin` — if `origin/main` has commits not in the branch, `git merge origin/main`, push, and let `CI` + the deploy gate re-run on the merged head. A base missing main's migrations crash-loops the PR's own environment's backend (the gateway is the migrator).
-3. **Wait for the `dev-env.yml` run** on this branch and watch it to conclusion (concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — so this run does not queue behind any other story's deploy; only a second push to this SAME PR would supersede it):
+3. **Watch the step 2 run to conclusion** (concurrency is keyed per-PR — `dev-preview-<PR#|ref>` — so this run does not queue behind any other story's deploy; only a second push to this SAME PR would supersede it):
    ```bash
-   RUN_ID="$(gh run list --workflow dev-env.yml --branch "$BRANCH" --limit 1 --json databaseId -q '.[0].databaseId')"
    gh run watch "$RUN_ID" --exit-status   # or poll `gh run view "$RUN_ID" --json status,conclusion` per CI Monitoring Protocol
    ```
+   - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys, and the `e2e` job fails a re-run that did not redeploy it.
+   - A spec this PR changed that passed only on retry fails the `e2e` job. Fix the spec or the race it found. Do not re-run for a luckier result.
    A green run means: fleet deployed to the PR's own environment, gateway migrated (health-gate) and the DB bootstrapped + demo-purged + seeded fresh at boot (M4-21-04 / DEMO-04), all 8 backends up (fleet-gate), and the **smoke + topology E2E passed** — including cross-tenant isolation.
 4. **Spawn `product-qa-spec`** (default critique disposition) to verify **each** original acceptance criterion against the green run:
+   - Quote each original AC's text beside its evidence. Evidence that proves behaviour different from the quoted text fails that AC. It is never a waiver. BUG-18 found a test whose CORRECTION comment pinned the opposite of its AC.
    - Backend / data / RLS ACs → cite the passing CI job or E2E assertion (topology proves cross-tenant refusal; the milestone demo script — e.g. M3-11 — proves the wedge flow).
    - **UI ACs (rendered surfaces)** → drive the deployed dev SPA read-only with the standalone Playwright MCP, authenticated as the seeded user, and capture each touched surface (including interactive states) to `$WORKTREE_PATH/.ralph/fidelity/<surface>-<state>.png`. Diff live `getComputedStyle` / layout against the Claude Design **prototype** (`.dc.html`, deployed to Netlify — confirm the file→surface mapping first) and the design system. A delta citing a design-system rule or a prototype CSS rule is a real fail; uncited taste is advisory → escalate to the user, never bounce the executor.
    - **Assert the relationship, not the dimension.** A layout AC is satisfied by what the number encodes — gutter symmetry, containment, alignment to a sibling — never by the raw measurement. A width assertion passes on the very bug it should catch: a cap and its placement are two facts, and measuring the cap proves nothing about placement (BUG-03-05 shipped 32% dead space under a green `width <= 1080`). **This fires whenever the diff adds or changes a layout constant** — a width, a grid track, a clearance, an overflow, an alignment — not only when an AC names layout. Three of these shipped from stories whose ACs never mentioned layout: a 26px input, a label overflowing its pill, a 360px menu clearance under a 189.73px menu. **Measure widest first.** `e2e/topology/layout.ts` sweeps 2560 / 1920 / 1440 / 1280 and returns the numbers to attach. A cap strands only what the window gives it room to strand — the same defect leaves 588px at 1920 and 1228px at 2560 — and every other sweep in `e2e/` stops at 1280.
+   - **A pixel figure derived from source is a guess.** Measure it on the gate run with `e2e/topology/layout.ts` and cite the run id. Only a measured figure justifies a CSS edit, a bounce or an escalation. LAND-05 derived 282px, measured 226px, escalated a defect that did not exist and reverted its CSS change.
    - A holistic "looks done" is not allowed — every AC needs its own evidence (a passing job/assertion, or a screenshot).
 5. **Fix loop (cap 2 cycles):** batch ALL fails (failed ACs + real fidelity deltas) into one report → spawn `product-executor` to fix inside the worktree → push (this re-fires `dev-env.yml` on `synchronize`) → **wait** for the new run → re-verify only the failed ACs / unresolved deltas. Every bounce must cite an AC id, a design-system rule, or a prototype CSS rule. After **2** cycles, stop and **escalate remaining fails to the user** — each dev-env run provisions/rebuilds a full 11-service environment from scratch and is expensive.
 6. **Log** to the story's `… QA Debate Log.md` under `## Post-Deploy QA — <date>`: per-AC verdict + evidence (CI job / E2E assertion / screenshot), fidelity delta references (for UI stories), fix cycles used, the `dev-env.yml` run id(s), and any design-system citations / advisory notes.
@@ -466,9 +505,9 @@ git -C "$WORKTREE_PATH" add ... && git -C "$WORKTREE_PATH" commit -m "fix: ..." 
 **3. The `dev-env.yml` run green?** → the deploy gate passed (fleet up + migrate+purge+seed at boot + smoke + topology). Proceed to Phase 3.5 step 4 (per-AC verification).
 
 ### Get the current run IDs
+Select by the head commit, never by the latest run on the branch. For `dev-env.yml`, use the Phase 3.5 step 2 query.
 ```bash
-gh run list --branch "$BRANCH" --workflow ci.yml       --limit 1 --json databaseId,status,conclusion -q '.[0]'
-gh run list --branch "$BRANCH" --workflow dev-env.yml   --limit 1 --json databaseId,status,conclusion -q '.[0]'
+gh run list --workflow ci.yml --commit "$(git -C "$WORKTREE_PATH" rev-parse HEAD)" --limit 1 --json databaseId,status,conclusion -q '.[0]'
 ```
 
 ---

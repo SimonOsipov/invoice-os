@@ -1,10 +1,10 @@
-// Unit tests for layout.ts's pure half. assertFillsColumn needs a browser and a
-// deployed app, so it is exercised by invoice-surfaces.spec.ts in the topology
-// suite; `gaps` is where the arithmetic that BUG-03-05 got wrong actually lives.
+// Unit tests for layout.ts. The browser-facing helpers run here against a fake page;
+// invoice-surfaces.spec.ts exercises them on the deployed app.
+import type { Locator, Page } from '@playwright/test'
 import { describe, expect, it } from 'vitest'
 
 import * as layout from './layout'
-import { gaps, WIDE_WIDTHS, type Box } from './layout'
+import { assertFillsColumn, assertSameHeight, gaps, settleAnimations, WIDE_WIDTHS, type Box } from './layout'
 
 describe('gaps', () => {
   it('reports zero on both sides when the inner element fills the outer one', () => {
@@ -227,5 +227,97 @@ describe('overlapOf', () => {
     // exists — gaps() reports the card as 8px outside the container on the left and
     // 764px clear on the right, and says nothing at all about whether they overlap.
     expect(gaps(CARD, CONTAINER)).toEqual({ left: -8, right: 764 })
+  })
+})
+
+// --- settling animations before a read -----------------------------------------
+//
+// A fake page: every resize starts a slide on the measured elements' shared ancestor.
+// `settled()` is false until it finishes, and each box reads its mid-slide geometry
+// until then. The mid-slide values sit inside each helper's slack, so expect.poll
+// accepts them and only a settle before the read returns the layout's numbers.
+const SLIDE_MS = 150
+const never = new Promise<void>(() => {})
+
+function slidingPage() {
+  let viewport = { width: 1280, height: 1080 }
+  let sliding = false
+  let slide: Promise<void> = Promise.resolve()
+  const startSlide = () => {
+    sliding = true
+    slide = new Promise((resolve) => setTimeout(() => ((sliding = false), resolve()), SLIDE_MS))
+  }
+
+  type FakeEl = { ownerDocument: unknown; contains: (n: unknown) => boolean }
+  const elements: FakeEl[] = []
+  const ancestor = { contains: (n: unknown) => n === ancestor || elements.includes(n as FakeEl) }
+  const unrelated = { contains: (n: unknown) => n === unrelated }
+  const animation = (target: unknown, endTime: number, finished: () => Promise<void>) => ({
+    effect: { target, getComputedTiming: () => ({ endTime }) },
+    get finished() {
+      return finished()
+    },
+  })
+  const doc = {
+    getAnimations: () => [
+      animation(ancestor, SLIDE_MS, () => slide),
+      animation(ancestor, Infinity, () => never), // a spinner: waiting on it hangs
+      animation(unrelated, SLIDE_MS, () => never), // not an ancestor: waiting on it hangs
+    ],
+  }
+
+  const locator = (box: (sliding: boolean) => { x: number; y: number; width: number; height: number }) => {
+    const el: FakeEl = { ownerDocument: doc, contains: (n) => n === el }
+    elements.push(el)
+    return {
+      evaluate: (fn: (el: unknown) => unknown) => Promise.resolve(fn(el)),
+      boundingBox: async () => box(sliding),
+    } as unknown as Locator
+  }
+
+  const page = {
+    viewportSize: () => viewport,
+    setViewportSize: async (v: { width: number; height: number }) => {
+      viewport = v
+      startSlide()
+    },
+  } as unknown as Page
+
+  return { page, locator, startSlide, settled: () => !sliding }
+}
+
+describe('settleAnimations', () => {
+  it('waits for an ancestor animation, skipping infinite and unrelated ones', async () => {
+    const fake = slidingPage()
+    const el = fake.locator(() => ({ x: 0, y: 0, width: 10, height: 10 }))
+    fake.startSlide()
+    expect(fake.settled()).toBe(false)
+
+    await settleAnimations(el)
+    expect(fake.settled(), 'settleAnimations returned before the ancestor slide finished').toBe(true)
+  })
+})
+
+describe('the sweeps measure settled geometry', () => {
+  it('assertFillsColumn reports the settled gaps, not the mid-slide ones', async () => {
+    const fake = slidingPage()
+    const outer = fake.locator(() => ({ x: 0, y: 0, width: 1000, height: 500 }))
+    // Mid-slide the inner box is 12px right of its place: inside the 24px slack.
+    const inner = fake.locator((sliding) => ({ x: sliding ? 12 : 0, y: 0, width: 1000, height: 500 }))
+
+    const fits = await assertFillsColumn(fake.page, inner, outer, 'fake')
+    expect(fits).toHaveLength(WIDE_WIDTHS.length)
+    for (const fit of fits) expect({ left: fit.left, right: fit.right }).toEqual({ left: 0, right: 0 })
+  })
+
+  it('assertSameHeight reports the settled heights, not the mid-slide ones', async () => {
+    const fake = slidingPage()
+    const b = fake.locator(() => ({ x: 0, y: 0, width: 100, height: 100 }))
+    // Mid-slide `a` stands 0.6px short: rounds inside the 1px tolerance.
+    const a = fake.locator((sliding) => ({ x: 0, y: 0, width: 100, height: sliding ? 99.4 : 100 }))
+
+    const pairs = await assertSameHeight(fake.page, a, b, 'fake')
+    expect(pairs).toHaveLength(WIDE_WIDTHS.length)
+    for (const pair of pairs) expect(pair.delta).toBe(0)
   })
 })

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -269,5 +270,186 @@ func TestCIRunFiltersReachEveryDBGatedTest(t *testing.T) {
 			t.Errorf("ci.yml -run filters %v on ./%s/... never run these DB-gated tests: %v",
 				filters, stepPkg, stranded)
 		}
+	}
+}
+
+// ciRunLineRE matches a non-comment go test or gate-script line passing -run, in a
+// `run:` step or a `run: |` block. A step `name:` may mention -run in prose.
+var ciRunLineRE = regexp.MustCompile(`(?m)^[ \t]*(?:[^#\s].*)?(?:go test|` + regexp.QuoteMeta(ciGateScript) + `).*\s-run[= ].*$`)
+
+type ciRunFilter struct {
+	line      string
+	pkg       string
+	recursive bool
+	filter    string
+}
+
+// ciRunFilters returns every -run filter in yaml. A -run line whose package or
+// filter did not parse lands in unparsed, so a parser gap fails instead of passing.
+func ciRunFilters(yaml string) (filters []ciRunFilter, unparsed []string) {
+	for _, line := range ciRunLineRE.FindAllString(yaml, -1) {
+		line = strings.TrimSpace(line)
+		pm := ciPkgArgRE.FindStringSubmatch(line + " ")
+		fm := ciRunFlagRE.FindStringSubmatch(line)
+		if pm == nil || fm == nil {
+			unparsed = append(unparsed, line)
+			continue
+		}
+		filter := fm[1]
+		if filter == "" {
+			filter = fm[2]
+		}
+		filters = append(filters, ciRunFilter{
+			line:      line,
+			pkg:       strings.TrimSuffix(pm[1], "/"),
+			recursive: strings.Contains(pm[0], "/..."),
+			filter:    filter,
+		})
+	}
+	return filters, unparsed
+}
+
+// ciSplitTopLevel splits s on sep outside (), [] and escapes, as go test splits -run.
+func ciSplitTopLevel(s string, sep byte) []string {
+	var out []string
+	depth, bracket, start := 0, false, 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '\\':
+			i++
+		case bracket:
+			if c == ']' {
+				bracket = false
+			}
+		case c == '[':
+			bracket = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case c == sep && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+// ciDeadRunFilters returns one message per -run alternative that matches no test.
+// Each top-level `|` branch counts: a renamed test inside an alternation is the
+// same silent no-op as a whole filter matching nothing.
+func ciDeadRunFilters(filters []ciRunFilter, testsIn func(pkg string, recursive bool) []string) []string {
+	var dead []string
+	for _, f := range filters {
+		names := testsIn(f.pkg, f.recursive)
+		top := ciSplitTopLevel(f.filter, '/')[0] // subtest names are invisible statically
+		for _, branch := range ciSplitTopLevel(top, '|') {
+			re, err := regexp.Compile(branch)
+			if err != nil {
+				dead = append(dead, "invalid regexp "+strconv.Quote(branch)+" in: "+f.line)
+				continue
+			}
+			if !slices.ContainsFunc(names, re.MatchString) {
+				dead = append(dead, strconv.Quote(branch)+" matches no test in ./"+f.pkg+
+					" ("+strconv.Itoa(len(names))+" tests) in: "+f.line)
+			}
+		}
+	}
+	return dead
+}
+
+// ciTestNames lists the Test functions `go test` runs for pkg, plus subpackages when recursive.
+func ciTestNames(t *testing.T, root, pkg string, recursive bool) []string {
+	t.Helper()
+	top := filepath.Join(root, pkg)
+	dirs := []string{top}
+	if recursive {
+		dirs = nil
+		err := filepath.WalkDir(top, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return err
+			}
+			if n := d.Name(); path != top && (n == "testdata" || strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_")) {
+				return filepath.SkipDir
+			}
+			dirs = append(dirs, path)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk ./%s: %v", pkg, err)
+		}
+	}
+	var names []string
+	for _, dir := range dirs {
+		for _, fn := range ciPackageFuncs(t, dir) {
+			if fn.test && fn.name != "TestMain" {
+				names = append(names, fn.name)
+			}
+		}
+	}
+	return names
+}
+
+// TestCIRunFilterAlternativesEachMatchATest is the reverse of the guards above:
+// a -run filter matching nothing prints "no tests to run" and exits 0.
+func TestCIRunFilterAlternativesEachMatchATest(t *testing.T) {
+	root := ciRepoRoot(t)
+	filters, unparsed := ciRunFilters(ciYAML(t, root))
+
+	if len(unparsed) != 0 {
+		t.Fatalf("these ci.yml lines pass -run but ciRunFilters could not read their package or "+
+			"filter, so they would go unchecked: %q", unparsed)
+	}
+	// Control needle: the go job's accuracy report filter. Missing means the scan examined nothing.
+	const controlNeedle = "TestTier1Accuracy"
+	if !slices.ContainsFunc(filters, func(f ciRunFilter) bool { return f.filter == controlNeedle }) {
+		t.Fatalf("the scan found %d -run filters but not the control %q -- ciRunLineRE or "+
+			"ciRunFlagRE stopped matching, or that step lost its filter", len(filters), controlNeedle)
+	}
+	if len(filters) < 5 {
+		t.Fatalf("the scan found only %d -run filters in ci.yml, want at least 5", len(filters))
+	}
+
+	dead := ciDeadRunFilters(filters, func(pkg string, recursive bool) []string {
+		return ciTestNames(t, root, pkg, recursive)
+	})
+	if len(dead) != 0 {
+		t.Errorf("ci.yml -run filters that run nothing (go test exits 0 on them):\n  %s",
+			strings.Join(dead, "\n  "))
+	}
+}
+
+func TestCIDeadRunFilters_FlagsABogusFilterAndABogusBranch(t *testing.T) {
+	yaml := `
+      - name: gate + CI -run filter coverage
+        run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestReal|TestRenamedAway' ./internal/a/...
+      - name: report
+        run: |
+          # a -run in a comment is not a filter ./internal/a/...
+          go test -count=1 -v -run 'TestNoSuchThing' ./internal/b/ | tee out.txt
+          go test -run=TestReal/sub ./internal/a/
+          go test -run 'Test(Real|Gone)' ./internal/a/
+`
+	filters, unparsed := ciRunFilters(yaml)
+	if len(unparsed) != 0 || len(filters) != 4 {
+		t.Fatalf("want 4 parsed filters and none unparsed, got %+v, unparsed %q", filters, unparsed)
+	}
+	if !filters[0].recursive || filters[1].recursive || filters[1].pkg != "internal/b" {
+		t.Fatalf("package parse wrong: %+v", filters)
+	}
+
+	tests := map[string][]string{"internal/a": {"TestReal"}, "internal/b": {"TestOther"}}
+	dead := ciDeadRunFilters(filters, func(pkg string, _ bool) []string { return tests[pkg] })
+	if len(dead) != 2 ||
+		!strings.HasPrefix(dead[0], `"TestRenamedAway" matches no test`) ||
+		!strings.HasPrefix(dead[1], `"TestNoSuchThing" matches no test`) {
+		t.Fatalf("want exactly TestRenamedAway and TestNoSuchThing flagged, got:\n%s", strings.Join(dead, "\n"))
+	}
+}
+
+func TestCIRunFilters_ReportsAnUnreadableRunLine(t *testing.T) {
+	_, unparsed := ciRunFilters("        run: go test -run TestX ./cmd/gateway/\n")
+	if len(unparsed) != 1 {
+		t.Fatalf("want the cmd/ line reported unparsed, got %q", unparsed)
 	}
 }

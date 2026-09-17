@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { APP_PERSONAS } from '../auth'
 import { actorLabel } from './actor'
@@ -319,9 +320,7 @@ describe('actorLabel adversarial coverage (AUDIT-02-04 QA)', () => {
     // Test files are excluded because they are not surfaces; actor.ts stays IN, its own
     // declaration renamed so it cannot read as a call.
     const scrub = (src: string) =>
-      src
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/\/\/.*$/gm, '')
+      stripComments(src)
         .replace(/function\s+actorLabel\s*\(/g, 'function DECLARED(')
 
     const expected: Record<string, { one: number; two: number; pair: string }> = {

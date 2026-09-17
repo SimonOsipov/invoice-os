@@ -2237,8 +2237,9 @@ ai_fake_self_test() {
   ai_expect_refusal F3 '{"data":{"variables":{"OPENROUTER_API_KEY":"sk-or-v1-fixture-not-a-real-key"}}}' "sk-or-v1-fixture-not-a-real-key"
   # F4 whitespace-only key refuses (non-empty != "").
   ai_expect_refusal F4 '{"data":{"variables":{"OPENROUTER_API_KEY":" \t "}}}'
-  # F5 an unrendered secrets reference refuses and must not leak it.
-  ai_expect_refusal F5 '{"data":{"variables":{"OPENROUTER_API_KEY":"secrets.OPENROUTER_API_KEY"}}}' "secrets.OPENROUTER_API_KEY"
+  # F5 an unrendered ${{ }} reference refuses and must not leak it.
+  # shellcheck disable=SC2016  # the braces are fixture data, not a missed expansion.
+  ai_expect_refusal F5 '{"data":{"variables":{"OPENROUTER_API_KEY":"${{ secrets.OPENROUTER_API_KEY }}"}}}' "secrets.OPENROUTER_API_KEY"
   # F6 a null variables map refuses, not "absent".
   ai_expect_refusal F6 '{"data":{"variables":null}}'
   # F7 a real GraphQL error response refuses.

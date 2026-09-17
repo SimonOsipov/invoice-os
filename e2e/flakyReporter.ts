@@ -15,7 +15,8 @@
 // Playwright compiles this TypeScript itself, so the deploy gate needs no extra
 // runtime and no experimental Node flag.
 
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { FullConfig, Reporter, Suite, TestCase } from '@playwright/test/reporter'
 
 export type FlakySpec = {
@@ -102,6 +103,14 @@ export default class FlakyReporter implements Reporter {
   onEnd(): void {
     const tests: TestCase[] = this.root?.allTests() ?? []
     const flaky = collectFlaky(tests as unknown as TestLike[])
+
+    // flakyGate.ts reads these after every suite has run. Written even when empty.
+    const jsonDir = process.env.FLAKY_JSON_DIR
+    if (jsonDir) {
+      mkdirSync(jsonDir, { recursive: true })
+      writeFileSync(join(jsonDir, `${this.label}.json`), JSON.stringify(flaky))
+    }
+
     const md = formatFlakySummary(this.label, flaky)
     if (!md) return
 

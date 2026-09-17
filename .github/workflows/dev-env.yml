@@ -565,6 +565,9 @@ jobs:
           needs.await-ci.result == 'success' ) )
     runs-on: ubuntu-latest
     container: ghcr.io/railwayapp/cli:4.66.0
+    # e2e compares this with its own attempt: the database reset runs only when this job runs.
+    outputs:
+      attempt: ${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
       # PR and push path — account-scoped token. RAILWAY_TOKEN must be ABSENT, not empty:
@@ -883,20 +886,35 @@ jobs:
   #    on the same commit, as the gate for merging it.
   e2e:
     name: E2E (smoke + api + topology)
-    needs: [fleet-gate, deploy-spas, prepare-env]
+    needs: [fleet-gate, deploy-spas, prepare-env, deploy-gateway]
     if: >-
       always() &&
       needs.fleet-gate.result == 'success' &&
       needs.deploy-spas.result == 'success' &&
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read   # flaky-spec gate lists the PR's changed files
     env:
+      FLAKY_JSON_DIR: ${{ github.workspace }}/e2e/flaky-results
       GATEWAY_URL: ${{ needs.prepare-env.outputs.gateway_url }}
       APP_URL: ${{ needs.prepare-env.outputs.app_url }}
       LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
     steps:
+      # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
+      - name: Refuse a re-run that skipped the gateway deploy
+        id: attempt
+        env:
+          DEPLOYED_ATTEMPT: ${{ needs.deploy-gateway.outputs.attempt }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$DEPLOYED_ATTEMPT" != "$RUN_ATTEMPT" ]; then
+            echo "::error::Re-run the whole workflow, not failed jobs — the database reset runs only when the gateway deploys. Gateway last deployed in attempt '${DEPLOYED_ATTEMPT:-none}'; this is attempt $RUN_ATTEMPT."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -947,7 +965,7 @@ jobs:
         # !cancelled(): skipping this when the wait fails makes topology report
         # `browserType.launch: Executable doesn't exist` — a missing-browser error for what
         # is really an unreachable SPA, which sends the next debugger to Playwright.
-        if: '!cancelled()'
+        if: "!cancelled() && steps.attempt.outcome == 'success'"
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
       - name: Smoke (landing + both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
@@ -965,7 +983,7 @@ jobs:
         # !cancelled(): a red smoke step must not silently withhold the api and
         # topology verdicts (APPR-14 fix) — always() would also run this on a
         # cancelled workflow, which we don't want.
-        if: '!cancelled()'
+        if: "!cancelled() && steps.attempt.outcome == 'success'"
         # Runs BEFORE topology: its beforeAll self-heal + afterAll rule-restore
         # must complete before topology's rule-dependent assertions run (D4).
         # Shares the global `rules` fixture with topology, so ordering here is
@@ -984,7 +1002,7 @@ jobs:
       - name: Topology (app verified-login + cross-tenant isolation)
         # !cancelled(): same reasoning as the API E2E step above — a red smoke
         # or api step must not hide topology's verdict.
-        if: '!cancelled()'
+        if: "!cancelled() && steps.attempt.outcome == 'success'"
         # GATEWAY_URL + APP_URL + LANDING_URL + OPS_CONSOLE_URL come from this
         # job's `env:` (needs.prepare-env.outputs.* — topology/targets.ts
         # reads them).
@@ -995,6 +1013,16 @@ jobs:
           if [ -d e2e/playwright-report ]; then
             mv e2e/playwright-report e2e/report-topology
           fi
+      # A retry-pass elsewhere stays a summary warning; in a spec this PR changed it fails.
+      - name: Fail on a retry-pass in a spec this PR changed
+        if: always() && steps.attempt.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_FILES_API: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files
+        run: |
+          set -euo pipefail
+          gh api --paginate "$PR_FILES_API" --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
+          node e2e/flakyGate.ts "$FLAKY_JSON_DIR" "$RUNNER_TEMP/pr-files.txt"
       # `if: always()`, not `if: failure()`. A spec that fails and then passes on
       # its retry leaves this job GREEN, so the failure-only upload could never
       # capture the one case with no other evidence. Measured over the 7 most

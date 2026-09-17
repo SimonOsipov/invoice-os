@@ -256,29 +256,33 @@ func TestAIText_EveryRuleRejectsTheDroppedDigitTIN(t *testing.T) {
 	}
 }
 
+// aitInventedValues is one value per header field that occurs nowhere on the golden page --
+// package-level so Stage E's summary driver (aitext_harness_internal_test.go) replays the
+// same adversarial fixture instead of copying it (task-1074 Stage 1 validation).
+var aitInventedValues = map[string]string{
+	"invoice_number": "INV-9999",
+	"issue_date":     "2026-01-31",
+	"supplier_tin":   "12345678-0001",
+	"supplier_name":  "GLOBACOM VENTURES LIMITED",
+	"buyer_tin":      "87654321-0002",
+	"buyer_name":     "INVENTED HOLDINGS LIMITED",
+	"currency":       "USD",
+	"subtotal":       "4321.00",
+	"vat":            "222.00",
+	"total":          "9999.00",
+}
+
 func TestAIText_EveryRuleRejectsAnInventedValue(t *testing.T) {
 	pages := aitGoldenPages(t, "wild_scanned_no_number")
-	invented := map[string]string{
-		"invoice_number": "INV-9999",
-		"issue_date":     "2026-01-31",
-		"supplier_tin":   "12345678-0001",
-		"supplier_name":  "GLOBACOM VENTURES LIMITED",
-		"buyer_tin":      "87654321-0002",
-		"buyer_name":     "INVENTED HOLDINGS LIMITED",
-		"currency":       "USD",
-		"subtotal":       "4321.00",
-		"vat":            "222.00",
-		"total":          "9999.00",
-	}
-	if len(invented) != len(HeaderFields) {
-		t.Fatalf("invented values cover %d fields, want one per header field (%d)", len(invented), len(HeaderFields))
+	if len(aitInventedValues) != len(HeaderFields) {
+		t.Fatalf("invented values cover %d fields, want one per header field (%d)", len(aitInventedValues), len(HeaderFields))
 	}
 
 	if len(pages) == 0 || len(pages[0].Tokens) == 0 {
 		t.Fatal("precondition failed: the golden replay produced no tokens, so every rejection below is vacuous")
 	}
 
-	for field, value := range invented {
+	for field, value := range aitInventedValues {
 		// Precondition first: a rule that "rejects" a value already on the page proves nothing.
 		if containsAny(pages, value) {
 			t.Fatalf("invented %s value %q is not invented -- it occurs on the golden page", field, value)

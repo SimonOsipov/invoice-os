@@ -10,6 +10,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it } from 'vitest'
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url))
@@ -33,18 +34,13 @@ const SWEPT_LOCATOR_FLOOR_BY_SPEC: Record<string, number> = {
 }
 const SWEPT_SPECS = Object.keys(SWEPT_LOCATOR_FLOOR_BY_SPEC)
 
-// Comments in CreateUpload.tsx discuss `accept` and the word "spreadsheet" at length. Every
-// scan below reads CODE, so the prose explaining a rule can never satisfy or violate it.
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-}
-
 function pickerCode(): string {
   const raw = readFileSync(CREATE_UPLOAD, 'utf8')
   expect(raw.length, 'CreateUpload.tsx must be non-empty').toBeGreaterThan(0)
   // Positive control: proves the read landed on the real picker before anything is parsed
   // out of it.
   expect(raw, 'CreateUpload.tsx must still declare the picker input this story widens').toContain('id="pf-import-file"')
+  // CreateUpload.tsx's comments discuss `accept` and "spreadsheet"; every scan reads code only.
   return stripComments(raw)
 }
 

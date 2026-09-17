@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -1879,12 +1880,6 @@ describe('AuditView pre-filter hand-off (AUDIT-09-05)', () => {
     const main = calls.find(isMainUrl)
     expect(main, `no main (limit=25) request was made -- calls: ${JSON.stringify(calls)}`).toBeTruthy()
     return new URL(main!).searchParams
-  }
-
-  // Naive: it would also cut a `//` inside a string literal, and AuditView.tsx has none. The
-  // paired control needles in the scan below fail loudly if it ever eats too much or too little.
-  function stripComments(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   }
 
   it('auditView_seedsFromPrefilterWithNoDateWindow', async () => {

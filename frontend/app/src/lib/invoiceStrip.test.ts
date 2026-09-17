@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it } from 'vitest'
 
 import { APP_PERSONAS } from '../auth'
@@ -1144,10 +1145,6 @@ describe('stripNodes: the scope fence (AC-7)', () => {
       if (e.isDirectory()) return e.name === 'node_modules' ? [] : walk(full)
       return /\.tsx?$/.test(e.name) ? [full] : []
     })
-  }
-
-  function stripComments(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
   }
 
   it('S-34: invoiceStrip has no barrel and no importer outside the strip and its mount', () => {

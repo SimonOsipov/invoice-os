@@ -7,6 +7,7 @@ import { unzipSync } from 'fflate'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 const TOPOLOGY_DIR = dirname(fileURLToPath(import.meta.url))
 const E2E_ROOT = dirname(TOPOLOGY_DIR)
@@ -36,21 +37,6 @@ if (extr15Start === -1)
 if (extr15Start >= blockStart)
   throw new Error('the EXTR-15 marker no longer precedes the EXTR-18-07 marker -- the span it delimits is empty')
 const extr15Block = source.slice(extr15Start, blockStart)
-
-// Comments legitimately quote the very patterns these guards scan for -- the EXTR-15 span's
-// own header explains its `buffer:` rule, and EXTR18-E2E-01's note quotes the banned
-// MOCK-INV-0001 negation. Stripped before scanning so a guard reads code, not documentation
-// about code. Line-based, so a literal containing "//" would truncate -- no such literal
-// exists among the strings these checks care about.
-function stripLineComments(text: string): string {
-  return text
-    .split('\n')
-    .map((line) => {
-      const idx = line.indexOf('//')
-      return idx === -1 ? line : line.slice(0, idx)
-    })
-    .join('\n')
-}
 
 function listTsFiles(dir: string): string[] {
   const out: string[] = []
@@ -154,7 +140,7 @@ describe('[extr-18-07] no MOCK-INV-0001 negation anywhere under e2e/', () => {
   it('no file negates MOCK-INV-0001 with !== or != in code (comments excluded)', () => {
     const pattern = /!==?\s*['"]MOCK-INV-0001['"]/
     const offenders = contents
-      .filter((c) => pattern.test(stripLineComments(c.text)))
+      .filter((c) => pattern.test(stripComments(c.text)))
       .map((c) => c.path.slice(E2E_ROOT.length + 1))
     expect(offenders, offenders.join(', ')).toEqual([])
   })
@@ -297,7 +283,7 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
   const FORWARDERS = new Set(['Buffer', 'file.buffer'])
   // Comment-stripped: this span's own header documents the rule below in prose, and the
   // prose would otherwise read as an offending call site.
-  const bufferArgs = [...stripLineComments(extr15Block).matchAll(/buffer:\s*([^,}\n]+)/g)].map((m) => m[1].trim())
+  const bufferArgs = [...stripComments(extr15Block).matchAll(/buffer:\s*([^,}\n]+)/g)].map((m) => m[1].trim())
 
   it('found buffer: args to check (control needle)', () => {
     expect(bufferArgs.length, 'no buffer: argument in the EXTR-15 span -- the check below covers nothing').toBeGreaterThanOrEqual(6)
@@ -432,11 +418,11 @@ describe('[extr-36] declaration order is load-bearing', () => {
   // and the two assertions above keep passing while meaning nothing. Comments stripped first:
   // the config's own prose quotes both settings.
   it('the topology run is still serial, so declaration order is execution order', () => {
-    const config = stripLineComments(readFileSync(join(E2E_ROOT, 'playwright.topology.config.ts'), 'utf8'))
+    const config = stripComments(readFileSync(join(E2E_ROOT, 'playwright.topology.config.ts'), 'utf8'))
     expect(config, 'playwright.topology.config.ts no longer sets fullyParallel: false').toMatch(/fullyParallel:\s*false/)
     expect(config, 'playwright.topology.config.ts no longer sets workers: 1').toMatch(/workers:\s*1\b/)
     expect(
-      stripLineComments(source).includes('describe.configure'),
+      stripComments(source).includes('describe.configure'),
       'import-wizard.spec.ts now calls describe.configure -- a parallel or reordering mode undoes the declaration order above',
     ).toBe(false)
   })

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url))
 const COMPONENTS_DIR = join(SRC_DIR, 'components')
@@ -18,14 +19,6 @@ const SIX_COMPONENTS = [
   'SourceDocumentRail.tsx',
   'SourceDocumentStates.tsx',
 ]
-
-// The design's cut button label, "Download original", also appears verbatim inside this
-// story's own explanatory comments (SourceDocumentModal.tsx, SourceDocumentStates.tsx)
-// saying it was cut. Strip comments first so the needle proving its absence from CODE
-// doesn't self-match the prose explaining that absence.
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-}
 
 // Never a glob over `>= 6`: a stray match would satisfy that trivially. This IS the
 // enumeration the vacuity floor below checks against the exact six-name set.
@@ -41,6 +34,7 @@ describe('no download affordance in the source-document components', () => {
 
   it('no download affordance in the source-document components', () => {
     for (const name of files) {
+      // Comments quote the cut "Download original" label; the needles read code only.
       const src = stripComments(readFileSync(join(COMPONENTS_DIR, name), 'utf8'))
       for (const needle of NEEDLES) {
         expect(src, `${name} must not match ${needle}`).not.toMatch(needle)

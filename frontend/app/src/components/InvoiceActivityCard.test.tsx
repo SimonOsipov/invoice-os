@@ -6,6 +6,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import type { ComponentProps } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -611,12 +612,6 @@ describe('InvoiceActivityCard scroll containment (AC-7, unit half)', () => {
 // ctx.openAuditForInvoice(invoiceId, invoiceNumber) once; the atom, the nav and the seed are
 // App.auditPrefilter.test.tsx's and AuditView.test.tsx's.
 describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () => {
-  // Naive: it would also cut a `//` inside a string literal, and this file's component has
-  // none. The paired control needles below fail loudly if it eats too much or too little.
-  function stripComments(src: string): string {
-    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
-  }
-
   it('invoiceActivity_openInAuditCallsTheHandoff', async () => {
     mockFetch(logResponse())
     const { ctx } = renderCard(INVOICE_ID, INVOICE_NUMBER)

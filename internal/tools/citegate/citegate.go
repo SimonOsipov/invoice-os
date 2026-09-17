@@ -25,7 +25,7 @@ type syntax struct {
 	hashSpace bool     // `#` opens a comment only at line start or after whitespace
 	quotes    string   // string quotes that end at the line end
 	multi     string   // string quotes that may span lines, with no escapes
-	template  bool     // JS template literal with ${} nesting
+	template  bool     // JS template literal; ${} is read as part of the string
 	regex     bool     // JS regex literal
 	triple    bool     // Python triple-quoted strings
 }
@@ -85,7 +85,6 @@ func Comments(path, src string) map[int]string {
 	line := 1
 	var quote byte
 	var multiline, escapes, regexClass bool
-	var braces []int   // open `{` count per ${ } level of nested template literals
 	prev := byte('\n') // last non-blank code byte, for the regex-vs-division guess
 
 	for i := 0; i < len(src); i++ {
@@ -146,11 +145,6 @@ func Comments(path, src string) map[int]string {
 			case c == '`':
 				state = inCode
 				prev = 'a'
-			case strings.HasPrefix(src[i:], "${"):
-				braces = append(braces, 0)
-				state = inCode
-				prev = '{'
-				i++
 			}
 
 		case inRegex:
@@ -187,15 +181,6 @@ func Comments(path, src string) map[int]string {
 				state, quote, multiline, escapes = inString, c, true, false
 			case sx.template && c == '`':
 				state = inTemplate
-			case sx.template && len(braces) > 0 && c == '{':
-				braces[len(braces)-1]++
-			case sx.template && len(braces) > 0 && c == '}':
-				if top := len(braces) - 1; braces[top] == 0 {
-					braces = braces[:top]
-					state = inTemplate
-				} else {
-					braces[top]--
-				}
 			case sx.regex && c == '/' && strings.IndexByte("\n(,=:[!&|?{;+-*%~^", prev) >= 0:
 				state, regexClass = inRegex, false
 			}
@@ -229,21 +214,15 @@ func lineMarker(sx syntax, src string, i int) string {
 func AddedLines(diff string) map[string]map[int]string {
 	out := map[string]map[int]string{}
 	var path string
-	var oldLeft, newLeft, n int
+	var newLeft, n int
 	for _, l := range strings.Split(diff, "\n") {
-		if oldLeft > 0 || newLeft > 0 {
-			switch {
-			case strings.HasPrefix(l, "+"):
+		// Counting the hunk's added lines keeps an added "++ x" line from reading as a file header.
+		if newLeft > 0 {
+			if strings.HasPrefix(l, "+") {
 				if path != "" {
 					out[path][n] = l[1:]
 				}
 				n++
-				newLeft--
-			case strings.HasPrefix(l, "-"):
-				oldLeft--
-			case strings.HasPrefix(l, " "):
-				n++
-				oldLeft--
 				newLeft--
 			}
 			continue
@@ -258,17 +237,16 @@ func AddedLines(diff string) map[string]map[int]string {
 				}
 			}
 		case strings.HasPrefix(l, "@@ "):
-			_, oldLeft = hunkRange(l, '-')
-			n, newLeft = hunkRange(l, '+')
+			n, newLeft = newRange(l)
 		}
 	}
 	return out
 }
 
-// hunkRange reads `-a,b` or `+c,d` from a hunk header; a missing count is 1.
-func hunkRange(header string, sign byte) (start, count int) {
+// newRange reads `+c,d` from a hunk header; a missing count is 1.
+func newRange(header string) (start, count int) {
 	for _, f := range strings.Fields(header) {
-		if len(f) < 2 || f[0] != sign {
+		if len(f) < 2 || f[0] != '+' {
 			continue
 		}
 		s, c, found := strings.Cut(f[1:], ",")

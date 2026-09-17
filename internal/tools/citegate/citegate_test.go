@@ -182,7 +182,7 @@ func TestComments_PerLanguage(t *testing.T) {
 		{"a.py", "x = \"# a.py:1\"\n# b.py:2\ns = \"\"\"\n# c.py:4\n\"\"\"\n", []int{2}},
 		{"a.css", ".x { content: '/* a.css:1 */'; }\n/* b.css:2\n   c.css:3 */\n", []int{2, 3}},
 		{"g_test.go", bt("var d = ¦\n// store.go:2 inside a raw string\n¦ // store.go:3\n"), []int{3}},
-		{"n.ts", bt("const s = ¦a ${f(¦b ${1}¦)} c¦ // n.ts:1\nconst r = /['\"¦]/ // n.ts:2\nconst q = x / y // n.ts:3\n"), []int{1, 2, 3}},
+		{"n.ts", bt("const s = ¦a ${f(¦b¦)} c¦ // n.ts:1\nconst r = /['\"¦]/ // n.ts:2\nconst q = x / y // n.ts:3\nconst fx = ¦\n// store.go:5 inside a template\n¦ // n.ts:6\n"), []int{1, 2, 3, 6}},
 	}
 	for _, c := range cases {
 		cm := Comments(c.path, c.src)

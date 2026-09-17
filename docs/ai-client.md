@@ -146,10 +146,12 @@ it before any forked service deploys.
 3. **`FakeHint` has no deployed channel.** The document opener drops the upload filename
    today, so only `Text` can steer a deployed fake. AIR-05 owns the channel; until then
    `FakeHint` is a test-only field.
-4. **Whether Railway stores an empty-string variable value is unmeasured.** The verdict
-   in `ai_key_verdict` passes when the key is absent OR exactly `""`, so either persisted
-   shape is a pass, and a rejection fails `prepare-env` loudly rather than deploying a
-   fork with an inherited key.
+4. **Railway does store an empty-string variable value** — measured, not assumed. On the
+   first `prepare-env` run of a ready PR, both services' re-read verdicts came back
+   `is empty` rather than `is absent`, so `variableUpsert` accepted `""` and persisted it.
+   The verdict in `ai_key_verdict` passes on either shape, absent or exactly `""`, so no
+   code depends on which one Railway chooses; a rejection would have failed `prepare-env`
+   loudly rather than deploying a fork with an inherited key.
 5. **(operator-facing)** The verdict matches the exact variable name. A key stored under
    a different case reads as absent and passes, which is correct because the Go client
    reads the exact name too.

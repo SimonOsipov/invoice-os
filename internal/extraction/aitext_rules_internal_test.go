@@ -964,3 +964,67 @@ func TestAIText_CorpusRowsRefuseAKeyThatOmitsACorpusLayout(t *testing.T) {
 		t.Errorf("aitCheckCorpusRows(key omits corpus_inline_labels.pdf) err = %v, want an error naming that layout", err)
 	}
 }
+
+// D1: a missing key field is not an empty one - dropping a committed [] cell loses a scored blank (D-A15).
+func TestAIText_CorpusRowsRefuseAKeyThatDropsAnEmptyField(t *testing.T) {
+	committed, keyFields, path := aitCorpusKeyFixture(t)
+	if v, ok := committed["vat"]; !ok || len(v) != 0 {
+		t.Fatalf("precondition failed: committed vat = %v, want present and empty", v)
+	}
+	dropped := map[string]aitKeyField{}
+	for f, v := range keyFields {
+		if f != "vat" {
+			dropped[f] = v
+		}
+	}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: dropped},
+		"corpus_inline_labels.pdf":  {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_ambiguous_date.pdf") || !strings.Contains(err.Error(), "vat") {
+		t.Errorf("aitCheckCorpusRows(key drops empty vat) err = %v, want an error naming corpus_ambiguous_date.pdf and vat", err)
+	}
+}
+
+// D1: D-A07 - a field outside the committed row is refused even when its value list is empty.
+func TestAIText_CorpusRowsRefuseAKeyThatAddsAnEmptyField(t *testing.T) {
+	_, keyFields, path := aitCorpusKeyFixture(t)
+	added := map[string]aitKeyField{}
+	for f, v := range keyFields {
+		added[f] = v
+	}
+	added["supplier_tin"] = aitKeyField{Values: []string{}, Confirmed: true}
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: added},
+		"corpus_inline_labels.pdf":  {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_ambiguous_date.pdf") || !strings.Contains(err.Error(), "supplier_tin") {
+		t.Errorf("aitCheckCorpusRows(key adds empty supplier_tin) err = %v, want an error naming corpus_ambiguous_date.pdf and supplier_tin", err)
+	}
+}
+
+// D1: D-A08 - an omitted layout is refused even when every committed cell is empty.
+func TestAIText_CorpusRowsRefuseAKeyThatOmitsAnAllEmptyLayout(t *testing.T) {
+	_, keyFields, _ := aitCorpusKeyFixture(t)
+	allEmpty := map[string][]string{
+		"invoice_number": {}, "issue_date": {}, "buyer_tin": {}, "buyer_name": {},
+		"currency": {}, "subtotal": {}, "vat": {}, "total": {},
+	}
+	path := writeJSONFile(t, "corpus_key_all_empty.json", map[string]any{
+		"corpus_ambiguous_date.pdf": map[string][]string{
+			"invoice_number": {"INV-1005"}, "issue_date": {"2026-03-12", "2026-12-03"},
+			"buyer_tin": {}, "buyer_name": {}, "currency": {"NGN"},
+			"subtotal": {}, "vat": {}, "total": {"4300.00"},
+		},
+		"corpus_blank_layout.pdf": allEmpty,
+	})
+	key := aitKey{Docs: map[string]aitKeyDoc{
+		"corpus_ambiguous_date.pdf": {Set: "corpus", Source: "expectByLayout", Fields: keyFields},
+	}}
+	err := aitCheckCorpusRows(key, path)
+	if err == nil || !strings.Contains(err.Error(), "corpus_blank_layout.pdf") {
+		t.Errorf("aitCheckCorpusRows(key omits all-empty corpus_blank_layout.pdf) err = %v, want an error naming that layout", err)
+	}
+}

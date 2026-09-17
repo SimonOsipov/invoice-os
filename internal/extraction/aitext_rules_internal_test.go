@@ -1,7 +1,5 @@
-// aitext_rules_internal_test.go: RED specs for AIR-01-01's page-check rules and scoring
-// helpers. Every aitRule*/aitClassify/aitAgreement/aitRuleCounts/aitScoreConfirmed/
-// aitPercentile/aitPickRule/aitPromptLines/aitLoadKey/aitCheckCorpusRows/aitLoadAnswers/
-// aitGoldenPages call is undefined until Stage 3 writes the helpers.
+// aitext_rules_internal_test.go: acceptance specs for AIR-01-01's page-check rules and scoring
+// helpers in aitext_internal_test.go.
 package extraction
 
 import (
@@ -274,10 +272,18 @@ func TestAIText_EveryRuleRejectsAnInventedValue(t *testing.T) {
 		t.Fatalf("invented values cover %d fields, want one per header field (%d)", len(invented), len(HeaderFields))
 	}
 
+	if len(pages) == 0 || len(pages[0].Tokens) == 0 {
+		t.Fatal("precondition failed: the golden replay produced no tokens, so every rejection below is vacuous")
+	}
+
 	for field, value := range invented {
 		// Precondition first: a rule that "rejects" a value already on the page proves nothing.
 		if containsAny(pages, value) {
 			t.Fatalf("invented %s value %q is not invented -- it occurs on the golden page", field, value)
+		}
+		// A shape-refused value is rejected by the guard, never by the page check this row pins.
+		if shape, _ := tier1Shape(field); len(shape.Normalize(value)) == 0 {
+			t.Fatalf("invented %s value %q is refused by its shape", field, value)
 		}
 		if found, _ := aitRuleWholeToken(field, value, pages); found {
 			t.Errorf("rule A found the invented %s value %q", field, value)

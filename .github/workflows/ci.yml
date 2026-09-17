@@ -934,6 +934,31 @@ jobs:
           esac
           go run ./internal/tools/migrationorder -base "$BASE" -head HEAD
 
+  # Fails when an added comment cites code by file and line number; those go
+  # stale silently. Unconditional, like stale-refs: the citation can be in any half.
+  cite-refs:
+    name: Line-number citations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Diffs against the merge base; a shallow clone has none.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prove the detector fires (known positives)
+        run: go test ./internal/tools/citegate/ -count=1
+      - name: Scan added comments for line-number citations
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
+          case "$BASE" in
+            ""|0000000000000000000000000000000000000000)
+              echo "No base commit to diff against — nothing to scan."; exit 0 ;;
+          esac
+          go run ./internal/tools/citegate -base "$BASE" -head HEAD
+
   # A force push after a PR is open for review deletes the commits a reviewer
   # actually read, and leaves the approval pointing at history nobody has seen.
   # Nothing local can catch it: the rewritten commits are gone from the branch,
@@ -984,7 +1009,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, queue, audit, stale-refs, migration-order, history-rewrite]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1003,6 +1028,7 @@ jobs:
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
           echo "migration-order: ${{ needs.migration-order.result }}"
+          echo "cite-refs:     ${{ needs.cite-refs.result }}"
           echo "history-rewrite: ${{ needs.history-rewrite.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
@@ -1046,6 +1072,9 @@ jobs:
           fi
           if [ "${{ needs.migration-order.result }}" != "success" ]; then
             echo "::error::A new migration sorts before one already on the base branch"; exit 1
+          fi
+          if [ "${{ needs.cite-refs.result }}" != "success" ]; then
+            echo "::error::Line-number citation scan failed"; exit 1
           fi
           # Skips legitimately: it only runs on pull_request, so a push build has
           # no PR to ask about.

@@ -49,16 +49,20 @@ Model, endpoint and the retry budget are constants — there is no knob for any 
 | Marker in the input | Fake answer |
 |---|---|
 | *(none)* | Every top-level property of the caller's schema, blank (`null`) |
-| `AIFAKE-UNAVAILABLE` | `ErrUnavailable` at once — no attempt is made and no wait happens |
+| `AIFAKE-UNAVAILABLE` | `ErrUnavailable` at once — no request is sent and no wait happens (`attempts` is still logged as `1`, the fake answer itself) |
 | `AIFAKE-ANSWER-<base64url>` | That decoded JSON object, after the same schema check a real answer gets |
 
 The marker is searched in `Request.Text` first, then in `Request.FakeHint`; `Request.System`
 is never scanned. The first match in a field wins. Matching is case-sensitive with no word
 boundary, so `scan-AIFAKE-UNAVAILABLE.pdf` still matches. The payload after
-`AIFAKE-ANSWER-` is `base64.RawURLEncoding` (unpadded), payload class `[A-Za-z0-9_-]+` — a
-padded `=` truncates the match and the call errors, and a bad payload after decoding is a
-plain error that is not `ErrUnavailable`. Fake mode validates the request exactly as the
-real path does; a `FakeHint` with no `Text` and no `Pages` is still an invalid request.
+`AIFAKE-ANSWER-` is `base64.RawURLEncoding` (unpadded), payload class `[A-Za-z0-9_-]+`, so
+the match stops at the first character outside that class. Trailing `=` padding is
+therefore harmless — what is left is exactly the unpadded encoding and still decodes — but
+a standard-alphabet `+` or `/` cuts the payload mid-string and the call errors
+(`TestFake_BadAnswerIsNotUnavailable`, case `std_encoding_breaks_urlsafe_decode`). A bad
+payload after decoding is a plain error that is not `ErrUnavailable`. Fake mode validates
+the request exactly as the real path does; a `FakeHint` with no `Text` and no `Pages` is
+still an invalid request.
 
 ## Retries and the budget
 
@@ -69,13 +73,15 @@ one JSON object, or fails the caller's schema. **Not retried:** every other non-
 — HTTP 408 included — and any 3xx; those return `refused` after exactly one request, and no
 response body text ever reaches the returned error.
 
-Backoff starts at 250ms and doubles each attempt, capped at 2s. The loop stops once less
-than the next wait remains before the budget's deadline, which against a permanently
-failing endpoint works out to 10 attempts and 13.75s slept in total. The budget, not an
-attempt count, ends the loop, and the exhausted call satisfies
-`errors.Is(err, ErrUnavailable)`. The caller's context always wins over the budget: a
-cancelled context or a deadline shorter than 15s returns at once with `context.Canceled` /
-`context.DeadlineExceeded`, neither of which matches `ErrUnavailable`.
+Backoff starts at 250ms and doubles each attempt, capped at 2s. The loop stops once the
+time left before the budget's deadline is no more than the next wait, which against a
+permanently failing endpoint works out to 10 attempts and 13.75s slept in total
+(`TestCall_BackoffIsCappedSoTheBudgetFitsTenAttempts` pins both numbers). The budget, not
+an attempt count, ends the loop, and the exhausted call satisfies
+`errors.Is(err, ErrUnavailable)`. The caller's context always wins over the budget: with a
+cancelled context, or a deadline shorter than 15s, the call returns as soon as that
+context ends, carrying `context.Canceled` / `context.DeadlineExceeded`, neither of which
+matches `ErrUnavailable`.
 
 ## The log line
 
@@ -99,10 +105,9 @@ page bytes, answer, schema name, file name or error body. It is written with a b
 context so the platform's context-aware log handler cannot attach a second `tenant_id`;
 the cost of that choice is that `request_id` never appears on this line.
 
-A deployed process's own logger setup attaches further base fields to every line it
-writes, this one included — name them `service` and `environment`, with no promise about
-how many fields a deployed line carries in total, since that count is owned by the
-process logger, not by this package.
+In a deployed binary the process logger adds its own base fields, `service` and
+`environment`, to every line it writes — this one included. How wide a deployed line ends
+up is the process logger's business, not this package's, so this page does not say.
 
 ### Outcomes
 

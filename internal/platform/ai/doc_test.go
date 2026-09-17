@@ -5,11 +5,14 @@
 // the doc's PROSE is true (retry rules, per-environment claims, secrets
 // rule): no derivation exists for those, only for names.
 //
-// Named TestAIDoc* so ci.yml's -run alternation reaches it, matching the
-// convention in internal/platform/db's doc gate tests.
+// Named TestAIDoc* after the convention in internal/platform/db's doc gate
+// tests. No ci.yml -run filter names this package; the unfiltered
+// go test ./... reaches it, and docs/** is in the go paths filter so a
+// docs-only commit still runs it.
 package ai
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,21 +145,30 @@ func firstGroup(t *testing.T, re *regexp.Regexp, src, what string) []string {
 	return out
 }
 
-// docSection returns doc's text between heading (exclusive) and the next
-// occurrence of stop (exclusive). Both boundaries are mandatory: a missing
-// one Fatals instead of silently reading past it into a neighboring table.
-func docSection(t *testing.T, doc, heading, stop string) string {
-	t.Helper()
+// sectionBetween returns doc's text between heading (exclusive) and the next
+// occurrence of stop (exclusive). Both boundaries are mandatory: a missing one
+// is an error, never a silent read past it into a neighboring table. Pure so
+// both error branches are testable.
+func sectionBetween(doc, heading, stop string) (string, error) {
 	i := strings.Index(doc, "\n"+heading+"\n")
 	if i < 0 {
-		t.Fatalf("%s has no %q heading", aiDoc, heading)
+		return "", fmt.Errorf("%s has no %q heading", aiDoc, heading)
 	}
 	body := doc[i+1+len(heading):]
 	j := strings.Index(body, "\n"+stop)
 	if j < 0 {
-		t.Fatalf("%s has no %q heading after %q", aiDoc, stop, heading)
+		return "", fmt.Errorf("%s has no %q heading after %q", aiDoc, stop, heading)
 	}
-	return body[:j]
+	return body[:j], nil
+}
+
+func docSection(t *testing.T, doc, heading, stop string) string {
+	t.Helper()
+	sec, err := sectionBetween(doc, heading, stop)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sec
 }
 
 // backtickedRowRE matches a markdown table row whose first cell is a
@@ -199,6 +211,27 @@ func TestDocSection_SlicesBetweenTwoHeadings(t *testing.T) {
 	doc := "# Title\n\n## A\nbody-of-a\n\n## B\nbody-of-b\n"
 	if got, want := docSection(t, doc, "## A", "## B"), "\nbody-of-a\n"; got != want {
 		t.Fatalf("docSection(doc, %q, %q) = %q, want %q", "## A", "## B", got, want)
+	}
+}
+
+// Pure fixture test for the two branches docSection turns into a Fatal: a
+// renamed heading must stop the scan, not let it read the next table.
+func TestSectionBetween_AMissingBoundaryIsAnError(t *testing.T) {
+	doc := "# Title\n\n## A\nbody-of-a\n\n## B\nbody-of-b\n"
+	cases := map[string]struct{ heading, stop string }{
+		"heading absent": {"## Z", "## B"},
+		"stop absent":    {"## A", "## Z"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			sec, err := sectionBetween(doc, tc.heading, tc.stop)
+			if err == nil {
+				t.Fatalf("sectionBetween(doc, %q, %q) = %q, want an error", tc.heading, tc.stop, sec)
+			}
+			if sec != "" {
+				t.Errorf("sectionBetween(doc, %q, %q) returned %q alongside its error, want empty", tc.heading, tc.stop, sec)
+			}
+		})
 	}
 }
 
@@ -287,7 +320,13 @@ func TestAIDoc_OutcomeTableMatchesTheCode(t *testing.T) {
 
 	wantOutcomes := derivedOutcomes(t, root)
 	outcomeSection := docSection(t, doc, "### Outcomes", "## ")
-	gotOutcomes := dedupeSorted(firstGroup(t, backtickedRowRE, outcomeSection, "outcome table"))
+	rawOutcomes := firstGroup(t, backtickedRowRE, outcomeSection, "outcome table")
+	// Counted before the dedupe: a duplicated valid row would otherwise
+	// collapse into agreement.
+	if len(rawOutcomes) != len(wantOutcomes) {
+		t.Fatalf("%s's Outcomes table has %d row(s) %v, want exactly %d", aiDoc, len(rawOutcomes), rawOutcomes, len(wantOutcomes))
+	}
+	gotOutcomes := dedupeSorted(rawOutcomes)
 
 	if !reflect.DeepEqual(wantOutcomes, gotOutcomes) {
 		t.Errorf("%s's Outcomes table lists %v, code emits %v", aiDoc, gotOutcomes, wantOutcomes)
@@ -318,14 +357,37 @@ func TestAIDoc_LogKeyTableMatchesTheLogger(t *testing.T) {
 	}
 }
 
+// durationNeedleRE anchors a derived duration on both sides, so a shorter
+// value is not found inside a longer one: a 5s budget must not read as stated
+// by the "13.75s" in the same paragraph.
+func durationNeedleRE(want string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:\A|[^0-9.])` + regexp.QuoteMeta(want) + `(?:[^0-9A-Za-z]|\z)`)
+}
+
 func TestAIDoc_StatesTheBudgetAndBackoff(t *testing.T) {
 	root := aiRepoRoot(t)
 	doc := readAIDoc(t, root)
 
 	base, backoffCap := derivedBackoff(t, root)
 	for _, want := range []string{budget.String(), base, backoffCap} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("%s does not state %q", aiDoc, want)
+		if !durationNeedleRE(want).MatchString(doc) {
+			t.Errorf("%s does not state %q as a value of its own", aiDoc, want)
+		}
+	}
+}
+
+// Control for durationNeedleRE: the anchors must reject a value that only
+// appears as the tail of a longer number, and accept a real statement.
+func TestDurationNeedle_RejectsASuffixOfALongerNumber(t *testing.T) {
+	const prose = "works out to 10 attempts and 13.75s slept, with a 15s budget, capped at 2s."
+	for _, want := range []string{"5s", "3.75s", "0 attempts"} {
+		if durationNeedleRE(want).MatchString(prose) {
+			t.Errorf("durationNeedleRE(%q) matched %q, want no match", want, prose)
+		}
+	}
+	for _, want := range []string{"15s", "2s", "13.75s"} {
+		if !durationNeedleRE(want).MatchString(prose) {
+			t.Errorf("durationNeedleRE(%q) did not match %q", want, prose)
 		}
 	}
 }

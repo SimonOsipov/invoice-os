@@ -116,8 +116,8 @@ test('deployed app: a persona hand-off switches identity over a live stored sess
 
 // Regression (one-shot hand-off): ?persona= is a sign-in hand-off, not a standing
 // credential. It used to survive in the address bar, so after Sign out the back button
-// returned to the `?persona=firm` entry and walked straight back into the workspace with no
-// OTP — a logout that did not log out. It is now stripped (replaceState) the moment it is
+// returned to the `?persona=firm` entry and walked straight back into the workspace — a
+// logout that did not log out. It is now stripped (replaceState) the moment it is
 // consumed, leaving a bare, sessionless app URL behind the sign-out redirect.
 //
 // This pins the strip itself rather than driving the back button: a bfcache restore would
@@ -404,21 +404,10 @@ test('deployed app: a signed-out deep link returns to its destination after sign
   await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
   await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
-  // Six separate fill() calls, for the same reason as the walk below: setDigit() moves DOM
-  // focus itself on every keystroke, which would race a keyboard-driven approach.
-  const digits = '481920'.split('')
-  for (let i = 0; i < digits.length; i++) {
-    await page.locator(`#si-otp-${i}`).fill(digits[i])
-  }
-  // verify() delays the navigation by 1100ms (SignInModal.tsx's redirectTimer). Absorbed by the
-  // auto-waiting assertions below — never add a fixed wait here.
-  await page.getByRole('button', { name: 'Verify & continue' }).click()
-
   // The hand-off lands on the app ROOT (destUrl carries no path), so arriving on /audit can
   // only have come from the restored destination.
-  // 30s, not the file's 15s default: this assertion alone absorbs SignInModal's 1100ms
-  // redirectTimer, a cross-origin hard navigation, a cold SPA boot and the /v1/me round trip
-  // that mints the marker.
+  // 30s, not the file's 15s default: this assertion alone absorbs a cross-origin hard
+  // navigation, a cold SPA boot and the /v1/me round trip that mints the marker.
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
   // The two below keep the default budget on purpose: the marker already gated on a mounted
   // workspace, and AuditView is a static import (App.tsx), so no further fetch precedes the h1.
@@ -460,13 +449,16 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 
   await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
   await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
-  await page.locator(`[data-persona="${FIRM_PERSONA.param}"]`).click()
 
-  const digits = '481920'.split('')
-  for (let i = 0; i < digits.length; i++) {
-    await page.locator(`#si-otp-${i}`).fill(digits[i])
-  }
-  await page.getByRole('button', { name: 'Verify & continue' }).click()
+  // The only browser proof that a keyboard pick works: the persona is a native button.
+  const pick = page.locator(`[data-persona="${FIRM_PERSONA.param}"]`)
+  await pick.focus()
+  await expect(pick, 'the persona button did not take focus').toBeFocused()
+  // Armed with the press: Enter navigates synchronously, before press() resolves.
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL)),
+    page.keyboard.press('Enter'),
+  ])
 
   // 30s here for the same reason the journey above needs it.
   await expect(page.locator('[title="Tenant verified via /v1/me"]')).toBeAttached({ timeout: 30_000 })
@@ -491,8 +483,8 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
-// This walk drives the REAL SignInModal (open -> pick a persona -> type the OTP -> Verify),
-// never e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
+// This walk drives the REAL SignInModal (open -> pick a persona), never
+// e2e/personas.ts#signInUrl's constructed URL. signInUrl cannot catch three ways the
 // two sides can silently diverge:
 //  (a) the persona->destination table is duplicated (frontend/landing/src/auth.ts's
 //      LandingPersona.target vs e2e/personas.ts#PERSONAS[id].destination) and nothing
@@ -500,8 +492,8 @@ test('deployed app: a signed-out deep link returns to its FILTER after sign-in',
 //  (b) the bases resolve from different variables at different times — landing bakes
 //      import.meta.env.VITE_*_URL into its build image, this suite reads process.env.*_URL
 //      at CI run time;
-//  (c) unset behaviour is opposite — destUrl() returns null and verify() silently no-ops,
-//      while signInUrl() throws.
+//  (c) unset behaviour is opposite — an unset target makes destUrl() return null and the
+//      pick a silent no-op, while signInUrl() throws.
 for (const id of PERSONA_IDS) {
   const persona = PERSONAS[id]
   test(`deployed ${persona.destination}: the ${id} persona reaches its destination through the sign-in modal`, async ({ page }) => {
@@ -515,17 +507,15 @@ for (const id of PERSONA_IDS) {
 
     await page.goto(LANDING_URL)
     await page.getByRole('banner').getByRole('button', { name: 'Explore the platform' }).click()
-    await expect(page.getByRole('dialog', { name: 'Sign in' })).toBeVisible()
+    const dialog = page.getByRole('dialog', { name: 'Sign in' })
+    await expect(dialog).toBeVisible()
 
-    await page.locator(`[data-persona="${id}"]`).click()
-
-    // Six separate fill() calls, not pressSequentially/keyboard.type: setDigit() moves DOM
-    // focus to the next box itself on every keystroke, which would race a keyboard-driven
-    // approach. fill() re-resolves each box by id regardless of where focus currently sits.
-    const digits = '481920'.split('')
-    for (let i = 0; i < digits.length; i++) {
-      await page.locator(`#si-otp-${i}`).fill(digits[i])
-    }
+    // Positive control first: an absence check on an unrendered picker passes vacuously.
+    await expect(dialog.locator('[data-persona]')).toHaveCount(PERSONA_IDS.length)
+    // One line each: stale-refs exempts a retired literal only when toHaveCount(0) shares its line.
+    await expect(dialog.locator('input')).toHaveCount(0)
+    await expect(dialog.getByText('Forgot password?')).toHaveCount(0)
+    await expect(dialog.getByText('SSO · OAUTH2')).toHaveCount(0)
 
     // Every destination strips ?persona= on arrival (each app's effect commented "Drop the
     // consumed ?persona="), so the wire value is only observable on the outbound navigation
@@ -533,7 +523,7 @@ for (const id of PERSONA_IDS) {
     const base = EXPECTED_BASE[id]
     const [navRequest] = await Promise.all([
       page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(base)),
-      page.getByRole('button', { name: 'Verify & continue' }).click(),
+      page.locator(`[data-persona="${id}"]`).click(),
     ])
     expect(new URL(navRequest.url()).searchParams.get('persona'), `navigation request did not carry ?persona=${id}`).toBe(id)
 

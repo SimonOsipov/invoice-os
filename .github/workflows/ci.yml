@@ -908,6 +908,32 @@ jobs:
           esac
           go run ./internal/tools/stalerefs -base "$BASE" -head HEAD
 
+  # goose refuses a migration numbered below the database's current version.
+  # Per-PR environments migrate a fresh database, so only production sees it.
+  # Unconditional for the stale-refs reason: a skip reads like a clean check.
+  migration-order:
+    name: Migration order
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check needs the merge base; a shallow clone has none.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prove the check fires (pinned PR #142 break)
+        run: go test ./internal/tools/migrationorder/ -count=1
+      - name: New migrations sort after the base branch's newest
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="${{ github.event.before }}"; fi
+          case "$BASE" in
+            ""|0000000000000000000000000000000000000000)
+              echo "No base commit to diff against — nothing to check."; exit 0 ;;
+          esac
+          go run ./internal/tools/migrationorder -base "$BASE" -head HEAD
+
   # A force push after a PR is open for review deletes the commits a reviewer
   # actually read, and leaves the approval pointing at history nobody has seen.
   # Nothing local can catch it: the rewritten commits are gone from the branch,
@@ -958,7 +984,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, queue, audit, stale-refs, history-rewrite]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, queue, audit, stale-refs, migration-order, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -976,6 +1002,7 @@ jobs:
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
+          echo "migration-order: ${{ needs.migration-order.result }}"
           echo "history-rewrite: ${{ needs.history-rewrite.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
@@ -1016,6 +1043,9 @@ jobs:
           # indistinguishable from a clean scan.
           if [ "${{ needs.stale-refs.result }}" != "success" ]; then
             echo "::error::Stale-reference scan failed"; exit 1
+          fi
+          if [ "${{ needs.migration-order.result }}" != "success" ]; then
+            echo "::error::A new migration sorts before one already on the base branch"; exit 1
           fi
           # Skips legitimately: it only runs on pull_request, so a push build has
           # no PR to ask about.

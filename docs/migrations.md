@@ -303,6 +303,12 @@ migrations, and then runs the M2-07 adversarial isolation suite (§8) as the app
 and reader roles. It is also folded into the required `CI` gate. Locally, `make test-rls`
 runs the same suite against the `make dev-db` Postgres.
 
+The **`migration-order`** job fails a change that adds a migration whose version sorts at or
+before the newest migration on the base branch. goose refuses such a file on any database
+that already applied the newer one, and the fresh databases in CI and PR environments cannot
+show it. The fix is to rename the file to a current timestamp. Run it locally with
+`go run ./internal/tools/migrationorder -base origin/main`.
+
 ---
 
 ## 7. Per-PR Postgres (M4-23) vs. the always-on `development` Postgres

@@ -35,7 +35,7 @@ if [ $# -lt 3 ]; then
   exit 1
 fi
 
-COMMIT="$1"
+COMMIT_REF="$1"
 shift
 OUT_DIR="$1"
 shift
@@ -63,6 +63,10 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 SRC_DIR="$REPO_ROOT/.ralph/scratch/air01/docling-src"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR" "$OUT_DIR"
+
+# A ref like origin/main contains "/" and is not a valid docker image tag; resolve to a full
+# SHA up front so the tag and provenance both name the exact commit read.
+COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify "${COMMIT_REF}^{commit}")"
 
 # git archive keeps the real invoices under .ralph/scratch/ out of the build context (P-17):
 # only sidecar/docling and the buildsha placeholder are exported.
@@ -121,7 +125,7 @@ done
 
 {
   echo "commit: $COMMIT"
-  echo "sidecar/docling last commit: $(git -C "$REPO_ROOT" log -1 --format='%h %ad' --date=short -- sidecar/docling)"
+  echo "sidecar/docling last commit: $(git -C "$REPO_ROOT" log -1 --format='%h %ad' --date=short "$COMMIT" -- sidecar/docling)"
   echo "image id: $IMAGE_ID"
   echo "platform: $PLATFORM"
   echo "installed versions:"

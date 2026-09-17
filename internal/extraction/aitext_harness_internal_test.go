@@ -292,14 +292,33 @@ func aitReadTextlessDumps(t *testing.T, out string) []docDump {
 	return dumps
 }
 
-// aitCheckKeyCoversScoredDumps fails before a cell is written when a non-textless dump has no
-// key row: aitScoreConfirmed's own loop drops that document with no trace at all -- not a
-// cell, not unconfirmed, not textless, not not_read (Stage 1 validation). A textless dump
-// needs no row (it is listed regardless of the key), and a not_scored document is never
-// dumped, so neither belongs in this check. Counts only, never a file name (Data handling
-// boundaries).
-func aitCheckKeyCoversScoredDumps(t *testing.T, key aitKey, dumps []docDump) {
+// aitAnyConfirmed reports whether doc carries at least one confirmed field -- an entirely
+// unconfirmed key row is harmless if it matches nothing (it would never score anyway).
+func aitAnyConfirmed(doc aitKeyDoc) bool {
+	for _, f := range doc.Fields {
+		if f.Confirmed {
+			return true
+		}
+	}
+	return false
+}
+
+// aitCheckKeyManifestCoverage fails before a cell is written on either side of a key/manifest
+// mismatch. Direction 1: a non-textless dump with no key row -- aitScoreConfirmed's own loop
+// drops that document with no trace at all (not a cell, not unconfirmed, not textless, not
+// not_read). Direction 2: a confirmed key row matching no dumped, textless or not-scored
+// document -- a stale or mistyped row that never surfaces otherwise (QA D2). A textless dump
+// needs no row (it is listed regardless of the key), and an unconfirmed-only row is inert.
+func aitCheckKeyManifestCoverage(t *testing.T, key aitKey, dumps []docDump, notScored []notScoredEntry) {
 	t.Helper()
+	accounted := map[string]bool{}
+	for _, d := range dumps {
+		accounted[d.File] = true
+	}
+	for _, n := range notScored {
+		accounted[n.File] = true
+	}
+
 	var scored, missing int
 	for _, d := range dumps {
 		if d.TextChars == 0 {
@@ -313,12 +332,24 @@ func aitCheckKeyCoversScoredDumps(t *testing.T, key aitKey, dumps []docDump) {
 	if missing > 0 {
 		t.Fatalf("%d scored document(s) have no key row; aitScoreConfirmed would drop them silently", missing)
 	}
-	t.Logf("key covers every scored dump: %d document(s)", scored)
+
+	var ghosts []string
+	for file, doc := range key.Docs {
+		if aitAnyConfirmed(doc) && !accounted[file] {
+			ghosts = append(ghosts, file)
+		}
+	}
+	if len(ghosts) > 0 {
+		t.Fatalf("confirmed key row(s) match no dumped, textless or not-scored document: %v", ghosts)
+	}
+	t.Logf("key/manifest coverage checked: %d scored document(s), %d key document(s)", scored, len(key.Docs))
 }
 
-// aitAnswerMetaJSON re-decodes one answers.jsonl line for cost and latency --
-// aitAnswerRecordJSON (01) carries neither, and this file must not add fields to it.
+// aitAnswerMetaJSON re-decodes one answers.jsonl line for file, cost and latency --
+// aitAnswerRecordJSON (01) already carries file but not cost/latency, and this file must not
+// add fields to it.
 type aitAnswerMetaJSON struct {
+	File     string            `json:"file"`
 	Run      int               `json:"run"`
 	Error    string            `json:"error"`
 	Fields   map[string]string `json:"fields"`
@@ -326,15 +357,33 @@ type aitAnswerMetaJSON struct {
 	LatencyS *float64          `json:"latency_s"`
 }
 
+// aitAnswerMeta is aitReadAnswerMeta's result: pooled cost/latency samples (good records only),
+// total spend (every record), the highest run number seen, and the same broken out per document
+// (Core AC 7, QA D3).
+type aitAnswerMeta struct {
+	Costs           []float64
+	Latencies       []float64
+	TotalCost       float64
+	MaxRun          int
+	TotalCostByFile map[string]float64
+	CostsByFile     map[string][]float64
+	LatenciesByFile map[string][]float64
+}
+
 // aitReadAnswerMeta returns per-call cost and latency over the good records, the total spend
 // over every record, and the highest run number seen -- run.py's intended RUNS, since no
-// AIMT_RUNS variable exists. aitLoadAnswers has already validated every line as JSON by the
-// time this runs, so a decode failure here cannot occur in practice.
-func aitReadAnswerMeta(t *testing.T, path string) (costs, latencies []float64, totalCost float64, maxRun int) {
+// AIMT_RUNS variable exists -- pooled and per document. aitLoadAnswers has already validated
+// every line as JSON by the time this runs, so a decode failure here cannot occur in practice.
+func aitReadAnswerMeta(t *testing.T, path string) aitAnswerMeta {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read answers %s: %v", path, err)
+	}
+	meta := aitAnswerMeta{
+		TotalCostByFile: map[string]float64{},
+		CostsByFile:     map[string][]float64{},
+		LatenciesByFile: map[string][]float64{},
 	}
 	for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -344,18 +393,21 @@ func aitReadAnswerMeta(t *testing.T, path string) (costs, latencies []float64, t
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			continue
 		}
-		if rec.Run > maxRun {
-			maxRun = rec.Run
+		if rec.Run > meta.MaxRun {
+			meta.MaxRun = rec.Run
 		}
-		totalCost += rec.Cost
+		meta.TotalCost += rec.Cost
+		meta.TotalCostByFile[rec.File] += rec.Cost
 		if rec.Error == "" && rec.Fields != nil {
-			costs = append(costs, rec.Cost)
+			meta.Costs = append(meta.Costs, rec.Cost)
+			meta.CostsByFile[rec.File] = append(meta.CostsByFile[rec.File], rec.Cost)
 			if rec.LatencyS != nil {
-				latencies = append(latencies, *rec.LatencyS)
+				meta.Latencies = append(meta.Latencies, *rec.LatencyS)
+				meta.LatenciesByFile[rec.File] = append(meta.LatenciesByFile[rec.File], *rec.LatencyS)
 			}
 		}
 	}
-	return costs, latencies, totalCost, maxRun
+	return meta
 }
 
 type aitSummaryFieldJSON struct {
@@ -373,11 +425,28 @@ type aitSummaryFieldJSON struct {
 }
 
 type aitSummaryRuleJSON struct {
-	Found         int  `json:"found"`
-	FoundOf       int  `json:"found_of"`
-	Accepted      int  `json:"accepted"`
-	AcceptedOf    int  `json:"accepted_of"`
-	AdversarialOK bool `json:"adversarial_ok"`
+	Found      int `json:"found"`
+	FoundOf    int `json:"found_of"`
+	Accepted   int `json:"accepted"`
+	AcceptedOf int `json:"accepted_of"`
+}
+
+// aitAdversarialJSON is one rule's result against each adversarial case, not just a pooled
+// pass/fail, so the report can name which case a rule fails (QA D7).
+type aitAdversarialJSON struct {
+	DroppedDigitTIN bool `json:"dropped_digit_tin"`
+	TruncatedAmount bool `json:"truncated_amount"`
+	InventedValue   bool `json:"invented_value"`
+	OK              bool `json:"ok"`
+}
+
+// aitSummaryDocJSON is one document's cost/latency rollup (Core AC 7 per-document breakdown).
+type aitSummaryDocJSON struct {
+	TotalCost  float64 `json:"total_cost"`
+	CostP50    float64 `json:"cost_p50"`
+	CostP90    float64 `json:"cost_p90"`
+	LatencyP50 float64 `json:"latency_p50_s"`
+	LatencyP90 float64 `json:"latency_p90_s"`
 }
 
 type aitSummaryJSON struct {
@@ -387,7 +456,8 @@ type aitSummaryJSON struct {
 	Textless    []string                                  `json:"textless"`
 	NotRead     []notScoredEntry                          `json:"not_read"`
 	Fields      map[string]map[string]aitSummaryFieldJSON `json:"fields_by_set"`
-	Rules       map[string]aitSummaryRuleJSON             `json:"rules"`
+	Rules       map[string]map[string]aitSummaryRuleJSON  `json:"rules"` // field -> rule -> counts (QA D1)
+	Adversarial map[string]aitAdversarialJSON             `json:"adversarial"`
 	PickedRule  string                                    `json:"picked_rule"`
 	CostP50     float64                                   `json:"cost_p50"`
 	CostP90     float64                                   `json:"cost_p90"`
@@ -395,37 +465,68 @@ type aitSummaryJSON struct {
 	LatencyP90  float64                                   `json:"latency_p90_s"`
 	TotalCost   float64                                   `json:"total_cost"`
 	MissingRuns int                                       `json:"missing_runs"`
+	PerDocument map[string]aitSummaryDocJSON              `json:"per_document"`
 }
 
-// aitAdversarialPass replays the golden that carries the dropped-digit TIN and rejects rule
-// unless it also rejects the truncated amount and every aitInventedValues entry (Core AC 5).
-func aitAdversarialPass(t *testing.T, rule func(field, raw string, pages []TokenPage) (bool, Region)) bool {
+// aitAdversarialCheck replays the golden that carries the dropped-digit TIN and the truncated
+// amount, plus every aitInventedValues entry, against rule -- one case at a time, so the report
+// can name which specific case a rule fails (Core AC 5, QA D7) instead of one pooled boolean.
+func aitAdversarialCheck(t *testing.T, rule func(field, raw string, pages []TokenPage) (bool, Region)) aitAdversarialJSON {
 	t.Helper()
 	pages := aitGoldenPages(t, "wild_scanned_no_number")
-	if found, _ := rule("buyer_tin", "9999999-1202", pages); found {
-		return false
-	}
-	if found, _ := rule("total", "935.00", pages); found {
-		return false
-	}
+
+	droppedDigitFound, _ := rule("buyer_tin", "9999999-1202", pages)
+	truncatedFound, _ := rule("total", "935.00", pages)
+
+	inventedFound := false
 	for field, value := range aitInventedValues {
 		if found, _ := rule(field, value, pages); found {
-			return false
+			inventedFound = true
+			break
 		}
 	}
-	return true
+
+	a := aitAdversarialJSON{
+		DroppedDigitTIN: !droppedDigitFound,
+		TruncatedAmount: !truncatedFound,
+		InventedValue:   !inventedFound,
+	}
+	a.OK = a.DroppedDigitTIN && a.TruncatedAmount && a.InventedValue
+	return a
 }
 
-// aitBuildSummary aggregates Core AC 4 (per set, per field), AC 5 (per-rule found/accepted and
-// adversarial results) and AC 7 (cost/latency percentiles) on top of 01's pure helpers.
+// ruleFn names one candidate or control page-check rule for iteration.
+type ruleFn struct {
+	name string
+	fn   func(field, raw string, pages []TokenPage) (bool, Region)
+}
+
+// aitRuleCountsByField runs every rule over every field's cells, keyed field then rule, so the
+// report can show which field a rule is weak on (Core AC 5, QA D1). aitPickRule keeps using the
+// pooled totals over all fields, computed separately.
+func aitRuleCountsByField(cellsByField map[string][]ruleCountCell, rules []ruleFn) map[string]map[string]aitSummaryRuleJSON {
+	out := map[string]map[string]aitSummaryRuleJSON{}
+	for field, cells := range cellsByField {
+		out[field] = map[string]aitSummaryRuleJSON{}
+		for _, r := range rules {
+			found, foundOf, accepted, acceptedOf := aitRuleCounts(r.fn, cells)
+			out[field][r.name] = aitSummaryRuleJSON{Found: found, FoundOf: foundOf, Accepted: accepted, AcceptedOf: acceptedOf}
+		}
+	}
+	return out
+}
+
+// aitBuildSummary aggregates Core AC 4 (per set, per field), AC 5 (per-rule-per-field
+// found/accepted and per-case adversarial results) and AC 7 (pooled and per-document
+// cost/latency percentiles) on top of 01's pure helpers.
 func aitBuildSummary(t *testing.T, key aitKey, dumps []docDump, tokensByFile map[string][]TokenPage,
-	answers []docAnswer, answerErrors int, result aitScoreResult,
-	costs, latencies []float64, totalCost float64, maxRun int,
+	answers []docAnswer, answerErrors int, result aitScoreResult, meta aitAnswerMeta,
 ) aitSummaryJSON {
 	t.Helper()
 
 	fields := map[string]map[string]aitSummaryFieldJSON{}
 	var ruleCells []ruleCountCell
+	ruleCellsByField := map[string][]ruleCountCell{}
 	textDocs := 0
 
 	for _, d := range dumps {
@@ -491,39 +592,46 @@ func aitBuildSummary(t *testing.T, key aitKey, dumps []docDump, tokensByFile map
 				// rule-found denominator wants a non-blank ANSWER TEXT, not just a non-"blank"
 				// verdict, or an empty raw with nothing to search for inflates found_of.
 				if verdict != "blank" && strings.TrimSpace(raw) != "" {
-					ruleCells = append(ruleCells, ruleCountCell{Field: field, Answer: raw, Verdict: verdict, Pages: pages})
+					cell := ruleCountCell{Field: field, Answer: raw, Verdict: verdict, Pages: pages}
+					ruleCells = append(ruleCells, cell)
+					ruleCellsByField[field] = append(ruleCellsByField[field], cell)
 				}
 			}
 			fields[d.Set][field] = stat
 		}
 	}
 
-	rules := map[string]aitSummaryRuleJSON{}
-	var stats []ruleStat
-	for _, r := range []struct {
-		name string
-		fn   func(field, raw string, pages []TokenPage) (bool, Region)
-	}{
-		{"A", aitRuleWholeToken}, {"B", aitRuleInLine}, {"C", aitRuleJoinedRow},
-	} {
-		found, foundOf, accepted, acceptedOf := aitRuleCounts(r.fn, ruleCells)
-		ok := aitAdversarialPass(t, r.fn)
-		rules[r.name] = aitSummaryRuleJSON{Found: found, FoundOf: foundOf, Accepted: accepted, AcceptedOf: acceptedOf, AdversarialOK: ok}
-		stats = append(stats, ruleStat{Name: r.name, Found: found, Accepted: accepted, Eligible: ok})
-	}
-	foundCtl, foundOfCtl, acceptedCtl, acceptedOfCtl := aitRuleCounts(aitRuleSubstringControl, ruleCells)
-	rules["control"] = aitSummaryRuleJSON{
-		Found: foundCtl, FoundOf: foundOfCtl, Accepted: acceptedCtl, AcceptedOf: acceptedOfCtl,
-		AdversarialOK: aitAdversarialPass(t, aitRuleSubstringControl),
-	}
+	candidates := []ruleFn{{"A", aitRuleWholeToken}, {"B", aitRuleInLine}, {"C", aitRuleJoinedRow}}
+	allRules := append(append([]ruleFn(nil), candidates...), ruleFn{"control", aitRuleSubstringControl})
+	rules := aitRuleCountsByField(ruleCellsByField, allRules)
 
-	costP50, costP90, _ := aitPercentile(costs)
-	latP50, latP90, _ := aitPercentile(latencies)
+	adversarial := map[string]aitAdversarialJSON{}
+	var stats []ruleStat
+	for _, r := range candidates {
+		found, _, accepted, _ := aitRuleCounts(r.fn, ruleCells)
+		adv := aitAdversarialCheck(t, r.fn)
+		adversarial[r.name] = adv
+		stats = append(stats, ruleStat{Name: r.name, Found: found, Accepted: accepted, Eligible: adv.OK})
+	}
+	adversarial["control"] = aitAdversarialCheck(t, aitRuleSubstringControl)
+
+	costP50, costP90, _ := aitPercentile(meta.Costs)
+	latP50, latP90, _ := aitPercentile(meta.Latencies)
+
+	perDocument := map[string]aitSummaryDocJSON{}
+	for file, total := range meta.TotalCostByFile {
+		docCostP50, docCostP90, _ := aitPercentile(meta.CostsByFile[file])
+		docLatP50, docLatP90, _ := aitPercentile(meta.LatenciesByFile[file])
+		perDocument[file] = aitSummaryDocJSON{
+			TotalCost: total, CostP50: docCostP50, CostP90: docCostP90,
+			LatencyP50: docLatP50, LatencyP90: docLatP90,
+		}
+	}
 
 	// ceiling: maxRun is the highest run number seen anywhere, so a run tier that failed for
 	// EVERY document (no record at all, not even an errored one) undercounts; revisit if
 	// run.py's own per-file attempt count needs recording alongside answers.jsonl.
-	missingRuns := textDocs*maxRun - len(answers)
+	missingRuns := textDocs*meta.MaxRun - len(answers)
 	if missingRuns < 0 {
 		missingRuns = 0
 	}
@@ -536,13 +644,15 @@ func aitBuildSummary(t *testing.T, key aitKey, dumps []docDump, tokensByFile map
 		NotRead:     result.NotRead,
 		Fields:      fields,
 		Rules:       rules,
+		Adversarial: adversarial,
 		PickedRule:  aitPickRule(stats),
 		CostP50:     costP50,
 		CostP90:     costP90,
 		LatencyP50:  latP50,
 		LatencyP90:  latP90,
-		TotalCost:   totalCost,
+		TotalCost:   meta.TotalCost,
 		MissingRuns: missingRuns,
+		PerDocument: perDocument,
 	}
 }
 
@@ -579,15 +689,15 @@ func TestAIText_Score(t *testing.T) {
 
 	dumps, tokensByFile := aitReadDumps(t, out)
 	dumps = append(dumps, aitReadTextlessDumps(t, out)...)
-	aitCheckKeyCoversScoredDumps(t, key, dumps)
+	aitCheckKeyManifestCoverage(t, key, dumps, notScored)
 
 	result := aitScoreConfirmed(key, dumps, answers, notScored)
 	if err := aitWriteJSON(filepath.Join(out, "cells.json"), result.Cells); err != nil {
 		t.Fatalf("write cells.json: %v", err)
 	}
 
-	costs, latencies, totalCost, maxRun := aitReadAnswerMeta(t, answersPath)
-	summary := aitBuildSummary(t, key, dumps, tokensByFile, answers, answerErrors, result, costs, latencies, totalCost, maxRun)
+	meta := aitReadAnswerMeta(t, answersPath)
+	summary := aitBuildSummary(t, key, dumps, tokensByFile, answers, answerErrors, result, meta)
 	if err := aitWriteJSON(filepath.Join(out, "summary.json"), summary); err != nil {
 		t.Fatalf("write summary.json: %v", err)
 	}

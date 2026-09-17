@@ -116,8 +116,9 @@ def call(dump, model, run):
 
 
 def _nearest_existing_dir(path):
-    # `git -C <missing dir>` fails closed as "not a work tree" -- wrongly, since a not-yet-
-    # created subdirectory of a repo is still inside it once created. Walk up to a real one.
+    # `git -C <missing dir>` errors out (non-zero), which the caller reads as "not inside a
+    # work tree" and silently PERMITS -- failing open on a not-yet-created in-repo path.
+    # Walk up to a real directory so the check actually runs against the repo.
     path = os.path.abspath(path)
     while not os.path.isdir(path):
         parent = os.path.dirname(path)

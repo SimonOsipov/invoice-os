@@ -497,31 +497,55 @@ func aitCheckCorpusRows(key aitKey, corpusKeyPath string) error {
 		return fmt.Errorf("parse corpus key %s: %w", corpusKeyPath, err)
 	}
 
-	files := make([]string, 0, len(key.Docs))
+	keyFiles := make([]string, 0, len(key.Docs))
 	for file, doc := range key.Docs {
 		if doc.Source == "expectByLayout" {
-			files = append(files, file)
+			keyFiles = append(keyFiles, file)
 		}
 	}
-	sort.Strings(files)
+	sort.Strings(keyFiles)
 
-	for _, file := range files {
-		doc := key.Docs[file]
-		row, ok := rows[file]
-		if !ok {
+	// Direction 1: a corpus-sourced key document the committed export does not recognise.
+	for _, file := range keyFiles {
+		if _, ok := rows[file]; !ok {
 			return fmt.Errorf("corpus key %s carries no row for %s, a corpus layout the answer key holds", corpusKeyPath, file)
 		}
-		// Walk the committed row's own fields, not the key's: a field the key dropped must
-		// still be caught, not silently skipped.
-		fields := make([]string, 0, len(row))
+	}
+
+	// Direction 2: a committed layout the key omits entirely (D-A08), and per field, a
+	// reading the committed row does not hold or a field outside its 8 written ones (D-A07).
+	rowFiles := make([]string, 0, len(rows))
+	for file := range rows {
+		rowFiles = append(rowFiles, file)
+	}
+	sort.Strings(rowFiles)
+
+	for _, file := range rowFiles {
+		doc, ok := key.Docs[file]
+		if !ok || doc.Source != "expectByLayout" {
+			return fmt.Errorf("corpus key %s: the answer key does not hold corpus layout %s", corpusKeyPath, file)
+		}
+		row := rows[file]
+
+		fieldSet := map[string]bool{}
 		for f := range row {
+			fieldSet[f] = true
+		}
+		for f := range doc.Fields {
+			fieldSet[f] = true
+		}
+		fields := make([]string, 0, len(fieldSet))
+		for f := range fieldSet {
 			fields = append(fields, f)
 		}
 		sort.Strings(fields)
+
 		for _, field := range fields {
-			want := row[field]
-			kf, ok := doc.Fields[field]
-			if !ok || !aitStringListsEqual(kf.Values, want) {
+			want, wantOK := row[field]
+			if !wantOK {
+				return fmt.Errorf("corpus key %s: %s field %s is outside the committed corpus fields", corpusKeyPath, file, field)
+			}
+			if kf := doc.Fields[field]; !aitStringListsEqual(kf.Values, want) {
 				return fmt.Errorf("corpus key %s: %s field %s disagrees with the answer key (committed %v, key %v)", corpusKeyPath, file, field, want, kf.Values)
 			}
 		}

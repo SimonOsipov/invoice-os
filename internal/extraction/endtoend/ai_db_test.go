@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/importer"
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // eeNoInvoiceNumberMessage is internal/importer's noInvoiceNumberMessage, unexported there and
@@ -16,16 +19,20 @@ import (
 // alone).
 const eeNoInvoiceNumberMessage = "This document was read, but no invoice number was found on it. Enter this invoice manually to carry on."
 
-// eeAI is a fixed-answer AIReader stub: no network, always the same answer.
+// eeAIUnavailableMessage is internal/importer's aiUnavailableMessage, reproduced (unexported there).
+const eeAIUnavailableMessage = "AI reading was unavailable when this document was imported, so no invoice fields were taken from it. Enter this invoice manually to carry on."
+
+// eeAI is a fixed-answer AIReader stub: no network, always the same answer or the same error.
 type eeAI struct {
 	enabled bool
 	answer  map[string]any
+	err     error
 }
 
 func (a *eeAI) Enabled() bool { return a.enabled }
 
 func (a *eeAI) Call(context.Context, ai.Request) (map[string]any, error) {
-	return a.answer, nil
+	return a.answer, a.err
 }
 
 // eeWithAI swaps the worker's AI seam.
@@ -177,4 +184,103 @@ func eeReasonStr(p *string) string {
 		return "NULL"
 	}
 	return *p
+}
+
+// AC 1/2/3 (AIR-04-02). A document the engine and a blank AI would both file on their own
+// prints reads: an unavailable AI call quarantines it under the AI's own sentence and carries
+// no reading forward; the blank-AI control on the same document files a draft.
+func TestRLS_EndToEndAnUnavailableAIQuarantinesTheDocument(t *testing.T) {
+	ctx := t.Context()
+	eeRequireFixtures(t, []string{eeLineFixture})
+	body := aiWireBody(t,
+		aiTok("Invoice Number: INV-4410", 0.10, 0.10, 0.45, 0.12),
+		aiTok("Invoice Date: 2026-07-14", 0.10, 0.14, 0.45, 0.16),
+		aiTok("Total: 2,150.00", 0.10, 0.18, 0.45, 0.20),
+	)
+
+	t.Run("AI unavailable", func(t *testing.T) {
+		h := eeRequire(t)
+		w := eeSeed(t, ctx, eeLineFixture)
+		stub := &eeAI{enabled: true, err: ai.ErrUnavailable}
+		eeExtract(t, ctx, w, eeLineFixture, eeWithText(eeReplayReader(t, body)), eeWithAI(stub))
+		res := eeImport(t, ctx, w)
+
+		if res.RowsInvalid != 1 {
+			t.Fatalf("RowsInvalid = %d, want 1: %+v", res.RowsInvalid, res)
+		}
+		if res.QuarantinedInvoices != 1 {
+			t.Errorf("QuarantinedInvoices = %d, want 1", res.QuarantinedInvoices)
+		}
+		if len(res.Errors) != 1 || res.Errors[0].Field != "invoice_number" || res.Errors[0].Message != eeAIUnavailableMessage {
+			t.Errorf("Errors = %+v, want exactly one {Field: invoice_number, Message: %q}", res.Errors, eeAIUnavailableMessage)
+		}
+
+		if got := eeInvoices(t, ctx, w.entityID); len(got) != 0 {
+			t.Errorf("entity %s holds %d invoice(s), want 0 -- an unavailable AI call must not file a draft", w.entityID, len(got))
+		}
+
+		svc := importer.NewService(importer.NewStore(h.app), invoice.NewStore(h.app), eeGate{})
+		rctx := auth.WithIdentity(ctx, auth.Identity{Subject: w.subject, Role: "authenticated", TenantID: w.tenantID})
+		reading, err := svc.CarriedReading(rctx, w.documentID)
+		if err != nil || reading != nil {
+			t.Errorf("CarriedReading = (%v, %v), want (nil, nil)", reading, err)
+		}
+	})
+
+	t.Run("AI blank control", func(t *testing.T) {
+		w := eeSeed(t, ctx, eeLineFixture)
+		stub := &eeAI{enabled: true}
+		eeExtract(t, ctx, w, eeLineFixture, eeWithText(eeReplayReader(t, body)), eeWithAI(stub))
+		res := eeImport(t, ctx, w)
+
+		if res.ReadyInvoices != 1 {
+			t.Fatalf("ReadyInvoices = %d, want 1: %+v", res.ReadyInvoices, res)
+		}
+		got := eeInvoices(t, ctx, w.entityID)
+		if len(got) != 1 {
+			t.Fatalf("entity %s holds %d invoice(s), want exactly 1", w.entityID, len(got))
+		}
+		if got[0].number != "INV-4410" {
+			t.Errorf("invoice_number = %q, want %q", got[0].number, "INV-4410")
+		}
+	})
+}
+
+// --- AIR-04-02 T09 -- GUARD -----------------------------------------------------------------
+
+// AC-6. With no AI configured, the import behaves exactly as today: no document_ai_reading row,
+// and the document files under its own printed number.
+func TestRLS_EndToEndNoKeyWritesNoMarker(t *testing.T) {
+	ctx := t.Context()
+	eeRequireFixtures(t, []string{eeLineFixture})
+	body := aiWireBody(t,
+		aiTok("Invoice Number: INV-4410", 0.10, 0.10, 0.45, 0.12),
+		aiTok("Invoice Date: 2026-07-14", 0.10, 0.14, 0.45, 0.16),
+		aiTok("Total: 2,150.00", 0.10, 0.18, 0.45, 0.20),
+	)
+
+	w := eeSeed(t, ctx, eeLineFixture)
+	jobID := eeExtract(t, ctx, w, eeLineFixture, eeWithText(eeReplayReader(t, body)))
+	res := eeImport(t, ctx, w)
+
+	rows := eeFieldResults(t, ctx, jobID)
+	if len(rows) == 0 {
+		t.Fatal("eeFieldResults returned 0 rows; the absence check below would pass vacuously")
+	}
+	for _, r := range rows {
+		if r.name == "document_ai_reading" {
+			t.Fatalf("field_results carries a document_ai_reading row %+v; the AI is nil, so no marker should ever be written", r)
+		}
+	}
+
+	if res.ReadyInvoices != 1 {
+		t.Fatalf("ReadyInvoices = %d, want 1: %+v", res.ReadyInvoices, res)
+	}
+	got := eeInvoices(t, ctx, w.entityID)
+	if len(got) != 1 {
+		t.Fatalf("entity %s holds %d invoice(s), want exactly 1", w.entityID, len(got))
+	}
+	if got[0].number != "INV-4410" {
+		t.Errorf("invoice_number = %q, want %q", got[0].number, "INV-4410")
+	}
 }

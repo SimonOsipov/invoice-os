@@ -111,13 +111,13 @@ func TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals(t *testing.T) {
 		t.Errorf("ac2Message( appears %d time(s), want at least 4 -- its definition plus the three displaced assertions in document_dup_test.go, document_source_rows_test.go and document_service_db_test.go", ac2Refs)
 	}
 
-	// Presence needle, the other half of the pair: both sentences the mapper returns today must
-	// exist as literals in production. This is what fails when the walk stops reading content,
-	// and it holds on the shipped code, so the absence above cannot pass for the wrong reason.
-	// goStringJoin folds "a" + "b" back into "ab" -- gofmt splits a long literal across lines.
+	// Presence needle, the other half of the pair: all three sentences the mapper returns today
+	// must exist as literals in production. This is what fails when the walk stops reading
+	// content, and it holds on the shipped code, so the absence above cannot pass for the wrong
+	// reason. goStringJoin folds "a" + "b" back into "ab" -- gofmt splits a long literal across lines.
 	joined := goStringJoin.ReplaceAllString(prod.String(), "")
-	ac1, ac2 := ac1Message(t), ac2Message(t)
-	for _, msg := range []string{ac1, ac2} {
+	ac1, ac2, ac3 := ac1Message(t), ac2Message(t), ac3Message(t)
+	for _, msg := range []string{ac1, ac2, ac3} {
 		if msg == "" {
 			t.Fatal("the mapper returned an empty message; the search below would match every file")
 		}
@@ -127,6 +127,12 @@ func TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals(t *testing.T) {
 	}
 	if ac1 == ac2 {
 		t.Errorf("the poor-scan and read-document branches return the same message %q; AC-1 and AC-2 are two different sentences", ac1)
+	}
+	if ac1 == ac3 {
+		t.Errorf("the poor-scan and AI-unavailable branches return the same message %q; each branch needs its own sentence", ac1)
+	}
+	if ac2 == ac3 {
+		t.Errorf("ac2 == ac3: the read-document and AI-unavailable branches return the same message %q", ac2)
 	}
 }
 

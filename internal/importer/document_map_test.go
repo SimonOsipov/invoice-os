@@ -685,6 +685,23 @@ func TestCarriedInput_OnlyTheNoNumberQuarantineIsCarried(t *testing.T) {
 	}
 }
 
+// --- AIR-04-02 T06 (AC-3) -- GUARD ---------------------------------------------------------
+
+// TestCarriedInput_AnAIUnavailableDocumentCarriesNothing: the marker-only set refuses on the
+// message gate (carriedInput checks against noInvoiceNumberMessage) independently of the
+// all-null floor -- both already refuse it on the scaffold, so this pins the AC-3 outcome
+// rather than discriminating which clause fired.
+func TestCarriedInput_AnAIUnavailableDocumentCarriesNothing(t *testing.T) {
+	if _, ok := carriedInput("doc-1", aiUnavailableFieldSet()); ok {
+		t.Error("carriedInput(AI-unavailable marker) ok = true, want false")
+	}
+	// Control: the sibling no-number reading must still be carriable, or the negative above
+	// holds vacuously.
+	if _, ok := carriedInput("doc-1", readDocumentNoNumberFieldSet()); !ok {
+		t.Fatal("carriedInput(read-document, no-number) ok = false, want true -- control failed, the negative above proves nothing")
+	}
+}
+
 // --- Line-item grouping (retiring D-13) --------------------------------------------------
 
 // AC-1: a settled extraction carrying line_items[1..3].* rows produces a LineItems of length
@@ -1298,6 +1315,28 @@ func ac2Message(t *testing.T) string {
 	return rowErr.Message
 }
 
+// aiUnavailableFieldSet is AC-2 of AIR-04-02: the whole field set the extraction worker writes
+// when the AI call failed -- one document_ai_reading row, reason unreadable.
+func aiUnavailableFieldSet() SettledExtraction {
+	return SettledExtraction{
+		JobID: "job-air-04-ai-unavailable",
+		Fields: []extractedField{
+			{Name: "document_ai_reading", Value: nil, Reason: mpPtr("unreadable")},
+		},
+	}
+}
+
+// ac3Message reads the AI-unavailable branch's message off the mapper, as ac1Message/ac2Message
+// do for their own branches.
+func ac3Message(t *testing.T) string {
+	t.Helper()
+	_, rowErr := documentCreateInput("entity-1", "doc-1", aiUnavailableFieldSet())
+	if rowErr == nil {
+		t.Fatal("documentCreateInput over the AI-unavailable field set returned no RowError; every expectation built on it is void")
+	}
+	return rowErr.Message
+}
+
 // assertPoorScanMessage pins AC-1: the message blames the scan and carries the upstream fix.
 // scan / supplier / pdf are the three anchors AC-1 itself names; nothing else is pinned.
 func assertPoorScanMessage(t *testing.T, msg string) {
@@ -1498,6 +1537,107 @@ func TestDocumentCreateInput_NoQuarantineMessageCarriesARuleKey(t *testing.T) {
 	}
 }
 
+// --- AIR-04-02 T01 (AC-2) -----------------------------------------------------------------
+
+// TestDocumentCreateInput_TheAIMarkerTakesTheAIUnavailableBranch: the marker-only field set
+// quarantines with its own sentence, distinct from the poor-scan and read-document ones.
+func TestDocumentCreateInput_TheAIMarkerTakesTheAIUnavailableBranch(t *testing.T) {
+	_, rowErr := documentCreateInput("entity-1", "doc-1", aiUnavailableFieldSet())
+	if rowErr == nil {
+		t.Fatal("rowErr = nil, want a structural RowError -- the AI-unavailable marker carries no invoice number")
+	}
+	if rowErr.Field != "invoice_number" {
+		t.Errorf("Field = %q, want %q", rowErr.Field, "invoice_number")
+	}
+	if rowErr.RuleKey != "" {
+		t.Errorf("RuleKey = %q, want empty", rowErr.RuleKey)
+	}
+	msg := rowErr.Message
+	if !strings.HasPrefix(msg, "AI reading was unavailable") {
+		t.Errorf("Message = %q, want one starting %q", msg, "AI reading was unavailable")
+	}
+	if !strings.HasSuffix(msg, "Enter this invoice manually to carry on.") {
+		t.Errorf("Message = %q, want one ending %q", msg, "Enter this invoice manually to carry on.")
+	}
+	if msg == ac1Message(t) {
+		t.Errorf("Message = %q, same as the poor-scan branch -- AC-2 wants a third, distinct sentence", msg)
+	}
+	if msg == ac2Message(t) {
+		t.Errorf("Message = %q, same as the read-document branch -- AC-2 wants a third, distinct sentence", msg)
+	}
+}
+
+// --- AIR-04-02 T02 (AC-2) -----------------------------------------------------------------
+
+// TestIsPoorScan_TheAIMarkerIsNotAPoorScan: the two marker predicates never both admit the
+// other's field set.
+func TestIsPoorScan_TheAIMarkerIsNotAPoorScan(t *testing.T) {
+	if isPoorScan(aiUnavailableFieldSet().Fields) {
+		t.Error("isPoorScan(AI marker) = true, want false -- the AI marker is not a poor scan")
+	}
+	if isAIUnavailable(poorScanFieldSet().Fields) {
+		t.Error("isAIUnavailable(poor scan) = true, want false -- the poor scan is not the AI marker")
+	}
+	// Controls: each predicate must still admit its OWN field set, or the negatives above hold vacuously.
+	if !isPoorScan(poorScanFieldSet().Fields) {
+		t.Fatal("isPoorScan(poor scan) = false, want true -- control failed, the negatives above prove nothing")
+	}
+	if !isAIUnavailable(aiUnavailableFieldSet().Fields) {
+		t.Fatal("isAIUnavailable(AI marker) = false, want true -- control failed, the negatives above prove nothing")
+	}
+}
+
+// --- AIR-04-02 T03 (AC-2) -----------------------------------------------------------------
+
+// TestDocumentCreateInput_OnlyTheExactAIMarkerSetTakesTheAIBranch is a GUARD: every shape that
+// is NOT exactly the one-row marker set must still fall through to today's read-document
+// message, never the AI-unavailable one. It is green against both the scaffold and the wired
+// predicate -- isAIUnavailable's false-stub sends every row here already.
+func TestDocumentCreateInput_OnlyTheExactAIMarkerSetTakesTheAIBranch(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields []extractedField
+	}{
+		{
+			name:   "marker with an empty reason",
+			fields: []extractedField{{Name: "document_ai_reading", Value: nil, Reason: mpPtr("")}},
+		},
+		{
+			name:   "marker with no reason at all",
+			fields: []extractedField{{Name: "document_ai_reading", Value: nil, Reason: nil}},
+		},
+		{
+			name: "marker plus one other field",
+			fields: []extractedField{
+				{Name: "document_ai_reading", Value: nil, Reason: mpPtr("unreadable")},
+				{Name: "total", Value: mpPtr("50.00")},
+			},
+		},
+		{
+			name: "marker plus a poor-scan row",
+			fields: []extractedField{
+				{Name: "document_ai_reading", Value: nil, Reason: mpPtr("unreadable")},
+				{Name: "document_text_layer", Value: nil, Reason: mpPtr("unreadable")},
+			},
+		},
+		{
+			name:   "a lone invoice_number marked unreadable, not the AI field",
+			fields: []extractedField{{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rowErr := documentCreateInput("entity-1", "doc-1", SettledExtraction{Fields: tc.fields})
+			if rowErr == nil {
+				t.Fatal("rowErr = nil, want a structural RowError")
+			}
+			if rowErr.Message != ac2Message(t) {
+				t.Errorf("Message = %q, want the read-document message %q", rowErr.Message, ac2Message(t))
+			}
+		})
+	}
+}
+
 type quarantineBranch struct {
 	name      string
 	ex        SettledExtraction
@@ -1509,6 +1649,7 @@ func quarantineBranches() []quarantineBranch {
 	return []quarantineBranch{
 		{name: "poor scan", ex: poorScanFieldSet(), wantField: "invoice_number"},
 		{name: "read document, no number", ex: readDocumentNoNumberFieldSet(), wantField: "invoice_number"},
+		{name: "AI unavailable", ex: aiUnavailableFieldSet(), wantField: "invoice_number"},
 		{
 			name: "whitespace-only number",
 			ex: SettledExtraction{Fields: []extractedField{

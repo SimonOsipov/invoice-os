@@ -170,6 +170,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     EXTR36_E2E_02,
     EXTR36_E2E_01,
     "AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine",
+    'AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -426,5 +427,38 @@ describe('[extr-36] declaration order is load-bearing', () => {
       stripComments(source).includes('describe.configure'),
       'import-wizard.spec.ts now calls describe.configure -- a parallel or reordering mode undoes the declaration order above',
     ).toBe(false)
+  })
+})
+
+// AIR-04-04. AI_UNAVAILABLE_REVIEW, AI_UNAVAILABLE_MESSAGE and AI_UNAVAILABLE_FIELD each pin a
+// different owner (no shared module e2e/ can import), so each gets its own read-back, the
+// EXTR-15-12 pattern above.
+describe('[air-04] the deployed literals track their owners', () => {
+  const documentRunSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/documentRun.ts'), 'utf8')
+  const importerSrc = readFileSync(join(REPO_ROOT, 'internal/importer/document.go'), 'utf8')
+  const aireadingSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/aireading.go'), 'utf8')
+
+  function literalOf(name: string): string {
+    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source)
+    expect(m, `${name} is gone from import-wizard.spec.ts`).not.toBeNull()
+    return (m as RegExpExecArray)[1]
+  }
+
+  it('AI_UNAVAILABLE_REVIEW is documentRun.ts\'s AI_UNAVAILABLE_REFUSAL, byte for byte', () => {
+    const m = /export const AI_UNAVAILABLE_REFUSAL =\s*'([^']+)'/.exec(documentRunSrc)
+    expect(m, 'AI_UNAVAILABLE_REFUSAL is gone from documentRun.ts').not.toBeNull()
+    expect(literalOf('AI_UNAVAILABLE_REVIEW')).toBe((m as RegExpExecArray)[1])
+  })
+
+  it('AI_UNAVAILABLE_MESSAGE is document.go\'s aiUnavailableMessage, byte for byte', () => {
+    const m = /aiUnavailableMessage = "([^"]+)"/.exec(importerSrc)
+    expect(m, 'aiUnavailableMessage is gone from internal/importer/document.go').not.toBeNull()
+    expect(literalOf('AI_UNAVAILABLE_MESSAGE')).toBe((m as RegExpExecArray)[1])
+  })
+
+  it('AI_UNAVAILABLE_FIELD is aireading.go\'s aiUnavailableField, byte for byte', () => {
+    const m = /const aiUnavailableField = "([^"]+)"/.exec(aireadingSrc)
+    expect(m, 'aiUnavailableField is gone from internal/extraction/aireading.go').not.toBeNull()
+    expect(literalOf('AI_UNAVAILABLE_FIELD')).toBe((m as RegExpExecArray)[1])
   })
 })

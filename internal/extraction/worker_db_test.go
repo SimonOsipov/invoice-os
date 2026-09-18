@@ -4278,10 +4278,10 @@ func TestRLS_ExtractWorkerSkipsTheAIWithoutText(t *testing.T) {
 	})
 }
 
-// T04. An AI error must never change the written rows: the engine's own result stands, exactly
-// as if the AI had been off. The premise check proves the same answer, un-errored, WOULD have
-// changed the row -- otherwise the comparison below would hold over nothing.
-func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAIErrors(t *testing.T) {
+// T07. A refused AI call also sends the document to manual entry (BQ1): only the marker is
+// written, not the engine's own result. The premise check proves an unerrored answer WOULD
+// have changed the rows -- otherwise the comparison would hold over nothing.
+func TestRLS_ExtractWorkerWritesTheMarkerWhenTheAICallIsRefused(t *testing.T) {
 	ctx := t.Context()
 
 	page := extraction.Page{
@@ -4289,29 +4289,21 @@ func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAIErrors(t *testing.T) {
 		Tokens: []extraction.Token{{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}}},
 	}
 	answer := map[string]any{"invoice_number": "20417"}
+	render := func(r wkAIRun) []string { return append(wkStrRows(r.rows), wkStrBoxes(r.boxes)...) }
 
-	run := func(riverJobID int64, reader extraction.AIReader) []string {
-		tenantID, documentID := wkFixture(t, ctx)
-		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
-		ew.AI = reader
-		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
-			t.Fatalf("Work: %v", err)
-		}
-		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
-		stAssertJobState(t, ctx, xid, "succeeded")
-		return append(wkStrRows(wpResults(t, ctx, xid)), wkStrBoxes(wkFieldBoxes(t, ctx, xid))...)
-	}
-
-	off := run(930007, nil)
-	changed := run(930008, &wkAI{enabled: true, answer: answer})
+	off := render(wkRunAI(t, ctx, 930007, []extraction.Page{page}, nil))
+	changed := render(wkRunAI(t, ctx, 930008, []extraction.Page{page}, &wkAI{enabled: true, answer: answer}))
 	if slices.Equal(off, changed) {
 		t.Fatalf("an unerrored AI answer of %v left the rows unchanged from the AI-off run; the premise this test needs is not true on this fixture", answer)
 	}
-
-	errored := run(930009, &wkAI{enabled: true, answer: answer, err: ai.ErrUnavailable})
-	if !slices.Equal(off, errored) {
-		t.Errorf("an AI error changed the written rows:\n off:     %v\n errored: %v", off, errored)
+	for _, s := range off {
+		if strings.Contains(s, "document_ai_reading") {
+			t.Errorf("the AI-off control wrote a document_ai_reading entry: %s", s)
+		}
 	}
+
+	errored := wkRunAI(t, ctx, 930009, []extraction.Page{page}, &wkAI{enabled: true, answer: answer, err: errors.New("ai: refused: HTTP 402")})
+	wkAssertOnlyMarker(t, ctx, errored.jobID, errored.rows)
 }
 
 // T05. The real fake client, through the worker: a text token carries the fake's steering
@@ -4398,6 +4390,290 @@ func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 	}
 	if calls[0]["outcome"] != "fake" {
 		t.Errorf("the ai call line carries outcome %v, want %q", calls[0]["outcome"], "fake")
+	}
+}
+
+// --- AIR-04-01: an unavailable AI writes only a marker row ---------------------------
+
+// wkAIR04Page is the shared page for T03/T04/T06/T07: an engine-decided invoice_number, so a
+// written marker can only come from the AI branch.
+func wkAIR04Page() extraction.Page {
+	return extraction.Page{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+		{Text: "Invoice Number: INV-4410", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.10, X1: 0.5, Y1: 0.12}},
+		{Text: "Invoice Date: 2026-07-14", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.14, X1: 0.5, Y1: 0.16}},
+		{Text: "Total: 2,150.00", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.18, X1: 0.5, Y1: 0.20}},
+	}}
+}
+
+// wkAssertOnlyMarker is the AIR-04-01 marker's whole shape: the job's only row, value NULL,
+// reason unreadable, rank 0, and no box.
+func wkAssertOnlyMarker(t *testing.T, ctx context.Context, jobID string, rows []wpRow) {
+	t.Helper()
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want exactly one (the marker)", rows)
+	}
+	wpAssertRankZero(t, rows, "document_ai_reading", nil, stPtr("unreadable"))
+
+	boxes := wkFieldBoxes(t, ctx, jobID)
+	if len(boxes) != 1 {
+		t.Fatalf("boxes = %v, want exactly 1 (the marker's, all-NULL)", boxes)
+	}
+	if b := boxes[0]; b.page != nil || b.x0 != nil || b.y0 != nil || b.x1 != nil || b.y1 != nil {
+		t.Errorf("marker box = %s, want all-NULL", b)
+	}
+}
+
+// T03. An unavailable AI call writes only the marker row -- no engine rows, no retry, one
+// audit event.
+func TestRLS_ExtractWorkerWritesOnlyTheMarkerWhenTheAIIsUnavailable(t *testing.T) {
+	ctx := t.Context()
+	page := wkAIR04Page()
+
+	stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "INV-4410"}, err: ai.ErrUnavailable}
+	r := wkRunAI(t, ctx, 930101, []extraction.Page{page}, stub)
+
+	wkAssertOnlyMarker(t, ctx, r.jobID, r.rows)
+	if k := stJobFailureKind(t, ctx, r.jobID); k != nil {
+		t.Errorf("failure_kind = %s, want NULL", wkStr(k))
+	}
+	if e := stJobLastError(t, ctx, r.jobID); e != nil {
+		t.Errorf("last_error = %s, want NULL", wkStr(e))
+	}
+	if n := stub.count(); n != 1 {
+		t.Errorf("the AI seam saw %d call(s), want exactly 1", n)
+	}
+	if len(r.audit) != 1 {
+		t.Fatalf("audit events = %d, want exactly 1", len(r.audit))
+	}
+	if ev := r.audit[0]; !ev.Succeeded || ev.FieldCount != 1 || ev.FlaggedCount != 1 || ev.FailureKind != "" {
+		t.Errorf("audit = %+v, want {Succeeded true, FieldCount 1, FlaggedCount 1, FailureKind \"\"}", ev)
+	}
+
+	// Control: the same page with a blank stub decides the engine's row and writes no marker.
+	off := wkRunAI(t, ctx, 930102, []extraction.Page{page}, &wkAI{enabled: true})
+	wpAssertRankZero(t, off.rows, "invoice_number", stPtr("INV-4410"), nil)
+	for _, row := range off.rows {
+		if row.name == "document_ai_reading" {
+			t.Errorf("control wrote a %q row, want none", row.name)
+		}
+	}
+}
+
+// T04 GUARD. The AI off, whether nil or a disabled stub answering ErrOff, writes no marker
+// and decides the engine's row as normal (AC-6).
+func TestRLS_ExtractWorkerWithTheAIOffWritesNoMarker(t *testing.T) {
+	ctx := t.Context()
+	page := wkAIR04Page()
+
+	nilRun := wkRunAI(t, ctx, 930103, []extraction.Page{page}, nil)
+	wpAssertRankZero(t, nilRun.rows, "invoice_number", stPtr("INV-4410"), nil)
+	for _, row := range nilRun.rows {
+		if row.name == "document_ai_reading" {
+			t.Errorf("nil AI wrote a %q row, want none", row.name)
+		}
+	}
+
+	stub := &wkAI{enabled: false, err: ai.ErrOff}
+	offRun := wkRunAI(t, ctx, 930104, []extraction.Page{page}, stub)
+	wpAssertRankZero(t, offRun.rows, "invoice_number", stPtr("INV-4410"), nil)
+	for _, row := range offRun.rows {
+		if row.name == "document_ai_reading" {
+			t.Errorf("disabled stub wrote a %q row, want none", row.name)
+		}
+	}
+	if n := stub.count(); n != 0 {
+		t.Errorf("the disabled stub saw %d call(s), want 0", n)
+	}
+}
+
+// T05. The real fake client's unavailable steer reaches askAI through the worker, and the
+// fake logs outcome "fake" for it (AC-8; production logs "unavailable").
+func TestRLS_ExtractWorkerReadsTheFakeUnavailableSteer(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+
+	base := wkAIR04Page()
+	page := extraction.Page{
+		Number: base.Number, WidthPt: base.WidthPt, HeightPt: base.HeightPt,
+		Tokens: append(append([]extraction.Token{}, base.Tokens...),
+			extraction.Token{Text: "AIFAKE-UNAVAILABLE", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.90, X1: 0.5, Y1: 0.92}}),
+	}
+
+	r := wkRunAI(t, ctx, 930105, []extraction.Page{page}, client)
+	wkAssertOnlyMarker(t, ctx, r.jobID, r.rows)
+
+	var calls []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "ai call" {
+			calls = append(calls, m)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("the logger recorded %d %q line(s), want exactly 1: %v", len(calls), "ai call", calls)
+	}
+	if calls[0]["purpose"] != "document" {
+		t.Errorf("the ai call line carries purpose %v, want %q", calls[0]["purpose"], "document")
+	}
+	if calls[0]["outcome"] != "fake" {
+		t.Errorf("the ai call line carries outcome %v, want %q", calls[0]["outcome"], "fake")
+	}
+	if calls[0]["tenant_id"] != r.tenantID {
+		t.Errorf("the ai call line carries tenant_id %v, want %s", calls[0]["tenant_id"], r.tenantID)
+	}
+}
+
+// T06. A replay of the same River job after the marker succeeded makes no second AI call and
+// leaves the marker as the job's only row (Q13: no re-read).
+func TestRLS_ExtractWorkerDoesNotRetryAnUnavailableDocument(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wkAIR04Page()}}, wpStoreRules(t).load, &wkAuditRecorder{})
+	ew.AI = stub
+	const riverJobID = int64(930106)
+	key := uuid.NewString()
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+
+	if n := stub.count(); n != 1 {
+		t.Errorf("the AI seam saw %d call(s) across both runs, want exactly 1", n)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	wkAssertOnlyMarker(t, ctx, xid, wpResults(t, ctx, xid))
+	stAssertJobState(t, ctx, xid, "succeeded")
+}
+
+// --- AIR-04-01 adversarial ------------------------------------------------------------
+
+// A payload the real fake cannot decode is a Call error like any other (BQ1): only the marker.
+func TestRLS_ExtractWorkerWritesTheMarkerForABadFakePayload(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	client, err := ai.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	base := wkAIR04Page()
+	page := extraction.Page{
+		Number: base.Number, WidthPt: base.WidthPt, HeightPt: base.HeightPt,
+		Tokens: append(append([]extraction.Token{}, base.Tokens...),
+			extraction.Token{Text: "AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString([]byte("[]")),
+				Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.90, X1: 0.5, Y1: 0.92}}),
+	}
+
+	r := wkRunAI(t, ctx, 930107, []extraction.Page{page}, client)
+	wkAssertOnlyMarker(t, ctx, r.jobID, r.rows)
+}
+
+// An enabled reader that answers ErrOff, bare or wrapped, writes today's rows, never the marker.
+func TestRLS_ExtractWorkerAnErrOffCallWritesTheEngineRows(t *testing.T) {
+	ctx := t.Context()
+	pages := []extraction.Page{wkAIR04Page()}
+	render := func(r wkAIRun) []string { return append(wkStrRows(r.rows), wkStrBoxes(r.boxes)...) }
+	off := render(wkRunAI(t, ctx, 930108, pages, nil))
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"bare", ai.ErrOff},
+		{"wrapped", fmt.Errorf("ai: call: %w", ai.ErrOff)},
+	}
+	for i, c := range cases {
+		stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "OTHER-1"}, err: c.err}
+		if got := render(wkRunAI(t, ctx, 930109+int64(i), pages, stub)); !slices.Equal(off, got) {
+			t.Errorf("%s: rows differ from the AI-off run:\n off: %v\n got: %v", c.name, off, got)
+		}
+		if n := stub.count(); n != 1 {
+			t.Errorf("%s: the AI seam saw %d call(s), want 1 (the ErrOff branch was not reached)", c.name, n)
+		}
+	}
+}
+
+// The no-text and mock arms never ask the AI, so a failing AI cannot put the marker there.
+func TestRLS_ExtractWorkerAnUnavailableAIDoesNotReachTheNoTextArms(t *testing.T) {
+	ctx := t.Context()
+
+	t.Run("no-text arm, TextChars is 0", func(t *testing.T) {
+		stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+		r := wkRunAI(t, ctx, 930111, []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}, stub)
+		if len(r.rows) != 1 {
+			t.Fatalf("rows = %v, want exactly the text-layer verdict", r.rows)
+		}
+		wpAssertRankZero(t, r.rows, "document_text_layer", nil, stPtr("unreadable"))
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s), want 0", n)
+		}
+	})
+
+	t.Run("mock arm, Text is nil", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+		ew := wkWorker(t, wkOK(), wkNewOpener())
+		ew.AI = stub
+		const riverJobID = int64(930112)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID))
+		for _, row := range rows {
+			if row.name == "document_ai_reading" {
+				t.Errorf("the mock arm wrote a %q row, want none", row.name)
+			}
+		}
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s), want 0", n)
+		}
+	})
+}
+
+// A replay whose AI would now answer still makes no call and keeps the marker (no re-read).
+func TestRLS_ExtractWorkerReplayOfAMarkerJobIgnoresARecoveredAI(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+	rec := &wkAuditRecorder{}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wkAIR04Page()}}, wpStoreRules(t).load, rec)
+	ew.AI = stub
+	const riverJobID = int64(930113)
+	key := uuid.NewString()
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	stub.mu.Lock()
+	stub.err, stub.answer = nil, map[string]any{"invoice_number": "INV-4410"}
+	stub.mu.Unlock()
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+
+	if n := stub.count(); n != 1 {
+		t.Errorf("the AI seam saw %d call(s) across both runs, want 1", n)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	wkAssertOnlyMarker(t, ctx, xid, wpResults(t, ctx, xid))
+	if ev := rec.events(); len(ev) != 1 || ev[0].FieldCount != 1 {
+		t.Errorf("audit = %+v, want one event with FieldCount 1", ev)
 	}
 }
 
@@ -4697,8 +4973,8 @@ func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
 	}
 }
 
-// Any AI error, including a cancelled or expired call, reads as no answer: the job succeeds
-// with the engine's rows.
+// T08 GUARD. A cancelled or expired caller context reads as no answer: the job succeeds with
+// the engine's rows.
 func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAICallIsCancelled(t *testing.T) {
 	ctx := t.Context()
 	pages := []extraction.Page{{
@@ -4716,20 +4992,12 @@ func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAICallIsCancelled(t *testin
 		t.Fatalf("an unerrored answer %v left the rows unchanged; the comparisons below would hold over nothing", answer)
 	}
 
-	t.Setenv(ai.EnvFake, "true")
-	t.Setenv(ai.EnvKey, "")
-	fake, err := ai.FromEnv(nil)
-	if err != nil {
-		t.Fatalf("ai.FromEnv: %v", err)
-	}
 	for i, c := range []struct {
 		name   string
 		reader extraction.AIReader
 	}{
 		{"canceled", &wkAI{enabled: true, answer: answer, err: context.Canceled}},
 		{"deadline", &wkAI{enabled: true, answer: answer, err: fmt.Errorf("ai: call: %w", context.DeadlineExceeded)}},
-		{"refused", &wkAI{enabled: true, answer: answer, err: errors.New("ai: refused")}},
-		{"real fake unavailable", fake},
 	} {
 		if got := render(wkRunAI(t, ctx, 930023+int64(i), pages, c.reader)); !slices.Equal(off, got) {
 			t.Errorf("%s: the AI error changed the rows:\n off: %v\n got: %v", c.name, off, got)

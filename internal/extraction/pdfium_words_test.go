@@ -145,7 +145,7 @@ func pdwFloor(t *testing.T) float64 {
 }
 
 // pdwCeiling recomputes AC-5's ceiling at test time: the narrowest same-line fragment gap
-// across the 28 generator-built fixtures.
+// across the 29 generator-built fixtures.
 func pdwCeiling(t *testing.T) (ceiling float64, fixture, left, right string) {
 	t.Helper()
 	names := pdcNonChromeFixtures(t)
@@ -392,12 +392,12 @@ func TestPDFiumWords_SplitGapStaysInsideItsMeasuredWindow(t *testing.T) {
 
 // --- AC-4: text and box rules -----------------------------------------------------------------
 
-// AC-4/AC-12 control: on the 28 every group is single-rect, so the merged slice must be
+// AC-4/AC-12 control: on the 29 every group is single-rect, so the merged slice must be
 // byte-identical to today's, index for index.
 func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 28 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 28", len(names))
+	if len(names) != 29 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29", len(names))
 	}
 
 	compared := 0
@@ -429,7 +429,7 @@ func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 }
 
 // AC-12 IS WRONG in the story (see architecture note H): under the relative rule at 0.60, zero
-// of the 28 generator-built fixtures move. Only the two Chrome fixtures do, and each collapses to
+// of the 29 generator-built fixtures move. Only the two Chrome fixtures do, and each collapses to
 // exactly advisory_register.pdf's own word-level count -- the two fixtures become one layout.
 //
 // "before" is the RAW rect count, never Read(): Read() now merges, so sourcing it from there

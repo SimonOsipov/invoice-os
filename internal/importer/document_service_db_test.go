@@ -669,6 +669,15 @@ func docSeedPoorScanExtraction(t *testing.T, super *pgxpool.Pool, tenantID, docu
 	seedExtractionField(t, super, tenantID, job, "document_text_layer", nil, sxPtr("unreadable"), 0, now)
 }
 
+// docSeedAIUnavailableExtraction seeds the rank-0 field set the extraction worker writes when
+// the AI call failed: one document_ai_reading row, NULL value, reason unreadable.
+func docSeedAIUnavailableExtraction(t *testing.T, super *pgxpool.Pool, tenantID, documentID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", now)
+	seedExtractionField(t, super, tenantID, job, "document_ai_reading", nil, sxPtr("unreadable"), 0, now)
+}
+
 // DOC-14: the poor scan reaches the batch-review screen as a scan-quality complaint, not as a
 // machine string about the tenant's data. End-to-end through the real ImportDocument, so a
 // mapper fix that never reaches the wire fails here.
@@ -863,6 +872,9 @@ func TestServiceCarriedReading_NothingToCarryIsNil(t *testing.T) {
 	poorScanDoc := docSeedDocument(t, super, tenantID)
 	docSeedPoorScanExtraction(t, super, tenantID, poorScanDoc)
 
+	aiUnavailableDoc := docSeedDocument(t, super, tenantID)
+	docSeedAIUnavailableExtraction(t, super, tenantID, aiUnavailableDoc)
+
 	numberedDoc := docSeedDocument(t, super, tenantID)
 	docSeedExtraction(t, super, tenantID, numberedDoc, docCleanValues("CR-02-N1"))
 
@@ -885,6 +897,7 @@ func TestServiceCarriedReading_NothingToCarryIsNil(t *testing.T) {
 	}{
 		{"no job", noJobDoc},
 		{"poor scan", poorScanDoc},
+		{"AI unavailable", aiUnavailableDoc},
 		{"numbered", numberedDoc},
 		{"bad date", badDateDoc},
 		{"already filed", filedDoc},
@@ -1135,6 +1148,9 @@ func TestServiceSupplyInvoiceNumber_RefusesWhatCannotBeCarried(t *testing.T) {
 	poorScanDoc := docSeedDocument(t, super, tenantID)
 	docSeedPoorScanExtraction(t, super, tenantID, poorScanDoc)
 
+	aiUnavailableDoc := docSeedDocument(t, super, tenantID)
+	docSeedAIUnavailableExtraction(t, super, tenantID, aiUnavailableDoc)
+
 	numberedDoc := docSeedDocument(t, super, tenantID)
 	docSeedExtraction(t, super, tenantID, numberedDoc, docCleanValues("SN-04-N1"))
 
@@ -1162,6 +1178,7 @@ func TestServiceSupplyInvoiceNumber_RefusesWhatCannotBeCarried(t *testing.T) {
 		wantErr error
 	}{
 		{"poor scan", poorScanDoc, "X1", ErrReadingNotCarried},
+		{"AI unavailable", aiUnavailableDoc, "X5", ErrReadingNotCarried},
 		{"numbered", numberedDoc, "X2", ErrReadingNotCarried},
 		{"all-null", allNullDoc, "X3", ErrReadingNotCarried},
 		{"no job", noJobDoc, "X4", ErrNotFound},

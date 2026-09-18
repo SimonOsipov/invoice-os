@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 
 import {
+  AI_UNAVAILABLE_FIELD,
   applyDraft,
   correctedMarker,
   docMetaLine,
@@ -19,6 +20,7 @@ import {
   fieldNote,
   getExtractionDetail,
   highlightStyle,
+  isAIUnavailable,
   isDrawnBox,
   lockedField,
   normaliseBox,
@@ -1498,5 +1500,52 @@ describe('offeredText, adversarial (AIR-03-04)', () => {
       savableCorrections([offered], { buyer_name: { kind: 'typed', value: '', region: null } }),
       'a cleared offered field posted a blank',
     ).toEqual([])
+  })
+})
+
+// -- isAIUnavailable (AIR-04-03) -------------------------------------------------------------
+
+describe('isAIUnavailable', () => {
+  const marker = (o: Partial<ExtractionFieldState> = {}) =>
+    mkField({ name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', ...o })
+
+  it('AIR04-P1: is true only for the exact marker set', () => {
+    expect(isAIUnavailable([marker()]), 'the marker-only set was not recognised').toBe(true)
+
+    expect(isAIUnavailable([marker({ reason: '' })]), 'a clean reason still read as unavailable').toBe(false)
+    expect(isAIUnavailable([marker(), mkField()]), 'a marker beside another row still read as unavailable').toBe(false)
+    expect(
+      isAIUnavailable([mkField({ name: 'document_text_layer', value: null, region: null, reason: 'unreadable' })]),
+      'the poor-scan marker was mistaken for the AI one',
+    ).toBe(false)
+    expect(isAIUnavailable([]), 'an empty field set read as unavailable').toBe(false)
+  })
+})
+
+describe('isAIUnavailable, adversarial', () => {
+  const marker = (o: Partial<ExtractionFieldState> = {}) =>
+    mkField({ name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', ...o })
+
+  it('AIR04-P2: every other reason on the marker row is not the AI state', () => {
+    const others = ['', 'missing', 'ambiguous', 'inconsistent'] as const
+    expect(others.length).toBeGreaterThan(0)
+    for (const reason of others) expect(isAIUnavailable([marker({ reason })]), `reason ${JSON.stringify(reason)}`).toBe(false)
+  })
+
+  it('AIR04-P3: the name must match exactly', () => {
+    for (const name of ['Document_AI_Reading', ' document_ai_reading', 'document_ai_reading ', 'document_ai']) {
+      expect(isAIUnavailable([marker({ name })]), `name ${JSON.stringify(name)}`).toBe(false)
+    }
+  })
+
+  it('AIR04-P4: two marker rows are not the one-row set', () => {
+    expect(isAIUnavailable([marker(), marker()])).toBe(false)
+    expect(isAIUnavailable([mkField(), marker()]), 'the marker second in the set').toBe(false)
+  })
+
+  // Go's importer predicate ignores value and region; this one matches it.
+  it('AIR04-P5: value and region do not decide the state, as in the Go importer', () => {
+    expect(isAIUnavailable([marker({ value: 'INV-1' })])).toBe(true)
+    expect(isAIUnavailable([marker({ region: mkRegion() })])).toBe(true)
   })
 })

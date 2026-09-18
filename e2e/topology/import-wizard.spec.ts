@@ -1993,6 +1993,13 @@ function uniqueAiSteeredPdfBytes(): Buffer {
   return Buffer.concat([AI_STEERED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// AIR-04-04's deployed fixture (fxE2ECopies): AIFAKE-UNAVAILABLE makes the fake fleet's AI call fail.
+const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_invoice.pdf'))
+
+function uniqueAiUnavailablePdfBytes(): Buffer {
+  return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // A correction applies to the invoice filed from the document, which commits AFTER the
 // extraction job reports succeeded -- posting on that signal alone races it and 409s
 // (ErrNoInvoiceForDocument, handlers.go).
@@ -8799,6 +8806,102 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     buyer_name: null,
   })
 
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// row sentence: aiUnavailableMessage (internal/importer/document.go)
+const AI_UNAVAILABLE_MESSAGE =
+  'AI reading was unavailable when this document was imported, so no invoice fields were taken from it. Enter this invoice manually to carry on.'
+// review sentence: AI_UNAVAILABLE_REFUSAL (frontend/app/src/lib/documentRun.ts)
+const AI_UNAVAILABLE_REVIEW =
+  'AI reading was unavailable for this document, so there are no fields to check here. The document is still stored. Enter this invoice manually to carry on.'
+// marker field: aiUnavailableField (internal/extraction/aireading.go)
+const AI_UNAVAILABLE_FIELD = 'document_ai_reading'
+
+test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading', async ({
+  page,
+}) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const name = 'ai_unavailable_invoice.pdf'
+
+  // (a) AC-1. Zz sorts this entity after the existing ones (entity-ordering trap).
+  const { token, documentIds, jobs } = await runDocuments(page, 'Zz AIR-04 unavailable', [
+    { name, mimeType: 'application/pdf', buffer: uniqueAiUnavailablePdfBytes() },
+  ])
+  const documentId = documentIds[name]!
+  const job = jobs[name]!
+  expect(job.state, `did not settle succeeded (kind ${job.failure_kind}, error ${job.last_error})`).toBe('succeeded')
+  expect(job.failure_kind).toBeNull()
+
+  // (b) AC-1: one marker-only row, nothing engine-read reaches the wire.
+  const detail = await getExtractionDetail(token, job.id)
+  expect(
+    detail.fields.map((f) => ({ name: f.name, value: f.value, reason: f.reason, alternatives: f.alternatives.length })),
+  ).toEqual([{ name: AI_UNAVAILABLE_FIELD, value: null, reason: 'unreadable', alternatives: 0 }])
+
+  // (c) AC-4: the document quarantines to the review batch surface, its own sentence.
+  await expect
+    .poll(() => new URL(page.url()).pathname, { timeout: 180_000 })
+    .toMatch(/^\/imports\/[0-9a-fA-F-]{36}\/review$/)
+  const tab = page.getByRole('button', { name: 'Quarantined documents (1)', exact: true })
+  await expect(tab).toHaveCount(1)
+  await tab.click()
+  const row = page.getByTestId('unreadable-row')
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText(name)
+  await expect(row).toContainText(AI_UNAVAILABLE_MESSAGE)
+  await expect(row).not.toContainText('was read, but no invoice number') // noInvoiceNumberMessage
+  await expect(row).not.toContainText('too poor to read') // poorScanMessage
+
+  // (d) AC-5: floor first (buttons render on this tab), then the absent affordance.
+  const handOff = row.getByRole('button', { name: 'Enter it by hand' })
+  await expect(handOff).toBeEnabled()
+  await expect(page.getByRole('button', { name: /read.*again/i })).toHaveCount(0)
+
+  // (e) AC-3, AC-7: no carried reading, either through the API or the carried form.
+  expect(await getCarriedReading(token, documentId)).toBeNull()
+  const readingGet = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/document/reading'),
+    { timeout: 60_000 },
+  )
+  await handOff.click()
+  const readingRes = await readingGet
+  expect(readingRes.status()).toBe(200)
+  expect(((await readingRes.json()) as { reading: unknown }).reading).toBeNull()
+  await expect(page.getByRole('button', { name: 'File invoice' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(CARRIED_CAPTION)).toHaveCount(0)
+  await expect(page.locator('[data-testid^="carried-"]')).toHaveCount(0)
+
+  // (f) the blank hand-off form still files, and attaches the same document.
+  const invoiceNumber = `AIR04-${Date.now()}`
+  const invoiceId = await fileHandOffDraft(page, invoiceNumber)
+  const source = await readSourceDocument(token, invoiceId)
+  expect(source.document?.id).toBe(documentId)
+
+  // (g) AC-4, AC-5, AC-7. Not openExtractionReview(): it asserts extraction-page-1, which this
+  // screen must never render. Inlined the same click/waitForResponse pattern.
+  const control = page.getByTestId('open-extraction-review')
+  await expect(control).toBeEnabled({ timeout: 60_000 })
+  const [reviewRes] = await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/.test(new URL(r.url()).pathname),
+      { timeout: 120_000 },
+    ),
+    control.click(),
+  ])
+  expect(reviewRes.status()).toBe(200)
+  await expect(page.getByTestId('extraction-review')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(AI_UNAVAILABLE_REVIEW, { exact: true })).toBeVisible()
+  await expect(page.getByTestId('extraction-review-body')).toHaveCount(0)
+  await expect(page.getByTestId('extraction-save')).toHaveCount(0)
+  await expect(page.getByTestId('extraction-canvas')).toHaveCount(0)
+  await expect(page.getByTestId('extraction-open-invoice')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /read.*again/i })).toHaveCount(0)
+
+  // (h)
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

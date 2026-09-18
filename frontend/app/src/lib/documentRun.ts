@@ -29,9 +29,10 @@ export function newestJob(jobs: readonly ExtractionJob[]): ExtractionJob | null 
   return newest
 }
 
-// Sole copy owner of the extraction job's terminal wording (poll budget, dead letter) for the run
-// card and Extraction review. A quarantined import row's sentence is internal/importer/document.go's.
-// Every sentence names manual entry, and none names a destination (TS15-3).
+// Sole copy owner of the extraction job's terminal wording (poll budget, dead letter, AI
+// unavailable) for the run card and Extraction review. A quarantined import row's sentence is
+// internal/importer/document.go's. Every sentence names manual entry, and none names a
+// destination (TS15-3).
 export function pollBudgetRefusal(): string {
   const seconds = Math.round(EXTRACTION_POLL_BUDGET_MS / 1000)
   return `This document is still being read after ${seconds} seconds, and this run will not wait any longer. It was stored and the read continues. Enter this invoice manually to carry on.`
@@ -64,6 +65,12 @@ export function deadLetterRefusal(failureKind: string | null, lastError: string 
       return `Reading this document failed — ${detail}. Enter this invoice manually to carry on.`
   }
 }
+
+// The review screen's sentence for a marker-only job. Not document.go's aiUnavailableMessage:
+// each surface owns its copy (QS-1), and this one never calls the document unreadable or
+// unstored (AIR04-R1).
+export const AI_UNAVAILABLE_REFUSAL =
+  'AI reading was unavailable for this document, so there are no fields to check here. The document is still stored. Enter this invoice manually to carry on.'
 
 // The reducer: the whole jobs[] array plus how long this document has been polled, in.
 // One verdict out. Budget arithmetic lives here so no caller re-derives the boundary.

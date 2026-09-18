@@ -404,8 +404,9 @@ free-text entry on a doubtful field, are **owed**.
 **A reason moves no stored value.** `documentCreateInput` maps `f.Value` and never `f.Reason`, so a cell
 flagged `ambiguous` still writes its value to the `invoices` row — which is also why
 `corpus_ambiguous_date.pdf`'s long-standing ambiguous `issue_date` has always scored as a hit.
-(The importer reads a reason in exactly one place, `isPoorScan`, and that predicate is over the
-whole field set rather than one field, so no header field's reason can reach it.) When EXTR-22
+(The importer reads a reason in exactly two places, `isPoorScan` and `isAIUnavailable`, and
+each predicate is over the whole field set rather than one field, so no header field's reason
+can reach either.) When EXTR-22
 measured it, over 110 cells before and after, four lines change and every one of them is a reason
 or an alternative; the value column diffs to nothing. EXTR-29's found total does move a value,
 because it changes the rank-0 reading: the ruled pair's `invoices` total goes from `1000.00` to

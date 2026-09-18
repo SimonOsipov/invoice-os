@@ -81,6 +81,15 @@ export interface ExtractionDetail {
   fields: ExtractionFieldState[]
 }
 
+// internal/extraction/aireading.go, aiUnavailableField -- mirrored, not imported (Go/TS have no
+// shared build). wireMirrors.test.ts pins the two literals equal.
+export const AI_UNAVAILABLE_FIELD = 'document_ai_reading'
+
+// The worker's marker-only set: AI failed, so nothing else was read.
+export function isAIUnavailable(fields: readonly ExtractionFieldState[]): boolean {
+  return fields.length === 1 && fields[0].name === AI_UNAVAILABLE_FIELD && fields[0].reason === 'unreadable'
+}
+
 // internal/extraction/handlers_correction.go, CorrectionMethod. The four values the method
 // CHECK admits.
 export type CorrectionMethod = 'typed' | 'chosen' | 'pointed' | 'undone'

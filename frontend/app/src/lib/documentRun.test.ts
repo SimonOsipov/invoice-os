@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import * as documentRunModule from './documentRun'
 import {
+  AI_UNAVAILABLE_REFUSAL,
   EXTRACTION_POLL_BUDGET_MS,
   deadLetterRefusal,
   documentRunRows,
@@ -1146,9 +1147,10 @@ function terminalSentences(): Record<string, string> {
   return out
 }
 
-/** The eight strings AC-2 and AC-3 range over: the seven plus the budget refusal. */
+/** The nine strings AC-2 and AC-3 range over: the seven, the budget refusal, and the
+ * AI-unavailable review sentence (AIR-04-03). */
 function allRefusals(): Record<string, string> {
-  return { ...terminalSentences(), '<budget>': pollBudgetRefusal() }
+  return { ...terminalSentences(), '<budget>': pollBudgetRefusal(), '<ai-unavailable>': AI_UNAVAILABLE_REFUSAL }
 }
 
 // AC-2's "names a next action", as two independent properties rather than prose: the sentence
@@ -1403,6 +1405,21 @@ describe('no refusal promises a screen that does not exist (TS15-3, AC-3)', () =
   })
 })
 
+describe('the AI-unavailable review sentence names the outage, not an unreadable document (AIR04-R1, AC-4/5)', () => {
+  it('AIR04-R1: starts and ends where AC-4 fixes it, and never calls the document unreadable', () => {
+    expect(AI_UNAVAILABLE_REFUSAL.startsWith('AI reading was unavailable'), 'lost the outage opener').toBe(true)
+    expect(AI_UNAVAILABLE_REFUSAL.endsWith('Enter this invoice manually to carry on.'), 'lost the manual-entry close').toBe(
+      true,
+    )
+
+    // EXTR-30-05's forbidden vocabulary for a quarantined document (FORBIDDEN_DOCUMENT_PHRASES):
+    // it is stored, not unreadable, and nothing here promises a retry.
+    for (const bad of [/unreadable/i, /could(?: not|n't) read/i, /not stored/i, /nothing was stored/i, /\bagain\b/i]) {
+      expect(AI_UNAVAILABLE_REFUSAL, `matched forbidden phrase ${bad}`).not.toMatch(bad)
+    }
+  })
+})
+
 describe('extract_failed carries last_error as a subordinate clause (TS15-4, AC-4)', () => {
   const KIND = 'extract_failed'
 
@@ -1633,7 +1650,7 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
     return files
   }
 
-  it('QS-1: neither Go quarantine sentence has leaked into non-test TypeScript', () => {
+  it('QS-1: no Go quarantine sentence has leaked into non-test TypeScript', () => {
     const root = process.cwd()
     const files = nonTestFiles(root)
     // Floor, so the absence claims below cannot pass over a walk that silently found nothing.
@@ -1646,5 +1663,6 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
 
     expect(contentsOf('was read, but no invoice number')).toEqual([])
     expect(contentsOf('too poor to read, so no invoice fields')).toEqual([])
+    expect(contentsOf('unavailable when this document was imported')).toEqual([])
   })
 })

@@ -6,12 +6,16 @@ package extraction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
+
+// aiUnavailableField is the one row a document gets when its AI call fails (AIR-04, Q9).
+const aiUnavailableField = "document_ai_reading"
 
 // AIReader is the slice of *ai.Client the worker uses; nil is off.
 type AIReader interface {
@@ -76,11 +80,19 @@ func aiPromptText(pages []TokenPage) string {
 	return aiTextIntro + "\n\n" + strings.Join(lines, "\n")
 }
 
-// askAI is the one AI call per document. It returns nil when off, nil, or the call errors --
-// the engine's own result stands either way (AIR-04 owns availability).
-func askAI(ctx context.Context, r AIReader, pages []TokenPage) map[string]string {
+// aiFailed: any Call error sends the document to manual entry (BQ1), except an ended caller
+// context (shutdown or job timeout, not an AI answer) and ErrOff (AC-6).
+func aiFailed(err error) bool {
+	return err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, ai.ErrOff)
+}
+
+// askAI asks once. The bool reports a failed call (aiFailed); the answer is nil then.
+func askAI(ctx context.Context, r AIReader, pages []TokenPage) (map[string]string, bool) {
 	if r == nil || !r.Enabled() {
-		return nil
+		return nil, false
 	}
 	ans, err := r.Call(ctx, ai.Request{
 		Purpose:    ai.PurposeDocument,
@@ -90,7 +102,7 @@ func askAI(ctx context.Context, r AIReader, pages []TokenPage) map[string]string
 		Schema:     aiFieldSchema,
 	})
 	if err != nil {
-		return nil
+		return nil, aiFailed(err)
 	}
 	var out map[string]string
 	for _, f := range HeaderFields {
@@ -103,7 +115,7 @@ func askAI(ctx context.Context, r AIReader, pages []TokenPage) map[string]string
 		}
 		out[f] = s
 	}
-	return out
+	return out, false
 }
 
 // paymentLabelRE is check (c): a supplier_name or buyer_name value fails behind a payment-account

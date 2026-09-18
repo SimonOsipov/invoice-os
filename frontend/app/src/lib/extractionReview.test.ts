@@ -1521,3 +1521,31 @@ describe('isAIUnavailable', () => {
     expect(isAIUnavailable([]), 'an empty field set read as unavailable').toBe(false)
   })
 })
+
+describe('isAIUnavailable, adversarial', () => {
+  const marker = (o: Partial<ExtractionFieldState> = {}) =>
+    mkField({ name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', ...o })
+
+  it('AIR04-P2: every other reason on the marker row is not the AI state', () => {
+    const others = ['', 'missing', 'ambiguous', 'inconsistent'] as const
+    expect(others.length).toBeGreaterThan(0)
+    for (const reason of others) expect(isAIUnavailable([marker({ reason })]), `reason ${JSON.stringify(reason)}`).toBe(false)
+  })
+
+  it('AIR04-P3: the name must match exactly', () => {
+    for (const name of ['Document_AI_Reading', ' document_ai_reading', 'document_ai_reading ', 'document_ai']) {
+      expect(isAIUnavailable([marker({ name })]), `name ${JSON.stringify(name)}`).toBe(false)
+    }
+  })
+
+  it('AIR04-P4: two marker rows are not the one-row set', () => {
+    expect(isAIUnavailable([marker(), marker()])).toBe(false)
+    expect(isAIUnavailable([mkField(), marker()]), 'the marker second in the set').toBe(false)
+  })
+
+  // Go's importer predicate ignores value and region; this one matches it.
+  it('AIR04-P5: value and region do not decide the state, as in the Go importer', () => {
+    expect(isAIUnavailable([marker({ value: 'INV-1' })])).toBe(true)
+    expect(isAIUnavailable([marker({ region: mkRegion() })])).toBe(true)
+  })
+})

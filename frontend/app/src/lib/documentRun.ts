@@ -66,9 +66,9 @@ export function deadLetterRefusal(failureKind: string | null, lastError: string 
   }
 }
 
-// The extraction review screen's sentence for a marker-only job (AC-4). A different string
-// from internal/importer/document.go's aiUnavailableMessage on purpose: each surface owns its
-// own copy (QS-1), and this one never calls the document unreadable or unstored (EXTR-30-05).
+// The review screen's sentence for a marker-only job. Not document.go's aiUnavailableMessage:
+// each surface owns its copy (QS-1), and this one never calls the document unreadable or
+// unstored (AIR04-R1).
 export const AI_UNAVAILABLE_REFUSAL =
   'AI reading was unavailable for this document, so there are no fields to check here. The document is still stored. Enter this invoice manually to carry on.'
 

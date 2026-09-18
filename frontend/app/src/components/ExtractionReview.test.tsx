@@ -785,6 +785,73 @@ describe('the AI-unavailable marker', () => {
     expect(screen.getByTestId('extraction-canvas'), 'the document pane did not render').toBeTruthy()
     expect(screen.queryByText(AI_UNAVAILABLE_REFUSAL), 'the AI-unavailable sentence rendered for a non-marker set').toBeNull()
   })
+
+  // The rung sits after dead_lettered: an unsettled or failed job outranks the field set.
+  it.each([...UNSETTLED])('AIR04-S3: a %s job carrying the marker still says it is being read', async (state) => {
+    render(review({ ctx: serving(mkDetail({ state, fields: [marker()] })).ctx }))
+    await flush()
+
+    expect(screen.getByText(STILL_READING), 'the still-reading sentence did not render').toBeTruthy()
+    expect(screen.queryByText(AI_UNAVAILABLE_REFUSAL), 'the marker outranked an unsettled state').toBeNull()
+  })
+
+  it.each([...KINDS, null])('AIR04-S4: a dead-lettered job of kind %s carrying the marker shows the dead-letter sentence', async (kind) => {
+    render(review({ ctx: serving(mkDetail({ state: 'dead_lettered', failure_kind: kind, fields: [marker()] })).ctx }))
+    await flush()
+
+    expect(screen.getByText(sentenceFor(kind)), 'the dead-letter sentence did not render').toBeTruthy()
+    expect(screen.queryByText(AI_UNAVAILABLE_REFUSAL), 'the marker outranked dead_lettered').toBeNull()
+  })
+
+  it('AIR04-S5: the marker state offers no control at all, so no "Read it again" (Core AC-5)', async () => {
+    render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields: [marker()] })).ctx, onOpenInvoice: () => {} }))
+    await flush()
+
+    expect(screen.getByText(AI_UNAVAILABLE_REFUSAL), 'floor: the marker state did not render').toBeTruthy()
+    expect(root().querySelectorAll('button, a, [role="button"]'), 'the marker state rendered a control').toHaveLength(0)
+    expect(root().textContent ?? '', 'the marker state promises a second read').not.toMatch(/\bagain\b/i)
+  })
+
+  it('AIR04-S6: the sentence takes the dead-letter rung’s exact treatment: same markup, same style', async () => {
+    render(review({ ctx: serving(mkDetail({ state: 'dead_lettered', failure_kind: null })).ctx }))
+    await flush()
+    const dead = sentenceFor(null)
+    const deadEl = screen.getByText(dead)
+    const deadShape = root().innerHTML.replace(dead, '§')
+    cleanup()
+
+    render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields: [marker()] })).ctx }))
+    await flush()
+    const aiEl = screen.getByText(AI_UNAVAILABLE_REFUSAL)
+
+    expect(deadShape, 'floor: the dead-letter markup lost its sentence').toContain('§')
+    expect(root().innerHTML.replace(AI_UNAVAILABLE_REFUSAL, '§'), 'the marker rung drifted from the dead-letter rung').toBe(deadShape)
+    expect(aiEl.tagName).toBe(deadEl.tagName)
+    expect(aiEl.getAttribute('style'), 'floor: SENTENCE carries no inline style').toBeTruthy()
+    expect(aiEl.getAttribute('style')).toBe(deadEl.getAttribute('style'))
+  })
+
+  // Parity with Go's importer predicate, which ignores value: the whole-set shape is the signal.
+  it('AIR04-S7: a marker carrying a value still takes the sentence', async () => {
+    render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields: [{ ...marker(), value: 'INV-1' }] })).ctx }))
+    await flush()
+
+    expect(screen.getByText(AI_UNAVAILABLE_REFUSAL)).toBeTruthy()
+    expect(screen.queryByTestId('extraction-review-body')).toBeNull()
+  })
+
+  it.each([
+    ['reason missing', [{ ...marker(), reason: 'missing' }]],
+    ['reason clean', [{ ...marker(), reason: '' }]],
+    ['marker beside document_text_layer', [marker(), { ...marker(), name: 'document_text_layer' }]],
+  ] as [string, ExtractionFieldState[]][])('AIR04-S8: %s keeps the panes', async (_label, fields) => {
+    expect(fields.length, 'floor: empty fixture').toBeGreaterThan(0)
+    render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields })).ctx }))
+    await flush()
+
+    expect(screen.getByTestId('extraction-review-body'), 'the panes did not render').toBeTruthy()
+    expect(screen.queryByText(AI_UNAVAILABLE_REFUSAL)).toBeNull()
+  })
 })
 
 // ==========================================================================================

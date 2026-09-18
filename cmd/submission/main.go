@@ -34,6 +34,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -149,10 +150,13 @@ func main() {
 	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
 	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in
 	// every case and reachable only on the text branch.
-	// AI is nil for now: AIR-03-03 wires the real ai.FromEnv client here.
+	aiClient, err := ai.FromEnv(app.Logger)
+	if err != nil {
+		log.Fatalf("submission: %v", err)
+	}
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, nil, app.Logger)
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).

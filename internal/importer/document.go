@@ -166,7 +166,11 @@ func isPoorScan(fields []extractedField) bool {
 // isAIUnavailable is the extraction worker's whole field set when the AI call failed: one
 // document_ai_reading row, reason unreadable (TestDocumentCreateInput_OnlyTheExactAIMarkerSetTakesTheAIBranch).
 func isAIUnavailable(fields []extractedField) bool {
-	return false
+	if len(fields) != 1 {
+		return false
+	}
+	f := fields[0]
+	return f.Name == "document_ai_reading" && f.Reason != nil && *f.Reason == "unreadable"
 }
 
 // documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput. The
@@ -186,8 +190,11 @@ func documentCreateInput(entityID, documentID string, ex SettledExtraction) (inv
 		// Field stays the wire key either way -- the review screen machine-reads it
 		// (TestDocumentCreateInput_EveryQuarantineBranchKeepsItsMachineFieldKey).
 		message := noInvoiceNumberMessage
-		if isPoorScan(ex.Fields) {
+		switch {
+		case isPoorScan(ex.Fields):
 			message = poorScanMessage
+		case isAIUnavailable(ex.Fields):
+			message = aiUnavailableMessage
 		}
 		return invoice.CreateInput{}, &RowError{
 			Field:   "invoice_number",

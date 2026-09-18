@@ -180,6 +180,12 @@ func TestAskAI_SendsOneDocumentCallWithTheText(t *testing.T) {
 	if req.Purpose != ai.PurposeDocument {
 		t.Errorf("Purpose = %q, want %q", req.Purpose, ai.PurposeDocument)
 	}
+	if req.System != aiSystem {
+		t.Errorf("System = %q, want aiSystem", req.System)
+	}
+	if string(req.Schema) != string(aiFieldSchema) {
+		t.Errorf("Schema = %s, want aiFieldSchema %s", req.Schema, aiFieldSchema)
+	}
 	if req.SchemaName != "invoice_fields" {
 		t.Errorf("SchemaName = %q, want invoice_fields", req.SchemaName)
 	}
@@ -208,6 +214,11 @@ func TestAskAI_OffOrNilMakesNoCall(t *testing.T) {
 	if got := askAI(context.Background(), nil, pages); got != nil {
 		t.Errorf("askAI(nil) = %v, want nil", got)
 	}
+
+	on := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}}
+	if got := askAI(context.Background(), on, pages); len(on.calls) != 1 || got["total"] != "1935.00" {
+		t.Errorf("control: askAI(on) calls = %d, answer = %v; want 1 call and total 1935.00", len(on.calls), got)
+	}
 }
 
 func TestAskAI_AnErrorLeavesNoAnswer(t *testing.T) {
@@ -217,6 +228,11 @@ func TestAskAI_AnErrorLeavesNoAnswer(t *testing.T) {
 		if got := askAI(context.Background(), stub, pages); got != nil {
 			t.Errorf("askAI(err=%v) = %v, want nil", e, got)
 		}
+	}
+
+	ok := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}}
+	if got := askAI(context.Background(), ok, pages); got["total"] != "1935.00" {
+		t.Errorf("control: askAI(no error) = %v, want total 1935.00", got)
 	}
 }
 
@@ -266,6 +282,23 @@ func TestAICheck_PageCheckRefusesAValueNotPrinted(t *testing.T) {
 			t.Errorf("checkAI accepted the invented %s value %q, not printed anywhere on the page", field, value)
 		}
 	}
+
+	// Control: the page's own values pass, so the refusals above are not a blind page.
+	for field, value := range map[string]string{
+		"issue_date":    "2026-08-14",
+		"supplier_tin":  "99999999-1201",
+		"supplier_name": "ADEYEMI TRADING LIMITED",
+		"buyer_tin":     "99999999-1202",
+		"buyer_name":    "HONEYWELL GROUP",
+		"currency":      "NGN",
+		"subtotal":      "1800.00",
+		"vat":           "135.00",
+		"total":         "1935.00",
+	} {
+		if _, ok := checkAI(field, value, pages); !ok {
+			t.Errorf("control: checkAI refused the printed %s value %q", field, value)
+		}
+	}
 }
 
 func TestAICheck_FindsAValueInsideOneLine(t *testing.T) {
@@ -288,6 +321,10 @@ func TestAICheck_DoesNotJoinNeighbouringLines(t *testing.T) {
 
 	if _, ok := checkAI("buyer_name", "Honeywell Group", pages); ok {
 		t.Error("checkAI joined two neighbouring tokens across a token boundary it must not cross")
+	}
+	joined := onePage(1, tok("Honeywell Group", 1, 0.10, 0.300, 0.26, 0.313))
+	if _, ok := checkAI("buyer_name", "Honeywell Group", joined); !ok {
+		t.Error("control: checkAI refused the name printed in one token")
 	}
 }
 
@@ -312,6 +349,13 @@ func TestAICheck_HasNoSubstringFallback(t *testing.T) {
 	amountToken := onePage(1, tok("1,935.00", 1, 0.10, 0.20, 0.30, 0.22))
 	if _, ok := checkAI("total", "935.00", amountToken); ok {
 		t.Error("checkAI accepted a substring match against a longer printed amount")
+	}
+
+	if _, ok := checkAI("buyer_name", "HONEYWELL GROUPS", nameToken); !ok {
+		t.Error("control: checkAI refused the whole printed name")
+	}
+	if _, ok := checkAI("total", "1935.00", amountToken); !ok {
+		t.Error("control: checkAI refused the whole printed amount")
 	}
 }
 
@@ -345,6 +389,10 @@ func TestAICheck_PaymentLabelOnTheLineBeforeFails(t *testing.T) {
 	if _, ok := checkAI("buyer_name", "ZENITH HOLDINGS LIMITED", pages); ok {
 		t.Error("checkAI accepted a value whose own line starts with nothing, when the line before carries a payment label")
 	}
+	control := onePage(1, tok("BILL TO", 1, 0.10, 0.10, 0.30, 0.12), value)
+	if _, ok := checkAI("buyer_name", "ZENITH HOLDINGS LIMITED", control); !ok {
+		t.Error("control: checkAI refused the value behind a non-payment line")
+	}
 }
 
 func TestAICheck_LineBeforeCountsOnlyWhenTheValueStartsItsLine(t *testing.T) {
@@ -365,6 +413,9 @@ func TestAICheck_APaymentLabelBeforeAnyOccurrenceFails(t *testing.T) {
 
 	if _, ok := checkAI("buyer_name", "ZENITH HOLDINGS LIMITED", pages); ok {
 		t.Error("checkAI accepted buyer_name even though one occurrence sits right after a payment label")
+	}
+	if _, ok := checkAI("buyer_name", "ZENITH HOLDINGS LIMITED", onePage(1, top, again)); !ok {
+		t.Error("control: checkAI refused the same two occurrences with no payment label between them")
 	}
 }
 
@@ -421,6 +472,11 @@ func TestAICheck_AllDigitNumberWithoutTheLabelStaysRefused(t *testing.T) {
 			}
 		})
 	}
+
+	labelled := onePage(1, tok("Invoice No: 20417", 1, 0.10, 0.10, 0.35, 0.12))
+	if _, ok := checkAI("invoice_number", "20417", labelled); !ok {
+		t.Error("control: checkAI refused 20417 behind an invoice-number label")
+	}
 }
 
 func TestAICheck_TheExceptionIsForAllDigitNumbersOnly(t *testing.T) {
@@ -433,12 +489,21 @@ func TestAICheck_TheExceptionIsForAllDigitNumbersOnly(t *testing.T) {
 	if _, ok := checkAI("invoice_number", "2026-06-11", date); ok {
 		t.Error("checkAI accepted a date-shaped value under the invoice-number exception")
 	}
+
+	digits := onePage(1, tok("Invoice No: 1500", 1, 0.10, 0.10, 0.40, 0.12))
+	if _, ok := checkAI("invoice_number", "1500", digits); !ok {
+		t.Error("control: checkAI refused the all-digit 1500 behind the same label")
+	}
 }
 
 func TestAICheck_ATwoReadingDateFailsTheFormatCheck(t *testing.T) {
 	pages := onePage(1, tok("Date 03/12/2026", 1, 0.10, 0.10, 0.40, 0.12))
 	if _, ok := checkAI("issue_date", "03/12/2026", pages); ok {
 		t.Error("checkAI accepted a numeric date with two valid day-first/month-first readings")
+	}
+	oneReading := onePage(1, tok("Date 25/12/2026", 1, 0.10, 0.10, 0.40, 0.12))
+	if reading, ok := checkAI("issue_date", "25/12/2026", oneReading); !ok || reading.Value != "2026-12-25" {
+		t.Errorf("control: checkAI(25/12/2026) = %+v, %v; want checked as 2026-12-25", reading, ok)
 	}
 }
 

@@ -1031,6 +1031,21 @@ const AMBIGUOUS_JOB: ExtractionDetail = mkDetail({
   ],
 })
 
+// AIR-03-06: invoice_number is one of the three server-locked fields (lockedFields,
+// handlers_correction.go) but flagged `ambiguous`, so the chip row renders exactly as it does
+// for any other ambiguous field -- `candidates` gates on the reason alone, never on the lock.
+const LOCKED_AMBIGUOUS_JOB: ExtractionDetail = mkDetail({
+  fields: [
+    mkField({
+      name: 'invoice_number',
+      value: 'INV-0001',
+      region: null,
+      reason: 'ambiguous',
+      alternatives: [{ value: '20417', region: null }],
+    }),
+  ],
+})
+
 const CORRECTED_JOB: ExtractionDetail = mkDetail({
   fields: [
     mkField({
@@ -1196,6 +1211,68 @@ describe('one shared draft, one Save', () => {
       region: null,
       anchor_label: '',
     })
+  })
+
+  // T15/T16 (AIR-03-06): choosing a chip on a FLAGGED LOCKED field (invoice_number) still saves
+  // through the same loop -- the lock is a server-side write refusal, not a screen affordance,
+  // and today's ExtractionFields chip row already renders unconditionally on `reason ===
+  // 'ambiguous'`.
+  it('saves a chosen chip on a flagged invoice number', async () => {
+    const w = writing(LOCKED_AMBIGUOUS_JOB, async (_url, body) =>
+      mkCorrectionResponse('invoice_number', String((body as { value?: string }).value ?? ''), 'chosen'),
+    )
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const chips = chipsOf('invoice_number')
+    expect(chips.length, 'the flagged invoice number rendered no chip -- every claim below is vacuous').toBe(2)
+
+    fireEvent.click(chips[1])
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    const posted = writes(w)
+    expect(posted, 'Save sent no correction for the drafted chip').toHaveLength(1)
+    expect(posted[0].url, 'the chip was posted to another field').toContain('/fields/invoice_number/corrections')
+    expect(posted[0].body, 'the chip did not reach the register as the candidate the person chose').toEqual({
+      value: '20417',
+      method: 'chosen',
+      region: null,
+      anchor_label: '',
+    })
+    expect(screen.queryByTestId('extraction-write-error'), 'a successful save rendered an error').toBeNull()
+  })
+
+  it('shows the server refusal verbatim and keeps the chosen chip when a locked rename is refused', async () => {
+    const TAKEN = 'This invoice number is already in the register for this company. Enter a different number.'
+    const w = writing(LOCKED_AMBIGUOUS_JOB, async () => {
+      throw new ApiError('http', TAKEN, 409)
+    })
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    const chips = chipsOf('invoice_number')
+    expect(chips.length, 'the flagged invoice number rendered no chip -- every claim below is vacuous').toBe(2)
+    fireEvent.click(chips[1])
+    await flush()
+
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(
+      screen.queryByTestId('extraction-write-error')?.textContent,
+      "the server's own sentence was not rendered verbatim",
+    ).toBe(TAKEN)
+    expect(
+      chipsOf('invoice_number')[1].getAttribute('aria-current'),
+      'the refused chip lost its selection, so the draft was not kept',
+    ).toBe('true')
   })
 
   it('settles an ambiguous field for the person who agrees with the extractor', async () => {
@@ -2682,5 +2759,56 @@ describe('the one exit to the invoice', () => {
     await flush()
     expect(saveButton(), 'the settled footer vanished -- the absence below is vacuous').toBeTruthy()
     expect(exitButton()).toBeNull()
+  })
+})
+
+describe('the offered text never rides a Save (AIR-03-04, AC-5)', () => {
+  const OFFERED = 'ZENITH HOLDINGS LIMITED'
+  const OFFERED_JOB: ExtractionDetail = mkDetail({
+    fields: [
+      mkField({
+        name: 'buyer_name',
+        value: null,
+        region: null,
+        reason: 'unreadable',
+        alternatives: [{ value: OFFERED, region: null }],
+      }),
+      mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+    ],
+  })
+
+  it('arms nothing on render and posts only what the person edited', async () => {
+    const w = writing(OFFERED_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(inputOf('buyer_name')?.value, 'the offered text never reached the input').toBe(OFFERED)
+    expect(saveButton()!.disabled, 'the offered text alone armed Save').toBe(true)
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '1,200.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(postedFields(w), 'the undrafted offered field was posted').toEqual(['total'])
+    expect(JSON.stringify(writes(w).map((c) => c.body)), 'the offered text rode a Save').not.toContain(OFFERED)
+  })
+
+  it('posts the offered field once the person edits it, as typed', async () => {
+    const w = writing(OFFERED_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('buyer_name') as HTMLInputElement, { target: { value: 'ZENITH HOLDINGS LTD' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(postedFields(w)).toEqual(['buyer_name'])
+    expect(writes(w)[0].body).toEqual({ value: 'ZENITH HOLDINGS LTD', method: 'typed', region: null, anchor_label: '' })
   })
 })

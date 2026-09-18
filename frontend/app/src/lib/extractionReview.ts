@@ -245,6 +245,27 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
   })
 }
 
+// internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
+// is filed under; updateContentTx re-derives the two supplier fields from the client entity and
+// never reads the input.
+export const LOCKED_FIELDS: readonly string[] = ['invoice_number', 'supplier_tin', 'supplier_name']
+
+// A locked name stays locked until the extractor's own reading flags it ambiguous or
+// unreadable, or a correction has already settled it -- the server's rule
+// (handlers_correction.go, lockedFieldFlaggedTx), mirrored here so the screen agrees with it.
+export function lockedField(f: ExtractionFieldState): boolean {
+  if (!LOCKED_FIELDS.includes(f.name)) return false
+  if (f.reason === 'ambiguous' || f.reason === 'unreadable') return false
+  return f.corrected === null
+}
+
+// The text an unreadable empty field shows in its input. Never drafted, so Save files it only
+// after an edit (the offered text never rides a Save).
+export function offeredText(field: ExtractionFieldState): string | null {
+  if (field.reason !== 'unreadable' || field.value !== null || field.alternatives.length === 0) return null
+  return field.alternatives[0].value ?? null
+}
+
 /** Where a field sits in the vocabulary; anything the wire adds later sorts after all of it. */
 function vocabularyRank(name: string): number {
   const i = HEADER_FIELDS.indexOf(name)

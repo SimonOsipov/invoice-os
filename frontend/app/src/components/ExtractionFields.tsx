@@ -6,7 +6,16 @@
 import type { CSSProperties } from 'react'
 
 import { crosshairGlyph } from '../glyphs'
-import { applyDraft, correctedMarker, fieldLabel, fieldNote, reasonPill, regionPhrase } from '../lib/extractionReview'
+import {
+  applyDraft,
+  correctedMarker,
+  fieldLabel,
+  fieldNote,
+  lockedField,
+  offeredText,
+  reasonPill,
+  regionPhrase,
+} from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
 import { linesFromFields } from '../lib/lineItems'
 import type { LineRole, LineRow } from '../lib/lineItems'
@@ -40,12 +49,9 @@ function isHeaderField(name: string): boolean {
   return !LINE_FIELD_RE.test(name)
 }
 
-// internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
-// a 422, and updateContentTx re-derives the two supplier fields from the client entity anyway.
-// readOnly, never disabled -- a disabled input leaves the tab order and fires no focus, so the
-// cell would stop being reachable or selectable by keyboard.
-const LOCKED_FIELDS = ['invoice_number', ...SUPPLIER_FIELDS]
-
+// lockedField (extractionReview.ts) decides which of the three are locked, keyed on the WIRE
+// field: an unflagged one is read-only, never disabled -- a disabled input leaves the tab order
+// and fires no focus, so the cell would stop being reachable or selectable by keyboard.
 // SUPPLIER_NOTE already says why the two supplier cells are locked, at pane level.
 const LOCK_REASONS: Record<string, string> = { invoice_number: INVOICE_NUMBER_LOCKED }
 
@@ -326,7 +332,8 @@ export function ExtractionFields({
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
                 // The gate is the REASON first -- a field can carry alternatives the extractor
-                // ranked below a reading it is sure of, and those stay off the screen. The
+                // ranked below a reading it is sure of, and those get no chip (an unreadable empty
+                // field shows its first one in the input instead: offeredText). The
                 // second clause is the render invariant, not a weakening: no chips means there
                 // is an input. Reconcile only sets `ambiguous` with two or more candidates
                 // (reconcile.go), so an ambiguous field with nothing to choose between is a
@@ -337,8 +344,8 @@ export function ExtractionFields({
                     : null
                 // The pill's number is the chip array's own length, so the two can never drift.
                 const pill = settled === null ? (reasonPill(f.reason, candidates?.length ?? 0) ?? cue) : null
-                const locked = LOCKED_FIELDS.includes(f.name)
-                const lock = LOCK_REASONS[f.name] ?? null
+                const locked = lockedField(wire)
+                const lock = locked ? (LOCK_REASONS[f.name] ?? null) : null
                 // The value the invoice holds, or the one the draft will settle it to. With no
                 // chosen entry it falls back to the WIRE's own reading, so the row always says
                 // which of the candidates is filed -- an ambiguous cell renders no input, and a
@@ -370,7 +377,7 @@ export function ExtractionFields({
                         <input
                           data-testid={`extraction-input-${f.name}`}
                           className="pf-input"
-                          value={f.value ?? ''}
+                          value={f.value ?? offeredText(wire) ?? ''}
                           readOnly={locked}
                           aria-readonly={locked}
                           aria-label={fieldLabel(f.name)}

@@ -34,6 +34,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
+	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -149,9 +150,13 @@ func main() {
 	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
 	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in
 	// every case and reachable only on the text branch.
+	aiClient, err := ai.FromEnv(app.Logger)
+	if err != nil {
+		log.Fatalf("submission: %v", err)
+	}
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, app.Logger)
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -409,7 +414,8 @@ func newAnchorLearnedAuditor() extraction.RecordAnchorLearned {
 
 // newInvoiceFieldApplier adapts the invoice store to the extraction seam. Each domain outcome
 // crosses as one of the extraction sentinels so statusForErr maps it by identity; anything else
-// passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError).
+// passes through raw and stays a 500 (TestNewInvoiceFieldApplier_MapsEachDomainError). The
+// rename's own two refusals map the same way (TestNewInvoiceFieldApplier_MapsTheRenameRefusals).
 func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoice {
 	return func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, _ extraction.CorrectionMethod) (string, error) {
 		in, err := invoiceEditFor(field, value)
@@ -424,6 +430,10 @@ func newInvoiceFieldApplier(edit invoiceFieldEdit) extraction.ApplyFieldToInvoic
 			return "", extraction.ErrInvoiceNotEditable
 		case errors.Is(err, invoice.ErrValidation):
 			return "", extraction.ErrValueRefused
+		case errors.Is(err, invoice.ErrNumberTaken):
+			return "", extraction.ErrInvoiceNumberTaken
+		case errors.Is(err, invoice.ErrNumberFixed):
+			return "", extraction.ErrInvoiceNumberFixed
 		case err != nil:
 			return "", err
 		}
@@ -463,14 +473,15 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 	}
 }
 
-// invoiceEditFor puts one corrected value on its own UpdateInput member. It lives here because
-// internal/extraction cannot name invoice.UpdateInput; the handler has already refused every
-// field outside this switch, and issue_date arrives normalised to ISO
+// invoiceEditFor puts one corrected value on its own EditInput/UpdateInput member. It lives here
+// because internal/extraction cannot name invoice.EditInput; the handler has already refused
+// every field name this switch does not name, and issue_date arrives normalised to ISO
 // (TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn).
 //
 // A NIL value is an undo of a field the extractor never read: the column goes back to holding
 // nothing, which is what the screen shows
-// (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn).
+// (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn). invoice_number cannot be cleared this
+// way -- a number is never NULL -- so a nil there stays ErrValueRefused, unchanged.
 func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 	var in invoice.UpdateInput
 	if field == "issue_date" {
@@ -486,9 +497,19 @@ func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 		}
 		return invoice.EditInput{UpdateInput: in}, nil
 	}
+	if field == "invoice_number" {
+		if value == nil {
+			return invoice.EditInput{}, fmt.Errorf("%w: invoice_number cannot be cleared", extraction.ErrValueRefused)
+		}
+		return invoice.EditInput{InvoiceNumber: value}, nil
+	}
 
 	var column **string
 	switch field {
+	case "supplier_tin":
+		column = &in.SupplierTIN
+	case "supplier_name":
+		column = &in.SupplierName
 	case "buyer_tin":
 		column = &in.BuyerTIN
 	case "buyer_name":
@@ -568,9 +589,9 @@ func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, 
 func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
 	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
 	text extraction.PageReader, rules extraction.LoadAnchorRules,
-	logger *slog.Logger) *extraction.ExtractWorker {
+	aiReader extraction.AIReader, logger *slog.Logger) *extraction.ExtractWorker {
 	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
-		Audit: auditor, Text: text, Rules: rules, Logger: logger}
+		Audit: auditor, Text: text, Rules: rules, AI: aiReader, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

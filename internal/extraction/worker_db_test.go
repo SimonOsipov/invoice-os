@@ -12,12 +12,15 @@
 package extraction_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"regexp"
@@ -37,6 +40,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -4098,5 +4102,637 @@ func TestRLS_ExtractWorkerWritesNoPagesForAnEmptyContentType(t *testing.T) {
 
 	if ids := wkPageRowIDs(t, ctx, documentID); len(ids) != 0 {
 		t.Errorf("wrote %d extraction_page_images row(s) (%v), want 0", len(ids), ids)
+	}
+}
+
+// --- AIR-03-03: the worker's AI step -------------------------------------------------
+
+// wkAI is a counting AIReader stub: no network, and it records every request and the tenant
+// riding the caller's context, so a spec can prove askAI ran on octx.
+type wkAI struct {
+	mu      sync.Mutex
+	enabled bool
+	answer  map[string]any
+	err     error
+	calls   int
+	reqs    []ai.Request
+	tenants []string
+}
+
+func (s *wkAI) Enabled() bool { return s.enabled }
+
+func (s *wkAI) Call(ctx context.Context, req ai.Request) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.reqs = append(s.reqs, req)
+	if id, ok := auth.IdentityFromContext(ctx); ok {
+		s.tenants = append(s.tenants, id.TenantID)
+	}
+	return s.answer, s.err
+}
+
+func (s *wkAI) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// wkStrRows/wkStrBoxes render a row/box set to strings, in the query's own order, so two runs
+// can be compared with slices.Equal.
+func wkStrRows(rows []wpRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.String()
+	}
+	return out
+}
+
+func wkStrBoxes(boxes []wkBox) []string {
+	out := make([]string, len(boxes))
+	for i, b := range boxes {
+		out[i] = b.String()
+	}
+	return out
+}
+
+// T01. One AI call per document that reaches the text arm, over octx (tenant_id present), and
+// the request text carries a page token.
+func TestRLS_ExtractWorkerAsksTheAIOncePerDocument(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	const tokenText = "Some Printed Text"
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: tokenText, Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.4, Y1: 0.12}}},
+	}
+	stub := &wkAI{enabled: true}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+	ew.AI = stub
+
+	const riverJobID = int64(930001)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the AI seam saw %d call(s), want exactly 1 per document that reaches the text arm", n)
+	}
+	if !strings.Contains(stub.reqs[0].Text, tokenText) {
+		t.Errorf("the AI request text is %q, want it to contain the page token %q", stub.reqs[0].Text, tokenText)
+	}
+	if len(stub.tenants) != 1 || stub.tenants[0] != tenantID {
+		t.Errorf("the AI call carried tenant(s) %v, want exactly [%s] -- askAI must run on octx", stub.tenants, tenantID)
+	}
+}
+
+// T02. AI nil, a disabled stub and an enabled stub that answers blank must all write the SAME
+// rows -- off is off, whichever of the three shapes off takes. The disabled stub must see no
+// call at all.
+func TestRLS_ExtractWorkerWithTheAIOffWritesTodaysRows(t *testing.T) {
+	ctx := t.Context()
+
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: INV-2200", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.4, Y1: 0.12}}},
+		Tables: wkAILineTable(),
+	}
+
+	// Absolute pin on the nil run: the three-way comparison below cannot see a worker change
+	// that moves all three runs together.
+	{
+		tenantID, documentID := wkFixture(t, ctx)
+		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+		const riverJobID = int64(930020)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		wkAssertEngineOnlyRows(t, wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID)), "INV-2200")
+	}
+
+	run := func(riverJobID int64, reader extraction.AIReader) []string {
+		tenantID, documentID := wkFixture(t, ctx)
+		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+		ew.AI = reader
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+		return append(wkStrRows(wpResults(t, ctx, xid)), wkStrBoxes(wkFieldBoxes(t, ctx, xid))...)
+	}
+
+	disabledStub := &wkAI{enabled: false}
+	nilRows := run(930002, nil)
+	disabledRows := run(930003, disabledStub)
+	blankRows := run(930004, &wkAI{enabled: true})
+
+	if !slices.Equal(nilRows, disabledRows) {
+		t.Errorf("AI nil vs. a disabled stub wrote different rows:\n nil:      %v\n disabled: %v", nilRows, disabledRows)
+	}
+	if !slices.Equal(nilRows, blankRows) {
+		t.Errorf("AI nil vs. an enabled stub answering blank wrote different rows:\n nil:   %v\n blank: %v", nilRows, blankRows)
+	}
+	if n := disabledStub.count(); n != 0 {
+		t.Errorf("the disabled stub saw %d call(s), want 0 -- askAI must check Enabled() before calling", n)
+	}
+}
+
+// T03. Neither arm that never reaches the text branch may call the AI: the mock arm (Text nil)
+// and the no-text arm (a read with TextChars == 0).
+func TestRLS_ExtractWorkerSkipsTheAIWithoutText(t *testing.T) {
+	ctx := t.Context()
+
+	t.Run("mock arm, Text is nil", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		stub := &wkAI{enabled: true}
+		ew := wkWorker(t, wkOK(), wkNewOpener())
+		ew.AI = stub
+
+		const riverJobID = int64(930005)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s) on the mock arm (Text nil), want 0", n)
+		}
+	})
+
+	t.Run("no-text arm, TextChars is 0", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		stub := &wkAI{enabled: true}
+		blank := &wpReader{pages: []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}}
+		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), blank, wpStoreRules(t).load, &wkAuditRecorder{})
+		ew.AI = stub
+
+		const riverJobID = int64(930006)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s) on the no-text arm (TextChars 0), want 0", n)
+		}
+	})
+}
+
+// T04. An AI error must never change the written rows: the engine's own result stands, exactly
+// as if the AI had been off. The premise check proves the same answer, un-errored, WOULD have
+// changed the row -- otherwise the comparison below would hold over nothing.
+func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAIErrors(t *testing.T) {
+	ctx := t.Context()
+
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}}},
+	}
+	answer := map[string]any{"invoice_number": "20417"}
+
+	run := func(riverJobID int64, reader extraction.AIReader) []string {
+		tenantID, documentID := wkFixture(t, ctx)
+		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+		ew.AI = reader
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+		stAssertJobState(t, ctx, xid, "succeeded")
+		return append(wkStrRows(wpResults(t, ctx, xid)), wkStrBoxes(wkFieldBoxes(t, ctx, xid))...)
+	}
+
+	off := run(930007, nil)
+	changed := run(930008, &wkAI{enabled: true, answer: answer})
+	if slices.Equal(off, changed) {
+		t.Fatalf("an unerrored AI answer of %v left the rows unchanged from the AI-off run; the premise this test needs is not true on this fixture", answer)
+	}
+
+	errored := run(930009, &wkAI{enabled: true, answer: answer, err: ai.ErrUnavailable})
+	if !slices.Equal(off, errored) {
+		t.Errorf("an AI error changed the written rows:\n off:     %v\n errored: %v", off, errored)
+	}
+}
+
+// T05. The real fake client, through the worker: a text token carries the fake's steering
+// marker, decoding to an answer schema-shaped over every HeaderFields key. The engine alone
+// reads invoice_number `missing` (normalizeInvoiceNumber rejects a bare digit string as an
+// amount), so a decided rank-0 row with a box proves the fake answered through askAI/mergeAI.
+func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+
+	answer := make(map[string]any, len(extraction.HeaderFields))
+	for _, f := range extraction.HeaderFields {
+		answer[f] = nil
+	}
+	answer["invoice_number"] = "20417"
+	rawAnswer, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("marshal fake answer: %v", err)
+	}
+	marker := "AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString(rawAnswer)
+
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{
+			{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}},
+			{Text: marker, Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.9, X1: 0.5, Y1: 0.92}},
+		},
+	}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+	ew.AI = client
+
+	const riverJobID = int64(930010)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("20417"), nil)
+
+	boxes := wkFieldBoxes(t, ctx, xid)
+	found := false
+	for _, b := range boxes {
+		if b.name != "invoice_number" || b.rank != 0 {
+			continue
+		}
+		found = true
+		if b.page == nil || b.x0 == nil || b.y0 == nil || b.x1 == nil || b.y1 == nil {
+			t.Errorf("invoice_number's rank-0 row carries no box: %v", b)
+		}
+	}
+	if !found {
+		t.Fatalf("no rank-0 invoice_number row among %v", boxes)
+	}
+
+	var calls []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "ai call" {
+			calls = append(calls, m)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("the logger recorded %d %q line(s), want exactly 1: %v", len(calls), "ai call", calls)
+	}
+	if calls[0]["tenant_id"] != tenantID {
+		t.Errorf("the ai call line carries tenant_id %v, want %s", calls[0]["tenant_id"], tenantID)
+	}
+	if calls[0]["outcome"] != "fake" {
+		t.Errorf("the ai call line carries outcome %v, want %q", calls[0]["outcome"], "fake")
+	}
+}
+
+// --- AIR-03-03 adversarial ------------------------------------------------------------
+
+// wkAILineTable is three line rows summing to 650.00, the ruled-table shape LineItems reads.
+func wkAILineTable() []extraction.Table {
+	cell := func(row, col int, text string) extraction.TableCell {
+		return extraction.TableCell{Row: row, Col: col, RowSpan: 1, ColSpan: 1, Text: text}
+	}
+	return []extraction.Table{{Rows: 4, Cols: 4, Cells: []extraction.TableCell{
+		cell(0, 0, "Description"), cell(0, 1, "Qty"), cell(0, 2, "Unit Price"), cell(0, 3, "Amount"),
+		cell(1, 0, "Widget A"), cell(1, 1, "2"), cell(1, 2, "100.00"), cell(1, 3, "200.00"),
+		cell(2, 0, "Widget B"), cell(2, 1, "3"), cell(2, 2, "50.00"), cell(2, 3, "150.00"),
+		cell(3, 0, "Widget C"), cell(3, 1, "1"), cell(3, 2, "300.00"), cell(3, 3, "300.00"),
+	}}}
+}
+
+// wkAssertEngineOnlyRows pins what the engine alone writes for one labelled invoice number over
+// wkAILineTable: that number decided, every other header field missing, every line cell as printed.
+func wkAssertEngineOnlyRows(t *testing.T, rows []wpRow, invoiceNumber string) {
+	t.Helper()
+	wpAssertRankZero(t, rows, "invoice_number", stPtr(invoiceNumber), nil)
+	for _, f := range extraction.HeaderFields {
+		if f == "invoice_number" {
+			continue
+		}
+		wpAssertRankZero(t, rows, f, nil, stPtr("missing"))
+	}
+	for _, c := range []struct{ name, value string }{
+		{"line_items[1].description", "Widget A"}, {"line_items[1].line_total", "200.00"},
+		{"line_items[2].description", "Widget B"}, {"line_items[2].line_total", "150.00"},
+		{"line_items[3].description", "Widget C"}, {"line_items[3].line_total", "300.00"},
+	} {
+		wpAssertRankZero(t, rows, c.name, stPtr(c.value), nil)
+	}
+}
+
+// wkLineRows keeps the line_items block and cell rows, rendered, in query order.
+func wkLineRows(rows []wpRow) []string {
+	out := []string{}
+	for _, r := range rows {
+		if strings.HasPrefix(r.name, "line_items") {
+			out = append(out, r.String())
+		}
+	}
+	return out
+}
+
+// wkRankRow returns the row named name at rank, or fails.
+func wkRankRow(t *testing.T, rows []wpRow, name string, rank int) wpRow {
+	t.Helper()
+	for _, r := range rows {
+		if r.name == name && r.rank == rank {
+			return r
+		}
+	}
+	t.Fatalf("no rank-%d row named %q among %v", rank, name, rows)
+	return wpRow{}
+}
+
+// wkAIRun is one succeeded Work over pages with reader on the AI seam, on a fresh tenant.
+type wkAIRun struct {
+	tenantID string
+	jobID    string
+	rows     []wpRow
+	boxes    []wkBox
+	audit    []extraction.ExtractionAudit
+}
+
+func wkRunAI(t *testing.T, ctx context.Context, riverJobID int64, pages []extraction.Page, reader extraction.AIReader) wkAIRun {
+	t.Helper()
+	tenantID, documentID := wkFixture(t, ctx)
+	rec := &wkAuditRecorder{}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: pages}, wpStoreRules(t).load, rec)
+	ew.AI = reader
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	return wkAIRun{tenantID: tenantID, jobID: xid, rows: wpResults(t, ctx, xid), boxes: wkFieldBoxes(t, ctx, xid), audit: rec.events()}
+}
+
+// A Rules error fails the job before the text step: no AI call is spent on a job that fails.
+func TestRLS_ExtractWorkerSkipsTheAIWhenTheRulesLoadFails(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: INV-2200", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.4, Y1: 0.12}}},
+	}
+	rulesErr := errors.New("rules store down")
+	rules := &wpRules{inner: func(context.Context, string, string) ([]extraction.AnchorRule, error) { return nil, rulesErr }}
+	stub := &wkAI{enabled: true}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, rules.load, &wkAuditRecorder{})
+	ew.AI = stub
+
+	const riverJobID = int64(930011)
+	err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString()))
+	if !errors.Is(err, rulesErr) {
+		t.Fatalf("Work returned %v, want the rules error", err)
+	}
+	if asked, _ := rules.calls(); len(asked) != 1 {
+		t.Fatalf("the Rules seam was called %d time(s), want 1: the error path under test was not reached", len(asked))
+	}
+	if n := stub.count(); n != 0 {
+		t.Errorf("the AI seam saw %d call(s) on a job whose rule load failed, want 0", n)
+	}
+}
+
+// Several AI fields change in one job: two missing fields fill and a decided one turns
+// ambiguous. The audit's counts read the merged rows, not the engine's.
+func TestRLS_ExtractWorkerMergesSeveralAIFieldsInOneJob(t *testing.T) {
+	ctx := t.Context()
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{
+			{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.10, X1: 0.5, Y1: 0.12}},
+			{Text: "Invoice Date: 2026-03-04", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.14, X1: 0.5, Y1: 0.16}},
+			{Text: "Delivered 2026-04-04", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.18, X1: 0.5, Y1: 0.20}},
+			{Text: "Kaduna Steel Works", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.22, X1: 0.5, Y1: 0.24}},
+		},
+	}
+	pages := []extraction.Page{page}
+
+	off := wkRunAI(t, ctx, 930012, pages, nil)
+	wpAssertRankZero(t, off.rows, "invoice_number", nil, stPtr("missing"))
+	wpAssertRankZero(t, off.rows, "issue_date", stPtr("2026-03-04"), nil)
+	wpAssertRankZero(t, off.rows, "buyer_name", nil, stPtr("missing"))
+
+	stub := &wkAI{enabled: true, answer: map[string]any{
+		"invoice_number": "20417",
+		"issue_date":     "2026-04-04",
+		"buyer_name":     "Kaduna Steel Works",
+	}}
+	on := wkRunAI(t, ctx, 930013, pages, stub)
+
+	wpAssertRankZero(t, on.rows, "invoice_number", stPtr("20417"), nil)
+	wpAssertRankZero(t, on.rows, "buyer_name", stPtr("Kaduna Steel Works"), nil)
+	wpAssertRankZero(t, on.rows, "issue_date", stPtr("2026-03-04"), stPtr("ambiguous"))
+	if alt := wkRankRow(t, on.rows, "issue_date", 1); alt.value == nil || *alt.value != "2026-04-04" {
+		t.Errorf("issue_date rank-1 value = %s, want 2026-04-04", wkStr(alt.value))
+	}
+
+	flagged := func(rows []wpRow) int {
+		n := 0
+		for _, r := range rows {
+			if r.rank == 0 && r.reason != nil {
+				n++
+			}
+		}
+		return n
+	}
+	if len(off.audit) != 1 || len(on.audit) != 1 {
+		t.Fatalf("audit events: off %d, on %d, want 1 each", len(off.audit), len(on.audit))
+	}
+	if got, want := on.audit[0].FlaggedCount, flagged(on.rows); got != want {
+		t.Errorf("audit FlaggedCount = %d, want %d (rank-0 rows with a reason in the merged write)", got, want)
+	}
+	if got, want := on.audit[0].FlaggedCount, off.audit[0].FlaggedCount-1; got != want {
+		t.Errorf("audit FlaggedCount = %d with the AI on, want %d (off %d, two filled, one made ambiguous)", got, want, off.audit[0].FlaggedCount)
+	}
+	if on.audit[0].FieldCount != off.audit[0].FieldCount {
+		t.Errorf("audit FieldCount = %d with the AI on, want %d: the merge keeps one result per field", on.audit[0].FieldCount, off.audit[0].FieldCount)
+	}
+}
+
+// AC-10: the schema asks for no line key, and an answer that names line keys anyway leaves
+// every line row exactly as the engine wrote it.
+func TestRLS_ExtractWorkerNeverLetsTheAIAnswerTouchLineRows(t *testing.T) {
+	ctx := t.Context()
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}}},
+		Tables: wkAILineTable(),
+	}
+	pages := []extraction.Page{page}
+
+	off := wkRunAI(t, ctx, 930014, pages, nil)
+	stub := &wkAI{enabled: true, answer: map[string]any{
+		"invoice_number":            "20417",
+		"line_items":                []any{map[string]any{"description": "HACKED"}},
+		"line_items[1].description": "HACKED",
+		"line_items[1].line_total":  "999.00",
+	}}
+	on := wkRunAI(t, ctx, 930015, pages, stub)
+
+	wpAssertRankZero(t, on.rows, "invoice_number", stPtr("20417"), nil)
+	offLines, onLines := wkLineRows(off.rows), wkLineRows(on.rows)
+	if len(offLines) < 6 {
+		t.Fatalf("the engine wrote %d line row(s), want the table's cells: %v", len(offLines), offLines)
+	}
+	if !slices.Equal(offLines, onLines) {
+		t.Errorf("the AI answer changed the line rows:\n off: %v\n on:  %v", offLines, onLines)
+	}
+
+	if stub.count() != 1 {
+		t.Fatalf("the AI seam saw %d call(s), want 1", stub.count())
+	}
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(stub.reqs[0].Schema, &schema); err != nil {
+		t.Fatalf("unmarshal request schema: %v", err)
+	}
+	keys := make([]string, 0, len(schema.Properties))
+	for k := range schema.Properties {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	want := slices.Clone(extraction.HeaderFields)
+	slices.Sort(want)
+	if !slices.Equal(keys, want) {
+		t.Errorf("the request schema asks for %v, want exactly HeaderFields %v", keys, want)
+	}
+}
+
+// The worker hands mergeAI the document's lines: an AI subtotal the lines contradict is
+// written inconsistent.
+func TestRLS_ExtractWorkerChecksAnAISubtotalAgainstTheLines(t *testing.T) {
+	ctx := t.Context()
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{
+			{Text: "Invoice Number: INV-2200", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}},
+			{Text: "900.00", Region: extraction.Region{Page: 1, X0: 0.7, Y0: 0.8, X1: 0.9, Y1: 0.82}},
+		},
+		Tables: wkAILineTable(),
+	}
+	pages := []extraction.Page{page}
+
+	off := wkRunAI(t, ctx, 930016, pages, nil)
+	wpAssertRankZero(t, off.rows, "subtotal", nil, stPtr("missing"))
+
+	on := wkRunAI(t, ctx, 930017, pages, &wkAI{enabled: true, answer: map[string]any{"subtotal": "900.00"}})
+	wpAssertRankZero(t, on.rows, "subtotal", stPtr("900.00"), stPtr("inconsistent"))
+}
+
+// Two jobs, two tenants, one worker seam and one real fake client: each ai call line carries
+// its own job's tenant, and each job's rows are visible to that tenant only.
+func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	pages := []extraction.Page{{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: INV-2200", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}}},
+	}}
+
+	a := wkRunAI(t, ctx, 930018, pages, client)
+	b := wkRunAI(t, ctx, 930019, pages, client)
+
+	var tenants []any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "ai call" {
+			tenants = append(tenants, m["tenant_id"])
+		}
+	}
+	if want := []any{a.tenantID, b.tenantID}; !slices.Equal(tenants, want) {
+		t.Errorf("ai call lines carry tenant_id %v, want %v in job order", tenants, want)
+	}
+
+	visible := func(reader, jobID string) int {
+		var n int
+		if err := db.WithinTenantTx(ctx, stRequire(t).app, reader, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT count(*) FROM extraction_field_results WHERE extraction_job_id = $1`, jobID).Scan(&n)
+		}); err != nil {
+			t.Fatalf("count rows of job %s as tenant %s: %v", jobID, reader, err)
+		}
+		return n
+	}
+	for _, c := range []struct {
+		name       string
+		own, other string
+		jobID      string
+		want       int
+	}{
+		{"job A", a.tenantID, b.tenantID, a.jobID, len(a.rows)},
+		{"job B", b.tenantID, a.tenantID, b.jobID, len(b.rows)},
+	} {
+		if got := visible(c.own, c.jobID); got != c.want {
+			t.Errorf("%s: its own tenant sees %d row(s), want %d", c.name, got, c.want)
+		}
+		if got := visible(c.other, c.jobID); got != 0 {
+			t.Errorf("%s: the other tenant sees %d row(s), want 0", c.name, got)
+		}
+	}
+}
+
+// Any AI error, including a cancelled or expired call, reads as no answer: the job succeeds
+// with the engine's rows.
+func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAICallIsCancelled(t *testing.T) {
+	ctx := t.Context()
+	pages := []extraction.Page{{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{
+			{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}},
+			{Text: "AIFAKE-UNAVAILABLE", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.9, X1: 0.5, Y1: 0.92}},
+		},
+	}}
+	answer := map[string]any{"invoice_number": "20417"}
+	render := func(r wkAIRun) []string { return append(wkStrRows(r.rows), wkStrBoxes(r.boxes)...) }
+
+	off := render(wkRunAI(t, ctx, 930021, pages, nil))
+	if changed := render(wkRunAI(t, ctx, 930022, pages, &wkAI{enabled: true, answer: answer})); slices.Equal(off, changed) {
+		t.Fatalf("an unerrored answer %v left the rows unchanged; the comparisons below would hold over nothing", answer)
+	}
+
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	fake, err := ai.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	for i, c := range []struct {
+		name   string
+		reader extraction.AIReader
+	}{
+		{"canceled", &wkAI{enabled: true, answer: answer, err: context.Canceled}},
+		{"deadline", &wkAI{enabled: true, answer: answer, err: fmt.Errorf("ai: call: %w", context.DeadlineExceeded)}},
+		{"refused", &wkAI{enabled: true, answer: answer, err: errors.New("ai: refused")}},
+		{"real fake unavailable", fake},
+	} {
+		if got := render(wkRunAI(t, ctx, 930023+int64(i), pages, c.reader)); !slices.Equal(off, got) {
+			t.Errorf("%s: the AI error changed the rows:\n off: %v\n got: %v", c.name, off, got)
+		}
 	}
 }

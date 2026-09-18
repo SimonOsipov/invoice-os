@@ -30,6 +30,7 @@
 import type { ReactNode } from 'react'
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { crossGlyph, crosshairGlyph } from '../glyphs'
@@ -41,6 +42,7 @@ import type {
   ExtractionCandidate,
   ExtractionCorrected,
   ExtractionFieldState,
+  ExtractionReason,
   ExtractionRegion,
 } from '../lib/extractionReview'
 import { ExtractionFields } from './ExtractionFields'
@@ -90,9 +92,10 @@ const POINT_ARMED = 'Waiting — drag a box around it on the document'
 const POINT_CANCEL = 'Stop pointing'
 const POINT_PAGELESS = 'Not found — type it in'
 
-// internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
-// is filed under; updateContentTx re-derives the two supplier fields from the client entity and
-// never reads the input, so a correction on any of the three is a 422.
+// internal/extraction/handlers_correction.go, lockedFields. Locked while UNFLAGGED (reason ''
+// here): invoice_number is what the invoice is filed under, and updateContentTx re-derives the
+// two supplier fields from the client entity and never reads the input (AIR-03-06 unlocks all
+// three once the extractor flags them ambiguous/unreadable -- see the describe block below).
 const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
 
 // internal/extraction/vocabulary.go, HeaderFields.
@@ -1678,11 +1681,11 @@ describe('an ambiguous field', () => {
 
 describe('what a field may be typed over with', () => {
   it('gives seven fields an editable input and the three locked ones a readOnly one', () => {
-    // `lockedFields` refuses invoice_number, supplier_tin and supplier_name with a 422, and
-    // `invoiceEditFor` writes only the other seven columns. An implementation that locks
-    // invoice_number alone answers 9/1 and ships two inputs whose Save 422s — on supplier_tin,
-    // which the deployed mock renders. The NAMES are asserted because a bare count of 3 passes
-    // on the wrong three.
+    // tenFields() carries reason '' -- UNFLAGGED -- so all three of invoice_number, supplier_tin
+    // and supplier_name are still locked (AIR-03-06 unlocks them only once flagged). An
+    // implementation that locks invoice_number alone answers 9/1 and ships two inputs whose Save
+    // 422s -- on supplier_tin, which the deployed mock renders. The NAMES are asserted because a
+    // bare count of 3 passes on the wrong three.
     render(fieldsPane({ fields: tenFields() }))
 
     const inputs = HEADER_FIELDS.map((name) => inputOf(name))
@@ -1736,6 +1739,184 @@ describe('what a field may be typed over with', () => {
         `${name} borrowed the invoice number's reason`,
       ).toBeNull()
     }
+  })
+})
+
+// AIR-03-06: the flag gate unlocks a locked field once the extractor flagged it `ambiguous` or
+// `unreadable`, or once it is corrected -- lockedField(wire) in extractionReview.ts.
+describe('a flagged locked field (AIR-03-06)', () => {
+  it('a flagged invoice number is editable and states no lock', () => {
+    const onType = vi.fn()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'invoice_number',
+            reason: 'unreadable',
+            value: null,
+            alternatives: [{ value: '20417', region: null }],
+          }),
+        ],
+        onType,
+      }),
+    )
+
+    const input = inputOf('invoice_number')
+    expect(input, 'the flagged field rendered no input').toBeTruthy()
+    expect(input!.value, 'the offered text was not shown').toBe('20417')
+    expect(input!.readOnly, 'a flagged invoice number is still read-only').toBe(false)
+    expect(
+      input!.getAttribute('aria-readonly'),
+      'a flagged invoice number still announces itself read-only',
+    ).not.toBe('true')
+    expect(
+      within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
+      'a flagged field still states the lock reason',
+    ).toBeNull()
+
+    fireEvent.change(input as HTMLInputElement, { target: { value: '99887766' } })
+    expect(onType.mock.calls, 'typing over a flagged locked field never reached the shell').toEqual([
+      ['invoice_number', '99887766'],
+    ])
+  })
+
+  it('a corrected locked field stays open for undo and re-edit', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'supplier_name',
+            reason: '',
+            value: 'Typed Ltd',
+            corrected: { method: 'typed', was: null, where: null },
+          }),
+        ],
+      }),
+    )
+
+    const input = inputOf('supplier_name')
+    expect(input, 'the corrected field rendered no input').toBeTruthy()
+    expect(input!.readOnly, 'a corrected locked field is still read-only').toBe(false)
+    expect(
+      screen.queryByTestId('extraction-undo-supplier_name'),
+      'no Undo rendered on the corrected field',
+    ).toBeTruthy()
+  })
+
+  it('an unflagged locked field stays read-only with its note', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'invoice_number', reason: '', value: 'INV-2026-0037' }),
+          mkField({ name: 'supplier_tin', reason: 'inconsistent', value: '12345678-0001' }),
+        ],
+      }),
+    )
+
+    for (const name of ['invoice_number', 'supplier_tin']) {
+      const input = inputOf(name)
+      expect(input, `${name} rendered no input`).toBeTruthy()
+      expect(input!.readOnly, `${name} is not read-only`).toBe(true)
+      expect(input!.getAttribute('aria-readonly'), `${name} does not announce itself read-only`).toBe('true')
+    }
+    expect(
+      within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
+      'the invoice-number lock note did not render',
+    ).toBeTruthy()
+  })
+
+  // AIR-03-06 QA: adversarial rows.
+  it('keys the lock on the wire, so an undone draft does not re-lock a corrected field', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'invoice_number',
+            reason: '',
+            value: '20417',
+            corrected: { method: 'chosen', was: 'INV-0001', where: null },
+          }),
+        ],
+        draft: { invoice_number: { kind: 'undone', value: '', region: null } },
+      }),
+    )
+
+    const input = inputOf('invoice_number')
+    expect(input, 'the corrected field rendered no input').toBeTruthy()
+    expect(input!.readOnly, 'an undone draft re-locked a field the server still accepts').toBe(false)
+    expect(input!.getAttribute('aria-readonly')).not.toBe('true')
+    expect(within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED)).toBeNull()
+  })
+
+  it('agrees on readOnly, aria-readonly and the lock note in every state', () => {
+    const reasons: ExtractionReason[] = ['', 'missing', 'inconsistent', 'unreadable', 'ambiguous']
+    for (const reason of reasons) {
+      for (const corrected of [null, { method: 'typed' as const, was: null, where: null }]) {
+        cleanup()
+        render(
+          fieldsPane({
+            fields: [
+              mkField({ name: 'invoice_number', reason, alternatives: [], corrected }),
+              mkField({ name: 'total', reason: '', value: '1.00' }),
+            ],
+          }),
+        )
+        const want = corrected === null && (reason === '' || reason === 'missing' || reason === 'inconsistent')
+        const label = `reason ${JSON.stringify(reason)}, corrected ${corrected === null ? 'null' : 'set'}`
+        const input = inputOf('invoice_number')
+        expect(input, `${label}: no input`).toBeTruthy()
+        expect(input!.readOnly, `${label}: readOnly`).toBe(want)
+        expect(input!.style.cssText === inputOf('total')!.style.cssText, `${label}: styled as editable`).toBe(!want)
+        expect(input!.getAttribute('aria-readonly'), `${label}: aria-readonly`).toBe(String(want))
+        expect(
+          within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED) !== null,
+          `${label}: lock note`,
+        ).toBe(want)
+      }
+    }
+  })
+
+  it('lets a person type into a flagged locked field and not into an unflagged one', async () => {
+    const onType = vi.fn()
+    const user = userEvent.setup()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'invoice_number', reason: '', value: 'INV-0001' }),
+          mkField({ name: 'supplier_tin', reason: 'unreadable', value: null, alternatives: [] }),
+        ],
+        onType,
+      }),
+    )
+
+    await user.type(inputOf('invoice_number')!, 'X')
+    expect(onType, 'keystrokes reached the shell from an unflagged locked field').not.toHaveBeenCalled()
+
+    await user.type(inputOf('supplier_tin')!, 'X')
+    expect(onType.mock.calls, 'the flagged field took no keystroke').toEqual([['supplier_tin', 'X']])
+  })
+
+  it('offers chips on an ambiguous locked field and states no lock', () => {
+    const onChoose = vi.fn()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'supplier_name',
+            reason: 'ambiguous',
+            value: 'Alpha Ltd',
+            alternatives: [{ value: 'Beta Ltd', region: null }],
+          }),
+        ],
+        onChoose,
+      }),
+    )
+
+    const chips = chipsOf('supplier_name')
+    expect(chips, 'the ambiguous locked field rendered no chips').toHaveLength(2)
+    fireEvent.click(chips[1])
+    expect(onChoose).toHaveBeenCalledWith('supplier_name', { value: 'Beta Ltd', region: null })
+    expect(screen.queryByTestId('extraction-lock-supplier_name')).toBeNull()
   })
 })
 
@@ -2037,5 +2218,146 @@ describe('the line-item field filter, both directions (EXTR-13-07)', () => {
       (screen.getByTestId('line-item-input-3-quantity') as HTMLInputElement).getAttribute('aria-label'),
       'the third row is not labelled by its ordinal',
     ).toBe('Line 3 quantity')
+  })
+})
+
+// ==========================================================================================
+// AIR-03-04 (Mode A). A doubtful field with no value still shows the AI's own reading, but
+// that reading is never drafted until a person edits it. buyer_name: not a LOCKED_FIELDS entry.
+// ==========================================================================================
+
+function offeredBuyerName(): ExtractionFieldState {
+  return mkField({
+    name: 'buyer_name',
+    value: null,
+    region: null,
+    reason: 'unreadable',
+    alternatives: [{ value: 'ZENITH HOLDINGS LIMITED', region: null }],
+  })
+}
+
+describe('the offered text (AIR-03-04)', () => {
+  it("offers the AI text in a doubtful field's input", () => {
+    render(fieldsPane({ fields: [offeredBuyerName()] }))
+
+    expect(valueOf('buyer_name'), 'the offered text never reached the input').toBe('ZENITH HOLDINGS LIMITED')
+    expect(within(row('buyer_name')).queryByText(PILL_UNREADABLE), 'the doubtful pill is missing').toBeTruthy()
+    expect(chipsOf('buyer_name'), 'an unreadable field rendered chips').toHaveLength(0)
+    expect(within(row('buyer_name')).queryByText(/POSSIBLE VALUES/), 'the row claims an ambiguous count').toBeNull()
+    expect(within(row('buyer_name')).queryByText(PILL), 'the reason pill lost its slot to NO REGION').toBeNull()
+  })
+
+  it('leaves the offered text out of the draft until it is edited', () => {
+    const onType = vi.fn()
+    render(fieldsPane({ fields: [offeredBuyerName()], onType }))
+
+    expect(onType, 'rendering the offered text already drafted it').not.toHaveBeenCalled()
+
+    fireEvent.change(inputOf('buyer_name') as HTMLInputElement, { target: { value: 'ZENITH HOLDINGS LTD' } })
+
+    expect(onType.mock.calls, 'the edit never reached the shell').toEqual([['buyer_name', 'ZENITH HOLDINGS LTD']])
+  })
+
+  it('a drafted value outranks the offered text', () => {
+    render(fieldsPane({ fields: [offeredBuyerName()], draft: { buyer_name: { kind: 'typed', value: 'X', region: null } } }))
+    expect(valueOf('buyer_name'), 'a typed draft lost to the offered text').toBe('X')
+
+    cleanup()
+    render(fieldsPane({ fields: [offeredBuyerName()], draft: { buyer_name: { kind: 'typed', value: '', region: null } } }))
+    expect(valueOf('buyer_name'), 'a cleared draft fell back to the offered text -- this kills a || mutation').toBe('')
+  })
+})
+
+describe('the offered text, adversarial (AIR-03-04)', () => {
+  const ALT_A = { value: 'ZENITH HOLDINGS LIMITED', region: null }
+  const ALT_B = { value: 'ZENITH HOLDINGS LTD', region: null }
+
+  it('an unreadable field with two alternatives offers the first and still renders no chip', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'unreadable', alternatives: [ALT_A, ALT_B] }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe(ALT_A.value)
+    expect(chipsOf('buyer_name'), 'the chip gate opened for unreadable').toHaveLength(0)
+    expect(within(row('buyer_name')).queryByText(PILL_UNREADABLE)).toBeTruthy()
+    expect(row('buyer_name').textContent, 'an alternative leaked as text beside the input').not.toContain('ZENITH')
+  })
+
+  it('an unreadable field with no alternative, or an empty first one, stays empty', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'unreadable', alternatives: [] }),
+          mkField({
+            name: 'buyer_tin',
+            value: null,
+            region: null,
+            reason: 'unreadable',
+            alternatives: [{ value: null, region: null }, ALT_B],
+          }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe('')
+    expect(valueOf('buyer_tin'), 'a later alternative leaked past an empty first').toBe('')
+  })
+
+  it('a field that is not unreadable never offers its alternative', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'missing', alternatives: [ALT_A] }),
+          mkField({ name: 'buyer_tin', value: null, region: null, reason: '', alternatives: [ALT_B] }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name'), 'a missing field offered text').toBe('')
+    expect(valueOf('buyer_tin'), 'a clean field offered a stray alternative').toBe('')
+  })
+
+  it('an ambiguous field with a null value renders chips, never an input holding an alternative', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'ambiguous', alternatives: [ALT_A, ALT_B] }),
+        ],
+      }),
+    )
+    expect(inputOf('buyer_name'), 'an ambiguous field rendered an input').toBeNull()
+    expect(chipsOf('buyer_name')).toHaveLength(3)
+  })
+
+  it('a locked field flagged unreadable shows its offered text', () => {
+    // Display only: whether it may be edited is AIR-03-06's lock gate.
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'supplier_name', value: null, region: null, reason: 'unreadable', alternatives: [ALT_A] }),
+        ],
+      }),
+    )
+    expect(valueOf('supplier_name')).toBe(ALT_A.value)
+  })
+
+  it('an undone draft on a saved offered field previews empty, per applyDraft', () => {
+    // A correction clears reason and alternatives on the wire (reader.go), so the undo preview
+    // is `was ?? ''`; the offered text returns only when Save re-reads the extractor's row.
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'buyer_name',
+            value: 'ZENITH HOLDINGS LTD',
+            region: null,
+            corrected: { method: 'typed', was: null, where: null },
+          }),
+        ],
+        draft: { buyer_name: { kind: 'undone', value: '', region: null } },
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe('')
   })
 })

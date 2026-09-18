@@ -511,13 +511,11 @@ func TestRLS_APointedCorrectionOnALayoutWithNoAnchorsCommitsWithoutARule(t *test
 	}
 }
 
-// --- C-11 (rule half) / AC-7: a locked field teaches nothing ------------------------------
+// --- C-11 (rule half) / AC-7: an unflagged locked field teaches nothing -------------------
 
-// The status and the message are already pinned by TestCorrectionHandler_InvoiceNumberIsRefusedWithAReason,
-// TestCorrectionHandler_SupplierFieldsAreRefusedWithAReason and
-// TestCorrectionHandler_LockedFieldRefusalPrecedesTheBodyDecode, which have no database. This is
-// the half they cannot measure: a layout-bearing job and a valid pointed body, so nothing but
-// the field lock stands between the request and a rule.
+// The status and the message are pinned by TestRLS_AnUnflaggedLockedFieldIsStillRefused. This
+// job seeds no field rows, so all three are unflagged; a layout-bearing job and a valid pointed
+// body leave nothing but the field lock between the request and a rule.
 func TestRLS_ALockedFieldRefusalWritesNoAnchorRule(t *testing.T) {
 	ctx := t.Context()
 	f := clSeed(t, ctx, "EXTR14-06-C11")

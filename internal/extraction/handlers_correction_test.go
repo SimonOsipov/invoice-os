@@ -301,54 +301,16 @@ func TestCorrectionHandler_UnknownFieldNameIsRefused(t *testing.T) {
 	}
 }
 
-// The identity fence: the correction route refuses invoice_number. A draft's number is
-// renamed through the invoice edit path instead.
-func TestCorrectionHandler_InvoiceNumberIsRefusedWithAReason(t *testing.T) {
+// The unknown-name refusal alone stays here: a locked NAME's refusal now depends on the
+// stored rank-0 flag, a database read this dead-pool file cannot make -- T01/T02 in
+// handlers_correction_db_test.go own that claim (AIR-03-06).
+func TestCorrectionHandler_LockedFieldRefusalPrecedesTheBodyDecode(t *testing.T) {
 	spy := newCorSpy()
 
-	w := corPost(t, spy, "invoice_number", corBody("INV-77", "typed", ""))
+	w := corPost(t, spy, "not_a_field", "this is not json at all")
 
-	hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgInvoiceNumber))
+	hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgUnknownField))
 	corAssertUntouched(t, spy)
-}
-
-// The client-record fence: updateContentTx re-derives supplier_tin and supplier_name from the
-// entity on every write and never reads the input, so accepting one would store the client
-// record's value under a cell that claims the human typed it.
-func TestCorrectionHandler_SupplierFieldsAreRefusedWithAReason(t *testing.T) {
-	for _, name := range []string{"supplier_tin", "supplier_name"} {
-		t.Run(name, func(t *testing.T) {
-			spy := newCorSpy()
-
-			w := corPost(t, spy, name, corBody("12345678-0001", "typed", ""))
-
-			hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgSupplierField))
-			corAssertUntouched(t, spy)
-		})
-	}
-}
-
-// Ordering: the reason a caller reads must be the real one. A locked field with an unparseable
-// body answers 422, not the 400 a body-first handler would give.
-func TestCorrectionHandler_LockedFieldRefusalPrecedesTheBodyDecode(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		want string
-	}{
-		{"invoice_number", corMsgInvoiceNumber},
-		{"supplier_tin", corMsgSupplierField},
-		{"supplier_name", corMsgSupplierField},
-		{"not_a_field", corMsgUnknownField},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			spy := newCorSpy()
-
-			w := corPost(t, spy, tc.name, "this is not json at all")
-
-			hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, tc.want))
-			corAssertUntouched(t, spy)
-		})
-	}
 }
 
 // The box CHECKs, mirrored at the boundary. Unrefused, a caller sending pixel coordinates or an

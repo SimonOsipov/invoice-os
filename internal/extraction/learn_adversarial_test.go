@@ -812,7 +812,8 @@ func TestLearnBoxlessRule_DerivesWhenADuplicatedValueYieldsOneRule(t *testing.T)
 }
 
 // AC-6: the refusal keys on the tier1Specs shape lookup, not on the field name -- the field
-// lock is refuseField, upstream. Must-fail mutation: default the shape on a tier1Shape miss.
+// lock is the correction handler's gate, upstream. Must-fail mutation: default the shape on a
+// tier1Shape miss.
 func TestLearnBoxlessRule_RefusesAFieldNoRuleCanFill(t *testing.T) {
 	lr, ok := extraction.LearnBoxlessRule("not_a_field", "ASC-2026-0919", dxParagraphs)
 	if ok {

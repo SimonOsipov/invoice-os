@@ -83,12 +83,23 @@ type CorrectionResponse struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
-// The three outcomes the invoice seam reports. Named sentinels, so statusForErr maps each by
-// identity and everything unrecognised stays a 500.
+// The invoice seam's outcomes. Named sentinels, so statusForErr maps each by identity and
+// everything unrecognised stays a 500.
 var (
 	ErrNoInvoiceForDocument = errors.New("extraction: no invoice was filed from this document")
 	ErrInvoiceNotEditable   = errors.New("extraction: the invoice is past the states an edit may reach")
 	ErrValueRefused         = errors.New("extraction: the invoice refused the value")
+	// The rename seam's two refusals (a flagged invoice_number correction).
+	ErrInvoiceNumberTaken = errors.New("extraction: invoice number already taken")
+	ErrInvoiceNumberFixed = errors.New("extraction: invoice number no longer correctable")
+)
+
+// The rename route's two 409 sentences, spelled here because internal/extraction cannot import
+// internal/invoice (deps_test.go). cmd/submission pins InvoiceNumberTakenReason against
+// invoice.NumberTakenReason.
+const (
+	InvoiceNumberTakenReason = "This invoice number is already in the register for this company. Enter a different number."
+	InvoiceNumberFixedReason = "The invoice number can only be corrected while the invoice is a draft that has never been submitted."
 )
 
 // The refusal wire. 400 is malformed input, 422 is a well-formed request this route declines.
@@ -105,10 +116,12 @@ const (
 	msgSupplierField    = "supplier_tin and supplier_name come from the client record, not from the document"
 )
 
-// The three fields HeaderFields names that no correction may reach. invoice_number is what the
-// invoice is filed under; updateContentTx re-derives supplier_tin and supplier_name from the
-// client entity on every write and never reads the input, so accepting either would store the
-// client record's value under a cell claiming the human typed it.
+// The three fields HeaderFields names whose correction is gated on the extractor's own doubt
+// (AIR-03-06): a field the stored rank-0 row flags ambiguous or unreadable is correctable like
+// any other; an unflagged one is refused with this sentence. invoice_number is what the invoice
+// is filed under; updateContentTx still re-derives supplier_tin/supplier_name from the client
+// entity, so a flagged supplier correction is saved and learned from but never overrides the
+// invoice's own supplier.
 var lockedFields = map[string]string{
 	"invoice_number": msgInvoiceNumberSet,
 	"supplier_tin":   msgSupplierField,
@@ -116,22 +129,54 @@ var lockedFields = map[string]string{
 }
 
 // refuseField answers the field-name vocabulary, before the body is read: the reason a caller
-// gets back must be the real one, not whatever the body happens to be wrong about too.
+// gets back must be the real one, not whatever the body happens to be wrong about too. A locked
+// name is not refused here -- lockedFieldFlaggedTx decides it, against the database.
 func refuseField(name string) (msg string, refused bool) {
-	known := false
 	for _, f := range HeaderFields {
 		if f == name {
-			known = true
-			break
+			return "", false
 		}
 	}
-	if !known {
-		return msgUnknownField, true
+	return msgUnknownField, true
+}
+
+// lockedFieldFlaggedTx reports whether jobID's stored rank-0 reading flags field ambiguous or
+// unreadable -- the ONLY input the gate trusts; the request never supplies it
+// (TestRLS_AnUnflaggedLockedFieldIsStillRefused). No tenant predicate: tenant_isolation supplies
+// it, so another tenant's job and an absent job both read as unflagged.
+func lockedFieldFlaggedTx(ctx context.Context, pool *pgxpool.Pool, jobID, field string) (bool, error) {
+	var reason *Reason
+	err := db.WithinRequestTenantTx(ctx, pool, func(tx pgx.Tx) error {
+		var err error
+		reason, err = rankZeroReasonTx(ctx, tx, jobID, field)
+		return err
+	})
+	if err != nil {
+		return false, err
 	}
-	if msg, ok := lockedFields[name]; ok {
-		return msg, true
+	return reason != nil && (*reason == ReasonAmbiguous || *reason == ReasonUnreadable), nil
+}
+
+// rankZeroReasonTx returns the reason on the job's latest rank-0 row for field, nil where the
+// row carries none or there is no row at all. Same ordering as rankZeroReadingTx, so the gate
+// and an undo agree on which row is "the" rank-0 one.
+func rankZeroReasonTx(ctx context.Context, tx pgx.Tx, jobID, field string) (*Reason, error) {
+	var reason *string
+	err := tx.QueryRow(ctx,
+		`SELECT reason_code FROM extraction_field_results
+		  WHERE extraction_job_id = $1 AND field_name = $2 AND candidate_rank = 0
+		  ORDER BY created_at DESC, id DESC LIMIT 1`, jobID, field).Scan(&reason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	return "", false
+	if err != nil {
+		return nil, err
+	}
+	if reason == nil {
+		return nil, nil
+	}
+	r := Reason(*reason)
+	return &r, nil
 }
 
 // normalisedBox mirrors extraction_field_corrections_bbox_normalised and the page CHECK, so a
@@ -178,6 +223,25 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 		if msg, refused := refuseField(field); refused {
 			writeError(w, http.StatusUnprocessableEntity, msg)
 			return
+		}
+		// The flag gate: a locked name is refused unless the extractor's own stored reading
+		// flagged it, read BEFORE the body -- the reason a caller gets back must be the real
+		// one (TestRLS_AnUnflaggedLockedFieldRefusalPrecedesTheBodyDecode).
+		if msg, locked := lockedFields[field]; locked {
+			flagged, err := lockedFieldFlaggedTx(r.Context(), pool, parsed.String(), field)
+			if err != nil {
+				status, m := statusForErr(err)
+				if status == http.StatusInternalServerError {
+					log.ErrorContext(r.Context(), "extraction: read the locked-field flag",
+						slog.String("job", parsed.String()), slog.String("field", field), slog.Any("err", err))
+				}
+				writeError(w, status, m)
+				return
+			}
+			if !flagged {
+				writeError(w, http.StatusUnprocessableEntity, msg)
+				return
+			}
 		}
 
 		var req CorrectionRequest

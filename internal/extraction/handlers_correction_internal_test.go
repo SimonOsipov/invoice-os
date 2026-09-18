@@ -42,3 +42,26 @@ func TestStatusForErr_MapsTheThreeInvoiceSentinels(t *testing.T) {
 		})
 	}
 }
+
+// T10 (internal/extraction half): the rename seam's two refusals, both 409. The cmd/submission
+// half is TestInvoiceNumberTakenReason_MatchesTheInvoiceRoutesOwnSentence
+// (correction_route_test.go), which pins InvoiceNumberTakenReason against invoice.NumberTakenReason.
+func TestStatusForErr_MapsTheTwoRenameRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		msg    string
+	}{
+		{"the number is already taken", ErrInvoiceNumberTaken, http.StatusConflict, InvoiceNumberTakenReason},
+		{"the number is no longer correctable", ErrInvoiceNumberFixed, http.StatusConflict, InvoiceNumberFixedReason},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, msg := statusForErr(tc.err)
+			if status != tc.status || msg != tc.msg {
+				t.Errorf("statusForErr(%v) = (%d, %q), want (%d, %q)", tc.err, status, msg, tc.status, tc.msg)
+			}
+		})
+	}
+}

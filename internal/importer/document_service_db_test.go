@@ -37,10 +37,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // --- fixture builders --------------------------------------------------
@@ -1235,5 +1237,150 @@ func TestServiceSupplyInvoiceNumber_AGateOutageKeepsTheInvoice(t *testing.T) {
 	}
 	if got := countInvoicesCitingDocument(t, super, documentID); got != 1 {
 		t.Errorf("invoices citing document = %d, want 1", got)
+	}
+}
+
+// --- AIR-03-06 Amendment E1: a document import holds every draft ------------------------
+
+// e1SeedReading seeds one succeeded job: every value at rank 0 with its reasons entry (absent
+// = NULL), then each alts entry as that field's rank-1 reading.
+func e1SeedReading(t *testing.T, super *pgxpool.Pool, tenantID, documentID string, values map[string]*string, reasons, alts map[string]string) {
+	t.Helper()
+	job := seedExtractionJob(t, super, tenantID, documentID, "succeeded", time.Now().UTC())
+	now := time.Now().UTC()
+	for i, name := range mapperFieldNames {
+		var reason *string
+		if r, ok := reasons[name]; ok {
+			reason = sxPtr(r)
+		}
+		seedExtractionField(t, super, tenantID, job, name, values[name], reason, 0, now.Add(time.Duration(i)*time.Millisecond))
+	}
+	for name, v := range alts {
+		seedExtractionField(t, super, tenantID, job, name, sxPtr(v), nil, 1, now.Add(time.Second))
+	}
+}
+
+// e1InvoiceState reads the one invoice filed from documentID.
+func e1InvoiceState(t *testing.T, super *pgxpool.Pool, documentID string) (number, status string, ruleSetVersionID *string) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT invoice_number, status, rule_set_version_id::text FROM invoices WHERE source_document_id = $1`, documentID,
+	).Scan(&number, &status, &ruleSetVersionID); err != nil {
+		t.Fatalf("read the invoice filed from document %s: %v", documentID, err)
+	}
+	return number, status, ruleSetVersionID
+}
+
+// T20 (E1-AC1, E1-AC2): a flagged number files a draft with no gate call, and the chip's
+// rename path renames it while it stays a draft.
+func TestRLS_AFlaggedInvoiceNumberImportStaysADraftThatTheChipCanRename(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "E1-T20 tenant")
+	entityID := seedEntity(t, super, tenantID, "E1-T20 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	e1SeedReading(t, super, tenantID, documentID, docCleanValues("INV-E1-01"),
+		map[string]string{"invoice_number": "ambiguous"},
+		map[string]string{"invoice_number": "20417"})
+
+	g := &fakeGate{}
+	svc := newTestServiceWithGate(app, g)
+	callCtx := sxIdentity(ctx, tenantID)
+
+	res, err := svc.ImportDocument(callCtx, entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	if res.ReadyInvoices != 1 || res.QuarantinedInvoices != 0 {
+		t.Errorf("ReadyInvoices/QuarantinedInvoices = %d/%d, want 1/0", res.ReadyInvoices, res.QuarantinedInvoices)
+	}
+	if res.RuleSetVersion != nil {
+		t.Errorf("RuleSetVersion = %v, want nil", *res.RuleSetVersion)
+	}
+	if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
+		t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+	}
+	number, status, rsv := e1InvoiceState(t, super, documentID)
+	if number != "INV-E1-01" || status != string(invoice.StatusDraft) || rsv != nil {
+		t.Fatalf("filed invoice = %q/%q/rule_set_version_id %v, want INV-E1-01/draft/NULL", number, status, rsv)
+	}
+	invID := invoiceIDByNumber(t, super, entityID, "INV-E1-01")
+
+	renamed := "20417"
+	var edited invoice.Invoice
+	if err := db.WithinRequestTenantTx(callCtx, app, func(tx pgx.Tx) error {
+		var eerr error
+		edited, eerr = invoice.NewStore(app).EditBySourceDocumentTx(callCtx, tx, documentID, invoice.EditInput{InvoiceNumber: &renamed})
+		return eerr
+	}); err != nil {
+		t.Fatalf("EditBySourceDocumentTx rename: %v", err)
+	}
+	if edited.ID != invID {
+		t.Errorf("renamed invoice id = %q, want %q", edited.ID, invID)
+	}
+	number, status, rsv = e1InvoiceState(t, super, documentID)
+	if number != "20417" || status != string(invoice.StatusDraft) || rsv != nil {
+		t.Errorf("after rename = %q/%q/rule_set_version_id %v, want 20417/draft/NULL", number, status, rsv)
+	}
+
+	var updates []map[string]any
+	for _, r := range readAuditForInvoice(t, app, tenantID, invID) {
+		if r.event != "invoice.updated" {
+			continue
+		}
+		var payload map[string]any
+		if jerr := json.Unmarshal(r.payload, &payload); jerr != nil {
+			t.Fatalf("unmarshal audit payload: %v", jerr)
+		}
+		updates = append(updates, payload)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("invoice.updated audit rows = %d, want 1", len(updates))
+	}
+	if updates[0]["previous_invoice_number"] != "INV-E1-01" || updates[0]["invoice_number"] != "20417" {
+		t.Errorf("invoice.updated payload = %v, want previous_invoice_number INV-E1-01, invoice_number 20417", updates[0])
+	}
+}
+
+// T21 (E1-AC3): the hold is not a reason branch. reason_code's CHECK refuses an empty string,
+// so the wire's empty reason and NULL are one stored state, row (a).
+func TestRLS_ADocumentImportHoldsEveryDraftWhateverTheReason(t *testing.T) {
+	cases := []struct {
+		name    string
+		reasons map[string]string
+		alts    map[string]string
+	}{
+		{name: "a_decided_number_null_reason"},
+		{name: "b_inconsistent_total", reasons: map[string]string{"total": "inconsistent"}},
+		{name: "c_ambiguous_buyer_tin", reasons: map[string]string{"buyer_tin": "ambiguous"}, alts: map[string]string{"buyer_tin": "87654321-0002"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			super, app := dbTestPools(t)
+			ctx := context.Background()
+
+			tenantID := seedTenant(t, super, "E1-T21 "+tc.name)
+			entityID := seedEntity(t, super, tenantID, "E1-T21 entity")
+			documentID := docSeedDocument(t, super, tenantID)
+			want := "E1-T21-" + tc.name
+			e1SeedReading(t, super, tenantID, documentID, docCleanValues(want), tc.reasons, tc.alts)
+
+			g := &fakeGate{}
+			res, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+			if err != nil {
+				t.Fatalf("ImportDocument: %v", err)
+			}
+			if res.ReadyInvoices != 1 || res.RuleSetVersion != nil {
+				t.Errorf("ReadyInvoices = %d, RuleSetVersion = %v, want 1 and nil", res.ReadyInvoices, res.RuleSetVersion)
+			}
+			if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
+				t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+			}
+			number, status, rsv := e1InvoiceState(t, super, documentID)
+			if number != want || status != string(invoice.StatusDraft) || rsv != nil {
+				t.Errorf("filed invoice = %q/%q/rule_set_version_id %v, want %s/draft/NULL", number, status, rsv, want)
+			}
+		})
 	}
 }

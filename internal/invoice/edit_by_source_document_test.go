@@ -781,6 +781,162 @@ func TestRLS_EditBySourceDocumentTxRefusesAnEmptyStringLineTax(t *testing.T) {
 	}
 }
 
+// --- AIR-03-06: renaming a flagged invoice_number and a supplier correction, through the SAME
+// edit path a lines-only or header-only correction already takes -- T11-T13 characterise
+// EXISTING editTx behaviour (canCorrectNumber, everSubmittedTx, updateContentTx's supplier
+// re-derivation), so they need no new source and may already be green. ---------------------
+
+// T11: a never-submitted draft's number is renamed through EditInput.InvoiceNumber -- the same
+// rename editTx already grants Store.Edit, reached here through the source-document entry the
+// correction handler calls.
+func TestRLS_EditBySourceDocumentTxRenamesANeverSubmittedDraft(t *testing.T) {
+	f := ebsSeed(t, "T11-INV-0001")
+	beforeUpdated := auditCount(t, f.app, f.tenantID, "invoice.updated")
+
+	got, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: strPtr("20417")})
+	if err != nil {
+		t.Fatalf("renaming a never-submitted draft: want success, got %v", err)
+	}
+	if got.InvoiceNumber != "20417" {
+		t.Errorf("the returned invoice_number = %q, want %q", got.InvoiceNumber, "20417")
+	}
+	if got := f.column(t, f.invoiceID, "invoice_number"); got == nil || *got != "20417" {
+		t.Errorf("invoices.invoice_number = %s, want %q", ebsShow(got), "20417")
+	}
+	if n := auditCount(t, f.app, f.tenantID, "invoice.updated"); n != beforeUpdated+1 {
+		t.Errorf("invoice.updated rows = %d, want %d", n, beforeUpdated+1)
+	}
+	payload := auditPayloadMap(t, f.app, f.tenantID, "invoice.updated")
+	if payload["previous_invoice_number"] != "T11-INV-0001" {
+		t.Errorf("the invoice.updated payload names previous_invoice_number %v, want %q", payload["previous_invoice_number"], "T11-INV-0001")
+	}
+	if payload["invoice_number"] != "20417" {
+		t.Errorf("the invoice.updated payload names invoice_number %v, want %q", payload["invoice_number"], "20417")
+	}
+}
+
+// T12: a rename is refused -- number unchanged in every arm -- once the draft has ever left
+// draft/validated (a), is currently validated (b), the target number is already the entity's
+// (c), or the invoice is currently submitted, which step 3's canEdit refuses before step 3b
+// ever reads the rename at all (d).
+func TestRLS_EditBySourceDocumentTxRefusesAFixedOrTakenNumber(t *testing.T) {
+	t.Run("history shows a transition past draft/validated, current status draft", func(t *testing.T) {
+		f := ebsSeed(t, "T12-A")
+		if _, err := f.super.Exec(context.Background(),
+			`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			f.tenantID, f.invoiceID, string(StatusQueued), string(StatusSubmitted), memberSubject); err != nil {
+			t.Fatalf("seed a submitted history row: %v", err)
+		}
+
+		_, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: strPtr("20417")})
+		if !errors.Is(err, ErrNumberFixed) {
+			t.Errorf("a draft with submitted history: err = %v, want ErrNumberFixed", err)
+		}
+		if got := f.column(t, f.invoiceID, "invoice_number"); got == nil || *got != "T12-A" {
+			t.Errorf("invoices.invoice_number = %s, want the unchanged %q", ebsShow(got), "T12-A")
+		}
+	})
+
+	t.Run("currently validated", func(t *testing.T) {
+		f := ebsSeed(t, "T12-B")
+		if _, err := f.store.Transition(f.ctx, f.invoiceID, StatusValidated); err != nil {
+			t.Fatalf("pre-hop Transition(-> validated): %v", err)
+		}
+
+		_, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: strPtr("20417")})
+		if !errors.Is(err, ErrNumberFixed) {
+			t.Errorf("a validated invoice: err = %v, want ErrNumberFixed", err)
+		}
+		if got := f.column(t, f.invoiceID, "invoice_number"); got == nil || *got != "T12-B" {
+			t.Errorf("invoices.invoice_number = %s, want the unchanged %q", ebsShow(got), "T12-B")
+		}
+	})
+
+	t.Run("the target number is already held by another invoice of the entity", func(t *testing.T) {
+		f := ebsSeed(t, "T12-C")
+		other := seedDocument(t, f.super, f.tenantID)
+		f.secondInvoiceOn(t, other, "T12-C-TAKEN")
+
+		_, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: strPtr("T12-C-TAKEN")})
+		if !errors.Is(err, ErrNumberTaken) {
+			t.Errorf("a number held by another invoice: err = %v, want ErrNumberTaken", err)
+		}
+		if got := f.column(t, f.invoiceID, "invoice_number"); got == nil || *got != "T12-C" {
+			t.Errorf("invoices.invoice_number = %s, want the unchanged %q", ebsShow(got), "T12-C")
+		}
+	})
+
+	t.Run("currently submitted -- step 3's canEdit refuses before step 3b's rename guard", func(t *testing.T) {
+		f := ebsSeed(t, "T12-D")
+		for _, s := range []Status{StatusValidated, StatusQueued, StatusSubmitted} {
+			if _, err := f.store.Transition(f.ctx, f.invoiceID, s); err != nil {
+				t.Fatalf("pre-hop Transition(-> %s): %v", s, err)
+			}
+		}
+
+		_, err := f.edit(t, f.documentID, EditInput{InvoiceNumber: strPtr("20417")})
+		if !errors.Is(err, ErrNotFixable) {
+			t.Errorf("a submitted invoice: err = %v, want ErrNotFixable -- canEdit must refuse before the rename guard ever runs", err)
+		}
+		if got := f.column(t, f.invoiceID, "invoice_number"); got == nil || *got != "T12-D" {
+			t.Errorf("invoices.invoice_number = %s, want the unchanged %q", ebsShow(got), "T12-D")
+		}
+		if got := f.status(t, f.invoiceID); got != StatusSubmitted {
+			t.Errorf("invoices.status = %q after a refused rename, want the unchanged %q", got, StatusSubmitted)
+		}
+	})
+}
+
+// T13: a typed supplier value never reaches the invoice -- updateContentTx re-derives
+// supplier_tin/supplier_name from the client entity on every write, exactly as it does for any
+// other correction. Store.Create already seeded the invoice's supplier from the same entity, so
+// this SupplierName-only edit changes nothing and takes the no-op path: no invoice.updated row.
+func TestRLS_EditBySourceDocumentTxSupplierInputTakesTheClientRecord(t *testing.T) {
+	f := ebsSeed(t, "T13")
+	beforeUpdated := auditCount(t, f.app, f.tenantID, "invoice.updated")
+
+	var entityName string
+	if err := f.super.QueryRow(context.Background(),
+		`SELECT name FROM business_entities WHERE id = $1`, f.entityID).Scan(&entityName); err != nil {
+		t.Fatalf("read the entity name: %v", err)
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{SupplierName: strPtr("Typed Ltd")}})
+	if err != nil {
+		t.Fatalf("a supplier correction: want success, got %v", err)
+	}
+	if got.SupplierName == nil || *got.SupplierName != entityName {
+		t.Errorf("the returned supplier_name = %s, want the entity's own name %q, not the typed %q",
+			ebsShow(got.SupplierName), entityName, "Typed Ltd")
+	}
+	if n := auditCount(t, f.app, f.tenantID, "invoice.updated"); n != beforeUpdated {
+		t.Errorf("invoice.updated rows = %d after a no-op supplier correction, want the unchanged %d", n, beforeUpdated)
+	}
+}
+
+// The supplier_tin half of T13, against an entity that HAS a TIN: the invoice takes the
+// entity's, never the typed one.
+func TestRLS_EditBySourceDocumentTxSupplierTINInputTakesTheClientRecord(t *testing.T) {
+	f := ebsSeed(t, "QA06-STIN")
+	const entityTIN, typed = "11111111-0001", "99999999-0009"
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE business_entities SET tin = $1 WHERE id = $2`, entityTIN, f.entityID); err != nil {
+		t.Fatalf("give the entity a TIN: %v", err)
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{SupplierTIN: strPtr(typed)}})
+	if err != nil {
+		t.Fatalf("a supplier_tin correction: want success, got %v", err)
+	}
+	if got.SupplierTIN == nil || *got.SupplierTIN != entityTIN {
+		t.Errorf("the returned supplier_tin = %s, want the entity's %q", ebsShow(got.SupplierTIN), entityTIN)
+	}
+	if col := f.column(t, f.invoiceID, "supplier_tin"); col == nil || *col != entityTIN {
+		t.Errorf("invoices.supplier_tin = %s, want the entity's %q, not the typed %q", ebsShow(col), entityTIN, typed)
+	}
+}
+
 // --- AC-8: replaceLinesTx's 22003 mapping is symmetric with Store.Create's -----------------
 
 // TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation drives EditBySourceDocumentTx, the

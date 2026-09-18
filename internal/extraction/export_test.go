@@ -244,6 +244,13 @@ func PDFiumGapsForTest(rects []*responses.GetPageTextStructuredRect, chars []*re
 	return out
 }
 
+// MergeAIForTest hands the external fixtures test the merge step over a fixture-built
+// pages/answer, so TestFixtures_AISteeredOutcomeIgnoresTokenOrder drives mergeAI without a
+// worker.
+func MergeAIForTest(engine []FieldResult, answer map[string]string, pages []TokenPage, lines []DocLine) []FieldResult {
+	return mergeAI(engine, answer, pages, lines)
+}
+
 // PDFiumWordsForTest runs the merge at an explicit splitGap and returns the group count too, so
 // a vanished token is visible. textChars is computed independently of pdfiumTokens' own
 // signature (which subtask 03 may or may not change): non-whitespace runes of the input rects,

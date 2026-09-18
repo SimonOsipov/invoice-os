@@ -55,7 +55,9 @@ type ExtractWorker struct {
 	// (TestExtractWorker_NilTextKeepsTheExtractorPath).
 	Text PageReader
 	// Rules loads the tenant's learned anchor rules for one layout fingerprint.
-	Rules  LoadAnchorRules
+	Rules LoadAnchorRules
+	// AI is the per-document AI reading step. nil is off.
+	AI     AIReader
 	Logger *slog.Logger
 }
 
@@ -243,14 +245,17 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				}
 			}
 			if err == nil {
+				// octx, not ctx: the client's ai call log line reads tenant_id off it.
+				answer := askAI(octx, w.AI, textTokens)
+				lines := LineItems(textPages)
 				// Entity{} skips Reconcile's advisory supplier cross-check; invoice.Store
 				// overwrites supplier_tin/supplier_name from the entity on every write anyway.
-				results = Reconcile(Input{
+				results = mergeAI(Reconcile(Input{
 					Candidates: Resolve(textTokens, RuleSet{Learned: learned, Tier1: Tier1Rules}),
-					Lines:      LineItems(textPages),
+					Lines:      lines,
 					Entity:     Entity{},
 					Pages:      textTokens,
-				})
+				}), answer, textTokens, lines)
 			}
 		}
 	}

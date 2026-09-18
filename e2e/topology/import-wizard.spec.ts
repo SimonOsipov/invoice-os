@@ -79,6 +79,7 @@ import {
   getExtractionDetail,
   getInvoice,
   postFieldCorrection,
+  rawFetch,
   PERSONAS,
   type CorrectionResponse,
   type ExtractionDetail,
@@ -1982,6 +1983,14 @@ function uniqueChromeRegisterPdfBytes(): Buffer {
 
 function uniqueChromeRegisterTwinPdfBytes(): Buffer {
   return Buffer.concat([CHROME_REGISTER_TWIN_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// AIR-03-05's deployed-steering fixture (fxE2ECopies): the AIFAKE-ANSWER marker steers the fake
+// fleet's document reading. Same recipe as the others above.
+const AI_STEERED_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_steered_invoice.pdf'))
+
+function uniqueAiSteeredPdfBytes(): Buffer {
+  return Buffer.concat([AI_STEERED_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // A correction applies to the invoice filed from the document, which commits AFTER the
@@ -4016,7 +4025,7 @@ test('EXTR12-E2E-02 (AC-7): the corrected marker sits inside the value control, 
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
 
-  // `total` is admitted: refuseField locks only invoice_number, supplier_tin and supplier_name.
+  // `total` is admitted: the flag gate locks only invoice_number, supplier_tin and supplier_name.
   await postFieldCorrection(token, jobId as string, 'total', { value: '2222.00', method: 'typed' })
 
   const detail = await openExtractionReview(page)
@@ -5023,7 +5032,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
-  // `subtotal` is admitted: refuseField locks only invoice_number, supplier_tin and
+  // `subtotal` is admitted: the flag gate locks only invoice_number, supplier_tin and
   // supplier_name. On the rich fixture `subtotal` is the header field carrying the flagged
   // disagreement, so it is the one with a pill to replace.
   await postFieldCorrection(token, jobId as string, 'subtotal', { value: '2222.00', method: 'typed' })
@@ -5381,7 +5390,8 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 // this file, byte for byte; one list, one copy.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
-// a 422, so none of them is what this journey types over.
+// a 422 while it is unflagged, which the steered fixture never lifts (AIR-03-06), so none of
+// them is what this journey types over.
 const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
 
 // The story's Invented-copy table, per method (artboard `:639-641`).
@@ -8711,6 +8721,83 @@ test('EXTR36-E2E-01 (AC-1/AC-2): a Chrome-shaped register anchors its printed la
     corrected?.corrected?.where,
     `corrected.where did not derive a rule -- the region matched no anchor. Field: ${JSON.stringify(corrected)}`,
   ).toBe('BILLED TO')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine", async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  await extractOneDocument(page, 'AIR-03-05 steered', { name: 'ai_steered_invoice.pdf', buffer: uniqueAiSteeredPdfBytes() })
+
+  // extractOneDocument already waited on invoice-detail, which proves the AI-only invoice
+  // number filed a draft instead of quarantining (AC-6).
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
+  const invoiceId = invoiceMatch![1]
+
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+
+  // AIR03-E2E-01 (AC-9 a): the engine's own buyer_tin disagrees with the AI's Supplier-TIN
+  // misread, so both render as chips -- chip 0 the wire's decided value, chip 1 the AI's own.
+  const tinCell = page.getByTestId('extraction-field-buyer_tin')
+  await expect(tinCell.locator('[data-testid^="extraction-chip-buyer_tin-"]'), 'buyer_tin must render exactly two chips').toHaveCount(2)
+  await expect(page.getByTestId('extraction-chip-buyer_tin-0')).toHaveText('12345678-0001page 1')
+  await expect(page.getByTestId('extraction-chip-buyer_tin-1')).toHaveText('87654321-0002page 1')
+  await expect(tinCell.getByText('FOUND TWO POSSIBLE VALUES', { exact: true })).toBeVisible()
+  const tinWire = wire.get('buyer_tin')
+  expect({ value: tinWire?.value, reason: tinWire?.reason, alt: tinWire?.alternatives.map((a) => a.value) }).toEqual({
+    value: '12345678-0001',
+    reason: 'ambiguous',
+    alt: ['87654321-0002'],
+  })
+
+  // AIR03-E2E-02 (AC-6, AC-9 b): the engine refuses the all-digit number as an amount; the AI's
+  // reading, checked against the "Invoice Number:" label, decides it -- unmarked (Q12).
+  const invoiceInput = page.getByTestId('extraction-input-invoice_number')
+  await expect(invoiceInput).toHaveValue('20417')
+  await expect(invoiceInput).toHaveJSProperty('readOnly', true)
+  await expect(page.getByTestId('extraction-field-invoice_number').locator('.mono'), 'a decided field renders no pill').toHaveCount(0)
+  const numberWire = wire.get('invoice_number')
+  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({ value: '20417', reason: '' })
+  expect(numberWire?.region, 'the AI-only number must still carry a region').not.toBeNull()
+
+  // AIR03-E2E-03 (AC-5, AC-9 c): "Account Name:" fails check (c), so the missing field is
+  // doubtful rather than silently filled -- the input offers the AI's text for correction.
+  const nameCell = page.getByTestId('extraction-field-buyer_name')
+  // pill text: REASON_PILLS
+  await expect(nameCell.getByText("COULDN'T READ THIS CLEARLY", { exact: true })).toBeVisible()
+  await expect(page.getByTestId('extraction-input-buyer_name')).toHaveValue('ZENITH HOLDINGS LIMITED')
+  const nameWire = wire.get('buyer_name')
+  expect({ value: nameWire?.value, reason: nameWire?.reason, alt: nameWire?.alternatives.map((a) => a.value) }).toEqual({
+    value: null,
+    reason: 'unreadable',
+    alt: ['ZENITH HOLDINGS LIMITED'],
+  })
+
+  // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
+  // the field is correctable here -- an unflagged locked field still answers today's 422.
+  // lock note: INVOICE_NUMBER_LOCKED
+  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
+    "The invoice number is this invoice's identity and cannot be changed here.",
+  )
+  const refusal = await rawFetch(`/api/submission/v1/extractions/${detail.id}/fields/invoice_number/corrections`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { value: '99999', method: 'typed' },
+  })
+  expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
+  // 422 sentence: msgInvoiceNumberSet
+  expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
+
+  const invoice = await getInvoice(token, invoiceId)
+  expect({ invoice_number: invoice.invoice_number, buyer_name: invoice.buyer_name }).toEqual({
+    invoice_number: '20417',
+    buyer_name: null,
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

@@ -20,7 +20,9 @@ import {
   getExtractionDetail,
   highlightStyle,
   isDrawnBox,
+  lockedField,
   normaliseBox,
+  offeredText,
   pageFrameStyle,
   pointBoxStyle,
   pointedEntry,
@@ -33,6 +35,7 @@ import {
 } from './extractionReview'
 import type {
   DraftEntries,
+  ExtractionCorrected,
   ExtractionDetail,
   ExtractionDocument,
   ExtractionFieldState,
@@ -899,6 +902,35 @@ describe('regionPhrase', () => {
   })
 })
 
+// -- lockedField (AIR-03-06) -----------------------------------------------------------
+
+function mkCorrected(o: Partial<ExtractionCorrected> = {}): ExtractionCorrected {
+  return { method: 'typed', was: null, where: null, ...o }
+}
+
+describe('lockedField', () => {
+  it('is locked unless the extractor flagged it, or the field is already corrected', () => {
+    for (const tc of [
+      { name: 'invoice_number', reason: '' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'missing' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'inconsistent' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'ambiguous' as ExtractionReason, corrected: null, want: false },
+      { name: 'invoice_number', reason: 'unreadable' as ExtractionReason, corrected: null, want: false },
+      { name: 'invoice_number', reason: '' as ExtractionReason, corrected: mkCorrected(), want: false },
+      { name: 'supplier_tin', reason: 'inconsistent' as ExtractionReason, corrected: null, want: true },
+      // A field outside the locked vocabulary is never locked, whatever its reason.
+      { name: 'buyer_name', reason: '' as ExtractionReason, corrected: null, want: false },
+      { name: 'buyer_name', reason: 'ambiguous' as ExtractionReason, corrected: null, want: false },
+    ]) {
+      const f = mkField({ name: tc.name, reason: tc.reason, corrected: tc.corrected })
+      expect(
+        lockedField(f),
+        `lockedField(${tc.name}, reason ${JSON.stringify(tc.reason)}, corrected ${tc.corrected === null ? 'null' : 'set'}) = ${!tc.want}, want ${tc.want}`,
+      ).toBe(tc.want)
+    }
+  })
+})
+
 describe('applyDraft', () => {
   it('lays a typed value over the wire and claims no correction', () => {
     // A drafted field must not say YOU CHANGED THIS: nothing has been recorded, and the copy
@@ -1389,5 +1421,82 @@ describe('savableCorrections, pointed', () => {
       out.map((p) => p.field),
       'a valueless point was posted, and the boundary refuses a blank value',
     ).toEqual(['total'])
+  })
+})
+
+// -- offeredText (AIR-03-04, AC-5) -------------------------------------------------------
+
+describe('offeredText', () => {
+  it('returns the first alternative of a doubtful empty field', () => {
+    const ALT_X = { value: 'ZENITH HOLDINGS LIMITED', region: null }
+    const ALT_Y = { value: 'ZENITH HOLDINGS LTD', region: null }
+
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [ALT_X] })),
+      'a doubtful empty field offers nothing',
+    ).toBe(ALT_X.value)
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [ALT_X, ALT_Y] })),
+      'a second alternative was offered instead of the first',
+    ).toBe(ALT_X.value)
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: 'v', alternatives: [ALT_X] })),
+      'a field that already has a value still offered one',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'ambiguous', value: null, alternatives: [ALT_X] })),
+      'ambiguous has its own chips and must not also offer text',
+    ).toBeNull()
+    expect(offeredText(mkField({ reason: 'missing', value: null, alternatives: [ALT_X] }))).toBeNull()
+    expect(
+      offeredText(mkField({ reason: '', value: null, alternatives: [ALT_X] })),
+      'a clean field with a stray alternative offered it',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [] })),
+      'nothing to offer, and nothing was offered',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [{ value: null, region: null }] })),
+      'the one alternative carries nothing either',
+    ).toBeNull()
+  })
+})
+
+describe('offeredText, adversarial (AIR-03-04)', () => {
+  it('offers only the first alternative, never a later one past an empty first', () => {
+    const f = mkField({
+      reason: 'unreadable',
+      value: null,
+      alternatives: [
+        { value: null, region: null },
+        { value: 'ZENITH HOLDINGS LTD', region: null },
+      ],
+    })
+    expect(offeredText(f), 'a later alternative leaked past an empty first').toBeNull()
+  })
+
+  it('never reaches a Save: an offered field with no draft posts nothing', () => {
+    const offered = mkField({
+      name: 'buyer_name',
+      reason: 'unreadable',
+      value: null,
+      alternatives: [{ value: 'ZENITH HOLDINGS LIMITED', region: null }],
+    })
+    expect(offeredText(offered), 'the fixture offers nothing -- every claim below is vacuous').toBe(
+      'ZENITH HOLDINGS LIMITED',
+    )
+    expect(applyDraft([offered], {})[0].value, 'applyDraft folded the offered text into the value').toBeNull()
+    expect(savableCorrections([offered], {}), 'an undrafted offered text was posted').toEqual([])
+    // Accepting the text unchanged is a real decision: the wire holds null, not the offer.
+    expect(
+      savableCorrections([offered], {
+        buyer_name: { kind: 'typed', value: 'ZENITH HOLDINGS LIMITED', region: null },
+      }).map((p) => [p.field, p.body.value, p.body.method]),
+    ).toEqual([['buyer_name', 'ZENITH HOLDINGS LIMITED', 'typed']])
+    expect(
+      savableCorrections([offered], { buyer_name: { kind: 'typed', value: '', region: null } }),
+      'a cleared offered field posted a blank',
+    ).toEqual([])
   })
 })

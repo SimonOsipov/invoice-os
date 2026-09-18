@@ -17,7 +17,8 @@ import (
 // answers ans, and checkAI reads pages for every non-blank answer.
 func mergeWith(engine []FieldResult, ans map[string]any, pages []TokenPage, lines []DocLine) []FieldResult {
 	stub := &recordingAI{enabled: true, answer: ans}
-	return mergeAI(engine, askAI(context.Background(), stub, pages), pages, lines)
+	answer, _ := askAI(context.Background(), stub, pages)
+	return mergeAI(engine, answer, pages, lines)
 }
 
 // cloneResults deep-copies rows so a later comparison is against the state before the call, not
@@ -267,7 +268,8 @@ func TestMergeAI_Row6_ABlankAnswerChangesNothing(t *testing.T) {
 
 	// askAI itself returns nil on any error, even with a real answer behind it.
 	errStub := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}, err: ai.ErrUnavailable}
-	gotErr := mergeAI(engine, askAI(context.Background(), errStub, pages), pages, nil)
+	errAnswer, _ := askAI(context.Background(), errStub, pages)
+	gotErr := mergeAI(engine, errAnswer, pages, nil)
 	if !reflect.DeepEqual(gotErr, want) {
 		t.Errorf("stub error case: got %+v, want unchanged %+v", gotErr, want)
 	}

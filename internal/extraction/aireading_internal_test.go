@@ -204,19 +204,19 @@ func TestAskAI_OffOrNilMakesNoCall(t *testing.T) {
 	pages := onePage(1, tok("Invoice", 1, 0.10, 0.10, 0.20, 0.12))
 
 	off := &recordingAI{enabled: false}
-	if got := askAI(context.Background(), off, pages); got != nil {
+	if got, _ := askAI(context.Background(), off, pages); got != nil {
 		t.Errorf("askAI(off) = %v, want nil", got)
 	}
 	if len(off.calls) != 0 {
 		t.Errorf("askAI(off) calls = %d, want 0", len(off.calls))
 	}
 
-	if got := askAI(context.Background(), nil, pages); got != nil {
+	if got, _ := askAI(context.Background(), nil, pages); got != nil {
 		t.Errorf("askAI(nil) = %v, want nil", got)
 	}
 
 	on := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}}
-	if got := askAI(context.Background(), on, pages); len(on.calls) != 1 || got["total"] != "1935.00" {
+	if got, _ := askAI(context.Background(), on, pages); len(on.calls) != 1 || got["total"] != "1935.00" {
 		t.Errorf("control: askAI(on) calls = %d, answer = %v; want 1 call and total 1935.00", len(on.calls), got)
 	}
 }
@@ -225,13 +225,13 @@ func TestAskAI_AnErrorLeavesNoAnswer(t *testing.T) {
 	pages := onePage(1, tok("Invoice", 1, 0.10, 0.10, 0.20, 0.12))
 	for _, e := range []error{ai.ErrUnavailable, ai.ErrOff, errors.New("x")} {
 		stub := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}, err: e}
-		if got := askAI(context.Background(), stub, pages); got != nil {
+		if got, _ := askAI(context.Background(), stub, pages); got != nil {
 			t.Errorf("askAI(err=%v) = %v, want nil", e, got)
 		}
 	}
 
 	ok := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}}
-	if got := askAI(context.Background(), ok, pages); got["total"] != "1935.00" {
+	if got, _ := askAI(context.Background(), ok, pages); got["total"] != "1935.00" {
 		t.Errorf("control: askAI(no error) = %v, want total 1935.00", got)
 	}
 }
@@ -245,7 +245,7 @@ func TestAskAI_KeepsOnlyNonBlankStrings(t *testing.T) {
 		"vat":            json.Number("5"),
 		"extra":          "x",
 	}}
-	got := askAI(context.Background(), stub, pages)
+	got, _ := askAI(context.Background(), stub, pages)
 	want := map[string]string{"total": "1935.00"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("askAI(mixed answer) = %v, want %v", got, want)

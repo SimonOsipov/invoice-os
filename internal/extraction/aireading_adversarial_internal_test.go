@@ -188,12 +188,12 @@ func TestAskAI_DropsWhitespaceOnlyAndNonHeaderAnswers(t *testing.T) {
 	stub := &recordingAI{enabled: true, answer: map[string]any{
 		"buyer_name": "\t\n", "currency": "", "line_items": "x", "total": 1935.0, "vat": " 135.00 ",
 	}}
-	got := askAI(context.Background(), stub, pages)
+	got, _ := askAI(context.Background(), stub, pages)
 	if len(got) != 1 || got["vat"] != " 135.00 " {
 		t.Errorf("askAI = %q, want only vat kept untrimmed", got)
 	}
 	stub.answer = map[string]any{"buyer_name": "\t\n"}
-	if got := askAI(context.Background(), stub, pages); got != nil {
+	if got, _ := askAI(context.Background(), stub, pages); got != nil {
 		t.Errorf("askAI(all blank) = %v, want nil", got)
 	}
 }

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 
 import {
+  AI_UNAVAILABLE_FIELD,
   applyDraft,
   correctedMarker,
   docMetaLine,
@@ -19,6 +20,7 @@ import {
   fieldNote,
   getExtractionDetail,
   highlightStyle,
+  isAIUnavailable,
   isDrawnBox,
   lockedField,
   normaliseBox,
@@ -1498,5 +1500,24 @@ describe('offeredText, adversarial (AIR-03-04)', () => {
       savableCorrections([offered], { buyer_name: { kind: 'typed', value: '', region: null } }),
       'a cleared offered field posted a blank',
     ).toEqual([])
+  })
+})
+
+// -- isAIUnavailable (AIR-04-03) -------------------------------------------------------------
+
+describe('isAIUnavailable', () => {
+  const marker = (o: Partial<ExtractionFieldState> = {}) =>
+    mkField({ name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', ...o })
+
+  it('AIR04-P1: is true only for the exact marker set', () => {
+    expect(isAIUnavailable([marker()]), 'the marker-only set was not recognised').toBe(true)
+
+    expect(isAIUnavailable([marker({ reason: '' })]), 'a clean reason still read as unavailable').toBe(false)
+    expect(isAIUnavailable([marker(), mkField()]), 'a marker beside another row still read as unavailable').toBe(false)
+    expect(
+      isAIUnavailable([mkField({ name: 'document_text_layer', value: null, region: null, reason: 'unreadable' })]),
+      'the poor-scan marker was mistaken for the AI one',
+    ).toBe(false)
+    expect(isAIUnavailable([]), 'an empty field set read as unavailable').toBe(false)
   })
 })

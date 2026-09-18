@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
+import { AI_UNAVAILABLE_FIELD } from './extractionReview'
 
 function repoFile(rel: string): string {
   return readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), 'utf8')
@@ -551,6 +552,22 @@ describe('wire mirror: db.NotActiveMemberMessage <-> the SPA <-> e2e/api/suspens
     expect(src, 'tenant.go stopped naming the file that pins its message').toContain(
       'frontend/app/src/lib/wireMirrors.test.ts',
     )
+  })
+})
+
+// AIR-04-03 — the AI-unavailable marker's field name mirror. isAIUnavailable keys on this
+// literal on both sides, as isPoorScan keys on document_text_layer's.
+describe('wire mirror: aireading.go’s aiUnavailableField <-> AI_UNAVAILABLE_FIELD (AIR-04-03)', () => {
+  it('aiUnavailableField_theGoConstEqualsTheTypeScriptOne', () => {
+    const goValue = goStringConst(repoFile('internal/extraction/aireading.go'), 'aiUnavailableField')
+
+    // Non-vacuous floor first: '' === '' would pass the equality row for free.
+    expect(goValue, 'no bare aiUnavailableField const found — did it move into a const ( … ) block?').not.toBe('')
+    expect(goValue, 'the frontend name no longer matches the Go marker').toBe(AI_UNAVAILABLE_FIELD)
+
+    // Planted negative: goStringConst reads only the bare form, so a block-form declaration
+    // reds on the floor above, not the equality — proving the floor actually discriminates.
+    expect(goStringConst('const (\n\taiUnavailableField = "x"\n)', 'aiUnavailableField')).toBe('')
   })
 })
 

@@ -41,6 +41,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import { ApiError } from '@invoice-os/api-client'
 
+import { AI_UNAVAILABLE_FIELD } from '../lib/extractionReview'
 import type {
   ExtractionDetail,
   ExtractionDocument,
@@ -49,7 +50,7 @@ import type {
   ExtractionRegion,
   LineItemsResponse,
 } from '../lib/extractionReview'
-import { deadLetterRefusal } from '../lib/documentRun'
+import { AI_UNAVAILABLE_REFUSAL, deadLetterRefusal } from '../lib/documentRun'
 import { linesFromFields, linesToPost } from '../lib/lineItems'
 import type { LineItemInput, LineRole } from '../lib/lineItems'
 import type { PlatformCtx } from '../types'
@@ -733,6 +734,56 @@ describe('the state ladder', () => {
       Array.from((mount as RegExpExecArray)[1].matchAll(/(\w+)=/g), (m) => m[1]),
       'ExtractionReview is mounted with props other than ctx, jobId and onOpenInvoice',
     ).toEqual(['ctx', 'jobId', 'onOpenInvoice'])
+  })
+})
+
+// ==========================================================================================
+// The AI-unavailable marker (AIR-04-03, AC-4). Same treatment as dead_lettered's rung above:
+// the sentence replaces the whole body, no canvas, no fetch, no Save, no invoice hand-off.
+// ==========================================================================================
+
+describe('the AI-unavailable marker', () => {
+  function marker(): ExtractionFieldState {
+    return { name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null }
+  }
+
+  it('AIR04-S1: a marker-only job renders the sentence instead of the panes', async () => {
+    const pf = pageFetch()
+    const detail = mkDetail({ state: 'succeeded', fields: [marker()] })
+    expect(detail.pages.length, 'the fixture carries no page — the fetch absence below is vacuous').toBe(3)
+
+    render(review({ ctx: serving(detail).ctx, onOpenInvoice: () => {} }))
+    await flush()
+
+    expect(screen.getByText(AI_UNAVAILABLE_REFUSAL), 'the AI-unavailable sentence did not render').toBeTruthy()
+    // "one sentence" read literally, as the dead-letter rows above do.
+    expect((root().textContent ?? '').replace(AI_UNAVAILABLE_REFUSAL, '').trim()).toBe('')
+    expect(screen.queryByText(STILL_READING), 'a settled marker-only job is not still being read').toBeNull()
+    const shown = allSentences().filter(([, s]) => (root().textContent ?? '').includes(s))
+    expect(shown, 'a marker-only job also rendered a dead-letter sentence').toEqual([])
+
+    expect(screen.queryByTestId('extraction-review-body'), 'the panes rendered for a marker-only job').toBeNull()
+    expect(screen.queryByTestId('extraction-canvas'), 'the document pane rendered for a marker-only job').toBeNull()
+    expect(saveButton(), 'Save rendered with nothing to settle').toBeNull()
+    expect(exitButton(), 'the invoice hand-off rendered with no field pane').toBeNull()
+    expect(frames(), 'a marker-only job rendered page frames').toHaveLength(0)
+    expect(pf.requested(), 'a marker-only job fetched a page image').toEqual([])
+    expect(urls(), 'a marker-only job created an object URL').toEqual([])
+  })
+
+  it.each([
+    ['a marker beside a real field', [marker(), mkField({ name: 'invoice_number' })]],
+    [
+      'a lone document_text_layer row',
+      [{ name: 'document_text_layer', value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null }],
+    ],
+  ] as [string, ExtractionFieldState[]][])('AIR04-S2: %s keeps the panes, not the sentence', async (_label, fields) => {
+    render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields })).ctx }))
+    await flush()
+
+    expect(screen.getByTestId('extraction-review-body'), 'the panes did not render').toBeTruthy()
+    expect(screen.getByTestId('extraction-canvas'), 'the document pane did not render').toBeTruthy()
+    expect(screen.queryByText(AI_UNAVAILABLE_REFUSAL), 'the AI-unavailable sentence rendered for a non-marker set').toBeNull()
   })
 })
 

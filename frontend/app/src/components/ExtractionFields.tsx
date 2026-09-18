@@ -6,7 +6,15 @@
 import type { CSSProperties } from 'react'
 
 import { crosshairGlyph } from '../glyphs'
-import { applyDraft, correctedMarker, fieldLabel, fieldNote, reasonPill, regionPhrase } from '../lib/extractionReview'
+import {
+  applyDraft,
+  correctedMarker,
+  fieldLabel,
+  fieldNote,
+  offeredText,
+  reasonPill,
+  regionPhrase,
+} from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
 import { linesFromFields } from '../lib/lineItems'
 import type { LineRole, LineRow } from '../lib/lineItems'
@@ -370,7 +378,7 @@ export function ExtractionFields({
                         <input
                           data-testid={`extraction-input-${f.name}`}
                           className="pf-input"
-                          value={f.value ?? ''}
+                          value={f.value ?? offeredText(wire) ?? ''}
                           readOnly={locked}
                           aria-readonly={locked}
                           aria-label={fieldLabel(f.name)}

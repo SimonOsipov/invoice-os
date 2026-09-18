@@ -245,10 +245,11 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
   })
 }
 
-// AIR-03-04 stub: real body lands with the executor's feat commit. Kept here only so the RED
-// tests compile against a real export.
-export function offeredText(_field: ExtractionFieldState): string | null {
-  return null
+// AIR-03-04, AC-5: a doubtful empty field still shows the AI's own reading, over the input, not
+// drafted -- so an unreadable+null+alternatives row is never blank.
+export function offeredText(field: ExtractionFieldState): string | null {
+  if (field.reason !== 'unreadable' || field.value !== null || field.alternatives.length === 0) return null
+  return field.alternatives[0].value ?? null
 }
 
 /** Where a field sits in the vocabulary; anything the wire adds later sorts after all of it. */

@@ -3,9 +3,10 @@
 **Audience:** anyone setting the OpenRouter key on a Railway service, anyone debugging an
 `ai call` log line, and AIR-03, AIR-05, and AIR-07 — the stories that will call this client.
 
-> **One caller today.** `submission`'s extraction worker calls `FromEnv` and reads through
-> the client on every text document. AIR-07 wires the `invoice` importer next, and AIR-05
-> fills the `FakeHint` channel described below.
+> **One caller today.** `submission`'s extraction worker calls `FromEnv` and calls the
+> client on a text document when the client is enabled
+> (`TestRLS_ExtractWorkerWithTheAIOffWritesTodaysRows` pins the off case). AIR-07 wires
+> the `invoice` importer next, and AIR-05 fills the `FakeHint` channel described below.
 > `doc_test.go`'s `TestAIDoc_*` suite is this page's doc-sync gate — every name below is
 > parsed out of the Go and shell source, never retyped, so a rename in code fails this
 > page's test rather than drifting silently, the same convention `docs/mock-app-adapter.md`
@@ -135,10 +136,11 @@ it before any forked service deploys.
 
 ## Known limitations
 
-1. **One binary wired.** `submission` calls `FromEnv` and reads through the client.
-   `invoice` (AIR-07) and the `FakeHint` channel (AIR-05) still owe their own deployed
-   checks: the binary boots with `OPENROUTER_API_KEY` empty, and an `ai call` line
-   appears in its Railway log.
+1. **One binary wired.** `submission` calls `FromEnv` and reads through the client, but
+   still owes its two deployed checks — the service boots with `OPENROUTER_API_KEY`
+   empty, and an `ai call` line appears in its Railway log — which AIR-03-05 records on
+   the PR deploy. `invoice` (AIR-07) and the `FakeHint` channel (AIR-05) own the same two
+   checks for their own wiring.
 2. **`unavailable` conflates two causes.** A spent budget and a cancelled-or-expired
    caller context both log it. The returned error distinguishes them —
    `errors.Is(err, ErrUnavailable)` is true only for the spent budget — but the log line

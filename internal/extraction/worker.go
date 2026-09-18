@@ -56,7 +56,7 @@ type ExtractWorker struct {
 	Text PageReader
 	// Rules loads the tenant's learned anchor rules for one layout fingerprint.
 	Rules LoadAnchorRules
-	// AI is the per-document AI reading step (AIR-03). nil is off.
+	// AI is the per-document AI reading step. nil is off.
 	AI     AIReader
 	Logger *slog.Logger
 }

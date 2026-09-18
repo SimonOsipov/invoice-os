@@ -11,6 +11,7 @@ import {
   correctedMarker,
   fieldLabel,
   fieldNote,
+  lockedField,
   offeredText,
   reasonPill,
   regionPhrase,
@@ -48,12 +49,9 @@ function isHeaderField(name: string): boolean {
   return !LINE_FIELD_RE.test(name)
 }
 
-// internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
-// a 422, and updateContentTx re-derives the two supplier fields from the client entity anyway.
-// readOnly, never disabled -- a disabled input leaves the tab order and fires no focus, so the
-// cell would stop being reachable or selectable by keyboard.
-const LOCKED_FIELDS = ['invoice_number', ...SUPPLIER_FIELDS]
-
+// lockedField (extractionReview.ts) decides which of the three are locked, keyed on the WIRE
+// field: an unflagged one is read-only, never disabled -- a disabled input leaves the tab order
+// and fires no focus, so the cell would stop being reachable or selectable by keyboard.
 // SUPPLIER_NOTE already says why the two supplier cells are locked, at pane level.
 const LOCK_REASONS: Record<string, string> = { invoice_number: INVOICE_NUMBER_LOCKED }
 
@@ -346,8 +344,8 @@ export function ExtractionFields({
                     : null
                 // The pill's number is the chip array's own length, so the two can never drift.
                 const pill = settled === null ? (reasonPill(f.reason, candidates?.length ?? 0) ?? cue) : null
-                const locked = LOCKED_FIELDS.includes(f.name)
-                const lock = LOCK_REASONS[f.name] ?? null
+                const locked = lockedField(wire)
+                const lock = locked ? (LOCK_REASONS[f.name] ?? null) : null
                 // The value the invoice holds, or the one the draft will settle it to. With no
                 // chosen entry it falls back to the WIRE's own reading, so the row always says
                 // which of the candidates is filed -- an ambiguous cell renders no input, and a

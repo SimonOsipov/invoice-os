@@ -860,8 +860,8 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 
 // -- copies this file deliberately does NOT guard (EXTR-13-06, AC-9) ----------------------
 //
-// LOCKED_FIELDS (ExtractionFields.test.tsx) vs handlers_correction.go's lockedFields -- a Go
-//   map[string]string, not a slice; it needs a different extractor, and refuseField's 422 is
+// LOCKED_FIELDS (extractionReview.ts) vs handlers_correction.go's lockedFields -- a Go
+//   map[string]string, not a slice; it needs a different extractor, and the gate's 422 is
 //   already pinned by the correction e2e.
 // CorrectionRequest's optionality asymmetry -- tsInterfaceKeys strips '?', so the SPA's
 //   all-required keys compare equal to client.ts's optional region/anchor_label. A live

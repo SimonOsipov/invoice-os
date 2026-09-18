@@ -5381,7 +5381,8 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 // this file, byte for byte; one list, one copy.
 
 // internal/extraction/handlers_correction.go, lockedFields: a correction on any of the three is
-// a 422, so none of them is what this journey types over.
+// a 422 while it is unflagged, which the steered fixture never lifts (AIR-03-06), so none of
+// them is what this journey types over.
 const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
 
 // The story's Invented-copy table, per method (artboard `:639-641`).

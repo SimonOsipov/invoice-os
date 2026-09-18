@@ -32,8 +32,8 @@ type candidate struct {
 
 // LearnRule derives one rule from a box, pointed or located by LearnTypedRule. ok is false when
 // no anchor stands in a relation to region -- an honest refusal; the correction is still recorded.
-// The field lock (invoice_number, supplier_tin, supplier_name) lives in the handler's refuseField,
-// not here.
+// The field lock (invoice_number, supplier_tin, supplier_name) lives in the handler's gate, not
+// here -- a flagged one reaches this func like any other field.
 func LearnRule(field string, region Region, anchors []AnchorObservation) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
 	if !ok {

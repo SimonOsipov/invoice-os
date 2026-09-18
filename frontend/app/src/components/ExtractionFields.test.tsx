@@ -90,9 +90,10 @@ const POINT_ARMED = 'Waiting — drag a box around it on the document'
 const POINT_CANCEL = 'Stop pointing'
 const POINT_PAGELESS = 'Not found — type it in'
 
-// internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
-// is filed under; updateContentTx re-derives the two supplier fields from the client entity and
-// never reads the input, so a correction on any of the three is a 422.
+// internal/extraction/handlers_correction.go, lockedFields. Locked while UNFLAGGED (reason ''
+// here): invoice_number is what the invoice is filed under, and updateContentTx re-derives the
+// two supplier fields from the client entity and never reads the input (AIR-03-06 unlocks all
+// three once the extractor flags them ambiguous/unreadable -- see the describe block below).
 const LOCKED_FIELDS = ['invoice_number', 'supplier_tin', 'supplier_name']
 
 // internal/extraction/vocabulary.go, HeaderFields.
@@ -1678,11 +1679,11 @@ describe('an ambiguous field', () => {
 
 describe('what a field may be typed over with', () => {
   it('gives seven fields an editable input and the three locked ones a readOnly one', () => {
-    // `lockedFields` refuses invoice_number, supplier_tin and supplier_name with a 422, and
-    // `invoiceEditFor` writes only the other seven columns. An implementation that locks
-    // invoice_number alone answers 9/1 and ships two inputs whose Save 422s — on supplier_tin,
-    // which the deployed mock renders. The NAMES are asserted because a bare count of 3 passes
-    // on the wrong three.
+    // tenFields() carries reason '' -- UNFLAGGED -- so all three of invoice_number, supplier_tin
+    // and supplier_name are still locked (AIR-03-06 unlocks them only once flagged). An
+    // implementation that locks invoice_number alone answers 9/1 and ships two inputs whose Save
+    // 422s -- on supplier_tin, which the deployed mock renders. The NAMES are asserted because a
+    // bare count of 3 passes on the wrong three.
     render(fieldsPane({ fields: tenFields() }))
 
     const inputs = HEADER_FIELDS.map((name) => inputOf(name))
@@ -1740,9 +1741,7 @@ describe('what a field may be typed over with', () => {
 })
 
 // AIR-03-06: the flag gate unlocks a locked field once the extractor flagged it `ambiguous` or
-// `unreadable`, or once it is corrected. Written RED against the SHIPPED component, which locks
-// the three names UNCONDITIONALLY (`const locked = LOCKED_FIELDS.includes(f.name)` above) --
-// every row here fails on its own readOnly/note assertion, not on an import or a render crash.
+// `unreadable`, or once it is corrected -- lockedField(wire) in extractionReview.ts.
 describe('a flagged locked field (AIR-03-06)', () => {
   it('a flagged invoice number is editable and states no lock', () => {
     const onType = vi.fn()

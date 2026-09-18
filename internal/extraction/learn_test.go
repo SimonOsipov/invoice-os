@@ -285,10 +285,10 @@ func TestLearnRule_R12_LexiconTieBreakPicksSubtotalOverTotal(t *testing.T) {
 	}
 }
 
-// R-14: LearnRule returns each of the seven correctable HeaderFields' own tier1Specs shape.
-// invoice_number, supplier_tin and supplier_name are locked at the correction HANDLER
-// (refuseField), not inside LearnRule, which applies no field lock of its own -- so this table
-// only needs the seven fields a correction can actually name.
+// R-14: LearnRule returns each of the seven ALWAYS-correctable HeaderFields' own tier1Specs
+// shape. invoice_number, supplier_tin and supplier_name are locked at the correction HANDLER's
+// gate, not inside LearnRule, which applies no field lock of its own -- a flagged one of the
+// three reaches this func too, but this table only needs the seven that are never locked.
 func TestLearnRule_R14_ShapeMatchesTier1SpecsAcrossCorrectableFields(t *testing.T) {
 	anchor := rvAnchor("a", "Label", 0.10, 0.10, 0.30, 0.13)
 	region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}

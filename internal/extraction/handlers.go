@@ -53,6 +53,11 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "this invoice can no longer be corrected"
 	case errors.Is(err, ErrValueRefused):
 		return http.StatusBadRequest, "the invoice refused this value"
+	// The rename seam's two refusals (TestStatusForErr_MapsTheTwoRenameRefusals).
+	case errors.Is(err, ErrInvoiceNumberTaken):
+		return http.StatusConflict, InvoiceNumberTakenReason
+	case errors.Is(err, ErrInvoiceNumberFixed):
+		return http.StatusConflict, InvoiceNumberFixedReason
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

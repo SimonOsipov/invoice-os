@@ -141,12 +141,14 @@ func parseLineFieldName(name string) (index int, role string, ok bool) {
 	return 0, "", false
 }
 
-// The two sentences the mapper quarantines a document with; the review screen renders them verbatim
+// The three sentences the mapper quarantines a document with; the review screen renders them verbatim
 // and this file is their only owner. Literals so TestOldMapperMessageIsGoneAndTheNewOnesAreLiterals can find them.
 const (
 	poorScanMessage = "The scan of this document was too poor to read, so no invoice fields could be taken from it. Ask the supplier whether they can send the original PDF, or enter this invoice manually to carry on."
 
 	noInvoiceNumberMessage = "This document was read, but no invoice number was found on it. Enter this invoice manually to carry on."
+
+	aiUnavailableMessage = "AI reading was unavailable when this document was imported, so no invoice fields were taken from it. Enter this invoice manually to carry on."
 )
 
 // isPoorScan reports the field set the extraction worker writes when a document yields no text
@@ -159,6 +161,12 @@ func isPoorScan(fields []extractedField) bool {
 	}
 	f := fields[0]
 	return f.Name == "document_text_layer" && f.Reason != nil && *f.Reason == "unreadable"
+}
+
+// isAIUnavailable is the extraction worker's whole field set when the AI call failed: one
+// document_ai_reading row, reason unreadable (TestDocumentCreateInput_OnlyTheExactAIMarkerSetTakesTheAIBranch).
+func isAIUnavailable(fields []extractedField) bool {
+	return false
 }
 
 // documentCreateInput maps one SettledExtraction's decided readings to invoice.CreateInput. The

@@ -20,6 +20,7 @@ import {
   getExtractionDetail,
   highlightStyle,
   isDrawnBox,
+  lockedField,
   normaliseBox,
   offeredText,
   pageFrameStyle,
@@ -34,6 +35,7 @@ import {
 } from './extractionReview'
 import type {
   DraftEntries,
+  ExtractionCorrected,
   ExtractionDetail,
   ExtractionDocument,
   ExtractionFieldState,
@@ -897,6 +899,35 @@ describe('regionPhrase', () => {
       label: 'YOU POINTED THIS OUT',
       was: `Taken from ${regionPhrase(mkRegion({ page: 3 }))}`,
     })
+  })
+})
+
+// -- lockedField (AIR-03-06) -----------------------------------------------------------
+
+function mkCorrected(o: Partial<ExtractionCorrected> = {}): ExtractionCorrected {
+  return { method: 'typed', was: null, where: null, ...o }
+}
+
+describe('lockedField', () => {
+  it('is locked unless the extractor flagged it, or the field is already corrected', () => {
+    for (const tc of [
+      { name: 'invoice_number', reason: '' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'missing' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'inconsistent' as ExtractionReason, corrected: null, want: true },
+      { name: 'invoice_number', reason: 'ambiguous' as ExtractionReason, corrected: null, want: false },
+      { name: 'invoice_number', reason: 'unreadable' as ExtractionReason, corrected: null, want: false },
+      { name: 'invoice_number', reason: '' as ExtractionReason, corrected: mkCorrected(), want: false },
+      { name: 'supplier_tin', reason: 'inconsistent' as ExtractionReason, corrected: null, want: true },
+      // A field outside the locked vocabulary is never locked, whatever its reason.
+      { name: 'buyer_name', reason: '' as ExtractionReason, corrected: null, want: false },
+      { name: 'buyer_name', reason: 'ambiguous' as ExtractionReason, corrected: null, want: false },
+    ]) {
+      const f = mkField({ name: tc.name, reason: tc.reason, corrected: tc.corrected })
+      expect(
+        lockedField(f),
+        `lockedField(${tc.name}, reason ${JSON.stringify(tc.reason)}, corrected ${tc.corrected === null ? 'null' : 'set'}) = ${!tc.want}, want ${tc.want}`,
+      ).toBe(tc.want)
+    }
   })
 })
 

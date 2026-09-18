@@ -405,6 +405,106 @@ func TestInvoiceEditFor_AJSONBodyCannotForgeTheClearSentinel(t *testing.T) {
 	}
 }
 
+// --- AIR-03-06: the three locked fields reach the SAME edit, through their own members --------
+
+// T07: a corrected invoice_number renames the draft through EditInput's own member, not through
+// UpdateInput -- the seven columns fcNonNil counts stay untouched by a rename.
+func TestNewInvoiceFieldApplier_InvoiceNumberRenamesThroughTheEdit(t *testing.T) {
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+
+	if _, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, "invoice_number", fcStr("20417"), fcMethodTyped); err != nil {
+		t.Fatalf("renaming to 20417: %v", err)
+	}
+	if spy.calls != 1 {
+		t.Fatalf("the edit ran %d time(s), want 1", spy.calls)
+	}
+	if spy.gotInput.InvoiceNumber == nil || *spy.gotInput.InvoiceNumber != "20417" {
+		t.Errorf("the edit was handed InvoiceNumber %s, want %q", fcShow(spy.gotInput.InvoiceNumber), "20417")
+	}
+	if n := fcNonNil(spy.gotInput.UpdateInput); n != 0 {
+		t.Errorf("a rename built an EditInput with %d non-nil header field(s), want 0", n)
+	}
+	if spy.gotInput.LineItems != nil {
+		t.Errorf("a rename sent a line-items array")
+	}
+}
+
+// T08: supplier_tin/supplier_name reach the edit as their own UpdateInput member -- the same
+// shape every other writable field takes, even though updateContentTx (internal/invoice)
+// discards the value and re-derives both from the client entity.
+func TestNewInvoiceFieldApplier_SupplierFieldsReachTheEditAsTheirOwnMember(t *testing.T) {
+	for _, tc := range []struct {
+		field string
+		read  func(invoice.UpdateInput) *string
+	}{
+		{"supplier_tin", func(in invoice.UpdateInput) *string { return in.SupplierTIN }},
+		{"supplier_name", func(in invoice.UpdateInput) *string { return in.SupplierName }},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			spy := &fcEditSpy{returnedID: fcInvoiceID}
+
+			if _, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, tc.field, fcStr("12345678-0001"), fcMethodTyped); err != nil {
+				t.Fatalf("applying %s: %v", tc.field, err)
+			}
+			if got := tc.read(spy.gotInput.UpdateInput); got == nil || *got != "12345678-0001" {
+				t.Errorf("%s reached the edit as %s, want %q", tc.field, fcShow(got), "12345678-0001")
+			}
+			if n := fcNonNil(spy.gotInput.UpdateInput); n != 1 {
+				t.Errorf("%s built an EditInput with %d non-nil header field(s), want exactly 1", tc.field, n)
+			}
+			if spy.gotInput.InvoiceNumber != nil {
+				t.Errorf("%s sent InvoiceNumber %s, want nil -- a supplier correction must not also rename", tc.field, fcShow(spy.gotInput.InvoiceNumber))
+			}
+
+			// A nil value clears through the same POINTER every other text column uses.
+			clearSpy := &fcEditSpy{returnedID: fcInvoiceID}
+			if _, err := newInvoiceFieldApplier(clearSpy.edit)(context.Background(), nil, fcDocumentID, tc.field, nil, fcMethodTyped); err != nil {
+				t.Fatalf("clearing %s: %v", tc.field, err)
+			}
+			if got := tc.read(clearSpy.gotInput.UpdateInput); got != invoice.ClearText {
+				t.Errorf("clearing %s reached the edit as %s, want the ClearText sentinel (pointer identity)", tc.field, fcShow(got))
+			}
+		})
+	}
+}
+
+// T09: the rename's own two refusals cross the seam as extraction sentinels, exactly as
+// TestNewInvoiceFieldApplier_MapsEachDomainError already proves for the other three.
+func TestNewInvoiceFieldApplier_MapsTheRenameRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   error
+		want error
+	}{
+		{"the number is already taken", invoice.ErrNumberTaken, extraction.ErrInvoiceNumberTaken},
+		{"the number is no longer correctable", invoice.ErrNumberFixed, extraction.ErrInvoiceNumberFixed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy := &fcEditSpy{err: tc.in, returnedID: fcInvoiceID}
+
+			id, err := newInvoiceFieldApplier(spy.edit)(context.Background(), nil, fcDocumentID, "invoice_number", fcStr("20417"), fcMethodTyped)
+
+			if !errors.Is(err, tc.want) {
+				t.Errorf("the adapter returned %v for %v, want %v", err, tc.in, tc.want)
+			}
+			if id != "" {
+				t.Errorf("the adapter returned invoice id %q alongside an error, want the empty string", id)
+			}
+		})
+	}
+}
+
+// T10 (cmd/submission half): the two rename routes must show the same sentence for the same
+// refusal, or a person moving between the invoice screen and this one reads two different
+// explanations for one rule. The internal/extraction half is
+// TestStatusForErr_MapsTheTwoRenameRefusals (handlers_correction_internal_test.go).
+func TestInvoiceNumberTakenReason_MatchesTheInvoiceRoutesOwnSentence(t *testing.T) {
+	if extraction.InvoiceNumberTakenReason != invoice.NumberTakenReason {
+		t.Errorf("extraction.InvoiceNumberTakenReason = %q, want invoice.NumberTakenReason %q",
+			extraction.InvoiceNumberTakenReason, invoice.NumberTakenReason)
+	}
+}
+
 // fcHeaderPtr reads one writable text member off an UpdateInput by its column name.
 func fcHeaderPtr(t *testing.T, in invoice.UpdateInput, field string) *string {
 	t.Helper()

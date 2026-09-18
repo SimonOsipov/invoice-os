@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -962,5 +963,307 @@ func TestRLS_UndoOnAFieldTheExtractorNeverReadClearsTheColumn(t *testing.T) {
 	}
 	if stored := cxCorrectionValue(t, ctx, jobID); stored != posted {
 		t.Errorf("the correction row carries value %q, want the posted %q", stored, posted)
+	}
+}
+
+// --- AIR-03-06: a flagged locked field is corrected -------------------------------------
+
+// cxFlag seeds one extraction_field_results row with an explicit reason and created_at -- the
+// flag gate's own input. created_at is explicit: two rows an autocommit statement inserts can
+// tie, and the id DESC tie-break is a random uuid.
+func cxFlag(t *testing.T, ctx context.Context, tenantID, jobID, field string, rank int, value, reason *string, createdAt time.Time) {
+	t.Helper()
+	if _, err := stRequire(t).super.Exec(ctx,
+		`INSERT INTO extraction_field_results
+		     (tenant_id, extraction_job_id, field_name, value, reason_code, candidate_rank, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		tenantID, jobID, field, value, reason, rank, createdAt); err != nil {
+		t.Fatalf("seed %s rank %d reason %v for job %s: %v", field, rank, reason, jobID, err)
+	}
+}
+
+// cxLockedFields is the vocabulary the gate covers, each with its own refusal sentence.
+var cxLockedFields = []struct{ field, msg string }{
+	{"invoice_number", corMsgInvoiceNumber},
+	{"supplier_tin", corMsgSupplierField},
+	{"supplier_name", corMsgSupplierField},
+}
+
+// cxLockedFieldValue is a well-formed posted value for a locked field.
+func cxLockedFieldValue(field string) string {
+	if field == "invoice_number" {
+		return "INV-T-99"
+	}
+	return "12345678-0001"
+}
+
+const cxMsgInvalidBody = "invalid request body"
+
+// T01: NULL, missing, inconsistent and no row at all are all "not flagged" -- the gate trusts
+// only its own stored rank-0 reason, never the request.
+func TestRLS_AnUnflaggedLockedFieldIsStillRefused(t *testing.T) {
+	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, lf := range cxLockedFields {
+		for _, tc := range []struct {
+			name string
+			seed func(t *testing.T, ctx context.Context, tenantID, jobID string)
+		}{
+			{"NULL reason with a value", func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+				cxFlag(t, ctx, tenantID, jobID, lf.field, 0, cxStr("some value"), nil, seedTime)
+			}},
+			{"missing with a NULL value", func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+				cxFlag(t, ctx, tenantID, jobID, lf.field, 0, nil, cxStr("missing"), seedTime)
+			}},
+			{"inconsistent with a value", func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+				cxFlag(t, ctx, tenantID, jobID, lf.field, 0, cxStr("some value"), cxStr("inconsistent"), seedTime)
+			}},
+			{"no row", func(t *testing.T, ctx context.Context, tenantID, jobID string) {}},
+		} {
+			t.Run(lf.field+"/"+tc.name, func(t *testing.T) {
+				ctx := t.Context()
+				reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+				t.Cleanup(func() { rdaPurge(t, tenantID) })
+				entityID := cxEntity(t, ctx, tenantID)
+				cxInvoice(t, ctx, tenantID, entityID, documentID, "T01-"+jobID[:8], "draft")
+				tc.seed(t, ctx, tenantID, jobID)
+
+				var seen cxSeamCall
+				w := cxServe(t, reqCtx, jobID, lf.field, cxBody(cxLockedFieldValue(lf.field)), cxRecorder(&seen, false), cxAuditor(nil))
+
+				hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, lf.msg))
+				// The seam never ran, which is also the "invoice unchanged" half of this claim:
+				// nothing can have been written to a row the seam never touched.
+				if seen.calls != 0 {
+					t.Errorf("the invoice seam ran %d time(s) on a refused correction, want 0", seen.calls)
+				}
+				if n := cxCorrectionRows(t, ctx, jobID); n != 0 {
+					t.Errorf("%d correction row(s) landed on a refused correction, want 0", n)
+				}
+			})
+		}
+	}
+}
+
+// T02: the gate answers BEFORE the body is decoded -- an unflagged locked field with a body
+// that is not JSON at all still reads 422 with the field's own sentence, never the 400 a
+// body-first handler would give.
+func TestRLS_AnUnflaggedLockedFieldRefusalPrecedesTheBodyDecode(t *testing.T) {
+	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, lf := range cxLockedFields {
+		t.Run(lf.field, func(t *testing.T) {
+			ctx := t.Context()
+			reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+			t.Cleanup(func() { rdaPurge(t, tenantID) })
+			entityID := cxEntity(t, ctx, tenantID)
+			cxInvoice(t, ctx, tenantID, entityID, documentID, "T02-"+jobID[:8], "draft")
+			cxFlag(t, ctx, tenantID, jobID, lf.field, 0, nil, nil, seedTime)
+
+			w := cxServe(t, reqCtx, jobID, lf.field, "this is not json at all", cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+
+			hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, lf.msg))
+		})
+	}
+
+	// The control: a FLAGGED locked field reaches the decode step, so the refusal above is
+	// reading the UNFLAGGED state and not every locked-field request outright.
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "T02-CONTROL", "draft")
+	cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, cxStr("INV-0001"), cxStr("ambiguous"), seedTime)
+
+	w := cxServe(t, reqCtx, jobID, "invoice_number", "this is not json at all", cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+	hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, cxMsgInvalidBody))
+}
+
+// T03: a flagged locked field -- ambiguous or unreadable -- is corrected like any other field.
+func TestRLS_AFlaggedLockedFieldIsCorrected(t *testing.T) {
+	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, lf := range cxLockedFields {
+		for _, tc := range []struct {
+			name   string
+			seed   func(t *testing.T, ctx context.Context, tenantID, jobID string)
+			method string
+			value  string
+		}{
+			{
+				name: "ambiguous with 2 rank rows",
+				seed: func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+					cxFlag(t, ctx, tenantID, jobID, lf.field, 0, cxStr("candidate A"), cxStr("ambiguous"), seedTime)
+					cxFlag(t, ctx, tenantID, jobID, lf.field, 1, cxStr("candidate B"), nil, seedTime)
+				},
+				method: "chosen", value: "candidate B",
+			},
+			{
+				name: "unreadable with value NULL",
+				seed: func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+					cxFlag(t, ctx, tenantID, jobID, lf.field, 0, nil, cxStr("unreadable"), seedTime)
+				},
+				method: "typed", value: cxLockedFieldValue(lf.field),
+			},
+		} {
+			t.Run(lf.field+"/"+tc.name, func(t *testing.T) {
+				ctx := t.Context()
+				reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+				t.Cleanup(func() { rdaPurge(t, tenantID) })
+				entityID := cxEntity(t, ctx, tenantID)
+				cxInvoice(t, ctx, tenantID, entityID, documentID, "T03-"+jobID[:8], "draft")
+				tc.seed(t, ctx, tenantID, jobID)
+
+				var seen cxSeamCall
+				w := cxServe(t, reqCtx, jobID, lf.field, corBody(tc.value, tc.method, ""), cxRecorder(&seen, false), cxAuditor(nil))
+
+				if w.Code != http.StatusCreated {
+					t.Fatalf("a flagged %s: status = %d, want %d (body=%q)", lf.field, w.Code, http.StatusCreated, w.Body.String())
+				}
+				if seen.calls != 1 {
+					t.Fatalf("the invoice seam ran %d time(s), want 1 -- every claim below is vacuous", seen.calls)
+				}
+				if seen.field != lf.field || seen.value == nil || *seen.value != tc.value {
+					t.Errorf("the invoice seam was handed (%q, %s), want (%q, %q)", seen.field, cxShowValue(seen.value), lf.field, tc.value)
+				}
+				if n := cxCorrectionRows(t, ctx, jobID); n != 1 {
+					t.Errorf("%d correction row(s), want 1", n)
+				}
+				if row := cxCorrectionRow(t, ctx, jobID); row.value != tc.value || row.method != tc.method {
+					t.Errorf("the stored row is (%q, %q), want (%q, %q)", row.value, row.method, tc.value, tc.method)
+				}
+				if rows := cxCorrectionAudit(t, ctx, tenantID); len(rows) != 1 {
+					t.Errorf("%d %s audit row(s), want 1", len(rows), cxEvent)
+				}
+			})
+		}
+	}
+}
+
+// T04: the flag is the newest rank-0 row of THIS job -- an older rank-0 flag, an alternative
+// rank's flag, and another job's flag on the same document all lose to it.
+func TestRLS_TheFlagIsTheLatestRankZeroRowOfThisJob(t *testing.T) {
+	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	t.Run("an older rank-0 flag loses to a newer unflagged rank-0 row", func(t *testing.T) {
+		ctx := t.Context()
+		reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+		t.Cleanup(func() { rdaPurge(t, tenantID) })
+		entityID := cxEntity(t, ctx, tenantID)
+		cxInvoice(t, ctx, tenantID, entityID, documentID, "T04-A", "draft")
+		cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, cxStr("INV-A"), cxStr("ambiguous"), older)
+		cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, nil, nil, newer)
+
+		w := cxServe(t, reqCtx, jobID, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+		hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgInvoiceNumber))
+	})
+
+	t.Run("rank 1's flag does not read as rank 0's", func(t *testing.T) {
+		ctx := t.Context()
+		reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+		t.Cleanup(func() { rdaPurge(t, tenantID) })
+		entityID := cxEntity(t, ctx, tenantID)
+		cxInvoice(t, ctx, tenantID, entityID, documentID, "T04-B", "draft")
+		cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, nil, nil, older)
+		cxFlag(t, ctx, tenantID, jobID, "invoice_number", 1, cxStr("INV-ALT"), cxStr("ambiguous"), older)
+
+		w := cxServe(t, reqCtx, jobID, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+		hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgInvoiceNumber))
+	})
+
+	t.Run("another job of the same document does not lend its flag to this one", func(t *testing.T) {
+		ctx := t.Context()
+		reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+		t.Cleanup(func() { rdaPurge(t, tenantID) })
+		entityID := cxEntity(t, ctx, tenantID)
+		cxInvoice(t, ctx, tenantID, entityID, documentID, "T04-C", "draft")
+		cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, nil, nil, older)
+		otherJob := cxJobIn(t, ctx, tenantID, documentID)
+		cxFlag(t, ctx, tenantID, otherJob, "invoice_number", 0, cxStr("INV-OTHER"), cxStr("ambiguous"), older)
+
+		w := cxServe(t, reqCtx, jobID, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+		hndAssert(t, w, http.StatusUnprocessableEntity, hndErrBody(t, corMsgInvoiceNumber))
+	})
+
+	// The control: the newer rank-0 row's flag IS respected, so the three arms above are
+	// reading the ordering rule and not refusing invoice_number outright.
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "T04-CONTROL", "draft")
+	cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, nil, nil, older)
+	cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, cxStr("INV-A"), cxStr("ambiguous"), newer)
+
+	w := cxServe(t, reqCtx, jobID, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("the control: status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+}
+
+// T05: another tenant's flagged field reads exactly like an absent job -- RLS supplies the
+// predicate the gate's own query carries none of.
+func TestRLS_AnotherTenantsFlaggedFieldReadsLikeAnAbsentOne(t *testing.T) {
+	ctx := t.Context()
+	reqCtxA, tenantA, documentA, jobA := cxJob(t, ctx)
+	_, tenantB, documentB, jobB := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantA, tenantB) })
+
+	entityA := cxEntity(t, ctx, tenantA)
+	cxInvoice(t, ctx, tenantA, entityA, documentA, "T05-A", "draft")
+	entityB := cxEntity(t, ctx, tenantB)
+	cxInvoice(t, ctx, tenantB, entityB, documentB, "T05-B", "draft")
+
+	seedTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cxFlag(t, ctx, tenantA, jobA, "invoice_number", 0, cxStr("INV-A"), cxStr("ambiguous"), seedTime)
+	cxFlag(t, ctx, tenantB, jobB, "invoice_number", 0, cxStr("INV-B"), cxStr("ambiguous"), seedTime)
+
+	// The positive control: A's own flagged job is answerable, so the refusal below is reading
+	// the cross-tenant boundary and not refusing every flagged job.
+	own := cxServe(t, reqCtxA, jobA, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+	if own.Code != http.StatusCreated {
+		t.Fatalf("control: A posting to its OWN flagged job answered %d (body=%q), want 201", own.Code, own.Body.String())
+	}
+
+	cross := cxServe(t, reqCtxA, jobB, "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+	absent := cxServe(t, reqCtxA, uuid.NewString(), "invoice_number", cxBody("INV-99"), cxRecorder(&cxSeamCall{}, false), cxAuditor(nil))
+
+	hndAssert(t, cross, http.StatusUnprocessableEntity, hndErrBody(t, corMsgInvoiceNumber))
+	if cross.Code != absent.Code || cross.Body.String() != absent.Body.String() {
+		t.Errorf("A posting to B's flagged job answered %d %q; an unknown job answered %d %q -- a caller must not be able to tell that B's flag exists",
+			cross.Code, cross.Body.String(), absent.Code, absent.Body.String())
+	}
+	if n := cxCorrectionRows(t, ctx, jobA); n != 1 {
+		t.Errorf("tenant A's correction rows = %d, want 1 -- the control wrote one and the cross attempt must add none", n)
+	}
+	if n := cxCorrectionRows(t, ctx, jobB); n != 0 {
+		t.Errorf("%d correction row(s) landed on B's job from A's request, want 0", n)
+	}
+}
+
+// T06: an undo on a flagged invoice_number hands the seam the extractor's own rank-0 reading,
+// never the posted value -- the same rule TestRLS_UndoAppliesTheExtractorsReadingNotThePostedValue
+// pins for an unlocked field.
+func TestRLS_AnUndoOnAFlaggedInvoiceNumberHandsTheSeamTheRankZeroReading(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "T06", "draft")
+	cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, cxStr("INV-0001"), cxStr("ambiguous"),
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	var seen cxSeamCall
+	w := cxServe(t, reqCtx, jobID, "invoice_number", corBody("X", "undone", ""), cxRecorder(&seen, false), cxAuditor(nil))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if seen.calls != 1 {
+		t.Fatalf("the invoice seam ran %d time(s), want 1 -- the claim below is vacuous", seen.calls)
+	}
+	if seen.value == nil || *seen.value != "INV-0001" {
+		t.Errorf("the invoice seam was handed %s for an undo, want %q -- the rank-0 reading, not the posted value", cxShowValue(seen.value), "INV-0001")
+	}
+	if seen.field != "invoice_number" {
+		t.Errorf("the invoice seam was handed field %q, want %q", seen.field, "invoice_number")
 	}
 }

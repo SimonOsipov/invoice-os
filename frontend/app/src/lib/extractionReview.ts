@@ -245,6 +245,18 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
   })
 }
 
+// internal/extraction/handlers_correction.go, lockedFields. invoice_number is what the invoice
+// is filed under; updateContentTx re-derives the two supplier fields from the client entity and
+// never reads the input.
+export const LOCKED_FIELDS: readonly string[] = ['invoice_number', 'supplier_tin', 'supplier_name']
+
+// AIR-03-06 scaffolding: locked by NAME alone, today's behaviour. The flag gate -- unlocking on
+// `ambiguous`/`unreadable`, or once corrected -- lands with the server-side gate (T14 is red
+// against this stub until then).
+export function lockedField(f: ExtractionFieldState): boolean {
+  return LOCKED_FIELDS.includes(f.name)
+}
+
 // The text an unreadable empty field shows in its input. Never drafted, so Save files it only
 // after an edit (the offered text never rides a Save).
 export function offeredText(field: ExtractionFieldState): string | null {

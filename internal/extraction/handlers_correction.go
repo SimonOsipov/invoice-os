@@ -83,12 +83,24 @@ type CorrectionResponse struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
-// The three outcomes the invoice seam reports. Named sentinels, so statusForErr maps each by
-// identity and everything unrecognised stays a 500.
+// The invoice seam's outcomes. Named sentinels, so statusForErr maps each by identity and
+// everything unrecognised stays a 500.
 var (
 	ErrNoInvoiceForDocument = errors.New("extraction: no invoice was filed from this document")
 	ErrInvoiceNotEditable   = errors.New("extraction: the invoice is past the states an edit may reach")
 	ErrValueRefused         = errors.New("extraction: the invoice refused the value")
+	// AIR-03-06 scaffolding: the rename seam's two refusals. Not yet raised by any gate or
+	// mapped by statusForErr -- T07-T10 are red until the applier and the mapping exist.
+	ErrInvoiceNumberTaken = errors.New("extraction: invoice number already taken")
+	ErrInvoiceNumberFixed = errors.New("extraction: invoice number no longer correctable")
+)
+
+// AIR-03-06 scaffolding: the rename route's two 409 sentences, spelled here because
+// internal/extraction cannot import internal/invoice (deps_test.go). cmd/submission pins
+// InvoiceNumberTakenReason against invoice.NumberTakenReason (T10).
+const (
+	InvoiceNumberTakenReason = "This invoice number is already in the register for this company. Enter a different number."
+	InvoiceNumberFixedReason = "The invoice number can only be corrected while the invoice is a draft that has never been submitted."
 )
 
 // The refusal wire. 400 is malformed input, 422 is a well-formed request this route declines.

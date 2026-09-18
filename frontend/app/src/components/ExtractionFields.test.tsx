@@ -1739,6 +1739,92 @@ describe('what a field may be typed over with', () => {
   })
 })
 
+// AIR-03-06: the flag gate unlocks a locked field once the extractor flagged it `ambiguous` or
+// `unreadable`, or once it is corrected. Written RED against the SHIPPED component, which locks
+// the three names UNCONDITIONALLY (`const locked = LOCKED_FIELDS.includes(f.name)` above) --
+// every row here fails on its own readOnly/note assertion, not on an import or a render crash.
+describe('a flagged locked field (AIR-03-06)', () => {
+  it('a flagged invoice number is editable and states no lock', () => {
+    const onType = vi.fn()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'invoice_number',
+            reason: 'unreadable',
+            value: null,
+            alternatives: [{ value: '20417', region: null }],
+          }),
+        ],
+        onType,
+      }),
+    )
+
+    const input = inputOf('invoice_number')
+    expect(input, 'the flagged field rendered no input').toBeTruthy()
+    expect(input!.value, 'the offered text was not shown').toBe('20417')
+    expect(input!.readOnly, 'a flagged invoice number is still read-only').toBe(false)
+    expect(
+      input!.getAttribute('aria-readonly'),
+      'a flagged invoice number still announces itself read-only',
+    ).not.toBe('true')
+    expect(
+      within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
+      'a flagged field still states the lock reason',
+    ).toBeNull()
+
+    fireEvent.change(input as HTMLInputElement, { target: { value: '99887766' } })
+    expect(onType.mock.calls, 'typing over a flagged locked field never reached the shell').toEqual([
+      ['invoice_number', '99887766'],
+    ])
+  })
+
+  it('a corrected locked field stays open for undo and re-edit', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'supplier_name',
+            reason: '',
+            value: 'Typed Ltd',
+            corrected: { method: 'typed', was: null, where: null },
+          }),
+        ],
+      }),
+    )
+
+    const input = inputOf('supplier_name')
+    expect(input, 'the corrected field rendered no input').toBeTruthy()
+    expect(input!.readOnly, 'a corrected locked field is still read-only').toBe(false)
+    expect(
+      screen.queryByTestId('extraction-undo-supplier_name'),
+      'no Undo rendered on the corrected field',
+    ).toBeTruthy()
+  })
+
+  it('an unflagged locked field stays read-only with its note', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'invoice_number', reason: '', value: 'INV-2026-0037' }),
+          mkField({ name: 'supplier_tin', reason: 'inconsistent', value: '12345678-0001' }),
+        ],
+      }),
+    )
+
+    for (const name of ['invoice_number', 'supplier_tin']) {
+      const input = inputOf(name)
+      expect(input, `${name} rendered no input`).toBeTruthy()
+      expect(input!.readOnly, `${name} is not read-only`).toBe(true)
+      expect(input!.getAttribute('aria-readonly'), `${name} does not announce itself read-only`).toBe('true')
+    }
+    expect(
+      within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
+      'the invoice-number lock note did not render',
+    ).toBeTruthy()
+  })
+})
+
 describe('Undo', () => {
   it('renders on a corrected field and nowhere else, and reports upward', () => {
     const onUndo = vi.fn()

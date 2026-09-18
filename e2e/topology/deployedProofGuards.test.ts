@@ -169,6 +169,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     EXTR35_E2E_01,
     EXTR36_E2E_02,
     EXTR36_E2E_01,
+    "AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine",
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)

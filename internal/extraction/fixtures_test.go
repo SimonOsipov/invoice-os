@@ -11,6 +11,8 @@ package extraction_test
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/parser"
@@ -100,6 +102,8 @@ var fxCorpus = []struct {
 	// EXTR-36-01: R0 re-set one Tj per glyph, Chrome/Skia's own shape.
 	{fxChromeRegister, fxBuildChromeRegister},
 	{fxChromeRegisterTwin, fxBuildChromeRegisterTwin},
+	// AIR-03-05's deployed-steering fixture: not corpus_-prefixed, outside every corpus_ ratchet.
+	{fxAISteered, fxBuildAISteeredInvoice},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -1678,6 +1682,198 @@ func fxBuildChromeRegisterTwin() []byte {
 	return fxGlyphPages(fxChromeRegisterLines("OAP/2026/0091", amounts), fxChromeRegisterPage2())
 }
 
+// --- the AI-steered fixture (AIR-03-05) --------------------------------------
+
+// fxAISteered: the deployed fake-fleet fixture. One committed PDF carries all three AC-9 cases
+// (a buyer_tin disagreement, an AI-only invoice number, a payment-label-failed buyer name) plus
+// the AIFAKE-ANSWER marker that steers the fake to read them. Not corpus_-prefixed, outside
+// every corpus_ ratchet.
+const fxAISteered = "ai_steered_invoice.pdf"
+
+const fxAISteeredMarkerPrefix = "AIFAKE-ANSWER-"
+
+// fxAISteeredAnswer is the fake's steered payload: every HeaderFields key null except the three
+// values this fixture's marker carries.
+func fxAISteeredAnswer() map[string]any {
+	answer := make(map[string]any, len(extraction.HeaderFields))
+	for _, f := range extraction.HeaderFields {
+		answer[f] = nil
+	}
+	answer["invoice_number"] = "20417"
+	answer["buyer_tin"] = "87654321-0002"
+	answer["buyer_name"] = "ZENITH HOLDINGS LIMITED"
+	return answer
+}
+
+// fxAISteeredMarker builds the marker text the fake decodes (internal/platform/ai/fake.go):
+// json.Marshal -- map keys sort alphabetically, so the bytes are deterministic -- then
+// base64.RawURLEncoding, matching the fake's own decode recipe.
+func fxAISteeredMarker() string {
+	raw, err := json.Marshal(fxAISteeredAnswer())
+	if err != nil {
+		panic("fxAISteeredMarker: marshal: " + err.Error())
+	}
+	return fxAISteeredMarkerPrefix + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// fxDecodeAISteeredMarker reverses fxAISteeredMarker, keeping only non-blank strings -- askAI's
+// own filter (aireading.go) -- so a test can feed the result straight to MergeAIForTest.
+func fxDecodeAISteeredMarker(t *testing.T, marker string) map[string]string {
+	t.Helper()
+
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(marker, fxAISteeredMarkerPrefix))
+	if err != nil {
+		t.Fatalf("decode marker: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal marker payload: %v", err)
+	}
+	out := make(map[string]string)
+	for k, v := range decoded {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+// fxAISteeredLines is ai_steered_invoice.pdf's line list, per System Design: every label the
+// fixture's three cases need shares a line with its value, and the marker sits last, at the
+// page foot, so no case ever depends on Docling's own token order
+// (TestFixtures_AISteeredOutcomeIgnoresTokenOrder proves it mechanically).
+func fxAISteeredLines() []fxLine {
+	return []fxLine{
+		{12, 72, 690, "Invoice Number: 20417"},
+		{12, 72, 672, "Invoice Date: 2026-07-14"},
+		{12, 72, 654, "From: Adeyemi Trading Limited"},
+		{12, 72, 636, "Supplier TIN: 87654321-0002"},
+		{12, 72, 618, "Buyer TIN: 12345678-0001"},
+		{12, 72, 600, "Account Name: ZENITH HOLDINGS LIMITED"},
+		{12, 72, 582, "Subtotal: 1,800.00"},
+		{12, 72, 564, "VAT: 135.00"},
+		{12, 72, 546, "Total: 1,935.00"},
+		{3, 72, 38, fxAISteeredMarker()},
+	}
+}
+
+func fxBuildAISteeredInvoice() []byte {
+	return fxTextPage(fxAISteeredLines()...)
+}
+
+// fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
+// other nine keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
+func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
+	marker := lines[len(lines)-1]
+	rest := lines[:len(lines)-1]
+	out := make([]fxLine, 0, len(lines))
+	out = append(out, rest[:i]...)
+	out = append(out, marker)
+	out = append(out, rest[i:]...)
+	return out
+}
+
+// fxPagesFromBytes reads a built (not committed) PDF through the real reader --
+// rvCorpusPages' (resolve_test.go) in-memory sibling.
+func fxPagesFromBytes(t *testing.T, raw []byte) []extraction.TokenPage {
+	t.Helper()
+
+	var pages []extraction.TokenPage
+	doc := extraction.Document{Bytes: raw, ContentType: "application/pdf"}
+	if _, err := extraction.NewPDFiumReader().Read(t.Context(), doc, extraction.CollectTokens(&pages)); err != nil {
+		t.Fatalf("read the built page: %v", err)
+	}
+	return pages
+}
+
+// TestFixtures_AISteeredMarkerDecodesAndResolvesNoCandidate: the marker round-trips to its own
+// payload (AC-1), and a page holding only the marker token anchors nothing -- reInvNum caps at
+// 64 chars, maxNameRunes at 256, and the TIN/amount/naira shapes all miss a base64url run.
+func TestFixtures_AISteeredMarkerDecodesAndResolvesNoCandidate(t *testing.T) {
+	marker := fxAISteeredMarker()
+	got := fxDecodeAISteeredMarker(t, marker)
+	want := map[string]string{"invoice_number": "20417", "buyer_tin": "87654321-0002", "buyer_name": "ZENITH HOLDINGS LIMITED"}
+	if !maps.Equal(got, want) {
+		t.Errorf("decoded marker = %v, want %v", got, want)
+	}
+
+	pages := fxPagesFromBytes(t, fxTextPage(fxLine{3, 72, 38, marker}))
+	if candidates := extraction.Resolve(pages, rvGeneric()); len(candidates) != 0 {
+		t.Errorf("Resolve over a marker-only page returned %d candidate(s), want 0: %+v", len(candidates), candidates)
+	}
+}
+
+// TestFixtures_AISteeredOutcomeIgnoresTokenOrder rotates the marker through every line index and
+// proves mergeAI's outcome never depends on where it lands among the other nine tokens.
+func TestFixtures_AISteeredOutcomeIgnoresTokenOrder(t *testing.T) {
+	lines := fxAISteeredLines()
+	if last := lines[len(lines)-1]; last.size != 3 || !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
+		t.Fatalf("the generator's own line list does not place the marker last: %+v", last)
+	}
+	answer := fxDecodeAISteeredMarker(t, fxAISteeredMarker())
+
+	engine := func() []extraction.FieldResult {
+		return []extraction.FieldResult{
+			{Field: extraction.Field{Name: "invoice_number", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+			{Field: extraction.Field{Name: "buyer_tin", Value: rcStr("12345678-0001"), Reason: extraction.ReasonNone}, Alternatives: []extraction.Field{}},
+			{Field: extraction.Field{Name: "buyer_name", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		}
+	}
+
+	for i := range lines {
+		t.Run(fmt.Sprintf("marker at %d", i), func(t *testing.T) {
+			pages := fxPagesFromBytes(t, fxTextPage(fxLinesWithMarkerAt(lines, i)...))
+			out := extraction.MergeAIForTest(engine(), answer, pages, nil)
+
+			byName := make(map[string]extraction.FieldResult, len(out))
+			for _, r := range out {
+				byName[r.Name] = r
+			}
+
+			inv := byName["invoice_number"]
+			if inv.Reason != extraction.ReasonNone || inv.Value == nil || *inv.Value != "20417" || inv.Region == nil {
+				t.Errorf("invoice_number = %+v, want decided 20417 with a region", inv)
+			}
+
+			tin := byName["buyer_tin"]
+			if tin.Reason != extraction.ReasonAmbiguous || tin.Value == nil || *tin.Value != "12345678-0001" {
+				t.Errorf("buyer_tin = %+v, want ambiguous at 12345678-0001", tin)
+			}
+			if len(tin.Alternatives) != 1 || tin.Alternatives[0].Value == nil || *tin.Alternatives[0].Value != "87654321-0002" {
+				t.Errorf("buyer_tin alternatives = %+v, want exactly [87654321-0002]", tin.Alternatives)
+			}
+
+			name := byName["buyer_name"]
+			if name.Reason != extraction.ReasonUnreadable || name.Value != nil {
+				t.Errorf("buyer_name = %+v, want unreadable with no value", name)
+			}
+			if len(name.Alternatives) != 1 || name.Alternatives[0].Value == nil || *name.Alternatives[0].Value != "ZENITH HOLDINGS LIMITED" {
+				t.Errorf("buyer_name alternatives = %+v, want exactly [ZENITH HOLDINGS LIMITED]", name.Alternatives)
+			}
+		})
+	}
+
+	// Control: without "Account Name:" on the buyer_name line, check (c) no longer fails and the
+	// missing field is decided instead of doubtful -- proof this test can fail.
+	t.Run("control: no payment label decides buyer_name", func(t *testing.T) {
+		control := slices.Clone(lines)
+		control[5] = fxLine{12, 72, 600, "ZENITH HOLDINGS LIMITED"}
+		pages := fxPagesFromBytes(t, fxTextPage(control...))
+		out := extraction.MergeAIForTest(engine(), answer, pages, nil)
+
+		for _, r := range out {
+			if r.Name != "buyer_name" {
+				continue
+			}
+			if r.Reason != extraction.ReasonNone || r.Value == nil || *r.Value != "ZENITH HOLDINGS LIMITED" {
+				t.Errorf("control buyer_name = %+v, want decided ZENITH HOLDINGS LIMITED", r)
+			}
+			return
+		}
+		t.Fatal("no buyer_name row in the control's output")
+	})
+}
+
 // --- reading a fixture back -------------------------------------------------
 
 var (
@@ -2189,7 +2385,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

@@ -65,6 +65,15 @@ payload after decoding is a plain error that is not `ErrUnavailable`. Fake mode 
 the request exactly as the real path does; a `FakeHint` with no `Text` and no `Pages` is
 still an invalid request.
 
+## Document reading
+
+`submission`'s extraction worker calls `Call` once per text document -- never per line item,
+never for a document with no text layer (AIR-05). A blank answer, the fake's own default,
+leaves the engine's own reading of every field untouched. The steered fake used on a `pr-<N>`
+deploy answers `invoice_number` `20417`, `buyer_tin` `87654321-0002` and `buyer_name` `ZENITH
+HOLDINGS LIMITED`; AIR-03-05's fixture and deployed spec pin how those three land beside the
+engine's own reading.
+
 ## Retries and the budget
 
 One `Call` has a 15s budget (the `budget` const), not an attempt-count limit. **Retried:**

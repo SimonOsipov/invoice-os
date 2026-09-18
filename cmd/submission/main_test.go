@@ -30,6 +30,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -320,7 +321,14 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		return nil, nil
 	}
 
-	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, logger)
+	// Real, non-nil AIReader: fake mode needs no network and Enabled() reports true.
+	t.Setenv(ai.EnvFake, "true")
+	aiClient, err := ai.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+
+	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, aiClient, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -340,8 +348,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 8 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 8 (Pool, Extractor, Open, Pages, Audit, Text, Rules, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 9 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 9 (Pool, Extractor, Open, Pages, Audit, Text, Rules, AI, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -379,6 +387,9 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	// Same reason as Audit above: a Rules set to some other loader is nil-free and proves nothing.
 	if _, err := ew.Rules(context.Background(), "t", "fp"); err != nil || ruled != 1 {
 		t.Errorf("ExtractWorker.Rules ran %d time(s) and returned %v, want the recording loader passed in to run exactly once", ruled, err)
+	}
+	if ew.AI != extraction.AIReader(aiClient) {
+		t.Error("ExtractWorker.AI is not the ai.FromEnv client passed in")
 	}
 }
 
@@ -497,10 +508,10 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 8 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 8 (pool, extractor, opener, pages, auditor, text, rules, logger)", len(ewArgs))
+	if len(ewArgs) != 9 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 9 (pool, extractor, opener, pages, auditor, text, rules, ai, logger)", len(ewArgs))
 	}
-	// EXTR-17-03 AC-8: the walk covers all 8 arguments. Argument 5's exemption is gone with the
+	// EXTR-17-03 AC-8: the walk covers all 9 arguments. Argument 5's exemption is gone with the
 	// literal nil it protected.
 	const ewTextArg = 5
 	for i, arg := range ewArgs {
@@ -537,6 +548,18 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	// The rules loader is real and non-nil at this call site whatever EXTRACTOR selects.
 	if sel, ok := ewArgs[6].(*ast.SelectorExpr); !ok || sel.Sel.Name != "AnchorRulesFor" {
 		t.Errorf("newExtractWorker's rules argument is %s, want an ...AnchorRulesFor method value: the learned-rule read is only reachable if main() builds it", wtRender(ewArgs[6]))
+	}
+
+	// AIR-03-03: the AI client, followed back to the one ai.FromEnv call main() fatals on.
+	aiName, aiArgs := wtOneCall(t, f, "ai.FromEnv")
+	if id, ok := ewArgs[7].(*ast.Ident); !ok || id.Name != aiName {
+		t.Errorf("newExtractWorker's ai argument is %s, want %s -- the client ai.FromEnv built and main() already fatals on", wtRender(ewArgs[7]), aiName)
+	}
+	if len(aiArgs) != 1 {
+		t.Fatalf("ai.FromEnv is called with %d argument(s), want 1 (the logger)", len(aiArgs))
+	}
+	if sel, ok := aiArgs[0].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("ai.FromEnv's argument is %s, want the logger", wtRender(aiArgs[0]))
 	}
 
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
@@ -610,8 +633,8 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	} else if len(call.Args) != 0 {
 		t.Errorf("newExtractionAuditor is called with %d argument(s), want 0", len(call.Args))
 	}
-	if sel, ok := ewArgs[7].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
-		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[7]))
+	if sel, ok := ewArgs[8].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[8]))
 	}
 }
 

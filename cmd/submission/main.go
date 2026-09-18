@@ -149,9 +149,10 @@ func main() {
 	// Text is nil under mock and unset, which is what keeps Work on the Extractor branch; under
 	// docling it is the sidecar reader and Work reads text through it instead. Rules is real in
 	// every case and reachable only on the text branch.
+	// AI is nil for now: AIR-03-03 wires the real ai.FromEnv client here.
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, app.Logger)
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, nil, app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
 	// starts alongside /healthz and drains on shutdown (decision #3).
@@ -568,9 +569,9 @@ func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, 
 func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
 	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
 	text extraction.PageReader, rules extraction.LoadAnchorRules,
-	logger *slog.Logger) *extraction.ExtractWorker {
+	aiReader extraction.AIReader, logger *slog.Logger) *extraction.ExtractWorker {
 	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
-		Audit: auditor, Text: text, Rules: rules, Logger: logger}
+		Audit: auditor, Text: text, Rules: rules, AI: aiReader, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

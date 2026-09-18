@@ -60,16 +60,13 @@ var eeLinesExpected = map[string]int{
 	"wild_stacked_borderless_asprinted.pdf": 0,
 }
 
-// eeGoldenReader replays one committed docling golden through the real DoclingReader. The
+// eeReplayReader replays one docling wire response body through the real DoclingReader. The
 // production reader, not a hand-rolled decoder: Page.Tables is what LineItems reads, and only
 // this reader fills it (internal/extraction/docling.go:112). PDFiumReader leaves it nil
 // (internal/extraction/pagereader.go:69-71), which is why the worker needs this on the Text
 // seam to write a line row at all. Precedent: wpDoclingReader, worker_pipeline_db_test.go:129.
-func eeGoldenReader(t *testing.T, golden string) extraction.PageReader {
+func eeReplayReader(t *testing.T, body []byte) extraction.PageReader {
 	t.Helper()
-	eeRequireFixtures(t, []string{golden})
-
-	body := eeFixtureBytes(t, golden)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -82,6 +79,13 @@ func eeGoldenReader(t *testing.T, golden string) extraction.PageReader {
 		t.Fatalf("NewDoclingReader(%q): %v", srv.URL, err)
 	}
 	return r
+}
+
+// eeGoldenReader is eeReplayReader over a committed docling golden.
+func eeGoldenReader(t *testing.T, golden string) extraction.PageReader {
+	t.Helper()
+	eeRequireFixtures(t, []string{golden})
+	return eeReplayReader(t, eeFixtureBytes(t, golden))
 }
 
 // eeGoldenPages is every page one golden emits, for the pure line-count oracle.

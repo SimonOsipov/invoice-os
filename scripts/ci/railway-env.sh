@@ -8,6 +8,7 @@
 #                            verify-gateway-domain <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            set-approvals-enforced <environment-id|--self-test>|
+#                            set-ai-fake <environment-id|--self-test>|
 #                            delete-environment <name>|list-environments>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
@@ -1970,23 +1971,23 @@ cmd_reconcile_fork() {
 # inlined at each call site, not a constant: it must be visible inside
 # cmd_set_approvals_enforced's own body, not one hop away.
 
-# service_id_by_name <settle-response-json> <service-name> <context-label>
+# service_id_by_name <settle-response-json> <service-name> <context-label> [not-set-label]
 # Pure: no token, no network. Echoes the serviceId on stdout on exactly one
 # match. Every refusal goes to stderr and leaves stdout EMPTY — the caller
 # captures stdout into a service id, so a leak here would upsert against
 # garbage (same property domain_expect_refusal_stdout_empty exists for).
 service_id_by_name() {
-  local resp="$1" name="$2" ctx="$3" total count
+  local resp="$1" name="$2" ctx="$3" label="${4:-APPROVALS_ENFORCED}" total count
 
   # Not `2>&1`: jq's own parse error is the only signal the response shape
   # drifted (same discipline as select_domain, :943-944).
   if ! total=$(printf '%s' "$resp" | jq '[.data.environment.serviceInstances.edges[]?] | length'); then
-    echo "::error::Could not read service instances for $ctx. This is NOT evidence that '$name' is absent. APPROVALS_ENFORCED was NOT set." >&2
+    echo "::error::Could not read service instances for $ctx. This is NOT evidence that '$name' is absent. $label was NOT set." >&2
     return 1
   fi
 
   if [ "$total" = "0" ]; then
-    echo "::error::Railway returned NO service instances for $ctx (a null environment, a GraphQL error, and an empty edges list all reduce to this). This is NOT evidence that '$name' is absent. APPROVALS_ENFORCED was NOT set." >&2
+    echo "::error::Railway returned NO service instances for $ctx (a null environment, a GraphQL error, and an empty edges list all reduce to this). This is NOT evidence that '$name' is absent. $label was NOT set." >&2
     return 1
   fi
 
@@ -1994,12 +1995,12 @@ service_id_by_name() {
     '[.data.environment.serviceInstances.edges[]?.node | select(.serviceName == $n)] | length')
 
   if [ "$count" = "0" ]; then
-    echo "::error::None of the $total service instance(s) in $ctx is named '$name' — renamed, or Railway and the deploy matrix have drifted apart. APPROVALS_ENFORCED was NOT set." >&2
+    echo "::error::None of the $total service instance(s) in $ctx is named '$name' — renamed, or Railway and the deploy matrix have drifted apart. $label was NOT set." >&2
     return 1
   fi
 
   if [ "$count" != "1" ]; then
-    echo "::error::$count service instances in $ctx are named '$name'. Refusing to guess which one runs the flag. APPROVALS_ENFORCED was NOT set." >&2
+    echo "::error::$count service instances in $ctx are named '$name'. Refusing to guess which one runs the flag. $label was NOT set." >&2
     return 1
   fi
 
@@ -2007,27 +2008,27 @@ service_id_by_name() {
     '.data.environment.serviceInstances.edges[]?.node | select(.serviceName == $n) | .serviceId'
 }
 
-# assert_environment_is_ephemeral <env-id>
+# assert_environment_is_ephemeral <env-id> [not-set-label]
 # Second guard alongside cmd_set_approvals_enforced's literal id compare: this
 # one survives a rename or a drifted RAILWAY_DEV_ENVIRONMENT_ID — the class of
 # failure that broke the dispatch path when `development` was renamed
 # `production` on 2026-07-27. Reuses fetch_environment_list/ENV_LIST_QUERY, no
 # new GraphQL.
 assert_environment_is_ephemeral() {
-  local env_id="$1" count ephemeral
+  local env_id="$1" label="${2:-APPROVALS_ENFORCED}" count ephemeral
   fetch_environment_list
 
   count=$(echo "$GQL_RESPONSE" | jq --arg id "$env_id" \
     '[.data.environments.edges[]?.node | select(.id == $id)] | length')
   if [ "$count" = "0" ]; then
-    echo "::error::No environment with id $env_id exists in project $RAILWAY_PROJECT_ID — an id this project does not own. APPROVALS_ENFORCED was NOT set."
+    echo "::error::No environment with id $env_id exists in project $RAILWAY_PROJECT_ID — an id this project does not own. $label was NOT set."
     exit 1
   fi
 
   ephemeral=$(echo "$GQL_RESPONSE" | jq -r --arg id "$env_id" \
     '.data.environments.edges[]?.node | select(.id == $id) | .isEphemeral')
   if [ "$ephemeral" != "true" ]; then
-    echo "::error::Environment $env_id is NOT ephemeral (isEphemeral=$ephemeral). Turning enforcement on there is an OPERATOR action (APPR-14-10); no CI path may take it. APPROVALS_ENFORCED was NOT set."
+    echo "::error::Environment $env_id is NOT ephemeral (isEphemeral=$ephemeral). Turning enforcement on there is an OPERATOR action (APPR-14-10); no CI path may take it. $label was NOT set."
     exit 1
   fi
 }
@@ -2152,6 +2153,174 @@ cmd_set_approvals_enforced() {
   echo "APPROVALS_ENFORCED confirmed true in environment $env_id (service $svc_id)."
 }
 
+# --- AI fake mode: force it ON and blank the key in a fork -------------------
+#
+# AIR-02-04. Both `submission` and `invoice` call the AI client; resolved by
+# NAME via SETTLE_QUERY, same discipline as cmd_set_approvals_enforced.
+
+# ai_key_verdict <variables-response-json> <service>
+# Pure: no token, no network. Passes only when the rendered map is an object
+# AND OPENROUTER_API_KEY is absent or exactly "". Never prints the value —
+# this map carries live credentials.
+ai_key_verdict() {
+  local resp="$1" svc="$2" kind
+
+  if ! kind=$(printf '%s' "$resp" | jq -r '
+    if type != "object" then "unreadable"
+    elif (has("errors") and ((.errors | length) > 0)) then "errors"
+    elif ((.data | type) != "object") or ((.data.variables | type) != "object") then "unreadable"
+    elif ((.data.variables | has("OPENROUTER_API_KEY")) | not) then "absent"
+    elif .data.variables.OPENROUTER_API_KEY == "" then "empty"
+    else "present" end' 2>/dev/null); then
+    kind="unreadable"
+  fi
+  [ -n "$kind" ] || kind="unreadable"
+
+  # "Cannot read" never reduces to "absent" — same discipline service_id_by_name
+  # and cmd_audit_sealed_variables already apply.
+  case "$kind" in
+    absent|empty)
+      echo "  $svc.OPENROUTER_API_KEY is $kind — no usable key in this environment."
+      return 0 ;;
+    errors)
+      echo "::error::Could not read $svc's variables (GraphQL error). This is NOT evidence that OPENROUTER_API_KEY is unset."
+      return 1 ;;
+    unreadable)
+      echo "::error::$svc's rendered variable map is not an object, so OPENROUTER_API_KEY could not be checked. This is NOT evidence that it is unset."
+      return 1 ;;
+    *)
+      echo "::error::$svc.OPENROUTER_API_KEY is SET in this environment. A PR environment must never hold a usable key. Value not printed."
+      return 1 ;;
+  esac
+}
+
+# Both helpers increment `failures`, a `local` of ai_fake_self_test (bash
+# dynamic scoping) — same convention as approvals_expect_select/_refusal. The
+# optional third arg is a leak needle: if it appears in the output, the
+# fixture FAILS.
+ai_expect_pass() {
+  local id="$1" json="$2" needle="${3:-}" out rc=0
+  out=$(ai_key_verdict "$json" "submission" 2>&1) || rc=$?
+  if [ "$rc" != "0" ]; then
+    echo "::error::self-test $id FAILED: expected exit 0, got exit $rc and '$out'"
+    failures=$((failures + 1)); return 0
+  fi
+  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+    echo "::error::self-test $id FAILED: the output leaked a fixture value"
+    failures=$((failures + 1)); return 0
+  fi
+  echo "  $id ok -> accepted, no value printed"
+}
+
+ai_expect_refusal() {
+  local id="$1" json="$2" needle="${3:-}" out rc=0
+  out=$(ai_key_verdict "$json" "submission" 2>&1) || rc=$?
+  if [ "$rc" = "0" ]; then
+    echo "::error::self-test $id FAILED: expected a refusal, got exit 0 and '$out'"
+    failures=$((failures + 1)); return 0
+  fi
+  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+    echo "::error::self-test $id FAILED: the refusal leaked a fixture value"
+    failures=$((failures + 1)); return 0
+  fi
+  echo "  $id ok -> refused (exit $rc), no value printed"
+}
+
+ai_fake_self_test() {
+  local failures=0
+
+  # F1 absent key passes.
+  ai_expect_pass F1 '{"data":{"variables":{"AI_FAKE":"true"}}}'
+  # F2 empty key passes.
+  ai_expect_pass F2 '{"data":{"variables":{"AI_FAKE":"true","OPENROUTER_API_KEY":""}}}'
+  # F3 a present key refuses and must not leak it.
+  ai_expect_refusal F3 '{"data":{"variables":{"OPENROUTER_API_KEY":"a-present-key-fixture"}}}' "a-present-key-fixture"
+  # F4 whitespace-only key refuses (non-empty != "").
+  ai_expect_refusal F4 '{"data":{"variables":{"OPENROUTER_API_KEY":" \t "}}}'
+  # F5 an unrendered ${{ }} reference refuses and must not leak it.
+  # shellcheck disable=SC2016  # the braces are fixture data, not a missed expansion.
+  ai_expect_refusal F5 '{"data":{"variables":{"OPENROUTER_API_KEY":"${{ secrets.OPENROUTER_API_KEY }}"}}}' "secrets.OPENROUTER_API_KEY"
+  # F6 a null variables map refuses, not "absent".
+  ai_expect_refusal F6 '{"data":{"variables":null}}'
+  # F7 a real GraphQL error response refuses.
+  ai_expect_refusal F7 '{"errors":[{"message":"Not Authorized"}],"data":null}'
+  # F8 a bare array top level refuses via the jq type guard.
+  ai_expect_refusal F8 '[]'
+
+  # F9: the F6 (unreadable) and F3 (present) messages must DIFFER — an
+  # operator must not have to guess which happened.
+  local msg_f6 msg_f3
+  msg_f6=$(ai_key_verdict '{"data":{"variables":null}}' "submission" 2>&1) || true
+  msg_f3=$(ai_key_verdict '{"data":{"variables":{"OPENROUTER_API_KEY":"a-present-key-fixture"}}}' "submission" 2>&1) || true
+  if [ "$msg_f6" = "$msg_f3" ]; then
+    echo "::error::self-test F9 FAILED: the unreadable and key-present refusals produced the SAME message"
+    failures=$((failures + 1))
+  else
+    echo "  F9 ok -> unreadable and key-present refusals are distinguishable"
+  fi
+
+  # F10 a present unrelated var alongside an empty key still passes, and the
+  # unrelated var's value must not leak either.
+  ai_expect_pass F10 '{"data":{"variables":{"DATABASE_URL":"postgres://u:pw-fixture@h/db","OPENROUTER_API_KEY":""}}}' "pw-fixture"
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::AI fake self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "AI fake self-test: 10 fixtures passed, no token read, no network call."
+}
+
+# cmd_set_ai_fake <environment-id|--self-test>
+# Guard order is load-bearing, copied from cmd_set_approvals_enforced: the
+# usage guard must precede the persistent-environment compare, or an empty
+# argument compares false against a real id and the refusal PASSES.
+cmd_set_ai_fake() {
+  local env_id="${1:-}"
+
+  # --self-test stays ahead of every other check: no token, no network, so it
+  # runs on a fork PR too.
+  if [ "$env_id" = "--self-test" ]; then
+    ai_fake_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-ai-fake <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to force AI fake mode in the persistent environment ($env_id). The real key there is an OPERATOR's; no CI path may override it."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" AI_FAKE
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  # Saved before the loop: graphql_post overwrites GQL_RESPONSE inside it.
+  local settle="$GQL_RESPONSE" svc svc_id
+  for svc in submission invoice; do
+    # Own line, not `local svc_id=$(...)`: a local declaration masks the exit
+    # status and set -e would not fire on a refusal.
+    svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" AI_FAKE)
+
+    upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
+    # No verify_variable here: it reads `.data.variables[$n] // empty`, so an
+    # absent key and an empty key both read back as "" — a want="" compare
+    # would pass vacuously. The fresh-read check below is the real one.
+    upsert_variable "$env_id" "$svc_id" "$svc" OPENROUTER_API_KEY ""
+    verify_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
+
+    graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+      "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+      "re-reading $svc variables in environment $env_id"
+    ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1
+  done
+  echo "AI fake mode confirmed in environment $env_id: AI_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -2164,10 +2333,11 @@ case "${1:-}" in
   verify-gateway-domain)     cmd_verify_gateway_domain "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   set-approvals-enforced)    cmd_set_approvals_enforced "${2:-}" ;;
+  set-ai-fake)               cmd_set_ai_fake "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-approvals-enforced <environment-id|--self-test>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-approvals-enforced <environment-id|--self-test>|set-ai-fake <environment-id|--self-test>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

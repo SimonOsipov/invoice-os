@@ -92,3 +92,13 @@ jobs:
 
       - name: Run set-approvals-enforced --self-test
         run: bash scripts/ci/railway-env.sh set-approvals-enforced --self-test
+
+  ai-fake-self-test:
+    name: AI fake-mode variable write self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run set-ai-fake --self-test
+        run: bash scripts/ci/railway-env.sh set-ai-fake --self-test

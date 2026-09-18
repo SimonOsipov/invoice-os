@@ -1052,6 +1052,24 @@ func TestSubmissionMain_FatalOnExtractorSelectionError(t *testing.T) {
 	}
 }
 
+// An unparseable AI_FAKE must refuse to boot, not run the worker with the AI silently off.
+func TestSubmissionMain_FatalOnAIClientError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d unconditional submission.MockConfigFromEnv call(s), fatal=%v, want 1 and true -- it cannot recognise a known-good boot fatal", calls, fatal)
+	}
+	calls, fatal := wtFatalAfter(t, f, "ai.FromEnv")
+	if calls != 1 {
+		t.Fatalf("main() assigns from ai.FromEnv %d time(s) at the top level, want 1", calls)
+	}
+	if !fatal {
+		t.Error("the statement after ai.FromEnv is not an error check that calls log.Fatal")
+	}
+}
+
 // psObjects is newPageSink's only collaborator: a fake document.ObjectStore that records the
 // one Put and, crucially, the reader's position when it arrived.
 type psObjects struct {

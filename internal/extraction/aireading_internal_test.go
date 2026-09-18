@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -233,6 +234,67 @@ func TestAskAI_AnErrorLeavesNoAnswer(t *testing.T) {
 	ok := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}}
 	if got, _ := askAI(context.Background(), ok, pages); got["total"] != "1935.00" {
 		t.Errorf("control: askAI(no error) = %v, want total 1935.00", got)
+	}
+}
+
+// T01 (AIR-04-01): askAI's second return is aiFailed(err) -- every Call error reports true
+// except a cancelled/expired caller context and ai.ErrOff (BQ1, AC-6).
+func TestAskAI_ReportsEveryFailureExceptAnEndedContextOrOff(t *testing.T) {
+	pages := onePage(1, tok("Invoice", 1, 0.10, 0.10, 0.20, 0.12))
+	answer := map[string]any{"total": "1935.00"}
+
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"unavailable", ai.ErrUnavailable, true},
+		{"fake unavailable", fmt.Errorf("%w (fake)", ai.ErrUnavailable), true},
+		{"refused", errors.New("ai: refused: HTTP 402"), true},
+		{"invalid request", errors.New("ai: invalid request: x"), true},
+		{"fake answer", errors.New("ai: fake answer: x"), true},
+		{"canceled", context.Canceled, false},
+		{"wrapped canceled", fmt.Errorf("ai: %w", context.Canceled), false},
+		{"wrapped deadline", fmt.Errorf("ai: %w", context.DeadlineExceeded), false},
+		{"off", ai.ErrOff, false},
+	} {
+		stub := &recordingAI{enabled: true, answer: answer, err: c.err}
+		got, failed := askAI(context.Background(), stub, pages)
+		if got != nil {
+			t.Errorf("%s: answer = %v, want nil", c.name, got)
+		}
+		if failed != c.want {
+			t.Errorf("%s: flag = %v, want %v", c.name, failed, c.want)
+		}
+		if len(stub.calls) != 1 {
+			t.Errorf("%s: calls = %d, want exactly 1", c.name, len(stub.calls))
+		}
+	}
+
+	ok := &recordingAI{enabled: true, answer: answer}
+	gotOK, failedOK := askAI(context.Background(), ok, pages)
+	if failedOK || gotOK["total"] != "1935.00" {
+		t.Errorf("control: askAI(no error) = %v, %v; want {total: 1935.00}, false", gotOK, failedOK)
+	}
+}
+
+// T02 (AIR-04-01) GUARD: the disabled/nil guard runs before any Call, so it can never report
+// failed even when the stub is primed with ErrUnavailable.
+func TestAskAI_OffOrNilIsNeverUnavailable(t *testing.T) {
+	pages := onePage(1, tok("Invoice", 1, 0.10, 0.10, 0.20, 0.12))
+
+	off := &recordingAI{enabled: false, err: ai.ErrUnavailable}
+	got, failed := askAI(context.Background(), off, pages)
+	if got != nil || failed {
+		t.Errorf("askAI(off) = %v, %v; want nil, false", got, failed)
+	}
+	if len(off.calls) != 0 {
+		t.Errorf("askAI(off) calls = %d, want 0", len(off.calls))
+	}
+
+	got, failed = askAI(context.Background(), nil, pages)
+	if got != nil || failed {
+		t.Errorf("askAI(nil) = %v, %v; want nil, false", got, failed)
 	}
 }
 

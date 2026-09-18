@@ -266,9 +266,12 @@ func TestMergeAI_Row6_ABlankAnswerChangesNothing(t *testing.T) {
 		}
 	}
 
-	// askAI itself returns nil on any error, even with a real answer behind it.
+	// askAI returns no answer on any error, and flags this one.
 	errStub := &recordingAI{enabled: true, answer: map[string]any{"total": "1935.00"}, err: ai.ErrUnavailable}
-	errAnswer, _ := askAI(context.Background(), errStub, pages)
+	errAnswer, failed := askAI(context.Background(), errStub, pages)
+	if !failed {
+		t.Errorf("askAI(ErrUnavailable) flag = false, want true")
+	}
 	gotErr := mergeAI(engine, errAnswer, pages, nil)
 	if !reflect.DeepEqual(gotErr, want) {
 		t.Errorf("stub error case: got %+v, want unchanged %+v", gotErr, want)

@@ -1,6 +1,6 @@
 // aireading.go: the AI's per-document reading and the checks that decide whether one of its
-// values may change a header field. Stubs only in this subtask; mergeAI (AIR-03-02) is the
-// first caller of askAI and checkAI.
+// values may change a header field. mergeAI (AIR-03-02) is the first caller of askAI and
+// checkAI.
 package extraction
 
 import (

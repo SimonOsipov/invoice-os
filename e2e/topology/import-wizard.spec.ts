@@ -8768,6 +8768,7 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
   // AIR03-E2E-03 (AC-5, AC-9 c): "Account Name:" fails check (c), so the missing field is
   // doubtful rather than silently filled -- the input offers the AI's text for correction.
   const nameCell = page.getByTestId('extraction-field-buyer_name')
+  // pill text: REASON_PILLS
   await expect(nameCell.getByText("COULDN'T READ THIS CLEARLY", { exact: true })).toBeVisible()
   await expect(page.getByTestId('extraction-input-buyer_name')).toHaveValue('ZENITH HOLDINGS LIMITED')
   const nameWire = wire.get('buyer_name')
@@ -8779,6 +8780,7 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
 
   // AIR03-E2E-04 (Q1): the AI deciding invoice_number changes WHICH reading wins, never whether
   // the field is correctable here -- an unflagged locked field still answers today's 422.
+  // lock note: INVOICE_NUMBER_LOCKED
   await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveText(
     "The invoice number is this invoice's identity and cannot be changed here.",
   )
@@ -8788,6 +8790,7 @@ test("AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lan
     body: { value: '99999', method: 'typed' },
   })
   expect(refusal.status, 'an unflagged locked field must still answer 422').toBe(422)
+  // 422 sentence: msgInvoiceNumberSet
   expect(refusal.body).toEqual({ error: 'invoice_number identifies the invoice and is not corrected here' })
 
   const invoice = await getInvoice(token, invoiceId)

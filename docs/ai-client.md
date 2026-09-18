@@ -67,12 +67,14 @@ still an invalid request.
 
 ## Document reading
 
-`submission`'s extraction worker calls `Call` once per text document -- never per line item,
-never for a document with no text layer (AIR-05). A blank answer, the fake's own default,
-leaves the engine's own reading of every field untouched. The steered fake used on a `pr-<N>`
-deploy answers `invoice_number` `20417`, `buyer_tin` `87654321-0002` and `buyer_name` `ZENITH
-HOLDINGS LIMITED`; AIR-03-05's fixture and deployed spec pin how those three land beside the
-engine's own reading.
+`submission`'s extraction worker calls `Call` once per extraction job attempt that reaches
+the text read -- never per line item, never for a document with no text layer (AIR-05); a
+River retry re-runs the job and calls again. A blank answer, the fake's own default, leaves
+the engine's own reading of every field untouched -- that is what the fake answers whenever
+the document text carries no `AIFAKE` marker. The steered reading only happens when the
+fixture's `AIFAKE-ANSWER-` marker is present: AIR-03-05's fixture carries one and answers
+`invoice_number` `20417`, `buyer_tin` `87654321-0002` and `buyer_name` `ZENITH HOLDINGS
+LIMITED`; its e2e spec pins how those three land beside the engine's own reading.
 
 ## Retries and the budget
 
@@ -145,11 +147,14 @@ it before any forked service deploys.
 
 ## Known limitations
 
-1. **One binary wired.** `submission` calls `FromEnv` and reads through the client, but
-   still owes its two deployed checks — the service boots with `OPENROUTER_API_KEY`
-   empty, and an `ai call` line appears in its Railway log — which AIR-03-05 records on
-   the PR deploy. `invoice` (AIR-07) and the `FakeHint` channel (AIR-05) own the same two
-   checks for their own wiring.
+1. **One binary wired.** `submission` calls `FromEnv` and reads through the client.
+   Its two deployed checks are recorded on PR #247's deploy-gate run 35341117286
+   (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
+   in the fork" read `submission.OPENROUTER_API_KEY is empty` and
+   `submission.AI_FAKE = true`, the fleet health gate passed, and the Railway
+   deploy log for the submission instance on `pr-247` carried `ai call` lines with
+   `purpose: document` and `outcome: fake`. `invoice` (AIR-07) and the `FakeHint`
+   channel (AIR-05) still owe the same two checks for their own wiring.
 2. **`unavailable` conflates two causes.** A spent budget and a cancelled-or-expired
    caller context both log it. The returned error distinguishes them —
    `errors.Is(err, ErrUnavailable)` is true only for the spent budget — but the log line

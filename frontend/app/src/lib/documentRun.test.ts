@@ -1633,7 +1633,7 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
     return files
   }
 
-  it('QS-1: neither Go quarantine sentence has leaked into non-test TypeScript', () => {
+  it('QS-1: no Go quarantine sentence has leaked into non-test TypeScript', () => {
     const root = process.cwd()
     const files = nonTestFiles(root)
     // Floor, so the absence claims below cannot pass over a walk that silently found nothing.
@@ -1646,5 +1646,6 @@ describe('EXTR-30-05 QS-1 (AC-8): the quarantine row sentences have no TypeScrip
 
     expect(contentsOf('was read, but no invoice number')).toEqual([])
     expect(contentsOf('too poor to read, so no invoice fields')).toEqual([])
+    expect(contentsOf('unavailable when this document was imported')).toEqual([])
   })
 })

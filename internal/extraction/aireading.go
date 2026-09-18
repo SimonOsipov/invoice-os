@@ -6,6 +6,7 @@ package extraction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -82,7 +83,10 @@ func aiPromptText(pages []TokenPage) string {
 // aiFailed: any Call error sends the document to manual entry (BQ1), except an ended caller
 // context (shutdown or job timeout, not an AI answer) and ErrOff (AC-6).
 func aiFailed(err error) bool {
-	return false
+	return err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, ai.ErrOff)
 }
 
 // askAI asks once. The bool reports a failed call (aiFailed); the answer is nil then.

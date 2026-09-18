@@ -30,6 +30,7 @@
 import type { ReactNode } from 'react'
 
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { crossGlyph, crosshairGlyph } from '../glyphs'
@@ -41,6 +42,7 @@ import type {
   ExtractionCandidate,
   ExtractionCorrected,
   ExtractionFieldState,
+  ExtractionReason,
   ExtractionRegion,
 } from '../lib/extractionReview'
 import { ExtractionFields } from './ExtractionFields'
@@ -1821,6 +1823,100 @@ describe('a flagged locked field (AIR-03-06)', () => {
       within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
       'the invoice-number lock note did not render',
     ).toBeTruthy()
+  })
+
+  // AIR-03-06 QA: adversarial rows.
+  it('keys the lock on the wire, so an undone draft does not re-lock a corrected field', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'invoice_number',
+            reason: '',
+            value: '20417',
+            corrected: { method: 'chosen', was: 'INV-0001', where: null },
+          }),
+        ],
+        draft: { invoice_number: { kind: 'undone', value: '', region: null } },
+      }),
+    )
+
+    const input = inputOf('invoice_number')
+    expect(input, 'the corrected field rendered no input').toBeTruthy()
+    expect(input!.readOnly, 'an undone draft re-locked a field the server still accepts').toBe(false)
+    expect(input!.getAttribute('aria-readonly')).not.toBe('true')
+    expect(within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED)).toBeNull()
+  })
+
+  it('agrees on readOnly, aria-readonly and the lock note in every state', () => {
+    const reasons: ExtractionReason[] = ['', 'missing', 'inconsistent', 'unreadable', 'ambiguous']
+    for (const reason of reasons) {
+      for (const corrected of [null, { method: 'typed' as const, was: null, where: null }]) {
+        cleanup()
+        render(
+          fieldsPane({
+            fields: [
+              mkField({ name: 'invoice_number', reason, alternatives: [], corrected }),
+              mkField({ name: 'total', reason: '', value: '1.00' }),
+            ],
+          }),
+        )
+        const want = corrected === null && (reason === '' || reason === 'missing' || reason === 'inconsistent')
+        const label = `reason ${JSON.stringify(reason)}, corrected ${corrected === null ? 'null' : 'set'}`
+        const input = inputOf('invoice_number')
+        expect(input, `${label}: no input`).toBeTruthy()
+        expect(input!.readOnly, `${label}: readOnly`).toBe(want)
+        expect(input!.style.cssText === inputOf('total')!.style.cssText, `${label}: styled as editable`).toBe(!want)
+        expect(input!.getAttribute('aria-readonly'), `${label}: aria-readonly`).toBe(String(want))
+        expect(
+          within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED) !== null,
+          `${label}: lock note`,
+        ).toBe(want)
+      }
+    }
+  })
+
+  it('lets a person type into a flagged locked field and not into an unflagged one', async () => {
+    const onType = vi.fn()
+    const user = userEvent.setup()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'invoice_number', reason: '', value: 'INV-0001' }),
+          mkField({ name: 'supplier_tin', reason: 'unreadable', value: null, alternatives: [] }),
+        ],
+        onType,
+      }),
+    )
+
+    await user.type(inputOf('invoice_number')!, 'X')
+    expect(onType, 'keystrokes reached the shell from an unflagged locked field').not.toHaveBeenCalled()
+
+    await user.type(inputOf('supplier_tin')!, 'X')
+    expect(onType.mock.calls, 'the flagged field took no keystroke').toEqual([['supplier_tin', 'X']])
+  })
+
+  it('offers chips on an ambiguous locked field and states no lock', () => {
+    const onChoose = vi.fn()
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'supplier_name',
+            reason: 'ambiguous',
+            value: 'Alpha Ltd',
+            alternatives: [{ value: 'Beta Ltd', region: null }],
+          }),
+        ],
+        onChoose,
+      }),
+    )
+
+    const chips = chipsOf('supplier_name')
+    expect(chips, 'the ambiguous locked field rendered no chips').toHaveLength(2)
+    fireEvent.click(chips[1])
+    expect(onChoose).toHaveBeenCalledWith('supplier_name', { value: 'Beta Ltd', region: null })
+    expect(screen.queryByTestId('extraction-lock-supplier_name')).toBeNull()
   })
 })
 

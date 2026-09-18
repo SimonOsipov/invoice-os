@@ -915,6 +915,28 @@ func TestRLS_EditBySourceDocumentTxSupplierInputTakesTheClientRecord(t *testing.
 	}
 }
 
+// The supplier_tin half of T13, against an entity that HAS a TIN: the invoice takes the
+// entity's, never the typed one.
+func TestRLS_EditBySourceDocumentTxSupplierTINInputTakesTheClientRecord(t *testing.T) {
+	f := ebsSeed(t, "QA06-STIN")
+	const entityTIN, typed = "11111111-0001", "99999999-0009"
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE business_entities SET tin = $1 WHERE id = $2`, entityTIN, f.entityID); err != nil {
+		t.Fatalf("give the entity a TIN: %v", err)
+	}
+
+	got, err := f.edit(t, f.documentID, EditInput{UpdateInput: UpdateInput{SupplierTIN: strPtr(typed)}})
+	if err != nil {
+		t.Fatalf("a supplier_tin correction: want success, got %v", err)
+	}
+	if got.SupplierTIN == nil || *got.SupplierTIN != entityTIN {
+		t.Errorf("the returned supplier_tin = %s, want the entity's %q", ebsShow(got.SupplierTIN), entityTIN)
+	}
+	if col := f.column(t, f.invoiceID, "supplier_tin"); col == nil || *col != entityTIN {
+		t.Errorf("invoices.supplier_tin = %s, want the entity's %q, not the typed %q", ebsShow(col), entityTIN, typed)
+	}
+}
+
 // --- AC-8: replaceLinesTx's 22003 mapping is symmetric with Store.Create's -----------------
 
 // TestReplaceLinesTx_AnOversizedLineAmountIsErrValidation drives EditBySourceDocumentTx, the

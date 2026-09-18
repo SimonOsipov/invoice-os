@@ -4016,7 +4016,7 @@ test('EXTR12-E2E-02 (AC-7): the corrected marker sits inside the value control, 
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
 
-  // `total` is admitted: refuseField locks only invoice_number, supplier_tin and supplier_name.
+  // `total` is admitted: the flag gate locks only invoice_number, supplier_tin and supplier_name.
   await postFieldCorrection(token, jobId as string, 'total', { value: '2222.00', method: 'typed' })
 
   const detail = await openExtractionReview(page)
@@ -5023,7 +5023,7 @@ test("EXTR11-E2E-11 (AC-8): the deployed surface matches the artboard's resolved
 
   const jobId = (await Promise.all(jobLookups)).flatMap((l) => l.jobs).map((j) => j.id).pop()
   expect(jobId, 'the invoice detail looked up no extraction job -- there is nothing to correct').toBeTruthy()
-  // `subtotal` is admitted: refuseField locks only invoice_number, supplier_tin and
+  // `subtotal` is admitted: the flag gate locks only invoice_number, supplier_tin and
   // supplier_name. On the rich fixture `subtotal` is the header field carrying the flagged
   // disagreement, so it is the one with a pill to replace.
   await postFieldCorrection(token, jobId as string, 'subtotal', { value: '2222.00', method: 'typed' })

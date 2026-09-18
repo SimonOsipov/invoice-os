@@ -104,6 +104,8 @@ var fxCorpus = []struct {
 	{fxChromeRegisterTwin, fxBuildChromeRegisterTwin},
 	// AIR-03-05's deployed-steering fixture: not corpus_-prefixed, outside every corpus_ ratchet.
 	{fxAISteered, fxBuildAISteeredInvoice},
+	// AIR-04-04's deployed-unavailable fixture: outside every corpus_ ratchet.
+	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -1761,6 +1763,26 @@ func fxBuildAISteeredInvoice() []byte {
 	return fxTextPage(fxAISteeredLines()...)
 }
 
+// fxAIUnavailable: AIR-04's deployed fixture. The engine alone decides INV-4410, so a deployed
+// quarantine proves the AIFAKE-UNAVAILABLE steer (TestFixtures_AIUnavailableEngineAloneWouldFileIt).
+const fxAIUnavailable = "ai_unavailable_invoice.pdf"
+
+const fxAIUnavailableMarker = "AIFAKE-UNAVAILABLE"
+
+func fxAIUnavailableLines() []fxLine {
+	return []fxLine{
+		{12, 72, 690, "Invoice Number: INV-4410"},
+		{12, 72, 672, "Invoice Date: 2026-07-14"},
+		{12, 72, 654, "From: Harmattan Supplies Limited"},
+		{12, 72, 636, "Total: 2,150.00"},
+		{3, 72, 38, fxAIUnavailableMarker},
+	}
+}
+
+func fxBuildAIUnavailableInvoice() []byte {
+	return fxTextPage(fxAIUnavailableLines()...)
+}
+
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
 // other nine keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
 func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
@@ -1872,6 +1894,48 @@ func TestFixtures_AISteeredOutcomeIgnoresTokenOrder(t *testing.T) {
 		}
 		t.Fatal("no buyer_name row in the control's output")
 	})
+}
+
+// TestFixtures_AIUnavailableEngineAloneWouldFileIt: the committed page prints the marker as its
+// own last token, and the engine alone decides the number, so only the steer can quarantine it.
+func TestFixtures_AIUnavailableEngineAloneWouldFileIt(t *testing.T) {
+	lines := fxAIUnavailableLines()
+	if last := lines[len(lines)-1]; last.text != fxAIUnavailableMarker {
+		t.Fatalf("the generator does not place the marker last: %+v", last)
+	}
+
+	// The COMMITTED file, not the built bytes: the committed file is what deploys.
+	pages := rvCorpusPages(t, fxAIUnavailable)
+	if len(pages) != 1 {
+		t.Fatalf("%s yielded %d page(s), want exactly 1", fxAIUnavailable, len(pages))
+	}
+	tokens := pages[0].Tokens
+	if len(tokens) != len(lines) {
+		t.Fatalf("%s yielded %d token(s), want %d (one per line)", fxAIUnavailable, len(tokens), len(lines))
+	}
+	markerAt := -1
+	for i, tok := range tokens {
+		if tok.Text != fxAIUnavailableMarker {
+			continue
+		}
+		if markerAt != -1 {
+			t.Fatalf("the marker token appears more than once: at %d and %d", markerAt, i)
+		}
+		markerAt = i
+	}
+	if markerAt != len(tokens)-1 {
+		t.Fatalf("the marker token is at index %d, want the last index %d", markerAt, len(tokens)-1)
+	}
+
+	engine := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric()), Pages: pages})
+	byName := make(map[string]extraction.FieldResult, len(engine))
+	for _, r := range engine {
+		byName[r.Name] = r
+	}
+	inv := byName["invoice_number"]
+	if inv.Reason != extraction.ReasonNone || inv.Value == nil || *inv.Value != "INV-4410" {
+		t.Errorf("invoice_number = %+v, want decided INV-4410 -- the engine alone must file this document without the steer", inv)
+	}
 }
 
 // --- reading a fixture back -------------------------------------------------
@@ -2385,7 +2449,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

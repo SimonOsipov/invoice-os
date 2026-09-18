@@ -76,6 +76,13 @@ fixture's `AIFAKE-ANSWER-` marker is present: AIR-03-05's fixture carries one an
 `invoice_number` `20417`, `buyer_tin` `87654321-0002` and `buyer_name` `ZENITH HOLDINGS
 LIMITED`; its e2e spec pins how those three land beside the engine's own reading.
 
+When `Call` returns any error except `ErrOff` or a cancelled or expired caller context, the
+worker writes one `document_ai_reading` row (value null, reason `unreadable`) and no engine
+reading, and the importer quarantines the document with no reading; the person enters it by
+hand (AIR-04). On a `pr-<N>` deploy, `AIFAKE-UNAVAILABLE` printed on the document forces this
+path: `ai_unavailable_invoice.pdf` and AIR04-E2E-01 pin it. The fake logs outcome `fake` for
+that call. Production logs `unavailable` when the budget is spent, or `refused`.
+
 ## Retries and the budget
 
 One `Call` has a 15s budget (the `budget` const), not an attempt-count limit. **Retried:**

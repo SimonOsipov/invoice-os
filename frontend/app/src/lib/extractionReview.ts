@@ -245,6 +245,12 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
   })
 }
 
+// AIR-03-04 stub: real body lands with the executor's feat commit. Kept here only so the RED
+// tests compile against a real export.
+export function offeredText(_field: ExtractionFieldState): string | null {
+  return null
+}
+
 /** Where a field sits in the vocabulary; anything the wire adds later sorts after all of it. */
 function vocabularyRank(name: string): number {
   const i = HEADER_FIELDS.indexOf(name)

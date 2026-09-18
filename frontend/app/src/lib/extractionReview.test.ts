@@ -21,6 +21,7 @@ import {
   highlightStyle,
   isDrawnBox,
   normaliseBox,
+  offeredText,
   pageFrameStyle,
   pointBoxStyle,
   pointedEntry,
@@ -1389,5 +1390,44 @@ describe('savableCorrections, pointed', () => {
       out.map((p) => p.field),
       'a valueless point was posted, and the boundary refuses a blank value',
     ).toEqual(['total'])
+  })
+})
+
+// -- offeredText (AIR-03-04, AC-5) -------------------------------------------------------
+
+describe('offeredText', () => {
+  it('returns the first alternative of a doubtful empty field', () => {
+    const ALT_X = { value: 'ZENITH HOLDINGS LIMITED', region: null }
+    const ALT_Y = { value: 'ZENITH HOLDINGS LTD', region: null }
+
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [ALT_X] })),
+      'a doubtful empty field offers nothing',
+    ).toBe(ALT_X.value)
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [ALT_X, ALT_Y] })),
+      'a second alternative was offered instead of the first',
+    ).toBe(ALT_X.value)
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: 'v', alternatives: [ALT_X] })),
+      'a field that already has a value still offered one',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'ambiguous', value: null, alternatives: [ALT_X] })),
+      'ambiguous has its own chips and must not also offer text',
+    ).toBeNull()
+    expect(offeredText(mkField({ reason: 'missing', value: null, alternatives: [ALT_X] }))).toBeNull()
+    expect(
+      offeredText(mkField({ reason: '', value: null, alternatives: [ALT_X] })),
+      'a clean field with a stray alternative offered it',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [] })),
+      'nothing to offer, and nothing was offered',
+    ).toBeNull()
+    expect(
+      offeredText(mkField({ reason: 'unreadable', value: null, alternatives: [{ value: null, region: null }] })),
+      'the one alternative carries nothing either',
+    ).toBeNull()
   })
 })

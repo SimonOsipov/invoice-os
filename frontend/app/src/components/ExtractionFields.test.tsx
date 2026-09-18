@@ -2039,3 +2039,50 @@ describe('the line-item field filter, both directions (EXTR-13-07)', () => {
     ).toBe('Line 3 quantity')
   })
 })
+
+// ==========================================================================================
+// AIR-03-04 (Mode A). A doubtful field with no value still shows the AI's own reading, but
+// that reading is never drafted until a person edits it. buyer_name: not a LOCKED_FIELDS entry.
+// ==========================================================================================
+
+function offeredBuyerName(): ExtractionFieldState {
+  return mkField({
+    name: 'buyer_name',
+    value: null,
+    region: null,
+    reason: 'unreadable',
+    alternatives: [{ value: 'ZENITH HOLDINGS LIMITED', region: null }],
+  })
+}
+
+describe('the offered text (AIR-03-04)', () => {
+  it("offers the AI text in a doubtful field's input", () => {
+    render(fieldsPane({ fields: [offeredBuyerName()] }))
+
+    expect(valueOf('buyer_name'), 'the offered text never reached the input').toBe('ZENITH HOLDINGS LIMITED')
+    expect(within(row('buyer_name')).queryByText(PILL_UNREADABLE), 'the doubtful pill is missing').toBeTruthy()
+    expect(chipsOf('buyer_name'), 'an unreadable field rendered chips').toHaveLength(0)
+    expect(within(row('buyer_name')).queryByText(/POSSIBLE VALUES/), 'the row claims an ambiguous count').toBeNull()
+    expect(within(row('buyer_name')).queryByText(PILL), 'the reason pill lost its slot to NO REGION').toBeNull()
+  })
+
+  it('leaves the offered text out of the draft until it is edited', () => {
+    const onType = vi.fn()
+    render(fieldsPane({ fields: [offeredBuyerName()], onType }))
+
+    expect(onType, 'rendering the offered text already drafted it').not.toHaveBeenCalled()
+
+    fireEvent.change(inputOf('buyer_name') as HTMLInputElement, { target: { value: 'ZENITH HOLDINGS LTD' } })
+
+    expect(onType.mock.calls, 'the edit never reached the shell').toEqual([['buyer_name', 'ZENITH HOLDINGS LTD']])
+  })
+
+  it('a drafted value outranks the offered text', () => {
+    render(fieldsPane({ fields: [offeredBuyerName()], draft: { buyer_name: { kind: 'typed', value: 'X', region: null } } }))
+    expect(valueOf('buyer_name'), 'a typed draft lost to the offered text').toBe('X')
+
+    cleanup()
+    render(fieldsPane({ fields: [offeredBuyerName()], draft: { buyer_name: { kind: 'typed', value: '', region: null } } }))
+    expect(valueOf('buyer_name'), 'a cleared draft fell back to the offered text -- this kills a || mutation').toBe('')
+  })
+})

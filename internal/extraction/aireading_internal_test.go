@@ -278,6 +278,28 @@ func TestAskAI_ReportsEveryFailureExceptAnEndedContextOrOff(t *testing.T) {
 	}
 }
 
+// aiFailed follows the wrapped cause, not the message; an ended context wins a joined error.
+func TestAIFailed_FollowsTheWrappedCause(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"wrapped off", fmt.Errorf("ai: %w", ai.ErrOff), false},
+		{"bare deadline", context.DeadlineExceeded, false},
+		{"doubly wrapped unavailable", fmt.Errorf("worker: %w", fmt.Errorf("%w (fake)", ai.ErrUnavailable)), true},
+		{"spent budget naming a deadline", fmt.Errorf("%w (last: %v)", ai.ErrUnavailable, context.DeadlineExceeded), true},
+		{"joined unavailable and canceled", errors.Join(ai.ErrUnavailable, context.Canceled), false},
+		{"joined unavailable and a plain error", errors.Join(ai.ErrUnavailable, errors.New("x")), true},
+	}
+	for _, c := range cases {
+		if got := aiFailed(c.err); got != c.want {
+			t.Errorf("%s: aiFailed(%v) = %v, want %v", c.name, c.err, got, c.want)
+		}
+	}
+}
+
 // T02 (AIR-04-01) GUARD: the disabled/nil guard runs before any Call, so it can never report
 // failed even when the stub is primed with ErrUnavailable.
 func TestAskAI_OffOrNilIsNeverUnavailable(t *testing.T) {

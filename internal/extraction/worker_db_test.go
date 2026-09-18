@@ -4561,6 +4561,122 @@ func TestRLS_ExtractWorkerDoesNotRetryAnUnavailableDocument(t *testing.T) {
 	stAssertJobState(t, ctx, xid, "succeeded")
 }
 
+// --- AIR-04-01 adversarial ------------------------------------------------------------
+
+// A payload the real fake cannot decode is a Call error like any other (BQ1): only the marker.
+func TestRLS_ExtractWorkerWritesTheMarkerForABadFakePayload(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	client, err := ai.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	base := wkAIR04Page()
+	page := extraction.Page{
+		Number: base.Number, WidthPt: base.WidthPt, HeightPt: base.HeightPt,
+		Tokens: append(append([]extraction.Token{}, base.Tokens...),
+			extraction.Token{Text: "AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString([]byte("[]")),
+				Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.90, X1: 0.5, Y1: 0.92}}),
+	}
+
+	r := wkRunAI(t, ctx, 930107, []extraction.Page{page}, client)
+	wkAssertOnlyMarker(t, ctx, r.jobID, r.rows)
+}
+
+// An enabled reader that answers ErrOff, bare or wrapped, writes today's rows, never the marker.
+func TestRLS_ExtractWorkerAnErrOffCallWritesTheEngineRows(t *testing.T) {
+	ctx := t.Context()
+	pages := []extraction.Page{wkAIR04Page()}
+	render := func(r wkAIRun) []string { return append(wkStrRows(r.rows), wkStrBoxes(r.boxes)...) }
+	off := render(wkRunAI(t, ctx, 930108, pages, nil))
+
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"bare", ai.ErrOff},
+		{"wrapped", fmt.Errorf("ai: call: %w", ai.ErrOff)},
+	}
+	for i, c := range cases {
+		stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "OTHER-1"}, err: c.err}
+		if got := render(wkRunAI(t, ctx, 930109+int64(i), pages, stub)); !slices.Equal(off, got) {
+			t.Errorf("%s: rows differ from the AI-off run:\n off: %v\n got: %v", c.name, off, got)
+		}
+		if n := stub.count(); n != 1 {
+			t.Errorf("%s: the AI seam saw %d call(s), want 1 (the ErrOff branch was not reached)", c.name, n)
+		}
+	}
+}
+
+// The no-text and mock arms never ask the AI, so a failing AI cannot put the marker there.
+func TestRLS_ExtractWorkerAnUnavailableAIDoesNotReachTheNoTextArms(t *testing.T) {
+	ctx := t.Context()
+
+	t.Run("no-text arm, TextChars is 0", func(t *testing.T) {
+		stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+		r := wkRunAI(t, ctx, 930111, []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}, stub)
+		if len(r.rows) != 1 {
+			t.Fatalf("rows = %v, want exactly the text-layer verdict", r.rows)
+		}
+		wpAssertRankZero(t, r.rows, "document_text_layer", nil, stPtr("unreadable"))
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s), want 0", n)
+		}
+	})
+
+	t.Run("mock arm, Text is nil", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+		ew := wkWorker(t, wkOK(), wkNewOpener())
+		ew.AI = stub
+		const riverJobID = int64(930112)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID))
+		for _, row := range rows {
+			if row.name == "document_ai_reading" {
+				t.Errorf("the mock arm wrote a %q row, want none", row.name)
+			}
+		}
+		if n := stub.count(); n != 0 {
+			t.Errorf("the AI seam saw %d call(s), want 0", n)
+		}
+	})
+}
+
+// A replay whose AI would now answer still makes no call and keeps the marker (no re-read).
+func TestRLS_ExtractWorkerReplayOfAMarkerJobIgnoresARecoveredAI(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
+	rec := &wkAuditRecorder{}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wkAIR04Page()}}, wpStoreRules(t).load, rec)
+	ew.AI = stub
+	const riverJobID = int64(930113)
+	key := uuid.NewString()
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("first Work: %v", err)
+	}
+	stub.mu.Lock()
+	stub.err, stub.answer = nil, map[string]any{"invoice_number": "INV-4410"}
+	stub.mu.Unlock()
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, key)); err != nil {
+		t.Fatalf("replayed Work: %v", err)
+	}
+
+	if n := stub.count(); n != 1 {
+		t.Errorf("the AI seam saw %d call(s) across both runs, want 1", n)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	wkAssertOnlyMarker(t, ctx, xid, wpResults(t, ctx, xid))
+	if ev := rec.events(); len(ev) != 1 || ev[0].FieldCount != 1 {
+		t.Errorf("audit = %+v, want one event with FieldCount 1", ev)
+	}
+}
+
 // --- AIR-03-03 adversarial ------------------------------------------------------------
 
 // wkAILineTable is three line rows summing to 650.00, the ruled-table shape LineItems reads.

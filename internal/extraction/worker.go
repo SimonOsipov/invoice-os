@@ -248,7 +248,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				// octx, not ctx: the client's ai call log line reads tenant_id off it.
 				answer, failed := askAI(octx, w.AI, textTokens)
 				if failed {
-					// Q9: no engine fallback. The importer quarantines on this one row.
+					// Q9: no engine fallback.
 					results = []FieldResult{{
 						Field:        Field{Name: aiUnavailableField, Reason: ReasonUnreadable},
 						Alternatives: []Field{},

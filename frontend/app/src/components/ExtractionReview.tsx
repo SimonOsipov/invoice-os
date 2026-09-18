@@ -8,10 +8,11 @@ import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
-import { deadLetterRefusal } from '../lib/documentRun'
+import { AI_UNAVAILABLE_REFUSAL, deadLetterRefusal } from '../lib/documentRun'
 import {
   applyDraft,
   getExtractionDetail,
+  isAIUnavailable,
   pointedEntry,
   postFieldCorrection,
   postLineItems,
@@ -157,6 +158,9 @@ export function ExtractionReview({
     // The same sentence the import run's card shows for this kind, from its sole copy owner.
     // ExtractionDetail carries no last_error, so the detail clause is always the fallback.
     content = <div style={SENTENCE}>{deadLetterRefusal(data.failure_kind, null)}</div>
+  } else if (isAIUnavailable(data.fields)) {
+    // Nothing was read: no canvas, no page fetch, no Save.
+    content = <div style={SENTENCE}>{AI_UNAVAILABLE_REFUSAL}</div>
   } else {
     const wire = data.fields
     // The canvas follows the draft: a chosen chip moves the highlight to that alternative's own

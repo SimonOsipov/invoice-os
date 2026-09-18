@@ -2086,3 +2086,97 @@ describe('the offered text (AIR-03-04)', () => {
     expect(valueOf('buyer_name'), 'a cleared draft fell back to the offered text -- this kills a || mutation').toBe('')
   })
 })
+
+describe('the offered text, adversarial (AIR-03-04)', () => {
+  const ALT_A = { value: 'ZENITH HOLDINGS LIMITED', region: null }
+  const ALT_B = { value: 'ZENITH HOLDINGS LTD', region: null }
+
+  it('an unreadable field with two alternatives offers the first and still renders no chip', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'unreadable', alternatives: [ALT_A, ALT_B] }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe(ALT_A.value)
+    expect(chipsOf('buyer_name'), 'the chip gate opened for unreadable').toHaveLength(0)
+    expect(within(row('buyer_name')).queryByText(PILL_UNREADABLE)).toBeTruthy()
+    expect(row('buyer_name').textContent, 'an alternative leaked as text beside the input').not.toContain('ZENITH')
+  })
+
+  it('an unreadable field with no alternative, or an empty first one, stays empty', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'unreadable', alternatives: [] }),
+          mkField({
+            name: 'buyer_tin',
+            value: null,
+            region: null,
+            reason: 'unreadable',
+            alternatives: [{ value: null, region: null }, ALT_B],
+          }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe('')
+    expect(valueOf('buyer_tin'), 'a later alternative leaked past an empty first').toBe('')
+  })
+
+  it('a field that is not unreadable never offers its alternative', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'missing', alternatives: [ALT_A] }),
+          mkField({ name: 'buyer_tin', value: null, region: null, reason: '', alternatives: [ALT_B] }),
+        ],
+      }),
+    )
+    expect(valueOf('buyer_name'), 'a missing field offered text').toBe('')
+    expect(valueOf('buyer_tin'), 'a clean field offered a stray alternative').toBe('')
+  })
+
+  it('an ambiguous field with a null value renders chips, never an input holding an alternative', () => {
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'buyer_name', value: null, region: null, reason: 'ambiguous', alternatives: [ALT_A, ALT_B] }),
+        ],
+      }),
+    )
+    expect(inputOf('buyer_name'), 'an ambiguous field rendered an input').toBeNull()
+    expect(chipsOf('buyer_name')).toHaveLength(3)
+  })
+
+  it('a locked field flagged unreadable shows its offered text', () => {
+    // Display only: whether it may be edited is AIR-03-06's lock gate.
+    render(
+      fieldsPane({
+        fields: [
+          mkField({ name: 'supplier_name', value: null, region: null, reason: 'unreadable', alternatives: [ALT_A] }),
+        ],
+      }),
+    )
+    expect(valueOf('supplier_name')).toBe(ALT_A.value)
+  })
+
+  it('an undone draft on a saved offered field previews empty, per applyDraft', () => {
+    // A correction clears reason and alternatives on the wire (reader.go), so the undo preview
+    // is `was ?? ''`; the offered text returns only when Save re-reads the extractor's row.
+    render(
+      fieldsPane({
+        fields: [
+          mkField({
+            name: 'buyer_name',
+            value: 'ZENITH HOLDINGS LTD',
+            region: null,
+            corrected: { method: 'typed', was: null, where: null },
+          }),
+        ],
+        draft: { buyer_name: { kind: 'undone', value: '', region: null } },
+      }),
+    )
+    expect(valueOf('buyer_name')).toBe('')
+  })
+})

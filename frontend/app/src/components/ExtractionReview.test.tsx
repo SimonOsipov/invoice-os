@@ -2684,3 +2684,54 @@ describe('the one exit to the invoice', () => {
     expect(exitButton()).toBeNull()
   })
 })
+
+describe('the offered text never rides a Save (AIR-03-04, AC-5)', () => {
+  const OFFERED = 'ZENITH HOLDINGS LIMITED'
+  const OFFERED_JOB: ExtractionDetail = mkDetail({
+    fields: [
+      mkField({
+        name: 'buyer_name',
+        value: null,
+        region: null,
+        reason: 'unreadable',
+        alternatives: [{ value: OFFERED, region: null }],
+      }),
+      mkField({ name: 'total', value: '1000.00', region: mkRegion({ page: 1 }) }),
+    ],
+  })
+
+  it('arms nothing on render and posts only what the person edited', async () => {
+    const w = writing(OFFERED_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    expect(inputOf('buyer_name')?.value, 'the offered text never reached the input').toBe(OFFERED)
+    expect(saveButton()!.disabled, 'the offered text alone armed Save').toBe(true)
+
+    fireEvent.change(inputOf('total') as HTMLInputElement, { target: { value: '1,200.00' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(postedFields(w), 'the undrafted offered field was posted').toEqual(['total'])
+    expect(JSON.stringify(writes(w).map((c) => c.body)), 'the offered text rode a Save').not.toContain(OFFERED)
+  })
+
+  it('posts the offered field once the person edits it, as typed', async () => {
+    const w = writing(OFFERED_JOB)
+    render(review({ ctx: w.ctx }))
+    await flush()
+
+    fireEvent.change(inputOf('buyer_name') as HTMLInputElement, { target: { value: 'ZENITH HOLDINGS LTD' } })
+    await flush()
+    await act(async () => {
+      fireEvent.click(saveButton() as HTMLElement)
+    })
+    await flush()
+
+    expect(postedFields(w)).toEqual(['buyer_name'])
+    expect(writes(w)[0].body).toEqual({ value: 'ZENITH HOLDINGS LTD', method: 'typed', region: null, anchor_label: '' })
+  })
+})

@@ -334,7 +334,8 @@ export function ExtractionFields({
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
                 // The gate is the REASON first -- a field can carry alternatives the extractor
-                // ranked below a reading it is sure of, and those stay off the screen. The
+                // ranked below a reading it is sure of, and those get no chip (an unreadable empty
+                // field shows its first one in the input instead: offeredText). The
                 // second clause is the render invariant, not a weakening: no chips means there
                 // is an input. Reconcile only sets `ambiguous` with two or more candidates
                 // (reconcile.go), so an ambiguous field with nothing to choose between is a

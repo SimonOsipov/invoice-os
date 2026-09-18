@@ -245,8 +245,8 @@ export function applyDraft(fields: ExtractionFieldState[], entries: DraftEntries
   })
 }
 
-// AIR-03-04, AC-5: a doubtful empty field still shows the AI's own reading, over the input, not
-// drafted -- so an unreadable+null+alternatives row is never blank.
+// The text an unreadable empty field shows in its input. Never drafted, so Save files it only
+// after an edit (the offered text never rides a Save).
 export function offeredText(field: ExtractionFieldState): string | null {
   if (field.reason !== 'unreadable' || field.value !== null || field.alternatives.length === 0) return null
   return field.alternatives[0].value ?? null

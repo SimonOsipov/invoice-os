@@ -1431,3 +1431,41 @@ describe('offeredText', () => {
     ).toBeNull()
   })
 })
+
+describe('offeredText, adversarial (AIR-03-04)', () => {
+  it('offers only the first alternative, never a later one past an empty first', () => {
+    const f = mkField({
+      reason: 'unreadable',
+      value: null,
+      alternatives: [
+        { value: null, region: null },
+        { value: 'ZENITH HOLDINGS LTD', region: null },
+      ],
+    })
+    expect(offeredText(f), 'a later alternative leaked past an empty first').toBeNull()
+  })
+
+  it('never reaches a Save: an offered field with no draft posts nothing', () => {
+    const offered = mkField({
+      name: 'buyer_name',
+      reason: 'unreadable',
+      value: null,
+      alternatives: [{ value: 'ZENITH HOLDINGS LIMITED', region: null }],
+    })
+    expect(offeredText(offered), 'the fixture offers nothing -- every claim below is vacuous').toBe(
+      'ZENITH HOLDINGS LIMITED',
+    )
+    expect(applyDraft([offered], {})[0].value, 'applyDraft folded the offered text into the value').toBeNull()
+    expect(savableCorrections([offered], {}), 'an undrafted offered text was posted').toEqual([])
+    // Accepting the text unchanged is a real decision: the wire holds null, not the offer.
+    expect(
+      savableCorrections([offered], {
+        buyer_name: { kind: 'typed', value: 'ZENITH HOLDINGS LIMITED', region: null },
+      }).map((p) => [p.field, p.body.value, p.body.method]),
+    ).toEqual([['buyer_name', 'ZENITH HOLDINGS LIMITED', 'typed']])
+    expect(
+      savableCorrections([offered], { buyer_name: { kind: 'typed', value: '', region: null } }),
+      'a cleared offered field posted a blank',
+    ).toEqual([])
+  })
+})

@@ -167,8 +167,9 @@ it before any forked service deploys.
    in the fork" read `submission.OPENROUTER_API_KEY is empty` and
    `submission.AI_FAKE = true`, the fleet health gate passed, and the Railway
    deploy log for the submission instance on `pr-247` carried `ai call` lines with
-   `purpose: document` and `outcome: fake`. The image read's own check:
-   <!-- lead fills: pr-249 ai call line + run id -->. `invoice` (AIR-07) still owes
+   `purpose: document` and `outcome: fake`. The image read's own check
+   (AIR05-E2E-01 and the `pr-249` `ai call` line) is recorded in PR #249's description.
+   `invoice` (AIR-07) still owes
    the same two checks for its own wiring.
 2. **`unavailable` conflates two causes.** A spent budget and a cancelled-or-expired
    caller context both log it. The returned error distinguishes them —

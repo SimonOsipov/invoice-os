@@ -271,8 +271,7 @@ func TestServiceImport_NoDocumentStillImports(t *testing.T) {
 }
 
 // TestSheetRow_CountsFromTheRowAfterTheHeader: sheetRow/sheetRows count from
-// the row AFTER headerRow, not always row 2. RED against the stub: sheetRow
-// still returns i+2 regardless of headerRow.
+// the row AFTER headerRow, not always row 2.
 func TestSheetRow_CountsFromTheRowAfterTheHeader(t *testing.T) {
 	if got := sheetRow(1, 0); got != 2 {
 		t.Errorf("sheetRow(1, 0) = %d, want 2", got)
@@ -298,8 +297,7 @@ func TestSheetRow_CountsFromTheRowAfterTheHeader(t *testing.T) {
 
 // TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle is
 // TestBuildCreateInput_SetsSourceRowsFromGroup's twin with a title row above
-// the header: the same group now counts from row 3, not row 1. RED against
-// the stub, same reason as the test above.
+// the header: the same group now counts from row 3, not row 1.
 func TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle(t *testing.T) {
 	colIndex := buildCreateInputFixture(t)
 	rows := [][]string{
@@ -326,8 +324,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle(t *testing.T) {
 // TestServiceImport_PersistsSourceRowsBelowATitle is
 // TestServiceImport_PersistsSourceRowsPerInvoice's DB twin with headerRow 3:
 // each invoice's own sheet rows count from row 4, and the batch itself
-// records the header row it was read from. RED both on the source_rows
-// values (sheetRow stub) and on the header_row read (no such column yet).
+// records the header row it was read from.
 func TestServiceImport_PersistsSourceRowsBelowATitle(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -375,9 +372,7 @@ func TestServiceImport_PersistsSourceRowsBelowATitle(t *testing.T) {
 }
 
 // TestServiceImport_RowErrorsCountFromTheHeaderRow (dry run): a row error's
-// Row/Rows count from headerRow, not always row 1. RED against the stub --
-// both headerRow=3 and the headerRow=1 control compute the SAME numbers
-// until sheetRow stops ignoring headerRow.
+// Row/Rows count from headerRow, not always row 1.
 func TestServiceImport_RowErrorsCountFromTheHeaderRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

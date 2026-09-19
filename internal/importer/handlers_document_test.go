@@ -319,7 +319,7 @@ func TestCreateDocumentHandler_CorsAllowMethodsAlreadyContainsPOST(t *testing.T)
 func TestImportRoutes_DocumentAndSpreadsheetDoNotCollide(t *testing.T) {
 	docSpy := &docImpSpy{res: BatchResult{ID: "d1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}}
 	var sheetCalls int
-	sheetImp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	sheetImp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		sheetCalls++
 		return BatchResult{ID: "s1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
 	}

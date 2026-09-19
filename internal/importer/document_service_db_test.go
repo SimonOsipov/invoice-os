@@ -1401,3 +1401,30 @@ func TestRLS_ADocumentImportHoldsEveryDraftWhateverTheReason(t *testing.T) {
 		})
 	}
 }
+
+// TestRLS_ImportDocumentBatchHasNoHeaderRow (AC-6): a document import's batch
+// carries no header row (it is not a spreadsheet import). RED: the column
+// does not exist yet.
+func TestRLS_ImportDocumentBatchHasNoHeaderRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AIR-06-02 doc-header-row tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-02 doc-header-row entity")
+	documentID := seedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, docCleanValues("AIR06-02-DOC"))
+
+	svc := newTestService(app)
+	res, err := svc.ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+
+	var headerRow *int
+	if err := super.QueryRow(ctx, `SELECT header_row FROM import_batches WHERE id = $1`, res.ID).Scan(&headerRow); err != nil {
+		t.Fatalf("read import_batches.header_row: %v", err)
+	}
+	if headerRow != nil {
+		t.Errorf("header_row = %d, want NULL for a document import", *headerRow)
+	}
+}

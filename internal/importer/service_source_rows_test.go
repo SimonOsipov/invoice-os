@@ -61,7 +61,7 @@ func buildCreateInputFixture(t *testing.T) map[string]int {
 }
 
 // TestBuildCreateInput_SetsSourceRowsFromGroup (AC-2): a group at
-// rowIdxs=[0,1,2] maps to sheet rows [2,3,4] (sheetRow(i) = i+2).
+// rowIdxs=[0,1,2] maps to sheet rows [2,3,4] (sheetRow(1, i) = i+2).
 func TestBuildCreateInput_SetsSourceRowsFromGroup(t *testing.T) {
 	colIndex := buildCreateInputFixture(t)
 	rows := [][]string{
@@ -71,7 +71,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroup(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil)
 
 	want := []int{2, 3, 4}
 	if len(in.SourceRows) != len(want) {
@@ -97,7 +97,7 @@ func TestBuildCreateInput_NoDocumentLeavesSourceRowsNil(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", 1, "Acme", nil)
 
 	if in.SourceRows != nil {
 		t.Errorf("SourceRows = %#v, want nil (not merely empty) when documentID is \"\"", in.SourceRows)
@@ -118,7 +118,7 @@ func TestBuildCreateInput_NonContiguousGroupKeepsEveryRow(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 2, 5}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil)
 
 	want := []int{2, 4, 7}
 	if len(in.SourceRows) != len(want) {
@@ -150,7 +150,7 @@ func TestServiceImport_PersistsSourceRowsPerInvoice(t *testing.T) {
 		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B2", "1", "100.00"), // sheet 5
 	}
 
-	res, err := svc.Import(c, entityID, "", documentID, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestServiceImport_DryRunWritesNoSourceRows(t *testing.T) {
 		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B1", "1", "100.00"),
 	}
 
-	res, err := svc.Import(c, entityID, "", documentID, stdMapping, stdHeader, rows, true)
+	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, true)
 	if err != nil {
 		t.Fatalf("Import (dry-run): %v", err)
 	}
@@ -242,7 +242,7 @@ func TestServiceImport_NoDocumentStillImports(t *testing.T) {
 		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget A", "1", "100.00"),
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -267,5 +267,168 @@ func TestServiceImport_NoDocumentStillImports(t *testing.T) {
 	}
 	if docID != nil {
 		t.Errorf("source_document_id = %q, want NULL", *docID)
+	}
+}
+
+// TestSheetRow_CountsFromTheRowAfterTheHeader: sheetRow/sheetRows count from
+// the row AFTER headerRow, not always row 2. RED against the stub: sheetRow
+// still returns i+2 regardless of headerRow.
+func TestSheetRow_CountsFromTheRowAfterTheHeader(t *testing.T) {
+	if got := sheetRow(1, 0); got != 2 {
+		t.Errorf("sheetRow(1, 0) = %d, want 2", got)
+	}
+	if got := sheetRow(1, 5); got != 7 {
+		t.Errorf("sheetRow(1, 5) = %d, want 7", got)
+	}
+	if got := sheetRow(3, 0); got != 4 {
+		t.Errorf("sheetRow(3, 0) = %d, want 4", got)
+	}
+	if got := sheetRow(3, 2); got != 6 {
+		t.Errorf("sheetRow(3, 2) = %d, want 6", got)
+	}
+
+	want := []int{4, 6}
+	if got := sheetRows(3, []int{2, 0}); !intSliceEqual(got, want) {
+		t.Errorf("sheetRows(3, [2 0]) = %v, want %v (sorted)", got, want)
+	}
+	if got := sheetRows(3, nil); len(got) != 0 {
+		t.Errorf("sheetRows(3, nil) = %v, want length 0", got)
+	}
+}
+
+// TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle is
+// TestBuildCreateInput_SetsSourceRowsFromGroup's twin with a title row above
+// the header: the same group now counts from row 3, not row 1. RED against
+// the stub, same reason as the test above.
+func TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle(t *testing.T) {
+	colIndex := buildCreateInputFixture(t)
+	rows := [][]string{
+		mkRow("INV-1", "", "", "", "", "", "", "", "Item A", "1", "1.00"),
+		mkRow("INV-1", "", "", "", "", "", "", "", "Item B", "1", "1.00"),
+		mkRow("INV-1", "", "", "", "", "", "", "", "Item C", "1", "1.00"),
+	}
+	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
+
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 3, "Acme", nil)
+
+	want := []int{4, 5, 6}
+	if len(in.SourceRows) != len(want) {
+		t.Fatalf("SourceRows length = %d, want %d (got %v)", len(in.SourceRows), len(want), in.SourceRows)
+	}
+	if !intSliceEqual(in.SourceRows, want) {
+		t.Errorf("SourceRows = %v, want %v", in.SourceRows, want)
+	}
+	if in.SourceDocumentID == nil || *in.SourceDocumentID != "doc-1" {
+		t.Errorf("SourceDocumentID = %v, want \"doc-1\"", in.SourceDocumentID)
+	}
+}
+
+// TestServiceImport_PersistsSourceRowsBelowATitle is
+// TestServiceImport_PersistsSourceRowsPerInvoice's DB twin with headerRow 3:
+// each invoice's own sheet rows count from row 4, and the batch itself
+// records the header row it was read from. RED both on the source_rows
+// values (sheetRow stub) and on the header_row read (no such column yet).
+func TestServiceImport_PersistsSourceRowsBelowATitle(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AIR-06-02 below-title tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-02 below-title entity")
+	documentID := seedDocument(t, super, tenantID)
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget A", "1", "100.00"),  // file row 4
+		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B1", "1", "100.00"), // file row 5
+		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget B", "1", "100.00"),  // file row 6
+		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B2", "1", "100.00"), // file row 7
+	}
+
+	res, err := svc.Import(c, entityID, "", documentID, 3, stdMapping, stdHeader, rows, false)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.ReadyInvoices != 2 {
+		t.Fatalf("ReadyInvoices = %d, want 2", res.ReadyInvoices)
+	}
+
+	invA := invoiceIDByNumber(t, super, entityID, "INV-A")
+	invB := invoiceIDByNumber(t, super, entityID, "INV-B")
+
+	wantA, wantB := []int{4, 6}, []int{5, 7}
+	if got := sourceRowsOf(t, super, invA); !intSliceEqual(got, wantA) {
+		t.Errorf("INV-A source_rows = %v, want %v", got, wantA)
+	}
+	if got := sourceRowsOf(t, super, invB); !intSliceEqual(got, wantB) {
+		t.Errorf("INV-B source_rows = %v, want %v", got, wantB)
+	}
+
+	var headerRow int
+	if err := super.QueryRow(ctx, `SELECT header_row FROM import_batches WHERE id = $1`, res.ID).Scan(&headerRow); err != nil {
+		t.Fatalf("read import_batches.header_row: %v", err)
+	}
+	if headerRow != 3 {
+		t.Errorf("import_batches.header_row = %d, want 3", headerRow)
+	}
+}
+
+// TestServiceImport_RowErrorsCountFromTheHeaderRow (dry run): a row error's
+// Row/Rows count from headerRow, not always row 1. RED against the stub --
+// both headerRow=3 and the headerRow=1 control compute the SAME numbers
+// until sheetRow stops ignoring headerRow.
+func TestServiceImport_RowErrorsCountFromTheHeaderRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AIR-06-02 row-errors tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-02 row-errors entity")
+
+	svc := newTestService(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("INV-X", "2026-01-10", "", "", "", "", "", "", "", "", ""),
+		mkRow("", "2026-01-10", "", "", "", "", "", "", "", "", ""),
+		mkRow("INV-X", "2026-01-11", "", "", "", "", "", "", "", "", ""),
+	}
+
+	res, err := svc.Import(c, entityID, "", "", 3, stdMapping, stdHeader, rows, true)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.RowsTotal != 3 || res.RowsInvalid != 3 {
+		t.Fatalf("RowsTotal/RowsInvalid = %d/%d, want 3/3", res.RowsTotal, res.RowsInvalid)
+	}
+	want := []RowError{
+		{Rows: []int{4, 6}, Field: "issue_date", Message: "rows disagree on issue_date"},
+		{Row: 5, Message: "blank invoice number: row cannot be grouped"},
+	}
+	if len(res.Errors) != len(want) {
+		t.Fatalf("Errors = %+v, want %+v", res.Errors, want)
+	}
+	for i, w := range want {
+		if got := res.Errors[i]; got.Row != w.Row || !intSliceEqual(got.Rows, w.Rows) || got.Field != w.Field || got.Message != w.Message {
+			t.Errorf("Errors[%d] = %+v, want %+v", i, got, w)
+		}
+	}
+
+	// Control: the identical rows read from row 1 (no title above the header).
+	controlRes, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, true)
+	if err != nil {
+		t.Fatalf("Import (control): %v", err)
+	}
+	wantControl := []RowError{
+		{Rows: []int{2, 4}, Field: "issue_date", Message: "rows disagree on issue_date"},
+		{Row: 3, Message: "blank invoice number: row cannot be grouped"},
+	}
+	if len(controlRes.Errors) != len(wantControl) {
+		t.Fatalf("control Errors = %+v, want %+v", controlRes.Errors, wantControl)
+	}
+	for i, w := range wantControl {
+		if got := controlRes.Errors[i]; got.Row != w.Row || !intSliceEqual(got.Rows, w.Rows) || got.Field != w.Field || got.Message != w.Message {
+			t.Errorf("control Errors[%d] = %+v, want %+v", i, got, w)
+		}
 	}
 }

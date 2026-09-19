@@ -56,7 +56,7 @@ func TestBackfill_SymmetricTrimDoesNotMisattributeWhitespaceVariants(t *testing.
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 	invPlain := invoiceIDByNumber(t, super, entityID, plain)
@@ -215,10 +215,10 @@ func TestBackfill_DuplicateWithAnAlreadyPopulatedSiblingIsAmbiguous(t *testing.T
 	svc := newTestService(app)
 	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(cA, entityA, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(cA, entityA, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
-	if _, err := svc.Import(cB, entityB, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(cB, entityB, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity B: %v", err)
 	}
 	invA := invoiceIDByNumber(t, super, entityA, "DUP-POP-1")
@@ -256,7 +256,7 @@ func TestBackfill_SingleInvoiceSingleRowDocument(t *testing.T) {
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 	inv := invoiceIDByNumber(t, super, entityID, "SOLO-1")
@@ -341,7 +341,7 @@ func TestBackfill_XLSXGapRowDoesNotShiftRecoveredRowNumbers(t *testing.T) {
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, decodedRows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, decodedRows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 
@@ -511,7 +511,7 @@ func TestBackfill_RowNumberingMatchesImporterAcrossBlankLinesAndQuotedNewlines(t
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, decodedRows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, decodedRows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 

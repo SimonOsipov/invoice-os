@@ -27,7 +27,7 @@ import (
 func TestImport_DryRunRequiresDocumentID(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("q.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run for a dry run with no document_id")
 		return BatchResult{}, nil
 	}
@@ -123,7 +123,7 @@ func TestImport_UnknownPartsIgnoredNotRejected(t *testing.T) {
 	open := newFakeDocOpen("q.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
 
 	var ran bool
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		ran = true
 		return BatchResult{ID: uuid.NewString(), Status: "completed", RowsTotal: len(r), RowsValid: len(r)}, nil
 	}

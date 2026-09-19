@@ -188,7 +188,7 @@ func TestStoreCreateBatchFinalize_RoundTripsCountsStatusAndErrors(t *testing.T) 
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID, "", "")
+	id, err := store.CreateBatch(c, entityID, "", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestStoreFinalize_EmptyErrorsMarshalsToEmptyArrayNotNull(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	id, err := store.CreateBatch(c, entityID, "", "")
+	id, err := store.CreateBatch(c, entityID, "", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestStoreCreateBatch_PersistsEntityIDAndFilenameTogetherNotTransposed(t *te
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "branch-lagos.csv"
-	id, err := store.CreateBatch(c, entityID, wantFilename, "")
+	id, err := store.CreateBatch(c, entityID, wantFilename, "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 	// against a vacuous pass below (if CreateBatch never wrote ANY filename,
 	// the NUL-specific leg would trivially "pass" against a NULL that was
 	// never meant to prove anything).
-	controlID, err := store.CreateBatch(c, entityID, "plain.csv", "")
+	controlID, err := store.CreateBatch(c, entityID, "plain.csv", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (control): %v", err)
 	}
@@ -474,7 +474,7 @@ func TestStoreCreateBatch_NULCharacterInFilenameStrippedAndPersisted(t *testing.
 		t.Fatalf("document.SanitizeFilename(%q) = %q, want %q", rawWithNUL, sanitized, wantStripped)
 	}
 
-	id, err := store.CreateBatch(c, entityID, sanitized, "")
+	id, err := store.CreateBatch(c, entityID, sanitized, "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (NUL-stripped filename): %v, want no error (a raw NUL would 22021 -- the store must never see one)", err)
 	}
@@ -513,7 +513,7 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 	// NULL -- guards against a vacuous pass on the unusable leg below (a
 	// CreateBatch that writes NULL unconditionally would otherwise "pass"
 	// the unusable-name check for the wrong reason).
-	normalID, err := store.CreateBatch(c, entityID, "good.csv", "")
+	normalID, err := store.CreateBatch(c, entityID, "good.csv", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (positive control): %v", err)
 	}
@@ -530,7 +530,7 @@ func TestStoreCreateBatch_UnusableFilenamePersistsAsNullNeverEmptyString(t *test
 		t.Fatalf(`document.SanitizeFilename("   ") = %q, want "" (whitespace-only is unusable)`, sanitized)
 	}
 
-	unusableID, err := store.CreateBatch(c, entityID, sanitized, "")
+	unusableID, err := store.CreateBatch(c, entityID, sanitized, "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (unusable filename): %v", err)
 	}
@@ -563,7 +563,7 @@ func TestServiceImport_ZeroRowEarlyFinalizePathPersistsFilename(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "header-only.csv"
-	res, err := svc.Import(c, entityID, wantFilename, "", stdMapping, stdHeader, nil, false)
+	res, err := svc.Import(c, entityID, wantFilename, "", 1, stdMapping, stdHeader, nil, false)
 	if err != nil {
 		t.Fatalf("Import (zero data rows): %v", err)
 	}
@@ -607,7 +607,7 @@ func TestStoreGetBatch_FilenamePopulatesBatchStructDirectly(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "direct-field-check.csv"
-	batchID, err := store.CreateBatch(c, entityID, wantFilename, "")
+	batchID, err := store.CreateBatch(c, entityID, wantFilename, "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}
@@ -659,7 +659,7 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", stdMapping, stdHeader, nil, true)
+	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", 1, stdMapping, stdHeader, nil, true)
 	if err != nil {
 		t.Fatalf("Import (dry-run, zero data rows): %v", err)
 	}
@@ -676,5 +676,43 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 	}
 	if batchCount != 0 {
 		t.Errorf("import_batches rows for entity = %d, want 0 (dry run + header-only file must persist nothing, no filename included)", batchCount)
+	}
+}
+
+// TestStore_CreateBatchRecordsTheHeaderRow: a positive headerRow persists on
+// the row; 0 (a document import) persists as NULL. RED: CreateBatch does not
+// write header_row yet, and the column does not exist.
+func TestStore_CreateBatchRecordsTheHeaderRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AIR-06-02 header-row tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-02 header-row entity")
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	spreadsheetID, err := store.CreateBatch(c, entityID, "f.csv", "", 3)
+	if err != nil {
+		t.Fatalf("CreateBatch: %v", err)
+	}
+	var gotHeaderRow int
+	if err := super.QueryRow(ctx, `SELECT header_row FROM import_batches WHERE id = $1`, spreadsheetID).Scan(&gotHeaderRow); err != nil {
+		t.Fatalf("read header_row: %v", err)
+	}
+	if gotHeaderRow != 3 {
+		t.Errorf("header_row = %d, want 3", gotHeaderRow)
+	}
+
+	documentID, err := store.CreateBatch(c, entityID, "f.csv", "", 0)
+	if err != nil {
+		t.Fatalf("CreateBatch (headerRow 0): %v", err)
+	}
+	var gotNull *int
+	if err := super.QueryRow(ctx, `SELECT header_row FROM import_batches WHERE id = $1`, documentID).Scan(&gotNull); err != nil {
+		t.Fatalf("read header_row (want NULL): %v", err)
+	}
+	if gotNull != nil {
+		t.Errorf("header_row = %d, want NULL for headerRow 0", *gotNull)
 	}
 }

@@ -5,6 +5,7 @@ package endtoend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -225,5 +226,39 @@ func TestRLS_EndToEndAFailedImageValueNeverReachesTheInvoice(t *testing.T) {
 	}
 	if buyerTIN != nil {
 		t.Errorf("invoices.buyer_tin = %q, want NULL -- a value the format-only reading failed must not reach the invoice", *buyerTIN)
+	}
+}
+
+// FC4/D2: every value failing the format check is a read with no number, not a poor scan.
+func TestRLS_EndToEndAnImageReadWithEveryValueFailedQuarantinesAsNoNumber(t *testing.T) {
+	ctx := t.Context()
+	eeRequireFixtures(t, []string{eeScannedFixture})
+	w := eeSeed(t, ctx, eeScannedFixture)
+	stub := &eeAI{enabled: true, answer: map[string]any{"invoice_number": "20417", "buyer_tin": "9999999-1202"}}
+	eeExtract(t, ctx, w, eeScannedFixture, eeWithPageBucket(), eeWithAI(stub))
+	res := eeImport(t, ctx, w)
+
+	if len(res.Errors) != 1 || res.Errors[0].Field != "invoice_number" || res.Errors[0].Message != eeNoInvoiceNumberMessage {
+		t.Fatalf("Errors = %+v, want exactly [{invoice_number, %q}]", res.Errors, eeNoInvoiceNumberMessage)
+	}
+	if got := eeInvoices(t, ctx, w.entityID); len(got) != 0 {
+		t.Errorf("entity %s holds %d invoice(s), want 0", w.entityID, len(got))
+	}
+}
+
+// A refused image call (non-retryable HTTP status) goes to manual entry like an unavailable one.
+func TestRLS_EndToEndARefusedImageReadGoesToManualEntry(t *testing.T) {
+	ctx := t.Context()
+	eeRequireFixtures(t, []string{eeScannedFixture})
+	w := eeSeed(t, ctx, eeScannedFixture)
+	stub := &eeAI{enabled: true, err: errors.New("ai: refused: HTTP 402")}
+	eeExtract(t, ctx, w, eeScannedFixture, eeWithPageBucket(), eeWithAI(stub))
+	res := eeImport(t, ctx, w)
+
+	if len(res.Errors) != 1 || res.Errors[0].Field != "invoice_number" || res.Errors[0].Message != eeAIUnavailableMessage {
+		t.Fatalf("Errors = %+v, want exactly [{invoice_number, %q}]", res.Errors, eeAIUnavailableMessage)
+	}
+	if reading := eeCarriedReading(t, ctx, w); reading != nil {
+		t.Errorf("CarriedReading = %+v, want nil", reading)
 	}
 }

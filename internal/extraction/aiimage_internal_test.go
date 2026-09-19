@@ -1,6 +1,6 @@
-// aiimage_internal_test.go: RED acceptance specs for AIR-05-02 (T02-T12) -- the image request,
-// the page choice and the format-only reading. Reuses recordingAI/tok/onePage from
-// aireading_internal_test.go and Reconcile(Input{}) as T11's oracle.
+// aiimage_internal_test.go: AIR-05-02 acceptance specs (T02-T12) and adversarial coverage -- the
+// image request, the page choice and the format-only reading. Reuses recordingAI/tok/onePage
+// from aireading_internal_test.go and Reconcile(Input{}) as the row-set oracle.
 package extraction
 
 import (
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -395,5 +396,339 @@ func TestAIUnavailableResults_IsTheAIR04Marker(t *testing.T) {
 	}
 	if len(row.Alternatives) != 0 {
 		t.Errorf("Alternatives = %v, want empty", row.Alternatives)
+	}
+}
+
+// Adversarial and edge coverage (QA).
+
+func aiImgRowNamed(t *testing.T, rows []FieldResult, name string) FieldResult {
+	t.Helper()
+	for _, r := range rows {
+		if r.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("no row named %q", name)
+	return FieldResult{}
+}
+
+func TestImageReadingAdv_UnansweredRowsAreReconcilesRowsUnchanged(t *testing.T) {
+	base := Reconcile(Input{})
+	if len(base) != len(HeaderFields)+1 {
+		t.Fatalf("Reconcile(Input{}) = %d rows, want %d", len(base), len(HeaderFields)+1)
+	}
+	answer := map[string]string{"invoice_number": "INV-5520", "buyer_tin": "123", "nonsense_key": "x"}
+	got := imageReading(answer)
+	if len(got) != len(base) {
+		t.Fatalf("imageReading = %d rows, want %d", len(got), len(base))
+	}
+	compared := 0
+	for i := range base {
+		if _, answered := answer[base[i].Name]; answered {
+			continue
+		}
+		compared++
+		if !reflect.DeepEqual(got[i], base[i]) {
+			t.Errorf("row %d (%s) = %+v, want Reconcile's %+v", i, base[i].Name, got[i], base[i])
+		}
+	}
+	if compared != len(base)-2 {
+		t.Errorf("compared %d rows, want %d", compared, len(base)-2)
+	}
+}
+
+// Alternatives marshal as [], never null (reconcile.go FieldResult), on every row built here.
+func TestImageReadingAdv_AlternativesAreNeverNil(t *testing.T) {
+	rows := imageReading(map[string]string{"total": "1935.00", "buyer_tin": "123"})
+	rows = append(rows, aiUnavailableResults()...)
+	if len(rows) != len(HeaderFields)+2 {
+		t.Fatalf("rows = %d, want %d", len(rows), len(HeaderFields)+2)
+	}
+	for _, r := range rows {
+		if r.Alternatives == nil {
+			t.Errorf("%s: Alternatives is nil, want non-nil", r.Name)
+		}
+		b, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", r.Name, err)
+		}
+		if bytes.Contains(b, []byte(`"alternatives":null`)) {
+			t.Errorf("%s: marshals alternatives as null: %s", r.Name, b)
+		}
+	}
+}
+
+// Q12: no new reason, row name or wire key.
+func TestImageReadingAdv_AddsNoReasonNameOrKey(t *testing.T) {
+	answer := map[string]string{
+		"invoice_number": "INV-5520", "issue_date": "03/04/2026", "supplier_tin": "12345678-0001",
+		"supplier_name": "Acme Ltd", "buyer_tin": "9999999-1202", "buyer_name": "Zenith",
+		"currency": "NGN", "subtotal": "abc", "vat": "0", "total": "1,935.00",
+	}
+	base := Reconcile(Input{})
+	baseKeys := aiImgJSONKeys(t, base[0])
+	if len(baseKeys) == 0 {
+		t.Fatal("Reconcile's row marshals no keys")
+	}
+	got := imageReading(answer)
+	if len(got) != len(base) {
+		t.Fatalf("imageReading = %d rows, want %d", len(got), len(base))
+	}
+	allowed := map[Reason]bool{ReasonNone: true, ReasonMissing: true, ReasonUnreadable: true}
+	decided, doubtful := 0, 0
+	for i, r := range got {
+		if r.Name != base[i].Name {
+			t.Errorf("row %d name = %q, want %q", i, r.Name, base[i].Name)
+		}
+		if !allowed[r.Reason] {
+			t.Errorf("%s: reason %q outside {none, missing, unreadable}", r.Name, r.Reason)
+		}
+		if k := aiImgJSONKeys(t, r); !reflect.DeepEqual(k, baseKeys) {
+			t.Errorf("%s: wire keys %v, want %v", r.Name, k, baseKeys)
+		}
+		switch r.Reason {
+		case ReasonNone:
+			decided++
+		case ReasonUnreadable:
+			doubtful++
+		}
+	}
+	// issue_date ambiguous, buyer_tin short, subtotal "abc" are the three doubtful.
+	if decided != 7 || doubtful != 3 {
+		t.Errorf("decided = %d, doubtful = %d; want 7 and 3", decided, doubtful)
+	}
+}
+
+func aiImgJSONKeys(t *testing.T, r FieldResult) []string {
+	t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func TestImageReadingAdv_TrimsTabsAndNewlinesFromTheOfferedText(t *testing.T) {
+	row := aiImgRowNamed(t, imageReading(map[string]string{"invoice_number": "\t20417\n"}), "invoice_number")
+	if row.Reason != ReasonUnreadable || len(row.Alternatives) != 1 {
+		t.Fatalf("row = %+v, want unreadable with one alternative", row)
+	}
+	if v := row.Alternatives[0].Value; v == nil || *v != "20417" {
+		t.Errorf("Alternatives[0].Value = %v, want %q", v, "20417")
+	}
+}
+
+// Rows hold copies: rewriting the answer map afterwards changes no row.
+func TestImageReadingAdv_RowsDoNotAliasTheAnswer(t *testing.T) {
+	answer := map[string]string{"total": "1935.00", "buyer_tin": "123"}
+	got := imageReading(answer)
+	answer["total"], answer["buyer_tin"] = "0", "0"
+	if v := aiImgRowNamed(t, got, "total").Value; v == nil || *v != "1935.00" {
+		t.Errorf("total = %v, want 1935.00", v)
+	}
+	alts := aiImgRowNamed(t, got, "buyer_tin").Alternatives
+	if len(alts) != 1 || *alts[0].Value != "123" {
+		t.Errorf("buyer_tin alternatives = %+v, want [123]", alts)
+	}
+}
+
+func TestImageReadingAdv_NilAnswerIsReconcilesRows(t *testing.T) {
+	base := Reconcile(Input{})
+	got := imageReading(nil)
+	if len(got) == 0 || !reflect.DeepEqual(got, base) {
+		t.Errorf("imageReading(nil) = %+v, want Reconcile(Input{}) %+v", got, base)
+	}
+}
+
+// The worker's path: askAIPages filters first, so a blank or non-header value reaches no row.
+func TestImageReadingAdv_ThroughAskAIPagesBlankAndNonHeaderChangeNothing(t *testing.T) {
+	stub := &recordingAI{enabled: true, answer: map[string]any{
+		"total": " \t ", "line_items": "x", "mystery_field": "y", "currency": "NGN",
+	}}
+	answer, failed := askAIPages(context.Background(), stub, [][]byte{{0x01}}, "H")
+	if failed || len(answer) != 1 {
+		t.Fatalf("askAIPages = %v, %v; want {currency}, false", answer, failed)
+	}
+	base := Reconcile(Input{})
+	got := imageReading(answer)
+	if len(got) != len(base) {
+		t.Fatalf("rows = %d, want %d", len(got), len(base))
+	}
+	for i := range base {
+		if base[i].Name == "currency" {
+			if got[i].Value == nil || *got[i].Value != "NGN" {
+				t.Errorf("currency = %v, want NGN", got[i].Value)
+			}
+			continue
+		}
+		if !reflect.DeepEqual(got[i], base[i]) {
+			t.Errorf("%s = %+v, want %+v", base[i].Name, got[i], base[i])
+		}
+	}
+}
+
+// askAIPages owns no page guard; readImagesAI (AIR-05-03) skips a document with no images.
+func TestAskAIPagesAdv_NoPagesStillAsksOnce(t *testing.T) {
+	stub := &recordingAI{enabled: true, answer: map[string]any{}}
+	askAIPages(context.Background(), stub, nil, "")
+	if len(stub.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(stub.calls))
+	}
+	if len(stub.calls[0].Pages) != 0 || stub.calls[0].Text != aiImageIntro {
+		t.Errorf("request = %+v, want 0 pages and aiImageIntro", stub.calls[0])
+	}
+}
+
+func TestAskAIPagesAdv_SendsEveryPageItIsGivenInOrder(t *testing.T) {
+	pngs := [][]byte{{3}, {1}, {2}}
+	stub := &recordingAI{enabled: true, answer: map[string]any{}}
+	askAIPages(context.Background(), stub, pngs, "H")
+	if len(stub.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(stub.calls))
+	}
+	if !reflect.DeepEqual(stub.calls[0].Pages, pngs) {
+		t.Errorf("Pages = %v, want %v", stub.calls[0].Pages, pngs)
+	}
+}
+
+// "First and last" is slice position. Ingest appends in render order (pagestore.go), which is
+// System Design's "first and last rendered page"; page numbers are not re-sorted.
+func TestAIImagePagesAdv_ChoosesBySlicePositionNotPageNumber(t *testing.T) {
+	p := func(n int) PageImage { return PageImage{Page: n, StorageKey: fmt.Sprintf("p%d", n)} }
+	got := aiImagePages([]PageImage{p(3), p(1), p(2)})
+	if len(got) != 2 || got[0].Page != 3 || got[1].Page != 2 {
+		t.Errorf("aiImagePages([p3 p1 p2]) = %+v, want [p3 p2]", got)
+	}
+}
+
+func TestAIImagePagesAdv_ThreePagesDropTheMiddle(t *testing.T) {
+	p := func(n int) PageImage { return PageImage{Page: n, StorageKey: fmt.Sprintf("p%d", n)} }
+	got := aiImagePages([]PageImage{p(1), p(2), p(3)})
+	if len(got) != 2 || got[0].Page != 1 || got[1].Page != 3 {
+		t.Errorf("aiImagePages(3 pages) = %+v, want [p1 p3]", got)
+	}
+}
+
+func TestAIImagePagesAdv_ResultDoesNotAliasTheInput(t *testing.T) {
+	for _, n := range []int{1, 2, 4} {
+		in := make([]PageImage, n)
+		for i := range in {
+			in[i] = PageImage{Page: i + 1, StorageKey: fmt.Sprintf("p%d", i+1)}
+		}
+		want := slices.Clone(in)
+		got := aiImagePages(in)
+		if len(got) == 0 {
+			t.Fatalf("%d pages: empty result", n)
+		}
+		for i := range got {
+			got[i].StorageKey = "overwritten"
+		}
+		if !reflect.DeepEqual(in, want) {
+			t.Errorf("%d pages: writing the result changed the input to %+v", n, in)
+		}
+	}
+}
+
+func TestAIImagePagesAdv_EmptyNonNilIsNothing(t *testing.T) {
+	if got := aiImagePages([]PageImage{}); len(got) != 0 {
+		t.Errorf("aiImagePages([]) = %+v, want empty", got)
+	}
+}
+
+// aiImgFailBody fails its Read and records Close.
+type aiImgFailBody struct{ closed *bool }
+
+func (b aiImgFailBody) Read([]byte) (int, error) { return 0, errors.New("aiimage test: read failed") }
+func (b aiImgFailBody) Close() error             { *b.closed = true; return nil }
+
+// aiImgCloseErrBody reads fine and fails its Close.
+type aiImgCloseErrBody struct{ *bytes.Reader }
+
+func (aiImgCloseErrBody) Close() error { return errors.New("aiimage test: close failed") }
+
+func TestReadPagePNGsAdv_AFailedReadStillClosesTheBody(t *testing.T) {
+	closed := false
+	read := func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+		return aiImgFailBody{closed: &closed}, 1, nil
+	}
+	got, err := readPagePNGs(context.Background(), read, []PageImage{{Page: 1, StorageKey: "k1"}})
+	if err == nil || got != nil {
+		t.Fatalf("readPagePNGs = %v, %v; want nil, an error", got, err)
+	}
+	if !closed {
+		t.Error("the body whose read failed was not closed")
+	}
+}
+
+func TestReadPagePNGsAdv_AFailedCloseIsAnError(t *testing.T) {
+	read := func(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+		return aiImgCloseErrBody{bytes.NewReader([]byte{0xAA})}, 1, nil
+	}
+	got, err := readPagePNGs(context.Background(), read, []PageImage{{Page: 1, StorageKey: "k1"}})
+	if err == nil || got != nil {
+		t.Errorf("readPagePNGs = %v, %v; want nil, the close error", got, err)
+	}
+}
+
+func TestReadPagePNGsAdv_StopsAtTheFirstFailure(t *testing.T) {
+	store := &aiImgStore{bodies: map[string][]byte{"k1": {1}, "k2": {2}, "k3": {3}}, failOn: "k2"}
+	pages := []PageImage{{Page: 1, StorageKey: "k1"}, {Page: 2, StorageKey: "k2"}, {Page: 3, StorageKey: "k3"}}
+	if _, err := readPagePNGs(context.Background(), store.get, pages); err == nil {
+		t.Fatal("readPagePNGs = nil error, want the k2 error")
+	}
+	if want := []string{"k1", "k2"}; !reflect.DeepEqual(store.keys, want) {
+		t.Errorf("keys asked = %v, want %v", store.keys, want)
+	}
+	if !store.allClosed() {
+		t.Error("a body opened before the failure was not closed")
+	}
+}
+
+// readPagePNGs has no ctx check of its own; the reader owns cancellation.
+func TestReadPagePNGsAdv_PassesTheContextToTheReader(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var seen []error
+	read := func(c context.Context, key string) (io.ReadCloser, int64, error) {
+		seen = append(seen, c.Err())
+		if c.Err() != nil {
+			return nil, 0, c.Err()
+		}
+		return io.NopCloser(bytes.NewReader(nil)), 0, nil
+	}
+	_, err := readPagePNGs(ctx, read, []PageImage{{Page: 1, StorageKey: "k1"}, {Page: 2, StorageKey: "k2"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if len(seen) != 1 || !errors.Is(seen[0], context.Canceled) {
+		t.Errorf("reader saw %v, want one call with a canceled ctx", seen)
+	}
+}
+
+func TestReadPagePNGsAdv_NoPagesReadsNothing(t *testing.T) {
+	got, err := readPagePNGs(context.Background(), nil, nil)
+	if err != nil || len(got) != 0 {
+		t.Errorf("readPagePNGs(nil read, no pages) = %v, %v; want empty, nil", got, err)
+	}
+}
+
+// An empty object is one empty page, not a dropped one: positions stay aligned.
+func TestReadPagePNGsAdv_AnEmptyObjectKeepsItsPosition(t *testing.T) {
+	store := &aiImgStore{bodies: map[string][]byte{"k1": {}, "k2": {0xBB}}}
+	got, err := readPagePNGs(context.Background(), store.get, []PageImage{{Page: 1, StorageKey: "k1"}, {Page: 2, StorageKey: "k2"}})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 2 || len(got[0]) != 0 || !bytes.Equal(got[1], []byte{0xBB}) {
+		t.Errorf("readPagePNGs = %v, want [[] [BB]]", got)
 	}
 }

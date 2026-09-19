@@ -87,8 +87,7 @@ func pgCode(err error) string {
 // invalid documentID hits the 22P02 path above; a blank one is nullified
 // before the cast, so a caller with no source document stays writable.
 //
-// headerRow is accepted but not yet written: the INSERT below still has no
-// header_row column.
+// headerRow 0 persists as NULL: a document import has no header row.
 func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID string, headerRow int) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -96,10 +95,10 @@ func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID 
 
 		if err := tx.QueryRow(ctx,
 			`INSERT INTO import_batches
-			   (tenant_id, entity_id, filename, document_id, status, rows_total, rows_valid, rows_invalid, errors)
-			 VALUES ($1, $2, nullif($3, ''), nullif($4, '')::uuid, 'processing', 0, 0, 0, '[]'::jsonb)
+			   (tenant_id, entity_id, filename, document_id, header_row, status, rows_total, rows_valid, rows_invalid, errors)
+			 VALUES ($1, $2, nullif($3, ''), nullif($4, '')::uuid, nullif($5, 0), 'processing', 0, 0, 0, '[]'::jsonb)
 			 RETURNING id`,
-			identity.TenantID, entityID, filename, documentID,
+			identity.TenantID, entityID, filename, documentID, headerRow,
 		).Scan(&id); err != nil {
 			switch pgCode(err) {
 			case "23503", "22P02":

@@ -266,10 +266,8 @@ func issueDateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int
 }
 
 // sheetRow converts a 0-based rows[] index into its 1-based file row.
-// headerRow is plumbed but not yet used: this still returns i+2 (a
-// later change makes it headerRow+1+i).
 func sheetRow(headerRow, i int) int {
-	return i + 2
+	return headerRow + 1 + i
 }
 
 // sheetRows converts rowIdxs (0-based) into sorted 1-based sheet rows, for a
@@ -604,8 +602,8 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 // path, which writes nothing to point at anything. "" is legal and persists as
 // NULL: a caller with no source document is still a caller.
 //
-// headerRow is plumbed through every numbering site and into CreateBatch, but
-// is not yet effective: sheetRow is still a stub.
+// headerRow is the file row the header was read from; every row number counts
+// from it.
 func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {

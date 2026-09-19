@@ -22,8 +22,7 @@ const eeNoInvoiceNumberMessage = "This document was read, but no invoice number 
 // eeAIUnavailableMessage is internal/importer's aiUnavailableMessage, reproduced (unexported there).
 const eeAIUnavailableMessage = "AI reading was unavailable when this document was imported, so no invoice fields were taken from it. Enter this invoice manually to carry on."
 
-// eePoorScanMessage is internal/importer's poorScanMessage (document.go:147), reproduced
-// (unexported there).
+// eePoorScanMessage is importer.poorScanMessage, reproduced (unexported there).
 const eePoorScanMessage = "The scan of this document was too poor to read, so no invoice fields could be taken from it. Ask the supplier whether they can send the original PDF, or enter this invoice manually to carry on."
 
 // eeAI is a fixed-answer AIReader stub: no network, always the same answer or the same error.

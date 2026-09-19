@@ -162,6 +162,10 @@ func detectFormat(filename, contentType string) string {
 	return ""
 }
 
+// parseHeaderRow is a stub for the RED test suite; handlers do not call it
+// yet.
+func parseHeaderRow(raw string) (int, error) { return 1, nil }
+
 // CreateHandler returns POST /v1/imports (mirrors internal/invoice's
 // CreateHandler factory: a closure over the injected Service.Import method ->
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via

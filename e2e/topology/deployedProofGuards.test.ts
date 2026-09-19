@@ -464,8 +464,8 @@ describe('[air-04] the deployed literals track their owners', () => {
   })
 })
 
-// AIR-05-04. NO_REGION_PILL and NO_REGION_NOTE each pin a different owner (no shared module
-// e2e/ can import), so each gets its own read-back, the EXTR-15-12 pattern above.
+// NO_REGION_PILL and NO_REGION_NOTE each pin a different owner (no shared module e2e/ can
+// import), so each gets its own read-back, the pattern above uses.
 describe('[air-05] the deployed literals track their owners', () => {
   const extractionFieldsSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionFields.tsx'), 'utf8')
   const extractionCanvasSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionCanvas.tsx'), 'utf8')

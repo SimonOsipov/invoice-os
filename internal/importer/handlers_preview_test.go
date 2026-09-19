@@ -466,7 +466,7 @@ func TestPreviewHandler_MalformedCSV400(t *testing.T) {
 // two do not share a code path inside encoding/csv's field scanner (verified
 // via errors.Is against both sentinels: the unterminated-quote body is
 // ErrQuote/not ErrBareQuote, this body is ErrBareQuote/not ErrQuote).
-// decodeCSV's reader (decode.go:96-98) sets FieldsPerRecord = -1 but never
+// decodeCSV's reader sets FieldsPerRecord = -1 but never
 // sets LazyQuotes, so it keeps the encoding/csv default (false) -- confirmed
 // this body still errors under that exact config, not a hypothetical
 // LazyQuotes=true reader that would swallow it. Body is pure ASCII (only

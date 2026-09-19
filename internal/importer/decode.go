@@ -33,7 +33,7 @@ var ErrHeaderRowPastEnd = errors.New("importer: header row is past the last row 
 
 // DecodeFrom is Decode with the column names on 1-based physical row
 // headerRow. Pure and DB-free; no header/column normalization happens here.
-// Row 1 runs today's reading unchanged; handlers validate headerRow >= 1.
+// Row 1 runs today's reading unchanged.
 func DecodeFrom(r io.Reader, format string, headerRow int) (header []string, rows [][]string, facts DecodeFacts, err error) {
 	if headerRow < 1 {
 		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: header row %d is below 1", headerRow)
@@ -178,7 +178,7 @@ func decodeCSVFrom(r io.Reader, headerRow int) ([]string, [][]string, DecodeFact
 // firstDisallowedControlByte scans decoded for a NUL byte or any other C0
 // control byte (< 0x20) not on the whitelist a real CSV legitimately
 // carries -- \t (0x09, a delimiter candidate), \n (0x0A) and \r (0x0D) (line
-// endings) -- returning the offset of the first one found. decodeCSV calls
+// endings) -- returning the offset of the first one found. decodeCSVText calls
 // this on the resolved decoded bytes, after the BOM/charset sniff and
 // before delimiter sniffing, to reject undecodable/corrupted input (raw
 // binary, a mis-sniffed encoding, BOM-less UTF-16) that would otherwise

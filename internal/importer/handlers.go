@@ -452,7 +452,7 @@ func PreviewHandler(
 		}
 
 		// Decode returns nil (not an empty slice) for both header and rows on
-		// an empty file (decode.go:102-104), and re-slicing a nil slice keeps
+		// an empty file, and re-slicing a nil slice keeps
 		// it nil -- encoding/json renders that as `null`. Columns/SampleRows
 		// are contracted to ALWAYS be arrays (PRV-08), so coerce explicitly
 		// rather than slicing.

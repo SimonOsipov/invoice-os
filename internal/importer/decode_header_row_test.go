@@ -1,6 +1,3 @@
-// RED: DecodeFrom is a stub returning ("not implemented"), so every case
-// below fails on that error or on the resulting value mismatch, not on a
-// compile error.
 package importer
 
 import (

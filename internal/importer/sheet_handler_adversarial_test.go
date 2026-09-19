@@ -106,7 +106,7 @@ func TestSheetHandler_SingleColumnCSV(t *testing.T) {
 }
 
 // TestSheetHandler_RaggedRowHasMoreCellsThanHeader: Decode's CSV reader sets
-// FieldsPerRecord = -1 (decode.go:98) precisely so a row like this is not an
+// FieldsPerRecord = -1 precisely so a row like this is not an
 // error; the story's "rows are verbatim" constraint requires every cell to
 // survive, not just the ones the header has names for.
 func TestSheetHandler_RaggedRowHasMoreCellsThanHeader(t *testing.T) {

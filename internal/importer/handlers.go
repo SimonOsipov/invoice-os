@@ -601,7 +601,7 @@ type sheetResponse struct {
 // 400) -> row cap -> 200.
 //
 // The returned window is ALWAYS the first rows_returned data rows in Decode
-// order, so rows[i] stays sheet row sheetRow(i) even when truncated.
+// order, so rows[i] keeps its sheet row even when truncated.
 // Numbering from physical lines would skew: encoding/csv drops blank lines and
 // a quoted cell can span several (TestSheetHandler_RowNumberingMatchesImporterSheetRow).
 func SheetHandler(

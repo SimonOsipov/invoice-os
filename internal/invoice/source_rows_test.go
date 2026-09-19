@@ -410,8 +410,8 @@ func TestRLS_InvoicesSourceRowsUnknownIDIndistinguishableFromCrossTenant(t *test
 
 // TestStoreCreate_SourceRowAtTwoAccepted (boundary): {1} is rejected
 // (TestStoreCreate_SourceRowBelowTwoRejected) -- {2} must be the genuine
-// floor, not merely ">= 2 in name only". Traced: sheetRow(i) = i+2
-// (internal/importer/service.go:270-272) and Decode returns header/rows
+// floor, not merely ">= 2 in name only". Traced: sheetRow(1, i) = i+2
+// (internal/importer/service.go) and Decode returns header/rows
 // separately (CSV records[0]/records[1:]), so rows[0]
 // (i=0) is the first DATA row and maps to sheet row 2 -- the floor can never
 // reject legitimate importer output.

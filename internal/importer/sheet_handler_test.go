@@ -154,7 +154,7 @@ func TestSheetHandler_MatchesDirectDecode(t *testing.T) {
 // TestSheetHandler_RowNumberingMatchesImporterSheetRow: encoding/csv drops
 // blank lines, so "B" (physical line 4) lands at data index 1 and "C"
 // (physical line 7) at data index 2 -- skewed against physical line numbers
-// in both cases. Asserted via sheetRow(i) itself, not a re-derived literal,
+// in both cases. Asserted via sheetRow(1, i) itself, not a re-derived literal,
 // so this tracks service.go's mapping if it ever changes.
 func TestSheetHandler_RowNumberingMatchesImporterSheetRow(t *testing.T) {
 	id := testIdentity()

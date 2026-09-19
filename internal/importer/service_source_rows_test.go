@@ -61,7 +61,7 @@ func buildCreateInputFixture(t *testing.T) map[string]int {
 }
 
 // TestBuildCreateInput_SetsSourceRowsFromGroup (AC-2): a group at
-// rowIdxs=[0,1,2] maps to sheet rows [2,3,4] (sheetRow(i) = i+2).
+// rowIdxs=[0,1,2] maps to sheet rows [2,3,4] (sheetRow(1, i) = i+2).
 func TestBuildCreateInput_SetsSourceRowsFromGroup(t *testing.T) {
 	colIndex := buildCreateInputFixture(t)
 	rows := [][]string{

@@ -125,7 +125,7 @@ func TestImportBatchesHeaderRow_DownLeavesEverythingElseAsBefore(t *testing.T) {
 
 // A batch written before the column existed reads NULL once the Up runs,
 // and the replayed Up's CHECK refuses 0.
-func TestImportBatchesHeaderRow_PreMigrationRowsReadNull(t *testing.T) {
+func TestRLS_ImportBatchesHeaderRow_PreMigrationRowsReadNull(t *testing.T) {
 	h := requireHarness(t)
 	ctx := t.Context()
 

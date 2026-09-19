@@ -170,10 +170,10 @@ The pixels are now served. `(*Reader).Detail` selects `page_number, width_px, he
 document and `(*Reader).PageImageKey` selects one row's `storage_key` by job id and page number,
 both inside a request-scoped transaction (`internal/extraction/reader.go`);
 `GET /v1/extractions/{id}/pages/{n}` streams the object that key names back as `image/png`
-(`internal/extraction/handlers.go`). `storage_key` therefore has two exits from this package.
+(`internal/extraction/handlers.go`). `storage_key` therefore has a second exit from this package.
 The route above is narrow: the key is selected off an RLS-visible row and handed straight to
 object storage, so no caller-supplied text reaches a bucket and a refused read touches none.
-The third exit is inside the same job: on a no-text document the worker reads back the first
+A third exit is inside the same job: on a no-text document the worker reads back the first
 and last page objects it wrote in that job and sends them to the AI. The keys come from the
 job's own render, never from a request.
 

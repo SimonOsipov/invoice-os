@@ -71,10 +71,10 @@ On an image read `FakeHint` is the document's raw bytes, so a trailing PDF comme
 
 ## Document reading
 
-`submission`'s extraction worker calls `Call` once per extraction job attempt that reaches
-the text read -- never per line item, and once for a PDF whose text read has
-`TextChars == 0` and rendered pages. That call sends the first and last page images and the
-intro only. A blank answer keeps the poor-scan verdict; a failed call writes the AIR-04
+`submission`'s extraction worker calls `Call` once per attempt whose text read finds text
+(`TextChars > 0`) -- never per line item -- and once, instead, for a PDF whose text read has
+`TextChars == 0` and rendered pages; that image-read call sends the first and last page images
+and the intro only. A blank answer keeps the poor-scan verdict; a failed call writes the AIR-04
 marker. A River retry re-runs the job and calls again. A blank answer on the text read, the
 fake's own default, leaves the engine's own reading of every field untouched -- that is what
 the fake answers whenever neither the text nor, on an image read, the document bytes carry a

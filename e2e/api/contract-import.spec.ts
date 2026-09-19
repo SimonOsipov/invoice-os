@@ -10,7 +10,9 @@
 // Success bodies (201 real / 200 dry-run) are asserted SHAPE-ONLY
 // ([D-success-shape-only]: errors is an array, the five counter fields are
 // numeric, format is "csv") -- exact counts are import.spec.ts's job (the
-// M4-03 perf/counts gate), not this contract suite's.
+// M4-03 perf/counts gate), not this contract suite's. The header-row describe
+// at the end is the one exception: its rows_total and row-error numbers ARE
+// the behaviour under test, so it pins them exactly.
 //
 // Dedup ([D-dedup]) is the AGAINST-STORE precheck (ExistingNumbers,
 // service.go), not an in-file duplicate -- a real import seeds one row, then

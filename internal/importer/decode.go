@@ -23,28 +23,35 @@ type DecodeFacts struct {
 	Encoding  string // csv only, else ""
 }
 
-// Decode turns uploaded bytes + a declared format ("csv" | "xlsx") into a
-// header row, the remaining data rows, and the facts Decode sniffed along
-// the way. It is pure, DB-free, and mapping-unaware: no header/column
-// normalization happens here (that is the service's job, M4-03-04).
+// Decode reads the column names from row 1.
 func Decode(r io.Reader, format string) (header []string, rows [][]string, facts DecodeFacts, err error) {
-	switch format {
-	case "csv":
-		return decodeCSV(r)
-	case "xlsx":
-		return decodeXLSX(r)
-	default:
-		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: unsupported format %q", format)
-	}
+	return DecodeFrom(r, format, 1)
 }
 
 // ErrHeaderRowPastEnd: the header row names a row the file does not have.
 var ErrHeaderRowPastEnd = errors.New("importer: header row is past the last row of the file")
 
-// DecodeFrom is Decode with the column names on 1-based physical row headerRow.
-// Stub: not implemented yet, pending the row-N read logic.
+// DecodeFrom is Decode with the column names on 1-based physical row
+// headerRow. Pure and DB-free; no header/column normalization happens here.
+// Row 1 runs today's reading unchanged; handlers validate headerRow >= 1.
 func DecodeFrom(r io.Reader, format string, headerRow int) (header []string, rows [][]string, facts DecodeFacts, err error) {
-	return nil, nil, DecodeFacts{}, errors.New("not implemented")
+	if headerRow < 1 {
+		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: header row %d is below 1", headerRow)
+	}
+	switch format {
+	case "csv":
+		if headerRow == 1 {
+			return decodeCSV(r)
+		}
+		return decodeCSVFrom(r, headerRow)
+	case "xlsx":
+		if headerRow == 1 {
+			return decodeXLSX(r)
+		}
+		return decodeXLSXFrom(r, headerRow)
+	default:
+		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: unsupported format %q", format)
+	}
 }
 
 // utf8BOM / utf16LEBOM / utf16BEBOM are the byte-order-mark prefixes Decode
@@ -55,17 +62,12 @@ var (
 	utf16BEBOM = []byte{0xFE, 0xFF}
 )
 
-// decodeCSV implements the CSV half of Decode: BOM/charset sniffing,
-// delimiter sniffing off the (decoded) header line, then a tolerant
-// encoding/csv parse that never errors on a ragged row.
-func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
+// decodeCSVText strips a BOM, picks the charset and refuses control bytes.
+func decodeCSVText(r io.Reader) (decoded []byte, encodingName string, err error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
-		return nil, nil, DecodeFacts{}, err
+		return nil, "", err
 	}
-
-	var decoded []byte
-	var encodingName string
 
 	switch {
 	case bytes.HasPrefix(raw, utf8BOM):
@@ -74,13 +76,13 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 	case bytes.HasPrefix(raw, utf16LEBOM):
 		decoded, err = unicode.UTF16(unicode.LittleEndian, unicode.ExpectBOM).NewDecoder().Bytes(raw)
 		if err != nil {
-			return nil, nil, DecodeFacts{}, fmt.Errorf("importer: decode utf-16le: %w", err)
+			return nil, "", fmt.Errorf("importer: decode utf-16le: %w", err)
 		}
 		encodingName = "utf-16le"
 	case bytes.HasPrefix(raw, utf16BEBOM):
 		decoded, err = unicode.UTF16(unicode.BigEndian, unicode.ExpectBOM).NewDecoder().Bytes(raw)
 		if err != nil {
-			return nil, nil, DecodeFacts{}, fmt.Errorf("importer: decode utf-16be: %w", err)
+			return nil, "", fmt.Errorf("importer: decode utf-16be: %w", err)
 		}
 		encodingName = "utf-16be"
 	case utf8.Valid(raw):
@@ -92,13 +94,25 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 		// fallback for non-UTF-8 CSV uploads.
 		decoded, err = charmap.Windows1252.NewDecoder().Bytes(raw)
 		if err != nil {
-			return nil, nil, DecodeFacts{}, fmt.Errorf("importer: decode windows-1252: %w", err)
+			return nil, "", fmt.Errorf("importer: decode windows-1252: %w", err)
 		}
 		encodingName = "windows-1252"
 	}
 
 	if off, found := firstDisallowedControlByte(decoded); found {
-		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: decode: input contains disallowed control byte 0x%02x at offset %d (unreadable/corrupted or unsupported encoding)", decoded[off], off)
+		return nil, "", fmt.Errorf("importer: decode: input contains disallowed control byte 0x%02x at offset %d (unreadable/corrupted or unsupported encoding)", decoded[off], off)
+	}
+
+	return decoded, encodingName, nil
+}
+
+// decodeCSV implements the CSV half of Decode: BOM/charset sniffing,
+// delimiter sniffing off the (decoded) header line, then a tolerant
+// encoding/csv parse that never errors on a ragged row.
+func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
+	decoded, encodingName, err := decodeCSVText(r)
+	if err != nil {
+		return nil, nil, DecodeFacts{}, err
 	}
 
 	delimiter := sniffDelimiter(headerLine(decoded))
@@ -113,6 +127,48 @@ func decodeCSV(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
 	}
 
 	facts := DecodeFacts{Format: "csv", Delimiter: string(delimiter), Encoding: encodingName}
+	if len(records) == 0 {
+		return nil, nil, facts, nil
+	}
+	return records[0], records[1:], facts, nil
+}
+
+// decodeCSVFrom is decodeCSV with the header on physical line headerRow
+// (>= 2): only decoded[offset:] is sniffed and parsed, so a bad title line
+// above the header cannot fail the file.
+//
+// ceiling: rows are lines, so a quoted cell spanning lines above the header
+// shifts N; count records if a real export does this.
+func decodeCSVFrom(r io.Reader, headerRow int) ([]string, [][]string, DecodeFacts, error) {
+	decoded, encodingName, err := decodeCSVText(r)
+	if err != nil {
+		return nil, nil, DecodeFacts{}, err
+	}
+
+	offset, ok := lineOffset(decoded, headerRow)
+	if !ok {
+		return nil, nil, DecodeFacts{}, ErrHeaderRowPastEnd
+	}
+
+	tail := decoded[offset:]
+	line := headerLine(tail)
+	delimiter := sniffDelimiter(line)
+
+	cr := csv.NewReader(bytes.NewReader(tail))
+	cr.Comma = delimiter
+	cr.FieldsPerRecord = -1 // tolerate ragged rows; the service quarantines them later
+
+	records, err := cr.ReadAll()
+	if err != nil {
+		return nil, nil, DecodeFacts{}, err
+	}
+
+	facts := DecodeFacts{Format: "csv", Delimiter: string(delimiter), Encoding: encodingName}
+	if len(line) == 0 {
+		// A blank header row: encoding/csv already skipped it, so every
+		// record parsed is data.
+		return nil, records, facts, nil
+	}
 	if len(records) == 0 {
 		return nil, nil, facts, nil
 	}
@@ -143,6 +199,23 @@ func headerLine(decoded []byte) []byte {
 		return decoded[:idx]
 	}
 	return decoded
+}
+
+// lineOffset returns the byte offset where 1-based physical line n (n >= 2)
+// starts, or false if decoded has fewer than n lines.
+func lineOffset(decoded []byte, n int) (int, bool) {
+	offset := 0
+	for i := 1; i < n; i++ {
+		idx := bytes.IndexByte(decoded[offset:], '\n')
+		if idx < 0 {
+			return 0, false
+		}
+		offset += idx + 1
+	}
+	if offset == len(decoded) {
+		return 0, false
+	}
+	return offset, true
 }
 
 // sniffDelimiter picks whichever candidate delimiter's encoding/csv parse of
@@ -195,44 +268,71 @@ func sniffDelimiter(header []byte) rune {
 // OpenReader without needing a real oversized fixture.
 var maxXLSXUnzipBytes int64 = 10 * maxUploadBytes // 150 MiB
 
-// decodeXLSX implements the XLSX half of Decode: stream the first sheet's
-// rows via excelize's row iterator so display values (formatted dates,
-// grouped numbers) come back exactly as a human would see them in Excel —
-// no normalization, that is the service's job. OpenReader is bounded by
+// xlsxRows returns every row of the first sheet from row 1 via excelize's
+// row iterator, so display values (formatted dates, grouped numbers) come
+// back exactly as a human would see them in Excel — no normalization, that
+// is the service's job. A gap row comes back nil. OpenReader is bounded by
 // maxXLSXUnzipBytes ([upload-cap]) so a small upload cannot decompress to an
 // unbounded size.
-func decodeXLSX(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
+func xlsxRows(r io.Reader) ([][]string, error) {
 	f, err := excelize.OpenReader(r, excelize.Options{UnzipSizeLimit: maxXLSXUnzipBytes})
 	if err != nil {
-		return nil, nil, DecodeFacts{}, err
+		return nil, err
 	}
 	defer f.Close()
 
 	sheet := f.GetSheetName(0)
 	rowsIter, err := f.Rows(sheet)
 	if err != nil {
-		return nil, nil, DecodeFacts{}, err
+		return nil, err
 	}
 	defer rowsIter.Close()
 
-	var header []string
-	var rows [][]string
-	first := true
+	var all [][]string
 	for rowsIter.Next() {
 		cols, err := rowsIter.Columns()
 		if err != nil {
-			return nil, nil, DecodeFacts{}, err
+			return nil, err
 		}
-		if first {
-			header = cols
-			first = false
-			continue
-		}
-		rows = append(rows, cols)
+		all = append(all, cols)
 	}
 	if err := rowsIter.Error(); err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// decodeXLSX implements the XLSX half of Decode: xlsxRows' first row is the
+// header, the rest are data.
+func decodeXLSX(r io.Reader) ([]string, [][]string, DecodeFacts, error) {
+	all, err := xlsxRows(r)
+	if err != nil {
 		return nil, nil, DecodeFacts{}, err
 	}
+	facts := DecodeFacts{Format: "xlsx"}
+	if len(all) == 0 {
+		return nil, nil, facts, nil
+	}
+	rows := all[1:]
+	if len(rows) == 0 {
+		rows = nil // today's loop never appended, so a header-only sheet has nil rows
+	}
+	return all[0], rows, facts, nil
+}
 
-	return header, rows, DecodeFacts{Format: "xlsx", Delimiter: "", Encoding: ""}, nil
+// decodeXLSXFrom is decodeXLSX with the header on sheet row headerRow (>= 2).
+func decodeXLSXFrom(r io.Reader, headerRow int) ([]string, [][]string, DecodeFacts, error) {
+	all, err := xlsxRows(r)
+	if err != nil {
+		return nil, nil, DecodeFacts{}, err
+	}
+	facts := DecodeFacts{Format: "xlsx"}
+	if headerRow > len(all) {
+		return nil, nil, facts, ErrHeaderRowPastEnd
+	}
+	rows := all[headerRow:]
+	if len(rows) == 0 {
+		rows = nil
+	}
+	return all[headerRow-1], rows, facts, nil
 }

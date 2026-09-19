@@ -3,6 +3,7 @@ package importer
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"unicode/utf8"
@@ -35,6 +36,15 @@ func Decode(r io.Reader, format string) (header []string, rows [][]string, facts
 	default:
 		return nil, nil, DecodeFacts{}, fmt.Errorf("importer: unsupported format %q", format)
 	}
+}
+
+// ErrHeaderRowPastEnd: the header row names a row the file does not have.
+var ErrHeaderRowPastEnd = errors.New("importer: header row is past the last row of the file")
+
+// DecodeFrom is Decode with the column names on 1-based physical row headerRow.
+// Stub: not implemented yet, pending the row-N read logic.
+func DecodeFrom(r io.Reader, format string, headerRow int) (header []string, rows [][]string, facts DecodeFacts, err error) {
+	return nil, nil, DecodeFacts{}, errors.New("not implemented")
 }
 
 // utf8BOM / utf16LEBOM / utf16BEBOM are the byte-order-mark prefixes Decode

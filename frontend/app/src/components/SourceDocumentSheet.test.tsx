@@ -43,10 +43,8 @@ function sheet(rowCount: number, over: Partial<DocumentSheet> = {}): DocumentShe
   }
 }
 
-// AIR-06-04: headerRow accepted but not yet threaded to the component.
 function renderSheet(s: DocumentSheet, sourceRows: number[] | null, otherInvoiceRows: number[] = [], headerRow = 1) {
-  void headerRow
-  return render(<SourceDocumentSheet sheet={s} sourceRows={sourceRows} otherInvoiceRows={otherInvoiceRows} />)
+  return render(<SourceDocumentSheet sheet={s} sourceRows={sourceRows} otherInvoiceRows={otherInvoiceRows} headerRow={headerRow} />)
 }
 
 function allRows(): HTMLElement[] {

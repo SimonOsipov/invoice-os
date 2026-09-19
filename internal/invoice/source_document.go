@@ -57,9 +57,12 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 		// A dedicated narrow projection, never invoiceColumns.
 		var documentID *string
 		var sourceRows []int
+		var headerRow *int
 		if err := tx.QueryRow(ctx,
-			`SELECT source_document_id::text, source_rows FROM invoices WHERE id = $1`, id,
-		).Scan(&documentID, &sourceRows); err != nil {
+			`SELECT i.source_document_id::text, i.source_rows, b.header_row
+			   FROM invoices i LEFT JOIN import_batches b ON b.id = i.import_batch_id
+			  WHERE i.id = $1`, id,
+		).Scan(&documentID, &sourceRows, &headerRow); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -69,7 +72,7 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 			return err
 		}
 
-		out = SourceDocument{InvoiceID: id, SourceRows: sourceRows}
+		out = SourceDocument{InvoiceID: id, SourceRows: sourceRows, HeaderRow: headerRow}
 		if documentID == nil {
 			return nil
 		}

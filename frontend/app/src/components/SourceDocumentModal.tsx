@@ -71,15 +71,16 @@ export function SourceDocumentModal({
   const record = meta.data?.document ?? null
   const documentId = record?.id ?? null
   const kind: DocumentKind | null = record ? classifyDocument(record.filename, record.declared_content_type) : null
+  const headerRow = meta.data?.header_row ?? 1
 
   // One channel per kind, and nothing at all for an unrenderable file — `sourceDocumentState`
   // short-circuits before consulting a channel for that kind.
   const sheet = useAsync<DocumentSheet>(
     () =>
       base && documentId
-        ? getDocumentSheet(ctx.authedFetch, base, documentId)
+        ? getDocumentSheet(ctx.authedFetch, base, documentId, headerRow)
         : Promise.reject(new Error('no source document')),
-    { immediate: base != null && documentId != null && kind === 'spreadsheet', deps: [documentId, kind] },
+    { immediate: base != null && documentId != null && kind === 'spreadsheet', deps: [documentId, kind, headerRow] },
   )
   // `useAsync`'s runId discards a superseded DISPATCH, but `fetchDocumentBytes` created the
   // object URL before the promise resolved (lib/sourceDocument.ts:98) — so the handle itself
@@ -154,6 +155,7 @@ export function SourceDocumentModal({
         sheet={sheetData}
         sourceRows={meta.data?.source_rows ?? null}
         otherInvoiceRows={record?.other_invoice_rows ?? []}
+        headerRow={headerRow}
       />
     )
   } else if (state === 'pdf' && handle) {

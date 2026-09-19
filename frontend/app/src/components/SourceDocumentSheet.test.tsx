@@ -412,6 +412,60 @@ describe('SourceDocumentSheet', () => {
     expect(sheetNumbers(allRows())[0]).toBe(4)
   })
 
+  // The numbering floor is one function in lib/sourceDocument.ts. The component held a
+  // second copy of the constant; an absence scan is what keeps it from growing back.
+  it('the sheet holds no second copy of the first-data-row constant', () => {
+    const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentSheet.tsx'), 'utf8')
+    expect(src.length).toBeGreaterThan(1000) // floor: the file really was read
+    expect(src).toContain('firstDataSheetRow(headerRow)') // control needle: the one source
+    expect(src).not.toContain('FIRST_DATA_SHEET_ROW')
+  })
+
+  // A header row past 1 moves BOTH ends of the returned window, so an invoice on the
+  // last row the endpoint sent is present at headerRow 3 and absent at headerRow 1.
+  it('the shown-window boundary moves with the header row', () => {
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [5003], [], 3)
+    expect(screen.getByTestId('sheet-jump').textContent).toBe('Jump to ROW 5003')
+    expect(screen.getByTestId('sheet-truncation').textContent).not.toContain('NOT IN THE SHOWN WINDOW')
+    cleanup()
+
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [5004], [], 3)
+    expect(screen.getByTestId('sheet-truncation').textContent).toContain(
+      'ROW 5004 OF THIS INVOICE IS NOT IN THE SHOWN WINDOW',
+    )
+    expect(screen.queryByTestId('sheet-jump')).toBeNull()
+    cleanup()
+
+    // Discriminator: the same row 5003 is OUTSIDE the window at headerRow 1.
+    renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [5003])
+    expect(screen.getByTestId('sheet-truncation').textContent).toContain(
+      'ROW 5003 OF THIS INVOICE IS NOT IN THE SHOWN WINDOW',
+    )
+  })
+
+  // The track is the file, so the LAST data row's marker must end at its bottom whatever
+  // the header row. Asserting the relationship, not a pixel.
+  it("the last data row's marker ends at the bottom of the track whatever the header row", () => {
+    const bottomOf = (el: HTMLElement) => parseFloat(el.style.top) + parseFloat(el.style.height)
+
+    renderSheet(sheet(100), [103], [], 3) // rows 4..103
+    const atThree = screen.getByTestId('marker-invoice-block')
+    expect(parseFloat(atThree.style.top)).toBeCloseTo(99, 5)
+    expect(bottomOf(atThree)).toBeCloseTo(100, 5)
+    cleanup()
+
+    // Control: at headerRow 1 the same relationship holds for row 101.
+    renderSheet(sheet(100), [101])
+    const atOne = screen.getByTestId('marker-invoice-block')
+    expect(parseFloat(atOne.style.top)).toBeCloseTo(99, 5)
+    expect(bottomOf(atOne)).toBeCloseTo(100, 5)
+  })
+
+  it('numbers the gutter from a header row far past the previewer window', () => {
+    renderSheet(sheet(3), null, [], 1000)
+    expect(sheetNumbers(allRows())).toEqual([1001, 1002, 1003])
+  })
+
   it('the sheet never names a property the design system lacks', () => {
     // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath throws.
     const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentSheet.tsx'), 'utf8')

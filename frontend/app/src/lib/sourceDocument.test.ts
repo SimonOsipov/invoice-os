@@ -286,7 +286,21 @@ describe('firstDataSheetRow', () => {
 
   it('FIRST_DATA_SHEET_ROW no longer exists in the module', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'sourceDocument.ts'), 'utf8')
+    // An absence scan passes on an empty or renamed file, so it needs a floor and a
+    // needle that must be FOUND. The scan is over the raw text, comments included:
+    // that is stricter than a stripped scan, which could pass on a live constant
+    // hidden behind a line continuation.
+    expect(src.length).toBeGreaterThan(2000)
+    expect(src).toContain('export function firstDataSheetRow')
     expect(src).not.toContain('FIRST_DATA_SHEET_ROW')
+  })
+
+  it('numbers from a header row far past the previewer window', () => {
+    expect(firstDataSheetRow(1000)).toBe(1001)
+    expect(numberSheetRows([['a'], ['b']], 1000)).toEqual([
+      { sheetRow: 1001, cells: ['a'] },
+      { sheetRow: 1002, cells: ['b'] },
+    ])
   })
 })
 
@@ -451,6 +465,21 @@ describe('rowsWithinSheet', () => {
     // Control at headerRow 1: today's boundary, unchanged.
     expect(rowsWithinSheet([5001], 5000, 1)).toEqual({ present: [5001], missing: [] })
     expect(rowsWithinSheet([5002], 5000, 1)).toEqual({ present: [], missing: [5002] })
+  })
+
+  it('an empty window at a header row past 1 holds nothing', () => {
+    expect(rowsWithinSheet([4, 5], 0, 3)).toEqual({ present: [], missing: [4, 5] })
+    // The same rows under a window of one: only the first data row fits.
+    expect(rowsWithinSheet([4, 5], 1, 3)).toEqual({ present: [4], missing: [5] })
+  })
+
+  it('sorts and dedupes before applying the header row bounds', () => {
+    // source_rows is neither sorted nor deduped by the CHECK constraint.
+    expect(rowsWithinSheet([7, 3, 7, 4], 5, 3)).toEqual({ present: [4, 7], missing: [3] })
+  })
+
+  it('a header row past the whole file leaves every stored row below the floor', () => {
+    expect(rowsWithinSheet([4, 100], 50, 1000)).toEqual({ present: [], missing: [4, 100] })
   })
 })
 

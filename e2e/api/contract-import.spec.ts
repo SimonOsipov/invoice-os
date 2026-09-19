@@ -730,7 +730,13 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     expect(imported.status, 'the import at header_row=3 should succeed').toBe(201)
     const importedBody = imported.body as Record<string, unknown>
     expect(importedBody.rows_total).toBe(3)
-    expect(importedBody.errors, 'row 5 (the empty invoice number) is the only row error').toContainEqual(expect.objectContaining({ row: 5 }))
+    // Count AND identity, not containment: at row 1 the same blank line is row
+    // 4, so a pinned length of one plus the exact message is what separates a
+    // working header_row from an ignored one. Message: service.go's
+    // ungroupable-row RowError.
+    expect(importedBody.errors, 'row 5 (the empty invoice number) is the only row error').toEqual([
+      expect.objectContaining({ row: 5, message: 'blank invoice number: row cannot be grouped' }),
+    ])
 
     const list = await listInvoices(token, { entity_id: entity.id, limit: 50 })
     const invA = list.invoices.find((i) => i.invoice_number === numA)
@@ -739,10 +745,12 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     expect(invB, 'invoice B must be in the list').toBeTruthy()
 
     const srcA = await sourceDocumentFetch(token, invA!.id)
+    expect(srcA.status, "invoice A's source-document read").toBe(200)
     expect((srcA.body as Record<string, unknown>).source_rows).toEqual([4])
     expect((srcA.body as Record<string, unknown>).header_row).toBe(3)
 
     const srcB = await sourceDocumentFetch(token, invB!.id)
+    expect(srcB.status, "invoice B's source-document read").toBe(200)
     expect((srcB.body as Record<string, unknown>).source_rows).toEqual([6])
     expect((srcB.body as Record<string, unknown>).header_row).toBe(3)
   })
@@ -762,10 +770,12 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     const documentId = previewBody.document_id as string
 
     const imported = await importFetch(token, buildForm(entity.id, documentId, { mapping: PERF_MAPPING, headerRow: '3' }))
-    expect(imported.status).toBe(201)
+    expect(imported.status, 'the xlsx import at header_row=3 should succeed').toBe(201)
     const importedBody = imported.body as Record<string, unknown>
     expect(importedBody.rows_total).toBe(3)
-    expect(importedBody.errors).toContainEqual(expect.objectContaining({ row: 5 }))
+    expect(importedBody.errors, 'row 5 (the empty invoice number) is the only row error').toEqual([
+      expect.objectContaining({ row: 5, message: 'blank invoice number: row cannot be grouped' }),
+    ])
 
     const list = await listInvoices(token, { entity_id: entity.id, limit: 50 })
     const invA = list.invoices.find((i) => i.invoice_number === numA)
@@ -774,10 +784,12 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     expect(invB, 'invoice B must be in the list').toBeTruthy()
 
     const srcA = await sourceDocumentFetch(token, invA!.id)
+    expect(srcA.status, "invoice A's source-document read").toBe(200)
     expect((srcA.body as Record<string, unknown>).source_rows).toEqual([4])
     expect((srcA.body as Record<string, unknown>).header_row).toBe(3)
 
     const srcB = await sourceDocumentFetch(token, invB!.id)
+    expect(srcB.status, "invoice B's source-document read").toBe(200)
     expect((srcB.body as Record<string, unknown>).source_rows).toEqual([6])
     expect((srcB.body as Record<string, unknown>).header_row).toBe(3)
   })
@@ -792,7 +804,10 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     expect(at3.status).toBe(200)
     const at3Body = at3.body as Record<string, unknown>
     expect(at3Body.columns).toEqual(PERF_HEADER.split(','))
-    expect((at3Body.rows as string[][])[0][0]).toBe(numA)
+    const at3Rows = at3Body.rows as string[][]
+    expect(at3Rows, 'the three rows below the header are all returned').toHaveLength(3)
+    expect(at3Rows[0][0]).toBe(numA)
+    expect(at3Rows[2][0]).toBe(numB)
     expect(at3Body.rows_total).toBe(3)
 
     // No param -- row 1 is the header, so columns is the title line's one
@@ -807,7 +822,9 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     const tin = freshTin()
     const csv = titleRowCsv(`AIR06-A-${tin}`, `AIR06-B-${tin}`)
 
-    assertErrorEnvelope(await previewFetch(token, csv, 'title-rows.csv', 'text/csv', '0'), 400, 'preview header_row=0')
+    const zero = await previewFetch(token, csv, 'title-rows.csv', 'text/csv', '0')
+    assertErrorEnvelope(zero, 400, 'preview header_row=0')
+    expect((zero.body as Record<string, unknown>).error).toBe('header_row must be a whole number of 1 or more')
 
     const pastEnd = await previewFetch(token, csv, 'title-rows.csv', 'text/csv', '99')
     expect(pastEnd.status, 'preview header_row=99').toBe(400)

@@ -680,8 +680,7 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 }
 
 // TestStore_CreateBatchRecordsTheHeaderRow: a positive headerRow persists on
-// the row; 0 (a document import) persists as NULL. RED: CreateBatch does not
-// write header_row yet, and the column does not exist.
+// the row; 0 (a document import) persists as NULL.
 func TestStore_CreateBatchRecordsTheHeaderRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

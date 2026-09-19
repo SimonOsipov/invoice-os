@@ -1,7 +1,6 @@
 // Suite for the import_batches.header_row migration: the 1-based file row an import read its
 // column names from. One migrator transaction, rolled back, the shape
-// extraction_jobs_layout_tokens_migration_test.go established. RED: the migration does not
-// exist yet.
+// extraction_jobs_layout_tokens_migration_test.go established.
 package db_test
 
 import (
@@ -108,7 +107,7 @@ func importBatchesForceRLS(t *testing.T, ctx context.Context, tx pgx.Tx) bool {
 }
 
 // TestImportBatchesHeaderRow_MigrationFileIsOrderedAndComplete (AC-6, no DB): the file exists,
-// sorts after its predecessor, and its Up/Down declare the expected shape. RED: no such file.
+// sorts after its predecessor, and its Up/Down declare the expected shape.
 func TestImportBatchesHeaderRow_MigrationFileIsOrderedAndComplete(t *testing.T) {
 	name := headerRowMigrationName(t)
 	if name <= headerRowPredecessor {
@@ -136,8 +135,7 @@ func TestImportBatchesHeaderRow_MigrationFileIsOrderedAndComplete(t *testing.T) 
 	}
 }
 
-// TestImportBatchesHeaderRow_MigrationRoundTrips (AC-6): the shipped bodies themselves. RED: no
-// such file, so headerRowMigrationName fatals before the round trip runs.
+// TestImportBatchesHeaderRow_MigrationRoundTrips (AC-6): the shipped bodies themselves.
 func TestImportBatchesHeaderRow_MigrationRoundTrips(t *testing.T) {
 	ctx := t.Context()
 	tx := migratorTx(t, ctx) // rolled back on cleanup

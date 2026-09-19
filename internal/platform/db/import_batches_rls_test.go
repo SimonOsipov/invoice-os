@@ -670,8 +670,7 @@ func TestRLS_ImportBatchesFilenameColumnInheritsTenantIsolation(t *testing.T) {
 }
 
 // TestRLS_ImportBatchesHeaderRowRefusesZero (AC-6): the header_row CHECK
-// refuses 0 under RLS, and accepts NULL and a positive value. RED: the
-// column does not exist yet (undefined_column, 42703).
+// refuses 0 under RLS, and accepts NULL and a positive value.
 func TestRLS_ImportBatchesHeaderRowRefusesZero(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

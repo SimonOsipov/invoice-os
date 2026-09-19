@@ -1403,8 +1403,7 @@ func TestRLS_ADocumentImportHoldsEveryDraftWhateverTheReason(t *testing.T) {
 }
 
 // TestRLS_ImportDocumentBatchHasNoHeaderRow (AC-6): a document import's batch
-// carries no header row (it is not a spreadsheet import). RED: the column
-// does not exist yet.
+// carries no header row (it is not a spreadsheet import).
 func TestRLS_ImportDocumentBatchHasNoHeaderRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

@@ -111,6 +111,18 @@ func TestAIPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 		t.Errorf("aiTextIntro does not equal run.py's TEXT_INTRO byte for byte (got len %d, want len %d)", len(aiTextIntro), len(m[1]))
 	}
 
+	// AIR-05-02 T01: the image message's intro, double-quoted (not triple) in run.py.
+	m = regexp.MustCompile(`\nIMAGE_INTRO = "(.*?)"\n`).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatal("IMAGE_INTRO literal not found in run.py")
+	}
+	if aiImageIntro != m[1] {
+		t.Errorf("aiImageIntro does not equal run.py's IMAGE_INTRO byte for byte (got len %d, want len %d)", len(aiImageIntro), len(m[1]))
+	}
+	if imagePartsLit := `parts = [{"type": "text", "text": IMAGE_INTRO}]`; !strings.Contains(text, imagePartsLit) {
+		t.Errorf("run.py no longer contains %q -- the image message no longer leads with the intro", imagePartsLit)
+	}
+
 	pageLit := `f"--- page {p['number']} ---"`
 	rowLit := `f"y={ln['y']:.3f} | {runs}"`
 	runLit := `f'x={s["x"]:.2f} {s["text"]}'`

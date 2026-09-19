@@ -1,6 +1,5 @@
-// handlers_header_row_test.go: RED specs for header_row on preview, import
-// and the sheet endpoint (T01-T12). Written against the parseHeaderRow stub;
-// the handlers still ignore header_row.
+// handlers_header_row_test.go: header_row on preview, import and the sheet
+// endpoint (T01-T12).
 package importer
 
 import (
@@ -23,9 +22,7 @@ import (
 const titleCSV = "Sales Register - March 2026\n\nInv No,Total\nINV-1,100\nINV-2,200\n"
 const pastEndCSV = "a,b\n1,2\n"
 
-// Local to this file: the two wire messages parseHeaderRow's real
-// implementation will carry. Not the production consts (they do not exist
-// yet at the stub stage) so this file will not collide once they land.
+// The wire messages as literals, so a changed production const fails here.
 const (
 	wantHeaderRowMalformedMsg = "header_row must be a whole number of 1 or more"
 	wantHeaderRowPastEndMsg   = "header_row is past the last row of the file"

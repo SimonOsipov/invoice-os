@@ -5,7 +5,7 @@
 // multipart-specific steps this endpoint needs: an upload cap
 // ([upload-cap]), multipart form parsing, mapping JSON decode, and
 // CSV/XLSX format detection ([mapping-transport]) ahead of the package-level
-// Decode -> Service.Import handoff. See handlers_test.go's doc comment for
+// DecodeFrom -> Service.Import handoff. See handlers_test.go's doc comment for
 // the full IMP-API-01..07 Test Specs map.
 package importer
 
@@ -407,9 +407,9 @@ func CreateHandler(
 //
 // The store call sits after r.FormFile, so an oversized body 413s before any
 // object is written. The two 4xx paths BELOW it carry the document id
-// (previewError); the four above it, and the new 500, do not.
+// (previewError); those above it, and the new 500, do not.
 //
-// It reuses detectFormat/Decode/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
+// It reuses detectFormat/DecodeFrom/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
 // writeJSON/writeError and adds NO second parsing path on purpose
 // ([preview-reuses-decode]): the columns this endpoint shows the user must be
 // the same bytes the import path will later read, or client and server
@@ -638,7 +638,7 @@ type sheetResponse struct {
 }
 
 // SheetHandler is GET /v1/documents/{id}/sheet: a stored CSV/XLSX decoded
-// through the SAME Decode the import path reads, so the evidence surface
+// through the SAME DecodeFrom the import path reads, so the evidence surface
 // cannot disagree with the invoice it is evidence for. Adds no second parsing
 // path, in Go or JS. Flow: identity-first-401 -> uuid guard -> header_row
 // (query, malformed -> 400) -> open -> nil-body
@@ -770,7 +770,7 @@ type savedMappingResponse struct {
 }
 
 // SavedMappingHandler is GET /v1/imports/saved-mapping. It decodes the stored document's header
-// with Decode, as the save path does, so the lookup key equals the save key.
+// with Decode.
 func SavedMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),

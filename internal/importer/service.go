@@ -146,7 +146,7 @@ type invoiceGroup struct {
 // canonicalFields is the closed set of column keys a mapping is allowed to
 // use -- the 11 fields Import actually understands. A mapping key outside
 // this set (e.g. a typo like "totla") is rejected in resolveMapping, by
-// exact symmetry with the mapped-header-absent-from-row-1 check just below
+// exact symmetry with the mapped-header-absent check just below
 // it: [mapping]'s guarantee is that the server structurally cannot mis-map,
 // which requires rejecting an unrecognized KEY just as firmly as it rejects
 // a mapped HEADER string that doesn't exist -- silently ignoring an unknown

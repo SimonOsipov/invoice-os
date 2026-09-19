@@ -5415,7 +5415,6 @@ func TestRLS_ExtractWorkerSkipsTheImageReadWithoutPageImages(t *testing.T) {
 
 // T06. AC 2/8: the real fake client, steered end to end through a trailing marker in the
 // document's own bytes (never a page token -- the image arm's Text carries no token at all).
-// The real PDFium text reader confirms TextChars 0 on scanned_invoice.pdf (production, AIR-05-01).
 func TestRLS_ExtractWorkerSteersTheFakeThroughTheDocumentBytes(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)

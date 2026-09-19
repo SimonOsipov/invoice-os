@@ -171,6 +171,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     EXTR36_E2E_01,
     "AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine",
     'AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading',
+    'AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -460,5 +461,30 @@ describe('[air-04] the deployed literals track their owners', () => {
     const m = /const aiUnavailableField = "([^"]+)"/.exec(aireadingSrc)
     expect(m, 'aiUnavailableField is gone from internal/extraction/aireading.go').not.toBeNull()
     expect(literalOf('AI_UNAVAILABLE_FIELD')).toBe((m as RegExpExecArray)[1])
+  })
+})
+
+// AIR-05-04. NO_REGION_PILL and NO_REGION_NOTE each pin a different owner (no shared module
+// e2e/ can import), so each gets its own read-back, the EXTR-15-12 pattern above.
+describe('[air-05] the deployed literals track their owners', () => {
+  const extractionFieldsSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionFields.tsx'), 'utf8')
+  const extractionCanvasSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionCanvas.tsx'), 'utf8')
+
+  function literalOf(name: string): string {
+    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source)
+    expect(m, `${name} is gone from import-wizard.spec.ts`).not.toBeNull()
+    return (m as RegExpExecArray)[1]
+  }
+
+  it('NO_REGION_PILL is ExtractionFields.tsx\'s NO_REGION, byte for byte', () => {
+    const m = /const NO_REGION = '([^']+)'/.exec(extractionFieldsSrc)
+    expect(m, 'NO_REGION is gone from ExtractionFields.tsx').not.toBeNull()
+    expect(literalOf('NO_REGION_PILL')).toBe((m as RegExpExecArray)[1])
+  })
+
+  it('NO_REGION_NOTE is ExtractionCanvas.tsx\'s NO_REGION, byte for byte', () => {
+    const m = /const NO_REGION = '([^']+)'/.exec(extractionCanvasSrc)
+    expect(m, 'NO_REGION is gone from ExtractionCanvas.tsx').not.toBeNull()
+    expect(literalOf('NO_REGION_NOTE')).toBe((m as RegExpExecArray)[1])
   })
 })

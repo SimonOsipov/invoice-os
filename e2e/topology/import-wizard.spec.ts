@@ -2000,6 +2000,29 @@ function uniqueAiUnavailablePdfBytes(): Buffer {
   return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
+// second trailing comment steering the fake's image-read answer.
+const IMAGE_READ_ANSWER = {
+  invoice_number: 'INV-5520',
+  issue_date: '2026-07-14',
+  supplier_tin: null,
+  supplier_name: null,
+  buyer_tin: '9999999-1202',
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: '1935.00',
+}
+
+function uniqueImageSteeredPdfBytes(): Buffer {
+  return Buffer.concat([
+    SCANNED_INVOICE_PDF,
+    Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8'),
+    Buffer.from(`%AIFAKE-ANSWER-${Buffer.from(JSON.stringify(IMAGE_READ_ANSWER)).toString('base64url')}\n`, 'utf8'),
+  ])
+}
+
 // A correction applies to the invoice filed from the document, which commits AFTER the
 // extraction job reports succeeded -- posting on that signal alone races it and 409s
 // (ErrNoInvoiceForDocument, handlers.go).
@@ -8900,6 +8923,81 @@ test('AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the d
   await expect(page.getByTestId('extraction-canvas')).toHaveCount(0)
   await expect(page.getByTestId('extraction-open-invoice')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /read.*again/i })).toHaveCount(0)
+
+  // (h)
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// pill: ExtractionFields.tsx's NO_REGION
+const NO_REGION_PILL = 'NO REGION'
+// note: ExtractionCanvas.tsx's NO_REGION
+const NO_REGION_NOTE = 'We have no region for this field, so there is nothing to highlight.'
+
+test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images', async ({
+  page,
+}) => {
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // (a) AC-5, AC-8. Zz sorts this entity after the existing ones (entity-ordering trap).
+  // extractOneDocument already waited on invoice-detail, which proves the answered image read
+  // filed a draft instead of quarantining.
+  await extractOneDocument(page, 'Zz AIR-05 image read', { name: 'scanned_invoice.pdf', buffer: uniqueImageSteeredPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'an answered image read must land on the real invoice detail, not the quarantine').not.toBeNull()
+  const invoiceId = invoiceMatch![1]
+
+  // (b) AC-3, AC-4: no document_text_layer field reaches the wire once the image read answers.
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+  expect(wire.has('document_text_layer'), 'the image read must replace the text-layer verdict').toBe(false)
+
+  const invoiceNumberWire = wire.get('invoice_number')
+  expect({
+    value: invoiceNumberWire?.value,
+    reason: invoiceNumberWire?.reason,
+    region: invoiceNumberWire?.region,
+    alternatives: invoiceNumberWire?.alternatives,
+  }).toEqual({ value: 'INV-5520', reason: '', region: null, alternatives: [] })
+
+  const totalWire = wire.get('total')
+  expect({
+    value: totalWire?.value,
+    reason: totalWire?.reason,
+    region: totalWire?.region,
+    alternatives: totalWire?.alternatives,
+  }).toEqual({ value: '1935.00', reason: '', region: null, alternatives: [] })
+
+  const buyerTinWire = wire.get('buyer_tin')
+  expect({ value: buyerTinWire?.value, reason: buyerTinWire?.reason }).toEqual({ value: null, reason: 'unreadable' })
+  expect(buyerTinWire?.alternatives).toEqual([{ value: '9999999-1202', region: null }])
+
+  // (c) AC-3, AC-8: a decided field with no region still renders, with the NO REGION pill.
+  await expect(page.getByTestId('extraction-input-invoice_number')).toHaveValue('INV-5520')
+  await expect(page.getByTestId('extraction-field-invoice_number').getByText(NO_REGION_PILL, { exact: true })).toBeVisible()
+
+  // (d) AC-3: selecting that field shows the canvas' no-region note, not a highlight.
+  await page.getByTestId('extraction-field-invoice_number').click()
+  await expect(page.getByTestId('extraction-no-region')).toHaveText(NO_REGION_NOTE)
+
+  // (e) AC-4: the doubtful buyer_tin offers the AI's own reading for correction.
+  // pill text: REASON_PILLS
+  await expect(page.getByTestId('extraction-field-buyer_tin').getByText("COULDN'T READ THIS CLEARLY", { exact: true })).toBeVisible()
+  await expect(page.getByTestId('extraction-input-buyer_tin')).toHaveValue('9999999-1202')
+
+  // (f) AC-3, Q12: an AI-only reading is filed with no marking anywhere in the review copy.
+  const reviewText = await page.getByTestId('extraction-review').innerText()
+  expect(reviewText).not.toMatch(/\bAI\b/)
+  expect(reviewText).not.toMatch(/artificial/i)
+
+  // (g) AC-4, D2: a value that failed its format check is never decided onto the invoice.
+  const invoice = await getInvoice(token, invoiceId)
+  expect({ invoice_number: invoice.invoice_number, total: invoice.total, buyer_tin: invoice.buyer_tin }).toEqual({
+    invoice_number: 'INV-5520',
+    total: '1935.00',
+    buyer_tin: null,
+  })
 
   // (h)
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

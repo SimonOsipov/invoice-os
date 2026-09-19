@@ -1104,9 +1104,9 @@ control itself, so a control cut down to one entry cannot leave the pins asserti
 ## What the deployed sidecar reads from a scan
 
 Production `docling` `/v1/read`, measured 2026-09-19 (AIR-05-01). TextChars counts the
-non-whitespace characters of every token's text, summed over pages, as `doclingTokens` does
-(`internal/extraction/docling.go:143-161`). A local `docling:canary` build is not this sidecar
-and is not accepted as evidence here.
+non-whitespace characters of every token's text, counted per page by `doclingTokens` and
+summed by the read loop. A local `docling:canary` build is not this sidecar and is not
+accepted as evidence here.
 
 | fixture | pages | TextChars | reaches TextChars == 0 |
 |---|---|---|---|
@@ -1117,10 +1117,13 @@ and is not accepted as evidence here.
 
 **1 of 4** scanned fixtures reach `TextChars == 0` on the deployed sidecar.
 
+A document that reaches `TextChars == 0` is read from its page images when the AI is on
+(AIR-05).
+
 F-291 note 570 (production, 2026-09-06): an image-only PDF read subtotal, VAT and total exactly,
 so its TextChars > 0 (a lower bound — the count itself was never stored or logged). Production
-now holds 0 extraction jobs against a control of 7 documents, so that job is purged and cannot
-be re-measured.
+held, on 2026-09-19, 0 extraction jobs against a control of 7 documents, so that job is purged
+and cannot be re-measured.
 
 ## Regenerating
 

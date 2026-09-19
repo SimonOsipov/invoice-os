@@ -1,10 +1,11 @@
 // aiimage.go: the image request, page choice and format-only reading for a document with no
-// text layer (AIR-05-02). readImagesAI and the worker field land in AIR-05-03.
+// text layer.
 package extraction
 
 import (
 	"context"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
@@ -67,23 +68,27 @@ func askAIPages(ctx context.Context, r AIReader, pngs [][]byte, hint string) (ma
 func imageReading(answer map[string]string) []FieldResult {
 	out := Reconcile(Input{})
 	for i := range out {
-		raw, ok := answer[out[i].Name]
-		if !ok {
+		name := out[i].Name
+		if !slices.Contains(HeaderFields, name) {
 			continue
 		}
-		if _, want, ok := aiReadings(out[i].Name, raw); ok && len(want) == 1 {
+		raw, ok := answer[name]
+		if !ok || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if _, want, ok := aiReadings(name, raw); ok && len(want) == 1 {
 			value := want[0]
 			out[i] = FieldResult{
-				Field:        Field{Name: out[i].Name, Value: &value, Reason: ReasonNone},
+				Field:        Field{Name: name, Value: &value, Reason: ReasonNone},
 				Alternatives: []Field{},
 			}
 			continue
 		}
 		trimmed := strings.TrimSpace(raw)
 		out[i] = FieldResult{
-			Field: Field{Name: out[i].Name, Reason: ReasonUnreadable},
+			Field: Field{Name: name, Reason: ReasonUnreadable},
 			Alternatives: []Field{
-				{Name: out[i].Name, Value: &trimmed, Reason: ReasonNone},
+				{Name: name, Value: &trimmed, Reason: ReasonNone},
 			},
 		}
 	}

@@ -732,3 +732,21 @@ func TestReadPagePNGsAdv_AnEmptyObjectKeepsItsPosition(t *testing.T) {
 		t.Errorf("readPagePNGs = %v, want [[] [BB]]", got)
 	}
 }
+
+// System Design "imageReading": only a HEADER row with a NON-BLANK answer changes; T11/AC-4:
+// every other row stays as Reconcile(Input{}) emits it.
+func TestImageReadingAdv_ABlankOrNonHeaderAnswerChangesNoRow(t *testing.T) {
+	base := Reconcile(Input{})
+	if len(base) == 0 {
+		t.Fatal("Reconcile(Input{}) returned no rows")
+	}
+	for _, answer := range []map[string]string{
+		{"total": "   "},
+		{"invoice_number": "\t\n"},
+		{"line_items": "x"},
+	} {
+		if got := imageReading(answer); !reflect.DeepEqual(got, base) {
+			t.Errorf("imageReading(%q) changed a row; want Reconcile(Input{}) unchanged", answer)
+		}
+	}
+}

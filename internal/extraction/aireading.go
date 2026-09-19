@@ -48,7 +48,8 @@ const (
 	aiPromptRunFmt  = "x=%.2f %s"
 )
 
-// aiFieldSchema is the JSON schema askAI sends: HeaderFields, string-or-null, no line items.
+// aiFieldSchema is the JSON schema askAI and askAIPages send: HeaderFields, string-or-null, no
+// line items.
 var aiFieldSchema = aiSchemaFor(HeaderFields)
 
 func aiSchemaFor(fields []string) json.RawMessage {

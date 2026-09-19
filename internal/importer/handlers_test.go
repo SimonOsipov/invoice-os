@@ -96,7 +96,7 @@ type importBatchBody struct {
 // importFunc is the exact signature CreateHandler's imp parameter expects
 // ((*Service).Import's signature) -- named here purely to keep the test
 // helpers below readable.
-type importFunc = func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
+type importFunc = func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error)
 
 // --- request-building helpers -------------------------------------------
 
@@ -250,7 +250,7 @@ func doImportCreate(t *testing.T, imp importFunc, open openSpec, id *auth.Identi
 // TestCreateHandler_NoIdentity401). RED against the 501 stub: the status
 // assertion fails (got 501, want 401).
 func TestCreateHandler_NoIdentity401(t *testing.T) {
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run without an identity")
 		return BatchResult{}, nil
 	}
@@ -377,7 +377,7 @@ func TestCreateHandler_DryRun200NothingPersisted(t *testing.T) {
 // request, not one part.
 func TestCreateHandler_OversizedBody413(t *testing.T) {
 	id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run when the request body exceeds the upload cap")
 		return BatchResult{}, nil
 	}
@@ -414,7 +414,7 @@ func TestCreateHandler_BadMapping400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
-			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run when mapping is missing or malformed")
 				return BatchResult{}, nil
 			}
@@ -511,7 +511,7 @@ func TestCreateHandler_XLSX201(t *testing.T) {
 // imp must never run -- the refusal happens in open(), before imp exists.
 func TestImport_SuspendedCallerIs403NotAServerError(t *testing.T) {
 	id := testIdentity()
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run for a caller the seam refuses")
 		return BatchResult{}, nil
 	}
@@ -919,7 +919,7 @@ func TestGetBatchHandler_NoIdentity401(t *testing.T) {
 // caught.
 func TestCreateHandler_PassesSanitizedPartFilenameToImp(t *testing.T) {
 	var capturedEntityID, capturedFilename string
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		capturedEntityID = entityID
 		capturedFilename = filename
 		return BatchResult{}, nil
@@ -959,7 +959,7 @@ func TestCreateHandler_DryRunFilenameThreadedButNothingPersisted(t *testing.T) {
 	// Leg 1 (spy, no DB): filename threading survives the dry-run path.
 	var capturedFilename string
 	var capturedDryRun bool
-	spy := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	spy := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		capturedFilename = filename
 		capturedDryRun = dryRun
 		return BatchResult{RowsTotal: len(rows), RowsValid: len(rows)}, nil

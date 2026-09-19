@@ -174,13 +174,13 @@ func TestSheetHandler_RowNumberingMatchesImporterSheetRow(t *testing.T) {
 	if resp.Rows[1][0] != "B" {
 		t.Errorf("rows[1][0] = %q, want %q", resp.Rows[1][0], "B")
 	}
-	if got := sheetRow(1); got != 3 {
+	if got := sheetRow(1, 1); got != 3 {
 		t.Errorf("sheetRow(1) = %d, want 3", got)
 	}
 	if resp.Rows[2][0] != "C" {
 		t.Errorf("rows[2][0] = %q, want %q", resp.Rows[2][0], "C")
 	}
-	if got := sheetRow(2); got != 4 {
+	if got := sheetRow(1, 2); got != 4 {
 		t.Errorf("sheetRow(2) = %d, want 4", got)
 	}
 }
@@ -237,7 +237,7 @@ func TestSheetHandler_XLSXGapRowIsEmptyArrayNotNull(t *testing.T) {
 		t.Fatalf("rows_total = %d, want 3 (header + 2 real rows + 1 gap)", resp.RowsTotal)
 	}
 	if got := resp.Rows[2][0]; got != "Row4" {
-		t.Errorf("rows[2][0] = %q, want %q at sheet row %d", got, "Row4", sheetRow(2))
+		t.Errorf("rows[2][0] = %q, want %q at sheet row %d", got, "Row4", sheetRow(1, 2))
 	}
 }
 

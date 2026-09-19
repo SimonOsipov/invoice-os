@@ -99,7 +99,7 @@ func importCleanFileForEntity(t *testing.T, app *pgxpool.Pool, tenantID, entityI
 	c := auth.WithIdentity(context.Background(), auth.Identity{
 		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, tinFixCleanFile(), false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, tinFixCleanFile(), false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

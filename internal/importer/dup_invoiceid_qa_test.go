@@ -114,7 +114,7 @@ func TestImport_StoreDuplicate_MultiRowGroupCarriesSingleCorrectInvoiceID(t *tes
 		mkRow("INV-MULTIROW", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item2", "1", "10.00"), // sheet 3
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestImport_StoreDuplicate_MultipleGroupsEachCarryOwnDistinctInvoiceID(t *te
 		mkRow("INV-MULTI-C", "2026-01-12", "T3", "B3", "NGN", "30.00", "3.00", "33.00", "ItemC", "1", "30.00"), // sheet 4
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestImport_StoreDuplicate_UnusualInvoiceNumberSurvivesRoundTrip(t *testing.
 				mkRow(tc.number, "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
 			}
 
-			res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+			res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 			if err != nil {
 				t.Fatalf("Import: %v", err)
 			}

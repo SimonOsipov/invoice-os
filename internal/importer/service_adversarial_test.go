@@ -82,7 +82,7 @@ func TestServiceImport_BlankSubtotalCellCommitsAsNullNotQuarantined(t *testing.T
 		mkRow("INV-BLANKSUB", "2026-01-10", "T1", "B1", "NGN", "", "0.00", "0.00", "Item1", "1", "10.00"), // sheet 2 -- blank subtotal
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestServiceImport_UnparseableIssueDateQuarantines(t *testing.T) {
 		mkRow("INV-GOODDATE", "2026-01-10", "T3", "B3", "NGN", "30.00", "3.00", "33.00", "Item3", "1", "30.00"), // sheet 4 -- clean sibling
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestServiceImport_BlankIssueDateCommitsAsNull(t *testing.T) {
 		mkRow("INV-NODATE", "", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2 -- blank issue_date
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestServiceImport_ZeroDataRowsRealImportFinalizesFailed(t *testing.T) {
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, [][]string{}, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, [][]string{}, false)
 	if err != nil {
 		t.Fatalf("Import (zero data rows): %v", err)
 	}
@@ -290,7 +290,7 @@ func TestServiceImport_WhitespaceOnlyInvoiceNumberTreatedAsBlankUngroupable(t *t
 		mkRow("   ", "2026-01-10", "T2", "B2", "NGN", "5.00", "0.00", "5.00", "Blank", "1", "5.00"),       // sheet 3 -- whitespace-only invoice_number
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestServiceImport_LineFieldsVaryAcrossGroupRowsNoConflictCommitsWithDistinc
 		mkRow("INV-VARYLINES", "2026-01-10", "T1", "B1", "NGN", "140.00", "0.00", "140.00", "Gadget", "3", "20.00"), // sheet 3 -- different description AND quantity
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestServiceImport_HeaderSubtotalNormalizedBeforeConflictCompareNoSpuriousCo
 		mkRow("INV-NORMSYM", "2026-01-10", "T1", "B1", "NGN", "1000", "0.00", "1000.00", "Item2", "1", "500.00"),  // sheet 3 -- subtotal "1000", same value
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestServiceImport_HeaderIssueDateTrimmedBeforeConflictCompareNoSpuriousConf
 		mkRow("INV-DATETRIM", "2026-01-10", "T1", "B1", "NGN", "100.00", "0.00", "100.00", "Item2", "1", "50.00"),   // sheet 3 -- same date, no whitespace
 	}
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

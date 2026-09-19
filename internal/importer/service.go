@@ -265,18 +265,19 @@ func issueDateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int
 	return err
 }
 
-// sheetRow converts a 0-based rows[] index into its 1-based spreadsheet row:
-// header is row 1, so rows[i] is sheet row i+2.
-func sheetRow(i int) int {
+// sheetRow converts a 0-based rows[] index into its 1-based file row.
+// headerRow is plumbed but not yet used: this still returns i+2 (a
+// later change makes it headerRow+1+i).
+func sheetRow(headerRow, i int) int {
 	return i + 2
 }
 
 // sheetRows converts rowIdxs (0-based) into sorted 1-based sheet rows, for a
 // RowError's plural Rows field ([errors-shape]).
-func sheetRows(rowIdxs []int) []int {
+func sheetRows(headerRow int, rowIdxs []int) []int {
 	out := make([]int, len(rowIdxs))
 	for i, ri := range rowIdxs {
-		out[i] = sheetRow(ri)
+		out[i] = sheetRow(headerRow, ri)
 	}
 	sort.Ints(out)
 	return out
@@ -379,7 +380,7 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
 // import run — the guardrail is trivially satisfied since Import never
 // accepts a caller-supplied batch id.
-func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID, supplierName string, supplierTIN *string) invoice.CreateInput {
+func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
 	issueDateStr := ""
@@ -412,7 +413,7 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 	// domain error -- it aborts the whole run with a 500.
 	if documentID != "" {
 		in.SourceDocumentID = &documentID
-		in.SourceRows = sheetRows(g.rowIdxs)
+		in.SourceRows = sheetRows(headerRow, g.rowIdxs)
 	}
 	for _, ri := range g.rowIdxs {
 		row := rows[ri]
@@ -514,9 +515,9 @@ const (
 // shape (DUP-03). invoiceID is the collided invoice's stored id, or "" when
 // none is resolvable (the racing-INSERT backstop) -- omitempty then omits
 // the key entirely.
-func storeDuplicateRowError(rowIdxs []int, invoiceID string) RowError {
+func storeDuplicateRowError(headerRow int, rowIdxs []int, invoiceID string) RowError {
 	return RowError{
-		Rows:      sheetRows(rowIdxs),
+		Rows:      sheetRows(headerRow, rowIdxs),
 		Field:     "invoice_number",
 		RuleKey:   ruleKeyDuplicateInvoiceNumber,
 		Severity:  "error",
@@ -602,7 +603,10 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 // run creates ([pointer-on-invoice]). It is likewise unused on the dry-run
 // path, which writes nothing to point at anything. "" is legal and persists as
 // NULL: a caller with no source document is still a caller.
-func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+//
+// headerRow is plumbed through every numbering site and into CreateBatch, but
+// is not yet effective: sheetRow is still a stub.
+func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
 		return BatchResult{}, err
@@ -645,7 +649,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		g := groups[num]
 		if field := headerConflictField(rows, colIndex, g.rowIdxs); field != "" {
 			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
+				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   field,
 				Message: fmt.Sprintf("rows disagree on %s", field),
 			})
@@ -655,7 +659,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		}
 		if dateErr := issueDateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
 			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
+				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   "issue_date",
 				Message: dateErr.Error(),
 			})
@@ -665,7 +669,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		}
 		if field := bestEffortBadNumericField(rows, colIndex, g.rowIdxs); field != "" {
 			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
+				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   field,
 				Message: fmt.Sprintf("%s is not a valid number", field),
 			})
@@ -674,7 +678,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			continue
 		}
 		if invoiceID, ok := existing[num]; ok {
-			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, invoiceID))
+			errorsList = append(errorsList, storeDuplicateRowError(headerRow, g.rowIdxs, invoiceID))
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
 			continue
@@ -684,7 +688,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	for _, i := range ungroupableRows {
 		errorsList = append(errorsList, RowError{
-			Row:     sheetRow(i),
+			Row:     sheetRow(headerRow, i),
 			Message: "blank invoice number: row cannot be grouped",
 		})
 		quarantinedInvoices++
@@ -746,7 +750,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// batchID is "" -- no batch exists on a dry-run and none is
 			// minted. MBSPayload never reads ImportBatchID, so it cannot
 			// reach 04 or affect a single verdict.
-			in := buildCreateInput(entityID, rows, colIndex, g, "", "", supplierName, supplierTIN)
+			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN)
 			// Ref is the invoice_number, not an id: no id exists yet
 			// pre-Create. 04 echoes Ref back untouched and never interprets
 			// it, and group numbers are unique by construction (groups is
@@ -784,7 +788,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 					InvoiceNumber: g.number,
 					// InvoiceID stays "" -> omitempty omits it: no id
 					// exists yet ([Stage-1 F7]).
-					Rows:       sheetRows(g.rowIdxs),
+					Rows:       sheetRows(headerRow, g.rowIdxs),
 					Violations: vs,
 				})
 			}
@@ -797,7 +801,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 	// straight to 'failed' — never CreateBatch/Create for a real group,
 	// never a partial-split status for this case.
 	if rowsTotal == 0 {
-		batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID)
+		batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID, headerRow)
 		if err != nil {
 			return BatchResult{}, err
 		}
@@ -807,7 +811,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		return BatchResult{ID: batchID, Status: "failed"}, nil
 	}
 
-	batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID)
+	batchID, err := s.batch.CreateBatch(ctx, entityID, filename, documentID, headerRow)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -831,7 +835,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	readyCount := 0
 	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, supplierName, supplierTIN)
+		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN)
 		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++
@@ -857,10 +861,10 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// ExistingNumbers precheck -- report the SAME enriched shape the
 			// precheck itself emits (DUP-04), never the bare generic form.
 			// No id: the racing tx's row may not even be visible yet.
-			errorsList = append(errorsList, storeDuplicateRowError(g.rowIdxs, ""))
+			errorsList = append(errorsList, storeDuplicateRowError(headerRow, g.rowIdxs, ""))
 		} else {
 			errorsList = append(errorsList, RowError{
-				Rows:    sheetRows(g.rowIdxs),
+				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   bestEffortBadNumericField(rows, colIndex, g.rowIdxs),
 				Message: msg,
 			})
@@ -932,7 +936,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			invoiceViolations = append(invoiceViolations, InvoiceViolations{
 				InvoiceNumber: c.inv.InvoiceNumber,
 				InvoiceID:     c.inv.ID,
-				Rows:          sheetRows(c.rowIdxs),
+				Rows:          sheetRows(headerRow, c.rowIdxs),
 				Violations:    vs,
 			})
 		}

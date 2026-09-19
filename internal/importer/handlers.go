@@ -182,7 +182,7 @@ func detectFormat(filename, contentType string) string {
 // object storage is down ([fail-closed]). A dry run needs the bytes too --
 // it decodes them, it just persists nothing.
 func CreateHandler(
-	imp func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
+	imp func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
 	log *slog.Logger,
@@ -319,7 +319,8 @@ func CreateHandler(
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, filename, documentID, mapping, header, rows, dryRun)
+		// headerRow: fixed at 1 for now; a later change parses it from the request.
+		res, err := imp(r.Context(), entityID, filename, documentID, 1, mapping, header, rows, dryRun)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

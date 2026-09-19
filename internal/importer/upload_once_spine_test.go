@@ -207,7 +207,7 @@ func TestCreateBatch_EmptyDocumentIDPersistsNull(t *testing.T) {
 		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
 	})
 
-	id, err := NewStore(app).CreateBatch(ctx, entityID, "x.csv", "")
+	id, err := NewStore(app).CreateBatch(ctx, entityID, "x.csv", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch: %v", err)
 	}

@@ -51,7 +51,7 @@ func TestSheet_UnmappedErrorIsStill500(t *testing.T) {
 
 func TestImport_WrappedNotActiveMemberIs403(t *testing.T) {
 	id := testIdentity()
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run for a caller the seam refuses")
 		return BatchResult{}, nil
 	}
@@ -114,7 +114,7 @@ func TestSheet_WrappedNotActiveMemberIs403(t *testing.T) {
 
 func TestImport_403DoesNotLog(t *testing.T) {
 	id := testIdentity()
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run for a caller the seam refuses")
 		return BatchResult{}, nil
 	}
@@ -201,7 +201,7 @@ func TestThreeRoutes_403BodyIsByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal mapping: %v", err)
 	}
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("imp must not run for a caller the seam refuses")
 		return BatchResult{}, nil
 	}
@@ -254,7 +254,7 @@ func TestThreeRoutes_ErrNoTenantIs500NotAuthNorForbidden(t *testing.T) {
 		run  func(t *testing.T) (*httptest.ResponseRecorder, []byte)
 	}{
 		{"CreateHandler", func(t *testing.T) (*httptest.ResponseRecorder, []byte) {
-			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				t.Fatal("imp must not run for a caller the seam refuses")
 				return BatchResult{}, nil
 			}

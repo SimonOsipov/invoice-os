@@ -70,7 +70,7 @@ func TestServiceImport_DryRunErrUpstreamAbortsRunNoWrites(t *testing.T) {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, true) // dryRun=true
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, true) // dryRun=true
 	if err == nil {
 		t.Fatal("Import (dryRun=true): err = nil, want ErrUpstream to propagate -- an unreachable 04 during a PREVIEW is still an outage, not \"everything is clean\"")
 	}
@@ -128,7 +128,7 @@ func TestServiceImport_ReadyInvoicesCountMatchesGateReceivedCount(t *testing.T) 
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestServiceImport_LeadingZeroSubtotalDryRunOverReportsNeverUnderReportsReal
 
 	// Dry-run FIRST (writes nothing, so it cannot shadow the real run's
 	// ExistingNumbers check that follows on the same entity/invoice_number).
-	dryRes, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, true)
+	dryRes, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, true)
 	if err != nil {
 		t.Fatalf("Import (dryRun=true): %v", err)
 	}
@@ -207,7 +207,7 @@ func TestServiceImport_LeadingZeroSubtotalDryRunOverReportsNeverUnderReportsReal
 
 	// Real SECOND: proves the invoice is genuinely, actually clean once
 	// Postgres has normalized the leading zero away.
-	realRes, err := svc.Import(c, entityID, "", "", stdMapping, stdHeader, rows, false)
+	realRes, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
 	if err != nil {
 		t.Fatalf("Import (real): %v", err)
 	}

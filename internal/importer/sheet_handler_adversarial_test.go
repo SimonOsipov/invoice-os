@@ -195,7 +195,7 @@ func TestSheetHandler_XLSXGapRowAtStart(t *testing.T) {
 	}
 	resp := mustUnmarshalSheet(t, raw)
 	if got := resp.Rows[1][0]; got != "Row3" {
-		t.Errorf("rows[1][0] = %q, want %q at sheet row %d", got, "Row3", sheetRow(1))
+		t.Errorf("rows[1][0] = %q, want %q at sheet row %d", got, "Row3", sheetRow(1, 1))
 	}
 }
 
@@ -323,13 +323,13 @@ func TestSheetHandler_RowNumberingIndependentlyMatchesImporterSheetRows(t *testi
 
 	// Emulate the service's own row-group -> source_rows mapping (service.go:415)
 	// for a group spanning all three data rows, over the SAME Decode() output.
-	gotSourceRows := sheetRows([]int{0, 1, 2})
+	gotSourceRows := sheetRows(1, []int{0, 1, 2})
 	wantSourceRows := []int{2, 3, 4}
 	if !reflect.DeepEqual(gotSourceRows, wantSourceRows) {
 		t.Fatalf("sheetRows([0,1,2]) = %v, want %v", gotSourceRows, wantSourceRows)
 	}
 	for i, want := range wantSourceRows {
-		if got := sheetRow(i); got != want {
+		if got := sheetRow(1, i); got != want {
 			t.Errorf("sheetRow(%d) = %d, want %d to match what the importer would write to invoices.source_rows", i, got, want)
 		}
 	}

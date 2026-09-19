@@ -347,7 +347,7 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 
 	in, mapErr := documentCreateInput(entityID, documentID, ex)
 
-	batchID, err := s.batch.CreateBatch(ctx, entityID, ex.Filename, documentID)
+	batchID, err := s.batch.CreateBatch(ctx, entityID, ex.Filename, documentID, 0) // no header row: a document import
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -390,7 +390,7 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 
 		var quarantineErr RowError
 		if errors.Is(createErr, invoice.ErrDuplicateNumber) {
-			quarantineErr = storeDuplicateRowError(nil, existing[in.InvoiceNumber])
+			quarantineErr = storeDuplicateRowError(1, nil, existing[in.InvoiceNumber])
 		} else {
 			quarantineErr = RowError{Message: msg}
 		}

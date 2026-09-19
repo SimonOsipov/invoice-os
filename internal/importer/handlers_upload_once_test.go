@@ -549,7 +549,7 @@ func TestImport_ReadsDocumentBytesAndBatchFilename(t *testing.T) {
 	var gotEntity, gotFilename, gotDocumentID string
 	var gotHeader []string
 	var gotRows [][]string
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		gotEntity, gotFilename, gotDocumentID = entityID, filename, documentID
 		gotHeader, gotRows = h, r
 		return BatchResult{ID: uuid.NewString(), Status: "completed", RowsTotal: len(r), RowsValid: len(r)}, nil
@@ -593,7 +593,7 @@ func TestImport_ReadsDocumentBytesAndBatchFilename(t *testing.T) {
 func TestImport_RequiresDocumentID(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("q.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run without a document_id")
 		return BatchResult{}, nil
 	}
@@ -617,7 +617,7 @@ func TestImport_RequiresDocumentID(t *testing.T) {
 func TestImport_RejectsFilePart(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("q.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run for a request carrying a file part")
 		return BatchResult{}, nil
 	}
@@ -642,7 +642,7 @@ func TestImport_RejectsFilePart(t *testing.T) {
 func TestImport_MalformedDocumentIDIs400(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("q.csv", "text/csv", csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run for a malformed document_id")
 		return BatchResult{}, nil
 	}
@@ -666,7 +666,7 @@ func TestImport_MalformedDocumentIDIs400(t *testing.T) {
 func TestImport_UnrecognizedDocumentFormatIs400(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("scan.pdf", "application/pdf", []byte("%PDF-1.7\n"))
-	imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run for an unrecognized document format")
 		return BatchResult{}, nil
 	}
@@ -697,7 +697,7 @@ func TestImport_NilObjectBodyIs500(t *testing.T) {
 		return document.Document{ID: docID, Filename: &filename, DeclaredContentType: &contentType},
 			document.Object{}, nil
 	}
-	imp := func(ctx context.Context, entityID, fn, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, fn, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 		t.Fatal("Import must not run for a document with no body")
 		return BatchResult{}, nil
 	}
@@ -780,7 +780,7 @@ func TestPreview_UploadCapIs15MiB(t *testing.T) {
 // one part.
 func TestImport_UploadCapIs15MiB(t *testing.T) {
 	newImp := func(t *testing.T) importFunc {
-		return func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
+		return func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, h []string, r [][]string, dryRun bool) (BatchResult, error) {
 			return BatchResult{ID: uuid.NewString(), Status: "completed", RowsTotal: len(r), RowsValid: len(r)}, nil
 		}
 	}

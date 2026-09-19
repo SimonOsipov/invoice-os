@@ -86,7 +86,10 @@ func pgCode(err error) string {
 // indistinguishable from a file genuinely named nothing. A non-empty but
 // invalid documentID hits the 22P02 path above; a blank one is nullified
 // before the cast, so a caller with no source document stays writable.
-func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID string) (string, error) {
+//
+// headerRow is accepted but not yet written: the INSERT below still has no
+// header_row column.
+func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID string, headerRow int) (string, error) {
 	var id string
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		identity, _ := auth.IdentityFromContext(ctx)

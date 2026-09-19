@@ -222,7 +222,7 @@ func backfillDocument(
 			for i, row := range rows {
 				// The bound check also absorbs excelize's nil gap rows.
 				if col < len(row) && row[col] == inv.number {
-					matched = append(matched, sheetRow(i))
+					matched = append(matched, sheetRow(1, i))
 				}
 			}
 			// Zero is rejected BEFORE the equality test: a 0 == 0 agreement

@@ -18,10 +18,14 @@ import (
 // SourceDocument is the GET /v1/invoices/{id}/source-document body. No
 // omitempty anywhere: an explicit null is the contract. SourceRows nil means
 // "never recorded", which the previewer must tell apart from an empty range.
+// It also reports the header row the import read.
 type SourceDocument struct {
-	InvoiceID  string                `json:"invoice_id"`
-	SourceRows []int                 `json:"source_rows"`
-	Document   *SourceDocumentRecord `json:"document"`
+	InvoiceID  string `json:"invoice_id"`
+	SourceRows []int  `json:"source_rows"`
+	// HeaderRow is the file row the import read its column names from; nil for
+	// a manual invoice, a document import and every pre-AIR-06 batch.
+	HeaderRow *int                  `json:"header_row"`
+	Document  *SourceDocumentRecord `json:"document"`
 }
 
 // SourceDocumentRecord is the documents row behind an imported invoice, plus

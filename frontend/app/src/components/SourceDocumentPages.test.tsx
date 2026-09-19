@@ -46,7 +46,7 @@ function pdfRecord(over: Partial<SourceDocumentRecord> = {}): SourceDocumentReco
 }
 
 function response(over: Partial<SourceDocumentResponse> = {}): SourceDocumentResponse {
-  return { invoice_id: 'inv-1', source_rows: null, document: pdfRecord(), ...over }
+  return { invoice_id: 'inv-1', source_rows: null, header_row: null, document: pdfRecord(), ...over }
 }
 
 function metaAsync(over: Partial<SourceDocumentAsync> = {}): SourceDocumentAsync {

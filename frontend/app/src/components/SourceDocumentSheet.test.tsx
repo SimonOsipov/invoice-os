@@ -43,7 +43,9 @@ function sheet(rowCount: number, over: Partial<DocumentSheet> = {}): DocumentShe
   }
 }
 
-function renderSheet(s: DocumentSheet, sourceRows: number[] | null, otherInvoiceRows: number[] = []) {
+// AIR-06-04: headerRow accepted but not yet threaded to the component.
+function renderSheet(s: DocumentSheet, sourceRows: number[] | null, otherInvoiceRows: number[] = [], headerRow = 1) {
+  void headerRow
   return render(<SourceDocumentSheet sheet={s} sourceRows={sourceRows} otherInvoiceRows={otherInvoiceRows} />)
 }
 
@@ -213,7 +215,7 @@ describe('SourceDocumentSheet', () => {
   })
 
   it('an invoice whose rows fall outside the returned window says so', () => {
-    // 5002, not 5001: rowsWithinSheet's boundary is rows_returned + 1, so 5001 is PRESENT.
+    // 5002, not 5001: rowsWithinSheet's boundary is rows_returned + headerRow, which is + 1 here.
     renderSheet(sheet(5000, { rows_total: 5001, truncated: true }), [5002, 5003])
 
     expect(screen.getByTestId('sheet-truncation').textContent).toContain(
@@ -375,6 +377,43 @@ describe('SourceDocumentSheet', () => {
     expect(Math.max(...sheetNumbers(allRows()))).toBe(5001)
   })
 
+  // AIR-06-04: the gutter numbers from the stored header row, not a hard-coded row 1.
+  it('the gutter numbers rows from the header row', () => {
+    renderSheet(sheet(4), null, [], 3)
+    expect(sheetNumbers(allRows())).toEqual([4, 5, 6, 7])
+    expect(rowByCell('INV-2').getAttribute('data-sheet-row')).toBe('4')
+    cleanup()
+
+    // Control: the default header row keeps today's numbering.
+    renderSheet(sheet(4), null)
+    expect(sheetNumbers(allRows())).toEqual([2, 3, 4, 5])
+  })
+
+  // AIR-06-04: the marker track's file-space offset and the track click both follow the
+  // header row, not the hard-coded FIRST_DATA_SHEET_ROW.
+  it('the marker track and the track click follow the header row', () => {
+    renderSheet(sheet(100), [4], [], 3)
+    expect(parseFloat(screen.getByTestId('marker-invoice-block').style.top)).toBeCloseTo(0, 5)
+    cleanup()
+
+    renderSheet(sheet(100), [5], [], 3)
+    expect(parseFloat(screen.getByTestId('marker-invoice-block').style.top)).toBeCloseTo(1, 5)
+    cleanup()
+
+    // Control at the default header row: today's offset, unchanged.
+    renderSheet(sheet(100), [2])
+    expect(parseFloat(screen.getByTestId('marker-invoice-block').style.top)).toBeCloseTo(0, 5)
+    cleanup()
+
+    // A click at the top of the track must land on the first data row, not past it.
+    renderSheet(sheet(100), [4], [], 3)
+    const track = screen.getByTestId('sheet-marker-track')
+    track.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 600, height: 600, left: 0, right: 16, width: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    fireEvent.click(track, { clientY: 0 })
+    expect(sheetNumbers(allRows())[0]).toBe(4)
+  })
+
   it('the sheet never names a property the design system lacks', () => {
     // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath throws.
     const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentSheet.tsx'), 'utf8')
@@ -419,7 +458,7 @@ describe('SourceDocumentSheet', () => {
       invoices_created: 500,
       other_invoice_rows: [100, 200],
     }
-    const data: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: INVOICE_ROWS, document: record }
+    const data: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: INVOICE_ROWS, header_row: null, document: record }
     const meta: SourceDocumentAsync = { status: 'ready', data, error: null, run: vi.fn() }
 
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw')

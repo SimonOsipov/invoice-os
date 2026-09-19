@@ -75,7 +75,7 @@ function sourceRecord(over: Partial<SourceDocumentRecord> = {}): SourceDocumentR
 }
 
 function meta(document: SourceDocumentRecord | null): SourceDocumentAsync {
-  const data: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], document }
+  const data: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], header_row: null, document }
   return { status: 'ready', data, error: null, run: vi.fn() }
 }
 

@@ -18,6 +18,7 @@ import {
   contiguousRanges,
   describeSourceRows,
   fetchDocumentBytes,
+  firstDataSheetRow,
   formatBytes,
   getDocumentSheet,
   getSourceDocument,
@@ -62,7 +63,7 @@ const UNRENDERABLE_DOC = mkDocument({ filename: 'a.zip', declared_content_type: 
 
 function mkMeta(status: LoadStatus, document: SourceDocumentRecord | null): SourceDocumentMeta {
   if (status !== 'ready') return { status, value: null }
-  return { status, value: { invoice_id: INVOICE_ID, source_rows: null, document } }
+  return { status, value: { invoice_id: INVOICE_ID, source_rows: null, header_row: null, document } }
 }
 
 // -- classifyDocument (AC1) --------------------------------------------------------
@@ -245,7 +246,7 @@ describe('sheetWindow', () => {
 // -- numberSheetRows (AC7) ------------------------------------------------------------
 
 describe('numberSheetRows', () => {
-  it('binds the sheet number, i+2', () => {
+  it('binds the sheet number from the header row', () => {
     expect(numberSheetRows([['a'], ['b'], ['c']])).toEqual([
       { sheetRow: 2, cells: ['a'] },
       { sheetRow: 3, cells: ['b'] },
@@ -259,6 +260,33 @@ describe('numberSheetRows', () => {
     const numbered = numberSheetRows(rows)
     const filtered = [numbered[1], numbered[4]]
     expect(filtered.map((r) => r.sheetRow)).toEqual([3, 6])
+  })
+})
+
+// -- firstDataSheetRow / numberSheetRows at a header row past 1 (AIR-06-04, Core AC 6) ------
+
+describe('firstDataSheetRow', () => {
+  it('is the row after the header', () => {
+    expect(firstDataSheetRow()).toBe(2)
+    expect(firstDataSheetRow(1)).toBe(2)
+    expect(firstDataSheetRow(3)).toBe(4)
+  })
+
+  it('numberSheetRows numbers from the row after the header', () => {
+    expect(numberSheetRows([['a'], ['b']])).toEqual([
+      { sheetRow: 2, cells: ['a'] },
+      { sheetRow: 3, cells: ['b'] },
+    ])
+    expect(numberSheetRows([['a'], ['b']], 3)).toEqual([
+      { sheetRow: 4, cells: ['a'] },
+      { sheetRow: 5, cells: ['b'] },
+    ])
+    expect(numberSheetRows([], 3)).toEqual([])
+  })
+
+  it('FIRST_DATA_SHEET_ROW no longer exists in the module', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'sourceDocument.ts'), 'utf8')
+    expect(src).not.toContain('FIRST_DATA_SHEET_ROW')
   })
 })
 
@@ -405,14 +433,24 @@ describe('rowsWithinSheet', () => {
     expect(rowsWithinSheet(null, 5000)).toEqual({ present: [], missing: [] })
   })
 
-  // sheetRow(i)=i+2 and the endpoint returns data rows 0..rowsReturned-1, so the last row
-  // actually sent is rowsReturned+1.
+  // The endpoint returns the first rowsReturned data rows, i.e. the header row + 1 through
+  // rowsReturned + the header row.
   it('the boundary is rows_returned + 1', () => {
     expect(rowsWithinSheet([5001], 5000)).toEqual({ present: [5001], missing: [] })
     expect(rowsWithinSheet([5002], 5000)).toEqual({ present: [], missing: [5002] })
     expect(rowsWithinSheet([5000], 5000)).toEqual({ present: [5000], missing: [] })
     expect(rowsWithinSheet([2], 5000)).toEqual({ present: [2], missing: [] })
-    expect(rowsWithinSheet([1], 5000)).toEqual({ present: [], missing: [1] }) // row 1 is the header
+    expect(rowsWithinSheet([1], 5000)).toEqual({ present: [], missing: [1] }) // row 1 is the header at headerRow 1
+  })
+
+  it('bounds follow the header row past 1', () => {
+    expect(rowsWithinSheet([4], 5000, 3)).toEqual({ present: [4], missing: [] })
+    expect(rowsWithinSheet([3], 5000, 3)).toEqual({ present: [], missing: [3] }) // row 3 is the header
+    expect(rowsWithinSheet([5003], 5000, 3)).toEqual({ present: [5003], missing: [] })
+    expect(rowsWithinSheet([5004], 5000, 3)).toEqual({ present: [], missing: [5004] })
+    // Control at headerRow 1: today's boundary, unchanged.
+    expect(rowsWithinSheet([5001], 5000, 1)).toEqual({ present: [5001], missing: [] })
+    expect(rowsWithinSheet([5002], 5000, 1)).toEqual({ present: [], missing: [5002] })
   })
 })
 
@@ -443,7 +481,7 @@ async function captureRejection(thunk: () => unknown): Promise<unknown> {
 
 describe('getSourceDocument', () => {
   it('url, bearer and the resolved body', async () => {
-    const body: SourceDocumentResponse = { invoice_id: INVOICE_ID, source_rows: null, document: mkDocument() }
+    const body: SourceDocumentResponse = { invoice_id: INVOICE_ID, source_rows: null, header_row: null, document: mkDocument() }
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(body) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
 
@@ -507,6 +545,32 @@ describe('getDocumentSheet', () => {
     expect(err).toBeInstanceOf(ApiError)
     expect((err as ApiError).status).toBe(404)
     expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it('sends header_row only past row 1', async () => {
+    const sheetBody: DocumentSheet = {
+      format: 'csv',
+      delimiter: ',',
+      encoding: 'utf-8',
+      columns: ['a'],
+      rows: [['1']],
+      rows_total: 1,
+      rows_returned: 1,
+      truncated: false,
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(sheetBody) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    await getDocumentSheet(af, BASE, DOCUMENT_ID)
+    await getDocumentSheet(af, BASE, DOCUMENT_ID, 1)
+    await getDocumentSheet(af, BASE, DOCUMENT_ID, 3)
+    await getDocumentSheet(af, BASE, 'a/b', 3)
+
+    const urls = fetchMock.mock.calls.map(([url]) => url as string)
+    expect(urls[0]).toBe(`${BASE}/api/invoice/v1/documents/${DOCUMENT_ID}/sheet`)
+    expect(urls[1]).toBe(`${BASE}/api/invoice/v1/documents/${DOCUMENT_ID}/sheet`)
+    expect(urls[2]).toBe(`${BASE}/api/invoice/v1/documents/${DOCUMENT_ID}/sheet?header_row=3`)
+    expect(urls[3]).toBe(`${BASE}/api/invoice/v1/documents/a%2Fb/sheet?header_row=3`)
   })
 })
 

@@ -59,7 +59,7 @@ function sourceRecord(): SourceDocumentRecord {
   }
 }
 
-const WITH_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], document: sourceRecord() }
+const WITH_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], header_row: null, document: sourceRecord() }
 
 function detailRecord(): InvoiceDetailRecord {
   return {

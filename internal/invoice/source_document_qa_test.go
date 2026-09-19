@@ -346,3 +346,36 @@ func TestSourceDocumentHandler_NullFilenameRendersExplicitlyOnWire(t *testing.T)
 		t.Errorf("body = %s, want it to contain \"filename\":null", raw)
 	}
 }
+
+// T3 (AIR-06-04): header_row renders explicitly on the wire, nil or set.
+func TestSourceDocumentHandler_HeaderRowRendersExplicitly(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	three := 3
+
+	t.Run("nil", func(t *testing.T) {
+		get := func(ctx context.Context, gotID string) (SourceDocument, error) {
+			return SourceDocument{InvoiceID: gotID}, nil
+		}
+		rec := doSourceDocument(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if raw := rec.Body.Bytes(); !bytes.Contains(raw, []byte(`"header_row":null`)) {
+			t.Errorf("body = %s, want it to contain \"header_row\":null", raw)
+		}
+	})
+
+	t.Run("set", func(t *testing.T) {
+		get := func(ctx context.Context, gotID string) (SourceDocument, error) {
+			return SourceDocument{InvoiceID: gotID, HeaderRow: &three}, nil
+		}
+		rec := doSourceDocument(t, get, &id, invoiceID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if raw := rec.Body.Bytes(); !bytes.Contains(raw, []byte(`"header_row":3`)) {
+			t.Errorf("body = %s, want it to contain \"header_row\":3", raw)
+		}
+	})
+}

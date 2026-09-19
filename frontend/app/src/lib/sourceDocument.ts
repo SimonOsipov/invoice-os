@@ -20,6 +20,7 @@ export interface SourceDocumentRecord {
 export interface SourceDocumentResponse {
   invoice_id: string
   source_rows: number[] | null // null = never recorded, distinct from []
+  header_row: number | null // null = row 1 (never recorded, a document import, or a pre-AIR-06 batch)
   document: SourceDocumentRecord | null // null = manually created invoice
 }
 
@@ -75,7 +76,14 @@ export async function getSourceDocument(
   )
 }
 
-export async function getDocumentSheet(authedFetch: AuthedFetch, base: string, documentId: string): Promise<DocumentSheet> {
+// AIR-06-04 stub: headerRow accepted but ignored, URL unchanged.
+export async function getDocumentSheet(
+  authedFetch: AuthedFetch,
+  base: string,
+  documentId: string,
+  headerRow = 1,
+): Promise<DocumentSheet> {
+  void headerRow
   return authedFetch<DocumentSheet>(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}/sheet`)
 }
 
@@ -198,9 +206,17 @@ export function sheetWindow(scrollTop: number, measuredViewportH: number, total:
 // Row 1 is the header; sheetRow(i) = i + 2, mirroring internal/importer/service.go:270.
 const FIRST_DATA_SHEET_ROW = 2
 
+// AIR-06-04 stub: always 2, headerRow ignored until the SPA threads the stored row through.
+export function firstDataSheetRow(headerRow = 1): number {
+  void headerRow
+  return FIRST_DATA_SHEET_ROW
+}
+
 // The number is bound BEFORE any filtering, which is what makes it structural: consumers
 // filter and slice NumberedRow[], so no view mode can renumber.
-export function numberSheetRows(rows: string[][]): NumberedRow[] {
+// AIR-06-04 stub: headerRow accepted but ignored.
+export function numberSheetRows(rows: string[][], headerRow = 1): NumberedRow[] {
+  void headerRow
   return rows.map((cells, i) => ({ sheetRow: i + FIRST_DATA_SHEET_ROW, cells }))
 }
 
@@ -223,10 +239,13 @@ export function contiguousRanges(rows: number[] | null): Array<[number, number]>
 // The sheet endpoint returns the first `rowsReturned` data rows in decode order, i.e. sheet
 // rows 2 … rowsReturned+1. Rows past that are stored but off-screen, and the surface must
 // say so instead of silently omitting them.
+// AIR-06-04 stub: headerRow accepted but ignored.
 export function rowsWithinSheet(
   sourceRows: number[] | null,
   rowsReturned: number,
+  headerRow = 1,
 ): { present: number[]; missing: number[] } {
+  void headerRow
   const present: number[] = []
   const missing: number[] = []
   for (const n of sortedUnique(sourceRows)) {

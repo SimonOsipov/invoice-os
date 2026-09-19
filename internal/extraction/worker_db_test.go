@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -4241,8 +4242,10 @@ func TestRLS_ExtractWorkerWithTheAIOffWritesTodaysRows(t *testing.T) {
 	}
 }
 
-// T03. Neither arm that never reaches the text branch may call the AI: the mock arm (Text nil)
-// and the no-text arm (a read with TextChars == 0).
+// T03. Neither arm that never reaches the text branch may call the AI (askAI): the mock arm
+// (Text nil) and the no-text arm with no rendered page (readImagesAI's own empty-images guard,
+// AIR-05-03). A no-text arm WITH a rendered page can call the AI -- that is now the image arm's
+// own job, pinned by TestRLS_ExtractWorkerReadsANoTextDocumentFromItsPageImages (T01).
 func TestRLS_ExtractWorkerSkipsTheAIWithoutText(t *testing.T) {
 	ctx := t.Context()
 
@@ -4261,19 +4264,18 @@ func TestRLS_ExtractWorkerSkipsTheAIWithoutText(t *testing.T) {
 		}
 	})
 
-	t.Run("no-text arm, TextChars is 0", func(t *testing.T) {
+	t.Run("no-text arm with no rendered page", func(t *testing.T) {
 		tenantID, documentID := wkFixture(t, ctx)
+		bucket := &wkPageBucket{}
 		stub := &wkAI{enabled: true}
-		blank := &wpReader{pages: []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}}
-		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), blank, wpStoreRules(t).load, &wkAuditRecorder{})
-		ew.AI = stub
+		ew := wkImageWorker(t, []byte("extr-09 worker fixture"), &wkStubReader{pages: 0}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
 
 		const riverJobID = int64(930006)
 		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
 			t.Fatalf("Work: %v", err)
 		}
 		if n := stub.count(); n != 0 {
-			t.Errorf("the AI seam saw %d call(s) on the no-text arm (TextChars 0), want 0", n)
+			t.Errorf("the AI seam saw %d call(s) on the no-text arm (no rendered page), want 0", n)
 		}
 	})
 }
@@ -4609,21 +4611,11 @@ func TestRLS_ExtractWorkerAnErrOffCallWritesTheEngineRows(t *testing.T) {
 	}
 }
 
-// The no-text and mock arms never ask the AI, so a failing AI cannot put the marker there.
-func TestRLS_ExtractWorkerAnUnavailableAIDoesNotReachTheNoTextArms(t *testing.T) {
+// The mock arm never asks the AI, so a failing AI cannot put the marker there. The no-text
+// arm's OPPOSITE is now pinned by TestRLS_ExtractWorkerWritesTheMarkerWhenTheImageReadFails
+// (AC-6, AIR-05-03): a failing AI there is exactly how the marker gets written.
+func TestRLS_ExtractWorkerAnUnavailableAIDoesNotReachTheMockArm(t *testing.T) {
 	ctx := t.Context()
-
-	t.Run("no-text arm, TextChars is 0", func(t *testing.T) {
-		stub := &wkAI{enabled: true, err: ai.ErrUnavailable}
-		r := wkRunAI(t, ctx, 930111, []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}, stub)
-		if len(r.rows) != 1 {
-			t.Fatalf("rows = %v, want exactly the text-layer verdict", r.rows)
-		}
-		wpAssertRankZero(t, r.rows, "document_text_layer", nil, stPtr("unreadable"))
-		if n := stub.count(); n != 0 {
-			t.Errorf("the AI seam saw %d call(s), want 0", n)
-		}
-	})
 
 	t.Run("mock arm, Text is nil", func(t *testing.T) {
 		tenantID, documentID := wkFixture(t, ctx)
@@ -5002,5 +4994,690 @@ func TestRLS_ExtractWorkerKeepsTheEngineResultWhenTheAICallIsCancelled(t *testin
 		if got := render(wkRunAI(t, ctx, 930023+int64(i), pages, c.reader)); !slices.Equal(off, got) {
 			t.Errorf("%s: the AI error changed the rows:\n off: %v\n got: %v", c.name, off, got)
 		}
+	}
+}
+
+// --- AIR-05-03: the no-text arm reads the page images -------------------------------
+
+// wkImageIntro mirrors extraction's unexported aiImageIntro (aiimage.go), tools/aimodeltest/
+// run.py's IMAGE_INTRO, byte for byte. Reproduced rather than exported: this external test
+// package reads the literal, the way eeNoInvoiceNumberMessage reads importer's.
+const wkImageIntro = "The document has no text layer. Its pages are attached as images."
+
+// wkPageBucket is a PageSink-and-PageObject pair over one map: put stores a rendered page's
+// bytes by key, object reads them back and records every key asked, in order. failOn errors the
+// read for that one key -- the page-read-failure lever (T07).
+type wkPageBucket struct {
+	mu     sync.Mutex
+	bodies map[string][]byte
+	asked  []string
+	failOn string
+}
+
+func (b *wkPageBucket) put(_ context.Context, key string, body []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bodies == nil {
+		b.bodies = map[string][]byte{}
+	}
+	// Copied: PageStore.Ingest hands the sink Page.ImagePNG borrowed for the call's duration.
+	b.bodies[key] = append([]byte(nil), body...)
+	return nil
+}
+
+func (b *wkPageBucket) object(_ context.Context, key string) (io.ReadCloser, int64, error) {
+	b.mu.Lock()
+	b.asked = append(b.asked, key)
+	fail := b.failOn != "" && key == b.failOn
+	body := append([]byte(nil), b.bodies[key]...)
+	b.mu.Unlock()
+	if fail {
+		return nil, 0, errors.New("wkPageBucket: object store failed on " + key)
+	}
+	return io.NopCloser(bytes.NewReader(body)), int64(len(body)), nil
+}
+
+func (b *wkPageBucket) keysAsked() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.asked)
+}
+
+func (b *wkPageBucket) body(key string) []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.bodies[key]...)
+}
+
+// wkNumberedReader is a PageReader over N synthetic pages whose PNG bytes end in "page-<n>", so
+// byte identity proves which page a request carried (T02: first and last, never the middle).
+type wkNumberedReader struct{ pages int }
+
+func (*wkNumberedReader) Name() string    { return "air-05-numbered-reader" }
+func (*wkNumberedReader) Version() string { return "v1" }
+
+func (r *wkNumberedReader) Read(_ context.Context, _ extraction.Document, onPage func(extraction.Page) error) (extraction.PageResult, error) {
+	for i := 1; i <= r.pages; i++ {
+		if err := onPage(extraction.Page{
+			Number: i, WidthPt: 612, HeightPt: 792,
+			ImageWidth: prLetterWidthPx, ImageHeight: prLetterHeightPx,
+			ImagePNG: []byte(fmt.Sprintf("\x89PNG\r\n\x1a\nair-05-numbered-page-%d", i)),
+		}); err != nil {
+			return extraction.PageResult{}, err
+		}
+	}
+	return extraction.PageResult{Pages: r.pages}, nil
+}
+
+// wkImageWorker wires the no-text image arm: reader renders pages through bucket's sink, a
+// blank text read keeps TextChars at 0 (the no-text classification), and rules/ai are the
+// caller's own seams so a test can read back what each one saw.
+func wkImageWorker(t *testing.T, body []byte, reader extraction.PageReader, bucket *wkPageBucket, rules extraction.LoadAnchorRules, ai extraction.AIReader, rec *wkAuditRecorder) *extraction.ExtractWorker {
+	t.Helper()
+	pages := &extraction.PageStore{Reader: reader, Sink: bucket.put}
+	ew := wkWorkerPages(t, wkOK(), &wkOpener{body: body}, pages, rec)
+	ew.Text = &wpReader{pages: []extraction.Page{{Number: 1, WidthPt: 612, HeightPt: 792}}}
+	ew.Rules = rules
+	ew.PageBytes = bucket.object
+	ew.AI = ai
+	return ew
+}
+
+// T01. AC 2/3/4: a no-text PDF's rendered pages, read back by their own storage keys, become
+// the image request; an answered read replaces the text-layer verdict with the AI's own rows.
+func TestRLS_ExtractWorkerReadsANoTextDocumentFromItsPageImages(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	raw := fxRead(t, fxScanned)
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true, answer: map[string]any{
+		"invoice_number": "INV-5520", "total": "1935.00", "buyer_tin": "9999999-1202",
+	}}
+	rules := wpStoreRules(t)
+	rec := &wkAuditRecorder{}
+	ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, rules.load, stub, rec)
+
+	const riverJobID = int64(931500)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the AI seam saw %d call(s), want exactly 1", n)
+	}
+	req := stub.reqs[0]
+	if len(req.Pages) != 1 {
+		t.Fatalf("req.Pages = %d page(s), want exactly 1 (scanned_invoice.pdf is a one-page fixture)", len(req.Pages))
+	}
+	pageKey := wkPageKeys(tenantID, raw, 1)[0]
+	if want := bucket.body(pageKey); !bytes.Equal(req.Pages[0], want) {
+		t.Errorf("req.Pages[0] = %v, want the body the sink PUT for page 1 (%v)", req.Pages[0], want)
+	}
+	if req.Text != wkImageIntro {
+		t.Errorf("req.Text = %q, want %q", req.Text, wkImageIntro)
+	}
+
+	rows := wpResults(t, ctx, xid)
+	for _, r := range rows {
+		if r.name == "document_text_layer" {
+			t.Errorf("rows carry a document_text_layer row %v; an answered image read must replace it", r)
+		}
+	}
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("INV-5520"), nil)
+	wpAssertRankZero(t, rows, "total", stPtr("1935.00"), nil)
+	r0 := wkRankRow(t, rows, "buyer_tin", 0)
+	if r0.value != nil || r0.reason == nil || *r0.reason != "unreadable" {
+		t.Errorf("buyer_tin rank 0 = %+v, want value NULL reason unreadable", r0)
+	}
+	r1 := wkRankRow(t, rows, "buyer_tin", 1)
+	if r1.value == nil || *r1.value != "9999999-1202" {
+		t.Errorf("buyer_tin rank 1 value = %s, want %q", wkStr(r1.value), "9999999-1202")
+	}
+
+	boxes := wkFieldBoxes(t, ctx, xid)
+	for _, name := range []string{"invoice_number", "total"} {
+		found := false
+		for _, b := range boxes {
+			if b.name != name || b.rank != 0 {
+				continue
+			}
+			found = true
+			if b.page != nil || b.x0 != nil || b.y0 != nil || b.x1 != nil || b.y1 != nil {
+				t.Errorf("%s rank-0 box = %s, want all-NULL: an image reading carries no region", name, b)
+			}
+		}
+		if !found {
+			t.Errorf("no rank-0 box row named %q among %v", name, boxes)
+		}
+	}
+
+	if len(rec.events()) != 1 {
+		t.Fatalf("audit events = %d, want exactly 1", len(rec.events()))
+	}
+	if ev := rec.events()[0]; !ev.Succeeded || ev.FieldCount != 11 {
+		t.Errorf("audit = %+v, want {Succeeded true, FieldCount 11}", ev)
+	}
+	if asked, _ := rules.calls(); len(asked) != 0 {
+		t.Errorf("the Rules seam was called %d time(s), want 0: the no-text arm never reaches it", len(asked))
+	}
+}
+
+// T02. AC-2: only the first and last rendered page travel, in slice order -- never the middle.
+func TestRLS_ExtractWorkerSendsOnlyTheFirstAndLastPage(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	body := []byte("air-05-03 t02 fixture")
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true}
+	ew := wkImageWorker(t, body, &wkNumberedReader{pages: 3}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+	const riverJobID = int64(931501)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the AI seam saw %d call(s), want exactly 1", n)
+	}
+	req := stub.reqs[0]
+	if len(req.Pages) != 2 {
+		t.Fatalf("req.Pages = %d page(s), want exactly 2 (first and last of 3)", len(req.Pages))
+	}
+	if !bytes.HasSuffix(req.Pages[0], []byte("page-1")) || !bytes.HasSuffix(req.Pages[1], []byte("page-3")) {
+		t.Errorf("req.Pages = %q, want the first and third numbered page (ending in page-1, page-3)", req.Pages)
+	}
+
+	wantKeys := wkPageKeys(tenantID, body, 3)
+	if got := bucket.keysAsked(); len(got) != 2 || got[0] != wantKeys[0] || got[1] != wantKeys[2] {
+		t.Errorf("bucket keys asked = %v, want exactly [%s, %s]", got, wantKeys[0], wantKeys[2])
+	}
+}
+
+// T03. AC-5: a blank image answer changes nothing -- the text-layer verdict the no-text arm
+// always writes first stands.
+func TestRLS_ExtractWorkerKeepsThePoorScanVerdictOnABlankImageRead(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	raw := fxRead(t, fxScanned)
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true} // blank answer: every header key absent
+	ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+	const riverJobID = int64(931502)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+	if n := stub.count(); n != 1 {
+		t.Errorf("the AI seam saw %d call(s), want exactly 1", n)
+	}
+}
+
+// T04. AC-6: an image-read failure writes only the AIR-04 marker; an AI error the shared
+// failure policy does not call "failed" (context.Canceled) leaves today's verdict standing.
+func TestRLS_ExtractWorkerWritesTheMarkerWhenTheImageReadFails(t *testing.T) {
+	ctx := t.Context()
+	raw := fxRead(t, fxScanned)
+	answer := map[string]any{"invoice_number": "INV-5520", "total": "1935.00", "buyer_tin": "9999999-1202"}
+
+	for i, c := range []struct {
+		name string
+		err  error
+	}{
+		{"unavailable", ai.ErrUnavailable},
+		{"refused", errors.New("ai: refused: HTTP 402")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tenantID, documentID := wkFixture(t, ctx)
+			bucket := &wkPageBucket{}
+			stub := &wkAI{enabled: true, answer: answer, err: c.err}
+			ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+			riverJobID := int64(931503 + i)
+			if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+				t.Fatalf("Work: %v", err)
+			}
+			xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+			stAssertJobState(t, ctx, xid, "succeeded")
+
+			rows := wpResults(t, ctx, xid)
+			if len(rows) != 1 {
+				t.Fatalf("rows = %v, want exactly the marker", rows)
+			}
+			wpAssertRankZero(t, rows, "document_ai_reading", nil, stPtr("unreadable"))
+			for _, r := range rows {
+				if r.name == "document_text_layer" {
+					t.Errorf("rows carry a document_text_layer row %v alongside the marker", r)
+				}
+			}
+		})
+	}
+
+	t.Run("canceled", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		bucket := &wkPageBucket{}
+		stub := &wkAI{enabled: true, answer: answer, err: context.Canceled}
+		ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+		const riverJobID = int64(931505)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+		rows := wpResults(t, ctx, xid)
+		if len(rows) != 1 {
+			t.Fatalf("rows = %v, want exactly today's verdict", rows)
+		}
+		wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+	})
+}
+
+// T05. AC-7: with the AI nil or disabled, or PageBytes unset, the image arm reads no page and
+// asks nothing.
+func TestRLS_ExtractWorkerWithTheAIOffReadsNoPageBytes(t *testing.T) {
+	ctx := t.Context()
+	raw := fxRead(t, fxScanned)
+
+	run := func(t *testing.T, riverJobID int64, configure func(ew *extraction.ExtractWorker, bucket *wkPageBucket)) (*wkPageBucket, []wpRow) {
+		tenantID, documentID := wkFixture(t, ctx)
+		bucket := &wkPageBucket{}
+		ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, nil, &wkAuditRecorder{})
+		configure(ew, bucket)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+		return bucket, wpResults(t, ctx, xid)
+	}
+
+	assertVerdictOnly := func(t *testing.T, bucket *wkPageBucket, rows []wpRow, calls int) {
+		t.Helper()
+		if len(rows) != 1 {
+			t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+		}
+		wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+		if n := len(bucket.keysAsked()); n != 0 {
+			t.Errorf("bucket reads = %d, want 0", n)
+		}
+		if calls != 0 {
+			t.Errorf("AI calls = %d, want 0", calls)
+		}
+	}
+
+	t.Run("AI nil", func(t *testing.T) {
+		bucket, rows := run(t, 931510, func(ew *extraction.ExtractWorker, b *wkPageBucket) {
+			ew.PageBytes = b.object
+		})
+		assertVerdictOnly(t, bucket, rows, 0)
+	})
+
+	t.Run("AI disabled", func(t *testing.T) {
+		stub := &wkAI{enabled: false}
+		bucket, rows := run(t, 931511, func(ew *extraction.ExtractWorker, b *wkPageBucket) {
+			ew.PageBytes = b.object
+			ew.AI = stub
+		})
+		assertVerdictOnly(t, bucket, rows, stub.count())
+	})
+
+	t.Run("PageBytes nil", func(t *testing.T) {
+		stub := &wkAI{enabled: true}
+		bucket, rows := run(t, 931512, func(ew *extraction.ExtractWorker, b *wkPageBucket) {
+			ew.PageBytes = nil
+			ew.AI = stub
+		})
+		assertVerdictOnly(t, bucket, rows, stub.count())
+	})
+}
+
+// T07. A page-read failure fails the attempt as extract_failed and makes no call. failOn
+// targets the LAST page key (scanned_invoice.pdf renders one page, so first == last). Two
+// Work() calls with two DIFFERENT river job ids model the two attempts: Work is driven
+// directly, not through a retrying River client, so reusing one river job id would resume
+// attempt 1's OWN "failed" row rather than modelling a distinct attempt -- the same shape
+// TestRLS_ExtractWorkerEmitsFailedOnlyWhenDeadLettered already uses.
+func TestRLS_ExtractWorkerFailsAPageReadAsExtractFailed(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	raw := fxRead(t, fxScanned)
+	lastKey := wkPageKeys(tenantID, raw, 1)[0]
+
+	bucket := &wkPageBucket{failOn: lastKey}
+	stub := &wkAI{enabled: true}
+	rec := &wkAuditRecorder{}
+	ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, stub, rec)
+
+	const attempt1RiverJobID = int64(931520)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(attempt1RiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err == nil {
+		t.Fatal("Work on attempt 1 of 3 returned nil, want the page-read error")
+	}
+	jid1 := wkExtractionJobID(t, ctx, tenantID, attempt1RiverJobID)
+	stAssertJobState(t, ctx, jid1, "failed")
+	if n := stub.count(); n != 0 {
+		t.Errorf("attempt 1: the AI seam saw %d call(s), want 0 -- the page read failed before the AI could be reached", n)
+	}
+	if len(rec.events()) != 0 {
+		t.Errorf("attempt 1: audit events = %d, want 0 -- a failed-but-retryable attempt is not terminal", len(rec.events()))
+	}
+
+	const attempt3RiverJobID = int64(931521)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(attempt3RiverJobID, 3, 3, tenantID, documentID, uuid.NewString())); err == nil {
+		t.Fatal("Work on attempt 3 of 3 returned nil, want the page-read error")
+	}
+	jid3 := wkExtractionJobID(t, ctx, tenantID, attempt3RiverJobID)
+	stAssertJobState(t, ctx, jid3, "dead_lettered")
+	if k := stJobFailureKind(t, ctx, jid3); k == nil || *k != string(extraction.FailureExtractFailed) {
+		t.Errorf("failure_kind = %s, want %q", wkStr(k), extraction.FailureExtractFailed)
+	}
+	if len(rec.events()) != 1 {
+		t.Fatalf("attempt 3: audit events = %d, want exactly 1", len(rec.events()))
+	}
+	if ev := rec.events()[0]; ev.Succeeded || ev.State != "dead_lettered" || ev.FailureKind != extraction.FailureExtractFailed {
+		t.Errorf("audit = %+v, want {Succeeded false, State dead_lettered, FailureKind extract_failed}", ev)
+	}
+}
+
+// T08. AC-2: a PDF that rendered zero pages asks nothing -- readImagesAI's len(images) == 0
+// guard returns before the bucket.
+func TestRLS_ExtractWorkerSkipsTheImageReadWithoutPageImages(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true}
+	ew := wkImageWorker(t, []byte("extr-09 worker fixture"), &wkStubReader{pages: 0}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+	const riverJobID = int64(931530)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	rows := wpResults(t, ctx, xid)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+	if n := stub.count(); n != 0 {
+		t.Errorf("the AI seam saw %d call(s), want 0", n)
+	}
+	if n := len(bucket.keysAsked()); n != 0 {
+		t.Errorf("bucket reads = %d, want 0", n)
+	}
+}
+
+// T06. AC 2/8: the real fake client, steered end to end through a trailing marker in the
+// document's own bytes (never a page token -- the image arm's Text carries no token at all).
+func TestRLS_ExtractWorkerSteersTheFakeThroughTheDocumentBytes(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+
+	answer := make(map[string]any, len(extraction.HeaderFields))
+	for _, f := range extraction.HeaderFields {
+		answer[f] = nil
+	}
+	answer["invoice_number"] = "INV-5520"
+	rawAnswer, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("marshal fake answer: %v", err)
+	}
+	marker := "%AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString(rawAnswer) + "\n"
+
+	raw := append(fxRead(t, fxScanned), []byte(marker)...)
+	bucket := &wkPageBucket{}
+	ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, client, &wkAuditRecorder{})
+
+	const riverJobID = int64(931540)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("INV-5520"), nil)
+
+	boxes := wkFieldBoxes(t, ctx, xid)
+	found := false
+	for _, b := range boxes {
+		if b.name != "invoice_number" || b.rank != 0 {
+			continue
+		}
+		found = true
+		if b.page != nil || b.x0 != nil || b.y0 != nil || b.x1 != nil || b.y1 != nil {
+			t.Errorf("invoice_number rank-0 box = %s, want all-NULL: an image reading carries no region", b)
+		}
+	}
+	if !found {
+		t.Fatalf("no rank-0 invoice_number row among %v", boxes)
+	}
+
+	var calls []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "ai call" {
+			calls = append(calls, m)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("the logger recorded %d %q line(s), want exactly 1: %v", len(calls), "ai call", calls)
+	}
+	if calls[0]["tenant_id"] != tenantID {
+		t.Errorf("the ai call line carries tenant_id %v, want %s", calls[0]["tenant_id"], tenantID)
+	}
+	if calls[0]["outcome"] != "fake" {
+		t.Errorf("the ai call line carries outcome %v, want %q", calls[0]["outcome"], "fake")
+	}
+	if calls[0]["purpose"] != "document" {
+		t.Errorf("the ai call line carries purpose %v, want %q", calls[0]["purpose"], "document")
+	}
+
+	t.Run("control: no marker", func(t *testing.T) {
+		tenantID, documentID := wkFixture(t, ctx)
+		bucket := &wkPageBucket{}
+		ew := wkImageWorker(t, fxRead(t, fxScanned), extraction.NewPDFiumReader(), bucket, wpStoreRules(t).load, client, &wkAuditRecorder{})
+		const controlRiverJobID = int64(931541)
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(controlRiverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+			t.Fatalf("Work: %v", err)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, controlRiverJobID)
+		rows := wpResults(t, ctx, xid)
+		if len(rows) != 1 {
+			t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+		}
+		wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+	})
+}
+
+// --- AIR-05-03 QA: adversarial coverage of the image arm ----------------------------------
+
+// A two-page document sends both pages: first and last are distinct, in order.
+func TestRLS_ExtractWorkerSendsBothPagesOfATwoPageDocument(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	body := []byte("air-05-03 qa two-page fixture")
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true}
+	ew := wkImageWorker(t, body, &wkNumberedReader{pages: 2}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(931550, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the AI seam saw %d call(s), want exactly 1", n)
+	}
+	req := stub.reqs[0]
+	if len(req.Pages) != 2 {
+		t.Fatalf("req.Pages = %d page(s), want 2", len(req.Pages))
+	}
+	if !bytes.HasSuffix(req.Pages[0], []byte("page-1")) || !bytes.HasSuffix(req.Pages[1], []byte("page-2")) {
+		t.Errorf("req.Pages = %q, want page-1 then page-2", req.Pages)
+	}
+	want := wkPageKeys(tenantID, body, 2)
+	if got := bucket.keysAsked(); !slices.Equal(got, want) {
+		t.Errorf("bucket keys asked = %v, want %v", got, want)
+	}
+}
+
+// A page-read failure on any selected key stops before the call: the first key stops the
+// loop there; the last key still discards the first page already read.
+func TestRLS_ExtractWorkerAPageReadFailureStopsBeforeTheCall(t *testing.T) {
+	ctx := t.Context()
+	body := []byte("air-05-03 qa three-page fixture")
+	for i, c := range []struct {
+		name      string
+		failIdx   int // index into the 3 page keys
+		wantAsked []int
+	}{
+		{"first key", 0, []int{0}},
+		{"last key", 2, []int{0, 2}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tenantID, documentID := wkFixture(t, ctx)
+			keys := wkPageKeys(tenantID, body, 3)
+			bucket := &wkPageBucket{failOn: keys[c.failIdx]}
+			stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "INV-5520"}}
+			ew := wkImageWorker(t, body, &wkNumberedReader{pages: 3}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+			riverJobID := int64(931551 + i)
+			if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err == nil {
+				t.Fatal("Work returned nil, want the page-read error")
+			}
+			xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+			stAssertJobState(t, ctx, xid, "failed")
+			if k := stJobFailureKind(t, ctx, xid); k == nil || *k != string(extraction.FailureExtractFailed) {
+				t.Errorf("failure_kind = %s, want %q", wkStr(k), extraction.FailureExtractFailed)
+			}
+			if n := stub.count(); n != 0 {
+				t.Errorf("the AI seam saw %d call(s), want 0", n)
+			}
+			var want []string
+			for _, j := range c.wantAsked {
+				want = append(want, keys[j])
+			}
+			if got := bucket.keysAsked(); len(got) == 0 || !slices.Equal(got, want) {
+				t.Errorf("bucket keys asked = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// FC4/D2: an answer whose every value fails the format check is still a read, not a poor
+// scan -- the verdict row goes, the failed values stay as rank-1 alternatives.
+func TestRLS_ExtractWorkerAnImageReadWhoseEveryValueFailsIsStillARead(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	failed := map[string]string{"invoice_number": "20417", "buyer_tin": "9999999-1202", "issue_date": "03/04/2026"}
+	answer := map[string]any{}
+	for k, v := range failed {
+		answer[k] = v
+	}
+	stub := &wkAI{enabled: true, answer: answer}
+	ew := wkImageWorker(t, fxRead(t, fxScanned), extraction.NewPDFiumReader(), &wkPageBucket{}, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+
+	const riverJobID = int64(931553)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID))
+	if len(rows) < 2 {
+		t.Fatalf("rows = %v, want the full reading", rows)
+	}
+	for _, r := range rows {
+		if r.name == "document_text_layer" || r.name == "document_ai_reading" {
+			t.Errorf("rows carry %v, want a reading, not a verdict or marker", r)
+		}
+	}
+	for name, raw := range failed {
+		r0 := wkRankRow(t, rows, name, 0)
+		if r0.value != nil || r0.reason == nil || *r0.reason != "unreadable" {
+			t.Errorf("%s rank 0 = %+v, want NULL unreadable", name, r0)
+		}
+		if r1 := wkRankRow(t, rows, name, 1); r1.value == nil || *r1.value != raw {
+			t.Errorf("%s rank 1 value = %s, want %q", name, wkStr(r1.value), raw)
+		}
+	}
+}
+
+// An answer with nothing callAI keeps (whitespace, non-header keys) is blank: the verdict stands.
+func TestRLS_ExtractWorkerAnAnswerWithNoHeaderValueKeepsTheVerdict(t *testing.T) {
+	ctx := t.Context()
+	raw := fxRead(t, fxScanned)
+	for i, c := range []struct {
+		name   string
+		answer map[string]any
+	}{
+		{"whitespace", map[string]any{"invoice_number": "   ", "total": "\t"}},
+		{"foreign keys", map[string]any{"line_items": "x", "nonsense_key": "INV-5520"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tenantID, documentID := wkFixture(t, ctx)
+			stub := &wkAI{enabled: true, answer: c.answer}
+			ew := wkImageWorker(t, raw, extraction.NewPDFiumReader(), &wkPageBucket{}, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+			riverJobID := int64(931554 + i)
+			if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+				t.Fatalf("Work: %v", err)
+			}
+			rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID))
+			if len(rows) != 1 {
+				t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+			}
+			wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+			if n := stub.count(); n != 1 {
+				t.Errorf("the AI seam saw %d call(s), want 1", n)
+			}
+		})
+	}
+}
+
+// A boxless format (DOCX) with no text renders nothing, so the image arm reads no page and
+// asks nothing, even with every seam wired.
+func TestRLS_ExtractWorkerNeverReadsPagesForABoxlessNoTextDocument(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	bucket := &wkPageBucket{}
+	stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "INV-5520"}}
+	ew := wkImageWorker(t, nil, &wkNumberedReader{pages: 2}, bucket, wpStoreRules(t).load, stub, &wkAuditRecorder{})
+	op := &wkOpener{body: []byte("PK\x03\x04 air-05-03 qa docx"), contentType: wkDocxContentType}
+	ew.Open = op.open
+
+	const riverJobID = int64(931556)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, riverJobID))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %v, want exactly the text-layer verdict", rows)
+	}
+	wpAssertRankZero(t, rows, "document_text_layer", nil, stPtr("unreadable"))
+	if n := stub.count(); n != 0 {
+		t.Errorf("the AI seam saw %d call(s), want 0", n)
+	}
+	if n := len(bucket.keysAsked()); n != 0 {
+		t.Errorf("bucket reads = %d, want 0", n)
+	}
+	if n := len(bucket.bodies); n != 0 {
+		t.Errorf("bucket holds %d rendered page(s), want 0: a DOCX renders nothing", n)
 	}
 }

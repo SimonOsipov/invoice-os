@@ -48,7 +48,8 @@ const (
 	aiPromptRunFmt  = "x=%.2f %s"
 )
 
-// aiFieldSchema is the JSON schema askAI sends: HeaderFields, string-or-null, no line items.
+// aiFieldSchema is the JSON schema askAI and askAIPages send: HeaderFields, string-or-null, no
+// line items.
 var aiFieldSchema = aiSchemaFor(HeaderFields)
 
 func aiSchemaFor(fields []string) json.RawMessage {
@@ -91,16 +92,23 @@ func aiFailed(err error) bool {
 
 // askAI asks once. The bool reports a failed call (aiFailed); the answer is nil then.
 func askAI(ctx context.Context, r AIReader, pages []TokenPage) (map[string]string, bool) {
-	if r == nil || !r.Enabled() {
-		return nil, false
-	}
-	ans, err := r.Call(ctx, ai.Request{
+	return callAI(ctx, r, ai.Request{
 		Purpose:    ai.PurposeDocument,
 		System:     aiSystem,
 		Text:       aiPromptText(pages),
 		SchemaName: "invoice_fields",
 		Schema:     aiFieldSchema,
 	})
+}
+
+// callAI is askAI's and askAIPages' shared call: the off check, one Call, the aiFailed policy
+// and the blank-string filter. Both callers therefore share one failure policy and one blank
+// rule.
+func callAI(ctx context.Context, r AIReader, req ai.Request) (map[string]string, bool) {
+	if r == nil || !r.Enabled() {
+		return nil, false
+	}
+	ans, err := r.Call(ctx, req)
 	if err != nil {
 		return nil, aiFailed(err)
 	}
@@ -152,15 +160,24 @@ type aiOccurrence struct {
 	region *Region
 }
 
+// aiReadings is check (a): field's shape and raw's normalised readings. ok is false when the
+// field carries no tier-1 shape at all (checkAI's and imageReading's shared format step).
+func aiReadings(field, raw string) (Shape, []string, bool) {
+	shape, ok := tier1Shape(field)
+	if !ok {
+		return "", nil, false
+	}
+	return shape, shape.Normalize(raw), true
+}
+
 // checkAI runs (a)-(d) against one AI-answered field. A value passing every check is checked;
 // its region is the page check's first qualifying occurrence.
 func checkAI(field, raw string, pages []TokenPage) (aiReading, bool) {
-	shape, ok := tier1Shape(field)
+	shape, want, ok := aiReadings(field, raw)
 	if !ok {
 		return aiReading{}, false
 	}
 
-	want := shape.Normalize(raw)
 	var value string
 	needD := false
 	switch {

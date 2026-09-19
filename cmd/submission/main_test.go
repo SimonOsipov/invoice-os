@@ -328,7 +328,16 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		t.Fatalf("ai.FromEnv: %v", err)
 	}
 
-	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, aiClient, logger)
+	// Sentinel, non-nil PageObject: reaching it proves the constructor wired the argument
+	// through rather than leaving the field nil.
+	const pageBytesSentinel = "sentinel/page-bytes"
+	pageBytesCalled := 0
+	pageBytes := func(context.Context, string) (io.ReadCloser, int64, error) {
+		pageBytesCalled++
+		return io.NopCloser(strings.NewReader(pageBytesSentinel)), int64(len(pageBytesSentinel)), nil
+	}
+
+	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, aiClient, pageBytes, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -348,8 +357,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 9 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 9 (Pool, Extractor, Open, Pages, Audit, Text, Rules, AI, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 10 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 10 (Pool, Extractor, Open, Pages, Audit, Text, Rules, AI, PageBytes, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -390,6 +399,17 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	}
 	if ew.AI != extraction.AIReader(aiClient) {
 		t.Error("ExtractWorker.AI is not the ai.FromEnv client passed in")
+	}
+	if ew.PageBytes == nil {
+		t.Fatal("ExtractWorker.PageBytes is nil")
+	}
+	body, size, err := ew.PageBytes(context.Background(), "k")
+	if err != nil || pageBytesCalled != 1 {
+		t.Fatalf("ExtractWorker.PageBytes ran %d time(s) and returned %v, want the sentinel reader passed in to run exactly once", pageBytesCalled, err)
+	}
+	got, err := io.ReadAll(body)
+	if err != nil || string(got) != pageBytesSentinel || size != int64(len(pageBytesSentinel)) {
+		t.Errorf("ExtractWorker.PageBytes returned (%q, %d, %v), want (%q, %d, nil)", got, size, err, pageBytesSentinel, len(pageBytesSentinel))
 	}
 }
 
@@ -508,10 +528,10 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 9 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 9 (pool, extractor, opener, pages, auditor, text, rules, ai, logger)", len(ewArgs))
+	if len(ewArgs) != 10 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 10 (pool, extractor, opener, pages, auditor, text, rules, ai, pageBytes, logger)", len(ewArgs))
 	}
-	// EXTR-17-03 AC-8: the walk covers all 9 arguments. Argument 5's exemption is gone with the
+	// EXTR-17-03 AC-8: the walk covers all 10 arguments. Argument 5's exemption is gone with the
 	// literal nil it protected.
 	const ewTextArg = 5
 	for i, arg := range ewArgs {
@@ -633,8 +653,19 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	} else if len(call.Args) != 0 {
 		t.Errorf("newExtractionAuditor is called with %d argument(s), want 0", len(call.Args))
 	}
-	if sel, ok := ewArgs[8].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
-		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[8]))
+	// AIR-05-03: the page-image reader, followed back to the same newPageObjectReader(...) call
+	// the pages route above already builds. Any other value here reads no page image the
+	// render actually wrote.
+	if call, ok := ewArgs[8].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newPageObjectReader" {
+		t.Errorf("newExtractWorker's pageBytes argument is %s, want a newPageObjectReader(...) call", wtRender(ewArgs[8]))
+	} else if len(call.Args) != 1 {
+		t.Errorf("newPageObjectReader is called with %d argument(s), want 1", len(call.Args))
+	} else if id, ok := call.Args[0].(*ast.Ident); !ok || id.Name != objName {
+		t.Errorf("newPageObjectReader is given %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(call.Args[0]), objName)
+	}
+
+	if sel, ok := ewArgs[9].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[9]))
 	}
 }
 

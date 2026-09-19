@@ -152,9 +152,9 @@ const (
 )
 
 // isPoorScan reports the field set the extraction worker writes when a document yields no text
-// at all: one document_text_layer row, reason unreadable. The predicate is over the whole set,
-// never one field's reason code -- an unreadable invoice_number among ten read fields is a read
-// document (TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch).
+// and its page images add no reading: one document_text_layer row, reason unreadable. The
+// predicate is over the whole set, never one field's reason code -- an unreadable invoice_number
+// among ten read fields is a read document (TestDocumentCreateInput_OnlyTheExactPoorScanFieldSetTakesTheScanBranch).
 func isPoorScan(fields []extractedField) bool {
 	if len(fields) != 1 {
 		return false

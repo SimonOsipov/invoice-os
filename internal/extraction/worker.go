@@ -234,6 +234,13 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				Field:        Field{Name: doclingTextLayerField, Reason: ReasonUnreadable},
 				Alternatives: []Field{},
 			}}
+			// The stored page images stand in for the missing text; nil keeps the verdict above.
+			var read []FieldResult
+			if read, err = w.readImagesAI(ctx, octx, images, doc); err != nil {
+				kind = FailureExtractFailed
+			} else if read != nil {
+				results = read
+			}
 		default:
 			var learned []AnchorRule
 			// Gated on the identity, not the format: with no stored layout the lookup would
@@ -251,10 +258,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 				answer, failed := askAI(octx, w.AI, textTokens)
 				if failed {
 					// Q9: no engine fallback.
-					results = []FieldResult{{
-						Field:        Field{Name: aiUnavailableField, Reason: ReasonUnreadable},
-						Alternatives: []Field{},
-					}}
+					results = aiUnavailableResults()
 				} else {
 					lines := LineItems(textPages)
 					// Entity{} skips Reconcile's advisory supplier cross-check; invoice.Store

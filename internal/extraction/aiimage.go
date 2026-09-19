@@ -102,3 +102,22 @@ func aiUnavailableResults() []FieldResult {
 		Alternatives: []Field{},
 	}}
 }
+
+// readImagesAI is the no-text arm's AI step. nil, nil means today's text-layer verdict stands.
+func (w *ExtractWorker) readImagesAI(ctx, octx context.Context, images []PageImage, doc Document) ([]FieldResult, error) {
+	if w.AI == nil || !w.AI.Enabled() || w.PageBytes == nil || len(images) == 0 {
+		return nil, nil
+	}
+	pngs, err := readPagePNGs(ctx, w.PageBytes, aiImagePages(images))
+	if err != nil {
+		return nil, err
+	}
+	answer, failed := askAIPages(octx, w.AI, pngs, string(doc.Bytes))
+	if failed {
+		return aiUnavailableResults(), nil
+	}
+	if len(answer) == 0 {
+		return nil, nil
+	}
+	return imageReading(answer), nil
+}

@@ -3,7 +3,7 @@
 //
 // Design (docs/migrations.md §6, §8):
 //   - Reuses the SAME Postgres-service-container + Makefile-bootstrap path as the CI
-//     `migrations` job (NOT testcontainers, which the build plan floated) — no new Go
+//     `migrations` job (deliberately NOT testcontainers) — no new Go
 //     dependency, one canonical role-bootstrap (db/bootstrap.sql), CI-consistent.
 //   - One connection pool PER ROLE, because RLS is enforced by WHO you connect as: a
 //     single pool could not exercise the owner-bypass or enumeration cases.

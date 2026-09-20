@@ -425,7 +425,7 @@ attack; folded into the required `CI` gate) and locally via `make test-rls` (aft
 `make dev-db`). The suite **skips itself** when the per-role `DATABASE_*` URLs are absent,
 so the default `go` job and a bare `go test ./...` stay green without a database.
 
-> The build plan floated *testcontainers*; we instead reuse the same
+> Deliberately **not** testcontainers: the suite reuses the same
 > Postgres-service-container + Makefile-bootstrap path as the `migrations` job — no new Go
 > dependency, one canonical bootstrap (`db/bootstrap.sql`), CI-consistent.
 

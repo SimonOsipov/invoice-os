@@ -11,8 +11,7 @@ demo date. There are **no `dayN.spec.ts` files**.
 
 - A milestone's "moment of value" is proven by **extending the relevant capability
   flow**, not by adding a new dated end-to-end journey.
-- The Day-30 / Day-60 / Day-90 roadmap narrative lives **only** in the Build Plan
-  (`Build Plan — 0 to MVP.html`). Test files carry feature names.
+- Test files carry feature names, never a milestone or a demo date.
 - Why: dated demos accrete and overlap — each re-walks the previous one's steps as a
   prefix, so the suite grows one full journey per milestone forever. Feature-named flows
   are extended in place instead.

@@ -2,9 +2,9 @@
 
 ## Overview
 
-Automated execution of a single build-plan task through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — created by `dev-env.yml`'s `prepare-env` job as a fork of `development`, M4-23; its database is bootstrapped, migrated, demo-purged and seeded at gateway boot, M4-21-04 / DEMO-04 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
+Automated execution of a single story through per-subtask quality gates (Architecture → Explore → Test-Spec* → Execution → QA Verify; *Test-Spec runs only for logic-bearing `Test-first: yes` subtasks), followed by a story-level deploy gate (Phase 3.5) that verifies the assembled feature against the original objective via the **`dev-env.yml`** run on the PR (deploy the whole fleet to the PR's own ephemeral Railway environment — created by `dev-env.yml`'s `prepare-env` job as a fork of `development`, M4-23; its database is bootstrapped, migrated, demo-purged and seeded at gateway boot, M4-21-04 / DEMO-04 — → fleet health → smoke + topology E2E). Runs in an isolated git worktree so the main checkout stays clean.
 
-**Story unit:** one **build-plan task** = one story = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
+**Story unit:** one **story** = one branch = one PR (e.g. `M3-04` "Validation v1"). RALPH decomposes it into sub-subtasks (`M3-04-01`, …) internally. This matches exactly how M1/M2 shipped (`task-20` → `task-20.1–.4`).
 
 Stories arrive in one of two states: **basic** (intent-only — Objective, Core ACs, Out of Scope; produced by `/pm-story`, or by `/pm-epic` for one story of a researched epic; zero Backlog subtasks) or **pre-planned** (Backlog subtasks already exist, or the Obsidian story is already architect-level like the M1/M2 stories). Basic stories are planned **in-run** by Phase 0.6; pre-planned stories skip Phase 0.6.
 
@@ -71,7 +71,7 @@ deployment trigger exists). Environments are torn down by CI; never reach for de
 Railway MCP calls to clean one up.
 
 ### 4. ONE Branch, ONE PR per Story
-All subtasks of a single build-plan task share one feature branch and one draft PR, all in one worktree. Never mix subtasks from different stories on one branch.
+All subtasks of a single story share one feature branch and one draft PR, all in one worktree. Never mix subtasks from different stories on one branch.
 
 ---
 
@@ -83,7 +83,7 @@ All subtasks of a single build-plan task share one feature branch and one draft 
 | **Playwright** | Visual verification, E2E, bug research | `mcp__playwright__*` — Use for UI/topology verification against deployed dev |
 | **Sentry** | Error tracking, issue investigation | `mcp__sentry__*` — Check for dev errors |
 | **Railway** | Deployment status (read-only) | `mcp__railway-mcp-server__*` — NO destructive actions; deploys happen in `dev-env.yml` |
-| **Obsidian** | User stories + build plan | `mcp__obsidian-mcp-tools__*` — read the story + `Build Plan — 0 to MVP.html` |
+| **Obsidian** | User stories | `mcp__obsidian-mcp-tools__*` — read the story |
 
 ## Documentation (docs/)
 Reference before making changes to related areas. Run `ls docs/` for the authoritative list — every file in it is a Stage 4 sweep target.
@@ -104,17 +104,17 @@ Design references (for UI stories): the Claude Design **prototype** project `626
 
 1. **Validate the story arg.** `/ralph` requires exactly one story reference. Two forms are accepted:
    - a **sysmap feature** — `F-192`, or its slug (`notifications.notice-failure`). **One feature = one story = one branch = one PR.** This is the current form; a feature is where new work is decided (`/pm-review` step 6.5), so it is the unit `/ralph` builds.
-   - a **build-plan task ID** — `M3-04`. The historical form, kept because stories M1–M5 shipped under it and their Obsidian files are the record.
+   - a **milestone story ID** — `M3-04`. The historical form, kept because stories M1–M5 shipped under it and their Obsidian files are the record.
 
-   Error and exit if missing. If the arg resolves as **both** a feature and a build-plan row, prefer the feature and say so — the map is the live record.
+   Error and exit if missing. If the arg resolves as **both** a feature and a milestone story, prefer the feature and say so — the map is the live record.
 2. **Read the story source.** *Feature form:*
    - `mcp__sysmap__sysmap_feature_show {"feature": "<ARG>"}`. This IS a **basic** story and needs no Obsidian file: the feature's `name` + `description` are the Objective, its **acceptance criteria are the Core ACs**, its `screen` says where the surface lives, and `depends_on` names what must already exist. Set `PLANNING_REQUIRED=true` and `STORY_SOURCE=sysmap`.
    - Refuse to build a feature whose status is not `planned` or `building` — anything else already has code, and `/ralph` would be re-implementing it. Say which status you found.
    - Set its status to `building` before Phase 1 (`sysmap_feature_status_set`), so a concurrent invocation and the queue both see it is in flight.
 
-   *Build-plan form:*
+   *Milestone-story form:*
    - `mcp__obsidian-mcp-tools__get_vault_file` matching `Simon Vault/Projects/ASComply Africa/User Stories/<Mn>/<STORY-ID>*.md` (use `list_vault_files` against `.../User Stories/<Mn>/` to disambiguate; also check `.../User Stories/Archive/<Mn>/`). Set `STORY_SOURCE=obsidian`.
-   - If no Obsidian story exists yet, fall back to the build plan: read `Simon Vault/Projects/ASComply Africa/Build Plan — 0 to MVP.html`, find the `<STORY-ID>` row (Task / Layer / Size / Depends / the milestone's "Ships when true"), and treat that row + the milestone goal as a **basic** story (set `PLANNING_REQUIRED=true`).
+   - If no Obsidian story exists, stop. There is no other source: the Build Plan is retired and nothing replaces it. Run `/pm-shape` then `/pm-story` (or `/pm-epic`) to write one.
 3. **Derive the branch slug.** If the story has a `## Branch Strategy` section, use it. Otherwise synthesize `BRANCH=feature/<lowercase-story-id>-<kebab-title>` (e.g. `feature/m3-04-validation-v1`). For a feature, the id is its tag lower-cased and the title is its name: `F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`.
 4. **Query Backlog for subtasks**:
    ```
@@ -123,9 +123,9 @@ Design references (for UI stories): the Claude Design **prototype** project `626
 5. **Refuse a story that still carries unanswered questions**: if the Obsidian story has a `## Blocking Questions` section with any entry left in it, stop immediately and print those entries. Phase 0.6d wrote them and a previous run halted on them. Answering them is the only way forward — never default them and never delete the section to proceed. (`## Open Questions` is a different, non-blocking section in full-mode PRDs. Do not treat it as this gate.)
 6. **Classify the story state**:
    - **`STORY_SOURCE=sysmap`** → always **BASIC**. A feature carries intent (name, description, acceptance criteria) and never subtasks — sysmap is not a task tracker. Its Backlog subtasks, if any, are labelled `story:f-192`.
-   - **Zero subtasks + Objective/Core ACs present (or build-plan fallback)** → **BASIC** → set `PLANNING_REQUIRED=true`; topo-sort + plan-logging happen at the end of Phase 0.6.
+   - **Zero subtasks + Objective/Core ACs present** → **BASIC** → set `PLANNING_REQUIRED=true`; topo-sort + plan-logging happen at the end of Phase 0.6.
    - **Subtasks returned (or an architect-level Obsidian story with a Subtasks section)** → **PRE-PLANNED** → topo-sort by `dependencies` → linear execution order, log the plan, skip Phase 0.6.
-   - **Neither** → error: "story <ID> is neither basic (no Objective/Core ACs, not in the build plan) nor pre-planned (no Backlog subtasks) — run /pm-story first, or /pm-epic if the topic needs several stories."
+   - **Neither** → error: "story <ID> is neither basic (no Objective/Core ACs) nor pre-planned (no Backlog subtasks) — run /pm-story first, or /pm-epic if the topic needs several stories."
 
 ### Phase 0.5: Worktree Bootstrap
 
@@ -183,7 +183,7 @@ Design references (for UI stories): the Claude Design **prototype** project `626
 Runs ONLY when Phase 0 set `PLANNING_REQUIRED=true`. All planning runs **inside the worktree** so every file reference is written against the code that will actually be modified.
 
 #### a. Architecture — finalize the story
-- Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content (or build-plan row + milestone goal) and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
+- Spawn `product-architecture-spec` (Opus), CWD = `$WORKTREE_PATH`, passing the FULL basic story content and its Obsidian path. Instruct it to operate per its "Expanding a Basic Story" section.
 - **Diff every new control against its siblings.** When the story adds a control to an existing bar, panel or surface, compare its visibility and disabled treatment against the controls already there before the plan is final. A sibling's shipped decision is the spec; contradicting it on the same surface is a defect, not a choice. INVED-02 shipped a hidden button beside disabled ones and the decision was reversed after it was built.
 - **A story that changes a layout constant ships a layout assertion.** A layout constant is a width, a grid track, a clearance, an overflow or an alignment. When a subtask adds or changes one, name a topology layout assertion as that subtask's deliverable. The instrument already exists: `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560 / 1920 / 1440 / 1280), and `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Phase 3.5 states what such an assertion must claim — the relationship the constant encodes, never the raw dimension. Planning it here is what puts it in the FIRST deploy-gate run. The deployed environment is this project's only renderer, so an assertion written after that run costs a whole extra one. A 26px input, a label overflowing its pill and a 360px menu clearance all shipped from stories whose ACs never mentioned layout.
 - **Re-measure every fact the story asserts.** A basic story states facts, not only goals: a root cause, a mechanism, a count, another PR's shipped state, a precedent's preconditions, whether the prescribed fix can work. Treat each one as a hypothesis. Re-measure it inside the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`. Cite what you ran, never the conclusion alone. BUG-02 asserted three mechanisms and all three proved wrong; APPR-04's ground truth was wrong in thirteen places. When a corrected premise carries the story's scope, Phase 0.6d stops the run for it.
@@ -394,7 +394,7 @@ After the FINAL subtask's Stage 4 completes:
 
 Runs **once per story**, after `CI` is green and CodeRabbit is addressed. This is the second, story-altitude pass: it verifies the *assembled feature against the original objective*, not per-subtask diffs. It is **not** an agent-driven browsing pass with a lease/label handshake — `dev-env.yml` runs on a push to a ready PR and deploys the whole coherent fleet to the PR's own ephemeral Railway environment, running smoke + topology (and any milestone demo script) E2E in CI.
 
-1. **Read the original acceptance criteria** — NOT the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria from `sysmap_feature_show`, which are standing invariants and are exactly what must hold on the deployed fleet. `STORY_SOURCE=obsidian`: the Obsidian parent story's original objective, plus the milestone's "Ships when true" bullets from the build plan.
+1. **Read the original acceptance criteria** — NOT the possibly-edited subtask ACs. `STORY_SOURCE=sysmap`: the feature's acceptance criteria from `sysmap_feature_show`, which are standing invariants and are exactly what must hold on the deployed fleet. `STORY_SOURCE=obsidian`: the Obsidian parent story's original objective.
 2. **Find the deploy gate run on HEAD.** Take only a `pull_request` run on the head commit that was not skipped:
    ```bash
    BRANCH="$(git -C "$WORKTREE_PATH" rev-parse --abbrev-ref HEAD)"
@@ -543,7 +543,7 @@ An agent parses these instructions with no one to ask when a sentence is ambiguo
 | Working in main checkout | Always work in `$WORKTREE_PATH`; main is the user's space |
 | Treating stories as needing to run serially against dev | Each PR gets its own ephemeral Railway environment (M4-23) — running multiple stories' `/ralph` invocations in parallel is the intended mode; nothing shared queues or races |
 | Title-parsing Backlog tasks to find a story's subtasks | Use the `story:<slug>` label |
-| Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs (or a build-plan row) = BASIC → run Phase 0.6 |
+| Erroring on a story with zero Backlog subtasks | Zero subtasks + Objective/Core ACs = BASIC → run Phase 0.6 |
 | Blocking on the user in any unattended phase | Unattended disposition: defaults + conservative options, recorded in ## Decisions / QA Debate Log; user reviews via PR. Phase 0.6d is the single exception |
 | Architect inventing scope while expanding a basic story | Every derived AC/subtask traces to Objective/Core AC/"Ships when true"; Out-of-scope leakage = mechanical fail |
 | Bouncing the executor on uncited taste | UI fails must cite a design-system rule or a prototype CSS rule; pure taste is advisory → escalate |

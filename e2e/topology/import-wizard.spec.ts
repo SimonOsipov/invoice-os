@@ -231,7 +231,7 @@ async function approveOpenRunsForEntity(token: string, entityId: string): Promis
   )
 }
 
-// AIR-07-06/07's shared CSV steering fixture: the fake AI fleet scans every AI request's
+// Shared CSV steering fixture: the fake AI fleet scans every AI request's
 // text for an AIFAKE-ANSWER-<base64url> marker (internal/platform/ai/fake.go's fakeMarker),
 // and suggest-mapping's prompt text is built from the decoded CSV rows verbatim
 // (internal/importer/suggest.go's mappingPromptText) -- so a marker planted in any data
@@ -469,7 +469,7 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
 })
 
 // AC-5: a placement chip must never overflow its column at any swept width, including the
-// SUGGESTED chip AIR-07-06 adds as a third `flex: 'none'` child. Deployed-only -- there is
+// SUGGESTED chip added as a third `flex: 'none'` child. Deployed-only -- there is
 // no way to reach a suggested Map step without the fake fleet's AI (see the file header),
 // so this runs ONLY when the deploy gate exercises this file against a live PR environment.
 // Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
@@ -502,8 +502,8 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
 
   // Not a strict requirement of AC-5 itself, but proof this run reached the state AC-5
-  // targets: a badge-less suggested chip (the AIR-07-04/05 HAZARD) would still pass a bare
-  // containment sweep, so this is the positive control that the steered fixture worked.
+  // targets: a badge-less suggested chip is a false-negative risk -- it would still pass a
+  // bare containment sweep -- so this is the positive control that the steered fixture worked.
   await expect(
     page.getByTestId('map-suggested-badge').first(),
     'the steered suggestion must place at least one SUGGESTED badge, or this run never reached the state AC-5 targets',

@@ -141,6 +141,11 @@ function suggestFail(status: number): SuggestAnswer {
   return () => Promise.resolve({ ok: false, status, json: () => Promise.resolve({ error: 'boom' }) })
 }
 
+// A transport rejection, not a non-2xx answer -- a different input class from suggestFail.
+function suggestThrow(): SuggestAnswer {
+  return () => Promise.reject(new TypeError('Failed to fetch'))
+}
+
 const DEFAULT_SUGGEST_NONE: SuggestMapping = {
   source: 'none',
   header_row: 1,
@@ -770,5 +775,74 @@ describe('the AI suggests a mapping after a saved lookup restores nothing', () =
     })
     await waitFor(() => expect(FakeXhr.instances, 'the import must reach the transport').toHaveLength(2))
     expect(FakeXhr.instances[1]!.body!.get('header_row'), 'the header row must survive the reset onto the wire').toBe('3')
+  })
+
+  it('AIRA-14: dropping a restored group back to automatic never sends it to the AI', async () => {
+    FakeXhr.instances = []
+    const SAVE_HIT: SavedMapping = { mapping: { invoice_number: 'Invoice No' }, saved_at: '2026-09-01T10:15:00Z' }
+    const suggestForB: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: ALT_COL,
+      sample_rows: [['x', 'y']],
+      rows_total: 1,
+      mapping: { invoice_number: 'Ref Number' },
+      saved_at: null,
+    }
+    await bootAtWithGateway({ 'doc-a14': okAnswer(SAVE_HIT) }, DEFAULT_ENTITIES, { 'doc-b14': suggestOk(suggestForB) })
+    await openCreateAndWaitForEntity()
+
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', TWO_COL), csvFile('b.csv', ALT_COL)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control: preview a never reached the transport').toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-a14', TWO_COL))
+    })
+    await waitFor(() => expect(FakeXhr.instances, 'control: preview b never reached the transport').toHaveLength(2))
+    act(() => {
+      FakeXhr.instances[1]!.respond(200, previewReply('doc-b14', ALT_COL))
+    })
+    await waitFor(() => expect(requireCtx().createStep, 'preview never landed on the mapping step').toBe('mapping'))
+
+    // Positive control: the mechanism fired once for the unsaved sibling, so the count
+    // below cannot read as "no suggest call is ever recorded in this fixture".
+    expect(suggestBodies, 'only the unsaved group may record a suggest call').toHaveLength(1)
+    expect(requireCtx().groups[0]?.restored, 'the active group must be the restored one').not.toBeNull()
+
+    act(() => {
+      requireCtx().resetGroupToAutomatic()
+    })
+    await act(async () => {})
+
+    expect(requireCtx().groups[0]?.restored, 'control: the reset must actually drop the restored snapshot').toBeNull()
+    expect(document.querySelector('[data-testid="map-restored-notice"]'), 'control: the notice must be gone').toBeNull()
+    expect(suggestBodies, 'dropping a restored group to automatic must not spend an AI call').toHaveLength(1)
+  })
+
+  it("AIRA-15: a suggest call whose transport rejects opens today's Map step too", async () => {
+    FakeXhr.instances = []
+    await bootAtWithGateway({}, DEFAULT_ENTITIES, { 'doc-a15': suggestThrow() })
+    await openCreateAndWaitForEntity()
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', TWO_COL)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances).toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-a15', TWO_COL))
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('mapping'))
+
+    expect(suggestBodies, 'control: the call must have been attempted').toHaveLength(1)
+    expect(requireCtx().importError, 'a transport rejection must not surface an import error').toBeNull()
+    expect(requireCtx().groups[0]?.mapping, 'a rejected suggestion must fall back to the automatic seed').toEqual(
+      initMappingFromHeaders(TWO_COL),
+    )
   })
 })

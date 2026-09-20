@@ -243,6 +243,9 @@ describe('retired landing copy guard (BUG-19-04)', () => {
   // because every other assertion iterates the list itself. Pin the membership.
   it('the retired list still names every phrase this guard was built for', () => {
     expect([...RETIRED_LANDING_COPY].sort()).toEqual([
+      'CSV / XLSX bulk import',
+      'Field & tax logic checks',
+      'Nigeria rule pack',
       'compliance infrastructure for African businesses',
       'compliance layer',
       'compliance workflow layer',
@@ -262,6 +265,9 @@ describe('retired landing copy guard (BUG-19-04)', () => {
       'we used licensed transmission partners before',
       'compliance infrastructure for African businesses, still here',
       'this was designed to expand later',
+      'we used to say CSV / XLSX bulk import here',
+      'the old chip read Nigeria rule pack',
+      'and beside it Field & tax logic checks',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts', RETIRED_LANDING_COPY)

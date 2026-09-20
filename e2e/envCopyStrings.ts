@@ -65,4 +65,9 @@ export const RETIRED_LANDING_COPY = [
   // Row 10 — footer tagline dropped to one sentence.
   'compliance infrastructure for African businesses',
   'designed to expand',
+  // Row 6 — replaced by "CSV / XLSX / PDF import".
+  'CSV / XLSX bulk import',
+  // Row 7 — replaced by "Golden MBS rule pack" / "Your own company rules".
+  'Nigeria rule pack',
+  'Field & tax logic checks',
 ] as const

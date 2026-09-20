@@ -59,11 +59,11 @@ const AUDIENCE_SEGMENTS = [
 const FORBIDDEN_ACCOUNTING_TERMS = ['SAP', 'NetSuite', 'Sage', 'QuickBooks', 'Zoho', 'CSV/XLSX'] as const
 
 // F-7, retyped from frontend/landing/src/data.tsx#STEPS, in order.
-const STEP_TITLES = ['Connect or import', 'Validate against MBS rules', 'Approve, archive & transmit'] as const
+const STEP_TITLES = ['Connect or import', 'Validate against MBS rules — and your own', 'Approve, archive & transmit'] as const
 const STEP_NUMBERS = ['01', '02', '03'] as const
 const STEP_POINTS: ReadonlyArray<readonly string[]> = [
-  ['REST API & webhooks', 'CSV / XLSX bulk import', 'ERP connectors'],
-  ['Nigeria rule pack', 'Field & tax logic checks', 'Inline fix suggestions'],
+  ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
+  ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
   ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
 ]
 

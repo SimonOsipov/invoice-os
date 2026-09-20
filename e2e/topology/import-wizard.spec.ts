@@ -93,7 +93,16 @@ import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
+import {
+  buildAir07TitleRowCsv,
+  buildAir07UnsteeredCsv,
+  buildHeaderOnlyCsv,
+  buildMixedCsv,
+  buildPerfCsv,
+  buildSingleInvoiceCsv,
+  PERF_HEADER,
+  steerMarker,
+} from '../importFixtures'
 
 // BULK-01-08 (task-312) fixtures -- COMMITTED files, referenced by path, deliberately
 // NEVER regenerated in memory the way importFixtures.ts's builders are. This is a
@@ -248,10 +257,10 @@ const AIRL01_ANSWER = {
   decimal_separator: null,
 }
 
-function buildAirl01SteeredCsv(): string {
-  const marker = `AIFAKE-ANSWER-${Buffer.from(JSON.stringify(AIRL01_ANSWER)).toString('base64url')}`
+function buildAirl01SteeredCsv(num = 'INV-AIRL01-1'): string {
+  const marker = steerMarker(AIRL01_ANSWER)
   const header = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
-  const row = ['INV-AIRL01-1', '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
+  const row = [num, '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
   return `${header}\n${row.join(',')}\n`
 }
 
@@ -532,6 +541,172 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
     body: JSON.stringify({ entity: entity.name, fits }, null, 2),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, and Continue imports it', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 steered ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E01-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-steered.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAirl01SteeredCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; header_row: number; mapping: Record<string, string> }
+  expect(suggestBody.source, 'control: this run must have reached the AI path').toBe('ai')
+  expect(suggestBody.header_row).toBe(1)
+  expect(suggestBody.mapping.invoice_number, 'control: the AI must have placed invoice_number').toBe('Invoice No')
+
+  // A screen that never rendered the suggestion cannot pass either check below.
+  const invoiceNoColumn = page.getByTestId('map-column').filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) })
+  await expect(invoiceNoColumn.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the Invoice No column').toHaveCount(1)
+  await expect(invoiceNoColumn.getByTestId('map-suggested-badge')).toHaveText('SUGGESTED')
+  await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the whole page').toHaveCount(1)
+
+  // No click-to-place here: the suggestion alone must already arm Import.
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'the suggestion alone must enable Import with no manual placement').toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  const importRes = await importResp
+  expect(importRes.status(), 'a steered single-row import must complete 201').toBe(201)
+  const importBody = (await importRes.json()) as { rows_total: number }
+  expect(importBody.rows_total).toBe(1)
+
+  const { invoices } = await listInvoices(token, { entity_id: entity.id })
+  expect(invoices, 'the fresh entity must hold exactly the one imported invoice').toHaveLength(1)
+  expect(invoices[0].invoice_number, 'the suggested invoice_number column must have been read').toBe(num)
+  expect(invoices[0].currency, "the alias fallback must fill currency left unplaced by the AI").toBe('NGN')
+  expect(invoices[0].total, "the alias fallback must fill total left unplaced by the AI").toBe('1075.00')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 row3 ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E03-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-row3.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAir07TitleRowCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; header_row: number; columns: string[] }
+  expect(suggestBody.source, 'control: this run must have reached the AI path').toBe('ai')
+  expect(suggestBody.header_row, 'the header must be read from row 3, not row 1').toBe(3)
+  expect(suggestBody.columns).toEqual(PERF_HEADER.split(','))
+
+  // Same idiom as E2E-02: CreateMapping's column header cell is the only <div class="mono">
+  // under <main>, so this resolves to exactly the rendered header row.
+  const headerCells = page.locator('main div.mono')
+  await expect(headerCells).toHaveText(PERF_HEADER.split(','))
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'the suggestion alone must enable Import with no manual placement').toBeEnabled()
+
+  const importReq = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  expect(requestBody(await importReq), 'the import must post header_row=3, not the default row 1').toMatch(
+    /name="header_row"\r\n\r\n3\r\n/,
+  )
+  const importRes = await importResp
+  expect(importRes.status(), 'a row-3 header import must complete 201').toBe(201)
+
+  const { invoices } = await listInvoices(token, { entity_id: entity.id })
+  expect(invoices, 'the fresh entity must hold exactly the one imported invoice').toHaveLength(1)
+  expect(invoices[0].invoice_number).toBe(num)
+
+  const source = await rawFetch(`/api/invoice/v1/invoices/${invoices[0].id}/source-document`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(source.status, 'GET source-document').toBe(200)
+  expect(
+    (source.body as { header_row: number | null }).header_row,
+    "the invoice's own source-document read must echo header_row 3",
+  ).toBe(3)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 unsteered ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E04-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-unsteered.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAir07UnsteeredCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; mapping: Record<string, string> }
+  // Control: proves the endpoint ran and answered blank, rather than this run never
+  // reaching the suggest call at all.
+  expect(suggestBody.source, 'control: a marker-less file must fall to the blank-answer path').toBe('none')
+  expect(Object.keys(suggestBody.mapping), 'control: a blank answer places nothing').toHaveLength(0)
+
+  // Control: the screen is live with all 11 columns rendered, not merely empty.
+  await expect(page.getByTestId('map-column'), 'control: the Map step must have rendered all 11 columns').toHaveCount(11)
+  await expect(page.getByTestId('map-suggested-badge'), 'no badge before placement').toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Map invoice number to continue' })).toBeVisible()
+
+  // The shipped click-to-place pair: arm invoice_number, then place it on its column.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
+  await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

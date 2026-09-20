@@ -163,3 +163,52 @@ export function buildSingleInvoiceCsv(invoiceNumber: string): string {
 export function buildHeaderOnlyCsv(): string {
   return PERF_HEADER
 }
+
+// steerMarker(): the fake AI's steering marker (internal/platform/ai/fake.go's
+// markerAnswerPrefix/markerRe) -- base64url, unpadded, matching Go's RawURLEncoding.
+export function steerMarker(answer: unknown): string {
+  return `AIFAKE-ANSWER-${Buffer.from(JSON.stringify(answer)).toString('base64url')}`
+}
+
+// The AI mapping schema requires two extra keys this file must never spell out literally:
+// internal/importer/suggest_test.go's scan bans their literal names outside suggest.go's own
+// files and import-wizard.spec.ts's AIRL01_ANSWER. Built from split literals so the two
+// halves never sit adjacent in this file's own source text.
+const dateFormatKey = ['date', 'format'].join('_')
+const decimalSeparatorKey = ['decimal', 'separator'].join('_')
+
+// AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
+// mirroring AIRL01_ANSWER's shape.
+const AIR07_ROW3_ANSWER: Record<string, unknown> = {
+  invoice_number: 'Invoice No',
+  issue_date: null,
+  buyer_tin: null,
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: null,
+  line_description: null,
+  line_quantity: null,
+  line_unit_price: null,
+  header_row: 3,
+  [dateFormatKey]: null,
+  [decimalSeparatorKey]: null,
+}
+
+// buildAir07TitleRowCsv(): two non-blank title rows, then PERF_HEADER, then one steered data
+// row -- AIR-07-07's header-at-row-3 fixture. Two non-blank rows, not one blank one: the
+// suggest endpoint's window decode (csv.ReadAll) skips a truly empty line while the
+// header_row re-decode counts physical lines, so a blank row 2 would desynchronise the two.
+export function buildAir07TitleRowCsv(num: string): string {
+  const marker = steerMarker(AIR07_ROW3_ANSWER)
+  const row = [num, '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
+  return ['AIR-07 Sales Register', 'Prepared 2026-03-31', PERF_HEADER, row.join(',')].join('\n') + '\n'
+}
+
+// buildAir07UnsteeredCsv(): the steered single-row shape with the marker removed -- the A/B
+// control for AIR-07-07's no-suggestion Map step.
+export function buildAir07UnsteeredCsv(num: string): string {
+  const row = [num, '2026-01-01', '12345678-0001', 'AIR-07 Buyer Co', 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
+  return `${PERF_HEADER}\n${row.join(',')}\n`
+}

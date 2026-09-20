@@ -3,7 +3,7 @@
 //
 // One spreadsheet row is one invoice LINE ITEM; rows group into invoices by the
 // column mapped to `invoice_number`. Recognised columns arrive pre-placed and
-// badged AUTO. the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.
+// badged AUTO — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.
 //
 // Every column, sample cell and file fact on this screen now comes from the SERVER's
 // preview response (M4-08-04, Core AC2) — the browser never parses the file. The whole

@@ -33,7 +33,7 @@ describe('mappingCopy', () => {
   it(`COPY-02: the three reworded sites carry the exact wording, and the legend names SUGGESTED then RESTORED`, () => {
     const src = readSrc(CREATE_MAPPING)
     const needles = [
-      `// badged AUTO. the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`,
+      `// badged AUTO — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`,
       `Drag invoice_number onto a column to continue — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`,
       `and confirmed with Continue. A suggestion is marked`,
     ]

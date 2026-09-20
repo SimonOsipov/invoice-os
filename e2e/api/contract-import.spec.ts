@@ -844,9 +844,8 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
   })
 })
 
-// AIR-07-07: own local steered-answer fixture, mirroring import-wizard.spec.ts's
-// AIRL01_ANSWER without importing it (repo convention -- no cross-suite imports between
-// spec files).
+// Own local steered-answer fixture, mirroring import-wizard.spec.ts's AIRL01_ANSWER
+// without importing it (repo convention -- no cross-suite imports between spec files).
 const AIR07_API_ANSWER: Record<string, unknown> = {
   invoice_number: 'Invoice No',
   issue_date: null,
@@ -885,7 +884,7 @@ test.describe('suggest-mapping contract (API E2E, over the deployed gateway)', (
       new Set(['source', 'header_row', 'columns', 'sample_rows', 'rows_total', 'mapping', 'saved_at']),
     )
     expect(res.source, 'a steered document with nothing saved yet must answer ai').toBe('ai')
-    expect(res.header_row).toBeGreaterThanOrEqual(1)
+    expect(res.header_row).toBe(1)
     expect(res.columns.length, 'control: the endpoint must have decoded a real header').toBeGreaterThan(0)
     expect(Array.isArray(res.sample_rows)).toBe(true)
     expect(res.mapping.invoice_number).toBe('Invoice No')

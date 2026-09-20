@@ -189,18 +189,16 @@ const AIR07_ROW3_ANSWER: Record<string, unknown> = {
   decimal_separator: null,
 }
 
-// buildAir07TitleRowCsv(): two non-blank title rows, then PERF_HEADER, then one steered data
-// row -- AIR-07-07's header-at-row-3 fixture. Two non-blank rows, not one blank one: the
-// suggest endpoint's window decode (csv.ReadAll) skips a truly empty line while the
-// header_row re-decode counts physical lines, so a blank row 2 would desynchronise the two.
+// buildAir07TitleRowCsv(): header-at-row-3 fixture, two non-blank title rows (not one
+// blank) -- a blank row would desync csv.ReadAll's line skip from header_row's raw count.
 export function buildAir07TitleRowCsv(num: string): string {
   const marker = steerMarker(AIR07_ROW3_ANSWER)
   const row = [num, '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
   return ['AIR-07 Sales Register', 'Prepared 2026-03-31', PERF_HEADER, row.join(',')].join('\n') + '\n'
 }
 
-// buildAir07UnsteeredCsv(): the steered single-row shape with the marker removed -- the A/B
-// control for AIR-07-07's no-suggestion Map step.
+// buildAir07UnsteeredCsv(): the steered single-row shape with the marker removed -- the
+// A/B control for the no-suggestion Map step.
 export function buildAir07UnsteeredCsv(num: string): string {
   const row = [num, '2026-01-01', '12345678-0001', 'AIR-07 Buyer Co', 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
   return `${PERF_HEADER}\n${row.join(',')}\n`

@@ -1,7 +1,5 @@
-// AIR-07-07 D-7: the one LOCAL guard on the deploy-only specs' steering marker. A
-// mis-encoded marker would silently burn the single deploy run this story gets, so this
-// pins the encoding against the fake client's own regex, read from its source rather than
-// transcribed -- see the REPO/readFileSync idiom this mirrors (workspaceCoverage.test.ts).
+// LOCAL guard on the deploy-only specs' steering marker, read from the fake client's
+// source regex (not transcribed) so a mis-encoded marker can't burn the one deploy run.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -40,8 +38,10 @@ describe('AIRM-01', () => {
 describe('AIRM-02', () => {
   it("the steering marker matches the fake client's own marker regex", () => {
     const src = readFileSync(FAKE_GO, 'utf8')
-    const match = src.match(/regexp\.MustCompile\(`([^`]+)`\)/)
-    expect(match, 'control: the marker regex literal must be found in fake.go, or this test reads nothing').not.toBeNull()
+    // Anchored on the NAME, not "first MustCompile in the file" -- a second MustCompile
+    // added above markerRe must not silently re-point this mirror at the wrong literal.
+    const match = src.match(/\bmarkerRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)
+    expect(match, "control: fake.go's named `markerRe = regexp.MustCompile(...)` declaration must be found, or this test reads nothing").not.toBeNull()
 
     const pattern = match![1]
     // Control: a mis-pathed read (e.g. an empty file, or a rewritten literal with no
@@ -60,7 +60,16 @@ describe('AIRM-02', () => {
       'control: this fixture must actually exercise a base64url-only character',
     ).toMatch(/[_-]/)
 
-    const found = marker.match(new RegExp(pattern))
+    // Go's regexp accepts constructs (e.g. named groups) that throw as a JS RegExp --
+    // report that as a named assertion failure, not an uncaught error.
+    let re: RegExp
+    try {
+      re = new RegExp(pattern)
+    } catch (err) {
+      throw new Error(`markerRe pattern ${JSON.stringify(pattern)} is not a valid JS RegExp: ${(err as Error).message}`)
+    }
+
+    const found = marker.match(re)
     expect(found, `marker ${marker} must match the fake client's own regex`).not.toBeNull()
     expect(found![0], 'the match must be the WHOLE marker, not a prefix truncated by a narrower class').toBe(marker)
   })

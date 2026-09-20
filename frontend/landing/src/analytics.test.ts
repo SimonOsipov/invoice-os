@@ -333,7 +333,10 @@ describe('honeypot cannot reach outcome senders (AC-5)', () => {
     // line matches the substring too, so it is excluded as the declaring module, not a caller.
     const analyticsPath = join(HERE, 'analytics.ts')
     const files = listSourceFiles(SRC_ROOT).filter((f) => f !== analyticsPath)
-    expect(files.length).toBeGreaterThan(0)
+    // Floor on the population: a walk that silently returned one directory would
+    // otherwise read as "nothing else calls it".
+    expect(files.length).toBeGreaterThanOrEqual(25)
+    expect(files).toContain(join(HERE, 'components', 'DemoCta.tsx'))
     const matches = files.filter((f) => readFileSync(f, 'utf8').includes('trackedHubSpotSubmit('))
     expect(matches.length).toBe(1)
     expect(matches[0]).toBe(DEMO_LEAD_FORM_PATH)

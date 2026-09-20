@@ -12,18 +12,17 @@ const (
 	// sampleRows is csvrun.py's SAMPLE_ROWS (:17). NOT handlers.go's maxSampleRows, which
 	// caps the preview response; equal at 5 by coincidence, mutated independently.
 	sampleRows = 5
-	// maxDetectableHeaderRow: csvgen.py:285 builds 1-3 title rows + a blank, so 5 is the
+	// maxDetectableHeaderRow: csvgen.py's TITLES builds 1-3 title rows + a blank, so 5 is the
 	// deepest header the measurement covered. A choice, not a derived literal (D-03).
 	maxDetectableHeaderRow = 5
 	windowRows             = maxDetectableHeaderRow + sampleRows
 	defaultHeaderRow       = 1
-	mappingSchemaName      = "column_mapping"                                              // csvrun.py:87
-	mappingIntro           = "The first rows of the file, as CSV. Row numbers start at 1." // csvrun.py:61
-	mappingRowFmt          = "Row %d: %s"                                                  // csvrun.py:66
+	mappingSchemaName      = "column_mapping"                                              // csvrun.py's call: response_format json_schema name
+	mappingIntro           = "The first rows of the file, as CSV. Row numbers start at 1." // csvrun.py's user_text: intro
+	mappingRowFmt          = "Row %d: %s"                                                  // csvrun.py's user_text: row join
 )
 
-// mappingFields is csvrun.py's FIELDS (:13-14), in order. Same eleven, same order, as
-// canonicalFields (service.go:154-166).
+// mappingFields is csvrun.py's FIELDS, in order. Same eleven, same order, as canonicalFields.
 var mappingFields = []string{"invoice_number", "issue_date", "buyer_tin", "buyer_name",
 	"currency", "subtotal", "vat", "total", "line_description", "line_quantity", "line_unit_price"}
 
@@ -55,8 +54,7 @@ Also return:
 // mappingSchema is mappingSchemaJSON()'s output, built once at package init.
 var mappingSchema = mappingSchemaJSON()
 
-// mappingSchemaJSON mirrors aiSchemaFor (aireading.go:55-68): csvrun.py's SCHEMA (:42-44),
-// transcribed.
+// mappingSchemaJSON mirrors aiSchemaFor: csvrun.py's SCHEMA, transcribed.
 func mappingSchemaJSON() json.RawMessage {
 	props := make(map[string]any, len(mappingFields)+3)
 	for _, f := range mappingFields {

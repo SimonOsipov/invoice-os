@@ -20,8 +20,8 @@ import (
 )
 
 // sgFakeAnswer calls mappingSchema through a real *ai.Client in fake mode and returns the
-// answer, the call error and the logged call's outcome. Precedent: worker_db_test.go:4322
-// (client construction) and :4383-4394 (outcome parsed from the JSON log line).
+// answer, the call error and the logged call's outcome. Precedent:
+// TestRLS_ExtractWorkerReadsThroughTheRealFakeClient (extraction/worker_db_test.go).
 func sgFakeAnswer(t *testing.T, text string) (map[string]any, error, string) {
 	t.Helper()
 	t.Setenv(ai.EnvFake, "true")
@@ -60,7 +60,7 @@ func sgOutcome(t *testing.T, log string) string {
 
 // --- AC-1: the mapping prompt -------------------------------------------------------------
 
-// T01 (row 1). Precedent: TestAIPrompt_MatchesTheMeasuredHarness, aireading_internal_test.go:91.
+// T01 (row 1). Precedent: TestAIPrompt_MatchesTheMeasuredHarness, aireading_internal_test.go.
 func TestMappingPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "csvrun.py"))
 	if err != nil {
@@ -98,8 +98,8 @@ func TestMappingPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 	}
 }
 
-// T23 (NEW). csvrun.py:87's json_schema name, the one value the request envelope carries that
-// no other test reads back from the harness.
+// T23 (NEW). csvrun.py's call: response_format json_schema name, the one value the request
+// envelope carries that no other test reads back from the harness.
 func TestMappingSchemaName_MatchesTheMeasuredHarness(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "csvrun.py"))
 	if err != nil {
@@ -136,7 +136,8 @@ func TestMappingSystem_SurvivesGofmtAndCarriesNoCurledQuote(t *testing.T) {
 			t.Errorf("mappingSystem no longer carries %s -- the curled-quote check below is vacuous", straight)
 		}
 	}
-	for _, curled := range []string{"“", "”", "‘", "’"} {
+	// Escaped, not literal: a literal curled quote here would trip the repo-wide fmt-check grep.
+	for _, curled := range []string{"\u201c", "\u201d", "\u2018", "\u2019"} {
 		if strings.Contains(mappingSystem, curled) {
 			t.Errorf("mappingSystem carries the curled quote %q", curled)
 		}
@@ -174,7 +175,7 @@ func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 		}
 	}
 	// The blank answer derives from "properties"; "required" is a separate transcription of
-	// csvrun.py:42 that nothing else reads back.
+	// csvrun.py's SCHEMA that nothing else reads back.
 	var decoded struct {
 		Required []string `json:"required"`
 	}

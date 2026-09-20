@@ -53,7 +53,12 @@ describe('AIRM-02', () => {
     // narrowed character class in fake.go is caught, not just a wrong prefix.
     const answer = { invoice_number: 'AIRM-02 test marker ~~ fixture ??' }
     const marker = steerMarker(answer)
-    expect(marker, 'control: this fixture must actually exercise a base64url-only character').toMatch(/[_-]/)
+    // The ENCODED half only: the AIFAKE-ANSWER- prefix carries hyphens of its own, so the
+    // same assertion over the whole marker holds for every payload and controls nothing.
+    expect(
+      marker.slice('AIFAKE-ANSWER-'.length),
+      'control: this fixture must actually exercise a base64url-only character',
+    ).toMatch(/[_-]/)
 
     const found = marker.match(new RegExp(pattern))
     expect(found, `marker ${marker} must match the fake client's own regex`).not.toBeNull()

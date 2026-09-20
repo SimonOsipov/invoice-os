@@ -125,6 +125,9 @@ describe('CreateMapping badges', () => {
     // Compared against AUTO's own resolved value, not a hardcoded literal, so a mutation that
     // drifts either badge's shared property is caught without depending on jsdom's own
     // normalization of a shorthand (e.g. `flex: 'none'` reads back as '0 0 auto').
+    // AC-11 says the badge is a <span>: selecting it by testid cannot see the element type,
+    // and only a `div.mono` swap reds AIRB-02, so compare the tag against AUTO's too.
+    expect(suggestedBadge.tagName).toBe(autoBadge.tagName)
     expect(suggestedBadge.className).toBe(autoBadge.className)
     expect(suggestedBadge.style.flex).toBe(autoBadge.style.flex)
     expect(suggestedBadge.style.fontSize).toBe(autoBadge.style.fontSize)

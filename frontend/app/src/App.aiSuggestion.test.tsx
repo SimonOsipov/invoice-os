@@ -927,8 +927,12 @@ describe('the AI suggests a mapping after a saved lookup restores nothing', () =
   // loudly instead of silently changing what the screen renders.
   it('AIRA-16: every non-aliasing column fixture in this file recognizes nothing', () => {
     const nonAliasing = [TWO_COL, ALT_COL, THREE_COL, FOUR_COL, ROW1_COL, ROW3_COL, ROW3_COL_ALT]
+    // Both floors stop the loop from passing on nothing: an emptied constant alias-matches
+    // nothing trivially, and a shortened list would just skip the constant that drifted.
+    expect(nonAliasing, 'control: every non-aliasing constant in this file must be swept').toHaveLength(7)
     for (const cols of nonAliasing) {
       const recognized = recognize(cols)
+      expect(cols.length, 'control: an empty column list alias-matches nothing vacuously').toBeGreaterThan(0)
       expect(Object.keys(recognized).length, 'control: recognize must return a key for every CANON field').toBeGreaterThan(0)
       expect(Object.values(recognized).every((v) => v === null), `${JSON.stringify(cols)} must alias-match nothing`).toBe(true)
     }

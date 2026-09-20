@@ -44,6 +44,7 @@ export interface MappingGroup {
   signature: string
   fileIds: string[]
   preview: ImportPreview
+  headerRow: number // the row the columns were decoded at; the import must read the same row
   mapping: Mapping
   restored: RestoredFrom | null
   suggested: SuggestedFrom | null
@@ -67,6 +68,7 @@ export function groupByLayout(previewed: { fileId: string; preview: ImportPrevie
       signature,
       fileIds: [fileId],
       preview,
+      headerRow: 1,
       mapping: initMappingFromHeaders(preview.columns),
       restored: null,
       suggested: null,
@@ -97,6 +99,7 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     signature: group.signature,
     fileIds: [fileId],
     preview: group.preview,
+    headerRow: group.headerRow,
     mapping: { ...group.mapping },
     restored: group.restored,
     suggested: group.suggested,

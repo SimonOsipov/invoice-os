@@ -83,6 +83,7 @@ function mkGroup(fileIds: string[], mapping: Mapping, columns: string[] = LAGOS_
     signature: JSON.stringify(columns),
     fileIds,
     preview: mkPreview(columns),
+    headerRow: 1,
     mapping,
     restored: null,
     suggested: null,
@@ -741,6 +742,38 @@ describe('applySuggestion', () => {
     const keys = Object.keys(result.mapping)
     expect(keys.length).toBeGreaterThan(0)
     keys.forEach((k) => expect(result.mapping[k]).toBeNull())
+  })
+})
+
+describe('the resolved header row (AIR-07-05)', () => {
+  it('AIRH-01: applySuggestion records the header row on the saved branch too', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const res: SuggestMapping = {
+      source: 'saved',
+      header_row: 3,
+      columns: LAGOS_COLS,
+      sample_rows: [],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: '2026-09-05T00:00:00Z',
+    }
+
+    const result = applySuggestion(group, res)
+
+    // AIRS-10 unchanged: still restores, still leaves suggested null.
+    expect(result.restored).not.toBeNull()
+    expect(result.suggested).toBeNull()
+    expect(result.headerRow, 'the resolved header row must survive the saved branch too').toBe(3)
+  })
+
+  it('AIRH-02: returnToAutomatic and splitOut keep the header row', () => {
+    const group: MappingGroup = { ...mkGroup(['f1', 'f2'], initMappingFromHeaders(LAGOS_COLS)), headerRow: 3 }
+
+    expect(returnToAutomatic(group).headerRow, 'a reset to automatic must not lose the resolved header row').toBe(3)
+
+    const result = splitOut([group], 'f2')
+    const split = result.find((g) => g.fileIds.includes('f2'))!
+    expect(split.headerRow, 'a split copy must carry the header row too').toBe(3)
   })
 })
 

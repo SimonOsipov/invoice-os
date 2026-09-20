@@ -427,3 +427,29 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
     expect(globalThis.document).toBeUndefined()
   })
 })
+
+// N2 (O4, NEW-BEHAVIOUR): pinned against today's unedited CTA_COMPONENTS literal
+// above -- fails honestly until DemoCta.tsx drops out of the list.
+describe('CTA components untouched (AC-3), gap-fill', () => {
+  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds five entries', () => {
+    expect(CTA_COMPONENTS.length).toBe(5)
+    expect(CTA_COMPONENTS).not.toContain('DemoCta.tsx')
+  })
+})
+
+// N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan. Protects
+// [analytics-line-count-frozen] -- the four send() lines docs cite by number
+// must hold their position however DEMO_CTA_SOURCES shrinks.
+describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, gap)', () => {
+  it('N3: demo_cta drops out, and analytics.ts keeps its four send() lines in place', () => {
+    expect(DEMO_CTA_SOURCES.length).toBe(5)
+    expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
+
+    const lines = ANALYTICS_SRC.split('\n')
+    expect(lines.length).toBeGreaterThan(129)
+    expect(lines[78]).toContain("send('demo_open'")
+    expect(lines[82]).toContain('generate_lead')
+    expect(lines[86]).toContain('demo_submit_failed')
+    expect(lines[129]).toContain('scroll_depth')
+  })
+})

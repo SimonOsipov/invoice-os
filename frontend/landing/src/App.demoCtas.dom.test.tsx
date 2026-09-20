@@ -132,6 +132,13 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
     expect(new Set([FIRM.cta, INHOUSE.cta, FINTECH.cta]).size).toBe(3)
   })
 
+  // A2 (O3, NEW-BEHAVIOUR): the future roster, pinned against today's unedited
+  // ROSTER literal above -- fails honestly until #demo's entry is dropped.
+  it('A2: the roster is exactly 9 entries, and no entry scopes to #demo', () => {
+    expect(ROSTER.length).toBe(9)
+    expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
+  })
+
   // F3-f: measured 2 (header) + 2 (#top) + 6 (#accountants) + 5 (#pricing) + 1 (#demo) +
   // 2 (footer) = 18 = the 10-entry roster + the 8 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx:114-115 mounts SignInModal/DemoModal as
@@ -165,6 +172,24 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
       closeButton!.click()
     })
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+// A1 (AC-1.3, NEW-BEHAVIOUR): pins the end state directly -- #demo's button must stop
+// opening the popup. #dc-name-error proves the click was not inert (validation ran on
+// a real submit), rather than a dead handler that also opens no dialog.
+describe('A1: the card no longer opens the demo dialog', () => {
+  it('clicking "Book my demo ->" in #demo validates in place, opens nothing', async () => {
+    await mountApp()
+    const demoEl = document.querySelector('#demo')
+    expect(demoEl, 'expected #demo to resolve').not.toBeNull()
+    if (!demoEl) return
+
+    await clickByText(demoEl, 'Book my demo →')
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(document.getElementById('dc-name-error'), 'expected the card to validate in place').not.toBeNull()
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

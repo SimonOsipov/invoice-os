@@ -92,3 +92,23 @@ export function restoreMapping(headers: string[], saved: Record<string, string>)
   })
   return map
 }
+
+// An AI answer that omits a field leaves that field's alias column free, so the automatic
+// placement is restored there. A column the answer already names is never reused, so no
+// placement the server's duplicate sweep removed can come back. Two fallbacks cannot
+// collide either: recognize never places two fields on one column.
+export function fillUnplacedFromAliases(headers: string[], placed: Mapping): Mapping {
+  const claimed = new Set(Object.values(placed).filter((v): v is string => v !== null))
+  const auto = recognize(headers)
+  const map: Mapping = {}
+  CANON.forEach((c) => {
+    const held = placed[c.key] ?? null
+    if (held !== null) {
+      map[c.key] = held
+      return
+    }
+    const alias = auto[c.key]
+    map[c.key] = alias && !claimed.has(alias) ? alias : null
+  })
+  return map
+}

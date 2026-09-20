@@ -15,7 +15,7 @@
 // lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
 // selection-half (BULK-01-03).
 
-import { canSubmitMapping, initMappingFromHeaders, restoreMapping } from './mapping'
+import { canSubmitMapping, fillUnplacedFromAliases, initMappingFromHeaders, restoreMapping } from './mapping'
 import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 import { fmtDateTime } from './format'
@@ -179,8 +179,9 @@ export async function restoreGroups(
   return result
 }
 
-// A `saved` answer takes the restore path; `none` is the identity. The snapshot shares the
-// mapping object for the same reason applySavedMapping's does.
+// A `saved` answer takes the restore path; `none` is the identity. The `saved` snapshot
+// shares the mapping object; the `suggested` snapshot keeps the AI's OWN placements while
+// group.mapping also carries the alias fallback, so a fallback badges AUTO, not SUGGESTED.
 export function applySuggestion(group: MappingGroup, res: SuggestMapping): MappingGroup {
   if (res.source === 'none') return group
   const preview: ImportPreview = { ...group.preview, columns: res.columns, sample_rows: res.sample_rows, rows_total: res.rows_total }
@@ -189,7 +190,7 @@ export function applySuggestion(group: MappingGroup, res: SuggestMapping): Mappi
   if (res.source === 'saved') {
     return { ...base, restored: { savedAt: res.saved_at ?? '', mapping }, suggested: null }
   }
-  return { ...base, suggested: { headerRow: res.header_row, mapping } }
+  return { ...base, mapping: fillUnplacedFromAliases(res.columns, mapping), suggested: { headerRow: res.header_row, mapping } }
 }
 
 // One suggestion at a time, in group order, for the groups restoreGroups left unrestored.

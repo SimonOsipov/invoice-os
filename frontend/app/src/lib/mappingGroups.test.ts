@@ -32,12 +32,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { CANON } from '../data'
 import { fmtDateTime } from './format'
-import { initMappingFromHeaders, recognize, restoreMapping } from './mapping'
-// fillUnplacedFromAliases does not exist yet (AIR-07-09, RED stage) -- the namespace
-// import plus cast keeps `tsc` green while the call itself still throws at runtime.
-import * as mappingModule from './mapping'
-const fillUnplacedFromAliases = (mappingModule as unknown as { fillUnplacedFromAliases: (headers: string[], placed: Mapping) => Mapping })
-  .fillUnplacedFromAliases
+import { fillUnplacedFromAliases, initMappingFromHeaders, recognize, restoreMapping } from './mapping'
 import {
   applySavedMapping,
   applySuggestion,

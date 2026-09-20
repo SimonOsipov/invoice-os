@@ -104,7 +104,9 @@ describe('R4 (AC-1.3, NEW-BEHAVIOUR): no CTA prop, one submit button', () => {
 
     const stripped = stripComments(readFileSync(DEMO_CTA_PATH, 'utf8'))
     expect(stripped.length).toBeGreaterThan(0)
-    expect(stripped, 'control needle: expected DemoCta.tsx to render DemoLeadForm').toContain('DemoLeadForm')
+    // Matches the ELEMENT, not the bare name: `import … from './DemoLeadForm'` alone
+    // satisfies a `toContain('DemoLeadForm')` even when nothing is rendered.
+    expect(stripped, 'control needle: expected DemoCta.tsx to render <DemoLeadForm').toMatch(/<DemoLeadForm\b/)
     expect(stripped).not.toMatch(/onBookDemo/)
     expect(stripped).not.toMatch(/onClick=/)
   })

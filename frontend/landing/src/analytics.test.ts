@@ -453,3 +453,39 @@ describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, g
     expect(lines[129]).toContain('scroll_depth')
   })
 })
+
+// AC #8 gap-fill. docs/analytics.md's four count-bearing sites are hand-maintained and
+// were guarded by nothing -- stalerefs tracks only multi-word quoted literals. Derived
+// from DEMO_CTA_SOURCES so a retired source cannot survive in the page.
+describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
+  const ANALYTICS_DOC = readFileSync(join(HERE, '..', '..', '..', 'docs', 'analytics.md'), 'utf8')
+  const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+
+  it('N4: the demo_open row lists exactly the shipped cta_location values, in order', () => {
+    expect(ANALYTICS_DOC.length, 'population floor: the doc must actually resolve').toBeGreaterThan(2000)
+    const row = ANALYTICS_DOC.split('\n').find((l) => l.startsWith('| `demo_open`'))
+    expect(row, 'expected the demo_open event row').toBeDefined()
+    // Every backticked all-lowercase token on the row is a value; the row's other
+    // backticks (`App.tsx`, `book(source)`) cannot match the class.
+    const listed = Array.from((row ?? '').matchAll(/`([a-z_]+)`/g))
+      .map((m) => m[1])
+      .filter((v) => v !== 'demo_open' && v !== 'cta_location')
+    expect(listed).toEqual([...DEMO_CTA_SOURCES])
+  })
+
+  it('N5: every cta_location count word in the doc matches DEMO_CTA_SOURCES.length', () => {
+    const n = WORD[DEMO_CTA_SOURCES.length]
+    const capitalised = n[0].toUpperCase() + n.slice(1)
+    expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
+    expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
+    expect(ANALYTICS_DOC).toContain(`matches the ${n} literal call`)
+    for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
+    expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
+  })
+
+  it('N6: the button total the doc quotes is the one F3-f measures', () => {
+    // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
+    // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
+    expect(ANALYTICS_DOC).toContain('values cover **nine** buttons')
+  })
+})

@@ -36,7 +36,7 @@ why the operator checklist below exists.
 | Event | Kind | Parameters | Fires when |
 |---|---|---|---|
 | `page_view` | GA4 automatic | *(none set by us)* | `gtag('config', id)` sends it; GA4 derives the traffic source from the referrer and `utm_*`. Never sent manually — a manual one would double-count. |
-| `demo_open` | custom | `cta_location`: `nav` \| `hero` \| `audience` \| `pricing` \| `demo_cta` \| `footer` | A visitor opens the Book-a-demo modal. The value is bound per call site in `App.tsx`'s `book(source)`. |
+| `demo_open` | custom | `cta_location`: `nav` \| `hero` \| `audience` \| `pricing` \| `footer` | A visitor opens the Book-a-demo modal. The value is bound per call site in `App.tsx`'s `book(source)`. |
 | `generate_lead` | GA4 recommended | `form_name`: `book_a_demo` | A demo submission **reaches HubSpot and succeeds**. |
 | `demo_submit_failed` | custom | `form_name`: `book_a_demo` | That same HubSpot call rejects (non-2xx, timeout, network). |
 | `scroll_depth` | custom | `percent_scrolled`: `25` \| `50` \| `75` \| `100` | The visitor first crosses each milestone. Once each per page load, ascending. |
@@ -47,7 +47,7 @@ Three notes on what does **not** fire:
   It routes through the shared stub, so a bot sees exactly what a human sees and reports nothing.
 - A submission on a **closed gate** (any non-production hostname) also fires neither: no HubSpot
   call is made, so there is no outcome to report.
-- Six `cta_location` values cover **ten** buttons. `Audience`'s three persona tabs all report
+- Five `cta_location` values cover **nine** buttons. `Audience`'s three persona tabs all report
   `audience`, and `Pricing`'s three tiers all report `pricing`.
 
 ## Configuration
@@ -93,11 +93,11 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
    LAND-05 the gate's consent arm is closed by default, so a clean profile that has not accepted
    reports nothing at all, and an empty DebugView then means the gate is working rather than the
    tag being broken. Also confirm that a real submission reports `generate_lead`, that
-   **all six** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`, `demo_cta`,
+   **all five** `cta_location` values appear: `nav`, `hero`, `audience`, `pricing`,
    `footer`, and that scrolling the page to the bottom reports `scroll_depth` once each at
    `percent_scrolled` 25, 50, 75 and 100 — four events, no repeats on scrolling back up.
    Not optional polish. A mutation making `App.tsx`'s `book()` ignore its argument and hardcode one
-   source **survives every test in the repo**: `analytics.test.ts` matches the six literal call
+   source **survives every test in the repo**: `analytics.test.ts` matches the five literal call
    sites against `App.tsx` as *text*, `analytics.dom.test.ts` calls `trackDemoOpen` directly rather
    than through `book`, and no CI run loads the tag, so the e2e suite sees no payload. DebugView is
    the only oracle that exists for it.

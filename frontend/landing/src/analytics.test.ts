@@ -23,7 +23,7 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'DemoCta.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'Footer.tsx']
 const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
@@ -237,7 +237,7 @@ describe('main.tsx boot wiring', () => {
 })
 
 describe('App.tsx CTA bindings (AC-3)', () => {
-  it('all six App.tsx call sites are bound to distinct sources', () => {
+  it('all five App.tsx call sites are bound to distinct sources', () => {
     // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
     expect(APP_SRC.length).toBeGreaterThan(0)
     expect(APP_SRC).toContain('onBookDemo')

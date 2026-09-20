@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// F-3: all ten rendered demo CTAs -- spread across six scopes, in six different
+// F-3: all nine rendered demo CTAs -- spread across five scopes, in five different
 // components -- open the same "Book a demo" modal. Also discharges F-12 criterion 3
 // (every pricing tier's CTA opens the demo modal): roster entries 6-8 are the three
 // PLANS[].cta values, the same ones Pricing.billingPeriod.dom.test.tsx reads; per
@@ -86,9 +86,9 @@ async function clickByText(root: ParentNode, text: string): Promise<void> {
   })
 }
 
-// Scope + label roster, in page order. Six of the ten labels are the imported constant
-// the CTA renders (FIRM/INHOUSE/FINTECH.cta, PLANS[].cta); the other four -- Nav, Hero,
-// DemoCta and Footer's own "Book a demo" -- have no shared constant behind them (Footer's
+// Scope + label roster, in page order. Six of the nine labels are the imported constant
+// the CTA renders (FIRM/INHOUSE/FINTECH.cta, PLANS[].cta); the other three -- Nav, Hero
+// and Footer's own "Book a demo" -- have no shared constant behind them (Footer's
 // copy lives in a local, unexported `COLS` array), so they are given as the literal each
 // component renders. Labels repeat ACROSS scopes ("Book a demo" is Nav's, PLANS[1]'s and
 // Footer's) but never WITHIN one -- that is what the per-entry scope assertion checks.
@@ -101,20 +101,20 @@ const ROSTER: { scope: string; label: string }[] = [
   { scope: '#pricing', label: PLANS[0].cta },
   { scope: '#pricing', label: PLANS[1].cta },
   { scope: '#pricing', label: PLANS[2].cta },
-  { scope: '#demo', label: 'Book my demo →' }, // DemoCta.tsx:176
   { scope: 'footer', label: 'Book a demo' }, // Footer.tsx:84
 ]
 
-// The eight controls in these six scopes that are NOT demo CTAs, named so the 18-button
+// The nine controls in these six scopes that are NOT demo CTAs, named so the 18-button
 // completeness guard below (F3-f) is not a magic number:
 //   header        -- "Explore the platform" (sign-in)
 //   #top          -- "Explore the platform" (sign-in)
 //   #accountants  -- the firm / inhouse / fintech audience-switch tabs (3)
 //   #pricing      -- the Monthly / Annual billing-period toggle (2)
+//   #demo         -- the shared form's "Book my demo →" submit
 //   footer        -- "Cookie choices"
-const NON_CTA_COUNT = 8
+const NON_CTA_COUNT = 9
 
-describe('F-3: all ten rendered demo CTAs open the same modal', () => {
+describe('F-3: all nine rendered demo CTAs open the same modal', () => {
   it('F3-a: control needle -- zero dialogs at rest, and every scope resolves to >= 1 button', async () => {
     await mountApp()
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
@@ -126,14 +126,21 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('F3-b: the roster is exactly 10 entries, and no scope hides a duplicate CTA label', () => {
-    expect(ROSTER.length).toBe(10)
+  it('F3-b: the roster is exactly 9 entries, and no scope hides a duplicate CTA label', () => {
+    expect(ROSTER.length).toBe(9)
     expect(new Set(PLANS.map((p) => p.cta)).size).toBe(3)
     expect(new Set([FIRM.cta, INHOUSE.cta, FINTECH.cta]).size).toBe(3)
   })
 
+  // A2 (O3, NEW-BEHAVIOUR): the future roster, pinned against today's unedited
+  // ROSTER literal above -- fails honestly until #demo's entry is dropped.
+  it('A2: the roster is exactly 9 entries, and no entry scopes to #demo', () => {
+    expect(ROSTER.length).toBe(9)
+    expect(ROSTER.some((entry) => entry.scope === '#demo')).toBe(false)
+  })
+
   // F3-f: measured 2 (header) + 2 (#top) + 6 (#accountants) + 5 (#pricing) + 1 (#demo) +
-  // 2 (footer) = 18 = the 10-entry roster + the 8 named non-CTA controls above. Asserted
+  // 2 (footer) = 18 = the 9-entry roster + the 9 named non-CTA controls above. Asserted
   // with the demo modal closed -- App.tsx:114-115 mounts SignInModal/DemoModal as
   // siblings of Footer, outside every one of these six scopes, but an OPEN modal still
   // adds buttons to the page (its own Close, and form controls) that this total ignores
@@ -165,6 +172,24 @@ describe('F-3: all ten rendered demo CTAs open the same modal', () => {
       closeButton!.click()
     })
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+// A1 (AC-1.3, NEW-BEHAVIOUR): pins the end state directly -- #demo's button must stop
+// opening the popup. #dc-name-error proves the click was not inert (validation ran on
+// a real submit), rather than a dead handler that also opens no dialog.
+describe('A1: the card no longer opens the demo dialog', () => {
+  it('clicking "Book my demo ->" in #demo validates in place, opens nothing', async () => {
+    await mountApp()
+    const demoEl = document.querySelector('#demo')
+    expect(demoEl, 'expected #demo to resolve').not.toBeNull()
+    if (!demoEl) return
+
+    await clickByText(demoEl, 'Book my demo →')
+
+    expect(document.querySelectorAll(DIALOG).length).toBe(0)
+    expect(document.getElementById('dc-name-error'), 'expected the card to validate in place').not.toBeNull()
     expect(consoleError).not.toHaveBeenCalled()
   })
 })

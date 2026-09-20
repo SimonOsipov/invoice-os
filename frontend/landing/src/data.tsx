@@ -66,15 +66,15 @@ export const STEPS: Step[] = [
     num: '01',
     title: 'Connect or import',
     glyph: <Icon paths={['M21 12a9 9 0 1 1-6.2-8.6', 'M21 3v6h-6']} size={20} />,
-    body: 'Pull invoices from your ERP via API, or upload CSV / XLSX from any accounting system. No migration.',
-    points: ['REST API & webhooks', 'CSV / XLSX bulk import', 'ERP connectors'],
+    body: 'Pull invoices from your ERP via API, or upload CSV / XLSX from any accounting system, or a PDF or scan of the invoice. No migration.',
+    points: ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
   },
   {
     num: '02',
-    title: 'Validate against MBS rules',
+    title: 'Validate against MBS rules — and your own',
     glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={20} />,
-    body: 'The engine checks tax IDs, VAT/WHT, totals, duplicates, and mandatory fields — flagging errors before they cost you.',
-    points: ['Nigeria rule pack', 'Field & tax logic checks', 'Inline fix suggestions'],
+    body: 'Every invoice is checked against the golden MBS rule pack — tax IDs, VAT/WHT, totals, duplicates, mandatory fields — plus the rules your company adds on top.',
+    points: ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
   },
   {
     num: '03',
@@ -226,12 +226,17 @@ export type Audience = {
 export const FIRM: Audience = {
   tabIcon: tg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']),
   headline: "Run every client's compliance from one portal.",
-  body: "Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner — and a distribution channel for ASComply.",
+  body: "Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner.",
   features: [
     { title: 'Multi-client portal', body: 'Every client company in one switchable workspace.', glyph: fg(['M3 3h7v7H3z', 'M14 3h7v7h-7z', 'M14 14h7v7h-7z', 'M3 14h7v7H3z']) },
     { title: 'Bulk validation queues', body: 'Run and clear validation across clients in one pass.', glyph: fg(['m3 17 2 2 4-4', 'm3 7 2 2 4-4', 'M13 6h8', 'M13 12h8', 'M13 18h8']) },
     { title: 'Per-client readiness scores', body: "See who's audit-ready and who needs attention.", glyph: fg(['m12 14 4-4', 'M3.34 19a10 10 0 1 1 17.32 0']) },
     { title: 'White-glove client onboarding', body: 'Templates and imports to set up new books fast.', glyph: fg(['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M19 8v6', 'M22 11h-6']) },
+    {
+      title: 'Per-client rule sets',
+      body: "Stack each client's own checks on top of the golden MBS rules.",
+      glyph: fg(['M8 16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2', 'M14 8h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-8a2 2 0 0 1-2-2v-6']),
+    },
   ],
   stats: [
     { value: '1 login', label: 'Every client company, switched instantly.', color: 'var(--fg-1)' },
@@ -247,7 +252,7 @@ export const INHOUSE: Audience = {
   features: [
     { title: 'Role-based approval chain', body: 'Creator → reviewer → approver, with rejection notes.', glyph: fg(['M6 3v12', 'M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', 'M15 6a9 9 0 0 0-9 9']) },
     { title: 'Departmental readiness dashboard', body: 'One company, every metric your controller needs.', glyph: fg(['M3 3h7v9H3z', 'M14 3h7v5h-7z', 'M14 12h7v9h-7z', 'M3 16h7v5H3z']) },
-    { title: 'ERP & accounting sync', body: 'Two-way sync with SAP, NetSuite, Sage & QuickBooks.', glyph: fg(['M21 12a9 9 0 1 1-6.2-8.6', 'M21 3v6h-6']) },
+    { title: 'ERP & accounting sync', body: 'Two-way sync with SAP, NetSuite, Sage, QuickBooks & Odoo.', glyph: fg(['M21 12a9 9 0 1 1-6.2-8.6', 'M21 3v6h-6']) },
     { title: 'SSO & team management', body: 'Provision finance staff with SSO, SCIM & roles.', glyph: fg(['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z']) },
     { title: 'Month-end close reports', body: 'VAT/WHT summaries and exception reports on demand.', glyph: fg(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M14 2v6h6', 'M16 13H8', 'M16 17H8']) },
   ],

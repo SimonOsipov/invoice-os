@@ -46,4 +46,34 @@ export const FORBIDDEN_STRINGS = [
   // ` signed ·` clears the honest retraction `· UNSIGNED ·` while still catching `SIGNED · x`.
   ' signed ·',
   '· signed',
+  // Production is hosted outside Nigeria, so this is a false claim — same class as the
+  // NRS/MBS entries above.
+  'Data resident in-region',
+] as const
+
+// Retired landing positioning copy. Kept out of FORBIDDEN_STRINGS: that list is for claims of
+// a regulatory action having OCCURRED, and this is marketing language — a different failure
+// mode, not a false-claim category. The two `layer` entries are independent needles; a line
+// carrying both reports both, pinned by "a line naming both overlapping phrases reports both".
+export const RETIRED_LANDING_COPY = [
+  // Row 3 — replaced by "is the solution between".
+  'compliance layer',
+  // Row 4 — replaced by "compliance solution".
+  'compliance workflow layer',
+  // Row 5 — replaced by "submit them to the regulatory bodies".
+  'licensed transmission partners',
+  // Row 10 — footer tagline dropped to one sentence.
+  'compliance infrastructure for African businesses',
+  'designed to expand',
+  // Row 6 — replaced by "CSV / XLSX / PDF import".
+  'CSV / XLSX bulk import',
+  // Row 7 — replaced by "Golden MBS rule pack" / "Your own company rules".
+  'Nigeria rule pack',
+  'Field & tax logic checks',
+  // Row 11 — the firms body no longer claims a distribution channel.
+  'distribution channel for ASComply',
+  // Row 12 — the footer no longer carries a build/environment tag. The separator is
+  // load-bearing: a bare `SANDBOX` hits the two consoles' legitimate env labels, and a bare
+  // `MBS ADAPTER` hits the live fintech-tab feature title "Sandbox MBS adapter".
+  'MBS ADAPTER · SANDBOX',
 ] as const

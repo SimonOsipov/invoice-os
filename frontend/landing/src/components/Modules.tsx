@@ -23,7 +23,7 @@ export function Modules() {
               color: 'var(--surface-foreground)',
             }}
           >
-            ASComply is your invoice compliance workflow layer.
+            ASComply is your invoice compliance solution.
           </h2>
           <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: '0 0 12px' }}>
             ASComply sits between your business, your accounting system, your tax adviser and the regulated e-invoicing
@@ -31,7 +31,7 @@ export function Modules() {
           </p>
           <p style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--on-dark-70)', maxWidth: 560, margin: 0 }}>
             We help your team validate invoices before they are submitted, manage approvals internally, store
-            audit-ready records and connect to licensed transmission partners where required.
+            audit-ready records and submit them to the regulatory bodies.
           </p>
         </div>
         <div

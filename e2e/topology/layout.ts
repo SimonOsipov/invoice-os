@@ -97,6 +97,19 @@ export function overlapOf(a: Rect, b: Rect): Rect {
 }
 
 /**
+ * Does `outer` contain `inner` on both axes? Containment is the two-axis form of
+ * gaps(): slackPx absorbs sub-pixel rounding on each edge, not a real overhang.
+ */
+export function enclosesRect(outer: Rect, inner: Rect, slackPx = 0): boolean {
+  return (
+    inner.x >= outer.x - slackPx &&
+    inner.y >= outer.y - slackPx &&
+    inner.x + inner.width <= outer.x + outer.width + slackPx &&
+    inner.y + inner.height <= outer.y + outer.height + slackPx
+  )
+}
+
+/**
  * Asserts `inner` fills `outer` horizontally at every width in WIDE_WIDTHS, and
  * returns what it measured so the caller can attach the numbers.
  *

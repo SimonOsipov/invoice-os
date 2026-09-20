@@ -28,9 +28,9 @@ const MIN_PHONE_CARD_PX = 300 // floor: the third-of-viewport cap must not pass 
 const BOX_SLACK_PX = 0.5 // sub-pixel rounding only
 const TAB_PRESSES = 30
 const NARROW_WIDTHS = [390, 375] as const
-// span + wrapper div + Cookie choices + version string: the four descendants the
+// copyright span + wrapper div + Cookie choices button: the three descendants the
 // copyright row is required to contain, so the walk's floor is counted, not invented.
-const MIN_COPYRIGHT_ROW_NODES = 4
+const MIN_COPYRIGHT_ROW_NODES = 3
 
 // WIDE_WIDTHS at 1080 plus 1280x720 — the viewport this suite actually runs at. A
 // clearance claim that only holds at 1080 is a claim about a viewport no test uses.
@@ -129,10 +129,6 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
   const box = await locator.boundingBox()
   expect(box, `${label} did not render ${at}`).toBeTruthy()
   return box!
-}
-
-function centreDistance(a: Rect, b: Rect): number {
-  return Math.hypot(a.x + a.width / 2 - (b.x + b.width / 2), a.y + a.height / 2 - (b.y + b.height / 2))
 }
 
 /**
@@ -921,31 +917,32 @@ test('landing consent: nothing is written to storage until the visitor answers',
   expectNoConsoleErrors(errors)
 })
 
-// C13 — the footer control belongs to the version string, and the row survives narrow
-// widths. Two oracles, because one does not span the wrap: the control and the version
-// share a group box at EVERY width, and centre-to-centre proximity is asserted where the
-// row has not wrapped.
-test('landing consent: the Cookie choices control reads as part of the version string', async ({ page }, testInfo) => {
+// C13 — the footer control sits opposite the copyright and the row survives narrow widths.
+// No flush-to-the-right-edge assertion is written: the row is space-between with exactly two
+// children, so Chromium pins the last one to the content box by definition of the layout, and
+// the claim would hold even if the wrapper were deleted. The belonging claim therefore rests
+// on the group box and the overflow walk.
+test('landing consent: the Cookie choices control sits opposite the copyright in the footer row', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   const { errors } = await openLanding(page)
 
   const footer = page.getByRole('contentinfo')
   const control = footer.getByRole('button', { name: 'Cookie choices' })
-  const version = footer.getByText('v 1.0 · MBS ADAPTER · SANDBOX', { exact: true })
   const copyright = footer.getByText('© 2026 ASCOMPLY AFRICA · LAGOS · NG', { exact: true })
   const group = control.locator('xpath=..')
-  for (const [label, locator] of [['the Cookie choices control', control], ['the version string', version], ['the copyright string', copyright]] as const) {
+  const row = copyright.locator('xpath=..')
+  // Retyped from Footer.tsx's inline `gap: 12` on the copyright row.
+  const COPYRIGHT_ROW_GAP_PX = 12
+  for (const [label, locator] of [['the Cookie choices control', control], ['the copyright string', copyright]] as const) {
     await expect(locator, `${label} is not unique in the footer`).toHaveCount(1)
   }
 
   const entry = page.viewportSize()
   const sweep: Array<{
     width: number
-    toVersion: number
-    toCopyright: number
+    oneLineSlack: number
     rowWrapped: boolean
     groupHoldsControl: boolean
-    groupHoldsVersion: boolean
     groupClearsCopyright: boolean
   }> = []
 
@@ -958,16 +955,14 @@ test('landing consent: the Cookie choices control reads as part of the version s
 
       const at = `at ${width}px`
       const c = await rectOf(control, 'the Cookie choices control', at)
-      const v = await rectOf(version, 'the version string', at)
       const r = await rectOf(copyright, 'the copyright string', at)
       const g = await rectOf(group, "the control's group box", at)
+      const w = await rectOf(row, 'the copyright row', at)
       sweep.push({
         width,
-        toVersion: centreDistance(c, v),
-        toCopyright: centreDistance(c, r),
+        oneLineSlack: w.width - (r.width + COPYRIGHT_ROW_GAP_PX + g.width),
         rowWrapped: !sharesLine(c, r),
         groupHoldsControl: enclosesRect(g, c),
-        groupHoldsVersion: enclosesRect(g, v),
         groupClearsCopyright: !rectsOverlap(g, r),
       })
     }
@@ -981,38 +976,41 @@ test('landing consent: the Cookie choices control reads as part of the version s
   })
   testInfo.annotations.push({
     type: 'measurement',
-    description: sweep.map((m) => `${m.width}px: version ${Math.round(m.toVersion)}px, copyright ${Math.round(m.toCopyright)}px${m.rowWrapped ? ' (row wrapped)' : ''}`).join(' | '),
+    description: sweep.map((m) => `${m.width}px: one-line slack ${Math.round(m.oneLineSlack)}px${m.rowWrapped ? ' (row wrapped)' : ''}`).join(' | '),
   })
 
   expect(sweep, 'the proximity sweep did not visit every width').toHaveLength(WIDE_WIDTHS.length + NARROW_WIDTHS.length)
 
-  // (a1) Belonging, at EVERY width including the narrow ones: one box holds the control
-  // and the version string, and the copyright string is outside it. This is the claim that
-  // goes red if the control is ever moved next to the copyright.
+  // (a1) Belonging, at EVERY width including the narrow ones: one box holds the control and
+  // the copyright string is outside it. This is the claim that goes red if the control is
+  // ever moved next to the copyright.
   for (const m of sweep) {
     expect(m.groupHoldsControl, `at ${m.width}px the Cookie choices control is not inside its own group box`).toBe(true)
-    expect(m.groupHoldsVersion, `at ${m.width}px the version string is not inside the control's group box`).toBe(true)
     expect(m.groupClearsCopyright, `at ${m.width}px the control's group box overlaps the copyright string`).toBe(true)
   }
 
-  // (a2) Centre-to-centre distance, scoped to the unwrapped row. It is a proximity proxy
-  // only while all three sit on ONE line; once the row wraps it is confounded by string
-  // width and INVERTS. At 390 the control and the version share a line 16px apart, yet the
-  // version's centre reads 164px away because that string is 204px wide, while the
-  // copyright — a whole line above — reads 93px; at 375 the metric passes only because the
-  // group itself broke apart and stacked the version under the control. AC #2 claims the
-  // belonging at 2560/1920/1440/1280, and that is exactly the unwrapped set; the narrow
-  // widths stay in the sweep and are carried by (a1) and (b).
+  // (a2) The wrap partition, and nothing more. No flush assertion belongs here: space-between
+  // pins the last child to the row's right edge by definition of the layout, so such an
+  // assertion would test Chromium's flexbox rather than this footer. Dropping the version
+  // string shrank the control group, so the row needs less width to hold one line, and the
+  // narrow widths now sit much closer to their wrap boundary than they did before. The exact
+  // margin is not measured — it is attached per width as `one-line slack` so the real number
+  // is readable in the Playwright report. Do not relax the equality to a `>=`.
   const unwrapped = sweep.filter((m) => !m.rowWrapped)
   expect(
     unwrapped.map((m) => m.width),
-    'the footer row no longer wraps where this test assumes it does, so the scoping below is stale',
+    'the footer copyright row wraps at a different set of widths than this test was built on',
   ).toEqual([...WIDE_WIDTHS])
-  for (const m of unwrapped) {
+
+  // The two are the same fact from different sources: slack is computed from three measured
+  // widths, wrapping is read off the rendered line boxes. If the row ever gains horizontal
+  // padding, the border-box width over-reports, the two disagree, and this reds instead of
+  // the annotation quietly lying.
+  for (const m of sweep) {
     expect(
-      m.toVersion,
-      `at ${m.width}px the Cookie choices control sits nearer the copyright string (${Math.round(m.toCopyright)}px) than the version string (${Math.round(m.toVersion)}px)`,
-    ).toBeLessThan(m.toCopyright)
+      m.rowWrapped,
+      `at ${m.width}px the row ${m.rowWrapped ? 'wrapped' : 'did not wrap'} but the one-line slack is ${Math.round(m.oneLineSlack)}px`,
+    ).toBe(m.oneLineSlack < 0)
   }
 
   // (b) The row wraps and is space-between with a wrapping right-hand group, so a wrap
@@ -1043,7 +1041,6 @@ test('landing consent: the Cookie choices control reads as part of the version s
 
       expect(walk.scanned, `the copyright-row walk reached ${walk.scanned} nodes at ${width}px`).toBeGreaterThanOrEqual(MIN_COPYRIGHT_ROW_NODES)
       expect(walk.seen, `the walk never reached the Cookie choices control at ${width}px`).toContain('Cookie choices')
-      expect(walk.seen, `the walk never reached the version string at ${width}px`).toContain('v 1.0 · MBS ADAPTER · SANDBOX')
       expect(walk.offenders, `the copyright row overflows at ${width}px: ${JSON.stringify(walk.offenders)}`).toEqual([])
     }
   } finally {

@@ -59,11 +59,11 @@ const AUDIENCE_SEGMENTS = [
 const FORBIDDEN_ACCOUNTING_TERMS = ['SAP', 'NetSuite', 'Sage', 'QuickBooks', 'Zoho', 'CSV/XLSX'] as const
 
 // F-7, retyped from frontend/landing/src/data.tsx#STEPS, in order.
-const STEP_TITLES = ['Connect or import', 'Validate against MBS rules', 'Approve, archive & transmit'] as const
+const STEP_TITLES = ['Connect or import', 'Validate against MBS rules — and your own', 'Approve, archive & transmit'] as const
 const STEP_NUMBERS = ['01', '02', '03'] as const
 const STEP_POINTS: ReadonlyArray<readonly string[]> = [
-  ['REST API & webhooks', 'CSV / XLSX bulk import', 'ERP connectors'],
-  ['Nigeria rule pack', 'Field & tax logic checks', 'Inline fix suggestions'],
+  ['REST API & webhooks', 'CSV / XLSX / PDF import', 'ERP connectors'],
+  ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions'],
   ['Approval workflow', 'PDF + JSON/XML/UBL export', 'Immutable audit log'],
 ]
 
@@ -238,6 +238,39 @@ test('landing content: the live-validation preview lists every check and its tal
   expect(liveTotal - livePassed, 'total − passed !== FAIL + WARN among the rendered rows').toBe(
     failCount + warnCount,
   )
+
+  expectNoConsoleErrors(sinks)
+})
+
+// E4 — the retired positioning copy. None of these four strings carries a data-* hook, so the
+// selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
+// which is what keeps a bad selector here from costing a fleet rebuild to discover.
+const HERO_SOLUTION_TEXT =
+  "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
+const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'
+const MODULES_SOLUTION_TEXT =
+  'We help your team validate invoices before they are submitted, manage approvals internally, store audit-ready records and submit them to the regulatory bodies.'
+const FOOTER_TAGLINE_TEXT = 'E-invoicing compliance solution for African businesses.'
+
+test('landing content: the retired positioning copy is replaced everywhere it shipped', async ({ page }) => {
+  const sinks = await openLanding(page)
+
+  const heroParagraph = page.locator('#top p')
+  await expect(heroParagraph, '#top does not hold exactly one hero paragraph').toHaveCount(1)
+  await expect(heroParagraph).toHaveText(HERO_SOLUTION_TEXT)
+
+  const modulesHeading = page.locator('#modules h2')
+  await expect(modulesHeading, '#modules does not hold exactly one heading').toHaveCount(1)
+  await expect(modulesHeading).toHaveText(MODULES_HEADING_TEXT)
+
+  // .mod-body excluded: those are the four module-card paragraphs, not the section intro.
+  const modulesIntro = page.locator('#modules p:not(.mod-body)')
+  await expect(modulesIntro, '#modules does not hold exactly two intro paragraphs').toHaveCount(2)
+  await expect(modulesIntro.nth(1)).toHaveText(MODULES_SOLUTION_TEXT)
+
+  const footerTagline = page.locator('footer p')
+  await expect(footerTagline, 'footer does not hold exactly one tagline paragraph').toHaveCount(1)
+  await expect(footerTagline).toHaveText(FOOTER_TAGLINE_TEXT)
 
   expectNoConsoleErrors(sinks)
 })

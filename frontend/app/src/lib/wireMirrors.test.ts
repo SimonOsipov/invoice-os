@@ -287,6 +287,28 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getSavedMapping(',
     floor: 1,
   },
+  // The AI mapping suggestion (internal/importer/handlers_suggest.go). Both Go structs are
+  // unexported; `go` names them lowercase.
+  {
+    ts: 'SuggestMappingRequest',
+    go: 'suggestMappingRequest',
+    goPath: 'internal/importer/handlers_suggest.go',
+    goAnchor: 'func SuggestMappingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function suggestMapping(',
+    e2eAnchor: 'export function suggestMapping(',
+    floor: 2,
+  },
+  {
+    ts: 'SuggestMapping',
+    go: 'suggestMappingResponse',
+    goPath: 'internal/importer/handlers_suggest.go',
+    goAnchor: 'func respondSuggestion(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function suggestMapping(',
+    e2eAnchor: 'export function suggestMapping(',
+    floor: 7,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -948,6 +970,9 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // A field added to all three legs at once -- goStructKeys compares SETS, so the registry is
 //   blind by construction. Go's TestLineItemsWireTypes_HaveBraceFreeBodies pins 4/1/4 exactly,
 //   which catches an addition; a same-count swap and wrong semantics stay open.
+// SuggestMapping's `source` literal union ('saved' | 'ai' | 'none') -- WIRE_MIRRORS compares
+//   key NAMES only, and handlers_suggest.go writes the three strings as inline literals with
+//   no const block for a vocabulary mirror (EXTR-12-02's shape) to read.
 
 // EXTR-15-01 AC-6. The exclusion list above claimed the jobs list had no SPA copy and that the
 // SPA never read it. Both are false, and a stale exclusion is worse than no exclusion: it

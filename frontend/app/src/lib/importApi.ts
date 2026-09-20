@@ -346,6 +346,10 @@ export async function createImport(
   form.append('mapping', JSON.stringify(req.mapping))
   form.append('document_id', req.documentId)
   form.append('remember_mapping', req.rememberMapping ? 'true' : 'false')
+  // parseHeaderRow (handlers.go) reads an absent part as row 1, so omitting it at row 1
+  // is a free choice that keeps IMPAPI-04/28's exact key list green (IMPAPI-29).
+  const headerRow = req.headerRow ?? 1
+  if (headerRow > 1) form.append('header_row', String(headerRow))
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
@@ -489,17 +493,12 @@ export async function supplyInvoiceNumber(
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
 }
 
-// Stage 2.5 RED (AIR-07-03): declaration-only, a fixed zero value — IMPAPI-30 is the
-// target assertion, not this body.
 export async function suggestMapping(
   authedFetch: AuthedFetch,
   base: string,
   req: SuggestMappingRequest,
 ): Promise<SuggestMapping> {
-  void authedFetch
-  void base
-  void req
-  return { source: 'none', header_row: 1, columns: [], sample_rows: [], rows_total: 0, mapping: {}, saved_at: null }
+  return authedFetch<SuggestMapping>(`${base}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body: req })
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

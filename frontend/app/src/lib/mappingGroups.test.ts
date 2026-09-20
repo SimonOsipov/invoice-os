@@ -30,8 +30,14 @@
 // reason (assertion / not-implemented), not an import/compile error.
 import { describe, expect, it, vi } from 'vitest'
 
+import { CANON } from '../data'
 import { fmtDateTime } from './format'
 import { initMappingFromHeaders, recognize, restoreMapping } from './mapping'
+// fillUnplacedFromAliases does not exist yet (AIR-07-09, RED stage) -- the namespace
+// import plus cast keeps `tsc` green while the call itself still throws at runtime.
+import * as mappingModule from './mapping'
+const fillUnplacedFromAliases = (mappingModule as unknown as { fillUnplacedFromAliases: (headers: string[], placed: Mapping) => Mapping })
+  .fillUnplacedFromAliases
 import {
   applySavedMapping,
   applySuggestion,
@@ -562,28 +568,38 @@ describe('restoreGroups', () => {
 describe('applySuggestion', () => {
   const cols = ['Invoice No', 'Subtotal', 'Total', 'VAT']
 
-  // Population floor (total placed) before the absence claim (vat unplaced) -- an empty
+  // Population floor (both placements survive) before the absence claim -- an empty
   // mapping must not pass this assertion vacuously.
-  it('AIRS-04: an AI suggestion REPLACES the seed -- a field it omits stays unplaced, not auto-filled by recognize', () => {
+  it('AIRS-04: an omitted field falls back to its alias header when free, and stays unplaced when the answer claims it', () => {
     const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
     const res: SuggestMapping = {
       source: 'ai',
       header_row: 1,
-      columns: cols,
+      columns: cols, // ['Invoice No', 'Subtotal', 'Total', 'VAT']
       sample_rows: [['INV-1', '10', '11', '1']],
       rows_total: 1,
-      mapping: { invoice_number: 'Invoice No', total: 'Total' }, // omits vat on purpose
+      // omits vat, whose alias column 'VAT' is free; omits total, whose alias column
+      // 'Total' the answer claims for subtotal
+      mapping: { invoice_number: 'Invoice No', subtotal: 'Total' },
       saved_at: null,
     }
 
     const result = applySuggestion(group, res)
 
-    expect(result.mapping.total).toBe('Total')
-    expect(result.mapping.vat).toBeNull()
+    // floor: the answer's own placements survive, so the nulls below are not vacuous
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+    expect(result.mapping.subtotal).toBe('Total')
+
+    expect(result.mapping.vat).toBe('VAT')
+    expect(result.mapping.total).toBeNull()
+
+    const placed = Object.values(result.mapping).filter((h): h is string => h !== null)
+    expect(placed.length).toBeGreaterThan(0)
+    expect(new Set(placed).size).toBe(placed.length)
 
     const recognized = recognize(cols)
-    const withHandVat: MappingGroup = { ...result, mapping: { ...result.mapping, vat: 'VAT' } }
-    expect(placementBadge(withHandVat, 'vat', 'VAT', recognized)).toBe('auto')
+    expect(placementBadge(result, 'vat', 'VAT', recognized)).toBe('auto')
+    expect(placementBadge(result, 'subtotal', 'Total', recognized)).toBe('suggested')
   })
 
   it('AIRS-08: a "none" response is the identity -- the same object back', () => {
@@ -723,7 +739,7 @@ describe('applySuggestion', () => {
     expect(result.mapping.vat).toBeNull()
   })
 
-  it('AIRS-QA-6: an empty AI mapping still records the suggestion and places nothing', () => {
+  it('AIRS-QA-6: an empty AI mapping still records the suggestion, and every field falls back to the alias seed', () => {
     const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
     const res: SuggestMapping = {
       source: 'ai',
@@ -739,9 +755,121 @@ describe('applySuggestion', () => {
 
     expect(result.suggested).not.toBeNull()
     expect(result.suggested?.headerRow).toBe(2)
-    const keys = Object.keys(result.mapping)
-    expect(keys.length).toBeGreaterThan(0)
-    keys.forEach((k) => expect(result.mapping[k]).toBeNull())
+    expect(result.mapping.total).toBe('Total') // floor: the seed is not empty
+    expect(result.mapping).toEqual(initMappingFromHeaders(LAGOS_COLS))
+  })
+
+  it('AIRF-04: a fallback placement badges AUTO beside a suggested placement that badges SUGGESTED', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: cols,
+      sample_rows: [['INV-1', '10', '11', '1']],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No', subtotal: 'Total' },
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+    const recognized = recognize(cols)
+
+    expect(placementBadge(result, 'vat', 'VAT', recognized)).toBe('auto')
+    expect(placementBadge(result, 'subtotal', 'Total', recognized)).toBe('suggested')
+  })
+
+  it('AIRF-05: a "saved" answer gets no fallback -- a field it omits stays unplaced', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+    const res: SuggestMapping = {
+      source: 'saved',
+      header_row: 1,
+      columns: ['Invoice No', 'Total', 'VAT'],
+      sample_rows: [],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: '2026-05-01T00:00:00Z',
+    }
+
+    const result = applySuggestion(group, res)
+
+    // floor: the answer's own placement survives
+    expect(result.restored).not.toBeNull()
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+
+    expect(result.mapping.vat).toBeNull()
+    expect(result.mapping.total).toBeNull()
+  })
+
+  it("AIRF-06: the suggested snapshot holds the answer's own placements, not the fallback", () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: cols,
+      sample_rows: [['INV-1', '10', '11', '1']],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No', subtotal: 'Total' },
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+
+    // floor: the answer's own placement is present on the suggested snapshot
+    expect(result.suggested?.mapping.subtotal).toBe('Total')
+    expect(result.suggested?.mapping.vat).toBeNull()
+    expect(result.mapping.vat).toBe('VAT')
+  })
+})
+
+describe('fillUnplacedFromAliases', () => {
+  it('AIRF-01: a free alias column gets the omitted field back; a column the answer claims does not', () => {
+    const aliasCols = ['Invoice No', 'Subtotal', 'Total', 'VAT']
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Invoice No', subtotal: 'Total' })
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    // floor: the answer's own placement survives the fill
+    expect(filled.subtotal).toBe('Total')
+    expect(filled.vat).toBe('VAT')
+    expect(filled.total).toBeNull()
+  })
+
+  it('AIRF-02: every CANON key comes back, and a placement the answer made is kept verbatim', () => {
+    const aliasCols = ['Ref Number', 'Total']
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Ref Number' })
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    expect(Object.keys(filled).sort()).toEqual(CANON.map((c) => c.key).sort())
+    expect(filled.invoice_number).toBe('Ref Number')
+    expect(filled.total).toBe('Total')
+  })
+
+  it('AIRF-03: an answer that names one header twice keeps exactly that duplicate -- the fallback adds none of its own', () => {
+    const aliasCols = ['Invoice No', 'Total', 'VAT']
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Invoice No', total: 'VAT', subtotal: 'VAT' })
+    const before = Object.values(placed).filter((h): h is string => h !== null)
+    expect(before.length).toBeGreaterThan(0) // floor: the fixture actually places something
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+    const after = Object.values(filled).filter((h): h is string => h !== null)
+
+    expect(after.sort()).toEqual(before.sort())
+    expect(filled.vat).toBeNull()
+    expect(after).not.toContain('Total')
+  })
+
+  it('AIRF-07: a field with no alias entry never falls back, even with every column free', () => {
+    const aliasCols = ['Ref Number', 'Total']
+    const placed = restoreMapping(aliasCols, {})
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    expect(filled.total).toBe('Total') // floor: an aliased field does fall back here
+    expect(filled.invoice_number).toBeNull()
+    expect(filled.buyer_name).toBeNull()
+    expect(filled.subtotal).toBeNull()
+    expect(filled.line_description).toBeNull()
   })
 })
 

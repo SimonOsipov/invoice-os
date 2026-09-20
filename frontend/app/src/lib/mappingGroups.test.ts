@@ -427,6 +427,34 @@ describe('placementBadge', () => {
     }
     expect(placementBadge(group, 'invoice_number', 'Invoice No', recognized)).toBeNull()
   })
+
+  // AIRS-01 cannot see this rung: invoice_number has no alias, so AUTO can never fire
+  // there and the suggested/recognized order is unobserved.
+  it('AIRS-QA-1: SUGGESTED wins over AUTO on a header the alias table also recognizes', () => {
+    const recognized = recognize(cols)
+    const placed: Mapping = { total: 'Total' }
+    const plain = mkGroup(['f1'], placed, cols)
+    // control: the same placement with no suggestion reads AUTO
+    expect(placementBadge(plain, 'total', 'Total', recognized)).toBe('auto')
+
+    const group: MappingGroup = { ...plain, suggested: { headerRow: 1, mapping: { total: 'Total' } } }
+    expect(placementBadge(group, 'total', 'Total', recognized)).toBe('suggested')
+  })
+
+  it('AIRS-QA-2: a placement moved off its suggested header loses SUGGESTED at both headers', () => {
+    const recognized = recognize(cols)
+    const suggested = { headerRow: 1, mapping: { invoice_number: 'Invoice No', total: 'Total' } }
+    const moved: MappingGroup = {
+      ...mkGroup(['f1'], { invoice_number: 'Invoice No', total: 'Subtotal' }, cols),
+      suggested,
+    }
+
+    // floor: the untouched placement still reads SUGGESTED, so the nulls below are not vacuous
+    expect(placementBadge(moved, 'invoice_number', 'Invoice No', recognized)).toBe('suggested')
+
+    expect(placementBadge(moved, 'total', 'Subtotal', recognized)).toBeNull()
+    expect(placementBadge(moved, 'total', 'Total', recognized)).toBeNull()
+  })
 })
 
 describe('restoredNotice', () => {
@@ -626,7 +654,93 @@ describe('applySuggestion', () => {
 
     expect(result.restored).not.toBeNull()
     expect(typeof result.restored?.savedAt).toBe('string')
+    // fmtDateTime maps both '' and null to the same dash, so the notice alone cannot
+    // discriminate the default -- assert the stored value.
+    expect(result.restored?.savedAt).toBe('')
     expect(restoredNotice(result)).toBe(`Mapping restored from this client's earlier import, saved ${fmtDateTime('')}.`)
+  })
+
+  it('AIRS-QA-3: the suggested snapshot records the response header row', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 4,
+      columns: LAGOS_COLS,
+      sample_rows: [],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+
+    expect(result.suggested).not.toBeNull()
+    expect(result.suggested?.headerRow).toBe(4)
+  })
+
+  // The server accepts two fields on one column; the Go duplicate sweep is the only
+  // protection a suggestion gets. Merging with the alias seed would undo it.
+  it('AIRS-QA-4: a merge would put back a duplicate the server swept -- replace leaves the field unplaced', () => {
+    const dupCols = ['Invoice No', 'Total']
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: dupCols,
+      // the sweep left `total` unplaced: it contested 'Total' with line_unit_price
+      mapping: { invoice_number: 'Invoice No', line_unit_price: 'Total' },
+      sample_rows: [['INV-1', '10']],
+      rows_total: 1,
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+
+    expect(result.mapping.line_unit_price).toBe('Total')
+    expect(result.mapping.total).toBeNull()
+
+    const placed = Object.values(result.mapping).filter((h): h is string => h !== null)
+    expect(placed.length).toBeGreaterThan(0)
+    expect(new Set(placed).size).toBe(placed.length)
+  })
+
+  it('AIRS-QA-5: a suggested header the response does not carry leaves that field unplaced', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: ['Invoice No', 'Total'],
+      mapping: { invoice_number: 'Invoice No', vat: 'VAT Amount' }, // 'VAT Amount' is not a column
+      sample_rows: [['INV-1', '10']],
+      rows_total: 1,
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+
+    expect(result.mapping.invoice_number).toBe('Invoice No')
+    expect(result.mapping.vat).toBeNull()
+  })
+
+  it('AIRS-QA-6: an empty AI mapping still records the suggestion and places nothing', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 2,
+      columns: LAGOS_COLS,
+      mapping: {},
+      sample_rows: [],
+      rows_total: 1,
+      saved_at: null,
+    }
+
+    const result = applySuggestion(group, res)
+
+    expect(result.suggested).not.toBeNull()
+    expect(result.suggested?.headerRow).toBe(2)
+    const keys = Object.keys(result.mapping)
+    expect(keys.length).toBeGreaterThan(0)
+    keys.forEach((k) => expect(result.mapping[k]).toBeNull())
   })
 })
 
@@ -717,6 +831,32 @@ describe('suggestGroups', () => {
     expect(result[0].suggested?.mapping.invoice_number).toBe('Invoice No')
     expect(result[1]).toBe(b)
     expect(result[2].suggested?.mapping.invoice_number).toBe('Invoice No')
+  })
+
+  // AIR-07-05 passes null when no AI key is configured; that is the AI-off path.
+  it('AIRS-QA-7: a null suggest seam hands every group back untouched', async () => {
+    const a = mkGroup(['f1'], initMappingFromHeaders(LAGOS_COLS))
+    const b = mkGroup(['f2'], initMappingFromHeaders(TILL_COLS), TILL_COLS)
+    const groups = [a, b]
+
+    const result = await suggestGroups(groups, null)
+
+    expect(result).toHaveLength(2)
+    expect(result[0]).toBe(a)
+    expect(result[1]).toBe(b)
+  })
+
+  it('AIRS-QA-8: an empty list makes no call, and a group carrying no files still gets one', async () => {
+    const suggest = vi.fn().mockResolvedValue(aiRes({ invoice_number: 'Invoice No' }))
+
+    expect(await suggestGroups([], suggest)).toEqual([])
+    expect(suggest).not.toHaveBeenCalled()
+
+    const noFiles = mkGroup([], initMappingFromHeaders(LAGOS_COLS))
+    const result = await suggestGroups([noFiles], suggest)
+
+    expect(suggest).toHaveBeenCalledTimes(1)
+    expect(result[0].suggested?.mapping.invoice_number).toBe('Invoice No')
   })
 })
 

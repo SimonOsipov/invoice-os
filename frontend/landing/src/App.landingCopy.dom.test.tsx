@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
+import { FINTECH, FIRM, INHOUSE } from './data'
 
 const HERO_PARAGRAPH =
   "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
@@ -26,6 +27,9 @@ const STEP_02_TITLE = 'Validate against MBS rules — and your own'
 const STEP_02_BODY =
   'Every invoice is checked against the golden MBS rule pack — tax IDs, VAT/WHT, totals, duplicates, mandatory fields — plus the rules your company adds on top.'
 const STEP_02_POINTS = ['Golden MBS rule pack', 'Your own company rules', 'Inline fix suggestions']
+
+const FIRM_BODY =
+  'Manage filings, validation queues and readiness scores across your whole book of business. Switch between clients in one login, and become their compliance partner.'
 
 function mount(): Document {
   document.body.innerHTML = renderToStaticMarkup(createElement(App))
@@ -79,5 +83,51 @@ describe('landing positioning copy, on the rendered tree', () => {
     for (const point of STEP_02_POINTS) {
       expect(textOf(cells[1]), `step 02 cell missing chip: ${point}`).toContain(point)
     }
+  })
+})
+
+describe('audience tab copy, on the rendered tree', () => {
+  // The 2 stacked-layer columns' direct children, 3 layers each: mocks 0-2, copy 3-5.
+  // The naive '#accountants [aria-hidden]' also catches every glyph svg.
+  const LAYER_SELECTOR = '#accountants .ios-grid > div > div[aria-hidden]'
+
+  it('all three audiences carry the same number of features', () => {
+    expect(FIRM.features).toHaveLength(5)
+    expect(INHOUSE.features).toHaveLength(5)
+    expect(FINTECH.features).toHaveLength(5)
+  })
+
+  it('the firms body drops the distribution-channel clause and gains the fifth feature', () => {
+    const d = mount()
+    const layers = d.querySelectorAll(LAYER_SELECTOR)
+    expect(layers.length, 'layer selector must resolve to exactly 6 elements').toBe(6)
+
+    const firm = textOf(layers[3])
+    expect(firm).toContain(FIRM_BODY)
+    expect(firm).not.toContain('distribution channel for ASComply')
+    expect(firm).toContain('Per-client rule sets')
+    expect(firm).toContain("Stack each client's own checks on top of the golden MBS rules.")
+  })
+
+  it("the fifth firms glyph matches its siblings' size and stroke", () => {
+    const d = mount()
+    const layers = d.querySelectorAll(LAYER_SELECTOR)
+    expect(layers.length, 'layer selector must resolve to exactly 6 elements').toBe(6)
+
+    const glyphs = layers[3].querySelectorAll('span > svg')
+    expect(glyphs.length, 'the firms copy layer must hold exactly 5 feature glyphs').toBe(5)
+    for (const g of glyphs) {
+      expect(g.getAttribute('width')).toBe('18')
+      expect(g.getAttribute('height')).toBe('18')
+      expect(g.getAttribute('viewBox')).toBe('0 0 24 24')
+      expect(g.getAttribute('stroke-width')).toBe('1.6')
+    }
+  })
+
+  it('the in-house ERP feature names Odoo', () => {
+    const d = mount()
+    const layers = d.querySelectorAll(LAYER_SELECTOR)
+    expect(layers.length, 'layer selector must resolve to exactly 6 elements').toBe(6)
+    expect(textOf(layers[4])).toContain('Two-way sync with SAP, NetSuite, Sage, QuickBooks & Odoo.')
   })
 })

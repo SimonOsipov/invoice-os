@@ -70,4 +70,6 @@ export const RETIRED_LANDING_COPY = [
   // Row 7 — replaced by "Golden MBS rule pack" / "Your own company rules".
   'Nigeria rule pack',
   'Field & tax logic checks',
+  // Row 11 — the firms body no longer claims a distribution channel.
+  'distribution channel for ASComply',
 ] as const

@@ -227,7 +227,7 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
   })
 })
 
-// Guards the retired landing positioning copy (rows 3/4/5/6/7/10) separately from
+// Guards the retired landing positioning copy (rows 3/4/5/6/7/10/11) separately from
 // FORBIDDEN_STRINGS: this is retired marketing language, not a false regulatory claim, so it
 // gets its own list rather than diluting that one. Reuses findForbiddenHits/scanFiles above
 // with RETIRED_LANDING_COPY instead of writing a second scanner.
@@ -250,6 +250,7 @@ describe('retired landing copy guard (BUG-19-04)', () => {
       'compliance layer',
       'compliance workflow layer',
       'designed to expand',
+      'distribution channel for ASComply',
       'licensed transmission partners',
     ])
   })
@@ -268,6 +269,7 @@ describe('retired landing copy guard (BUG-19-04)', () => {
       'we used to say CSV / XLSX bulk import here',
       'the old chip read Nigeria rule pack',
       'and beside it Field & tax logic checks',
+      'once we promised a distribution channel for ASComply here',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts', RETIRED_LANDING_COPY)

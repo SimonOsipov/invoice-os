@@ -107,10 +107,8 @@ export function Footer({
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
             © 2026 ASCOMPLY AFRICA · LAGOS · NG
           </span>
-          {/* One wrapper, not two loose children: space-between across three children would
-              push the control toward the row's centre. It wraps because the outer row's own
-              break point is the only thing between a narrow viewport and overflow that
-              App.tsx's `overflow-x: clip` would hide without a scrollbar. */}
+          {/* Layout-inert with one child; kept because T4-2 pins the row at two direct
+              children and this wrapper at one. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <button
               onClick={onCookieChoices}
@@ -130,9 +128,6 @@ export function Footer({
             >
               Cookie choices
             </button>
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-              v 1.0 · MBS ADAPTER · SANDBOX
-            </span>
           </div>
         </div>
       </div>

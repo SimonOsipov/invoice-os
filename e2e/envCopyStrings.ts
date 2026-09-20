@@ -72,4 +72,8 @@ export const RETIRED_LANDING_COPY = [
   'Field & tax logic checks',
   // Row 11 — the firms body no longer claims a distribution channel.
   'distribution channel for ASComply',
+  // Row 12 — the footer no longer carries a build/environment tag. The separator is
+  // load-bearing: a bare `SANDBOX` hits the two consoles' legitimate env labels, and a bare
+  // `MBS ADAPTER` hits the live fintech-tab feature title "Sandbox MBS adapter".
+  'MBS ADAPTER · SANDBOX',
 ] as const

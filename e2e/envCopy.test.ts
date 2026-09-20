@@ -245,6 +245,7 @@ describe('retired landing copy guard (BUG-19-04)', () => {
     expect([...RETIRED_LANDING_COPY].sort()).toEqual([
       'CSV / XLSX bulk import',
       'Field & tax logic checks',
+      'MBS ADAPTER · SANDBOX',
       'Nigeria rule pack',
       'compliance infrastructure for African businesses',
       'compliance layer',
@@ -270,6 +271,7 @@ describe('retired landing copy guard (BUG-19-04)', () => {
       'the old chip read Nigeria rule pack',
       'and beside it Field & tax logic checks',
       'once we promised a distribution channel for ASComply here',
+      'the footer used to read v 1.0 · MBS ADAPTER · SANDBOX',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts', RETIRED_LANDING_COPY)

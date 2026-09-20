@@ -249,22 +249,30 @@ func TestSuggestWindow_EmptyDecodeYieldsNoRows(t *testing.T) {
 	}
 }
 
-// T07 (row 7).
+// T07 (row 7). Walks the cap's boundary: a fixture of only 39 rows leaves the predicate's
+// off-by-one invisible, because `n > windowRows` is still true at 39 and n is capped anyway.
+// Exactly windowRows rows is the one input that discriminates.
 func TestSuggestWindow_LongFileIsCappedAtWindowRows(t *testing.T) {
 	header := []string{"H"}
-	rows := make([][]string, 39)
-	for i := range rows {
-		rows[i] = []string{strconv.Itoa(i)}
-	}
-	got := suggestWindow(header, rows)
-	if len(got) != windowRows {
-		t.Fatalf("suggestWindow returned %d entries, want windowRows=%d", len(got), windowRows)
-	}
-	if !slices.Equal(got[0], header) {
-		t.Errorf("suggestWindow[0] = %v, want header %v", got[0], header)
-	}
-	if !slices.Equal(got[1], rows[0]) {
-		t.Errorf("suggestWindow[1] = %v, want rows[0] %v", got[1], rows[0])
+	for _, n := range []int{windowRows - 2, windowRows - 1, windowRows, windowRows + 1, 39} {
+		rows := make([][]string, n)
+		for i := range rows {
+			rows[i] = []string{strconv.Itoa(i)}
+		}
+		want := n + 1
+		if want > windowRows {
+			want = windowRows
+		}
+		got := suggestWindow(header, rows)
+		if len(got) != want {
+			t.Fatalf("suggestWindow(header, %d rows) returned %d entries, want %d", n, len(got), want)
+		}
+		if !slices.Equal(got[0], header) {
+			t.Errorf("%d rows: suggestWindow[0] = %v, want header %v", n, got[0], header)
+		}
+		if !slices.Equal(got[1], rows[0]) {
+			t.Errorf("%d rows: suggestWindow[1] = %v, want rows[0] %v", n, got[1], rows[0])
+		}
 	}
 }
 
@@ -321,7 +329,8 @@ func TestGuardHeaderRow_MalformedValuesFallBackToOne(t *testing.T) {
 	}
 }
 
-// T10 (row 10). Proves its own premise: the real fake's blank answer carries a nil header_row.
+// T10 (row 10). Asserts the literal 1, not defaultHeaderRow: every other guardHeaderRow test
+// compares against the constant, so mutating it moves both sides and stays green.
 func TestGuardHeaderRow_FakeBlankAnswerResolvesRowOne(t *testing.T) {
 	ans, err, outcome := sgFakeAnswer(t, "Row 1: a,b")
 	if err != nil {
@@ -333,8 +342,8 @@ func TestGuardHeaderRow_FakeBlankAnswerResolvesRowOne(t *testing.T) {
 	if ans["header_row"] != nil {
 		t.Fatalf("ans[header_row] = %v, want nil (blank answer) -- test's premise is false", ans["header_row"])
 	}
-	if got := guardHeaderRow(ans, 10); got != defaultHeaderRow {
-		t.Errorf("guardHeaderRow(blank answer, 10) = %d, want defaultHeaderRow %d", got, defaultHeaderRow)
+	if got := guardHeaderRow(ans, 10); got != 1 {
+		t.Errorf("guardHeaderRow(blank answer, 10) = %d, want 1 (§6 rule 1's fallback)", got)
 	}
 }
 
@@ -467,6 +476,20 @@ func TestGuardPlacements_MatchesResolveMappingEquality(t *testing.T) {
 	}
 	if colIndex["total"] != 1 {
 		t.Errorf("resolveMapping[total] = %d, want index 1 (the unpadded %q, not %q)", colIndex["total"], "Total", " Total")
+	}
+
+	// The discriminating case: a name that exists only padded. A trimming membership test would
+	// place it, and resolveMapping would then reject the mapping the guard had passed.
+	padded := []string{" Total", "Inv No"}
+	trimmed := guardPlacements(map[string]any{"invoice_number": "Inv No", "total": "Total"}, padded)
+	if v, ok := trimmed["total"]; ok {
+		t.Errorf("guardPlacements placed total = %q against header %v, which carries no %q", v, padded, "Total")
+	}
+	if trimmed["invoice_number"] != "Inv No" {
+		t.Errorf("guardPlacements[invoice_number] = %q, want %q (the control)", trimmed["invoice_number"], "Inv No")
+	}
+	if _, err := resolveMapping(trimmed, padded); err != nil {
+		t.Errorf("resolveMapping rejected what the guard passed: %v", err)
 	}
 }
 

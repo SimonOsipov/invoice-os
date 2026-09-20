@@ -989,16 +989,29 @@ test('landing consent: the Cookie choices control sits opposite the copyright in
     expect(m.groupClearsCopyright, `at ${m.width}px the control's group box overlaps the copyright string`).toBe(true)
   }
 
-  // (a2) The wrap partition, and nothing more. No flush assertion belongs here: it would
-  // test Chromium's flexbox rather than this footer. Dropping the version string collapsed
-  // the 390px one-line margin from ~231px to ~11px, so the narrow widths now sit close to
-  // their break point — that is why this partition must stay knife-edge and why the slack
-  // is attached. Do not relax the equality to a `>=`.
+  // (a2) The wrap partition, and nothing more. No flush assertion belongs here: space-between
+  // pins the last child to the row's right edge by definition of the layout, so such an
+  // assertion would test Chromium's flexbox rather than this footer. Dropping the version
+  // string shrank the control group, so the row needs less width to hold one line, and the
+  // narrow widths now sit much closer to their wrap boundary than they did before. The exact
+  // margin is not measured — it is attached per width as `one-line slack` so the real number
+  // is readable in the Playwright report. Do not relax the equality to a `>=`.
   const unwrapped = sweep.filter((m) => !m.rowWrapped)
   expect(
     unwrapped.map((m) => m.width),
     'the footer copyright row wraps at a different set of widths than this test was built on',
   ).toEqual([...WIDE_WIDTHS])
+
+  // The two are the same fact from different sources: slack is computed from three measured
+  // widths, wrapping is read off the rendered line boxes. If the row ever gains horizontal
+  // padding, the border-box width over-reports, the two disagree, and this reds instead of
+  // the annotation quietly lying.
+  for (const m of sweep) {
+    expect(
+      m.rowWrapped,
+      `at ${m.width}px the row ${m.rowWrapped ? 'wrapped' : 'did not wrap'} but the one-line slack is ${Math.round(m.oneLineSlack)}px`,
+    ).toBe(m.oneLineSlack < 0)
+  }
 
   // (b) The row wraps and is space-between with a wrapping right-hand group, so a wrap
   // failure pushes a child past the LEFT edge as readily as the right. Both edges.

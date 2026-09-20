@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest'
 const CREATE_MAPPING = 'src/components/CreateMapping.tsx'
 const CLIENTS = 'src/lib/clients.ts'
 const CREATE_FORM = 'src/components/CreateForm.tsx'
+const MAPPING_LIB = 'src/lib/mapping.ts'
+const TYPES = 'src/types.ts'
 
 const SHARED_SENTENCE = `the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`
 
@@ -68,5 +70,20 @@ describe('mappingCopy', () => {
     expect(createFormSrc, 'control: the file must actually be read').toContain('export function CreateForm(')
     expect(createFormSrc).toContain('identifier the product does not guess. */}')
     expect(createFormSrc.includes('never matched by name')).toBe(false)
+  })
+
+  // AC-3 names five sites; COPY-01/02/03 above only guard the three in CreateMapping.tsx.
+  // These two describe a different subject each (the ALIAS table; the CanonField type), so
+  // they get their own honest wording rather than the shared UI sentence forced in verbatim.
+  it(`COPY-05: mapping.ts and types.ts are honest about how invoice_number gets placed`, () => {
+    const mappingSrc = readSrc(MAPPING_LIB)
+    expect(mappingSrc, 'control: the file must actually be read').toContain('export function recognize(')
+    expect(mappingSrc).toContain('this table never name-matches it; a suggestion or a restore is the only automatic route.')
+    expect(mappingSrc.includes('the fiscal identifier is never guessed')).toBe(false)
+
+    const typesSrc = readSrc(TYPES)
+    expect(typesSrc, 'control: the file must actually be read').toContain('export type CanonField = {')
+    expect(typesSrc).toContain('alias recognition never guesses -- a suggestion or a restore is the only automatic route.')
+    expect(typesSrc.includes('that recognition never guesses')).toBe(false)
   })
 })

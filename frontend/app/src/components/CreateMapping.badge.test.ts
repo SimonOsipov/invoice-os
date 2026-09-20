@@ -114,6 +114,9 @@ describe('CreateMapping badges', () => {
     expect(autoBadges, 'control: exactly one AUTO badge must render on the VAT column').toHaveLength(1)
     const autoBadge = autoBadges[0] as HTMLElement
 
+    // Column-scoped, not file-scoped: invoice_number ALSO badges suggested in this fixture
+    // (it's part of the answer too), so a file-wide "exactly one SUGGESTED" count would be
+    // wrong here -- do not "restore" that broader assertion.
     const suggestedBadges = Array.from(totalCol.querySelectorAll('[data-testid="map-suggested-badge"]'))
     expect(suggestedBadges, 'exactly one SUGGESTED badge must render on the Total column').toHaveLength(1)
     const suggestedBadge = suggestedBadges[0] as HTMLElement

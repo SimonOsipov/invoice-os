@@ -640,12 +640,14 @@ func TestResolveMapping_AcceptsTwoFieldsOnOneColumn(t *testing.T) {
 // --- AC-9's source scan ----------------------------------------------------------------------
 
 // sgScanSkip is excluded because these files legitimately name date_format and
-// decimal_separator: the schema and its guard fixtures, plus a steered-answer e2e
-// fixture whose confinement to one object literal the test below checks separately.
+// decimal_separator: the schema and its guard fixtures, plus three steered-answer e2e
+// fixtures whose confinement to one object literal each the test below checks separately.
 var sgScanSkip = map[string]bool{
 	"internal/importer/suggest.go":       true,
 	"internal/importer/suggest_test.go":  true,
 	"e2e/topology/import-wizard.spec.ts": true,
+	"e2e/importFixtures.ts":              true,
+	"e2e/api/contract-import.spec.ts":    true,
 }
 
 var sgScanDirs = []string{"internal", "cmd", filepath.Join("frontend", "app", "src"), "e2e"}
@@ -715,41 +717,54 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 	}
 }
 
-// TestDateFormatAndDecimalSeparator_StayInsideTheSteeredAnswerFixture confines
-// import-wizard.spec.ts's whole-file exemption above: every mention of either key in that
-// file must sit inside the AIRL01_ANSWER object literal, so a read added anywhere else in
-// the file still reds.
-func TestDateFormatAndDecimalSeparator_StayInsideTheSteeredAnswerFixture(t *testing.T) {
+// TestDateFormatAndDecimalSeparator_StayInsideEachSteeredAnswerFixture confines every
+// whole-file exemption above: in each listed file, every mention of either key must sit
+// inside that file's own steered-answer object literal, so a read added anywhere else in
+// any of the three files still reds.
+func TestDateFormatAndDecimalSeparator_StayInsideEachSteeredAnswerFixture(t *testing.T) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}
 	root := strings.TrimSpace(string(out))
-	path := filepath.Join(root, "e2e", "topology", "import-wizard.spec.ts")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	text := string(b)
 
-	start := strings.Index(text, "const AIRL01_ANSWER = {")
-	if start == -1 {
-		t.Fatal("AIRL01_ANSWER fixture not found -- the exemption above has nothing to confine")
+	cases := []struct {
+		path    string
+		opening string
+		want    int
+	}{
+		{filepath.Join("e2e", "topology", "import-wizard.spec.ts"), "const AIRL01_ANSWER = {", 2},
+		{filepath.Join("e2e", "importFixtures.ts"), "const AIR07_ROW3_ANSWER: Record<string, unknown> = {", 2},
+		{filepath.Join("e2e", "api", "contract-import.spec.ts"), "const AIR07_API_ANSWER: Record<string, unknown> = {", 2},
 	}
-	closeOffset := strings.Index(text[start:], "\n}")
-	if closeOffset == -1 {
-		t.Fatal("AIRL01_ANSWER fixture's closing brace not found")
-	}
-	end := start + closeOffset
 
 	needle := regexp.MustCompile(`date_format|decimal_separator`)
-	matches := needle.FindAllStringIndex(text, -1)
-	if len(matches) != 2 {
-		t.Fatalf("found %d mention(s) of date_format/decimal_separator in %s, want exactly 2 (one property each, inside AIRL01_ANSWER)", len(matches), path)
-	}
-	for _, m := range matches {
-		if m[0] < start || m[0] > end {
-			t.Errorf("a mention of %q falls outside the AIRL01_ANSWER fixture -- the whole-file exemption no longer holds", text[m[0]:m[1]])
+	for _, c := range cases {
+		path := filepath.Join(root, c.path)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", c.path, err)
+		}
+		text := string(b)
+
+		start := strings.Index(text, c.opening)
+		if start == -1 {
+			t.Fatalf("%s: fixture opening %q not found -- the exemption above has nothing to confine", c.path, c.opening)
+		}
+		closeOffset := strings.Index(text[start:], "\n}")
+		if closeOffset == -1 {
+			t.Fatalf("%s: fixture's closing brace not found", c.path)
+		}
+		end := start + closeOffset
+
+		matches := needle.FindAllStringIndex(text, -1)
+		if len(matches) != c.want {
+			t.Fatalf("%s: found %d mention(s) of date_format/decimal_separator, want exactly %d (one property each, inside the fixture)", c.path, len(matches), c.want)
+		}
+		for _, m := range matches {
+			if m[0] < start || m[0] > end {
+				t.Errorf("%s: a mention of %q falls outside its steered-answer fixture -- the whole-file exemption no longer holds", c.path, text[m[0]:m[1]])
+			}
 		}
 	}
 }

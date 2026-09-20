@@ -170,13 +170,6 @@ export function steerMarker(answer: unknown): string {
   return `AIFAKE-ANSWER-${Buffer.from(JSON.stringify(answer)).toString('base64url')}`
 }
 
-// The AI mapping schema requires two extra keys this file must never spell out literally:
-// internal/importer/suggest_test.go's scan bans their literal names outside suggest.go's own
-// files and import-wizard.spec.ts's AIRL01_ANSWER. Built from split literals so the two
-// halves never sit adjacent in this file's own source text.
-const dateFormatKey = ['date', 'format'].join('_')
-const decimalSeparatorKey = ['decimal', 'separator'].join('_')
-
 // AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
 // mirroring AIRL01_ANSWER's shape.
 const AIR07_ROW3_ANSWER: Record<string, unknown> = {
@@ -192,8 +185,8 @@ const AIR07_ROW3_ANSWER: Record<string, unknown> = {
   line_quantity: null,
   line_unit_price: null,
   header_row: 3,
-  [dateFormatKey]: null,
-  [decimalSeparatorKey]: null,
+  date_format: null,
+  decimal_separator: null,
 }
 
 // buildAir07TitleRowCsv(): two non-blank title rows, then PERF_HEADER, then one steered data

@@ -844,31 +844,28 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
   })
 })
 
-// AIR-07-07: own local steered-answer builder, mirroring import-wizard.spec.ts's
+// AIR-07-07: own local steered-answer fixture, mirroring import-wizard.spec.ts's
 // AIRL01_ANSWER without importing it (repo convention -- no cross-suite imports between
-// spec files). The two extra schema-required keys are spelled indirectly: suggest_test.go's
-// scan bans their literal names outside suggest.go's own files and AIRL01_ANSWER.
-const air07DateFormatKey = ['date', 'format'].join('_')
-const air07DecimalSeparatorKey = ['decimal', 'separator'].join('_')
+// spec files).
+const AIR07_API_ANSWER: Record<string, unknown> = {
+  invoice_number: 'Invoice No',
+  issue_date: null,
+  buyer_tin: null,
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: null,
+  line_description: null,
+  line_quantity: null,
+  line_unit_price: null,
+  header_row: 1,
+  date_format: null,
+  decimal_separator: null,
+}
 
 function air07SteeredCsv(num: string): string {
-  const answer: Record<string, unknown> = {
-    invoice_number: 'Invoice No',
-    issue_date: null,
-    buyer_tin: null,
-    buyer_name: null,
-    currency: null,
-    subtotal: null,
-    vat: null,
-    total: null,
-    line_description: null,
-    line_quantity: null,
-    line_unit_price: null,
-    header_row: 1,
-    [air07DateFormatKey]: null,
-    [air07DecimalSeparatorKey]: null,
-  }
-  const row = [num, '2026-01-15', '87654321-0002', steerMarker(answer), 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00']
+  const row = [num, '2026-01-15', '87654321-0002', steerMarker(AIR07_API_ANSWER), 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00']
   return `${PERF_HEADER}\n${row.join(',')}\n`
 }
 

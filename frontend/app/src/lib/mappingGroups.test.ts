@@ -690,9 +690,10 @@ describe('applySuggestion', () => {
     expect(result.suggested?.headerRow).toBe(4)
   })
 
-  // The server accepts two fields on one column; the Go duplicate sweep is the only
-  // protection a suggestion gets. Merging with the alias seed would undo it.
-  it('AIRS-QA-4: a merge would put back a duplicate the server swept -- replace leaves the field unplaced', () => {
+  // The server accepts two fields on one column, so the Go duplicate sweep is the only
+  // protection a suggestion gets. An unconditional alias merge would undo it; the
+  // claimed-header check in fillUnplacedFromAliases is what keeps it swept.
+  it('AIRS-QA-4: a duplicate the server swept stays swept -- the claimed header blocks the alias fallback', () => {
     const dupCols = ['Invoice No', 'Total']
     const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
     const res: SuggestMapping = {
@@ -1255,5 +1256,107 @@ describe('saved-mapping helpers — adversarial (QA Mode B)', () => {
     expect(placementBadge(edited, 'total', 'Total', recognized)).toBe('auto')
     expect(restoredNotice(edited)).toBe(notice)
     expect(rememberMapping(edited)).toBe(true)
+  })
+})
+
+// The alias fallback is only duplicate-free if "the answer claims this column" is read
+// exactly and off the post-restore mapping. These probe the edges that reading admits.
+describe('the alias fallback — adversarial (QA Mode B)', () => {
+  const aliasCols = ['Invoice No', 'Subtotal', 'Total', 'VAT']
+
+  const aiOf = (mapping: Record<string, string>, columns: string[]): SuggestMapping => ({
+    source: 'ai',
+    header_row: 1,
+    columns,
+    sample_rows: [],
+    rows_total: 1,
+    mapping,
+    saved_at: null,
+  })
+
+  it('AIRF-QA-1: the fill returns a new mapping and leaves the one it was given untouched', () => {
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Invoice No' })
+    const before = JSON.stringify(placed)
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    expect(filled.total).toBe('Total') // floor: the fill did place something
+    expect(filled).not.toBe(placed)
+    expect(JSON.stringify(placed)).toBe(before)
+    expect(placed.total).toBeNull()
+  })
+
+  it('AIRF-QA-2: group.mapping and the suggested snapshot are different objects, not one shared reference', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+
+    const result = applySuggestion(group, aiOf({ invoice_number: 'Invoice No', subtotal: 'Total' }, aliasCols))
+
+    expect(result.suggested?.mapping.subtotal).toBe('Total') // floor
+    expect(result.suggested?.mapping).not.toBe(result.mapping)
+    expect(result.mapping.vat).toBe('VAT')
+    expect(result.suggested?.mapping.vat).toBeNull()
+  })
+
+  it('AIRF-QA-3: a claimed header name blocks the fallback even when a second column shares that name', () => {
+    const dupCols = ['Invoice No', 'Total', 'Total']
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+
+    const result = applySuggestion(group, aiOf({ invoice_number: 'Invoice No', line_unit_price: 'Total' }, dupCols))
+
+    expect(result.mapping.line_unit_price).toBe('Total') // floor
+    expect(result.mapping.total).toBeNull()
+    const placed = Object.values(result.mapping).filter((h): h is string => h !== null)
+    expect(placed.length).toBeGreaterThan(0)
+    expect(new Set(placed).size).toBe(placed.length)
+  })
+
+  it('AIRF-QA-4: a non-canonical key in the answer claims nothing, so its header stays free for the fallback', () => {
+    const group = mkGroup(['f1'], initMappingFromHeaders(['X']), ['X'])
+
+    const result = applySuggestion(group, aiOf({ invoice_number: 'Invoice No', not_a_field: 'VAT' }, aliasCols))
+
+    expect(result.mapping.invoice_number).toBe('Invoice No') // floor
+    expect(Object.keys(result.mapping)).not.toContain('not_a_field')
+    expect(result.mapping.vat).toBe('VAT')
+  })
+
+  it('AIRF-QA-5: a suggested value that is not a column claims nothing, and the field still falls back', () => {
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Invoice No', vat: 'VAT Amount' })
+    expect(placed.vat).toBeNull() // floor: restoreMapping already dropped the non-column
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    expect(filled.invoice_number).toBe('Invoice No')
+    expect(filled.vat).toBe('VAT')
+  })
+
+  it('AIRF-QA-6: every header the fill adds is new, and no two additions share one column', () => {
+    const placed = restoreMapping(aliasCols, { invoice_number: 'Invoice No', subtotal: 'Total' })
+
+    const filled = fillUnplacedFromAliases(aliasCols, placed)
+
+    const claimed = Object.values(placed).filter((h): h is string => h !== null)
+    const added = CANON.map((c) => c.key)
+      .filter((k) => placed[k] === null && filled[k] !== null)
+      .map((k) => filled[k] as string)
+
+    expect(added.length).toBeGreaterThan(0) // floor: the fill added something to check
+    expect(new Set(added).size).toBe(added.length)
+    added.forEach((h) => expect(claimed).not.toContain(h))
+  })
+
+  it("AIRF-QA-7: a fallback still lands beside a duplicate the answer made, and adds no second one", () => {
+    const dupCols = ['Invoice No', 'Total', 'VAT', 'Qty']
+    const placed = restoreMapping(dupCols, { invoice_number: 'Invoice No', total: 'VAT', subtotal: 'VAT' })
+    const before = Object.values(placed).filter((h): h is string => h !== null)
+
+    const filled = fillUnplacedFromAliases(dupCols, placed)
+    const after = Object.values(filled).filter((h): h is string => h !== null)
+
+    expect(filled.line_quantity).toBe('Qty') // floor: a fallback did land
+    expect(filled.vat).toBeNull()
+    expect(after.length).toBe(before.length + 1)
+    expect(after.filter((h) => h === 'VAT')).toHaveLength(2)
+    expect(new Set(after).size).toBe(after.length - 1)
   })
 })

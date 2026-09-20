@@ -83,7 +83,7 @@ describe('mappingCopy', () => {
 
     const typesSrc = readSrc(TYPES)
     expect(typesSrc, 'control: the file must actually be read').toContain('export type CanonField = {')
-    expect(typesSrc).toContain('alias recognition never guesses -- a suggestion or a restore is the only automatic route.')
+    expect(typesSrc).toContain('alias recognition never guesses it; a suggestion or a restore is the only automatic route.')
     expect(typesSrc.includes('that recognition never guesses')).toBe(false)
   })
 })

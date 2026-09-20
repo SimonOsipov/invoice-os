@@ -7512,6 +7512,19 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
     delete headers['content-encoding']
     await route.fulfill({ status: real.status(), headers, json: { saved_mapping: null } })
   })
+  // The saved row also reaches the screen through suggest-mapping, which does its own
+  // server-side lookup -- intercepting only the route above no longer isolates it.
+  const SUGGEST_GLOB = '**/api/invoice/v1/imports/suggest-mapping'
+  let suggestHits = 0
+  await page.route(SUGGEST_GLOB, async (route) => {
+    suggestHits += 1
+    const real = await route.fetch()
+    const body = await real.json()
+    const headers = real.headers()
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({ status: real.status(), headers, json: { ...body, source: 'none', mapping: {} } })
+  })
 
   const preview3 = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -7524,12 +7537,16 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await expect.poll(() => hits, { message: 'the intercepted lookup must fire exactly once' }).toBe(1)
   // The row still exists -- only this test's answer to the SPA differs from the real one.
   expect(realBodies[0]?.saved_mapping?.mapping.invoice_number, 'control: the real lookup still returns the saved row').toBe('Invoice No')
+  await expect
+    .poll(() => suggestHits, { message: 'the intercepted suggest-mapping must fire exactly once -- its own server-side lookup is the second route to the saved row' })
+    .toBe(1)
 
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
   await expect(blockedBtn).toBeVisible()
 
   await page.unroute(LOOKUP_GLOB)
+  await page.unroute(SUGGEST_GLOB)
   // Import 3 is never submitted -- its only purpose is proving the dependency on the lookup.
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

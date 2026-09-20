@@ -639,11 +639,13 @@ func TestResolveMapping_AcceptsTwoFieldsOnOneColumn(t *testing.T) {
 
 // --- AC-9's source scan ----------------------------------------------------------------------
 
-// sgScanSkip is excluded because these two files legitimately name date_format and
-// decimal_separator (schema properties, guard fixtures).
+// sgScanSkip is excluded because these files legitimately name date_format and
+// decimal_separator: the schema and its guard fixtures, plus a steered-answer e2e
+// fixture whose confinement to one object literal the test below checks separately.
 var sgScanSkip = map[string]bool{
-	"internal/importer/suggest.go":      true,
-	"internal/importer/suggest_test.go": true,
+	"internal/importer/suggest.go":       true,
+	"internal/importer/suggest_test.go":  true,
+	"e2e/topology/import-wizard.spec.ts": true,
 }
 
 var sgScanDirs = []string{"internal", "cmd", filepath.Join("frontend", "app", "src"), "e2e"}
@@ -697,7 +699,7 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 				control++
 			}
 			if needle.Match(b) {
-				t.Errorf("%s mentions date_format or decimal_separator -- AC-9 forbids any code path outside suggest.go/suggest_test.go from reading either key", rel)
+				t.Errorf("%s mentions date_format or decimal_separator -- AC-9 forbids any code path outside sgScanSkip's exempted files from reading either key", rel)
 			}
 			return nil
 		})
@@ -710,5 +712,44 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 	}
 	if control == 0 {
 		t.Fatalf("scan found 0 hit(s) for the control %q across %d file(s) -- the absence above is not evidence", sgScanControl, files)
+	}
+}
+
+// TestDateFormatAndDecimalSeparator_StayInsideTheSteeredAnswerFixture confines
+// import-wizard.spec.ts's whole-file exemption above: every mention of either key in that
+// file must sit inside the AIRL01_ANSWER object literal, so a read added anywhere else in
+// the file still reds.
+func TestDateFormatAndDecimalSeparator_StayInsideTheSteeredAnswerFixture(t *testing.T) {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	path := filepath.Join(root, "e2e", "topology", "import-wizard.spec.ts")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(b)
+
+	start := strings.Index(text, "const AIRL01_ANSWER = {")
+	if start == -1 {
+		t.Fatal("AIRL01_ANSWER fixture not found -- the exemption above has nothing to confine")
+	}
+	closeOffset := strings.Index(text[start:], "\n}")
+	if closeOffset == -1 {
+		t.Fatal("AIRL01_ANSWER fixture's closing brace not found")
+	}
+	end := start + closeOffset
+
+	needle := regexp.MustCompile(`date_format|decimal_separator`)
+	matches := needle.FindAllStringIndex(text, -1)
+	if len(matches) != 2 {
+		t.Fatalf("found %d mention(s) of date_format/decimal_separator in %s, want exactly 2 (one property each, inside AIRL01_ANSWER)", len(matches), path)
+	}
+	for _, m := range matches {
+		if m[0] < start || m[0] > end {
+			t.Errorf("a mention of %q falls outside the AIRL01_ANSWER fixture -- the whole-file exemption no longer holds", text[m[0]:m[1]])
+		}
 	}
 }

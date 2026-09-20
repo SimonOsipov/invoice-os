@@ -136,17 +136,18 @@ export function applySavedMapping(group: MappingGroup, saved: SavedMapping | nul
   return { ...group, mapping, restored: { savedAt: saved.saved_at, mapping } }
 }
 
-// No undo: the restored snapshot is dropped.
+// No undo: the restored and suggested snapshots are both dropped.
 export function returnToAutomatic(group: MappingGroup): MappingGroup {
-  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
+  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null, suggested: null }
 }
 
 export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null
 
-// RESTORED wins over AUTO. A placement moved off its restored header loses RESTORED.
+// RESTORED > SUGGESTED > AUTO. A placement moved off its recorded header loses its badge.
 export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
   if (group.mapping[field] !== header) return null
   if (group.restored?.mapping[field] === header) return 'restored'
+  if (group.suggested?.mapping[field] === header) return 'suggested'
   if (recognized[field] === header) return 'auto'
   return null
 }
@@ -175,17 +176,40 @@ export async function restoreGroups(
   return result
 }
 
-// Declaration only: a shallow copy, no replace semantics and no signature recompute yet.
-export function applySuggestion(group: MappingGroup, _res: SuggestMapping): MappingGroup {
-  return { ...group }
+// A `saved` answer takes the restore path; `none` is the identity. The snapshot shares the
+// mapping object for the same reason applySavedMapping's does.
+export function applySuggestion(group: MappingGroup, res: SuggestMapping): MappingGroup {
+  if (res.source === 'none') return group
+  const preview: ImportPreview = { ...group.preview, columns: res.columns, sample_rows: res.sample_rows, rows_total: res.rows_total }
+  const mapping = restoreMapping(res.columns, res.mapping)
+  const base = { ...group, preview, signature: columnSignature(res.columns), mapping }
+  if (res.source === 'saved') {
+    return { ...base, restored: { savedAt: res.saved_at ?? '', mapping }, suggested: null }
+  }
+  return { ...base, suggested: { headerRow: res.header_row, mapping } }
 }
 
-// Declaration only: no lookups performed yet.
+// One suggestion at a time, in group order, for the groups restoreGroups left unrestored.
+// A failed suggestion leaves that group on today's seed.
 export async function suggestGroups(
   groups: MappingGroup[],
-  _suggest: ((documentId: string) => Promise<SuggestMapping>) | null,
+  suggest: ((documentId: string) => Promise<SuggestMapping>) | null,
 ): Promise<MappingGroup[]> {
-  return groups
+  if (!suggest) return groups
+  const result: MappingGroup[] = []
+  for (const group of groups) {
+    if (group.restored) {
+      result.push(group)
+      continue
+    }
+    try {
+      const res = await suggest(group.preview.document_id)
+      result.push(applySuggestion(group, res))
+    } catch {
+      result.push(group)
+    }
+  }
+  return result
 }
 
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only

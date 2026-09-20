@@ -239,6 +239,18 @@ describe('retired landing copy guard (BUG-19-04)', () => {
     expect(scanned.length, 'total scanned files (vacuity guard)').toBeGreaterThanOrEqual(120)
   })
 
+  // An absence scan disarms silently when a needle is dropped: nothing else here fails,
+  // because every other assertion iterates the list itself. Pin the membership.
+  it('the retired list still names every phrase this guard was built for', () => {
+    expect([...RETIRED_LANDING_COPY].sort()).toEqual([
+      'compliance infrastructure for African businesses',
+      'compliance layer',
+      'compliance workflow layer',
+      'designed to expand',
+      'licensed transmission partners',
+    ])
+  })
+
   // Control: 'compliance layer' is NOT a substring of 'compliance workflow layer'
   // (`'compliance workflow layer'.includes('compliance layer')` is false — the word
   // "workflow" sits between them). Each needle still gets its own dedicated sample line

@@ -483,7 +483,7 @@ export type PlatformCtx = {
   // group's mapping is a COPY of the shared group's mapping at split time, never a
   // fresh seed ([split-copies-the-mapping]).
   splitOutFile: (fileId: string) => void
-  // Reseeds the active group from automatic suggestions and drops its restored snapshot; no undo.
+  // Reseeds the active group from automatic suggestions and drops both its restored and suggested snapshots; no undo.
   resetGroupToAutomatic: () => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected

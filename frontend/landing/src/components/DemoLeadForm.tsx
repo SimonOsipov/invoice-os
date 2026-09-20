@@ -1,5 +1,5 @@
-// The shared Book-a-Demo lead-capture form (task-1108, extracted from DemoModal).
-// Rendered inside DemoModal's card and, from BUG-19-02, inside DemoCta's bare card.
+// The shared Book-a-Demo lead-capture form. DemoModal mounts it inside the popup
+// card; the landing card mounts it bare. idPrefix keeps the two id namespaces apart.
 
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactNode } from 'react'
@@ -88,11 +88,9 @@ export function DemoLeadForm({
     [],
   )
 
-  // Whichever panel is showing owns the focus, and it takes it exactly once — when
-  // that panel appears. See DemoModal.tsx's former header comment for the full
-  // rationale (deferred setTimeout focus used to race a submit inside the window).
-  // The card's first form panel does not steal focus on mount — only a later
-  // "form" panel (after a retry) does; the modal always focuses on mount.
+  // Keyed on demoStep, never a deferred setTimeout: a deferred focus used to land
+  // after a submit and yank focus off the field at fault. The card skips only its
+  // FIRST form panel, so mounting a card does not steal the page's focus.
   useEffect(() => {
     if (demoStep === 'form') {
       const skip = variant === 'card' && firstFormPanel.current

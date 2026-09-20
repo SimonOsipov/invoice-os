@@ -28,7 +28,8 @@ const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
 
-// O5's widening (task-1108, AC-1.6): every non-test .ts/.tsx under src, not just DemoModal.tsx.
+// Every non-test .ts/.tsx under src, not just DemoModal.tsx: the one call site must be
+// provable wherever it moves to.
 const SRC_ROOT = HERE
 function listSourceFiles(dir: string): string[] {
   const out: string[] = []
@@ -324,8 +325,9 @@ describe('CTA components untouched (AC-3)', () => {
 })
 
 describe('honeypot cannot reach outcome senders (AC-5)', () => {
-  // S1 (NEW-BEHAVIOUR): replaces the old DEMO_MODAL_SRC-scoped count (task-1108 AC-1.6) —
-  // widened to a directory scan so the single call site is provable wherever it moves to.
+  // A directory scan, not a DemoModal.tsx-scoped count, so the single call site stays
+  // provable wherever it moves to. Comment-blind — paired with A9a in
+  // DemoLeadForm.adversarial.test.tsx, which re-asserts the same fact on stripped source.
   it('S1: exactly one file in the whole package calls trackedHubSpotSubmit(, and it is components/DemoLeadForm.tsx', () => {
     // analytics.ts declares trackedHubSpotSubmit — its own `function trackedHubSpotSubmit(`
     // line matches the substring too, so it is excluded as the declaring module, not a caller.

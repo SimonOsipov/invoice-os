@@ -1,6 +1,5 @@
-// The Book-a-Demo lead-capture popup (task-117 / M4-19). Shell only — the form
-// itself is DemoLeadForm (task-1108); this owns the overlay, Escape, Tab-trap, and
-// focus restore, cloned VERBATIM from SignInModal.tsx's shell.
+// The Book-a-Demo popup shell — overlay, brand header, Close, Escape, Tab-trap and
+// focus restore, cloned VERBATIM from SignInModal.tsx. The form itself is DemoLeadForm.
 
 import { useEffect } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'

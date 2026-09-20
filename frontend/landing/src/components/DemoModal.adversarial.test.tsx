@@ -14,8 +14,8 @@
 //    — a render-time seam, not simulated user interaction, so it stays inside
 //    this file's "SSR, no interactivity" constraint.
 //
-//    The mock keys off useState's call ORDER. Since task-1108, the three hooks
-//    live in the child DemoLeadForm (DemoModal itself declares none): 1st `form`
+//    The mock keys off useState's call ORDER. All three hooks live in the child
+//    DemoLeadForm (DemoModal itself declares none): 1st `form`
 //    (DEFAULT_FORM, an object with a `name` key), 2nd `errors` (a plain object,
 //    `{}` by default), 3rd `demoStep` (a string). renderToStaticMarkup renders
 //    parent then child in one synchronous pass, so DemoModal's zero useState

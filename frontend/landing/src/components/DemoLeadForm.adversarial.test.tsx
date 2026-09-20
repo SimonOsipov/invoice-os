@@ -114,6 +114,11 @@ describe('panel padding follows the variant (A4)', () => {
     const cardForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dc', variant: 'card' }))
     expect(modalForm.startsWith('<form noValidate="" style="padding:20px">')).toBe(true)
     expect(cardForm.startsWith('<form noValidate="" style="padding:0">')).toBe(true)
+    // Through DemoModal too: rendering the form alone cannot see which variant the
+    // popup asks for.
+    expect(renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))).toContain(
+      '<form noValidate="" style="padding:20px">',
+    )
 
     for (const step of ['success', 'error'] as const) {
       const modalPanel = await renderSeeded(3, step, { idPrefix: 'dm', variant: 'modal', onDone: noop })

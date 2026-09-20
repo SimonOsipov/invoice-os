@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { FORBIDDEN_STRINGS } from './envCopyStrings'
+import { FORBIDDEN_STRINGS, RETIRED_LANDING_COPY } from './envCopyStrings'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -57,17 +57,19 @@ function collapseConcat(src: string): string {
   return src.replace(CONCAT_BOUNDARY, '')
 }
 
-// The matcher itself, parameterized on source text + a label (not inlined into the scan loop)
-// so row "the matcher is not vacuous" below can exercise the SAME function on an inline
-// fixture, not a copy of its logic. Case-insensitive by construction — the live defect is
-// `sub="Sent to NRS"` (capital S) against the lowercase-first needle list.
-function findForbiddenHits(src: string, label: string): Hit[] {
+// The matcher itself, parameterized on source text + a label + a needle list (not inlined
+// into the scan loop) so row "the matcher is not vacuous" below can exercise the SAME
+// function on an inline fixture, not a copy of its logic. Case-insensitive by construction —
+// the live defect is `sub="Sent to NRS"` (capital S) against the lowercase-first needle list.
+// `needles` defaults to FORBIDDEN_STRINGS so every existing call site is unchanged; the
+// retired-landing-copy guard below passes RETIRED_LANDING_COPY instead of duplicating this.
+function findForbiddenHits(src: string, label: string, needles: readonly string[] = FORBIDDEN_STRINGS): Hit[] {
   const hits: Hit[] = []
   const lines = src.split('\n')
   const lower = lines.map((l) => l.toLowerCase())
   const norm = lower.map(collapseConcat)
   norm.forEach((line, i) => {
-    for (const needle of FORBIDDEN_STRINGS) {
+    for (const needle of needles) {
       if (line.includes(needle.toLowerCase())) hits.push({ file: label, line: i + 1, needle })
     }
   })
@@ -77,7 +79,7 @@ function findForbiddenHits(src: string, label: string): Hit[] {
   // skipping what's already hit.
   for (let i = 0; i < lower.length - 1; i++) {
     const pair = collapseConcat(`${lower[i]} ${lower[i + 1]}`)
-    for (const needle of FORBIDDEN_STRINGS) {
+    for (const needle of needles) {
       const n = needle.toLowerCase()
       if (pair.includes(n) && !norm[i].includes(n) && !norm[i + 1].includes(n)) {
         hits.push({ file: label, line: i + 1, needle })
@@ -91,8 +93,8 @@ function formatHit(hit: Hit): string {
   return `${hit.file}:${hit.line}: ${hit.needle}`
 }
 
-function scanFiles(paths: string[]): Hit[] {
-  return paths.flatMap((relPath) => findForbiddenHits(readFileSync(join(REPO_ROOT, relPath), 'utf8'), relPath))
+function scanFiles(paths: string[], needles: readonly string[] = FORBIDDEN_STRINGS): Hit[] {
+  return paths.flatMap((relPath) => findForbiddenHits(readFileSync(join(REPO_ROOT, relPath), 'utf8'), relPath, needles))
 }
 
 describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
@@ -148,6 +150,7 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
       'returns a signed evidence bundle',
       'billed as 1,020 signed bundles',
       'IRN issued · evidence signed',
+      'No card required · Data resident in-region',
     ].join('\n')
 
     const hits = findForbiddenHits(SAMPLE, 'sample.ts')
@@ -221,5 +224,56 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
     const appList = [...match[1].matchAll(/'([^']*)'/g)].map((m) => m[1])
     expect(appList.length, 'the regex extracted nothing (vacuity guard)').toBeGreaterThan(0)
     expect(new Set(appList)).toEqual(new Set(FORBIDDEN_STRINGS))
+  })
+})
+
+// Guards BUG-19-04's retired positioning copy (rows 3/4/5/10) separately from
+// FORBIDDEN_STRINGS: this is retired marketing language, not a false regulatory claim, so it
+// gets its own list rather than diluting that one. Reuses findForbiddenHits/scanFiles above
+// with RETIRED_LANDING_COPY instead of writing a second scanner.
+describe('retired landing copy guard (BUG-19-04)', () => {
+  it('population floor: enough files are scanned for the absence check below to mean something', () => {
+    const { scanned } = partition(listFrontendSourceFiles())
+    // Vacuity guard: a broken pathspec collapses this to 0, which must fail HERE rather than
+    // let the absence check pass vacuously over zero files.
+    expect(scanned.length, 'total scanned files (vacuity guard)').toBeGreaterThanOrEqual(120)
+  })
+
+  // Control: 'compliance layer' is NOT a substring of 'compliance workflow layer'
+  // (`'compliance workflow layer'.includes('compliance layer')` is false — the word
+  // "workflow" sits between them). Each needle still gets its own dedicated sample line
+  // regardless, so neither entry's detection depends on, or can be masked by, the other.
+  it('the matcher detects every retired string independently', () => {
+    const SAMPLE = [
+      'this reads as a compliance layer between systems',
+      'our old compliance workflow layer is retired',
+      'we used licensed transmission partners before',
+      'compliance infrastructure for African businesses, still here',
+      'this was designed to expand later',
+    ].join('\n')
+
+    const hits = findForbiddenHits(SAMPLE, 'sample.ts', RETIRED_LANDING_COPY)
+    const detected = new Set(hits.map((h) => h.needle))
+    const undetected = RETIRED_LANDING_COPY.filter((needle) => !detected.has(needle))
+    expect(undetected, `retired strings not detected in the sample: ${undetected.join(', ')}`).toEqual([])
+  })
+
+  // Positive control proving a line naming both phrases reports both hits, not one
+  // suppressing the other.
+  it('a line naming both overlapping phrases reports both', () => {
+    const hits = findForbiddenHits(
+      'our compliance workflow layer used to run a compliance layer check',
+      'sample.ts',
+      RETIRED_LANDING_COPY,
+    )
+    expect(hits.map((h) => h.needle).sort()).toEqual(['compliance layer', 'compliance workflow layer'])
+  })
+
+  it('no retired landing copy remains anywhere in frontend', () => {
+    const { scanned } = partition(listFrontendSourceFiles())
+    expect(scanned.length, 'files to scan (vacuity guard)').toBeGreaterThanOrEqual(120)
+
+    const hits = scanFiles(scanned, RETIRED_LANDING_COPY)
+    expect(hits.map(formatHit), hits.map(formatHit).join('\n')).toEqual([])
   })
 })

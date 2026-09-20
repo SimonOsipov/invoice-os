@@ -168,14 +168,14 @@ describe('R8 (AC #6 corrected, mixed): one reassurance line, from the shared for
     expect(stripped).not.toContain('No card required')
   })
 
-  it('the reassurance line lives only in DemoLeadForm.tsx (breaklist TOTAL 1, down from 2)', () => {
+  it('the reassurance line lives only in DemoLeadForm.tsx, not DemoCta.tsx', () => {
     const demoCtaExists = existsSync(DEMO_CTA_PATH)
     const demoLeadFormExists = existsSync(DEMO_LEAD_FORM_PATH)
     expect(demoCtaExists, 'expected DemoCta.tsx to exist').toBe(true)
     expect(demoLeadFormExists, 'expected DemoLeadForm.tsx to exist').toBe(true)
     if (!demoCtaExists || !demoLeadFormExists) return
 
-    const NEEDLE = /Data resident in-region/g
+    const NEEDLE = /No card required/g
     const inLeadForm = (readFileSync(DEMO_LEAD_FORM_PATH, 'utf8').match(NEEDLE) ?? []).length
     const inCta = (readFileSync(DEMO_CTA_PATH, 'utf8').match(NEEDLE) ?? []).length
 

@@ -38,7 +38,7 @@ const WARN_PATHS = [
 ]
 
 // The form's half of DemoModal's single <style> element — interpolated there so the
-// popup still renders exactly one <style>; DemoCta (BUG-19-02) renders its own.
+// popup still renders exactly one <style>; DemoCta renders its own.
 export const DEMO_FORM_CSS = `
   @keyframes dmSpin { to { transform: rotate(360deg); } }
   .dm-input, .dm-select { transition: border-color 120ms, box-shadow 120ms; }
@@ -401,7 +401,7 @@ export function DemoLeadForm({
               'Book my demo →'
             )}
           </button>
-          <p style={{ fontSize: 12, color: 'var(--fg-3)', textAlign: 'center', margin: '14px 0 0' }}>No card required · Data resident in-region</p>
+          <p style={{ fontSize: 12, color: 'var(--fg-3)', textAlign: 'center', margin: '14px 0 0' }}>No card required</p>
         </form>
       )}
 

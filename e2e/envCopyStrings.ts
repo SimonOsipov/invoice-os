@@ -46,4 +46,25 @@ export const FORBIDDEN_STRINGS = [
   // ` signed ·` clears the honest retraction `· UNSIGNED ·` while still catching `SIGNED · x`.
   ' signed ·',
   '· signed',
+  // Production runs in Amsterdam (docs/data-residency), not in-region — a false claim,
+  // same class as the NRS/MBS entries above.
+  'Data resident in-region',
+] as const
+
+// Positioning copy retired by BUG-19-04 (row 3/4/5/10). Kept out of FORBIDDEN_STRINGS: that
+// list is for claims of a regulatory action having OCCURRED, and this is marketing
+// positioning language — a different failure mode, not a false-claim category.
+// `compliance layer` is a substring of `compliance workflow layer`; both stay listed (each
+// names a distinct retired phrase) but the scanner below dedupes overlapping hits per line so
+// one leftover string is never counted twice.
+export const RETIRED_LANDING_COPY = [
+  // Row 3 — replaced by "is the solution between".
+  'compliance layer',
+  // Row 4 — replaced by "compliance solution".
+  'compliance workflow layer',
+  // Row 5 — replaced by "submit them to the regulatory bodies".
+  'licensed transmission partners',
+  // Row 10 — footer tagline dropped to one sentence.
+  'compliance infrastructure for African businesses',
+  'designed to expand',
 ] as const

@@ -63,7 +63,7 @@ export function Footer({
               <span style={{ fontWeight: 600, fontSize: 15 }}>ASComply Africa</span>
             </div>
             <p style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--fg-3)', margin: 0 }}>
-              E-invoicing compliance infrastructure for African businesses. Built for Nigeria's MBS, designed to expand.
+              E-invoicing compliance solution for African businesses.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 56, flexWrap: 'wrap' }}>

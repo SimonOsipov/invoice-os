@@ -157,7 +157,7 @@ describe('the heading is a slot with no wrapper (A6)', () => {
   it('A10: the form still closes on the submit button and the reassurance line', () => {
     const html = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
     expect(html).toMatch(/<button type="submit"[^>]*>Book my demo →<\/button>/)
-    expect(html.endsWith('No card required · Data resident in-region</p></form>')).toBe(true)
+    expect(html.endsWith('No card required</p></form>')).toBe(true)
   })
 })
 

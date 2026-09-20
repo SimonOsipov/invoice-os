@@ -242,8 +242,9 @@ test('landing content: the live-validation preview lists every check and its tal
   expectNoConsoleErrors(sinks)
 })
 
-// E4 — BUG-19-04 rows 3/4/5/10. None of these four strings carries a data-* hook or a unit/DOM
-// test, so this spec is their only rendered-build oracle beyond the one-shot breaklist sweep.
+// E4 — the retired positioning copy. None of these four strings carries a data-* hook, so the
+// selectors are structural; App.landingCopy.dom.test.tsx asserts the same four on the SSR tree,
+// which is what keeps a bad selector here from costing a fleet rebuild to discover.
 const HERO_SOLUTION_TEXT =
   "ASComply Africa is the solution between your business and Nigeria's Merchant Buyer Solution. Create, validate, approve, archive, and transmit compliant invoices — through the dashboard or the API."
 const MODULES_HEADING_TEXT = 'ASComply is your invoice compliance solution.'

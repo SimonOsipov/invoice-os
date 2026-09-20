@@ -23,6 +23,9 @@ export type DemoFormErrors = {
   consent?: string
 }
 
+export const ROLE_OPTIONS = ['Owner / Partner', 'Finance or Accounting lead', 'Tax / Compliance', 'Developer / IT', 'Other']
+export const VOLUME_OPTIONS = ['under 1k', '1k–10k', '10k–100k', '100k+']
+
 // The four mandate turnover bands, in the regulator's enforcement order.
 export const TAXPAYER_SIZE_OPTIONS = [
   'Large ₦5bn+',
@@ -38,6 +41,21 @@ export const DEFAULT_TAXPAYER_SIZE = 'Medium ₦1bn–₦5bn'
 // rather than a promise.
 export const CONSENT_TEXT =
   'I agree to ASComply Africa storing and processing my details so a compliance specialist can contact me about this demo request.'
+
+export const DEFAULT_FORM = {
+  name: '',
+  email: '',
+  company: '',
+  role: 'Finance or Accounting lead',
+  size: DEFAULT_TAXPAYER_SIZE,
+  volume: '1k–10k',
+  consent: false,
+}
+
+export type DemoFormState = typeof DEFAULT_FORM
+// Every key except the one boolean — setField carries strings, setConsent the box.
+export type DemoFieldKey = Exclude<keyof DemoFormState, 'consent'>
+export type DemoStep = 'form' | 'submitting' | 'success' | 'error'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 

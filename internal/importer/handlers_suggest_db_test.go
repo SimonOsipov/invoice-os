@@ -44,6 +44,11 @@ func TestSuggestHandler_ASavedMappingAtTheResolvedRowWinsOverTheAI(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
 	}
+	// The lookup key is the resolved header, so the model is asked first even when the
+	// saved row will win -- the accepted cost of one call per second import (D-08).
+	if len(suggester.calls) != 1 {
+		t.Errorf("suggester calls = %d, want exactly 1 -- the resolved row is what keys the lookup", len(suggester.calls))
+	}
 	resp := mustDecodeSuggest(t, raw)
 	if resp.Source != "saved" {
 		t.Fatalf("source = %q, want %q (body=%s)", resp.Source, "saved", raw)
@@ -52,7 +57,15 @@ func TestSuggestHandler_ASavedMappingAtTheResolvedRowWinsOverTheAI(t *testing.T)
 		t.Errorf("mapping = %v, want the stored mapping %v, not the AI's", resp.Mapping, savedMapping)
 	}
 	if resp.SavedAt == nil {
-		t.Error("saved_at is nil, want non-nil for a saved hit")
+		t.Fatal("saved_at is nil, want non-nil for a saved hit")
+	}
+	// saved_at must be the stored row's own timestamp, not a response-time clock.
+	stored, err := impStore.SavedMapping(saveCtx, entityID, resolvedHeader)
+	if err != nil || stored == nil {
+		t.Fatalf("SavedMapping readback: %v (row=%v)", err, stored)
+	}
+	if !resp.SavedAt.Equal(stored.SavedAt) {
+		t.Errorf("saved_at = %v, want the stored row's %v", resp.SavedAt, stored.SavedAt)
 	}
 }
 
@@ -137,6 +150,15 @@ func TestSuggestHandler_ACrossTenantDocumentIs404NotFiveHundred(t *testing.T) {
 
 	docB := storeDocumentAs(t, docSvc, tenantB, "data.csv", "text/csv",
 		csvBody(t, []string{"Inv No"}, [][]string{{"INV-1"}}))
+
+	// Control: the document is readable by its owner, so tenant A's 404 is a refusal
+	// and not a fixture that stored nothing.
+	entityB := seedEntity(t, super, tenantB, "AIR-07-02 cross-tenant B entity")
+	idB := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB}
+	recB, rawB := doSuggestRequest(t, docSvc.Open, impStore.SavedMapping, &fakeSuggester{enabled: true}, nil, &idB, suggestReqBody(entityB, docB.ID))
+	if recB.Code != http.StatusOK {
+		t.Fatalf("owner status = %d, want 200 (body=%s) -- the control failed, so the 404 below proves nothing", recB.Code, rawB)
+	}
 
 	idA := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA}
 	suggester := &fakeSuggester{enabled: true}

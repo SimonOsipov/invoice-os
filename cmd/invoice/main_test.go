@@ -8,6 +8,7 @@ package main
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"strings"
@@ -310,6 +311,30 @@ func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
 
 // callSiteIndex returns the first index of name+"(" that is not its own
 // declaration, so an anchor cannot silently resolve to `func name(`.
+// sourceWithoutComments re-prints path's Go source with every comment dropped, so a
+// window or count scan reads code and nothing else. Without it a comment naming the
+// symbol satisfies the scan while the code it guards is gone.
+func sourceWithoutComments(t *testing.T, path string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0) // mode 0 attaches no comments
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, f); err != nil {
+		t.Fatalf("print %s: %v", path, err)
+	}
+	src := b.String()
+	if len(src) < 4000 || !strings.Contains(src, "func main()") {
+		t.Fatalf("%s stripped to %d byte(s) with no func main() -- a truncated read scans nothing and reports clean", path, len(src))
+	}
+	if strings.Contains(src, "// ") {
+		t.Fatalf("%s still carries a line comment after stripping -- the scans below would read prose as code", path)
+	}
+	return src
+}
+
 func callSiteIndex(src, name string) int {
 	needle := name + "("
 	const decl = "func "
@@ -469,11 +494,7 @@ func TestInvoiceMain_RegistersTheSuggestMappingRoute(t *testing.T) {
 // owns instead: the key literal appears nowhere here, and ai.FromEnv's result is what
 // reaches SuggestMappingHandler.
 func TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/invoice/main.go: %v", err)
-	}
-	src := string(b)
+	src := sourceWithoutComments(t, "main.go")
 
 	if n := strings.Count(src, `"OPENROUTER_API_KEY"`); n != 0 {
 		t.Errorf(`cmd/invoice/main.go contains the literal "OPENROUTER_API_KEY" %d time(s), want 0 -- the key must be read only inside ai.FromEnv`, n)
@@ -545,11 +566,7 @@ func TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv(t *testing.T) {
 // log.Fatalf, matching TestInvoiceMain_WiresTheApprovalsEnforcedFlag's precedent --
 // fatal's own doc comment explains why log.Fatalf is silent under LOG_LEVEL=warn.
 func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
-	b, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatalf("read cmd/invoice/main.go: %v", err)
-	}
-	src := string(b)
+	src := sourceWithoutComments(t, "main.go")
 
 	idx := callSiteIndex(src, "ai.FromEnv")
 	if idx == -1 {

@@ -338,6 +338,9 @@ func TestSuggestHandler_EmptyFileAnswersEmptyArraysNotNull(t *testing.T) {
 	if !bytes.Contains(raw, []byte(`"sample_rows":[]`)) {
 		t.Errorf(`raw body = %s, want "sample_rows":[], never null`, raw)
 	}
+	if !bytes.Contains(raw, []byte(`"mapping":{}`)) {
+		t.Errorf(`raw body = %s, want "mapping":{}, never null`, raw)
+	}
 	resp := mustDecodeSuggest(t, raw)
 	if resp.RowsTotal != 0 {
 		t.Errorf("rows_total = %d, want 0", resp.RowsTotal)

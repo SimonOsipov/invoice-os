@@ -16,7 +16,7 @@
 // selection-half (BULK-01-03).
 
 import { canSubmitMapping, initMappingFromHeaders, restoreMapping } from './mapping'
-import type { ImportPreview, SavedMapping } from './importApi'
+import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 import { fmtDateTime } from './format'
 
@@ -34,6 +34,11 @@ export interface RestoredFrom {
   mapping: Mapping // the placements as restored; a placement still equal to this renders RESTORED
 }
 
+export interface SuggestedFrom {
+  headerRow: number
+  mapping: Mapping // the placements as suggested; a placement still equal to this renders SUGGESTED
+}
+
 export interface MappingGroup {
   id: string
   signature: string
@@ -41,6 +46,7 @@ export interface MappingGroup {
   preview: ImportPreview
   mapping: Mapping
   restored: RestoredFrom | null
+  suggested: SuggestedFrom | null
 }
 
 // Walks `previewed` in pick order and buckets by columnSignature, preserving
@@ -63,6 +69,7 @@ export function groupByLayout(previewed: { fileId: string; preview: ImportPrevie
       preview,
       mapping: initMappingFromHeaders(preview.columns),
       restored: null,
+      suggested: null,
     }
     bySignature.set(signature, group)
     groups.push(group)
@@ -92,6 +99,7 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     preview: group.preview,
     mapping: { ...group.mapping },
     restored: group.restored,
+    suggested: group.suggested,
   }
 
   const next = groups.slice()
@@ -133,7 +141,7 @@ export function returnToAutomatic(group: MappingGroup): MappingGroup {
   return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
 }
 
-export type PlacementBadge = 'restored' | 'auto' | null
+export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null
 
 // RESTORED wins over AUTO. A placement moved off its restored header loses RESTORED.
 export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
@@ -165,6 +173,19 @@ export async function restoreGroups(
     }
   }
   return result
+}
+
+// Declaration only: a shallow copy, no replace semantics and no signature recompute yet.
+export function applySuggestion(group: MappingGroup, _res: SuggestMapping): MappingGroup {
+  return { ...group }
+}
+
+// Declaration only: no lookups performed yet.
+export async function suggestGroups(
+  groups: MappingGroup[],
+  _suggest: ((documentId: string) => Promise<SuggestMapping>) | null,
+): Promise<MappingGroup[]> {
+  return groups
 }
 
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only

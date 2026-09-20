@@ -302,6 +302,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/imports/{id}` | invoice | covered | |
 | `GET /v1/imports/document/reading` | invoice | covered | |
 | `GET /v1/imports/saved-mapping` | invoice | covered | |
+| `POST /v1/imports/suggest-mapping` | invoice | covered | |
 | `POST /v1/imports/document/invoice` | invoice | covered | |
 | `GET /v1/documents/{id}` | invoice | covered | |
 | `GET /v1/documents/{id}/sheet` | invoice | covered | |

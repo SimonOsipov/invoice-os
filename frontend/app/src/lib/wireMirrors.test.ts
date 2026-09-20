@@ -412,6 +412,8 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'SupplyNumberRequest',
       'SavedMapping',
       'SavedMappingResponse',
+      'SuggestMappingRequest',
+      'SuggestMapping',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -813,6 +815,59 @@ describe('every wire struct in handlers_lineitems.go has a mirror row (EXTR-13-0
       'type Mirrored struct {\n\tA string `json:"a"`\n}\n\ntype Newcomer struct {\n\tB string `json:"b"`\n}\n\ntype Internal struct {\n\tC string\n}\n'
     expect(exportedWireStructs(fixture)).toEqual(['Mirrored', 'Newcomer'])
     expect(exportedWireStructs(fixture).filter((n) => !['Mirrored'].includes(n))).toEqual(['Newcomer'])
+  })
+})
+
+// AIR-07-03 -- the suggest-mapping wire (internal/importer/handlers_suggest.go). Both Go
+// structs are unexported, so exportedWireStructs' [A-Z] leading letter would read zero here.
+// Typed `string`, not inferred as a literal: at Stage 2.5 this path is absent from every
+// WIRE_MIRRORS row, and a literal type here would make `m.goPath === SUGGEST_GO_PATH`
+// a TS2367 (no overlap) rather than the runtime `[]` the RED test needs.
+const SUGGEST_GO_PATH: string = 'internal/importer/handlers_suggest.go'
+const SUGGEST_SPA_PATH = 'frontend/app/src/lib/importApi.ts'
+const SUGGEST_REQUEST_KEYS = ['entity_id', 'document_id']
+const SUGGEST_RESPONSE_KEYS = ['source', 'header_row', 'columns', 'sample_rows', 'rows_total', 'mapping', 'saved_at']
+
+// Same shape as exportedWireStructs, lowercase-tolerant: MappingSuggester is an
+// `interface`, not a `struct`, so the keyword alone already excludes it.
+function wireStructsAnyCase(source: string): string[] {
+  return [...source.matchAll(/type\s+([A-Za-z][A-Za-z0-9_]*)\s+struct\s*\{([^{}]*)\}/g)]
+    .filter((m) => /`json:"[^"]+"`/.test(m[2]))
+    .map((m) => m[1])
+}
+
+describe('the suggest-mapping wire types: exact key lists, not just a floor (AIR-07-03)', () => {
+  it('wireMirrors_theSuggestKeyListsAreExactNotJustAboveAFloor', () => {
+    const goRequestKeys = goStructKeys(repoFile(SUGGEST_GO_PATH), 'suggestMappingRequest')
+    const goResponseKeys = goStructKeys(repoFile(SUGGEST_GO_PATH), 'suggestMappingResponse')
+    expect(goRequestKeys, 'Go suggestMappingRequest read nothing').toEqual(SUGGEST_REQUEST_KEYS)
+    expect(goResponseKeys, 'Go suggestMappingResponse read nothing').toEqual(SUGGEST_RESPONSE_KEYS)
+
+    for (const path of [SUGGEST_SPA_PATH, E2E_CLIENT]) {
+      const src = repoFile(path)
+      expect(tsInterfaceKeys(src, 'SuggestMappingRequest'), `${path} SuggestMappingRequest`).toEqual(goRequestKeys)
+      expect(tsInterfaceKeys(src, 'SuggestMapping'), `${path} SuggestMapping`).toEqual(goResponseKeys)
+    }
+  })
+})
+
+describe('every wire struct in handlers_suggest.go has a mirror row (AIR-07-03)', () => {
+  it('wireMirrors_noStructInTheSuggestFileIsUnmirrored', () => {
+    const found = wireStructsAnyCase(repoFile(SUGGEST_GO_PATH))
+    expect(found, 'the struct scan read nothing').toEqual(['suggestMappingRequest', 'suggestMappingResponse'])
+    expect(found, 'MappingSuggester is an interface, not a struct').not.toContain('MappingSuggester')
+
+    const mirrored = WIRE_MIRRORS.filter((m) => m.goPath === SUGGEST_GO_PATH).map((m) => m.go)
+    for (const name of found) {
+      expect(mirrored, `${name} is a tagged wire struct with no WIRE_MIRRORS row`).toContain(name)
+    }
+  })
+
+  it('wireMirrors_plantedPositiveAnUnmirroredSuggestStructIsReported', () => {
+    // Synthetic, in-memory only.
+    const fixture =
+      'type suggestMappingRequest struct {\n\tA string `json:"a"`\n}\n\ntype MappingSuggester interface {\n\tEnabled() bool\n}\n'
+    expect(wireStructsAnyCase(fixture)).toEqual(['suggestMappingRequest'])
   })
 })
 

@@ -203,6 +203,7 @@ export interface CreateImportRequest {
   entityId: string
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
   rememberMapping: boolean
+  headerRow?: number // absent or 1 sends no part; parseHeaderRow reads "" as row 1
 }
 
 export type UploadPhase =
@@ -437,6 +438,24 @@ export interface SavedMappingResponse {
   saved_mapping: SavedMapping | null
 }
 
+// POST /v1/imports/suggest-mapping. Mirrors internal/importer/handlers_suggest.go's
+// suggestMappingRequest/suggestMappingResponse. Flat on purpose: wireMirrors.test.ts's
+// tsInterfaceKeys reads zero keys from a body containing a nested literal.
+export interface SuggestMappingRequest {
+  entity_id: string
+  document_id: string
+}
+
+export interface SuggestMapping {
+  source: 'saved' | 'ai' | 'none'
+  header_row: number
+  columns: string[]
+  sample_rows: string[][]
+  rows_total: number
+  mapping: Record<string, string>
+  saved_at: string | null
+}
+
 export async function getSavedMapping(
   authedFetch: AuthedFetch,
   base: string,
@@ -468,6 +487,19 @@ export async function supplyInvoiceNumber(
   req: SupplyNumberRequest,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
+}
+
+// Stage 2.5 RED (AIR-07-03): declaration-only, a fixed zero value — IMPAPI-30 is the
+// target assertion, not this body.
+export async function suggestMapping(
+  authedFetch: AuthedFetch,
+  base: string,
+  req: SuggestMappingRequest,
+): Promise<SuggestMapping> {
+  void authedFetch
+  void base
+  void req
+  return { source: 'none', header_row: 1, columns: [], sample_rows: [], rows_total: 0, mapping: {}, saved_at: null }
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

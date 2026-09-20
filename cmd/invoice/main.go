@@ -196,8 +196,9 @@ func main() {
 	cancelSeed()
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
-	// aiClient is off when OPENROUTER_API_KEY is unset (AC-5): FromEnv never exits, only an
-	// unparseable AI_FAKE does, through fatal -- see fatal's own doc comment.
+	// aiClient is off when OPENROUTER_API_KEY is unset: FromEnv never exits, only an
+	// unparseable AI_FAKE does, through fatal -- see fatal's own doc comment
+	// (TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf).
 	aiClient, err := ai.FromEnv(app.Logger)
 	if err != nil {
 		fatal(app.Logger, "invoice: ai: %v", err)
@@ -213,8 +214,9 @@ func main() {
 	// A later import's lookup for a saved mapping. The literal path beats {id} below it
 	// (TestImportRoutes_SavedMappingIsNotSwallowedByBatchID).
 	app.Mux.HandleFunc("GET /v1/imports/saved-mapping", importer.SavedMappingHandler(docSvc.Open, impStore.SavedMapping, app.Logger))
-	// A later import's AI-assisted first-mapping suggestion (AIR-07-02): an off/unavailable/
-	// refused AI still answers 200 source:"none", never a 5xx.
+	// A later import's AI-assisted first-mapping suggestion: an off/unavailable/refused AI
+	// still answers 200 source:"none", never a 5xx (TestSuggestHandler_OffAnswersNoneWithRowOne,
+	// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred).
 	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.Open, impStore.SavedMapping, aiClient, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on

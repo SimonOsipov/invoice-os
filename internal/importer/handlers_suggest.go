@@ -1,4 +1,4 @@
-// handlers_suggest.go: POST /v1/imports/suggest-mapping (§2/§4).
+// handlers_suggest.go: POST /v1/imports/suggest-mapping.
 package importer
 
 import (
@@ -61,8 +61,9 @@ func askMapping(ctx context.Context, s MappingSuggester, window [][]string) map[
 	return ans
 }
 
-// coerceColumns and coerceSampleRows mirror PreviewHandler's own coercions (D-S1-4): §2
-// forbids a null columns/sample_rows array, and excelize's gap row comes back nil.
+// coerceColumns and coerceSampleRows mirror PreviewHandler's own coercions: §2 forbids
+// a null columns/sample_rows array, and excelize's gap row comes back nil
+// (TestSuggestHandler_EmptyFileAnswersEmptyArraysNotNull, TestSuggestHandler_AGapRowIsAnEmptyArrayNotNull).
 func coerceColumns(header []string) []string {
 	if header == nil {
 		return []string{}
@@ -100,7 +101,7 @@ func respondSuggestion(w http.ResponseWriter, source string, headerRow int, head
 	})
 }
 
-// SuggestMappingHandler serves POST /v1/imports/suggest-mapping (§4): the request ladder is
+// SuggestMappingHandler serves POST /v1/imports/suggest-mapping: the request ladder is
 // CreateDocumentHandler's (POST + JSON body, two uuids), the open/decode ladder is
 // SavedMappingHandler's.
 func SuggestMappingHandler(
@@ -180,7 +181,7 @@ func SuggestMappingHandler(
 		}
 
 		// obj.Body is handed back unread and not seekable; buffer once, decode from memory
-		// since this endpoint decodes up to twice (D-S1-2).
+		// since this endpoint decodes up to twice (TestSuggestHandler_ReDecodesAtTheAnsweredHeaderRow).
 		raw, err := io.ReadAll(obj.Body)
 		if err != nil {
 			log.ErrorContext(r.Context(), "importer: read source document", slog.Any("err", err))
@@ -196,7 +197,8 @@ func SuggestMappingHandler(
 
 		window := suggestWindow(hdr1, rows1)
 		if len(window) == 0 {
-			// Nothing to show the model; only a blank answer is possible (D-S1-6).
+			// Nothing to show the model; only a blank answer is possible
+			// (TestSuggestHandler_EmptyFileAnswersEmptyArraysNotNull).
 			respondSuggestion(w, "none", defaultHeaderRow, hdr1, rows1, nil, nil)
 			return
 		}
@@ -208,7 +210,9 @@ func SuggestMappingHandler(
 		if headerRow != defaultHeaderRow {
 			h, rs, _, derr := DecodeFrom(bytes.NewReader(raw), format, headerRow)
 			// The AI's row choice is never the caller's fault: a re-parse failure or a
-			// blank header at that row falls back to row 1 rather than 400ing (D-S1-3).
+			// blank header at that row falls back to row 1 rather than 400ing
+			// (TestSuggestHandler_AnUndecodableTailAtTheAnsweredRowFallsBackToRowOne,
+			// TestSuggestHandler_ABlankHeaderAtTheAnsweredRowFallsBackToRowOne).
 			if derr != nil || len(h) == 0 {
 				headerRow = defaultHeaderRow
 				header, rows = hdr1, rows1

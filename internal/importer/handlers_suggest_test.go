@@ -202,10 +202,11 @@ func TestSuggestHandler_OffAnswersNoneWithRowOne(t *testing.T) {
 
 // --- row 9 -------------------------------------------------------------------------
 
-// TestSuggestHandler_UnavailableAnswersNoneNotFiveHundred uses the REAL ai.Client in
-// fake mode: result.outcome is unexported, so the buffered log line is the only oracle
-// that the envelope validated (never "refused") before the fake's error path ran.
-func TestSuggestHandler_UnavailableAnswersNoneNotFiveHundred(t *testing.T) {
+// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred uses the REAL
+// ai.Client in fake mode: result.outcome is unexported, so the buffered log line is
+// the only oracle that the envelope validated (never "refused") before the fake's
+// error path ran.
+func TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred(t *testing.T) {
 	id := testIdentity()
 	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Note"}, [][]string{{"AIFAKE-UNAVAILABLE"}}))
 
@@ -249,9 +250,6 @@ func TestSuggestHandler_UnavailableAnswersNoneNotFiveHundred(t *testing.T) {
 	// source:"none" rather than a 500.
 	if calls[0]["outcome"] != "fake" {
 		t.Errorf("outcome = %v, want %q", calls[0]["outcome"], "fake")
-	}
-	if calls[0]["outcome"] == "refused" {
-		t.Error("outcome = refused -- the envelope must validate (Purpose, Text, non-empty SchemaName)")
 	}
 }
 

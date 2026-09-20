@@ -185,7 +185,7 @@ export function applySuggestion(group: MappingGroup, res: SuggestMapping): Mappi
   if (res.source === 'none') return group
   const preview: ImportPreview = { ...group.preview, columns: res.columns, sample_rows: res.sample_rows, rows_total: res.rows_total }
   const mapping = restoreMapping(res.columns, res.mapping)
-  const base = { ...group, preview, signature: columnSignature(res.columns), mapping }
+  const base = { ...group, preview, signature: columnSignature(res.columns), mapping, headerRow: res.header_row }
   if (res.source === 'saved') {
     return { ...base, restored: { savedAt: res.saved_at ?? '', mapping }, suggested: null }
   }

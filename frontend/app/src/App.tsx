@@ -38,6 +38,7 @@ import {
   restoreGroups,
   returnToAutomatic,
   splitOut,
+  suggestGroups,
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
@@ -48,6 +49,7 @@ import {
   makeImportAuth,
   previewImport,
   readingForDocument,
+  suggestMapping,
   supplyInvoiceNumber,
   uploadSourceDocument,
   type CarriedReading,
@@ -901,7 +903,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         // ceiling: a click before the entity list resolves snapshots a null target, so that import
         // opens unrestored; revisit if a returning client's import is reported unrestored.
         const lookup = target ? (documentId: string) => getSavedMapping(authedFetch, base, target, documentId) : null
-        setGroups(await restoreGroups(groupByLayout(previewed), lookup))
+        const restored = await restoreGroups(groupByLayout(previewed), lookup)
+        // Only a group that restored nothing reaches the AI: the endpoint has no such check of
+        // its own, so this ordering is the whole of the one-extra-call-per-import claim.
+        const suggest = target
+          ? (documentId: string) => suggestMapping(authedFetch, base, { entity_id: target, document_id: documentId })
+          : null
+        setGroups(await suggestGroups(restored, suggest))
         setGroupIndex(0)
         setCreateStep('mapping')
         // A fresh mapping cycle must not carry a PREVIOUS run's leftovers onto it.
@@ -1074,6 +1082,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
                 entityId,
                 mapping: toImportMapping(group.mapping),
                 rememberMapping: rememberMapping(group),
+                headerRow: group.headerRow,
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })

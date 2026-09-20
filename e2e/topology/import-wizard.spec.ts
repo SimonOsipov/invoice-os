@@ -222,6 +222,39 @@ async function approveOpenRunsForEntity(token: string, entityId: string): Promis
   )
 }
 
+// AIR-07-06/07's shared CSV steering fixture: the fake AI fleet scans every AI request's
+// text for an AIFAKE-ANSWER-<base64url> marker (internal/platform/ai/fake.go's fakeMarker),
+// and suggest-mapping's prompt text is built from the decoded CSV rows verbatim
+// (internal/importer/suggest.go's mappingPromptText) -- so a marker planted in any data
+// cell reaches it unchanged. Header names deliberately mirror PERF_HEADER's real aliasing
+// shape (issue_date/buyer_tin/currency/vat/total/line_quantity/line_unit_price all
+// auto-recognize; invoice_number/buyer_name/subtotal/line_description never do), so the
+// steered answer only needs to place invoice_number for the screen to carry both AUTO and
+// SUGGESTED badges at once.
+const AIRL01_ANSWER = {
+  invoice_number: 'Invoice No',
+  issue_date: null,
+  buyer_tin: null,
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: null,
+  line_description: null,
+  line_quantity: null,
+  line_unit_price: null,
+  header_row: 1,
+  date_format: null,
+  decimal_separator: null,
+}
+
+function buildAirl01SteeredCsv(): string {
+  const marker = `AIFAKE-ANSWER-${Buffer.from(JSON.stringify(AIRL01_ANSWER)).toString('base64url')}`
+  const header = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
+  const row = ['INV-AIRL01-1', '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
+  return `${header}\n${row.join(',')}\n`
+}
+
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
   // Sign-in, nav, ONE upload ([upload-once] -- preview stores the bytes and the
   // import that follows sends only the id), and render, on a possibly cold 11-service fleet.
@@ -422,6 +455,83 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // Both non-default tabs are OMITTED from the DOM at zero, never merely hidden.
   await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Already imported \(/ })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-5: a placement chip must never overflow its column at any swept width, including the
+// SUGGESTED chip AIR-07-06 adds as a third `flex: 'none'` child. Deployed-only -- there is
+// no way to reach a suggested Map step without the fake fleet's AI (see the file header),
+// so this runs ONLY when the deploy gate exercises this file against a live PR environment.
+// Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
+test('AIRL-01: a placement chip stays inside its column at every swept width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 layout ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'airl01.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAirl01SteeredCsv(), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  await suggestResp
+
+  const columns = page.locator('[data-testid="map-column"]')
+  expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
+  const anyChip = columns.locator('span[draggable]')
+  expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
+
+  // Not a strict requirement of AC-5 itself, but proof this run reached the state AC-5
+  // targets: a badge-less suggested chip (the AIR-07-04/05 HAZARD) would still pass a bare
+  // containment sweep, so this is the positive control that the steered fixture worked.
+  await expect(
+    page.getByTestId('map-suggested-badge').first(),
+    'the steered suggestion must place at least one SUGGESTED badge, or this run never reached the state AC-5 targets',
+  ).toBeVisible()
+
+  const entryViewport = page.viewportSize()
+  const widthsMeasured: number[] = []
+  const fits: { width: number; left: number; right: number; fieldWidth: number }[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      widthsMeasured.push(width)
+      const count = await columns.count()
+      for (let i = 0; i < count; i++) {
+        const chip = columns.nth(i).locator('span[draggable]')
+        if ((await chip.count()) === 0) continue
+        const cell = chip.locator('xpath=..')
+        const fieldSpan = chip.locator('.mono').first()
+        const [cellBox, chipBox, fieldBox] = await Promise.all([cell.boundingBox(), chip.boundingBox(), fieldSpan.boundingBox()])
+        expect(cellBox && chipBox, `column ${i}'s chip/cell must both render at ${width}px`).toBeTruthy()
+        const g = gaps(chipBox!, cellBox!)
+        expect(g.left, `column ${i}'s chip must not start left of its cell at ${width}px`).toBeGreaterThanOrEqual(0)
+        expect(g.right, `column ${i}'s chip must not extend right of its cell at ${width}px`).toBeGreaterThanOrEqual(0)
+        expect(fieldBox?.width ?? 0, `column ${i}'s field-name span must have a real width at ${width}px`).toBeGreaterThan(0)
+        fits.push({ width, left: g.left, right: g.right, fieldWidth: fieldBox?.width ?? 0 })
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(widthsMeasured, 'every WIDE_WIDTHS entry must have been measured, in order').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('airl01-chip-column-fit.json', {
+    body: JSON.stringify({ entity: entity.name, fits }, null, 2),
+    contentType: 'application/json',
+  })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1691,8 +1801,8 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   await expect(page.getByText('layout-a-till.csv', { exact: false }), "the FIRST file's name is gone from this group's screen").toHaveCount(0)
 
   // invoice_number is never auto-recognized regardless of header spelling ("the invoice
-  // number is never guessed" -- CreateMapping's own copy), so this group needs its own
-  // manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
+  // number is never matched by name" -- CreateMapping's own copy), so this group needs its
+  // own manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Ref', { exact: true }).click()
 

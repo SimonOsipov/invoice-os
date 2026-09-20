@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_PERSONAS, type Session } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import type { SavedMapping, SuggestMapping } from './lib/importApi'
-import { initMappingFromHeaders, restoreMapping, toImportMapping } from './lib/mapping'
+import { initMappingFromHeaders, recognize, restoreMapping, toImportMapping } from './lib/mapping'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
 
@@ -376,6 +376,10 @@ describe('the AI suggests a mapping after a saved lookup restores nothing', () =
     expect(chip, 'the suggestion must place a chip on Invoice No').not.toBeNull()
     expect(chip!.querySelector('.mono')?.textContent, 'the placed field must read invoice_number').toBe('invoice_number')
 
+    const badges = chip!.querySelectorAll('[data-testid="map-suggested-badge"]')
+    expect(badges, 'the suggested chip must carry exactly one SUGGESTED badge, reading SUGGESTED').toHaveLength(1)
+    expect(badges[0]!.textContent).toBe('SUGGESTED')
+
     const paletteChip = Array.from(document.querySelectorAll('button[draggable]')).find((b) => b.textContent?.includes('invoice_number'))
     expect(paletteChip, 'a suggested invoice_number must not sit in the palette').toBeUndefined()
 
@@ -474,6 +478,17 @@ describe('the AI suggests a mapping after a saved lookup restores nothing', () =
       byHeader.get('Client Ref')!.querySelector('span[draggable] .mono')?.textContent,
       "buyer_name's chip must be untouched by the move",
     ).toBe('buyer_name')
+
+    // A placement moved off its suggested header loses SUGGESTED (mirrors AIRS-QA-2 at lib
+    // level) -- the moved chip on Backup Amount carries no badge...
+    const movedChip = byHeader.get('Backup Amount')!.querySelector('span[draggable]')
+    expect(movedChip, 'control: the moved field must still be placed somewhere').not.toBeNull()
+    expect(movedChip!.querySelectorAll('[data-testid="map-suggested-badge"]'), 'a placement moved off its suggested header must lose the badge').toHaveLength(0)
+
+    // ...but the floor: an untouched suggested chip (buyer_name on Client Ref) still carries
+    // exactly one, so a render that lost every badge cannot pass this test.
+    const untouchedChip = byHeader.get('Client Ref')!.querySelector('span[draggable]')
+    expect(untouchedChip!.querySelectorAll('[data-testid="map-suggested-badge"]'), 'the floor: an untouched suggested chip must keep its badge').toHaveLength(1)
 
     act(() => {
       requireCtx().continueMapping()
@@ -844,5 +859,78 @@ describe('the AI suggests a mapping after a saved lookup restores nothing', () =
     expect(requireCtx().groups[0]?.mapping, 'a rejected suggestion must fall back to the automatic seed').toEqual(
       initMappingFromHeaders(TWO_COL),
     )
+  })
+
+  it('AIRB-02: a suggestion adds a badge and no new div.mono', async () => {
+    // Two full boots in one test (cleanup() + a URL reset between them) -- the AC-11 claim
+    // is a delta across renders, not a fact about one render.
+    FakeXhr.instances = []
+    suggestBodies.length = 0
+
+    await bootAtWithGateway({}, DEFAULT_ENTITIES, { 'doc-b2-none': suggestOk(DEFAULT_SUGGEST_NONE) })
+    await openCreateAndWaitForEntity()
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', TWO_COL)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances).toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-b2-none', TWO_COL))
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('mapping'))
+
+    const noneDivMono = document.querySelectorAll('main div.mono').length
+    const noneBadges = document.querySelectorAll('[data-testid="map-suggested-badge"]').length
+    expect(noneDivMono, 'control: the header cells must render').toBeGreaterThan(0)
+    expect(noneBadges, 'a none response must place no suggestion, so no badge should render').toBe(0)
+
+    cleanup()
+    window.history.replaceState(null, '', '/')
+    FakeXhr.instances = []
+
+    const res: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: TWO_COL,
+      sample_rows: [['INV-1', 'C-1']],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: null,
+    }
+    await bootAtWithGateway({}, DEFAULT_ENTITIES, { 'doc-b2-ai': suggestOk(res) })
+    await openCreateAndWaitForEntity()
+    act(() => {
+      requireCtx().addPickedFiles([csvFile('a.csv', TWO_COL)])
+    })
+    act(() => {
+      requireCtx().readAllColumns()
+    })
+    await waitFor(() => expect(FakeXhr.instances).toHaveLength(1))
+    act(() => {
+      FakeXhr.instances[0]!.respond(200, previewReply('doc-b2-ai', TWO_COL))
+    })
+    await waitFor(() => expect(requireCtx().createStep).toBe('mapping'))
+
+    const aiDivMono = document.querySelectorAll('main div.mono').length
+    const aiBadges = document.querySelectorAll('[data-testid="map-suggested-badge"]').length
+    expect(aiDivMono, 'control: the header cells must render in the second render too').toBeGreaterThan(0)
+    expect(aiDivMono, 'the suggestion must not add a new div.mono to main').toBe(noneDivMono)
+    expect(aiBadges, 'the suggestion must add exactly one badge').toBe(1)
+    expect(aiBadges, 'the badge count must climb from the none render, not just be nonzero').toBeGreaterThan(noneBadges)
+  })
+
+  // Fixture-accident guard (AIR-07-09 QA): every AIRA-* spec above survives the alias
+  // fallback ONLY because these column lists deliberately alias-match nothing (see the file
+  // header comment). Pins that property directly so a future realistic column name reds
+  // loudly instead of silently changing what the screen renders.
+  it('AIRA-16: every non-aliasing column fixture in this file recognizes nothing', () => {
+    const nonAliasing = [TWO_COL, ALT_COL, THREE_COL, FOUR_COL, ROW1_COL, ROW3_COL, ROW3_COL_ALT]
+    for (const cols of nonAliasing) {
+      const recognized = recognize(cols)
+      expect(Object.keys(recognized).length, 'control: recognize must return a key for every CANON field').toBeGreaterThan(0)
+      expect(Object.values(recognized).every((v) => v === null), `${JSON.stringify(cols)} must alias-match nothing`).toBe(true)
+    }
   })
 })

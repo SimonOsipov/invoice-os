@@ -7,7 +7,7 @@
 // it, unlike frontend/app's approvals.test.ts) — without it node:* imports fail TS2591.
 /// <reference types="node" />
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,8 +24,21 @@ const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
 const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'DemoCta.tsx', 'Footer.tsx']
+const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
+
+// O5's widening (task-1108, AC-1.6): every non-test .ts/.tsx under src, not just DemoModal.tsx.
+const SRC_ROOT = HERE
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listSourceFiles(full))
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) out.push(full)
+  }
+  return out
+}
 
 describe('measurementId', () => {
   it('AC-1: resolves from the environment at call time', () => {
@@ -311,50 +324,81 @@ describe('CTA components untouched (AC-3)', () => {
 })
 
 describe('honeypot cannot reach outcome senders (AC-5)', () => {
-  it('DemoModal imports trackedHubSpotSubmit and neither sender directly', () => {
-    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
-    expect(DEMO_MODAL_SRC).toContain('submitDemoLead')
-
-    expect(DEMO_MODAL_SRC).toMatch(
-      /import\s*\{[^}]*\btrackedHubSpotSubmit\b[^}]*\}\s*from\s*['"]\.\.\/analytics['"]/,
-    )
-    expect(DEMO_MODAL_SRC).not.toMatch(/\bgenerate_lead\b/)
-    expect(DEMO_MODAL_SRC).not.toMatch(/\bdemo_submit_failed\b/)
-
-    const occurrences = DEMO_MODAL_SRC.match(/trackedHubSpotSubmit\(/g) ?? []
-    expect(occurrences.length).toBe(1)
-
-    const line = DEMO_MODAL_SRC.split('\n').find((l) => l.includes('trackedHubSpotSubmit('))
-    expect(line).toBeDefined()
-    expect(line).toContain('submitDemoLead')
+  // S1 (NEW-BEHAVIOUR): replaces the old DEMO_MODAL_SRC-scoped count (task-1108 AC-1.6) —
+  // widened to a directory scan so the single call site is provable wherever it moves to.
+  it('S1: exactly one file in the whole package calls trackedHubSpotSubmit(, and it is components/DemoLeadForm.tsx', () => {
+    // analytics.ts declares trackedHubSpotSubmit — its own `function trackedHubSpotSubmit(`
+    // line matches the substring too, so it is excluded as the declaring module, not a caller.
+    const analyticsPath = join(HERE, 'analytics.ts')
+    const files = listSourceFiles(SRC_ROOT).filter((f) => f !== analyticsPath)
+    expect(files.length).toBeGreaterThan(0)
+    const matches = files.filter((f) => readFileSync(f, 'utf8').includes('trackedHubSpotSubmit('))
+    expect(matches.length).toBe(1)
+    expect(matches[0]).toBe(DEMO_LEAD_FORM_PATH)
   })
 
-  // Closes a gap the row above leaves open: it never checked that trackedHubSpotSubmit
-  // is the ONLY analytics binding DemoModal.tsx pulls in. Exporting a private sender
-  // and calling it directly at the shared success/catch transition (:186/:190) would
-  // still satisfy every assertion above — the import regex's [^}]* tolerates extra
-  // names alongside trackedHubSpotSubmit, and neither outcome event's literal string
-  // is written in this file (only in analytics.ts). That mutation makes the honeypot
-  // and closed-gate branches count as conversions, and it survives unless this row
-  // exists.
-  it('DemoModal imports exactly one binding from analytics.ts, and never via a namespace import', () => {
-    const braceImports = Array.from(DEMO_MODAL_SRC.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/analytics['"]/g))
+  // S2 (NEW-BEHAVIOUR): DemoLeadForm.tsx doesn't exist yet — guard existence first so a
+  // missing file fails this assertion, not a thrown ENOENT.
+  it('S2: the trackedHubSpotSubmit call site passes submitDemoLead and names no event literal', () => {
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+
+    const src = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    expect(src).toContain('submitDemoLead')
+    const line = src.split('\n').find((l) => l.includes('trackedHubSpotSubmit('))
+    expect(line, 'expected a trackedHubSpotSubmit( call site').toBeDefined()
+    expect(line).toContain('submitDemoLead')
+    expect(src).not.toMatch(/\bgenerate_lead\b/)
+    expect(src).not.toMatch(/\bdemo_submit_failed\b/)
+  })
+
+  // S3 (NEW-BEHAVIOUR): re-points the old :340-349 DEMO_MODAL_SRC check at DemoLeadForm.tsx.
+  // Closes the same gap the original comment named — trackedHubSpotSubmit must be the ONLY
+  // analytics binding the new component pulls in, never via a namespace import.
+  it('S3: DemoLeadForm.tsx imports exactly one binding from analytics.ts, and never via a namespace import', () => {
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+
+    const src = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    const braceImports = Array.from(src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/analytics['"]/g))
     expect(braceImports.length, 'expected exactly one import statement from ../analytics').toBe(1)
     const names = braceImports[0][1]
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
     expect(names).toEqual(['trackedHubSpotSubmit'])
-    expect(DEMO_MODAL_SRC).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
+    expect(src).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
+  })
+
+  // S4 (NEW-BEHAVIOUR): today DemoModal.tsx still imports trackedHubSpotSubmit directly
+  // (:23) — fails honestly until the extraction moves it to DemoLeadForm.tsx.
+  it('S4: DemoModal.tsx and DemoCta.tsx import nothing from ../analytics', () => {
+    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
+    expect(DEMO_MODAL_SRC).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
+
+    const demoCtaSrc = readFileSync(join(HERE, 'components', 'DemoCta.tsx'), 'utf8')
+    expect(demoCtaSrc.length).toBeGreaterThan(0)
+    expect(demoCtaSrc).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
   })
 })
 
 describe('honeypot branch and runStub pinned (AC-6)', () => {
-  it('the honeypot branch and runStub are unchanged', () => {
+  // S5 (NEW-BEHAVIOUR): today's single setTimeout(resolve, 1300) still lives in
+  // DemoModal.tsx — fails on the "zero times in DemoModal.tsx" assertion until it moves.
+  it('S5: the honeypot branch and the single 1300ms stub live in DemoLeadForm.tsx, and DemoModal.tsx has neither', () => {
     expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
-    expect(DEMO_MODAL_SRC).toContain('if (trap) await runStub()')
-    const delayCalls = DEMO_MODAL_SRC.match(/setTimeout\(resolve, 1300\)/g) ?? []
-    expect(delayCalls.length).toBe(1)
+    const modalDelayCalls = DEMO_MODAL_SRC.match(/setTimeout\(resolve, 1300\)/g) ?? []
+    expect(modalDelayCalls.length).toBe(0)
+
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+    const formSrc = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    expect(formSrc).toContain('if (trap) await runStub()')
+    const formDelayCalls = formSrc.match(/setTimeout\(resolve, 1300\)/g) ?? []
+    expect(formDelayCalls.length).toBe(1)
   })
 })
 
@@ -364,6 +408,16 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
     expect(globalThis.window).toBeUndefined()
     expect(globalThis.document).toBeUndefined()
     await expect(import('./components/DemoModal')).resolves.toBeDefined()
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
+  })
+
+  // S13 (NEW-BEHAVIOUR): DemoLeadForm.tsx doesn't exist yet, so the dynamic import
+  // rejects and `.resolves` fails honestly — no static import, no collection error.
+  it('S13: importing DemoLeadForm in a node environment is inert', async () => {
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
+    await expect(import('./components/DemoLeadForm')).resolves.toBeDefined()
     expect(globalThis.window).toBeUndefined()
     expect(globalThis.document).toBeUndefined()
   })

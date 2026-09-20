@@ -5,8 +5,8 @@ import { CANON } from '../data'
 import type { Mapping } from '../types'
 
 // Header aliases that auto-place a column. `invoice_number` is deliberately
-// absent: the fiscal identifier is never guessed — a plausible wrong default
-// invites rubber-stamping, and this data is submitted under the firm's TIN.
+// absent: this table never name-matches it; a suggestion or a restore is the only automatic route.
+// A plausible wrong default invites rubber-stamping, and this data is submitted under the firm's TIN.
 const ALIAS: Record<string, string[]> = {
   issue_date: ['issuedate', 'date'],
   buyer_tin: ['buyertin'],

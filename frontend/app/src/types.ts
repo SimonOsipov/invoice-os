@@ -191,7 +191,7 @@ export type View = 'dashboard' | 'invoices' | 'rules' | 'workflows' | 'create' |
 export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
-// `required` marks the fiscal identifier that recognition never guesses.
+// `required` marks the fiscal identifier alias recognition never guesses -- a suggestion or a restore is the only automatic route.
 export type CanonField = { key: string; required?: boolean }
 
 // canonical field key -> source column header, or null while unplaced

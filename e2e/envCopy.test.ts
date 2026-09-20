@@ -227,7 +227,7 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
   })
 })
 
-// Guards BUG-19-04's retired positioning copy (rows 3/4/5/10) separately from
+// Guards the retired landing positioning copy (rows 3/4/5/6/7/10) separately from
 // FORBIDDEN_STRINGS: this is retired marketing language, not a false regulatory claim, so it
 // gets its own list rather than diluting that one. Reuses findForbiddenHits/scanFiles above
 // with RETIRED_LANDING_COPY instead of writing a second scanner.

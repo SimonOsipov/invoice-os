@@ -108,7 +108,7 @@ func newBFTwoInvoiceFixture(t *testing.T, super, app *pgxpool.Pool, label string
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestBackfill_TiedColumnIsAmbiguous(t *testing.T) {
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, header, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, header, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 	inv1 := invoiceIDByNumber(t, super, entityID, "INV-1")
@@ -297,10 +297,10 @@ func TestBackfill_DuplicateInvoiceNumberInOneDocumentIsAmbiguous(t *testing.T) {
 	svc := newTestService(app)
 	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(cA, entityA, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(cA, entityA, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity A: %v", err)
 	}
-	if _, err := svc.Import(cB, entityB, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(cB, entityB, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import into entity B: %v", err)
 	}
 	invA := invoiceIDByNumber(t, super, entityA, "DUP-1")
@@ -340,7 +340,7 @@ func TestBackfill_MatchesRawUntrimmedCellValue(t *testing.T) {
 
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", doc.ID, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", doc.ID, 1, stdMapping, stdHeader, rows, false); err != nil {
 		t.Fatalf("import fixture: %v", err)
 	}
 	inv := invoiceIDByNumber(t, super, entityID, padded)
@@ -449,10 +449,10 @@ func TestRLS_BackfillDoesNotCrossTenants(t *testing.T) {
 
 	cA := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA})
 	cB := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantB})
-	if _, err := svc.Import(cA, entityA, "", docA.ID, stdMapping, stdHeader, rowsA, false); err != nil {
+	if _, err := svc.Import(cA, entityA, "", docA.ID, 1, stdMapping, stdHeader, rowsA, false); err != nil {
 		t.Fatalf("import tenant A: %v", err)
 	}
-	if _, err := svc.Import(cB, entityB, "", docB.ID, stdMapping, stdHeader, rowsB, false); err != nil {
+	if _, err := svc.Import(cB, entityB, "", docB.ID, 1, stdMapping, stdHeader, rowsB, false); err != nil {
 		t.Fatalf("import tenant B: %v", err)
 	}
 
@@ -541,7 +541,7 @@ func TestBackfill_UndecodableOrMissingDocumentIsSkippedNotFatal(t *testing.T) {
 	cleanDoc := storeDocumentAs(t, docSvc, tenantID, "clean.csv", "text/csv", csvBody(t, stdHeader, cleanRows))
 	svc := newTestService(app)
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	if _, err := svc.Import(c, entityID, "", cleanDoc.ID, stdMapping, stdHeader, cleanRows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", cleanDoc.ID, 1, stdMapping, stdHeader, cleanRows, false); err != nil {
 		t.Fatalf("import clean fixture: %v", err)
 	}
 	cleanInv := invoiceIDByNumber(t, super, entityID, "CLEAN-1")

@@ -100,7 +100,7 @@ function sourceMeta(withDocument = true): SourceDocumentAsync {
     invoices_created: 1,
     other_invoice_rows: [],
   }
-  const data: SourceDocumentResponse = { invoice_id: ID, source_rows: [1], document: withDocument ? document : null }
+  const data: SourceDocumentResponse = { invoice_id: ID, source_rows: [1], header_row: null, document: withDocument ? document : null }
   return { status: 'ready', data, error: null, run: vi.fn() }
 }
 

@@ -32,7 +32,7 @@ function record(over: Partial<SourceDocumentRecord> = {}): SourceDocumentRecord 
 }
 
 function response(over: Partial<SourceDocumentResponse> = {}): SourceDocumentResponse {
-  return { invoice_id: 'inv-1', source_rows: [44, 45, 46, 47], document: record(), ...over }
+  return { invoice_id: 'inv-1', source_rows: [44, 45, 46, 47], header_row: null, document: record(), ...over }
 }
 
 function metaAsync(over: Partial<SourceDocumentAsync> = {}): SourceDocumentAsync {
@@ -359,5 +359,98 @@ describe('SourceDocumentModal shell', () => {
     expect(screen.getByTestId('sheet-scope-file').getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByTestId('sheet-scope-invoice').getAttribute('aria-pressed')).toBe('false')
     expect(screen.getByTestId('sheet-scroll').scrollTop).toBe(1050)
+  })
+
+  // AIR-06-04: the modal must ask for the sheet at the invoice's stored header row and
+  // number the gutter from it. Control at header_row null keeps today's plain URL and row 2.
+  it("asks for the sheet at the invoice's header row", async () => {
+    function fetchMockFor(id: string, body: DocumentSheet) {
+      return vi.fn((url: string) => {
+        const gotId = /\/documents\/([^/]+)\/sheet/.exec(url)?.[1]
+        return gotId === id
+          ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+          : Promise.reject(new Error(`no sheet fixture for ${url}`))
+      })
+    }
+
+    const sheetBody = docSheet('D', 3)
+
+    const fetchMock1 = fetchMockFor('doc-1', sheetBody)
+    vi.stubGlobal('fetch', fetchMock1)
+    renderModal(metaAsync({ data: response({ header_row: 3 }) }))
+    await screen.findAllByTestId('sheet-row')
+    const urls1 = fetchMock1.mock.calls.map(([url]) => url as string)
+    expect(urls1.some((u) => u.includes('header_row=3'))).toBe(true)
+    expect(document.querySelector('[data-sheet-row]')?.getAttribute('data-sheet-row')).toBe('4')
+    cleanup()
+
+    const fetchMock2 = fetchMockFor('doc-1', sheetBody)
+    vi.stubGlobal('fetch', fetchMock2)
+    renderModal(metaAsync({ data: response({ header_row: null }) }))
+    await screen.findAllByTestId('sheet-row')
+    const urls2 = fetchMock2.mock.calls.map(([url]) => url as string)
+    expect(urls2.every((u) => !u.includes('header_row'))).toBe(true)
+    expect(document.querySelector('[data-sheet-row]')?.getAttribute('data-sheet-row')).toBe('2')
+  })
+
+  // A recorded header row of 1 is not the absent case, but the URL must stay byte-identical
+  // to today's: the sheet endpoint reads "" as row 1.
+  it('a recorded header row of 1 asks for the plain sheet url', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(docSheet('D', 3)) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderModal(metaAsync({ data: response({ header_row: 1 }) }))
+    await screen.findAllByTestId('sheet-row')
+
+    const urls = fetchMock.mock.calls.map(([url]) => url as string)
+    expect(urls.some((u) => u.endsWith('/documents/doc-1/sheet'))).toBe(true)
+    expect(urls.every((u) => !u.includes('header_row'))).toBe(true)
+    expect(document.querySelector('[data-sheet-row]')?.getAttribute('data-sheet-row')).toBe('2')
+  })
+
+  // The header row arrives with meta, which can resolve after the first render. The
+  // useAsync dep is the fence: a later value must re-ask the endpoint, not leave a sheet
+  // decoded at the wrong header row on screen.
+  it('re-asks for the sheet when the header row changes', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(docSheet('D', 3)) }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const view = render(
+      <SourceDocumentModal
+        ctx={modalCtx()}
+        meta={metaAsync({ data: response({ header_row: null }) })}
+        invoiceNumber="INV-2026-0037"
+        invoiceCreatedAt="2026-06-12T09:15:00Z"
+        createdBy="c0000000-0000-0000-0000-000000000001"
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findAllByTestId('sheet-row')
+    expect(document.querySelector('[data-sheet-row]')?.getAttribute('data-sheet-row')).toBe('2')
+    const before = fetchMock.mock.calls.length
+
+    view.rerender(
+      <SourceDocumentModal
+        ctx={modalCtx()}
+        meta={metaAsync({ data: response({ header_row: 5 }) })}
+        invoiceNumber="INV-2026-0037"
+        invoiceCreatedAt="2026-06-12T09:15:00Z"
+        createdBy="c0000000-0000-0000-0000-000000000001"
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(before)
+    })
+    const urls = fetchMock.mock.calls.map(([url]) => url as string)
+    expect(urls.some((u) => u.includes('header_row=5'))).toBe(true)
+    await waitFor(() => {
+      expect(document.querySelector('[data-sheet-row]')?.getAttribute('data-sheet-row')).toBe('6')
+    })
   })
 })

@@ -5,7 +5,7 @@
 // multipart-specific steps this endpoint needs: an upload cap
 // ([upload-cap]), multipart form parsing, mapping JSON decode, and
 // CSV/XLSX format detection ([mapping-transport]) ahead of the package-level
-// Decode -> Service.Import handoff. See handlers_test.go's doc comment for
+// DecodeFrom -> Service.Import handoff. See handlers_test.go's doc comment for
 // the full IMP-API-01..07 Test Specs map.
 package importer
 
@@ -18,6 +18,7 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,7 +111,7 @@ func derefOr(p *string, fallback string) string {
 const maxSampleRows = 5
 
 // previewResponse is the POST /v1/imports/preview success body: the stored
-// document's id plus DecodeFacts merged with Decode's header/rows, capped and
+// document's id plus DecodeFacts merged with DecodeFrom's header/rows, capped and
 // reshaped for a preview. Field order = JSON key order = the story's example.
 // Delimiter/Encoding mirror importResponse exactly (nilIfEmpty, JSON null for
 // an xlsx upload). Columns/SampleRows must always render as a JSON array,
@@ -162,15 +163,33 @@ func detectFormat(filename, contentType string) string {
 	return ""
 }
 
+const (
+	headerRowMalformed = "header_row must be a whole number of 1 or more"
+	headerRowPastEnd   = "header_row is past the last row of the file"
+)
+
+// parseHeaderRow reads the optional header_row value; "" is row 1.
+func parseHeaderRow(raw string) (int, error) {
+	if raw == "" {
+		return 1, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, errors.New(headerRowMalformed)
+	}
+	return n, nil
+}
+
 // CreateHandler returns POST /v1/imports (mirrors internal/invoice's
 // CreateHandler factory: a closure over the injected Service.Import method ->
 // http.HandlerFunc). Flow: identity-first-401 (IMP-API-01) -> upload-cap via
 // http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (a MaxBytesError
 // -> 413, IMP-API-04; any other parse error -> 400) -> entity_id/mapping form
 // values (blank/malformed -> 400, IMP-API-05) -> remember_mapping (anything but
-// absent, "true" or "false" -> 400) -> document_id -> open (the document's
+// absent, "true" or "false" -> 400) -> header_row (malformed -> 400) ->
+// document_id -> open (the document's
 // bytes) -> format detection
-// (unrecognized -> 400) -> Decode (undecodable -> 400) -> imp
+// (unrecognized -> 400) -> DecodeFrom (past-end or undecodable -> 400) -> imp
 // (Service.Import) -> statusForErr -> the shared {"error":"..."} envelope on
 // failure, or, on success, save (only when remembered, not a dry run and
 // completed; a save error is logged, never surfaced) -> a 200 (dry run) /
@@ -182,7 +201,7 @@ func detectFormat(filename, contentType string) string {
 // object storage is down ([fail-closed]). A dry run needs the bytes too --
 // it decodes them, it just persists nothing.
 func CreateHandler(
-	imp func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
+	imp func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
 	log *slog.Logger,
@@ -244,6 +263,12 @@ func CreateHandler(
 			return
 		}
 
+		headerRow, err := parseHeaderRow(r.FormValue("header_row"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, headerRowMalformed)
+			return
+		}
+
 		documentID := r.FormValue("document_id")
 		if documentID == "" {
 			writeError(w, http.StatusBadRequest, "document_id is required")
@@ -297,9 +322,13 @@ func CreateHandler(
 			return
 		}
 
-		header, rows, facts, err := Decode(obj.Body, format)
+		header, rows, facts, err := DecodeFrom(obj.Body, format, headerRow)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			msg := "could not decode uploaded file"
+			if errors.Is(err, ErrHeaderRowPastEnd) {
+				msg = headerRowPastEnd
+			}
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 
@@ -319,7 +348,7 @@ func CreateHandler(
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, filename, documentID, mapping, header, rows, dryRun)
+		res, err := imp(r.Context(), entityID, filename, documentID, headerRow, mapping, header, rows, dryRun)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -369,16 +398,18 @@ func CreateHandler(
 // them ([preview-auth] still holds; [preview-stateless] does not, which is why
 // it now takes a store and a logger). Flow: identity-first-401 -> upload-cap
 // via http.MaxBytesReader ([upload-cap]) -> ParseMultipartForm (MaxBytesError
-// -> 413, any other parse error -> 400) -> the "file" part -> store
+// -> 413, any other parse error -> 400) -> the "file" part -> header_row
+// (malformed -> 400, before store) -> store
 // ([store-before-decode], so an unparseable file is still retrievable) ->
-// format detection (unrecognized -> 400) -> Decode (undecodable -> 400) -> a
+// format detection (unrecognized -> 400) -> DecodeFrom (past-end or
+// undecodable -> 400) -> a
 // 200 previewResponse. See handlers_preview_test.go for the PRV-01..PRV-16 map.
 //
 // The store call sits after r.FormFile, so an oversized body 413s before any
 // object is written. The two 4xx paths BELOW it carry the document id
-// (previewError); the four above it, and the new 500, do not.
+// (previewError); those above it, and the new 500, do not.
 //
-// It reuses detectFormat/Decode/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
+// It reuses detectFormat/DecodeFrom/maxUploadBytes/maxMultipartMemory/nilIfEmpty/
 // writeJSON/writeError and adds NO second parsing path on purpose
 // ([preview-reuses-decode]): the columns this endpoint shows the user must be
 // the same bytes the import path will later read, or client and server
@@ -418,6 +449,12 @@ func PreviewHandler(
 		}
 		defer file.Close()
 
+		headerRow, err := parseHeaderRow(r.FormValue("header_row"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, headerRowMalformed)
+			return
+		}
+
 		// The RAW part filename: Service.Store owns the sanitization, and two
 		// copies of a security coercion drift apart.
 		// The reuse flag is discarded: the preview wire is unchanged (PRV-01..PRV-19).
@@ -445,14 +482,18 @@ func PreviewHandler(
 			return
 		}
 
-		header, rows, facts, err := Decode(file, format)
+		header, rows, facts, err := DecodeFrom(file, format, headerRow)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, previewError{Error: "could not decode uploaded file", DocumentID: doc.ID})
+			msg := "could not decode uploaded file"
+			if errors.Is(err, ErrHeaderRowPastEnd) {
+				msg = headerRowPastEnd
+			}
+			writeJSON(w, http.StatusBadRequest, previewError{Error: msg, DocumentID: doc.ID})
 			return
 		}
 
 		// Decode returns nil (not an empty slice) for both header and rows on
-		// an empty file (decode.go:102-104), and re-slicing a nil slice keeps
+		// an empty file, and re-slicing a nil slice keeps
 		// it nil -- encoding/json renders that as `null`. Columns/SampleRows
 		// are contracted to ALWAYS be arrays (PRV-08), so coerce explicitly
 		// rather than slicing.
@@ -464,6 +505,10 @@ func PreviewHandler(
 		for i, row := range rows {
 			if i == maxSampleRows {
 				break
+			}
+			// excelize yields a gap row as nil, which marshals to a null element and crashes previewColumns.
+			if row == nil {
+				row = []string{}
 			}
 			// Verbatim: no copy, no padding, no trimming. Decode tolerates
 			// ragged rows (FieldsPerRecord = -1) and the import path reads
@@ -593,14 +638,15 @@ type sheetResponse struct {
 }
 
 // SheetHandler is GET /v1/documents/{id}/sheet: a stored CSV/XLSX decoded
-// through the SAME Decode the import path reads, so the evidence surface
+// through the SAME DecodeFrom the import path reads, so the evidence surface
 // cannot disagree with the invoice it is evidence for. Adds no second parsing
-// path, in Go or JS. Flow: identity-first-401 -> uuid guard -> open -> nil-body
-// guard -> format detection (unrecognized -> 400) -> Decode (undecodable ->
-// 400) -> row cap -> 200.
+// path, in Go or JS. Flow: identity-first-401 -> uuid guard -> header_row
+// (query, malformed -> 400) -> open -> nil-body
+// guard -> format detection (unrecognized -> 400) -> DecodeFrom (past-end or
+// undecodable -> 400) -> row cap -> 200.
 //
 // The returned window is ALWAYS the first rows_returned data rows in Decode
-// order, so rows[i] stays sheet row sheetRow(i) even when truncated.
+// order, so rows[i] keeps its sheet row even when truncated.
 // Numbering from physical lines would skew: encoding/csv drops blank lines and
 // a quoted cell can span several (TestSheetHandler_RowNumberingMatchesImporterSheetRow).
 func SheetHandler(
@@ -619,6 +665,12 @@ func SheetHandler(
 		id := r.PathValue("id")
 		if _, err := uuid.Parse(id); err != nil {
 			writeError(w, http.StatusBadRequest, "id must be a well-formed uuid")
+			return
+		}
+
+		headerRow, err := parseHeaderRow(r.URL.Query().Get("header_row"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, headerRowMalformed)
 			return
 		}
 
@@ -662,9 +714,13 @@ func SheetHandler(
 			return
 		}
 
-		header, rows, facts, err := Decode(obj.Body, format)
+		header, rows, facts, err := DecodeFrom(obj.Body, format, headerRow)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "could not decode uploaded file")
+			msg := "could not decode uploaded file"
+			if errors.Is(err, ErrHeaderRowPastEnd) {
+				msg = headerRowPastEnd
+			}
+			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
 
@@ -714,7 +770,7 @@ type savedMappingResponse struct {
 }
 
 // SavedMappingHandler is GET /v1/imports/saved-mapping. It decodes the stored document's header
-// with Decode, as the save path does, so the lookup key equals the save key.
+// with Decode.
 func SavedMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	lookup func(ctx context.Context, entityID string, header []string) (*SavedMapping, error),

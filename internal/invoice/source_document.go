@@ -18,10 +18,14 @@ import (
 // SourceDocument is the GET /v1/invoices/{id}/source-document body. No
 // omitempty anywhere: an explicit null is the contract. SourceRows nil means
 // "never recorded", which the previewer must tell apart from an empty range.
+// It also reports the header row the import read.
 type SourceDocument struct {
-	InvoiceID  string                `json:"invoice_id"`
-	SourceRows []int                 `json:"source_rows"`
-	Document   *SourceDocumentRecord `json:"document"`
+	InvoiceID  string `json:"invoice_id"`
+	SourceRows []int  `json:"source_rows"`
+	// HeaderRow is the file row the import read its column names from; nil for
+	// a manual invoice, a document import and every pre-AIR-06 batch.
+	HeaderRow *int                  `json:"header_row"`
+	Document  *SourceDocumentRecord `json:"document"`
 }
 
 // SourceDocumentRecord is the documents row behind an imported invoice, plus
@@ -53,9 +57,12 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 		// A dedicated narrow projection, never invoiceColumns.
 		var documentID *string
 		var sourceRows []int
+		var headerRow *int
 		if err := tx.QueryRow(ctx,
-			`SELECT source_document_id::text, source_rows FROM invoices WHERE id = $1`, id,
-		).Scan(&documentID, &sourceRows); err != nil {
+			`SELECT i.source_document_id::text, i.source_rows, b.header_row
+			   FROM invoices i LEFT JOIN import_batches b ON b.id = i.import_batch_id
+			  WHERE i.id = $1`, id,
+		).Scan(&documentID, &sourceRows, &headerRow); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -65,7 +72,7 @@ func (s *Store) SourceDocument(ctx context.Context, id string) (SourceDocument, 
 			return err
 		}
 
-		out = SourceDocument{InvoiceID: id, SourceRows: sourceRows}
+		out = SourceDocument{InvoiceID: id, SourceRows: sourceRows, HeaderRow: headerRow}
 		if documentID == nil {
 			return nil
 		}

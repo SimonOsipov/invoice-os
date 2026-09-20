@@ -84,11 +84,11 @@ function sourceRecord(over: Partial<SourceDocumentRecord> = {}): SourceDocumentR
 }
 
 function withDocument(): SourceDocumentResponse {
-  return { invoice_id: 'inv-1', source_rows: [44, 45, 46, 47], document: sourceRecord() }
+  return { invoice_id: 'inv-1', source_rows: [44, 45, 46, 47], header_row: null, document: sourceRecord() }
 }
 
 function withoutDocument(): SourceDocumentResponse {
-  return { invoice_id: 'inv-1', source_rows: null, document: null }
+  return { invoice_id: 'inv-1', source_rows: null, header_row: null, document: null }
 }
 
 // Dispatched by URL suffix, never by call order: the detail fires three concurrent
@@ -217,7 +217,7 @@ describe('SourceDocumentCard on the invoice detail', () => {
   })
 
   it('a null filename falls back to "Filename not recorded"', async () => {
-    mockFetch({ invoice_id: 'inv-1', source_rows: [44], document: sourceRecord({ filename: null }) })
+    mockFetch({ invoice_id: 'inv-1', source_rows: [44], header_row: null, document: sourceRecord({ filename: null }) })
     render(<InvoiceDetail ctx={detailCtx()} />)
 
     const card = await screen.findByTestId('source-document-card')
@@ -226,7 +226,7 @@ describe('SourceDocumentCard on the invoice detail', () => {
 
   it('a long filename wraps with word-break: break-all rather than overflowing', async () => {
     const longName = `${'a'.repeat(120)}.xlsx`
-    mockFetch({ invoice_id: 'inv-1', source_rows: [44], document: sourceRecord({ filename: longName }) })
+    mockFetch({ invoice_id: 'inv-1', source_rows: [44], header_row: null, document: sourceRecord({ filename: longName }) })
     render(<InvoiceDetail ctx={detailCtx()} />)
 
     const filenameEl = await screen.findByText(longName)
@@ -236,7 +236,7 @@ describe('SourceDocumentCard on the invoice detail', () => {
   // `source_rows: null` with a document present is every invoice imported before this
   // story shipped -- distinct from the manual-invoice `document: null` case above.
   it('a pre-story invoice (document present, rows never recorded) shows the honest fallback', async () => {
-    mockFetch({ invoice_id: 'inv-1', source_rows: null, document: sourceRecord() })
+    mockFetch({ invoice_id: 'inv-1', source_rows: null, header_row: null, document: sourceRecord() })
     render(<InvoiceDetail ctx={detailCtx()} />)
 
     const range = await screen.findByTestId('source-document-range')

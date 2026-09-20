@@ -668,3 +668,53 @@ func TestRLS_ImportBatchesFilenameColumnInheritsTenantIsolation(t *testing.T) {
 		t.Errorf("B's filename after refused cross-tenant UPDATE = %v, want unchanged %q (mutation-verify)", gotB, filenameB)
 	}
 }
+
+// TestRLS_ImportBatchesHeaderRowRefusesZero (AC-6): the header_row CHECK
+// refuses 0 under RLS, and accepts NULL and a positive value.
+func TestRLS_ImportBatchesHeaderRowRefusesZero(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-HR-01 A Corp")
+	defer cleanupEntityA()
+
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx,
+			`INSERT INTO import_batches (tenant_id, entity_id, header_row) VALUES ($1, $2, 0)`,
+			h.tenantA, entityA,
+		)
+		return e
+	})
+	if pgCode(err) != "23514" {
+		t.Fatalf("INSERT header_row=0: SQLSTATE = %q, want 23514 (check_violation): %v", pgCode(err), err)
+	}
+	if got := pgConstraint(err); got != "import_batches_header_row_check" {
+		t.Errorf("constraint = %q, want import_batches_header_row_check", got)
+	}
+
+	var idNull string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO import_batches (tenant_id, entity_id, header_row) VALUES ($1, $2, NULL) RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&idNull)
+	})
+	if err != nil {
+		t.Fatalf("INSERT header_row=NULL: %v", err)
+	}
+	defer func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, idNull) }()
+
+	var idPositive string
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO import_batches (tenant_id, entity_id, header_row) VALUES ($1, $2, 3) RETURNING id`,
+			h.tenantA, entityA,
+		).Scan(&idPositive)
+	})
+	if err != nil {
+		t.Fatalf("INSERT header_row=3: %v", err)
+	}
+	defer func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM import_batches WHERE id = $1`, idPositive)
+	}()
+}

@@ -71,7 +71,7 @@ func doImportSave(t *testing.T, imp importFunc, open openSpec, save saveFunc, lo
 
 // completedImp is an imp double that always reports a completed batch.
 func completedImp() importFunc {
-	return func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	return func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		return BatchResult{ID: "b1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
 	}
 }
@@ -84,7 +84,7 @@ func TestCreateHandler_SavesMappingAfterCompletedImport(t *testing.T) {
 	header := []string{"Invoice No", "Total"}
 
 	var impHeader []string
-	imp := func(ctx context.Context, gotEntityID, filename, documentID string, gotMapping map[string]string, gotHeader []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, gotEntityID, filename, documentID string, _ int, gotMapping map[string]string, gotHeader []string, rows [][]string, dryRun bool) (BatchResult, error) {
 		impHeader = gotHeader
 		return BatchResult{ID: "b1", Status: "completed", Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
 	}
@@ -161,7 +161,7 @@ func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			id := testIdentity()
 			mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
-			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				return BatchResult{Status: "completed"}, tc.err
 			}
 			body, ct, open := storedUpload(t, uuid.NewString(), mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
@@ -180,7 +180,7 @@ func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
 
 	t.Run("missing mapping", func(t *testing.T) {
 		id := testIdentity()
-		imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 			t.Fatal("imp must not run when mapping is missing")
 			return BatchResult{}, nil
 		}
@@ -199,7 +199,7 @@ func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
 
 	t.Run("unrecognized format", func(t *testing.T) {
 		id := testIdentity()
-		imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 			t.Fatal("imp must not run for an unrecognized format")
 			return BatchResult{}, nil
 		}
@@ -220,7 +220,7 @@ func TestCreateHandler_RefusedRequestDoesNotSave(t *testing.T) {
 
 	t.Run("undecodable file", func(t *testing.T) {
 		id := testIdentity()
-		imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 			t.Fatal("imp must not run for an undecodable file")
 			return BatchResult{}, nil
 		}
@@ -253,7 +253,7 @@ func TestCreateHandler_FailedBatchDoesNotSave(t *testing.T) {
 		t.Run(tc.status, func(t *testing.T) {
 			id := testIdentity()
 			mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No"})
-			imp := func(ctx context.Context, entityID, filename, documentID string, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
 				return BatchResult{ID: "b1", Status: tc.status, Errors: []RowError{}, InvoiceViolations: []InvoiceViolations{}}, nil
 			}
 			body, ct, open := storedUpload(t, uuid.NewString(), mappingJSON, "data.csv", "", csvBody(t, []string{"Invoice No"}, nil))

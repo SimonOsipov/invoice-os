@@ -10,7 +10,9 @@
 // Success bodies (201 real / 200 dry-run) are asserted SHAPE-ONLY
 // ([D-success-shape-only]: errors is an array, the five counter fields are
 // numeric, format is "csv") -- exact counts are import.spec.ts's job (the
-// M4-03 perf/counts gate), not this contract suite's.
+// M4-03 perf/counts gate), not this contract suite's. The header-row describe
+// at the end is the one exception: its rows_total and row-error numbers ARE
+// the behaviour under test, so it pins them exactly.
 //
 // Dedup ([D-dedup]) is the AGAINST-STORE precheck (ExistingNumbers,
 // service.go), not an in-file duplicate -- a real import seeds one row, then
@@ -42,6 +44,9 @@ import { test, expect } from '@playwright/test'
 import { login, createEntity, apiBase, getSavedMapping, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { listInvoices, rawFetch } from './client'
+import { PERF_HEADER, PERF_MAPPING } from '../importFixtures'
+import { strToU8, zipSync } from 'fflate'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
 // RawResult. Never set Content-Type manually -- fetch derives the multipart
@@ -94,9 +99,16 @@ function buildCleanCsv(num: string): string {
 // submission service, EXTR-09). Returns the whole RawResult
 // because its two POST-STORE 4xx bodies carry document_id alongside error,
 // which the unrecognized-format case below relies on.
-async function previewFetch(token: string, csv: string, filename = 'import.csv', type = 'text/csv'): Promise<RawResult> {
+async function previewFetch(
+  token: string,
+  csv: string | Uint8Array<ArrayBuffer>,
+  filename = 'import.csv',
+  type = 'text/csv',
+  headerRow?: string,
+): Promise<RawResult> {
   const form = new FormData()
   form.set('file', new Blob([csv], { type }), filename)
+  if (headerRow !== undefined) form.set('header_row', headerRow)
   const res = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -113,8 +125,14 @@ async function previewFetch(token: string, csv: string, filename = 'import.csv',
 
 // uploadDocument(): preview a file and hand back the id of the document it
 // stored, whatever the preview's own status was.
-async function uploadDocument(token: string, csv: string, filename = 'import.csv', type = 'text/csv'): Promise<string> {
-  const res = await previewFetch(token, csv, filename, type)
+async function uploadDocument(
+  token: string,
+  csv: string | Uint8Array<ArrayBuffer>,
+  filename = 'import.csv',
+  type = 'text/csv',
+  headerRow?: string,
+): Promise<string> {
+  const res = await previewFetch(token, csv, filename, type, headerRow)
   const id = (res.body as Record<string, unknown> | undefined)?.document_id
   expect(typeof id, `preview should carry a document_id (status ${res.status}, body ${JSON.stringify(res.body)})`).toBe('string')
   return id as string
@@ -122,12 +140,17 @@ async function uploadDocument(token: string, csv: string, filename = 'import.csv
 
 // buildForm(): the POST /v1/imports body -- three text fields, no file. `opts` overrides the
 // mapping and adds remember_mapping; with no `remember`, no part is sent and the server saves.
-function buildForm(entityId: string, documentId: string, opts?: { mapping?: Record<string, string>; remember?: 'true' | 'false' }): FormData {
+function buildForm(
+  entityId: string,
+  documentId: string,
+  opts?: { mapping?: Record<string, string>; remember?: 'true' | 'false'; headerRow?: string },
+): FormData {
   const f = new FormData()
   f.set('entity_id', entityId)
   f.set('mapping', JSON.stringify(opts?.mapping ?? IMPORT_MAPPING))
   f.set('document_id', documentId)
   if (opts?.remember !== undefined) f.set('remember_mapping', opts.remember)
+  if (opts?.headerRow !== undefined) f.set('header_row', opts.headerRow)
   return f
 }
 
@@ -591,5 +614,232 @@ test.describe('document download contract (API E2E, over the deployed gateway)',
     const res = await downloadFetch(tokenA, second)
     expect(res.status, 'the reused row still serves its bytes').toBe(200)
     expectBytes(await res.arrayBuffer(), csv, 'the deduped document')
+  })
+})
+
+// header row contract: preview/import/sheet all read the column names from a
+// given physical row, not always row 1 (AIR-06). Local seams duplicate this
+// file's own multipart pattern rather than reach into a shared helper -- no
+// such helper exists in e2e (repo convention, contract-source-document.spec.ts).
+test.describe('header row contract (API E2E, over the deployed gateway)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+  })
+
+  // cells(): PERF_HEADER's 11-column data row; only the invoice number varies.
+  function cells(num: string): string[] {
+    return [num, '2026-01-15', '87654321-0002', 'AIR-06 Header Buyer', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00']
+  }
+
+  // titleRowCsv(): row 1 a title, row 2 a blank line, row 3 the header, rows 4
+  // and 6 invoice A/B, row 5 the same line as A with an empty invoice number
+  // (one row error).
+  function titleRowCsv(numA: string, numB: string): string {
+    return ['Sales Register - March 2026', '', PERF_HEADER, cells(numA).join(','), cells('').join(','), cells(numB).join(',')].join('\n') + '\n'
+  }
+
+  function colName(i: number): string {
+    if (i >= 26) throw new Error(`titleRowXlsx: column index ${i} has no single-letter reference`)
+    return String.fromCharCode(65 + i)
+  }
+
+  function xmlEscape(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  // titleRowXlsx(): a minimal 5-part xlsx via fflate -- inlineStr cells, no
+  // shared-strings part. A null row writes no <row> element, so it is a true
+  // gap rather than an empty row (measured against excelize's own reader).
+  function titleRowXlsx(rows: (string[] | null)[]): Uint8Array<ArrayBuffer> {
+    const sheetData = rows
+      .map((row, i) => {
+        if (row === null) return ''
+        const r = i + 1
+        const rowCells = row.map((v, c) => `<c r="${colName(c)}${r}" t="inlineStr"><is><t>${xmlEscape(v)}</t></is></c>`).join('')
+        return `<row r="${r}">${rowCells}</row>`
+      })
+      .join('')
+
+    const contentTypes =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '</Types>'
+
+    const rootRels =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>'
+
+    const workbook =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>' +
+      '</workbook>'
+
+    const workbookRels =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '</Relationships>'
+
+    const sheet1 =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      `<sheetData>${sheetData}</sheetData>` +
+      '</worksheet>'
+
+    return zipSync(
+      {
+        '[Content_Types].xml': strToU8(contentTypes),
+        '_rels/.rels': strToU8(rootRels),
+        'xl/workbook.xml': strToU8(workbook),
+        'xl/_rels/workbook.xml.rels': strToU8(workbookRels),
+        'xl/worksheets/sheet1.xml': strToU8(sheet1),
+      },
+      { level: 0 },
+    )
+  }
+
+  function sourceDocumentFetch(tok: string, invoiceId: string): Promise<RawResult> {
+    return rawFetch(`/api/invoice/v1/invoices/${invoiceId}/source-document`, { headers: { Authorization: `Bearer ${tok}` } })
+  }
+
+  function sheetFetch(tok: string, documentId: string, query = ''): Promise<RawResult> {
+    return rawFetch(`/api/invoice/v1/documents/${documentId}/sheet${query}`, { headers: { Authorization: `Bearer ${tok}` } })
+  }
+
+  test('HDR-API-01: a CSV with its header on row 3', async () => {
+    const tin = freshTin()
+    const entity = await createEntity(token, { name: `AIR-06 hdr ${tin}`, tin: freshTin() })
+    const numA = `AIR06-A-${tin}`
+    const numB = `AIR06-B-${tin}`
+
+    const preview = await previewFetch(token, titleRowCsv(numA, numB), 'title-rows.csv', 'text/csv', '3')
+    expect(preview.status, 'preview at header_row=3 should succeed').toBe(200)
+    const previewBody = preview.body as Record<string, unknown>
+    expect(previewBody.columns).toEqual(PERF_HEADER.split(','))
+    expect(previewBody.rows_total, 'rows_total counts only the rows below the header').toBe(3)
+    const documentId = previewBody.document_id as string
+
+    const imported = await importFetch(token, buildForm(entity.id, documentId, { mapping: PERF_MAPPING, headerRow: '3' }))
+    expect(imported.status, 'the import at header_row=3 should succeed').toBe(201)
+    const importedBody = imported.body as Record<string, unknown>
+    expect(importedBody.rows_total).toBe(3)
+    // Count AND identity, not containment: at row 1 the same blank line is row
+    // 4, so a pinned length of one plus the exact message is what separates a
+    // working header_row from an ignored one. Message: service.go's
+    // ungroupable-row RowError.
+    expect(importedBody.errors, 'row 5 (the empty invoice number) is the only row error').toEqual([
+      expect.objectContaining({ row: 5, message: 'blank invoice number: row cannot be grouped' }),
+    ])
+
+    const list = await listInvoices(token, { entity_id: entity.id, limit: 50 })
+    const invA = list.invoices.find((i) => i.invoice_number === numA)
+    const invB = list.invoices.find((i) => i.invoice_number === numB)
+    expect(invA, 'invoice A must be in the list').toBeTruthy()
+    expect(invB, 'invoice B must be in the list').toBeTruthy()
+
+    const srcA = await sourceDocumentFetch(token, invA!.id)
+    expect(srcA.status, "invoice A's source-document read").toBe(200)
+    expect((srcA.body as Record<string, unknown>).source_rows).toEqual([4])
+    expect((srcA.body as Record<string, unknown>).header_row).toBe(3)
+
+    const srcB = await sourceDocumentFetch(token, invB!.id)
+    expect(srcB.status, "invoice B's source-document read").toBe(200)
+    expect((srcB.body as Record<string, unknown>).source_rows).toEqual([6])
+    expect((srcB.body as Record<string, unknown>).header_row).toBe(3)
+  })
+
+  test('HDR-API-02: the XLSX twin, with row 2 a true gap', async () => {
+    const tin = freshTin()
+    const entity = await createEntity(token, { name: `AIR-06 hdr xlsx ${tin}`, tin: freshTin() })
+    const numA = `AIR06-A-${tin}`
+    const numB = `AIR06-B-${tin}`
+
+    const xlsx = titleRowXlsx([['Sales Register - March 2026'], null, PERF_HEADER.split(','), cells(numA), cells(''), cells(numB)])
+    const preview = await previewFetch(token, xlsx, 'title-rows.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '3')
+    expect(preview.status, 'preview at header_row=3 should succeed for xlsx too').toBe(200)
+    const previewBody = preview.body as Record<string, unknown>
+    expect(previewBody.columns).toEqual(PERF_HEADER.split(','))
+    expect(previewBody.rows_total).toBe(3)
+    const documentId = previewBody.document_id as string
+
+    const imported = await importFetch(token, buildForm(entity.id, documentId, { mapping: PERF_MAPPING, headerRow: '3' }))
+    expect(imported.status, 'the xlsx import at header_row=3 should succeed').toBe(201)
+    const importedBody = imported.body as Record<string, unknown>
+    expect(importedBody.rows_total).toBe(3)
+    expect(importedBody.errors, 'row 5 (the empty invoice number) is the only row error').toEqual([
+      expect.objectContaining({ row: 5, message: 'blank invoice number: row cannot be grouped' }),
+    ])
+
+    const list = await listInvoices(token, { entity_id: entity.id, limit: 50 })
+    const invA = list.invoices.find((i) => i.invoice_number === numA)
+    const invB = list.invoices.find((i) => i.invoice_number === numB)
+    expect(invA, 'invoice A must be in the list').toBeTruthy()
+    expect(invB, 'invoice B must be in the list').toBeTruthy()
+
+    const srcA = await sourceDocumentFetch(token, invA!.id)
+    expect(srcA.status, "invoice A's source-document read").toBe(200)
+    expect((srcA.body as Record<string, unknown>).source_rows).toEqual([4])
+    expect((srcA.body as Record<string, unknown>).header_row).toBe(3)
+
+    const srcB = await sourceDocumentFetch(token, invB!.id)
+    expect(srcB.status, "invoice B's source-document read").toBe(200)
+    expect((srcB.body as Record<string, unknown>).source_rows).toEqual([6])
+    expect((srcB.body as Record<string, unknown>).header_row).toBe(3)
+  })
+
+  test('HDR-API-03: the sheet reads from the row it is given', async () => {
+    const tin = freshTin()
+    const numA = `AIR06-A-${tin}`
+    const numB = `AIR06-B-${tin}`
+    const documentId = await uploadDocument(token, titleRowCsv(numA, numB), 'title-rows.csv', 'text/csv')
+
+    const at3 = await sheetFetch(token, documentId, '?header_row=3')
+    expect(at3.status).toBe(200)
+    const at3Body = at3.body as Record<string, unknown>
+    expect(at3Body.columns).toEqual(PERF_HEADER.split(','))
+    const at3Rows = at3Body.rows as string[][]
+    expect(at3Rows, 'the three rows below the header are all returned').toHaveLength(3)
+    expect(at3Rows[0][0]).toBe(numA)
+    expect(at3Rows[2][0]).toBe(numB)
+    expect(at3Body.rows_total).toBe(3)
+
+    // No param -- row 1 is the header, so columns is the title line's one
+    // cell. rows_total is not asserted here: encoding/csv drops the blank
+    // line, and pinning that number would duplicate a Go-level fact.
+    const at1 = await sheetFetch(token, documentId)
+    expect(at1.status).toBe(200)
+    expect((at1.body as Record<string, unknown>).columns as string[]).toEqual(['Sales Register - March 2026'])
+  })
+
+  test('HDR-API-04: refusals', async () => {
+    const tin = freshTin()
+    const csv = titleRowCsv(`AIR06-A-${tin}`, `AIR06-B-${tin}`)
+
+    const zero = await previewFetch(token, csv, 'title-rows.csv', 'text/csv', '0')
+    assertErrorEnvelope(zero, 400, 'preview header_row=0')
+    expect((zero.body as Record<string, unknown>).error).toBe('header_row must be a whole number of 1 or more')
+
+    const pastEnd = await previewFetch(token, csv, 'title-rows.csv', 'text/csv', '99')
+    expect(pastEnd.status, 'preview header_row=99').toBe(400)
+    const pastEndBody = pastEnd.body as Record<string, unknown>
+    expect(pastEndBody.error).toBe('header_row is past the last row of the file')
+    // Post-store, unlike header_row=0 above -- assertErrorEnvelope would fail
+    // here because this body legitimately carries a second key.
+    expect(typeof pastEndBody.document_id).toBe('string')
+
+    const entity = await createEntity(token, { name: `AIR-06 hdr refuse ${tin}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, csv, 'title-rows.csv', 'text/csv')
+    const badHeaderRow = await importFetch(token, buildForm(entity.id, documentId, { mapping: PERF_MAPPING, headerRow: 'abc' }))
+    assertErrorEnvelope(badHeaderRow, 400, 'import header_row=abc')
+    expect((badHeaderRow.body as Record<string, unknown>).error).toBe('header_row must be a whole number of 1 or more')
   })
 })

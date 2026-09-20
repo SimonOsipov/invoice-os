@@ -96,8 +96,8 @@ function sourceRecord(): SourceDocumentRecord {
   }
 }
 
-const WITH_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], document: sourceRecord() }
-const WITHOUT_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: null, document: null }
+const WITH_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: [1], header_row: null, document: sourceRecord() }
+const WITHOUT_DOCUMENT: SourceDocumentResponse = { invoice_id: 'inv-1', source_rows: null, header_row: null, document: null }
 
 function job(id: string, createdAt: string): ExtractionJob {
   return { id, document_id: DOCUMENT_ID, state: 'succeeded', created_at: createdAt, last_error: null, failure_kind: null }

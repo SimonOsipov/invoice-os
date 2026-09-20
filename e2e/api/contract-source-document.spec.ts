@@ -177,8 +177,8 @@ test.describe('invoice source-document contract (API E2E, over the deployed gate
       // a synthetic seeder subject -- this is what the rail renders as
       // "Uploaded by", so a fabricated uuid there would be a lying surface.
       expect(record.uploaded_by, `${invoice.invoice_number} uploaded_by`).toBe(PERSONAS.A.subject)
-      // A linked invoice always carries the rows it occupies; the sheet-row
-      // floor is 2 because row 1 is the header.
+      // A linked invoice always carries the rows it occupies; these fixtures
+      // import with the header on row 1, so the floor is 2.
       expect(body.source_rows, `${invoice.invoice_number} source_rows`).not.toBeNull()
       expect((body.source_rows as number[]).length).toBeGreaterThan(0)
       for (const row of body.source_rows as number[]) {

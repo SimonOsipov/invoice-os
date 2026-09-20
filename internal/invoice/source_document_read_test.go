@@ -583,3 +583,103 @@ func TestSourceDocumentUploaderLookupUsesIndex(t *testing.T) {
 		t.Errorf("plan = %s, must not Seq Scan audit_log", plan)
 	}
 }
+
+// T1 (AIR-06-04): the batch's header_row reaches SourceDocument.HeaderRow.
+func TestStoreSourceDocument_HeaderRowComesFromTheImportBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "AIR-06-04 T1 tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-04 T1 entity")
+	documentID := seedDocument(t, super, tenantID)
+	batchID := seedImportBatch(t, super, tenantID, entityID)
+	if _, err := super.Exec(ctx, `UPDATE import_batches SET header_row = 3 WHERE id = $1`, batchID); err != nil {
+		t.Fatalf("set header_row: %v", err)
+	}
+
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	inv, err := store.Create(c, CreateInput{
+		EntityID: entityID, InvoiceNumber: "AIR-06-04-T1", ImportBatchID: &batchID,
+		SourceDocumentID: &documentID, SourceRows: []int{4, 5},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := store.SourceDocument(c, inv.ID)
+	if err != nil {
+		t.Fatalf("SourceDocument: %v", err)
+	}
+	if got.HeaderRow == nil {
+		t.Fatal("HeaderRow = nil, want 3")
+	}
+	if *got.HeaderRow != 3 {
+		t.Errorf("HeaderRow = %d, want 3", *got.HeaderRow)
+	}
+	if want := []int{4, 5}; !intSliceEqual(got.SourceRows, want) {
+		t.Errorf("SourceRows = %v, want %v", got.SourceRows, want)
+	}
+	if got.Document == nil {
+		t.Error("Document = nil, want a populated record")
+	}
+}
+
+// T2 (AIR-06-04): HeaderRow is nil for every case that recorded none. The
+// non-nil case lives in TestStoreSourceDocument_HeaderRowComesFromTheImportBatch,
+// the floor keeping these subtests from passing vacuously.
+func TestStoreSourceDocument_HeaderRowIsNilWithoutARecordedRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "AIR-06-04 T2 tenant")
+	entityID := seedEntity(t, super, tenantID, "AIR-06-04 T2 entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	t.Run("manual invoice, no batch", func(t *testing.T) {
+		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "AIR-06-04-T2-manual"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := store.SourceDocument(c, inv.ID)
+		if err != nil {
+			t.Fatalf("SourceDocument: %v", err)
+		}
+		if got.HeaderRow != nil {
+			t.Errorf("HeaderRow = %d, want nil", *got.HeaderRow)
+		}
+	})
+
+	t.Run("batch header_row is NULL", func(t *testing.T) {
+		batchID := seedImportBatch(t, super, tenantID, entityID)
+		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "AIR-06-04-T2-nullbatch", ImportBatchID: &batchID})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := store.SourceDocument(c, inv.ID)
+		if err != nil {
+			t.Fatalf("SourceDocument: %v", err)
+		}
+		if got.HeaderRow != nil {
+			t.Errorf("HeaderRow = %d, want nil", *got.HeaderRow)
+		}
+	})
+
+	t.Run("document but no batch", func(t *testing.T) {
+		documentID := seedDocument(t, super, tenantID)
+		inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "AIR-06-04-T2-docnobatch", SourceDocumentID: &documentID})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := store.SourceDocument(c, inv.ID)
+		if err != nil {
+			t.Fatalf("SourceDocument: %v", err)
+		}
+		if got.HeaderRow != nil {
+			t.Errorf("HeaderRow = %d, want nil", *got.HeaderRow)
+		}
+		if got.Document == nil {
+			t.Error("Document = nil, want a populated record")
+		}
+	})
+}

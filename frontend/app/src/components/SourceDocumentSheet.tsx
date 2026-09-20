@@ -9,6 +9,7 @@ import { fmtPlain } from '../lib/format'
 import {
   contiguousRanges,
   describeSourceRows,
+  firstDataSheetRow,
   numberSheetRows,
   rangeLabel,
   rowsWithinSheet,
@@ -96,9 +97,6 @@ function pct(n: number, total: number): number {
   return Math.min(100, Math.max(0, (n / total) * 100))
 }
 
-/** numberSheetRows starts the data at sheet row 2, so file index 0 is sheet row 2. */
-const FIRST_DATA_SHEET_ROW = 2
-
 /** Nearest on-screen row to a file position; past the returned window that is the last row sent. */
 function nearestVisibleIndex(rows: NumberedRow[], sheetRow: number): number {
   let best = 0
@@ -112,25 +110,29 @@ export function SourceDocumentSheet({
   sheet,
   sourceRows,
   otherInvoiceRows,
+  headerRow = 1,
 }: {
   sheet: DocumentSheet
   /** null = never recorded, distinct from []. */
   sourceRows: number[] | null
   /** Sibling invoices' first rows on the same document — already fetched by the shell. */
   otherInvoiceRows: number[]
+  /** The file row the import read its column names from. */
+  headerRow?: number
 }) {
   const [scope, setScope] = useState<Scope>('file')
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportH, setViewportH] = useState(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const firstRow = firstDataSheetRow(headerRow)
 
   // Bound once, BEFORE any scope filtering: that is what makes the sheet number structural
   // rather than a re-indexed position. No arithmetic on a slice offset may replace it.
-  const numbered = useMemo(() => numberSheetRows(sheet.rows), [sheet.rows])
+  const numbered = useMemo(() => numberSheetRows(sheet.rows, headerRow), [sheet.rows, headerRow])
 
   const { present, missing } = useMemo(
-    () => rowsWithinSheet(sourceRows, sheet.rows_returned),
-    [sourceRows, sheet.rows_returned],
+    () => rowsWithinSheet(sourceRows, sheet.rows_returned, headerRow),
+    [sourceRows, sheet.rows_returned, headerRow],
   )
   const presentSet = useMemo(() => new Set(present), [present])
   const ranges = useMemo(() => contiguousRanges(sourceRows), [sourceRows])
@@ -181,7 +183,7 @@ export function SourceDocumentSheet({
     const r = e.currentTarget.getBoundingClientRect()
     // An unlaid-out track returns an all-zero rect; the division would poison scrollTop with NaN.
     if (!(r.height > 0)) return
-    const target = Math.round(((e.clientY - r.top) / r.height) * total) + FIRST_DATA_SHEET_ROW
+    const target = Math.round(((e.clientY - r.top) / r.height) * total) + firstRow
     scrollToIndex(nearestVisibleIndex(viewRows, target))
   }
 
@@ -348,21 +350,21 @@ export function SourceDocumentSheet({
             <div
               key={from}
               data-testid="marker-invoice-block"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - FIRST_DATA_SHEET_ROW, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--accent)' }}
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--accent)' }}
             />
           ))}
           {viewRuns.map(([from, to]) => (
             <div
               key={from}
               data-testid="marker-viewport"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - FIRST_DATA_SHEET_ROW, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--action-tint)', border: '1px solid var(--action)' }}
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(from - firstRow, total)}%`, height: `${pct(to - from + 1, total)}%`, minHeight: 4, background: 'var(--action-tint)', border: '1px solid var(--action)' }}
             />
           ))}
           {ticks.map((n, i) => (
             <div
               key={i}
               data-testid="marker-tick"
-              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(n - FIRST_DATA_SHEET_ROW, total)}%`, height: 1, background: 'var(--line-3)' }}
+              style={{ position: 'absolute', left: 0, right: 0, top: `${pct(n - firstRow, total)}%`, height: 1, background: 'var(--line-3)' }}
             />
           ))}
         </div>

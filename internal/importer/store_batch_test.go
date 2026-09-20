@@ -76,7 +76,7 @@ func TestGetBatch_CarriesTheStoredDocumentID(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	withDoc, err := store.CreateBatch(c, entityID, "scan.pdf", documentID)
+	withDoc, err := store.CreateBatch(c, entityID, "scan.pdf", documentID, 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (with document): %v", err)
 	}
@@ -93,7 +93,7 @@ func TestGetBatch_CarriesTheStoredDocumentID(t *testing.T) {
 	}
 
 	// CreateBatch maps "" through nullif to SQL NULL.
-	noDoc, err := store.CreateBatch(c, entityID, "ledger.csv", "")
+	noDoc, err := store.CreateBatch(c, entityID, "ledger.csv", "", 0)
 	if err != nil {
 		t.Fatalf("CreateBatch (no document): %v", err)
 	}

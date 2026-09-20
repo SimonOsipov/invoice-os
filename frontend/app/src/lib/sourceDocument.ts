@@ -20,6 +20,7 @@ export interface SourceDocumentRecord {
 export interface SourceDocumentResponse {
   invoice_id: string
   source_rows: number[] | null // null = never recorded, distinct from []
+  header_row: number | null // null = row 1 (never recorded, a document import, or a pre-AIR-06 batch)
   document: SourceDocumentRecord | null // null = manually created invoice
 }
 
@@ -75,8 +76,14 @@ export async function getSourceDocument(
   )
 }
 
-export async function getDocumentSheet(authedFetch: AuthedFetch, base: string, documentId: string): Promise<DocumentSheet> {
-  return authedFetch<DocumentSheet>(`${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}/sheet`)
+export async function getDocumentSheet(
+  authedFetch: AuthedFetch,
+  base: string,
+  documentId: string,
+  headerRow = 1,
+): Promise<DocumentSheet> {
+  const url = `${base}/api/invoice/v1/documents/${encodeURIComponent(documentId)}/sheet`
+  return authedFetch<DocumentSheet>(headerRow > 1 ? `${url}?header_row=${headerRow}` : url)
 }
 
 // Bare fetch, not authedFetch: the response is bytes and apiFetch always res.json()s.
@@ -195,13 +202,16 @@ export function sheetWindow(scrollTop: number, measuredViewportH: number, total:
   return { start, end }
 }
 
-// Row 1 is the header; sheetRow(i) = i + 2, mirroring internal/importer/service.go:270.
-const FIRST_DATA_SHEET_ROW = 2
+// The header sits on row headerRow, so the first data row is the one after it.
+export function firstDataSheetRow(headerRow = 1): number {
+  return headerRow + 1
+}
 
 // The number is bound BEFORE any filtering, which is what makes it structural: consumers
 // filter and slice NumberedRow[], so no view mode can renumber.
-export function numberSheetRows(rows: string[][]): NumberedRow[] {
-  return rows.map((cells, i) => ({ sheetRow: i + FIRST_DATA_SHEET_ROW, cells }))
+export function numberSheetRows(rows: string[][], headerRow = 1): NumberedRow[] {
+  const first = firstDataSheetRow(headerRow)
+  return rows.map((cells, i) => ({ sheetRow: first + i, cells }))
 }
 
 // source_rows is neither sorted nor deduped by the CHECK constraint ({7,3} and {3,3} are legal).
@@ -220,17 +230,19 @@ export function contiguousRanges(rows: number[] | null): Array<[number, number]>
   return ranges
 }
 
-// The sheet endpoint returns the first `rowsReturned` data rows in decode order, i.e. sheet
-// rows 2 … rowsReturned+1. Rows past that are stored but off-screen, and the surface must
-// say so instead of silently omitting them.
+// The sheet endpoint returns the first rowsReturned data rows in decode order, i.e. the
+// header row + 1 through rowsReturned + the header row. Rows past that are stored but
+// off-screen, and the surface must say so instead of silently omitting them.
 export function rowsWithinSheet(
   sourceRows: number[] | null,
   rowsReturned: number,
+  headerRow = 1,
 ): { present: number[]; missing: number[] } {
+  const first = firstDataSheetRow(headerRow)
   const present: number[] = []
   const missing: number[] = []
   for (const n of sortedUnique(sourceRows)) {
-    if (n >= FIRST_DATA_SHEET_ROW && n <= rowsReturned + 1) present.push(n)
+    if (n >= first && n <= rowsReturned + headerRow) present.push(n)
     else missing.push(n)
   }
   return { present, missing }

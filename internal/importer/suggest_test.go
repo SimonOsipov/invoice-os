@@ -1,14 +1,10 @@
-// suggest_test.go: AIR-07-01 Mode A red specs for the mapping prompt, its schema and the
-// guard. suggest.go is declaration-only (every function returns its zero value; mappingSystem/
-// mappingIntro/mappingRowFmt/sampleRows are stub values), so most assertions below fail
-// honestly against that stub. A few sub-assertions inside a multi-assertion test coincide with
-// the stub's output (e.g. "unplaced" checks against an always-nil guardPlacements) -- the test
-// as a whole still fails on its other assertion(s); see the handback report for the full list.
+// suggest_test.go: the mapping prompt, its schema and the guard (suggest.go).
 package importer
 
 import (
 	"bytes"
 	"encoding/json"
+	"go/format"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -90,14 +86,60 @@ func TestMappingPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 		t.Errorf("mappingIntro does not equal csvrun.py's intro byte for byte (got %q, want %q)", mappingIntro, m[1])
 	}
 
-	rowLit := `f"Row {i}: {csv_line(r)}"`
-	if !strings.Contains(text, rowLit) {
-		t.Fatalf("csvrun.py no longer contains %q -- the fixed Python-to-Go map below is stale", rowLit)
+	// The Row f-string is scoped to the indented `return intro + ...` line (:66), not searched
+	// over the whole file: an unanchored Contains would pass on a commented-out literal.
+	m = regexp.MustCompile(`(?m)^\s+return intro \+.*f"(.*?)".*$`).FindStringSubmatch(text)
+	if m == nil {
+		t.Fatal("the `return intro + ...` row-join line not found in csvrun.py")
 	}
 	pyToGo := strings.NewReplacer("{i}", "%d", "{csv_line(r)}", "%s").Replace
-	unwrap := strings.TrimSuffix(strings.TrimPrefix(rowLit, `f"`), `"`)
-	if got := pyToGo(unwrap); got != mappingRowFmt {
-		t.Errorf("mapped Python literal %q = %q, want mappingRowFmt %q", rowLit, got, mappingRowFmt)
+	if got := pyToGo(m[1]); got != mappingRowFmt {
+		t.Errorf("mapped Python literal %q = %q, want mappingRowFmt %q", m[1], got, mappingRowFmt)
+	}
+}
+
+// T23 (NEW). csvrun.py:87's json_schema name, the one value the request envelope carries that
+// no other test reads back from the harness.
+func TestMappingSchemaName_MatchesTheMeasuredHarness(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "csvrun.py"))
+	if err != nil {
+		t.Fatalf("read csvrun.py: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^\s+"response_format":.*"name": "(.*?)".*$`).FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal(`the "response_format" line not found in csvrun.py`)
+	}
+	if mappingSchemaName != m[1] {
+		t.Errorf("mappingSchemaName = %q, want %q (csvrun.py's json_schema name)", mappingSchemaName, m[1])
+	}
+}
+
+// T24 (NEW). mappingSystem must stay a backtick raw string: gofmt curls the straight quotes it
+// carries if it is ever moved into a doc comment (gofmt-eats-quotes-in-doc-comments).
+func TestMappingSystem_SurvivesGofmtAndCarriesNoCurledQuote(t *testing.T) {
+	src, err := os.ReadFile("suggest.go")
+	if err != nil {
+		t.Fatalf("read suggest.go: %v", err)
+	}
+	formatted, err := format.Source(src)
+	if err != nil {
+		t.Fatalf("format.Source(suggest.go): %v", err)
+	}
+	if !bytes.Equal(src, formatted) {
+		t.Errorf("suggest.go is not gofmt-clean; gofmt would rewrite it")
+	}
+	if !strings.Contains(string(src), "const mappingSystem = `") {
+		t.Errorf("mappingSystem is no longer a backtick raw string literal")
+	}
+	for _, straight := range []string{`"YYYY-MM-DD"`, `"other"`, `"."`, `","`} {
+		if !strings.Contains(mappingSystem, straight) {
+			t.Errorf("mappingSystem no longer carries %s -- the curled-quote check below is vacuous", straight)
+		}
+	}
+	for _, curled := range []string{"“", "”", "‘", "’"} {
+		if strings.Contains(mappingSystem, curled) {
+			t.Errorf("mappingSystem carries the curled quote %q", curled)
+		}
 	}
 }
 
@@ -118,6 +160,9 @@ func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 		t.Fatalf("answer has %d key(s), want 14: %v", len(ans), ans)
 	}
 	want := append(append([]string{}, mappingFields...), "header_row", "date_format", "decimal_separator")
+	if len(want) != 14 {
+		t.Fatalf("fixture builds %d name(s), want 14 -- mappingFields is wrong", len(want))
+	}
 	for _, k := range want {
 		v, ok := ans[k]
 		if !ok {
@@ -127,6 +172,17 @@ func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 		if v != nil {
 			t.Errorf("answer[%q] = %v, want nil (blank answer)", k, v)
 		}
+	}
+	// The blank answer derives from "properties"; "required" is a separate transcription of
+	// csvrun.py:42 that nothing else reads back.
+	var decoded struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(mappingSchema, &decoded); err != nil {
+		t.Fatalf("unmarshal mappingSchema: %v", err)
+	}
+	if !slices.Equal(decoded.Required, want) {
+		t.Errorf("mappingSchema.required = %v, want %v", decoded.Required, want)
 	}
 }
 
@@ -356,21 +412,22 @@ func TestGuardPlacements_ADuplicatedColumnUnplacesEveryClaimant(t *testing.T) {
 	}
 }
 
-// T14 (row 14). NOTE: with guardPlacements fully stubbed (always empty), every assertion below
-// is currently satisfied vacuously -- an empty result trivially matches "all three unplaced".
-// This row's real discriminating power against row 13 (2-way vs 3-way duplicate) only exists
-// once the guard is implemented; see mutations-AIR-07-01.jsonl row 14 for the replay proof.
+// T14 (row 14). Rule 5 unplaces every claimant however many there are, not just a pair: the
+// `claims[name] == 2` mutation leaves T13 green and reds only this row.
 func TestGuardPlacements_ThreeWayDuplicateUnplacesAllThree(t *testing.T) {
-	header := []string{"Amount"}
-	answer := map[string]any{"total": "Amount", "subtotal": "Amount", "vat": "Amount"}
+	header := []string{"Amount", "Qty"}
+	answer := map[string]any{"total": "Amount", "subtotal": "Amount", "vat": "Amount", "line_quantity": "Qty"}
 	got := guardPlacements(answer, header)
 	for _, f := range []string{"total", "subtotal", "vat"} {
 		if _, ok := got[f]; ok {
 			t.Errorf("guardPlacements placed %s on a three-way duplicated column: %v", f, got)
 		}
 	}
-	if len(got) != 0 {
-		t.Errorf("guardPlacements placed %v, want none", got)
+	if got["line_quantity"] != "Qty" {
+		t.Errorf("guardPlacements[line_quantity] = %q, want %q (the control)", got["line_quantity"], "Qty")
+	}
+	if len(got) != 1 {
+		t.Errorf("guardPlacements placed %v, want line_quantity alone", got)
 	}
 }
 
@@ -519,6 +576,43 @@ func TestCSVLine_MatchesPythonExceptForALeadingSpaceField(t *testing.T) {
 	}
 }
 
+// T25 (NEW). The csvLine ceiling's claim that the divergence loses a suggestion and never
+// mis-places one, asserted end to end through the guard rather than left as prose.
+func TestCSVLineDivergence_IsFailSafeInTheGuard(t *testing.T) {
+	header := []string{" Total", "Inv No"}
+	line := csvLine(header)
+	if !strings.Contains(line, `" Total"`) {
+		t.Fatalf("csvLine(%q) = %q, want the leading-space field quoted -- the ceiling's premise is false", header, line)
+	}
+
+	echoed := guardPlacements(map[string]any{"invoice_number": "Inv No", "total": `" Total"`}, header)
+	if v, ok := echoed["total"]; ok {
+		t.Errorf("guardPlacements placed total = %q from the prompt's quoted form, want unplaced", v)
+	}
+	if echoed["invoice_number"] != "Inv No" {
+		t.Errorf("guardPlacements[invoice_number] = %q, want %q (the control)", echoed["invoice_number"], "Inv No")
+	}
+
+	raw := guardPlacements(map[string]any{"invoice_number": "Inv No", "total": " Total"}, header)
+	if raw["total"] != " Total" {
+		t.Errorf("guardPlacements[total] = %q, want %q -- the unquoted form must still place", raw["total"], " Total")
+	}
+}
+
+// T26 (NEW). §6 rule 5's premise: resolveMapping accepts two fields on one column and imports
+// both, so guardPlacements is the only protection a suggestion gets. Pins the shipped
+// behaviour; no change in suggest.go can red it.
+func TestResolveMapping_AcceptsTwoFieldsOnOneColumn(t *testing.T) {
+	header := []string{"Inv", "Amount"}
+	colIndex, err := resolveMapping(map[string]string{"invoice_number": "Inv", "total": "Amount", "subtotal": "Amount"}, header)
+	if err != nil {
+		t.Fatalf("resolveMapping rejected a duplicate column: %v -- §6 rule 5 is no longer the only protection", err)
+	}
+	if colIndex["total"] != 1 || colIndex["subtotal"] != 1 {
+		t.Errorf("resolveMapping = %v, want total and subtotal both on index 1", colIndex)
+	}
+}
+
 // --- AC-9's source scan ----------------------------------------------------------------------
 
 // sgScanSkip is excluded because these two files legitimately name date_format and
@@ -534,9 +628,11 @@ var sgScanDirs = []string{"internal", "cmd", filepath.Join("frontend", "app", "s
 // the scan for reasons unrelated to this repo's own source (static-scans-walk-sibling-worktrees).
 var sgScanSkipDir = map[string]bool{".claude": true, ".ralph": true, "node_modules": true, ".git": true}
 
-// This is a currently-green structural guard, not a redified behaviour test: nothing in the
-// repo reads date_format or decimal_separator today (breaklist confirms TOTAL 0), so the scan
-// has nothing to catch until a future change violates AC-9. It reds only as a regression check.
+// sgScanControl must be found by the same walk: zero needle hits reads exactly like a broken
+// scan, so an absence assertion is worthless without a planted positive.
+var sgScanControl = regexp.MustCompile(`canonicalFields`)
+
+// tools/ is deliberately outside sgScanDirs: csvrun.py names both keys and must.
 func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T) {
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -545,7 +641,7 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 	root := strings.TrimSpace(string(out))
 	needle := regexp.MustCompile(`date_format|decimal_separator`)
 
-	var files int
+	var files, control int
 	for _, dir := range sgScanDirs {
 		start := filepath.Join(root, dir)
 		if _, statErr := os.Stat(start); statErr != nil {
@@ -573,6 +669,9 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 			if readErr != nil {
 				return readErr
 			}
+			if sgScanControl.Match(b) {
+				control++
+			}
 			if needle.Match(b) {
 				t.Errorf("%s mentions date_format or decimal_separator -- AC-9 forbids any code path outside suggest.go/suggest_test.go from reading either key", rel)
 			}
@@ -584,5 +683,8 @@ func TestDateFormatAndDecimalSeparator_AreReadNowhereOutsideSuggest(t *testing.T
 	}
 	if files < 300 {
 		t.Fatalf("scan walked %d file(s), want at least 300 -- looks truncated, not a clean scan", files)
+	}
+	if control == 0 {
+		t.Fatalf("scan found 0 hit(s) for the control %q across %d file(s) -- the absence above is not evidence", sgScanControl, files)
 	}
 }

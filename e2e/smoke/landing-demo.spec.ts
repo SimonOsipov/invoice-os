@@ -3,7 +3,8 @@ import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
-// The Book-a-Demo lead-capture modal against the PR's own deployed landing (LAND-02).
+// The Book-a-Demo lead capture, both the modal and the inline #demo card, against the
+// PR's own deployed landing (LAND-02).
 //
 // EVERY test in this file runs with the HubSpot gate CLOSED. The gate is
 // `resolveSubmitTarget(window.location.hostname)`, which returns a target only on an
@@ -19,7 +20,7 @@ import { seedConsent } from './landingConsent'
 // frontend/landing's vitest project defaults to `node`; a file may opt into jsdom per-file,
 // but this package carries no React testing library and jsdom has no layout engine — so a
 // submit event on a rendered modal, a focus trap, an async timing property and a rendered
-// text measurement can only be observed in a browser. Functional only — nothing
+// geometry measurement can only be observed in a browser. Functional only — nothing
 // here takes a screenshot, and every assertion is a fact about behaviour or geometry.
 //
 // TWO INDEPENDENT HUBSPOT GUARDS, and the distinction is load-bearing:
@@ -57,7 +58,7 @@ const DEFAULT_TAXPAYER_SIZE = 'Medium ₦1bn–₦5bn'
 // still render "a taxpayer size", so E4 names them explicitly.
 const BARE_SIZE_WORDS = ['Micro', 'Small', 'Medium', 'Large'] as const
 
-// DemoModal's demo-mode stub resolves after 1300ms (`runStub`), and a closed gate, a
+// DemoLeadForm's demo-mode stub resolves after 1300ms (`runStub`), and a closed gate, a
 // tripped honeypot and an injected submit all route through that ONE helper — which is the
 // property E5 exists to defend. The floor is set below 1300 rather than at it: setTimeout
 // never fires early, but the click-to-timer-start latency is measured on our side of the
@@ -118,8 +119,7 @@ const HONEYPOT_ATTRS: ReadonlyArray<readonly [string, string]> = [
 // the narrow width that actually exercises the rule named in the plan.
 // The other eight are the widths at which the UNGUARDED value measurably broke: 1150/1100/
 // 960/921 in the band just above the 920px single-column breakpoint, where the 0.8fr column
-// is at its narrowest, and 500/430/390/375 below it. All ten are asserted — the recorded-only
-// tier this file shipped with is gone, and the note on E6 says why.
+// is at its narrowest, and 500/430/390/375 below it. All ten are asserted.
 const ASSERTED_WIDTHS = [1280, 1150, 1100, 960, 921, 600, 500, 430, 390, 375] as const
 
 type LandingSinks = {
@@ -248,7 +248,7 @@ async function openLanding(page: Page): Promise<LandingSinks> {
   await expect(page.getByRole('banner')).toBeVisible()
 
   // Inter and Fraunces are Google-hosted with display=swap. A swap AFTER a measurement
-  // reflows text under geometry that has already been read, and E6 measures text to the
+  // reflows geometry that has already been read, and E6 measures geometry to the
   // sub-pixel. Settle once, here, before anything else — same reason as landing-nav.spec.ts.
   await page.evaluate(() => document.fonts.ready.then(() => true))
 
@@ -488,7 +488,7 @@ async function readSizeOptions(select: Locator): Promise<Array<{ value: string; 
 }
 
 // E4 — the modal's select and the inline card agree about the turnover bands ON THE
-// DEPLOYED BUILD. Two surfaces, two source files, one contract. This asserts agreement and
+// DEPLOYED BUILD. Two surfaces, one shared component, one contract. This asserts agreement and
 // membership only; whether the agreed value FITS its box is E6's job.
 test('landing demo: the modal select and the inline card agree on the turnover bands', async ({ page }) => {
   const sinks = await openLanding(page)
@@ -630,9 +630,12 @@ type CardSizeMeasurement = {
  */
 function measureCardSizeControl(page: Page): Promise<CardSizeMeasurement> {
   return page.evaluate(() => {
+    // Rounded to 2dp, same precedent as sizeHeightPx below: keeps measureCardStable's
+    // byte-equality check honest against float jitter rather than brittle to it.
+    const round = (n: number) => Math.round(n * 100) / 100
     const rectOf = (el: Element) => {
       const r = el.getBoundingClientRect()
-      return { x: r.x, y: r.y, width: r.width, height: r.height }
+      return { x: round(r.x), y: round(r.y), width: round(r.width), height: round(r.height) }
     }
 
     const size = document.getElementById('dc-size')
@@ -706,17 +709,40 @@ test('landing demo: the inline card taxpayer-size value fits its box', async ({ 
     })
   }
 
-  // Widths 375-600 are where the row-overflow assertion has teeth; the wide end is cheap
-  // insurance, kept because this file had never swept above 1280 before.
+  // Widths 375-600 are where the row-overflow (or below 480, the stack) assertion has teeth;
+  // the wide end is cheap insurance, kept because this file had never swept above 1280 before.
   for (const m of sweep) {
     const at = `at ${m.viewportWidth}px`
     // Non-vacuity: a build that regressed to a short bare word would fit everywhere.
     expect(m.sizeValue, `the card is not showing the default turnover band ${at}`).toBe(DEFAULT_TAXPAYER_SIZE)
-    expect(enclosesRect(m.size, m.caret, 1), `the ▾ caret is not contained by its control ${at}`).toBe(true)
-    expect(enclosesRect(m.card, m.size, 1), `the control is not contained by the card ${at}`).toBe(true)
-    expect(m.rowScrollWidth, `the two-select row overflows ${at}`).toBeLessThanOrEqual(m.rowClientWidth)
-    // The 42px box the control declares, plus 1px of sub-pixel slack.
-    expect(m.sizeHeightPx, `the control grew to ${m.sizeHeightPx}px ${at}`).toBeLessThanOrEqual(43)
+    expect(enclosesRect(m.size, m.caret, 1), `the chevron caret is not contained by its control ${at}`).toBe(true)
+    expect(enclosesRect(m.card, m.size, 1), `the size control is not contained by the card ${at}`).toBe(true)
+    // #dc-size is the row's first flex item: an overflowing row pushes #dc-volume out, not
+    // #dc-size, so the card must be asserted to enclose both.
+    expect(enclosesRect(m.card, m.volume, 1), `the volume control is not contained by the card ${at}`).toBe(true)
+
+    if (m.viewportWidth >= 480) {
+      expect(m.rowScrollWidth, `the two-select row overflows ${at}`).toBeLessThanOrEqual(m.rowClientWidth)
+    } else {
+      // Below 480px .dm-row switches to flex-direction: column (DEMO_FORM_CSS), so the row
+      // can never overflow here — assert the real behaviour instead: size and volume stack
+      // vertically, each stretched to the row's full width.
+      expect(m.volume.y, `the controls did not stack vertically ${at}`).toBeGreaterThanOrEqual(
+        m.size.y + m.size.height - 1,
+      )
+      expect(m.size.width, `the size control is not full-width when stacked ${at}`).toBeGreaterThan(
+        m.rowClientWidth * 0.9,
+      )
+      expect(m.volume.width, `the volume control is not full-width when stacked ${at}`).toBeGreaterThan(
+        m.rowClientWidth * 0.9,
+      )
+    }
+
+    // DemoLeadForm declares the select at 42px; two-sided so a shrunk control also fails.
+    const heightMsg = `the control is ${m.sizeHeightPx}px, not within 1px of the declared 42px ${at}`
+    expect(m.sizeHeightPx, heightMsg).toBeGreaterThanOrEqual(41)
+    expect(m.sizeHeightPx, heightMsg).toBeLessThanOrEqual(43)
+    // Flex items never overlap; cheap insurance rather than a real oracle.
     expect(rectsOverlap(m.size, m.volume), `the size and volume controls overlap ${at}`).toBe(false)
   }
 

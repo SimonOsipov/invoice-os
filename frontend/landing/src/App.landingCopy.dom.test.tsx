@@ -97,6 +97,18 @@ describe('audience tab copy, on the rendered tree', () => {
     expect(FINTECH.features).toHaveLength(5)
   })
 
+  // The data assertion above stays green if AudienceCopy stops rendering feature lists at
+  // all, so pin the rendered count on each of the three copy layers too.
+  it('every audience copy layer renders five feature glyphs', () => {
+    const d = mount()
+    const layers = d.querySelectorAll(LAYER_SELECTOR)
+    expect(layers.length, 'layer selector must resolve to exactly 6 elements').toBe(6)
+    for (const i of [3, 4, 5]) {
+      const glyphs = layers[i].querySelectorAll('span > svg')
+      expect(glyphs.length, `copy layer ${i} must hold exactly 5 feature glyphs`).toBe(5)
+    }
+  })
+
   it('the firms body drops the distribution-channel clause and gains the fifth feature', () => {
     const d = mount()
     const layers = d.querySelectorAll(LAYER_SELECTOR)

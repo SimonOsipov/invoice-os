@@ -371,11 +371,11 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 }
 
 // TestCharsIn_ReproducesEveryRectTextOnTheCorpus widens the no-op control to every committed
-// fixture except the two Chrome ones (29 files): the loop is identical and covers 29 for free.
+// fixture except the two Chrome ones (30 files): the loop is identical and covers 30 for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 29 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29 (31 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 30 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 30 (32 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -520,13 +520,13 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 // --- AC-6: one token per rect, on the word-level fixtures only ------------------------------
 
 // AC-6 (re-pointed for EXTR-36-03): the merge collapses per-glyph rects into words, so "one
-// token per rect" only holds on the 29 word-level fixtures now. chrome_register.pdf's 802 rects
+// token per rect" only holds on the 30 word-level fixtures now. chrome_register.pdf's 802 rects
 // merge to 42 tokens, the twin's 800 to 42 as well -- each checked against its own rect count,
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 29 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29", len(names))
+	if len(names) != 30 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 30", len(names))
 	}
 
 	totalTokens := 0

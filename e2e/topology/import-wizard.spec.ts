@@ -82,6 +82,7 @@ import {
   rawFetch,
   PERSONAS,
   type CorrectionResponse,
+  type ExtractionCandidate,
   type ExtractionDetail,
   type ExtractionJob,
   type ExtractionJobsResponse,
@@ -2283,6 +2284,14 @@ const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_
 
 function uniqueAiUnavailablePdfBytes(): Buffer {
   return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// AIR-08-13's deployed fixture (fxE2ECopies): a ruled 2-row table plus an AIFAKE-LINES-ANSWER
+// marker steering three line-item rows. Same recipe as the others above.
+const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'))
+
+function uniqueAiLinesPdfBytes(): Buffer {
+  return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
@@ -6382,6 +6391,14 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
     ).toHaveValue('')
   }
 
+  // AIR08-E2E's Core AC 7 leg, free on this document: rich_invoice.pdf carries no AIFAKE-LINES
+  // marker, so mergeAILines leaves every row untouched -- no chip and no ambiguous pill.
+  await expect(page.locator('[data-testid^="line-item-chip-"]'), 'an unsteered document renders a chip').toHaveCount(0)
+  await expect(
+    page.locator('[data-testid^="line-item-ambiguous-"]'),
+    'an unsteered document renders an ambiguous pill',
+  ).toHaveCount(0)
+
   // -- 2. the flag is per row, and lands only where the wire's own numbers disagree ----------
   const states = lines.map((row, i) => ({ n: i + 1, state: wireRowState(row) }))
   const flagged = states.filter((s) => s.state === 'flagged').map((s) => s.n)
@@ -9312,6 +9329,180 @@ test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read fro
   })
 
   // (h)
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// `${value}page ${region.page}` matches LineItemGrid's own chip render (CHIP_VALUE span
+// immediately followed by CHIP_WHERE, no separator) -- the same convention AIR03-E2E-01 reads
+// off ExtractionFields' chips. Never hardcodes whether a region is present: it reads that off
+// the wire response itself, never off a literal copied from the fixture builder.
+function lineChipText(value: string, region: ExtractionRegion | null): string {
+  return region === null ? value : `${value}page ${region.page}`
+}
+
+test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid', async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // AIR08-E2E-01 (AC-4): extractOneDocument already waited on invoice-detail, which proves the
+  // steered document filed a draft instead of quarantining.
+  await extractOneDocument(page, 'Zz AIR-08 lines', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
+
+  const detail = await openExtractionReview(page)
+  const lines = wireLines(detail)
+  expect(
+    lines.map((l) => l.index),
+    'the extraction detail must carry three contiguous line indices',
+  ).toEqual([1, 2, 3])
+  const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
+
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.locator('[data-testid^="line-item-row-"]'), 'the grid did not render one row per wire line').toHaveCount(3)
+
+  // AIR08-E2E-02 (AC-5, agreeing row): row 1's four cells render the engine's own values in
+  // ordinary inputs, with no chip and no pill anywhere on that row.
+  const row1 = lines[0]
+  const row1Want: Record<LineRoleName, string> = { description: 'Widget', quantity: '2', unit_price: '500.00', line_total: '1000.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    expect(row1.cells[role]?.value, `row 1's ${role} did not carry the engine's own reading on the wire`).toBe(row1Want[role])
+    expect(fieldsByName.get(row1.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
+    await expect(
+      page.getByTestId(`line-item-input-1-${role}`),
+      `row 1's ${role} input did not carry the engine's own reading`,
+    ).toHaveValue(row1Want[role])
+  }
+  await expect(page.locator('[data-testid^="line-item-chip-1-"]'), 'the agreeing row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId('line-item-ambiguous-1'), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId('line-item-flag-1'), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
+
+  // AIR08-E2E-04 (Core AC 6, disagreement): row 2's unit_price renders two chips, chip 0 the
+  // engine's own value (with its wire region, if any), chip 1 the AI's with none; the other
+  // three cells of the same row stay ordinary inputs at the engine's own reading.
+  const row2 = lines[1]
+  const upWire = row2.cells.unit_price as WireLineCell
+  expect(
+    { value: upWire.value, reason: fieldsByName.get(upWire.name)?.reason },
+    'row 2 unit_price must be the engine reading, ambiguous',
+  ).toEqual({ value: '250.00', reason: 'ambiguous' })
+  const upAlternatives: ExtractionCandidate[] = fieldsByName.get(upWire.name)?.alternatives ?? []
+  expect(upAlternatives, 'row 2 unit_price must carry exactly one alternative, the AI\'s own').toEqual([{ value: '260.00', region: null }])
+
+  const upChips = page.locator('[data-testid^="line-item-chip-2-unit_price-"]')
+  await expect(upChips, 'row 2 unit_price must render exactly two chips').toHaveCount(2)
+  await expect(page.getByTestId('line-item-chip-2-unit_price-0')).toHaveText(lineChipText('250.00', upWire.region))
+  await expect(page.getByTestId('line-item-chip-2-unit_price-1')).toHaveText(lineChipText('260.00', null))
+  await expect(
+    page.getByTestId('line-item-ambiguous-2'),
+    'row 2 must show the FOUND TWO POSSIBLE VALUES pill',
+  ).toHaveText('FOUND TWO POSSIBLE VALUES')
+  await expect(page.getByTestId('line-item-flag-2'), 'row 2 must not also carry an arithmetic pill').toHaveCount(0)
+
+  const row2OtherWant: Partial<Record<LineRoleName, string>> = { description: 'Gadget', quantity: '3', line_total: '750.00' }
+  for (const role of ['description', 'quantity', 'line_total'] as const) {
+    expect(row2.cells[role]?.value, `row 2's ${role} did not carry the engine's own reading on the wire`).toBe(row2OtherWant[role])
+    expect(fieldsByName.get(row2.cells[role]?.name ?? '')?.reason, `row 2's ${role} was disturbed by the unit_price disagreement`).toBe('')
+    await expect(
+      page.getByTestId(`line-item-input-2-${role}`),
+      `row 2's ${role} input did not carry the engine's own reading`,
+    ).toHaveValue(row2OtherWant[role] as string)
+  }
+
+  // AIR08-E2E-03 (Core AC 8, AI-only row): row 3 renders the AI's own values in ordinary
+  // inputs, its wire cells carry reason '' and empty alternatives, and the row shows no pill --
+  // UNMARKED (Q12).
+  const row3 = lines[2]
+  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    const cell = row3.cells[role] as WireLineCell
+    expect(cell.value, `row 3's ${role} did not carry the AI's own reading on the wire`).toBe(row3Want[role])
+    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
+    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
+    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
+    await expect(
+      page.getByTestId(`line-item-input-3-${role}`),
+      `row 3's ${role} input did not carry the AI's own reading`,
+    ).toHaveValue(row3Want[role])
+  }
+  await expect(page.locator('[data-testid^="line-item-chip-3-"]'), 'the AI-only row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId('line-item-ambiguous-3'), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId('line-item-flag-3'), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'Zz AIR-08 layout', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  await openExtractionReview(page)
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+
+  // Non-empty floor: the sweep below measures the chip row, so it must actually be on screen.
+  await expect(
+    page.locator('[data-testid^="line-item-chip-2-unit_price-"]'),
+    'row 2 renders no chip row -- the sweep below would measure an input row instead',
+  ).toHaveCount(2)
+
+  const paneBody = fieldsPaneBody(page)
+  const scroll = page.getByTestId('line-item-scroll')
+
+  const measured: { width: number; left: number; right: number; bodyScrollWidth: number; bodyClientWidth: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [s, b] = await Promise.all([scroll.boundingBox(), paneBody.boundingBox()])
+        const flow = await paneBody.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { s, b, flow }
+      }, `line grid containment (chip row) at ${width}px`)
+
+      expect(m.s && m.b, `both the scrollbox and the pane body must render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed to zero is inside anything and passes vacuously.
+      expect(m.s!.width, `the scrollbox collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
+      expect(m.b!.width, `the pane body collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      const g = gaps(m.s as Rect, m.b as Rect)
+      expect(g.left, `the scrollbox starts ${(-g.left).toFixed(1)}px left of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the scrollbox ends ${(-g.right).toFixed(1)}px right of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      expect(
+        m.flow.scrollWidth,
+        `the pane body holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px -- the chip row's overflow escaped its scrollbox`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+
+      measured.push({
+        width,
+        left: g.left,
+        right: g.right,
+        bodyScrollWidth: m.flow.scrollWidth,
+        bodyClientWidth: m.flow.clientWidth,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-line-grid-chip-containment.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

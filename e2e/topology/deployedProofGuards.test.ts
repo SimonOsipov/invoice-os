@@ -172,6 +172,8 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     "AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine",
     'AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading',
     'AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images',
+    'AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid',
+    'AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)

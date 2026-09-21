@@ -19,6 +19,7 @@ import (
 // fingerprintGoldensPreMerge. The twin differs only in the invoice number and the amounts, so
 // both Chrome rows hold one value.
 var fingerprintGoldens = map[string]string{
+	"ai_lines_invoice.pdf":                  "v3:d7fd646ccc6d992349063e9a6a7eebaf48db7589c42b88b10fee51e66dcb41e4",
 	"ai_steered_invoice.pdf":                "v3:fc3afe3868932fe3274fbffa1d713c010b77ccae47f358aa71f7fdb7296082b2",
 	"ai_unavailable_invoice.pdf":            "v3:053f25807f20c119ecb7e375a101c9e70c54e0621a79777c5ce7b7cdf76ad7e3",
 	"advisory_dense.pdf":                    "v3:fe469d7afac0a666956002d69238ca46fc252def84fe910cb24820ec432e311b",

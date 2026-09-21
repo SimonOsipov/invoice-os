@@ -92,8 +92,10 @@ func TestMergeAILines_AnAgreeingCellKeepsTheEngineRowUnchanged(t *testing.T) {
 		engineTotal,
 	}
 	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("30.00")}}
+	// real pages: the agreement must be why the row survives, not the page check
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.40, 0.12), tok("30.00", 1, 0.60, 0.10, 0.80, 0.12))
 
-	got := mergeAILines(rows, ai, nil)
+	got := mergeAILines(rows, ai, pages)
 
 	gotTotal := findLineRow(t, got, 1, LineRoleLineTotal)
 	if !reflect.DeepEqual(gotTotal, engineTotal) {
@@ -134,8 +136,13 @@ func TestMergeAILines_ADisagreeingCellKeepsTheEngineValueAsAnAmbiguousAlternativ
 		{Field: Field{Name: LineFieldName(1, LineRoleUnitPrice), Value: mgStr("30.00"), Region: region, Reason: ReasonNone}, Alternatives: []Field{}},
 	}
 	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("30.00"), UnitPrice: aliStr("29.00")}}
+	pages := onePage(1,
+		tok("Widget", 1, 0.10, 0.10, 0.40, 0.12),
+		tok("30.00", 1, 0.60, 0.10, 0.80, 0.12),
+		tok("29.00", 1, 0.60, 0.20, 0.80, 0.22),
+	)
 
-	got := mergeAILines(rows, ai, nil)
+	got := mergeAILines(rows, ai, pages)
 
 	unitPrice := findLineRow(t, got, 1, LineRoleUnitPrice)
 	if unitPrice.Value == nil || *unitPrice.Value != "30.00" {
@@ -156,6 +163,27 @@ func TestMergeAILines_ADisagreeingCellKeepsTheEngineValueAsAnAmbiguousAlternativ
 	}
 	if alt.Region != nil {
 		t.Errorf("alternative region = %+v, want nil", alt.Region)
+	}
+}
+
+func TestMergeAILines_AHallucinatedDisagreementLeavesTheEngineCellUnflagged(t *testing.T) {
+	region := &Region{Page: 1, X0: 0.60, Y0: 0.10, X1: 0.80, Y1: 0.12}
+	rows := []FieldResult{
+		{Field: Field{Name: LineFieldName(1, LineRoleDescription), Value: mgStr("Widget"), Reason: ReasonNone}, Alternatives: []Field{}},
+		{Field: Field{Name: LineFieldName(1, LineRoleLineTotal), Value: mgStr("30.00"), Reason: ReasonNone}, Alternatives: []Field{}},
+		{Field: Field{Name: LineFieldName(1, LineRoleUnitPrice), Value: mgStr("30.00"), Region: region, Reason: ReasonNone}, Alternatives: []Field{}},
+	}
+	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("30.00"), UnitPrice: aliStr("29.00")}}
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.40, 0.12), tok("30.00", 1, 0.60, 0.10, 0.80, 0.12))
+
+	got := mergeAILines(rows, ai, pages)
+
+	unitPrice := findLineRow(t, got, 1, LineRoleUnitPrice)
+	if unitPrice.Reason != ReasonNone {
+		t.Errorf("unit_price reason = %q, want ReasonNone: an off-page AI value must not flag a good engine cell", unitPrice.Reason)
+	}
+	if len(unitPrice.Alternatives) != 0 {
+		t.Errorf("unit_price alternatives = %+v, want none: a hallucinated candidate must not reach the user", unitPrice.Alternatives)
 	}
 }
 
@@ -283,10 +311,13 @@ func TestMergeAILines_ABlockRowSurvivesExactlyAsReconcileSet(t *testing.T) {
 		{Field: Field{Name: LineFieldName(1, LineRoleDescription), Value: mgStr("Widget"), Reason: ReasonNone}, Alternatives: []Field{}},
 		{Field: Field{Name: LineFieldName(1, LineRoleLineTotal), Value: mgStr("30.00"), Reason: ReasonNone}, Alternatives: []Field{}},
 	}
-	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("30.00")}}
+	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("30.00"), UnitPrice: aliStr("30.00")}}
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.40, 0.12), tok("30.00", 1, 0.60, 0.10, 0.80, 0.12))
 
-	got := mergeAILines(rows, ai, nil)
+	got := mergeAILines(rows, ai, pages)
 
+	// the fixture must actually fill a cell in, or AC-11's "over AI-filled cells" is untested
+	_ = findLineRow(t, got, 1, LineRoleUnitPrice)
 	gotBlock := findRow(t, got, "line_items")
 	if !reflect.DeepEqual(gotBlock, block) {
 		t.Errorf("line_items block = %+v, want unchanged %+v", gotBlock, block)
@@ -301,8 +332,10 @@ func TestMergeAILines_TrailingZeroAmountsAgreeNotAmbiguous(t *testing.T) {
 		engineTotal,
 	}
 	ai := []AILine{{Description: aliStr("Widget"), LineTotal: aliStr("700")}}
+	// real pages: the trailing-zero reading must be why the row survives, not the page check
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.40, 0.12), tok("700", 1, 0.60, 0.10, 0.80, 0.12))
 
-	got := mergeAILines(rows, ai, nil)
+	got := mergeAILines(rows, ai, pages)
 
 	gotTotal := findLineRow(t, got, 1, LineRoleLineTotal)
 	if gotTotal.Reason == ReasonAmbiguous {

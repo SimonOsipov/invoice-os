@@ -413,6 +413,10 @@ func aliMergeCell(role string, engine FieldResult, engineOK bool, aiRaw *string,
 			return &row // AC-3: agree, engine's row survives untouched
 		case len(aliRoleReadings(role, *aiRaw)) == 0:
 			return &row // the AI's cell is not a reading of this role at all: not evidence
+		case !aliLinePresent(role, *aiRaw, pages):
+			// AC-13: an unchecked value never flips a good engine cell to ambiguous,
+			// matching mergeAI's own `if !checked { continue }`.
+			return &row
 		}
 		v := *aiRaw
 		row.Reason = ReasonAmbiguous

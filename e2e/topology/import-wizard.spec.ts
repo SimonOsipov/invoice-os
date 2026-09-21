@@ -7882,6 +7882,16 @@ async function runDocumentsIn(
   }
   await page.route('**/api/submission/v1/documents', captureUpload)
 
+  // An earlier run on this page routes LATE: startDocumentRun keeps reqInFlight held past the
+  // import 201 a caller polls for, and a New invoice click inside that window either returns
+  // early or is pulled back to the landing -- no upload is issued at all. The progress card is
+  // mounted for exactly that window and unmounts only on applyRoute, which returns immediately
+  // before reqInFlight is released.
+  await expect(
+    page.getByTestId('import-progress'),
+    'an earlier run on this page has not routed yet -- this run would issue no upload',
+  ).toHaveCount(0, { timeout: 60_000 })
+
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
   await page.getByRole('button', { name: 'Extract invoices' }).click()

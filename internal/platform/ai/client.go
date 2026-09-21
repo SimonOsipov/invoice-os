@@ -28,6 +28,7 @@ type Purpose string
 const (
 	PurposeDocument    Purpose = "document"
 	PurposeSpreadsheet Purpose = "spreadsheet"
+	PurposeLineItems   Purpose = "line_items"
 )
 
 // Request is one call's input. FakeHint is read only in fake mode; it is
@@ -187,7 +188,7 @@ func realSleep(ctx context.Context, d time.Duration) error {
 }
 
 func validateRequest(req Request) error {
-	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet {
+	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet && req.Purpose != PurposeLineItems {
 		return fmt.Errorf("ai: invalid request: unsupported purpose %q", req.Purpose)
 	}
 	if req.Text == "" && len(req.Pages) == 0 {

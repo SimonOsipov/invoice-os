@@ -169,7 +169,7 @@ count. Keys, in emission order (`log.go`):
 |---|---|
 | `tenant_id` | From the caller context's identity, via `auth.IdentityFromContext`. Omitted entirely when there is no identity or its tenant is empty — never logged as a blank string. |
 | `model` | Always the `Model` const. |
-| `purpose` | `document` or `spreadsheet`, logged raw — an invalid purpose is still logged as what was asked for. |
+| `purpose` | `document`, `spreadsheet` or `line_items`, logged raw — an invalid purpose is still logged as what was asked for. |
 | `input_tokens` | OpenRouter's `usage.prompt_tokens`, summed over every attempt, zero when no response carried usage. |
 | `output_tokens` | OpenRouter's `usage.completion_tokens`, summed the same way. |
 | `cost` | OpenRouter's `usage.cost`, summed the same way. |

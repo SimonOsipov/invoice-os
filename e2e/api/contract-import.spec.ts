@@ -41,11 +41,11 @@
 // POST /v1/documents (EXTR-09) mints them too, from the submission service --
 // contract-document-upload.spec.ts owns that route.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, apiBase, getSavedMapping, PERSONAS } from './client'
+import { login, createEntity, apiBase, getSavedMapping, PERSONAS, suggestMapping } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { listInvoices, rawFetch } from './client'
-import { PERF_HEADER, PERF_MAPPING } from '../importFixtures'
+import { PERF_HEADER, PERF_MAPPING, steerMarker } from '../importFixtures'
 import { strToU8, zipSync } from 'fflate'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
@@ -841,5 +841,77 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
     const badHeaderRow = await importFetch(token, buildForm(entity.id, documentId, { mapping: PERF_MAPPING, headerRow: 'abc' }))
     assertErrorEnvelope(badHeaderRow, 400, 'import header_row=abc')
     expect((badHeaderRow.body as Record<string, unknown>).error).toBe('header_row must be a whole number of 1 or more')
+  })
+})
+
+// Own local steered-answer fixture, mirroring import-wizard.spec.ts's AIRL01_ANSWER
+// without importing it (repo convention -- no cross-suite imports between spec files).
+const AIR07_API_ANSWER: Record<string, unknown> = {
+  invoice_number: 'Invoice No',
+  issue_date: null,
+  buyer_tin: null,
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: null,
+  line_description: null,
+  line_quantity: null,
+  line_unit_price: null,
+  header_row: 1,
+  date_format: null,
+  decimal_separator: null,
+}
+
+function air07SteeredCsv(num: string): string {
+  const row = [num, '2026-01-15', '87654321-0002', steerMarker(AIR07_API_ANSWER), 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00']
+  return `${PERF_HEADER}\n${row.join(',')}\n`
+}
+
+test.describe('suggest-mapping contract (API E2E, over the deployed gateway)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+  })
+
+  test('AIR07-API-01: the suggest endpoint answers the documented body on the deployed stack', async () => {
+    const entity = await createEntity(token, { name: `AIR-07 api ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, air07SteeredCsv(`INV-AIR07API1-${freshTin()}`))
+
+    const res = await suggestMapping(token, { entity_id: entity.id, document_id: documentId })
+    expect(new Set(Object.keys(res)), 'the response must carry exactly the 7 documented keys').toEqual(
+      new Set(['source', 'header_row', 'columns', 'sample_rows', 'rows_total', 'mapping', 'saved_at']),
+    )
+    expect(res.source, 'a steered document with nothing saved yet must answer ai').toBe('ai')
+    expect(res.header_row).toBe(1)
+    expect(res.columns.length, 'control: the endpoint must have decoded a real header').toBeGreaterThan(0)
+    expect(Array.isArray(res.sample_rows)).toBe(true)
+    expect(res.mapping.invoice_number).toBe('Invoice No')
+  })
+
+  test('AIR07-API-02: a saved mapping outranks a live AI answer in the source field', async () => {
+    const entity = await createEntity(token, { name: `AIR-07 api ${freshTin()}`, tin: freshTin() })
+
+    // Leg 1 (control): nothing saved yet for this entity/header, so the AI's own answer is
+    // used as-is. Without this leg, a 'saved' result below would prove nothing -- it could
+    // just as well come from a stack where the AI never ran.
+    const doc1 = await uploadDocument(token, air07SteeredCsv(`INV-AIR07API2A-${freshTin()}`))
+    const leg1 = await suggestMapping(token, { entity_id: entity.id, document_id: doc1 })
+    expect(leg1.source, 'control: with nothing saved yet, the live AI answer must be used').toBe('ai')
+    expect(leg1.mapping.invoice_number).toBe('Invoice No')
+
+    // Import doc1 with the FULL 11-key mapping and remember it -- the AI's own answer only
+    // ever placed invoice_number.
+    const imported = await importFetch(token, buildForm(entity.id, doc1, { mapping: IMPORT_MAPPING, remember: 'true' }))
+    expect(imported.status, 'the saving import must complete').toBe(201)
+
+    // Leg 2: a second, still-steered document sharing doc1's identical 11-column header --
+    // the saved-mapping lookup keys on (entity_id, decoded header), not on document id.
+    const doc2 = await uploadDocument(token, air07SteeredCsv(`INV-AIR07API2B-${freshTin()}`))
+    const leg2 = await suggestMapping(token, { entity_id: entity.id, document_id: doc2 })
+    expect(leg2.source, 'a saved mapping must outrank a live, present AI answer').toBe('saved')
+    expect(leg2.saved_at, 'a saved answer must carry a save timestamp').not.toBeNull()
+    expect(leg2.mapping, "the saved FULL mapping must win, not the AI's 1-key answer").toEqual(IMPORT_MAPPING)
   })
 })

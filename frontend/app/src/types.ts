@@ -191,7 +191,7 @@ export type View = 'dashboard' | 'invoices' | 'rules' | 'workflows' | 'create' |
 export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
-// `required` marks the fiscal identifier that recognition never guesses.
+// `required` marks the fiscal identifier — alias recognition never guesses it; a suggestion or a restore is the only automatic route.
 export type CanonField = { key: string; required?: boolean }
 
 // canonical field key -> source column header, or null while unplaced
@@ -483,7 +483,7 @@ export type PlatformCtx = {
   // group's mapping is a COPY of the shared group's mapping at split time, never a
   // fresh seed ([split-copies-the-mapping]).
   splitOutFile: (fileId: string) => void
-  // Reseeds the active group from automatic suggestions and drops its restored snapshot; no undo.
+  // Reseeds the active group from automatic suggestions and drops both its restored and suggested snapshots; no undo.
   resetGroupToAutomatic: () => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected

@@ -15,8 +15,8 @@
 // lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
 // selection-half (BULK-01-03).
 
-import { canSubmitMapping, initMappingFromHeaders, restoreMapping } from './mapping'
-import type { ImportPreview, SavedMapping } from './importApi'
+import { canSubmitMapping, fillUnplacedFromAliases, initMappingFromHeaders, restoreMapping } from './mapping'
+import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 import { fmtDateTime } from './format'
 
@@ -34,13 +34,20 @@ export interface RestoredFrom {
   mapping: Mapping // the placements as restored; a placement still equal to this renders RESTORED
 }
 
+export interface SuggestedFrom {
+  headerRow: number
+  mapping: Mapping // the placements as suggested; a placement still equal to this renders SUGGESTED
+}
+
 export interface MappingGroup {
   id: string
   signature: string
   fileIds: string[]
   preview: ImportPreview
+  headerRow: number // the row the columns were decoded at; the import must read the same row
   mapping: Mapping
   restored: RestoredFrom | null
+  suggested: SuggestedFrom | null
 }
 
 // Walks `previewed` in pick order and buckets by columnSignature, preserving
@@ -61,8 +68,10 @@ export function groupByLayout(previewed: { fileId: string; preview: ImportPrevie
       signature,
       fileIds: [fileId],
       preview,
+      headerRow: 1,
       mapping: initMappingFromHeaders(preview.columns),
       restored: null,
+      suggested: null,
     }
     bySignature.set(signature, group)
     groups.push(group)
@@ -90,8 +99,10 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     signature: group.signature,
     fileIds: [fileId],
     preview: group.preview,
+    headerRow: group.headerRow,
     mapping: { ...group.mapping },
     restored: group.restored,
+    suggested: group.suggested,
   }
 
   const next = groups.slice()
@@ -128,17 +139,18 @@ export function applySavedMapping(group: MappingGroup, saved: SavedMapping | nul
   return { ...group, mapping, restored: { savedAt: saved.saved_at, mapping } }
 }
 
-// No undo: the restored snapshot is dropped.
+// No undo: the restored and suggested snapshots are both dropped.
 export function returnToAutomatic(group: MappingGroup): MappingGroup {
-  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null }
+  return { ...group, mapping: initMappingFromHeaders(group.preview.columns), restored: null, suggested: null }
 }
 
-export type PlacementBadge = 'restored' | 'auto' | null
+export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null
 
-// RESTORED wins over AUTO. A placement moved off its restored header loses RESTORED.
+// RESTORED > SUGGESTED > AUTO. A placement moved off its recorded header loses its badge.
 export function placementBadge(group: MappingGroup, field: string, header: string, recognized: Mapping): PlacementBadge {
   if (group.mapping[field] !== header) return null
   if (group.restored?.mapping[field] === header) return 'restored'
+  if (group.suggested?.mapping[field] === header) return 'suggested'
   if (recognized[field] === header) return 'auto'
   return null
 }
@@ -160,6 +172,43 @@ export async function restoreGroups(
     try {
       const saved = await lookup(group.preview.document_id)
       result.push(applySavedMapping(group, saved))
+    } catch {
+      result.push(group)
+    }
+  }
+  return result
+}
+
+// A `saved` answer takes the restore path; `none` is the identity. The `saved` snapshot
+// shares the mapping object; the `suggested` snapshot keeps the AI's OWN placements while
+// group.mapping also carries the alias fallback, so a fallback badges AUTO, not SUGGESTED.
+export function applySuggestion(group: MappingGroup, res: SuggestMapping): MappingGroup {
+  if (res.source === 'none') return group
+  const preview: ImportPreview = { ...group.preview, columns: res.columns, sample_rows: res.sample_rows, rows_total: res.rows_total }
+  const mapping = restoreMapping(res.columns, res.mapping)
+  const base = { ...group, preview, signature: columnSignature(res.columns), mapping, headerRow: res.header_row }
+  if (res.source === 'saved') {
+    return { ...base, restored: { savedAt: res.saved_at ?? '', mapping }, suggested: null }
+  }
+  return { ...base, mapping: fillUnplacedFromAliases(res.columns, mapping), suggested: { headerRow: res.header_row, mapping } }
+}
+
+// One suggestion at a time, in group order, for the groups restoreGroups left unrestored.
+// A failed suggestion leaves that group on today's seed.
+export async function suggestGroups(
+  groups: MappingGroup[],
+  suggest: ((documentId: string) => Promise<SuggestMapping>) | null,
+): Promise<MappingGroup[]> {
+  if (!suggest) return groups
+  const result: MappingGroup[] = []
+  for (const group of groups) {
+    if (group.restored) {
+      result.push(group)
+      continue
+    }
+    try {
+      const res = await suggest(group.preview.document_id)
+      result.push(applySuggestion(group, res))
     } catch {
       result.push(group)
     }

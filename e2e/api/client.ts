@@ -653,6 +653,28 @@ export function getSavedMapping(token: string, entityId: string, documentId: str
   )
 }
 
+// POST /v1/imports/suggest-mapping. Mirrors internal/importer/handlers_suggest.go's
+// suggestMappingRequest/suggestMappingResponse. Flat on purpose: wireMirrors.test.ts's
+// tsInterfaceKeys reads zero keys from a body containing a nested literal.
+export interface SuggestMappingRequest {
+  entity_id: string
+  document_id: string
+}
+
+export interface SuggestMapping {
+  source: 'saved' | 'ai' | 'none'
+  header_row: number
+  columns: string[]
+  sample_rows: string[][]
+  rows_total: number
+  mapping: Record<string, string>
+  saved_at: string | null
+}
+
+export function suggestMapping(token: string, body: SuggestMappingRequest): Promise<SuggestMapping> {
+  return apiFetch<SuggestMapping>(`${apiBase()}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body, token })
+}
+
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
 // The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
 // earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.

@@ -8,6 +8,7 @@ package main
 import (
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"strings"
@@ -310,6 +311,30 @@ func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {
 
 // callSiteIndex returns the first index of name+"(" that is not its own
 // declaration, so an anchor cannot silently resolve to `func name(`.
+// sourceWithoutComments re-prints path's Go source with every comment dropped, so a
+// window or count scan reads code and nothing else. Without it a comment naming the
+// symbol satisfies the scan while the code it guards is gone.
+func sourceWithoutComments(t *testing.T, path string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0) // mode 0 attaches no comments
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, f); err != nil {
+		t.Fatalf("print %s: %v", path, err)
+	}
+	src := b.String()
+	if len(src) < 4000 || !strings.Contains(src, "func main()") {
+		t.Fatalf("%s stripped to %d byte(s) with no func main() -- a truncated read scans nothing and reports clean", path, len(src))
+	}
+	if strings.Contains(src, "// ") {
+		t.Fatalf("%s still carries a line comment after stripping -- the scans below would read prose as code", path)
+	}
+	return src
+}
+
 func callSiteIndex(src, name string) int {
 	needle := name + "("
 	const decl = "func "
@@ -374,5 +399,188 @@ func TestInvoiceMain_WiresApprovalFactsIntoGetHandler(t *testing.T) {
 	})
 	if !found {
 		t.Error("no invoice.GetHandler( call found in cmd/invoice/main.go — this test's anchor moved")
+	}
+}
+
+// TestInvoiceMain_RegistersTheSuggestMappingRoute (AIR-07-02): the AST walk
+// TestInvoiceMain_RegistersTheSavedMappingRoute uses, for the new POST sibling. The
+// control needle POST /v1/imports proves the walk finds a real, already-shipped
+// registration (and still names CreateHandler) before a negative result is trusted.
+func TestInvoiceMain_RegistersTheSuggestMappingRoute(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+
+	var foundCreate, foundSuggest bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		switch strings.Trim(lit.Value, `"`) {
+		case "POST /v1/imports":
+			foundCreate = true
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "CreateHandler" {
+				t.Error(`the control needle "POST /v1/imports" no longer names CreateHandler -- this test's anchor moved`)
+			}
+		case "POST /v1/imports/suggest-mapping":
+			foundSuggest = true
+
+			handlerCall, ok := call.Args[1].(*ast.CallExpr)
+			if !ok {
+				t.Fatalf("POST /v1/imports/suggest-mapping's second argument is %T, want a call expression", call.Args[1])
+			}
+			hsel, ok := handlerCall.Fun.(*ast.SelectorExpr)
+			if !ok || hsel.Sel.Name != "SuggestMappingHandler" {
+				t.Fatal("POST /v1/imports/suggest-mapping's handler call is not ....SuggestMappingHandler(...)")
+			}
+			if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "importer" {
+				t.Error("POST /v1/imports/suggest-mapping's handler is not importer.SuggestMappingHandler(...)")
+			}
+			if len(handlerCall.Args) != 4 {
+				t.Fatalf("importer.SuggestMappingHandler has %d argument(s), want 4 (open, lookup, ai client, logger)", len(handlerCall.Args))
+			}
+			openArg, ok := handlerCall.Args[0].(*ast.SelectorExpr)
+			if !ok || openArg.Sel.Name != "Open" {
+				t.Errorf("SuggestMappingHandler's first argument is not ....Open, got %#v", handlerCall.Args[0])
+			} else if recv, ok := openArg.X.(*ast.Ident); !ok || recv.Name != "docSvc" {
+				t.Errorf("SuggestMappingHandler's first argument is not docSvc.Open")
+			}
+			lookupArg, ok := handlerCall.Args[1].(*ast.SelectorExpr)
+			if !ok || lookupArg.Sel.Name != "SavedMapping" {
+				t.Errorf("SuggestMappingHandler's second argument is not ....SavedMapping, got %#v", handlerCall.Args[1])
+			} else if recv, ok := lookupArg.X.(*ast.Ident); !ok || recv.Name != "impStore" {
+				t.Errorf("SuggestMappingHandler's second argument is not impStore.SavedMapping")
+			}
+			if _, ok := handlerCall.Args[2].(*ast.Ident); !ok {
+				t.Errorf("SuggestMappingHandler's third argument is not a plain identifier (the ai client variable), got %#v", handlerCall.Args[2])
+			}
+			loggerArg, ok := handlerCall.Args[3].(*ast.SelectorExpr)
+			if !ok || loggerArg.Sel.Name != "Logger" {
+				t.Errorf("SuggestMappingHandler's fourth argument is not ....Logger, got %#v", handlerCall.Args[3])
+			} else if recv, ok := loggerArg.X.(*ast.Ident); !ok || recv.Name != "app" {
+				t.Errorf("SuggestMappingHandler's fourth argument is not app.Logger")
+			}
+		}
+		return true
+	})
+
+	if !foundCreate {
+		t.Fatal("control needle: no POST /v1/imports registration found -- the AST walk itself is broken, so the assertions below are vacuous")
+	}
+	if !foundSuggest {
+		t.Error(`no app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+}
+
+// TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv (AIR-07-02 Constraint/AC-5) replaces
+// the pre-Stage-1 TestInvoiceBoots_WithNoOpenRouterKey, which pinned
+// internal/platform/ai's OWN shipped behaviour (already TestFromEnv_NoKeyIsOff in
+// env_test.go) and could never turn red from a change in this file. What this file
+// owns instead: the key literal appears nowhere here, and ai.FromEnv's result is what
+// reaches SuggestMappingHandler.
+func TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv(t *testing.T) {
+	src := sourceWithoutComments(t, "main.go")
+
+	if n := strings.Count(src, `"OPENROUTER_API_KEY"`); n != 0 {
+		t.Errorf(`cmd/invoice/main.go contains the literal "OPENROUTER_API_KEY" %d time(s), want 0 -- the key must be read only inside ai.FromEnv`, n)
+	}
+
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+
+	var fromEnvVar string
+	ast.Inspect(f, func(n ast.Node) bool {
+		if fromEnvVar != "" {
+			return false
+		}
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) == 0 {
+			return true
+		}
+		call, ok := assign.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "FromEnv" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "ai" {
+			return true
+		}
+		ident, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		fromEnvVar = ident.Name
+		return false
+	})
+	if fromEnvVar == "" {
+		t.Fatal("no ai.FromEnv( assignment found in cmd/invoice/main.go -- this test's anchor moved")
+	}
+
+	var reachesHandler bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		if reachesHandler {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "SuggestMappingHandler" {
+			return true
+		}
+		for _, arg := range call.Args {
+			if ident, ok := arg.(*ast.Ident); ok && ident.Name == fromEnvVar {
+				reachesHandler = true
+			}
+		}
+		return true
+	})
+	if !reachesHandler {
+		t.Errorf("ai.FromEnv's result (%s) does not reach a SuggestMappingHandler( call as a plain argument", fromEnvVar)
+	}
+}
+
+// TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf (AIR-07-02 Constraint): an
+// unparseable AI_FAKE must stop the boot through fatal(app.Logger, ...), never
+// log.Fatalf, matching TestInvoiceMain_WiresTheApprovalsEnforcedFlag's precedent --
+// fatal's own doc comment explains why log.Fatalf is silent under LOG_LEVEL=warn.
+func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
+	src := sourceWithoutComments(t, "main.go")
+
+	idx := callSiteIndex(src, "ai.FromEnv")
+	if idx == -1 {
+		t.Fatal("cmd/invoice/main.go has no ai.FromEnv( call site -- AIR-07-02's ai client is not wired, or this test's anchor moved")
+	}
+	end := idx + 400
+	if end > len(src) {
+		end = len(src)
+	}
+	window := src[idx:end]
+	if !strings.Contains(window, "fatal(") {
+		t.Errorf("no fatal( within 400 bytes after the ai.FromEnv( call site -- an unparseable AI_FAKE must stop the boot:\n%s", window)
+	}
+	if strings.Contains(window, "log.Fatal") {
+		t.Errorf("found log.Fatal within 400 bytes after the ai.FromEnv( call site -- use fatal(app.Logger, ...), which logs at ERROR:\n%s", window)
 	}
 }

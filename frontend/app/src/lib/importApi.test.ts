@@ -68,6 +68,7 @@ import {
   previewImport,
   readingForDocument,
   rowErrorRows,
+  suggestMapping,
   supplyInvoiceNumber,
   uploadPercent,
   type CarriedReading,
@@ -76,6 +77,8 @@ import {
   type ImportPreview,
   type ImportReport,
   type SavedMapping,
+  type SuggestMapping,
+  type SuggestMappingRequest,
   type SupplyNumberRequest,
   type UploadPhase,
   type XhrCtor,
@@ -453,6 +456,27 @@ describe('createImport', () => {
     // both channels must be .map-able, never a crash on the commonest outcome (D1)
     expect(() => result.errors.map((e) => e.message)).not.toThrow()
     expect(() => result.invoice_violations.map((v) => v.invoice_number)).not.toThrow()
+  })
+
+  // AIR-07-03 AC-2. parseHeaderRow (handlers.go) reads an absent part as row 1, so
+  // omitting the part at row 1 is the free choice that keeps IMPAPI-04/28 green.
+  it('IMPAPI-29: createImport omits header_row at row 1 and at absent, and sends it above 1', async () => {
+    for (const req of [makeReq(), { ...makeReq(), headerRow: 1 }]) {
+      FakeXhr.reset()
+      const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)
+      FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+      await promise
+
+      const entries = Array.from(FakeXhr.last()!.body!.entries())
+      expect(entries.map(([k]) => k).sort()).toEqual(['document_id', 'entity_id', 'mapping', 'remember_mapping'])
+    }
+
+    FakeXhr.reset()
+    const promise = createImport(fakeAuth(), base, { ...makeReq(), headerRow: 3 }, () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    expect(FakeXhr.last()!.body!.getAll('header_row')).toEqual(['3'])
   })
 })
 
@@ -1016,6 +1040,95 @@ describe('getSavedMapping', () => {
     expect(err401).toBeInstanceOf(ApiError)
     expect((err401 as ApiError).status).toBe(401)
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+})
+
+// suggestMapping: the AI mapping suggestion POST. Same authedFetch seam as getSavedMapping,
+// so the refusal contract is QA-15's, unchanged.
+describe('suggestMapping (AIR-07-03)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('IMPAPI-30: suggestMapping POSTs JSON through authedFetch, never the XHR transport', async () => {
+    FakeXhr.reset()
+    const req: SuggestMappingRequest = { entity_id: 'entity-1', document_id: DOC_ID }
+    const response: SuggestMapping = {
+      source: 'ai',
+      header_row: 1,
+      columns: ['Invoice No'],
+      sample_rows: [['INV-1']],
+      rows_total: 1,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: null,
+    }
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(response) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    const result = await suggestMapping(af, base, req)
+
+    expect(result).toEqual(response)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(`${base}/api/invoice/v1/imports/suggest-mapping`)
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual(req)
+    expect(FakeXhr.instances).toEqual([])
+  })
+
+  it('QA-16: a refusal rejects the ApiError unchanged, exactly as getSavedMapping does', async () => {
+    mockFetchOnce({ ok: false, status: 500, statusText: 'Internal Server Error', json: () => Promise.reject(new Error('no body')) })
+    const err500 = await captureRejection(() =>
+      suggestMapping(createAuthedFetch(() => 'tok', vi.fn()), base, { entity_id: 'e1', document_id: DOC_ID }),
+    )
+    expect(err500).toBeInstanceOf(ApiError)
+    expect((err500 as ApiError).kind).toBe('http')
+    expect((err500 as ApiError).status).toBe(500)
+
+    const onUnauthorized = vi.fn()
+    mockFetchOnce({ ok: false, status: 401, statusText: 'Unauthorized', json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const err401 = await captureRejection(() =>
+      suggestMapping(createAuthedFetch(() => 'tok', onUnauthorized), base, { entity_id: 'e1', document_id: DOC_ID }),
+    )
+    expect(err401).toBeInstanceOf(ApiError)
+    expect((err401 as ApiError).status).toBe(401)
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+  })
+
+  // Go tags saved_at without omitempty, so every response carries it; the 'none' source
+  // carries an empty column list rather than omitting the key.
+  it('QA-17: a saved-source body round-trips a non-null saved_at, and a none-source body round-trips empty collections', async () => {
+    const saved: SuggestMapping = {
+      source: 'saved',
+      header_row: 3,
+      columns: ['Invoice No', 'Total'],
+      sample_rows: [['INV-1', '100']],
+      rows_total: 2,
+      mapping: { invoice_number: 'Invoice No' },
+      saved_at: '2026-09-01T10:15:00Z',
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(saved) })
+    const a = await suggestMapping(createAuthedFetch(() => 'tok', vi.fn()), base, { entity_id: 'e1', document_id: DOC_ID })
+    expect(a.saved_at).toBe('2026-09-01T10:15:00Z')
+    expect(a.columns.length, 'the fixture must carry columns for the assertion below to mean anything').toBeGreaterThan(0)
+    expect(a.columns).toEqual(saved.columns)
+    expect(a.sample_rows).toEqual(saved.sample_rows)
+    expect(a.header_row).toBe(3)
+
+    const none: SuggestMapping = {
+      source: 'none',
+      header_row: 1,
+      columns: [],
+      sample_rows: [],
+      rows_total: 0,
+      mapping: {},
+      saved_at: null,
+    }
+    mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(none) })
+    const b = await suggestMapping(createAuthedFetch(() => 'tok', vi.fn()), base, { entity_id: 'e1', document_id: DOC_ID })
+    expect(b).toEqual(none)
+    expect(b.saved_at, 'a null saved_at must survive, not become undefined').toBeNull()
+    expect('saved_at' in b, 'saved_at is never omitted: Go carries no omitempty').toBe(true)
   })
 })
 

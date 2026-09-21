@@ -203,6 +203,7 @@ export interface CreateImportRequest {
   entityId: string
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
   rememberMapping: boolean
+  headerRow?: number // absent or 1 sends no part; parseHeaderRow reads "" as row 1
 }
 
 export type UploadPhase =
@@ -345,6 +346,10 @@ export async function createImport(
   form.append('mapping', JSON.stringify(req.mapping))
   form.append('document_id', req.documentId)
   form.append('remember_mapping', req.rememberMapping ? 'true' : 'false')
+  // parseHeaderRow (handlers.go) reads an absent part as row 1, so omitting it at row 1
+  // is a free choice that keeps IMPAPI-04/28's exact key list green (IMPAPI-29).
+  const headerRow = req.headerRow ?? 1
+  if (headerRow > 1) form.append('header_row', String(headerRow))
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)
@@ -437,6 +442,24 @@ export interface SavedMappingResponse {
   saved_mapping: SavedMapping | null
 }
 
+// POST /v1/imports/suggest-mapping. Mirrors internal/importer/handlers_suggest.go's
+// suggestMappingRequest/suggestMappingResponse. Flat on purpose: wireMirrors.test.ts's
+// tsInterfaceKeys reads zero keys from a body containing a nested literal.
+export interface SuggestMappingRequest {
+  entity_id: string
+  document_id: string
+}
+
+export interface SuggestMapping {
+  source: 'saved' | 'ai' | 'none'
+  header_row: number
+  columns: string[]
+  sample_rows: string[][]
+  rows_total: number
+  mapping: Record<string, string>
+  saved_at: string | null
+}
+
 export async function getSavedMapping(
   authedFetch: AuthedFetch,
   base: string,
@@ -468,6 +491,14 @@ export async function supplyInvoiceNumber(
   req: SupplyNumberRequest,
 ): Promise<InvoiceRecord> {
   return authedFetch<InvoiceRecord>(`${base}/api/invoice/v1/imports/document/invoice`, { method: 'POST', body: req })
+}
+
+export async function suggestMapping(
+  authedFetch: AuthedFetch,
+  base: string,
+  req: SuggestMappingRequest,
+): Promise<SuggestMapping> {
+  return authedFetch<SuggestMapping>(`${base}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body: req })
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

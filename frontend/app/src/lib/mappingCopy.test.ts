@@ -1,4 +1,4 @@
-// Static copy guard for the "never guessed" rewording. Mirrors
+// Static copy guard for the "never matched by name" rewording. Mirrors
 // reviewCopy.census.test.ts's readSrc idiom -- source-text assertions, not render.
 
 import { readFileSync } from 'node:fs'
@@ -7,38 +7,83 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const CREATE_MAPPING = 'src/components/CreateMapping.tsx'
+const CLIENTS = 'src/lib/clients.ts'
+const CREATE_FORM = 'src/components/CreateForm.tsx'
+const MAPPING_LIB = 'src/lib/mapping.ts'
+const TYPES = 'src/types.ts'
+
+const SHARED_SENTENCE = `the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`
 
 function readSrc(rel: string): string {
   return readFileSync(path.join(process.cwd(), rel), 'utf8')
 }
 
 describe('mappingCopy', () => {
-  it(`COPY-01: every "never guessed" line in CreateMapping.tsx also says the invoice number is only restored from this client's earlier import`, () => {
+  it(`COPY-01: every "never matched by name" line in CreateMapping.tsx also carries the whole rule sentence`, () => {
     const src = readSrc(CREATE_MAPPING)
     expect(src, 'control: the file must actually be read').toContain('export function CreateMapping(')
 
-    const lines = src.split('\n').filter((l) => l.includes('never guessed'))
-    expect(lines, 'exactly three lines must say "never guessed"').toHaveLength(3)
+    const lines = src.split('\n').filter((l) => l.includes('never matched by name'))
+    expect(lines, 'exactly three lines must say "never matched by name"').toHaveLength(3)
 
-    const missing = lines.filter((l) => !l.includes("only restored from this client's earlier import"))
+    const missing = lines.filter((l) => !l.includes(SHARED_SENTENCE))
     expect(missing).toEqual([])
   })
 
-  it(`COPY-02: the three reworded sites carry System Design §6's exact wording`, () => {
+  it(`COPY-02: the three reworded sites carry the exact wording, and the legend names SUGGESTED then RESTORED`, () => {
     const src = readSrc(CREATE_MAPPING)
     const needles = [
-      `// badged AUTO — except the invoice number, which is never guessed, only restored from this client's earlier import.`,
-      `Drag invoice_number onto a column to continue — the invoice number is never guessed, only restored from this client's earlier import.`,
-      `— the invoice number is never guessed, only restored from this client's earlier import and marked`,
+      `// badged AUTO — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`,
+      `Drag invoice_number onto a column to continue — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.`,
+      `and confirmed with Continue. A suggestion is marked`,
     ]
     for (const n of needles) {
       expect(src.includes(n), n).toBe(true)
     }
 
-    const after = src.slice(src.indexOf(needles[2]!) + needles[2]!.length).replace(/^\{' '\}\s*/, '')
+    const suggestedSpan = `<span className="mono" style={{ fontSize: 10, color: 'var(--status-amber-text)' }}>SUGGESTED</span>, a restore`
+    const restoredSpan = `<span className="mono" style={{ fontSize: 10, color: 'var(--action)' }}>RESTORED</span>.`
+
+    const afterSuggestedNeedle = src.slice(src.indexOf(needles[2]!) + needles[2]!.length).replace(/^\{' '\}\s*/, '')
+    expect(afterSuggestedNeedle.startsWith(suggestedSpan), 'the legend must name SUGGESTED next, in the amber colour').toBe(true)
+
+    const afterSuggestedSpan = afterSuggestedNeedle.slice(suggestedSpan.length).replace(/^\{' '\}\s*/, '')
     expect(
-      after.startsWith(`<span className="mono" style={{ fontSize: 10, color: 'var(--action)' }}>RESTORED</span>.`),
+      afterSuggestedSpan.startsWith(restoredSpan),
       'the RESTORED span, in the action colour, must close the reworded sentence',
     ).toBe(true)
+  })
+
+  it(`COPY-03: the old "never guessed" wording is gone from CreateMapping.tsx`, () => {
+    const src = readSrc(CREATE_MAPPING)
+    expect(src.includes('never matched by name'), 'control: the new wording must be present').toBe(true)
+    expect(src.includes('never guessed')).toBe(false)
+  })
+
+  it(`COPY-04: the manual form's rule is untouched`, () => {
+    const clientsSrc = readSrc(CLIENTS)
+    expect(clientsSrc, 'control: the file must actually be read').toContain('export function defaultDraft(')
+    expect(clientsSrc).toContain('//   invoice number is a fiscal identifier the product never guesses (§9).')
+    expect(clientsSrc.includes('never matched by name')).toBe(false)
+
+    const createFormSrc = readSrc(CREATE_FORM)
+    expect(createFormSrc, 'control: the file must actually be read').toContain('export function CreateForm(')
+    expect(createFormSrc).toContain('identifier the product does not guess. */}')
+    expect(createFormSrc.includes('never matched by name')).toBe(false)
+  })
+
+  // AC-3 names five sites; COPY-01/02/03 above only guard the three in CreateMapping.tsx.
+  // These two describe a different subject each (the ALIAS table; the CanonField type), so
+  // they get their own honest wording rather than the shared UI sentence forced in verbatim.
+  it(`COPY-05: mapping.ts and types.ts are honest about how invoice_number gets placed`, () => {
+    const mappingSrc = readSrc(MAPPING_LIB)
+    expect(mappingSrc, 'control: the file must actually be read').toContain('export function recognize(')
+    expect(mappingSrc).toContain('this table never name-matches it; a suggestion or a restore is the only automatic route.')
+    expect(mappingSrc.includes('the fiscal identifier is never guessed')).toBe(false)
+
+    const typesSrc = readSrc(TYPES)
+    expect(typesSrc, 'control: the file must actually be read').toContain('export type CanonField = {')
+    expect(typesSrc).toContain('alias recognition never guesses it; a suggestion or a restore is the only automatic route.')
+    expect(typesSrc.includes('that recognition never guesses')).toBe(false)
   })
 })

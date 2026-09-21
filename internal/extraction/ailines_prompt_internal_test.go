@@ -372,3 +372,39 @@ func TestAliRunPy_TheKeyAndCostGuardsAreIntact(t *testing.T) {
 		t.Errorf(`"Bearer " + KEY occurs %d times, want exactly 1`, c)
 	}
 }
+
+// T11: a refusal returns immediately (never retried) after cost accounting, and a malformed
+// line_items payload raises rather than silently becoming an empty list.
+func TestAliRunPy_ARefusalIsTerminalAndAMalformedLineItemsIsAnError(t *testing.T) {
+	src := aliRunPy(t)
+
+	refusalBlock := "            if refusal or not content:\n" +
+		"                rec[\"refused\"] = True\n" +
+		"                rec[\"error\"] = \"refused: \" + (refusal or resp[\"choices\"][0].get(\"finish_reason\") or \"empty content\")[:300]\n" +
+		"                return rec"
+	if !strings.Contains(src, refusalBlock) {
+		t.Errorf("run.py is missing the terminal refusal block:\n%s", refusalBlock)
+	}
+
+	costIdx, refusalIdx := strings.Index(src, `spent[0] += rec["cost"]`), strings.Index(src, refusalBlock)
+	if costIdx < 0 || refusalIdx < 0 || costIdx > refusalIdx {
+		t.Error("cost accounting must happen before the refusal check, not after")
+	}
+
+	malformedGuard := "                if not isinstance(rows, list):\n" +
+		"                    raise ValueError(\"line_items is not a list\")"
+	if !strings.Contains(src, malformedGuard) {
+		t.Errorf("run.py is missing the malformed line_items guard:\n%s", malformedGuard)
+	}
+
+	fallbacks := []string{
+		`.get("line_items", [])`,
+		`.get("line_items") or []`,
+		`["line_items"] or []`,
+	}
+	for _, f := range fallbacks {
+		if strings.Contains(src, f) {
+			t.Errorf("run.py contains %q -- a malformed line_items payload must be an error, never an empty-list fallback", f)
+		}
+	}
+}

@@ -2,7 +2,7 @@
 // no DOM, no network call, nothing persisted (EXTR-14 owns learned mappings). Everything the
 // grid decides without a DOM lives here, so it has an oracle without one.
 
-import type { ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
+import type { ExtractionCandidate, ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
 import { addScaled, mulScaled, parseScaled, renderScaled, type Scaled } from './invoices'
 
 export type LineRole = 'description' | 'quantity' | 'unit_price' | 'line_total'
@@ -26,6 +26,8 @@ export interface LineCell {
   value: string
   region: ExtractionRegion | null
   reason: ExtractionReason
+  // Always present, never undefined -- Go writes no omitempty (ExtractionFieldState's own rule).
+  alternatives: ExtractionCandidate[]
 }
 
 export interface LineRow {
@@ -93,7 +95,7 @@ export function parseLineFieldName(name: string): { index: number; role: LineWir
 // -- grouping -------------------------------------------------------------------------------
 
 function blankCell(name: string | null): LineCell {
-  return { name, value: '', region: null, reason: '' }
+  return { name, value: '', region: null, reason: '', alternatives: [] }
 }
 
 // The wire arrives lexicographic (reader.go's ORDER BY ties on created_at), so
@@ -124,9 +126,20 @@ export function linesFromFields(fields: readonly ExtractionFieldState[]): LineRo
       value: field.value ?? '',
       region: field.region,
       reason: field.reason,
+      alternatives: field.alternatives,
     }
   }
   return [...byIndex.keys()].sort((a, b) => a - b).map((index) => byIndex.get(index) as LineRow)
+}
+
+// -- ambiguity --------------------------------------------------------------------------------
+
+// ExtractionFields' own gate, verbatim, so the two surfaces cannot drift apart: null unless the
+// cell is ambiguous AND carries a real alternative to choose between.
+export function cellCandidates(cell: LineCell): ExtractionCandidate[] | null {
+  return cell.reason === 'ambiguous' && cell.alternatives.length > 0
+    ? [{ value: cell.value, region: cell.region }, ...cell.alternatives]
+    : null
 }
 
 // -- arithmetic -----------------------------------------------------------------------------

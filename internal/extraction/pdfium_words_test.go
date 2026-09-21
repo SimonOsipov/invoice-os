@@ -392,12 +392,12 @@ func TestPDFiumWords_SplitGapStaysInsideItsMeasuredWindow(t *testing.T) {
 
 // --- AC-4: text and box rules -----------------------------------------------------------------
 
-// AC-4/AC-12 control: on the 29 every group is single-rect, so the merged slice must be
+// AC-4/AC-12 control: on the 30 every group is single-rect, so the merged slice must be
 // byte-identical to today's, index for index.
 func TestPDFiumWords_ASingleRectTokenIsUnchanged(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 29 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29", len(names))
+	if len(names) != 30 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 30", len(names))
 	}
 
 	compared := 0

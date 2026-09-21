@@ -251,6 +251,13 @@ func MergeAIForTest(engine []FieldResult, answer map[string]string, pages []Toke
 	return mergeAI(engine, answer, pages, lines)
 }
 
+// MergeAILinesForTest hands the external fixtures test the line-merge step over a fixture-built
+// engine/answer/pages triple, so TestFixtures_AILinesMergeMatchesTheCommittedMarker drives
+// mergeAILines without a worker.
+func MergeAILinesForTest(rows []FieldResult, ai []AILine, pages []TokenPage) []FieldResult {
+	return mergeAILines(rows, ai, pages)
+}
+
 // PDFiumWordsForTest runs the merge at an explicit splitGap and returns the group count too, so
 // a vanished token is visible. textChars is computed independently of pdfiumTokens' own
 // signature (which subtask 03 may or may not change): non-whitespace runes of the input rects,

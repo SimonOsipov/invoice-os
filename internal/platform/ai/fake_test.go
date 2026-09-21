@@ -52,6 +52,11 @@ func answerMarker(content string) string {
 	return markerAnswerPrefix + base64.RawURLEncoding.EncodeToString([]byte(content))
 }
 
+// scopedAnswerMarker builds an AIFAKE-<SCOPE>-ANSWER-<base64url> marker for content.
+func scopedAnswerMarker(scope, content string) string {
+	return "AIFAKE-" + scope + "-ANSWER-" + base64.RawURLEncoding.EncodeToString([]byte(content))
+}
+
 var wantBlankTop = map[string]any{"total": nil, "vat": nil, "currency": nil, "n": nil}
 var wantValidContent = map[string]any{"total": "1935.00", "vat": nil, "currency": "NGN", "n": json.Number("3")}
 
@@ -338,6 +343,30 @@ func TestFake_ValidatesTheRequest(t *testing.T) {
 		"disallowed_keyword": func() Request {
 			r := baseReq()
 			r.Schema = disallowedKeyword
+			return r
+		},
+		// Real-path mirror: TestCall_InvalidRequestSendsNothing "fake_scope_lowercase".
+		"fake_scope_lowercase": func() Request {
+			r := baseReq()
+			r.FakeScope = "lines"
+			return r
+		},
+		// Real-path mirror: TestCall_InvalidRequestSendsNothing "fake_scope_digit".
+		"fake_scope_digit": func() Request {
+			r := baseReq()
+			r.FakeScope = "LINE5"
+			return r
+		},
+		// Real-path mirror: TestCall_InvalidRequestSendsNothing "fake_scope_hyphen".
+		"fake_scope_hyphen": func() Request {
+			r := baseReq()
+			r.FakeScope = "LINE-S"
+			return r
+		},
+		// Real-path mirror: TestCall_InvalidRequestSendsNothing "fake_scope_metacharacter".
+		"fake_scope_metacharacter": func() Request {
+			r := baseReq()
+			r.FakeScope = "LI.*"
 			return r
 		},
 	}
@@ -789,6 +818,176 @@ func TestCall_OffAnswersBeforeItReadsTheRequest(t *testing.T) {
 			}
 			if answer != nil {
 				t.Errorf("answer = %#v, want nil", answer)
+			}
+		})
+	}
+}
+
+// -- AIR-08-11: FakeScope --
+
+// linesAnswerContent is a 2-row line_items payload. Its base64.RawURLEncoding output is
+// verified in TestFake_ScopedPayloadClassRoundTripsDashAndUnderscore to contain BOTH '-' and
+// '_' -- a payload that happens to avoid one of them proves nothing about the payload class
+// (fake-marker-regex-char-class-is-unpinned).
+const linesAnswerContent = `{"line_items":[{"description":"Diesel generator rental? spec ~A1, ~B2, ~C3? unit?","line_tax":"21375.00","line_total":"285000.00","quantity":"1","unit_price":"285000.00"},{"description":"Cable and conduit install, block? ~D4 ~E5 ~F6?","line_tax":"10875.00","line_total":"145000.00","quantity":"2","unit_price":"72500.00"}]}`
+
+var linesSchema = json.RawMessage(`{"type":"object","additionalProperties":false,"required":["line_items"],"properties":{"line_items":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["description","quantity","unit_price","line_total","line_tax"],"properties":{"description":{"type":["string","null"]},"quantity":{"type":["string","null"]},"unit_price":{"type":["string","null"]},"line_total":{"type":["string","null"]},"line_tax":{"type":["string","null"]}}}}}}`)
+
+var wantLinesAnswer = map[string]any{
+	"line_items": []any{
+		map[string]any{
+			"description": "Diesel generator rental? spec ~A1, ~B2, ~C3? unit?",
+			"line_tax":    "21375.00",
+			"line_total":  "285000.00",
+			"quantity":    "1",
+			"unit_price":  "285000.00",
+		},
+		map[string]any{
+			"description": "Cable and conduit install, block? ~D4 ~E5 ~F6?",
+			"line_tax":    "10875.00",
+			"line_total":  "145000.00",
+			"quantity":    "2",
+			"unit_price":  "72500.00",
+		},
+	},
+}
+
+// TestFake_ScopedPayloadClassRoundTripsDashAndUnderscore pins AC-9: a payload whose
+// RawURLEncoding actually contains both '-' and '_' must still decode through the scoped
+// marker, proving the payload class is [A-Za-z0-9_-]+ and not a narrower one that happens to
+// pass on an example lucky enough to avoid one of the two characters.
+func TestFake_ScopedPayloadClassRoundTripsDashAndUnderscore(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(linesAnswerContent))
+	if !strings.Contains(payload, "-") || !strings.Contains(payload, "_") {
+		t.Fatalf("control: payload encoding is %q, want it to contain both '-' and '_'", payload)
+	}
+
+	c := fakeModeClient(t)
+	req := baseReq()
+	req.FakeScope = "LINES"
+	req.Schema = linesSchema
+	req.Text = scopedAnswerMarker("LINES", linesAnswerContent)
+
+	got, err := fakeCallWithin(t, c, req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(got, wantLinesAnswer) {
+		t.Errorf("Call() = %#v, want %#v", got, wantLinesAnswer)
+	}
+}
+
+// AC-2: a scoped request must not decode an unscoped marker's payload against its own schema --
+// the fallback is exactly the bug this story fixes.
+func TestFake_ScopedRequestIgnoresAnUnscopedMarker(t *testing.T) {
+	c := fakeModeClient(t)
+	req := baseReq()
+	req.FakeScope = "LINES"
+	req.Text = answerMarker(validContent)
+
+	answer, err := fakeCallWithin(t, c, req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(answer, wantBlankTop) {
+		t.Errorf("Call() = %#v, want %#v (an unscoped marker must not steer a scoped call)", answer, wantBlankTop)
+	}
+}
+
+// AC-3: the scoped spelling is invisible to markerRe, so an unscoped request reads it as no
+// marker at all -- asserted both through Call and directly against markerRe.
+func TestFake_UnscopedRequestIgnoresAScopedMarker(t *testing.T) {
+	c := fakeModeClient(t)
+	req := baseReq()
+	req.Text = scopedAnswerMarker("LINES", validContent)
+
+	answer, err := fakeCallWithin(t, c, req)
+	if err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(answer, wantBlankTop) {
+		t.Errorf("Call() = %#v, want %#v", answer, wantBlankTop)
+	}
+}
+
+func TestMarkerRe_DoesNotMatchAScopedMarker(t *testing.T) {
+	cases := map[string]string{
+		"scoped_answer":      scopedAnswerMarker("LINES", validContent),
+		"scoped_unavailable": "AIFAKE-LINES-UNAVAILABLE",
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			if m := markerRe.FindString(text); m != "" {
+				t.Errorf("markerRe matched %q inside %q, want no match", m, text)
+			}
+		})
+	}
+}
+
+// AC-4: one text carrying both an unscoped and a scoped marker steers each call to its own
+// payload, in either textual order.
+func TestFake_ScopedAndUnscopedMarkersSteerIndependently(t *testing.T) {
+	scoped := scopedAnswerMarker("LINES", otherContent)
+	unscoped := answerMarker(validContent)
+
+	cases := map[string]string{
+		"unscoped_first": unscoped + " then " + scoped,
+		"scoped_first":   scoped + " then " + unscoped,
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := fakeModeClient(t)
+
+			headerReq := baseReq()
+			headerReq.Text = text
+			headerAnswer, err := fakeCallWithin(t, c, headerReq)
+			if err != nil {
+				t.Fatalf("unscoped Call() err = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(headerAnswer, wantValidContent) {
+				t.Errorf("unscoped Call() = %#v, want %#v", headerAnswer, wantValidContent)
+			}
+
+			lineReq := baseReq()
+			lineReq.FakeScope = "LINES"
+			lineReq.Text = text
+			lineAnswer, err := fakeCallWithin(t, c, lineReq)
+			if err != nil {
+				t.Fatalf("scoped Call() err = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(lineAnswer, wantOtherContent) {
+				t.Errorf("scoped Call() = %#v, want %#v", lineAnswer, wantOtherContent)
+			}
+		})
+	}
+}
+
+// AC-5: AIFAKE-LINES-UNAVAILABLE fails only the scoped call; an unscoped call reading the same
+// text still answers its own marker.
+func TestFake_ScopedUnavailableFailsOnlyTheScopedCall(t *testing.T) {
+	cases := map[string]string{
+		"unavailable_first": "AIFAKE-LINES-UNAVAILABLE then " + answerMarker(validContent),
+		"answer_first":      answerMarker(validContent) + " then AIFAKE-LINES-UNAVAILABLE",
+	}
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := fakeModeClient(t)
+
+			lineReq := baseReq()
+			lineReq.FakeScope = "LINES"
+			lineReq.Text = text
+			if _, err := fakeCallWithin(t, c, lineReq); !errors.Is(err, ErrUnavailable) {
+				t.Errorf("scoped Call() err = %v, want ErrUnavailable", err)
+			}
+
+			headerReq := baseReq()
+			headerReq.Text = text
+			headerAnswer, err := fakeCallWithin(t, c, headerReq)
+			if err != nil {
+				t.Fatalf("unscoped Call() err = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(headerAnswer, wantValidContent) {
+				t.Errorf("unscoped Call() = %#v, want %#v", headerAnswer, wantValidContent)
 			}
 		})
 	}

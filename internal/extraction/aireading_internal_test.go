@@ -211,6 +211,9 @@ func TestAskAI_SendsOneDocumentCallWithTheText(t *testing.T) {
 	if req.FakeHint != "" {
 		t.Errorf("FakeHint = %q, want empty", req.FakeHint)
 	}
+	if req.FakeScope != "" {
+		t.Errorf("FakeScope = %q, want empty -- the header call is unscoped", req.FakeScope)
+	}
 }
 
 func TestAskAI_OffOrNilMakesNoCall(t *testing.T) {
@@ -620,5 +623,30 @@ func TestAICheck_TheBoxIsTheWholeLine(t *testing.T) {
 	}
 	if readingU.Region != nil {
 		t.Errorf("region = %v, want nil for an unusable box", readingU.Region)
+	}
+}
+
+func TestCallAI_DropsAKeyThatIsNotAHeaderField(t *testing.T) {
+	r := &recordingAI{enabled: true, answer: map[string]any{
+		"invoice_number": "INV-1",
+		"line_items":     "whatever the model felt like",
+		"not_a_field":    "also dropped",
+	}}
+
+	out, failed := callAI(context.Background(), r, ai.Request{})
+
+	if failed {
+		t.Fatal("callAI failed on a well-formed answer")
+	}
+	if len(out) == 0 {
+		t.Fatal("callAI returned nothing, so the drop assertions below prove nothing")
+	}
+	if got, ok := out["invoice_number"]; !ok || got != "INV-1" {
+		t.Errorf("invoice_number = %q, %v; want INV-1 kept", got, ok)
+	}
+	for _, k := range []string{"line_items", "not_a_field"} {
+		if _, ok := out[k]; ok {
+			t.Errorf("%q survived callAI; only HeaderFields may", k)
+		}
 	}
 }

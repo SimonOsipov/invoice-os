@@ -5,8 +5,8 @@
 
 import type { CSSProperties } from 'react'
 
-import { reasonPill } from '../lib/extractionReview'
-import { LINE_ROLES, lineSumState, rowArithmetic } from '../lib/lineItems'
+import { reasonPill, regionPhrase } from '../lib/extractionReview'
+import { LINE_ROLES, cellCandidates, lineSumState, rowArithmetic } from '../lib/lineItems'
 import type { LineRole, LineRow } from '../lib/lineItems'
 
 const EMPTY_FOUND = 'We found no line items on this document.'
@@ -82,6 +82,43 @@ const MARKER: CSSProperties = {
 // INPUT (`:127`): the class carries the box and `width: 100%`; the padding is the marker's room
 // and there is no inline width.
 const INPUT: CSSProperties = { paddingRight: 30 }
+
+// CHIP_ROW/CHIP/CHIP_PICKED/CHIP_VALUE/CHIP_WHERE (ExtractionFields.tsx), unchanged: an
+// ambiguous line cell reads as the same object an ambiguous header field does.
+const CHIP_ROW: CSSProperties = { display: 'flex', gap: 8 }
+
+const CHIP: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  textAlign: 'left',
+  border: '1px solid var(--line-2)',
+  background: 'var(--bg-2)',
+  borderRadius: 10,
+  padding: '8px 11px',
+  fontFamily: 'var(--font-sans)',
+  cursor: 'pointer',
+  transition: 'background 120ms, border-color 120ms, color 120ms',
+}
+
+const CHIP_PICKED: CSSProperties = { ...CHIP, border: '1px solid var(--action)' }
+
+const CHIP_VALUE: CSSProperties = {
+  display: 'block',
+  fontSize: 13,
+  fontWeight: 500,
+  color: 'var(--fg-1)',
+  overflowWrap: 'anywhere',
+}
+
+const CHIP_WHERE: CSSProperties = {
+  display: 'block',
+  fontSize: 8.5,
+  color: 'var(--fg-3)',
+  letterSpacing: '0.05em',
+  marginTop: 4,
+  textTransform: 'uppercase',
+  overflowWrap: 'anywhere',
+}
 
 // The role selector is the column heading. `.pf-input` for the box; no `.pf-btn`, which forces
 // a pill radius (app-layer.css:275).
@@ -207,6 +244,13 @@ export function LineItemGrid({
                   const n = at + 1
                   const wire = wireRows.find((w) => w.key === row.key) ?? null
                   const flagged = rowArithmetic(row) === 'flagged'
+                  // The candidate set is read off the WIRE cell, never the draft: candidate 0 is
+                  // the engine's own reading, which must stay fixed while a person tries the
+                  // alternatives, exactly as ExtractionFields keeps `wire` apart from `draft`.
+                  const ambiguous =
+                    LINE_ROLES.map((role) => cellCandidates(wire?.cells[role] ?? row.cells[role])).find(
+                      (c) => c !== null,
+                    ) ?? null
                   return (
                     <tr key={row.key} data-testid={`line-item-row-${n}`}>
                       {LINE_ROLES.map((role) => {
@@ -217,6 +261,9 @@ export function LineItemGrid({
                         const on = cell.name !== null && cell.name === selected
                         // No wire counterpart means an appended row, which is never marked.
                         const changed = wire !== null && wire.cells[role].value !== cell.value
+                        // Candidates come off the WIRE cell (never mutated by an edit); the pick
+                        // below still resolves against the DRAFT cell's own current value.
+                        const candidates = cellCandidates(wire?.cells[role] ?? cell)
                         return (
                           <td
                             key={role}
@@ -225,17 +272,45 @@ export function LineItemGrid({
                             onClick={cell.name === null ? undefined : () => onSelectCell(cell.name as string)}
                             style={on ? SELECTED_CELL : CELL}
                           >
-                            <span style={CONTROL}>
-                              <input
-                                data-testid={`line-item-input-${n}-${role}`}
-                                className="pf-input"
-                                value={cell.value}
-                                aria-label={`Line ${n} ${ROLE_LABEL[role].toLowerCase()}`}
-                                onChange={(e) => onEditCell(at, role, e.target.value)}
-                                style={INPUT}
-                              />
-                              {changed ? <span data-testid={`line-item-marker-${n}-${role}`} style={MARKER} /> : null}
-                            </span>
+                            {candidates === null ? (
+                              <span style={CONTROL}>
+                                <input
+                                  data-testid={`line-item-input-${n}-${role}`}
+                                  className="pf-input"
+                                  value={cell.value}
+                                  aria-label={`Line ${n} ${ROLE_LABEL[role].toLowerCase()}`}
+                                  onChange={(e) => onEditCell(at, role, e.target.value)}
+                                  style={INPUT}
+                                />
+                                {changed ? (
+                                  <span data-testid={`line-item-marker-${n}-${role}`} style={MARKER} />
+                                ) : null}
+                              </span>
+                            ) : (
+                              <span style={CHIP_ROW}>
+                                {candidates.map((a, i) => (
+                                  <button
+                                    key={`${a.value ?? ''}-${i}`}
+                                    type="button"
+                                    data-testid={`line-item-chip-${n}-${role}-${i}`}
+                                    aria-current={a.value === cell.value}
+                                    onClick={() => onEditCell(at, role, a.value ?? '')}
+                                    style={a.value === cell.value ? CHIP_PICKED : CHIP}
+                                  >
+                                    <span style={CHIP_VALUE}>{a.value ?? ''}</span>
+                                    {regionPhrase(a.region) === null ? null : (
+                                      <span
+                                        className="mono"
+                                        data-testid={`line-item-chip-where-${n}-${role}-${i}`}
+                                        style={CHIP_WHERE}
+                                      >
+                                        {regionPhrase(a.region)}
+                                      </span>
+                                    )}
+                                  </button>
+                                ))}
+                              </span>
+                            )}
                           </td>
                         )
                       })}
@@ -246,6 +321,11 @@ export function LineItemGrid({
                               {reasonPill('inconsistent', 0)}
                             </span>
                           ) : null}
+                          {ambiguous === null ? null : (
+                            <span className="mono" data-testid={`line-item-ambiguous-${n}`} style={PILL}>
+                              {reasonPill('ambiguous', ambiguous.length)}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td style={CELL}>

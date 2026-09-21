@@ -255,20 +255,27 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 			}
 			if err == nil {
 				// octx, not ctx: the client's ai call log line reads tenant_id off it.
+				// Sequential, header first: the line call only runs once the header call has
+				// not failed, so ErrOff still reaches it but a real failure spends one call.
 				answer, failed := askAI(octx, w.AI, textTokens)
+				var lineAnswer []AILine
+				if !failed {
+					lineAnswer, failed = askAILines(octx, w.AI, textTokens)
+				}
 				if failed {
-					// Q9: no engine fallback.
+					// Q9: no engine fallback -- one policy for both calls.
 					results = aiUnavailableResults()
 				} else {
 					lines := LineItems(textPages)
 					// Entity{} skips Reconcile's advisory supplier cross-check; invoice.Store
 					// overwrites supplier_tin/supplier_name from the entity on every write anyway.
-					results = mergeAI(Reconcile(Input{
+					merged := mergeAI(Reconcile(Input{
 						Candidates: Resolve(textTokens, RuleSet{Learned: learned, Tier1: Tier1Rules}),
 						Lines:      lines,
 						Entity:     Entity{},
 						Pages:      textTokens,
 					}), answer, textTokens, lines)
+					results = mergeAILines(merged, lineAnswer, textTokens)
 				}
 			}
 		}

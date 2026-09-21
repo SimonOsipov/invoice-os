@@ -101,16 +101,25 @@ func askAI(ctx context.Context, r AIReader, pages []TokenPage) (map[string]strin
 	})
 }
 
-// callAI is askAI's and askAIPages' shared call: the off check, one Call, the aiFailed policy
-// and the blank-string filter. Both callers therefore share one failure policy and one blank
-// rule.
-func callAI(ctx context.Context, r AIReader, req ai.Request) (map[string]string, bool) {
+// aiCallHead is callAI's and askAILines' shared call: the off check, one Call and the aiFailed
+// policy. Each caller decodes the raw answer with its own tail, so both keep one failure policy.
+func aiCallHead(ctx context.Context, r AIReader, req ai.Request) (map[string]any, bool) {
 	if r == nil || !r.Enabled() {
 		return nil, false
 	}
 	ans, err := r.Call(ctx, req)
 	if err != nil {
 		return nil, aiFailed(err)
+	}
+	return ans, false
+}
+
+// callAI is askAI's and askAIPages' shared tail: aiCallHead's answer, filtered to HeaderFields
+// and blank-string trimmed.
+func callAI(ctx context.Context, r AIReader, req ai.Request) (map[string]string, bool) {
+	ans, failed := aiCallHead(ctx, r, req)
+	if failed || ans == nil {
+		return nil, failed
 	}
 	var out map[string]string
 	for _, f := range HeaderFields {

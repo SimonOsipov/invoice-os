@@ -4349,11 +4349,12 @@ func TestRLS_ExtractWorkerWritesTheMarkerWhenTheAICallIsRefused(t *testing.T) {
 	wkAssertOnlyMarker(t, ctx, errored.jobID, errored.rows)
 }
 
-// T05. The real fake client, through the worker: a text token carries the fake's steering
-// marker, decoding to an answer schema-shaped over every HeaderFields key. Both calls read the
-// SAME text (worker.go's shared textTokens), so the line-item call's own schema refuses that
-// same marker -- one failure policy, so the document quarantines to the marker row. What this
-// still proves: the real client is reached under octx, on both calls, in purpose order.
+// T05. The real fake client, through the worker: an unscoped text token steers the header call,
+// decoding to an answer schema-shaped over every HeaderFields key, and a scoped AIFAKE-LINES-
+// ANSWER- token beside it steers the line call to its own (empty) answer -- both calls read the
+// SAME text (worker.go's shared textTokens), and each finds only its own marker (AIR-08-11).
+// Proves the real client is reached under octx, on both calls, in purpose order, and that the
+// header's decided invoice_number survives the merge with a box.
 func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)
@@ -4376,12 +4377,16 @@ func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 		t.Fatalf("marshal fake answer: %v", err)
 	}
 	marker := "AIFAKE-ANSWER-" + base64.RawURLEncoding.EncodeToString(rawAnswer)
+	// Scoped, beside the unscoped one: the line call finds only this marker (AIR-08-11), so the
+	// header marker above is no longer discarded when the line call runs its own schema check.
+	lineMarker := "AIFAKE-LINES-ANSWER-" + base64.RawURLEncoding.EncodeToString([]byte(`{"line_items":[]}`))
 
 	page := extraction.Page{
 		Number: 1, WidthPt: 612, HeightPt: 792,
 		Tokens: []extraction.Token{
 			{Text: "Invoice Number: 20417", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}},
 			{Text: marker, Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.9, X1: 0.5, Y1: 0.92}},
+			{Text: lineMarker, Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.94, X1: 0.5, Y1: 0.96}},
 		},
 	}
 	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
@@ -4394,7 +4399,24 @@ func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 
 	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
 	stAssertJobState(t, ctx, xid, "succeeded")
-	wkAssertOnlyMarker(t, ctx, xid, wpResults(t, ctx, xid))
+
+	rows := wpResults(t, ctx, xid)
+	wpAssertRankZero(t, rows, "invoice_number", stPtr("20417"), nil)
+
+	boxes := wkFieldBoxes(t, ctx, xid)
+	found := false
+	for _, b := range boxes {
+		if b.name != "invoice_number" || b.rank != 0 {
+			continue
+		}
+		found = true
+		if b.page == nil || b.x0 == nil || b.y0 == nil || b.x1 == nil || b.y1 == nil {
+			t.Errorf("invoice_number's rank-0 row carries no box: %v", b)
+		}
+	}
+	if !found {
+		t.Fatalf("no rank-0 invoice_number row among %v", boxes)
+	}
 
 	var calls []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {

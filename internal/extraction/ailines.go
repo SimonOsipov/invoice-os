@@ -66,6 +66,7 @@ func askAILines(ctx context.Context, r AIReader, pages []TokenPage) ([]AILine, b
 		Purpose:    ai.PurposeLineItems,
 		System:     aiLinesSystem,
 		Text:       aiPromptText(pages),
+		FakeScope:  "LINES",
 		SchemaName: "invoice_line_items",
 		Schema:     aiLinesSchema,
 	})

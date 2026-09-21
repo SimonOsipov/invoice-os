@@ -735,6 +735,26 @@ func TestCall_InvalidRequestSendsNothing(t *testing.T) {
 			r.Schema = additionalPropsTrue
 			return r
 		},
+		"fake_scope_lowercase": func() Request {
+			r := baseReq()
+			r.FakeScope = "lines"
+			return r
+		},
+		"fake_scope_digit": func() Request {
+			r := baseReq()
+			r.FakeScope = "LINE5"
+			return r
+		},
+		"fake_scope_hyphen": func() Request {
+			r := baseReq()
+			r.FakeScope = "LINE-S"
+			return r
+		},
+		"fake_scope_metacharacter": func() Request {
+			r := baseReq()
+			r.FakeScope = "LI.*"
+			return r
+		},
 	}
 
 	for name, build := range cases {
@@ -801,6 +821,33 @@ func TestCall_FakeHintIsNeverSent(t *testing.T) {
 	_, _, raw := rec.snapshot()
 	if bytes.Contains(raw, []byte("HINT-7f3a")) {
 		t.Errorf("request body contains FakeHint text %q, want absent", "HINT-7f3a")
+	}
+	if !bytes.Contains(raw, []byte("rows")) {
+		t.Errorf("request body missing control text %q", "rows")
+	}
+}
+
+// AC-7: FakeScope is never sent on the wire, mirroring FakeHint (T18) above.
+func TestCall_FakeScopeIsNeverSent(t *testing.T) {
+	var rec capture
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(envelope(validContent, "")))
+	}))
+	t.Cleanup(srv.Close)
+
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.FakeScope = "ZZZSCOPENEEDLE"
+
+	if _, err := c.Call(t.Context(), req); err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+
+	_, _, raw := rec.snapshot()
+	if bytes.Contains(raw, []byte("ZZZSCOPENEEDLE")) {
+		t.Errorf("request body contains FakeScope text %q, want absent", "ZZZSCOPENEEDLE")
 	}
 	if !bytes.Contains(raw, []byte("rows")) {
 		t.Errorf("request body missing control text %q", "rows")

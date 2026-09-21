@@ -163,6 +163,9 @@ func TestAskAILines_SendsOneLineItemCallWithTheText(t *testing.T) {
 	if req.Pages != nil {
 		t.Errorf("Pages = %v, want nil", req.Pages)
 	}
+	if req.FakeScope != "LINES" {
+		t.Errorf("FakeScope = %q, want %q -- the line call is scoped so it cannot be steered by the header's own marker", req.FakeScope, "LINES")
+	}
 }
 
 func TestAskAILines_TextEqualsAskAIsTextForTheSamePages(t *testing.T) {

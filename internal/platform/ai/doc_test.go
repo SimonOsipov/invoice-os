@@ -278,8 +278,8 @@ func TestAIDoc_NamesEveryVariableMarkerAndOutcome(t *testing.T) {
 
 	markerSection := docSection(t, doc, "## Fake mode markers", "## ")
 	rows := tableBodyRows(markerSection)
-	if len(rows) != 3 {
-		t.Fatalf("%s's fake-mode-marker table has %d body row(s) %v, want exactly 3", aiDoc, len(rows), rows)
+	if len(rows) != 4 {
+		t.Fatalf("%s's fake-mode-marker table has %d body row(s) %v, want exactly 4", aiDoc, len(rows), rows)
 	}
 	blank := 0
 	for _, r := range rows {

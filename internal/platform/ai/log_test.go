@@ -347,6 +347,7 @@ func TestLog_CarriesNoContent(t *testing.T) {
 	req.System = "SYS-7f3a"
 	req.Text = "TXT-7f3a"
 	req.FakeHint = "HINT-7f3a"
+	req.FakeScope = "ZZZSCOPENEEDLE"
 	req.SchemaName = "SCH-7f3a"
 	req.Schema = oneStringSchema
 
@@ -379,7 +380,7 @@ func TestLog_CarriesNoContent(t *testing.T) {
 		t.Errorf("log buffer missing a %q outcome; got %q", "refused", raw)
 	}
 
-	for _, needle := range []string{"SYS-7f3a", "TXT-7f3a", "HINT-7f3a", "SCH-7f3a", "ANS-7f3a", "BODY-7f3a"} {
+	for _, needle := range []string{"SYS-7f3a", "TXT-7f3a", "HINT-7f3a", "ZZZSCOPENEEDLE", "SCH-7f3a", "ANS-7f3a", "BODY-7f3a"} {
 		if strings.Contains(raw, needle) {
 			t.Errorf("log buffer contains %q, want absent", needle)
 		}

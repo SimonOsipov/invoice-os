@@ -211,6 +211,9 @@ func TestAskAI_SendsOneDocumentCallWithTheText(t *testing.T) {
 	if req.FakeHint != "" {
 		t.Errorf("FakeHint = %q, want empty", req.FakeHint)
 	}
+	if req.FakeScope != "" {
+		t.Errorf("FakeScope = %q, want empty -- the header call is unscoped", req.FakeScope)
+	}
 }
 
 func TestAskAI_OffOrNilMakesNoCall(t *testing.T) {

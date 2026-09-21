@@ -55,6 +55,7 @@ Model, endpoint and the retry budget are constants — there is no knob for any 
 | *(none)* | Every top-level property of the caller's schema, blank (`null`) |
 | `AIFAKE-UNAVAILABLE` | `ErrUnavailable` at once — no request is sent and no wait happens (`attempts` is still logged as `1`, the fake answer itself) |
 | `AIFAKE-ANSWER-<base64url>` | That decoded JSON object, after the same schema check a real answer gets |
+| `AIFAKE-<SCOPE>-ANSWER-<base64url>` / `AIFAKE-<SCOPE>-UNAVAILABLE` | The scoped spelling: a request whose `FakeScope` is `<SCOPE>` matches only its own scope's marker, and never falls back to the unscoped row above |
 
 The marker is searched in `Request.Text` first, then in `Request.FakeHint`; `Request.System`
 is never scanned. The first match in a field wins. Matching is case-sensitive with no word
@@ -67,6 +68,16 @@ a standard-alphabet `+` or `/` cuts the payload mid-string and the call errors
 payload after decoding is a plain error that is not `ErrUnavailable`. Fake mode validates
 the request exactly as the real path does; a `FakeHint` with no `Text` and no `Pages` is
 still an invalid request.
+
+`Request.FakeScope` is empty by default, in which case the marker search above is exactly
+today's unscoped one, byte for byte. A non-empty `FakeScope` must match `^[A-Z]+$`
+(`ai: invalid request` otherwise) and narrows the search to that scope's own spelling only —
+`AIFAKE-<SCOPE>-ANSWER-...` or `AIFAKE-<SCOPE>-UNAVAILABLE` — so two calls that share the
+same `Text` can be steered independently, one per scope. A scoped request never falls back to
+an unscoped marker, and an unscoped request never matches a scoped one: the two spellings are
+mutually invisible to each other's regexp. `submission`'s extraction worker sends
+`FakeScope: "LINES"` on its line-item call; its header call stays unscoped. `FakeScope` is
+never sent on the wire and never logged, the same as `FakeHint`.
 
 On an image read `FakeHint` is the document's raw bytes, so a trailing PDF comment
 `%AIFAKE-ANSWER-…` steers it; AIR05-E2E-01 does.

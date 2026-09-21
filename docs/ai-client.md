@@ -222,10 +222,13 @@ it before any forked service deploys.
    deploy log for the submission instance on `pr-247` carried `ai call` lines with
    `purpose: document` and `outcome: fake`. The image read's own check
    (AIR05-E2E-01 and the `pr-249` `ai call` line) is recorded in PR #249's description.
-   `invoice`'s own two checks land the same way on PR #251's deploy-gate run:
-   `dev-env.yml` gates the `Dev Env (deploy full fleet + verify)` job on
-   `pull_request.draft == false`, and every run against PR #251 has skipped that job
-   while the PR stays a draft.
+   `invoice`'s own two checks are recorded on PR #251's deploy-gate run 35559923822
+   (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
+   in the fork" read `invoice.AI_FAKE = true` and `invoice.OPENROUTER_API_KEY is
+   empty`, the fleet health gate passed, and the Railway deploy log for the invoice
+   instance on `pr-251` carried 29 `ai call` lines — each matched by a
+   `POST /v1/imports/suggest-mapping` request returning 200 — with
+   `purpose: spreadsheet` and `outcome: fake`, zero tokens and zero cost throughout.
 2. **`unavailable` conflates two causes.** A spent budget and a cancelled-or-expired
    caller context both log it. The returned error distinguishes them —
    `errors.Is(err, ErrUnavailable)` is true only for the spent budget — but the log line

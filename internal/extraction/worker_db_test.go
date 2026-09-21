@@ -4109,15 +4109,19 @@ func TestRLS_ExtractWorkerWritesNoPagesForAnEmptyContentType(t *testing.T) {
 // --- AIR-03-03: the worker's AI step -------------------------------------------------
 
 // wkAI is a counting AIReader stub: no network, and it records every request and the tenant
-// riding the caller's context, so a spec can prove askAI ran on octx.
+// riding the caller's context, so a spec can prove askAI ran on octx. answer/err answer the
+// header call; lineAnswer/lineErr answer the line-item call, so a spec can steer the two
+// calls independently -- left unset, the line call succeeds with no answer, today's shape.
 type wkAI struct {
-	mu      sync.Mutex
-	enabled bool
-	answer  map[string]any
-	err     error
-	calls   int
-	reqs    []ai.Request
-	tenants []string
+	mu         sync.Mutex
+	enabled    bool
+	answer     map[string]any
+	err        error
+	lineAnswer map[string]any
+	lineErr    error
+	calls      int
+	reqs       []ai.Request
+	tenants    []string
 }
 
 func (s *wkAI) Enabled() bool { return s.enabled }
@@ -4129,6 +4133,9 @@ func (s *wkAI) Call(ctx context.Context, req ai.Request) (map[string]any, error)
 	s.reqs = append(s.reqs, req)
 	if id, ok := auth.IdentityFromContext(ctx); ok {
 		s.tenants = append(s.tenants, id.TenantID)
+	}
+	if req.Purpose == ai.PurposeLineItems {
+		return s.lineAnswer, s.lineErr
 	}
 	return s.answer, s.err
 }
@@ -4157,8 +4164,8 @@ func wkStrBoxes(boxes []wkBox) []string {
 	return out
 }
 
-// T01. One AI call per document that reaches the text arm, over octx (tenant_id present), and
-// the request text carries a page token.
+// T01. Two AI calls per document that reaches the text arm -- header, then line items -- each
+// over octx (tenant_id present), each with the request text carrying a page token.
 func TestRLS_ExtractWorkerAsksTheAIOncePerDocument(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)
@@ -4180,14 +4187,48 @@ func TestRLS_ExtractWorkerAsksTheAIOncePerDocument(t *testing.T) {
 	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
 	stAssertJobState(t, ctx, xid, "succeeded")
 
-	if n := stub.count(); n != 1 {
-		t.Fatalf("the AI seam saw %d call(s), want exactly 1 per document that reaches the text arm", n)
+	if n := stub.count(); n != 2 {
+		t.Fatalf("the AI seam saw %d call(s), want exactly 2 (header, then line items) per document that reaches the text arm", n)
 	}
-	if !strings.Contains(stub.reqs[0].Text, tokenText) {
-		t.Errorf("the AI request text is %q, want it to contain the page token %q", stub.reqs[0].Text, tokenText)
+	if len(stub.reqs) != 2 {
+		t.Fatalf("the AI seam recorded %d request(s), want 2", len(stub.reqs))
 	}
-	if len(stub.tenants) != 1 || stub.tenants[0] != tenantID {
-		t.Errorf("the AI call carried tenant(s) %v, want exactly [%s] -- askAI must run on octx", stub.tenants, tenantID)
+	header, lines := stub.reqs[0], stub.reqs[1]
+	if header.SchemaName != "invoice_fields" || header.Purpose != ai.PurposeDocument {
+		t.Errorf("request 0 = {SchemaName %q, Purpose %q}, want {invoice_fields, document}", header.SchemaName, header.Purpose)
+	}
+	if lines.SchemaName != "invoice_line_items" || lines.Purpose != ai.PurposeLineItems {
+		t.Errorf("request 1 = {SchemaName %q, Purpose %q}, want {invoice_line_items, line_items}", lines.SchemaName, lines.Purpose)
+	}
+	for i, req := range []ai.Request{header, lines} {
+		if !strings.Contains(req.Text, tokenText) {
+			t.Errorf("request %d text is %q, want it to contain the page token %q", i, req.Text, tokenText)
+		}
+	}
+	if want := []string{tenantID, tenantID}; !slices.Equal(stub.tenants, want) {
+		t.Errorf("the AI calls carried tenant(s) %v, want %v -- both calls must run on octx", stub.tenants, want)
+	}
+}
+
+// A failed line call quarantines the document exactly as a failed header call does: one
+// failure policy. The header call succeeds and answers first, proving the header's own answer
+// is discarded rather than merged when the line call fails after it.
+func TestRLS_ExtractWorkerAFailedLineCallWritesOnlyTheMarker(t *testing.T) {
+	ctx := t.Context()
+	page := wkAIR04Page()
+
+	stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "INV-4410"}, lineErr: ai.ErrUnavailable}
+	r := wkRunAI(t, ctx, 930200, []extraction.Page{page}, stub)
+
+	wkAssertOnlyMarker(t, ctx, r.jobID, r.rows)
+	if n := stub.count(); n != 2 {
+		t.Errorf("the AI seam saw %d call(s), want exactly 2 (the header call ran, then the line call ran and failed)", n)
+	}
+	if len(r.audit) != 1 {
+		t.Fatalf("audit events = %d, want exactly 1", len(r.audit))
+	}
+	if ev := r.audit[0]; !ev.Succeeded || ev.FieldCount != 1 || ev.FlaggedCount != 1 {
+		t.Errorf("audit = %+v, want {Succeeded true, FieldCount 1, FlaggedCount 1}", ev)
 	}
 }
 
@@ -4309,9 +4350,10 @@ func TestRLS_ExtractWorkerWritesTheMarkerWhenTheAICallIsRefused(t *testing.T) {
 }
 
 // T05. The real fake client, through the worker: a text token carries the fake's steering
-// marker, decoding to an answer schema-shaped over every HeaderFields key. The engine alone
-// reads invoice_number `missing` (normalizeInvoiceNumber rejects a bare digit string as an
-// amount), so a decided rank-0 row with a box proves the fake answered through askAI/mergeAI.
+// marker, decoding to an answer schema-shaped over every HeaderFields key. Both calls read the
+// SAME text (worker.go's shared textTokens), so the line-item call's own schema refuses that
+// same marker -- one failure policy, so the document quarantines to the marker row. What this
+// still proves: the real client is reached under octx, on both calls, in purpose order.
 func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)
@@ -4352,24 +4394,7 @@ func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 
 	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
 	stAssertJobState(t, ctx, xid, "succeeded")
-
-	rows := wpResults(t, ctx, xid)
-	wpAssertRankZero(t, rows, "invoice_number", stPtr("20417"), nil)
-
-	boxes := wkFieldBoxes(t, ctx, xid)
-	found := false
-	for _, b := range boxes {
-		if b.name != "invoice_number" || b.rank != 0 {
-			continue
-		}
-		found = true
-		if b.page == nil || b.x0 == nil || b.y0 == nil || b.x1 == nil || b.y1 == nil {
-			t.Errorf("invoice_number's rank-0 row carries no box: %v", b)
-		}
-	}
-	if !found {
-		t.Fatalf("no rank-0 invoice_number row among %v", boxes)
-	}
+	wkAssertOnlyMarker(t, ctx, xid, wpResults(t, ctx, xid))
 
 	var calls []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -4384,14 +4409,19 @@ func TestRLS_ExtractWorkerReadsThroughTheRealFakeClient(t *testing.T) {
 			calls = append(calls, m)
 		}
 	}
-	if len(calls) != 1 {
-		t.Fatalf("the logger recorded %d %q line(s), want exactly 1: %v", len(calls), "ai call", calls)
+	if len(calls) != 2 {
+		t.Fatalf("the logger recorded %d %q line(s), want exactly 2 (header, then line items): %v", len(calls), "ai call", calls)
 	}
-	if calls[0]["tenant_id"] != tenantID {
-		t.Errorf("the ai call line carries tenant_id %v, want %s", calls[0]["tenant_id"], tenantID)
-	}
-	if calls[0]["outcome"] != "fake" {
-		t.Errorf("the ai call line carries outcome %v, want %q", calls[0]["outcome"], "fake")
+	for i, wantPurpose := range []string{"document", "line_items"} {
+		if calls[i]["tenant_id"] != tenantID {
+			t.Errorf("call %d carries tenant_id %v, want %s", i, calls[i]["tenant_id"], tenantID)
+		}
+		if calls[i]["outcome"] != "fake" {
+			t.Errorf("call %d carries outcome %v, want %q", i, calls[i]["outcome"], "fake")
+		}
+		if calls[i]["purpose"] != wantPurpose {
+			t.Errorf("call %d carries purpose %v, want %q", i, calls[i]["purpose"], wantPurpose)
+		}
 	}
 }
 
@@ -4601,12 +4631,12 @@ func TestRLS_ExtractWorkerAnErrOffCallWritesTheEngineRows(t *testing.T) {
 		{"wrapped", fmt.Errorf("ai: call: %w", ai.ErrOff)},
 	}
 	for i, c := range cases {
-		stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "OTHER-1"}, err: c.err}
+		stub := &wkAI{enabled: true, answer: map[string]any{"invoice_number": "OTHER-1"}, err: c.err, lineErr: c.err}
 		if got := render(wkRunAI(t, ctx, 930109+int64(i), pages, stub)); !slices.Equal(off, got) {
 			t.Errorf("%s: rows differ from the AI-off run:\n off: %v\n got: %v", c.name, off, got)
 		}
-		if n := stub.count(); n != 1 {
-			t.Errorf("%s: the AI seam saw %d call(s), want 1 (the ErrOff branch was not reached)", c.name, n)
+		if n := stub.count(); n != 2 {
+			t.Errorf("%s: the AI seam saw %d call(s), want 2 (ErrOff is not a failure, so the line call still runs)", c.name, n)
 		}
 	}
 }
@@ -4834,8 +4864,9 @@ func TestRLS_ExtractWorkerMergesSeveralAIFieldsInOneJob(t *testing.T) {
 	}
 }
 
-// AC-10: the schema asks for no line key, and an answer that names line keys anyway leaves
-// every line row exactly as the engine wrote it.
+// The header schema asks for no line key, so a stray line_items key inside the header answer
+// leaves every line row exactly as the engine wrote it -- the separate line-item call, seeing
+// no line answer of its own here, moves nothing either.
 func TestRLS_ExtractWorkerNeverLetsTheAIAnswerTouchLineRows(t *testing.T) {
 	ctx := t.Context()
 	page := extraction.Page{
@@ -4860,17 +4891,17 @@ func TestRLS_ExtractWorkerNeverLetsTheAIAnswerTouchLineRows(t *testing.T) {
 		t.Fatalf("the engine wrote %d line row(s), want the table's cells: %v", len(offLines), offLines)
 	}
 	if !slices.Equal(offLines, onLines) {
-		t.Errorf("the AI answer changed the line rows:\n off: %v\n on:  %v", offLines, onLines)
+		t.Errorf("a stray line_items key in the HEADER answer changed the line rows:\n off: %v\n on:  %v", offLines, onLines)
 	}
 
-	if stub.count() != 1 {
-		t.Fatalf("the AI seam saw %d call(s), want 1", stub.count())
+	if n := stub.count(); n != 2 {
+		t.Fatalf("the AI seam saw %d call(s), want 2 (header, then line items)", n)
 	}
 	var schema struct {
 		Properties map[string]any `json:"properties"`
 	}
 	if err := json.Unmarshal(stub.reqs[0].Schema, &schema); err != nil {
-		t.Fatalf("unmarshal request schema: %v", err)
+		t.Fatalf("unmarshal header request schema: %v", err)
 	}
 	keys := make([]string, 0, len(schema.Properties))
 	for k := range schema.Properties {
@@ -4880,7 +4911,77 @@ func TestRLS_ExtractWorkerNeverLetsTheAIAnswerTouchLineRows(t *testing.T) {
 	want := slices.Clone(extraction.HeaderFields)
 	slices.Sort(want)
 	if !slices.Equal(keys, want) {
-		t.Errorf("the request schema asks for %v, want exactly HeaderFields %v", keys, want)
+		t.Errorf("the header request schema asks for %v, want exactly HeaderFields %v", keys, want)
+	}
+}
+
+// The whole line-item path together: an engine table of two rows and a steered three-row line
+// answer -- row 1 agreeing, row 2 disagreeing on one cell, row 3 AI-only -- write three
+// contiguous line indices, one rank-1 alternative on the disagreeing cell, and no reason on the
+// AI-only row. "55.00", "Widget C", "1" and "300.00" are the page's own tokens: the page check
+// an AI value must pass before it flags a cell or writes one unmarked (AC-13/14 in
+// ailinesmerge.go) needs each of them findable on the page, separate from the engine's table.
+func TestRLS_ExtractWorkerMergesTheAIsSteeredLineAnswer(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+
+	cell := func(row, col int, text string) extraction.TableCell {
+		return extraction.TableCell{Row: row, Col: col, RowSpan: 1, ColSpan: 1, Text: text}
+	}
+	page := extraction.Page{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{
+			{Text: "55.00", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.30, X1: 0.2, Y1: 0.32}},
+			{Text: "Widget C", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.34, X1: 0.3, Y1: 0.36}},
+			{Text: "1", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.38, X1: 0.2, Y1: 0.40}},
+			{Text: "300.00", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.42, X1: 0.2, Y1: 0.44}},
+		},
+		Tables: []extraction.Table{{Rows: 3, Cols: 4, Cells: []extraction.TableCell{
+			cell(0, 0, "Description"), cell(0, 1, "Qty"), cell(0, 2, "Unit Price"), cell(0, 3, "Amount"),
+			cell(1, 0, "Widget A"), cell(1, 1, "2"), cell(1, 2, "100.00"), cell(1, 3, "200.00"),
+			cell(2, 0, "Widget B"), cell(2, 1, "3"), cell(2, 2, "50.00"), cell(2, 3, "150.00"),
+		}}},
+	}
+
+	stub := &wkAI{enabled: true, lineAnswer: map[string]any{"line_items": []any{
+		map[string]any{"description": "Widget A", "quantity": "2", "unit_price": "100.00", "line_total": "200.00"},
+		map[string]any{"description": "Widget B", "quantity": "3", "unit_price": "55.00", "line_total": "150.00"},
+		map[string]any{"description": "Widget C", "quantity": "1", "unit_price": "300.00", "line_total": "300.00"},
+	}}}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{page}}, wpStoreRules(t).load, &wkAuditRecorder{})
+	ew.AI = stub
+
+	const riverJobID = int64(930201)
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("Work: %v", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+	stAssertJobState(t, ctx, xid, "succeeded")
+	rows := wpResults(t, ctx, xid)
+
+	// Row 1: full agreement, the engine's own values stand.
+	for _, c := range []struct{ name, value string }{
+		{"line_items[1].description", "Widget A"}, {"line_items[1].quantity", "2"},
+		{"line_items[1].unit_price", "100.00"}, {"line_items[1].line_total", "200.00"},
+	} {
+		wpAssertRankZero(t, rows, c.name, stPtr(c.value), nil)
+	}
+
+	// Row 2: one disagreeing cell -- unit_price turns ambiguous, every other cell stands.
+	wpAssertRankZero(t, rows, "line_items[2].description", stPtr("Widget B"), nil)
+	wpAssertRankZero(t, rows, "line_items[2].quantity", stPtr("3"), nil)
+	wpAssertRankZero(t, rows, "line_items[2].unit_price", stPtr("50.00"), stPtr("ambiguous"))
+	wpAssertRankZero(t, rows, "line_items[2].line_total", stPtr("150.00"), nil)
+	if alt := wkRankRow(t, rows, "line_items[2].unit_price", 1); alt.value == nil || *alt.value != "55.00" {
+		t.Errorf("line_items[2].unit_price rank-1 value = %s, want 55.00", wkStr(alt.value))
+	}
+
+	// Row 3: AI-only, written unmarked -- no engine row to disagree with.
+	for _, c := range []struct{ name, value string }{
+		{"line_items[3].description", "Widget C"}, {"line_items[3].quantity", "1"},
+		{"line_items[3].unit_price", "300.00"}, {"line_items[3].line_total", "300.00"},
+	} {
+		wpAssertRankZero(t, rows, c.name, stPtr(c.value), nil)
 	}
 }
 
@@ -4905,8 +5006,9 @@ func TestRLS_ExtractWorkerChecksAnAISubtotalAgainstTheLines(t *testing.T) {
 	wpAssertRankZero(t, on.rows, "subtotal", stPtr("900.00"), stPtr("inconsistent"))
 }
 
-// Two jobs, two tenants, one worker seam and one real fake client: each ai call line carries
-// its own job's tenant, and each job's rows are visible to that tenant only.
+// Two jobs, two tenants, one worker seam and one real fake client: each of the two ai call
+// lines per job (header, then line items) carries its own job's tenant, and each job's rows
+// are visible to that tenant only.
 func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
 	ctx := t.Context()
 	t.Setenv(ai.EnvFake, "true")
@@ -4924,7 +5026,7 @@ func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
 	a := wkRunAI(t, ctx, 930018, pages, client)
 	b := wkRunAI(t, ctx, 930019, pages, client)
 
-	var tenants []any
+	var tenants, purposes []any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
@@ -4932,10 +5034,17 @@ func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
 		}
 		if m["msg"] == "ai call" {
 			tenants = append(tenants, m["tenant_id"])
+			purposes = append(purposes, m["purpose"])
 		}
 	}
-	if want := []any{a.tenantID, b.tenantID}; !slices.Equal(tenants, want) {
+	if len(tenants) != 4 {
+		t.Fatalf("the logger recorded %d %q line(s), want exactly 4 (header, line items, per job): %v", len(tenants), "ai call", tenants)
+	}
+	if want := []any{a.tenantID, a.tenantID, b.tenantID, b.tenantID}; !slices.Equal(tenants, want) {
 		t.Errorf("ai call lines carry tenant_id %v, want %v in job order", tenants, want)
+	}
+	if want := []any{"document", "line_items", "document", "line_items"}; !slices.Equal(purposes, want) {
+		t.Errorf("ai call lines carry purpose %v, want %v (header then line items, per job)", purposes, want)
 	}
 
 	visible := func(reader, jobID string) int {

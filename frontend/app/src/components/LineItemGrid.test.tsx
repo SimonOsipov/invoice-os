@@ -15,7 +15,7 @@ import { useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { ExtractionRegion } from '../lib/extractionReview'
+import type { ExtractionCandidate, ExtractionRegion } from '../lib/extractionReview'
 import { LINE_ROLES, addRow, lineFieldName, remapRoles, removeRow } from '../lib/lineItems'
 import type { LineCell, LineRole, LineRow } from '../lib/lineItems'
 import { LineItemGrid } from './LineItemGrid'
@@ -23,8 +23,14 @@ import { LineItemGrid } from './LineItemGrid'
 const REGION_A: ExtractionRegion = { page: 1, x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.15 }
 const REGION_B: ExtractionRegion = { page: 2, x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.45 }
 
-function mkCell(name: string | null, value: string, region: ExtractionRegion | null = null): LineCell {
-  return { name, value, region, reason: '' }
+function mkCell(
+  name: string | null,
+  value: string,
+  region: ExtractionRegion | null = null,
+  reason: LineCell['reason'] = '',
+  alternatives: LineCell['alternatives'] = [],
+): LineCell {
+  return { name, value, region, reason, alternatives }
 }
 
 /** wireIndex 2, quantity 2 * unit_price 100.00 = line_total 200.00 -- clean by default. */
@@ -50,6 +56,12 @@ function mkRow(
       line_tax: mkCell(lineFieldName(wireIndex, 'line_tax'), ''),
     },
   }
+}
+
+/** Marks one cell of an existing row ambiguous, carrying the given alternatives -- the rest of
+ *  the row is untouched, so a fixture can stay otherwise clean (unflagged) or not, at will. */
+function withAmbiguous(row: LineRow, role: LineRole, alternatives: ExtractionCandidate[]): LineRow {
+  return { ...row, cells: { ...row.cells, [role]: { ...row.cells[role], reason: 'ambiguous', alternatives } } }
 }
 
 interface GridProps {
@@ -163,6 +175,18 @@ function markerAt(n: number, role: LineRole): HTMLElement | null {
 
 function flagAt(n: number): HTMLElement | null {
   return screen.queryByTestId(`line-item-flag-${n}`)
+}
+
+function ambiguousFlagAt(n: number): HTMLElement | null {
+  return screen.queryByTestId(`line-item-ambiguous-${n}`)
+}
+
+function chipsAt(n: number, role: LineRole): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(`[data-testid^="line-item-chip-${n}-${role}-"]`))
+}
+
+function chipWhereAt(n: number, role: LineRole, i: number): HTMLElement | null {
+  return screen.queryByTestId(`line-item-chip-where-${n}-${role}-${i}`)
 }
 
 function addBtn(): HTMLElement {
@@ -742,5 +766,154 @@ describe('QA-DEFECT-01 the changed marker survives a removal', () => {
     fireEvent.click(removeBtn(1))
 
     expect(markerAt(1, 'quantity'), 'the edited cell lost its marker when an unrelated row was removed').toBeTruthy()
+  })
+})
+
+// ==========================================================================================
+// AIR-08-12. A disagreeing line cell reaches the person: cellCandidates gates a chip row in
+// place of the input, mirroring ExtractionFields' own chip row (regionPhrase, aria-current).
+// ==========================================================================================
+
+describe('AC-3 the chip row', () => {
+  it('renders one chip per candidate, the value text, and calls onEditCell with the clicked value', () => {
+    const alts: ExtractionCandidate[] = [{ value: '90', region: null }]
+    const row = withAmbiguous(mkRow(1), 'quantity', alts)
+    const onEditCell = vi.fn()
+    render(itemGrid({ rows: [row], wireRows: [row], onEditCell }))
+
+    const chips = chipsAt(1, 'quantity')
+    expect(chips.length, 'one alternative is two chips: the cell reading plus the alternative').toBe(2)
+    expect(chips[0].textContent, "chip 0 does not carry the cell's own reading").toContain('2')
+    expect(chips[1].textContent, 'chip 1 does not carry the alternative').toContain('90')
+
+    fireEvent.click(chips[1])
+    expect(onEditCell, 'clicking a chip did not report an edit').toHaveBeenCalledTimes(1)
+    expect(onEditCell, 'the click did not post the clicked candidate to the right cell').toHaveBeenCalledWith(
+      0,
+      'quantity',
+      '90',
+    )
+
+    // A chip row and an input never render together over the same cell.
+    expect(
+      screen.queryByTestId('line-item-input-1-quantity'),
+      'the ambiguous cell renders both a chip row and an input',
+    ).toBeNull()
+    // A clean sibling cell still renders its ordinary input.
+    expect(inputAt(1, 'description').value, "the untouched cell's input stopped rendering").toBe('Widget')
+  })
+
+  it('renders regionPhrase only for a candidate that carries a region', () => {
+    const region: ExtractionRegion = { page: 3, x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.12 }
+    // The engine's own line reading carries no region (an AI line reading never does), so chip
+    // 0 states no page and chip 1, carrying the alternative's own region, does.
+    const row = withAmbiguous(mkRow(1), 'quantity', [{ value: '90', region }])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    expect(chipWhereAt(1, 'quantity', 0), "the region-less candidate's chip states a page").toBeNull()
+    expect(chipWhereAt(1, 'quantity', 1)?.textContent, "the alternative's own page is missing").toBe('page 3')
+  })
+})
+
+describe('AC-4 the picked chip', () => {
+  it('marks chip 0 on first render, when the draft still holds the engine reading', () => {
+    const row = withAmbiguous(mkRow(1), 'quantity', [{ value: '90', region: null }])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    const chips = chipsAt(1, 'quantity')
+    expect(chips.map((c) => c.getAttribute('aria-current')), 'chip 0 is not picked on first render').toEqual([
+      'true',
+      'false',
+    ])
+  })
+
+  it('moves the mark to the clicked chip without a re-fetch, through the draft alone', () => {
+    const row = withAmbiguous(mkRow(1), 'quantity', [{ value: '90', region: null }])
+    render(<Harness initial={[row]} />)
+
+    fireEvent.click(chipsAt(1, 'quantity')[1])
+
+    expect(
+      chipsAt(1, 'quantity').map((c) => c.getAttribute('aria-current')),
+      'the click moved no mark, or marked the wrong chip',
+    ).toEqual(['false', 'true'])
+  })
+})
+
+describe('AC-5 the ambiguous pill', () => {
+  it('renders with the chip count, in the row flag column', () => {
+    const alts: ExtractionCandidate[] = [
+      { value: '90', region: null },
+      { value: '91', region: null },
+    ]
+    const row = withAmbiguous(mkRow(1), 'quantity', alts)
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    const pill = ambiguousFlagAt(1)
+    expect(pill, 'the ambiguous row renders no pill').toBeTruthy()
+    // reasonPill('ambiguous', 3): the cell's own reading plus two alternatives.
+    expect(pill!.textContent).toBe('FOUND THREE POSSIBLE VALUES')
+    const strip = pill!.parentElement as HTMLElement
+    expect(strip.style.flexWrap, "the ambiguous pill sits outside the row's existing wrapping strip").toBe('wrap')
+  })
+
+  it('renders alongside the arithmetic pill when a row is both flagged and ambiguous, in the same strip', () => {
+    // quantity 9 * unit_price 100.00 != line_total 200.00 -- arithmetic-flagged too.
+    const row = withAmbiguous(mkRow(1, { quantity: '9' }), 'description', [{ value: 'Gadget', region: null }])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    expect(flagAt(1), 'the floor: the row must actually be arithmetic-flagged').toBeTruthy()
+    expect(ambiguousFlagAt(1), 'the floor: the row must actually carry an ambiguous cell').toBeTruthy()
+    expect(flagAt(1)!.parentElement, 'the two pills do not share the same strip').toBe(
+      ambiguousFlagAt(1)!.parentElement,
+    )
+  })
+
+  it('renders no pill for a row with no ambiguous cell', () => {
+    const row = mkRow(1)
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+    expect(ambiguousFlagAt(1), 'a clean row rendered an ambiguous pill').toBeNull()
+  })
+})
+
+describe('AC-6 no chip is ever disabled or hidden', () => {
+  it('renders no [disabled] and no [title] over an ambiguous row', () => {
+    const row = withAmbiguous(mkRow(1), 'quantity', [{ value: '90', region: null }])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    expect(chipsAt(1, 'quantity').length, 'the floor: the chip row rendered').toBeGreaterThan(0)
+    expect(gridEl().querySelectorAll('[disabled]'), 'an ambiguous row disables a control').toHaveLength(0)
+    expect(gridEl().querySelectorAll('[title]'), 'an ambiguous row hides a reason in a tooltip').toHaveLength(0)
+  })
+})
+
+describe('AC-7 an ambiguous cell with no alternatives renders the ordinary input', () => {
+  it('is the render invariant: no chips means there is an input', () => {
+    const row = withAmbiguous(mkRow(1), 'quantity', [])
+    render(itemGrid({ rows: [row], wireRows: [row] }))
+
+    expect(chipsAt(1, 'quantity'), 'an empty-alternatives cell rendered a chip row').toHaveLength(0)
+    expect(inputAt(1, 'quantity'), 'an empty-alternatives cell rendered no input').toBeTruthy()
+    expect(ambiguousFlagAt(1), 'an empty-alternatives cell still raised the ambiguous pill').toBeNull()
+  })
+})
+
+describe('AC-9 a chip click is an ordinary cell edit', () => {
+  it('sets the draft cell value through onEditCell, the same seam a keystroke uses', () => {
+    const row = withAmbiguous(mkRow(1), 'quantity', [{ value: '90', region: null }])
+    const sink = { rows: [] as LineRow[] }
+    render(<CaptureHarness initial={[row]} sink={sink} />)
+
+    expect(sink.rows[0].cells.quantity.value, "the floor: the draft starts on the cell's own reading").toBe('2')
+
+    fireEvent.click(chipsAt(1, 'quantity')[1])
+
+    expect(sink.rows[0].cells.quantity.value, 'the chip click did not reach the draft as an ordinary edit').toBe(
+      '90',
+    )
+    // A value edit, not a correction: the reason travels unchanged, the way typing a digit does.
+    expect(sink.rows[0].cells.quantity.reason, 'the chip click cleared the reason as a side effect').toBe(
+      'ambiguous',
+    )
   })
 })

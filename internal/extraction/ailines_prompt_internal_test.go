@@ -42,7 +42,7 @@ func aliPyLiteral(t *testing.T, src, name string) string {
 	return m[1]
 }
 
-// T1 (AC-1): LINE_ROLES must equal extraction.LineRoles, in order, checked both as a set (a
+// T1: LINE_ROLES must equal extraction.LineRoles, in order, checked both as a set (a
 // brace-blind extractor returning zero keys must Fatal, not pass vacuously) and by DeepEqual.
 func TestAliRunPy_LineRolesIsExactlyExtractionLineRoles(t *testing.T) {
 	if len(LineRoles) != 5 {
@@ -99,7 +99,7 @@ func TestAliRunPy_LineRolesIsExactlyExtractionLineRoles(t *testing.T) {
 	}
 }
 
-// T2 (AC-2, AC-5): the three schemas, byte-pinned; the empty row list stays legal by
+// T2: the three schemas, byte-pinned; the empty row list stays legal by
 // construction (no minItems anywhere, no post-construction schema mutation).
 func TestAliRunPy_TheLineItemSchemaAcceptsAnEmptyRowList(t *testing.T) {
 	src := aliRunPy(t)
@@ -123,7 +123,7 @@ func TestAliRunPy_TheLineItemSchemaAcceptsAnEmptyRowList(t *testing.T) {
 	}
 }
 
-// T3 (AC-2): the three json_schema names each occur exactly once, and the call shapes / the
+// T3: the three json_schema names each occur exactly once, and the call shapes / the
 // response_format line that reads them are byte-pinned.
 func TestAliRunPy_TheSchemaNamesAreTheOnesTheReportQuotes(t *testing.T) {
 	src := aliRunPy(t)
@@ -151,7 +151,7 @@ func TestAliRunPy_TheSchemaNamesAreTheOnesTheReportQuotes(t *testing.T) {
 	}
 }
 
-// T4 (AC-6): PURPOSES is exactly [header, combined, lines], each with a CALL_SHAPES entry and a
+// T4: PURPOSES is exactly [header, combined, lines], each with a CALL_SHAPES entry and a
 // PURPOSE_OUT entry, and an unknown purpose (including "") exits non-zero naming it.
 func TestAliRunPy_EveryPurposeHasACallShapeAndAnOutputFile(t *testing.T) {
 	src := aliRunPy(t)
@@ -203,7 +203,7 @@ func TestAliRunPy_EveryPurposeHasACallShapeAndAnOutputFile(t *testing.T) {
 	}
 }
 
-// T5 (AC-7): the resume key carries (file, model, purpose, run) in both the write and the skip
+// T5: the resume key carries (file, model, purpose, run) in both the write and the skip
 // test, and neither pre-purpose 3-part form survives anywhere in the file.
 func TestAliRunPy_TheResumeKeyCarriesThePurpose(t *testing.T) {
 	src := aliRunPy(t)
@@ -229,7 +229,7 @@ func TestAliRunPy_TheResumeKeyCarriesThePurpose(t *testing.T) {
 	}
 }
 
-// T6 (AC-8): line_items lands under a top-level "lines" key, never inside "fields" -- a nested
+// T6: line_items lands under a top-level "lines" key, never inside "fields" -- a nested
 // array there would fail aitLoadAnswers' map[string]string unmarshal (see T7).
 func TestAliRunPy_LineItemsAreATopLevelKeyNeverInsideFields(t *testing.T) {
 	src := aliRunPy(t)
@@ -250,7 +250,7 @@ func TestAliRunPy_LineItemsAreATopLevelKeyNeverInsideFields(t *testing.T) {
 	}
 }
 
-// T7 (AC-8's rationale): the one leg that runs real code. aitAnswerRecordJSON.Fields is
+// T7: the one leg that runs real code. aitAnswerRecordJSON.Fields is
 // map[string]string, so a record whose fields carries a nested line_items array hard-fails the
 // header loader naming the line; a flat-fields control on the same loader passes clean.
 func TestAliAnswers_ANestedLineItemsArrayHardFailsTheHeaderLoader(t *testing.T) {
@@ -281,7 +281,7 @@ func TestAliAnswers_ANestedLineItemsArrayHardFailsTheHeaderLoader(t *testing.T) 
 	}
 }
 
-// T8 (AC-10): SYSTEM and TEXT_INTRO pinned by hash, not only by the existing aiSystem/
+// T8: SYSTEM and TEXT_INTRO pinned by hash, not only by the existing aiSystem/
 // aiTextIntro comparison -- that comparison has no second side to catch a two-sided edit.
 func TestAliRunPy_TheHeaderPromptIsByteUnchanged(t *testing.T) {
 	src := aliRunPy(t)
@@ -297,7 +297,7 @@ func TestAliRunPy_TheHeaderPromptIsByteUnchanged(t *testing.T) {
 	}
 }
 
-// T9 (AC-4): the line-item prompt carries its eight load-bearing rules, and both arms compose
+// T9: the line-item prompt carries its eight load-bearing rules, and both arms compose
 // LINE_SYSTEM/COMBINED_SYSTEM from the same LINE_RULES literal byte for byte.
 func TestAliRunPy_TheLinePromptCarriesItsLoadBearingRules(t *testing.T) {
 	src := aliRunPy(t)
@@ -333,7 +333,7 @@ func TestAliRunPy_TheLinePromptCarriesItsLoadBearingRules(t *testing.T) {
 	}
 }
 
-// T10 (AC-11): the DATA and key-file work-tree guards, check-ignore and COST_CAP are unchanged,
+// T10: the DATA and key-file work-tree guards, check-ignore and COST_CAP are unchanged,
 // and no print( line -- the leak sweep's floor -- ever names the key or its path.
 func TestAliRunPy_TheKeyAndCostGuardsAreIntact(t *testing.T) {
 	src := aliRunPy(t)

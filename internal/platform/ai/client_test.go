@@ -763,6 +763,22 @@ func TestCall_InvalidRequestSendsNothing(t *testing.T) {
 	}
 }
 
+// Control for bad_purpose above: PurposeLineItems (AIR-08) is a third accepted purpose, not
+// just PurposeDocument and PurposeSpreadsheet.
+func TestCall_PurposeLineItemsIsAccepted(t *testing.T) {
+	srv, hits := okServer(t, validContent)
+	c, _ := fakeClient(t, srv.URL, 15*time.Second)
+	req := baseReq()
+	req.Purpose = PurposeLineItems
+
+	if _, err := c.Call(t.Context(), req); err != nil {
+		t.Fatalf("Call() err = %v, want nil", err)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("hits = %d, want 1", hits.Load())
+	}
+}
+
 // -- T18 --
 
 func TestCall_FakeHintIsNeverSent(t *testing.T) {

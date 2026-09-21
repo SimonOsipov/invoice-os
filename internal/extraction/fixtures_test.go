@@ -1950,6 +1950,14 @@ const fxAILines = "ai_lines_invoice.pdf"
 
 const fxAILinesMarkerPrefix = "AIFAKE-LINES-ANSWER-"
 
+// The marker is drawn small and near the left edge so the whole run fits the page width.
+// Docling clips a run at the page edge and returns the prefix, which decodes to a base64
+// error and quarantines the document -- TestFixtures_AILinesMarkerFitsThePageWidth.
+const (
+	fxAILinesMarkerPt = 2
+	fxAILinesMarkerX  = 20
+)
+
 func fxAILinesHeaderLines() []fxLine {
 	return []fxLine{
 		{24, 72, 720, "INVOICE"},
@@ -2069,7 +2077,7 @@ func fxAILinesLines() []fxLine {
 		fxLine{10, 72, fxAILinesAIOnlyY, fxAILinesAIOnlyLine},
 		fxLine{10, 72, fxAILinesFootnoteY, fxAILinesFootnote},
 	)
-	lines = append(lines, fxLine{3, 72, 38, fxAILinesMarker()})
+	lines = append(lines, fxLine{fxAILinesMarkerPt, fxAILinesMarkerX, 38, fxAILinesMarker()})
 	return lines
 }
 
@@ -2175,7 +2183,7 @@ func TestFixtures_AILinesRuledTableYieldsTwoDocLines(t *testing.T) {
 // fixture's TestFixtures_AISteeredOutcomeIgnoresTokenOrder recipe.
 func TestFixtures_AILinesOutcomeIgnoresTokenOrder(t *testing.T) {
 	lines := fxAILinesLines()
-	if last := lines[len(lines)-1]; last.size != 3 || !strings.HasPrefix(last.text, fxAILinesMarkerPrefix) {
+	if last := lines[len(lines)-1]; last.size != fxAILinesMarkerPt || !strings.HasPrefix(last.text, fxAILinesMarkerPrefix) {
 		t.Fatalf("the generator's own line list does not place the marker last: %+v", last)
 	}
 	marker := fxAILinesMarker()
@@ -3445,5 +3453,48 @@ func TestFixtures_EveryTestNamedInACommentIsDeclared(t *testing.T) {
 	}
 	if got := fxUndeclaredNames([]string{known}, declared); len(got) != 0 {
 		t.Errorf("a genuinely declared name reports %q, want none", got)
+	}
+}
+
+// fxHelveticaWidths is Helvetica's own advance width, in 1/1000 em, for every character a
+// scoped marker can contain: the base64url alphabet plus the prefix's letters and hyphen.
+var fxHelveticaWidths = map[rune]int{
+	'0': 556, '1': 556, '2': 556, '3': 556, '4': 556, '5': 556, '6': 556, '7': 556, '8': 556, '9': 556,
+	'A': 667, 'B': 667, 'C': 722, 'D': 722, 'E': 667, 'F': 611, 'G': 778, 'H': 722, 'I': 278,
+	'J': 500, 'K': 667, 'L': 556, 'M': 833, 'N': 722, 'O': 778, 'P': 667, 'Q': 778, 'R': 722,
+	'S': 667, 'T': 611, 'U': 722, 'V': 667, 'W': 944, 'X': 667, 'Y': 667, 'Z': 611,
+	'a': 556, 'b': 556, 'c': 500, 'd': 556, 'e': 556, 'f': 278, 'g': 556, 'h': 556, 'i': 222,
+	'j': 222, 'k': 500, 'l': 222, 'm': 833, 'n': 556, 'o': 556, 'p': 556, 'q': 556, 'r': 333,
+	's': 500, 't': 278, 'u': 556, 'v': 500, 'w': 722, 'x': 500, 'y': 500, 'z': 500,
+	'-': 333, '_': 556,
+}
+
+// TestFixtures_AILinesMarkerFitsThePageWidth is the local guard on a deployed-only failure:
+// the sidecar clips a text run at the page edge and returns its prefix, whose payload is not
+// valid base64, so the line call fails and the document quarantines. PDFium parses the content
+// stream and never clips, so every other local test stays green on a marker that cannot survive
+// the deployed read.
+func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
+	marker := fxAILinesMarker()
+	if len(marker) == 0 {
+		t.Fatal("the marker is empty, so the width assertion below proves nothing")
+	}
+
+	milli := 0
+	for _, r := range marker {
+		w, ok := fxHelveticaWidths[r]
+		if !ok {
+			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
+		}
+		milli += w
+	}
+	right := float64(fxAILinesMarkerX) + float64(milli)*float64(fxAILinesMarkerPt)/1000
+
+	// Headroom, not just fit: the payload grows whenever the steered answer does, and a run
+	// that ends exactly at the edge re-truncates silently on the next change.
+	limit := float64(fxPageWidthPt) * 0.95
+	if right > limit {
+		t.Errorf("marker of %d chars at %dpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
+			len(marker), fxAILinesMarkerPt, fxAILinesMarkerX, right, limit, fxPageWidthPt)
 	}
 }

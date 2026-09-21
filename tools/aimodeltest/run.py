@@ -2,6 +2,7 @@
 """Send each document to each model via OpenRouter; append answers to answers.jsonl (resumable)."""
 import base64, json, os, subprocess, sys, threading, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 
 BASE = os.environ.get("DATA", "")
 KEY = ""
@@ -9,8 +10,11 @@ MODELS = ["google/gemini-3.5-flash-lite", "google/gemini-3.8-flash", "openai/gpt
           "openai/gpt-5.6-luna-pro", "qwen/qwen3.8-flash"]
 FIELDS = ["invoice_number", "issue_date", "supplier_tin", "supplier_name",
           "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"]
+PURPOSES = ["header", "combined", "lines"]
 COST_CAP = float(os.environ.get("COST_CAP", "4.0"))
 OUT = os.path.join(BASE, os.environ.get("ANSWERS", "answers.jsonl"))
+LINE_OUT = os.path.join(BASE, os.environ.get("LINE_ANSWERS", "answers.lines.jsonl"))
+PURPOSE_OUT = {"header": OUT, "lines": LINE_OUT, "combined": LINE_OUT}
 
 SYSTEM = """You extract the header fields of one invoice for a Nigerian e-invoicing system.
 
@@ -29,8 +33,33 @@ Return a JSON object with exactly these keys. Each value is a string, or null wh
 TEXT_INTRO = """The document text below was read by a PDF parser. Each line is one visual row on the page. y is the row's vertical position and x each text run's horizontal position, both from 0 to 1 measured from the top-left corner."""
 IMAGE_INTRO = "The document has no text layer. Its pages are attached as images."
 
+LINE_ROLES = ["description", "quantity", "unit_price", "line_total", "line_tax"]
+
+LINE_RULES = """Return the invoice's printed line-item rows under the key line_items, in printed order, top to bottom. Return an empty list when the document prints no line-item rows at all.
+
+One object per printed row. Never merge two printed rows into one, never split one printed row into two, never invent a row that is not printed, and never reorder the rows.
+
+A totals band is never a line item. A subtotal, tax, total, amount-due or balance line below or beside the rows is not a row, even when it repeats a row's figures.
+
+Each object has exactly these keys. Each value is a string, or null when the row does not print that cell. Never guess, compute or infer a value that is not printed.
+- description: what the row is for, exactly as printed. When a description is printed over more than one line, join the lines with one space.
+- quantity: the number of units, exactly as printed.
+- unit_price: the price of one unit, as digits with a decimal point and no currency symbol or thousands separators (1250.00).
+- line_total: the row's own amount, same number format.
+- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null."""
+
+LINE_SYSTEM = "You extract the line items of one invoice for a Nigerian e-invoicing system.\n\n" + LINE_RULES
+COMBINED_SYSTEM = SYSTEM + "\n\nYou also extract the same invoice's line items.\n\n" + LINE_RULES
+
 SCHEMA = {"type": "object", "additionalProperties": False, "required": FIELDS,
           "properties": {f: {"type": ["string", "null"]} for f in FIELDS}}
+LINE_ITEM_SCHEMA = {"type": "object", "additionalProperties": False, "required": LINE_ROLES, "properties": {r: {"type": ["string", "null"]} for r in LINE_ROLES}}
+LINES_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["line_items"], "properties": {"line_items": {"type": "array", "items": LINE_ITEM_SCHEMA}}}
+COMBINED_SCHEMA = {"type": "object", "additionalProperties": False, "required": FIELDS + ["line_items"], "properties": dict(SCHEMA["properties"], line_items={"type": "array", "items": LINE_ITEM_SCHEMA})}
+
+CALL_SHAPES = {"header": (SYSTEM, "invoice_fields", SCHEMA),
+               "lines": (LINE_SYSTEM, "invoice_line_items", LINES_SCHEMA),
+               "combined": (COMBINED_SYSTEM, "invoice_fields_and_lines", COMBINED_SCHEMA)}
 
 
 def doc_text(dump):
@@ -59,28 +88,32 @@ spent = [0.0]
 
 def done_keys():
     keys, total = set(), 0.0
-    if os.path.exists(OUT):
-        for line in open(OUT):
+    for path in dict.fromkeys(PURPOSE_OUT.values()):
+        if not os.path.exists(path):
+            continue
+        for line in open(path):
             r = json.loads(line)
             total += r.get("cost") or 0
             if not r.get("error"):
-                keys.add((r["file"], r["model"], r["run"]))
+                keys.add((r["file"], r["model"], r.get("purpose", "header"), r["run"]))
     return keys, total
 
 
-def call(dump, model, run):
+def call(dump, model, purpose, run):
     # An arm label "<model>+reasoning-<effort>" runs the same model with reasoning turned on.
     model_id, _, arm = model.partition("+")
+    system, schema_name, schema = CALL_SHAPES[purpose]
     body = {"model": model_id,
-            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user_content(dump)}],
-            "response_format": {"type": "json_schema", "json_schema": {"name": "invoice_fields", "strict": True, "schema": SCHEMA}},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user_content(dump)}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": schema}},
             "provider": {"require_parameters": True},
             "usage": {"include": True}}
     if not model.startswith("openai/"):  # the Luna models reject temperature
         body["temperature"] = 0
     if arm.startswith("reasoning-"):
         body["reasoning"] = {"effort": arm.removeprefix("reasoning-")}
-    rec ={"file": dump["file"], "model": model, "run": run, "input": "text" if dump["text_chars"] > 0 else "image"}
+    rec = {"file": dump["file"], "model": model, "purpose": purpose, "run": run,
+           "input": "text" if dump["text_chars"] > 0 else "image"}
     for attempt in range(3):
         with lock:
             if spent[0] >= COST_CAP:
@@ -102,9 +135,21 @@ def call(dump, model, run):
                 spent[0] += rec["cost"]
             if "error" in resp:
                 raise ValueError(json.dumps(resp["error"])[:300])
-            content = resp["choices"][0]["message"]["content"]
-            fields = json.loads(content)
-            rec["fields"] = {f: fields.get(f) for f in FIELDS}
+            message = resp["choices"][0]["message"]
+            refusal = (message.get("refusal") or "").strip()
+            content = message.get("content")
+            if refusal or not content:
+                rec["refused"] = True
+                rec["error"] = "refused: " + (refusal or resp["choices"][0].get("finish_reason") or "empty content")[:300]
+                return rec
+            parsed = json.loads(content)
+            if purpose in ("header", "combined"):
+                rec["fields"] = {f: parsed.get(f) for f in FIELDS}
+            if purpose in ("lines", "combined"):
+                rows = parsed["line_items"]
+                if not isinstance(rows, list):
+                    raise ValueError("line_items is not a list")
+                rec["lines"] = [{r: row.get(r) for r in LINE_ROLES} for row in rows]
             rec.pop("error", None)
             return rec
         except urllib.error.HTTPError as e:
@@ -153,6 +198,10 @@ def main():
     if only:
         files = [f for f in files if os.path.basename(f) in only.split(",")]
     models = os.environ.get("ONLY_MODELS", ",".join(MODELS)).split(",")
+    purposes = os.environ.get("ONLY_PURPOSES", ",".join(PURPOSES)).split(",")
+    bad = [p for p in purposes if p not in CALL_SHAPES]
+    if bad:
+        sys.exit(f"unknown purpose(s): {','.join(bad)}")
     runs = int(os.environ.get("RUNS", "3"))
     keys, spent[0] = done_keys()
     jobs = []
@@ -163,17 +212,20 @@ def main():
         if dump["text_chars"] == 0:
             continue  # Stage B already excludes these; this is a second fence (never send as images)
         for model in models:
-            for run in range(1, runs + 1):
-                if (name, model, run) not in keys:
-                    jobs.append((dump, model, run))
+            for purpose in purposes:
+                for run in range(1, runs + 1):
+                    if (name, model, purpose, run) not in keys:
+                        jobs.append((dump, model, purpose, run))
     print(f"{len(jobs)} calls to make, ${spent[0]:.4f} already spent, cap ${COST_CAP}", flush=True)
-    with ThreadPoolExecutor(max_workers=int(os.environ.get("WORKERS", "8"))) as pool, open(OUT, "a") as fh:
+    with ExitStack() as stack, ThreadPoolExecutor(max_workers=int(os.environ.get("WORKERS", "8"))) as pool:
+        handles = {p: stack.enter_context(open(PURPOSE_OUT[p], "a")) for p in dict.fromkeys(purposes)}
         for rec in pool.map(lambda j: call(*j), jobs):
             with lock:
+                fh = handles[rec["purpose"]]
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()
             status = "ERR " + rec["error"][:120] if rec.get("error") else "ok"
-            print(f'{rec["model"]:32} {rec["file"][:40]:40} run{rec["run"]} ${rec.get("cost") or 0:.5f} {rec.get("latency_s")}s {status}', flush=True)
+            print(f'{rec["model"]:32} {rec["purpose"]:8} {rec["file"][:40]:40} run{rec["run"]} ${rec.get("cost") or 0:.5f} {rec.get("latency_s")}s {status}', flush=True)
     print(f"spent this account total ${spent[0]:.4f}", flush=True)
 
 

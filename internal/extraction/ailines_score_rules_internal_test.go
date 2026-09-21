@@ -316,6 +316,44 @@ func TestAliBuildSummary_ThreeRunsDisagreeingOnRowCountAreReportedNotAveraged(t 
 	}
 }
 
+func TestAliBuildSummary_ModelsListsTheDistinctModelsSeenInCalls(t *testing.T) {
+	calls := []aliCallMeta{
+		{File: "x.pdf", Model: "gpt", Purpose: aliPurposeHeader, Run: 1, Outcome: aliCallGood},
+		{File: "x.pdf", Model: "gemini", Purpose: aliPurposeLines, Run: 1, Outcome: aliCallGood},
+		{File: "x.pdf", Model: "gemini", Purpose: aliPurposeLines, Run: 2, Outcome: aliCallGood},
+	}
+	sum, _ := aliBuildSummary(aliKey{Docs: map[string]aliKeyDoc{}}, nil, map[string][]DocLine{}, nil, calls, nil)
+	aliFloor(t, len(sum.Models), "model(s)")
+	if len(sum.Models) != 2 {
+		t.Fatalf("Models = %v, want 2 distinct models, not 3 (no dedup) or 1 (overwritten)", sum.Models)
+	}
+	if sum.Models[0] != "gemini" || sum.Models[1] != "gpt" {
+		t.Errorf("Models = %v, want sorted [gemini gpt]", sum.Models)
+	}
+}
+
+// The driver's own refusal on more than one model can only run under a hand-run env (F-7's
+// admission), so it is graded by source scan, the same tool T1/T2 use for AC-1's driver body.
+func TestAliScoreLines_TheDriverRefusesMoreThanOneModel(t *testing.T) {
+	src := aliScoreDriverSource(t)
+	aliFloor(t, len(src), "driver source byte(s)")
+
+	guard := `if len(summary.Models) > 1 {`
+	idx := strings.Index(src, guard)
+	if idx < 0 {
+		t.Fatalf("driver source is missing the multi-model refusal guard %q", guard)
+	}
+	rest := src[idx+len(guard):]
+	fatalIdx := strings.Index(rest, "t.Fatalf(")
+	closeIdx := strings.Index(rest, "\n\t}")
+	if fatalIdx < 0 || closeIdx < 0 || fatalIdx > closeIdx {
+		t.Error("multi-model guard body must call t.Fatalf before the block closes")
+	}
+	if !strings.Contains(rest, "pooling would silently produce a wrong headline") {
+		t.Error("multi-model guard's Fatalf message is missing or was edited away from its own guard")
+	}
+}
+
 // --- T6-T8: role and denominator counting (AC-3) ------------------------------------------
 
 func aliFCSummary(t *testing.T) aliSummaryJSON {

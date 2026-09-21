@@ -40,10 +40,21 @@ describe('AIRM-02', () => {
     const src = readFileSync(FAKE_GO, 'utf8')
     // Anchored on the NAME, not "first MustCompile in the file" -- a second MustCompile
     // added above markerRe must not silently re-point this mirror at the wrong literal.
-    const match = src.match(/\bmarkerRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)
+    // The argument may concatenate backtick literals with shared consts, so resolve both.
+    const match = src.match(/\bmarkerRe\s*=\s*regexp\.MustCompile\(([^)]*(?:\)[^)]*)*?)\)\n/)
     expect(match, "control: fake.go's named `markerRe = regexp.MustCompile(...)` declaration must be found, or this test reads nothing").not.toBeNull()
 
     const pattern = match![1]
+      .split('+')
+      .map((part) => {
+        const term = part.trim()
+        const literal = term.match(/^`([^`]*)`$/)
+        if (literal) return literal[1]
+        const resolved = src.match(new RegExp(`\\bconst\\s+${term}\\s*=\\s*\`([^\`]*)\``))
+        expect(resolved, `markerRe references ${term}, which is not a backtick const in fake.go`).not.toBeNull()
+        return resolved![1]
+      })
+      .join('')
     // Control: a mis-pathed read (e.g. an empty file, or a rewritten literal with no
     // AIFAKE- prefix) cannot pass the assertion below vacuously.
     expect(pattern.length).toBeGreaterThan(0)

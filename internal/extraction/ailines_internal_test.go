@@ -27,6 +27,42 @@ const (
 
 func aliStr(s string) *string { return &s }
 
+// aliEngineLineJSON is one line-item row's engine reading: only the roles the reader populated,
+// keyed by role. An absent cell carries no key, the contract aitDumpEngineJSON already uses.
+type aliEngineLineJSON struct {
+	Index int                          `json:"index"`
+	Roles map[string]aitDumpEngineJSON `json:"roles"`
+}
+
+// aliEngineLines groups Reconcile's line-item rows by index, ascending. A row whose every cell
+// is absent produced no FieldResult at all, so it emits no entry and the indexes may gap.
+func aliEngineLines(results []FieldResult) []aliEngineLineJSON {
+	byIndex := map[int]map[string]aitDumpEngineJSON{}
+	for _, r := range results {
+		index, role, ok := ParseLineFieldName(r.Name)
+		if !ok {
+			continue // a header field, or the line_items block row: neither is a line cell
+		}
+		if byIndex[index] == nil {
+			byIndex[index] = map[string]aitDumpEngineJSON{}
+		}
+		v := *r.Value // never nil: TestAliEngineLines_EveryEmittedLineRowCarriesAValue
+		byIndex[index][role] = aitDumpEngineJSON{Value: &v, Reason: string(r.Reason)}
+	}
+
+	indexes := make([]int, 0, len(byIndex))
+	for i := range byIndex {
+		indexes = append(indexes, i)
+	}
+	sort.Ints(indexes)
+
+	out := make([]aliEngineLineJSON, 0, len(indexes))
+	for _, i := range indexes {
+		out = append(out, aliEngineLineJSON{Index: i, Roles: byIndex[i]})
+	}
+	return out
+}
+
 // aliTrimTrailingZeros makes 700 and 700.00 one value; line_items.unit_price is numeric(14,2),
 // so the difference is invisible downstream and scoring it would measure formatting.
 func aliTrimTrailingZeros(s string) string {

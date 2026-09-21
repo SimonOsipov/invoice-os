@@ -1,6 +1,5 @@
-// ailines_rules_internal_test.go: RED specs for the line-item scoring core -- role readings,
-// the five-way cell verdict, and the order-preserving three-pass row alignment. Helpers land in
-// ailines_internal_test.go (not yet written); this package will not compile until they exist.
+// Specs for the line-item scoring core -- role readings, the five-way cell verdict, and the
+// order-preserving three-pass row alignment. Helpers live in ailines_internal_test.go.
 package extraction
 
 import "testing"
@@ -204,7 +203,7 @@ func aliFixtureTotalsBandFullKey() (answer, key []DocLine) {
 	return answer, key
 }
 
-// --- role readings (AC 1) ----------------------------------------------------------------
+// --- role readings --------------------------------------------------------------------------
 
 func TestAliRoleReadings_AnAmountIgnoresTrailingZeros(t *testing.T) {
 	a := aliRoleReadings(LineRoleUnitPrice, "700")
@@ -281,7 +280,7 @@ func TestAliRoleReadings_ARefusedNumericRawHasNoReading(t *testing.T) {
 	}
 }
 
-// --- cell verdicts (AC 2) ------------------------------------------------------------------
+// --- cell verdicts --------------------------------------------------------------------------
 
 func TestAliClassifyCell_AMatchingReadingAgainstAKeyValueIsRight(t *testing.T) {
 	if got := aliClassifyCell(LineRoleLineTotal, aliStr("56000"), aliStr("56000.00")); got != aliRight {
@@ -316,7 +315,7 @@ func TestAliClassifyCell_NoAnswerAgainstANullKeyCellIsRight(t *testing.T) {
 	}
 }
 
-// --- monotone matching (AC 3) --------------------------------------------------------------
+// --- monotone matching ----------------------------------------------------------------------
 
 func TestAliMonotoneMatch_NeverCrossesTwoPairs(t *testing.T) {
 	const classA, classB = 0, 1
@@ -353,7 +352,7 @@ func TestAliMonotoneMatch_TiesTakeTheEarliestKeyRow(t *testing.T) {
 	}
 }
 
-// --- the three passes, in order (AC 4) -------------------------------------------------------
+// --- the three passes, in order -------------------------------------------------------------
 
 func TestAliAlign_TheBukkaHutMenusPairInPrintedOrder(t *testing.T) {
 	answer, key := aliFixtureClean()
@@ -377,6 +376,14 @@ func TestAliAlign_TheBukkaHutMenusPairInPrintedOrder(t *testing.T) {
 	}
 	if got.Misaligned() != 0 {
 		t.Errorf("Misaligned() = %d, want 0", got.Misaligned())
+	}
+
+	right, wrong, missing := aliSweepCells(t, got.Pairs, answer, key)
+	if total := right + wrong + missing; total != 75 {
+		t.Fatalf("scored %d cells, want 75", total)
+	}
+	if right != 75 || wrong != 0 || missing != 0 {
+		t.Errorf("right/wrong/missing = %d/%d/%d, want 75/0/0", right, wrong, missing)
 	}
 }
 
@@ -502,7 +509,7 @@ func TestAliAlign_AZeroRowControlCountsEveryAnswerRowAsInvented(t *testing.T) {
 	}
 }
 
-// --- misaligned and the partition invariant (AC 5) --------------------------------------------
+// --- misaligned and the partition invariant -------------------------------------------------
 
 func TestAliAlign_AMisreadRowInAGapStillPairsPositionally(t *testing.T) {
 	answer, key := aliFixtureMisreadGap()
@@ -560,7 +567,7 @@ func TestAliAlign_TheOutcomesPartitionBothSides(t *testing.T) {
 	}
 }
 
-// --- the off-by-one: load-bearing, numbers measured (AC 6) -------------------------------------
+// --- the off-by-one: load-bearing, numbers measured -----------------------------------------
 
 func TestAliAlign_AShiftByOneReportsOneDroppedRowNotFifteenWrongCells(t *testing.T) {
 	answer, key := aliFixtureShiftByOne()
@@ -611,7 +618,7 @@ func TestAliAlign_AShiftByOneReportsOneDroppedRowNotFifteenWrongCells(t *testing
 	}
 }
 
-// --- the equal-amount swap: load-bearing, the story's own AC-7 number is wrong (AC 7, AC 8) -----
+// --- the equal-amount swap: load-bearing -----------------------------------------------------
 
 func TestAliAlign_TwoEqualAmountRowsSwappedAcrossMenusBreakTheCleanPass(t *testing.T) {
 	answer, key := aliFixtureSwap(0, 11) // positions 1 and 12: SMOKEY JOLLOF RICE <-> FRIED RICE
@@ -671,7 +678,7 @@ func TestAliAlign_TwoEqualAmountRowsSwappedAcrossMenusBreakTheCleanPass(t *testi
 	}
 }
 
-// --- menus out of order: the design's own rationale, and the only fixture that misaligns (AC 9) --
+// --- menus out of order: the design's own rationale, and the only fixture that misaligns ----
 
 func TestAliAlign_MenusReturnedOutOfOrderMisalignsThePositionalPairs(t *testing.T) {
 	answer, key := aliFixtureMenusOutOfOrder()
@@ -709,7 +716,7 @@ func TestAliAlign_MenusReturnedOutOfOrderMisalignsThePositionalPairs(t *testing.
 	}
 }
 
-// --- a partial reader and an invented totals band, on the full menu key (AC 10) -----------------
+// --- a partial reader and an invented totals band, on the full menu key ---------------------
 
 func TestAliAlign_AnInventedTotalsRowOnTheFullMenuKeyStaysInvented(t *testing.T) {
 	answer, key := aliFixtureTotalsBandFullKey()

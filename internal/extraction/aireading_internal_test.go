@@ -175,8 +175,8 @@ func TestAIPromptText_OneLinePerDoclingTokenInReaderOrder(t *testing.T) {
 		"y=0.100 | x=0.20 A\n" +
 		"--- page 2 ---\n" +
 		"y=0.200 | x=0.05 C"
-	if got := aiPromptText(pages); got != want {
-		t.Errorf("aiPromptText = %q, want %q", got, want)
+	if got := DoclingPromptText(pages); got != want {
+		t.Errorf("DoclingPromptText = %q, want %q", got, want)
 	}
 }
 
@@ -202,8 +202,8 @@ func TestAskAI_SendsOneDocumentCallWithTheText(t *testing.T) {
 	if req.SchemaName != "invoice_fields" {
 		t.Errorf("SchemaName = %q, want invoice_fields", req.SchemaName)
 	}
-	if want := aiPromptText(pages); req.Text != want {
-		t.Errorf("Text = %q, want aiPromptText(pages) = %q", req.Text, want)
+	if want := DoclingPromptText(pages); req.Text != want {
+		t.Errorf("Text = %q, want DoclingPromptText(pages) = %q", req.Text, want)
 	}
 	if req.Pages != nil {
 		t.Errorf("Pages = %v, want nil", req.Pages)

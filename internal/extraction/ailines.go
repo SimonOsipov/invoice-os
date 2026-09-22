@@ -65,7 +65,7 @@ func askAILines(ctx context.Context, r AIReader, pages []TokenPage) ([]AILine, b
 	ans, failed := aiCallHead(ctx, r, ai.Request{
 		Purpose:    ai.PurposeLineItems,
 		System:     aiLinesSystem,
-		Text:       aiPromptText(pages),
+		Text:       DoclingPromptText(pages),
 		FakeScope:  "LINES",
 		SchemaName: "invoice_line_items",
 		Schema:     aiLinesSchema,

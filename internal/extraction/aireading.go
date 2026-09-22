@@ -67,9 +67,9 @@ func aiSchemaFor(fields []string) json.RawMessage {
 	return b
 }
 
-// aiPromptText is aiTextIntro plus one line per Docling token in reader order, the AIR-01
+// DoclingPromptText is aiTextIntro plus one line per Docling token in reader order, the AIR-01
 // measured shape (run.py doc_text).
-func aiPromptText(pages []TokenPage) string {
+func DoclingPromptText(pages []TokenPage) string {
 	var lines []string
 	for _, p := range pages {
 		lines = append(lines, fmt.Sprintf(aiPromptPageFmt, p.Number))
@@ -95,7 +95,7 @@ func askAI(ctx context.Context, r AIReader, pages []TokenPage) (map[string]strin
 	return callAI(ctx, r, ai.Request{
 		Purpose:    ai.PurposeDocument,
 		System:     aiSystem,
-		Text:       aiPromptText(pages),
+		Text:       DoclingPromptText(pages),
 		SchemaName: "invoice_fields",
 		Schema:     aiFieldSchema,
 	})

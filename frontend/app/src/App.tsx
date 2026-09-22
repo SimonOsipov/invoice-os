@@ -772,7 +772,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     if (reqInFlight.current && lockBy.current.seq === runSeq.current) {
       navigate('create')
       setSwitcherOpen(false)
-      showStillWorking()
+      // The review step renders neither slot, so show the holder's own screen (BUG20-R1, BUG20-R2).
+      if (createStep === 'review' && !runIsActive(run)) {
+        const step = lockBy.current.op === 'filing' ? 'form' : 'upload'
+        setCreateStep(step)
+        showStillWorking(step)
+      } else showStillWorking()
       return
     }
     navigate('create')
@@ -813,8 +818,8 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
 
   // The slot is the screen's, not the lock holder's: CreateFlow shows the progress card over the
   // form while a run is active (BUG20-P4, BUG20-D13).
-  function showStillWorking() {
-    if (createStep === 'form' && !runIsActive(run)) setFilingError(STILL_WORKING)
+  function showStillWorking(step: CreateStep = createStep) {
+    if (step === 'form' && !runIsActive(run)) setFilingError(STILL_WORKING)
     else setImportError(STILL_WORKING)
   }
 

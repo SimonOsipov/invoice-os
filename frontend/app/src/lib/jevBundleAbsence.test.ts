@@ -61,6 +61,12 @@ describe('frontend/app/src holds no non-test jev harness file', () => {
 
     const matches = files.filter((f) => HARNESS_NEEDLE.test(f.content))
     expect(matches.length, 'no file matched the harness needle -- a broken walk reads exactly this way').toBeGreaterThan(0)
+    // This spec matches its own text, so `> 0` alone can never fail on a needle regression.
+    // The live positive measured at design time is the auto-placement recorder.
+    expect(
+      matches.map((f) => f.path).filter((p) => p.endsWith('mapping.autoplacement.test.ts')),
+      'the known live positive no longer matches -- the needle, not the walk, has regressed',
+    ).toHaveLength(1)
 
     const nonTest = matches.filter((f) => !f.path.endsWith('.test.ts')).map((f) => f.path)
     expect(nonTest, 'a non-test file carries a jev/typesafe/autoplacement string').toEqual([])

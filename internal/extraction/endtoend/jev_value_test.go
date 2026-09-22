@@ -1094,20 +1094,24 @@ func TestJevValue_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
 		if countByCheck(stored, "value_check") == 0 {
 			t.Fatalf("the ledger holds no value_check rows")
 		}
-		var withProbability, withReader int
+		var withProbability int
 		for _, o := range stored {
 			if o.Probability != nil {
 				withProbability++
 			}
-			if o.Reader == jvReader {
-				withReader++
+			// Spelled against a literal, not against jvReader: comparing an outcome's Reader
+			// to the constant that set it is a self-matching needle -- emptying the constant
+			// would satisfy it. This suite reads every document through Docling (design §1).
+			if o.Reader != "docling" {
+				t.Fatalf("%s/%s/%s stored Reader %q, want docling -- AC-7 names the reader that produced each document's text", o.Check, o.DocumentID, o.Field, o.Reader)
 			}
 		}
 		if withProbability == 0 {
 			t.Errorf("no stored outcome kept a Probability through the ledger write")
 		}
-		if withReader == 0 {
-			t.Errorf("no stored outcome kept Reader %q through the ledger write", jvReader)
+		prov := jvSection(t, body, "Provenance")
+		if want := "| value_check | " + jvDocuments()[0].pdf + " | docling |"; !strings.Contains(prov, want) {
+			t.Errorf("Provenance is missing the row %q:\n%s", want, prov)
 		}
 	})
 

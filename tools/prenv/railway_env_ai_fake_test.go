@@ -301,7 +301,14 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 		t.Errorf("the set-ai-fake step carries continue-on-error — a silent failure would leave a PR environment holding a usable key; window = %q", window)
 	}
 
-	needsMatch := regexp.MustCompile(`(?m)^  deploy-gateway:[\s\S]{0,400}?needs:\s*\[([^\]]*)\]`).FindStringSubmatch(content)
+	// Scoped to the deploy-gateway job with comments stripped, so a commented-out
+	// needs: list cannot satisfy it. Case-sensitive: YAML keys are.
+	gw := content[deployGatewayAt+1:]
+	if next := regexp.MustCompile(`\n  [A-Za-z_]`).FindStringIndex(gw); next != nil {
+		gw = gw[:next[0]]
+	}
+	gw = regexp.MustCompile(`(?m)(^|\s)#.*$`).ReplaceAllString(gw, "")
+	needsMatch := regexp.MustCompile(`(?m)^    needs:\s*\[([^\]]*)\]`).FindStringSubmatch(gw)
 	if needsMatch == nil {
 		t.Fatalf("could not find deploy-gateway's needs: list in %s", path)
 	}
@@ -353,6 +360,65 @@ func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "AI fake self-test: 10 fixtures passed") {
 		t.Errorf("stdout does not contain the ai-fake self-test's closing line; stdout = %q", stdout)
+	}
+}
+
+// The selector's closing line is a literal that still says 11 after a fixture
+// is deleted; this counts the fixtures that actually reported.
+func TestServiceSelectorSelfTestReportsEveryFixture(t *testing.T) {
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
+		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	end := strings.Index(stdout, "Service selector self-test: 11 fixtures passed")
+	if end < 0 {
+		t.Fatalf("no selector closing line; stdout = %q", stdout)
+	}
+	reported := regexp.MustCompile(`(?m)^  (A\d+) ok -> `).FindAllStringSubmatch(stdout[:end], -1)
+	if len(reported) == 0 {
+		t.Fatalf("no selector fixture reported ok before the closing line; stdout = %q", stdout)
+	}
+	seen := map[string]int{}
+	for _, m := range reported {
+		seen[m[1]]++
+	}
+	for i := 1; i <= 11; i++ {
+		if id := "A" + strconv.Itoa(i); seen[id] != 1 {
+			t.Errorf("fixture %s reported ok %d time(s), want 1", id, seen[id])
+		}
+	}
+	if len(reported) != 11 {
+		t.Errorf("%d selector fixtures reported ok, the closing line claims 11", len(reported))
+	}
+}
+
+// --self-test's "no network call", observed: curl is shimmed to record each
+// call. The live path is the control that proves the shim is on the script's PATH.
+func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "curl-calls")
+	shim := "#!/bin/sh\necho called >> '" + calls + "'\necho '{\"data\":{\"environments\":{\"edges\":[]}}}'\n"
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
+		t.Fatalf("writing the curl shim: %v", err)
+	}
+	path := "PATH=" + dir + ":" + os.Getenv("PATH")
+	railway := []string{"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID"}
+
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, []string{path}, railway...)
+	if code != 0 {
+		t.Fatalf("--self-test exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if _, err := os.Stat(calls); err == nil {
+		t.Errorf("--self-test called curl; stdout = %q", stdout)
+	}
+
+	live := []string{path, "RAILWAY_API_TOKEN=not-a-token", "RAILWAY_PROJECT_ID=p", "RAILWAY_DEV_ENVIRONMENT_ID=" + persistentEnvironmentID}
+	if out, _, code := runAIFakeCmd(t, []string{"env-x"}, live, railway...); code == 0 {
+		t.Errorf("control: the live path exited 0 against an empty environment list; stdout = %q", out)
+	}
+	if _, err := os.Stat(calls); err != nil {
+		t.Fatalf("control: the live path never reached the curl shim, so --self-test's silence proves nothing: %v", err)
 	}
 }
 

@@ -95,7 +95,7 @@ func d2Outcomes() []Outcome {
 	for i, m := range failMs {
 		out = append(out, Outcome{
 			Check: "value_check", DocumentID: fmt.Sprintf("d2-fail-%d", i), Field: "amount",
-			Label: "not-asked", Failed: true, FailReason: "vendor error",
+			Label: "not-asked", Failed: true, Reason: "vendor error",
 			ProbabilityKind: KindNoul, Elapsed: time.Duration(m) * time.Millisecond,
 		})
 	}
@@ -117,7 +117,7 @@ func d3Outcomes() []Outcome {
 	for i := 0; i < 2; i++ {
 		out = append(out, Outcome{
 			Check: "value_check", DocumentID: fmt.Sprintf("d3-fail-%d", i), Field: "amount",
-			Label: "not-asked", Failed: true, FailReason: "vendor error",
+			Label: "not-asked", Failed: true, Reason: "vendor error",
 			ProbabilityKind: KindNoul,
 		})
 	}
@@ -154,7 +154,7 @@ func d5Outcomes(failed int) []Outcome {
 		if i < failed {
 			out = append(out, Outcome{
 				Check: "value_check", DocumentID: doc, Field: "amount",
-				Label: "not-asked", Failed: true, FailReason: "vendor error",
+				Label: "not-asked", Failed: true, Reason: "vendor error",
 				ProbabilityKind: KindNoul,
 			})
 			continue
@@ -841,5 +841,179 @@ func TestReport_TheJSONTwinCarriesTheSameCounts(t *testing.T) {
 	}
 	if len(got.Thresholds) != len(thresholds) {
 		t.Errorf("JSON twin carries %d threshold row(s), want %d", len(got.Thresholds), len(thresholds))
+	}
+}
+
+// --- CHECK-01-04: D-4's ruling, the variant split, the per-call fold, and the reason tally ---
+
+// C-2, D-4. A failed row is NOT-ASKED: it cannot enter a denominator of labelled answers, so
+// the N line's three percentages must read against that ruling.
+func TestJevReport_AFailedRowDoesNotEnterTheAskedCount(t *testing.T) {
+	var outcomes []Outcome
+	for i := 0; i < 4; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("ok-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		})
+	}
+	outcomes = append(outcomes, Outcome{
+		Check: "value_check", DocumentID: "fail-0", Field: "amount",
+		Label: "not-asked", Failed: true, Reason: "vendor error", ProbabilityKind: KindNoul,
+	})
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	line := jmLineWithTokens(t, string(md), "documents:")
+	for _, want := range []string{"questions asked: 4 (80.00%)", "questions not asked: 1 (20.00%)", "questions failed: 1 (20.00%)"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("N line %q must state %q", line, want)
+		}
+	}
+	if strings.Contains(line, "asked: 5") {
+		t.Errorf("N line %q reads asked: 5 -- a failed row must not enter the asked count", line)
+	}
+}
+
+// C-1. The variant marker (A55/AC-11) separates the planted-variant cost from the
+// production-shaped one; dropping it collapses both into the all-calls figure.
+func TestJevReport_TheVariantCostIsSeparateFromTheProductionCost(t *testing.T) {
+	outcomes := d3Outcomes()
+	for i := 0; i < 7; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d3-%d", i), Field: "variant_field",
+			Label: "wrong", Variant: true, ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: jmNum("1000"), OutputTokens: jmNum("20")},
+		})
+	}
+	md, _, err := Render(outcomes, Pricing{2.00, 10.00})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	prod := jmLineWithTokens(t, body, "cost per 1,000 documents", "production")
+	if !jmHasNumber(prod, "0.72") {
+		t.Errorf("production cost line %q must read 0.72, unmoved by the variant rows", prod)
+	}
+	all := jmLineWithTokens(t, body, "cost per 1,000 documents", "all calls")
+	if !jmHasNumber(all, "1.49") {
+		t.Errorf("all-calls cost line %q must read 1.49 (production + planted variants)", all)
+	}
+	if prod == all {
+		t.Fatalf("production and all-calls cost lines are the same line; Variant produced no split")
+	}
+}
+
+// C-1. A variant call burns wall clock but must never enter the budget series: its elapsed
+// time is synthetic-corruption overhead, not a production-shaped attempt.
+func TestJevReport_AVariantCallBurnsNoBudgetLatency(t *testing.T) {
+	var outcomes []Outcome
+	for i := 0; i < 5; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("prod-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Elapsed: 100 * time.Millisecond,
+		})
+	}
+	for i := 0; i < 3; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("var-%d", i), Field: "amount",
+			Label: "wrong", Variant: true, ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Elapsed: 5000 * time.Millisecond,
+		})
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, series := range []string{"all attempts", "successful only"} {
+		line := jmLineWithTokens(t, body, series, "p50")
+		for _, want := range []string{"p50 100", "p90 100", "max 100"} {
+			if !strings.Contains(line, want) {
+				t.Errorf("%s line %q must read %q -- a variant row must not enter this series", series, line, want)
+			}
+		}
+	}
+	if jmHasNumber(body, "5000") {
+		t.Errorf("report shows 5000 -- a variant call's elapsed time must burn no budget latency")
+	}
+}
+
+// R-5. usageStats/latencyOverElapsed fold per outcome ROW today; several rows sharing one
+// CallID must fold to one call, or the cost figure inflates by the questions-per-call factor.
+func TestJevReport_RowsSharingOneCallCountItsUsageOnce(t *testing.T) {
+	var outcomes []Outcome
+	for i := 0; i < 6; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: "d1", Field: fmt.Sprintf("f%d", i),
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: jmNum("600"), OutputTokens: jmNum("20")}, CallID: "doc1#production",
+		})
+	}
+	// Empty CallID is its own call -- the fallback every CHECK-01-02 fixture (none of which
+	// set CallID) relies on.
+	outcomes = append(outcomes, Outcome{
+		Check: "value_check", DocumentID: "d2", Field: "amount",
+		Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		Usage: Usage{InputTokens: jmNum("600"), OutputTokens: jmNum("20")},
+	})
+
+	md, _, err := Render(outcomes, Pricing{1.00, 0})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	tokens := jmLineWithTokens(t, body, "input tokens per call")
+	if !jmHasNumber(tokens, "600") {
+		t.Errorf("token line %q: mean input tokens must be 600", tokens)
+	}
+	cost := jmLineWithTokens(t, body, "cost per 1,000 documents")
+	if !jmHasNumber(cost, "0.60") {
+		t.Errorf("cost line %q: want 0.60 -- 1,200 input tokens over 2 calls, not 4,200 over 7 rows", cost)
+	}
+	if jmHasNumber(body, "2.10") {
+		t.Errorf("report shows 2.10 -- the unfolded cost over 7 rows, not the per-call fold")
+	}
+}
+
+// AC-4. "never silently dropped" extends to the reason tally: every not-asked row's Reason
+// must be named and counted, and the counts must sum to the printed not-asked figure.
+func TestJevReport_TheNotAskedReasonsAreTallied(t *testing.T) {
+	counts := map[string]int{
+		"missing": 2, "ambiguous": 3, "no answer key": 1, "variant not plantable": 4,
+	}
+	var outcomes []Outcome
+	i := 0
+	for reason, n := range counts {
+		for j := 0; j < n; j++ {
+			outcomes = append(outcomes, Outcome{
+				Check: "value_check", DocumentID: fmt.Sprintf("na-%d", i), Field: "amount",
+				Label: "not-asked", Reason: reason,
+			})
+			i++
+		}
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	line := jmLineWithTokens(t, body, "not asked, by reason:")
+	sum := 0
+	for reason, n := range counts {
+		want := fmt.Sprintf("%s %d", reason, n)
+		if !strings.Contains(line, want) {
+			t.Errorf("reason line %q missing %q", line, want)
+		}
+		sum += n
+	}
+	notAsked := jmLineWithTokens(t, body, "questions not asked:")
+	if !strings.Contains(notAsked, fmt.Sprintf("questions not asked: %d", sum)) {
+		t.Errorf("N line %q: not-asked count must equal the reason tally's sum (%d)", notAsked, sum)
 	}
 }

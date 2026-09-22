@@ -1,5 +1,7 @@
 package jevmeasure
 
+import "slices"
+
 // Provisional wording (A37): CHECK-01-02 authors and pins this text so the
 // report can quote it byte-for-byte. Reconciling it with the real
 // TypeSafe-console wording that produced the chosen thresholds is owed at
@@ -20,6 +22,16 @@ var documentTypeOrder = []string{
 	"tax invoice", "receipt", "proforma", "quotation",
 	"credit note", "delivery note", "statement", "purchase order",
 }
+
+// DocumentTypeOptions is A30's closed, ordered eight. Cloned: the order is a fixed fact, not a
+// slice a caller may reorder.
+func DocumentTypeOptions() []string { return slices.Clone(documentTypeOrder) }
+
+// The two question-type spellings CHECK-02 will match against the vendor's API reference.
+const (
+	QuestionTypeNoul   = "noul"
+	QuestionTypeChoice = "choice"
+)
 
 // DocumentTypeCriteria describes each of A30's eight options, keyed by option name.
 var DocumentTypeCriteria = map[string]string{

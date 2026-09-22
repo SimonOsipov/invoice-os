@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,10 +23,16 @@ const (
 
 	// A truncated or empty `go list -deps` output must not read as a clean scan.
 	eeMinDepsFloor = 20
-	// A scan that reads fewer files than this is reading the wrong directory.
-	eeMinTestFiles = 3
+	// A scan that reads fewer files than this is reading the wrong directory. Measured
+	// 2026-09-22: 23 *_test.go files in this package.
+	eeMinTestFiles = 20
 	// One package before this subtask, two after.
 	eeMinExtractionPkgs = 2
+
+	// eeJevValueFile must stay in the glob TestEndToEndPackage_HasExactlyOneSkipSite scans:
+	// CHECK-01-04's tests live there, and a glob that stopped matching it would report a clean
+	// package while a new skip site sat unseen inside.
+	eeJevValueFile = "jev_value_test.go"
 )
 
 // eeRepoRoot pins `go list` to THIS worktree. A sibling /ralph worktree under
@@ -171,6 +178,9 @@ func TestEndToEndPackage_HasExactlyOneSkipSite(t *testing.T) {
 	// a package whose files stopped being parsed at all.
 	if len(declares) != 1 || declares[0] != eeSkipFile {
 		t.Fatalf("eeRequire is declared in %v, want exactly [%s]", declares, eeSkipFile)
+	}
+	if !slices.Contains(names, eeJevValueFile) {
+		t.Fatalf("glob *_test.go named %v, missing %s -- the scan would report clean while a skip site inside it went unseen", names, eeJevValueFile)
 	}
 	if got := skipSites[eeSkipFile]; got != 1 {
 		t.Errorf("%s holds %d t.Skip call(s), want exactly 1 (eeRequire)", eeSkipFile, got)

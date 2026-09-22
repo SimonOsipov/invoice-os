@@ -27,5 +27,16 @@ type Outcome struct {
 	Elapsed         time.Duration
 	Usage           Usage
 	Failed          bool
-	FailReason      string
+	// Reason is why this row carries no answer: an extraction.Reason string, a variant skip
+	// reason, or a vendor error. Empty when Label == "right"/"wrong".
+	Reason string
+	// Variant marks a row planted with a known-wrong value (CHECK-01-04 A28/A29): excluded from
+	// the budget and from the production cost.
+	Variant bool
+	// Answer is the option a `choice` question answered; empty for a `noul` row. Field carries
+	// the true type on a choice row, Answer the answered one.
+	Answer string
+	// CallID groups rows that share one Ask() call, so usageStats/latencyOverElapsed fold once
+	// per call rather than once per row. Empty is its own call (every CHECK-01-02 fixture).
+	CallID string
 }

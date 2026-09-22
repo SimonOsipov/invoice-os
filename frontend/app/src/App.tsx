@@ -520,6 +520,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // wizard components never observe the rejection that would clear it, since errors come
   // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
+  // Bumped by resetImport and by every run start, so only the current run sets run state or
+  // lands a route (App.secondImport.test.tsx).
+  const runSeq = useRef(0)
 
   // resetImport() snapshots active.entityId at openCreate so a company switch cannot
   // silently retarget an import already in flight. But that snapshot can be taken
@@ -779,6 +782,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // `target` is a parameter, never a state read: switchClient's setActiveEntityId has not
   // committed, so `active` there still names the company being LEFT (:502-528's race).
   function resetImport(target: string | null = active.entityId) {
+    runSeq.current += 1
     setEntityId(target)
     setPickedFiles([])
     setFilesRefusal(null)
@@ -1019,13 +1023,17 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // function (AC #7).
   //
   // reqInFlight is taken ONCE for the whole run and released ONCE in a `finally` after
-  // the loop (and the routing it decides) exits — same shape as readAllColumns above,
-  // extended from "one request" to "the whole sequential run" (AC #8).
+  // the loop exits — same shape as readAllColumns above, extended from "one request" to
+  // "the whole sequential run" (AC #8).
   function startRun() {
     const base = gatewayBase()
     if (base == null || !entityId || !canSubmitAllMappings(groups)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
+    const seq = ++runSeq.current
+    const show = (r: ImportRun) => {
+      if (seq === runSeq.current) setRun(r)
+    }
     setImportError(null)
 
     // Snapshotted once, same discipline as readAllColumns' `files` snapshot: this run
@@ -1067,7 +1075,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
                   : 'this file was not uploaded — read its columns again',
               },
             })
-            setRun(localRun)
+            show(localRun)
             continue
           }
           try {
@@ -1086,7 +1094,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
-                setRun(localRun)
+                show(localRun)
               },
             )
             localRun = runReducer(localRun, {
@@ -1102,13 +1110,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
               outcome: { kind: 'failed', message: toApiError(err).message },
             })
           }
-          setRun(localRun)
+          show(localRun)
         }
-
-        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
       } finally {
         reqInFlight.current = false
       }
+      // Outside the lock: every invoice is committed and this lookup only picks the screen, so a
+      // New invoice inside it can start the next import (App.secondImport.test.tsx).
+      const soleId = await resolveSoleInvoiceId(localRun, base)
+      if (seq === runSeq.current) applyRoute(routeAfterRun(localRun, soleId))
     })()
   }
 
@@ -1135,6 +1145,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     if (base == null || !entityId || !canStartDocumentRun(pickedFiles)) return
     if (reqInFlight.current) return
     reqInFlight.current = true
+    const seq = ++runSeq.current
     setImportError(null)
 
     const filesSnapshot = pickedFiles
@@ -1173,12 +1184,14 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         for (const o of outcomes) {
           if (o.outcome.kind !== 'imported' && o.outcome.kind !== 'failed') continue
           localRun = runReducer(localRun, { type: 'settled', outcome: o.outcome })
-          setRun(localRun)
+          if (seq === runSeq.current) setRun(localRun)
         }
-        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
       } finally {
         reqInFlight.current = false
       }
+      // Outside the lock, as in startRun.
+      const soleId = await resolveSoleInvoiceId(localRun, base)
+      if (seq === runSeq.current) applyRoute(routeAfterRun(localRun, soleId))
     })()
   }
 

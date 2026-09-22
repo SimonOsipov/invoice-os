@@ -466,4 +466,14 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     citation: { text: '// A failed filing\'s message named the company just left. `filing` is deliberately NOT' },
     note: 'Not on ctx and no screen reads it: a re-entrancy guard taken directly by App.tsx#readAllColumns, App.tsx#startRun and App.tsx#startDocumentRun, and passed as `inFlight` into the filing call in App.tsx#fileDraft. Same in-flight rationale as `filing` (App.tsx#switchClient).',
   },
+  {
+    binding: 'runSeq',
+    name: 'runSeq',
+    kind: 'useRef',
+    resetBySwitchClient: true,
+    routes: [],
+    verdict: 'correctly-reset',
+    citation: { in: 'function switchClient(id: string)', text: 'resetImport(id)' },
+    note: 'Not on ctx. Bumped by App.tsx#resetImport and by every run start, so a run left or superseded writes no run state and lands no route.',
+  },
 ]

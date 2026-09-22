@@ -429,8 +429,8 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
     // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx and ROUTE-02-05 adds
     // App.routeDrillDown.test.tsx, the 14th and 15th. ROUTE-06-05 adds
     // App.routeSweep.test.tsx, the 16th. App.savedMapping.test.tsx adds the 17th.
-    // App.aiSuggestion.test.tsx adds the 18th.
-    expect(files, 'the walk must find exactly the eighteen App-rendering test files').toHaveLength(18)
+    // App.aiSuggestion.test.tsx adds the 18th. App.secondImport.test.tsx adds the 19th.
+    expect(files, 'the walk must find exactly the nineteen App-rendering test files').toHaveLength(19)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')

@@ -277,6 +277,9 @@ func jvOpen(t *testing.T, name string) []byte {
 // jvWrite is this suite's only write seam: every artefact write goes through it.
 func jvWrite(t *testing.T, out, name string, b []byte) {
 	t.Helper()
+	if out == "" {
+		t.Fatalf("jvWrite %s with an empty out root would write into the package directory", name)
+	}
 	path := filepath.Join(out, name)
 	jvPaths = append(jvPaths, filepath.Clean(path))
 	if err := os.WriteFile(path, b, 0o644); err != nil {
@@ -1024,6 +1027,43 @@ func TestJevValue_AnEmptyExpectationIsNeverAHit(t *testing.T) {
 	}
 }
 
+// AC-5, AC-4. Two branches the corpus cannot reach: every asked corpus cell is also correct, so
+// a labeller wired to "right" would pass the walk; and no corpus cell is decided with a nil
+// value, so the "no value" not-asked reason is never produced. Both are exercised here.
+func TestJevValue_ACellIsLabelledAgainstItsOwnAnswerKey(t *testing.T) {
+	val := func(s string) *string { return &s }
+	rows := []extraction.FieldResult{
+		{Field: extraction.Field{Name: "invoice_number", Value: val("INV-1"), Reason: extraction.ReasonNone}},
+		{Field: extraction.Field{Name: "total", Value: val("999.00"), Reason: extraction.ReasonNone}},
+		{Field: extraction.Field{Name: "currency", Value: nil, Reason: extraction.ReasonNone}},
+	}
+	doc := jvDoc{pdf: "synthetic.pdf", trueType: "tax invoice", expect: map[string][]string{
+		"invoice_number": {"INV-1"},
+		"total":          {"1000.00"},
+	}}
+
+	cells := jvCells(t, rows, doc)
+	if len(cells) != len(writtenFields) {
+		t.Fatalf("jvCells returned %d cell(s), want one per written field (%d)", len(cells), len(writtenFields))
+	}
+
+	want := []struct{ field, label, reason string }{
+		{"invoice_number", "right", ""},
+		{"total", "wrong", ""},                // decided, but not what the answer key says
+		{"currency", "not-asked", "no value"}, // ReasonNone with no value is still not asked
+	}
+	for _, w := range want {
+		cell, ok := jvCellFor(cells, w.field)
+		if !ok {
+			t.Errorf("jvCells has no %s cell", w.field)
+			continue
+		}
+		if cell.Label != w.label || cell.Reason != w.reason {
+			t.Errorf("%s cell = {Label:%q Reason:%q}, want {Label:%q Reason:%q}", w.field, cell.Label, cell.Reason, w.label, w.reason)
+		}
+	}
+}
+
 // R-1's ruling, new: a non-invoice's decided fields are not-asked for want of an answer key,
 // and its production call carries exactly the one document_type question.
 func TestJevValue_ANonInvoiceValueCellIsNotAskedForWantOfAnAnswerKey(t *testing.T) {
@@ -1205,6 +1245,8 @@ func TestJevValue_APlantedVariantIsAlwaysLabelledWrong(t *testing.T) {
 	if variantWrong != 38 {
 		t.Errorf("value_check has %d variant row(s) correctly labelled wrong, want 38", variantWrong)
 	}
+	// 88 is measured against today's Tier1Rules and goldens, like the 15 above: re-measure and
+	// update in the same commit if the corpus moves -- never relax it (R-15).
 	if baseRight != 88 {
 		t.Errorf("value_check has %d non-variant row(s) labelled right, want 88 -- control: the labeller is not hard-wired to wrong", baseRight)
 	}
@@ -1538,13 +1580,23 @@ func TestJevValue_TheVariantsRideTheirOwnCall(t *testing.T) {
 	}
 
 	variantOutcomes := 0
+	callIDs := map[string]bool{}
 	for _, o := range outcomes {
-		if o.DocumentID == layout && o.Variant {
+		if o.DocumentID != layout || o.CallID == "" {
+			continue
+		}
+		callIDs[o.CallID] = true
+		if o.Variant {
 			variantOutcomes++
 		}
 	}
 	if variantOutcomes != 3 {
 		t.Errorf("%s produced %d Variant outcome(s), want 3", layout, variantOutcomes)
+	}
+	// Two distinct CallIDs, or usageStats folds the variant call's tokens into the production
+	// call and the all-calls cost silently loses them.
+	if len(callIDs) != 2 {
+		t.Errorf("%s's outcomes carry %d distinct CallID(s) (%v), want 2 -- one per call", layout, len(callIDs), callIDs)
 	}
 }
 

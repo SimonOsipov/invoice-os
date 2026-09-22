@@ -450,6 +450,9 @@ func writeCheckSection(w *bytes.Buffer, sec checkSection, pricing Pricing) {
 		sec.NotAsked, pct(sec.NotAsked, total),
 		sec.Failed, pct(sec.Failed, sec.Attempted),
 	)
+	if sec.Failed > 0 {
+		fmt.Fprintf(w, "a failed question counts as not asked, never as asked: it came back with no answer to label.\n")
+	}
 	if sec.VariantCount > 0 {
 		fmt.Fprintf(w, "of the asked, %d are planted variants, excluded from the budget and from the production cost.\n", sec.VariantCount)
 	}

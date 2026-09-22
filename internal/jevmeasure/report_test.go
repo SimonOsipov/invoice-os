@@ -873,6 +873,11 @@ func TestJevReport_AFailedRowDoesNotEnterTheAskedCount(t *testing.T) {
 	if strings.Contains(line, "asked: 5") {
 		t.Errorf("N line %q reads asked: 5 -- a failed row must not enter the asked count", line)
 	}
+	// D-4: the ruling is stated in the rendered report, not only in code.
+	const ruling = "a failed question counts as not asked"
+	if !strings.Contains(string(md), ruling) {
+		t.Errorf("report never states %q; a reader cannot tell which denominator the percentages use", ruling)
+	}
 }
 
 // C-1. The variant marker (A55/AC-11) separates the planted-variant cost from the

@@ -352,6 +352,22 @@ func TestApprovalsSelfTestUnchangedByTheLabelArgument(t *testing.T) {
 	}
 }
 
+// R6: set-ai-fake --self-test runs the shared service selector's 11 fixtures, so the ai-fake-self-test job keeps service_id_by_name under CI.
+func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
+		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Service selector self-test: 11 fixtures passed, no token read, no network call.") {
+		t.Errorf("stdout does not contain the selector self-test's closing line; stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, "AI fake self-test: 10 fixtures passed") {
+		t.Errorf("stdout does not contain the ai-fake self-test's closing line; stdout = %q", stdout)
+	}
+}
+
 // shellFunctionSource returns bash text redefining the named railway-env.sh
 // functions, so a test can drive one directly without reaching the script's
 // own `case` dispatch. Built on shellFunctionBody, which t.Fatalf's when a
@@ -605,6 +621,64 @@ func TestSharedHelperLabelDefaultsToApprovalsEnforced(t *testing.T) {
 			}
 		})
 	}
+}
+
+// R7: neither shared helper has a default label; a call without one refuses before it reads anything.
+func TestServiceSelectorLabelIsRequired(t *testing.T) {
+	// A1's 11-instance fleet (approvals_self_test), copied verbatim: selects svc-inv.
+	const fleetJSON = `{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}`
+
+	t.Run("service_id_by_name without a label refuses", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name") +
+			`rc=0; out=$(service_id_by_name "$1" invoice "self-test R7" 2>/dev/null) || rc=$?; printf '%s' "$out"; exit "$rc"`
+		stdout, _, code := runBashScript(t, script, fleetJSON)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: no label given, must refuse; stdout = %q", stdout)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty: a leak here would upsert against a garbage serviceId", stdout)
+		}
+	})
+
+	t.Run("service_id_by_name with a label selects", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name") +
+			`rc=0; out=$(service_id_by_name "$1" invoice "self-test R7" AI_FAKE 2>/dev/null) || rc=$?; printf '%s' "$out"; exit "$rc"`
+		stdout, _, code := runBashScript(t, script, fleetJSON)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 with a label given; stdout = %q", code, stdout)
+		}
+		if stdout != "svc-inv" {
+			t.Errorf("stdout = %q, want %q", stdout, "svc-inv")
+		}
+	})
+
+	t.Run("assert_environment_is_ephemeral without a label exits before the read", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "assert_environment_is_ephemeral") + `
+fetch_environment_list() { echo FETCHED; GQL_RESPONSE='{"data":{"environments":{"edges":[{"node":{"id":"env-x","isEphemeral":true}}]}}}'; }
+assert_environment_is_ephemeral env-x
+`
+		stdout, _, code := runBashScript(t, script)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: no label given, must refuse before reading; stdout = %q", stdout)
+		}
+		if strings.Contains(stdout, "FETCHED") {
+			t.Errorf("stdout contains FETCHED — fetch_environment_list ran before the label was checked; stdout = %q", stdout)
+		}
+	})
+
+	t.Run("assert_environment_is_ephemeral with a label passes an ephemeral env", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "assert_environment_is_ephemeral") + `
+fetch_environment_list() { echo FETCHED; GQL_RESPONSE='{"data":{"environments":{"edges":[{"node":{"id":"env-x","isEphemeral":true}}]}}}'; }
+assert_environment_is_ephemeral env-x AI_FAKE
+`
+		stdout, _, code := runBashScript(t, script)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 with a label given; stdout = %q", code, stdout)
+		}
+		if !strings.Contains(stdout, "FETCHED") {
+			t.Errorf("stdout does not contain FETCHED; stdout = %q", stdout)
+		}
+	})
 }
 
 // T14: with every Railway variable unset, an empty argument must still exit 2

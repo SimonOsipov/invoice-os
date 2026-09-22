@@ -492,16 +492,44 @@ func jvCountByCheck(outcomes []jevmeasure.Outcome) (value, docType int) {
 	return value, docType
 }
 
+// jvGateLogs records every message jvGateLog sent to t.Log -- the seam
+// TestJevValue_UnsetKeyLogsAndReturns inspects to prove the gate logs exactly one line naming
+// the missing var(s). Reset per subtest with jvResetGateLogs.
+var jvGateLogs []string
+
+func jvResetGateLogs() { jvGateLogs = nil }
+
+// jvGateLog is jvGatedRun's only logging seam when it declines to run: it both records msg (for
+// the test to inspect) and logs it, so a mutation silencing the log also empties the record.
+func jvGateLog(t *testing.T, msg string) {
+	t.Helper()
+	jvGateLogs = append(jvGateLogs, msg)
+	t.Log(msg)
+}
+
+// jvGateReason names which env var(s) jvGatedRun found missing, so the logged line lets an
+// operator tell key-missing, out-missing and both-missing apart.
+func jvGateReason(key, out string) string {
+	switch {
+	case key == "" && out == "":
+		return "TYPESAFE_API_KEY and JEV_OUT unset: no client built, no call"
+	case key == "":
+		return "TYPESAFE_API_KEY unset: no client built, no call"
+	default:
+		return "JEV_OUT unset: no client built, no call"
+	}
+}
+
 // jvGatedRun reads TYPESAFE_API_KEY and JEV_OUT; if either is empty it logs one line naming
-// both and returns false without building a client. Copies TestAIText_WriteCorpusKey's shape.
-// When both are set it runs the full walk against baseURL and writes the rendered report under
-// JEV_OUT -- the live run this gate exists to control.
+// which one and returns false without building a client. Copies TestAIText_WriteCorpusKey's
+// shape. When both are set it runs the full walk against baseURL and writes the rendered report
+// under JEV_OUT -- the live run this gate exists to control.
 func jvGatedRun(t *testing.T, baseURL string) bool {
 	t.Helper()
 	key := os.Getenv("TYPESAFE_API_KEY")
 	out := os.Getenv("JEV_OUT")
 	if key == "" || out == "" {
-		t.Log("TYPESAFE_API_KEY or JEV_OUT unset: no client built, no call")
+		jvGateLog(t, jvGateReason(key, out))
 		return false
 	}
 	t.Logf("live run: model %s", jvResolveModel()) // R-14: named so an operator sees what will be sent
@@ -844,12 +872,14 @@ func jvConfusionTotal(cells map[string]map[string]int) int {
 
 // --- the tests ---
 
-// AC-1. No t.Skip: t.Log + return, copying TestAIText_WriteCorpusKey's shape.
+// AC-1. No t.Skip: t.Log + return, copying TestAIText_WriteCorpusKey's shape. The gate must log
+// exactly one line naming which var is missing, and log nothing when it proceeds.
 func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
-	negative := func(t *testing.T, key, out string) {
+	negative := func(t *testing.T, key, out string, wantKeyNamed, wantOutNamed bool) {
 		t.Helper()
 		t.Setenv("TYPESAFE_API_KEY", key)
 		t.Setenv("JEV_OUT", out)
+		jvResetGateLogs()
 		var calls int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
@@ -862,15 +892,28 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 		if calls != 0 {
 			t.Errorf("jvGatedRun(key=%q, out=%q) opened %d call(s), want 0", key, out, calls)
 		}
+		if len(jvGateLogs) != 1 {
+			t.Fatalf("jvGatedRun(key=%q, out=%q) logged %d line(s), want exactly 1", key, out, len(jvGateLogs))
+		}
+		msg := jvGateLogs[0]
+		if strings.Contains(msg, "TYPESAFE_API_KEY") != wantKeyNamed {
+			t.Errorf("jvGatedRun(key=%q, out=%q) logged %q; TYPESAFE_API_KEY named = %v, want %v", key, out, msg, strings.Contains(msg, "TYPESAFE_API_KEY"), wantKeyNamed)
+		}
+		if strings.Contains(msg, "JEV_OUT") != wantOutNamed {
+			t.Errorf("jvGatedRun(key=%q, out=%q) logged %q; JEV_OUT named = %v, want %v", key, out, msg, strings.Contains(msg, "JEV_OUT"), wantOutNamed)
+		}
 	}
-	t.Run("neither set", func(t *testing.T) { negative(t, "", "") })
-	t.Run("key only", func(t *testing.T) { negative(t, "sk-test", "") })
-	t.Run("out only", func(t *testing.T) { negative(t, "", t.TempDir()) })
+	// wantKeyNamed/wantOutNamed let each subtest tell key-missing, out-missing and
+	// both-missing apart by what the logged line names.
+	t.Run("neither set", func(t *testing.T) { negative(t, "", "", true, true) })
+	t.Run("key only", func(t *testing.T) { negative(t, "sk-test", "", false, true) })
+	t.Run("out only", func(t *testing.T) { negative(t, "", t.TempDir(), true, false) })
 
 	// Positive control leg (essential): without it a gate that always returns false passes.
 	t.Run("both set: positive control", func(t *testing.T) {
 		t.Setenv("TYPESAFE_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", t.TempDir())
+		jvResetGateLogs()
 		var calls int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls++
@@ -883,6 +926,9 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 		}
 		if calls == 0 {
 			t.Errorf("jvGatedRun with both env vars set opened 0 call(s), want > 0")
+		}
+		if len(jvGateLogs) != 0 {
+			t.Errorf("jvGatedRun with both env vars set logged %d line(s), want 0 -- the decline line must be absent on the positive control", len(jvGateLogs))
 		}
 	})
 }
@@ -1245,8 +1291,9 @@ func TestJevValue_APlantedVariantIsAlwaysLabelledWrong(t *testing.T) {
 	if variantWrong != 38 {
 		t.Errorf("value_check has %d variant row(s) correctly labelled wrong, want 38", variantWrong)
 	}
-	// 88 is measured against today's Tier1Rules and goldens, like the 15 above: re-measure and
-	// update in the same commit if the corpus moves -- never relax it (R-15).
+	// 15 (no answer key, above), 38 (planted total, TestJevValue_EveryVariantIsPlantedOrCounted)
+	// and 88 here are corpus-shape figures that move together: re-measure all three in the same
+	// commit when the corpus changes -- never relax any of them (R-15).
 	if baseRight != 88 {
 		t.Errorf("value_check has %d non-variant row(s) labelled right, want 88 -- control: the labeller is not hard-wired to wrong", baseRight)
 	}

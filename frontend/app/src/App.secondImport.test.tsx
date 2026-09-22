@@ -1251,3 +1251,33 @@ it('BUG20-R3: New invoice during a document run, after history navigation to a r
   expect({ path: window.location.pathname, importError: c().importError }).toEqual({ path: `/extraction/${JOB}`, importError: null })
   expect(screen.queryAllByText(STILL_WORKING_COPY), 'the refusal outlived the run').toHaveLength(0)
 })
+
+// The DOM read comes first: state alone cannot see a message the review step never renders.
+it("BUG20-QA24: a filing that fails after the refusal on a review shows the server's message on the form", async () => {
+  await filingHeld()
+  await historyToReview()
+  await act(async () => c().openCreate())
+  expect(c().filingError?.message ?? null, 'New invoice was not refused').toBe(STILL_WORKING_COPY)
+  await releaseFiling(409)
+  expect(screen.queryAllByText('duplicate invoice number'), "the server's message is not on screen").toHaveLength(1)
+  expect({ step: c().createStep, filing: c().filing, refusals: screen.queryAllByText(STILL_WORKING_COPY).length }).toEqual({
+    step: 'form',
+    filing: false,
+    refusals: 0,
+  })
+})
+
+it("BUG20-QA25: a preview that fails after the refusal on a review shows the file's message on the upload step", async () => {
+  await previewHeld()
+  await historyToReview()
+  await act(async () => c().openCreate())
+  expect(c().importError?.message ?? null, 'New invoice was not refused').toBe(STILL_WORKING_COPY)
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect(screen.queryAllByText('a.csv: boom'), "the file's message is not on screen").toHaveLength(1)
+  expect({ step: c().createStep, picked: pickedNames(), refusals: screen.queryAllByText(STILL_WORKING_COPY).length }).toEqual({
+    step: 'upload',
+    picked: ['a.csv'],
+    refusals: 0,
+  })
+})

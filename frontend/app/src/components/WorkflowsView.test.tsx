@@ -468,4 +468,14 @@ describe('APPR-09-04 QA: the intro states what publishing does today', () => {
     ).toBeNull()
     expect(screen.queryByText(/applies it to every matching invoice/), 'the superseded claim is still on screen').toBeNull()
   })
+
+  // The null assertion above is case-sensitive and exact; this one catches a reworded caveat.
+  it('ends the intro at the publishing sentence, with no caveat after it in any wording', () => {
+    render(<WorkflowsView ctx={listCtx([policy()])} />)
+
+    const intro = screen.getByText(/^Each policy decides who signs off/).textContent ?? ''
+    expect(intro.length, 'the intro rendered no text').toBeGreaterThan(0)
+    expect(intro, 'a sentence follows the publishing sentence').toMatch(/Publishing a policy opens an approval on every matching invoice\.$/)
+    expect(intro, 'the intro says transmission is not held, in some letter case').not.toMatch(/transmission is not held/i)
+  })
 })

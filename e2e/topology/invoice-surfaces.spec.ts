@@ -2294,9 +2294,8 @@ test('detail surface: submit one invoice from its own page -- cancel sends nothi
 
 // The agreement invariant, in one browser session: the register row and that invoice's own
 // detail page give the SAME verdict and the SAME sentence, refused then permitted.
-// LIMIT: every PR environment runs APPROVALS_ENFORCED=true and production runs it off, and
-// pushes to main run zero browser specs -- so a green run here proves agreement, never the
-// reported production symptom. That symptom's evidence is an owed manual pass after merge.
+// LIMIT: pushes to main run zero browser specs -- so a green run here proves agreement, never
+// the reported production symptom. That symptom's evidence is an owed manual pass after merge.
 test('submit gate: the register row and its own detail page never disagree -- refused, then permitted', async ({ page }) => {
   // Two nav round trips plus an approval walk on a possibly cold fleet; the sibling
   // detail-submit spec budgets the same.

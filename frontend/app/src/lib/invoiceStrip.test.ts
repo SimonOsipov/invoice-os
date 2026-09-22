@@ -188,9 +188,9 @@ describe('stripNodes: nodes 1/2/4/5 follow status, arch §3e', () => {
 
   it('S-3 (invoiceStrip_totalOverEveryStatus): progress over nodes 1/2/4/5 is monotone with at most one current', () => {
     // AMENDED from the story (arch §7 row 4): "exactly one node is current" is FALSE
-    // across all five nodes. APPROVALS_ENFORCED is off in production, so an open run on a
-    // queued invoice legitimately leaves node 3 AND node 4 current (see S-16). The
-    // invariant is scoped to nodes {1,2,4,5}; node 3 is exempt by construction.
+    // across all five nodes: an open run on a queued invoice leaves node 3 AND node 4
+    // current (see S-16). The invariant is scoped to nodes {1,2,4,5}; node 3 is exempt by
+    // construction.
     const rank: Record<StripState, number> = {
       done: 0,
       current: 1,

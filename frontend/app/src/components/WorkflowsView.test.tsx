@@ -455,13 +455,17 @@ describe('APPR-09-04 QA: the two error slots survive each other, in both orders'
 })
 
 describe('APPR-09-04 QA: the intro states what publishing does today', () => {
-  it('carries the interim second sentence and drops the claim the flag does not honour', () => {
+  it('states that publishing opens an approval and makes no claim that transmission is unheld', () => {
     render(<WorkflowsView ctx={listCtx([policy()])} />)
 
     expect(
-      screen.getByText(/Publishing a policy opens an approval on every matching invoice\. Transmission is not held for approval yet\./),
-      'the intro lost the interim sentence APPR-14 removes when it flips the flag',
+      screen.getByText(/Publishing a policy opens an approval on every matching invoice\./),
+      'the intro lost the sentence that says publishing opens an approval',
     ).toBeTruthy()
+    expect(
+      screen.queryByText(/Transmission is not held for approval yet/),
+      'the intro still claims transmission is not held for approval',
+    ).toBeNull()
     expect(screen.queryByText(/applies it to every matching invoice/), 'the superseded claim is still on screen').toBeNull()
   })
 })

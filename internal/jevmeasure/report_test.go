@@ -1381,12 +1381,19 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.id, func(t *testing.T) {
-			want, ok := reg[tc.id]
+			raw, ok := reg[tc.id]
 			if !ok {
 				t.Fatalf("registry has no entry %q", tc.id)
 			}
+			want := raw
+			// absenceCheck is what the ungated leg must never quote. For the two run-formatted
+			// caveats it is the number-free tail after "%d" -- the ungated fixture's own count
+			// differs from tc.count, so checking the full substituted sentence would miss a gate
+			// that fires anyway (it would just print a different number).
+			absenceCheck := raw
 			if tc.id == caveatValuePlantedWrongs || tc.id == caveatMappingAutoFewWrongs {
-				want = fmt.Sprintf(want, tc.count)
+				want = fmt.Sprintf(raw, tc.count)
+				_, absenceCheck, _ = strings.Cut(raw, "%d")
 			}
 
 			mdGated, _, err := Render(tc.gated, Pricing{})
@@ -1401,7 +1408,7 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Render (ungated): %v", err)
 			}
-			if strings.Contains(string(mdUngated), want) {
+			if strings.Contains(string(mdUngated), absenceCheck) {
 				t.Errorf("ungated render quotes caveat %q; its gate is not gating", tc.id)
 			}
 		})

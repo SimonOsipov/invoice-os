@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -297,8 +298,14 @@ func TestCSVGen_TheCategorySplitIsThirteenTwentySevenEight(t *testing.T) {
 func TestCSVGen_EveryKeyNamesItsOwnHeader(t *testing.T) {
 	layouts := cgLoad(t, cgRun(t))
 
+	// A field missing from the key iterates zero times below, so its absence would
+	// read clean; the scorer would then silently measure ten fields, not eleven.
+	wantFields := slices.Sorted(slices.Values(cgCANON))
 	var checked int
 	for _, l := range layouts {
+		if got := slices.Sorted(maps.Keys(l.Key)); !slices.Equal(got, wantFields) {
+			t.Errorf("layout %s: key covers %v, want the eleven canonical fields %v", l.ID, got, wantFields)
+		}
 		for _, f := range cgCANON {
 			for _, hp := range l.Key[f] {
 				if hp != nil {
@@ -416,6 +423,59 @@ func TestCSVGen_EveryLayoutDeclaresItsFormatFacts(t *testing.T) {
 		}
 		if checked < 400 {
 			t.Fatalf("checked only %d issue_date cells, want >= 400", checked)
+		}
+	})
+
+	// A shape regex cannot tell DD/MM from MM/DD. The generator gives every
+	// layout it marks unambiguous a first invoice dated on the 13th or later,
+	// so the declared day position must carry a value above 12.
+	t.Run("the day position matches the declared slash format", func(t *testing.T) {
+		dayIdx := map[string]int{"DD/MM/YYYY": 0, "MM/DD/YYYY": 1}
+		counted := map[string]int{}
+		for _, l := range layouts {
+			di, ok := dayIdx[l.DateFormat]
+			if !ok || l.AmbiguousDates {
+				continue
+			}
+			var maxDay, maxMonth, cells int
+			for _, hp := range l.Key["issue_date"] {
+				if hp == nil {
+					continue
+				}
+				for _, v := range cgColumnValues(l, *hp) {
+					head, _, _ := strings.Cut(v, " ")
+					parts := strings.Split(head, "/")
+					if len(parts) != 3 {
+						t.Errorf("layout %s: issue_date value %q is not three slash-separated parts", l.ID, v)
+						continue
+					}
+					day, derr := strconv.Atoi(parts[di])
+					month, merr := strconv.Atoi(parts[1-di])
+					if derr != nil || merr != nil {
+						t.Errorf("layout %s: issue_date value %q has a non-numeric day or month", l.ID, v)
+						continue
+					}
+					cells++
+					maxDay = max(maxDay, day)
+					maxMonth = max(maxMonth, month)
+				}
+			}
+			if cells == 0 {
+				continue
+			}
+			counted[l.DateFormat]++
+			if maxMonth > 12 {
+				t.Errorf("layout %s: the month position reaches %d, so the data is not %s", l.ID, maxMonth, l.DateFormat)
+			}
+			if maxDay <= 12 {
+				t.Errorf("layout %s: no cell's day position exceeds 12, so the data is indistinguishable from %s's mirror", l.ID, l.DateFormat)
+			}
+		}
+		if counted["DD/MM/YYYY"] < 8 {
+			t.Fatalf("checked only %d unambiguous DD/MM/YYYY layouts, want >= 8", counted["DD/MM/YYYY"])
+		}
+		if counted["MM/DD/YYYY"] < 2 {
+			t.Fatalf("checked only %d unambiguous MM/DD/YYYY layouts, want >= 2", counted["MM/DD/YYYY"])
 		}
 	})
 
@@ -579,23 +639,48 @@ func TestCSVGen_EveryValueIsSyntheticAndNoFileIsRead(t *testing.T) {
 			}
 		}
 
-		// Control: a scanner that finds nothing is indistinguishable from a clean file.
-		if got := cgOpenCallArgs(`f = open(p)` + "\n" + `g = open(p, "rb")` + "\n"); len(got) != 2 {
-			t.Fatalf("control fixture: open(-scan found %d calls, want 2", len(got))
+		// Control: a scanner that finds nothing, or one that truncates at the first
+		// ")" of a nested call and so never sees the mode, reads clean on a dirty file.
+		ctrl := cgOpenCallArgs("f = open(p)\n" + `g = open(os.path.join(a, b), "rb")` + "\n")
+		if len(ctrl) != 2 {
+			t.Fatalf("control fixture: open(-scan found %d calls, want 2", len(ctrl))
+		}
+		if got := cgOpenModes(ctrl[1]); !slices.Equal(got, []string{"rb"}) {
+			t.Fatalf("control fixture: the nested-paren call's modes = %v, want [rb]", got)
 		}
 
-		m := regexp.MustCompile(`(?m)^import (.+)$`).FindStringSubmatch(text)
-		if m == nil {
-			t.Fatalf("csvgen.py has no top-level import line")
+		if bad := cgNonStdlibImports(text); len(bad) > 0 {
+			t.Errorf("csvgen.py imports non-allowlisted module(s) %v", bad)
 		}
-		allowed := map[string]bool{"csv": true, "datetime": true, "io": true, "json": true, "os": true, "random": true, "re": true}
-		for _, mod := range strings.Split(m[1], ",") {
-			name, _, _ := strings.Cut(strings.TrimSpace(mod), " as ")
-			if !allowed[name] {
-				t.Errorf("csvgen.py imports non-allowlisted module %q", name)
-			}
+		// Control: the same predicate must name both an extra import line and a from-import.
+		wantBad := []string{"requests", "urllib"}
+		if got := cgNonStdlibImports("import csv\nimport os, requests\nfrom urllib.request import urlopen\n"); !slices.Equal(got, wantBad) {
+			t.Fatalf("control fixture: non-allowlisted imports = %v, want %v", got, wantBad)
 		}
 	})
+}
+
+var cgImportRe = regexp.MustCompile(`(?m)^(?:import (.+)|from ([A-Za-z0-9_.]+) import )`)
+
+// cgNonStdlibImports names every top-level module imported outside the allowlist,
+// across every import line -- a first-match scan misses a second one.
+func cgNonStdlibImports(src string) []string {
+	allowed := map[string]bool{"csv": true, "datetime": true, "io": true, "json": true, "os": true, "random": true, "re": true}
+	var out []string
+	for _, m := range cgImportRe.FindAllStringSubmatch(src, -1) {
+		mods := []string{m[2]}
+		if m[1] != "" {
+			mods = strings.Split(m[1], ",")
+		}
+		for _, mod := range mods {
+			name, _, _ := strings.Cut(strings.TrimSpace(mod), " as ")
+			name, _, _ = strings.Cut(name, ".")
+			if name != "" && !allowed[name] {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 func cgIsIdentChar(b byte) bool {

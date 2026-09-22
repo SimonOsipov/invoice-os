@@ -63,10 +63,8 @@ type allowEntry struct {
 	Why          string
 }
 
-// Empty: the one entry this held (scripts/ci/railway-env.sh's "APPR-14-03"
-// story-id comment) was deleted along with the comment itself. The two
-// meta-tests below tolerate an empty list rather than assume one always
-// exists.
+// Empty today; TestFleetGate_AllowlistFaultsFireOnAPlantedTree proves the
+// carve-out machinery without a live entry.
 var allowlist = []allowEntry{}
 
 type hit struct {
@@ -152,13 +150,41 @@ func scanRepo(t *testing.T) []hit {
 	return hits
 }
 
-func allowed(h hit) bool {
-	for _, e := range allowlist {
+func allowed(list []allowEntry, h hit) bool {
+	for _, e := range list {
 		if h.File == e.File && strings.Contains(h.Text, e.LineContains) {
 			return true
 		}
 	}
 	return false
+}
+
+// allowlistFaults returns the entries that carve out no scanned line, the
+// entries that carve out more than one, and whether list carves out half the
+// hits or more. TestFleetGate_AllowlistFaultsFireOnAPlantedTree drives each.
+func allowlistFaults(list []allowEntry, hits []hit) (stale, wide []string, hollow bool) {
+	excluded := 0
+	for _, h := range hits {
+		if allowed(list, h) {
+			excluded++
+		}
+	}
+	for _, e := range list {
+		var matched []string
+		for _, h := range hits {
+			if allowed([]allowEntry{e}, h) {
+				matched = append(matched, h.File+":"+strconv.Itoa(h.Line))
+			}
+		}
+		name := e.File + " / " + strconv.Quote(e.LineContains)
+		switch {
+		case len(matched) == 0:
+			stale = append(stale, name+" ("+e.Why+")")
+		case len(matched) > 1:
+			wide = append(wide, name+" excludes "+strings.Join(matched, ", "))
+		}
+	}
+	return stale, wide, excluded*2 >= len(hits)
 }
 
 func contains(xs []string, want string) bool {
@@ -306,7 +332,7 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 
 	checked := 0
 	for _, h := range hits {
-		if allowed(h) {
+		if allowed(allowlist, h) {
 			continue
 		}
 		checked++
@@ -388,18 +414,58 @@ func TestFleetGate_AllowlistEntriesStillMatchSomething(t *testing.T) {
 	if len(hits) == 0 {
 		t.Fatal("the scan found nothing, so no allowlist entry can be resolved against it")
 	}
-	for _, e := range allowlist {
-		found := false
-		for _, h := range hits {
-			if h.File == e.File && strings.Contains(h.Text, e.LineContains) {
-				found = true
-				t.Logf("allowlist: %s:%d %q (%s)", h.File, h.Line, e.LineContains, e.Why)
-				break
-			}
-		}
-		if !found {
-			t.Errorf("allowlist entry %s / %q matches no scanned line -- it was excluded because %s, and that reason no longer applies", e.File, e.LineContains, e.Why)
-		}
+	stale, _, _ := allowlistFaults(allowlist, hits)
+	for _, s := range stale {
+		t.Errorf("allowlist entry %s matches no scanned line -- the reason it was excluded no longer applies", s)
+	}
+}
+
+// The real allowlist may be empty, which leaves the two allowlist tests
+// looping over nothing; this drives every fault branch on a planted tree.
+func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
+	root := t.TempDir()
+	tree := filepath.Join(root, "docs")
+	if err := os.MkdirAll(tree, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Spliced, as in TestFleetGate_FindsAPlantedControlNeedle, so no line of
+	// this file is itself a hit.
+	const subject = "service"
+	line := "all 13 of them, one per " + subject
+	body := line + " CARVE\n" + line + " WIDE\n" + line + " WIDE\n" + line + "\n" + line + "\n" + line + "\n"
+	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	hits, err := scanUnder(root, []string{"docs"})
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(hits) != 6 {
+		t.Fatalf("planted 6 hits, scanner reported %d: %+v", len(hits), hits)
+	}
+
+	carve := allowEntry{File: "docs/a.md", LineContains: "CARVE"}
+	wideEntry := allowEntry{File: "docs/a.md", LineContains: "WIDE"}
+	gone := allowEntry{File: "docs/a.md", LineContains: "GONE"}
+
+	if !allowed([]allowEntry{carve}, hits[0]) {
+		t.Errorf("the entry does not carve out its own line %q", hits[0].Text)
+	}
+	if allowed([]allowEntry{carve}, hits[3]) {
+		t.Errorf("the entry carves out a line it does not name: %q", hits[3].Text)
+	}
+	if stale, wide, hollow := allowlistFaults([]allowEntry{carve}, hits); len(stale) != 0 || len(wide) != 0 || hollow {
+		t.Errorf("a one-line entry over 6 hits reported stale=%v wide=%v hollow=%v, want none", stale, wide, hollow)
+	}
+	if stale, _, _ := allowlistFaults([]allowEntry{gone}, hits); len(stale) != 1 {
+		t.Errorf("an entry matching no line reported stale=%v, want 1", stale)
+	}
+	if _, wide, _ := allowlistFaults([]allowEntry{wideEntry}, hits); len(wide) != 1 {
+		t.Errorf("an entry matching 2 lines reported wide=%v, want 1", wide)
+	}
+	// Exactly half: the boundary the hollow check owns.
+	if _, _, hollow := allowlistFaults([]allowEntry{carve, wideEntry}, hits); !hollow {
+		t.Errorf("3 of 6 lines carved out, hollow not reported")
 	}
 }
 
@@ -556,34 +622,20 @@ func assertMember(t *testing.T, file string, items []string, at []int, want stri
 
 // TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine: an entry matching many
 // lines silently swallows real count sites, and every other test here stays
-// green. Widening `APPR-14-03` to `service` survives the whole suite otherwise.
+// green.
 func TestFleetGate_AnAllowlistEntryExcludesExactlyOneLine(t *testing.T) {
 	hits := scanRepo(t)
 	if len(hits) == 0 {
 		t.Fatal("the scan found nothing, so no allowlist entry can be bounded against it")
 	}
-	for _, e := range allowlist {
-		var matched []string
-		for _, h := range hits {
-			if h.File == e.File && strings.Contains(h.Text, e.LineContains) {
-				matched = append(matched, h.File+":"+strconv.Itoa(h.Line))
-			}
-		}
-		if len(matched) != 1 {
-			t.Errorf("allowlist entry %s / %q excludes %d line(s) %v, want exactly 1 -- an entry that matches more than the one line it names carves real count sites out of the scan",
-				e.File, e.LineContains, len(matched), matched)
-		}
+	_, wide, hollow := allowlistFaults(allowlist, hits)
+	for _, w := range wide {
+		t.Errorf("allowlist entry %s, want exactly 1 line -- an entry that matches more than the one line it names carves real count sites out of the scan", w)
 	}
 	// The excluded lines must stay a small minority of the population, so a
 	// pile of narrow entries cannot hollow the scan out one line at a time.
-	excluded := 0
-	for _, h := range hits {
-		if allowed(h) {
-			excluded++
-		}
-	}
-	if excluded*2 >= len(hits) {
-		t.Errorf("%d of %d scanned line(s) are allowlisted -- the exclusions are no longer a carve-out", excluded, len(hits))
+	if hollow {
+		t.Errorf("half or more of the %d scanned line(s) are allowlisted -- the exclusions are no longer a carve-out", len(hits))
 	}
 }
 

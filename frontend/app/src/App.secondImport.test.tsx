@@ -490,3 +490,194 @@ it('BUG20-S10: a company switch mid-run leaves the spreadsheet run: no run state
     importedInvoiceId: null,
   })
 })
+
+it('BUG20-QA1 (handler contract): restartImport inside the window drops the spreadsheet landing', async () => {
+  await spreadsheetRunInWindow()
+  await act(async () => c().restartImport())
+  await releaseLookup()
+  expect({
+    view: c().view,
+    step: c().createStep,
+    path: window.location.pathname,
+    importedInvoiceId: c().importedInvoiceId,
+  }).toEqual({ view: 'create', step: 'upload', path: '/create', importedInvoiceId: null })
+})
+
+it('BUG20-QA2 (handler contract): restartImport inside the window drops the document landing', async () => {
+  await documentRunInWindow()
+  await act(async () => c().restartImport())
+  await releaseLookup()
+  expect({
+    view: c().view,
+    step: c().createStep,
+    path: window.location.pathname,
+    extractionJobId: c().extractionJobId,
+  }).toEqual({ view: 'create', step: 'upload', path: '/create', extractionJobId: null })
+})
+
+it('BUG20-QA3 (handler contract): a document start refused by its entry guard keeps the spreadsheet landing', async () => {
+  await spreadsheetRunInWindow()
+  expect(pickedNames(), 'the refusal needs a spreadsheet selection').toEqual(['a.csv'])
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'a spreadsheet selection started a document upload').toHaveLength(2)
+  await releaseLookup()
+  expect({ path: window.location.pathname, view: c().view }).toEqual({ path: `/invoices/${INV}`, view: 'detail' })
+})
+
+it('BUG20-QA4 (handler contract): a spreadsheet start refused by its entry guard keeps its landing', async () => {
+  await spreadsheetRunInWindow()
+  // base == null is the only entry-guard clause a mapped window can fail.
+  vi.stubEnv('VITE_GATEWAY_URL', '')
+  act(() => c().continueMapping())
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  expect(FakeXhr.instances, 'a gateway-less start issued a createImport').toHaveLength(2)
+  await releaseLookup()
+  expect({ path: window.location.pathname, view: c().view }).toEqual({ path: `/invoices/${INV}`, view: 'detail' })
+})
+
+it('BUG20-QA5: a company switch mid-run drops the unread-file row of a left spreadsheet run', async () => {
+  await boot()
+  await act(async () => c().addPickedFiles([csv('a.csv')]))
+  act(() => c().readAllColumns())
+  expect(FakeXhr.instances, 'the preview was not issued').toHaveLength(1)
+  // Added after the preview started, so it reaches the run with no document id.
+  await act(async () => c().addPickedFiles([csv('b.csv')]))
+  act(() => FakeXhr.instances[0]!.respond(200, PREVIEW))
+  await waitFor(() => expect(c().createStep).toBe('mapping'))
+  expect(c().pickedFiles.map((p) => [p.file.name, p.documentId ?? null])).toEqual([
+    ['a.csv', DOC],
+    ['b.csv', null],
+  ])
+  act(() => c().armField('invoice_number'))
+  act(() => c().clickCol('invoice_number'))
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'createImport was not issued').toHaveLength(2)
+  expect(runNames()).toEqual(['a.csv', 'b.csv'])
+  await switchTo(ENTITY_B)
+  act(() => FakeXhr.instances[1]!.respond(200, report('csv')))
+  await flush()
+  expect({
+    status: c().run.status,
+    path: window.location.pathname,
+    view: c().view,
+    reviewBatchIds: c().reviewBatchIds,
+    lookups,
+  }).toEqual({ status: 'idle', path: '/', view: 'dashboard', reviewBatchIds: [], lookups: 0 })
+})
+
+it('BUG20-QA6: an undisturbed spreadsheet run whose only file fails lands back on the map step', async () => {
+  await spreadsheetMapped()
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'createImport was not issued').toHaveLength(2)
+  act(() => FakeXhr.instances[1]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({
+    status: c().run.status,
+    outcomes: c().run.files.map((f) => f.outcome.kind),
+    step: c().createStep,
+    path: window.location.pathname,
+    lookups,
+  }).toEqual({ status: 'failed', outcomes: ['failed'], step: 'mapping', path: '/create', lookups: 0 })
+})
+
+it('BUG20-QA7: an undisturbed document run whose only file fails lands back on the documents step', async () => {
+  await boot()
+  await act(async () => c().addPickedFiles([pdf('a.pdf')]))
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'the upload was not issued').toHaveLength(1)
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({
+    status: c().run.status,
+    outcomes: c().run.files.map((f) => f.outcome.kind),
+    step: c().createStep,
+    path: window.location.pathname,
+    lookups,
+  }).toEqual({ status: 'failed', outcomes: ['failed'], step: 'documents', path: '/create', lookups: 0 })
+})
+
+it('BUG20-QA8: an undisturbed spreadsheet run with two ready invoices lands on its batch review', async () => {
+  await spreadsheetMapped()
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'createImport was not issued').toHaveLength(2)
+  act(() => FakeXhr.instances[1]!.respond(200, { ...report('csv'), ready_invoices: 2, invoices_clean: 2 }))
+  await flush()
+  expect({
+    step: c().createStep,
+    reviewBatchIds: c().reviewBatchIds,
+    path: window.location.pathname,
+    lookups,
+  }).toEqual({ step: 'review', reviewBatchIds: [BATCH], path: `/imports/${BATCH}/review`, lookups: 0 })
+})
+
+it('BUG20-QA9: an undisturbed two-document run lands on its batch review', async () => {
+  await boot()
+  await act(async () => c().addPickedFiles([pdf('a.pdf'), pdf('b.pdf')]))
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'both uploads were not issued').toHaveLength(2)
+  act(() => {
+    FakeXhr.instances[0]!.respond(201, uploadReply('a.pdf'))
+    FakeXhr.instances[1]!.respond(201, uploadReply('b.pdf'))
+  })
+  await flush()
+  expect({ step: c().createStep, reviewBatchIds: c().reviewBatchIds, status: c().run.status, lookups }).toEqual({
+    step: 'review',
+    reviewBatchIds: [BATCH, BATCH],
+    status: 'idle',
+    lookups: 0,
+  })
+})
+
+it('BUG20-QA10: files picked inside the window are on the upload step after the old document landing is dropped', async () => {
+  await documentRunInWindow()
+  await act(async () => c().openCreate())
+  await act(async () => c().addPickedFiles([pdf('b.pdf')]))
+  await releaseLookup()
+  expect(progressCard(), 'a progress card covers the upload step').toBeNull()
+  expect(screen.queryAllByText('b.pdf'), 'b.pdf is not on screen').not.toHaveLength(0)
+})
+
+it('BUG20-QA11: files picked inside the window are on the upload step after the old spreadsheet landing is dropped', async () => {
+  await spreadsheetRunInWindow()
+  await act(async () => c().openCreate())
+  await act(async () => c().addPickedFiles([csv('b.csv')]))
+  await releaseLookup()
+  expect(progressCard(), 'a progress card covers the upload step').toBeNull()
+  expect(screen.queryAllByText('b.csv'), 'b.csv is not on screen').not.toHaveLength(0)
+})
+
+it('BUG20-QA12: a document run started inside the window keeps its lock and lands on its own', async () => {
+  await documentRunInWindow()
+  await act(async () => c().openCreate())
+  await act(async () => c().addPickedFiles([pdf('b.pdf')]))
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'the second upload was not issued').toHaveLength(2)
+  await releaseLookup()
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'the old landing freed the lock the second run holds').toHaveLength(2)
+  act(() => FakeXhr.instances[1]!.respond(201, uploadReply('b.pdf')))
+  await waitFor(() => expect(lookups, 'the second run never requested its lookup').toBe(2))
+  await releaseLookup()
+  expect({ path: window.location.pathname, view: c().view }).toEqual({ path: `/extraction/${JOB}`, view: 'extraction' })
+})
+
+it('BUG20-QA13: a spreadsheet run started inside the window keeps its lock and lands on its own', async () => {
+  await spreadsheetRunInWindow()
+  await act(async () => c().openCreate())
+  await act(async () => c().addPickedFiles([csv('b.csv')]))
+  act(() => c().readAllColumns())
+  expect(FakeXhr.instances, 'the second preview was not issued').toHaveLength(3)
+  act(() => FakeXhr.instances[2]!.respond(200, PREVIEW))
+  await waitFor(() => expect(c().createStep).toBe('mapping'))
+  act(() => c().armField('invoice_number'))
+  act(() => c().clickCol('invoice_number'))
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'the second createImport was not issued').toHaveLength(4)
+  await releaseLookup()
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'the old landing freed the lock the second run holds').toHaveLength(4)
+  act(() => FakeXhr.instances[3]!.respond(200, report('csv')))
+  await waitFor(() => expect(lookups, 'the second run never requested its lookup').toBe(2))
+  await releaseLookup()
+  expect({ path: window.location.pathname, view: c().view }).toEqual({ path: `/invoices/${INV}`, view: 'detail' })
+})

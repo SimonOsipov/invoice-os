@@ -167,6 +167,30 @@ describe('AC-2: every layout gets a full eleven-key mapping', () => {
   })
 })
 
+// --- the anti-vacuity choke point ---------------------------------------------------------
+
+describe('readJevLayouts refuses a corpus it cannot measure', () => {
+  it('throws naming the path when layouts.json is absent', () => {
+    withTempDir((dir) => {
+      expect(() => readJevLayouts(dir)).toThrow(join(dir, 'layouts.json'))
+    })
+  })
+
+  it('throws rather than returning an empty array', () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, 'layouts.json'), '[]')
+      expect(() => readJevLayouts(dir)).toThrow('holds no layouts')
+    })
+  })
+
+  it('control: a one-layout corpus reads back', () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, 'layouts.json'), JSON.stringify([{ id: 'a', columns: ['Date'] }]))
+      expect(readJevLayouts(dir)).toHaveLength(1)
+    })
+  })
+})
+
 // --- AC-3 -----------------------------------------------------------------------------------
 
 describe('AC-3: the alias table is the shipped one', () => {

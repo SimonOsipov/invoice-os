@@ -249,6 +249,7 @@ fails if a name, its `switchClient` reset, or its verdict disagrees with the mod
 | `activeEntityIdRef` | no | none | `correctly-reset` |
 | `reqInFlight` | no | none | `deliberate` |
 | `runSeq` | yes | none | `correctly-reset` |
+| `lockBy` | no | none | `deliberate` |
 
 ## Why `Workspace` can't mount while `?persona=` is live
 

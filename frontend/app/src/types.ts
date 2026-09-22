@@ -295,7 +295,7 @@ export type PlatformCtx = {
   // button or spin), and state cannot beat a double-click (React batches, so both clicks
   // see the old value). The ref owns correctness, this owns the frame.
   filing: boolean
-  // The server's own ApiError, rendered VERBATIM beside the primary — same treatment as
+  // ApiError, rendered VERBATIM beside the primary — same treatment as
   // `importError` on the map step. No status->copy table: ApiError.message already carries
   // the gateway's {"error":…} text, and a second copy of it drifts.
   filingError: ApiError | null

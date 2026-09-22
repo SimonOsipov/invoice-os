@@ -1,6 +1,7 @@
 // report_test.go: the renderer's tests, against outcomes built in-process --
-// no vendor, no network. Datasets D1-D5 are the architect's corrected fixtures
-// (CHECK-01-02 plan, 2026-09-22); nearest-rank percentile is ceil(q*n).
+// no vendor, no network. D1-D5 are the architect's fixtures; the jmRank*
+// ones are QA's, added because no D1-D5 percentile rank was fractional
+// enough to tell ceil from floor -- see TestReport_TheLatencyPercentileRoundsTheRankUp.
 package jevmeasure
 
 import (
@@ -46,6 +47,22 @@ func jmStripToken(s, tok string) string {
 
 func jmHasNumber(s, n string) bool {
 	return regexp.MustCompile(`\b` + regexp.QuoteMeta(n) + `\b`).MatchString(s)
+}
+
+// jmSection returns just the "## <check>" block, so a per-check assertion
+// can't be satisfied by text another check's section printed.
+func jmSection(t *testing.T, md, check string) string {
+	t.Helper()
+	head := "## " + check + "\n"
+	i := strings.Index(md, head)
+	if i == -1 {
+		t.Fatalf("report has no %q section", check)
+	}
+	rest := md[i+len(head):]
+	if j := strings.Index(rest, "\n## "); j != -1 {
+		return rest[:j]
+	}
+	return rest
 }
 
 // D1 -- percentiles. 10 latencies, all successful.
@@ -162,15 +179,18 @@ func jmAskedOutcomes(n int) []Outcome {
 }
 
 // AC-4. D4's own table: every row differs from every other; per-100 uses the
-// 3 documents, not the 9 questions. Column order between wrong-caught and
-// wrong-missed is unsettled between AC-4's prose and the plan's worked table,
-// so both are asserted present without asserting their relative order.
+// 3 documents, not the 9 questions. The header leg pins AC-4's column order.
 func TestReport_ThresholdSweepCountsBothErrorKinds(t *testing.T) {
 	md, _, err := Render(d4Outcomes(), Pricing{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	body := string(md)
+
+	header := "| threshold | right flagged | right flagged per 100 documents | wrong missed | wrong caught |"
+	if !strings.Contains(body, header) {
+		t.Errorf("sweep header is not AC-4's columns in AC-4's order; want %q", header)
+	}
 
 	rows := []struct {
 		threshold, rightFlagged, per100, wrongCaught, wrongMissed string
@@ -311,8 +331,9 @@ func TestReport_ASmallRunSaysSoRatherThanQuotingARate(t *testing.T) {
 	if !strings.Contains(body29, "fewer than 30") {
 		t.Errorf("29 asked questions must warn naming the small-N floor (fewer than 30)")
 	}
-	if !jmHasNumber(body29, "29") {
-		t.Errorf("the warning must name the actual asked count (29)")
+	warning := jmLineWithTokens(t, body29, "fewer than 30")
+	if !jmHasNumber(warning, "29") {
+		t.Errorf("warning %q must name the actual asked count (29)", warning)
 	}
 
 	md30, _, err := Render(jmAskedOutcomes(30), Pricing{})
@@ -357,8 +378,9 @@ func TestJevReport_TheBudgetLineNamesTheFailureInclusiveSeries(t *testing.T) {
 	}
 	body := string(md)
 
-	if !strings.Contains(body, "all attempts") {
-		t.Errorf(`report never names the "all attempts" series in words`)
+	budget := jmLineWithTokens(t, body, "budget")
+	if !strings.Contains(budget, "all attempts") {
+		t.Errorf(`budget line %q never names the "all attempts" series in words`, budget)
 	}
 	for _, want := range []string{"18", "2500", "3000"} {
 		if !jmHasNumber(body, want) {
@@ -390,7 +412,7 @@ func TestJevReport_ADegradedRunTripsAtMoreThanOneInTen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render (quiet): %v", err)
 	}
-	if strings.Contains(string(quiet), "2 of 20") {
+	if strings.Contains(string(quiet), "2 of 20") || strings.Contains(string(quiet), "DEGRADED") {
 		t.Errorf("2 failed of 20 attempted is exactly one in ten, not more -- must not trip the degraded warning")
 	}
 
@@ -398,7 +420,7 @@ func TestJevReport_ADegradedRunTripsAtMoreThanOneInTen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render (loud): %v", err)
 	}
-	if !strings.Contains(string(loud), "3 of 20") {
+	if !strings.Contains(string(loud), "3 of 20") || !strings.Contains(string(loud), "DEGRADED") {
 		t.Errorf("3 failed of 20 attempted must trip the degraded warning naming the counts")
 	}
 }
@@ -564,5 +586,250 @@ func TestReport_TheValueSectionHasNoConfidenceColumn(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(string(mdType)), "confidence") {
 		t.Errorf("document-type report never mentions confidence -- control leg: an empty render would also pass the value-only check above")
+	}
+}
+
+// jmRankLatencies -- the integer percentile path. 11 latencies, so q*n is
+// fractional at both p50 (5.5) and p90 (9.9) and the floor neighbours (505,
+// 909) appear in no other figure the report prints.
+func jmRankLatencies() []Outcome {
+	ms := []int{101, 202, 303, 404, 505, 606, 707, 808, 909, 1010, 1111}
+	out := make([]Outcome, len(ms))
+	for i, m := range ms {
+		out[i] = Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("rank-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Elapsed: time.Duration(m) * time.Millisecond,
+		}
+	}
+	return out
+}
+
+// jmRankTokens -- the float percentile path. 11 input-token counts; p90's
+// rank is 9.9, so its floor neighbour (999) differs from its ceil one (1110).
+func jmRankTokens() []Outcome {
+	input := []string{"111", "222", "333", "444", "555", "666", "777", "888", "999", "1110", "1221"}
+	out := make([]Outcome, len(input))
+	for i, v := range input {
+		out[i] = Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("tok-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: jmNum(v), OutputTokens: jmNum("20")},
+		}
+	}
+	return out
+}
+
+// AC-6. nearestRank rounds the rank UP. D1/D2 could not see this: three of
+// their four q*n products are whole numbers, and the fourth's floor neighbour
+// equals the max they already accept.
+func TestReport_TheLatencyPercentileRoundsTheRankUp(t *testing.T) {
+	md, _, err := Render(jmRankLatencies(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, want := range []string{"606", "1010", "1111"} {
+		if !jmHasNumber(body, want) {
+			t.Errorf("latency series never shows %s (ceil-rank p50/p90/max over 11 values)", want)
+		}
+	}
+	for _, wrong := range []string{"505", "909"} {
+		if jmHasNumber(body, wrong) {
+			t.Errorf("latency series shows %s -- the floor-rank neighbour, not nearest-rank ceil", wrong)
+		}
+	}
+}
+
+// AC-9. The same ceil-rank rule on the token path, which runs through a
+// separate float64 helper and so needs its own dataset.
+func TestReport_TheTokenPercentileRoundsTheRankUp(t *testing.T) {
+	md, _, err := Render(jmRankTokens(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	tokens := jmLineWithTokens(t, body, "input tokens per call")
+	if !jmHasNumber(tokens, "1110") {
+		t.Errorf("token line %q: p90 over 11 values is the 10th (1110), the ceil of rank 9.9", tokens)
+	}
+	if jmHasNumber(tokens, "999") {
+		t.Errorf("token line %q: 999 is the floor-rank neighbour, not nearest-rank ceil", tokens)
+	}
+	if !jmHasNumber(tokens, "666") {
+		t.Errorf("token line %q: mean over 11 values is 666", tokens)
+	}
+}
+
+// AC-4. The document-type comparator is inclusive at the boundary too; only
+// the noul side of A51 was pinned before.
+func TestReport_AConfidenceThresholdBoundaryIsInclusive(t *testing.T) {
+	outcomes := []Outcome{{
+		Check: "document_type_check", DocumentID: "d1", Field: "receipt",
+		Label: "right", ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.50"),
+	}}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, thr := range []string{"0.30", "0.50"} {
+		line := jmLineWithTokens(t, body, thr, "100.00")
+		if !jmHasNumber(jmStripToken(line, thr), "1") {
+			t.Errorf("threshold %s row %q: a confidence of exactly 0.50 must record (boundary inclusive)", thr, line)
+		}
+	}
+	for _, thr := range []string{"0.70", "0.90"} {
+		line := jmLineWithTokens(t, body, thr, "0.00")
+		if jmHasNumber(jmStripToken(line, thr), "1") {
+			t.Errorf("threshold %s row %q: a confidence of 0.50 must not record (0.50 >= %s is false)", thr, line, thr)
+		}
+	}
+}
+
+// AC-6/7. A question never asked burned no call, so its row must not enter
+// either latency series -- including it would deflate every percentile.
+func TestReport_AQuestionNeverAskedBurnsNoLatency(t *testing.T) {
+	outcomes := []Outcome{{
+		Check: "value_check", DocumentID: "d1", Field: "amount",
+		Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		Elapsed: 700 * time.Millisecond,
+	}}
+	for i := 0; i < 3; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("na-%d", i), Field: "amount",
+			Label: "not-asked",
+		})
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, series := range []string{"all attempts", "successful only"} {
+		line := jmLineWithTokens(t, body, series, "p50")
+		if !strings.Contains(line, "p50 700") {
+			t.Errorf("%s line %q: p50 must be 700 -- three never-asked rows must not add three zeros", series, line)
+		}
+	}
+}
+
+// AC-5. The N line names all three counts; nothing pinned the documents count
+// or the not-asked count before.
+func TestReport_TheNLineNamesDocumentsAskedAndNotAsked(t *testing.T) {
+	var outcomes []Outcome
+	for i := 0; i < 7; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("ok-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		})
+	}
+	for i := 0; i < 5; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("na-%d", i), Field: "amount",
+			Label: "not-asked",
+		})
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	line := jmLineWithTokens(t, string(md), "documents:")
+	for _, want := range []string{"documents: 12", "questions asked: 7", "questions not asked: 5"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("N line %q must state %q", line, want)
+		}
+	}
+}
+
+// AC-5. Each check counts its own documents; a document answered by two
+// checks is one document in each section, not two in either.
+func TestReport_EachCheckCountsItsOwnDocuments(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "shared", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+		{Check: "value_check", DocumentID: "value-only", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+		{Check: "document_type_check", DocumentID: "shared", Field: "receipt", Label: "right",
+			ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.99")},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	valueLine := jmLineWithTokens(t, jmSection(t, body, "value_check"), "documents:")
+	if !strings.Contains(valueLine, "documents: 2") {
+		t.Errorf("value_check N line %q: two distinct document ids, want documents: 2", valueLine)
+	}
+	typeLine := jmLineWithTokens(t, jmSection(t, body, "document_type_check"), "documents:")
+	if !strings.Contains(typeLine, "documents: 1") {
+		t.Errorf("document_type_check N line %q: one document id, want documents: 1", typeLine)
+	}
+}
+
+// AC-10. An absent output_tokens must be named too; only the input side was
+// pinned, so dropping the output half of the absence test left no red.
+func TestReport_AnAbsentOutputTokenCountIsNamedToo(t *testing.T) {
+	outcomes := []Outcome{{
+		Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+		ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		Usage: Usage{InputTokens: jmNum("500"), OutputTokens: nil},
+	}}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if !strings.Contains(body, "not reported by the vendor") {
+		t.Errorf("an absent output_tokens value must read as not reported by the vendor")
+	}
+	if !jmHasNumber(body, "500") {
+		t.Errorf("the reported input count must still print alongside the absence")
+	}
+}
+
+// Render's second return value is the JSON twin a re-run is diffed against;
+// nothing asserted it existed before.
+func TestReport_TheJSONTwinCarriesTheSameCounts(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+		{Check: "value_check", DocumentID: "d2", Field: "amount", Label: "not-asked"},
+	}
+	_, twin, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var sections []struct {
+		Check      string
+		Documents  int
+		Asked      int
+		NotAsked   int
+		Thresholds []struct {
+			Threshold    float64
+			RightFlagged int
+		}
+	}
+	if err := json.Unmarshal(twin, &sections); err != nil {
+		t.Fatalf("JSON twin does not parse: %v", err)
+	}
+	if len(sections) != 1 {
+		t.Fatalf("JSON twin has %d section(s), want 1", len(sections))
+	}
+	got := sections[0]
+	if got.Check != "value_check" || got.Documents != 2 || got.Asked != 1 || got.NotAsked != 1 {
+		t.Errorf("JSON twin section = %+v, want value_check with 2 documents, 1 asked, 1 not asked", got)
+	}
+	if len(got.Thresholds) != len(thresholds) {
+		t.Errorf("JSON twin carries %d threshold row(s), want %d", len(got.Thresholds), len(thresholds))
 	}
 }

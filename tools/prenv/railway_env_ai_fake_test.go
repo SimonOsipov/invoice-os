@@ -1,8 +1,6 @@
 // railway_env_ai_fake_test.go pins the contract of
-// `scripts/ci/railway-env.sh set-ai-fake`, `ai_key_verdict` and
-// `ai_fake_self_test`. T09 is the no-regression oracle for the shared-helper
-// label argument added to service_id_by_name and
-// assert_environment_is_ephemeral.
+// `scripts/ci/railway-env.sh set-ai-fake`, `ai_key_verdict`, `ai_fake_self_test`,
+// and the shared service selector it resolves services through (R6, R7).
 //
 // NOT COVERED HERE: the live GraphQL write, verify_variable's mismatch
 // branch on OPENROUTER_API_KEY (deliberately never called — an absent and an
@@ -23,10 +21,10 @@ import (
 	"testing"
 )
 
-// runAIFakeCmd execs `railway-env.sh set-ai-fake <args...>`. Deliberate copy
-// of runApprovalsCmd (same env-filter loop) rather than a shared helper — the
-// two differ by subcommand name and refactoring a green file is out of scope
-// here.
+// persistentEnvironmentID is the id dev-env.yml, dev-env-teardown.yml and dev-env-sweeper.yml pin as RAILWAY_DEV_ENVIRONMENT_ID, so the refusal tests compare against CI's exact string.
+const persistentEnvironmentID = "6c864094-6a06-452f-8495-be77d8a94fe7"
+
+// runAIFakeCmd execs `railway-env.sh set-ai-fake <args...>` with unsetVars removed from the environment and extraEnv appended.
 func runAIFakeCmd(t *testing.T, args []string, extraEnv []string, unsetVars ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
@@ -253,11 +251,11 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 // T07: dev-env.yml must run set-ai-fake exactly once, inside prepare-env,
 // PR-only, with no continue-on-error (AC #6).
 //
-// WEAK BY DESIGN, same as the approvals wiring test: proves the wiring, not
-// the write.
+// WEAK BY DESIGN: proves the wiring, not the write.
 //
 // KILLS: the step omitted; the step gated on the wrong event; a silent
-// continue-on-error swallowing a failed write.
+// continue-on-error swallowing a failed write; deploy-gateway's needs: list
+// dropping prepare-env.
 func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 	path := filepath.Join(repoRoot(t), ".github", "workflows", "dev-env.yml")
 	raw, err := os.ReadFile(path)
@@ -284,9 +282,8 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 		t.Errorf("set-ai-fake is called at byte offset %d, outside the prepare-env job (%d-%d)", callAt, prepareEnvAt, deployGatewayAt)
 	}
 
-	// Scoped to the CURRENT step only, same reasoning as the approvals wiring
-	// test: a fixed byte window risks bleeding into the PRECEDING step's own
-	// if: line.
+	// Scoped to the CURRENT step only: a fixed byte window risks bleeding into the
+	// PRECEDING step's own if: line.
 	nameLines := regexp.MustCompile(`(?m)^\s*- name:`).FindAllStringIndex(content[:callAt], -1)
 	if len(nameLines) == 0 {
 		t.Fatalf("no '- name:' step header found before the set-ai-fake call site in %s", path)
@@ -302,6 +299,14 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 	}
 	if strings.Contains(window, "continue-on-error") {
 		t.Errorf("the set-ai-fake step carries continue-on-error — a silent failure would leave a PR environment holding a usable key; window = %q", window)
+	}
+
+	needsMatch := regexp.MustCompile(`(?m)^  deploy-gateway:[\s\S]{0,400}?needs:\s*\[([^\]]*)\]`).FindStringSubmatch(content)
+	if needsMatch == nil {
+		t.Fatalf("could not find deploy-gateway's needs: list in %s", path)
+	}
+	if !strings.Contains(needsMatch[1], "prepare-env") {
+		t.Errorf("deploy-gateway's needs: list %q does not name prepare-env — the gate that stops the whole deploy on a failed prepare-env step (needs.prepare-env.result == 'success') would not apply", needsMatch[1])
 	}
 }
 
@@ -332,23 +337,6 @@ func TestRailwayInvariantsYmlWiresSetAIFakeSelfTest(t *testing.T) {
 	}
 	if callSites[0][0] < jobAt {
 		t.Errorf("set-ai-fake --self-test is called at byte %d, before its own job header at byte %d — it belongs to a different job", callSites[0][0], jobAt)
-	}
-}
-
-// T09: no-regression oracle for the shared-helper label argument added to
-// service_id_by_name and assert_environment_is_ephemeral — the label
-// default must keep every approvals message and the approvals fixture count
-// byte-identical. Reuses runApprovalsCmd, already declared in
-// railway_env_approvals_test.go.
-func TestApprovalsSelfTestUnchangedByTheLabelArgument(t *testing.T) {
-	stdout, _, code := runApprovalsCmd(t, []string{"--self-test"}, nil, "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID")
-
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stdout = %q", code, stdout)
-	}
-	const want = "Approvals enforcement self-test: 11 fixtures passed, no token read, no network call."
-	if !strings.Contains(stdout, want) {
-		t.Errorf("stdout does not contain %q byte-for-byte; stdout = %q", want, stdout)
 	}
 }
 
@@ -574,58 +562,9 @@ func TestAIFakeSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
 	}
 }
 
-// T13: the label argument added to service_id_by_name and
-// assert_environment_is_ephemeral must DEFAULT to APPROVALS_ENFORCED, and the
-// six refusal messages must still render the pre-existing wording. T09 cannot
-// see this: the approvals self-test discards service_id_by_name's stderr.
-func TestSharedHelperLabelDefaultsToApprovalsEnforced(t *testing.T) {
-	raw, err := os.ReadFile(railwayEnvScript(t))
-	if err != nil {
-		t.Fatalf("reading railway-env.sh: %v", err)
-	}
-	content := string(raw)
-
-	for _, decl := range []string{
-		`local resp="$1" name="$2" ctx="$3" label="${4:-APPROVALS_ENFORCED}" total count`,
-		`local env_id="$1" label="${2:-APPROVALS_ENFORCED}" count ephemeral`,
-	} {
-		if n := strings.Count(content, decl); n != 1 {
-			t.Errorf("found %d occurrence(s) of %q, want exactly 1 — every existing 3-arg and 1-arg call site depends on this default", n, decl)
-		}
-	}
-	if n := strings.Count(content, "APPROVALS_ENFORCED was NOT set."); n != 0 {
-		t.Errorf("%d refusal message(s) still hardcode APPROVALS_ENFORCED — set-ai-fake would name the wrong variable", n)
-	}
-	if n := strings.Count(content, `$label was NOT set.`); n != 6 {
-		t.Errorf("%d `$label was NOT set.` message(s), want 6: four in service_id_by_name and two in assert_environment_is_ephemeral", n)
-	}
-
-	const zeroInstances = `{"data":{"environment":{"serviceInstances":{"edges":[]}}}}`
-	prelude := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name")
-	for _, tc := range []struct {
-		name     string
-		call     string
-		wantTail string
-	}{
-		{"three args keep the approvals wording", `service_id_by_name "$1" invoice "environment env-x"`, "APPROVALS_ENFORCED was NOT set."},
-		{"a fourth argument replaces it", `service_id_by_name "$1" invoice "environment env-x" AI_FAKE`, "AI_FAKE was NOT set."},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			script := prelude + "\nrc=0\nout=$(" + tc.call + " 2>&1 >/dev/null) || rc=$?\nprintf '%s' \"$out\"\nexit \"$rc\"\n"
-			stdout, _, code := runBashScript(t, script, zeroInstances)
-			if code == 0 {
-				t.Fatalf("service_id_by_name exited 0 on a zero-instance response; stdout = %q", stdout)
-			}
-			if !strings.HasSuffix(strings.TrimSpace(stdout), tc.wantTail) {
-				t.Errorf("refusal does not end with %q; got %q", tc.wantTail, strings.TrimSpace(stdout))
-			}
-		})
-	}
-}
-
 // R7: neither shared helper has a default label; a call without one refuses before it reads anything.
 func TestServiceSelectorLabelIsRequired(t *testing.T) {
-	// A1's 11-instance fleet (approvals_self_test), copied verbatim: selects svc-inv.
+	// A1's 11-instance fleet (service_selector_self_test), copied verbatim: selects svc-inv.
 	const fleetJSON = `{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}`
 
 	t.Run("service_id_by_name without a label refuses", func(t *testing.T) {

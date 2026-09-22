@@ -3,9 +3,8 @@
 // HEAD; T2, T3 and T4 are GUARDs, each already green, that fence the change against a
 // specific named regression (see each test's doc comment).
 //
-// SAME REFUSAL AS railway_env_approvals_test.go's package comment: verify_variable
-// cannot be driven token-free (its own re-read is a live GraphQL round trip), so no
-// test here fakes one. The only live oracle for "Railway actually holds it" is a
+// verify_variable cannot be driven token-free (its own re-read is a live GraphQL
+// round trip), so no test here fakes one. The only live oracle for "Railway actually holds it" is a
 // green prepare-env run on a real PR; the only oracle for "Vite actually baked it
 // into the bundle" is e2e/topology/demo-persona.spec.ts, which cannot pass with the
 // flag unset because the trigger it looks for is tree-shaken out of a flag-off build.
@@ -22,9 +21,8 @@ import (
 
 // reconcileURLVariablesBody extracts reconcile_url_variables's body from
 // scripts/ci/railway-env.sh: everything between its opening brace and the next line
-// that is exactly `}` at column 0 — same convention as
-// cmdSetApprovalsEnforcedBody (railway_env_approvals_test.go). Fatal, not a silent
-// miss, when the function is absent.
+// that is exactly `}` at column 0. Fatal, not a silent miss, when the function is
+// absent.
 func reconcileURLVariablesBody(t *testing.T) string {
 	t.Helper()
 	path := railwayEnvScript(t)

@@ -1,0 +1,167 @@
+// jevseam_internal_test.go: the decision seam -- what the worker actually merges (worker.go:269-278)
+// -- replayed over the real fourteen-layout corpus instead of hand-built rows.
+package extraction
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"slices"
+	"testing"
+)
+
+// jsWantLayouts pins the corpus size: any list below it must have shrunk.
+const jsWantLayouts = 14
+
+// jsLayouts mirrors endtoend's expectByLayout order (TestJevSeam_LayoutListMirrorsExpectByLayout
+// pins the copy against drift).
+var jsLayouts = []string{
+	"corpus_inline_labels", "corpus_split_labels", "corpus_stacked_labels", "corpus_two_column",
+	"corpus_ambiguous_date", "corpus_totals_block", "wild_two_party_bare_tin", "wild_ruled_lines_totals",
+	"wild_rc_due_naira", "wild_stacked_borderless", "wild_scanned_no_number",
+	"wild_two_party_bare_tin_asprinted", "wild_ruled_lines_totals_asprinted",
+	"wild_stacked_borderless_asprinted",
+}
+
+// jsGoldenRead replays one committed Docling golden through the real DoclingReader and readText
+// -- production's own two-slice read (worker.go:72), not aitGoldenPages' single TokenPage slice.
+func jsGoldenRead(t *testing.T, name string) ([]Page, []TokenPage) {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join("testdata", name+".docling.json"))
+	if err != nil {
+		t.Fatalf("read golden %s: %v", name, err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	r, err := NewDoclingReader(srv.URL)
+	if err != nil {
+		t.Fatalf("NewDoclingReader(%q): %v", srv.URL, err)
+	}
+
+	pages, tokens, _, err := readText(t.Context(), r, Document{ContentType: "application/pdf"})
+	if err != nil {
+		t.Fatalf("readText golden %s: %v", name, err)
+	}
+	return pages, tokens
+}
+
+func jsTokenCount(tokens []TokenPage) int {
+	n := 0
+	for _, p := range tokens {
+		n += len(p.Tokens)
+	}
+	return n
+}
+
+// TestJevSeam_ABlankAIDecisionEqualsReconcile is AC-3's identity, over the real corpus rather
+// than hand-built rows: it is what turns "measured on what production decides" into a fact.
+// Passes today, unrenamed -- both merges are already the identity under a blank answer
+// (TestMergeAI_Row6, TestMergeAILines_NilAIReturnsRowsUnchanged); this is a characterization
+// pin, not a RED driver.
+func TestJevSeam_ABlankAIDecisionEqualsReconcile(t *testing.T) {
+	if len(jsLayouts) == 0 {
+		t.Fatal("jsLayouts is empty -- the walk below would range over nothing and pass vacuously")
+	}
+	for _, layout := range jsLayouts {
+		t.Run(layout, func(t *testing.T) {
+			pages, tokens := jsGoldenRead(t, layout)
+			if jsTokenCount(tokens) == 0 {
+				t.Fatalf("%s: golden replay yielded zero tokens -- the seam below has nothing to reconcile", layout)
+			}
+			lines := LineItems(pages)
+			in := Input{
+				Candidates: Resolve(tokens, RuleSet{Tier1: Tier1Rules}),
+				Lines:      lines,
+				Entity:     Entity{},
+				Pages:      tokens,
+			}
+			want := Reconcile(in)
+			got := mergeAILines(mergeAI(Reconcile(in), nil, tokens, lines), nil, tokens)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s: a blank AI answer changed the decision\ngot:  %+v\nwant: %+v (Reconcile's own output)", layout, got, want)
+			}
+		})
+	}
+}
+
+// TestJevSeam_ZeroLayoutsWalkedIsAFatal is the walk's own floor (docs/extraction-corpus.md:417-423):
+// wild_scanned_no_number is image-only, so its golden is the only route to a non-zero token count.
+func TestJevSeam_ZeroLayoutsWalkedIsAFatal(t *testing.T) {
+	if len(jsLayouts) < jsWantLayouts {
+		t.Fatalf("jsLayouts has %d entries, want at least %d -- the walk covers fewer than the corpus", len(jsLayouts), jsWantLayouts)
+	}
+	for _, layout := range jsLayouts {
+		_, tokens := jsGoldenRead(t, layout)
+		if n := jsTokenCount(tokens); n == 0 {
+			t.Fatalf("%s: golden replay yielded zero tokens -- a walk claiming %d layouts must prove each one was read", layout, jsWantLayouts)
+		}
+	}
+}
+
+// jsExpectByLayoutRE isolates endtoend's var expectByLayout = []struct{...}{...} block: the
+// struct-type close plus slice-open ("}{") through the slice literal's own unindented close.
+var jsExpectByLayoutRE = regexp.MustCompile(`(?s)var expectByLayout = .*?\n\}\n`)
+
+var jsFileRE = regexp.MustCompile(`file:\s*"([^"]+)\.pdf"`)
+
+// TestJevSeam_LayoutListMirrorsExpectByLayout pins jsLayouts against endtoend's own table so the
+// hand copy across the package boundary (package extraction cannot import package endtoend)
+// cannot drift silently.
+func TestJevSeam_LayoutListMirrorsExpectByLayout(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("endtoend", "score_test.go"))
+	if err != nil {
+		t.Fatalf("read endtoend/score_test.go: %v", err)
+	}
+
+	block := jsExpectByLayoutRE.FindString(string(src))
+	if block == "" {
+		t.Fatal("expectByLayout block not found in endtoend/score_test.go -- the mirror below would compare against nothing")
+	}
+
+	var got []string
+	for _, m := range jsFileRE.FindAllStringSubmatch(block, -1) {
+		got = append(got, m[1])
+	}
+	if len(got) == 0 {
+		t.Fatal("extracted zero layout names from expectByLayout -- the set-equality check below would pass vacuously")
+	}
+
+	gotSorted := slices.Clone(got)
+	wantSorted := slices.Clone(jsLayouts)
+	slices.Sort(gotSorted)
+	slices.Sort(wantSorted)
+	if !slices.Equal(gotSorted, wantSorted) {
+		t.Errorf("jsLayouts drifted from endtoend's expectByLayout\nendtoend has: %v\njsLayouts has: %v", gotSorted, wantSorted)
+	}
+}
+
+// TestJevSeam_ANonBlankAnswerMovesARow is AC-4's control leg: without it, the identity above
+// could pass because nothing ever moves a row, not because a blank answer is a no-op. Follows
+// the mergeWith precedent at aimerge_internal_test.go's TestMergeAI_Row5.
+func TestJevSeam_ANonBlankAnswerMovesARow(t *testing.T) {
+	engine := []FieldResult{
+		{Field: Field{Name: "invoice_number", Reason: ReasonMissing}, Alternatives: []Field{}},
+	}
+	pages := onePage(1, tok("Invoice Number: 20417", 1, 0.10, 0.10, 0.40, 0.12))
+
+	got := mergeWith(engine, map[string]any{"invoice_number": "20417"}, pages, nil)
+
+	if got[0].Reason != ReasonNone {
+		t.Fatalf("row Reason = %q, want %q -- a non-blank answer must move the row, or the identity above is not a real control", got[0].Reason, ReasonNone)
+	}
+	if got[0].Value == nil || *got[0].Value != "20417" {
+		t.Errorf("row Value = %v, want \"20417\"", got[0].Value)
+	}
+	if got[0].Region == nil {
+		t.Error("row Region is nil, want the token's own region")
+	}
+}

@@ -780,7 +780,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // `active`, so switching company between two runs cannot leave the second run filing
   // under the first run's entity.
   // `target` is a parameter, never a state read: switchClient's setActiveEntityId has not
-  // committed, so `active` there still names the company being LEFT (:502-528's race).
+  // committed, so `active` there still names the company being LEFT.
   function resetImport(target: string | null = active.entityId) {
     runSeq.current += 1
     setEntityId(target)

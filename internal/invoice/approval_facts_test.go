@@ -80,32 +80,11 @@ func (fx *approvalFactsFixture) armInvoice(t *testing.T, super, app *pgxpool.Poo
 	fx.invID = inv.ID
 }
 
-// --- AC-2: the flag folds TransmitClear, and ONLY TransmitClear --------------
-
-// TestStoreApprovalFacts_FoldsTheFlagOff: an open run under an active policy is NOT
-// clear, but a flag-off deployment reads clear anyway -- the arm is inert there.
-func TestStoreApprovalFacts_FoldsTheFlagOff(t *testing.T) {
-	super, app := dbTestPools(t)
-
-	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-FLAGOFF", false)
-	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // defaults to open
-
-	store := NewStore(app, WithApprovalsEnforced(false))
-
-	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
-	if err != nil {
-		t.Fatalf("ApprovalFacts: %v", err)
-	}
-	if !got.TransmitClear {
-		t.Errorf("TransmitClear = false with APPROVALS_ENFORCED off, want true -- the flag folds this field")
-	}
-}
-
 // TestStoreApprovalFacts_OpenRunIsNotClear: an open run under an active policy is not clear.
 func TestStoreApprovalFacts_OpenRunIsNotClear(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-FLAGON", false)
+	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-OPENRUN", false)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
 	store := NewStore(app)
@@ -119,17 +98,17 @@ func TestStoreApprovalFacts_OpenRunIsNotClear(t *testing.T) {
 	}
 }
 
-// TestStoreApprovalFacts_ApprovedRunIsClearWithTheFlagOn is the permissive control
+// TestStoreApprovalFacts_ApprovedRunIsClear is the permissive control
 // for the row above: a method that always answered false would pass that spec for
-// free. An approved run clears the gate even with the flag on.
-func TestStoreApprovalFacts_ApprovedRunIsClearWithTheFlagOn(t *testing.T) {
+// free. An approved run clears the gate.
+func TestStoreApprovalFacts_ApprovedRunIsClear(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-APPROVED", false)
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
@@ -152,7 +131,7 @@ func TestStoreApprovalFacts_CarriesRunStatePendingOrdAndHoldsRole(t *testing.T) 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-FIELDS", true)
 	fx.armInvoice(t, super, app, "appr-08-05-fields")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
@@ -182,7 +161,7 @@ func TestStoreApprovalFacts_UnstaffedCallerDoesNotHoldTheRole(t *testing.T) {
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-UNSTAFFED", false)
 	fx.armInvoice(t, super, app, "appr-08-05-unstaffed")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
@@ -196,42 +175,6 @@ func TestStoreApprovalFacts_UnstaffedCallerDoesNotHoldTheRole(t *testing.T) {
 	}
 }
 
-// TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff is the tripwire against
-// "fixing" this method into consistency with the two WRITE doors, which skip the
-// approval read entirely when the flag is off. can_approve/can_reject ship
-// unflagged (docs/approvals.md section 11), so RunState/PendingStepOrd/
-// CallerHoldsRole must be populated in every deployment.
-func TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff(t *testing.T) {
-	super, app := dbTestPools(t)
-	traced, rec := tracedAppPool(t)
-
-	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-OFFREADS", true)
-	fx.armInvoice(t, super, app, "appr-08-05-offreads")
-
-	store := NewStore(traced, WithApprovalsEnforced(false))
-	rec.reset()
-
-	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
-	if err != nil {
-		t.Fatalf("ApprovalFacts: %v", err)
-	}
-	if stmts := rec.mentioning("approval_runs"); len(stmts) == 0 {
-		t.Error("no statement mentioning approval_runs was issued with the flag off -- the flag folds ONLY TransmitClear, never the read")
-	}
-	if got.RunState != "open" {
-		t.Errorf("RunState = %q with the flag off, want %q", got.RunState, "open")
-	}
-	if got.PendingStepOrd == nil {
-		t.Error("PendingStepOrd = nil with the flag off, want a pointer to 0")
-	}
-	if !got.CallerHoldsRole {
-		t.Error("CallerHoldsRole = false with the flag off, want true")
-	}
-	if !got.TransmitClear {
-		t.Error("TransmitClear = false with the flag off, want true")
-	}
-}
-
 // TestStoreApprovalFacts_OneTransaction: db.WithinTenantTx issues exactly one
 // set_config('app.current_tenant' per transaction, so the count of those statements
 // IS the transaction count.
@@ -242,7 +185,7 @@ func TestStoreApprovalFacts_OneTransaction(t *testing.T) {
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-ONETX", true)
 	fx.armInvoice(t, super, app, "appr-08-05-onetx")
 
-	store := NewStore(traced, WithApprovalsEnforced(true))
+	store := NewStore(traced)
 	rec.reset()
 
 	if _, err := store.ApprovalFacts(fx.ctx, fx.invID); err != nil {
@@ -261,7 +204,7 @@ func TestStoreApprovalFacts_OneTransaction(t *testing.T) {
 func TestStoreApprovalFacts_ErrorReturnsTheZeroValue(t *testing.T) {
 	_, app := dbTestPools(t)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(context.Background(), uuid.NewString())
 	if !errors.Is(err, db.ErrNoTenant) {
@@ -272,15 +215,15 @@ func TestStoreApprovalFacts_ErrorReturnsTheZeroValue(t *testing.T) {
 	}
 }
 
-// TestStoreApprovalFacts_NoRunIsNotClearWithTheFlagOn: the seeded backlog shape --
+// TestStoreApprovalFacts_NoRunIsNotClear: the seeded backlog shape --
 // validated under an active policy with no run at all. TransmitClear fails closed
 // on an absent answer, and RunState is "" rather than an error.
-func TestStoreApprovalFacts_NoRunIsNotClearWithTheFlagOn(t *testing.T) {
+func TestStoreApprovalFacts_NoRunIsNotClear(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-NORUN", false)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
@@ -311,7 +254,7 @@ func TestStoreApprovalFacts_UppercaseIdReadsTheSameRow(t *testing.T) {
 		t.Fatalf("fixture id %q has no lowercase hex digits -- the case this test exists for is not exercised", fx.invID)
 	}
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, upper)
 	if err != nil {

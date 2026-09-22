@@ -650,9 +650,8 @@ func TestSubmitGate_AdminAndReviewerUnchanged(t *testing.T) {
 	if len(want) != len(allStatuses) {
 		t.Fatalf("oracle covers %d statuses, want all %d", len(want), len(allStatuses))
 	}
-	// approvalClear=true IS the "unchanged" condition: a flag-off deployment
-	// folds to clear, so every row here must stay byte-identical to the answer
-	// shipped before the approval arm existed.
+	// approvalClear=true is the no-policy / approved-run condition; every row must
+	// stay byte-identical to the pre-approval answer.
 	for _, role := range []string{"admin", "reviewer"} {
 		for _, s := range allStatuses {
 			t.Run(string(s)+"_"+role, func(t *testing.T) {

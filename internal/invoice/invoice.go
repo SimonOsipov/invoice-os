@@ -335,8 +335,7 @@ type ListFilter struct {
 	KeptAsIs bool
 
 	// AwaitingApproval (APPR-08-07) narrows to invoices an active approval policy is
-	// still holding: the exact negation of approval.TransmitClear -- the UNFLAGGED
-	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
+	// still holding: the exact negation of approval.TransmitClear, restricted to validated.
 	// Zero value applies no predicate, like every other bool above.
 	AwaitingApproval bool
 

@@ -21,11 +21,10 @@ import (
 
 // --- harness ----------------------------------------------------------------
 
-// gateSubmitter builds a Submitter over a Store carrying the flag. Submitter reads the
-// flag off its own *Store (batch_submit.go), so this is the whole wiring.
-func gateSubmitter(t *testing.T, pool *pgxpool.Pool, enforced bool) *Submitter {
+// gateSubmitter builds a Submitter over a real Store and an insert-only queue client.
+func gateSubmitter(t *testing.T, pool *pgxpool.Pool) *Submitter {
 	t.Helper()
-	return NewSubmitter(NewStore(pool, WithApprovalsEnforced(enforced)), newInsertOnlyQueueClient(t, pool))
+	return NewSubmitter(NewStore(pool), newInsertOnlyQueueClient(t, pool))
 }
 
 // upperIDOrFatal uppercases a fixture uuid and fails when that is a no-op — a uuid whose
@@ -110,11 +109,8 @@ func TestBatchSubmitReasonTokens_PinTheWireLiterals(t *testing.T) {
 	}
 }
 
-// TestBatchSubmit_SubmitterGetsTheFlaggedStoreInMain: this subtask changes no wiring only
-// because cmd/invoice/main.go builds ONE Store, flagged, and hands that same value to
-// NewSubmitter. A second, unflagged invoice.NewStore for the submitter would leave every
-// spec in this package green and the batch door ungated in production.
-func TestBatchSubmit_SubmitterGetsTheFlaggedStoreInMain(t *testing.T) {
+// TestBatchSubmit_SubmitterGetsTheStoreInMain: one Store in main.go, handed to NewSubmitter.
+func TestBatchSubmit_SubmitterGetsTheStoreInMain(t *testing.T) {
 	src, err := os.ReadFile("../../cmd/invoice/main.go")
 	if err != nil {
 		t.Fatalf("read cmd/invoice/main.go: %v", err)
@@ -122,21 +118,17 @@ func TestBatchSubmit_SubmitterGetsTheFlaggedStoreInMain(t *testing.T) {
 	main := string(src)
 
 	if n := strings.Count(main, "invoice.NewStore("); n != 1 {
-		t.Errorf("cmd/invoice/main.go calls invoice.NewStore %d time(s), want exactly 1 — a second store is a second, unflagged answer to APPROVALS_ENFORCED", n)
-	}
-	const flagged = "store := invoice.NewStore(pool, invoice.WithApprovalsEnforced(enforced))"
-	if !strings.Contains(main, flagged) {
-		t.Errorf("cmd/invoice/main.go does not build the flagged store as\n\t%s", flagged)
+		t.Errorf("cmd/invoice/main.go calls invoice.NewStore %d time(s), want exactly 1", n)
 	}
 	const wired = "invoice.NewSubmitter(store, "
 	if !strings.Contains(main, wired) {
-		t.Errorf("cmd/invoice/main.go does not hand the flagged store to the submitter as\n\t%s", wired)
+		t.Errorf("cmd/invoice/main.go does not hand the store to the submitter as\n\t%s", wired)
 	}
 }
 
 // --- AC #2/#4: an open run skips the item, it does not fail the batch --------
 
-// TestBatchSubmit_AwaitingApprovalSkip: flag ON, active policy, an open run -> one skipped
+// TestBatchSubmit_AwaitingApprovalSkip: active policy, an open run -> one skipped
 // item carrying the invoice's REAL status, no queue row, no transition.
 func TestBatchSubmit_AwaitingApprovalSkip(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -144,8 +136,7 @@ func TestBatchSubmit_AwaitingApprovalSkip(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-04-GATED", StatusValidated)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
 
-	sub := NewSubmitter(NewStore(app), newInsertOnlyQueueClient(t, app))
-	res, err := sub.BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -179,7 +170,7 @@ func TestBatchSubmit_MixedBatchSkipsOnlyTheGatedOnes(t *testing.T) {
 
 	draftID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-08-04-MIX-C", StatusDraft)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, gatedID, draftID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -212,7 +203,7 @@ func TestBatchSubmit_NotValidatedStillWinsOverAwaitingApproval(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-04-DRAFTGATED", StatusDraft)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -234,7 +225,7 @@ func TestBatchSubmit_DuplicateIdsStillResolveOnceUnderTheGate(t *testing.T) {
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, fx.invID, fx.invID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -252,7 +243,7 @@ func TestBatchSubmit_DuplicateIdsStillResolveOnceUnderTheGate(t *testing.T) {
 	}
 }
 
-// --- AC #2: one read, after the locks, and only under the flag ---------------
+// --- AC #2: one read, after the locks ----------------------------------------
 
 // TestBatchSubmit_ApprovalReadRunsAfterTheRowLocks: the approval read follows EVERY
 // per-distinct-id lock, per the invoices -> approval_* lock order.
@@ -267,7 +258,7 @@ func TestBatchSubmit_ApprovalReadRunsAfterTheRowLocks(t *testing.T) {
 	runB := seedApprovalRunFor(t, super, fx.tenantID, secondID, fx.versionID)
 	closeApprovalRunFor(t, super, runB, "approved", "fixture")
 
-	submitter := gateSubmitter(t, tracedApp, true)
+	submitter := gateSubmitter(t, tracedApp)
 
 	rec.reset()
 	if _, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
@@ -277,7 +268,7 @@ func TestBatchSubmit_ApprovalReadRunsAfterTheRowLocks(t *testing.T) {
 	}
 
 	if got := rec.mentioning("approval_"); len(got) == 0 {
-		t.Fatalf("BatchSubmit issued no statement mentioning approval_ under the flag — the gate read never runs")
+		t.Fatalf("BatchSubmit issued no statement mentioning approval_ — the gate read never runs")
 	}
 	lastLockAt := rec.lastIndexMentioning(t, eligibilityLockSQL)
 	approvalAt := rec.firstIndexMentioning(t, "approval_")
@@ -300,7 +291,7 @@ func TestBatchSubmit_ApprovalReadIsConstantInBatchSize(t *testing.T) {
 			"APPR-08-04-BATCH50-"+uuid.NewString(), StatusValidated))
 	}
 
-	submitter := gateSubmitter(t, tracedApp, true)
+	submitter := gateSubmitter(t, tracedApp)
 
 	rec.reset()
 	if _, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
@@ -314,46 +305,9 @@ func TestBatchSubmit_ApprovalReadIsConstantInBatchSize(t *testing.T) {
 	}
 }
 
-// TestBatchSubmit_FlagOffEnqueuesAGatedInvoice (AC #2, the silent half): with the flag off
-// the batch door is byte-for-byte the door it was. Control.
-func TestBatchSubmit_FlagOffEnqueuesAGatedInvoice(t *testing.T) {
-	super, _ := dbTestPools(t)
-	tracedApp, rec := tracedAppPool(t)
-
-	fx := seedGatedTenant(t, super, "APPR-08-04-FLAGOFF", StatusValidated)
-	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
-
-	submitter := gateSubmitter(t, tracedApp, false)
-
-	rec.reset()
-	res, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
-		InvoiceIDs: []string{fx.invID}, IdempotencyKey: uuid.NewString(),
-	})
-	if err != nil {
-		t.Fatalf("BatchSubmit with the flag off: %v (want nil)", err)
-	}
-	if len(res.Results) != 1 {
-		t.Fatalf("len(results) = %d, want 1", len(res.Results))
-	}
-	wantItem(t, res.Results[0], 0, fx.invID, true, StatusQueued, "")
-
-	if s := statusOf(t, super, fx.invID); s != StatusQueued {
-		t.Errorf("stored status = %q, want %q", s, StatusQueued)
-	}
-	if got := rec.mentioning("approval_runs"); len(got) != 0 {
-		t.Errorf("flag-off BatchSubmit issued %d statement(s) mentioning approval_runs: %v", len(got), got)
-	}
-	if got := rec.mentioning("approval_policy_versions"); len(got) != 0 {
-		t.Errorf("flag-off BatchSubmit issued %d statement(s) mentioning approval_policy_versions: %v", len(got), got)
-	}
-	if s := runStateOf(t, super, runID); s != "open" {
-		t.Errorf("run state = %q, want unchanged %q", s, "open")
-	}
-}
-
-// TestBatchSubmit_NoActivePolicyEnqueuesUnderTheFlag: a tenant that published no policy
+// TestBatchSubmit_NoActivePolicyEnqueues: a tenant that published no policy
 // pays ONE statement and its invoices still transmit, open run or not.
-func TestBatchSubmit_NoActivePolicyEnqueuesUnderTheFlag(t *testing.T) {
+func TestBatchSubmit_NoActivePolicyEnqueues(t *testing.T) {
 	super, _ := dbTestPools(t)
 	tracedApp, rec := tracedAppPool(t)
 
@@ -362,7 +316,7 @@ func TestBatchSubmit_NoActivePolicyEnqueuesUnderTheFlag(t *testing.T) {
 	seedApprovalRunFor(t, super, tenantID, invID, versionID) // open, but the policy is not active
 	ctx := gateCtx(tenantID)
 
-	submitter := gateSubmitter(t, tracedApp, true)
+	submitter := gateSubmitter(t, tracedApp)
 
 	rec.reset()
 	res, err := submitter.BatchSubmit(ctx, BatchSubmitInput{
@@ -378,42 +332,6 @@ func TestBatchSubmit_NoActivePolicyEnqueuesUnderTheFlag(t *testing.T) {
 
 	if got := rec.mentioning("approval_"); len(got) != 1 {
 		t.Errorf("no-active-policy BatchSubmit issued %d approval_ statement(s), want exactly 1 (the short-circuit): %v", len(got), got)
-	}
-}
-
-// TestBatchSubmit_FlagOffWithNilClearMapDoesNotSkipEverything: the mutant-killer. With the
-// flag off TransmitClearTx never runs, so the clear map is nil and a nil-map read yields
-// false — dropping the approvalsEnforced conjunct from the guard would classify EVERY
-// invoice in EVERY batch as awaiting_approval. TransmitClear is clear-shaped so absence
-// fails closed (approval/gate.go), which is right when the gate ran and catastrophic when
-// it did not.
-func TestBatchSubmit_FlagOffWithNilClearMapDoesNotSkipEverything(t *testing.T) {
-	super, app := dbTestPools(t)
-
-	tenantID := seedTenant(t, super, "APPR-08-04-NILMAP tenant")
-	entityID := seedEntity(t, super, tenantID, "APPR-08-04-NILMAP entity")
-	ctx := gateCtx(tenantID)
-
-	ids := []string{
-		seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-08-04-NILMAP-A", StatusValidated),
-		seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-08-04-NILMAP-B", StatusValidated),
-		seedInvoiceAtStatus(t, super, tenantID, entityID, "APPR-08-04-NILMAP-C", StatusValidated),
-	}
-
-	res, err := gateSubmitter(t, app, false).BatchSubmit(ctx, BatchSubmitInput{
-		InvoiceIDs: ids, IdempotencyKey: uuid.NewString(),
-	})
-	if err != nil {
-		t.Fatalf("BatchSubmit with the flag off and no policy at all: %v (want nil)", err)
-	}
-	if len(res.Results) != len(ids) {
-		t.Fatalf("len(results) = %d, want %d", len(res.Results), len(ids))
-	}
-	for i, id := range ids {
-		wantItem(t, res.Results[i], i, id, true, StatusQueued, "")
-		if n := countBatchSubmitJobs(t, app, id); n != 1 {
-			t.Errorf("river_job rows for %s = %d, want 1", id, n)
-		}
 	}
 }
 
@@ -433,7 +351,7 @@ func TestBatchSubmit_UppercaseIdOnAnApprovedInvoiceEnqueues(t *testing.T) {
 
 	upper := upperIDOrFatal(t, fx.invID)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{upper}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -465,7 +383,7 @@ func TestBatchSubmit_UppercaseIdOnAGatedInvoiceStillRefuses(t *testing.T) {
 
 	upper := upperIDOrFatal(t, fx.invID)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{upper}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -496,7 +414,7 @@ func TestBatchSubmit_SameIdInTwoSpellingsResolvesOnce(t *testing.T) {
 
 	upper := upperIDOrFatal(t, fx.invID)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, upper}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {

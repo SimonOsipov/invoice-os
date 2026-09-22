@@ -382,9 +382,7 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 //
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
-// It arrives already folded against APPROVALS_ENFORCED (Store.ApprovalFacts), so
-// a flag-off deployment reads true and this arm is inert
-// (TestSubmitGate_AdminAndReviewerUnchanged).
+// approvalClear is Store.ApprovalFacts' TransmitClear (TestTransition_QueuedRefusedWhenAwaitingApproval).
 func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
@@ -784,8 +782,7 @@ func ListHandler(
 		}
 
 		// awaiting_approval (APPR-08-07): invoices an active approval policy still holds.
-		// Never gated by APPROVALS_ENFORCED -- the flag gates enforcement, not visibility
-		// (docs/approvals.md §11).
+		// A read filter, never a refusal (docs/approvals.md §11).
 		awaitingApproval := false
 		if raw := query.Get("awaiting_approval"); raw != "" {
 			b, err := strconv.ParseBool(raw)

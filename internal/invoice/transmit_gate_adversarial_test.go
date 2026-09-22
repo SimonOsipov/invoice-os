@@ -1,9 +1,9 @@
 // APPR-08-10 (task-502): the transmit gate driven through BOTH doors at once.
 //
 // Each door alone is already covered -- transition_gate_test.go (12) and
-// batch_submit_gate_test.go (14) each cover their own door in both flag states. The only
-// additive claims here are the CONJUNCTION (both doors, one tenant, one test), the wire
-// agreeing with the door it advertises, and the direct-UPDATE scope boundary.
+// batch_submit_gate_test.go (14) each cover their own door. The only additive claims
+// here are the CONJUNCTION (both doors, one tenant, one test), the wire agreeing with
+// the door it advertises, and the direct-UPDATE scope boundary.
 //
 // gate_adversarial_test.go / gate_test.go are a DIFFERENT gate (the validation gate,
 // gate.go) and are not opened by this file.
@@ -123,12 +123,12 @@ func TestGate_NoHTTPDoorReachesQueuedWhileGated(t *testing.T) {
 	g := seedGatedTenantAsAdmin(t, super, "APPR-08-10-BOTH-GATED")
 	invID := g.invoiceWith(t, super, "APPR-08-10-BOTH-GATED-A", "open")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(g.ctx, invID, StatusQueued); !errors.Is(err, ErrAwaitingApproval) {
 		t.Errorf("door 1 (Store.Transition): err = %v, want ErrAwaitingApproval", err)
 	}
-	if batchDoor(t, gateSubmitter(t, app, true), g.ctx, invID) {
+	if batchDoor(t, gateSubmitter(t, app), g.ctx, invID) {
 		t.Error("door 2 (Submitter.BatchSubmit) enqueued a gated invoice, want an awaiting_approval skip")
 	}
 
@@ -154,8 +154,7 @@ func TestGate_BlocksBothDoors(t *testing.T) {
 	if _, err := store.Transition(g.ctx, invID, StatusQueued); !errors.Is(err, ErrAwaitingApproval) {
 		t.Errorf("door 1 with no run at all: err = %v, want ErrAwaitingApproval", err)
 	}
-	sub := NewSubmitter(NewStore(app), newInsertOnlyQueueClient(t, app))
-	if batchDoor(t, sub, g.ctx, invID) {
+	if batchDoor(t, gateSubmitter(t, app), g.ctx, invID) {
 		t.Error("door 2 enqueued an invoice with no run under an active policy, want an awaiting_approval skip")
 	}
 
@@ -164,54 +163,23 @@ func TestGate_BlocksBothDoors(t *testing.T) {
 	}
 }
 
-// --- AC #2: with the flag off, both doors are the doors they were ------------
-
-// TestGate_FlagOffLeavesBothDoorsUnchanged. TWO invoices, one per door: a PERMISSIVE door
-// CONSUMES its invoice, so reusing one would have the batch door skip not_validated on an
-// already-queued row and report a pass for the wrong reason.
-func TestGate_FlagOffLeavesBothDoorsUnchanged(t *testing.T) {
-	super, app := dbTestPools(t)
-
-	g := seedGatedTenantAsAdmin(t, super, "APPR-08-10-FLAGOFF")
-	forTransition := g.invoiceWith(t, super, "APPR-08-10-FLAGOFF-T", "open")
-	forBatch := g.invoiceWith(t, super, "APPR-08-10-FLAGOFF-B", "open")
-
-	store := NewStore(app) // flag OFF
-
-	if _, err := store.Transition(g.ctx, forTransition, StatusQueued); err != nil {
-		t.Errorf("door 1 with the flag off over an open run: %v (want nil)", err)
-	}
-	if !batchDoor(t, gateSubmitter(t, app, false), g.ctx, forBatch) {
-		t.Error("door 2 with the flag off skipped a gated invoice, want an enqueue")
-	}
-
-	for _, id := range []string{forTransition, forBatch} {
-		if s := statusOf(t, super, id); s != StatusQueued {
-			t.Errorf("stored status of %s = %q, want %q", id, s, StatusQueued)
-		}
-	}
-}
-
 // --- AC #1/#2: the wire and the doors answer the same question ---------------
 
-// TestGate_WireAgreesWithBothDoorsInBothFlagStates: can_submit PREDICTS what each door
-// then does, across both flag states and both approval shapes. The SPA reads that flag to
-// enable a button, so a wire that disagrees with its own door is a lie on screen.
+// TestGate_WireAgreesWithBothDoors: can_submit PREDICTS what each door then does, across
+// both approval shapes. The SPA reads that field to enable a button, so a wire that
+// disagrees with its own door is a lie on screen.
 //
 // One invoice per (combination, door): a permissive door consumes its own.
-func TestGate_WireAgreesWithBothDoorsInBothFlagStates(t *testing.T) {
+func TestGate_WireAgreesWithBothDoors(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	for _, tc := range []struct {
 		name     string
-		enforced bool
 		runState string
 		want     bool
 	}{
-		{"flagoff-gated", false, "open", true},
-		{"flagoff-clear", false, "approved", true},
-		{"flagon-gated", true, "open", false},
-		{"flagon-clear", true, "approved", true},
+		{"gated", "open", false},
+		{"clear", "approved", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			label := "APPR-08-10-WIRE-" + tc.name
@@ -219,7 +187,7 @@ func TestGate_WireAgreesWithBothDoorsInBothFlagStates(t *testing.T) {
 			forTransition := g.invoiceWith(t, super, label+"-T", tc.runState)
 			forBatch := g.invoiceWith(t, super, label+"-B", tc.runState)
 
-			store := NewStore(app, WithApprovalsEnforced(tc.enforced))
+			store := NewStore(app)
 
 			for _, id := range []string{forTransition, forBatch} {
 				rec, body := doInvoiceGetGated(t, store.Get, store.CallerRole, store.ApprovalFacts, &g.identity, id)
@@ -237,7 +205,7 @@ func TestGate_WireAgreesWithBothDoorsInBothFlagStates(t *testing.T) {
 			if got := transitionDoor(t, store, g.ctx, forTransition); got != tc.want {
 				t.Errorf("door 1 reached queued = %v, want %v -- the wire advertised can_submit = %v", got, tc.want, tc.want)
 			}
-			if got := batchDoor(t, gateSubmitter(t, app, tc.enforced), g.ctx, forBatch); got != tc.want {
+			if got := batchDoor(t, gateSubmitter(t, app), g.ctx, forBatch); got != tc.want {
 				t.Errorf("door 2 enqueued = %v, want %v -- the wire advertised can_submit = %v", got, tc.want, tc.want)
 			}
 		})
@@ -262,12 +230,12 @@ func TestGate_ApprovingUnblocksBothDoors(t *testing.T) {
 	transitionInv, transitionRun := seed("APPR-08-10-APPROVE-T")
 	batchInv, batchRun := seed("APPR-08-10-APPROVE-B")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(g.ctx, transitionInv, StatusQueued); !errors.Is(err, ErrAwaitingApproval) {
 		t.Fatalf("before: door 1 on an open run: err = %v, want ErrAwaitingApproval", err)
 	}
-	if batchDoor(t, gateSubmitter(t, app, true), g.ctx, batchInv) {
+	if batchDoor(t, gateSubmitter(t, app), g.ctx, batchInv) {
 		t.Fatal("before: door 2 enqueued an invoice whose run is still open")
 	}
 
@@ -277,7 +245,7 @@ func TestGate_ApprovingUnblocksBothDoors(t *testing.T) {
 	if _, err := store.Transition(g.ctx, transitionInv, StatusQueued); err != nil {
 		t.Errorf("after: door 1 on an approved run: %v (want nil)", err)
 	}
-	if !batchDoor(t, gateSubmitter(t, app, true), g.ctx, batchInv) {
+	if !batchDoor(t, gateSubmitter(t, app), g.ctx, batchInv) {
 		t.Error("after: door 2 skipped an invoice whose run is approved, want an enqueue")
 	}
 
@@ -301,7 +269,7 @@ func TestGate_DirectStatusUpdateIsNotDefended(t *testing.T) {
 	g := seedGatedTenantAsAdmin(t, super, "APPR-08-10-DIRECT")
 	invID := g.invoiceWith(t, super, "APPR-08-10-DIRECT-A", "open")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 	if _, err := store.Transition(g.ctx, invID, StatusQueued); !errors.Is(err, ErrAwaitingApproval) {
 		t.Fatalf("setup: the door must refuse this invoice first: err = %v, want ErrAwaitingApproval", err)
 	}

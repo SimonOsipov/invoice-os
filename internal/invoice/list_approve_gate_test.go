@@ -430,7 +430,7 @@ func TestListHandler_RealStore_CrossTenantCannotApprove(t *testing.T) {
 		Subject: fxA.subject, Role: "authenticated", TenantID: fxB.tenantID,
 	})
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 	page := func(t *testing.T, ctx context.Context) (*httptest.ResponseRecorder, map[string]map[string]json.RawMessage) {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/v1/invoices?limit=200", nil)

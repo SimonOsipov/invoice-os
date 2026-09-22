@@ -17,7 +17,7 @@
 //	AC-4  TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID
 //	AC-5  TestListHandler_RowFactsNotCalledOnAnEmptyPage
 //
-// AC-6 (the flag does not gate the row facts) is DB-backed and lives in
+// AC-6 (the row facts are populated) is DB-backed and lives in
 // row_facts_store_test.go. The two shipped guards this subtask must not break --
 // TestListHandler_EmptyState (handlers_test.go) and TestListHandler_NoActionFlagKeys
 // (handlers_test.go) -- stay where they are, unwidened.

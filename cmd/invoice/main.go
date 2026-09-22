@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/approval"
@@ -75,15 +74,7 @@ func main() {
 	// /v1/invoices... — the invoice CRUD + guarded-transition surface, resolved
 	// under RLS. Reached via the gateway as /api/invoice/v1/invoices... (the
 	// prefix is stripped upstream).
-	//
-	// APPROVALS_ENFORCED gates enforcement only (docs/approvals.md §11); unset is
-	// off and an unparseable value stops the boot. fatal, not log.Fatalf — see
-	// fatal's doc comment (TestInvoiceMain_WiresTheApprovalsEnforcedFlag).
-	enforced, err := parseEnvBool(os.Getenv("APPROVALS_ENFORCED"))
-	if err != nil {
-		fatal(app.Logger, "invoice: APPROVALS_ENFORCED must be a boolean: %v", err)
-	}
-	store := invoice.NewStore(pool, invoice.WithApprovalsEnforced(enforced))
+	store := invoice.NewStore(pool)
 	app.Mux.HandleFunc("POST /v1/invoices", invoice.CreateHandler(store.Create, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}", invoice.GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/history", invoice.HistoryHandler(store.History, app.Logger))
@@ -305,19 +296,6 @@ func main() {
 func fatal(logger *slog.Logger, format string, args ...any) {
 	logger.Error(fmt.Sprintf(format, args...))
 	os.Exit(1)
-}
-
-// parseEnvBool reads a boolean env value. Unset is false; a set-but-unparseable
-// value is an ERROR, never silently false — the permissive state here is "off",
-// so a typo would quietly reopen the transmit gate (TestParseEnvBool_Table).
-// Value-based and pure, so it needs no t.Setenv — same shape as
-// gateway.MockIssuerEnabled.
-func parseEnvBool(raw string) (bool, error) {
-	// Handled before ParseBool, which rejects the empty string.
-	if raw == "" {
-		return false, nil
-	}
-	return strconv.ParseBool(raw)
 }
 
 func mustEnv(key string) string {

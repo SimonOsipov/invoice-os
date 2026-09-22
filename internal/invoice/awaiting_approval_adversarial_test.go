@@ -3,8 +3,9 @@
 //
 // Three of these close holes mutation testing proved open against the Mode A set:
 //
-//	AC #7  wrapping the fragment in `if !s.approvalsEnforced` left the whole suite green --
-//	       every test store defaults to flag-off, so nothing read the flag.
+//	AC #7  the fragment must run unconditionally -- a short-circuited WHERE clause would
+//	       still pass every test that never seeds an open run at all. Probed directly below
+//	       (TestStoreList_AwaitingApprovalFilterMatchesTheOpenRun).
 //	AC #1  deleting the migration Down left the suite green AND `make migrate-down` green
 //	       (goose reports EMPTY and exits 0). CI reset->up cannot see it either: the
 //	       approval_runs Down drops the table, which takes the index with it.
@@ -26,17 +27,12 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// --- AC #7: the flag gates enforcement, not visibility ----------------------
+// --- AC #7: the filter matches the open run -----------------------------------
 
-// TestStoreList_AwaitingApprovalIsNotGatedByApprovalsEnforced: the same fixture read
-// through a flag-off and a flag-on store must return the identical rows.
-//
-// Every other DB-backed case builds NewStore(app), which leaves approvalsEnforced false,
-// so a `if !s.approvalsEnforced` wrapper around the fragment is invisible to all of them --
-// and it would make the list surface vanish the moment APPR-14 turns the flag on. The
-// ApprovalFacts leg below is the non-vacuity guard: it proves the option really is live on
-// the flag-on store, so "identical" is a fact about the filter and not about a dead option.
-func TestStoreList_AwaitingApprovalIsNotGatedByApprovalsEnforced(t *testing.T) {
+// TestStoreList_AwaitingApprovalFilterMatchesTheOpenRun: an invoice with an open run,
+// or with no run at all, under an active policy -- both are awaiting approval. An
+// approved-run invoice is not.
+func TestStoreList_AwaitingApprovalFilterMatchesTheOpenRun(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	tenantID, entityID, versionID := seedOneStepActivePolicyTenant(t, super, "AWAIT-FLAG")
@@ -48,45 +44,18 @@ func TestStoreList_AwaitingApprovalIsNotGatedByApprovalsEnforced(t *testing.T) {
 	clearedID := seedInvoiceAtStatus(t, super, tenantID, entityID, "AWAIT-FLAG-cleared", StatusValidated)
 	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, tenantID, clearedID, versionID), "approved", "approver")
 
-	off := NewStore(app)
-	on := NewStore(app, WithApprovalsEnforced(true))
-
-	// The option is live: ApprovalFacts folds the flag, so the two stores MUST disagree
-	// here. Without this leg a no-op option would make the equality below vacuous.
-	offFacts, err := off.ApprovalFacts(c, gatedOpen)
-	if err != nil {
-		t.Fatalf("flag-off ApprovalFacts: %v", err)
-	}
-	onFacts, err := on.ApprovalFacts(c, gatedOpen)
-	if err != nil {
-		t.Fatalf("flag-on ApprovalFacts: %v", err)
-	}
-	if !offFacts.TransmitClear || onFacts.TransmitClear {
-		t.Fatalf("ApprovalFacts.TransmitClear = %v (flag off) / %v (flag on), want true/false -- "+
-			"WithApprovalsEnforced is not reaching the store, so the List comparison below proves nothing",
-			offFacts.TransmitClear, onFacts.TransmitClear)
-	}
+	store := NewStore(app)
 
 	want := map[string]bool{gatedOpen: true, gatedNoRun: true}
 
-	offItems, offTotal := listAwaiting(t, off, c, ListFilter{})
-	onItems, onTotal := listAwaiting(t, on, c, ListFilter{})
-	offSet, onSet := idSet(offItems), idSet(onItems)
+	items, _ := listAwaiting(t, store, c, ListFilter{})
+	got := idSet(items)
 
-	if !reflect.DeepEqual(offSet, want) {
-		t.Errorf("flag-off ids = %v, want exactly %v", sortedIDs(offSet), sortedIDs(want))
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ids = %v, want exactly %v", sortedIDs(got), sortedIDs(want))
 	}
-	if !reflect.DeepEqual(onSet, want) {
-		t.Errorf("flag-on ids = %v, want exactly %v -- APPROVALS_ENFORCED must not gate the "+
-			"awaiting_approval filter (AC #7, docs/approvals.md §11 \"Not gated\")", sortedIDs(onSet), sortedIDs(want))
-	}
-	if !reflect.DeepEqual(offSet, onSet) || offTotal != onTotal {
-		t.Errorf("flag-off returned %v/total %d and flag-on returned %v/total %d, want identical",
-			sortedIDs(offSet), offTotal, sortedIDs(onSet), onTotal)
-	}
-	if offSet[clearedID] {
-		t.Errorf("the approved-run invoice %s is in the result -- the filter is not discriminating, "+
-			"so the flag comparison above would hold for a broken predicate too", clearedID)
+	if got[clearedID] {
+		t.Errorf("the approved-run invoice %s is in the result -- the filter is not discriminating", clearedID)
 	}
 }
 

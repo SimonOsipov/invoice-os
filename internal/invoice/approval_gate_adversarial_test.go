@@ -51,8 +51,8 @@ func TestGetHandler_ApprovalArmAcrossEveryStatusAndVerdict(t *testing.T) {
 	}
 }
 
-// TestGetHandler_ApprovalSentenceOnlyReachesTheWireOnValidated guards the COPY, not
-// the flag. awaitingApprovalReason promises "it can be submitted once an approver
+// TestGetHandler_ApprovalSentenceOnlyReachesTheWireOnValidated guards the COPY.
+// awaitingApprovalReason promises "it can be submitted once an approver
 // approves it", which is only true where a submit is otherwise possible. A run in
 // state cancelled or rejected also reads TransmitClear false
 // (TestStoreApprovalFacts_CancelledRunIsNotClear below), and both of those demote
@@ -201,7 +201,7 @@ func TestStoreApprovalFacts_ClosedRunStatesAreNotClear(t *testing.T) {
 			runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 			closeApprovalRunFor(t, super, runID, state, "fixture")
 
-			store := NewStore(app, WithApprovalsEnforced(true))
+			store := NewStore(app)
 
 			got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 			if err != nil {
@@ -233,7 +233,7 @@ func TestStoreApprovalFacts_SeesOnlyCommittedDecisions(t *testing.T) {
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-RACE", false)
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	before, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
@@ -300,19 +300,15 @@ func TestStoreApprovalFacts_SeesOnlyCommittedDecisions(t *testing.T) {
 // wiring is WRITTEN, not that it answers. Here store.Get, store.CallerRole and
 // store.ApprovalFacts are all real, over an invoice armed through Store.ApplyValidation,
 // and the assertion is the serialized body.
-//
-// Both flag positions run against the SAME armed invoice: the flag-ON answer is the
-// feature, and the flag-OFF answer is the release-safety claim (docs/approvals.md
-// section 11) that the whole subtask rests on.
 func TestGetHandler_RealStoreRealApprovalFacts_EndToEnd(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-E2E", true)
 	fx.armInvoice(t, super, app, "appr-08-05-e2e")
 
-	getFor := func(t *testing.T, enforced bool) submitGateBody {
+	getFor := func(t *testing.T) submitGateBody {
 		t.Helper()
-		store := NewStore(app, WithApprovalsEnforced(enforced))
+		store := NewStore(app)
 		r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
 		r.SetPathValue("id", fx.invID)
 		r = r.WithContext(fx.ctx)
@@ -330,26 +326,16 @@ func TestGetHandler_RealStoreRealApprovalFacts_EndToEnd(t *testing.T) {
 
 	// The caller is an active admin, so the role rung passes and the status rung
 	// passes (armInvoice asserts validated) -- the approval rung is what decides.
-	t.Run("flag_on_blocks_with_the_shared_sentence", func(t *testing.T) {
-		resp := getFor(t, true)
+	t.Run("blocks_with_the_shared_sentence", func(t *testing.T) {
+		resp := getFor(t)
 		if resp.CanSubmit {
-			t.Error("can_submit = true for an admin on an armed validated invoice with the flag ON, want false")
+			t.Error("can_submit = true for an admin on an armed validated invoice, want false")
 		}
 		switch {
 		case resp.SubmitBlockedReason == nil:
 			t.Errorf("submit_blocked_reason = null, want %q", wantAwaitingApprovalReason)
 		case *resp.SubmitBlockedReason != wantAwaitingApprovalReason:
 			t.Errorf("submit_blocked_reason = %q, want %q", *resp.SubmitBlockedReason, wantAwaitingApprovalReason)
-		}
-	})
-
-	t.Run("flag_off_is_inert", func(t *testing.T) {
-		resp := getFor(t, false)
-		if !resp.CanSubmit {
-			t.Error("can_submit = false with APPROVALS_ENFORCED off, want true -- the flag-off wire must read exactly as it did before the gate landed")
-		}
-		if resp.SubmitBlockedReason != nil {
-			t.Errorf("submit_blocked_reason = %q with the flag off, want null", *resp.SubmitBlockedReason)
 		}
 	})
 }

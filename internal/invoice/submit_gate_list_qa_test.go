@@ -146,7 +146,7 @@ func TestListAndDetail_SubmitGateAgreeOnTheRoleRung(t *testing.T) {
 	}
 	preparerCtx, adminCtx := ctxFor("preparer"), ctxFor("admin")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	// CONTROL: the SAME two invoices read by an admin answer two DIFFERENT things.
 	// Without it a page that refused everything would satisfy the role claim below.
@@ -193,10 +193,10 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	b := seedApprovalFactsFixture(t, super, "BUG-12-01-QA-RLS-B", true)
 	ids := []string{a.invID, b.invID}
 
-	on := NewStore(app, WithApprovalsEnforced(true))
-	facts, gate, err := on.RowFacts(a.ctx, ids)
+	store := NewStore(app)
+	facts, gate, err := store.RowFacts(a.ctx, ids)
 	if err != nil {
-		t.Fatalf("RowFacts (flag on): %v", err)
+		t.Fatalf("RowFacts: %v", err)
 	}
 
 	// CONTROL 1: RLS really hides B from A, so the fold really is being asked
@@ -208,7 +208,7 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	// two-statement path. On the short-circuit every requested id maps true and an
 	// absent id would read clear for free.
 	if gate.TransmitClear[a.invID] {
-		t.Fatalf("tenant A's own unarmed validated invoice reads clear under APPROVALS_ENFORCED -- the no-policy short-circuit fired")
+		t.Fatalf("tenant A's own unarmed validated invoice reads clear -- the no-policy short-circuit fired")
 	}
 
 	if len(gate.TransmitClear) != len(ids) {
@@ -220,24 +220,6 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	}
 	if got {
 		t.Errorf("TransmitClear[%s] = true for an id RLS cannot see -- an unreadable invoice must fail CLOSED", b.invID)
-	}
-
-	// The flag-off half of C6: the detail wire folds to true for ANY id when the
-	// flag is off, so the list cannot answer false at the same setting.
-	off := NewStore(app)
-	_, offGate, err := off.RowFacts(a.ctx, ids)
-	if err != nil {
-		t.Fatalf("RowFacts (flag off): %v", err)
-	}
-	offGot, ok := offGate.TransmitClear[b.invID]
-	if !ok {
-		t.Fatalf("APPROVALS_ENFORCED off: TransmitClear has no entry for %s", b.invID)
-	}
-	if !offGot {
-		t.Errorf("APPROVALS_ENFORCED off: TransmitClear[%s] = false, want true -- the detail wire answers true for any id here, and the two surfaces cannot differ at one setting", b.invID)
-	}
-	if offGot == got {
-		t.Errorf("TransmitClear[%s] is %v at BOTH flag settings -- the fold is not reading the flag for an absent id", b.invID, got)
 	}
 }
 
@@ -272,7 +254,7 @@ func TestListHandler_SubmitGateDoesNotCrossTenants(t *testing.T) {
 	bIDs := []string{b.invID, seedInvoiceAtStatus(t, super, b.tenantID, b.entityID, "bug-12-01-qa-xt-b-2", StatusValidated)}
 	sort.Strings(bIDs)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	aRows := listPageRaw(t, store, aCtx, "tenant A")
 	bRows := listPageRaw(t, store, b.ctx, "tenant B")

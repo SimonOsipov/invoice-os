@@ -1,7 +1,7 @@
 // APPR-08-10 (task-502): the transmit gate driven through BOTH doors at once.
 //
-// Each door alone is already covered -- transition_gate_test.go (12) and
-// batch_submit_gate_test.go (14) each cover their own door. The only additive claims
+// Each door alone is already covered -- transition_gate_test.go and
+// batch_submit_gate_test.go each cover their own door. The only additive claims
 // here are the CONJUNCTION (both doors, one tenant, one test), the wire agreeing with
 // the door it advertises, and the direct-UPDATE scope boundary.
 //

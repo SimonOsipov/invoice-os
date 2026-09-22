@@ -382,7 +382,6 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 //
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
-// approvalClear is Store.ApprovalFacts' TransmitClear (TestTransition_QueuedRefusedWhenAwaitingApproval).
 func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local

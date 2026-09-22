@@ -860,10 +860,12 @@ false and the detail page renders a disabled Submit carrying the awaiting-approv
 sentence. That is deliberate: an unknown approval standing must not render an enabled
 button. `Submitter.BatchSubmit` fails the whole request on the same read error, so
 neither door ever submits an invoice whose approval standing could not be read. Pinned
-by `TestGetHandler_ApprovalFactsErrorFailsClosedNot500` and
-`TestStoreApprovalFacts_ErrorReturnsTheZeroValue`.
+by `TestGetHandler_ApprovalFactsErrorFailsClosedNot500`,
+`TestStoreApprovalFacts_ErrorReturnsTheZeroValue`,
+`TestBatchSubmit_TransmitClearTxErrorIsReturnedNotSwallowed` and
+`TestTransition_TransmitClearTxErrorIsReturnedNotSwallowed`.
 
-**Not gated** — these are read surfaces; an open run never refuses them:
+**Not gated** — an open run never refuses these:
 
 - **Arming.** Publishing a policy and validating an invoice opens an approval run. Runs,
   their steps and their decisions exist independently of whether an open one currently

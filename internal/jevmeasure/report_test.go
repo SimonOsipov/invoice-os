@@ -489,6 +489,39 @@ func TestReport_NoPriceMeansNoCostNumber(t *testing.T) {
 // AC-10, D-11. An absent input_tokens value names the field AND the count ("1 of 2 calls", not
 // "some calls") and is excluded from the mean, not zeroed: (0+500)/2=250 would be the
 // zero-defaulting bug; excluding the absent value gives 500.
+// Core AC-6. A supplied price the vendor gave no tokens for must name the vendor, not the price:
+// an operator who set both rates and read "price not supplied" would hunt a fault that is not there.
+func TestReport_ASuppliedPriceWithNoVendorTokensNamesTheVendor(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+		{Check: "value_check", DocumentID: "d2", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+	}
+	md, _, err := Render(outcomes, Pricing{2.00, 10.00})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if !strings.Contains(body, "no token counts reported by the vendor — cost not computed") {
+		t.Errorf("a supplied price with no vendor tokens must name the vendor as the cause; got body %q", body)
+	}
+	if strings.Contains(body, "price not supplied") {
+		t.Errorf("both rates were supplied; the report must not blame the price")
+	}
+
+	// Control: the same outcomes with no price must still blame the price, so the branch above
+	// is reached by the price being supplied and not by the missing tokens alone.
+	unpriced, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render unpriced: %v", err)
+	}
+	if !strings.Contains(string(unpriced), "price not supplied — cost not computed") {
+		t.Errorf("with no price supplied the report must still read %q", "price not supplied — cost not computed")
+	}
+}
+
 func TestReport_AnAbsentUsageFieldIsNamedNotZeroed(t *testing.T) {
 	outcomes := []Outcome{
 		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",

@@ -637,10 +637,15 @@ func writeUsage(w *bytes.Buffer, sec checkSection, pricing Pricing) {
 }
 
 func writeCostLine(w *bytes.Buffer, label string, cost *float64, pricing Pricing) {
-	if cost != nil {
+	switch {
+	case cost != nil:
 		fmt.Fprintf(w, "%s: $%.2f (price used: $%.2f / 1M input tokens, $%.2f / 1M output tokens, operator-supplied)\n",
 			label, *cost, pricing.InputPerMillion, pricing.OutputPerMillion)
-	} else {
+	case pricing.supplied():
+		// Naming the real cause: an operator who set both rates and read "price not supplied"
+		// would hunt a config fault that is not there. See the usage lines above for the counts.
+		fmt.Fprintf(w, "%s: no token counts reported by the vendor — cost not computed\n", label)
+	default:
 		fmt.Fprintf(w, "%s: price not supplied — cost not computed\n", label)
 	}
 }

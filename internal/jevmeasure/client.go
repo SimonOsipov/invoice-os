@@ -126,8 +126,10 @@ func (c *Client) Ask(ctx context.Context, state string, qs map[string]Question) 
 		return Response{}, 0, fmt.Errorf("jevmeasure: status %d", httpResp.StatusCode)
 	}
 
+	// No dec.UseNumber(): every numeric target below is already *json.Number, which
+	// encoding/json decodes natively -- UseNumber only changes an any-typed target, and
+	// wireResponse has none (measured, §1.13). Restore it the moment wireResponse grows one.
 	dec := json.NewDecoder(bytes.NewReader(respBody))
-	dec.UseNumber()
 	var wire wireResponse
 	if decErr := dec.Decode(&wire); decErr != nil {
 		return Response{}, 0, fmt.Errorf("jevmeasure: decode response: %v", decErr)

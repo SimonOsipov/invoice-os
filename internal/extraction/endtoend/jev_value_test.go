@@ -262,29 +262,78 @@ var jvPaths []string
 
 func jvResetPaths() { jvPaths = nil }
 
-// jvOpen is this suite's only read seam: every golden/fixture read goes through it.
-func jvOpen(t *testing.T, name string) []byte {
+// jvOpenPath is this file's one filesystem read call site; jvOpen and the merge ledger's reader
+// both route through it. notFoundOK tolerates a first run with no ledger written yet.
+func jvOpenPath(t *testing.T, path string, notFoundOK bool) ([]byte, bool) {
 	t.Helper()
-	path := filepath.Join(eeFxDir, name)
 	jvPaths = append(jvPaths, filepath.Clean(path))
 	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("jvOpen %s: %v", name, err)
+		if notFoundOK && os.IsNotExist(err) {
+			return nil, false
+		}
+		t.Fatalf("jvOpenPath %s: %v", path, err)
 	}
+	return b, true
+}
+
+// jvOpen is this suite's read seam for golden/fixture files, under eeFxDir.
+func jvOpen(t *testing.T, name string) []byte {
+	t.Helper()
+	b, _ := jvOpenPath(t, filepath.Join(eeFxDir, name), false)
 	return b
 }
 
-// jvWrite is this suite's only write seam: every artefact write goes through it.
+// jvWritePath is this file's one filesystem write call site: temp-file-plus-rename (design §4.1),
+// so a crash leaves the previous artifact rather than a torn one. jvWrite and the merge ledger's
+// writer both route through it.
+func jvWritePath(t *testing.T, path string, b []byte) {
+	t.Helper()
+	jvPaths = append(jvPaths, filepath.Clean(path))
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		t.Fatalf("jvWritePath %s: %v", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("jvWritePath rename %s: %v", path, err)
+	}
+}
+
+// jvWrite is this suite's write seam: every artefact write goes through it.
 func jvWrite(t *testing.T, out, name string, b []byte) {
 	t.Helper()
 	if out == "" {
 		t.Fatalf("jvWrite %s with an empty out root would write into the package directory", name)
 	}
-	path := filepath.Join(out, name)
-	jvPaths = append(jvPaths, filepath.Clean(path))
-	if err := os.WriteFile(path, b, 0o644); err != nil {
-		t.Fatalf("jvWrite %s: %v", name, err)
+	jvWritePath(t, filepath.Join(out, name), b)
+}
+
+// jvLedgerName is the merge ledger D-1 introduces: two independently-run test binaries jointly
+// produce one report by reading, merging through jevmeasure.MergeOutcomes, and rewriting this.
+const jvLedgerName = "jev-outcomes.json"
+
+// jvReadLedger reads the prior ledger, tolerating a first run where nothing has been written yet.
+func jvReadLedger(t *testing.T, out string) []jevmeasure.Outcome {
+	t.Helper()
+	b, ok := jvOpenPath(t, filepath.Join(out, jvLedgerName), true)
+	if !ok {
+		return nil
 	}
+	var prior []jevmeasure.Outcome
+	if err := json.Unmarshal(b, &prior); err != nil {
+		t.Fatalf("jvReadLedger: unmarshal %s: %v", jvLedgerName, err)
+	}
+	return prior
+}
+
+// jvWriteLedger marshals outcomes and writes them to the ledger via jvWritePath.
+func jvWriteLedger(t *testing.T, out string, outcomes []jevmeasure.Outcome) {
+	t.Helper()
+	b, err := json.Marshal(outcomes)
+	if err != nil {
+		t.Fatalf("jvWriteLedger: marshal: %v", err)
+	}
+	jvWritePath(t, filepath.Join(out, jvLedgerName), b)
 }
 
 // jvPathAllowed reports whether path, once cleaned, sits under eeFxDir (a read root) or under
@@ -309,6 +358,9 @@ const jvCallTimeout = 30 * time.Second
 // jvModel is the vendor model id CHECK-02 still owes (R-14); JEV_MODEL overrides it at the live
 // run so an operator can see and swap what gets sent.
 const jvModel = "systemone-default"
+
+// jvReader: this suite always runs Docling (design §1, "Import wizard deployed vs sysmap").
+const jvReader = "docling"
 
 func jvResolveModel() string {
 	if m := os.Getenv("JEV_MODEL"); m != "" {
@@ -383,19 +435,21 @@ func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 				outcomes = append(outcomes, jevmeasure.Outcome{
 					Check: "value_check", DocumentID: doc.pdf, Field: cell.Field,
 					Label: "not-asked", Reason: cell.Reason, ProbabilityKind: jevmeasure.KindNoul,
+					Reader: jvReader,
 				})
 			case err != nil:
 				outcomes = append(outcomes, jevmeasure.Outcome{
 					Check: "value_check", DocumentID: doc.pdf, Field: cell.Field,
 					Label: "not-asked", Failed: true, Reason: err.Error(),
 					ProbabilityKind: jevmeasure.KindNoul, Elapsed: elapsed, CallID: callID,
+					Reader: jvReader,
 				})
 			default:
 				ans := resp.Answers[cell.Field]
 				outcomes = append(outcomes, jevmeasure.Outcome{
 					Check: "value_check", DocumentID: doc.pdf, Field: cell.Field,
 					Label: cell.Label, ProbabilityKind: jevmeasure.KindNoul, Probability: ans.Noul,
-					Elapsed: elapsed, Usage: resp.Usage, CallID: callID,
+					Elapsed: elapsed, Usage: resp.Usage, CallID: callID, Reader: jvReader,
 				})
 			}
 		}
@@ -405,6 +459,7 @@ func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 				Check: "document_type_check", DocumentID: doc.pdf, Field: doc.trueType,
 				Label: "not-asked", Failed: true, Reason: err.Error(),
 				ProbabilityKind: jevmeasure.KindChoiceConfidence, Elapsed: elapsed, CallID: callID,
+				Reader: jvReader,
 			})
 		} else {
 			ans := resp.Answers["document_type"]
@@ -416,6 +471,7 @@ func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 				Check: "document_type_check", DocumentID: doc.pdf, Field: doc.trueType,
 				Answer: ans.Choice, Label: label, ProbabilityKind: jevmeasure.KindChoiceConfidence,
 				Probability: ans.Confidence, Elapsed: elapsed, Usage: resp.Usage, CallID: callID,
+				Reader: jvReader,
 			})
 		}
 
@@ -449,12 +505,14 @@ func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 				outcomes = append(outcomes, jevmeasure.Outcome{
 					Check: "value_check", DocumentID: doc.pdf, Field: qid,
 					Label: "not-asked", Reason: "variant not plantable", ProbabilityKind: jevmeasure.KindNoul,
+					Reader: jvReader,
 				})
 			case verr != nil:
 				outcomes = append(outcomes, jevmeasure.Outcome{
 					Check: "value_check", DocumentID: doc.pdf, Field: qid,
 					Label: "not-asked", Failed: true, Reason: verr.Error(), Variant: true,
 					ProbabilityKind: jevmeasure.KindNoul, Elapsed: velapsed, CallID: vCallID,
+					Reader: jvReader,
 				})
 			default:
 				ans := vresp.Answers[qid]
@@ -462,6 +520,7 @@ func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 					Check: "value_check", DocumentID: doc.pdf, Field: qid,
 					Label: "wrong", Variant: true, ProbabilityKind: jevmeasure.KindNoul,
 					Probability: ans.Noul, Elapsed: velapsed, Usage: vresp.Usage, CallID: vCallID,
+					Reader: jvReader,
 				})
 			}
 		}
@@ -534,14 +593,35 @@ func jvGatedRun(t *testing.T, baseURL string) bool {
 	}
 	t.Logf("live run: model %s", jvResolveModel()) // R-14: named so an operator sees what will be sent
 
-	outcomes := jvWalk(t, baseURL)
-	md, reportJSON, err := jevmeasure.Render(outcomes, jevmeasure.Pricing{})
+	fresh := jvWalk(t, baseURL)
+	prior := jvReadLedger(t, out)
+	all := jevmeasure.MergeOutcomes(prior, fresh)
+	jvWriteLedger(t, out, all)
+
+	md, reportJSON, err := jevmeasure.Render(all, jevmeasure.Pricing{})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	jvWrite(t, out, "report.md", md)
-	jvWrite(t, out, "report.json", reportJSON)
+	jvWrite(t, out, "jev-report.md", md)
+	jvWrite(t, out, "jev-report.json", reportJSON)
 	return true
+}
+
+// Row 11 / AC-8. A literal pin, not a re-measurement: the real oracle is the DB-gated
+// TestRLS_EndToEndScoresTheCorpus (score_db_test.go), which does not run in CI's go job. This
+// only catches eeCorpusHits or eeCorpusCells moving in this branch's own test list -- weak by
+// construction (a self-consistent edit to both still passes TestEndToEnd_TheFloorIsAQuotientOfThePinnedIntegers),
+// worth having anyway.
+func TestJevGuard_TheCorpusFigureIsUnmoved(t *testing.T) {
+	if eeCorpusHits != 89 {
+		t.Errorf("eeCorpusHits = %d, want 89", eeCorpusHits)
+	}
+	if eeCorpusCells != 112 {
+		t.Errorf("eeCorpusCells = %d, want 112", eeCorpusCells)
+	}
+	if want := 89.0 / 112.0; eeCorpusFloor != want {
+		t.Errorf("eeCorpusFloor = %v, want %v", eeCorpusFloor, want)
+	}
 }
 
 // jvLineWithTokens returns the first report line containing every tok.

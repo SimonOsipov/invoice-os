@@ -7,6 +7,7 @@ package jevmeasure
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -459,7 +460,7 @@ func TestReport_UsagePresentNeverPrintsAnAbsentSentence(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	body := string(md)
-	if strings.Contains(body, "not reported by the vendor") {
+	if strings.Contains(body, "not reported on") {
 		t.Errorf("usage is present for every production call; nothing should read as absent")
 	}
 	if strings.Contains(body, "price not supplied") {
@@ -485,8 +486,8 @@ func TestReport_NoPriceMeansNoCostNumber(t *testing.T) {
 	}
 }
 
-// AC-10. An absent input_tokens value reads as "not reported by the vendor"
-// and is excluded from the mean, not zeroed: (0+500)/2=250 would be the
+// AC-10, D-11. An absent input_tokens value names the field AND the count ("1 of 2 calls", not
+// "some calls") and is excluded from the mean, not zeroed: (0+500)/2=250 would be the
 // zero-defaulting bug; excluding the absent value gives 500.
 func TestReport_AnAbsentUsageFieldIsNamedNotZeroed(t *testing.T) {
 	outcomes := []Outcome{
@@ -503,8 +504,8 @@ func TestReport_AnAbsentUsageFieldIsNamedNotZeroed(t *testing.T) {
 	}
 	body := string(md)
 
-	if !strings.Contains(body, "not reported by the vendor") {
-		t.Errorf("an absent input_tokens value must read as not reported by the vendor")
+	if !strings.Contains(body, "usage: input_tokens not reported on 1 of 2 calls") {
+		t.Errorf("an absent input_tokens value must name the field and the count (1 of 2 calls); got body %q", body)
 	}
 	if !jmHasNumber(body, "500") {
 		t.Errorf("mean input tokens must be 500 -- the one reported value, absence excluded")
@@ -798,8 +799,8 @@ func TestReport_AnAbsentOutputTokenCountIsNamedToo(t *testing.T) {
 	}
 	body := string(md)
 
-	if !strings.Contains(body, "not reported by the vendor") {
-		t.Errorf("an absent output_tokens value must read as not reported by the vendor")
+	if !strings.Contains(body, "usage: output_tokens not reported on 1 of 1 calls") {
+		t.Errorf("an absent output_tokens value must name the field and the count (1 of 1 calls); got body %q", body)
 	}
 	if !jmHasNumber(body, "500") {
 		t.Errorf("the reported input count must still print alongside the absence")
@@ -1020,5 +1021,441 @@ func TestJevReport_TheNotAskedReasonsAreTallied(t *testing.T) {
 	notAsked := jmLineWithTokens(t, body, "questions not asked:")
 	if !strings.Contains(notAsked, fmt.Sprintf("questions not asked: %d", sum)) {
 		t.Errorf("N line %q: not-asked count must equal the reason tally's sum (%d)", notAsked, sum)
+	}
+}
+
+// --- CHECK-01-07: three checks in one report, the merge ledger, the caveat registry ---
+
+// Row 8/AC-6. Four sections (two mapping halves + value + document-type), each with its own N
+// and its own 4-row threshold table; the coverage line names all four with no partial warning.
+func TestJevReport_CoversAllThreeChecks(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Label: "right",
+			ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.90")},
+		{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+		{Check: "mapping_check_ai", DocumentID: "sw_zoho", Field: "total", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	headings := 0
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "## ") && line != "## Provenance" && line != "## Wording" {
+			headings++
+		}
+	}
+	if headings != 4 {
+		t.Fatalf("report has %d check heading(s), want exactly 4", headings)
+	}
+	for _, check := range checkOrder {
+		sec := jmSection(t, body, check)
+		if !strings.Contains(sec, "documents: 1") {
+			t.Errorf("%s section has no own documents: line", check)
+		}
+		rows := 0
+		for _, line := range strings.Split(sec, "\n") {
+			if strings.HasPrefix(line, "| 0.") {
+				rows++
+			}
+		}
+		if rows != 4 {
+			t.Errorf("%s section has %d threshold row(s), want 4:\n%s", check, rows, sec)
+		}
+	}
+
+	want := "checks covered by this artifact: " + strings.Join(checkOrder, ", ")
+	if !strings.Contains(body, want) {
+		t.Errorf("coverage line %q not found in order %v", want, checkOrder)
+	}
+	if strings.Contains(body, "has not been measured into this artifact yet") {
+		t.Errorf("partial warning must be absent when all four checks are present")
+	}
+}
+
+// Row 20/§4.4.4. Fewer than four checks: the coverage line names only what is present, and the
+// partial warning fires -- a partial artifact must read as visibly partial.
+func TestJevReport_APartialArtifactNamesAndWarnsAboutMissingChecks(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+		{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if !strings.Contains(body, "checks covered by this artifact: value_check, mapping_check_auto") {
+		t.Errorf("coverage line does not name exactly the two present checks; body:\n%s", body)
+	}
+	if !strings.Contains(body, "has not been measured into this artifact yet") {
+		t.Errorf("a 2-of-4 artifact must warn that it is partial")
+	}
+}
+
+// Row 9/AC-6. A probability-free section renders no threshold table, names the RIGHT missing
+// word for its own comparator kind, and still renders its confusion table; the value-only
+// control leg is what stops a single hard-coded message string reding
+// TestReport_TheValueSectionHasNoConfidenceColumn; the third leg controls that a section WITH
+// probabilities is unaffected.
+func TestJevReport_ACheckWithNoProbabilityRendersNoThresholdTable(t *testing.T) {
+	typeOut := []Outcome{
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Answer: "receipt",
+			Label: "right", ProbabilityKind: KindChoiceConfidence},
+	}
+	md, _, err := Render(typeOut, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (type): %v", err)
+	}
+	sec := jmSection(t, string(md), "document_type_check")
+	if !strings.Contains(sec, "no confidence returned by the vendor — no threshold table") {
+		t.Errorf("section never states the no-confidence line:\n%s", sec)
+	}
+	for _, want := range []string{"| 0.30 |", "| 0.50 |", "| 0.70 |", "| 0.90 |", "comparator:"} {
+		if strings.Contains(sec, want) {
+			t.Errorf("probability-free section must not contain %q:\n%s", want, sec)
+		}
+	}
+	if !strings.Contains(sec, "confusion table") {
+		t.Errorf("section must still render the confusion table")
+	}
+
+	valueOut := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right", ProbabilityKind: KindNoul},
+	}
+	md2, _, err := Render(valueOut, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (value): %v", err)
+	}
+	body2 := string(md2)
+	if !strings.Contains(body2, "no probability returned by the vendor — no threshold table") {
+		t.Errorf("value-only probability-free section must state the no-probability line")
+	}
+	if strings.Contains(strings.ToLower(body2), "confidence") {
+		t.Errorf("value-only report must never mention confidence")
+	}
+
+	md3, _, err := Render(d1Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render (control): %v", err)
+	}
+	body3 := string(md3)
+	for _, want := range []string{"| 0.30 |", "| 0.50 |", "| 0.70 |", "| 0.90 |"} {
+		if !strings.Contains(body3, want) {
+			t.Errorf("a section with probabilities must still render %q", want)
+		}
+	}
+}
+
+// Row 10/AC-7. Reader is named per (check, document): the fixture pairs docling with two
+// documents (one repeated across two fields, so dedup is exercised), pdfium with one, and the
+// mapping reader with one; a document with no Reader produces no row.
+func TestJevReport_NamesTheReaderPerDocument(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "docling-1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "docling"},
+		{Check: "value_check", DocumentID: "docling-1", Field: "total", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "docling"},
+		{Check: "value_check", DocumentID: "docling-2", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "docling"},
+		{Check: "value_check", DocumentID: "pdfium-1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "pdfium"},
+		{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "importer.Decode (csv)"},
+		{Check: "value_check", DocumentID: "no-reader-1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	prov := jmSection(t, string(md), "Provenance")
+
+	for _, want := range []string{"docling", "pdfium", "importer.Decode (csv)", "docling-1", "docling-2", "pdfium-1", "sw_zoho"} {
+		if !strings.Contains(prov, want) {
+			t.Errorf("Provenance section missing %q:\n%s", want, prov)
+		}
+	}
+	if strings.Contains(prov, "no-reader-1") {
+		t.Errorf("a document with an empty Reader must produce no row")
+	}
+	rows := strings.Count(prov, "| value_check |") + strings.Count(prov, "| mapping_check_auto |")
+	if rows != 4 {
+		t.Errorf("Provenance carries %d reader row(s), want 4 (docling-1 dedup, docling-2, pdfium-1, sw_zoho):\n%s", rows, prov)
+	}
+
+	valueOnly := []Outcome{{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+		ProbabilityKind: KindNoul, Probability: jmNum("0.90"), Reader: "docling"}}
+	mdVal, _, err := Render(valueOnly, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (value-only): %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(mdVal)), "confidence") {
+		t.Errorf("a value-only render with readers set must still never mention confidence")
+	}
+}
+
+// Row 20/D-1. MergeOutcomes is order-independent: whichever binary runs last, the merged
+// ledger's check order is governed by checkOrder, not by arrival order.
+func TestMergeOutcomes_IsOrderIndependentOfWhichBinaryRunsFirst(t *testing.T) {
+	valueRows := []Outcome{{Check: "value_check", DocumentID: "v1", Field: "amount", Label: "right"}}
+	mappingRows := []Outcome{{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right"}}
+
+	ledgerA := MergeOutcomes(nil, valueRows)
+	ledgerA = MergeOutcomes(ledgerA, mappingRows)
+
+	ledgerB := MergeOutcomes(nil, mappingRows)
+	ledgerB = MergeOutcomes(ledgerB, valueRows)
+
+	if !reflect.DeepEqual(ledgerA, ledgerB) {
+		t.Errorf("MergeOutcomes order depends on which binary ran first:\nA = %+v\nB = %+v", ledgerA, ledgerB)
+	}
+	if len(ledgerA) != 2 || ledgerA[0].Check != "value_check" || ledgerA[1].Check != "mapping_check_auto" {
+		t.Errorf("merged ledger = %+v, want [value_check, mapping_check_auto] in checkOrder", ledgerA)
+	}
+}
+
+// Row 20. Re-running one check replaces its rows rather than appending a second copy; a check
+// this merge never touches survives both runs untouched.
+func TestMergeOutcomes_ReplacesRatherThanAppendsTheSameCheck(t *testing.T) {
+	valueRows := []Outcome{{Check: "value_check", DocumentID: "v1", Field: "amount", Label: "right"}}
+	first := []Outcome{{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right"}}
+	second := []Outcome{
+		{Check: "mapping_check_auto", DocumentID: "sw_zoho", Field: "total", Label: "right"},
+		{Check: "mapping_check_auto", DocumentID: "mix_01", Field: "total", Label: "wrong"},
+	}
+
+	merged := MergeOutcomes(valueRows, first)
+	merged = MergeOutcomes(merged, second)
+
+	var mappingRows, keptValueRows int
+	for _, o := range merged {
+		switch o.Check {
+		case "mapping_check_auto":
+			mappingRows++
+		case "value_check":
+			keptValueRows++
+		}
+	}
+	if mappingRows != 2 {
+		t.Errorf("merged holds %d mapping_check_auto row(s), want 2 -- the second run's own count, not 1+2=3", mappingRows)
+	}
+	if keptValueRows != 1 {
+		t.Errorf("merged holds %d value_check row(s), want 1 -- value_check must survive a mapping-only re-run untouched", keptValueRows)
+	}
+}
+
+// Row 20. A stored-then-reloaded Outcome keeps its Probability, Elapsed, Usage and Reader; the
+// Render leg is the consequence this guards -- a probability that did not survive the ledger
+// would silently drop out of the threshold sweep on the next merge.
+func TestOutcome_JSONRoundTripKeepsProbabilityElapsedUsageAndReader(t *testing.T) {
+	o := Outcome{
+		Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+		ProbabilityKind: KindNoul, Probability: jmNum("0.375"),
+		Elapsed: 1234 * time.Millisecond, Reader: "docling",
+		Usage: Usage{InputTokens: jmNum("500"), OutputTokens: jmNum("20")},
+	}
+	b, err := json.Marshal([]Outcome{o})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back []Outcome
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(back) != 1 {
+		t.Fatalf("round trip produced %d outcome(s), want 1", len(back))
+	}
+	got := back[0]
+	if got.Probability == nil || got.Probability.String() != "0.375" {
+		t.Errorf("Probability did not round-trip: got %v, want 0.375", got.Probability)
+	}
+	if got.Elapsed != o.Elapsed {
+		t.Errorf("Elapsed did not round-trip: got %v, want %v", got.Elapsed, o.Elapsed)
+	}
+	if got.Usage.InputTokens == nil || got.Usage.InputTokens.String() != "500" {
+		t.Errorf("Usage.InputTokens did not round-trip: got %v, want 500", got.Usage.InputTokens)
+	}
+	if got.Reader != "docling" {
+		t.Errorf("Reader did not round-trip: got %q, want docling", got.Reader)
+	}
+
+	md, _, err := Render(back, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(string(md), "comparator: noul <= threshold") {
+		t.Errorf("a round-tripped Probability must still drive the threshold sweep")
+	}
+}
+
+// Row 21. Every CaveatRegistry() entry renders when its gate is satisfied, and renders NOWHERE
+// when it is not -- the negative leg is what stops a future caveat wording from reding
+// TestReport_TheValueSectionHasNoConfidenceColumn. Placement and content legs follow.
+func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
+	reg := CaveatRegistry()
+
+	valueVariant := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+		{Check: "value_check", DocumentID: "d1", Field: "variant_x", Label: "wrong", Variant: true,
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+	valuePlain := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+	doctypeAnswered := []Outcome{
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Answer: "receipt",
+			Label: "right", ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.90")},
+	}
+	doctypePlain := []Outcome{
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Label: "not-asked", Reason: "no answer key"},
+	}
+	mappingAutoFewWrongs := []Outcome{
+		{Check: "mapping_check_auto", DocumentID: "l1", Field: "total", Label: "right"},
+		{Check: "mapping_check_auto", DocumentID: "l2", Field: "vat", Label: "wrong"},
+		{Check: "mapping_check_auto", DocumentID: "l3", Field: "vat", Label: "wrong"},
+		{Check: "mapping_check_auto", DocumentID: "l4", Field: "vat", Label: "wrong"},
+	}
+	var mappingAutoManyWrongs []Outcome
+	for i := 0; i < 11; i++ {
+		mappingAutoManyWrongs = append(mappingAutoManyWrongs, Outcome{
+			Check: "mapping_check_auto", DocumentID: fmt.Sprintf("l%d", i), Field: "vat", Label: "wrong",
+		})
+	}
+	mappingAI := []Outcome{{Check: "mapping_check_ai", DocumentID: "l1", Field: "total", Label: "right"}}
+	bothMapping := append(append([]Outcome{}, mappingAutoFewWrongs...), mappingAI...)
+	nonMapping := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+	}
+
+	cases := []struct {
+		id             string
+		gated, ungated []Outcome
+	}{
+		{caveatDoctypeTitleAnnounced, doctypeAnswered, doctypePlain},
+		{caveatValuePlantedWrongs, valueVariant, valuePlain},
+		{caveatMappingDeclaredHeaderRow, mappingAutoFewWrongs, nonMapping},
+		{caveatMappingAutoFewWrongs, mappingAutoFewWrongs, mappingAutoManyWrongs},
+		{caveatMappingAcceptedList, mappingAutoFewWrongs, nonMapping},
+		{caveatMappingTwoHalves, bothMapping, mappingAutoFewWrongs},
+	}
+
+	// Registry control: an entry added without a matching case here (plus wording.provisional,
+	// handled separately below) reds this rather than escaping unnoticed.
+	if len(reg) != len(cases)+1 {
+		t.Fatalf("CaveatRegistry() has %d entr(ies), want %d (%d gated/ungated cases + wording.provisional)", len(reg), len(cases)+1, len(cases))
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			want, ok := reg[tc.id]
+			if !ok {
+				t.Fatalf("registry has no entry %q", tc.id)
+			}
+
+			mdGated, _, err := Render(tc.gated, Pricing{})
+			if err != nil {
+				t.Fatalf("Render (gated): %v", err)
+			}
+			if !strings.Contains(string(mdGated), want) {
+				t.Errorf("gated render never quotes caveat %q verbatim", tc.id)
+			}
+
+			mdUngated, _, err := Render(tc.ungated, Pricing{})
+			if err != nil {
+				t.Fatalf("Render (ungated): %v", err)
+			}
+			if strings.Contains(string(mdUngated), want) {
+				t.Errorf("ungated render quotes caveat %q; its gate is not gating", tc.id)
+			}
+		})
+	}
+
+	// wording.provisional: always, inside ## Wording, before the first ###.
+	mdAny, _, err := Render(valuePlain, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	wordingCaveat := reg[caveatWordingProvisional]
+	wordingSec := jmSection(t, string(mdAny), "Wording")
+	idx := strings.Index(wordingSec, wordingCaveat)
+	firstHeading := strings.Index(wordingSec, "### ")
+	if idx == -1 {
+		t.Fatalf("wording.provisional never renders inside ## Wording")
+	}
+	if firstHeading != -1 && idx > firstHeading {
+		t.Errorf("wording.provisional must render before the first ### heading inside ## Wording")
+	}
+	if !strings.Contains(wordingCaveat, "Provisional") {
+		t.Errorf("wording.provisional must contain %q", "Provisional")
+	}
+	if !strings.Contains(wordingCaveat, "the live run") {
+		t.Errorf("wording.provisional must point at the live run")
+	}
+
+	// Placement leg: doctype.title_announced above the confusion table.
+	mdDoctype, _, err := Render(doctypeAnswered, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	doctypeSec := jmSection(t, string(mdDoctype), "document_type_check")
+	caveatIdx := strings.Index(doctypeSec, reg[caveatDoctypeTitleAnnounced])
+	confusionIdx := strings.Index(doctypeSec, "confusion table")
+	if caveatIdx == -1 || confusionIdx == -1 || caveatIdx > confusionIdx {
+		t.Errorf("doctype.title_announced must render above the confusion table")
+	}
+	if !strings.Contains(reg[caveatDoctypeTitleAnnounced], "optimistic bound") {
+		t.Errorf("doctype.title_announced must contain %q", "optimistic bound")
+	}
+
+	// Placement leg: value.planted_wrongs inside value_check.
+	mdValue, _, err := Render(valueVariant, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	valueSec := jmSection(t, string(mdValue), "value_check")
+	if !strings.Contains(valueSec, reg[caveatValuePlantedWrongs]) {
+		t.Errorf("value.planted_wrongs must render inside the value_check section")
+	}
+
+	// Placement leg: mapping_check_auto carries its three caveats.
+	mdAuto, _, err := Render(mappingAutoFewWrongs, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	autoSec := jmSection(t, string(mdAuto), "mapping_check_auto")
+	for _, id := range []string{caveatMappingDeclaredHeaderRow, caveatMappingAutoFewWrongs, caveatMappingAcceptedList} {
+		if !strings.Contains(autoSec, reg[id]) {
+			t.Errorf("mapping_check_auto section must contain caveat %q", id)
+		}
+	}
+	for _, needle := range []string{"56", "50", "title_01", "title_02", "title_05", "title_06"} {
+		if !strings.Contains(reg[caveatMappingDeclaredHeaderRow], needle) {
+			t.Errorf("mapping.declared_header_row must name %q", needle)
+		}
+	}
+
+	// Placement leg: mapping_check_ai carries accepted_list and two_halves.
+	mdBoth, _, err := Render(bothMapping, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	aiSec := jmSection(t, string(mdBoth), "mapping_check_ai")
+	for _, id := range []string{caveatMappingAcceptedList, caveatMappingTwoHalves} {
+		if !strings.Contains(aiSec, reg[id]) {
+			t.Errorf("mapping_check_ai section must contain caveat %q", id)
+		}
 	}
 }

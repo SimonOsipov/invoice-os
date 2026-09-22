@@ -14,6 +14,43 @@ import (
 // thresholds, never inferred from data.
 var thresholds = []float64{0.30, 0.50, 0.70, 0.90}
 
+// checkOrder is the report's fixed section order (D-1): two go test binaries produce outcomes
+// for these checks, so the artifact's shape must not depend on which one happened to run last.
+var checkOrder = []string{"value_check", "document_type_check", "mapping_check_auto", "mapping_check_ai"}
+
+// checkRank is check's position in checkOrder, or last (len(checkOrder)) for a name this report
+// has never heard of -- it still renders, just after every known check.
+func checkRank(check string) int {
+	if i := slices.Index(checkOrder, check); i >= 0 {
+		return i
+	}
+	return len(checkOrder)
+}
+
+// MergeOutcomes replaces every stored outcome whose Check appears in fresh, keeps the rest, and
+// returns them ordered by checkRank (stable, so rows keep their relative order within a check).
+// Pure -- jevmeasure stays filesystem-free (D-1); the $JEV_OUT read/merge/write is each gated
+// run's own seam, not this package's.
+func MergeOutcomes(prior, fresh []Outcome) []Outcome {
+	freshChecks := map[string]bool{}
+	for _, o := range fresh {
+		freshChecks[o.Check] = true
+	}
+
+	merged := make([]Outcome, 0, len(prior)+len(fresh))
+	for _, o := range prior {
+		if !freshChecks[o.Check] {
+			merged = append(merged, o)
+		}
+	}
+	merged = append(merged, fresh...)
+
+	sort.SliceStable(merged, func(i, j int) bool {
+		return checkRank(merged[i].Check) < checkRank(merged[j].Check)
+	})
+	return merged
+}
+
 // Pricing is an operator-supplied $ rate per million tokens (A50): the
 // vendor's usage object carries no cost figure. The zero value means "no
 // price supplied" -- Render must never print a cost derived from it.
@@ -41,26 +78,33 @@ type latencyStats struct {
 }
 
 type checkSection struct {
-	Check      string
-	Kind       ProbabilityKind
-	Documents  int
-	Asked      int
-	NotAsked   int
-	Failed     int
-	Attempted  int
-	Degraded   bool
-	SmallN     bool
-	Thresholds []thresholdRow
-	LatencyAll latencyStats
-	LatencyOK  latencyStats
+	Check     string
+	Kind      ProbabilityKind
+	Documents int
+	Asked     int
+	NotAsked  int
+	Wrong     int
+	Failed    int
+	Attempted int
+	Degraded  bool
+	SmallN    bool
+	// HasProbability gates the threshold table (AC-6 row 2): false when no outcome in this
+	// section carries a Probability, so a probability-free check renders no table of zeros.
+	HasProbability bool
+	Thresholds     []thresholdRow
+	LatencyAll     latencyStats
+	LatencyOK      latencyStats
 
-	TokensMean   *float64
-	TokensP90    *float64
-	InputAbsent  bool
-	OutputAbsent bool
-	CostProd     *float64
-	CostAll      *float64
-	HasVariant   bool
+	TokensMean *float64
+	TokensP90  *float64
+	// InputAbsentN/OutputAbsentN/CallsTotal name the field AND the count (D-11): "input_tokens
+	// not reported on 3 of 21 calls" is actionable in a vault document; "some calls" is not.
+	InputAbsentN  int
+	OutputAbsentN int
+	CallsTotal    int
+	CostProd      *float64
+	CostAll       *float64
+	HasVariant    bool
 
 	// VariantCount is how many of Asked are planted variants (A55/AC-11); NotAskedReasons
 	// tallies every not-asked row's Reason (AC-4: never silently dropped).
@@ -68,7 +112,9 @@ type checkSection struct {
 	NotAskedReasons map[string]int
 
 	// Confusion is nil unless at least one outcome in this check carries a non-empty Answer
-	// (R-4): a value_check section never grows one.
+	// (R-4): a value_check section never grows one. Also this section's gate for
+	// doctype.title_announced (§4.3): "carries a non-empty Answer" is exactly what Confusion
+	// != nil already means.
 	Confusion *confusionTable
 }
 
@@ -100,14 +146,20 @@ func Render(outcomes []Outcome, pricing Pricing) ([]byte, []byte, error) {
 		groups[o.Check] = append(groups[o.Check], o)
 	}
 
+	checksPresent := map[string]bool{}
+	for _, c := range order {
+		checksPresent[c] = true
+	}
+
 	var md bytes.Buffer
 	fmt.Fprintf(&md, "# Jev Measurement Report\n\n")
+	writeCoverageLine(&md, order)
 
 	sections := make([]checkSection, 0, len(order))
 	for _, check := range order {
 		sec := buildCheckSection(check, groups[check], pricing)
 		sections = append(sections, sec)
-		writeCheckSection(&md, sec, pricing)
+		writeCheckSection(&md, sec, pricing, checksPresent)
 	}
 
 	writeProvenance(&md, outcomes, order)
@@ -120,6 +172,24 @@ func Render(outcomes []Outcome, pricing Pricing) ([]byte, []byte, error) {
 	return md.Bytes(), reportJSON, nil
 }
 
+// writeCoverageLine names which of checkOrder's four checks this artifact actually covers
+// (§4.1/§4.4.4): a partial run -- one binary's outcomes, or a not-yet-recorded Flash Lite half
+// -- must read as visibly partial, never as a complete report that simply says nothing about
+// the missing checks.
+func writeCoverageLine(w *bytes.Buffer, order []string) {
+	fmt.Fprintf(w, "checks covered by this artifact: %s\n", strings.Join(order, ", "))
+	missing := 0
+	for _, c := range checkOrder {
+		if !slices.Contains(order, c) {
+			missing++
+		}
+	}
+	if missing > 0 {
+		fmt.Fprintf(w, "a check absent from the list above has not been measured into this artifact yet\n")
+	}
+	fmt.Fprintf(w, "\n")
+}
+
 func buildCheckSection(check string, outs []Outcome, pricing Pricing) checkSection {
 	sec := checkSection{Check: check}
 
@@ -130,6 +200,9 @@ func buildCheckSection(check string, outs []Outcome, pricing Pricing) checkSecti
 		if o.Variant {
 			sec.HasVariant = true
 		}
+		if o.Probability != nil {
+			sec.HasProbability = true
+		}
 		if o.Label == "not-asked" {
 			sec.NotAsked++
 			if o.Reason != "" {
@@ -139,6 +212,9 @@ func buildCheckSection(check string, outs []Outcome, pricing Pricing) checkSecti
 			sec.Asked++
 			if o.Variant {
 				sec.VariantCount++
+			}
+			if o.Label == "wrong" {
+				sec.Wrong++
 			}
 		}
 		if o.Failed {
@@ -157,9 +233,9 @@ func buildCheckSection(check string, outs []Outcome, pricing Pricing) checkSecti
 	sec.LatencyAll = latencyOverElapsed(outs, true)
 	sec.LatencyOK = latencyOverElapsed(outs, false)
 
-	mean, p90, inputAbsent, outputAbsent, prodCost, allCost := usageStats(outs, sec.Documents, pricing)
+	mean, p90, inputAbsentN, outputAbsentN, callsTotal, prodCost, allCost := usageStats(outs, sec.Documents, pricing)
 	sec.TokensMean, sec.TokensP90 = mean, p90
-	sec.InputAbsent, sec.OutputAbsent = inputAbsent, outputAbsent
+	sec.InputAbsentN, sec.OutputAbsentN, sec.CallsTotal = inputAbsentN, outputAbsentN, callsTotal
 	sec.CostProd, sec.CostAll = prodCost, allCost
 
 	sec.Confusion = buildConfusion(outs)
@@ -248,15 +324,20 @@ func comparatorCaption(kind ProbabilityKind) string {
 	return "noul <= threshold"
 }
 
+// buildThresholds reads ProbabilityKind before the Probability == nil continue (§4.4.1): a
+// probability-free section must still report the RIGHT no-table word (confidence vs
+// probability), which depends on Kind -- read after the continue, a section with no
+// probabilities would leave kind empty and comparatorCaption would answer the noul caption for
+// a document-type section.
 func buildThresholds(outs []Outcome, docs int) (ProbabilityKind, []thresholdRow) {
 	var kind ProbabilityKind
 	var right, wrong []float64
 	for _, o := range outs {
-		if o.Probability == nil {
-			continue
-		}
 		if o.ProbabilityKind != "" {
 			kind = o.ProbabilityKind
+		}
+		if o.Probability == nil {
+			continue
 		}
 		v, err := o.Probability.Float64()
 		if err != nil {
@@ -372,12 +453,13 @@ func nearestRankFloat(sorted []float64, q float64) float64 {
 	return sorted[idx-1]
 }
 
-// usageStats computes input-token mean/p90 (over every call, production and variant alike) and
-// two costs per 1,000 documents: production-shaped calls only, and all calls including planted
-// variants (C-1). A nil token pointer is excluded from the mean, never zeroed (AC-10), and marks
-// its field absent. Several rows sharing one CallID fold to that call's usage once (R-5); an
-// empty CallID is its own call.
-func usageStats(outs []Outcome, docs int, pricing Pricing) (mean, p90 *float64, inputAbsent, outputAbsent bool, prodCost, allCost *float64) {
+// usageStats computes input-token mean/p90 (over every call, production and variant alike),
+// two costs per 1,000 documents (production-shaped only, and all calls including planted
+// variants, C-1), and per-field absence counts against callsTotal, the same folded-call
+// population (D-11: "3 of 21 calls", not "some calls"). A nil token pointer is excluded from
+// the mean, never zeroed (AC-10). Several rows sharing one CallID fold to that call's usage
+// once (R-5); an empty CallID is its own call.
+func usageStats(outs []Outcome, docs int, pricing Pricing) (mean, p90 *float64, inputAbsentN, outputAbsentN, callsTotal int, prodCost, allCost *float64) {
 	var inputVals []float64
 	var inputSum, outputSum float64
 	var prodInputSum, prodOutputSum float64
@@ -393,17 +475,18 @@ func usageStats(outs []Outcome, docs int, pricing Pricing) (mean, p90 *float64, 
 			}
 			seen[o.CallID] = true
 		}
+		callsTotal++
 
 		var in, out float64
 		if o.Usage.InputTokens == nil {
-			inputAbsent = true
+			inputAbsentN++
 		} else if v, err := o.Usage.InputTokens.Float64(); err == nil {
 			in = v
 			inputVals = append(inputVals, v)
 			inputSum += v
 		}
 		if o.Usage.OutputTokens == nil {
-			outputAbsent = true
+			outputAbsentN++
 		} else if v, err := o.Usage.OutputTokens.Float64(); err == nil {
 			out = v
 			outputSum += v
@@ -430,7 +513,7 @@ func usageStats(outs []Outcome, docs int, pricing Pricing) (mean, p90 *float64, 
 		c := (inputSum*pricing.InputPerMillion + outputSum*pricing.OutputPerMillion) / 1_000_000 / float64(docs) * 1000
 		allCost = &c
 	}
-	return mean, p90, inputAbsent, outputAbsent, prodCost, allCost
+	return mean, p90, inputAbsentN, outputAbsentN, callsTotal, prodCost, allCost
 }
 
 func pct(n, total int) string {
@@ -440,7 +523,7 @@ func pct(n, total int) string {
 	return fmt.Sprintf("%.2f%%", float64(n)/float64(total)*100)
 }
 
-func writeCheckSection(w *bytes.Buffer, sec checkSection, pricing Pricing) {
+func writeCheckSection(w *bytes.Buffer, sec checkSection, pricing Pricing, checksPresent map[string]bool) {
 	fmt.Fprintf(w, "## %s\n\n", sec.Check)
 
 	total := sec.Asked + sec.NotAsked
@@ -473,6 +556,8 @@ func writeCheckSection(w *bytes.Buffer, sec checkSection, pricing Pricing) {
 	}
 	fmt.Fprintf(w, "\n")
 
+	writeCaveats(w, sec, checksPresent)
+
 	if sec.SmallN {
 		fmt.Fprintf(w, "This check asked fewer than 30 questions (%d) -- treat every rate above as indicative only, not a stable estimate.\n\n", sec.Asked)
 	}
@@ -480,13 +565,21 @@ func writeCheckSection(w *bytes.Buffer, sec checkSection, pricing Pricing) {
 		fmt.Fprintf(w, "DEGRADED: %d of %d production-shaped calls attempted failed (more than one in ten) -- %s's numbers below are unreliable.\n\n", sec.Failed, sec.Attempted, sec.Check)
 	}
 
-	fmt.Fprintf(w, "comparator: %s\n\n", comparatorCaption(sec.Kind))
-	fmt.Fprintf(w, "| threshold | right flagged | right flagged per 100 documents | wrong missed | wrong caught |\n")
-	fmt.Fprintf(w, "|---|---|---|---|---|\n")
-	for _, row := range sec.Thresholds {
-		fmt.Fprintf(w, "| %.2f | %d | %.2f | %d | %d |\n", row.Threshold, row.RightFlagged, row.RightPer100, row.WrongMissed, row.WrongCaught)
+	if sec.HasProbability {
+		fmt.Fprintf(w, "comparator: %s\n\n", comparatorCaption(sec.Kind))
+		fmt.Fprintf(w, "| threshold | right flagged | right flagged per 100 documents | wrong missed | wrong caught |\n")
+		fmt.Fprintf(w, "|---|---|---|---|---|\n")
+		for _, row := range sec.Thresholds {
+			fmt.Fprintf(w, "| %.2f | %d | %.2f | %d | %d |\n", row.Threshold, row.RightFlagged, row.RightPer100, row.WrongMissed, row.WrongCaught)
+		}
+		fmt.Fprintf(w, "\n")
+	} else {
+		word := "probability"
+		if sec.Kind == KindChoiceConfidence {
+			word = "confidence"
+		}
+		fmt.Fprintf(w, "no %s returned by the vendor — no threshold table\n\n", word)
 	}
-	fmt.Fprintf(w, "\n")
 
 	fmt.Fprintf(w, "call latency, all attempts (ms): p50 %d, p90 %d, max %d\n", sec.LatencyAll.P50Ms, sec.LatencyAll.P90Ms, sec.LatencyAll.MaxMs)
 	fmt.Fprintf(w, "call latency, successful only (ms): p50 %d, p90 %d, max %d\n", sec.LatencyOK.P50Ms, sec.LatencyOK.P90Ms, sec.LatencyOK.MaxMs)
@@ -503,8 +596,11 @@ func writeUsage(w *bytes.Buffer, sec checkSection, pricing Pricing) {
 	if sec.TokensMean != nil {
 		fmt.Fprintf(w, "input tokens per call: mean %.0f, p90 %.0f\n", *sec.TokensMean, *sec.TokensP90)
 	}
-	if sec.InputAbsent || sec.OutputAbsent {
-		fmt.Fprintf(w, "usage: not reported by the vendor for some calls\n")
+	if sec.InputAbsentN > 0 {
+		fmt.Fprintf(w, "usage: input_tokens not reported on %d of %d calls\n", sec.InputAbsentN, sec.CallsTotal)
+	}
+	if sec.OutputAbsentN > 0 {
+		fmt.Fprintf(w, "usage: output_tokens not reported on %d of %d calls\n", sec.OutputAbsentN, sec.CallsTotal)
 	}
 
 	writeCostLine(w, "cost per 1,000 documents, production-shaped calls only", sec.CostProd, pricing)
@@ -548,18 +644,20 @@ func writeConfusionTable(w *bytes.Buffer, c *confusionTable) {
 		c.NonInvoiceMisses)
 }
 
-// writeProvenance records, per check, whether its choice answers carried a confidence (AC-12).
-// Emits nothing when no outcome carries KindChoiceConfidence at all (R-10): a value-only render
+// writeProvenance records, per check, whether its choice answers carried a confidence (AC-12),
+// and (AC-7) which reader produced each document's text -- one row per distinct (check,
+// document) pair with a non-empty Reader, in checkOrder then first-seen document order.
+// Emits nothing when neither block has content (R-10): a value-only render with no readers set
 // must never grow the word "confidence".
 func writeProvenance(w *bytes.Buffer, outcomes []Outcome, order []string) {
 	type provStats struct{ present, total int }
 	stats := map[string]*provStats{}
-	var haveAny bool
+	var haveConfidence bool
 	for _, o := range outcomes {
 		if o.ProbabilityKind != KindChoiceConfidence {
 			continue
 		}
-		haveAny = true
+		haveConfidence = true
 		s, ok := stats[o.Check]
 		if !ok {
 			s = &provStats{}
@@ -570,31 +668,67 @@ func writeProvenance(w *bytes.Buffer, outcomes []Outcome, order []string) {
 			s.present++
 		}
 	}
-	if !haveAny {
+
+	type readerRow struct{ check, doc, reader string }
+	byCheck := map[string][]Outcome{}
+	for _, o := range outcomes {
+		byCheck[o.Check] = append(byCheck[o.Check], o)
+	}
+	seenPair := map[string]bool{}
+	var readerRows []readerRow
+	for _, check := range order {
+		for _, o := range byCheck[check] {
+			if o.Reader == "" {
+				continue
+			}
+			key := check + "\x00" + o.DocumentID
+			if seenPair[key] {
+				continue
+			}
+			seenPair[key] = true
+			readerRows = append(readerRows, readerRow{check, o.DocumentID, o.Reader})
+		}
+	}
+
+	if !haveConfidence && len(readerRows) == 0 {
 		return
 	}
 
 	fmt.Fprintf(w, "## Provenance\n\n")
-	for _, check := range order {
-		s, ok := stats[check]
-		if !ok {
-			continue
+
+	if len(readerRows) > 0 {
+		fmt.Fprintf(w, "readers, by document:\n\n")
+		fmt.Fprintf(w, "| check | document | reader |\n")
+		fmt.Fprintf(w, "|---|---|---|\n")
+		for _, r := range readerRows {
+			fmt.Fprintf(w, "| %s | %s | %s |\n", r.check, r.doc, r.reader)
 		}
-		label := strings.ReplaceAll(check, "_", " ")
-		switch {
-		case s.present == s.total:
-			fmt.Fprintf(w, "%s: confidence: present\n", label)
-		case s.present == 0:
-			fmt.Fprintf(w, "%s: confidence: absent\n", label)
-		default:
-			fmt.Fprintf(w, "%s: confidence: present on %d of %d answers\n", label, s.present, s.total)
-		}
+		fmt.Fprintf(w, "\n")
 	}
-	fmt.Fprintf(w, "\n")
+
+	if haveConfidence {
+		for _, check := range order {
+			s, ok := stats[check]
+			if !ok {
+				continue
+			}
+			label := strings.ReplaceAll(check, "_", " ")
+			switch {
+			case s.present == s.total:
+				fmt.Fprintf(w, "%s: confidence: present\n", label)
+			case s.present == 0:
+				fmt.Fprintf(w, "%s: confidence: absent\n", label)
+			default:
+				fmt.Fprintf(w, "%s: confidence: present on %d of %d answers\n", label, s.present, s.total)
+			}
+		}
+		fmt.Fprintf(w, "\n")
+	}
 }
 
 func writeWording(w *bytes.Buffer) {
 	fmt.Fprintf(w, "## Wording\n\n")
+	fmt.Fprintf(w, "%s\n\n", CaveatRegistry()[caveatWordingProvisional])
 	fmt.Fprintf(w, "### Value check\n\n%s\n\ntrue: %s\n\nfalse: %s\n\n",
 		ValueCheckInstructions, ValueCheckCriteriaTrue, ValueCheckCriteriaFalse)
 	fmt.Fprintf(w, "### Mapping check\n\n%s\n\ntrue: %s\n\nfalse: %s\n\n",

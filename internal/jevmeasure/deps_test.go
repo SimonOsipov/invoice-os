@@ -11,15 +11,23 @@ import (
 )
 
 const (
-	jmModulePath = "github.com/SimonOsipov/invoice-os"
-	jmSelfPkg    = jmModulePath + "/internal/jevmeasure"
-	jmControlPkg = jmModulePath + "/internal/platform/ai"
+	jmModulePath  = "github.com/SimonOsipov/invoice-os"
+	jmSelfPkg     = jmModulePath + "/internal/jevmeasure"
+	jmEndtoendPkg = jmModulePath + "/internal/extraction/endtoend"
+	jmControlPkg  = jmModulePath + "/internal/platform/ai"
 
-	// Measured today (b9cf1424): 606 lines, 35 module-path packages. A
-	// truncated or empty scan must not read as clean.
-	jmMinCmdLines = 500
-	jmMinCmdPkgs  = 30
+	// Measured today (CHECK-01-07): 606 lines, 35 module-path packages. A
+	// truncated or empty scan must not read as clean. D-9: raised from the
+	// original 500/30 margin to close to the real measurement.
+	jmMinCmdLines = 600
+	jmMinCmdPkgs  = 34
 	jmMinSelfDeps = 5
+
+	// jmMinCmdTestLines/jmMinCmdTestPkgs: the -test closure (`go list -deps -test ./cmd/...`)
+	// is strictly stronger than jmMinCmdLines/jmMinCmdPkgs -- it also sees a cmd/*_test.go
+	// import the non-test scan cannot. Measured today: 617 lines, 38 packages.
+	jmMinCmdTestLines = 550
+	jmMinCmdTestPkgs  = 30
 )
 
 func jmRepoRoot(t *testing.T) string {
@@ -111,5 +119,46 @@ func TestJevMeasure_ImportsOnlyTheStandardLibrary(t *testing.T) {
 	}
 	if !sawSelf {
 		t.Fatalf("scan never named %s -- the scan itself is broken", jmSelfPkg)
+	}
+}
+
+// AC-9 row, respecified (D-9): TestJevMeasure_NoCommandDependsOnIt already covers the build
+// closure; this covers the -test closure, which a cmd/*_test.go importing the harness would
+// slip past the build-only scan. Mutation ledger: import jevmeasure from any cmd test file --
+// must red; from any cmd non-test file -- both this and TestJevMeasure_NoCommandDependsOnIt red.
+func TestJevGuard_NoCommandImportsTheHarness(t *testing.T) {
+	lines := jmGoList(t, "-deps", "-test", "./cmd/...")
+	if len(lines) < jmMinCmdTestLines {
+		t.Fatalf("go list -deps -test ./cmd/... returned %d line(s), want at least %d -- a truncated scan reports clean vacuously", len(lines), jmMinCmdTestLines)
+	}
+
+	modPkgs := map[string]bool{}
+	var sawControl, sawSelf, sawEndtoend bool
+	for _, raw := range lines {
+		dep := jmDep(raw)
+		if dep == jmControlPkg {
+			sawControl = true
+		}
+		if dep == jmSelfPkg {
+			sawSelf = true
+		}
+		if dep == jmEndtoendPkg {
+			sawEndtoend = true
+		}
+		if dep == jmModulePath || strings.HasPrefix(dep, jmModulePath+"/") {
+			modPkgs[dep] = true
+		}
+	}
+	if !sawControl {
+		t.Fatalf("control needle %s not found -- the scan itself is broken", jmControlPkg)
+	}
+	if len(modPkgs) < jmMinCmdTestPkgs {
+		t.Fatalf("scan named %d module-path package(s), want at least %d -- looks truncated", len(modPkgs), jmMinCmdTestPkgs)
+	}
+	if sawSelf {
+		t.Errorf("./cmd/...'s test closure depends on %s -- no product command may import the measurement harness", jmSelfPkg)
+	}
+	if sawEndtoend {
+		t.Errorf("./cmd/...'s test closure depends on %s -- the endtoend measurement suite must not leak into a shipped command", jmEndtoendPkg)
 	}
 }

@@ -6,14 +6,11 @@ package extraction_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
 // Provenance also picks the golden's suffix and the reader that replays it: a docling golden is
@@ -269,23 +266,10 @@ func TestNonInvoice_EveryGoldenReplaysWithTokens(t *testing.T) {
 					}
 				}
 			case niProvPDFium:
-				want, err := os.ReadFile(filepath.Join(fxDir, f.golden))
-				if err != nil {
-					t.Fatalf("read golden %s: %v", f.golden, err)
-				}
-				pages, _ := ptRead(t, f.pdf)
-				got := ptMarshal(t, ptTokens(pages))
-				if !bytes.Equal(got, want) {
-					t.Errorf("tokens for %s do not match %s", f.pdf, f.golden)
-				}
-				var pinned []extraction.Token
-				if err := json.Unmarshal(want, &pinned); err != nil {
-					t.Fatalf("unmarshal golden %s: %v", f.golden, err)
-				}
-				n = len(pinned)
-				for _, tok := range pinned {
-					texts = append(texts, tok.Text)
-				}
+				// J-1 (CHECK-01-07): this arm is untested and unreachable -- CHECK-01-03's D-1
+				// keeps the non-invoice replay docling-only so the CHECK-01 score stays
+				// interpretable (R-6). Add a docling golden for f.pdf; do not wire a pdfium replay.
+				t.Fatalf("%s declares pdfium provenance, which this suite no longer replays", f.pdf)
 			default:
 				t.Fatalf("%s carries unknown provenance %q", f.pdf, f.provenance)
 			}

@@ -975,6 +975,14 @@ func TestJevMapping_OneLayoutSetProducesOneCall(t *testing.T) {
 			t.Errorf("AUTO request missing field %q", f)
 		}
 	}
+	// §3.5: state is production's own CSV window -- the bytes the model judged the mapping
+	// against -- never the whole file, never layouts.json's rows, never empty.
+	if want := mappingPromptText(jpWindow(t, dir, "busy_01")); busyAuto.State != want {
+		t.Errorf("AUTO request state = %q, want the CSV window production sends: %q", busyAuto.State, want)
+	}
+	if !strings.Contains(busyAuto.State, "Row 1: A,B,C,D,E,F,G") || !strings.Contains(busyAuto.State, "Row 2: 1,2,3,4,5,6,7") {
+		t.Errorf("state does not carry the CSV's own header and sample rows: %q", busyAuto.State)
+	}
 	for _, f := range []string{"buyer_name", "currency", "subtotal", "issue_date", "line_description"} {
 		if _, ok := busyAI.Questions[f]; !ok {
 			t.Errorf("busy_01 AI request missing field %q", f)
@@ -1005,6 +1013,46 @@ func TestJevMapping_OneLayoutSetProducesOneCall(t *testing.T) {
 	}
 }
 
+// --- AC-7: the reader, on the mapping half ------------------------------------------------
+
+// AC-7. Row 10 proves jevmeasure RENDERS a reader per document; nothing proved the mapping walk
+// SETS one. Emptying jpReader left the whole package green, so this is that clause's only
+// oracle: every mapping outcome names the csv reader, and the rendered Provenance carries one
+// row per (check, document).
+func TestJevMapping_TheReportNamesTheCSVReaderForEveryMappingDocument(t *testing.T) {
+	dir := t.TempDir()
+	jpSeedOneLayoutFixture(t, dir, "plain_01")
+	srv, _ := jpFake(t, func(state string, questions map[string]any) (string, int) {
+		return jpNoulBody(questions, "0.90"), http.StatusOK
+	})
+	outcomes := jpWalk(t, srv.URL, dir)
+	if len(outcomes) == 0 {
+		t.Fatalf("the walk produced no outcomes")
+	}
+	for _, o := range outcomes {
+		if o.Reader != jpReader {
+			t.Errorf("%s/%s/%s carries Reader %q, want %q -- the mapping documents are spreadsheets", o.Check, o.DocumentID, o.Field, o.Reader, jpReader)
+		}
+		if o.ProbabilityKind != jevmeasure.KindNoul {
+			t.Errorf("%s/%s/%s carries ProbabilityKind %q, want %q", o.Check, o.DocumentID, o.Field, o.ProbabilityKind, jevmeasure.KindNoul)
+		}
+	}
+
+	md, _, err := jevmeasure.Render(outcomes, jevmeasure.Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	prov := jpSection(t, string(md), "Provenance")
+	for _, want := range []string{
+		"| mapping_check_auto | plain_01 | " + jpReader + " |",
+		"| mapping_check_ai | plain_01 | " + jpReader + " |",
+	} {
+		if !strings.Contains(prov, want) {
+			t.Errorf("Provenance is missing the row %q:\n%s", want, prov)
+		}
+	}
+}
+
 // --- new: the re-decode (D-2, highest-value addition) -------------------------------------
 
 // Row 17. The defect this catches ships green and costs the whole titled half of the Flash
@@ -1025,6 +1073,10 @@ func TestJevMapping_ATitledLayoutIsRedecodedAtTheAnsweredHeaderRow(t *testing.T)
 			ID: "overshoot_01", Columns: []string{"Inv No", "Total"},
 			Key: jpFullKey(map[string][]*string{"invoice_number": {jpKeyPtr("Inv No")}, "total": {jpKeyPtr("Total")}}),
 		},
+		{
+			ID: "blankrow_01", Columns: []string{"Inv No", "Total"},
+			Key: jpFullKey(map[string][]*string{"invoice_number": {jpKeyPtr("Inv No")}, "total": {jpKeyPtr("Total")}}),
+		},
 	}
 	jpWriteLayouts(t, dir, layouts)
 	// title_01: three title lines, a blank line, then the header at physical row 5 -- the
@@ -1032,20 +1084,28 @@ func TestJevMapping_ATitledLayoutIsRedecodedAtTheAnsweredHeaderRow(t *testing.T)
 	jpWriteCSV(t, dir, "title_01", "Title Line 1\nTitle Line 2\nTitle Line 3\n\nInv No,Total\nINV-1,100\nINV-2,200\n")
 	jpWriteCSV(t, dir, "plain_01", "Inv No,Total\nINV-1,100\n")
 	jpWriteCSV(t, dir, "overshoot_01", "Inv No,Total\nINV-1,100\n")
+	// blankrow_01's physical row 2 is blank, and encoding/csv drops it, so the window is two
+	// rows long and a header_row of 2 passes guardHeaderRow untouched. DecodeFrom then answers
+	// a BLANK header, and only the len(h) > 0 fallback puts the row-1 header back.
+	jpWriteCSV(t, dir, "blankrow_01", "Inv No,Total\n\nINV-1,100\n")
 
 	answers := strings.Join([]string{
 		`{"layout":"title_01","answer":{"invoice_number":"Inv No","total":"Total","header_row":5},"model":"m"}`,
 		// Control: header_row 1 must still work through the hdr1 path.
 		`{"layout":"plain_01","answer":{"invoice_number":"Inv No","total":"Total","header_row":1},"model":"m"}`,
-		// Fallback leg: header_row points past the last row -> falls back to row 1, never fails.
+		// Clamp leg: header_row points past the window -> guardHeaderRow answers row 1, so the
+		// re-decode is never entered at all.
 		`{"layout":"overshoot_01","answer":{"invoice_number":"Inv No","total":"Total","header_row":99},"model":"m"}`,
+		// Fallback leg: header_row 2 IS inside the window, so the re-decode runs and comes back
+		// blank; production falls back to row 1 rather than failing the layout, and so must this.
+		`{"layout":"blankrow_01","answer":{"invoice_number":"Inv No","total":"Total","header_row":2},"model":"m"}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "mapping_answers.jsonl"), []byte(answers), 0o644); err != nil {
 		t.Fatalf("write mapping_answers.jsonl: %v", err)
 	}
 
 	got := jpAISet(t, dir, layouts)
-	for _, id := range []string{"title_01", "plain_01", "overshoot_01"} {
+	for _, id := range []string{"title_01", "plain_01", "overshoot_01", "blankrow_01"} {
 		if got[id]["invoice_number"] != "Inv No" || got[id]["total"] != "Total" {
 			t.Errorf("%s: got %v, want both fields placed at Inv No/Total", id, got[id])
 		}
@@ -1125,18 +1185,32 @@ func TestJevMapping_TheAutoSetCoversEveryLayoutAndEverySlot(t *testing.T) {
 	}
 	auto := jpAutoSet(t, dir, layouts)
 
-	asked, notAsked := 0, 0
+	// Count the slots the ARTIFACT carries, never len(layouts) x len(mappingFields): the loop
+	// walks those two and would sum to 528 whatever jpAutoSet returned.
+	asked, notAsked, slots := 0, 0, 0
 	for _, l := range layouts {
-		for _, f := range mappingFields {
-			if auto[l.ID][f] != "" {
+		entry, ok := auto[l.ID]
+		if !ok {
+			t.Errorf("auto_placements.json carries no entry for layout %q", l.ID)
+			continue
+		}
+		slots += len(entry)
+		for _, h := range entry {
+			if h != "" {
 				asked++
 			} else {
 				notAsked++
 			}
 		}
 	}
-	if asked+notAsked != 528 {
-		t.Errorf("asked(%d) + not-asked(%d) = %d, want 528 (48 layouts x 11 fields)", asked, notAsked, asked+notAsked)
+	if slots != 528 {
+		t.Errorf("the AUTO artifact carries %d slot(s), want 528 (48 layouts x 11 fields)", slots)
+	}
+	if asked+notAsked != slots {
+		t.Errorf("asked(%d) + not-asked(%d) = %d, want every one of the %d slots", asked, notAsked, asked+notAsked, slots)
+	}
+	if asked == 0 {
+		t.Errorf("the AUTO artifact places nothing at all over 48 layouts -- a reader that answered empty strings reads exactly this way")
 	}
 }
 

@@ -1222,6 +1222,23 @@ func TestMergeOutcomes_IsOrderIndependentOfWhichBinaryRunsFirst(t *testing.T) {
 	if len(ledgerA) != 2 || ledgerA[0].Check != "value_check" || ledgerA[1].Check != "mapping_check_auto" {
 		t.Errorf("merged ledger = %+v, want [value_check, mapping_check_auto] in checkOrder", ledgerA)
 	}
+
+	// Purity (D-1): MergeOutcomes must not reorder or overwrite either argument in place --
+	// the ledger's prior rows are the other binary's, and a caller may still be holding them.
+	priorIn := []Outcome{
+		{Check: "mapping_check_ai", DocumentID: "m1", Field: "total", Label: "right"},
+		{Check: "value_check", DocumentID: "v1", Field: "amount", Label: "right"},
+	}
+	freshIn := []Outcome{{Check: "mapping_check_auto", DocumentID: "a1", Field: "total", Label: "right"}}
+	priorWant := append([]Outcome(nil), priorIn...)
+	freshWant := append([]Outcome(nil), freshIn...)
+	_ = MergeOutcomes(priorIn, freshIn)
+	if !reflect.DeepEqual(priorIn, priorWant) {
+		t.Errorf("MergeOutcomes mutated prior: got %+v, want %+v", priorIn, priorWant)
+	}
+	if !reflect.DeepEqual(freshIn, freshWant) {
+		t.Errorf("MergeOutcomes mutated fresh: got %+v, want %+v", freshIn, freshWant)
+	}
 }
 
 // Row 20. Re-running one check replaces its rows rather than appending a second copy; a check

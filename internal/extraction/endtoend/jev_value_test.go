@@ -1013,6 +1013,162 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 	})
 }
 
+// Row 20, this binary's copy. jvGatedRun's read/merge/write seam is structurally identical to
+// jpGatedRun's in internal/importer and lives in a different test binary, so the two can drift
+// with every test still green. This is that copy's own oracle: the artifact names, a prior
+// check surviving the merge, and a re-run replacing rather than appending. Factoring the seam
+// into one shared helper was rejected: jevmeasure must stay filesystem-free (D-1), and moving
+// the two calls out of this file empties both the exactly-one-call-site source leg and the
+// jvPaths audit in TestJevValue_TheGoHarnessOpensOnlyFixtureRootPaths.
+func TestJevValue_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
+	gatedRun := func(t *testing.T, out string) {
+		t.Helper()
+		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("JEV_OUT", out)
+		srv, _ := jvFake(t, func(state string, questions map[string]any) (string, int) {
+			return jvNoulBody(questions, "0.90"), http.StatusOK
+		})
+		if got := jvGatedRun(t, srv.URL); !got {
+			t.Fatalf("jvGatedRun = false, want true")
+		}
+	}
+	readLedger := func(t *testing.T, out string) []jevmeasure.Outcome {
+		t.Helper()
+		b, _ := jvOpenPath(t, filepath.Join(out, jvLedgerName), false)
+		var stored []jevmeasure.Outcome
+		if err := json.Unmarshal(b, &stored); err != nil {
+			t.Fatalf("%s does not parse back into outcomes: %v", jvLedgerName, err)
+		}
+		return stored
+	}
+	countByCheck := func(outs []jevmeasure.Outcome, check string) int {
+		n := 0
+		for _, o := range outs {
+			if o.Check == check {
+				n++
+			}
+		}
+		return n
+	}
+	const priorMapping = `[{"check":"mapping_check_auto","document_id":"sw_zoho","field":"total",` +
+		`"label":"right","probability_kind":"noul","probability":0.75,"reader":"importer.Decode (csv)"}]`
+
+	t.Run("write", func(t *testing.T) {
+		out := t.TempDir()
+		gatedRun(t, out)
+
+		for _, name := range []string{"jev-report.md", "jev-report.json", jvLedgerName} {
+			if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+				t.Errorf("%s not written: %v", name, err)
+			}
+		}
+		// The old artifact names: a live run that leaves both means the lead transcribes
+		// whichever they open first.
+		for _, gone := range []string{"report.md", "report.json", "jev-report.md.tmp"} {
+			if _, err := os.Stat(filepath.Join(out, gone)); err == nil {
+				t.Errorf("%s exists under JEV_OUT and must not", gone)
+			}
+		}
+
+		md, _ := jvOpenPath(t, filepath.Join(out, "jev-report.md"), false)
+		body := string(md)
+		if !strings.HasPrefix(body, "# Jev Measurement Report") {
+			t.Errorf("jev-report.md does not open with the report title; first 60 bytes: %q", body[:min(60, len(body))])
+		}
+		if !strings.Contains(body, "checks covered by this artifact: value_check, document_type_check") {
+			t.Errorf("the coverage line must name both checks this binary measured:\n%s", jvLineWithTokens(t, body, "checks covered by this artifact:"))
+		}
+		if !strings.Contains(body, "has not been measured into this artifact yet") {
+			t.Errorf("a 2-of-4 artifact must read as visibly partial")
+		}
+
+		twin, _ := jvOpenPath(t, filepath.Join(out, "jev-report.json"), false)
+		var sections []any
+		if err := json.Unmarshal(twin, &sections); err != nil || len(sections) == 0 {
+			t.Errorf("jev-report.json is not a non-empty array: err=%v len=%d", err, len(sections))
+		}
+
+		// Ledger round trip: a Probability or Reader that did not survive the write would
+		// drop out of the next merge's threshold sweep and its Provenance row, silently.
+		stored := readLedger(t, out)
+		if countByCheck(stored, "value_check") == 0 {
+			t.Fatalf("the ledger holds no value_check rows")
+		}
+		var withProbability, withReader int
+		for _, o := range stored {
+			if o.Probability != nil {
+				withProbability++
+			}
+			if o.Reader == jvReader {
+				withReader++
+			}
+		}
+		if withProbability == 0 {
+			t.Errorf("no stored outcome kept a Probability through the ledger write")
+		}
+		if withReader == 0 {
+			t.Errorf("no stored outcome kept Reader %q through the ledger write", jvReader)
+		}
+	})
+
+	t.Run("merge keeps the other binary's check and orders by checkOrder", func(t *testing.T) {
+		out := t.TempDir()
+		jvWritePath(t, filepath.Join(out, jvLedgerName), []byte(priorMapping))
+		gatedRun(t, out)
+
+		md, _ := jvOpenPath(t, filepath.Join(out, "jev-report.md"), false)
+		body := string(md)
+		valueIdx := strings.Index(body, "## value_check")
+		typeIdx := strings.Index(body, "## document_type_check")
+		mapIdx := strings.Index(body, "## mapping_check_auto")
+		if valueIdx == -1 || typeIdx == -1 {
+			t.Fatalf("the merged report is missing this binary's own sections (value %d, type %d)", valueIdx, typeIdx)
+		}
+		if mapIdx == -1 {
+			t.Fatalf("the merged report lost the prior mapping_check_auto rows -- one binary's run must not discard another's")
+		}
+		if !(valueIdx < typeIdx && typeIdx < mapIdx) {
+			t.Errorf("sections render at value %d, type %d, mapping %d -- checkOrder must fix the order whichever binary arrives last", valueIdx, typeIdx, mapIdx)
+		}
+		if !strings.Contains(body, "checks covered by this artifact: value_check, document_type_check, mapping_check_auto") {
+			t.Errorf("the coverage line must name all three merged checks: %q", jvLineWithTokens(t, body, "checks covered by this artifact:"))
+		}
+		if !strings.Contains(body, "has not been measured into this artifact yet") {
+			t.Errorf("a 3-of-4 artifact must still read as visibly partial")
+		}
+		if n := countByCheck(readLedger(t, out), "mapping_check_auto"); n != 1 {
+			t.Errorf("the merged ledger holds %d mapping_check_auto row(s), want the 1 it was seeded with", n)
+		}
+	})
+
+	t.Run("a re-run replaces this binary's rows and keeps the other's", func(t *testing.T) {
+		out := t.TempDir()
+		jvWritePath(t, filepath.Join(out, jvLedgerName), []byte(priorMapping))
+
+		gatedRun(t, out)
+		first := readLedger(t, out)
+		md1, _ := jvOpenPath(t, filepath.Join(out, "jev-report.md"), false)
+		n1 := jvLineWithTokens(t, jvSection(t, string(md1), "value_check"), "questions asked:")
+
+		gatedRun(t, out)
+		second := readLedger(t, out)
+		md2, _ := jvOpenPath(t, filepath.Join(out, "jev-report.md"), false)
+		n2 := jvLineWithTokens(t, jvSection(t, string(md2), "value_check"), "questions asked:")
+
+		if n1 != n2 {
+			t.Errorf("value_check's N line changed across a re-run:\n%s\n%s -- rows must be replaced, not appended", n1, n2)
+		}
+		for _, check := range []string{"value_check", "document_type_check"} {
+			if a, b := countByCheck(first, check), countByCheck(second, check); a != b || a == 0 {
+				t.Errorf("%s holds %d row(s) after one run and %d after two, want the same non-zero count", check, a, b)
+			}
+		}
+		if n := countByCheck(second, "mapping_check_auto"); n != 1 {
+			t.Errorf("the other binary's single mapping_check_auto row is %d row(s) after two re-runs, want 1", n)
+		}
+	})
+}
+
 // AC-2. jvDocuments is compared against an independent table -- requiredPDFs + jvNonInvoicePDFs.
 func TestJevValue_TheWalkCoversEveryScoredLayoutAndNonInvoice(t *testing.T) {
 	if len(expectByLayout) < wildRequireListPin {

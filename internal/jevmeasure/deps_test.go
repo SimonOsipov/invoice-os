@@ -5,7 +5,11 @@
 package jevmeasure
 
 import (
+	"go/parser"
+	"go/token"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -160,5 +164,52 @@ func TestJevGuard_NoCommandImportsTheHarness(t *testing.T) {
 	}
 	if sawEndtoend {
 		t.Errorf("./cmd/...'s test closure depends on %s -- the endtoend measurement suite must not leak into a shipped command", jmEndtoendPkg)
+	}
+}
+
+// jmFilesystemImports are the packages that would give jevmeasure a filesystem of its own.
+// D-1 keeps the harness filesystem-free for a reason the two gated runs depend on: every
+// artifact write goes through their own seam, so jvWrite's jvPaths audit and
+// TestJevValue_TheGoHarnessOpensOnlyFixtureRootPaths' exactly-one-call-site source leg still
+// see it. TestJevMeasure_ImportsOnlyTheStandardLibrary cannot catch this -- os IS stdlib.
+var jmFilesystemImports = []string{"os", "os/exec", "path/filepath", "io/fs", "io/ioutil", "embed"}
+
+// Mutation ledger: import "os" from any non-test file in this package -- must red.
+func TestJevMeasure_OwnsNoFilesystem(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	banned := map[string]bool{}
+	for _, p := range jmFilesystemImports {
+		banned[p] = true
+	}
+
+	scanned, sawControl := 0, false
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), name, nil, parser.ImportsOnly)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", name, perr)
+		}
+		scanned++
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if path == "encoding/json" {
+				sawControl = true
+			}
+			if banned[path] {
+				t.Errorf("%s imports %q -- jevmeasure must stay filesystem-free (D-1); the $JEV_OUT read/merge/write belongs to each gated run's own seam", filepath.Base(name), path)
+			}
+		}
+	}
+	if scanned < 4 {
+		t.Fatalf("scanned %d non-test file(s) in this package, want at least 4 -- a walk that reads nothing reports clean vacuously", scanned)
+	}
+	if !sawControl {
+		t.Fatalf("control needle encoding/json not found across %d file(s) -- the scan itself is broken", scanned)
 	}
 }

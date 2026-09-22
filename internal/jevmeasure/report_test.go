@@ -1,0 +1,568 @@
+// report_test.go: the renderer's tests, against outcomes built in-process --
+// no vendor, no network. Datasets D1-D5 are the architect's corrected fixtures
+// (CHECK-01-02 plan, 2026-09-22); nearest-rank percentile is ceil(q*n).
+package jevmeasure
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+func jmNum(s string) *json.Number {
+	n := json.Number(s)
+	return &n
+}
+
+// jmLineWithTokens returns the first report line containing every tok, so a
+// row can be found by an anchor unlikely to collide with raw outcome data
+// echoed elsewhere (D4's right values sit exactly on the swept thresholds).
+func jmLineWithTokens(t *testing.T, md string, toks ...string) string {
+	t.Helper()
+	for _, line := range strings.Split(md, "\n") {
+		all := true
+		for _, tok := range toks {
+			if !strings.Contains(line, tok) {
+				all = false
+				break
+			}
+		}
+		if all {
+			return line
+		}
+	}
+	t.Fatalf("no report line contains all of %v", toks)
+	return ""
+}
+
+// jmStripToken removes tok once, so a standalone-digit search on the
+// remainder can't match inside tok itself (e.g. the leading 0 of "0.90").
+func jmStripToken(s, tok string) string {
+	return strings.Replace(s, tok, "", 1)
+}
+
+func jmHasNumber(s, n string) bool {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(n) + `\b`).MatchString(s)
+}
+
+// D1 -- percentiles. 10 latencies, all successful.
+func d1Outcomes() []Outcome {
+	ms := []int{10, 12, 14, 16, 18, 20, 30, 40, 60, 500}
+	out := make([]Outcome, len(ms))
+	for i, m := range ms {
+		out[i] = Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d1-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Elapsed: time.Duration(m) * time.Millisecond,
+		}
+	}
+	return out
+}
+
+// D2 -- the two latency series: 8 successes plus 2 failures whose elapsed
+// time only shows up in the all-attempts series.
+func d2Outcomes() []Outcome {
+	successMs := []int{10, 12, 14, 16, 18, 20, 30, 40}
+	failMs := []int{2500, 3000}
+	var out []Outcome
+	for i, m := range successMs {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d2-ok-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Elapsed: time.Duration(m) * time.Millisecond,
+		})
+	}
+	for i, m := range failMs {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d2-fail-%d", i), Field: "amount",
+			Label: "not-asked", Failed: true, FailReason: "vendor error",
+			ProbabilityKind: KindNoul, Elapsed: time.Duration(m) * time.Millisecond,
+		})
+	}
+	return out
+}
+
+// D3 -- tokens and cost. 18 successful production calls with usage, 2 failed
+// (no usage); the 7 excluded variant calls simply never enter this slice.
+func d3Outcomes() []Outcome {
+	input := []string{"100", "110", "120", "130", "140", "150", "160", "170", "180", "190", "200", "210", "220", "230", "240", "250", "1100", "1500"}
+	var out []Outcome
+	for i, v := range input {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d3-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: jmNum(v), OutputTokens: jmNum("20")},
+		})
+	}
+	for i := 0; i < 2; i++ {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("d3-fail-%d", i), Field: "amount",
+			Label: "not-asked", Failed: true, FailReason: "vendor error",
+			ProbabilityKind: KindNoul,
+		})
+	}
+	return out
+}
+
+// D4 -- the threshold sweep. 9 outcomes (5 right, 4 wrong) over 3 documents;
+// the right values sit exactly on each swept threshold.
+func d4Outcomes() []Outcome {
+	right := []string{"0.95", "0.90", "0.70", "0.50", "0.30"}
+	wrong := []string{"0.10", "0.45", "0.65", "0.85"}
+	docs := []string{"d1", "d2", "d3"}
+	var out []Outcome
+	for i, v := range right {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: docs[i%3], Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum(v),
+		})
+	}
+	for i, v := range wrong {
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: docs[i%3], Field: "amount",
+			Label: "wrong", ProbabilityKind: KindNoul, Probability: jmNum(v),
+		})
+	}
+	return out
+}
+
+// D5 -- the degraded-run boundary: 20 production-shaped calls, `failed` of them failed.
+func d5Outcomes(failed int) []Outcome {
+	var out []Outcome
+	for i := 0; i < 20; i++ {
+		doc := fmt.Sprintf("d5-%d", i)
+		if i < failed {
+			out = append(out, Outcome{
+				Check: "value_check", DocumentID: doc, Field: "amount",
+				Label: "not-asked", Failed: true, FailReason: "vendor error",
+				ProbabilityKind: KindNoul,
+			})
+			continue
+		}
+		out = append(out, Outcome{
+			Check: "value_check", DocumentID: doc, Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		})
+	}
+	return out
+}
+
+func jmAskedOutcomes(n int) []Outcome {
+	out := make([]Outcome, n)
+	for i := range out {
+		out[i] = Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("na-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		}
+	}
+	return out
+}
+
+// AC-4. D4's own table: every row differs from every other; per-100 uses the
+// 3 documents, not the 9 questions. Column order between wrong-caught and
+// wrong-missed is unsettled between AC-4's prose and the plan's worked table,
+// so both are asserted present without asserting their relative order.
+func TestReport_ThresholdSweepCountsBothErrorKinds(t *testing.T) {
+	md, _, err := Render(d4Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	rows := []struct {
+		threshold, rightFlagged, per100, wrongCaught, wrongMissed string
+	}{
+		{"0.30", "1", "33.33", "1", "3"},
+		{"0.50", "2", "66.67", "2", "2"},
+		{"0.70", "3", "100.00", "3", "1"},
+		{"0.90", "4", "133.33", "4", "0"},
+	}
+	for _, row := range rows {
+		line := jmLineWithTokens(t, body, row.threshold, row.per100)
+		scan := jmStripToken(line, row.threshold)
+		for _, want := range []string{row.rightFlagged, row.per100, row.wrongCaught, row.wrongMissed} {
+			if !jmHasNumber(scan, want) {
+				t.Errorf("threshold %s row %q: want %s present", row.threshold, line, want)
+			}
+		}
+	}
+}
+
+// AC-4. A right value at exactly 0.50 must flag (noul <= threshold, inclusive).
+func TestReport_AThresholdBoundaryIsInclusive(t *testing.T) {
+	outcomes := []Outcome{{
+		Check: "value_check", DocumentID: "d1", Field: "amount",
+		Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.50"),
+	}}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if got := strings.Count(body, "noul <= threshold"); got != 1 {
+		t.Errorf(`report shows "noul <= threshold" %d time(s), want exactly 1`, got)
+	}
+
+	notFlagged := jmLineWithTokens(t, body, "0.30", "0.00")
+	if jmHasNumber(jmStripToken(notFlagged, "0.30"), "1") {
+		t.Errorf("threshold 0.30 row %q: a right value of 0.50 must not flag (0.50 <= 0.30 is false)", notFlagged)
+	}
+
+	for _, thr := range []string{"0.50", "0.70", "0.90"} {
+		line := jmLineWithTokens(t, body, thr, "100.00")
+		if !jmHasNumber(jmStripToken(line, thr), "1") {
+			t.Errorf("threshold %s row %q: a right value of exactly 0.50 must flag (boundary inclusive)", thr, line)
+		}
+	}
+}
+
+// AC-4, new A49. The value check and the document-type check sweep opposite
+// directions; a single shared comparator would red one of these two legs.
+func TestReport_TheTwoChecksSweepOppositeDirections(t *testing.T) {
+	valueOut := []Outcome{{
+		Check: "value_check", DocumentID: "d1", Field: "amount",
+		Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.20"),
+	}}
+	md1, _, err := Render(valueOut, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (value): %v", err)
+	}
+	body1 := string(md1)
+	if !strings.Contains(body1, "noul <= threshold") {
+		t.Errorf("value check report never states its comparator literally")
+	}
+	line := jmLineWithTokens(t, body1, "0.30")
+	if !jmHasNumber(jmStripToken(line, "0.30"), "1") {
+		t.Errorf("threshold 0.30 row %q: a noul of 0.20 must flag (0.20 <= 0.30)", line)
+	}
+
+	typeOut := []Outcome{{
+		Check: "document_type_check", DocumentID: "d1", Field: "receipt",
+		Label: "right", ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.20"),
+	}}
+	md2, _, err := Render(typeOut, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (type): %v", err)
+	}
+	body2 := string(md2)
+	if !strings.Contains(body2, "confidence >= threshold") {
+		t.Errorf("document-type report never states its comparator literally")
+	}
+	line2 := jmLineWithTokens(t, body2, "0.30")
+	if jmHasNumber(jmStripToken(line2, "0.30"), "1") {
+		t.Errorf("threshold 0.30 row %q: a confidence of 0.20 must not record (0.20 >= 0.30 is false)", line2)
+	}
+}
+
+// AC-5. Vacuous as recorded (an empty report shows zero "%", trivially
+// satisfying "every %% is preceded by a count"); the floor below fixes it.
+func TestReport_StatesNBeforeAnyRate(t *testing.T) {
+	var outcomes []Outcome
+	for i := 0; i < 3; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("na-%d", i), Field: "amount",
+			Label: "not-asked",
+		})
+	}
+	for i := 0; i < 7; i++ {
+		outcomes = append(outcomes, Outcome{
+			Check: "value_check", DocumentID: fmt.Sprintf("ok-%d", i), Field: "amount",
+			Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+		})
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if pct := strings.Count(body, "%"); pct < 3 {
+		t.Fatalf(`report shows %d "%%" occurrence(s), want at least 3 -- a report with none would pass "every %% has a count" vacuously`, pct)
+	}
+	digit := regexp.MustCompile(`[0-9]`)
+	for _, line := range strings.Split(body, "\n") {
+		idx := strings.Index(line, "%")
+		for idx != -1 {
+			if !digit.MatchString(line[:idx]) {
+				t.Errorf("line %q: a %% at position %d has no count before it on the same line", line, idx)
+			}
+			rest := line[idx+1:]
+			next := strings.Index(rest, "%")
+			if next == -1 {
+				break
+			}
+			idx += 1 + next
+		}
+	}
+}
+
+// AC-5. Vacuous as recorded (no quiet leg, so an always-warning impl passed);
+// the 30-asked leg below fixes it.
+func TestReport_ASmallRunSaysSoRatherThanQuotingARate(t *testing.T) {
+	md29, _, err := Render(jmAskedOutcomes(29), Pricing{})
+	if err != nil {
+		t.Fatalf("Render (29): %v", err)
+	}
+	body29 := strings.ToLower(string(md29))
+	if !strings.Contains(body29, "fewer than 30") {
+		t.Errorf("29 asked questions must warn naming the small-N floor (fewer than 30)")
+	}
+	if !jmHasNumber(body29, "29") {
+		t.Errorf("the warning must name the actual asked count (29)")
+	}
+
+	md30, _, err := Render(jmAskedOutcomes(30), Pricing{})
+	if err != nil {
+		t.Fatalf("Render (30): %v", err)
+	}
+	body30 := strings.ToLower(string(md30))
+	if strings.Contains(body30, "fewer than 30") {
+		t.Errorf("30 asked questions must not trip the small-N warning")
+	}
+}
+
+// AC-6. D1's own table: nearest-rank p50/p90/max, differing from the wrong
+// formulas that would otherwise pass (mean, avg-of-two median, linear-interp).
+func TestReport_PercentilesAreNearestRankAndDifferFromEveryNeighbour(t *testing.T) {
+	md, _, err := Render(d1Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, want := range []string{"18", "60", "500"} {
+		if !jmHasNumber(body, want) {
+			t.Errorf("report never shows %s (nearest-rank p50/p90/max)", want)
+		}
+	}
+	// 10, the min, is skipped: it legitimately equals both a raw data point
+	// and n, so its absence can't be asserted without a false failure.
+	for _, wrong := range []string{"72", "19", "104"} {
+		if jmHasNumber(body, wrong) {
+			t.Errorf("report shows %s -- a wrong percentile formula, not nearest-rank", wrong)
+		}
+	}
+}
+
+// AC-6. The budget line names the failure-inclusive series in words; D2's
+// all-attempts triple (18, 2500, 3000) differs from the successful-only one.
+func TestJevReport_TheBudgetLineNamesTheFailureInclusiveSeries(t *testing.T) {
+	md, _, err := Render(d2Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if !strings.Contains(body, "all attempts") {
+		t.Errorf(`report never names the "all attempts" series in words`)
+	}
+	for _, want := range []string{"18", "2500", "3000"} {
+		if !jmHasNumber(body, want) {
+			t.Errorf("all-attempts series never shows %s (p50/p90/max)", want)
+		}
+	}
+}
+
+// AC-6/7. A failed call's elapsed time is excluded from the successful-only
+// series; D2's successful-only triple (16, 40, 40) differs from all-attempts.
+func TestJevReport_ATimedOutCallContributesItsElapsedTime(t *testing.T) {
+	md, _, err := Render(d2Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, want := range []string{"16", "40"} {
+		if !jmHasNumber(body, want) {
+			t.Errorf("successful-only series never shows %s (p50/p90=max)", want)
+		}
+	}
+}
+
+// AC-8. D5's real strict->10% boundary: 2/20 (10%) is quiet, 3/20 (15%) fires
+// naming the counts.
+func TestJevReport_ADegradedRunTripsAtMoreThanOneInTen(t *testing.T) {
+	quiet, _, err := Render(d5Outcomes(2), Pricing{})
+	if err != nil {
+		t.Fatalf("Render (quiet): %v", err)
+	}
+	if strings.Contains(string(quiet), "2 of 20") {
+		t.Errorf("2 failed of 20 attempted is exactly one in ten, not more -- must not trip the degraded warning")
+	}
+
+	loud, _, err := Render(d5Outcomes(3), Pricing{})
+	if err != nil {
+		t.Fatalf("Render (loud): %v", err)
+	}
+	if !strings.Contains(string(loud), "3 of 20") {
+		t.Errorf("3 failed of 20 attempted must trip the degraded warning naming the counts")
+	}
+}
+
+// AC-9. D3's corrected arithmetic: mean 300, p90 1100, cost per 1,000
+// documents 0.72, discriminating against every wrong denominator/leak listed
+// in the plan (1.595, 0.80, 1.1815, 0.0144, 0.54, 0.00072).
+func TestReport_UsagePresentComputesMeanP90AndCostPerThousand(t *testing.T) {
+	md, _, err := Render(d3Outcomes(), Pricing{2.00, 10.00})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	for _, want := range []string{"300", "1100", "0.72"} {
+		if !jmHasNumber(body, want) {
+			t.Errorf("report never shows %s (mean/p90/cost per 1,000 documents)", want)
+		}
+	}
+	low := strings.ToLower(body)
+	if !strings.Contains(low, "operator-supplied") && !strings.Contains(low, "operator supplied") {
+		t.Errorf("report never labels the price as operator-supplied")
+	}
+}
+
+// AC-9. With usage present and a price supplied, neither absent-sentence may print.
+func TestReport_UsagePresentNeverPrintsAnAbsentSentence(t *testing.T) {
+	md, _, err := Render(d3Outcomes(), Pricing{2.00, 10.00})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+	if strings.Contains(body, "not reported by the vendor") {
+		t.Errorf("usage is present for every production call; nothing should read as absent")
+	}
+	if strings.Contains(body, "price not supplied") {
+		t.Errorf("a price was supplied; the report must not say otherwise")
+	}
+}
+
+// AC-9, new A50. No price -> no cost figure, but the token lines still print.
+func TestReport_NoPriceMeansNoCostNumber(t *testing.T) {
+	md, _, err := Render(d3Outcomes(), Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+	if !strings.Contains(body, "price not supplied — cost not computed") {
+		t.Errorf("report never reads %q with no price supplied", "price not supplied — cost not computed")
+	}
+	if !jmHasNumber(body, "300") {
+		t.Errorf("token lines must still print without a price")
+	}
+	if strings.Contains(body, "$") {
+		t.Errorf("no cost figure should print without a price")
+	}
+}
+
+// AC-10. An absent input_tokens value reads as "not reported by the vendor"
+// and is excluded from the mean, not zeroed: (0+500)/2=250 would be the
+// zero-defaulting bug; excluding the absent value gives 500.
+func TestReport_AnAbsentUsageFieldIsNamedNotZeroed(t *testing.T) {
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: nil, OutputTokens: jmNum("20")}},
+		{Check: "value_check", DocumentID: "d2", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99"),
+			Usage: Usage{InputTokens: jmNum("500"), OutputTokens: jmNum("20")}},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+
+	if !strings.Contains(body, "not reported by the vendor") {
+		t.Errorf("an absent input_tokens value must read as not reported by the vendor")
+	}
+	if !jmHasNumber(body, "500") {
+		t.Errorf("mean input tokens must be 500 -- the one reported value, absence excluded")
+	}
+	if jmHasNumber(body, "250") {
+		t.Errorf("mean input tokens shows 250 -- a zero-defaulting bug, not an excluded absence")
+	}
+}
+
+// A30's eight document-type options, in A30's fixed order.
+var jmA30Options = []string{
+	"tax invoice", "receipt", "proforma", "quotation",
+	"credit note", "delivery note", "statement", "purchase order",
+}
+
+// AC-11. Registry-driven: the report renders from WordingRegistry() itself,
+// so a constant added without being wired into Render fails here rather than
+// escaping unnoticed by a hand-written list.
+func TestReport_QuotesEveryWordingRegistryEntryVerbatim(t *testing.T) {
+	reg := WordingRegistry()
+	if len(reg) < 15 {
+		t.Fatalf("WordingRegistry() has %d entr(ies), want at least 15 (7 constants + 8 criteria)", len(reg))
+	}
+
+	outcomes := []Outcome{
+		{Check: "value_check", DocumentID: "d1", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.90")},
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Label: "right",
+			ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.90")},
+	}
+	md, _, err := Render(outcomes, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := string(md)
+	for key, want := range reg {
+		if !strings.Contains(body, want) {
+			t.Errorf("wording %q is not quoted verbatim in the report", key)
+		}
+	}
+
+	if len(DocumentTypeCriteria) != len(jmA30Options) {
+		t.Fatalf("DocumentTypeCriteria has %d entr(ies), want %d", len(DocumentTypeCriteria), len(jmA30Options))
+	}
+	last := -1
+	for _, opt := range jmA30Options {
+		desc, ok := DocumentTypeCriteria[opt]
+		if !ok {
+			t.Fatalf("DocumentTypeCriteria has no entry for %q", opt)
+		}
+		idx := strings.Index(body, desc)
+		if idx == -1 {
+			t.Fatalf("criteria for %q is not quoted in the report", opt)
+		}
+		if idx <= last {
+			t.Errorf("%q's criteria appears out of A30 order (index %d, want > %d)", opt, idx, last)
+		}
+		last = idx
+	}
+}
+
+// AC-12, new A49. A noul answer has no confidence, so the value section's
+// table must never mention it; the document-type render is the control leg
+// that stops an empty/broken render from passing the first half vacuously.
+func TestReport_TheValueSectionHasNoConfidenceColumn(t *testing.T) {
+	valueOnly := []Outcome{{
+		Check: "value_check", DocumentID: "d1", Field: "amount",
+		Label: "right", ProbabilityKind: KindNoul, Probability: jmNum("0.90"),
+	}}
+	mdValue, _, err := Render(valueOnly, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (value): %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(mdValue)), "confidence") {
+		t.Errorf("value-only report mentions confidence; a noul answer has none")
+	}
+
+	typeOnly := []Outcome{{
+		Check: "document_type_check", DocumentID: "d1", Field: "receipt",
+		Label: "right", ProbabilityKind: KindChoiceConfidence, Probability: jmNum("0.90"),
+	}}
+	mdType, _, err := Render(typeOnly, Pricing{})
+	if err != nil {
+		t.Fatalf("Render (type): %v", err)
+	}
+	if !strings.Contains(strings.ToLower(string(mdType)), "confidence") {
+		t.Errorf("document-type report never mentions confidence -- control leg: an empty render would also pass the value-only check above")
+	}
+}

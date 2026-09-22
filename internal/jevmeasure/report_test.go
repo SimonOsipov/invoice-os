@@ -440,9 +440,15 @@ func TestReport_UsagePresentComputesMeanP90AndCostPerThousand(t *testing.T) {
 			t.Errorf("report never shows %s (mean/p90/cost per 1,000 documents)", want)
 		}
 	}
-	low := strings.ToLower(body)
+	cost := jmLineWithTokens(t, body, "cost per 1,000 documents")
+	low := strings.ToLower(cost)
 	if !strings.Contains(low, "operator-supplied") && !strings.Contains(low, "operator supplied") {
-		t.Errorf("report never labels the price as operator-supplied")
+		t.Errorf("cost line %q never labels the price as operator-supplied", cost)
+	}
+	for _, want := range []string{"$2.00", "$10.00"} {
+		if !strings.Contains(cost, want) {
+			t.Errorf("cost line %q must print the price it used (%s)", cost, want)
+		}
 	}
 }
 
@@ -750,8 +756,12 @@ func TestReport_TheNLineNamesDocumentsAskedAndNotAsked(t *testing.T) {
 // AC-5. Each check counts its own documents; a document answered by two
 // checks is one document in each section, not two in either.
 func TestReport_EachCheckCountsItsOwnDocuments(t *testing.T) {
+	// "shared" answers twice in value_check, so a documents count that is
+	// really a row count reads 3 here instead of 2.
 	outcomes := []Outcome{
 		{Check: "value_check", DocumentID: "shared", Field: "amount", Label: "right",
+			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
+		{Check: "value_check", DocumentID: "shared", Field: "buyer_tin", Label: "right",
 			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
 		{Check: "value_check", DocumentID: "value-only", Field: "amount", Label: "right",
 			ProbabilityKind: KindNoul, Probability: jmNum("0.99")},
@@ -766,7 +776,7 @@ func TestReport_EachCheckCountsItsOwnDocuments(t *testing.T) {
 
 	valueLine := jmLineWithTokens(t, jmSection(t, body, "value_check"), "documents:")
 	if !strings.Contains(valueLine, "documents: 2") {
-		t.Errorf("value_check N line %q: two distinct document ids, want documents: 2", valueLine)
+		t.Errorf("value_check N line %q: two distinct document ids over three rows, want documents: 2", valueLine)
 	}
 	typeLine := jmLineWithTokens(t, jmSection(t, body, "document_type_check"), "documents:")
 	if !strings.Contains(typeLine, "documents: 1") {

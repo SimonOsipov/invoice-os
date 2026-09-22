@@ -128,7 +128,7 @@ function reply(status: number, body: unknown): Reply {
 let lookups = 0
 let heldLookups: ((status: 200 | 500) => void)[] = []
 let posts = 0
-let heldPosts: ((status: 201 | 409) => void)[] = []
+let heldPosts: ((status: 201 | 409 | 'network') => void)[] = []
 
 function stubFetch() {
   vi.stubGlobal(
@@ -136,14 +136,16 @@ function stubFetch() {
     vi.fn((url: string, init?: { method?: string }): Promise<Reply> => {
       if (init?.method === 'POST' && url.endsWith('/api/invoice/v1/invoices')) {
         posts += 1
-        return new Promise<Reply>((resolve) => {
-          heldPosts.push((status) =>
-            resolve(
-              status === 201
-                ? reply(201, { id: FILED, invoice_number: 'INV-2026-00482', status: 'draft' })
-                : reply(409, { error: 'duplicate invoice number' }),
-            ),
-          )
+        return new Promise<Reply>((resolve, reject) => {
+          heldPosts.push((status) => {
+            if (status === 'network') reject(new TypeError('Failed to fetch'))
+            else
+              resolve(
+                status === 201
+                  ? reply(201, { id: FILED, invoice_number: 'INV-2026-00482', status: 'draft' })
+                  : reply(409, { error: 'duplicate invoice number' }),
+              )
+          })
         })
       }
       if (url.includes('import_batch_id=')) {
@@ -298,7 +300,7 @@ async function filingHeld() {
   expect(c().filing, 'the filing is not pending').toBe(true)
 }
 
-async function releaseFiling(status: 201 | 409) {
+async function releaseFiling(status: 201 | 409 | 'network') {
   expect(heldPosts, 'no filing POST is held').toHaveLength(1)
   await act(async () => heldPosts.shift()!(status))
   await flush()
@@ -966,4 +968,206 @@ it('BUG20-D13 (handler contract): the progress card outranks the form step', asy
     filingError: c().filingError,
   }).toEqual({ step: 'form', status: 'running', importError: STILL_WORKING_COPY, filingError: null })
   expect(refusalsIn(progressCard()), 'the refusal is not inside import-progress').toHaveLength(1)
+})
+
+// No UI reaches a lock holder while the map step shows, so fileDraft is called as a handler.
+it('BUG20-QA14 (handler contract): Import on the map step while a filing holds the lock says why on the map step', async () => {
+  await spreadsheetMapped()
+  await waitFor(() => expect(c().activeEntity?.id, 'activeEntity never resolved').toBe(ENTITY))
+  await act(async () => c().fileDraft())
+  await waitFor(() => expect(posts, 'the filing POST was not issued').toBe(1))
+  expect({ step: c().createStep, status: c().run.status }).toEqual({ step: 'mapping', status: 'idle' })
+  act(() => c().continueMapping())
+  expect({ xhrs: FakeXhr.instances.length, importError: c().importError?.message ?? null, filingError: c().filingError }).toEqual({
+    xhrs: 1,
+    importError: STILL_WORKING_COPY,
+    filingError: null,
+  })
+  expect(refusalsIn(document.body), 'the refusal is not on the map step').toHaveLength(1)
+  await releaseFiling(409)
+  expect({ step: c().createStep, importError: c().importError }).toEqual({ step: 'mapping', importError: null })
+  expect(refusalsIn(document.body), 'the release left the refusal on the map step').toHaveLength(0)
+})
+
+it('BUG20-QA15: New invoice from another screen while a filing is held returns to its form, closes the switcher and says why', async () => {
+  await boot()
+  await waitFor(() => expect(c().activeEntity?.id, 'activeEntity never resolved').toBe(ENTITY))
+  act(() => c().skipUpload())
+  act(() => c().updateDraft('number', 'INV-QA15'))
+  await act(async () => c().fileDraft())
+  await waitFor(() => expect(posts, 'the filing POST was not issued').toBe(1))
+  act(() => c().closeCreate())
+  act(() => c().toggleSwitcher())
+  expect({ view: c().view, switcherOpen: c().switcherOpen }).toEqual({ view: 'invoices', switcherOpen: true })
+  await act(async () => c().openCreate())
+  expect({
+    view: c().view,
+    path: window.location.pathname,
+    step: c().createStep,
+    switcherOpen: c().switcherOpen,
+    filing: c().filing,
+    number: c().draft.number,
+    filingError: c().filingError?.message ?? null,
+  }).toEqual({
+    view: 'create',
+    path: '/create',
+    step: 'form',
+    switcherOpen: false,
+    filing: true,
+    number: 'INV-QA15',
+    filingError: STILL_WORKING_COPY,
+  })
+  expect(refusalsIn(document.body), 'the refusal is not on screen').toHaveLength(1)
+})
+
+it('BUG20-QA16: New invoice held mid document run, pressed again in the landing window, opens a fresh upload step', async () => {
+  await documentRunHeld()
+  await act(async () => c().openCreate())
+  expect({ step: c().createStep, importError: c().importError?.message ?? null }).toEqual({
+    step: 'documents',
+    importError: STILL_WORKING_COPY,
+  })
+  act(() => FakeXhr.instances[0]!.respond(201, uploadReply('a.pdf')))
+  await assertWindowFloor()
+  expect(c().importError, 'the lock release left the refusal up').toBeNull()
+  await act(async () => c().openCreate())
+  expect({ step: c().createStep, picked: pickedNames(), importError: c().importError }).toEqual({
+    step: 'upload',
+    picked: [],
+    importError: null,
+  })
+  expect(progressCard(), 'the second New invoice was held after the lock was released').toBeNull()
+  await releaseLookup()
+  expect({ path: window.location.pathname, view: c().view, extractionJobId: c().extractionJobId }).toEqual({
+    path: '/create',
+    view: 'create',
+    extractionJobId: null,
+  })
+})
+
+it('BUG20-QA17: New invoice mid document run whose only file fails clears the refusal and lands the failure', async () => {
+  await documentRunHeld()
+  await act(async () => c().openCreate())
+  expect(c().importError?.message ?? null).toBe(STILL_WORKING_COPY)
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({
+    status: c().run.status,
+    outcomes: c().run.files.map((f) => f.outcome.kind),
+    step: c().createStep,
+    path: window.location.pathname,
+    importError: c().importError,
+    lookups,
+  }).toEqual({ status: 'failed', outcomes: ['failed'], step: 'documents', path: '/create', importError: null, lookups: 0 })
+  expect(screen.queryAllByTestId('document-failures-card'), 'the failure did not land').toHaveLength(1)
+  expect(screen.queryAllByText(STILL_WORKING_COPY), 'the refusal outlived the run').toHaveLength(0)
+})
+
+it('BUG20-QA18: New invoice mid spreadsheet run whose only file fails clears the refusal and lands on the map step', async () => {
+  await spreadsheetMapped()
+  act(() => c().continueMapping())
+  expect(FakeXhr.instances, 'createImport was not issued').toHaveLength(2)
+  await act(async () => c().openCreate())
+  expect({ step: c().createStep, importError: c().importError?.message ?? null }).toEqual({
+    step: 'mapping',
+    importError: STILL_WORKING_COPY,
+  })
+  act(() => FakeXhr.instances[1]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({
+    status: c().run.status,
+    files: c().run.files.map((f) => (f.outcome.kind === 'failed' ? [f.name, f.outcome.message] : [f.name, f.outcome.kind])),
+    step: c().createStep,
+    path: window.location.pathname,
+    importError: c().importError,
+    lookups,
+  }).toEqual({ status: 'failed', files: [['a.csv', 'boom']], step: 'mapping', path: '/create', importError: null, lookups: 0 })
+})
+
+it('BUG20-QA19: a filing that throws after the refusal keeps the network message', async () => {
+  await filingHeld()
+  await act(async () => c().openCreate())
+  const refused = c().filingError?.message ?? null
+  await releaseFiling('network')
+  const err = c().filingError
+  expect({ refused, step: c().createStep, filing: c().filing, filingError: err ? [err.kind, err.message] : null }).toEqual({
+    refused: STILL_WORKING_COPY,
+    step: 'form',
+    filing: false,
+    filingError: ['network', 'Failed to fetch'],
+  })
+})
+
+it('BUG20-QA20: a preview that fails on the network after the refusal keeps the file message', async () => {
+  await previewHeld()
+  await act(async () => c().openCreate())
+  const refused = c().importError?.message ?? null
+  act(() => FakeXhr.instances[0]!.onerror?.())
+  await flush()
+  const err = c().importError
+  expect({ refused, step: c().createStep, importError: err ? [err.kind, err.message] : null }).toEqual({
+    refused: STILL_WORKING_COPY,
+    step: 'upload',
+    importError: ['network', 'a.csv: network error'],
+  })
+})
+
+it('BUG20-QA21: New invoice during a preview, on the form after a failed document run, says why on the form', async () => {
+  await boot()
+  await act(async () => c().addPickedFiles([pdf('a.pdf')]))
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'the upload was not issued').toHaveLength(1)
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({ status: c().run.status, step: c().createStep }).toEqual({ status: 'failed', step: 'documents' })
+  await act(async () => c().removePickedFile(c().pickedFiles[0]!.id))
+  await act(async () => c().addPickedFiles([csv('a.csv')]))
+  act(() => c().readAllColumns())
+  expect(FakeXhr.instances, 'the preview was not issued').toHaveLength(2)
+  act(() => c().skipUpload())
+  expect({ step: c().createStep, status: c().run.status }).toEqual({ step: 'form', status: 'failed' })
+  await act(async () => c().openCreate())
+  expect({ filingError: c().filingError?.message ?? null, importError: c().importError }).toEqual({
+    filingError: STILL_WORKING_COPY,
+    importError: null,
+  })
+  expect(refusalsIn(document.body), 'the refusal is not on the form').toHaveLength(1)
+})
+
+it('BUG20-QA22: after a company switch mid-run, the refusal clears when the left run fails, and the new flow is untouched', async () => {
+  await documentRunHeld()
+  await switchTo(ENTITY_B)
+  await act(async () => c().openCreate())
+  await act(async () => c().addPickedFiles([pdf('b.pdf')]))
+  act(() => c().startDocumentRun())
+  expect({ xhrs: FakeXhr.instances.length, importError: c().importError?.message ?? null }).toEqual({
+    xhrs: 1,
+    importError: STILL_WORKING_COPY,
+  })
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({
+    importError: c().importError,
+    step: c().createStep,
+    status: c().run.status,
+    picked: pickedNames(),
+    path: window.location.pathname,
+    lookups,
+  }).toEqual({ importError: null, step: 'upload', status: 'idle', picked: ['b.pdf'], path: '/create', lookups: 0 })
+  act(() => c().startDocumentRun())
+  expect(FakeXhr.instances, 'the released lock still refuses Extract invoices').toHaveLength(2)
+})
+
+it('BUG20-QA23: a preview that fails after the refusal on the form clears the refusal', async () => {
+  await previewHeld()
+  act(() => c().skipUpload())
+  await act(async () => c().openCreate())
+  expect(c().filingError?.message ?? null).toBe(STILL_WORKING_COPY)
+  act(() => FakeXhr.instances[0]!.respond(500, { error: 'boom' }))
+  await flush()
+  expect({ step: c().createStep, filingError: c().filingError, importError: c().importError?.message ?? null }).toEqual({
+    step: 'form',
+    filingError: null,
+    importError: 'a.csv: boom',
+  })
 })

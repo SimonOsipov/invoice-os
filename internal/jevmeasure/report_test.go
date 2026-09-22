@@ -1360,13 +1360,17 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 	cases := []struct {
 		id             string
 		gated, ungated []Outcome
+		// count is the gated fixture's own measured figure, formatted into the two caveats
+		// whose text is a template (value.planted_wrongs, mapping.auto_few_wrongs); zero for a
+		// caveat whose registry text is static.
+		count int
 	}{
-		{caveatDoctypeTitleAnnounced, doctypeAnswered, doctypePlain},
-		{caveatValuePlantedWrongs, valueVariant, valuePlain},
-		{caveatMappingDeclaredHeaderRow, mappingAutoFewWrongs, nonMapping},
-		{caveatMappingAutoFewWrongs, mappingAutoFewWrongs, mappingAutoManyWrongs},
-		{caveatMappingAcceptedList, mappingAutoFewWrongs, nonMapping},
-		{caveatMappingTwoHalves, bothMapping, mappingAutoFewWrongs},
+		{caveatDoctypeTitleAnnounced, doctypeAnswered, doctypePlain, 0},
+		{caveatValuePlantedWrongs, valueVariant, valuePlain, 1},
+		{caveatMappingDeclaredHeaderRow, mappingAutoFewWrongs, nonMapping, 0},
+		{caveatMappingAutoFewWrongs, mappingAutoFewWrongs, mappingAutoManyWrongs, 3},
+		{caveatMappingAcceptedList, mappingAutoFewWrongs, nonMapping, 0},
+		{caveatMappingTwoHalves, bothMapping, mappingAutoFewWrongs, 0},
 	}
 
 	// Registry control: an entry added without a matching case here (plus wording.provisional,
@@ -1380,6 +1384,9 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 			want, ok := reg[tc.id]
 			if !ok {
 				t.Fatalf("registry has no entry %q", tc.id)
+			}
+			if tc.id == caveatValuePlantedWrongs || tc.id == caveatMappingAutoFewWrongs {
+				want = fmt.Sprintf(want, tc.count)
 			}
 
 			mdGated, _, err := Render(tc.gated, Pricing{})
@@ -1443,7 +1450,7 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	valueSec := jmSection(t, string(mdValue), "value_check")
-	if !strings.Contains(valueSec, reg[caveatValuePlantedWrongs]) {
+	if !strings.Contains(valueSec, fmt.Sprintf(reg[caveatValuePlantedWrongs], 1)) {
 		t.Errorf("value.planted_wrongs must render inside the value_check section")
 	}
 
@@ -1454,7 +1461,11 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 	}
 	autoSec := jmSection(t, string(mdAuto), "mapping_check_auto")
 	for _, id := range []string{caveatMappingDeclaredHeaderRow, caveatMappingAutoFewWrongs, caveatMappingAcceptedList} {
-		if !strings.Contains(autoSec, reg[id]) {
+		want := reg[id]
+		if id == caveatMappingAutoFewWrongs {
+			want = fmt.Sprintf(want, 3)
+		}
+		if !strings.Contains(autoSec, want) {
 			t.Errorf("mapping_check_auto section must contain caveat %q", id)
 		}
 	}
@@ -1474,5 +1485,29 @@ func TestJevReport_EveryRequiredCaveatIsRendered(t *testing.T) {
 		if !strings.Contains(aiSec, reg[id]) {
 			t.Errorf("mapping_check_ai section must contain caveat %q", id)
 		}
+	}
+}
+
+// No rendered caveat may carry a standalone "N" where its own measured figure belongs -- a
+// bug this shape once shipped in value.planted_wrongs and mapping.auto_few_wrongs, and would
+// ship again in any future caveat template whose %-verb is left unformatted. Scans the whole
+// report, not just those two ids, so a new offender is caught the same way.
+func TestJevReport_NoCaveatRendersABarePlaceholder(t *testing.T) {
+	outs := []Outcome{
+		{Check: "document_type_check", DocumentID: "d1", Field: "receipt", Answer: "receipt", Label: "right"},
+		{Check: "value_check", DocumentID: "d1", Field: "variant_x", Label: "wrong", Variant: true},
+		{Check: "mapping_check_auto", DocumentID: "l1", Field: "total", Label: "right"},
+		{Check: "mapping_check_auto", DocumentID: "l2", Field: "vat", Label: "wrong"},
+		{Check: "mapping_check_ai", DocumentID: "l1", Field: "total", Label: "right"},
+	}
+	md, _, err := Render(outs, Pricing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	barePlaceholder := regexp.MustCompile(`\bN\b`)
+	if loc := barePlaceholder.FindIndex(md); loc != nil {
+		start, end := max(0, loc[0]-60), min(len(md), loc[1]+60)
+		t.Errorf("rendered report carries a bare placeholder %q: %q", "N", md[start:end])
 	}
 }

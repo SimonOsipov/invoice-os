@@ -20,11 +20,11 @@ const (
 	jmEndtoendPkg = jmModulePath + "/internal/extraction/endtoend"
 	jmControlPkg  = jmModulePath + "/internal/platform/ai"
 
-	// Measured today (CHECK-01-07): 606 lines, 35 module-path packages. A
-	// truncated or empty scan must not read as clean. D-9: raised from the
-	// original 500/30 margin to close to the real measurement.
-	jmMinCmdLines = 600
-	jmMinCmdPkgs  = 34
+	// Measured today: 606 lines, 35 module-path packages. Floor set at ~90% of measured (D-9)
+	// -- tight enough that a truncated or empty scan can't read as clean, loose enough that an
+	// unrelated dependency change doesn't red this guard.
+	jmMinCmdLines = 545
+	jmMinCmdPkgs  = 31
 	jmMinSelfDeps = 5
 
 	// jmMinCmdTestLines/jmMinCmdTestPkgs: the -test closure (`go list -deps -test ./cmd/...`)

@@ -33,14 +33,14 @@ func CaveatRegistry() map[string]string {
 			"it is an optimistic bound and is NOT evidence the check discriminates in production. Real non-invoices are " +
 			"harder — a proforma headed TAX INVOICE, a receipt carrying an invoice number and a total, a statement laid " +
 			"out as a line-item table.",
-		caveatValuePlantedWrongs: "Every asked value row taken from the corpus labels right; the N planted variants are " +
+		caveatValuePlantedWrongs: "Every asked value row taken from the corpus labels right; the %d planted variants are " +
 			"the only wrong rows in this check. The wrong-catch rate below is measured against deliberately corrupted " +
 			"values, not against production error.",
 		caveatMappingDeclaredHeaderRow: "AUTO is computed from each layout's DECLARED header row (layouts.json " +
 			"`columns`), not from a detected one. Measured consequence: 56 placements against 50 from the first " +
 			"physical row, differing only on title_01, title_02, title_05 and title_06, and identical on the 40 " +
 			"layouts whose header_row is 1. Nothing deployed sets header_row > 1, so production never meets this case.",
-		caveatMappingAutoFewWrongs: "Only N of the AUTO placements are wrong (measured at design time: 5 of 56, all on " +
+		caveatMappingAutoFewWrongs: "Only %d of the AUTO placements are wrong (measured at design time: 5 of 56, all on " +
 			"the `vat` field, where the alias table takes a VAT rate column for a VAT amount column). The wrong-caught " +
 			"column below therefore moves in steps of roughly 20 percentage points.",
 		caveatMappingAcceptedList: "A field's answer key is a LIST of accepted headers, not one answer. A placement " +
@@ -91,7 +91,21 @@ func writeCaveats(w *bytes.Buffer, sec checkSection, checksPresent map[string]bo
 	reg := CaveatRegistry()
 	for _, id := range caveatOrder {
 		if caveatGate(id, sec, checksPresent) {
-			fmt.Fprintf(w, "%s\n\n", reg[id])
+			fmt.Fprintf(w, "%s\n\n", caveatText(id, sec, reg))
 		}
+	}
+}
+
+// caveatText fills value.planted_wrongs and mapping.auto_few_wrongs with this run's own measured
+// counts (VariantCount, Wrong) rather than the leftover literal N; every other id renders as
+// registered.
+func caveatText(id string, sec checkSection, reg map[string]string) string {
+	switch id {
+	case caveatValuePlantedWrongs:
+		return fmt.Sprintf(reg[id], sec.VariantCount)
+	case caveatMappingAutoFewWrongs:
+		return fmt.Sprintf(reg[id], sec.Wrong)
+	default:
+		return reg[id]
 	}
 }

@@ -218,7 +218,7 @@ const availableSettingsTab = (tab: SettingsTab, mode: Mode): SettingsTab =>
 // The busy beat's floor: resolved after ms regardless of what else is happening.
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-// One refusal copy for every click reqInFlight turns away. Matched by identity when a release clears it.
+// One refusal copy. Matched by identity when a release clears it.
 const STILL_WORKING = new ApiError('network', 'An import or filing is still in progress. Try again when it finishes.')
 
 // This app shell is ported from the prototype's `class Component extends DCLogic`

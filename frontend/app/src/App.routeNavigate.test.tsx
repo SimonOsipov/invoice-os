@@ -1508,7 +1508,7 @@ describe('ROUTE-06-03 AC-2: switchClient seeds the import target with the incomi
 })
 
 // Pins AC-3's literal outcome (entityId ends at active.entityId), NOT the default
-// parameter's value: openCreate() always lands createStep at 'upload' in the same
+// parameter's value: openCreate() lands createStep at 'upload' in the same
 // commit as its bare resetImport() call, so a null default is healed to
 // active.entityId by the untouched re-seed effect (:529-533) before this test's
 // act() returns -- verified empirically, RTL's act() flushes passive effects

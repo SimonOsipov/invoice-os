@@ -48,7 +48,7 @@ func TestDoclingPromptText_IsReachableFromOutsideThePackage(t *testing.T) {
 // matched exactly: the unrenamed identifier is lowercase-ai only, and this package already has
 // unrelated test names spelling out "AIPromptText" (capital AI) that a case-insensitive scan
 // would self-match forever, rename or not.
-func jsScanExtractionSources(t *testing.T, banned, control string) (bannedIn, controlIn []string) {
+func jsScanExtractionSources(t *testing.T, banned, control string) (scanned int, bannedIn, controlIn []string) {
 	t.Helper()
 
 	entries, err := os.ReadDir(".")
@@ -63,28 +63,56 @@ func jsScanExtractionSources(t *testing.T, banned, control string) (bannedIn, co
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)
 		}
+		scanned++
 		src := string(b)
 		if strings.Contains(src, banned) {
 			bannedIn = append(bannedIn, e.Name())
 		}
-		if strings.Contains(src, control) {
+		if strings.Contains(src, control) && !strings.HasSuffix(e.Name(), "_test.go") {
 			controlIn = append(controlIn, e.Name())
 		}
 	}
-	return bannedIn, controlIn
+	return scanned, bannedIn, controlIn
 }
+
+// jsMinSources floors the population: internal/extraction carries far more than this, so a
+// scan that reads only its own file (or a handful) fails here instead of reporting clean.
+const jsMinSources = 40
 
 func TestAIPromptText_IsGoneFromThePackage(t *testing.T) {
 	// Assembled so this file's own source cannot match the banned scan below.
 	banned := "ai" + "PromptText"
 	const control = "DoclingPromptText"
 
-	bannedIn, controlIn := jsScanExtractionSources(t, banned, control)
+	scanned, bannedIn, controlIn := jsScanExtractionSources(t, banned, control)
 
+	if scanned < jsMinSources {
+		t.Fatalf("scanned %d .go file(s) in internal/extraction, want at least %d -- zero hits below would read exactly like a clean package", scanned, jsMinSources)
+	}
+	// Control must land in a non-test file: this file names the control itself, so counting
+	// test files would let the scan prove itself.
 	if len(controlIn) == 0 {
-		t.Fatalf("the scan found %q in no file in internal/extraction -- the walk is broken, so the banned check below would pass vacuously", control)
+		t.Fatalf("the scan found %q in no non-test file in internal/extraction -- the walk is broken, so the banned check below would pass vacuously", control)
 	}
 	if len(bannedIn) != 0 {
 		t.Errorf("%q is still present in %v -- the rename to DoclingPromptText must remove every occurrence", banned, bannedIn)
+	}
+}
+
+// TestDoclingPromptText_AnEmptyPageSetIsJustTheIntro pins the exported boundary's degenerate
+// input: no pages means no page header and no row, never a nil or a bare token dump.
+func TestDoclingPromptText_AnEmptyPageSetIsJustTheIntro(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		pages []extraction.TokenPage
+	}{
+		{"nil", nil},
+		{"empty", []extraction.TokenPage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, want := extraction.DoclingPromptText(tc.pages), jsPromptIntro+"\n\n"; got != want {
+				t.Errorf("DoclingPromptText(%s) = %q, want %q", tc.name, got, want)
+			}
+		})
 	}
 }

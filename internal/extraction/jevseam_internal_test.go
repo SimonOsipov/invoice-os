@@ -1,8 +1,9 @@
-// jevseam_internal_test.go: the decision seam -- what the worker actually merges (worker.go:269-278)
-// -- replayed over the real fourteen-layout corpus instead of hand-built rows.
+// jevseam_internal_test.go: the decision seam -- what ExtractWorker.Work actually merges --
+// replayed over the real fourteen-layout corpus instead of hand-built rows.
 package extraction
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,7 +28,7 @@ var jsLayouts = []string{
 }
 
 // jsGoldenRead replays one committed Docling golden through the real DoclingReader and readText
-// -- production's own two-slice read (worker.go:72), not aitGoldenPages' single TokenPage slice.
+// -- production's own two-slice read (readText), not aitGoldenPages' single TokenPage slice.
 func jsGoldenRead(t *testing.T, name string) ([]Page, []TokenPage) {
 	t.Helper()
 
@@ -85,6 +86,9 @@ func TestJevSeam_ABlankAIDecisionEqualsReconcile(t *testing.T) {
 				Pages:      tokens,
 			}
 			want := Reconcile(in)
+			if len(want) == 0 {
+				t.Fatalf("%s: Reconcile decided zero rows -- the identity below would hold over two empty slices", layout)
+			}
 			got := mergeAILines(mergeAI(Reconcile(in), nil, tokens, lines), nil, tokens)
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("%s: a blank AI answer changed the decision\ngot:  %+v\nwant: %+v (Reconcile's own output)", layout, got, want)
@@ -93,7 +97,7 @@ func TestJevSeam_ABlankAIDecisionEqualsReconcile(t *testing.T) {
 	}
 }
 
-// TestJevSeam_ZeroLayoutsWalkedIsAFatal is the walk's own floor (docs/extraction-corpus.md:417-423):
+// TestJevSeam_ZeroLayoutsWalkedIsAFatal is the walk's own floor (docs/extraction-corpus.md):
 // wild_scanned_no_number is image-only, so its golden is the only route to a non-zero token count.
 func TestJevSeam_ZeroLayoutsWalkedIsAFatal(t *testing.T) {
 	if len(jsLayouts) < jsWantLayouts {
@@ -141,6 +145,41 @@ func TestJevSeam_LayoutListMirrorsExpectByLayout(t *testing.T) {
 	slices.Sort(wantSorted)
 	if !slices.Equal(gotSorted, wantSorted) {
 		t.Errorf("jsLayouts drifted from endtoend's expectByLayout\nendtoend has: %v\njsLayouts has: %v", gotSorted, wantSorted)
+	}
+}
+
+// TestJevSeam_BothProductionCallsSendTheSameBody is AC-2's cross-call half: each call site is
+// pinned to DoclingPromptText separately, but nothing else asserts the two bodies are the same
+// bytes for the same pages -- which is the one-shape constraint CHECK-03's thresholds rest on.
+func TestJevSeam_BothProductionCallsSendTheSameBody(t *testing.T) {
+	pages := []TokenPage{
+		{Number: 1, Tokens: []Token{
+			tok("Invoice", 1, 0.10, 0.10, 0.30, 0.12),
+			tok("INV-1", 1, 0.10, 0.20, 0.30, 0.22),
+		}},
+		{Number: 2, Tokens: []Token{tok("Total 100.00", 2, 0.50, 0.80, 0.90, 0.82)}},
+	}
+
+	doc := &recordingAI{enabled: true, answer: map[string]any{}}
+	lines := &recordingAI{enabled: true, answer: map[string]any{"line_items": []any{}}}
+	askAI(context.Background(), doc, pages)
+	askAILines(context.Background(), lines, pages)
+
+	if len(doc.calls) != 1 || len(lines.calls) != 1 {
+		t.Fatalf("calls = %d document, %d line-item, want exactly 1 each", len(doc.calls), len(lines.calls))
+	}
+	want := DoclingPromptText(pages)
+	if want == "" {
+		t.Fatal("DoclingPromptText returned empty for a two-page token set -- the equality below would be vacuous")
+	}
+	if doc.calls[0].Text != want {
+		t.Errorf("askAI Text = %q, want DoclingPromptText = %q", doc.calls[0].Text, want)
+	}
+	if lines.calls[0].Text != want {
+		t.Errorf("askAILines Text = %q, want DoclingPromptText = %q", lines.calls[0].Text, want)
+	}
+	if doc.calls[0].Text != lines.calls[0].Text {
+		t.Errorf("the two production calls sent different bodies:\ndocument:  %q\nline-item: %q", doc.calls[0].Text, lines.calls[0].Text)
 	}
 }
 

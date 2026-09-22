@@ -101,22 +101,21 @@ func TestStoreApprovalFacts_FoldsTheFlagOff(t *testing.T) {
 	}
 }
 
-// TestStoreApprovalFacts_FoldsTheFlagOn is the biting half: the same open run under
-// the same active policy, with the flag on, is not clear.
-func TestStoreApprovalFacts_FoldsTheFlagOn(t *testing.T) {
+// TestStoreApprovalFacts_OpenRunIsNotClear: an open run under an active policy is not clear.
+func TestStoreApprovalFacts_OpenRunIsNotClear(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-05-FLAGON", false)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.ApprovalFacts(fx.ctx, fx.invID)
 	if err != nil {
 		t.Fatalf("ApprovalFacts: %v", err)
 	}
 	if got.TransmitClear {
-		t.Errorf("TransmitClear = true with an open run under an active policy and the flag on, want false")
+		t.Errorf("TransmitClear = true with an open run under an active policy, want false")
 	}
 }
 

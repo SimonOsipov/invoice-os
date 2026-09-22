@@ -220,48 +220,43 @@ func boolLabel(v bool) string {
 
 // --- AC-3: the flag reaches the list wire -----------------------------------
 
-// TestListHandler_SubmitFlagsFlipWithTheEnforcementFlag carries the flag-POLARITY
-// claim for the list wire; TestListAndDetail_SubmitGateCannotDisagree carries the
-// agreement claim. One armed fixture read at both settings: the pair must flip, and
-// must equal the detail body's pair at each setting.
+// TestListHandler_SubmitFlagsFlipWithTheApprovalRun: one invoice, open run then approved run;
+// the list row and the detail body flip together and agree at each leg.
 //
 // The flip assertion runs FIRST. Two identical readings mean the fixture never armed,
-// and every assertion below it would pass on a wire that ignored the flag entirely.
-func TestListHandler_SubmitFlagsFlipWithTheEnforcementFlag(t *testing.T) {
+// and every assertion below it would pass on a wire that ignored the run state entirely.
+func TestListHandler_SubmitFlagsFlipWithTheApprovalRun(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	fx := seedApprovalFactsFixture(t, super, "BUG-12-01-FLIP", true)
-	fx.armInvoice(t, super, app, "bug-12-01-flip")
+	fx := seedApprovalFactsFixture(t, super, "BUG-15-01-FLIP", true)
+	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
+	store := NewStore(app)
 
-	pairsFor := func(t *testing.T, enforced bool) (listCan, listReason, detailCan, detailReason string) {
-		t.Helper()
-		store := NewStore(app, WithApprovalsEnforced(enforced))
-		label := "enforced=" + boolLabel(enforced)
-		listCan, listReason = listSubmitPair(t, store, fx.ctx, fx.invID, label)
-		detailCan, detailReason = detailSubmitPair(t, store, fx.ctx, fx.invID, label)
-		return
-	}
+	openList, openReason := listSubmitPair(t, store, fx.ctx, fx.invID, "open")
+	openDetail, openDetailReason := detailSubmitPair(t, store, fx.ctx, fx.invID, "open")
 
-	offList, offReason, offDetail, offDetailReason := pairsFor(t, false)
-	onList, onReason, onDetail, onDetailReason := pairsFor(t, true)
+	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	if offList == onList && offReason == onReason {
-		t.Fatalf("the list submit pair is %s/%s at BOTH flag settings -- the fixture never armed, so this spec is vacuous", offList, offReason)
+	clearList, clearReason := listSubmitPair(t, store, fx.ctx, fx.invID, "approved")
+	clearDetail, clearDetailReason := detailSubmitPair(t, store, fx.ctx, fx.invID, "approved")
+
+	if openList == clearList && openReason == clearReason {
+		t.Fatalf("the list submit pair is %s/%s at BOTH run states -- the fixture never armed, so this spec is vacuous", openList, openReason)
 	}
-	if offList != "true" || offReason != "null" {
-		t.Errorf("APPROVALS_ENFORCED off: list can_submit/submit_blocked_reason = %s/%s, want true/null -- the fold makes the approval rung inert", offList, offReason)
+	if openList != "false" {
+		t.Errorf("open run: list can_submit = %s, want false", openList)
 	}
-	if onList != "false" {
-		t.Errorf("APPROVALS_ENFORCED on: list can_submit = %s, want false on an open run under an active policy", onList)
+	if want := jsonOf(t, awaitingApprovalReason); openReason != want {
+		t.Errorf("open run: list submit_blocked_reason = %s, want %s", openReason, want)
 	}
-	if want := jsonOf(t, awaitingApprovalReason); onReason != want {
-		t.Errorf("APPROVALS_ENFORCED on: list submit_blocked_reason = %s, want %s", onReason, want)
+	if openList != openDetail || openReason != openDetailReason {
+		t.Errorf("open run: list = %s/%s, detail = %s/%s -- one gate, two wires", openList, openReason, openDetail, openDetailReason)
 	}
-	if offList != offDetail || offReason != offDetailReason {
-		t.Errorf("APPROVALS_ENFORCED off: list = %s/%s, detail = %s/%s -- one gate, two wires", offList, offReason, offDetail, offDetailReason)
+	if clearList != "true" || clearReason != "null" {
+		t.Errorf("approved run: list can_submit/submit_blocked_reason = %s/%s, want true/null", clearList, clearReason)
 	}
-	if onList != onDetail || onReason != onDetailReason {
-		t.Errorf("APPROVALS_ENFORCED on: list = %s/%s, detail = %s/%s -- one gate, two wires", onList, onReason, onDetail, onDetailReason)
+	if clearList != clearDetail || clearReason != clearDetailReason {
+		t.Errorf("approved run: list = %s/%s, detail = %s/%s -- one gate, two wires", clearList, clearReason, clearDetail, clearDetailReason)
 	}
 }
 

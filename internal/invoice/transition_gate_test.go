@@ -175,7 +175,7 @@ func TestTransition_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-03-GATED", StatusValidated)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // defaults to open
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, fx.invID)
 	beforeAudit := auditCount(t, app, fx.tenantID, "invoice.transitioned")

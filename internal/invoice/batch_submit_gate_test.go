@@ -144,7 +144,8 @@ func TestBatchSubmit_AwaitingApprovalSkip(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-04-GATED", StatusValidated)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	sub := NewSubmitter(NewStore(app), newInsertOnlyQueueClient(t, app))
+	res, err := sub.BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {

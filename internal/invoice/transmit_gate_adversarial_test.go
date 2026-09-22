@@ -140,21 +140,22 @@ func TestGate_NoHTTPDoorReachesQueuedWhileGated(t *testing.T) {
 	}
 }
 
-// TestGate_FlagOnBlocksBothDoors: the SEEDED shape -- validated under an active policy
+// TestGate_BlocksBothDoors: the SEEDED shape -- validated under an active policy
 // with no run at all. TransmitClear(true, false) is false with no run exactly as it is
 // with an open one, so a backlog nobody has armed is held by both doors too.
-func TestGate_FlagOnBlocksBothDoors(t *testing.T) {
+func TestGate_BlocksBothDoors(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	g := seedGatedTenantAsAdmin(t, super, "APPR-08-10-NORUN")
 	invID := g.invoiceWith(t, super, "APPR-08-10-NORUN-A", "")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(g.ctx, invID, StatusQueued); !errors.Is(err, ErrAwaitingApproval) {
 		t.Errorf("door 1 with no run at all: err = %v, want ErrAwaitingApproval", err)
 	}
-	if batchDoor(t, gateSubmitter(t, app, true), g.ctx, invID) {
+	sub := NewSubmitter(NewStore(app), newInsertOnlyQueueClient(t, app))
+	if batchDoor(t, sub, g.ctx, invID) {
 		t.Error("door 2 enqueued an invoice with no run under an active policy, want an awaiting_approval skip")
 	}
 

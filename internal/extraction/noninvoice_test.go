@@ -123,6 +123,30 @@ func TestNonInvoice_FixturesMatchTheirGenerator(t *testing.T) {
 	}
 }
 
+// AC-1: the row's declared type is the one its own file names. Without this, swapping two rows'
+// docType values leaves seven distinct types over seven byte-matching PDFs and every other
+// clause green -- while the answer key the document-type check is scored against is wrong.
+func TestNonInvoice_EachRowNamesItsOwnTypeAndGolden(t *testing.T) {
+	if len(nonInvoiceFixtures) != 7 {
+		t.Fatalf("nonInvoiceFixtures names %d fixture(s), want 7", len(nonInvoiceFixtures))
+	}
+
+	for _, f := range nonInvoiceFixtures {
+		t.Run(f.pdf, func(t *testing.T) {
+			wantPDF := "noninvoice_" + f.docType + ".pdf"
+			if f.pdf != wantPDF {
+				t.Errorf("the row declaring type %q names %s, want %s", f.docType, f.pdf, wantPDF)
+			}
+			if base := strings.TrimSuffix(wantPDF, ".pdf"); !strings.HasPrefix(f.golden, base+".") {
+				t.Errorf("the row declaring type %q names golden %s, which is not %s's own golden", f.docType, f.golden, wantPDF)
+			}
+			if title := niTitleFor[f.pdf]; title == "" {
+				t.Errorf("niTitleFor names no title for %s", f.pdf)
+			}
+		})
+	}
+}
+
 // AC-3: the same builder run twice in one process is byte-identical.
 func TestNonInvoice_GeneratorIsDeterministic(t *testing.T) {
 	for _, f := range nonInvoiceFixtures {
@@ -225,6 +249,9 @@ func TestNonInvoice_EveryGoldenReplaysWithTokens(t *testing.T) {
 	if len(niTokenFloor) != 7 {
 		t.Fatalf("niTokenFloor holds %d row(s), want 7 -- filled at Stage 4 from the real read", len(niTokenFloor))
 	}
+	if len(niTitleFor) != 7 {
+		t.Fatalf("niTitleFor holds %d row(s), want 7 -- a missing row makes the needle below strings.Contains(text, \"\"), which every token satisfies", len(niTitleFor))
+	}
 
 	for _, f := range nonInvoiceFixtures {
 		t.Run(f.pdf, func(t *testing.T) {
@@ -272,6 +299,9 @@ func TestNonInvoice_EveryGoldenReplaysWithTokens(t *testing.T) {
 			}
 
 			want := niTitleFor[f.pdf]
+			if want == "" {
+				t.Fatalf("niTitleFor names no title for %s; an empty needle matches every token", f.pdf)
+			}
 			var sawTitle bool
 			for _, text := range texts {
 				if strings.Contains(text, want) {

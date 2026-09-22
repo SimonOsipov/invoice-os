@@ -311,6 +311,15 @@ function refusalsIn(el: HTMLElement | null): HTMLElement[] {
   return within(el!).queryAllByText(STILL_WORKING_COPY)
 }
 
+// jsdom has no history stack: move the URL the way Back would, then fire the browser's event.
+async function historyToReview() {
+  window.history.replaceState(null, '', `/imports/${BATCH}/review`)
+  await act(async () => {
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  })
+  expect({ step: c().createStep, path: window.location.pathname }).toEqual({ step: 'review', path: `/imports/${BATCH}/review` })
+}
+
 it('BUG20-D1: inside the landing window, New invoice then Extract invoices issues the upload', async () => {
   await documentRunInWindow()
   await act(async () => c().openCreate())
@@ -1170,4 +1179,75 @@ it('BUG20-QA23: a preview that fails after the refusal on the form clears the re
     filingError: null,
     importError: 'a.csv: boom',
   })
+})
+
+// The review step renders neither error slot, so the refusal must leave it.
+it('BUG20-R1: New invoice during a filing, after history navigation to a review, returns to the form and says why', async () => {
+  await boot()
+  await waitFor(() => expect(c().activeEntity?.id, 'activeEntity never resolved').toBe(ENTITY))
+  act(() => c().skipUpload())
+  // defaultDraft's number is a constant, so only a typed one shows a draft reset.
+  act(() => c().updateDraft('number', 'INV-R1'))
+  await act(async () => c().fileDraft())
+  await waitFor(() => expect(posts, 'the filing POST was not issued').toBe(1))
+  expect(c().filing, 'the filing is not pending').toBe(true)
+  await historyToReview()
+  await act(async () => c().openCreate())
+  expect({
+    view: c().view,
+    step: c().createStep,
+    path: window.location.pathname,
+    filing: c().filing,
+    number: c().draft.number,
+    filingError: c().filingError?.message ?? null,
+    importError: c().importError,
+  }).toEqual({
+    view: 'create',
+    step: 'form',
+    path: '/create',
+    filing: true,
+    number: 'INV-R1',
+    filingError: STILL_WORKING_COPY,
+    importError: null,
+  })
+  expect(refusalsIn(document.body), 'the refusal is not on screen').toHaveLength(1)
+  await releaseFiling(201)
+  expect({ path: window.location.pathname, filingError: c().filingError }).toEqual({ path: `/invoices/${FILED}`, filingError: null })
+})
+
+it('BUG20-R2: New invoice during a preview, after history navigation to a review, returns to the upload step and says why', async () => {
+  await previewHeld()
+  await historyToReview()
+  await act(async () => c().openCreate())
+  expect({
+    view: c().view,
+    step: c().createStep,
+    path: window.location.pathname,
+    picked: pickedNames(),
+    importError: c().importError?.message ?? null,
+    filingError: c().filingError,
+  }).toEqual({ view: 'create', step: 'upload', path: '/create', picked: ['a.csv'], importError: STILL_WORKING_COPY, filingError: null })
+  expect(refusalsIn(document.body), 'the refusal is not on screen').toHaveLength(1)
+  act(() => FakeXhr.instances[0]!.respond(200, PREVIEW))
+  await flush()
+  expect({ step: c().createStep, importError: c().importError }).toEqual({ step: 'mapping', importError: null })
+})
+
+// Control: CreateFlow shows the progress card over any step while a run is active.
+it('BUG20-R3: New invoice during a document run, after history navigation to a review, keeps the progress card and says why', async () => {
+  await documentRunHeld()
+  await historyToReview()
+  expect(progressCard(), 'the progress card is not mounted over the review step').not.toBeNull()
+  await act(async () => c().openCreate())
+  expect({ view: c().view, status: c().run.status, importError: c().importError?.message ?? null }).toEqual({
+    view: 'create',
+    status: 'running',
+    importError: STILL_WORKING_COPY,
+  })
+  expect(refusalsIn(progressCard()), 'the refusal is not inside import-progress').toHaveLength(1)
+  act(() => FakeXhr.instances[0]!.respond(201, uploadReply('a.pdf')))
+  await waitFor(() => expect(lookups, 'the sole-invoice lookup was never requested').toBe(1))
+  await releaseLookup()
+  expect({ path: window.location.pathname, importError: c().importError }).toEqual({ path: `/extraction/${JOB}`, importError: null })
+  expect(screen.queryAllByText(STILL_WORKING_COPY), 'the refusal outlived the run').toHaveLength(0)
 })

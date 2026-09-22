@@ -5,6 +5,7 @@
 package jevmeasure
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -211,5 +212,86 @@ func TestJevMeasure_OwnsNoFilesystem(t *testing.T) {
 	}
 	if !sawControl {
 		t.Fatalf("control needle encoding/json not found across %d file(s) -- the scan itself is broken", scanned)
+	}
+}
+
+// jmMeasureBinaries names each measurement binary's live-run entry point: the test an operator
+// runs, and the gated-run func that must receive Endpoint. A binary with no such call writes
+// nothing on a live run, however complete its walk is, and the report simply omits its checks.
+var jmMeasureBinaries = []struct{ file, entry, gate string }{
+	{"../extraction/endtoend/jev_value_test.go", "TestJevValue_Measure", "jvGatedRun"},
+	{"../importer/jev_mapping_test.go", "TestJevMapping_Measure", "jpGatedRun"},
+}
+
+// jmMinMeasureFuncs floors each parsed file. Measured today: 68 and 44 top-level funcs.
+const jmMinMeasureFuncs = 30
+
+// jmHandsEndpointTo reports whether fn calls gate with jevmeasure.Endpoint as an argument.
+func jmHandsEndpointTo(fn *ast.FuncDecl, gate string) bool {
+	found := false
+	ast.Inspect(fn, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, isIdent := call.Fun.(*ast.Ident); !isIdent || id.Name != gate {
+			return true
+		}
+		for _, arg := range call.Args {
+			sel, isSel := arg.(*ast.SelectorExpr)
+			if !isSel || sel.Sel.Name != "Endpoint" {
+				continue
+			}
+			if pkg, isPkg := sel.X.(*ast.Ident); isPkg && pkg.Name == "jevmeasure" {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// Core AC-3 and AC-4 are measured by the endtoend binary, the mapping check by the importer
+// one. Either binary without an entry point that hands it Endpoint measures nothing against a
+// real key, and nothing else in the suite notices. Mutation ledger: point either entry point's
+// gated run at anything but Endpoint, or rename the entry point -- must red.
+func TestJevGuard_EveryMeasurementBinaryHasALiveRunEntryPoint(t *testing.T) {
+	if len(jmMeasureBinaries) < 2 {
+		t.Fatalf("jmMeasureBinaries names %d binar(ies), want at least 2 -- both measurement binaries must be scanned", len(jmMeasureBinaries))
+	}
+	for _, b := range jmMeasureBinaries {
+		f, err := parser.ParseFile(token.NewFileSet(), filepath.FromSlash(b.file), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", b.file, err)
+		}
+
+		var entry *ast.FuncDecl
+		var sawGate bool
+		funcs := 0
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			funcs++
+			switch fn.Name.Name {
+			case b.entry:
+				entry = fn
+			case b.gate:
+				sawGate = true
+			}
+		}
+		if funcs < jmMinMeasureFuncs {
+			t.Fatalf("%s parsed %d func(s), want at least %d -- a truncated read reports clean vacuously", b.file, funcs, jmMinMeasureFuncs)
+		}
+		if !sawGate {
+			t.Fatalf("control needle func %s not found in %s -- the scan itself is broken", b.gate, b.file)
+		}
+		if entry == nil {
+			t.Fatalf("%s declares no func %s -- this check has no live-run entry point", b.file, b.entry)
+		}
+		if !jmHandsEndpointTo(entry, b.gate) {
+			t.Errorf("%s does not call %s with jevmeasure.Endpoint -- an operator's live run would measure nothing on this binary", b.entry, b.gate)
+		}
 	}
 }

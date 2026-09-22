@@ -1518,3 +1518,51 @@ func TestJevReport_NoCaveatRendersABarePlaceholder(t *testing.T) {
 		t.Errorf("rendered report carries a bare placeholder %q: %q", "N", md[start:end])
 	}
 }
+
+// Core AC-6's supply path. Render prices tokens only from an operator's two rates, so the
+// parser both gated seams call must refuse anything that is not a pair of non-negative
+// numbers: a rate read as a silent 0 would print $0.00 and read as free.
+func TestJevReport_PricingFromRatesTakesOnlyAPairOfNonNegativeNumbers(t *testing.T) {
+	cases := []struct {
+		name    string
+		in, out string
+		want    Pricing
+	}{
+		{"both supplied", "2.00", "10.00", Pricing{2.00, 10.00}},
+		{"integers", "2", "10", Pricing{2, 10}},
+		{"surrounding space", " 2.00 ", " 10.00", Pricing{2.00, 10.00}},
+		{"both unset", "", "", Pricing{}},
+		{"input unset", "", "10.00", Pricing{}},
+		{"output unset", "2.00", "", Pricing{}},
+		{"input not a number", "abc", "10.00", Pricing{}},
+		{"output not a number", "2.00", "abc", Pricing{}},
+		{"input negative", "-1", "10.00", Pricing{}},
+		{"output negative", "2.00", "-1", Pricing{}},
+		{"not a number", "NaN", "10.00", Pricing{}},
+		{"infinite", "Inf", "10.00", Pricing{}},
+		{"both zero", "0", "0", Pricing{}},
+	}
+	if len(cases) < 12 {
+		t.Fatalf("the table names %d case(s), want at least 12 -- a table read down to the accepted pair proves nothing", len(cases))
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PricingFromRates(tc.in, tc.out)
+			if got != tc.want {
+				t.Errorf("PricingFromRates(%q, %q) = %+v, want %+v", tc.in, tc.out, got, tc.want)
+			}
+			md, _, err := Render(d3Outcomes(), got)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			body := string(md)
+			if tc.want == (Pricing{}) && !strings.Contains(body, "price not supplied — cost not computed") {
+				t.Errorf("rates (%q, %q) were rejected and the report must still read %q", tc.in, tc.out, "price not supplied — cost not computed")
+			}
+			if tc.want != (Pricing{}) && strings.Contains(body, "price not supplied") {
+				t.Errorf("rates (%q, %q) were accepted and the report still declines to price the tokens", tc.in, tc.out)
+			}
+		})
+	}
+}

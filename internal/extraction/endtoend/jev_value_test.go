@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,12 @@ func jvResolveModel() string {
 	return jvModel
 }
 
+// jvResolvePricing reads the operator's two $ rates per million tokens (A50); either absent or
+// malformed leaves the zero value, which Render prints as "price not supplied".
+func jvResolvePricing() jevmeasure.Pricing {
+	return jevmeasure.PricingFromRates(os.Getenv(jevmeasure.PriceInputEnv), os.Getenv(jevmeasure.PriceOutputEnv))
+}
+
 // jvValueQuestion composes one noul question: ValueCheckInstructions has no placeholder for the
 // field or the value (R-11), so the constant is sent as a byte-exact prefix, followed by both.
 func jvValueQuestion(field, value string) jevmeasure.Question {
@@ -598,13 +605,19 @@ func jvGatedRun(t *testing.T, baseURL string) bool {
 	all := jevmeasure.MergeOutcomes(prior, fresh)
 	jvWriteLedger(t, out, all)
 
-	md, reportJSON, err := jevmeasure.Render(all, jevmeasure.Pricing{})
+	md, reportJSON, err := jevmeasure.Render(all, jvResolvePricing())
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	jvWrite(t, out, "jev-report.md", md)
 	jvWrite(t, out, "jev-report.json", reportJSON)
 	return true
+}
+
+// TestJevValue_Measure is the value and document-type checks' live-run entry point. CI sets
+// neither env var, so this always declines there.
+func TestJevValue_Measure(t *testing.T) {
+	jvGatedRun(t, jevmeasure.Endpoint)
 }
 
 // Row 11 / AC-8. A literal pin, not a re-measurement: the real oracle is the DB-gated
@@ -824,6 +837,20 @@ func jvNoulBody(questions map[string]any, val string) string {
 		answers[id] = map[string]any{"type": jevmeasure.QuestionTypeNoul, "noul": json.Number(val)}
 	}
 	b, _ := json.Marshal(map[string]any{"answers": answers, "usage": map[string]any{}})
+	return string(b)
+}
+
+// jvNoulBodyWithUsage answers like jvNoulBody and reports token counts, so the report has
+// tokens for an operator-supplied rate to price.
+func jvNoulBodyWithUsage(questions map[string]any, val string, inTokens, outTokens int) string {
+	answers := make(map[string]any, len(questions))
+	for id := range questions {
+		answers[id] = map[string]any{"type": jevmeasure.QuestionTypeNoul, "noul": json.Number(val)}
+	}
+	b, _ := json.Marshal(map[string]any{
+		"answers": answers,
+		"usage":   map[string]any{"input_tokens": inTokens, "output_tokens": outTokens},
+	})
 	return string(b)
 }
 
@@ -2124,5 +2151,81 @@ func TestJevValue_AFailedRowCarriesNotAskedAndNeverALabel(t *testing.T) {
 		if o.Failed && o.Label != "not-asked" {
 			t.Errorf("%s/%s: Failed=true but Label=%q, want not-asked", o.DocumentID, o.Field, o.Label)
 		}
+	}
+}
+
+// jvCostLabel is the report's production-shaped cost line; jvCostFigure reads its dollar figure.
+const jvCostLabel = "cost per 1,000 documents, production-shaped calls only"
+
+var jvCostRe = regexp.MustCompile(`\$([0-9]+\.[0-9]{2}) \(price used`)
+
+func jvCostFigure(t *testing.T, line string) float64 {
+	t.Helper()
+	m := jvCostRe.FindStringSubmatch(line)
+	if m == nil {
+		t.Fatalf("no cost figure in %q", line)
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		t.Fatalf("cost figure %q does not parse: %v", m[1], err)
+	}
+	return v
+}
+
+// Core AC-6. The gated run is the only place a Pricing can enter Render, so this binary reads
+// the operator's two rates from the environment. A malformed or absent rate must keep the
+// price-not-supplied sentence rather than silently pricing the run at zero.
+func TestJevValue_TheOperatorSuppliedPriceReachesTheCostLine(t *testing.T) {
+	run := func(t *testing.T, in, out string) string {
+		t.Helper()
+		dir := t.TempDir()
+		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("JEV_OUT", dir)
+		t.Setenv("JEV_PRICE_INPUT_PER_M", in)
+		t.Setenv("JEV_PRICE_OUTPUT_PER_M", out)
+		srv, _ := jvFake(t, func(state string, questions map[string]any) (string, int) {
+			return jvNoulBodyWithUsage(questions, "0.90", 1000, 200), http.StatusOK
+		})
+		if got := jvGatedRun(t, srv.URL); !got {
+			t.Fatalf("jvGatedRun = false, want true")
+		}
+		md, _ := jvOpenPath(t, filepath.Join(dir, "jev-report.md"), false)
+		return jvLineWithTokens(t, string(md), jvCostLabel)
+	}
+
+	t.Run("a supplied price prices the tokens", func(t *testing.T) {
+		line := run(t, "2.00", "10.00")
+		if strings.Contains(line, "price not supplied") {
+			t.Fatalf("both rates were supplied and the report still reads: %s", line)
+		}
+		if !strings.Contains(line, "price used: $2.00 / 1M input tokens, $10.00 / 1M output tokens") {
+			t.Errorf("the cost line does not echo the operator's rates: %s", line)
+		}
+		single := jvCostFigure(t, line)
+		if single <= 0 {
+			t.Fatalf("cost per 1,000 documents is %v, want a positive figure: %s", single, line)
+		}
+		// Discriminating leg: a cost that ignores the operator's numbers would not move. The
+		// band absorbs the cost line's two-decimal rounding, nothing wider.
+		double := jvCostFigure(t, run(t, "4.00", "20.00"))
+		if double < 1.9*single || double > 2.1*single {
+			t.Errorf("doubling both rates rendered $%.2f against $%.2f -- the operator's rates do not drive the arithmetic", double, single)
+		}
+	})
+
+	for _, tc := range []struct{ name, in, out string }{
+		{"unset", "", ""},
+		{"input not a number", "abc", "10.00"},
+		{"output negative", "2.00", "-1"},
+	} {
+		t.Run(tc.name+" leaves the price unsupplied", func(t *testing.T) {
+			line := run(t, tc.in, tc.out)
+			if !strings.Contains(line, "price not supplied — cost not computed") {
+				t.Errorf("rates (%q, %q) rendered %q, want the price-not-supplied sentence", tc.in, tc.out, line)
+			}
+			if strings.Contains(line, "$0.00") {
+				t.Errorf("rates (%q, %q) priced the run at zero: %s", tc.in, tc.out, line)
+			}
+		})
 	}
 }

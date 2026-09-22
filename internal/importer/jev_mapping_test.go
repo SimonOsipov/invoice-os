@@ -253,6 +253,12 @@ func jpResolveModel() string {
 	return jpModel
 }
 
+// jpResolvePricing reads the operator's two $ rates per million tokens (A50); either absent or
+// malformed leaves the zero value, which Render prints as "price not supplied".
+func jpResolvePricing() jevmeasure.Pricing {
+	return jevmeasure.PricingFromRates(os.Getenv(jevmeasure.PriceInputEnv), os.Getenv(jevmeasure.PriceOutputEnv))
+}
+
 // jpWalk runs the measurement pass for every layout under dir: the AUTO call and the Flash Lite
 // call are each production-shaped (D3) -- one Ask() per layout per set with at least one
 // placement, zero calls for a set with none.
@@ -409,7 +415,7 @@ func jpGatedRun(t *testing.T, baseURL string) bool {
 	}
 	jpWrite(t, out, "jev-outcomes.json", ledgerJSON)
 
-	md, reportJSON, err := jevmeasure.Render(all, jevmeasure.Pricing{})
+	md, reportJSON, err := jevmeasure.Render(all, jpResolvePricing())
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -538,6 +544,20 @@ func jpNoulBody(questions map[string]any, val string) string {
 		answers[id] = map[string]any{"type": jevmeasure.QuestionTypeNoul, "noul": json.Number(val)}
 	}
 	b, _ := json.Marshal(map[string]any{"answers": answers, "usage": map[string]any{}})
+	return string(b)
+}
+
+// jpNoulBodyWithUsage answers like jpNoulBody and reports token counts, so the report has
+// tokens for an operator-supplied rate to price.
+func jpNoulBodyWithUsage(questions map[string]any, val string, inTokens, outTokens int) string {
+	answers := make(map[string]any, len(questions))
+	for id := range questions {
+		answers[id] = map[string]any{"type": jevmeasure.QuestionTypeNoul, "noul": json.Number(val)}
+	}
+	b, _ := json.Marshal(map[string]any{
+		"answers": answers,
+		"usage":   map[string]any{"input_tokens": inTokens, "output_tokens": outTokens},
+	})
 	return string(b)
 }
 
@@ -1353,5 +1373,97 @@ func TestJevMapping_LabelIsPureAndTotal(t *testing.T) {
 				t.Errorf("jpLabel mutated its accepted slice: got %v, want %v", accepted, original)
 			}
 		}
+	}
+}
+
+// jpCostLabel is the report's production-shaped cost line; jpCostFigure reads its dollar figure.
+const jpCostLabel = "cost per 1,000 documents, production-shaped calls only"
+
+var jpCostRe = regexp.MustCompile(`\$([0-9]+\.[0-9]{2}) \(price used`)
+
+// jpCostLine returns the auto set's cost line -- the ai set asks nothing under a one-layout
+// fixture, so its own cost line is never priced.
+func jpCostLine(t *testing.T, md string) string {
+	t.Helper()
+	for _, line := range strings.Split(jpSection(t, md, "mapping_check_auto"), "\n") {
+		if strings.HasPrefix(line, jpCostLabel) {
+			return line
+		}
+	}
+	t.Fatalf("mapping_check_auto has no %q line", jpCostLabel)
+	return ""
+}
+
+func jpCostFigure(t *testing.T, line string) float64 {
+	t.Helper()
+	m := jpCostRe.FindStringSubmatch(line)
+	if m == nil {
+		t.Fatalf("no cost figure in %q", line)
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		t.Fatalf("cost figure %q does not parse: %v", m[1], err)
+	}
+	return v
+}
+
+// Core AC-6, this binary's copy. The gated seams are duplicated by design, so the mapping
+// binary needs its own oracle that the operator's rates reach Render.
+func TestJevMapping_TheOperatorSuppliedPriceReachesTheCostLine(t *testing.T) {
+	run := func(t *testing.T, in, out string) string {
+		t.Helper()
+		dir := t.TempDir()
+		jpSeedOneLayoutFixture(t, dir, "plain_01")
+		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("JEV_OUT", dir)
+		t.Setenv("JEV_PRICE_INPUT_PER_M", in)
+		t.Setenv("JEV_PRICE_OUTPUT_PER_M", out)
+		srv, _ := jpFake(t, func(state string, questions map[string]any) (string, int) {
+			return jpNoulBodyWithUsage(questions, "0.90", 1000, 200), http.StatusOK
+		})
+		if got := jpGatedRun(t, srv.URL); !got {
+			t.Fatalf("jpGatedRun = false, want true")
+		}
+		md, err := os.ReadFile(filepath.Join(dir, "jev-report.md"))
+		if err != nil {
+			t.Fatalf("read jev-report.md: %v", err)
+		}
+		return jpCostLine(t, string(md))
+	}
+
+	t.Run("a supplied price prices the tokens", func(t *testing.T) {
+		line := run(t, "2.00", "10.00")
+		if strings.Contains(line, "price not supplied") {
+			t.Fatalf("both rates were supplied and the report still reads: %s", line)
+		}
+		if !strings.Contains(line, "price used: $2.00 / 1M input tokens, $10.00 / 1M output tokens") {
+			t.Errorf("the cost line does not echo the operator's rates: %s", line)
+		}
+		single := jpCostFigure(t, line)
+		if single <= 0 {
+			t.Fatalf("cost per 1,000 documents is %v, want a positive figure: %s", single, line)
+		}
+		// Discriminating leg: a cost that ignores the operator's numbers would not move. The
+		// band absorbs the cost line's two-decimal rounding, nothing wider.
+		double := jpCostFigure(t, run(t, "4.00", "20.00"))
+		if double < 1.9*single || double > 2.1*single {
+			t.Errorf("doubling both rates rendered $%.2f against $%.2f -- the operator's rates do not drive the arithmetic", double, single)
+		}
+	})
+
+	for _, tc := range []struct{ name, in, out string }{
+		{"unset", "", ""},
+		{"input not a number", "abc", "10.00"},
+		{"output negative", "2.00", "-1"},
+	} {
+		t.Run(tc.name+" leaves the price unsupplied", func(t *testing.T) {
+			line := run(t, tc.in, tc.out)
+			if !strings.Contains(line, "price not supplied — cost not computed") {
+				t.Errorf("rates (%q, %q) rendered %q, want the price-not-supplied sentence", tc.in, tc.out, line)
+			}
+			if strings.Contains(line, "$0.00") {
+				t.Errorf("rates (%q, %q) priced the run at zero: %s", tc.in, tc.out, line)
+			}
+		})
 	}
 }

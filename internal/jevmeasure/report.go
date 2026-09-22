@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,31 @@ type Pricing struct {
 
 func (p Pricing) supplied() bool {
 	return p.InputPerMillion != 0 || p.OutputPerMillion != 0
+}
+
+// PriceInputEnv/PriceOutputEnv name the two rates an operator supplies to a gated run. Named
+// here so both measurement binaries read the same variables; jevmeasure itself never touches
+// the environment (D-1).
+const (
+	PriceInputEnv  = "JEV_PRICE_INPUT_PER_M"
+	PriceOutputEnv = "JEV_PRICE_OUTPUT_PER_M"
+)
+
+// PricingFromRates parses the two operator-supplied $ rates per million tokens. Either rate
+// absent, unparseable, negative or non-finite answers the zero value: a half-read price would
+// understate the cost silently, and "price not supplied" is the honest line to print instead.
+func PricingFromRates(input, output string) Pricing {
+	in, inErr := strconv.ParseFloat(strings.TrimSpace(input), 64)
+	out, outErr := strconv.ParseFloat(strings.TrimSpace(output), 64)
+	switch {
+	case inErr != nil || outErr != nil:
+		return Pricing{}
+	case math.IsNaN(in) || math.IsNaN(out) || math.IsInf(in, 0) || math.IsInf(out, 0):
+		return Pricing{}
+	case in < 0 || out < 0:
+		return Pricing{}
+	}
+	return Pricing{InputPerMillion: in, OutputPerMillion: out}
 }
 
 type thresholdRow struct {

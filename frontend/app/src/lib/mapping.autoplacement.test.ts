@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { CANON } from '../data'
 import { initMappingFromHeaders } from './mapping'
@@ -77,6 +77,18 @@ function withTempDir(fn: (dir: string) => void): void {
   }
 }
 
+// Captures console.log so "logs one line" is measured, not assumed -- jrGateLogs' analog on
+// the Go half.
+function captureLogs(fn: () => void): string[] {
+  const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+  try {
+    fn()
+    return spy.mock.calls.map((c) => c.join(' '))
+  } finally {
+    spy.mockRestore()
+  }
+}
+
 // --- AC-1 -----------------------------------------------------------------------------------
 
 describe('AC-1: auto placement writer is silent without JEV_OUT', () => {
@@ -96,9 +108,30 @@ describe('AC-1: auto placement writer is silent without JEV_OUT', () => {
   it('negative: with JEV_OUT unset, runGated makes no read and writes nothing', () => {
     withTempDir((dir) => {
       const before = readdirSync(dir)
-      const ran = runGated(undefined)
+      let ran = true
+      const logs = captureLogs(() => {
+        ran = runGated(undefined)
+      })
       expect(ran).toBe(false)
       expect(readdirSync(dir)).toEqual(before)
+      // AC-1's other clause: exactly one line, and it names the variable that was missing.
+      expect(logs).toHaveLength(1)
+      expect(logs[0]).toContain('JEV_OUT')
+    })
+  })
+
+  // Control for the line count above: a run that IS given a directory declines nothing, so a
+  // writer that logged unconditionally would fail the negative leg's "exactly one".
+  it('control: a run given a directory logs no decline line', () => {
+    withTempDir((dir) => {
+      writeFileSync(join(dir, 'layouts.json'), JSON.stringify([{ id: 'a', columns: ['Date'] }]))
+      let ran = false
+      const logs = captureLogs(() => {
+        ran = runGated(dir)
+      })
+      expect(ran).toBe(true)
+      expect(logs).toEqual([])
+      expect(existsSync(join(dir, 'auto_placements.json'))).toBe(true)
     })
   })
 
@@ -159,8 +192,11 @@ describe('AC-3: the alias table is the shipped one', () => {
     expect(result.x).toEqual(want)
   })
 
+  // Asserts on the shipped function, not on `want`: a literal compared to itself cannot fail.
   it('invoice_number is never auto-placed, the deliberate absence ALIAS names', () => {
-    expect(want.invoice_number).toBeNull()
+    const tempting = ['Invoice Number', 'Invoice No', 'InvoiceNo', 'Invoice #', 'Number']
+    const result = autoPlacements([{ id: 'x', columns: tempting }])
+    expect(result.x.invoice_number).toBeNull()
   })
 
   it('is not a copy: matches initMappingFromHeaders called directly in this spec', () => {

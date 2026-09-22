@@ -600,7 +600,20 @@ type jrEnvKeySite struct {
 	file     string
 	funcName string
 	gated    bool // reads os.Getenv(ai.EnvKey) BEFORE calling ai.FromEnv, in the same function
-	blanked  bool // sets ai.EnvKey to "" before ai.FromEnv, in the same function
+	blanked  bool // sets ai.EnvKey to "" BEFORE calling ai.FromEnv, in the same function
+}
+
+// jrBlanksEnvKey reports whether call is Setenv(ai.EnvKey, ""). Position matters: a client
+// built before the blanking saw the real key.
+func jrBlanksEnvKey(call *ast.CallExpr) bool {
+	if !strings.HasSuffix(jrCallName(call.Fun), ".Setenv") || len(call.Args) != 2 {
+		return false
+	}
+	if jrCallName(call.Args[0]) != "ai.EnvKey" {
+		return false
+	}
+	lit, ok := call.Args[1].(*ast.BasicLit)
+	return ok && lit.Kind == token.STRING && lit.Value == `""`
 }
 
 func jrCallName(e ast.Expr) string {
@@ -615,67 +628,74 @@ func jrCallName(e ast.Expr) string {
 	return ""
 }
 
-// jrScanFromEnvSites parses every *_test.go under dir with go/parser and returns one entry
-// per top-level function whose body calls ai.FromEnv.
+// jrClassifyFile returns one entry per top-level function in src whose body calls ai.FromEnv.
+// Both flags are position-aware: a client built before the gate or before the blanking saw
+// the real key (TestJevRecord_TheKeyGateClassifierReadsOrder).
+func jrClassifyFile(t *testing.T, name string, src []byte) []jrEnvKeySite {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	var sites []jrEnvKeySite
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		var fromEnvPos, getenvPos, blankPos token.Pos
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if jrBlanksEnvKey(call) && blankPos == token.NoPos {
+				blankPos = call.Pos()
+			}
+			switch jrCallName(call.Fun) {
+			case "ai.FromEnv":
+				if fromEnvPos == token.NoPos {
+					fromEnvPos = call.Pos()
+				}
+			case "os.Getenv":
+				if len(call.Args) == 1 && jrCallName(call.Args[0]) == "ai.EnvKey" && getenvPos == token.NoPos {
+					getenvPos = call.Pos()
+				}
+			}
+			return true
+		})
+		if fromEnvPos == token.NoPos {
+			continue
+		}
+		sites = append(sites, jrEnvKeySite{
+			file:     name,
+			funcName: fn.Name.Name,
+			gated:    getenvPos != token.NoPos && getenvPos < fromEnvPos,
+			blanked:  blankPos != token.NoPos && blankPos < fromEnvPos,
+		})
+	}
+	return sites
+}
+
+// jrScanFromEnvSites classifies every *_test.go under dir.
 func jrScanFromEnvSites(t *testing.T, dir string) []jrEnvKeySite {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read dir %s: %v", dir, err)
 	}
-	fset := token.NewFileSet()
 	var sites []jrEnvKeySite
 	scanned := 0
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		src, err := os.ReadFile(path)
+		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		f, err := parser.ParseFile(fset, path, src, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", path, err)
+			t.Fatalf("read %s: %v", e.Name(), err)
 		}
 		scanned++
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
-			}
-			var fromEnvPos, getenvPos token.Pos
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				switch jrCallName(call.Fun) {
-				case "ai.FromEnv":
-					if fromEnvPos == token.NoPos {
-						fromEnvPos = call.Pos()
-					}
-				case "os.Getenv":
-					if len(call.Args) == 1 && jrCallName(call.Args[0]) == "ai.EnvKey" && getenvPos == token.NoPos {
-						getenvPos = call.Pos()
-					}
-				}
-				return true
-			})
-			if fromEnvPos == token.NoPos {
-				continue
-			}
-			start := fset.Position(fn.Pos()).Offset
-			end := fset.Position(fn.End()).Offset
-			body := string(src[start:end])
-			sites = append(sites, jrEnvKeySite{
-				file:     e.Name(),
-				funcName: fn.Name.Name,
-				gated:    getenvPos != token.NoPos && getenvPos < fromEnvPos,
-				blanked:  strings.Contains(body, `Setenv(ai.EnvKey, "")`),
-			})
-		}
+		sites = append(sites, jrClassifyFile(t, e.Name(), src)...)
 	}
 	if scanned < 3 {
 		t.Fatalf("scanned %d _test.go file(s) in %s, want at least 3 -- the walk looks truncated", scanned, dir)
@@ -714,5 +734,91 @@ func TestJevRecord_TheOnlyRealClientSitsBehindTheKeyGate(t *testing.T) {
 	}
 	if gated[0].file != "jev_record_test.go" || gated[0].funcName != "jrGatedRun" {
 		t.Fatalf("the gated ai.FromEnv call site is %s:%s, want jev_record_test.go:jrGatedRun", gated[0].file, gated[0].funcName)
+	}
+}
+
+// jrClassifierFixture holds one function per branch jrClassifyFile can take. Parsed, never
+// run: the ai.FromEnv calls below are source text, not call sites in this package.
+const jrClassifierFixture = `package p
+
+func gatedFirst() {
+	if os.Getenv(ai.EnvKey) == "" {
+		return
+	}
+	c, _ := ai.FromEnv(nil)
+	_ = c
+}
+
+func blankedFirst(t *testing.T) {
+	t.Setenv(ai.EnvKey, "")
+	c, _ := ai.FromEnv(nil)
+	_ = c
+}
+
+func blankedAfter(t *testing.T) {
+	c, _ := ai.FromEnv(nil)
+	t.Setenv(ai.EnvKey, "")
+	_ = c
+}
+
+func gatedAfter() {
+	c, _ := ai.FromEnv(nil)
+	if os.Getenv(ai.EnvKey) == "" {
+		return
+	}
+	_ = c
+}
+
+func bare() {
+	c, _ := ai.FromEnv(nil)
+	_ = c
+}
+
+func noClient(t *testing.T) {
+	t.Setenv(ai.EnvKey, "")
+	_ = os.Getenv(ai.EnvKey)
+}
+`
+
+// TestJevRecord_TheKeyGateClassifierReadsOrder pins what makes TheOnlyRealClientSitsBehindThe
+// KeyGate discriminating: a client built BEFORE the gate or BEFORE the blanking saw the real
+// key, so neither flag may be a mere presence check.
+func TestJevRecord_TheKeyGateClassifierReadsOrder(t *testing.T) {
+	sites := jrClassifyFile(t, "fixture_test.go", []byte(jrClassifierFixture))
+
+	got := map[string]jrEnvKeySite{}
+	for _, s := range sites {
+		got[s.funcName] = s
+	}
+	if len(sites) != 5 {
+		t.Fatalf("classified %d site(s), want 5 (noClient builds no client): %v", len(sites), sites)
+	}
+
+	for _, tc := range []struct {
+		fn      string
+		gated   bool
+		blanked bool
+	}{
+		{"gatedFirst", true, false},
+		{"blankedFirst", false, true},
+		{"blankedAfter", false, false},
+		{"gatedAfter", false, false},
+		{"bare", false, false},
+	} {
+		s, ok := got[tc.fn]
+		if !ok {
+			t.Errorf("%s was not classified", tc.fn)
+			continue
+		}
+		if s.gated != tc.gated || s.blanked != tc.blanked {
+			t.Errorf("%s: gated=%v blanked=%v, want gated=%v blanked=%v", tc.fn, s.gated, s.blanked, tc.gated, tc.blanked)
+		}
+	}
+
+	// The two that must reach the unaccounted arm of TheOnlyRealClientSitsBehindTheKeyGate.
+	for _, fn := range []string{"blankedAfter", "gatedAfter", "bare"} {
+		if s := got[fn]; s.gated || s.blanked {
+			t.Errorf("%s classified safe (gated=%v blanked=%v); it builds a client the real key can reach", fn, s.gated, s.blanked)
+		}
 	}
 }

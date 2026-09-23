@@ -186,6 +186,10 @@ Tell the FIRST subtask's executor to put the story's `## Decisions` section and 
 
 For each subtask in dependency order, run the stages below. Stage numbers start at 2.5 because code comments cite them. Run one stage agent at a time, and run no suite while a stage agent runs: agents in one worktree share its files and its dev Postgres.
 
+Before every spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
+
+After a context compaction, also run `mcp__backlog__task_list` for `story:<slug>` and `gh pr checks` before the next spawn. The summary says where the run was; git, Backlog and CI say where it is.
+
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask "In Progress" and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
 **Test-first is the default for logic-bearing work** (rules engine, tax maths, state machines, RLS, validation). `Test-first: no` is for UI, copy and config whose oracle is the deploy gate.

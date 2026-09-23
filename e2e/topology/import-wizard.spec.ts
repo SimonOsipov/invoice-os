@@ -9559,7 +9559,10 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
     expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: null, reason: 'missing' })
   }
 
-  const pilled = page.locator('[data-testid^="extraction-field-"]').filter({ hasText: REASON_PILL.unreadable })
+  // Floor: the one-pill count below is vacuous over a pane that dropped cells.
+  const cells = page.locator('[data-testid^="extraction-field-"]')
+  await expect(cells, 'the pane does not render one cell per header field').toHaveCount(VOCABULARY.length)
+  const pilled = cells.filter({ hasText: REASON_PILL.unreadable })
   await expect(pilled, 'a cell other than invoice_number renders the doubt pill').toHaveCount(1)
   await expect(pilled).toHaveAttribute('data-testid', 'extraction-field-invoice_number')
 

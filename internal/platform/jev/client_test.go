@@ -901,8 +901,12 @@ func TestAsk_AnErrorNeverCarriesTheBodyStateOrKey(t *testing.T) {
 				t.Fatal("hits = 0, want the request to reach the server")
 			}
 			text := err.Error()
+			if !slices.Contains(c21Texts, text) {
+				t.Errorf("err text = %q, want one of %q", text, c21Texts)
+			}
+			// Lowercased, so a re-cased leak still counts.
 			for _, needle := range []string{"SECRETKEY", "SECRETSTATE", "SECRETQUESTION", "SECRETBODY422", "SECRETBODY500", "SECRETBODYJSON", ts.URL, "http"} {
-				if strings.Contains(text, needle) {
+				if strings.Contains(strings.ToLower(text), strings.ToLower(needle)) {
 					t.Errorf("err text %q contains %q", text, needle)
 				}
 			}

@@ -18,8 +18,7 @@ func jcMinimalQuestions() map[string]Question {
 
 // AC-1. One POST, the key under AuthHeaderName with AuthHeaderPrefix, and the wire
 // body carries model/state/questions -- the key appears nowhere else. The spelling
-// of AuthHeaderName/AuthHeaderPrefix is read from the constants, never guessed:
-// CHECK-02 owns that lookup against the vendor's API reference.
+// of AuthHeaderName/AuthHeaderPrefix is read from the constants, never guessed.
 func TestClient_SendsOneBearerPost(t *testing.T) {
 	const apiKey = "sk-test-JEVKEY42"
 	const model = "jev-latest"

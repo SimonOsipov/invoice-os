@@ -749,6 +749,7 @@ func TestJevMapping_TheWalkNamesNoClient(t *testing.T) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
+			// Exact case on purpose: Go selectors are case-sensitive.
 			if id, ok := x.X.(*ast.Ident); ok && id.Name == jevName {
 				if x.Sel.Name == "Model" {
 					sawJevModel = true

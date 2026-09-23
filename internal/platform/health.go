@@ -57,6 +57,10 @@ var DBReset string
 // health-gate asserts this field on every trigger, not only on PRs.
 var DemoPurge string
 
+// MockIssuer is "absent", "off" or "on" on the gateway and empty elsewhere: a
+// 404 on the mint routes cannot tell an untagged build from a gated-off one.
+var MockIssuer string
+
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]string{"status": "ok", "build": BuildSHA}

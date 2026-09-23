@@ -187,11 +187,10 @@ func TestApprovalGate_AllowedWhenEveryRungPasses(t *testing.T) {
 	}
 }
 
-// TestApprovalGate_IgnoresTransmitClear (AC #5): APPROVALS_ENFORCED reaches
-// ApprovalFacts through TransmitClear and nowhere else (store.go), so a gate that
-// consulted it would silently flag-gate an UNFLAGGED endpoint. Same fixture, both
-// values, identical answer -- and allowed in both, so a gate stuck on false cannot
-// pass this for free.
+// TestApprovalGate_IgnoresTransmitClear (AC #5): TransmitClear feeds can_submit alone
+// (store.go), so approvalGate must not consult it for can_approve/can_reject. Same
+// fixture, both values, identical answer -- and allowed in both, so a gate stuck on
+// false cannot pass this for free.
 func TestApprovalGate_IgnoresTransmitClear(t *testing.T) {
 	f := liveRunFacts()
 	f.TransmitClear = false
@@ -202,7 +201,7 @@ func TestApprovalGate_IgnoresTransmitClear(t *testing.T) {
 	assertApprovalGate(t, canOff, reasonOff, true, "")
 	assertApprovalGate(t, canOn, reasonOn, true, "")
 	if canOff != canOn {
-		t.Errorf("can = %v with TransmitClear false and %v with it true, want identical -- the four flags are not flag-gated", canOff, canOn)
+		t.Errorf("can = %v with TransmitClear false and %v with it true, want identical", canOff, canOn)
 	}
 	if !sameReason(reasonOff, reasonOn) {
 		t.Errorf("reason differs across TransmitClear: %v vs %v, want identical", derefReason(reasonOff), derefReason(reasonOn))
@@ -407,55 +406,34 @@ func TestGetHandler_ApproveKeysAppearExactlyOnce(t *testing.T) {
 
 // --- DB-backed: the real Store.ApprovalFacts behind the read side --------------
 
-// TestGetHandler_ApproveFlagsIgnoreTheEnforcementFlag (AC #5) end to end. The store
-// half is already pinned by TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff;
-// this is the HANDLER half -- the same armed invoice, read through the REAL
-// Store.ApprovalFacts under both flag states, must produce byte-identical approve
-// flags. The armed fixture clears every rung, so both arms read true: a gate stuck
-// on false cannot pass this by agreeing with itself.
-func TestGetHandler_ApproveFlagsIgnoreTheEnforcementFlag(t *testing.T) {
+// TestGetHandler_ApproveFlagsOnTheRealStore (AC #5) end to end -- the HANDLER half of
+// TestStoreApprovalFacts_CarriesRunStatePendingOrdAndHoldsRole's store-level proof.
+// The same armed invoice, read through the REAL Store.ApprovalFacts, must produce
+// approve flags true and can_submit false on the open run.
+func TestGetHandler_ApproveFlagsOnTheRealStore(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-06-FLAGPARITY", true)
 	fx.armInvoice(t, super, app, "appr-08-06-flagparity")
 
-	flagsFor := func(t *testing.T, enforced bool) (approveGateBody, string) {
-		t.Helper()
-		store := NewStore(app, WithApprovalsEnforced(enforced))
-		r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
-		r.SetPathValue("id", fx.invID)
-		r = r.WithContext(fx.ctx)
-		rec := httptest.NewRecorder()
-		GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("enforced=%v: status = %d, want 200 (body=%s)", enforced, rec.Code, rec.Body.String())
-		}
-		return decodeApproveBody(t, rec), rec.Body.String()
+	store := NewStore(app)
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
+	r.SetPathValue("id", fx.invID)
+	r = r.WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	GetHandler(store.Get, store.CallerRole, store.ApprovalFacts, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
+	got, body := decodeApproveBody(t, rec), rec.Body.String()
 
-	off, offBody := flagsFor(t, false)
-	on, onBody := flagsFor(t, true)
-
-	if !off.CanApprove {
-		t.Errorf("APPROVALS_ENFORCED off: can_approve = false, want true -- the caller is a staffed admin on a validated invoice with an open run (body=%s)", offBody)
+	if !got.CanApprove {
+		t.Errorf("can_approve = false, want true -- the caller is a staffed admin on a validated invoice with an open run (body=%s)", body)
 	}
-	if !on.CanApprove {
-		t.Errorf("APPROVALS_ENFORCED on: can_approve = false, want true (body=%s)", onBody)
+	if got.CanApprove != got.CanReject {
+		t.Errorf("can_approve=%v can_reject=%v, want agreement", got.CanApprove, got.CanReject)
 	}
-	if off.CanApprove != on.CanApprove || off.CanReject != on.CanReject {
-		t.Errorf("flags differ across APPROVALS_ENFORCED: off=%+v on=%+v, want identical -- the decision endpoint is unflagged", off, on)
-	}
-	if !sameReason(off.ApproveBlockedReason, on.ApproveBlockedReason) || !sameReason(off.RejectBlockedReason, on.RejectBlockedReason) {
-		t.Errorf("reasons differ across APPROVALS_ENFORCED: off=%q/%q on=%q/%q, want identical",
-			derefReason(off.ApproveBlockedReason), derefReason(off.RejectBlockedReason),
-			derefReason(on.ApproveBlockedReason), derefReason(on.RejectBlockedReason))
-	}
-	// can_submit is the control: it IS flag-folded, so a handler that had simply
-	// stopped reading the flag would show up here rather than pass silently.
-	if !strings.Contains(offBody, `"can_submit":true`) {
-		t.Errorf("APPROVALS_ENFORCED off: want the literal \"can_submit\":true (body=%s)", offBody)
-	}
-	if !strings.Contains(onBody, `"can_submit":false`) {
-		t.Errorf("APPROVALS_ENFORCED on: want the literal \"can_submit\":false on an open run (body=%s)", onBody)
+	if !strings.Contains(body, `"can_submit":false`) {
+		t.Errorf("want the literal \"can_submit\":false on an open run (body=%s)", body)
 	}
 }

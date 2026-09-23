@@ -407,8 +407,7 @@ export interface GetInvoiceResult extends Invoice {
   resolve_outside_blocked_reason: string | null
   // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
   // no-omitempty convention. One backend gate feeds both pairs, so can_approve always
-  // equals can_reject and the two reasons are the same string. NOT gated by
-  // APPROVALS_ENFORCED -- the decision endpoint is unflagged.
+  // equals can_reject and the two reasons are the same string.
   can_approve: boolean
   approve_blocked_reason: string | null
   can_reject: boolean
@@ -651,6 +650,28 @@ export function getSavedMapping(token: string, entityId: string, documentId: str
     `${apiBase()}/api/invoice/v1/imports/saved-mapping?entity_id=${encodeURIComponent(entityId)}&document_id=${encodeURIComponent(documentId)}`,
     { token },
   )
+}
+
+// POST /v1/imports/suggest-mapping. Mirrors internal/importer/handlers_suggest.go's
+// suggestMappingRequest/suggestMappingResponse. Flat on purpose: wireMirrors.test.ts's
+// tsInterfaceKeys reads zero keys from a body containing a nested literal.
+export interface SuggestMappingRequest {
+  entity_id: string
+  document_id: string
+}
+
+export interface SuggestMapping {
+  source: 'saved' | 'ai' | 'none'
+  header_row: number
+  columns: string[]
+  sample_rows: string[][]
+  rows_total: number
+  mapping: Record<string, string>
+  saved_at: string | null
+}
+
+export function suggestMapping(token: string, body: SuggestMappingRequest): Promise<SuggestMapping> {
+  return apiFetch<SuggestMapping>(`${apiBase()}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body, token })
 }
 
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).

@@ -287,6 +287,28 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function getSavedMapping(',
     floor: 1,
   },
+  // The AI mapping suggestion (internal/importer/handlers_suggest.go). Both Go structs are
+  // unexported; `go` names them lowercase.
+  {
+    ts: 'SuggestMappingRequest',
+    go: 'suggestMappingRequest',
+    goPath: 'internal/importer/handlers_suggest.go',
+    goAnchor: 'func SuggestMappingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function suggestMapping(',
+    e2eAnchor: 'export function suggestMapping(',
+    floor: 2,
+  },
+  {
+    ts: 'SuggestMapping',
+    go: 'suggestMappingResponse',
+    goPath: 'internal/importer/handlers_suggest.go',
+    goAnchor: 'func respondSuggestion(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function suggestMapping(',
+    e2eAnchor: 'export function suggestMapping(',
+    floor: 7,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -412,6 +434,8 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'SupplyNumberRequest',
       'SavedMapping',
       'SavedMappingResponse',
+      'SuggestMappingRequest',
+      'SuggestMapping',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -816,6 +840,59 @@ describe('every wire struct in handlers_lineitems.go has a mirror row (EXTR-13-0
   })
 })
 
+// AIR-07-03 -- the suggest-mapping wire (internal/importer/handlers_suggest.go). Both Go
+// structs are unexported, so exportedWireStructs' [A-Z] leading letter would read zero here.
+// Typed `string`, not inferred as a literal: at Stage 2.5 this path is absent from every
+// WIRE_MIRRORS row, and a literal type here would make `m.goPath === SUGGEST_GO_PATH`
+// a TS2367 (no overlap) rather than the runtime `[]` the RED test needs.
+const SUGGEST_GO_PATH: string = 'internal/importer/handlers_suggest.go'
+const SUGGEST_SPA_PATH = 'frontend/app/src/lib/importApi.ts'
+const SUGGEST_REQUEST_KEYS = ['entity_id', 'document_id']
+const SUGGEST_RESPONSE_KEYS = ['source', 'header_row', 'columns', 'sample_rows', 'rows_total', 'mapping', 'saved_at']
+
+// Same shape as exportedWireStructs, lowercase-tolerant: MappingSuggester is an
+// `interface`, not a `struct`, so the keyword alone already excludes it.
+function wireStructsAnyCase(source: string): string[] {
+  return [...source.matchAll(/type\s+([A-Za-z][A-Za-z0-9_]*)\s+struct\s*\{([^{}]*)\}/g)]
+    .filter((m) => /`json:"[^"]+"`/.test(m[2]))
+    .map((m) => m[1])
+}
+
+describe('the suggest-mapping wire types: exact key lists, not just a floor (AIR-07-03)', () => {
+  it('wireMirrors_theSuggestKeyListsAreExactNotJustAboveAFloor', () => {
+    const goRequestKeys = goStructKeys(repoFile(SUGGEST_GO_PATH), 'suggestMappingRequest')
+    const goResponseKeys = goStructKeys(repoFile(SUGGEST_GO_PATH), 'suggestMappingResponse')
+    expect(goRequestKeys, 'Go suggestMappingRequest read nothing').toEqual(SUGGEST_REQUEST_KEYS)
+    expect(goResponseKeys, 'Go suggestMappingResponse read nothing').toEqual(SUGGEST_RESPONSE_KEYS)
+
+    for (const path of [SUGGEST_SPA_PATH, E2E_CLIENT]) {
+      const src = repoFile(path)
+      expect(tsInterfaceKeys(src, 'SuggestMappingRequest'), `${path} SuggestMappingRequest`).toEqual(goRequestKeys)
+      expect(tsInterfaceKeys(src, 'SuggestMapping'), `${path} SuggestMapping`).toEqual(goResponseKeys)
+    }
+  })
+})
+
+describe('every wire struct in handlers_suggest.go has a mirror row (AIR-07-03)', () => {
+  it('wireMirrors_noStructInTheSuggestFileIsUnmirrored', () => {
+    const found = wireStructsAnyCase(repoFile(SUGGEST_GO_PATH))
+    expect(found, 'the struct scan read nothing').toEqual(['suggestMappingRequest', 'suggestMappingResponse'])
+    expect(found, 'MappingSuggester is an interface, not a struct').not.toContain('MappingSuggester')
+
+    const mirrored = WIRE_MIRRORS.filter((m) => m.goPath === SUGGEST_GO_PATH).map((m) => m.go)
+    for (const name of found) {
+      expect(mirrored, `${name} is a tagged wire struct with no WIRE_MIRRORS row`).toContain(name)
+    }
+  })
+
+  it('wireMirrors_plantedPositiveAnUnmirroredSuggestStructIsReported', () => {
+    // Synthetic, in-memory only.
+    const fixture =
+      'type suggestMappingRequest struct {\n\tA string `json:"a"`\n}\n\ntype MappingSuggester interface {\n\tEnabled() bool\n}\n'
+    expect(wireStructsAnyCase(fixture)).toEqual(['suggestMappingRequest'])
+  })
+})
+
 // The mux pattern cmd/submission/main.go registers, with {id} normalized to {}.
 function goMuxPattern(source: string, suffix: string): string {
   const m = new RegExp(`"POST (/v1/[^"]*${suffix})"`).exec(source)?.[1] ?? ''
@@ -875,6 +952,70 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
   })
 })
 
+// The invoice mux's pattern, gateway-prefixed. goMuxPattern above hardcodes /api/submission.
+function goInvoiceMuxPattern(source: string, suffix: string): string {
+  const m = new RegExp(`"POST (/v1/[^"]*${suffix})"`).exec(source)?.[1] ?? ''
+  return m === '' ? '' : `/api/invoice${m}`.replace(/\{[^}]*\}/g, '{}')
+}
+
+describe('the suggest-mapping path equals the registered mux pattern (AIR-07-03)', () => {
+  const INVOICE_MAIN = 'cmd/invoice/main.go'
+
+  it('suggestPath_bothTypeScriptCallersBuildThePathTheMuxRegistered', () => {
+    const want = goInvoiceMuxPattern(repoFile(INVOICE_MAIN), '/suggest-mapping')
+    expect(want, `no POST …/suggest-mapping pattern in ${INVOICE_MAIN}`).toBe('/api/invoice/v1/imports/suggest-mapping')
+
+    expect(
+      tsTemplatePath(repoFile(SUGGEST_SPA_PATH), /`\$\{base\}([^`]*suggest-mapping)`/),
+      'the SPA posts to a path the invoice mux does not register',
+    ).toBe(want)
+    expect(
+      tsTemplatePath(repoFile(E2E_CLIENT), /`\$\{apiBase\(\)\}([^`]*suggest-mapping)`/),
+      'e2e/api/client.ts posts to a path the invoice mux does not register',
+    ).toBe(want)
+  })
+})
+
+// The three source values Go writes as inline literals. No const block exists to mirror,
+// so the call sites and the one local assignment are the only readable statement of them.
+function goSuggestSources(source: string): string[] {
+  const found = new Set<string>()
+  for (const m of source.matchAll(/respondSuggestion\(w,\s*"([^"]+)"/g)) found.add(m[1])
+  for (const m of source.matchAll(/\bsource\s*:?=\s*"([^"]+)"/g)) found.add(m[1])
+  return [...found].sort()
+}
+
+// A single-line field's quoted union members. Brace-free by construction, like the bodies
+// tsInterfaceKeys reads.
+function tsFieldUnionMembers(source: string, interfaceName: string, field: string): string[] {
+  const body = new RegExp(`export interface\\s+${interfaceName}\\s*\\{([^{}]*)\\}`).exec(source)?.[1] ?? ''
+  const line = new RegExp(`^\\s*${field}\\s*:\\s*(.+)$`, 'm').exec(body)?.[1] ?? ''
+  return [...line.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort()
+}
+
+describe("the suggest response's source vocabulary (AIR-07-03)", () => {
+  it('wireMirrors_theSuggestSourceVocabularyMatchesGo', () => {
+    const goSources = goSuggestSources(repoFile(SUGGEST_GO_PATH))
+    expect(goSources, 'the Go source-literal scan read nothing').not.toEqual([])
+    expect(goSources).toEqual(['ai', 'none', 'saved'])
+
+    for (const path of [SUGGEST_SPA_PATH, E2E_CLIENT]) {
+      const members = tsFieldUnionMembers(repoFile(path), 'SuggestMapping', 'source')
+      expect(members, `${path} SuggestMapping.source read nothing`).not.toEqual([])
+      expect(members, `${path} SuggestMapping.source vs the Go literals`).toEqual(goSources)
+    }
+  })
+
+  it('wireMirrors_plantedPositiveASourceVocabularyDivergenceIsReported', () => {
+    // Synthetic, in-memory only.
+    const goFixture = 'respondSuggestion(w, "stored", 1, nil, nil, nil, nil)\n\t\tsource := "ai"\n'
+    const tsFixture = "export interface SuggestMapping {\n  source: 'saved' | 'ai'\n}"
+    expect(goSuggestSources(goFixture)).toEqual(['ai', 'stored'])
+    expect(tsFieldUnionMembers(tsFixture, 'SuggestMapping', 'source')).toEqual(['ai', 'saved'])
+    expect(goSuggestSources(goFixture)).not.toEqual(tsFieldUnionMembers(tsFixture, 'SuggestMapping', 'source'))
+  })
+})
+
 // -- copies this file deliberately does NOT guard (EXTR-13-06, AC-9) ----------------------
 //
 // LOCKED_FIELDS (extractionReview.ts) vs handlers_correction.go's lockedFields -- a Go
@@ -893,6 +1034,11 @@ describe('the line-items gateway path equals the registered mux pattern (EXTR-13
 // A field added to all three legs at once -- goStructKeys compares SETS, so the registry is
 //   blind by construction. Go's TestLineItemsWireTypes_HaveBraceFreeBodies pins 4/1/4 exactly,
 //   which catches an addition; a same-count swap and wrong semantics stay open.
+// SuggestMapping's and SuggestMappingRequest's field TYPES -- every row here compares key
+//   NAMES, so header_row: string, or an e2e copy whose saved_at drops `| null`, reads clean
+//   on all three legs. The vocabulary of `source` is the one value-level exception:
+//   wireMirrors_theSuggestSourceVocabularyMatchesGo reads Go's inline literals directly,
+//   there being no const block to mirror.
 
 // EXTR-15-01 AC-6. The exclusion list above claimed the jobs list had no SPA copy and that the
 // SPA never read it. Both are false, and a stale exclusion is worse than no exclusion: it

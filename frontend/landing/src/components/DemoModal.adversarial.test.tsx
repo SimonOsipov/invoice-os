@@ -14,15 +14,17 @@
 //    — a render-time seam, not simulated user interaction, so it stays inside
 //    this file's "SSR, no interactivity" constraint.
 //
-//    The mock keys off useState's call ORDER, which DemoModal calls in a fixed
-//    sequence every render: 1st `form` (DEFAULT_FORM, an object with a `name`
-//    key), 2nd `errors` (a plain object, `{}` by default), 3rd `demoStep` (a
-//    string). React's Rules of Hooks guarantee this order never changes across
-//    renders of the same component — the same guarantee the hooks system
-//    itself is built on — so this is not the usual fragile call-order trick
-//    against an opaque API. If DemoModal's own hook order changes, this test
-//    needs updating alongside it; that coupling is intentional and documented
-//    here, not hidden.
+//    The mock keys off useState's call ORDER. All three hooks live in the child
+//    DemoLeadForm (DemoModal itself declares none): 1st `form`
+//    (DEFAULT_FORM, an object with a `name` key), 2nd `errors` (a plain object,
+//    `{}` by default), 3rd `demoStep` (a string). renderToStaticMarkup renders
+//    parent then child in one synchronous pass, so DemoModal's zero useState
+//    calls leave this order unchanged. React's Rules of Hooks guarantee the
+//    order never changes across renders of the same component — the same
+//    guarantee the hooks system itself is built on — so this is not the usual
+//    fragile call-order trick against an opaque API. If DemoLeadForm's own hook
+//    order changes, this test needs updating alongside it; that coupling is
+//    intentional and documented here, not hidden.
 //
 // 2. That DEFAULT_FORM.size really IS the imported DEFAULT_TAXPAYER_SIZE
 //    constant, not a hardcoded literal that merely happens to match it today

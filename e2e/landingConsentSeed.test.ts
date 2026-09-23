@@ -117,8 +117,8 @@ describe('control: both sources were read and still have the shape these asserti
     // The floor that makes the ordering assertion below cover the whole suite:
     // a second page.goto would be an unseeded entry point.
     expect(spec.match(/page\.goto\(/g) ?? []).toHaveLength(1)
-    expect(spec.match(/await openLanding\(page\)/g) ?? []).toHaveLength(7)
-    expect(spec.match(/expectClosedGateStayedSilent\(sinks\)/g) ?? []).toHaveLength(7)
+    expect(spec.match(/await openLanding\(page\)/g) ?? []).toHaveLength(8)
+    expect(spec.match(/expectClosedGateStayedSilent\(sinks\)/g) ?? []).toHaveLength(8)
   })
 })
 

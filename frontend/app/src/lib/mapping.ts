@@ -5,8 +5,8 @@ import { CANON } from '../data'
 import type { Mapping } from '../types'
 
 // Header aliases that auto-place a column. `invoice_number` is deliberately
-// absent: the fiscal identifier is never guessed — a plausible wrong default
-// invites rubber-stamping, and this data is submitted under the firm's TIN.
+// absent: this table never name-matches it; a suggestion or a restore is the only automatic route.
+// A plausible wrong default invites rubber-stamping, and this data is submitted under the firm's TIN.
 const ALIAS: Record<string, string[]> = {
   issue_date: ['issuedate', 'date'],
   buyer_tin: ['buyertin'],
@@ -89,6 +89,26 @@ export function restoreMapping(headers: string[], saved: Record<string, string>)
   CANON.forEach((c) => {
     const v = saved[c.key]
     map[c.key] = typeof v === 'string' && headers.includes(v) ? v : null
+  })
+  return map
+}
+
+// An AI answer that omits a field leaves that field's alias column free, so the automatic
+// placement is restored there. A column the answer already names is never reused, so no
+// placement the server's duplicate sweep removed can come back. Two fallbacks cannot
+// collide either: recognize never places two fields on one column.
+export function fillUnplacedFromAliases(headers: string[], placed: Mapping): Mapping {
+  const claimed = new Set(Object.values(placed).filter((v): v is string => v !== null))
+  const auto = recognize(headers)
+  const map: Mapping = {}
+  CANON.forEach((c) => {
+    const held = placed[c.key] ?? null
+    if (held !== null) {
+      map[c.key] = held
+      return
+    }
+    const alias = auto[c.key]
+    map[c.key] = alias && !claimed.has(alias) ? alias : null
   })
   return map
 }

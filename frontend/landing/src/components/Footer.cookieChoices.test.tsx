@@ -63,7 +63,7 @@ function directChildren(elementHtml: string): string[] {
 }
 
 // The attributes are the assertion surface for the a11y specs, so they get read from
-// the opening tag alone — a whole-element scan matches the version span's attributes too.
+// the opening tag alone.
 function openingTag(elementHtml: string): string {
   const at = elementHtml.indexOf('>')
   expect(at, 'no opening tag in this markup').toBeGreaterThan(-1)
@@ -101,22 +101,20 @@ describe('Footer Cookie choices control (LAND-05-04)', () => {
     expect(html, 'the control is an anchor, not a button').not.toMatch(/<a[^>]*>Cookie choices</)
   })
 
-  it('T4-2: it shares one wrapper with the version string, and the row keeps two direct children', () => {
+  it('T4-2: the control keeps its own wrapper, and the row keeps two direct children', () => {
     const row = copyrightRowSlice(html)
     const children = directChildren(row)
     expect(children.length, 'the copyright row must stay a two-item space-between row').toBe(2)
     expect(children[0], 'the first child is the copyright string').toContain(COPYRIGHT)
 
     const wrapper = children[1]
-    expect(wrapper, 'the control is not grouped with the version string').toContain(LABEL)
-    expect(wrapper, 'the version string left the wrapper').toContain('v 1.0')
+    expect(wrapper, 'the second child is not the control wrapper').toContain(LABEL)
 
     const inner = directChildren(wrapper)
-    expect(inner.length, 'the wrapper holds the control and the version string, nothing else').toBe(2)
-    expect(inner.join(''), 'the wrapper direct children are not the control and the version string').toContain(LABEL)
-    expect(inner.join('')).toContain('v 1.0')
+    expect(inner.length, 'the wrapper holds the control and nothing else').toBe(1)
+    expect(inner[0], 'the wrapper direct child is not the control').toContain(LABEL)
 
-    // Element count alone lets a text node in as a third anonymous flex item.
+    // Element count alone lets a text node in as a further anonymous flex item.
     expectNoStrayText(row, children)
     expectNoStrayText(wrapper, inner)
   })
@@ -193,22 +191,22 @@ describe('Footer Cookie choices control (LAND-05-04)', () => {
   })
 
   it('T4-5: it renders var(--primary), never --fg-3 / --muted-foreground', () => {
-    // Control needle: --fg-3 IS in this row, on both spans, so the exclusion is not vacuous.
-    expect(copyrightRowSlice(html), 'control: the row spans no longer carry --fg-3').toContain('var(--fg-3)')
+    // Control needle: --fg-3 IS in this row, on the copyright span, so the exclusion is not vacuous.
+    expect(copyrightRowSlice(html), 'control: the copyright span no longer carries --fg-3').toContain('var(--fg-3)')
     const control = buttonWithLabel(html, LABEL)
     expect(control).toContain('var(--primary)')
     expect(control).not.toContain('var(--fg-3)')
     expect(control).not.toContain('var(--muted-foreground)')
   })
 
+  // Inert while the wrapper holds one child — a one-child flex container cannot wrap. Pinned
+  // so the row keeps its break point the day a second child joins the wrapper.
   it('AC-3: the wrapper wraps, keeping the break point the row has today', () => {
     const row = copyrightRowSlice(html)
     expect(row, 'control: the outer row already wraps').toContain('flex-wrap:wrap')
     const children = directChildren(row)
     expect(children.length).toBe(2)
-    expect(children[1], 'a non-wrapping wrapper overflows into App.tsx overflow-x: clip, silently').toContain(
-      'flex-wrap:wrap',
-    )
+    expect(children[1], 'the wrapper would not wrap a second child, overflowing the row').toContain('flex-wrap:wrap')
   })
 
   it('T4-9: with no onCookieChoices the render does not throw and still emits the control', () => {

@@ -1,6 +1,5 @@
 // task-499 (APPR-08-08): DB-backed specs for (*Store).RowFacts -- the list's
-// row-approval read -- and for the end-to-end guarantee that APPROVALS_ENFORCED never
-// gates it.
+// row-approval read.
 //
 // Each case carries a POSITIVE leg asserting a real, populated answer: an "is empty" or
 // "the two are equal" assertion alone passes for free against a method that returns
@@ -9,8 +8,8 @@
 //
 // Spec-to-test map (task-499 Test Specs table):
 //
-//	AC-6 TestStoreRowFacts_DoesNotConsultApprovalsEnforced
-//	AC-6 TestListHandler_ApprovalFactsIgnoreTheEnforcementFlag
+//	AC-6 TestStoreRowFacts_ReturnsTheArmedStanding
+//	AC-6 TestListHandler_ApprovalObjectCarriesTheArmedStanding
 //	RLS  TestStoreRowFacts_IsTenantScopedByRLS
 //
 // Fixtures are reused wholesale: seedApprovalFactsFixture / armInvoice
@@ -59,61 +58,29 @@ func wantArmedRowFactsOnTheWire() approval.RowFacts {
 	return want
 }
 
-// --- AC-6: the flag gates enforcement, not visibility -----------------------
+// --- AC-6: the row facts are populated ---------------------------------------
 
-// TestStoreRowFacts_DoesNotConsultApprovalsEnforced: the ONE way this method differs
-// from (*Store).ApprovalFacts, which folds the flag into TransmitClear. Two stores over
-// the same armed fixture, flag on and off, must answer identically
-// (docs/approvals.md section 11).
-//
-// Three legs, and the equality one alone is worthless without the other two:
-//
-//	POPULATED -- the flag-ON map really carries the armed invoice's facts, so a method
-//	  that answered {} for both would not pass by returning nothing.
-//	LIVE -- WithApprovalsEnforced(true) is actually in force on that same store, proved
-//	  through ApprovalFacts, whose TransmitClear the flag DOES fold. Without this leg,
-//	  wrapping the whole read in "if !s.approvalsEnforced { ... }" passes: nothing else
-//	  in the package reads the flag on a store built for this test.
-//	EQUAL -- the two maps are deeply equal.
-func TestStoreRowFacts_DoesNotConsultApprovalsEnforced(t *testing.T) {
+// TestStoreRowFacts_ReturnsTheArmedStanding: the armed invoice's entry equals the real,
+// populated standing -- not an empty map.
+func TestStoreRowFacts_ReturnsTheArmedStanding(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-08-FLAGPAIR", true)
 	fx.armInvoice(t, super, app, "appr-08-08-flagpair")
 
-	on := NewStore(app, WithApprovalsEnforced(true))
-	off := NewStore(app, WithApprovalsEnforced(false))
+	store := NewStore(app)
 
-	gotOn, _, err := on.RowFacts(fx.ctx, []string{fx.invID})
+	gotOn, _, err := store.RowFacts(fx.ctx, []string{fx.invID})
 	if err != nil {
-		t.Fatalf("RowFacts (flag on): %v", err)
-	}
-	gotOff, _, err := off.RowFacts(fx.ctx, []string{fx.invID})
-	if err != nil {
-		t.Fatalf("RowFacts (flag off): %v", err)
+		t.Fatalf("RowFacts: %v", err)
 	}
 
-	// POPULATED.
-	factsOn, ok := gotOn[fx.invID]
+	facts, ok := gotOn[fx.invID]
 	if !ok {
-		t.Fatalf("RowFacts (flag on) = %+v, want an entry for the armed invoice %s -- an empty map would make the equality check below vacuous", gotOn, fx.invID)
+		t.Fatalf("RowFacts = %+v, want an entry for the armed invoice %s", gotOn, fx.invID)
 	}
-	if !reflect.DeepEqual(factsOn, wantArmedRowFacts()) {
-		t.Errorf("RowFacts (flag on)[%s] = %+v, want %+v", fx.invID, factsOn, wantArmedRowFacts())
-	}
-
-	// LIVE: the flag-ON store really has the flag on.
-	af, err := on.ApprovalFacts(fx.ctx, fx.invID)
-	if err != nil {
-		t.Fatalf("ApprovalFacts (flag on): %v", err)
-	}
-	if af.TransmitClear {
-		t.Fatal("ApprovalFacts(flag on).TransmitClear = true for an OPEN run under an active policy -- WithApprovalsEnforced(true) is not in force on this store, so the equality check below proves nothing")
-	}
-
-	// EQUAL.
-	if !reflect.DeepEqual(gotOn, gotOff) {
-		t.Errorf("RowFacts differ by APPROVALS_ENFORCED:\n  on  = %+v\n  off = %+v\nthe flag gates enforcement, never visibility (docs/approvals.md section 11)", gotOn, gotOff)
+	if !reflect.DeepEqual(facts, wantArmedRowFacts()) {
+		t.Errorf("RowFacts[%s] = %+v, want %+v", fx.invID, facts, wantArmedRowFacts())
 	}
 }
 
@@ -133,7 +100,7 @@ func TestStoreRowFacts_IsTenantScopedByRLS(t *testing.T) {
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-08-RLS", true)
 	fx.armInvoice(t, super, app, "appr-08-08-rls")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	// Control: tenant A sees its own armed invoice.
 	own, _, err := store.RowFacts(fx.ctx, []string{fx.invID})
@@ -167,7 +134,7 @@ func TestStoreRowFacts_IsTenantScopedByRLS(t *testing.T) {
 // (platform/db/tenant.go), so this needs no fixture -- only a real store.
 func TestStoreRowFacts_TenantlessContextErrors(t *testing.T) {
 	_, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, _, err := store.RowFacts(context.Background(), []string{uuid.NewString()})
 	if err == nil {
@@ -194,7 +161,7 @@ func TestStoreRowFacts_EmptyIDSlice(t *testing.T) {
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-08-EMPTYIDS", true)
 	fx.armInvoice(t, super, app, "appr-08-08-emptyids")
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	// Control: this tenant really does have an armed invoice to over-return.
 	armed, _, err := store.RowFacts(fx.ctx, []string{fx.invID})
@@ -224,64 +191,50 @@ func TestStoreRowFacts_EmptyIDSlice(t *testing.T) {
 	}
 }
 
-// TestListHandler_ApprovalFactsIgnoreTheEnforcementFlag: the same AC-6 guarantee end to
+// TestListHandler_ApprovalObjectCarriesTheArmedStanding: the same AC-6 guarantee end to
 // end, DB row through to wire byte -- the REAL Store.List and Store.RowFacts wired into
-// the REAL ListHandler, exactly as cmd/invoice/main.go wires them, on a flag-on and a
-// flag-off store. The two rows' approval objects must be byte-identical.
-//
-// A store-level equality can hold while the HANDLER forks on the flag (an
-// "if s.approvalsEnforced" in the seam wiring, a nulled envelope on a flag-off
-// deployment); this is the leg that would catch that.
-func TestListHandler_ApprovalFactsIgnoreTheEnforcementFlag(t *testing.T) {
+// the REAL ListHandler, exactly as cmd/invoice/main.go wires them. The armed invoice's
+// approval object on the wire equals its populated standing, not an empty or null one.
+func TestListHandler_ApprovalObjectCarriesTheArmedStanding(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-08-WIREFLAG", true)
 	fx.armInvoice(t, super, app, "appr-08-08-wireflag")
 
-	approvalOf := func(t *testing.T, store *Store) json.RawMessage {
-		t.Helper()
-		r := httptest.NewRequest("GET", "/v1/invoices?limit=200", nil)
-		r = r.WithContext(fx.ctx)
-		rec := httptest.NewRecorder()
-		ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	store := NewStore(app)
+
+	r := httptest.NewRequest("GET", "/v1/invoices?limit=200", nil)
+	r = r.WithContext(fx.ctx)
+	rec := httptest.NewRecorder()
+	ListHandler(store.List, store.RowFacts, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var raw json.RawMessage
+	for _, row := range listRowsRaw(t, rec) {
+		var idField string
+		if err := json.Unmarshal(row["id"], &idField); err != nil {
+			t.Fatalf("decode row id: %v", err)
 		}
-		for _, row := range listRowsRaw(t, rec) {
-			var idField string
-			if err := json.Unmarshal(row["id"], &idField); err != nil {
-				t.Fatalf("decode row id: %v", err)
-			}
-			if idField != fx.invID {
-				continue
-			}
-			raw, ok := row["approval"]
-			if !ok {
-				t.Fatalf("the armed invoice's row has no \"approval\" key: %s", rec.Body.String())
-			}
-			return raw
+		if idField != fx.invID {
+			continue
 		}
+		var ok bool
+		raw, ok = row["approval"]
+		if !ok {
+			t.Fatalf("the armed invoice's row has no \"approval\" key: %s", rec.Body.String())
+		}
+	}
+	if raw == nil {
 		t.Fatalf("the armed invoice %s is not on the page: %s", fx.invID, rec.Body.String())
-		return nil
 	}
 
-	on := NewStore(app, WithApprovalsEnforced(true))
-	off := NewStore(app, WithApprovalsEnforced(false))
-
-	rawOn := approvalOf(t, on)
-	rawOff := approvalOf(t, off)
-
-	// POPULATED: an explicit null on both sides would make the comparison vacuous.
-	var gotOn approval.RowFacts
-	if err := json.Unmarshal(rawOn, &gotOn); err != nil {
-		t.Fatalf("decode approval (flag on) %q: %v", string(rawOn), err)
+	var got approval.RowFacts
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode approval %q: %v", string(raw), err)
 	}
-	if !reflect.DeepEqual(gotOn, wantArmedRowFactsOnTheWire()) {
-		t.Errorf("approval (flag on) = %+v, want %+v", gotOn, wantArmedRowFactsOnTheWire())
-	}
-
-	if string(rawOn) != string(rawOff) {
-		t.Errorf("the armed invoice's approval object differs by APPROVALS_ENFORCED:\n  on  = %s\n  off = %s", rawOn, rawOff)
+	if !reflect.DeepEqual(got, wantArmedRowFactsOnTheWire()) {
+		t.Errorf("approval = %+v, want %+v", got, wantArmedRowFactsOnTheWire())
 	}
 }
 

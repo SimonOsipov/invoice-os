@@ -82,6 +82,7 @@ import {
   rawFetch,
   PERSONAS,
   type CorrectionResponse,
+  type ExtractionCandidate,
   type ExtractionDetail,
   type ExtractionJob,
   type ExtractionJobsResponse,
@@ -93,7 +94,16 @@ import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-import { buildHeaderOnlyCsv, buildMixedCsv, buildPerfCsv, buildSingleInvoiceCsv, PERF_HEADER } from '../importFixtures'
+import {
+  buildAir07TitleRowCsv,
+  buildAir07UnsteeredCsv,
+  buildHeaderOnlyCsv,
+  buildMixedCsv,
+  buildPerfCsv,
+  buildSingleInvoiceCsv,
+  PERF_HEADER,
+  steerMarker,
+} from '../importFixtures'
 
 // BULK-01-08 (task-312) fixtures -- COMMITTED files, referenced by path, deliberately
 // NEVER regenerated in memory the way importFixtures.ts's builders are. This is a
@@ -220,6 +230,39 @@ async function approveOpenRunsForEntity(token: string, entityId: string): Promis
   await Promise.all(
     invoices.filter((inv) => inv.approval?.run_state === 'open').map((inv) => approveUntilClosed(inv.id, approverTokens)),
   )
+}
+
+// Shared CSV steering fixture: the fake AI fleet scans every AI request's
+// text for an AIFAKE-ANSWER-<base64url> marker (internal/platform/ai/fake.go's fakeMarker),
+// and suggest-mapping's prompt text is built from the decoded CSV rows verbatim
+// (internal/importer/suggest.go's mappingPromptText) -- so a marker planted in any data
+// cell reaches it unchanged. Header names deliberately mirror PERF_HEADER's real aliasing
+// shape (issue_date/buyer_tin/currency/vat/total/line_quantity/line_unit_price all
+// auto-recognize; invoice_number/buyer_name/subtotal/line_description never do), so the
+// steered answer only needs to place invoice_number for the screen to carry both AUTO and
+// SUGGESTED badges at once.
+const AIRL01_ANSWER = {
+  invoice_number: 'Invoice No',
+  issue_date: null,
+  buyer_tin: null,
+  buyer_name: null,
+  currency: null,
+  subtotal: null,
+  vat: null,
+  total: null,
+  line_description: null,
+  line_quantity: null,
+  line_unit_price: null,
+  header_row: 1,
+  date_format: null,
+  decimal_separator: null,
+}
+
+function buildAirl01SteeredCsv(num = 'INV-AIRL01-1'): string {
+  const marker = steerMarker(AIRL01_ANSWER)
+  const header = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
+  const row = [num, '2026-01-01', '12345678-0001', marker, 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00']
+  return `${header}\n${row.join(',')}\n`
 }
 
 test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through the UI on deployed dev', async ({ page }, testInfo) => {
@@ -422,6 +465,249 @@ test('E2E-01/02/03/06/07 (Core AC7, FLOW-05): 500-invoice CSV completes through 
   // Both non-default tabs are OMITTED from the DOM at zero, never merely hidden.
   await expect(page.getByRole('button', { name: /^Unreadable rows \(/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Already imported \(/ })).toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AC-5: a placement chip must never overflow its column at any swept width, including the
+// SUGGESTED chip added as a third `flex: 'none'` child. Deployed-only -- there is
+// no way to reach a suggested Map step without the fake fleet's AI (see the file header),
+// so this runs ONLY when the deploy gate exercises this file against a live PR environment.
+// Stage 3/4 locally can only typecheck it (pnpm --filter @invoice-os/e2e typecheck).
+test('AIRL-01: a placement chip stays inside its column at every swept width', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 layout ${Date.now()}`, tin: freshTin() })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'airl01.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAirl01SteeredCsv(), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  await suggestResp
+
+  const columns = page.locator('[data-testid="map-column"]')
+  expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
+  const anyChip = columns.locator('span[draggable]')
+  expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
+
+  // Not a strict requirement of AC-5 itself, but proof this run reached the state AC-5
+  // targets: a badge-less suggested chip is a false-negative risk -- it would still pass a
+  // bare containment sweep -- so this is the positive control that the steered fixture worked.
+  await expect(
+    page.getByTestId('map-suggested-badge').first(),
+    'the steered suggestion must place at least one SUGGESTED badge, or this run never reached the state AC-5 targets',
+  ).toBeVisible()
+
+  const entryViewport = page.viewportSize()
+  const widthsMeasured: number[] = []
+  const fits: { width: number; left: number; right: number; fieldWidth: number }[] = []
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      widthsMeasured.push(width)
+      const count = await columns.count()
+      for (let i = 0; i < count; i++) {
+        const chip = columns.nth(i).locator('span[draggable]')
+        if ((await chip.count()) === 0) continue
+        const cell = chip.locator('xpath=..')
+        const fieldSpan = chip.locator('.mono').first()
+        const [cellBox, chipBox, fieldBox] = await Promise.all([cell.boundingBox(), chip.boundingBox(), fieldSpan.boundingBox()])
+        expect(cellBox && chipBox, `column ${i}'s chip/cell must both render at ${width}px`).toBeTruthy()
+        const g = gaps(chipBox!, cellBox!)
+        expect(g.left, `column ${i}'s chip must not start left of its cell at ${width}px`).toBeGreaterThanOrEqual(0)
+        expect(g.right, `column ${i}'s chip must not extend right of its cell at ${width}px`).toBeGreaterThanOrEqual(0)
+        expect(fieldBox?.width ?? 0, `column ${i}'s field-name span must have a real width at ${width}px`).toBeGreaterThan(0)
+        fits.push({ width, left: g.left, right: g.right, fieldWidth: fieldBox?.width ?? 0 })
+      }
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(widthsMeasured, 'every WIDE_WIDTHS entry must have been measured, in order').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('airl01-chip-column-fit.json', {
+    body: JSON.stringify({ entity: entity.name, fits }, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR07-E2E-01: a steered suggestion opens the Map step placed and badged, and Continue imports it', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 steered ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E01-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-steered.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAirl01SteeredCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; header_row: number; mapping: Record<string, string> }
+  expect(suggestBody.source, 'control: this run must have reached the AI path').toBe('ai')
+  expect(suggestBody.header_row).toBe(1)
+  expect(suggestBody.mapping.invoice_number, 'control: the AI must have placed invoice_number').toBe('Invoice No')
+
+  // A screen that never rendered the suggestion cannot pass either check below.
+  const invoiceNoColumn = page.getByTestId('map-column').filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) })
+  await expect(invoiceNoColumn.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the Invoice No column').toHaveCount(1)
+  await expect(invoiceNoColumn.getByTestId('map-suggested-badge')).toHaveText('SUGGESTED')
+  await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the whole page').toHaveCount(1)
+
+  // No click-to-place here: the suggestion alone must already arm Import.
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'the suggestion alone must enable Import with no manual placement').toBeEnabled()
+
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  const importRes = await importResp
+  expect(importRes.status(), 'a steered single-row import must complete 201').toBe(201)
+  const importBody = (await importRes.json()) as { rows_total: number }
+  expect(importBody.rows_total).toBe(1)
+
+  const { invoices } = await listInvoices(token, { entity_id: entity.id })
+  expect(invoices, 'the fresh entity must hold exactly the one imported invoice').toHaveLength(1)
+  expect(invoices[0].invoice_number, 'the suggested invoice_number column must have been read').toBe(num)
+  expect(invoices[0].currency, "the alias fallback must fill currency left unplaced by the AI").toBe('NGN')
+  expect(invoices[0].total, "the alias fallback must fill total left unplaced by the AI").toBe('1075.00')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR07-E2E-03: a title-row file maps and imports from row 3', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 row3 ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E03-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-row3.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAir07TitleRowCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; header_row: number; columns: string[] }
+  expect(suggestBody.source, 'control: this run must have reached the AI path').toBe('ai')
+  expect(suggestBody.header_row, 'the header must be read from row 3, not row 1').toBe(3)
+  expect(suggestBody.columns).toEqual(PERF_HEADER.split(','))
+
+  // Same idiom as E2E-02: CreateMapping's column header cell is the only <div class="mono">
+  // under <main>, so this resolves to exactly the rendered header row.
+  const headerCells = page.locator('main div.mono')
+  await expect(headerCells).toHaveText(PERF_HEADER.split(','))
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'the suggestion alone must enable Import with no manual placement').toBeEnabled()
+
+  const importReq = page.waitForRequest(
+    (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  const importResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports'),
+    { timeout: 60_000 },
+  )
+  await importBtn.click()
+  expect(requestBody(await importReq), 'the import must post header_row=3, not the default row 1').toMatch(
+    /name="header_row"\r\n\r\n3\r\n/,
+  )
+  const importRes = await importResp
+  expect(importRes.status(), 'a row-3 header import must complete 201').toBe(201)
+
+  const { invoices } = await listInvoices(token, { entity_id: entity.id })
+  expect(invoices, 'the fresh entity must hold exactly the one imported invoice').toHaveLength(1)
+  expect(invoices[0].invoice_number).toBe(num)
+
+  const source = await rawFetch(`/api/invoice/v1/invoices/${invoices[0].id}/source-document`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  expect(source.status, 'GET source-document').toBe(200)
+  expect(
+    (source.body as { header_row: number | null }).header_row,
+    "the invoice's own source-document read must echo header_row 3",
+  ).toBe(3)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `AIR-07 unsteered ${Date.now()}`, tin: freshTin() })
+  const num = `INV-AIR07E04-${Date.now()}`
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const fileInput = page.locator('input[type="file"]#pf-import-file')
+  await fileInput.setInputFiles({ name: 'air07-unsteered.csv', mimeType: 'text/csv', buffer: Buffer.from(buildAir07UnsteeredCsv(num), 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+
+  const suggestResp = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/suggest-mapping'),
+    { timeout: 60_000 },
+  )
+  await readColumnsBtn.click()
+  const suggestBody = (await (await suggestResp).json()) as { source: string; mapping: Record<string, string> }
+  // Control: proves the endpoint ran and answered blank, rather than this run never
+  // reaching the suggest call at all.
+  expect(suggestBody.source, 'control: a marker-less file must fall to the blank-answer path').toBe('none')
+  expect(Object.keys(suggestBody.mapping), 'control: a blank answer places nothing').toHaveLength(0)
+
+  // Control: the screen is live with all 11 columns rendered, not merely empty.
+  await expect(page.getByTestId('map-column'), 'control: the Map step must have rendered all 11 columns').toHaveCount(11)
+  await expect(page.getByTestId('map-suggested-badge'), 'no badge before placement').toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Map invoice number to continue' })).toBeVisible()
+
+  // The shipped click-to-place pair: arm invoice_number, then place it on its column.
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+
+  const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
+  await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
+  await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1691,8 +1977,8 @@ test('BULK-E2E-02 (Core AC 4): different-layout files map SEPARATELY, one column
   await expect(page.getByText('layout-a-till.csv', { exact: false }), "the FIRST file's name is gone from this group's screen").toHaveCount(0)
 
   // invoice_number is never auto-recognized regardless of header spelling ("the invoice
-  // number is never guessed" -- CreateMapping's own copy), so this group needs its own
-  // manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
+  // number is never matched by name" -- CreateMapping's own copy), so this group needs its
+  // own manual placement too, onto ITS OWN header's own column name ("Ref", not "Invoice No").
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Ref', { exact: true }).click()
 
@@ -1998,6 +2284,14 @@ const AI_UNAVAILABLE_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_unavailable_
 
 function uniqueAiUnavailablePdfBytes(): Buffer {
   return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
+// AIR-08-13's deployed fixture (fxE2ECopies): a ruled 2-row table plus an AIFAKE-LINES-ANSWER
+// marker steering three line-item rows. Same recipe as the others above.
+const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'))
+
+function uniqueAiLinesPdfBytes(): Buffer {
+  return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
@@ -6097,6 +6391,14 @@ test('EXTR13-E2E-01 (Core AC 1-7): the deployed grid reads, flags, sums, selects
     ).toHaveValue('')
   }
 
+  // AIR08-E2E's Core AC 7 leg, free on this document: rich_invoice.pdf carries no AIFAKE-LINES
+  // marker, so mergeAILines leaves every row untouched -- no chip and no ambiguous pill.
+  await expect(page.locator('[data-testid^="line-item-chip-"]'), 'an unsteered document renders a chip').toHaveCount(0)
+  await expect(
+    page.locator('[data-testid^="line-item-ambiguous-"]'),
+    'an unsteered document renders an ambiguous pill',
+  ).toHaveCount(0)
+
   // -- 2. the flag is per row, and lands only where the wire's own numbers disagree ----------
   const states = lines.map((row, i) => ({ n: i + 1, state: wireRowState(row) }))
   const flagged = states.filter((s) => s.state === 'flagged').map((s) => s.n)
@@ -7227,6 +7529,19 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
     delete headers['content-encoding']
     await route.fulfill({ status: real.status(), headers, json: { saved_mapping: null } })
   })
+  // The saved row also reaches the screen through suggest-mapping, which does its own
+  // server-side lookup -- intercepting only the route above no longer isolates it.
+  const SUGGEST_GLOB = '**/api/invoice/v1/imports/suggest-mapping'
+  let suggestHits = 0
+  await page.route(SUGGEST_GLOB, async (route) => {
+    suggestHits += 1
+    const real = await route.fetch()
+    const body = await real.json()
+    const headers = real.headers()
+    delete headers['content-length']
+    delete headers['content-encoding']
+    await route.fulfill({ status: real.status(), headers, json: { ...body, source: 'none', mapping: {} } })
+  })
 
   const preview3 = page.waitForResponse(
     (r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/imports/preview'),
@@ -7239,12 +7554,16 @@ test('EXTR37-E2E-01: the second import of a file for the same client opens mappe
   await expect.poll(() => hits, { message: 'the intercepted lookup must fire exactly once' }).toBe(1)
   // The row still exists -- only this test's answer to the SPA differs from the real one.
   expect(realBodies[0]?.saved_mapping?.mapping.invoice_number, 'control: the real lookup still returns the saved row').toBe('Invoice No')
+  await expect
+    .poll(() => suggestHits, { message: 'the intercepted suggest-mapping must fire exactly once -- its own server-side lookup is the second route to the saved row' })
+    .toBe(1)
 
   await expect(notice).toHaveCount(0)
   await expect(badges).toHaveCount(0)
   await expect(blockedBtn).toBeVisible()
 
   await page.unroute(LOOKUP_GLOB)
+  await page.unroute(SUGGEST_GLOB)
   // Import 3 is never submitted -- its only purpose is proving the dependency on the lookup.
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -7579,6 +7898,13 @@ async function runDocumentsIn(
     await route.fulfill({ response: res, body: text })
   }
   await page.route('**/api/submission/v1/documents', captureUpload)
+
+  // An earlier run on this page routes LATE: past the import 201 a caller polls for. The
+  // progress card unmounts on applyRoute.
+  await expect(
+    page.getByTestId('import-progress'),
+    'an earlier run on this page has not routed yet',
+  ).toHaveCount(0, { timeout: 60_000 })
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
@@ -9000,6 +9326,180 @@ test('AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read fro
   })
 
   // (h)
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// `${value}page ${region.page}` matches LineItemGrid's own chip render (CHIP_VALUE span
+// immediately followed by CHIP_WHERE, no separator) -- the same convention AIR03-E2E-01 reads
+// off ExtractionFields' chips. Never hardcodes whether a region is present: it reads that off
+// the wire response itself, never off a literal copied from the fixture builder.
+function lineChipText(value: string, region: ExtractionRegion | null): string {
+  return region === null ? value : `${value}page ${region.page}`
+}
+
+test('AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid', async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  // AIR08-E2E-01 (AC-4): extractOneDocument already waited on invoice-detail, which proves the
+  // steered document filed a draft instead of quarantining.
+  await extractOneDocument(page, 'Zz AIR-08 lines', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
+
+  const detail = await openExtractionReview(page)
+  const lines = wireLines(detail)
+  expect(
+    lines.map((l) => l.index),
+    'the extraction detail must carry three contiguous line indices',
+  ).toEqual([1, 2, 3])
+  const fieldsByName = new Map(detail.fields.map((f) => [f.name, f]))
+
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+  await expect(page.locator('[data-testid^="line-item-row-"]'), 'the grid did not render one row per wire line').toHaveCount(3)
+
+  // AIR08-E2E-02 (AC-5, agreeing row): row 1's four cells render the engine's own values in
+  // ordinary inputs, with no chip and no pill anywhere on that row.
+  const row1 = lines[0]
+  const row1Want: Record<LineRoleName, string> = { description: 'Widget', quantity: '2', unit_price: '500.00', line_total: '1000.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    expect(row1.cells[role]?.value, `row 1's ${role} did not carry the engine's own reading on the wire`).toBe(row1Want[role])
+    expect(fieldsByName.get(row1.cells[role]?.name ?? '')?.reason, `row 1's ${role} is not decided on the wire`).toBe('')
+    await expect(
+      page.getByTestId(`line-item-input-1-${role}`),
+      `row 1's ${role} input did not carry the engine's own reading`,
+    ).toHaveValue(row1Want[role])
+  }
+  await expect(page.locator('[data-testid^="line-item-chip-1-"]'), 'the agreeing row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId('line-item-ambiguous-1'), 'the agreeing row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId('line-item-flag-1'), 'the agreeing row renders an arithmetic pill').toHaveCount(0)
+
+  // AIR08-E2E-04 (Core AC 6, disagreement): row 2's unit_price renders two chips, chip 0 the
+  // engine's own value (with its wire region, if any), chip 1 the AI's with none; the other
+  // three cells of the same row stay ordinary inputs at the engine's own reading.
+  const row2 = lines[1]
+  const upWire = row2.cells.unit_price as WireLineCell
+  expect(
+    { value: upWire.value, reason: fieldsByName.get(upWire.name)?.reason },
+    'row 2 unit_price must be the engine reading, ambiguous',
+  ).toEqual({ value: '250.00', reason: 'ambiguous' })
+  const upAlternatives: ExtractionCandidate[] = fieldsByName.get(upWire.name)?.alternatives ?? []
+  expect(upAlternatives, 'row 2 unit_price must carry exactly one alternative, the AI\'s own').toEqual([{ value: '260.00', region: null }])
+
+  const upChips = page.locator('[data-testid^="line-item-chip-2-unit_price-"]')
+  await expect(upChips, 'row 2 unit_price must render exactly two chips').toHaveCount(2)
+  await expect(page.getByTestId('line-item-chip-2-unit_price-0')).toHaveText(lineChipText('250.00', upWire.region))
+  await expect(page.getByTestId('line-item-chip-2-unit_price-1')).toHaveText(lineChipText('260.00', null))
+  await expect(
+    page.getByTestId('line-item-ambiguous-2'),
+    'row 2 must show the FOUND TWO POSSIBLE VALUES pill',
+  ).toHaveText('FOUND TWO POSSIBLE VALUES')
+  await expect(page.getByTestId('line-item-flag-2'), 'row 2 must not also carry an arithmetic pill').toHaveCount(0)
+
+  const row2OtherWant: Partial<Record<LineRoleName, string>> = { description: 'Gadget', quantity: '3', line_total: '750.00' }
+  for (const role of ['description', 'quantity', 'line_total'] as const) {
+    expect(row2.cells[role]?.value, `row 2's ${role} did not carry the engine's own reading on the wire`).toBe(row2OtherWant[role])
+    expect(fieldsByName.get(row2.cells[role]?.name ?? '')?.reason, `row 2's ${role} was disturbed by the unit_price disagreement`).toBe('')
+    await expect(
+      page.getByTestId(`line-item-input-2-${role}`),
+      `row 2's ${role} input did not carry the engine's own reading`,
+    ).toHaveValue(row2OtherWant[role] as string)
+  }
+
+  // AIR08-E2E-03 (Core AC 8, AI-only row): row 3 renders the AI's own values in ordinary
+  // inputs, its wire cells carry reason '' and empty alternatives, and the row shows no pill --
+  // UNMARKED (Q12).
+  const row3 = lines[2]
+  const row3Want: Record<LineRoleName, string> = { description: 'Delivery', quantity: '1', unit_price: '90.00', line_total: '90.00' }
+  for (const role of LINE_ROLE_NAMES) {
+    const cell = row3.cells[role] as WireLineCell
+    expect(cell.value, `row 3's ${role} did not carry the AI's own reading on the wire`).toBe(row3Want[role])
+    expect(fieldsByName.get(cell.name)?.reason, `row 3's ${role} is not unmarked on the wire`).toBe('')
+    const alternatives: ExtractionCandidate[] = fieldsByName.get(cell.name)?.alternatives ?? []
+    expect(alternatives, `row 3's ${role} carries an alternative -- AI-only rows are unmarked`).toEqual([])
+    await expect(
+      page.getByTestId(`line-item-input-3-${role}`),
+      `row 3's ${role} input did not carry the AI's own reading`,
+    ).toHaveValue(row3Want[role])
+  }
+  await expect(page.locator('[data-testid^="line-item-chip-3-"]'), 'the AI-only row renders a chip').toHaveCount(0)
+  await expect(page.getByTestId('line-item-ambiguous-3'), 'the AI-only row renders an ambiguous pill').toHaveCount(0)
+  await expect(page.getByTestId('line-item-flag-3'), 'the AI-only row renders an arithmetic pill').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'Zz AIR-08 layout', { name: 'ai_lines_invoice.pdf', buffer: uniqueAiLinesPdfBytes() })
+  await openExtractionReview(page)
+  await expect(page.getByTestId('line-item-grid'), 'the fields pane rendered no line-item grid').toBeVisible({
+    timeout: 30_000,
+  })
+
+  // Non-empty floor: the sweep below measures the chip row, so it must actually be on screen.
+  await expect(
+    page.locator('[data-testid^="line-item-chip-2-unit_price-"]'),
+    'row 2 renders no chip row -- the sweep below would measure an input row instead',
+  ).toHaveCount(2)
+
+  const paneBody = fieldsPaneBody(page)
+  const scroll = page.getByTestId('line-item-scroll')
+
+  const measured: { width: number; left: number; right: number; bodyScrollWidth: number; bodyClientWidth: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [s, b] = await Promise.all([scroll.boundingBox(), paneBody.boundingBox()])
+        const flow = await paneBody.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { s, b, flow }
+      }, `line grid containment (chip row) at ${width}px`)
+
+      expect(m.s && m.b, `both the scrollbox and the pane body must render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed to zero is inside anything and passes vacuously.
+      expect(m.s!.width, `the scrollbox collapsed to zero width at ${width}px -- its edges are vacuous`).toBeGreaterThan(0)
+      expect(m.b!.width, `the pane body collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      const g = gaps(m.s as Rect, m.b as Rect)
+      expect(g.left, `the scrollbox starts ${(-g.left).toFixed(1)}px left of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the scrollbox ends ${(-g.right).toFixed(1)}px right of the pane body at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      expect(
+        m.flow.scrollWidth,
+        `the pane body holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px -- the chip row's overflow escaped its scrollbox`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+
+      measured.push({
+        width,
+        left: g.left,
+        right: g.right,
+        bodyScrollWidth: m.flow.scrollWidth,
+        bodyClientWidth: m.flow.clientWidth,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  await testInfo.attach('extraction-line-grid-chip-containment.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 

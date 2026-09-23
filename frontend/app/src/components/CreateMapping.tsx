@@ -3,7 +3,7 @@
 //
 // One spreadsheet row is one invoice LINE ITEM; rows group into invoices by the
 // column mapped to `invoice_number`. Recognised columns arrive pre-placed and
-// badged AUTO — except the invoice number, which is never guessed, only restored from this client's earlier import.
+// badged AUTO — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.
 //
 // Every column, sample cell and file fact on this screen now comes from the SERVER's
 // preview response (M4-08-04, Core AC2) — the browser never parses the file. The whole
@@ -63,15 +63,17 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     const badge = activeGroup && fk ? placementBadge(activeGroup, fk, col.header, recognized) : null
     const isAuto = badge === 'auto'
     const isRestored = badge === 'restored'
+    const isSuggested = badge === 'suggested'
     return {
       ...col,
       field: fk,
       isAuto,
       isRestored,
+      isSuggested,
       colBg: fk ? (isAuto ? 'var(--action-tint)' : 'var(--action-tint)') : 'var(--bg-2)',
-      tagBg: isAuto ? 'var(--status-green-bg)' : 'var(--action-tint)',
-      tagBorder: isAuto ? 'var(--status-green-border)' : 'var(--action)',
-      tagColor: isAuto ? 'var(--status-green-text)' : 'var(--action)',
+      tagBg: isAuto ? 'var(--status-green-bg)' : isSuggested ? 'var(--status-amber-bg)' : 'var(--action-tint)',
+      tagBorder: isAuto ? 'var(--status-green-border)' : isSuggested ? 'var(--status-amber-border)' : 'var(--action)',
+      tagColor: isAuto ? 'var(--status-green-text)' : isSuggested ? 'var(--status-amber-text)' : 'var(--action)',
       dropBorder: dropHot && !fk ? 'var(--action)' : 'var(--line-2)',
       dropBg: dropHot && !fk ? 'var(--action-tint)' : 'transparent',
     }
@@ -146,7 +148,7 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
     : invNumArmed
       ? { text: 'invoice_number is armed — click the column that holds it. Nothing continues until you place it by hand.', color: 'var(--action)' }
       : !invNumMapped
-        ? { text: "Drag invoice_number onto a column to continue — the invoice number is never guessed, only restored from this client's earlier import.", color: 'var(--status-red-text)' }
+        ? { text: "Drag invoice_number onto a column to continue — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.", color: 'var(--status-red-text)' }
         : optionalUnmapped > 0
           ? { text: `${optionalUnmapped} optional field${optionalUnmapped === 1 ? '' : 's'} still unplaced — unmapped fields import as empty and are judged by the rule engine.`, color: 'var(--status-muted-text)' }
           : { text: 'All fields mapped.', color: 'var(--status-green-text)' }
@@ -187,7 +189,8 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
             <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, lineHeight: 1.5 }}>
               Drag each field onto the column that holds its data — or click a field, then a column. One spreadsheet row is a single line item; rows group into invoices by the column mapped to{' '}
               <span className="mono" style={{ fontSize: 11 }}>invoice_number</span>. Supplier details come from {active.short}, not the file. Recognised columns are pre-placed and marked{' '}
-              <span className="mono" style={{ fontSize: 10, color: 'var(--status-green-text)' }}>AUTO</span> — the invoice number is never guessed, only restored from this client's earlier import and marked{' '}
+              <span className="mono" style={{ fontSize: 10, color: 'var(--status-green-text)' }}>AUTO</span> — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue. A suggestion is marked{' '}
+              <span className="mono" style={{ fontSize: 10, color: 'var(--status-amber-text)' }}>SUGGESTED</span>, a restore{' '}
               <span className="mono" style={{ fontSize: 10, color: 'var(--action)' }}>RESTORED</span>.
             </p>
           </div>
@@ -347,6 +350,9 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                       )}
                       {col.isRestored && (
                         <span className="mono" data-testid="map-restored-badge" style={{ flex: 'none', fontSize: 7.5, fontWeight: 700, color: 'var(--action)', border: '1px solid var(--action)', borderRadius: 'var(--radius-sm)', padding: '0 3px' }}>RESTORED</span>
+                      )}
+                      {col.isSuggested && (
+                        <span className="mono" data-testid="map-suggested-badge" style={{ flex: 'none', fontSize: 7.5, fontWeight: 700, color: 'var(--status-amber-text)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-sm)', padding: '0 3px' }}>SUGGESTED</span>
                       )}
                       <span
                         onClick={(e) => {

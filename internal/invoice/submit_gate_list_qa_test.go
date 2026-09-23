@@ -146,7 +146,7 @@ func TestListAndDetail_SubmitGateAgreeOnTheRoleRung(t *testing.T) {
 	}
 	preparerCtx, adminCtx := ctxFor("preparer"), ctxFor("admin")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	// CONTROL: the SAME two invoices read by an admin answer two DIFFERENT things.
 	// Without it a page that refused everything would satisfy the role claim below.
@@ -193,10 +193,10 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	b := seedApprovalFactsFixture(t, super, "BUG-12-01-QA-RLS-B", true)
 	ids := []string{a.invID, b.invID}
 
-	on := NewStore(app, WithApprovalsEnforced(true))
-	facts, gate, err := on.RowFacts(a.ctx, ids)
+	store := NewStore(app)
+	facts, gate, err := store.RowFacts(a.ctx, ids)
 	if err != nil {
-		t.Fatalf("RowFacts (flag on): %v", err)
+		t.Fatalf("RowFacts: %v", err)
 	}
 
 	// CONTROL 1: RLS really hides B from A, so the fold really is being asked
@@ -208,7 +208,7 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	// two-statement path. On the short-circuit every requested id maps true and an
 	// absent id would read clear for free.
 	if gate.TransmitClear[a.invID] {
-		t.Fatalf("tenant A's own unarmed validated invoice reads clear under APPROVALS_ENFORCED -- the no-policy short-circuit fired")
+		t.Fatalf("tenant A's own unarmed validated invoice reads clear -- the no-policy short-circuit fired")
 	}
 
 	if len(gate.TransmitClear) != len(ids) {
@@ -220,24 +220,6 @@ func TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee(t *testing.T)
 	}
 	if got {
 		t.Errorf("TransmitClear[%s] = true for an id RLS cannot see -- an unreadable invoice must fail CLOSED", b.invID)
-	}
-
-	// The flag-off half of C6: the detail wire folds to true for ANY id when the
-	// flag is off, so the list cannot answer false at the same setting.
-	off := NewStore(app)
-	_, offGate, err := off.RowFacts(a.ctx, ids)
-	if err != nil {
-		t.Fatalf("RowFacts (flag off): %v", err)
-	}
-	offGot, ok := offGate.TransmitClear[b.invID]
-	if !ok {
-		t.Fatalf("APPROVALS_ENFORCED off: TransmitClear has no entry for %s", b.invID)
-	}
-	if !offGot {
-		t.Errorf("APPROVALS_ENFORCED off: TransmitClear[%s] = false, want true -- the detail wire answers true for any id here, and the two surfaces cannot differ at one setting", b.invID)
-	}
-	if offGot == got {
-		t.Errorf("TransmitClear[%s] is %v at BOTH flag settings -- the fold is not reading the flag for an absent id", b.invID, got)
 	}
 }
 
@@ -272,7 +254,7 @@ func TestListHandler_SubmitGateDoesNotCrossTenants(t *testing.T) {
 	bIDs := []string{b.invID, seedInvoiceAtStatus(t, super, b.tenantID, b.entityID, "bug-12-01-qa-xt-b-2", StatusValidated)}
 	sort.Strings(bIDs)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	aRows := listPageRaw(t, store, aCtx, "tenant A")
 	bRows := listPageRaw(t, store, b.ctx, "tenant B")
@@ -311,4 +293,102 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- one page, every run shape -----------------------------------------------
+
+// TestListAndBatch_MixedPageAnswersPerInvoice: one gated tenant, one page holding every run
+// shape. Each invoice's verdict follows its OWN run on the store map, both wires and the
+// batch door, so a verdict computed once per page, or keyed on the wrong id, reds here.
+func TestListAndBatch_MixedPageAnswersPerInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+
+	g := seedGatedTenantAsAdmin(t, super, "BUG-15-01-QA-MIXED")
+	shapes := []struct {
+		label    string
+		runState string // "" seeds no run
+		clear    bool
+	}{
+		{"open", "open", false},
+		{"approved", "approved", true},
+		{"norun", "", false},
+		{"cancelled", "cancelled", false},
+		{"rejected", "rejected", false},
+	}
+	clearCount := 0
+	for _, s := range shapes {
+		if s.clear {
+			clearCount++
+		}
+	}
+	if clearCount == 0 || clearCount == len(shapes) {
+		t.Fatalf("the table holds %d clear of %d shapes, want both kinds -- one verdict cannot tell a per-id gate from a page-wide one", clearCount, len(shapes))
+	}
+
+	ids := make([]string, len(shapes))
+	want := map[string]bool{}
+	for i, s := range shapes {
+		ids[i] = g.invoiceWith(t, super, "BUG-15-01-QA-MIXED-"+s.label, s.runState)
+		want[ids[i]] = s.clear
+	}
+
+	store := NewStore(app)
+
+	_, gate, err := store.RowFacts(g.ctx, ids)
+	if err != nil {
+		t.Fatalf("RowFacts: %v", err)
+	}
+	if len(gate.TransmitClear) != len(ids) {
+		t.Fatalf("TransmitClear has %d entries for %d requested ids: %v", len(gate.TransmitClear), len(ids), gate.TransmitClear)
+	}
+	for i, id := range ids {
+		if got, ok := gate.TransmitClear[id]; !ok || got != want[id] {
+			t.Errorf("%s: TransmitClear[%s] = %v (present=%v), want %v", shapes[i].label, id, got, ok, want[id])
+		}
+	}
+
+	blocked := jsonOf(t, awaitingApprovalReason)
+	for i, id := range ids {
+		label := shapes[i].label
+		listCan, listReason := listSubmitPair(t, store, g.ctx, id, label)
+		detailCan, detailReason := detailSubmitPair(t, store, g.ctx, id, label)
+		wantCan, wantReason := "false", blocked
+		if want[id] {
+			wantCan, wantReason = "true", "null"
+		}
+		if listCan != wantCan || listReason != wantReason {
+			t.Errorf("%s: list = %s/%s, want %s/%s", label, listCan, listReason, wantCan, wantReason)
+		}
+		if detailCan != listCan || detailReason != listReason {
+			t.Errorf("%s: detail = %s/%s, list = %s/%s -- one gate, two wires", label, detailCan, detailReason, listCan, listReason)
+		}
+	}
+
+	// The same page through the batch door, the open-run id repeated at the end.
+	in := append(append([]string{}, ids...), ids[0])
+	res, err := gateSubmitter(t, app).BatchSubmit(g.ctx, BatchSubmitInput{
+		InvoiceIDs: in, IdempotencyKey: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("BatchSubmit: %v (want nil -- a gated invoice is a skip, not an error)", err)
+	}
+	if len(res.Results) != len(in) {
+		t.Fatalf("len(results) = %d, want %d", len(res.Results), len(in))
+	}
+	for pos, id := range in {
+		if want[id] {
+			wantItem(t, res.Results[pos], pos, id, true, StatusQueued, "")
+		} else {
+			wantItem(t, res.Results[pos], pos, id, false, StatusValidated, batchSubmitReasonAwaitingApproval)
+		}
+	}
+	for i, id := range ids {
+		wantStatus := StatusValidated
+		if want[id] {
+			wantStatus = StatusQueued
+		}
+		if s := statusOf(t, super, id); s != wantStatus {
+			t.Errorf("%s: stored status = %q, want %q", shapes[i].label, s, wantStatus)
+		}
+	}
 }

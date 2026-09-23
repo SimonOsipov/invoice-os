@@ -61,9 +61,9 @@ export function bootAnalytics(): boolean {
   return ensureTag(window.location.hostname, readConsent())
 }
 
-export type DemoCtaSource = 'nav' | 'hero' | 'audience' | 'pricing' | 'demo_cta' | 'footer'
+export type DemoCtaSource = 'nav' | 'hero' | 'audience' | 'pricing' | 'footer'
 export const DEMO_CTA_SOURCES: readonly DemoCtaSource[] =
-  ['nav', 'hero', 'audience', 'pricing', 'demo_cta', 'footer']
+  ['nav', 'hero', 'audience', 'pricing', 'footer']
 
 const FORM_NAME = 'book_a_demo'
 

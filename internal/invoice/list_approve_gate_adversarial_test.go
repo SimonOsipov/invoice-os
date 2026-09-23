@@ -127,7 +127,7 @@ func TestListHandler_RealStore_NullRoleKeyOnThePendingStepCannotApprove(t *testi
 		Subject: subject, Role: "authenticated", TenantID: tenantID,
 	})
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 	invID := armOneInvoice(t, super, store, ctx, entityID, "appr-12-09-qa-null-key")
 	if n := mustCount(t, super,
 		`SELECT count(*) FROM approval_run_steps s JOIN approval_runs r ON r.id = s.run_id
@@ -199,7 +199,7 @@ func TestListAndDetail_RealStore_ApproveGateAgreesRowByRow(t *testing.T) {
 	bareID := fx.invID
 	draftID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-12-09-QA-AGREE draft", StatusDraft)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 	armedID := armOneInvoice(t, super, store, fx.ctx, fx.entityID, "appr-12-09-qa-agree-armed")
 	closedID := armOneInvoice(t, super, store, fx.ctx, fx.entityID, "appr-12-09-qa-agree-closed")
 

@@ -429,7 +429,8 @@ describe('AC-6: every existing <App /> test file resets the jsdom URL', () => {
     // ROUTE-05-02 adds App.signedOutDeepLink.test.tsx and ROUTE-02-05 adds
     // App.routeDrillDown.test.tsx, the 14th and 15th. ROUTE-06-05 adds
     // App.routeSweep.test.tsx, the 16th. App.savedMapping.test.tsx adds the 17th.
-    expect(files, 'the walk must find exactly the seventeen App-rendering test files').toHaveLength(17)
+    // App.aiSuggestion.test.tsx adds the 18th. App.secondImport.test.tsx adds the 19th.
+    expect(files, 'the walk must find exactly the nineteen App-rendering test files').toHaveLength(19)
 
     for (const f of files) {
       const src = readFileSync(path.join(process.cwd(), f), 'utf8')
@@ -1507,7 +1508,7 @@ describe('ROUTE-06-03 AC-2: switchClient seeds the import target with the incomi
 })
 
 // Pins AC-3's literal outcome (entityId ends at active.entityId), NOT the default
-// parameter's value: openCreate() always lands createStep at 'upload' in the same
+// parameter's value: openCreate() lands createStep at 'upload' in the same
 // commit as its bare resetImport() call, so a null default is healed to
 // active.entityId by the untouched re-seed effect (:529-533) before this test's
 // act() returns -- verified empirically, RTL's act() flushes passive effects

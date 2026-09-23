@@ -21,6 +21,7 @@ import {
   markRunRouted,
   removeFile,
   routeAfterRun,
+  runIsActive,
   runKindOf,
   runReducer,
   type ImportRun,
@@ -38,6 +39,7 @@ import {
   restoreGroups,
   returnToAutomatic,
   splitOut,
+  suggestGroups,
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
@@ -48,6 +50,7 @@ import {
   makeImportAuth,
   previewImport,
   readingForDocument,
+  suggestMapping,
   supplyInvoiceNumber,
   uploadSourceDocument,
   type CarriedReading,
@@ -214,6 +217,9 @@ const availableSettingsTab = (tab: SettingsTab, mode: Mode): SettingsTab =>
 
 // The busy beat's floor: resolved after ms regardless of what else is happening.
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+// One refusal copy. Matched by identity when a release clears it.
+const STILL_WORKING = new ApiError('network', 'An import or filing is still in progress. Try again when it finishes.')
 
 // This app shell is ported from the prototype's `class Component extends DCLogic`
 // (Platform.dc.html ~L980-1263): `this.state` becomes typed `useState` hooks below,
@@ -513,11 +519,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // separately-submittable invoices (createRequest carries no idempotency key; that field
   // is batch-submit-only). readColumns and startDocumentRun (upload step, one per run
   // kind), startImport (mapping step) and fileDraft (form step) live on different steps or
-  // different run kinds and can never overlap, so one flag covers all four. A ref also
+  // different run kinds, so one flag covers all four. A ref also
   // cannot get stuck the way a component-local flag would: the
   // wizard components never observe the rejection that would clear it, since errors come
   // back through ctx.importError / ctx.filingError.
   const reqInFlight = useRef(false)
+  // Bumped by resetImport and by every run start, so only the current run sets run state or
+  // lands a route (App.secondImport.test.tsx).
+  const runSeq = useRef(0)
+  // The operation holding reqInFlight and the runSeq it started under; read only while the lock is held.
+  const lockBy = useRef<{ op: 'preview' | 'run' | 'filing'; seq: number }>({ op: 'run', seq: 0 })
 
   // resetImport() snapshots active.entityId at openCreate so a company switch cannot
   // silently retarget an import already in flight. But that snapshot can be taken
@@ -756,6 +767,19 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   }
 
   function openCreate() {
+    // An operation the user has not left keeps its screen and lands as it would have; a switch
+    // already left it (App.secondImport.test.tsx's BUG20-D11, BUG20-D12).
+    if (reqInFlight.current && lockBy.current.seq === runSeq.current) {
+      navigate('create')
+      setSwitcherOpen(false)
+      // The review step renders neither slot, so show the holder's own screen (BUG20-R1, BUG20-R2).
+      if (createStep === 'review' && !runIsActive(run)) {
+        const step = lockBy.current.op === 'filing' ? 'form' : 'upload'
+        setCreateStep(step)
+        showStillWorking(step)
+      } else showStillWorking()
+      return
+    }
     navigate('create')
     setCreateStep('upload')
     setDraft(defaultDraft(active))
@@ -775,8 +799,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // `active`, so switching company between two runs cannot leave the second run filing
   // under the first run's entity.
   // `target` is a parameter, never a state read: switchClient's setActiveEntityId has not
-  // committed, so `active` there still names the company being LEFT (:502-528's race).
+  // committed, so `active` there still names the company being LEFT.
   function resetImport(target: string | null = active.entityId) {
+    runSeq.current += 1
     setEntityId(target)
     setPickedFiles([])
     setFilesRefusal(null)
@@ -789,6 +814,27 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // here specifically so a deep-link arrival — which carries no picked files, preview
     // or mapping at all — cannot open the upload step on another run's state.
     setReviewBatchIds([])
+  }
+
+  // The slot is the screen's, not the lock holder's: CreateFlow shows the progress card over the
+  // form while a run is active (BUG20-P4, BUG20-D13).
+  function showStillWorking(step: CreateStep = createStep) {
+    if (step === 'form' && !runIsActive(run)) setFilingError(STILL_WORKING)
+    else setImportError(STILL_WORKING)
+  }
+
+  // A repeat of the holder's own operation in the same flow stays silent: the double-click guard
+  // (BUG20-D6, BUG20-S6).
+  function lockHeld(op: 'preview' | 'run' | 'filing'): boolean {
+    if (!reqInFlight.current) return false
+    if (lockBy.current.op !== op || lockBy.current.seq !== runSeq.current) showStillWorking()
+    return true
+  }
+
+  // Every release clears the refusal in either slot and keeps any other error (BUG20-P2, BUG20-F3).
+  function releaseStillWorking() {
+    setImportError((e) => (e === STILL_WORKING ? null : e))
+    setFilingError((e) => (e === STILL_WORKING ? null : e))
   }
 
   function closeCreate() {
@@ -868,8 +914,9 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
     // preview neither sends nor needs one (see canReadColumns, wrapped here by
     // canReadColumnsAll — the same predicate CreateUpload's own gate reads).
     if (base == null || !canReadColumnsAll(pickedFiles)) return
-    if (reqInFlight.current) return
+    if (lockHeld('preview')) return
     reqInFlight.current = true
+    lockBy.current = { op: 'preview', seq: runSeq.current }
     setImportError(null)
 
     // Snapshotted once, same discipline as the old readColumns closing over a fixed
@@ -901,7 +948,13 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         // ceiling: a click before the entity list resolves snapshots a null target, so that import
         // opens unrestored; revisit if a returning client's import is reported unrestored.
         const lookup = target ? (documentId: string) => getSavedMapping(authedFetch, base, target, documentId) : null
-        setGroups(await restoreGroups(groupByLayout(previewed), lookup))
+        const restored = await restoreGroups(groupByLayout(previewed), lookup)
+        // Only a group that restored nothing reaches the AI: the endpoint has no such check of
+        // its own, so this ordering is the whole of the one-extra-call-per-import claim.
+        const suggest = target
+          ? (documentId: string) => suggestMapping(authedFetch, base, { entity_id: target, document_id: documentId })
+          : null
+        setGroups(await suggestGroups(restored, suggest))
         setGroupIndex(0)
         setCreateStep('mapping')
         // A fresh mapping cycle must not carry a PREVIOUS run's leftovers onto it.
@@ -918,6 +971,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         setRun({ files: [], cursor: 0, status: 'idle' })
       } finally {
         reqInFlight.current = false
+        releaseStillWorking()
       }
     })()
   }
@@ -1011,13 +1065,18 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   // function (AC #7).
   //
   // reqInFlight is taken ONCE for the whole run and released ONCE in a `finally` after
-  // the loop (and the routing it decides) exits — same shape as readAllColumns above,
-  // extended from "one request" to "the whole sequential run" (AC #8).
+  // the loop exits — same shape as readAllColumns above, extended from "one request" to
+  // "the whole sequential run" (AC #8).
   function startRun() {
     const base = gatewayBase()
     if (base == null || !entityId || !canSubmitAllMappings(groups)) return
-    if (reqInFlight.current) return
+    if (lockHeld('run')) return
     reqInFlight.current = true
+    const seq = ++runSeq.current
+    lockBy.current = { op: 'run', seq }
+    const show = (r: ImportRun) => {
+      if (seq === runSeq.current) setRun(r)
+    }
     setImportError(null)
 
     // Snapshotted once, same discipline as readAllColumns' `files` snapshot: this run
@@ -1059,7 +1118,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
                   : 'this file was not uploaded — read its columns again',
               },
             })
-            setRun(localRun)
+            show(localRun)
             continue
           }
           try {
@@ -1074,10 +1133,11 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
                 entityId,
                 mapping: toImportMapping(group.mapping),
                 rememberMapping: rememberMapping(group),
+                headerRow: group.headerRow,
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
-                setRun(localRun)
+                show(localRun)
               },
             )
             localRun = runReducer(localRun, {
@@ -1093,13 +1153,16 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
               outcome: { kind: 'failed', message: toApiError(err).message },
             })
           }
-          setRun(localRun)
+          show(localRun)
         }
-
-        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
       } finally {
         reqInFlight.current = false
+        releaseStillWorking()
       }
+      // Outside the lock: every invoice is committed and this lookup only picks the screen, so a
+      // New invoice inside it can start the next import (App.secondImport.test.tsx).
+      const soleId = await resolveSoleInvoiceId(localRun, base)
+      if (seq === runSeq.current) applyRoute(routeAfterRun(localRun, soleId))
     })()
   }
 
@@ -1124,8 +1187,10 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function startDocumentRun() {
     const base = gatewayBase()
     if (base == null || !entityId || !canStartDocumentRun(pickedFiles)) return
-    if (reqInFlight.current) return
+    if (lockHeld('run')) return
     reqInFlight.current = true
+    const seq = ++runSeq.current
+    lockBy.current = { op: 'run', seq }
     setImportError(null)
 
     const filesSnapshot = pickedFiles
@@ -1164,12 +1229,15 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         for (const o of outcomes) {
           if (o.outcome.kind !== 'imported' && o.outcome.kind !== 'failed') continue
           localRun = runReducer(localRun, { type: 'settled', outcome: o.outcome })
-          setRun(localRun)
+          if (seq === runSeq.current) setRun(localRun)
         }
-        applyRoute(routeAfterRun(localRun, await resolveSoleInvoiceId(localRun, base)))
       } finally {
         reqInFlight.current = false
+        releaseStillWorking()
       }
+      // Outside the lock, as in startRun.
+      const soleId = await resolveSoleInvoiceId(localRun, base)
+      if (seq === runSeq.current) applyRoute(routeAfterRun(localRun, soleId))
     })()
   }
 
@@ -1345,12 +1413,19 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
   function fileDraft() {
     const base = gatewayBase()
     if (base == null || activeEntity == null || !fileDraftGate(draft, activeEntity).canFile) return
+    if (lockHeld('filing')) return
+    // Both lib calls take reqInFlight synchronously, so this names the holder before the POST.
+    lockBy.current = { op: 'filing', seq: runSeq.current }
+    const onPending = (pending: boolean) => {
+      setFiling(pending)
+      if (!pending) releaseStillWorking()
+    }
     // A carried reading files through the supply route under the typed number (EXTR27-A4).
     if (handOffReading !== null && handOffDocumentId !== null) {
       void fileSuppliedNumber(draft.number, activeEntity, handOffDocumentId, {
         supply: (req) => supplyInvoiceNumber(authedFetch, base, req),
         inFlight: reqInFlight,
-        onPending: setFiling,
+        onPending,
         onError: setFilingError,
         onCreated: openImportedInvoice,
       })
@@ -1362,7 +1437,7 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
       {
         create: (input) => createInvoice(authedFetch, base, input),
         inFlight: reqInFlight,
-        onPending: setFiling,
+        onPending,
         onError: setFilingError,
         onCreated: openImportedInvoice,
       },

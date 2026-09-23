@@ -335,8 +335,7 @@ type ListFilter struct {
 	KeptAsIs bool
 
 	// AwaitingApproval (APPR-08-07) narrows to invoices an active approval policy is
-	// still holding: the exact negation of approval.TransmitClear -- the UNFLAGGED
-	// predicate, so APPROVALS_ENFORCED never gates it -- restricted to validated.
+	// still holding: the exact negation of approval.TransmitClear, restricted to validated.
 	// Zero value applies no predicate, like every other bool above.
 	AwaitingApproval bool
 
@@ -436,8 +435,8 @@ var (
 	ErrNotResolvable = errors.New("invoice: not resolvable")
 
 	// ErrAwaitingApproval — an open approval run blocks the move into queued.
-	// Flag-gated at Store.Transition; statusForErr answers 409 with
-	// awaitingApprovalReason (TestStatusForErr_AwaitingApprovalIs409).
+	// statusForErr answers 409 with awaitingApprovalReason
+	// (TestStatusForErr_AwaitingApprovalIs409).
 	// NOT approval.ErrNotAwaitingApproval, which means the near-inverse
 	// (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
 	ErrAwaitingApproval = errors.New("invoice: awaiting approval")

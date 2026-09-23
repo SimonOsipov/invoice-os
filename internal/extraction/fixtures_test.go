@@ -106,6 +106,17 @@ var fxCorpus = []struct {
 	{fxAISteered, fxBuildAISteeredInvoice},
 	// AIR-04-04's deployed-unavailable fixture: outside every corpus_ ratchet.
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
+	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
+	{fxAILines, fxBuildAILinesInvoice},
+	// CHECK-01-03's seven non-invoice types: the document-type check's negative half.
+	// Byte-compared like the rest, outside every corpus_ ratchet.
+	{fxNonInvoiceReceipt, fxBuildNonInvoiceReceipt},
+	{fxNonInvoiceProforma, fxBuildNonInvoiceProforma},
+	{fxNonInvoiceQuotation, fxBuildNonInvoiceQuotation},
+	{fxNonInvoiceCreditNote, fxBuildNonInvoiceCreditNote},
+	{fxNonInvoiceDeliveryNote, fxBuildNonInvoiceDeliveryNote},
+	{fxNonInvoiceStatement, fxBuildNonInvoiceStatement},
+	{fxNonInvoicePurchaseOrder, fxBuildNonInvoicePurchaseOrder},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -1938,6 +1949,358 @@ func TestFixtures_AIUnavailableEngineAloneWouldFileIt(t *testing.T) {
 	}
 }
 
+// AIR-08-13's deployed line-items fixture: a clean, unambiguous header (this fixture's marker
+// steers only the LINES call, never askAI's header call) plus a ruled 2-row table
+// (fxBuildRichInvoice's recipe) and a scoped LINES marker answering three rows -- one agreeing
+// with the table cell for cell, one disagreeing in exactly its unit_price, and one printed only
+// as plain text below the rules so TableFormer never sees it. Not corpus_-prefixed, outside
+// every corpus_ ratchet.
+const fxAILines = "ai_lines_invoice.pdf"
+
+const fxAILinesMarkerPrefix = "AIFAKE-LINES-ANSWER-"
+
+// The marker is drawn small and near the left edge so the whole run fits the page width.
+// Docling clips a run at the page edge and returns the prefix, which decodes to a base64
+// error and quarantines the document -- TestFixtures_AILinesMarkerFitsThePageWidth.
+const (
+	fxAILinesMarkerPt = 2
+	fxAILinesMarkerX  = 20
+)
+
+func fxAILinesHeaderLines() []fxLine {
+	return []fxLine{
+		{24, 72, 720, "INVOICE"},
+		{12, 72, 690, "Invoice No: ASC-8-0921"},
+		{12, 72, 672, "Issue Date: 20/05/2026"},
+		{12, 72, 654, "Supplier: Kaduna Supply Limited"},
+		{12, 72, 636, "TIN: 30154829-0032"},
+		{12, 72, 618, "Currency: NGN"},
+	}
+}
+
+// fxAILinesTableRowYs are this fixture's own horizontal rule positions -- header-top,
+// header/row1, row1/row2, bottom -- one header and two body rows, fxTableRowYs' own shape.
+var fxAILinesTableRowYs = [4]int{590, 566, 542, 518}
+
+const (
+	fxAILinesTableHeaderY = 578
+	fxAILinesRow1Y        = 554
+	fxAILinesRow2Y        = 530
+	fxAILinesAIOnlyY      = 494
+	fxAILinesFootnoteY    = 476
+)
+
+// fxAILinesRow1/2 are the ruled table's own two printed body rows: row 1 the AI will agree with
+// cell for cell, row 2 the AI will answer with a different unit_price.
+var (
+	fxAILinesRow1 = []string{"Widget", "2", "500.00", "1000.00"}
+	fxAILinesRow2 = []string{"Gadget", "3", "250.00", "750.00"}
+)
+
+// fxAILinesDisagreedUnitPrice is the AI's row-2 answer, printed nowhere inside the ruled table.
+// aliLinePresent (ailinesmerge.go) refuses to flip a cell to ambiguous unless the AI's own value
+// is printed somewhere on the page, so the footnote below carries it too -- one Go value feeds
+// the marker, the footnote and this test's own expectation, so none of the three can drift from
+// the others.
+const fxAILinesDisagreedUnitPrice = "260.00"
+
+var fxAILinesFootnote = "Revised Unit Price: " + fxAILinesDisagreedUnitPrice
+
+// fxAILinesAIOnlyRow is row 3: it exists only as plain text below the rules, never in the ruled
+// table, so TableFormer's own read stops at two rows and the AI supplies the third.
+var fxAILinesAIOnlyRow = []string{"Delivery", "1", "90.00", "90.00"}
+
+var fxAILinesAIOnlyLine = strings.Join(fxAILinesAIOnlyRow, " ")
+
+// fxAILinesAnswer is the marker's own line_items answer, built from the same Go values the
+// printed page carries -- row 1 matches fxAILinesRow1 exactly, row 2 matches fxAILinesRow2
+// except unit_price, and row 3 is fxAILinesAIOnlyRow.
+func fxAILinesAnswer() []map[string]any {
+	row := func(cells []string, unitPrice string) map[string]any {
+		return map[string]any{
+			"description": cells[0], "quantity": cells[1], "unit_price": unitPrice, "line_total": cells[3], "line_tax": nil,
+		}
+	}
+	return []map[string]any{
+		row(fxAILinesRow1, fxAILinesRow1[2]),            // AGREEING
+		row(fxAILinesRow2, fxAILinesDisagreedUnitPrice), // DISAGREEMENT: unit_price only
+		row(fxAILinesAIOnlyRow, fxAILinesAIOnlyRow[2]),  // AI-ONLY
+	}
+}
+
+// fxAILinesMarker builds the marker text the fake decodes, fxAISteeredMarker's own recipe:
+// json.Marshal sorts map keys alphabetically, then base64.RawURLEncoding.
+func fxAILinesMarker() string {
+	raw, err := json.Marshal(map[string]any{"line_items": fxAILinesAnswer()})
+	if err != nil {
+		panic("fxAILinesMarker: marshal: " + err.Error())
+	}
+	return fxAILinesMarkerPrefix + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// fxDecodeAILinesMarker reverses fxAILinesMarker, keeping only non-blank strings -- aiLineFrom's
+// own filter (ailines.go) -- so a test can feed the result straight to MergeAILinesForTest.
+func fxDecodeAILinesMarker(t *testing.T, marker string) []extraction.AILine {
+	t.Helper()
+
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(marker, fxAILinesMarkerPrefix))
+	if err != nil {
+		t.Fatalf("decode marker: %v", err)
+	}
+	var decoded struct {
+		LineItems []map[string]any `json:"line_items"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal marker payload: %v", err)
+	}
+
+	str := func(row map[string]any, key string) *string {
+		v, ok := row[key]
+		if !ok || v == nil {
+			return nil
+		}
+		s, ok := v.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			return nil
+		}
+		return &s
+	}
+	lines := make([]extraction.AILine, len(decoded.LineItems))
+	for i, row := range decoded.LineItems {
+		lines[i] = extraction.AILine{
+			Description: str(row, "description"), Quantity: str(row, "quantity"), UnitPrice: str(row, "unit_price"),
+			LineTotal: str(row, "line_total"), LineTax: str(row, "line_tax"),
+		}
+	}
+	return lines
+}
+
+// fxAILinesLines is every text line the fixture draws, marker last -- fxLinesWithMarkerAt's own
+// precondition (fxAISteeredLines' precedent).
+func fxAILinesLines() []fxLine {
+	lines := fxAILinesHeaderLines()
+	lines = append(lines, fxTableRowText(fxAILinesTableHeaderY, fxTableHeader)...)
+	lines = append(lines, fxTableRowText(fxAILinesRow1Y, fxAILinesRow1)...)
+	lines = append(lines, fxTableRowText(fxAILinesRow2Y, fxAILinesRow2)...)
+	lines = append(lines,
+		fxLine{10, 72, fxAILinesAIOnlyY, fxAILinesAIOnlyLine},
+		fxLine{10, 72, fxAILinesFootnoteY, fxAILinesFootnote},
+	)
+	lines = append(lines, fxLine{fxAILinesMarkerPt, fxAILinesMarkerX, 38, fxAILinesMarker()})
+	return lines
+}
+
+// fxAILinesRules is the ruled table's own geometry, fxBuildRichInvoice's H-before-V recipe.
+// Independent of fxAILinesLines' Tj order: the rules are appended after the text stream, so
+// rotating the marker's line position never moves them.
+func fxAILinesRules() []byte {
+	var rules bytes.Buffer
+	for _, y := range fxAILinesTableRowYs {
+		rules.WriteString(fxRuleH(y, fxTableColXs[0], fxTableColXs[len(fxTableColXs)-1]))
+	}
+	for _, x := range fxTableColXs {
+		rules.WriteString(fxRuleV(x, fxAILinesTableRowYs[len(fxAILinesTableRowYs)-1], fxAILinesTableRowYs[0]))
+	}
+	return rules.Bytes()
+}
+
+// fxAILinesAssemble builds the fixture's PDF from an explicit line order -- shared by the
+// builder (marker last) and the rotation sweep (marker anywhere).
+func fxAILinesAssemble(lines []fxLine) []byte {
+	content := fxText(lines...)
+	content = append(content, fxAILinesRules()...)
+	return fxAssemble([]fxObject{
+		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
+		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		fxPage(fxFontRes(5), 4),
+		fxStream(content),
+		fxObject(fxHelvetica),
+	})
+}
+
+func fxBuildAILinesInvoice() []byte {
+	return fxAILinesAssemble(fxAILinesLines())
+}
+
+// fxAILinesParsedRow returns the Tj strings printed at baseline y, left to right, straight out
+// of body -- fxTjRe's own recipe (TestFixtures_RichInvoiceTotalsAreSplitLabels), so a table row
+// assertion is parsed from the fixture's own bytes, never hand-copied.
+func fxAILinesParsedRow(body []byte, y int) []string {
+	type placed struct {
+		x    int
+		text string
+	}
+	var found []placed
+	for _, m := range fxTjRe.FindAllSubmatch(body, -1) {
+		py, _ := strconv.Atoi(string(m[2]))
+		if py != y {
+			continue
+		}
+		px, _ := strconv.Atoi(string(m[1]))
+		found = append(found, placed{px, string(m[3])})
+	}
+	slices.SortFunc(found, func(a, b placed) int { return a.x - b.x })
+	out := make([]string, len(found))
+	for i, p := range found {
+		out[i] = p.text
+	}
+	return out
+}
+
+// TestFixtures_AILinesRuledTableYieldsTwoDocLines parses the committed fixture's own ruled
+// table -- never a hand-typed copy of it -- and proves it classifies to exactly two DocLines,
+// the floor the deployed line-item merge (AIR-08-13) depends on. Page.Tables is Docling's own
+// output and is not reachable from a Go unit test (pagereader.go: "Nil from PDFiumReader, which
+// does not look for tables at all"), so this proves the fixture's OWN shape reads correctly
+// through LineItems -- not that the deployed sidecar finds the same table, which is
+// AIR08-E2E-01's job.
+func TestFixtures_AILinesRuledTableYieldsTwoDocLines(t *testing.T) {
+	raw := fxRead(t, fxAILines)
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxAILines)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	row1 := fxAILinesParsedRow(body, fxAILinesRow1Y)
+	row2 := fxAILinesParsedRow(body, fxAILinesRow2Y)
+	if len(row1) != 4 || len(row2) != 4 {
+		t.Fatalf("%s: parsed %d/%d cell(s) for row 1/2, want 4 each -- the DocLines assertion below would prove nothing", fxAILines, len(row1), len(row2))
+	}
+
+	cells := make([]extraction.TableCell, 0, len(fxTableHeader)+8)
+	for c, h := range fxTableHeader {
+		cells = append(cells, liCell(0, c, h, nil))
+	}
+	for c, v := range row1 {
+		cells = append(cells, liCell(1, c, v, nil))
+	}
+	for c, v := range row2 {
+		cells = append(cells, liCell(2, c, v, nil))
+	}
+	tbl := extraction.Table{Rows: 3, Cols: 4, Cells: cells}
+
+	got := extraction.LineItems([]extraction.Page{{Tables: []extraction.Table{tbl}}})
+	if len(got) != 2 {
+		t.Fatalf("%s's ruled table classified to %d DocLine(s), want exactly 2", fxAILines, len(got))
+	}
+}
+
+// TestFixtures_AILinesOutcomeIgnoresTokenOrder rotates the marker through every other line
+// index and proves the page still carries it as exactly one token regardless -- the header
+// fixture's TestFixtures_AISteeredOutcomeIgnoresTokenOrder recipe.
+func TestFixtures_AILinesOutcomeIgnoresTokenOrder(t *testing.T) {
+	lines := fxAILinesLines()
+	if last := lines[len(lines)-1]; last.size != fxAILinesMarkerPt || !strings.HasPrefix(last.text, fxAILinesMarkerPrefix) {
+		t.Fatalf("the generator's own line list does not place the marker last: %+v", last)
+	}
+	marker := fxAILinesMarker()
+
+	for i := range lines {
+		t.Run(fmt.Sprintf("marker at %d", i), func(t *testing.T) {
+			raw := fxAILinesAssemble(fxLinesWithMarkerAt(lines, i))
+			pages := fxPagesFromBytes(t, raw)
+
+			n := 0
+			for _, p := range pages {
+				for _, tok := range p.Tokens {
+					if tok.Text == marker {
+						n++
+					}
+				}
+			}
+			if n != 1 {
+				t.Errorf("marker at position %d: page carries the scoped marker as %d token(s), want exactly 1", i, n)
+			}
+		})
+	}
+}
+
+// TestFixtures_AILinesMergeMatchesTheCommittedMarker decodes the COMMITTED fixture's own marker
+// and feeds it through mergeAILines over the fixture's own parsed engine rows, so the deployed
+// merge outcome this subtask asserts is derived from the fixture, never copied by hand.
+func TestFixtures_AILinesMergeMatchesTheCommittedMarker(t *testing.T) {
+	raw := fxRead(t, fxAILines)
+	objs := fxObjects(raw)
+	pages := fxPages(t, objs)
+	if len(pages) < 1 {
+		t.Fatalf("found %d page object(s) in %s, want at least 1", len(pages), fxAILines)
+	}
+	body := fxContent(t, objs, pages[0])
+
+	row1 := fxAILinesParsedRow(body, fxAILinesRow1Y)
+	row2 := fxAILinesParsedRow(body, fxAILinesRow2Y)
+	if len(row1) != 4 || len(row2) != 4 {
+		t.Fatalf("%s: parsed %d/%d cell(s) for row 1/2, want 4 each -- the merge assertion below would prove nothing", fxAILines, len(row1), len(row2))
+	}
+
+	engine := extraction.LineItemResults([]extraction.DocLine{
+		{Index: 1, Description: &row1[0], Quantity: &row1[1], UnitPrice: &row1[2], LineTotal: &row1[3]},
+		{Index: 2, Description: &row2[0], Quantity: &row2[1], UnitPrice: &row2[2], LineTotal: &row2[3]},
+	})
+
+	tokenPages := rvCorpusPages(t, fxAILines) // the COMMITTED file, not the built bytes: the committed file is what deploys.
+	ai := fxDecodeAILinesMarker(t, fxAILinesMarker())
+
+	got := extraction.MergeAILinesForTest(engine, ai, tokenPages)
+
+	byIndex := map[int]map[string]extraction.FieldResult{}
+	var indexes []int
+	for _, r := range got {
+		idx, role, ok := extraction.ParseLineFieldName(r.Name)
+		if !ok {
+			t.Fatalf("mergeAILines returned a non-line row %q -- ai != nil so every row must be a line cell", r.Name)
+		}
+		if byIndex[idx] == nil {
+			byIndex[idx] = map[string]extraction.FieldResult{}
+		}
+		byIndex[idx][role] = r
+		indexes = append(indexes, idx)
+	}
+	slices.Sort(indexes)
+	indexes = slices.Compact(indexes)
+	if !slices.Equal(indexes, []int{1, 2, 3}) {
+		t.Fatalf("mergeAILines line indices = %v, want contiguous [1 2 3]", indexes)
+	}
+
+	// Row 1: untouched -- every cell the engine's own reading, no alternatives.
+	row1Want := map[string]string{"description": row1[0], "quantity": row1[1], "unit_price": row1[2], "line_total": row1[3]}
+	for role, want := range row1Want {
+		got := byIndex[1][role]
+		if got.Value == nil || *got.Value != want || got.Reason != extraction.ReasonNone || len(got.Alternatives) != 0 {
+			t.Errorf("row 1 %s = %+v, want decided %q with no alternatives", role, got, want)
+		}
+	}
+
+	// Row 2: ambiguous on unit_price only, the engine's value standing with the AI's as the one
+	// alternative; every other role untouched by the disagreement.
+	up := byIndex[2]["unit_price"]
+	if up.Value == nil || *up.Value != row2[2] || up.Reason != extraction.ReasonAmbiguous ||
+		len(up.Alternatives) != 1 || up.Alternatives[0].Value == nil || *up.Alternatives[0].Value != fxAILinesDisagreedUnitPrice {
+		t.Errorf("row 2 unit_price = %+v, want ambiguous at %q with one alternative %q", up, row2[2], fxAILinesDisagreedUnitPrice)
+	}
+	row2Want := map[string]string{"description": row2[0], "quantity": row2[1], "line_total": row2[3]}
+	for role, want := range row2Want {
+		got := byIndex[2][role]
+		if got.Value == nil || *got.Value != want || got.Reason != extraction.ReasonNone {
+			t.Errorf("row 2 %s = %+v, want decided %q, untouched by the unit_price disagreement", role, got, want)
+		}
+	}
+
+	// Row 3: AI-only, unmarked (Q12) -- every cell reason none, no alternatives.
+	row3Want := map[string]string{
+		"description": fxAILinesAIOnlyRow[0], "quantity": fxAILinesAIOnlyRow[1],
+		"unit_price": fxAILinesAIOnlyRow[2], "line_total": fxAILinesAIOnlyRow[3],
+	}
+	for role, want := range row3Want {
+		got := byIndex[3][role]
+		if got.Value == nil || *got.Value != want || got.Reason != extraction.ReasonNone || len(got.Alternatives) != 0 {
+			t.Errorf("row 3 %s = %+v, want unmarked %q", role, got, want)
+		}
+	}
+}
+
 // --- reading a fixture back -------------------------------------------------
 
 var (
@@ -2449,7 +2812,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}
@@ -3100,4 +3463,152 @@ func TestFixtures_EveryTestNamedInACommentIsDeclared(t *testing.T) {
 	if got := fxUndeclaredNames([]string{known}, declared); len(got) != 0 {
 		t.Errorf("a genuinely declared name reports %q, want none", got)
 	}
+}
+
+// fxHelveticaWidths is Helvetica's own advance width, in 1/1000 em, for every character a
+// scoped marker can contain: the base64url alphabet plus the prefix's letters and hyphen.
+var fxHelveticaWidths = map[rune]int{
+	'0': 556, '1': 556, '2': 556, '3': 556, '4': 556, '5': 556, '6': 556, '7': 556, '8': 556, '9': 556,
+	'A': 667, 'B': 667, 'C': 722, 'D': 722, 'E': 667, 'F': 611, 'G': 778, 'H': 722, 'I': 278,
+	'J': 500, 'K': 667, 'L': 556, 'M': 833, 'N': 722, 'O': 778, 'P': 667, 'Q': 778, 'R': 722,
+	'S': 667, 'T': 611, 'U': 722, 'V': 667, 'W': 944, 'X': 667, 'Y': 667, 'Z': 611,
+	'a': 556, 'b': 556, 'c': 500, 'd': 556, 'e': 556, 'f': 278, 'g': 556, 'h': 556, 'i': 222,
+	'j': 222, 'k': 500, 'l': 222, 'm': 833, 'n': 556, 'o': 556, 'p': 556, 'q': 556, 'r': 333,
+	's': 500, 't': 278, 'u': 556, 'v': 500, 'w': 722, 'x': 500, 'y': 500, 'z': 500,
+	'-': 333, '_': 556,
+}
+
+// TestFixtures_AILinesMarkerFitsThePageWidth is the local guard on a deployed-only failure:
+// the sidecar clips a text run at the page edge and returns its prefix, whose payload is not
+// valid base64, so the line call fails and the document quarantines. PDFium parses the content
+// stream and never clips, so every other local test stays green on a marker that cannot survive
+// the deployed read.
+func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
+	marker := fxAILinesMarker()
+	if len(marker) == 0 {
+		t.Fatal("the marker is empty, so the width assertion below proves nothing")
+	}
+
+	milli := 0
+	for _, r := range marker {
+		w, ok := fxHelveticaWidths[r]
+		if !ok {
+			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
+		}
+		milli += w
+	}
+	right := float64(fxAILinesMarkerX) + float64(milli)*float64(fxAILinesMarkerPt)/1000
+
+	// Headroom, not just fit: the payload grows whenever the steered answer does, and a run
+	// that ends exactly at the edge re-truncates silently on the next change.
+	limit := float64(fxPageWidthPt) * 0.95
+	if right > limit {
+		t.Errorf("marker of %d chars at %dpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
+			len(marker), fxAILinesMarkerPt, fxAILinesMarkerX, right, limit, fxPageWidthPt)
+	}
+}
+
+// --- CHECK-01-03: the seven non-invoice builders -----------------------------
+
+func fxBuildNonInvoiceReceipt() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "RECEIPT"},
+		fxLine{12, 72, 690, "Receipt No: RCP-3101"},
+		fxLine{12, 72, 672, "Date: 2026-02-11"},
+		fxLine{12, 72, 654, "Received from: Honeywell Group"},
+		fxLine{12, 72, 636, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 618, "Supplier TIN: 99999999-1401"},
+		fxLine{12, 72, 600, "Payment method: Bank transfer"},
+		fxLine{12, 72, 582, "Amount received: NGN 1,075.00"},
+		fxLine{12, 72, 564, "PAID IN FULL"},
+		fxLine{12, 72, 546, "This receipt acknowledges payment. It is not a tax invoice."},
+	)
+}
+
+func fxBuildNonInvoiceProforma() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "PROFORMA INVOICE"},
+		fxLine{12, 72, 690, "Proforma No: PF-3201"},
+		fxLine{12, 72, 672, "Date: 2026-02-18"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1402"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Currency: NGN"},
+		fxLine{12, 72, 582, "Estimated total: NGN 2,150.00"},
+		fxLine{12, 72, 564, "This is not a tax invoice. No payment is due on this document."},
+		fxLine{12, 72, 546, "Prices are indicative and valid for 14 days."},
+	)
+}
+
+func fxBuildNonInvoiceQuotation() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "QUOTATION"},
+		fxLine{12, 72, 690, "Quotation No: QT-3301"},
+		fxLine{12, 72, 672, "Date: 2026-03-03"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1403"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Quoted total: NGN 4,300.00"},
+		fxLine{12, 72, 582, "Valid for 30 days from the date above."},
+		fxLine{12, 72, 564, "Acceptance of this quotation is required before supply."},
+	)
+}
+
+func fxBuildNonInvoiceCreditNote() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "CREDIT NOTE"},
+		fxLine{12, 72, 690, "Credit Note No: CN-3401"},
+		fxLine{12, 72, 672, "Date: 2026-03-19"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1404"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Reason: goods returned"},
+		fxLine{12, 72, 582, "Credit amount: NGN -750.00"},
+		fxLine{12, 72, 564, "This document reduces the amount owed. It requests no payment."},
+	)
+}
+
+func fxBuildNonInvoiceDeliveryNote() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "DELIVERY NOTE"},
+		fxLine{12, 72, 690, "Delivery Note No: DN-3501"},
+		fxLine{12, 72, 672, "Date: 2026-04-08"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1405"},
+		fxLine{12, 72, 618, "Deliver to: Honeywell Group"},
+		fxLine{12, 72, 600, "Address: 14 Kofo Abayomi Street, Victoria Island, Lagos"},
+		fxLine{12, 72, 582, "Item: 40 cartons of bottled water"},
+		fxLine{12, 72, 564, "Quantity dispatched: 40"},
+		fxLine{12, 72, 546, "Goods received by: ____________"},
+		fxLine{12, 72, 528, "No charges are shown on this document."},
+	)
+}
+
+func fxBuildNonInvoiceStatement() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "STATEMENT OF ACCOUNT"},
+		fxLine{12, 72, 690, "Statement No: ST-3601"},
+		fxLine{12, 72, 672, "Period: 01/04/2026 to 30/04/2026"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1406"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Opening balance: NGN 12,000.00"},
+		fxLine{12, 72, 582, "Payments received: NGN 5,000.00"},
+		fxLine{12, 72, 564, "Closing balance: NGN 7,000.00"},
+		fxLine{12, 72, 546, "This statement summarises several documents. It is not a tax invoice."},
+	)
+}
+
+func fxBuildNonInvoicePurchaseOrder() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "PURCHASE ORDER"},
+		fxLine{12, 72, 690, "PO No: PO-3701"},
+		fxLine{12, 72, 672, "Date: 2026-05-12"},
+		fxLine{12, 72, 654, "Ordered by: Honeywell Group"},
+		fxLine{12, 72, 636, "Buyer TIN: 99999999-1407"},
+		fxLine{12, 72, 618, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 600, "Item: 200 reams of A4 paper"},
+		fxLine{12, 72, 582, "Order value: NGN 3,600.00"},
+		fxLine{12, 72, 564, "Please supply the goods above and invoice on delivery."},
+	)
 }

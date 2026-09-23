@@ -86,11 +86,12 @@ type aitDumpEngineJSON struct {
 }
 
 type aitDumpJSON struct {
-	File      string                       `json:"file"`
-	Set       string                       `json:"set"`
-	TextChars int                          `json:"text_chars"`
-	Pages     []aitDumpPageJSON            `json:"pages"`
-	Engine    map[string]aitDumpEngineJSON `json:"engine"`
+	File        string                       `json:"file"`
+	Set         string                       `json:"set"`
+	TextChars   int                          `json:"text_chars"`
+	Pages       []aitDumpPageJSON            `json:"pages"`
+	Engine      map[string]aitDumpEngineJSON `json:"engine"`
+	EngineLines []aliEngineLineJSON          `json:"engine_lines"`
 }
 
 type aitTextlessJSON struct {
@@ -141,6 +142,19 @@ func aitWriteJSON(path string, v any) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
+// aitEngineHeaders is dump.json's engine map: one entry per header field. Reconcile also
+// returns the line_items block and one row per line cell; aliEngineLines takes those.
+func aitEngineHeaders(results []FieldResult) map[string]aitDumpEngineJSON {
+	engine := map[string]aitDumpEngineJSON{}
+	for _, r := range results {
+		if !containsString(HeaderFields, r.Name) {
+			continue
+		}
+		engine[r.Name] = aitDumpEngineJSON{Value: r.Value, Reason: string(r.Reason)}
+	}
+	return engine
+}
+
 // TestAIText_Dump is Stage B: for each manifest document, read its Docling JSON, run the
 // worker's default arm (no learned rules -- a fresh layout has none) and write dump.json.
 // A TextChars == 0 document is recorded in textless.json and never dumped (Core AC 8).
@@ -172,14 +186,6 @@ func TestAIText_Dump(t *testing.T) {
 			Entity:     Entity{},
 			Pages:      tokens,
 		})
-		engine := map[string]aitDumpEngineJSON{}
-		for _, r := range results {
-			if !containsString(HeaderFields, r.Name) {
-				continue // Reconcile also returns line-item rows; dump.json's engine is headers only
-			}
-			engine[r.Name] = aitDumpEngineJSON{Value: r.Value, Reason: string(r.Reason)}
-		}
-
 		lines := aitPromptLines(tokens)
 		byPage := map[int][]promptLine{}
 		for _, l := range lines {
@@ -204,7 +210,8 @@ func TestAIText_Dump(t *testing.T) {
 			pagesJSON = append(pagesJSON, aitDumpPageJSON{Number: p.Number, Tokens: tokJSON, Lines: lineJSON})
 		}
 
-		dj := aitDumpJSON{File: doc.File, Set: doc.Set, TextChars: res.TextChars, Pages: pagesJSON, Engine: engine}
+		dj := aitDumpJSON{File: doc.File, Set: doc.Set, TextChars: res.TextChars, Pages: pagesJSON,
+			Engine: aitEngineHeaders(results), EngineLines: aliEngineLines(results)}
 		dir := filepath.Join(out, "docs", aitStem(doc.File))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)

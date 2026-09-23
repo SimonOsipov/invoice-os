@@ -7,7 +7,7 @@
 // it, unlike frontend/app's approvals.test.ts) — without it node:* imports fail TS2591.
 /// <reference types="node" />
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,9 +23,23 @@ const ANALYTICS_SRC = readFileSync(join(HERE, 'analytics.ts'), 'utf8')
 const MAIN_SRC = readFileSync(join(HERE, 'main.tsx'), 'utf8')
 const APP_SRC = readFileSync(join(HERE, 'App.tsx'), 'utf8')
 const DEMO_MODAL_SRC = readFileSync(join(HERE, 'components', 'DemoModal.tsx'), 'utf8')
-const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'DemoCta.tsx', 'Footer.tsx']
+const CTA_COMPONENTS = ['Nav.tsx', 'Hero.tsx', 'Audience.tsx', 'Pricing.tsx', 'Footer.tsx']
+const DEMO_LEAD_FORM_PATH = join(HERE, 'components', 'DemoLeadForm.tsx')
 
 const ID = 'G-E409H76XYY'
+
+// Every non-test .ts/.tsx under src, not just DemoModal.tsx: the one call site must be
+// provable wherever it moves to.
+const SRC_ROOT = HERE
+function listSourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listSourceFiles(full))
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.|\.d\.ts$/.test(entry.name)) out.push(full)
+  }
+  return out
+}
 
 describe('measurementId', () => {
   it('AC-1: resolves from the environment at call time', () => {
@@ -223,7 +237,7 @@ describe('main.tsx boot wiring', () => {
 })
 
 describe('App.tsx CTA bindings (AC-3)', () => {
-  it('all six App.tsx call sites are bound to distinct sources', () => {
+  it('all five App.tsx call sites are bound to distinct sources', () => {
     // Control needle first (A-14): a misresolved/empty read would otherwise pass vacuously.
     expect(APP_SRC.length).toBeGreaterThan(0)
     expect(APP_SRC).toContain('onBookDemo')
@@ -311,50 +325,85 @@ describe('CTA components untouched (AC-3)', () => {
 })
 
 describe('honeypot cannot reach outcome senders (AC-5)', () => {
-  it('DemoModal imports trackedHubSpotSubmit and neither sender directly', () => {
-    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
-    expect(DEMO_MODAL_SRC).toContain('submitDemoLead')
-
-    expect(DEMO_MODAL_SRC).toMatch(
-      /import\s*\{[^}]*\btrackedHubSpotSubmit\b[^}]*\}\s*from\s*['"]\.\.\/analytics['"]/,
-    )
-    expect(DEMO_MODAL_SRC).not.toMatch(/\bgenerate_lead\b/)
-    expect(DEMO_MODAL_SRC).not.toMatch(/\bdemo_submit_failed\b/)
-
-    const occurrences = DEMO_MODAL_SRC.match(/trackedHubSpotSubmit\(/g) ?? []
-    expect(occurrences.length).toBe(1)
-
-    const line = DEMO_MODAL_SRC.split('\n').find((l) => l.includes('trackedHubSpotSubmit('))
-    expect(line).toBeDefined()
-    expect(line).toContain('submitDemoLead')
+  // A directory scan, not a DemoModal.tsx-scoped count, so the single call site stays
+  // provable wherever it moves to. Comment-blind — paired with A9a in
+  // DemoLeadForm.adversarial.test.tsx, which re-asserts the same fact on stripped source.
+  it('S1: exactly one file in the whole package calls trackedHubSpotSubmit(, and it is components/DemoLeadForm.tsx', () => {
+    // analytics.ts declares trackedHubSpotSubmit — its own `function trackedHubSpotSubmit(`
+    // line matches the substring too, so it is excluded as the declaring module, not a caller.
+    const analyticsPath = join(HERE, 'analytics.ts')
+    const files = listSourceFiles(SRC_ROOT).filter((f) => f !== analyticsPath)
+    // Floor on the population: a walk that silently returned one directory would
+    // otherwise read as "nothing else calls it".
+    expect(files.length).toBeGreaterThanOrEqual(25)
+    expect(files).toContain(join(HERE, 'components', 'DemoCta.tsx'))
+    const matches = files.filter((f) => readFileSync(f, 'utf8').includes('trackedHubSpotSubmit('))
+    expect(matches.length).toBe(1)
+    expect(matches[0]).toBe(DEMO_LEAD_FORM_PATH)
   })
 
-  // Closes a gap the row above leaves open: it never checked that trackedHubSpotSubmit
-  // is the ONLY analytics binding DemoModal.tsx pulls in. Exporting a private sender
-  // and calling it directly at the shared success/catch transition (:186/:190) would
-  // still satisfy every assertion above — the import regex's [^}]* tolerates extra
-  // names alongside trackedHubSpotSubmit, and neither outcome event's literal string
-  // is written in this file (only in analytics.ts). That mutation makes the honeypot
-  // and closed-gate branches count as conversions, and it survives unless this row
-  // exists.
-  it('DemoModal imports exactly one binding from analytics.ts, and never via a namespace import', () => {
-    const braceImports = Array.from(DEMO_MODAL_SRC.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/analytics['"]/g))
+  // S2 (NEW-BEHAVIOUR): DemoLeadForm.tsx doesn't exist yet — guard existence first so a
+  // missing file fails this assertion, not a thrown ENOENT.
+  it('S2: the trackedHubSpotSubmit call site passes submitDemoLead and names no event literal', () => {
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+
+    const src = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    expect(src).toContain('submitDemoLead')
+    const line = src.split('\n').find((l) => l.includes('trackedHubSpotSubmit('))
+    expect(line, 'expected a trackedHubSpotSubmit( call site').toBeDefined()
+    expect(line).toContain('submitDemoLead')
+    expect(src).not.toMatch(/\bgenerate_lead\b/)
+    expect(src).not.toMatch(/\bdemo_submit_failed\b/)
+  })
+
+  // S3 (NEW-BEHAVIOUR): re-points the old :340-349 DEMO_MODAL_SRC check at DemoLeadForm.tsx.
+  // Closes the same gap the original comment named — trackedHubSpotSubmit must be the ONLY
+  // analytics binding the new component pulls in, never via a namespace import.
+  it('S3: DemoLeadForm.tsx imports exactly one binding from analytics.ts, and never via a namespace import', () => {
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+
+    const src = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    const braceImports = Array.from(src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/analytics['"]/g))
     expect(braceImports.length, 'expected exactly one import statement from ../analytics').toBe(1)
     const names = braceImports[0][1]
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
     expect(names).toEqual(['trackedHubSpotSubmit'])
-    expect(DEMO_MODAL_SRC).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
+    expect(src).not.toMatch(/import\s*\*\s*as\s+\w+\s*from\s*['"]\.\.\/analytics['"]/)
+  })
+
+  // S4 (NEW-BEHAVIOUR): today DemoModal.tsx still imports trackedHubSpotSubmit directly
+  // (:23) — fails honestly until the extraction moves it to DemoLeadForm.tsx.
+  it('S4: DemoModal.tsx and DemoCta.tsx import nothing from ../analytics', () => {
+    expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
+    expect(DEMO_MODAL_SRC).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
+
+    const demoCtaSrc = readFileSync(join(HERE, 'components', 'DemoCta.tsx'), 'utf8')
+    expect(demoCtaSrc.length).toBeGreaterThan(0)
+    expect(demoCtaSrc).not.toMatch(/from\s*['"]\.\.\/analytics['"]/)
   })
 })
 
 describe('honeypot branch and runStub pinned (AC-6)', () => {
-  it('the honeypot branch and runStub are unchanged', () => {
+  // S5 (NEW-BEHAVIOUR): today's single setTimeout(resolve, 1300) still lives in
+  // DemoModal.tsx — fails on the "zero times in DemoModal.tsx" assertion until it moves.
+  it('S5: the honeypot branch and the single 1300ms stub live in DemoLeadForm.tsx, and DemoModal.tsx has neither', () => {
     expect(DEMO_MODAL_SRC.length).toBeGreaterThan(0)
-    expect(DEMO_MODAL_SRC).toContain('if (trap) await runStub()')
-    const delayCalls = DEMO_MODAL_SRC.match(/setTimeout\(resolve, 1300\)/g) ?? []
-    expect(delayCalls.length).toBe(1)
+    const modalDelayCalls = DEMO_MODAL_SRC.match(/setTimeout\(resolve, 1300\)/g) ?? []
+    expect(modalDelayCalls.length).toBe(0)
+
+    const exists = existsSync(DEMO_LEAD_FORM_PATH)
+    expect(exists, 'expected components/DemoLeadForm.tsx to exist').toBe(true)
+    if (!exists) return
+    const formSrc = readFileSync(DEMO_LEAD_FORM_PATH, 'utf8')
+    expect(formSrc).toContain('if (trap) await runStub()')
+    const formDelayCalls = formSrc.match(/setTimeout\(resolve, 1300\)/g) ?? []
+    expect(formDelayCalls.length).toBe(1)
   })
 })
 
@@ -366,5 +415,77 @@ describe('DemoModal SSR graph purity (AC-8, gap)', () => {
     await expect(import('./components/DemoModal')).resolves.toBeDefined()
     expect(globalThis.window).toBeUndefined()
     expect(globalThis.document).toBeUndefined()
+  })
+
+  // S13 (NEW-BEHAVIOUR): DemoLeadForm.tsx doesn't exist yet, so the dynamic import
+  // rejects and `.resolves` fails honestly — no static import, no collection error.
+  it('S13: importing DemoLeadForm in a node environment is inert', async () => {
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
+    await expect(import('./components/DemoLeadForm')).resolves.toBeDefined()
+    expect(globalThis.window).toBeUndefined()
+    expect(globalThis.document).toBeUndefined()
+  })
+})
+
+// N2 (O4, NEW-BEHAVIOUR): pinned against today's unedited CTA_COMPONENTS literal
+// above -- fails honestly until DemoCta.tsx drops out of the list.
+describe('CTA components untouched (AC-3), gap-fill', () => {
+  it('N2: CTA_COMPONENTS excludes DemoCta.tsx and holds five entries', () => {
+    expect(CTA_COMPONENTS.length).toBe(5)
+    expect(CTA_COMPONENTS).not.toContain('DemoCta.tsx')
+  })
+})
+
+// N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan. Protects
+// [analytics-line-count-frozen] -- the four send() lines docs cite by number
+// must hold their position however DEMO_CTA_SOURCES shrinks.
+describe('DEMO_CTA_SOURCES shrinks without moving the four cited sends (AC #7, gap)', () => {
+  it('N3: demo_cta drops out, and analytics.ts keeps its four send() lines in place', () => {
+    expect(DEMO_CTA_SOURCES.length).toBe(5)
+    expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
+
+    const lines = ANALYTICS_SRC.split('\n')
+    expect(lines.length).toBeGreaterThan(129)
+    expect(lines[78]).toContain("send('demo_open'")
+    expect(lines[82]).toContain('generate_lead')
+    expect(lines[86]).toContain('demo_submit_failed')
+    expect(lines[129]).toContain('scroll_depth')
+  })
+})
+
+// AC #8 gap-fill. docs/analytics.md's four count-bearing sites are hand-maintained and
+// were guarded by nothing -- stalerefs tracks only multi-word quoted literals. Derived
+// from DEMO_CTA_SOURCES so a retired source cannot survive in the page.
+describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
+  const ANALYTICS_DOC = readFileSync(join(HERE, '..', '..', '..', 'docs', 'analytics.md'), 'utf8')
+  const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
+
+  it('N4: the demo_open row lists exactly the shipped cta_location values, in order', () => {
+    expect(ANALYTICS_DOC.length, 'population floor: the doc must actually resolve').toBeGreaterThan(2000)
+    const row = ANALYTICS_DOC.split('\n').find((l) => l.startsWith('| `demo_open`'))
+    expect(row, 'expected the demo_open event row').toBeDefined()
+    // Every backticked all-lowercase token on the row is a value; the row's other
+    // backticks (`App.tsx`, `book(source)`) cannot match the class.
+    const listed = Array.from((row ?? '').matchAll(/`([a-z_]+)`/g))
+      .map((m) => m[1])
+      .filter((v) => v !== 'demo_open' && v !== 'cta_location')
+    expect(listed).toEqual([...DEMO_CTA_SOURCES])
+  })
+
+  it('N5: every cta_location count word in the doc matches DEMO_CTA_SOURCES.length', () => {
+    const n = WORD[DEMO_CTA_SOURCES.length]
+    const capitalised = n[0].toUpperCase() + n.slice(1)
+    expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
+    expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
+    expect(ANALYTICS_DOC).toContain(`matches the ${n} literal call`)
+    for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
+    expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
+  })
+
+  it('N6: the button total the doc quotes is the one F3-f measures', () => {
+    // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
+    // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
+    expect(ANALYTICS_DOC).toContain('values cover **nine** buttons')
   })
 })

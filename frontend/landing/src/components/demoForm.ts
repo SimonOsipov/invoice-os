@@ -1,13 +1,8 @@
-// Pure, testable helpers for DemoModal's lead-capture form (task-117.1 / task-117.2,
-// extended by LAND-02-01 for HubSpot lead capture — consent + taxpayer-size options
-// + the splitName/firstNameOf refactor). Kept separate from the component so
-// validation and the success-copy derivation can be reviewed/tested without
-// rendering React.
+// Pure data and helpers for the Book-a-Demo form, kept out of DemoLeadForm.tsx so
+// validation and the success-copy derivation are testable without rendering React.
 //
-// `consent` is REQUIRED (tightened from optional by LAND-02-02, once DemoModal's
-// DEFAULT_FORM started carrying `consent: false`): an unchecked box is now always a
-// real `false`, never an absent key, so no caller can reach validateDemoForm's
-// fail-closed branch by omission alone.
+// `consent` is REQUIRED: DEFAULT_FORM below always carries a real `false`, so no
+// caller reaches validateDemoForm's fail-closed branch by omitting the key.
 
 export type DemoFormValues = {
   name: string
@@ -22,6 +17,9 @@ export type DemoFormErrors = {
   company?: string
   consent?: string
 }
+
+export const ROLE_OPTIONS = ['Owner / Partner', 'Finance or Accounting lead', 'Tax / Compliance', 'Developer / IT', 'Other']
+export const VOLUME_OPTIONS = ['under 1k', '1k–10k', '10k–100k', '100k+']
 
 // The four mandate turnover bands, in the regulator's enforcement order.
 export const TAXPAYER_SIZE_OPTIONS = [
@@ -38,6 +36,21 @@ export const DEFAULT_TAXPAYER_SIZE = 'Medium ₦1bn–₦5bn'
 // rather than a promise.
 export const CONSENT_TEXT =
   'I agree to ASComply Africa storing and processing my details so a compliance specialist can contact me about this demo request.'
+
+export const DEFAULT_FORM = {
+  name: '',
+  email: '',
+  company: '',
+  role: 'Finance or Accounting lead',
+  size: DEFAULT_TAXPAYER_SIZE,
+  volume: '1k–10k',
+  consent: false,
+}
+
+export type DemoFormState = typeof DEFAULT_FORM
+// Every key except the one boolean — setField carries strings, setConsent the box.
+export type DemoFieldKey = Exclude<keyof DemoFormState, 'consent'>
+export type DemoStep = 'form' | 'submitting' | 'success' | 'error'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 

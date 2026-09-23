@@ -15,12 +15,13 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import type { ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
+import type { ExtractionCandidate, ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
 import {
   LINE_ROLES,
   LINE_TOLERANCE,
   LINE_WIRE_ROLES,
   addRow,
+  cellCandidates,
   lineSetChanged,
   lineSumState,
   linesFromFields,
@@ -43,12 +44,13 @@ function mkField(
   value: string | null,
   region: ExtractionRegion | null = null,
   reason: ExtractionReason = '',
+  alternatives: ExtractionCandidate[] = [],
 ): ExtractionFieldState {
-  return { name, value, region, reason, alternatives: [], corrected: null }
+  return { name, value, region, reason, alternatives, corrected: null }
 }
 
 function cell(name: string | null, value: string | null): LineCell {
-  return { name, value: value ?? '', region: null, reason: '' }
+  return { name, value: value ?? '', region: null, reason: '', alternatives: [] }
 }
 
 interface RowValues {
@@ -165,6 +167,7 @@ describe('linesFromFields', () => {
         value: '',
         region: null,
         reason: '',
+        alternatives: [],
       })
     }
   })
@@ -177,6 +180,67 @@ describe('linesFromFields', () => {
       rows.map((r) => r.cells.description.name),
       'index 3 was renumbered to fill the gap left by the missing index 2',
     ).toEqual(['line_items[1].description', 'line_items[3].description'])
+  })
+
+  it('a wire cell with two alternatives survives grouping with both, in wire order', () => {
+    const alts: ExtractionCandidate[] = [
+      { value: '9', region: null },
+      { value: '90', region: { page: 1, x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.12 } },
+    ]
+    const fields = [mkField('line_items[1].quantity', '900', null, 'ambiguous', alts)]
+    const rows = linesFromFields(fields)
+    expect(rows.length, 'the floor: the one field must land in one row').toBe(1)
+    expect(rows[0].cells.quantity.alternatives, 'the wire alternatives did not survive grouping').toEqual(alts)
+  })
+
+  it('a cell with no alternatives on the wire groups to an empty array, never undefined', () => {
+    const rows = linesFromFields([mkField('line_items[1].quantity', '2')])
+    expect(rows[0].cells.quantity.alternatives, 'a field carrying no alternatives left the key undefined').toEqual([])
+  })
+})
+
+describe('cellCandidates', () => {
+  const readingOnly = (value: string, region: ExtractionRegion | null = null): ExtractionCandidate => ({
+    value,
+    region,
+  })
+
+  it('is null for a clean cell', () => {
+    expect(cellCandidates({ name: 'n', value: '2', region: null, reason: '', alternatives: [] })).toBeNull()
+  })
+
+  it('is null when the reason is ambiguous but alternatives is empty -- the render invariant', () => {
+    expect(
+      cellCandidates({ name: 'n', value: '2', region: null, reason: 'ambiguous', alternatives: [] }),
+      'an ambiguous cell with nothing to choose between must still gate to null',
+    ).toBeNull()
+  })
+
+  it('is null when alternatives is non-empty but the reason is not ambiguous', () => {
+    // The gate is the REASON first, mirroring ExtractionFields' own comment: a cell can carry
+    // alternatives ranked below a reading the extractor is sure of, and those get no chips.
+    expect(
+      cellCandidates({
+        name: 'n',
+        value: '2',
+        region: null,
+        reason: 'inconsistent',
+        alternatives: [readingOnly('9')],
+      }),
+      'a non-ambiguous reason with real alternatives still rendered chips',
+    ).toBeNull()
+  })
+
+  it("prepends the cell's own reading as candidate 0, then the alternatives in wire order", () => {
+    const region: ExtractionRegion = { page: 2, x0: 0.3, y0: 0.3, x1: 0.4, y1: 0.32 }
+    const cell: LineCell = {
+      name: 'line_items[1].quantity',
+      value: '900',
+      region,
+      reason: 'ambiguous',
+      alternatives: [readingOnly('9'), readingOnly('90', region)],
+    }
+    expect(cellCandidates(cell)).toEqual([{ value: '900', region }, { value: '9', region: null }, { value: '90', region }])
   })
 })
 
@@ -332,26 +396,30 @@ describe('remapRoles', () => {
         value: 'Widget',
         region: { page: 1, x0: 0, y0: 0, x1: 0.1, y1: 0.02 },
         reason: '',
+        alternatives: [],
       },
       quantity: {
         name: 'line_items[1].quantity',
         value: '2',
         region: { page: 1, x0: 0.2, y0: 0, x1: 0.3, y1: 0.02 },
         reason: '',
+        alternatives: [],
       },
       unit_price: {
         name: 'line_items[1].unit_price',
         value: '3.00',
         region: { page: 1, x0: 0.4, y0: 0, x1: 0.5, y1: 0.02 },
         reason: '',
+        alternatives: [],
       },
       line_total: {
         name: 'line_items[1].line_total',
         value: '6.00',
         region: { page: 1, x0: 0.6, y0: 0, x1: 0.7, y1: 0.02 },
         reason: '',
+        alternatives: [],
       },
-      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '', alternatives: [] },
     },
   }
 
@@ -430,6 +498,7 @@ describe('addRow', () => {
         value: '',
         region: null,
         reason: '',
+        alternatives: [],
       })
     }
   })
@@ -638,11 +707,11 @@ describe('remapRoles (adversarial)', () => {
   const reasoned: LineRow = {
     key: 'r1',
     cells: {
-      description: { name: 'line_items[1].description', value: 'Widget', region: null, reason: 'ambiguous' },
-      quantity: { name: 'line_items[1].quantity', value: '2', region: null, reason: 'unreadable' },
-      unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent' },
-      line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing' },
-      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '' },
+      description: { name: 'line_items[1].description', value: 'Widget', region: null, reason: 'ambiguous', alternatives: [] },
+      quantity: { name: 'line_items[1].quantity', value: '2', region: null, reason: 'unreadable', alternatives: [] },
+      unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent', alternatives: [] },
+      line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing', alternatives: [] },
+      line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '', alternatives: [] },
     },
   }
 

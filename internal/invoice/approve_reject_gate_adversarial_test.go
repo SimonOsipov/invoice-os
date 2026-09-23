@@ -131,8 +131,8 @@ func ordName(p *int) string {
 
 // TestApprovalGate_TransmitClearIsInertAcrossTheWholeOracle widens
 // TestApprovalGate_IgnoresTransmitClear (AC #5) from one allowed fixture to the whole
-// cross product: the flag reaches ApprovalFacts through TransmitClear alone, so
-// flipping it must not move any of the 560 answers -- not just the passing one.
+// cross product: TransmitClear is submit's input alone, so flipping it must not move
+// any of the 560 answers -- not just the passing one.
 func TestApprovalGate_TransmitClearIsInertAcrossTheWholeOracle(t *testing.T) {
 	for _, s := range allStatuses {
 		for _, state := range approvalRunStates {
@@ -145,7 +145,7 @@ func TestApprovalGate_TransmitClearIsInertAcrossTheWholeOracle(t *testing.T) {
 						canOff, reasonOff := approvalGate(s, role, off)
 						canOn, reasonOn := approvalGate(s, role, on)
 						if canOff != canOn || !sameReason(reasonOff, reasonOn) {
-							t.Errorf("%s/%s/ord=%s/holds=%v/%s: flag off -> (%v,%q), on -> (%v,%q), want identical",
+							t.Errorf("%s/%s/ord=%s/holds=%v/%s: TransmitClear=false -> (%v,%q), true -> (%v,%q), want identical",
 								s, orNone(state), ordName(ord), holds, orNone(role),
 								canOff, derefReason(reasonOff), canOn, derefReason(reasonOn))
 						}
@@ -198,9 +198,9 @@ func TestGetHandler_ApproveFlagsFailClosedOnASeamError(t *testing.T) {
 
 // approveFlagsVia runs the REAL Store through the REAL GetHandler and returns the four
 // keys off the serialized body -- no stub anywhere between the wire and Postgres.
-func approveFlagsVia(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture, enforced bool) approveGateBody {
+func approveFlagsVia(t *testing.T, app *pgxpool.Pool, fx approvalFactsFixture) approveGateBody {
 	t.Helper()
-	store := NewStore(app, WithApprovalsEnforced(enforced))
+	store := NewStore(app)
 	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
 	r.SetPathValue("id", fx.invID)
 	r = r.WithContext(fx.ctx)
@@ -266,8 +266,8 @@ func approvalStoreFor(app *pgxpool.Pool) *approval.Store {
 // actually make. Every row arms a real invoice through Store.ApplyValidation, spoils
 // exactly one precondition, reads can_approve off the serialized body, and THEN calls
 // the real approval.Store.Decide -- the domain half of POST
-// /v1/invoices/{id}/approvals. A true flag must be followed by a success and a false
-// flag by the sentinel whose sentence the wire just published.
+// /v1/invoices/{id}/approvals. A true can_approve must be followed by a success and a
+// false one by the sentinel whose sentence the wire just published.
 func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 	rows := []struct {
 		name string
@@ -300,7 +300,7 @@ func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 			row.spoil(t, super, fx)
 
 			if row.refusedBySeam {
-				store := NewStore(app, WithApprovalsEnforced(true))
+				store := NewStore(app)
 				r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+fx.invID, nil)
 				r.SetPathValue("id", fx.invID)
 				r = r.WithContext(fx.ctx)
@@ -315,7 +315,7 @@ func TestGetHandler_ApproveFlagAgreesWithTheDecisionEndpoint(t *testing.T) {
 				return
 			}
 
-			got := approveFlagsVia(t, app, fx, true)
+			got := approveFlagsVia(t, app, fx)
 			_, decideErr := approvalStoreFor(app).Decide(fx.ctx, fx.invID, "approved", nil)
 			assertDecideAgrees(t, got, decideErr)
 
@@ -338,7 +338,7 @@ func TestGetHandler_ApproveFlagClosesAfterTheRunIsDecided(t *testing.T) {
 	fx := seedApprovalFactsFixture(t, super, "APPR-08-06-CLOSES", true)
 	fx.armInvoice(t, super, app, "appr-08-06-closes")
 
-	before := approveFlagsVia(t, app, fx, true)
+	before := approveFlagsVia(t, app, fx)
 	if !before.CanApprove {
 		t.Fatalf("can_approve = false for a staffed admin on a freshly armed invoice, want true (reason=%q)", derefReason(before.ApproveBlockedReason))
 	}
@@ -350,7 +350,7 @@ func TestGetHandler_ApproveFlagClosesAfterTheRunIsDecided(t *testing.T) {
 		t.Fatalf("Decide(approved) on the invoice the wire said was approvable: %v", err)
 	}
 
-	after := approveFlagsVia(t, app, fx, true)
+	after := approveFlagsVia(t, app, fx)
 	if after.CanApprove {
 		t.Error("can_approve = true after the run was approved, want false")
 	}
@@ -361,27 +361,17 @@ func TestGetHandler_ApproveFlagClosesAfterTheRunIsDecided(t *testing.T) {
 	assertDecideAgrees(t, after, secondErr)
 }
 
-// TestGetHandler_ApproveFlagsUnflaggedOnEveryFixture is AC #5 against the real store on
-// the shapes that REFUSE, not just the one that passes: APPROVALS_ENFORCED must move
-// neither the flags nor the reasons, whatever rung is doing the refusing.
-func TestGetHandler_ApproveFlagsUnflaggedOnEveryFixture(t *testing.T) {
+// TestGetHandler_ApproveFlagsOnEveryFixture is AC #5 against the real store on
+// the shapes that REFUSE, not just the one that passes.
+func TestGetHandler_ApproveFlagsOnEveryFixture(t *testing.T) {
 	for _, staffed := range []bool{true, false} {
 		t.Run(fmt.Sprintf("staffed_%v", staffed), func(t *testing.T) {
 			super, app := dbTestPools(t)
 
-			fx := seedApprovalFactsFixture(t, super, fmt.Sprintf("APPR-08-06-UNFLAGGED-%v", staffed), staffed)
-			fx.armInvoice(t, super, app, fmt.Sprintf("appr-08-06-unflagged-%v", staffed))
+			fx := seedApprovalFactsFixture(t, super, fmt.Sprintf("APPR-08-06-EVERY-%v", staffed), staffed)
+			fx.armInvoice(t, super, app, fmt.Sprintf("appr-08-06-every-%v", staffed))
 
-			off := approveFlagsVia(t, app, fx, false)
-			on := approveFlagsVia(t, app, fx, true)
-			if off.CanApprove != on.CanApprove || off.CanReject != on.CanReject {
-				t.Errorf("flags differ across APPROVALS_ENFORCED: off=%+v on=%+v", off, on)
-			}
-			if !sameReason(off.ApproveBlockedReason, on.ApproveBlockedReason) || !sameReason(off.RejectBlockedReason, on.RejectBlockedReason) {
-				t.Errorf("reasons differ across APPROVALS_ENFORCED: off=%q/%q on=%q/%q",
-					derefReason(off.ApproveBlockedReason), derefReason(off.RejectBlockedReason),
-					derefReason(on.ApproveBlockedReason), derefReason(on.RejectBlockedReason))
-			}
+			on := approveFlagsVia(t, app, fx)
 			// staffed=false seeds no membership at all, so the role rung refuses; the
 			// staffed arm clears every rung. Pinning which one each is keeps this from
 			// passing on two identically-broken answers.

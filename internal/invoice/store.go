@@ -24,32 +24,11 @@ import (
 // transaction and RLS enforces isolation.
 type Store struct {
 	pool *pgxpool.Pool
-
-	// APPROVALS_ENFORCED. The two write doors into queued and the wire flag must
-	// all read THIS field, never re-derive it
-	// (TestApprovalsEnforced_DeclaredOnceWrittenOnce).
-	approvalsEnforced bool
 }
 
-// StoreOption configures a Store at construction. Variadic so the existing
-// NewStore(pool) call sites compile unchanged (TestNewStore_BothAritiesCompile).
-type StoreOption func(*Store)
-
-// WithApprovalsEnforced turns the transmit gate on. Default false: an unset flag
-// leaves both doors into queued as they were (TestNewStore_DefaultsToNotEnforced).
-func WithApprovalsEnforced(v bool) StoreOption {
-	return func(s *Store) { s.approvalsEnforced = v }
-}
-
-// NewStore wraps the app-role connection pool. The caller owns the pool's
-// lifecycle. Options apply in order, last wins
-// (TestStoreOptions_ApplyInOrderLastWins).
-func NewStore(pool *pgxpool.Pool, opts ...StoreOption) *Store {
-	s := &Store{pool: pool}
-	for _, opt := range opts {
-		opt(s)
-	}
-	return s
+// NewStore wraps the app-role connection pool. The caller owns the pool's lifecycle.
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
 }
 
 // scanner is the common Scan(...) surface of both pgx.Row (QueryRow) and
@@ -730,8 +709,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Invoice, int, error) 
 			// A THIRD predicate: only validated rows match, a status neither the
 			// needs_attention fragment above nor needs_fix below can reach
 			// (TestStoreList_AwaitingApprovalIsNotNeedsAttention, ...IsNotNeedsFix).
-			// Exact negation of approval.TransmitClear -- the UNFLAGGED predicate, so
-			// APPROVALS_ENFORCED never gates it (...IsTheExactNegationOfTransmitClear).
+			// Exact negation of approval.TransmitClear (...IsTheExactNegationOfTransmitClear).
 			// invoices.id is qualified: approval_runs has its own id, so a bare id
 			// binds there and silently never matches.
 			conditions = append(conditions, `(status = 'validated'
@@ -1705,11 +1683,8 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
-// ApprovalFacts is one invoice's approval standing as internal/invoice reads it:
-// approval.GateFacts with the transmit verdict already resolved against
-// APPROVALS_ENFORCED. TransmitClear is the ONLY field the flag touches -- the
-// other three feed can_approve/can_reject, which ship unflagged
-// (docs/approvals.md section 11).
+// ApprovalFacts is one invoice's approval standing: TransmitClear feeds can_submit,
+// the other three feed can_approve/can_reject (docs/approvals.md section 11).
 type ApprovalFacts struct {
 	TransmitClear   bool
 	RunState        string
@@ -1717,18 +1692,11 @@ type ApprovalFacts struct {
 	CallerHoldsRole bool
 }
 
-// transmitClear folds APPROVALS_ENFORCED into a raw approval verdict. It is the
-// ONE expression both read paths (ApprovalFacts, RowFacts) fold the flag in.
-func (s *Store) transmitClear(raw bool) bool { return !s.approvalsEnforced || raw }
-
 // ApprovalFacts reads id's approval standing for the caller inside ONE
 // db.WithinRequestTenantTx -- CallerRole's wrapper above, for the same reason: a
-// read with no write needs no second transaction. The approval read runs
-// whatever the flag says; only TransmitClear folds it
-// (TestStoreApprovalFacts_ReadsRunFactsEvenWithTheFlagOff), deliberately unlike
-// the two write doors, which skip the read entirely when the flag is off. An
-// error returns the ZERO value, whose TransmitClear is false, so a caller that
-// ignores the error still fails closed.
+// read with no write needs no second transaction. An error returns the ZERO
+// value, whose TransmitClear is false, so a caller that ignores the error
+// still fails closed.
 func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, error) {
 	var out ApprovalFacts
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -1737,7 +1705,7 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			return err
 		}
 		out = ApprovalFacts{
-			TransmitClear:   s.transmitClear(approval.TransmitClear(f.PolicyActive, f.ApprovedRun)),
+			TransmitClear:   approval.TransmitClear(f.PolicyActive, f.ApprovedRun),
 			RunState:        f.RunState,
 			PendingStepOrd:  f.PendingStepOrd,
 			CallerHoldsRole: f.CallerHoldsRole,
@@ -1756,19 +1724,15 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 type ListGateFacts struct {
 	CallerRole       string
 	HoldsPendingRole map[string]bool
-	// TransmitClear is the page's submit verdict, already folded against
-	// APPROVALS_ENFORCED. An absent id reads false -- fail closed.
+	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
-// caller's gate inputs, in ONE transaction. Unlike ApprovalFacts above, the map it
-// RETURNS must not be shaped by s.approvalsEnforced: the flag gates enforcement, not
-// visibility (docs/approvals.md section 11,
-// TestStoreRowFacts_DoesNotConsultApprovalsEnforced).
+// caller's gate inputs, in ONE transaction.
 // RLS is the only tenant scope (TestStoreRowFacts_IsTenantScopedByRLS).
-// The returned map is the visibility half; ListGateFacts.TransmitClear is gate
-// INPUT, never wire copy, and folds the flag through s.transmitClear.
+// The returned map is display copy for the approval wire object; ListGateFacts is gate input,
+// never wire copy (TestStoreRowFacts_ReturnsTheArmedStanding).
 //
 // The three gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
@@ -1812,11 +1776,10 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 		if err != nil {
 			return err
 		}
-		// Fold for every REQUESTED id, not only the ones the set read returned: an
-		// id it skipped must still read the flag-off answer the detail wire gives.
+		// Every requested id gets an entry; one RLS hides reads false (TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee).
 		transmit := make(map[string]bool, len(ids))
 		for _, id := range ids {
-			transmit[id] = s.transmitClear(clear[id])
+			transmit[id] = clear[id]
 		}
 
 		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit}
@@ -1841,7 +1804,7 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 // Create -- CodeRabbit finding) -> a no-op (current==target)
 // -> ErrRedundantTransition (checked FIRST, [D4], before legality, and so
 // retained HERE rather than in transitionTx) -> then, on the ONE legal edge
-// into queued and only when APPROVALS_ENFORCED is on, the transmit gate:
+// into queued, the transmit gate:
 // approval.TransmitClearTx on this same tx, after the lock so the answer
 // cannot be stale (TestTransition_GateRunsAfterTheRowLock) -> not clear ->
 // ErrAwaitingApproval -> then transitionTx on this
@@ -1888,7 +1851,7 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// (TestTransition_UppercaseIdOnAnApprovedInvoiceReachesQueued). The
 		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
 		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
-		if s.approvalsEnforced && target == StatusQueued && canTransition(current, target) {
+		if target == StatusQueued && canTransition(current, target) {
 			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
 			if err != nil {
 				return err

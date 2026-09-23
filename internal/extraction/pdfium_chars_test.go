@@ -371,11 +371,11 @@ func TestCharsIn_ReproducesEveryRectTextOnAWordLevelPage(t *testing.T) {
 }
 
 // TestCharsIn_ReproducesEveryRectTextOnTheCorpus widens the no-op control to every committed
-// fixture except the two Chrome ones (29 files): the loop is identical and covers 29 for free.
+// fixture except the two Chrome ones: the loop is identical and covers the rest for free.
 func TestCharsIn_ReproducesEveryRectTextOnTheCorpus(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 29 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29 (31 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
+	if len(names) != 37 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 37 (39 committed minus %s and %s)", len(names), chrRegister, chrRegisterTwin)
 	}
 
 	totalRects := 0
@@ -465,10 +465,13 @@ func TestCharsIn_ASlidingRunReadsOnce(t *testing.T) {
 
 // --- AC-5: TextChars is unmoved -------------------------------------------------------------
 
-// pdcTextCharsGoldens pins (pages, pagesWithText, textChars) per fixture on today's reader.
-// pdfiumTokens' non-whitespace char count is unaffected by the mode flip or by charsIn existing
-// -- neither is wired into it in this subtask -- so none of these 29 rows may move.
+// pdcTextCharsGoldens pins (pages, pagesWithText, textChars) per fixture on today's reader, one
+// row per committed fixture. pdfiumTokens' non-whitespace char count is unaffected by the mode
+// flip or by charsIn existing, so none of these rows may move.
 var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
+	"ai_lines_invoice.pdf":                  {1, 1, 656},
+	"ai_steered_invoice.pdf":                {1, 1, 480},
+	"ai_unavailable_invoice.pdf":            {1, 1, 105},
 	"advisory_dense.pdf":                    {1, 1, 1766},
 	"advisory_register.pdf":                 {2, 2, 804},
 	"advisory_register_unspaced.pdf":        {2, 2, 804},
@@ -487,6 +490,13 @@ var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"learned_typed_total_twin.pdf":          {1, 1, 131},
 	"native_3page.pdf":                      {3, 3, 96},
 	"native_invoice.pdf":                    {1, 1, 41},
+	"noninvoice_credit_note.pdf":            {1, 1, 219},
+	"noninvoice_delivery_note.pdf":          {1, 1, 285},
+	"noninvoice_proforma.pdf":               {1, 1, 251},
+	"noninvoice_purchase_order.pdf":         {1, 1, 206},
+	"noninvoice_quotation.pdf":              {1, 1, 223},
+	"noninvoice_receipt.pdf":                {1, 1, 234},
+	"noninvoice_statement.pdf":              {1, 1, 284},
 	"rich_invoice.pdf":                      {1, 1, 247},
 	"scanned_invoice.pdf":                   {1, 0, 0},
 	"table_invoice.pdf":                     {1, 1, 74},
@@ -520,13 +530,13 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 // --- AC-6: one token per rect, on the word-level fixtures only ------------------------------
 
 // AC-6 (re-pointed for EXTR-36-03): the merge collapses per-glyph rects into words, so "one
-// token per rect" only holds on the 29 word-level fixtures now. chrome_register.pdf's 802 rects
+// token per rect" only holds on the word-level fixtures now. chrome_register.pdf's 802 rects
 // merge to 42 tokens, the twin's 800 to 42 as well -- each checked against its own rect count,
 // not against the other's.
 func TestPDFiumTokens_OneTokenPerRectOnEveryWordLevelFixture(t *testing.T) {
 	names := pdcNonChromeFixtures(t)
-	if len(names) != 29 {
-		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 29", len(names))
+	if len(names) != 37 {
+		t.Fatalf("pdcNonChromeFixtures returned %d name(s), want exactly 37", len(names))
 	}
 
 	totalTokens := 0

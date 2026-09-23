@@ -15,12 +15,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -662,51 +660,6 @@ func TestSeed_PlanIsChosenByTenantIdNotKind(t *testing.T) {
 		if got := planFor(id); got != inhousePlan {
 			t.Errorf("planFor(%s) = %+v, want inhousePlan", id, got)
 		}
-	}
-}
-
-// controlNeedle is what proves the scan below read the package's PRODUCTION
-// source rather than nothing at all. It is checked against the non-test files
-// only: this file names it in half a dozen messages, so scanning itself would
-// satisfy the control no matter what demopolicy.go holds.
-const controlNeedle = "DemoTenants"
-
-// AC-6, and a POSITIVE CONTROL: green before the implementation lands, and it
-// must stay green. The assertion ORDER is load-bearing — a glob that stops
-// matching, or a package that loses DemoTenants, fails loudly here instead of
-// reading as a clean scan of nothing.
-func TestSeed_DoesNotReadApprovalsEnforced(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob *.go: %v", err)
-	}
-	if len(files) < 2 {
-		t.Fatalf("scanned %d .go file(s) in internal/demopolicy, want at least 2 — the absence assertion below would prove nothing", len(files))
-	}
-
-	var all, production strings.Builder
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
-		}
-		all.Write(b)
-		if !strings.HasSuffix(f, "_test.go") {
-			production.Write(b)
-		}
-	}
-	if production.Len() == 0 {
-		t.Fatalf("no non-test .go file among %v — the scan would only be reading its own suite", files)
-	}
-	if !strings.Contains(production.String(), controlNeedle) {
-		t.Fatalf("the control needle %s is absent from the package's production source — this scan cannot tell a clean package from a broken read", controlNeedle)
-	}
-
-	// Concatenated so the scan cannot match this file's own literal. Checked
-	// over every file, tests included: nothing here may touch the flag.
-	flag := "APPROVALS" + "_ENFORCED"
-	if strings.Contains(all.String(), flag) {
-		t.Errorf("internal/demopolicy mentions %s; the flag is APPR-14's and this package must neither read nor write it", flag)
 	}
 }
 

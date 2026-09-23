@@ -11,16 +11,9 @@ so a reader can tell built from unbuilt without reading the code.
 > `approval_runs` row is written per invoice sitting at `validated` with no live run,
 > capped at 5,000 (§5). Approve and reject now write `approval_decisions`
 > (**APPR-07** — §2.1/§2.2). The transmit gate is **built** (**APPR-08**): an open
-> approval run now refuses both doors into `queued`, `Store.Transition` and
-> `Submitter.BatchSubmit`.
->
-> **It is behind `APPROVALS_ENFORCED`, which defaults OFF.** On a fleet that has not set
-> it, an invoice carrying an open run transmits exactly as it did before — the gate is
-> present and inert. **§11 is the whole flag story.** CI already sets it true on every PR
-> ephemeral environment; the persistent production environment is the one fleet still on
-> the default, until an operator flips it (§11's checklist). Every section below states
-> the gate's behaviour in the present tense and adds only "subject to the flag (§11)";
-> none of them restates §11.
+> approval run refuses both doors into `queued`, `Store.Transition` and
+> `Submitter.BatchSubmit`, unconditionally, in every environment. §11 lists what an open
+> run does not gate.
 
 The API is six routes (`cmd/invoice/main.go:187-192`):
 
@@ -195,13 +188,13 @@ the seal back — a sealed version without its audit row cannot exist.
 
 ## 2. A tenant with no active policy
 
-**Approval policies gate transmission** (subject to the flag, §11) — and a tenant with
+**Approval policies gate transmission** — and a tenant with
 no active version is *cleared by* that gate rather than exempt from it. The rule is
 `approval.TransmitClear`, a **positive** predicate over two disjuncts,
 `!policyActive || approvedRun`: an invoice may pass into `queued` if its tenant has no
 active policy version, **or** if it carries a run closed `approved`. With no active
 version the first disjunct holds for every invoice in the tenant, so nothing about this
-section changes — flag on or off.
+section changes.
 
 The gate is applied at exactly **two** places and nowhere else: `Store.Transition`
 (`internal/invoice`), the single-invoice door, and `Submitter.BatchSubmit`
@@ -675,7 +668,7 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 | import from file or ERP | ✓ | ✓ | ✓ | not enforced |
 | run validation | ✓ | ✓ | ✓ | not enforced |
 | approve in approval steps | ✓ | — | ✓ | **server-enforced** — `internal/approval/decision.go`'s two-axis check: AXIS 1 refuses any non-{admin,reviewer}; AXIS 2 refuses an approver who does not hold the pending step's workflow role. |
-| transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `TransitionHandler` (single) and `BatchSubmitHandler` (batch, `POST /v1/invoices/submissions`), both `internal/invoice/handlers.go`. Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. **Role is only the first rung**: past it, the approval gate (`TransmitClear`) blocks an invoice whose run is still open, at `Store.Transition` and `Submitter.BatchSubmit` — subject to the flag (§11). |
+| transmit to NRS/MBS | ✓ | — | ✓ | **server-enforced, both doors** — `TransitionHandler` (single) and `BatchSubmitHandler` (batch, `POST /v1/invoices/submissions`), both `internal/invoice/handlers.go`. Both apply `isApprover` = admin or reviewer; a preparer gets `403` either way. **Role is only the first rung**: past it, the approval gate (`TransmitClear`) blocks an invoice whose run is still open, at `Store.Transition` and `Submitter.BatchSubmit`. |
 | invite and manage members | ✓ | — | — | **partly server-enforced** — the *manage* half is admin-only in `tenancy.Store.SetMembershipStatus` (`internal/tenancy/store.go`) (`PATCH /v1/memberships/{user_id}`). The *invite* half has **no server surface**. |
 | manage ERP connectors | ✓ | — | — | **no server surface** — no endpoint exists |
 | manage signing certificates | ✓ | — | — | **no server surface** — no endpoint exists |
@@ -683,12 +676,11 @@ Read either as a statement of fact, never as "presumably enforced somewhere".
 **Three rows are server-enforced today**, and one of those only in half. Any wider claim
 — that the matrix as a whole is backed — remains aspirational. Arming shipped (APPR-06):
 the runs exist. Approve/reject shipped (APPR-07): `internal/approval/decision.go` is the
-enforcement point. The transmit gate shipped (APPR-08): an open approval run now
+enforcement point. The transmit gate shipped (APPR-08): an open approval run
 constrains **both** transmit doors, `Store.Transition` and `Submitter.BatchSubmit`, and
 nothing else — a direct `UPDATE invoices SET status = 'queued'` is out of scope by design
-(§2). It is **flag-gated and the flag defaults OFF** (§11), so on an unset fleet the row
-above describes the role rung only. The code is the authority for this table; if the two
-disagree, the code is right and this table is stale.
+(§2). The code is the authority for this table; if the two disagree, the code is right and
+this table is stale.
 
 Separately, and not in the matrix: **every approval-policy write requires an active
 admin** (`internal/approval/store.go:455`). Reading policies needs no admin role — only
@@ -829,36 +821,19 @@ field first. Nothing asks for one today.
 
 ---
 
-## 11. The APPROVALS_ENFORCED flag
+## 11. Enforcement and visibility
 
-**The default is OFF.** `APPROVALS_ENFORCED` is read exactly once — in
-`cmd/invoice/main.go`, by `parseEnvBool` — and reaches the store as
-`invoice.WithApprovalsEnforced`, an option on `invoice.NewStore`. Unset means off: the
-transmit gate enforces nothing and both doors into `queued` behave exactly as they did
-before this epic.
+### What an open run refuses, and what it does not
 
-A **set-but-unparseable** value stops the boot (`fatal`, logged at ERROR); it never falls
-back to off. The permissive state is already the default, so a typo must be loud rather
-than quietly leave the gate open. Accepted values are `strconv.ParseBool`'s set and
-nothing else — `1 t T TRUE true True 0 f F FALSE false False`. Whitespace is **not**
-trimmed and `yes`/`on` are **not** accepted; each of those stops the boot.
+An open approval run **refuses** a transmit. It does not stop anyone from **seeing**
+that a run is open.
 
-Only the invoice service reads the variable. `cmd/submission` and
-`tools/revalidate-invoices` build their own `invoice.Store` and deliberately leave it at
-the default: neither owns a route **into** `queued`, so the flag would be inert in both.
-Reading it in three binaries would be two more places an operator must keep consistent
-for no behavioural gain.
+An open run refuses:
 
-### It gates enforcement, not visibility
-
-The flag decides whether an open approval run **refuses** a transmit. It does not decide
-whether anyone can **see** that a run is open.
-
-**Gated by the flag** — with it off, these behave as they did before the gate landed:
-
-- `Store.Transition` refusing a move into `queued` while a run is open.
-- `Submitter.BatchSubmit` skipping such an invoice, with `reason: "awaiting_approval"`.
-- `can_submit` / `submit_blocked_reason` on both invoice wires — the detail body and every list row.
+- `Store.Transition` refuses a move into `queued` while a run is open.
+- `Submitter.BatchSubmit` skips such an invoice, with `reason: "awaiting_approval"`.
+- Both invoice wires report `can_submit: false` with the awaiting-approval sentence —
+  the detail body and every list row.
 
 **The two doors refuse in the same sentence, by different mechanisms.** `Store.Transition`
 answers `409` with `awaitingApprovalReason` (`internal/invoice/handlers.go`) — the same
@@ -878,36 +853,35 @@ forks by status into three arms (`submitBlockedReason`) while the batch token do
 `duplicate_request` has no server sentence at all — so neither has a byte-identical partner
 to mirror.
 
-**One exception, on the error path only.** `Store.ApprovalFacts` folds the flag into
-`TransmitClear` on its success path. When the read itself fails, it returns the zero
-`ApprovalFacts` instead, and `GetHandler` does the same with a seam error — so
-`TransmitClear` reads false and the detail page renders a disabled Submit carrying the
-awaiting-approval sentence, whatever the flag says. That is deliberate: an unknown
-approval standing must not render an enabled button. The consequence to know is that a
-flag-off deployment hitting a database fault shows a blocked Submit on the detail page
-while `Submitter.BatchSubmit` — which skips the approval read entirely when the flag is
-off — still submits the same invoice. Pinned by
-`TestGetHandler_ApprovalFactsErrorFailsClosedNot500` and
-`TestStoreApprovalFacts_ErrorReturnsTheZeroValue`.
+**Fail-closed on a read error.** `Store.ApprovalFacts` computes `TransmitClear` on its
+success path only. When the read itself fails, it returns the zero `ApprovalFacts`
+instead, and `GetHandler` does the same with a seam error — so `TransmitClear` reads
+false and the detail page renders a disabled Submit carrying the awaiting-approval
+sentence. That is deliberate: an unknown approval standing must not render an enabled
+button. `Submitter.BatchSubmit` fails the whole request on the same read error, so
+neither door ever submits an invoice whose approval standing could not be read. Pinned
+by `TestGetHandler_ApprovalFactsErrorFailsClosedNot500`,
+`TestStoreApprovalFacts_ErrorReturnsTheZeroValue`,
+`TestBatchSubmit_TransmitClearTxErrorIsReturnedNotSwallowed` and
+`TestTransition_TransmitClearTxErrorIsReturnedNotSwallowed`.
 
-**Not gated** — these run identically whatever the flag says:
+**Not gated** — an open run never refuses these:
 
-- **Arming.** Publishing a policy and validating an invoice open approval runs whether the
-  flag is on or off. Runs, their steps and their decisions exist either way; the flag only
-  decides whether an open one stops a transmit.
+- **Arming.** Publishing a policy and validating an invoice opens an approval run. Runs,
+  their steps and their decisions exist independently of whether an open one currently
+  refuses a transmit.
 - `can_approve` / `can_reject`. Both ship on the detail wire
   (`GET /v1/invoices/{id}`); `can_approve` and `approve_blocked_reason` ALSO ship per row
   on `GET /v1/invoices` (APPR-12-09), from the same `approvalGate` call, so the two wires
   cannot disagree. `can_reject` stays detail-only — the approvals queue has no reject
   action.
 - The invoice detail page's approve/reject controls and its approval card. Both
-  render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1) and
-  behave identically whether the flag is on or off.
-- The per-row `approval` facts on `GET /v1/invoices`. They are display copy only. Both row
-  checkboxes read `can_submit` / `submit_blocked_reason` instead (`isRowSelectable`,
-  `selectBlockedReason`, `frontend/app/src/lib/invoices.ts`), and that pair is gated above,
-  so with the flag off an open run no longer blocks batch **selection** in the browser.
-  BUG-12 removed the SPA-side re-derivation that used to make it do so.
+  render from the facts above (`can_approve`/`can_reject`, and the run read in §2.1).
+- The per-row `approval` facts on `GET /v1/invoices`. They are display copy only — batch
+  checkbox selection reads `can_submit` / `submit_blocked_reason` instead
+  (`isRowSelectable`, `selectBlockedReason`, `frontend/app/src/lib/invoices.ts`), which an
+  open run refuses above, so an open-run row cannot be batch-**selected**. BUG-12 removed
+  the SPA-side re-derivation that used to let the two diverge.
 - The `awaiting_approval` list filter.
 - The `awaiting_approval` **count** on the dashboard rollup's `Bucket`
   (`internal/dashboard/store.go`, `GET /v1/rollup`). The Approvals nav badge
@@ -921,117 +895,27 @@ off — still submits the same invoice. Pinned by
   two share a predicate: the batch-submit skip reason above (`BatchSubmitResultItem.Reason`)
   is a refusal, is gated, and is a different fact — do not merge them.
 
-So with the flag off an operator still sees the whole approval surface — runs open,
-approvers approve or reject, rows report the step they are waiting on — and the server
-still transmits, though the review screen will not let an open-run row be batch-selected
-(above). That is deliberate: every read surface can be exercised in production before the
-refusal is switched on.
-
-### APPR-14 owns the flip
-
-**APPR-14 owns turning it on**, and owns the flag-ON deployed proof with it. CI already
-sets `APPROVALS_ENFORCED=true` on every PR ephemeral environment
-(`.github/workflows/dev-env.yml`'s `set-approvals-enforced` step, APPR-14-03), so it is not
-true that no environment sets it — only the persistent production environment still runs
-the default. The Go services still ship no `.env.example` (`docs/add-a-service.md`), but
-the dev-environment workflow no longer rewrites only URL variables: it now writes this one
-too, directly. What remains is the operator checklist below.
-
-#### Operator checklist: flipping it in production
-
-This is the **execution** of a decision already taken — Q8, 2026-08-08, "SHIP IT, no
-cutover" — not a fresh one. CI already discharges the flag on every PR environment; none
-of the items below are dischargeable by CI, because `scripts/ci/railway-env.sh` refuses on
-purpose to write this variable in the persistent environment ("Refusing to turn
-`APPROVALS_ENFORCED` on in the persistent environment ... Enforcement there is an OPERATOR
-action (APPR-14-10); no CI path may take it.").
-
-**Measured pre-conditions**, source-verified rather than live-measured — production still
-runs the one-tenant seeder until this branch merges and deploys:
-- Both persona tenants hold an active, sealed policy (`DemoTenants`,
-  `internal/demopolicy/demopolicy.go`).
-- Every seat the seeded plans actually require is staffed with an active approver: firm
-  `fin_mgr` = …0004 Musa Danjuma (reviewer); firm `compliance` = …0005 Chiamaka Nwosu
-  (reviewer); in-house `fin_dir` = …0002 and …0008 (both active).
-  Source: `db/seed.dev.sql:35-48, 94-108`.
-- The firm tenant's seven validated invoices all sit below both thresholds, so each arms
-  and is closable by those two seats.
-
-1. **Merge, deploy, and confirm the firm tenant's `awaiting_approval` reads 7 — before
-   flipping.** The seeder runs at invoice-service boot; production still runs the
-   one-tenant seeder until this branch ships. Flipping first would be a no-op on the firm
-   tenant and would gate nothing.
-2. **Confirm the variable is currently unset.** Not measured here — the Railway MCP
-   returned `Unauthorized` and the CLI read was blocked by the permission classifier.
-   ```
-   railway variable list --service invoice \
-     --environment 6c864094-6a06-452f-8495-be77d8a94fe7 \
-     --project 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
-   ```
-3. **Set it.** Project `ASComply`, environment `production` (the persistent environment
-   Railway renamed from `development`, `docs/deploy-model.md:63-70`), service `invoice` —
-   the only binary that reads it (`cmd/invoice/main.go:79`). Addressed by ID so a future
-   rename cannot invalidate the command. `--set` is the CLI's legacy form; this is the
-   current one:
-   ```
-   railway variable set APPROVALS_ENFORCED=true \
-     --project 9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3 \
-     --environment 6c864094-6a06-452f-8495-be77d8a94fe7 \
-     --service invoice
-   ```
-   Never pass `--skip-deploys`. The flag is read once at boot — without the redeploy the
-   running container keeps the old value and the flip silently does nothing.
-4. **Verify. There is no readback.** `/healthz` carries no flag field, the value is never
-   logged at boot, and `railway variable list` shows what was written, never what the
-   running process read. Open a validated firm invoice with an open run and read
-   `GET /v1/invoices/{id}`:
-   - ON (correct): `can_submit: false`, `submit_blocked_reason` set, Submit renders
-     disabled.
-   - OFF (the flip did not land): `can_submit: true`, `submit_blocked_reason: null`.
-5. **If it did not take effect**, in this order: (a) written but not redeployed — redeploy
-   `invoice`; (b) written on the wrong service — only `invoice` reads it; writing it on
-   `gateway` or `submission` is inert and silent; (c) an unparseable value — that stops the
-   boot with a `fatal` at ERROR (`main.go:80-82`); a service that will not come back up
-   after the flip means a typo (`yes`, `on` and untrimmed whitespace are all rejected).
-6. **Reversible.** Set the same variable to `false` — prefer that to deleting the key:
-   unset also means off, but delete is a second code path. The flag touches exactly one
-   verdict, `TransmitClear` — on `ApprovalFacts` for the detail wire and on
-   `ListGateFacts` for every list row, both folded by `Store.transmitClear`
-   (`internal/invoice/store.go`, pinned by
-   `TestStore_TransmitClearFoldIsTheOnlyReadPathFlagReader`); arming, runs, decisions and
-   audit rows are written identically either way, so nothing is lost flipping in either
-   direction. The
-   redeploy re-runs `demopolicy.Seed` (idempotent) and `demodocs`; it runs neither of
-   the gateway's two boot-time destructive steps — `db.Reset`, gated off the persistent
-   environment by `RAILWAY_ENVIRONMENT_NAME`, nor the DEMO-04 demo-tenant purge, which
-   is NOT gated off production and does delete `approval_runs` for the demo tenants
-   every time the **gateway** boots.
-7. **Nothing automated catches a regression here**, same as `docs/analytics.md:74-76`, and
-   sharper — there is no readback at all. Re-run the `can_submit` probe (item 4) after any
-   invoice-service redeploy or environment-variable change, not only after this flip.
+An operator still sees the whole approval surface — runs open, approvers approve or
+reject, rows report the step they are waiting on — even though the server refuses the
+transmit and the review screen will not let an open-run row be batch-selected (above).
+That is deliberate: every read surface stays exercisable in production independent of
+the refusal.
 
 **Known limitation, out of scope here.** The demo firm persona (…0001 Chinedu Okafor)
 holds only `cfo` on the firm tenant and cannot approve the firm plan's two unconditional
-steps (`fin_mgr`, `compliance`) — he can neither approve nor, once this flips, submit the
-firm tenant's own seeded invoices from the UI. The gateway side is done — DEMO-05
-widened `loginPersonas` past APPR-14-01's …0004/…0005 to every seeded active member, so
-all eleven can mint. The missing half is now the demo persona switcher (DEMO-06): the SPA's
-`APP_PERSONAS` and sign-in screen deliberately stay at two personas, and the rest of each
-tenant's roster will be reached through the switcher.
+steps (`fin_mgr`, `compliance`) — he can neither approve nor submit the firm tenant's own
+seeded invoices from the UI. The gateway side is done — DEMO-05 widened `loginPersonas`
+past APPR-14-01's …0004/…0005 to every seeded active member, so all eleven can mint. The
+missing half is now the demo persona switcher (DEMO-06): the SPA's `APP_PERSONAS` and
+sign-in screen deliberately stay at two personas, and the rest of each tenant's roster
+will be reached through the switcher.
 
-**Do not delay this flip pending an unrelated copy decision.** The Workflows screen's
-intro currently states "Transmission is not held for approval yet," which is already false
-on every PR ephemeral environment and becomes false in production the moment this flip
-lands. Whether to remove that sentence is a separate product decision, not made under this
-subtask — but it is one more reason not to leave the flip sitting once the merge-deploy
-pre-condition (item 1) is met.
-
-### Flipping it alone changes nothing on a seeded dev tenant — except the two demo ones
+### Enforcement changes nothing on a seeded dev tenant — except the two demo ones
 
 `db/seed.dev.sql` publishes **no approval policy**. Two of the four seeded tenants
 therefore have no active policy version, and with no active version nothing arms — no run
 opens, so there is no open run for the gate to refuse (§2 has the full no-active-policy
-behaviour). Setting `APPROVALS_ENFORCED=true` against those is observably a no-op. To watch
+behaviour). Enforcement against those two tenants is therefore observably inert. To watch
 the gate act, publish a policy first, then validate an invoice under it.
 
 **The two demo tenants are the exception, and they carry the only seeded approval policies

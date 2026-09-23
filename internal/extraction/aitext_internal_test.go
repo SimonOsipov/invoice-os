@@ -200,8 +200,6 @@ func aitRuleSubstringControl(field, raw string, pages []TokenPage) (bool, Region
 	return false, Region{}
 }
 
-func aitLoose(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
-
 // aitReadings normalises raw under field's shape, falling back to its loosened text when the
 // shape refuses it (a blank raw has no reading at all).
 func aitReadings(field, raw string) []string {
@@ -243,15 +241,6 @@ func aitClassify(field string, answer *string, key []string) string {
 		}
 	}
 	return "wrong"
-}
-
-func hasCommonReading(a, b []string) bool {
-	for _, r := range a {
-		if containsString(b, r) {
-			return true
-		}
-	}
-	return false
 }
 
 // aitAgreement classifies the AI/engine pair into the five classes that cover every cell with

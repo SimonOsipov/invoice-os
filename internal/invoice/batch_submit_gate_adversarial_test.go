@@ -1,8 +1,8 @@
 // APPR-08-04 (task-501, Mode B): adversarial coverage for the batch door's transmit gate,
 // written against the shipped implementation. batch_submit_gate_test.go holds the
 // acceptance-criteria specs; this file holds what survived them — a swallowed gate error,
-// the flag-OFF half of id normalisation, the run states that are not "approved", and the
-// statement budget claims no behavioural assertion reaches.
+// the no-active-policy half of id normalisation, the run states that are not "approved", and
+// the statement budget claims no behavioural assertion reaches.
 //
 // Run: DATABASE_URL=… DATABASE_SUPERUSER_URL=… DATABASE_READER_URL=… \
 // go test -p 1 -count=1 ./internal/invoice/...
@@ -56,13 +56,12 @@ func noDashIDOrFatal(t *testing.T, id string) string {
 	return bare
 }
 
-// --- the flag-OFF half of normalisation -------------------------------------
+// --- the no-active-policy half of normalisation ------------------------------
 
-// TestBatchSubmit_FlagOffCanonicalisesTheEchoedIdAndTheDerivedKey: keying eligibility on
-// the LOCKED row's id is NOT flag-scoped, so it changes the flag-off door too — the echoed
-// invoice_id and the derived idempotency key both become canonical. Every other
-// canonical-id spec runs with the flag ON, so nothing else pins this.
-func TestBatchSubmit_FlagOffCanonicalisesTheEchoedIdAndTheDerivedKey(t *testing.T) {
+// TestBatchSubmit_NoPolicyTenantCanonicalisesTheEchoedIdAndTheDerivedKey: canonicalisation
+// on the no-active-policy short-circuit path -- the echoed invoice_id and the derived
+// idempotency key both become canonical.
+func TestBatchSubmit_NoPolicyTenantCanonicalisesTheEchoedIdAndTheDerivedKey(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	tenantID := seedTenant(t, super, "APPR-08-04-OFFCANON tenant")
@@ -73,11 +72,11 @@ func TestBatchSubmit_FlagOffCanonicalisesTheEchoedIdAndTheDerivedKey(t *testing.
 	upper := upperIDOrFatal(t, invID)
 	reqKey := uuid.NewString()
 
-	res, err := gateSubmitter(t, app, false).BatchSubmit(ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(ctx, BatchSubmitInput{
 		InvoiceIDs: []string{upper}, IdempotencyKey: reqKey,
 	})
 	if err != nil {
-		t.Fatalf("BatchSubmit(UPPERCASE id) with the flag off: %v (want nil)", err)
+		t.Fatalf("BatchSubmit(UPPERCASE id) on a no-active-policy tenant: %v (want nil)", err)
 	}
 	if len(res.Results) != 1 {
 		t.Fatalf("len(results) = %d, want 1", len(res.Results))
@@ -122,7 +121,7 @@ func TestBatchSubmit_TransmitClearTxErrorIsReturnedNotSwallowed(t *testing.T) {
 
 	secondID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-08-04-GATEERR-B", StatusValidated)
 
-	submitter := NewSubmitter(NewStore(failing, WithApprovalsEnforced(true)), newInsertOnlyQueueClient(t, app))
+	submitter := NewSubmitter(NewStore(failing), newInsertOnlyQueueClient(t, app))
 
 	res, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, secondID}, IdempotencyKey: uuid.NewString(),
@@ -170,7 +169,7 @@ func TestBatchSubmit_MixedSpellingsAcrossDifferentInvoices(t *testing.T) {
 
 	draftID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-08-04-MIXSPELL-C", StatusDraft)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{
 			upperIDOrFatal(t, fx.invID), // approved run, UPPERCASE
 			noDashIDOrFatal(t, gatedID), // open run, 32-hex-no-dash
@@ -214,7 +213,7 @@ func TestBatchSubmit_OnlyAnApprovedRunClears(t *testing.T) {
 	rejectedID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-08-04-RUNSTATES-REJECTED", StatusValidated)
 	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, fx.tenantID, rejectedID, fx.versionID), "rejected", "fixture")
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, cancelledID, rejectedID}, IdempotencyKey: uuid.NewString(),
 	})
 	if err != nil {
@@ -255,7 +254,7 @@ func TestBatchSubmit_CrossTenantIdHardFailsTheWholeBatch(t *testing.T) {
 	otherEntity := seedEntity(t, super, otherTenant, "APPR-08-04-XTENANT other entity")
 	foreignID := seedInvoiceAtStatus(t, super, otherTenant, otherEntity, "APPR-08-04-XTENANT-FOREIGN", StatusValidated)
 
-	res, err := gateSubmitter(t, app, true).BatchSubmit(fx.ctx, BatchSubmitInput{
+	res, err := gateSubmitter(t, app).BatchSubmit(fx.ctx, BatchSubmitInput{
 		InvoiceIDs: []string{fx.invID, foreignID}, IdempotencyKey: uuid.NewString(),
 	})
 	if !errors.Is(err, ErrNotFound) {
@@ -296,7 +295,7 @@ func TestBatchSubmit_EligibilityLocksOncePerDistinctId(t *testing.T) {
 	secondID := seedInvoiceAtStatus(t, super, fx.tenantID, fx.entityID, "APPR-08-04-LOCKCOUNT-B", StatusValidated)
 	closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, fx.tenantID, secondID, fx.versionID), "approved", "fixture")
 
-	submitter := gateSubmitter(t, tracedApp, true)
+	submitter := gateSubmitter(t, tracedApp)
 
 	rec.reset()
 	res, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
@@ -329,7 +328,7 @@ func TestBatchSubmit_TwoSpellingsCostOneExtraLockAndNoExtraGateRead(t *testing.T
 		closeApprovalRunFor(t, super, seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID), "approved", "fixture")
 
 		upper := upperIDOrFatal(t, fx.invID)
-		submitter := gateSubmitter(t, tracedApp, true)
+		submitter := gateSubmitter(t, tracedApp)
 
 		rec.reset()
 		res, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{
@@ -361,7 +360,7 @@ func TestBatchSubmit_TwoSpellingsCostOneExtraLockAndNoExtraGateRead(t *testing.T
 		ctx := gateCtx(tenantID)
 
 		upper := upperIDOrFatal(t, invID)
-		submitter := gateSubmitter(t, tracedApp, true)
+		submitter := gateSubmitter(t, tracedApp)
 
 		rec.reset()
 		res, err := submitter.BatchSubmit(ctx, BatchSubmitInput{
@@ -384,10 +383,10 @@ func TestBatchSubmit_TwoSpellingsCostOneExtraLockAndNoExtraGateRead(t *testing.T
 
 // --- the largest legal batch --------------------------------------------------
 
-// TestBatchSubmit_AtThe200IdCapUnderTheFlag: the handler's cap is the biggest batch the
+// TestBatchSubmit_AtThe200IdCap: the handler's cap is the biggest batch the
 // gate ever sees. 200 invoices, alternating approved and open runs, still cost two
 // approval statements and still classify per position.
-func TestBatchSubmit_AtThe200IdCapUnderTheFlag(t *testing.T) {
+func TestBatchSubmit_AtThe200IdCap(t *testing.T) {
 	super, _ := dbTestPools(t)
 	tracedApp, rec := tracedAppPool(t)
 
@@ -407,7 +406,7 @@ func TestBatchSubmit_AtThe200IdCapUnderTheFlag(t *testing.T) {
 		wantEnqueued = append(wantEnqueued, approved)
 	}
 
-	submitter := gateSubmitter(t, tracedApp, true)
+	submitter := gateSubmitter(t, tracedApp)
 
 	rec.reset()
 	res, err := submitter.BatchSubmit(fx.ctx, BatchSubmitInput{

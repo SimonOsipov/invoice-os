@@ -50,6 +50,28 @@ Credit notes & adjustments
 # assertions a file-level suppression would blind.
 status-history
 
+# --- assembled ids (demo lead form) ---------------------------------------
+# BUG-19-01 extracted DemoLeadForm.tsx, where every field id is built as
+# `${idPrefix}-<field>` rather than stored whole; DemoModal.tsx passes
+# idPrefix="dm", so the runtime ids are unchanged but no literal exists for
+# the scan to find. Replacement oracle: DemoLeadForm.adversarial.test.tsx's
+# "A1: the popup still carries every id it shipped with, and no new one"
+# renders the popup and asserts the derived id list; DemoModal.adversarial.test.tsx's
+# "renders aria-invalid=\"true\", aria-describedby, and the role=\"alert\" error
+# once errors.consent is set" covers dm-consent-error; DemoModal.retry.dom.test.tsx's
+# "POSTs the seven mapped fields and focuses the success panel" covers
+# dm-success-done. Plus e2e/smoke/landing-demo.spec.ts's #dm-* assertions on
+# the deployed build. A rendering assertion is a stronger oracle than a literal grep.
+dm-name
+dm-email
+dm-company
+dm-role
+dm-size
+dm-volume
+dm-consent
+dm-consent-error
+dm-success-done
+
 # --- route path placeholders ---------------------------------------------
 # `<uuid>` is human placeholder notation, never a runtime string: routePath
 # builds `/invoices/${encodeURIComponent(id)}`, so the producer is an expression

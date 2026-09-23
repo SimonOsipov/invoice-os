@@ -175,8 +175,8 @@ func TestAIPromptText_OneLinePerDoclingTokenInReaderOrder(t *testing.T) {
 		"y=0.100 | x=0.20 A\n" +
 		"--- page 2 ---\n" +
 		"y=0.200 | x=0.05 C"
-	if got := aiPromptText(pages); got != want {
-		t.Errorf("aiPromptText = %q, want %q", got, want)
+	if got := DoclingPromptText(pages); got != want {
+		t.Errorf("DoclingPromptText = %q, want %q", got, want)
 	}
 }
 
@@ -202,14 +202,17 @@ func TestAskAI_SendsOneDocumentCallWithTheText(t *testing.T) {
 	if req.SchemaName != "invoice_fields" {
 		t.Errorf("SchemaName = %q, want invoice_fields", req.SchemaName)
 	}
-	if want := aiPromptText(pages); req.Text != want {
-		t.Errorf("Text = %q, want aiPromptText(pages) = %q", req.Text, want)
+	if want := DoclingPromptText(pages); req.Text != want {
+		t.Errorf("Text = %q, want DoclingPromptText(pages) = %q", req.Text, want)
 	}
 	if req.Pages != nil {
 		t.Errorf("Pages = %v, want nil", req.Pages)
 	}
 	if req.FakeHint != "" {
 		t.Errorf("FakeHint = %q, want empty", req.FakeHint)
+	}
+	if req.FakeScope != "" {
+		t.Errorf("FakeScope = %q, want empty -- the header call is unscoped", req.FakeScope)
 	}
 }
 
@@ -620,5 +623,30 @@ func TestAICheck_TheBoxIsTheWholeLine(t *testing.T) {
 	}
 	if readingU.Region != nil {
 		t.Errorf("region = %v, want nil for an unusable box", readingU.Region)
+	}
+}
+
+func TestCallAI_DropsAKeyThatIsNotAHeaderField(t *testing.T) {
+	r := &recordingAI{enabled: true, answer: map[string]any{
+		"invoice_number": "INV-1",
+		"line_items":     "whatever the model felt like",
+		"not_a_field":    "also dropped",
+	}}
+
+	out, failed := callAI(context.Background(), r, ai.Request{})
+
+	if failed {
+		t.Fatal("callAI failed on a well-formed answer")
+	}
+	if len(out) == 0 {
+		t.Fatal("callAI returned nothing, so the drop assertions below prove nothing")
+	}
+	if got, ok := out["invoice_number"]; !ok || got != "INV-1" {
+		t.Errorf("invoice_number = %q, %v; want INV-1 kept", got, ok)
+	}
+	for _, k := range []string{"line_items", "not_a_field"} {
+		if _, ok := out[k]; ok {
+			t.Errorf("%q survived callAI; only HeaderFields may", k)
+		}
 	}
 }

@@ -37,6 +37,7 @@ const FORBIDDEN = [
   'evidence signed',
   ' signed ·',
   '· signed',
+  'Data resident in-region',
 ]
 
 // Test files are excluded — they carry the forbidden strings as fixtures.

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -28,16 +29,21 @@ type Purpose string
 const (
 	PurposeDocument    Purpose = "document"
 	PurposeSpreadsheet Purpose = "spreadsheet"
+	PurposeLineItems   Purpose = "line_items"
 )
 
-// Request is one call's input. FakeHint is read only in fake mode; it is
-// never sent on the wire and never logged.
+// Request is one call's input. FakeHint and FakeScope are read only in fake
+// mode; neither is ever sent on the wire or logged. A non-empty FakeScope
+// narrows the fake's steering marker to that scope's own spelling
+// (AIFAKE-<SCOPE>-...) and never falls back to the unscoped one, so two
+// calls sharing the same Text can be steered independently.
 type Request struct {
 	Purpose    Purpose
 	System     string
 	Text       string
 	Pages      [][]byte // PNG
 	FakeHint   string
+	FakeScope  string
 	SchemaName string
 	Schema     json.RawMessage
 }
@@ -186,8 +192,12 @@ func realSleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// fakeScopeRE is the shape a non-empty FakeScope must have: it is inlined into a regexp
+// pattern (fake.go's scopedMarkerRe), so only plain letters are allowed.
+var fakeScopeRE = regexp.MustCompile(`^[A-Z]+$`)
+
 func validateRequest(req Request) error {
-	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet {
+	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet && req.Purpose != PurposeLineItems {
 		return fmt.Errorf("ai: invalid request: unsupported purpose %q", req.Purpose)
 	}
 	if req.Text == "" && len(req.Pages) == 0 {
@@ -195,6 +205,9 @@ func validateRequest(req Request) error {
 	}
 	if req.SchemaName == "" {
 		return errors.New("ai: invalid request: schema name is required")
+	}
+	if req.FakeScope != "" && !fakeScopeRE.MatchString(req.FakeScope) {
+		return fmt.Errorf("ai: invalid request: fake scope %q must match ^[A-Z]+$", req.FakeScope)
 	}
 	return nil
 }

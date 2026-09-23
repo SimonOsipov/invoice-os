@@ -1716,12 +1716,10 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       assertErrorEnvelope(res, 404, 'validated invoice with no armed run')
     })
 
-    // --- APPR-08-10: the always-visible surface (not gated by the flag) ------
+    // --- APPR-08-10: the always-visible surface ------------------------------
     //
     // The four detail keys, the per-row approval envelope and the awaiting_approval
-    // filter all ship UNFLAGGED by design (docs/approvals.md, "Not gated") -- the flag
-    // gates ENFORCEMENT, not visibility, so these hold whatever APPROVALS_ENFORCED is
-    // (this suite's gate environment runs it true, APPR-14-03).
+    // filter all ship by design (docs/approvals.md, "Not gated").
 
     test('contract: the four approval flags are present and typed', async () => {
       // approveFlags() already asserts PRESENCE and the approve/reject agreement; this

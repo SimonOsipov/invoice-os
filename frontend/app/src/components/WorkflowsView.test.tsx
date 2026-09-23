@@ -455,13 +455,27 @@ describe('APPR-09-04 QA: the two error slots survive each other, in both orders'
 })
 
 describe('APPR-09-04 QA: the intro states what publishing does today', () => {
-  it('carries the interim second sentence and drops the claim the flag does not honour', () => {
+  it('states that publishing opens an approval and makes no claim that transmission is unheld', () => {
     render(<WorkflowsView ctx={listCtx([policy()])} />)
 
     expect(
-      screen.getByText(/Publishing a policy opens an approval on every matching invoice\. Transmission is not held for approval yet\./),
-      'the intro lost the interim sentence APPR-14 removes when it flips the flag',
+      screen.getByText(/Publishing a policy opens an approval on every matching invoice\./),
+      'the intro lost the sentence that says publishing opens an approval',
     ).toBeTruthy()
+    expect(
+      screen.queryByText(/Transmission is not held for approval yet/),
+      'the intro still claims transmission is not held for approval',
+    ).toBeNull()
     expect(screen.queryByText(/applies it to every matching invoice/), 'the superseded claim is still on screen').toBeNull()
+  })
+
+  // The null assertion above is case-sensitive and exact; this one catches a reworded caveat.
+  it('ends the intro at the publishing sentence, with no caveat after it in any wording', () => {
+    render(<WorkflowsView ctx={listCtx([policy()])} />)
+
+    const intro = screen.getByText(/^Each policy decides who signs off/).textContent ?? ''
+    expect(intro.length, 'the intro rendered no text').toBeGreaterThan(0)
+    expect(intro, 'a sentence follows the publishing sentence').toMatch(/Publishing a policy opens an approval on every matching invoice\.$/)
+    expect(intro, 'the intro says transmission is not held, in some letter case').not.toMatch(/transmission is not held/i)
   })
 })

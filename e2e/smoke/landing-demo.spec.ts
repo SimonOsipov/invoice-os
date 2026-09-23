@@ -1,8 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
+import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
-// The Book-a-Demo lead-capture modal against the PR's own deployed landing (LAND-02).
+// The Book-a-Demo lead capture, both the modal and the inline #demo card, against the
+// PR's own deployed landing (LAND-02).
 //
 // EVERY test in this file runs with the HubSpot gate CLOSED. The gate is
 // `resolveSubmitTarget(window.location.hostname)`, which returns a target only on an
@@ -18,7 +20,7 @@ import { seedConsent } from './landingConsent'
 // frontend/landing's vitest project defaults to `node`; a file may opt into jsdom per-file,
 // but this package carries no React testing library and jsdom has no layout engine — so a
 // submit event on a rendered modal, a focus trap, an async timing property and a rendered
-// text measurement can only be observed in a browser. Functional only — nothing
+// geometry measurement can only be observed in a browser. Functional only — nothing
 // here takes a screenshot, and every assertion is a fact about behaviour or geometry.
 //
 // TWO INDEPENDENT HUBSPOT GUARDS, and the distinction is load-bearing:
@@ -56,7 +58,7 @@ const DEFAULT_TAXPAYER_SIZE = 'Medium ₦1bn–₦5bn'
 // still render "a taxpayer size", so E4 names them explicitly.
 const BARE_SIZE_WORDS = ['Micro', 'Small', 'Medium', 'Large'] as const
 
-// DemoModal's demo-mode stub resolves after 1300ms (`runStub`), and a closed gate, a
+// DemoLeadForm's demo-mode stub resolves after 1300ms (`runStub`), and a closed gate, a
 // tripped honeypot and an injected submit all route through that ONE helper — which is the
 // property E5 exists to defend. The floor is set below 1300 rather than at it: setTimeout
 // never fires early, but the click-to-timer-start latency is measured on our side of the
@@ -117,8 +119,7 @@ const HONEYPOT_ATTRS: ReadonlyArray<readonly [string, string]> = [
 // the narrow width that actually exercises the rule named in the plan.
 // The other eight are the widths at which the UNGUARDED value measurably broke: 1150/1100/
 // 960/921 in the band just above the 920px single-column breakpoint, where the 0.8fr column
-// is at its narrowest, and 500/430/390/375 below it. All ten are asserted — the recorded-only
-// tier this file shipped with is gone, and the note on E6 says why.
+// is at its narrowest, and 500/430/390/375 below it. All ten are asserted.
 const ASSERTED_WIDTHS = [1280, 1150, 1100, 960, 921, 600, 500, 430, 390, 375] as const
 
 type LandingSinks = {
@@ -247,7 +248,7 @@ async function openLanding(page: Page): Promise<LandingSinks> {
   await expect(page.getByRole('banner')).toBeVisible()
 
   // Inter and Fraunces are Google-hosted with display=swap. A swap AFTER a measurement
-  // reflows text under geometry that has already been read, and E6 measures text to the
+  // reflows geometry that has already been read, and E6 measures geometry to the
   // sub-pixel. Settle once, here, before anything else — same reason as landing-nav.spec.ts.
   await page.evaluate(() => document.fonts.ready.then(() => true))
 
@@ -263,14 +264,14 @@ async function openDemoModal(page: Page): Promise<Locator> {
 }
 
 /** The three required answers. Consent is deliberately NOT ticked here — E2 needs it unticked. */
-async function fillRequiredFields(dialog: Locator): Promise<void> {
-  await dialog.locator('#dm-name').fill(LEAD.name)
-  await dialog.locator('#dm-email').fill(LEAD.email)
-  await dialog.locator('#dm-company').fill(LEAD.company)
+async function fillRequiredFields(root: Locator, prefix: string): Promise<void> {
+  await root.locator(`#${prefix}-name`).fill(LEAD.name)
+  await root.locator(`#${prefix}-email`).fill(LEAD.email)
+  await root.locator(`#${prefix}-company`).fill(LEAD.company)
 }
 
-function submitButton(dialog: Locator): Locator {
-  return dialog.getByRole('button', { name: /^Book my demo/ })
+function submitButton(root: Locator): Locator {
+  return root.getByRole('button', { name: /^Book my demo/ })
 }
 
 /**
@@ -278,13 +279,17 @@ function submitButton(dialog: Locator): Locator {
  * path is indistinguishable from the closed-gate path is exactly "E1 and E5 both end here,
  * both no faster than the shared stub" — so both call THIS, rather than each describing
  * success in its own words.
+ *
+ * The Done button renders only where the form is given an onDone — the card is not — so
+ * `opts.done` selects whether that half is asserted.
  */
-async function expectSuccessPanel(dialog: Locator): Promise<void> {
-  await expect(dialog.locator('#dm-success-done')).toBeVisible()
-  await expect(dialog).toContainText(`Thanks, ${LEAD.firstName}.`)
-  await expect(dialog).toContainText(LEAD.email)
+async function expectSuccessPanel(root: Locator, prefix: string, opts: { done: boolean }): Promise<void> {
+  await expect(root.locator(`#${prefix}-success`)).toBeVisible()
+  if (opts.done) await expect(root.locator(`#${prefix}-success-done`)).toBeVisible()
+  await expect(root).toContainText(`Thanks, ${LEAD.firstName}.`)
+  await expect(root).toContainText(LEAD.email)
   // The form is gone, not merely covered.
-  await expect(dialog.locator('#dm-name')).toHaveCount(0)
+  await expect(root.locator(`#${prefix}-name`)).toHaveCount(0)
 }
 
 /** AC #2 + AC #3, asserted at the end of every test in this file. */
@@ -325,149 +330,11 @@ function activeKey(page: Page): Promise<string> {
   })
 }
 
-// Every field is relative or derived — nothing viewport-absolute — so two readings taken at
-// the same viewport must be byte-identical, which is what makes the stability check below a
-// real assertion rather than a sleep.
-type SizeValueMeasurement = {
-  /** The rendered value text, so a build that regressed to "Medium" cannot pass by fitting. */
-  text: string
-  /** Line boxes the value occupies, counted by DISTINCT rect top. THE oracle: 1 = no wrap. */
-  lines: number
-  /** Raw `getClientRects()` length. Reported, never asserted — see the note on `lines`. */
-  rectCount: number
-  /** Widest single rect. This is the UNCLIPPED run, so it does not shrink under truncation. */
-  widestLinePx: number
-  /** Gap between the value's PAINTED right edge and the ▾ caret's left edge. < 0 is overlap. */
-  caretGapPx: number
-  /** How far the ▾ caret spills past the box's content-box right edge. > 0 means it was cut off. */
-  caretOverhangPx: number
-  /** How far the text's last line falls below the box's border box. > 0 is a visible bleed. */
-  bleedBelowBoxPx: number
-  boxHeightPx: number
-  clientWidth: number
-  scrollWidth: number
-  clientHeight: number
-  scrollHeight: number
-}
-
-/**
- * Measures the inline #demo card's taxpayer-size value.
- *
- * A Range over the text node is still the oracle, but TWO of its readings had to be reinterpreted
- * when LAND-02-03's overflow guard landed, because the guard changed the DOM the Range sits in.
- * Both reinterpretations are recorded here rather than in the test, since both are facts about the
- * measurement rather than about the value.
- *
- * 1. `lines` counts DISTINCT RECT TOPS, not `rects.length`. Chromium reports a *truncated* run as
- *    two rects at the SAME y — the full unclipped run plus the visible portion — so raw rect count
- *    reads 2 on a value that occupies one line and is behaving exactly as designed. Rect count was
- *    only ever a proxy for line count, and it stops being one the moment anything clips. A genuine
- *    wrap puts the second rect ~17px lower, which is what this still catches: on the unguarded
- *    markup it reads 2 at 1150/1100/960/500/430/390 and 3 at 921/375.
- * 2. `caretGapPx` measures from the value's PAINTED right edge. The guard puts the text in a span
- *    with `overflow: hidden`, so nothing paints past that span's border box however long the string
- *    is — the unclipped run's right edge is no longer where ink stops, and reading it would report
- *    a collision that is not on screen. When nothing clips the text, the two are the same number.
- *
- * scrollHeight is reported below but is NOT a primary oracle: two 14px lines still fit inside a
- * 40px content box, so a wrapped value reads back as scrollHeight === clientHeight while looking
- * visibly broken. It only catches the three-line case.
- */
-function measureTaxpayerSizeValue(page: Page): Promise<SizeValueMeasurement> {
-  return page.evaluate(() => {
-    const label = Array.from(document.querySelectorAll<HTMLElement>('#demo .label')).find((el) =>
-      (el.textContent ?? '').trim().startsWith('Taxpayer size'),
-    )
-    if (!label) throw new Error('no "Taxpayer size" label inside the #demo card')
-    const box = label.nextElementSibling as HTMLElement | null
-    if (!box) throw new Error('the "Taxpayer size" label has no value box beside it')
-
-    // Walked, not read off box.childNodes: the guard moved the text one level down into its own
-    // span, and a build that moved it again should still be measured rather than crash.
-    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT)
-    let textNode: Text | null = null
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      if ((n.textContent ?? '').trim().length > 0) {
-        textNode = n as Text
-        break
-      }
-    }
-    if (!textNode) throw new Error('the taxpayer-size value box holds no text node')
-
-    const range = document.createRange()
-    range.selectNodeContents(textNode)
-    const rects = Array.from(range.getClientRects())
-    if (!rects.length) throw new Error('the taxpayer-size value produced no client rects')
-
-    // The caret is named by its glyph, not by position: the box now holds two spans, and picking
-    // the wrong one would silently measure the value against itself.
-    const caret = Array.from(box.querySelectorAll<HTMLElement>('span')).find(
-      (el) => (el.textContent ?? '').trim() === '▾',
-    )
-    if (!caret) throw new Error('the taxpayer-size value box has no ▾ caret span')
-
-    const round = (n: number): number => Math.round(n * 100) / 100
-    const boxRect = box.getBoundingClientRect()
-    const caretRect = caret.getBoundingClientRect()
-    const bottom = Math.max(...rects.map((r) => r.bottom))
-
-    // Distinct line boxes: sorted tops, split wherever the gap exceeds 1px. A real second line is
-    // a full 17px lower, so 1px is comfortably below the smallest difference that means "wrapped"
-    // and comfortably above sub-pixel noise between two rects of the same line.
-    const tops = rects.map((r) => r.top).sort((a, b) => a - b)
-    let lines = 1
-    for (let i = 1; i < tops.length; i++) if (tops[i] - tops[i - 1] > 1) lines++
-
-    // Where ink actually stops. `holder` is the element the text lives in; if it clips, its border
-    // box bounds the paint, otherwise the run's own right edge does.
-    const holder = textNode.parentElement!
-    const clips = holder !== box && getComputedStyle(holder).overflow !== 'visible'
-    const paintedRight = clips ? holder.getBoundingClientRect().right : Math.max(...rects.map((r) => r.right))
-
-    // The box's content-box right edge, border and padding resolved rather than assumed, so this
-    // stays honest if either is ever retuned.
-    const boxStyle = getComputedStyle(box)
-    const contentRight =
-      boxRect.right - parseFloat(boxStyle.borderRightWidth) - parseFloat(boxStyle.paddingRight)
-
-    return {
-      text: (textNode.textContent ?? '').trim(),
-      lines,
-      rectCount: rects.length,
-      widestLinePx: round(Math.max(...rects.map((r) => r.width))),
-      caretGapPx: round(caretRect.left - paintedRight),
-      caretOverhangPx: round(caretRect.right - contentRight),
-      bleedBelowBoxPx: round(bottom - boxRect.bottom),
-      boxHeightPx: round(boxRect.height),
-      clientWidth: box.clientWidth,
-      scrollWidth: box.scrollWidth,
-      clientHeight: box.clientHeight,
-      scrollHeight: box.scrollHeight,
-    }
-  })
-}
-
 /** Two rAFs — layout after a resize is committed by the second one. */
 function settleLayout(page: Page): Promise<boolean> {
   return page.evaluate(
     () => new Promise<boolean>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))),
   )
-}
-
-/**
- * Re-measures until two consecutive readings agree. Fonts are already settled, so the only
- * thing this waits out is the resize reflow — and it waits it out with an ASSERTION rather
- * than a sleep: if the box is still moving, the equality below fails and says so. Every
- * field of the measurement is relative or derived, never viewport-absolute, which is what
- * makes byte-equality the right stability test.
- */
-async function measureStable(page: Page, width: number): Promise<SizeValueMeasurement> {
-  await settleLayout(page)
-  const first = await measureTaxpayerSizeValue(page)
-  await settleLayout(page)
-  const second = await measureTaxpayerSizeValue(page)
-  expect(second, `the taxpayer-size value box was still reflowing at ${width}px`).toEqual(first)
-  return second
 }
 
 // E0 — the classifier every GA assertion in this file consumes, exercised directly. No
@@ -505,13 +372,13 @@ test('landing demo: a complete submission on a closed gate succeeds locally and 
   const sinks = await openLanding(page)
   const dialog = await openDemoModal(page)
 
-  await fillRequiredFields(dialog)
+  await fillRequiredFields(dialog, 'dm')
   await dialog.locator('#dm-consent').check()
   await expect(dialog.locator('#dm-consent')).toBeChecked()
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog)
+  await expectSuccessPanel(dialog, 'dm', { done: true })
   const elapsedMs = Date.now() - startedAt
 
   // The closed gate routes through the same 1300ms stub the honeypot uses. Asserted here as
@@ -531,7 +398,7 @@ test('landing demo: an unticked consent box blocks the submit and names the reas
   const sinks = await openLanding(page)
   const dialog = await openDemoModal(page)
 
-  await fillRequiredFields(dialog)
+  await fillRequiredFields(dialog, 'dm')
   await expect(dialog.locator('#dm-consent')).not.toBeChecked()
 
   await submitButton(dialog).click()
@@ -610,25 +477,30 @@ test('landing demo: the Tab trap wraps in both directions and never lands on the
   expectClosedGateStayedSilent(sinks)
 })
 
-// E4 — the modal's select and the inline card agree about the turnover bands ON THE
-// DEPLOYED BUILD. Two surfaces, two source files, one contract. This asserts agreement and
-// membership only; whether the agreed value FITS its box is E6's job.
-test('landing demo: the modal select and the inline card agree on the turnover bands', async ({ page }) => {
-  const sinks = await openLanding(page)
-  const dialog = await openDemoModal(page)
-
-  const options = dialog.locator('#dm-size option')
-  // Web-first, and it settles the read below: four bands plus the disabled placeholder.
-  await expect(options).toHaveCount(TAXPAYER_SIZE_BANDS.length + 1)
-
-  const rendered = await options.evaluateAll((els) =>
+/** A `<select>`'s rendered options: value, text, and disabled state, in DOM order. */
+async function readSizeOptions(select: Locator): Promise<Array<{ value: string; text: string; disabled: boolean }>> {
+  return select.locator('option').evaluateAll((els) =>
     els.map((el) => {
       const option = el as HTMLOptionElement
       return { value: option.value, text: (option.textContent ?? '').trim(), disabled: option.disabled }
     }),
   )
-  const selectable = rendered.filter((o) => !o.disabled)
-  const placeholders = rendered.filter((o) => o.disabled)
+}
+
+// E4 — the modal's select and the inline card agree about the turnover bands ON THE
+// DEPLOYED BUILD. Two surfaces, one shared component, one contract. This asserts agreement and
+// membership only; whether the agreed value FITS its box is E6's job.
+test('landing demo: the modal select and the inline card agree on the turnover bands', async ({ page }) => {
+  const sinks = await openLanding(page)
+  const dialog = await openDemoModal(page)
+
+  const modalSelect = dialog.locator('#dm-size')
+  // Web-first, and it settles the read below: four bands plus the disabled placeholder.
+  await expect(modalSelect.locator('option')).toHaveCount(TAXPAYER_SIZE_BANDS.length + 1)
+  const modalRendered = await readSizeOptions(modalSelect)
+
+  const selectable = modalRendered.filter((o) => !o.disabled)
+  const placeholders = modalRendered.filter((o) => o.disabled)
 
   expect(selectable.map((o) => o.value)).toEqual([...TAXPAYER_SIZE_BANDS])
   expect(selectable.map((o) => o.text)).toEqual([...TAXPAYER_SIZE_BANDS])
@@ -637,11 +509,11 @@ test('landing demo: the modal select and the inline card agree on the turnover b
   // A build that regressed to bare size words would still offer "a taxpayer size", so the
   // regression is named rather than implied.
   for (const word of BARE_SIZE_WORDS) {
-    expect(rendered.map((o) => o.text), `the select still offers the bare word "${word}"`).not.toContain(word)
+    expect(modalRendered.map((o) => o.text), `the select still offers the bare word "${word}"`).not.toContain(word)
   }
 
   // The select's default, read from the deployed build rather than assumed.
-  const selectDefault = await dialog.locator('#dm-size').inputValue()
+  const selectDefault = await modalSelect.inputValue()
   expect(TAXPAYER_SIZE_BANDS, 'the select defaults to something that is not one of the four bands').toContain(
     selectDefault,
   )
@@ -650,8 +522,23 @@ test('landing demo: the modal select and the inline card agree on the turnover b
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
 
-  const card = await measureStable(page, page.viewportSize()!.width)
-  expect(card.text, "the inline card's taxpayer size disagrees with the modal's default").toBe(selectDefault)
+  // The surface-to-surface equality below is now STRUCTURAL — one component rendered
+  // twice — so it guards a future split, not two hand-maintained lists. The comparison
+  // against TAXPAYER_SIZE_BANDS (retyped above, never imported) is what stays falsifiable.
+  const cardSelect = page.locator('#dc-size')
+  await expect(cardSelect.locator('option')).toHaveCount(TAXPAYER_SIZE_BANDS.length + 1)
+  const cardRendered = await readSizeOptions(cardSelect)
+  const cardSelectable = cardRendered.filter((o) => !o.disabled)
+
+  expect(cardSelectable.map((o) => o.value)).toEqual([...TAXPAYER_SIZE_BANDS])
+  expect(cardSelectable.map((o) => o.text)).toEqual([...TAXPAYER_SIZE_BANDS])
+  expect(cardRendered).toEqual(modalRendered)
+
+  for (const word of BARE_SIZE_WORDS) {
+    expect(cardRendered.map((o) => o.text), `the card still offers the bare word "${word}"`).not.toContain(word)
+  }
+
+  expect(await cardSelect.inputValue()).toBe(selectDefault)
 
   expectClosedGateStayedSilent(sinks)
 })
@@ -669,7 +556,7 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
   const sinks = await openLanding(page)
   const dialog = await openDemoModal(page)
 
-  await fillRequiredFields(dialog)
+  await fillRequiredFields(dialog, 'dm')
   await dialog.locator('#dm-consent').check()
 
   // Assigned programmatically, never typed: the input is positioned off-screen at x=-9999,
@@ -687,7 +574,7 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
 
   const startedAt = Date.now()
   await submitButton(dialog).click()
-  await expectSuccessPanel(dialog)
+  await expectSuccessPanel(dialog, 'dm', { done: true })
   const elapsedMs = Date.now() - startedAt
 
   expect(
@@ -699,86 +586,164 @@ test('landing demo: a tripped honeypot is dropped silently, and no faster than a
   expectClosedGateStayedSilent(sinks)
 })
 
-// E6 — AC #6's measurement obligation, carried in from LAND-02-03.
-//
-// DEFAULT_TAXPAYER_SIZE went from 'Medium' (6 chars) to 'Medium ₦1bn–₦5bn' (16), rendered in a
-// fixed height:42 flex box. Unguarded, that wrapped to two or three lines and bled out of the
-// box — so the risk this measures is not only a ▾ collision but wrapping and vertical bleed.
-//
-// The full sweep is measured and attached FIRST, before any assertion, so the numbers reach the
-// PR even on a failing run — AC #6 requires the result recorded either way.
-//
-// WHY EVERY WIDTH IS NOW ASSERTED. This file first shipped with eight of these ten widths
-// RECORDED but not asserted, because at the time no mitigation existed and a red deploy gate
-// would have blocked the story on a defect it was not scoped to fix. The guard now exists
-// (DemoCta.tsx: the value text has its own span carrying white-space/overflow/text-overflow/
-// min-width:0, and the flex:1 wrapper carries min-width:0), so the recorded-only tier has no
-// remaining purpose and is gone.
-//
-// The guard is asserted at ten widths rather than the two AC #6 mandates because the failure it
-// prevents is width-dependent and was invisible at both mandated widths. An offline Chromium
-// replica of this layout — the component's own SSR markup, the repo's real design-tokens and
-// landing.css, real Inter — measured all three markups at eighteen widths from 320 to 1440:
-//   * unguarded: FAILS at 11 of 18. Two lines at 1150/1100/1000/960/940/500/430/390, three at
-//     921/375/320, and at three lines it also bleeds 4.5px below the 42px box (scrollHeight 46
-//     against clientHeight 40). One line at 1280 and 600 — both mandated widths pass.
-//   * the old 'Medium' placeholder: passes at every width down to 375, which is what makes this
-//     a LAND-02-03 regression rather than something pre-existing.
-//   * guarded (what ships): passes at all 18.
-// So each assertion below is known to be RED on the markup this branch started from, at the
-// widths named in ASSERTED_WIDTHS. None of them is vacuous.
+// AC-T2 — the inline card submits independently of the modal, on the same closed gate.
+test('landing demo: the inline card submits on a closed gate and sends nothing', async ({ page }) => {
+  const sinks = await openLanding(page)
+  const card = page.locator('#demo')
+
+  await fillRequiredFields(card, 'dc')
+  await card.locator('#dc-consent').check()
+
+  const startedAt = Date.now()
+  await submitButton(card).click()
+  await expectSuccessPanel(card, 'dc', { done: false })
+  const elapsedMs = Date.now() - startedAt
+
+  // The card's closed-gate path routes through the same shared stub E1 asserts against.
+  expect(
+    elapsedMs,
+    `the card's closed-gate submit resolved in ${elapsedMs}ms — below the shared ${STUB_DELAY_FLOOR_MS}ms stub floor`,
+  ).toBeGreaterThanOrEqual(STUB_DELAY_FLOOR_MS)
+
+  expectClosedGateStayedSilent(sinks)
+})
+
+// The wide end has room to strand a band; ASSERTED_WIDTHS alone had never swept above 1280.
+const CARD_FIT_WIDTHS = [...new Set([...WIDE_WIDTHS, ...ASSERTED_WIDTHS])]
+
+type CardSizeMeasurement = {
+  /** #dc-size.value, read from the deployed build. */
+  sizeValue: string
+  /** Rounded to 2dp. */
+  sizeHeightPx: number
+  size: Rect
+  caret: Rect
+  volume: Rect
+  card: Rect
+  rowScrollWidth: number
+  rowClientWidth: number
+}
+
+/**
+ * Reads the card's taxpayer-size control and its neighbours by id, throwing a named
+ * error per missing node rather than measuring nulls.
+ */
+function measureCardSizeControl(page: Page): Promise<CardSizeMeasurement> {
+  return page.evaluate(() => {
+    // Rounded to 2dp, same precedent as sizeHeightPx below: keeps measureCardStable's
+    // byte-equality check honest against float jitter rather than brittle to it.
+    const round = (n: number) => Math.round(n * 100) / 100
+    const rectOf = (el: Element) => {
+      const r = el.getBoundingClientRect()
+      return { x: round(r.x), y: round(r.y), width: round(r.width), height: round(r.height) }
+    }
+
+    const size = document.getElementById('dc-size')
+    if (!size) throw new Error('no #dc-size select inside the card')
+    // The caret is named by being the wrapper's only span, not by position.
+    const wrapper = size.parentElement
+    const spans = wrapper ? Array.from(wrapper.querySelectorAll('span')) : []
+    if (spans.length !== 1) {
+      throw new Error(`#dc-size's wrapper has ${spans.length} <span> children, expected the one caret`)
+    }
+    const caret = spans[0]
+
+    const volume = document.getElementById('dc-volume')
+    if (!volume) throw new Error('no #dc-volume select inside the card')
+
+    const row = document.querySelector('#demo .dm-row')
+    if (!row) throw new Error('no .dm-row inside #demo')
+
+    const card = document.querySelector('#demo .ios-demo-card')
+    if (!card) throw new Error('no .ios-demo-card inside #demo')
+
+    return {
+      sizeValue: (size as HTMLSelectElement).value,
+      sizeHeightPx: Math.round(size.getBoundingClientRect().height * 100) / 100,
+      size: rectOf(size),
+      caret: rectOf(caret),
+      volume: rectOf(volume),
+      card: rectOf(card),
+      rowScrollWidth: row.scrollWidth,
+      rowClientWidth: row.clientWidth,
+    }
+  })
+}
+
+/**
+ * Re-measures until two consecutive readings agree, the same wait-with-an-assertion
+ * pattern the rest of this file uses instead of a sleep.
+ */
+async function measureCardStable(page: Page, width: number): Promise<CardSizeMeasurement> {
+  await settleLayout(page)
+  const first = await measureCardSizeControl(page)
+  await settleLayout(page)
+  const second = await measureCardSizeControl(page)
+  expect(second, `the card's taxpayer-size control was still reflowing at ${width}px`).toEqual(first)
+  return second
+}
+
+// E6 — AC #6's measurement obligation. The card now renders a real <select>, so the
+// browser owns wrapping and truncation and the old text-level oracles are gone. What is
+// still ours: the control and its caret stay inside the boxes that clip them, and the
+// two-select row shrinks rather than overflowing.
 test('landing demo: the inline card taxpayer-size value fits its box', async ({ page }, testInfo) => {
   const sinks = await openLanding(page)
 
-  const sweep: Array<SizeValueMeasurement & { viewportWidth: number }> = []
-  for (const width of ASSERTED_WIDTHS) {
+  const sweep: Array<CardSizeMeasurement & { viewportWidth: number }> = []
+  for (const width of CARD_FIT_WIDTHS) {
     await page.setViewportSize({ width, height: 900 })
-    sweep.push({ viewportWidth: width, ...(await measureStable(page, width)) })
+    sweep.push({ viewportWidth: width, ...(await measureCardStable(page, width)) })
   }
 
   await testInfo.attach('taxpayer-size-value-fit.json', {
     body: JSON.stringify({ url: LANDING_URL, measuredAt: new Date().toISOString(), sweep }, null, 2),
     contentType: 'application/json',
   })
-  testInfo.annotations.push({
-    type: 'measurement (LAND-02-03 / AC #6)',
-    description: sweep
-      .map(
-        (m) =>
-          `${m.viewportWidth}px: ${m.lines} line(s) (${m.rectCount} rect(s)), widest run ${m.widestLinePx}px, ` +
-          `box content width ${m.clientWidth}px, caret gap ${m.caretGapPx}px, ` +
-          `caret overhang ${m.caretOverhangPx}px, bleed below box ${m.bleedBelowBoxPx}px`,
-      )
-      .join(' | '),
-  })
+  for (const m of sweep) {
+    testInfo.annotations.push({
+      type: 'measurement',
+      description:
+        `${m.viewportWidth}px: value "${m.sizeValue}", control height ${m.sizeHeightPx}px, ` +
+        `row scrollWidth ${m.rowScrollWidth} vs clientWidth ${m.rowClientWidth}`,
+    })
+  }
 
+  // Widths 375-600 are where the row-overflow (or below 480, the stack) assertion has teeth;
+  // the wide end is cheap insurance, kept because this file had never swept above 1280 before.
   for (const m of sweep) {
     const at = `at ${m.viewportWidth}px`
-    // Non-vacuity: prove we measured the LONG value. A build that regressed to 'Medium'
-    // would fit everywhere and pass every assertion below while testing nothing.
-    expect(m.text, `the inline card is not showing the default turnover band ${at}`).toBe(DEFAULT_TAXPAYER_SIZE)
-    // THE oracle. One line box, or it wrapped.
-    expect(m.lines, `"${m.text}" wrapped onto ${m.lines} lines inside its 42px box ${at}`).toBe(1)
-    expect(m.bleedBelowBoxPx, `"${m.text}" bleeds ${m.bleedBelowBoxPx}px below its box ${at}`).toBeLessThanOrEqual(0)
-    // Not `> 0`. Once the value truncates, its span shrinks to exactly the space left by the
-    // caret and the two border boxes are flush by construction, so the gap is 0 at every width
-    // where the ellipsis appears — while the painted glyphs stay clearly apart, because the
-    // ellipsis lands before the clip edge. What must never happen is ink CROSSING the caret,
-    // which is what a negative gap means and what this still fails on.
-    expect(m.caretGapPx, `"${m.text}" paints over the ▾ caret ${at}`).toBeGreaterThanOrEqual(0)
-    // The other half of that claim, and the one a guard applied to the WRONG element breaks:
-    // put white-space/overflow on the box instead of on a span inside it and the caret is
-    // shoved out of the box and clipped away entirely (measured: 53px past the content edge,
-    // no ▾ on screen at all). 1px of sub-pixel slack, as with boxHeightPx below.
-    expect(m.caretOverhangPx, `the ▾ caret is cut off by ${m.caretOverhangPx}px ${at}`).toBeLessThanOrEqual(1)
-    // The box itself is still the 42px line box it declares (+1px of sub-pixel slack).
-    expect(m.boxHeightPx, `the value box grew to ${m.boxHeightPx}px ${at}`).toBeLessThanOrEqual(43)
-    // Weak against a two-line wrap by construction — two 14px lines still fit a 40px content
-    // box — so this only catches the three-line case. Kept because it catches it directly.
-    expect(m.scrollHeight, `the value box overflows vertically ${at}`).toBeLessThanOrEqual(m.clientHeight)
-    // NOT weak: this is what fails if the value is made unwrappable without also being made
-    // shrinkable — the box then holds a 166px run in a 111px content box and overflows.
-    expect(m.scrollWidth, `the value box overflows horizontally ${at}`).toBeLessThanOrEqual(m.clientWidth)
+    // Non-vacuity: a build that regressed to a short bare word would fit everywhere.
+    expect(m.sizeValue, `the card is not showing the default turnover band ${at}`).toBe(DEFAULT_TAXPAYER_SIZE)
+    expect(enclosesRect(m.size, m.caret, 1), `the chevron caret is not contained by its control ${at}`).toBe(true)
+    expect(enclosesRect(m.card, m.size, 1), `the size control is not contained by the card ${at}`).toBe(true)
+    // #dc-size is the row's first flex item: an overflowing row pushes #dc-volume out, not
+    // #dc-size, so the card must be asserted to enclose both.
+    expect(enclosesRect(m.card, m.volume, 1), `the volume control is not contained by the card ${at}`).toBe(true)
+
+    if (m.viewportWidth >= 480) {
+      expect(m.rowScrollWidth, `the two-select row overflows ${at}`).toBeLessThanOrEqual(m.rowClientWidth)
+    } else {
+      // Below 480px .dm-row switches to flex-direction: column (DEMO_FORM_CSS), so the row
+      // can never overflow here — assert the real behaviour instead: size and volume stack
+      // vertically, each stretched to the row's full width.
+      expect(m.volume.y, `the controls did not stack vertically ${at}`).toBeGreaterThanOrEqual(
+        m.size.y + m.size.height - 1,
+      )
+      expect(m.size.width, `the size control is not full-width when stacked ${at}`).toBeGreaterThan(
+        m.rowClientWidth * 0.9,
+      )
+      expect(m.volume.width, `the volume control is not full-width when stacked ${at}`).toBeGreaterThan(
+        m.rowClientWidth * 0.9,
+      )
+    }
+
+    // DemoLeadForm declares the select at 42px; two-sided so a shrunk control also fails.
+    const heightMsg = `the control is ${m.sizeHeightPx}px, not within 1px of the declared 42px ${at}`
+    expect(m.sizeHeightPx, heightMsg).toBeGreaterThanOrEqual(41)
+    expect(m.sizeHeightPx, heightMsg).toBeLessThanOrEqual(43)
+    // Flex items never overlap; cheap insurance rather than a real oracle.
+    expect(rectsOverlap(m.size, m.volume), `the size and volume controls overlap ${at}`).toBe(false)
   }
 
   expectClosedGateStayedSilent(sinks)

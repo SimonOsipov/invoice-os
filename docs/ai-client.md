@@ -3,11 +3,13 @@
 **Audience:** anyone setting the OpenRouter key on a Railway service, anyone debugging an
 `ai call` log line, and AIR-03, AIR-05, and AIR-07 — the stories that will call this client.
 
-> **One caller today.** `submission`'s extraction worker calls `FromEnv` and calls the
+> **Two callers.** `submission`'s extraction worker calls `FromEnv` and calls the
 > client on a text document, and on a PDF with no text, from its first and last page
 > images, when the client is enabled
-> (`TestRLS_ExtractWorkerWithTheAIOffWritesTodaysRows` pins the off case). AIR-07 wires
-> the `invoice` importer next.
+> (`TestRLS_ExtractWorkerWithTheAIOffWritesTodaysRows` pins the off case). `invoice`'s
+> `SuggestMappingHandler` (AIR-07) calls the same client once per suggest-mapping
+> request, asking it to map a spreadsheet's columns onto the eleven canonical invoice
+> fields — see "Spreadsheet mapping" below.
 > `doc_test.go`'s `TestAIDoc_*` suite is this page's doc-sync gate — every name below is
 > parsed out of the Go and shell source, never retyped, so a rename in code fails this
 > page's test rather than drifting silently, the same convention `docs/mock-app-adapter.md`
@@ -53,6 +55,7 @@ Model, endpoint and the retry budget are constants — there is no knob for any 
 | *(none)* | Every top-level property of the caller's schema, blank (`null`) |
 | `AIFAKE-UNAVAILABLE` | `ErrUnavailable` at once — no request is sent and no wait happens (`attempts` is still logged as `1`, the fake answer itself) |
 | `AIFAKE-ANSWER-<base64url>` | That decoded JSON object, after the same schema check a real answer gets |
+| `AIFAKE-<SCOPE>-ANSWER-<base64url>` / `AIFAKE-<SCOPE>-UNAVAILABLE` | The scoped spelling: a request whose `FakeScope` is `<SCOPE>` matches only its own scope's marker, and never falls back to the unscoped row above |
 
 The marker is searched in `Request.Text` first, then in `Request.FakeHint`; `Request.System`
 is never scanned. The first match in a field wins. Matching is case-sensitive with no word
@@ -65,6 +68,16 @@ a standard-alphabet `+` or `/` cuts the payload mid-string and the call errors
 payload after decoding is a plain error that is not `ErrUnavailable`. Fake mode validates
 the request exactly as the real path does; a `FakeHint` with no `Text` and no `Pages` is
 still an invalid request.
+
+`Request.FakeScope` is empty by default, in which case the marker search above is exactly
+today's unscoped one, byte for byte. A non-empty `FakeScope` must match `^[A-Z]+$`
+(`ai: invalid request` otherwise) and narrows the search to that scope's own spelling only —
+`AIFAKE-<SCOPE>-ANSWER-...` or `AIFAKE-<SCOPE>-UNAVAILABLE` — so two calls that share the
+same `Text` can be steered independently, one per scope. A scoped request never falls back to
+an unscoped marker, and an unscoped request never matches a scoped one: the two spellings are
+mutually invisible to each other's regexp. `submission`'s extraction worker sends
+`FakeScope: "LINES"` on its line-item call; its header call stays unscoped. `FakeScope` is
+never sent on the wire and never logged, the same as `FakeHint`.
 
 On an image read `FakeHint` is the document's raw bytes, so a trailing PDF comment
 `%AIFAKE-ANSWER-…` steers it; AIR05-E2E-01 does.
@@ -89,6 +102,55 @@ reading, and the importer quarantines the document with no reading; the person e
 hand (AIR-04). On a `pr-<N>` deploy, `AIFAKE-UNAVAILABLE` printed on the document forces this
 path: `ai_unavailable_invoice.pdf` and AIR04-E2E-01 pin it. The fake logs outcome `fake` for
 that call. Production logs `unavailable` when the budget is spent, or `refused`.
+
+## Spreadsheet mapping
+
+`invoice`'s `POST /v1/imports/suggest-mapping` (`SuggestMappingHandler`,
+`internal/importer/handlers_suggest.go`) is the client's second caller: one `Call` per
+request, `ai.PurposeSpreadsheet`, asking the model to map the file's columns onto the
+eleven canonical invoice fields.
+
+**The window.** `windowRows` (10) is `maxDetectableHeaderRow` (5) plus `sampleRows` (5).
+`suggestWindow` (`internal/importer/suggest.go`) returns the decoded header plus up to
+9 data rows, fewer for a shorter file, never padded, capped at `windowRows` entries
+total for a longer one.
+
+**The guard.** The answer is never trusted as written. It passes five rules, the second
+with its own sub-rule (2b):
+1. `guardHeaderRow` resolves `header_row` only when it is a `json.Number` inside
+   `[1, windowLen]`; anything else — missing, the wrong type, or out of range — falls
+   back to row 1 (`defaultHeaderRow`).
+2. The window itself is never padded past a shorter file's own row count, and never
+   grows past `windowRows` entries for a longer one.
+   - **2b.** A nil or zero-length decoded header yields a nil window: there is nothing
+     to show the model, so no call is made and the response is `source: "none"` at once.
+3. `guardPlacements` considers only the eleven canonical fields (`canonicalFields`,
+   `service.go`); every other key in the answer — `date_format` and
+   `decimal_separator` included — is dropped here.
+4. A placement must be a string, non-blank after trimming, and match a header cell
+   exactly — case-sensitive, untrimmed — in the header the document was actually
+   re-decoded at, never the window.
+5. When two or more fields claim the same header string, none of them are placed; the
+   guard cannot tell which one the AI meant.
+
+**The blank-header fallback.** When the answer's `header_row` names a row other than 1,
+the handler re-decodes the document at that row. If the re-decode fails, or the header
+at that row comes back empty, the handler falls back to row 1 and the original decode
+rather than failing the request
+(`TestSuggestHandler_AnUndecodableTailAtTheAnsweredRowFallsBackToRowOne`,
+`TestSuggestHandler_ABlankHeaderAtTheAnsweredRowFallsBackToRowOne`).
+
+**`source`.** The response names exactly one of three values: `saved`, when a mapping
+already saved for the entity matches the re-decoded header; `none`, when there is no
+window to show the model, or when the guard placed nothing and the header row stayed at
+its default; `ai`, otherwise — including when the guard moved the header row but placed
+no fields.
+
+`date_format` and `decimal_separator` are sent and never read. Both are required
+properties of `mappingSchema` (`internal/importer/suggest.go`) alongside the eleven
+canonical fields, so the model must answer them — but nothing reads the answer back:
+`guardHeaderRow` inspects only `header_row`, and rule 3 above drops both keys from
+`guardPlacements`'s answer loop before either could ever be placed.
 
 ## Retries and the budget
 
@@ -118,7 +180,7 @@ count. Keys, in emission order (`log.go`):
 |---|---|
 | `tenant_id` | From the caller context's identity, via `auth.IdentityFromContext`. Omitted entirely when there is no identity or its tenant is empty — never logged as a blank string. |
 | `model` | Always the `Model` const. |
-| `purpose` | `document` or `spreadsheet`, logged raw — an invalid purpose is still logged as what was asked for. |
+| `purpose` | `document`, `spreadsheet` or `line_items`, logged raw — an invalid purpose is still logged as what was asked for. |
 | `input_tokens` | OpenRouter's `usage.prompt_tokens`, summed over every attempt, zero when no response carried usage. |
 | `output_tokens` | OpenRouter's `usage.completion_tokens`, summed the same way. |
 | `cost` | OpenRouter's `usage.cost`, summed the same way. |
@@ -161,16 +223,23 @@ it before any forked service deploys.
 
 ## Known limitations
 
-1. **One binary wired.** `submission` calls `FromEnv` and reads through the client.
-   Its two deployed checks are recorded on PR #247's deploy-gate run 35341117286
+1. **Both binaries wired.** `submission` calls `FromEnv` and reads through the client
+   for document extraction; `invoice`'s `SuggestMappingHandler` (AIR-07) calls it for
+   spreadsheet column mapping (see "Spreadsheet mapping" above). `submission`'s two
+   deployed checks are recorded on PR #247's deploy-gate run 35341117286
    (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
    in the fork" read `submission.OPENROUTER_API_KEY is empty` and
    `submission.AI_FAKE = true`, the fleet health gate passed, and the Railway
    deploy log for the submission instance on `pr-247` carried `ai call` lines with
    `purpose: document` and `outcome: fake`. The image read's own check
    (AIR05-E2E-01 and the `pr-249` `ai call` line) is recorded in PR #249's description.
-   `invoice` (AIR-07) still owes
-   the same two checks for its own wiring.
+   `invoice`'s own two checks are recorded on PR #251's deploy-gate run 35559923822
+   (`dev-env.yml`): the `prepare-env` step "Force AI fake mode and blank the AI key
+   in the fork" read `invoice.AI_FAKE = true` and `invoice.OPENROUTER_API_KEY is
+   empty`, the fleet health gate passed, and the Railway deploy log for the invoice
+   instance on `pr-251` carried 29 `ai call` lines — each matched by a
+   `POST /v1/imports/suggest-mapping` request returning 200 — with
+   `purpose: spreadsheet` and `outcome: fake`, zero tokens and zero cost throughout.
 2. **`unavailable` conflates two causes.** A spent budget and a cancelled-or-expired
    caller context both log it. The returned error distinguishes them —
    `errors.Is(err, ErrUnavailable)` is true only for the spent budget — but the log line

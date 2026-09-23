@@ -37,9 +37,10 @@ environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway b
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
                 empty (M3-16 invariant) ──> discover the 5 public URLs fresh
-gateway     ──> gate on /healthz (schema migrated + DB seeded at boot; the
-                demo-tenant purge runs in the same sequence and is NON-fatal, so the
-                gate asserts /healthz's `demo_purge` field separately — DEMO-04)
+gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is also
+                seeded, and its demo-tenant purge is NON-fatal, so the gate asserts
+                /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
+                on `development` — DEMO-04)
             ──> deploy 8 context services + docling + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
             ──> verify: smoke (landing + consoles) + api (typed contract suite) +

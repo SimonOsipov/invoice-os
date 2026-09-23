@@ -251,7 +251,9 @@ the same refusal that protects every other URL variable this function reconciles
 
 - [`docs/approvals.md`](approvals.md) — the approval-policy seeder's convergence contract,
   and the unarmed-backlog residual this page's checklist prevents.
-- [`docs/deploy-model.md`](deploy-model.md) — why `ENVIRONMENT` is not a usable boundary,
-  and how a per-PR environment differs from the persistent one.
+- [`docs/deploy-model.md`](deploy-model.md) — "`ENVIRONMENT` in a fork is set by CI": who
+  writes the gateway's `ENVIRONMENT` in a fork and on production (`db.Reset` gates on
+  `RAILWAY_ENVIRONMENT_NAME` instead), and how a per-PR environment differs from the
+  persistent one.
 - [`docs/migrations.md`](migrations.md) — the append-only grant posture the purge bypasses
   for `audit_log`, and for `audit_log` only.

@@ -91,7 +91,7 @@ PR opened ──> dev-env.yml:
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
                 M4-21-04; the demo-tenant purge runs in the same sequence and is
                 NON-fatal, so /healthz carries a `demo_purge` field the gate
-                asserts == "true" separately — DEMO-04)
+                asserts == "true" separately — DEMO-04; mock_issuer == "on")
                 ──> 8 context services + docling + 4 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + both consoles) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo
@@ -103,16 +103,17 @@ PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the 
 merge to main ──> dev-env.yml (push): await green CI on the merge commit
                   ──> targets the PERSISTENT environment BY ID (never a fork; the
                       fork-reconciliation steps are all `== 'pull_request'`)
-                  ──> gateway ──> /healthz gate ──> 8 context + docling + 4 SPAs ──> fleet gate
+                  ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
+                      "absent", then GET /.well-known/jwks.json and POST /auth/login
+                      must answer 404) ──> 8 context + docling + 4 SPAs ──> fleet gate
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
                       bypassing the CI gate — the manual override
                    ──> same deploy + health-gate + fleet-gate flow, no E2E (M4-22-07
                        dropped the reset/seed job and dispatch-path E2E run). The
-                       gateway's boot-time demo purge (DEMO-04) DOES run on this path:
-                       it has no environment gate, so the four demo tenants are cleared
-                       and re-seeded on the persistent environment too.
+                       gateway reads ENVIRONMENT=production, so its boot-time purge
+                       and seed do not run here.
 ```
 
 ### Why per-PR environments, not one shared env
@@ -429,22 +430,18 @@ finding for a deployment that read `SUCCESS` moments later. Any early-fail thres
 guess about how long `CRASHED` can persist, and every such guess reintroduces that false
 fatal.
 
-### `ENVIRONMENT` is decorative in a fork
+### `ENVIRONMENT` in a fork is set by CI
 
-`ENVIRONMENT` is inherited **verbatim**, so inside `pr-<N>` it resolves to the literal
-string `development`, while `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
+`ENVIRONMENT` forks verbatim, and production's gateway reads `production`. On `pull_request`,
+`prepare-env` runs `railway-env.sh set-fork-environment`, which sets the fork **gateway's**
+`ENVIRONMENT` to the constant `development` and re-reads it. The other services keep the
+inherited value. `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
 
-`provisionableEnvironment` (`internal/platform/db/bootstrap.go`) returns true for exactly
-`development` or `^(?:.+-)?pr-[0-9]+$`. A fork passes on the **first** branch; a fork whose
-`ENVIRONMENT` were "correctly" `pr-<N>` would pass on the **second**. Both pass — so in a
-PR environment the fail-closed allowlist **distinguishes nothing**. It retains full value
-on the paths it was written for: `production`, `staging`, and empty.
+Production's gateway `ENVIRONMENT` is set by hand, once, with `railway-env.sh
+set-production-environment`. No workflow writes it.
 
-This is recorded, **not repaired**. Setting `ENVIRONMENT` per-fork would be a regression,
-not a fix: the environment *name* is a CI convention this workflow is free to change
-(`[env-name-is-convention]`), and coupling provisioning behaviour to it would make a
-rename silently change whether a database bootstraps. No variable is set and no app code
-is touched.
+The value is a constant, not the environment name, so `[env-name-is-convention]` still holds:
+renaming the fork convention cannot change whether a fork's database bootstraps.
 
 ## Related
 

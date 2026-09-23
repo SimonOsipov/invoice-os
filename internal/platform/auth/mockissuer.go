@@ -16,8 +16,8 @@ import (
 
 // MockIssuer mints GoTrue-shaped, ES256-signed JWTs and serves its own JWKS, so a
 // Verifier validates them with the exact code path it will use against Supabase
-// GoTrue after M8. It stands in for GoTrue outside production, the public demo
-// included; production refusal of mock-issued tokens is enforced separately in M8-07.
+// GoTrue after M8. It stands in for GoTrue outside production, and is compiled into
+// the gateway only under -tags mockissuer (AUTH-01).
 type MockIssuer struct {
 	issuer string
 	kid    string

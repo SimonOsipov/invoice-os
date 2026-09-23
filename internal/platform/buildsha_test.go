@@ -128,18 +128,57 @@ func TestHealthzCarriesDemoPurgeOnlyWhenSet(t *testing.T) {
 	}
 }
 
-// TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions: eight of the nine
-// fleet binaries never call db.Provision, so neither package var is ever
-// assigned and their /healthz bodies must stay byte-identical to what they were
-// before demo_purge existed. Asserting the absence of one key is weaker than
-// asserting the whole key set — a third field added on the same reasoning would
-// pass the absence check and still change every non-gateway body.
-func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
-	t.Cleanup(func(purge, reset string) func() {
-		return func() { DemoPurge, DBReset = purge, reset }
-	}(DemoPurge, DBReset))
+// MockIssuer rides the same probe on the same terms: only the gateway sets it,
+// and every other service's body must stay as it was.
+func TestHealthzCarriesMockIssuerOnlyWhenSet(t *testing.T) {
+	t.Cleanup(func(original string) func() {
+		return func() { MockIssuer = original }
+	}(MockIssuer))
 
-	DemoPurge, DBReset = "", ""
+	for _, c := range []struct {
+		set       string
+		wantField string
+		wantOK    bool
+	}{
+		{"", "", false},
+		{"absent", "absent", true},
+		{"off", "off", true},
+		{"on", "on", true},
+	} {
+		MockIssuer = c.set
+
+		rec := httptest.NewRecorder()
+		healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
+
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("MockIssuer=%q: decode %q: %v", c.set, rec.Body.String(), err)
+		}
+		got, ok := body["mock_issuer"]
+		if ok != c.wantOK {
+			t.Errorf("MockIssuer=%q: mock_issuer present = %v, want %v (body %q)", c.set, ok, c.wantOK, rec.Body.String())
+		}
+		if got != c.wantField {
+			t.Errorf("MockIssuer=%q: mock_issuer = %q, want %q", c.set, got, c.wantField)
+		}
+		if body["build"] != BuildSHA {
+			t.Errorf("MockIssuer=%q: build field = %q, want %q", c.set, body["build"], BuildSHA)
+		}
+	}
+}
+
+// TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions: eight of the nine
+// fleet binaries never set these package vars, so their /healthz bodies must
+// stay byte-identical to what they were before the fields existed. Asserting the
+// absence of one key is weaker than asserting the whole key set — a further field
+// added on the same reasoning would pass the absence check and still change every
+// non-gateway body.
+func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
+	t.Cleanup(func(issuer, purge, reset string) func() {
+		return func() { MockIssuer, DemoPurge, DBReset = issuer, purge, reset }
+	}(MockIssuer, DemoPurge, DBReset))
+
+	MockIssuer, DemoPurge, DBReset = "", "", ""
 
 	rec := httptest.NewRecorder()
 	healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))

@@ -6,7 +6,7 @@
 // example.
 //
 // It CONVERGES rather than inserting-if-absent. db.PurgeDemoTenants empties
-// approval_runs on every gated boot, production included, and deliberately leaves
+// approval_runs on every gated boot, and deliberately leaves
 // the three policy tables standing (docs/demo-reset.md); db.Reset truncates the
 // same rows, but only in a pr-<N> environment. So a seeder that no-ops once its
 // policy exists arms nothing on the second deploy and every validated invoice
@@ -20,7 +20,7 @@
 // ErrPolicyNothingToPublish on the second boot.
 //
 // RESIDUAL, recorded and undefended: a gateway restarted out of band empties
-// approval_runs again -- the purge does it everywhere, and a pr-<N> environment
+// approval_runs again -- the purge does it on every gated boot, and a pr-<N> environment
 // runs Reset again on top -- and nothing re-runs this seeder because
 // the invoice service did not restart. The fleet stays green, /healthz stays 200,
 // and awaiting_approval silently reads counts.validated. Recovery is one operator

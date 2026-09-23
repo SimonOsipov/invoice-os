@@ -319,7 +319,7 @@ Postgres. That Postgres is a FORK of `development`'s live volume (M4-23-03's
 holds — and is bootstrapped + migrated + reset + purged + seeded fresh at gateway boot
 (`internal/platform/db.Provision`, M4-21-04; the reset step is persona-handoff-fix,
 Decision [pr-only-reset] — see docs/topology-e2e.md "Boot-time seed"; the demo-tenant
-purge is DEMO-04 and, unlike the reset, is not PR-only). When the PR closes, merged or not,
+purge is DEMO-04). When the PR closes, merged or not,
 `dev-env-teardown.yml` deletes that whole environment — Postgres included — and the daily
 `dev-env-sweeper.yml` reaps any the close event missed (M4-23). Losing that ephemeral DB's
 state costs nothing; nothing else depends on it once the PR is gone.
@@ -328,19 +328,18 @@ The **`development` environment's own Postgres is different: it is stateful, per
 and never torn down** (Decision `[dev-env-status]`) — it is the fork base every PR
 environment is created from, and the target of live demo calls.
 
-> **DEMO-04 narrows that persistence** ([`docs/demo-reset.md`](demo-reset.md) is the full
-> account; this is the migration-side summary).
-> "Never torn down" still holds for the volume, the service and every non-demo tenant.
-> It no longer holds row-for-row: `db.PurgeDemoTenants` runs inside `db.Provision` on
-> **every** gated boot, this environment included, and deletes those four tenants'
-> (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
+> **DEMO-04's purge does not reach this environment** ([`docs/demo-reset.md`](demo-reset.md)
+> is the full account; this is the migration-side summary).
+> "Never torn down" holds for the volume, the service and every tenant.
+> `db.PurgeDemoTenants` runs inside `db.Provision` on **every** gated boot and deletes the
+> four demo tenants' (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
 > curated state. Four tenant-owned tables are spared (`db.purgeExcludedTables`):
 > `memberships`, which has no runtime INSERT path, and the three approval-policy tables,
 > which `internal/demopolicy` rebuilds for two of the four tenants only — purging them
 > would leave the other two with no policy and nothing to restore it. The purge is gated
-> by `GATEWAY_DB_BOOTSTRAP` alone — it has no environment gate, deliberately, so the demo
-> resets itself on deploy with no manual step. Nothing outside those four tenant IDs is
-> reachable by it.
+> like the seed, by `db.BootstrapEnabled`; this environment's gateway reads
+> `ENVIRONMENT=production`, which that allowlist refuses, so a gated boot never happens
+> here. Nothing outside those four tenant IDs is reachable by it.
 
 Migrations against it are therefore forward-only/additive; the reversibility guarantee is
 enforced against the *ephemeral CI* Postgres (§6) instead, never against `development`'s.
@@ -425,7 +424,7 @@ attack; folded into the required `CI` gate) and locally via `make test-rls` (aft
 `make dev-db`). The suite **skips itself** when the per-role `DATABASE_*` URLs are absent,
 so the default `go` job and a bare `go test ./...` stay green without a database.
 
-> The build plan floated *testcontainers*; we instead reuse the same
+> Deliberately **not** testcontainers: the suite reuses the same
 > Postgres-service-container + Makefile-bootstrap path as the `migrations` job — no new Go
 > dependency, one canonical bootstrap (`db/bootstrap.sql`), CI-consistent.
 
@@ -510,7 +509,10 @@ run per-PR: a PR's ephemeral Postgres comes from the `environmentCreate` fork th
 the fork carries no deployment, so `prepare-env` deploys it explicitly), and is then
 bootstrapped/migrated/reset/purged/seeded by the gateway at boot
 (`db.Provision`, M4-21-04, `[superuser-dsn-on-gateway]` above) — no human runs the steps
-below for it.
+below for it. The persistent environment's gateway reads `ENVIRONMENT=production`, which
+`BootstrapEnabled` refuses, so step 2's boot-time bootstrap no longer runs there: a role
+password rotation needs a manual `ALTER ROLE`, and a role added to `db/bootstrap.sql` must
+be created by hand ("Bootstrap drift", §1).
 
 **Status: DONE (2026-07-06).** The dev `Postgres` service exists in the `development`
 environment (project `9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3`, service

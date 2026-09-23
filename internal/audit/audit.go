@@ -14,7 +14,7 @@
 // tenant-scoped tx fails closed (NULL tenant_id fails the WITH CHECK, 42501, no row written).
 //
 // One exception, superuser-only: db.PurgeDemoTenants deletes the four seeded demo tenants'
-// rows on every gated gateway boot, production included (docs/demo-reset.md).
+// rows on every gated gateway boot (docs/demo-reset.md).
 package audit
 
 import (

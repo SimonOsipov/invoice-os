@@ -11,8 +11,7 @@ demo date. There are **no `dayN.spec.ts` files**.
 
 - A milestone's "moment of value" is proven by **extending the relevant capability
   flow**, not by adding a new dated end-to-end journey.
-- The Day-30 / Day-60 / Day-90 roadmap narrative lives **only** in the Build Plan
-  (`Build Plan — 0 to MVP.html`). Test files carry feature names.
+- Test files carry feature names, never a milestone or a demo date.
 - Why: dated demos accrete and overlap — each re-walks the previous one's steps as a
   prefix, so the suite grows one full journey per milestone forever. Feature-named flows
   are extended in place instead.
@@ -63,7 +62,8 @@ seed; Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`, and
 therefore starts from the seed, never from another run's leftovers, and the health-gate
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
 variable that otherwise fails closed and silent. The purge needs no such variable: it is
-gated by `GATEWAY_DB_BOOTSTRAP` alone and so runs on every environment, PR fork or not.
+gated like the seed, by `GATEWAY_DB_BOOTSTRAP` and the `ENVIRONMENT` that CI's
+`set-fork-environment` sets in every PR fork.
 
 What a spec still cannot assume is an empty table:
 

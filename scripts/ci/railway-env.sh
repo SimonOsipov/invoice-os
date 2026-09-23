@@ -1397,7 +1397,7 @@ verify_variable() {
 
   got=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" '.data.variables[$n] // empty')
   if [ "$got" != "$want" ]; then
-    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'. The fork would deploy pointing at the wrong environment."
+    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'."
     exit 1
   fi
 }

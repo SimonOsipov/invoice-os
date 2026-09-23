@@ -156,7 +156,7 @@ func main() {
 	}
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient,
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, nil,
 		newPageObjectReader(docObjects), app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
@@ -590,7 +590,8 @@ func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, 
 func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
 	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
 	text extraction.PageReader, rules extraction.LoadAnchorRules,
-	aiReader extraction.AIReader, pageBytes extraction.PageObject, logger *slog.Logger) *extraction.ExtractWorker {
+	aiReader extraction.AIReader, jevAsker extraction.JevAsker, pageBytes extraction.PageObject,
+	logger *slog.Logger) *extraction.ExtractWorker {
 	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
 		Audit: auditor, Text: text, Rules: rules, AI: aiReader, PageBytes: pageBytes, Logger: logger}
 }

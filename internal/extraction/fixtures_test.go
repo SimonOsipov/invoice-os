@@ -6,7 +6,7 @@
 // No third-party PDF writer -- a convention, not a fence: assertFenced allows the extraction
 // import by name and ignores non-module deps entirely, so nothing here reds on one. The reason
 // is that a third-party writer makes TestFixtures_GeneratorIsDeterministic someone else's
-// property. The imports today are stdlib plus the package under test.
+// property. The imports today are stdlib, the package under test and internal/platform/jev.
 package extraction_test
 
 import (
@@ -20,6 +20,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
 
 var fxUpdate = flag.Bool("update", false, "rewrite the PDF fixtures under testdata/ from their generators instead of comparing against them")
@@ -1794,6 +1796,20 @@ func fxBuildAIUnavailableInvoice() []byte {
 	return fxTextPage(fxAIUnavailableLines()...)
 }
 
+// fxJevDoubt: invoice_number is its only decided field the value check asks about, so the
+// fake's whole-call doubt marker doubts exactly one field.
+const fxJevDoubt = "jev_doubt_invoice.pdf"
+
+const fxJevDoubtMarker = "JEVFAKE-DOUBT"
+
+func fxJevDoubtLines() []fxLine {
+	return nil
+}
+
+func fxBuildJevDoubtInvoice() []byte {
+	return fxTextPage()
+}
+
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
 // other nine keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
 func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
@@ -1946,6 +1962,148 @@ func TestFixtures_AIUnavailableEngineAloneWouldFileIt(t *testing.T) {
 	inv := byName["invoice_number"]
 	if inv.Reason != extraction.ReasonNone || inv.Value == nil || *inv.Value != "INV-4410" {
 		t.Errorf("invoice_number = %+v, want decided INV-4410 -- the engine alone must file this document without the steer", inv)
+	}
+}
+
+// fxJevDecided is the engine's rows with no AI: what the worker hands the value check.
+func fxJevDecided(pages []extraction.TokenPage) []extraction.FieldResult {
+	return extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(pages, rvGeneric()), Pages: pages})
+}
+
+// fxJevFake is the real client in fake mode, as a PR environment runs it.
+func fxJevFake(t *testing.T) *jev.Client {
+	t.Helper()
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	c, err := jev.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	if !c.Enabled() {
+		t.Fatal("the fake client is not enabled")
+	}
+	return c
+}
+
+// fxJevDoubtRequireMarkerLast guards the rotation and the control, which both take the last line
+// as the marker.
+func fxJevDoubtRequireMarkerLast(t *testing.T, lines []fxLine) {
+	t.Helper()
+	if len(lines) == 0 {
+		t.Fatal("fxJevDoubtLines is empty, want the three field lines and the marker")
+	}
+	if last := lines[len(lines)-1]; last.text != fxJevDoubtMarker {
+		t.Fatalf("the generator does not place the marker last: %+v", last)
+	}
+}
+
+// fxAssertJevDoubtOutcome: only invoice_number moves, to unreadable, keeping its value and region.
+func fxAssertJevDoubtOutcome(t *testing.T, in, out []extraction.FieldResult) {
+	t.Helper()
+	i := slices.IndexFunc(in, func(r extraction.FieldResult) bool { return r.Name == "invoice_number" })
+	if i < 0 || in[i].Reason != extraction.ReasonNone || in[i].Value == nil || *in[i].Value != "JD-3310" {
+		t.Fatalf("input invoice_number is not decided JD-3310: %+v", in)
+	}
+	if len(out) != len(in) {
+		t.Fatalf("check returned %d row(s), want %d", len(out), len(in))
+	}
+	for j := range in {
+		want := in[j]
+		if j == i {
+			want.Reason = extraction.ReasonUnreadable
+		}
+		if !reflect.DeepEqual(out[j], want) {
+			t.Errorf("row %s = reason %q value %q, want reason %q value %q (value and region kept)",
+				in[j].Name, out[j].Reason, vsDeref(out[j].Value), want.Reason, vsDeref(want.Value))
+		}
+	}
+}
+
+// TestFixtures_JevDoubtDecidesOnlyTheNumberAndTheSupplier: the engine alone decides the number and
+// the supplier pair, and the marker anchors nothing.
+func TestFixtures_JevDoubtDecidesOnlyTheNumberAndTheSupplier(t *testing.T) {
+	pages := fxPagesFromBytes(t, fxBuildJevDoubtInvoice())
+
+	candidates := extraction.Resolve(pages, rvGeneric())
+	if len(candidates) == 0 {
+		t.Fatal("Resolve returned no candidates, want the number and the supplier pair")
+	}
+	for _, c := range candidates {
+		if strings.Contains(c.Value, "JEVFAKE") {
+			t.Errorf("candidate %s = %q carries the marker", c.Field, c.Value)
+		}
+	}
+
+	byName := make(map[string]extraction.FieldResult)
+	for _, r := range fxJevDecided(pages) {
+		byName[r.Name] = r
+	}
+	want := map[string]string{"invoice_number": "JD-3310", "supplier_name": "Kaduna Textiles Limited", "supplier_tin": "23456789-0001"}
+	for _, name := range extraction.HeaderFields {
+		r, ok := byName[name]
+		if !ok {
+			t.Errorf("no %s row", name)
+			continue
+		}
+		if v, decided := want[name]; decided {
+			if r.Reason != extraction.ReasonNone || r.Value == nil || *r.Value != v {
+				t.Errorf("%s = %+v, want decided %q", name, r, v)
+			}
+			continue
+		}
+		if r.Reason != extraction.ReasonMissing || r.Value != nil {
+			t.Errorf("%s = %+v, want missing with no value", name, r)
+		}
+	}
+}
+
+// TestFixtures_JevDoubtFlagsOnlyTheInvoiceNumber: the supplier pair is never asked, so the
+// whole-call doubt lands on invoice_number alone.
+func TestFixtures_JevDoubtFlagsOnlyTheInvoiceNumber(t *testing.T) {
+	client := fxJevFake(t)
+	pages := fxPagesFromBytes(t, fxBuildJevDoubtInvoice())
+	in := fxJevDecided(pages)
+
+	out := extraction.CheckValuesForTest(t.Context(), client, pages, slices.Clone(in))
+	fxAssertJevDoubtOutcome(t, in, out)
+}
+
+// TestFixtures_JevDoubtWithoutItsMarkerChangesNothing: the control -- the same page minus the
+// marker decides the number and the check leaves every row as it was.
+func TestFixtures_JevDoubtWithoutItsMarkerChangesNothing(t *testing.T) {
+	client := fxJevFake(t)
+	lines := fxJevDoubtLines()
+	fxJevDoubtRequireMarkerLast(t, lines)
+	if !bytes.Equal(fxTextPage(lines...), fxBuildJevDoubtInvoice()) {
+		t.Fatal("fxBuildJevDoubtInvoice is not fxTextPage(fxJevDoubtLines()...)")
+	}
+
+	pages := fxPagesFromBytes(t, fxTextPage(lines[:len(lines)-1]...))
+	in := fxJevDecided(pages)
+	i := slices.IndexFunc(in, func(r extraction.FieldResult) bool { return r.Name == "invoice_number" })
+	if i < 0 || in[i].Reason != extraction.ReasonNone || in[i].Value == nil || *in[i].Value != "JD-3310" {
+		t.Fatalf("the unmarked page does not decide invoice_number JD-3310, so the control asks nothing: %+v", in)
+	}
+
+	out := extraction.CheckValuesForTest(t.Context(), client, pages, slices.Clone(in))
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("check over the unmarked page = %+v, want the input unchanged %+v", out, in)
+	}
+}
+
+// TestFixtures_JevDoubtIgnoresTokenOrder rotates the marker through every line index.
+func TestFixtures_JevDoubtIgnoresTokenOrder(t *testing.T) {
+	client := fxJevFake(t)
+	lines := fxJevDoubtLines()
+	fxJevDoubtRequireMarkerLast(t, lines)
+
+	for i := range lines {
+		t.Run(fmt.Sprintf("marker at %d", i), func(t *testing.T) {
+			pages := fxPagesFromBytes(t, fxTextPage(fxLinesWithMarkerAt(lines, i)...))
+			in := fxJevDecided(pages)
+			out := extraction.CheckValuesForTest(t.Context(), client, pages, slices.Clone(in))
+			fxAssertJevDoubtOutcome(t, in, out)
+		})
 	}
 }
 

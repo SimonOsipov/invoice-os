@@ -278,6 +278,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 						Pages:      textTokens,
 					}), answer, textTokens, lines)
 					results = mergeAILines(merged, lineAnswer, textTokens)
+					// octx, not ctx: the jev call line reads tenant_id off it.
+					results = checkValues(octx, w.Jev, textTokens, results)
 				}
 			}
 		}

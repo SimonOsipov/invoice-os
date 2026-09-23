@@ -1818,7 +1818,7 @@ func fxBuildJevDoubtInvoice() []byte {
 }
 
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
-// other nine keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
+// others keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
 func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
 	marker := lines[len(lines)-1]
 	rest := lines[:len(lines)-1]
@@ -2695,6 +2695,26 @@ func TestFixtures_EveryCommittedWildArrangementHasAGenerator(t *testing.T) {
 	}
 	if got := fxUngenerated(append(slices.Clone(wild), "wild_planted.pdf")); !slices.Equal(got, []string{"wild_planted.pdf"}) {
 		t.Errorf("a planted wild_planted.pdf reports %v, want exactly [wild_planted.pdf]", got)
+	}
+}
+
+// A committed PDF with no fxCorpus entry is never byte-compared by TestFixtures_MatchTheirGenerator.
+func TestFixtures_EveryCommittedFixtureHasAGenerator(t *testing.T) {
+	entries, err := os.ReadDir(fxDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", fxDir, err)
+	}
+	var committed []string
+	for _, e := range entries {
+		if n := e.Name(); !e.IsDir() && strings.HasSuffix(n, ".pdf") {
+			committed = append(committed, n)
+		}
+	}
+	if len(committed) < fgGoldenFloor {
+		t.Fatalf("%s holds %d .pdf file(s), want at least %d", fxDir, len(committed), fgGoldenFloor)
+	}
+	if missing := fxUngenerated(committed); len(missing) != 0 {
+		t.Errorf("%v committed with no fxCorpus entry", missing)
 	}
 }
 

@@ -528,6 +528,19 @@ func TestPDFiumReader_TextCharsUnchanged(t *testing.T) {
 	}
 }
 
+// fingerprintGoldens is directory-complete (TestFingerprint_GoldenTableCoversEveryCommittedFixture),
+// so the same key set makes this table complete too.
+func TestPDFiumReader_TextCharsGoldensCoverEveryCommittedFixture(t *testing.T) {
+	got := slices.Sorted(maps.Keys(pdcTextCharsGoldens))
+	want := slices.Sorted(maps.Keys(fingerprintGoldens))
+	if len(want) < fgGoldenFloor {
+		t.Fatalf("fingerprintGoldens holds %d row(s), want at least %d", len(want), fgGoldenFloor)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("pdcTextCharsGoldens and fingerprintGoldens key sets differ:\ntextChars:   %v\nfingerprint: %v", got, want)
+	}
+}
+
 // --- AC-6: one token per rect, on the word-level fixtures only ------------------------------
 
 // AC-6 (re-pointed for EXTR-36-03): the merge collapses per-glyph rects into words, so "one

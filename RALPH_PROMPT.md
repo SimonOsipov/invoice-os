@@ -191,6 +191,8 @@ Before every spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$W
 
 After a context compaction, also run `mcp__backlog__task_list` for `story:<slug>` and `gh pr checks` before the next spawn. The summary says where the run was; git, Backlog and CI say where it is.
 
+Every stage brief (Test-Spec, Execution, QA Verify) says: **terse comments** — one or two lines for the non-obvious why, per `CLAUDE.md` "Code Comments". Do not copy the density of the file being edited.
+
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask "In Progress" and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
 **Test-first is the default for logic-bearing work** (rules engine, tax maths, state machines, RLS, validation). `Test-first: no` is for UI, copy and config whose oracle is the deploy gate.

@@ -2299,7 +2299,9 @@ environment_verdict() {
       return 1 ;;
   esac
 
-  got=$(printf '%s' "$resp" | jq -r '.data.variables.ENVIRONMENT')
+  # The sentinel keeps a trailing newline that $(...) would otherwise strip.
+  got=$(printf '%s' "$resp" | jq -j '.data.variables.ENVIRONMENT' && printf x)
+  got=${got%x}
   if [ "$got" != "$want" ]; then
     echo "::error::gateway ENVIRONMENT reads '$got'; want '$want'."
     return 1

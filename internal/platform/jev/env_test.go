@@ -131,12 +131,17 @@ func TestFromEnv_WiresTheRealEndpointAndBudget(t *testing.T) {
 // subprocess mode in main_test.go can.
 func TestFromEnv_DoesNotExitTheProcess(t *testing.T) {
 	cases := []struct {
-		name string
-		key  *string
+		name    string
+		key     *string
+		fake    *string
+		wantErr bool
 	}{
-		{"key_unset", nil},
-		{"key_empty", ptr("")},
-		{"key_set", ptr("k")},
+		{name: "key_unset"},
+		{name: "key_empty", key: ptr("")},
+		{name: "key_set", key: ptr("k")},
+		{name: "fake_without_a_key", key: ptr(""), fake: ptr("true")},
+		{name: "fake_unparseable", fake: ptr("ture"), wantErr: true},
+		{name: "fake_with_a_key", key: ptr("k"), fake: ptr("true"), wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,6 +155,9 @@ func TestFromEnv_DoesNotExitTheProcess(t *testing.T) {
 			if tc.key != nil {
 				env = append(env, EnvKey+"="+*tc.key)
 			}
+			if tc.fake != nil {
+				env = append(env, EnvFake+"="+*tc.fake)
+			}
 			cmd := exec.CommandContext(t.Context(), os.Args[0])
 			cmd.Env = env
 
@@ -158,10 +166,125 @@ func TestFromEnv_DoesNotExitTheProcess(t *testing.T) {
 				t.Fatalf("subprocess err = %v: FromEnv must return, not exit. output: %s", err, out)
 			}
 			want := subprocessDone + " client=true err=<nil>"
+			if tc.wantErr {
+				want = subprocessDone + " client=false err="
+			}
 			if !strings.Contains(string(out), want) {
 				t.Errorf("output = %q, want it to contain %q", out, want)
 			}
+			if tc.wantErr && strings.Contains(string(out), "err=<nil>") {
+				t.Errorf("output = %q, want a non-nil error", out)
+			}
 		})
+	}
+}
+
+func TestFromEnv_FakeParsesLikeParseBool(t *testing.T) {
+	cases := []struct {
+		name     string
+		raw      *string
+		wantFake bool
+	}{
+		{"unset", nil, false},
+		{"empty", ptr(""), false},
+		{"false", ptr("false"), false},
+		{"zero", ptr("0"), false},
+		{"true", ptr("true"), true},
+		{"one", ptr("1"), true},
+		{"TRUE", ptr("TRUE"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(EnvKey, "")
+			if tc.raw == nil {
+				unsetEnv(t, EnvFake)
+			} else {
+				t.Setenv(EnvFake, *tc.raw)
+			}
+
+			c, err := FromEnv(nil)
+			if err != nil {
+				t.Fatalf("FromEnv() err = %v, want nil", err)
+			}
+			if c == nil {
+				t.Fatal("FromEnv() client = nil, want non-nil")
+			}
+			if c.cfg.fake != tc.wantFake {
+				t.Errorf("cfg.fake = %v, want %v", c.cfg.fake, tc.wantFake)
+			}
+			if got := c.Enabled(); got != tc.wantFake {
+				t.Errorf("Enabled() = %v, want %v with no key", got, tc.wantFake)
+			}
+		})
+	}
+
+	// Never trimmed: a padded value is a typo, not "not fake".
+	for name, raw := range map[string]string{"ture": "ture", "leading_space": " true", "trailing_space": "true "} {
+		t.Run("unparseable_"+name, func(t *testing.T) {
+			t.Setenv(EnvKey, "")
+			t.Setenv(EnvFake, raw)
+
+			c, err := FromEnv(nil)
+			if !strings.Contains(errText(err), "JEV_FAKE") {
+				t.Errorf("FromEnv() err = %q, want an error naming JEV_FAKE", errText(err))
+			}
+			if c != nil {
+				t.Error("FromEnv() client = non-nil, want nil")
+			}
+		})
+	}
+}
+
+func TestFromEnv_FakeWithAKeyRefusesToStart(t *testing.T) {
+	t.Setenv(EnvFake, "true")
+	t.Setenv(EnvKey, "sk-SECRET-7f")
+
+	c, err := FromEnv(nil)
+	if c != nil {
+		t.Error("FromEnv() client = non-nil, want nil")
+	}
+	text := errText(err)
+	for _, name := range []string{"JEV_FAKE", "TYPESAFE_API_KEY"} {
+		if !strings.Contains(text, name) {
+			t.Errorf("FromEnv() err = %q, want it to name %s", text, name)
+		}
+	}
+	if strings.Contains(text, "sk-SECRET-7f") || strings.Contains(text, "SECRET") {
+		t.Errorf("FromEnv() err = %q contains the key's value", text)
+	}
+
+	t.Run("control_empty_key", func(t *testing.T) {
+		t.Setenv(EnvFake, "true")
+		t.Setenv(EnvKey, "")
+
+		c, err := FromEnv(nil)
+		if err != nil {
+			t.Fatalf("FromEnv() err = %v, want nil", err)
+		}
+		if c == nil {
+			t.Fatal("FromEnv() client = nil, want non-nil")
+		}
+		if !c.Enabled() {
+			t.Error("Enabled() = false, want true in fake mode")
+		}
+	})
+}
+
+func TestFromEnv_FakeWithAWhitespaceKeyRefusesToStart(t *testing.T) {
+	t.Setenv(EnvFake, "true")
+	t.Setenv(EnvKey, " ")
+
+	c, err := FromEnv(nil)
+	if err == nil {
+		t.Error("FromEnv() err = nil, want an error: a whitespace key is set")
+	}
+	if c != nil {
+		t.Error("FromEnv() client = non-nil, want nil")
+	}
+	for _, name := range []string{"JEV_FAKE", "TYPESAFE_API_KEY"} {
+		if !strings.Contains(errText(err), name) {
+			t.Errorf("FromEnv() err = %q, want it to name %s", errText(err), name)
+		}
 	}
 }
 

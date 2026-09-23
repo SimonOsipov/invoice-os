@@ -1017,36 +1017,40 @@ func TestAsk_ACallerDeadlineShorterThanTheBudgetWins(t *testing.T) {
 
 // -- AC-9 --
 
+func setQ(r *Request, id string, f func(*Question)) {
+	q := r.Questions[id]
+	f(&q)
+	r.Questions[id] = q
+}
+
+// invalidRequests mutates threeTypeReq, one row per validation clause. The fake
+// path runs the same rows (TestFake_ValidatesTheRequestLikeTheRealPath).
+var invalidRequests = []struct {
+	clause string
+	mutate func(r *Request)
+}{
+	{"purpose_not_one_of_the_three", func(r *Request) { r.Purpose = "bogus" }},
+	{"state_empty", func(r *Request) { r.State = "" }},
+	{"zero_questions", func(r *Request) { r.Questions = map[string]Question{} }},
+	{"question_id_empty", func(r *Request) { r.Questions[""] = r.Questions["n"]; delete(r.Questions, "n") }},
+	{"question_type_unknown", func(r *Request) { setQ(r, "n", func(q *Question) { q.Type = "yesno" }) }},
+	{"instructions_empty", func(r *Request) { setQ(r, "n", func(q *Question) { q.Instructions = "" }) }},
+	{"choice_fewer_than_two_options", func(r *Request) {
+		setQ(r, "c", func(q *Question) { q.Options = []Option{{"receipt", ""}}; q.Default = "receipt" })
+	}},
+	{"option_name_duplicated", func(r *Request) {
+		setQ(r, "c", func(q *Question) { q.Options = []Option{{"receipt", ""}, {"receipt", "again"}, {"credit note", ""}} })
+	}},
+	{"option_name_empty", func(r *Request) {
+		setQ(r, "c", func(q *Question) { q.Options = []Option{{"", "blank"}, {"receipt", ""}, {"credit note", ""}} })
+	}},
+	{"choice_default_not_an_option", func(r *Request) { setQ(r, "c", func(q *Question) { q.Default = "purchase order" }) }},
+	{"score_default_missing", func(r *Request) { setQ(r, "s", func(q *Question) { q.Default = "" }) }},
+	{"score_level_description_empty", func(r *Request) { setQ(r, "s", func(q *Question) { q.Options[1].Description = "" }) }},
+}
+
 func TestAsk_AnInvalidRequestSendsNothing(t *testing.T) {
-	setQ := func(r *Request, id string, f func(*Question)) {
-		q := r.Questions[id]
-		f(&q)
-		r.Questions[id] = q
-	}
-	cases := []struct {
-		clause string
-		mutate func(r *Request)
-	}{
-		{"purpose_not_one_of_the_three", func(r *Request) { r.Purpose = "bogus" }},
-		{"state_empty", func(r *Request) { r.State = "" }},
-		{"zero_questions", func(r *Request) { r.Questions = map[string]Question{} }},
-		{"question_id_empty", func(r *Request) { r.Questions[""] = r.Questions["n"]; delete(r.Questions, "n") }},
-		{"question_type_unknown", func(r *Request) { setQ(r, "n", func(q *Question) { q.Type = "yesno" }) }},
-		{"instructions_empty", func(r *Request) { setQ(r, "n", func(q *Question) { q.Instructions = "" }) }},
-		{"choice_fewer_than_two_options", func(r *Request) {
-			setQ(r, "c", func(q *Question) { q.Options = []Option{{"receipt", ""}}; q.Default = "receipt" })
-		}},
-		{"option_name_duplicated", func(r *Request) {
-			setQ(r, "c", func(q *Question) { q.Options = []Option{{"receipt", ""}, {"receipt", "again"}, {"credit note", ""}} })
-		}},
-		{"option_name_empty", func(r *Request) {
-			setQ(r, "c", func(q *Question) { q.Options = []Option{{"", "blank"}, {"receipt", ""}, {"credit note", ""}} })
-		}},
-		{"choice_default_not_an_option", func(r *Request) { setQ(r, "c", func(q *Question) { q.Default = "purchase order" }) }},
-		{"score_default_missing", func(r *Request) { setQ(r, "s", func(q *Question) { q.Default = "" }) }},
-		{"score_level_description_empty", func(r *Request) { setQ(r, "s", func(q *Question) { q.Options[1].Description = "" }) }},
-	}
-	for _, tc := range cases {
+	for _, tc := range invalidRequests {
 		t.Run(tc.clause, func(t *testing.T) {
 			ts := newServer(t, func(_ int32, w http.ResponseWriter, _ *http.Request) { reply(w, 200, threeTypeOK) })
 			c := clockClient(ts, newFakeClock())

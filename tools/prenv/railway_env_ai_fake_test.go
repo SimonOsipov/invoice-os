@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -214,8 +215,8 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 		t.Errorf("ai_key_verdict is called BEFORE SERVICE_VARIABLES_QUERY — the verdict must run on a FRESH read, not the mutation's own response")
 	}
 
-	// Comment lines dropped: the body's own comment names verify_variable above the upserts.
-	stmts := statements(shellFunctionBody(t, "cmd_set_ai_fake"))
+	// Comments dropped, trailing ones too: the body's own comment names verify_variable above the upserts.
+	stmts := codeStatements(shellFunctionBody(t, "cmd_set_ai_fake"))
 	loopStart, loopEnd := -1, -1
 	for i, s := range stmts {
 		if loopStart < 0 && strings.HasPrefix(s, "for svc in submission invoice") {
@@ -228,15 +229,22 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 	if loopStart < 0 || loopEnd < 0 {
 		t.Fatalf("no `for svc in submission invoice ... done` loop in cmd_set_ai_fake's statements; stmts = %q", stmts)
 	}
-	loop := strings.Join(stmts[loopStart+1:loopEnd], "\n")
+	// Whole-statement match: a suffix such as `|| true` must not satisfy it.
+	loop := stmts[loopStart+1 : loopEnd]
 	for _, n := range []string{
-		`upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true`, // control: present today
+		`upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true`, // control
 		`upsert_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
 		`upsert_variable "$env_id" "$svc_id" "$svc" TYPESAFE_API_KEY ""`,
 		`verify_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
 	} {
-		if !strings.Contains(loop, n) {
-			t.Errorf("the per-service loop of cmd_set_ai_fake does not contain %q (comment lines excluded)", n)
+		got := 0
+		for _, s := range loop {
+			if s == n {
+				got++
+			}
+		}
+		if got != 1 {
+			t.Errorf("the per-service loop of cmd_set_ai_fake holds %d statements equal to %q, want 1 (comments excluded)", got, n)
 		}
 	}
 	code := strings.Join(stmts, "\n")
@@ -247,6 +255,48 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 	}
 	if firstVerify < lastUpsert {
 		t.Errorf("a verify_variable precedes the last upsert_variable — every write must land before the first read-back")
+	}
+}
+
+// Code only: T05's raw-text scan is satisfied by a commented-out settle call or verdict.
+func TestSetAIFakeVerdictReadsTheFreshReadJustBeforeIt(t *testing.T) {
+	cmds := shellCommands(codeStatements(shellFunctionBody(t, "cmd_set_ai_fake")))
+
+	settle, loopStart, loopEnd := 0, -1, -1
+	var verdicts []int
+	for i, c := range cmds {
+		if strings.Contains(c, "SETTLE_QUERY") {
+			settle++
+		}
+		if strings.Contains(c, "ai_key_verdict") {
+			verdicts = append(verdicts, i)
+		}
+		if loopStart < 0 && strings.HasPrefix(c, "for svc in submission invoice") {
+			loopStart = i
+		} else if loopStart >= 0 && loopEnd < 0 && c == "done" {
+			loopEnd = i
+		}
+	}
+	if loopStart < 0 || loopEnd < 0 {
+		t.Fatalf("no `for svc in submission invoice ... done` loop in cmd_set_ai_fake's code; cmds = %q", cmds)
+	}
+	if settle != 1 {
+		t.Errorf("cmd_set_ai_fake's code references SETTLE_QUERY %d times, want 1", settle)
+	}
+	if len(verdicts) != 1 {
+		t.Fatalf("cmd_set_ai_fake's code calls ai_key_verdict %d times, want 1; cmds = %q", len(verdicts), cmds)
+	}
+
+	v := verdicts[0]
+	if v <= loopStart || v >= loopEnd {
+		t.Fatalf("ai_key_verdict is called outside the per-service loop; cmds = %q", cmds)
+	}
+	if want := `ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1`; cmds[v] != want {
+		t.Errorf("the verdict call is %q, want %q", cmds[v], want)
+	}
+	// Any command in between (upsert, verify) overwrites GQL_RESPONSE.
+	if !strings.HasPrefix(cmds[v-1], `graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY"`) {
+		t.Errorf("the command before the verdict is %q, want the SERVICE_VARIABLES_QUERY re-read", cmds[v-1])
 	}
 }
 
@@ -275,9 +325,9 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 		}
 	}
 
-	code := strings.Join(statements(shellFunctionBody(t, "ai_fake_self_test")), "\n")
+	code := strings.Join(codeStatements(shellFunctionBody(t, "ai_fake_self_test")), "\n")
 	for _, n := range []string{
-		`"OPENROUTER_API_KEY":"a-present-key-fixture"`,    // control: F3, present today
+		`"OPENROUTER_API_KEY":"a-present-key-fixture"`,    // control: F3
 		`"TYPESAFE_API_KEY":"a-present-typesafe-fixture"`, // F11
 		`"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""`,   // F12
 	} {
@@ -364,6 +414,103 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 	}
 }
 
+// T07 reads raw text: a commented-out call, a widened `if:`, or a new job between
+// prepare-env and deploy-gateway all pass it. This reads comment-stripped lines
+// and bounds prepare-env by the next job header.
+func TestDevEnvYmlSetAIFakeStepIsLiveAndPROnly(t *testing.T) {
+	path := filepath.Join(repoRoot(t), ".github", "workflows", "dev-env.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	// A `#` inside a quoted scalar is cut too; that fails a needle, it cannot pass one.
+	comment := regexp.MustCompile(`(^|\s)#.*$`)
+	lines := strings.Split(string(raw), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(comment.ReplaceAllString(l, ""), " \t")
+	}
+
+	jobsAt := slices.Index(lines, "jobs:")
+	if jobsAt < 0 {
+		t.Fatalf("%s has no top-level jobs: key", path)
+	}
+	jobHeader := regexp.MustCompile(`^  [A-Za-z0-9_-]+:$`)
+	jobStart, jobEnd := -1, -1
+	for i := jobsAt + 1; i < len(lines) && jobEnd < 0; i++ {
+		if !jobHeader.MatchString(lines[i]) {
+			continue
+		}
+		if jobStart >= 0 {
+			jobEnd = i
+		} else if lines[i] == "  prepare-env:" {
+			jobStart = i
+		}
+	}
+	if jobStart < 0 || jobEnd < 0 {
+		t.Fatalf("could not bound the prepare-env job in %s (start %d, end %d)", path, jobStart, jobEnd)
+	}
+	job := lines[jobStart+1 : jobEnd]
+	if !slices.Contains(job, "    runs-on: ubuntu-latest") {
+		t.Fatalf("control: prepare-env's runs-on line is not in the bounded job; the bounds or the comment stripping drifted")
+	}
+	for _, l := range job {
+		if strings.HasPrefix(l, "    continue-on-error") {
+			t.Errorf("the prepare-env job carries a job-level %q", strings.TrimSpace(l))
+		}
+	}
+
+	var calls []int
+	for i, l := range lines {
+		if strings.Contains(l, "set-ai-fake") {
+			calls = append(calls, i)
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("%s holds set-ai-fake on %d uncommented lines, want 1", path, len(calls))
+	}
+	c := calls[0]
+	if got, want := strings.TrimSpace(lines[c]), `run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"`; got != want {
+		t.Errorf("the set-ai-fake line is %q, want %q", got, want)
+	}
+	if c <= jobStart || c >= jobEnd {
+		t.Fatalf("set-ai-fake is on line %d, outside the prepare-env job (lines %d-%d)", c+1, jobStart+1, jobEnd)
+	}
+
+	stepStart, stepEnd := -1, jobEnd
+	for i := c; i > jobStart; i-- {
+		if strings.HasPrefix(lines[i], "      - ") {
+			stepStart = i
+			break
+		}
+	}
+	for i := c + 1; i < jobEnd; i++ {
+		if strings.HasPrefix(lines[i], "      - ") {
+			stepEnd = i
+			break
+		}
+	}
+	if stepStart < 0 {
+		t.Fatalf("no step header above the set-ai-fake line in prepare-env")
+	}
+	step := lines[stepStart:stepEnd]
+	if !slices.Contains(step, "          ENV_ID: ${{ steps.resolve.outputs.environment_id }}") {
+		t.Fatalf("control: the step's ENV_ID line is not in the bounded step %q", step)
+	}
+	var ifs []string
+	for _, l := range step {
+		key := strings.TrimPrefix(strings.TrimSpace(l), "- ")
+		if strings.HasPrefix(key, "if:") {
+			ifs = append(ifs, key)
+		}
+		if strings.Contains(l, "continue-on-error") {
+			t.Errorf("the set-ai-fake step carries %q", strings.TrimSpace(l))
+		}
+	}
+	if want := "if: github.event_name == 'pull_request'"; len(ifs) != 1 || ifs[0] != want {
+		t.Errorf("the set-ai-fake step's if: lines are %q, want exactly [%q]", ifs, want)
+	}
+}
+
 // T08: railway-invariants.yml must run set-ai-fake --self-test exactly once,
 // in job ai-fake-self-test (AC #7).
 //
@@ -440,6 +587,37 @@ func TestServiceSelectorSelfTestReportsEveryFixture(t *testing.T) {
 	}
 }
 
+// T12 counts call lines in the source, so a fixture that never runs still counts;
+// this counts the AI fixtures that actually reported.
+func TestAIFakeSelfTestReportsEveryFixture(t *testing.T) {
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
+		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	start := strings.Index(stdout, "Service selector self-test: 11 fixtures passed")
+	end := strings.Index(stdout, "AI fake self-test: 12 fixtures passed")
+	if start < 0 || end < start {
+		t.Fatalf("no selector closing line followed by the AI closing line; stdout = %q", stdout)
+	}
+	reported := regexp.MustCompile(`(?m)^  (F\d+) ok -> `).FindAllStringSubmatch(stdout[start:end], -1)
+	if len(reported) == 0 {
+		t.Fatalf("no AI fixture reported ok before the closing line; stdout = %q", stdout)
+	}
+	seen := map[string]int{}
+	for _, m := range reported {
+		seen[m[1]]++
+	}
+	for i := 1; i <= 12; i++ {
+		if id := "F" + strconv.Itoa(i); seen[id] != 1 {
+			t.Errorf("fixture %s reported ok %d time(s), want 1", id, seen[id])
+		}
+	}
+	if len(reported) != 12 {
+		t.Errorf("%d AI fixtures reported ok, the closing line claims 12", len(reported))
+	}
+}
+
 // --self-test's "no network call", observed: curl is shimmed to record each
 // call. The live path is the control that proves the shim is on the script's PATH.
 func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
@@ -467,6 +645,38 @@ func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
 	if _, err := os.Stat(calls); err != nil {
 		t.Fatalf("control: the live path never reached the curl shim, so --self-test's silence proves nothing: %v", err)
 	}
+}
+
+var shellTrailingComment = regexp.MustCompile(`(^|[ \t;])#.*$`)
+
+// codeStatements is statements with trailing `# …` comments cut too. A ` #`
+// inside quotes is cut as well; that fails a needle, it cannot pass one.
+func codeStatements(body []string) []string {
+	var out []string
+	for _, s := range statements(body) {
+		if s = strings.TrimSpace(shellTrailingComment.ReplaceAllString(s, "${1}")); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// shellCommands joins backslash-continued statements into one command each.
+func shellCommands(stmts []string) []string {
+	var out []string
+	cur := ""
+	for _, s := range stmts {
+		if strings.HasSuffix(s, `\`) {
+			cur += strings.TrimSuffix(s, `\`)
+			continue
+		}
+		out = append(out, cur+s)
+		cur = ""
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
 }
 
 // shellFunctionSource returns bash text redefining the named railway-env.sh
@@ -522,8 +732,7 @@ exit "$rc"
 `
 
 // T10: ai_key_verdict's full truth table, including response shapes no
-// self-test fixture covers, plus the no-leak property on EVERY branch —
-// ai_fake_self_test only carries a leak needle on three of its fixtures.
+// self-test fixture covers, plus the no-leak property on EVERY branch.
 func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 	prelude := "set -uo pipefail\n" + shellFunctionSource(t, "ai_key_verdict")
 
@@ -581,6 +790,10 @@ func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 		{"object typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":{"v":"ts-9f2a-nested"}}}}`, false, "ts-9f2a-nested"},
 		{"array typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":["ts-9f2a-array"]}}}`, false, "ts-9f2a-array"},
 		{"unrendered typesafe reference", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":"${{ secrets.TYPESAFE_API_KEY }}"}}}`, false, "secrets.TYPESAFE_API_KEY"},
+		{"unrendered openrouter reference", `{"data":{"variables":{"OPENROUTER_API_KEY":"${{ secrets.OPENROUTER_API_KEY }}","TYPESAFE_API_KEY":""}}}`, false, "secrets.OPENROUTER_API_KEY"},
+		{"typesafe key empty and openrouter key absent", `{"data":{"variables":{"TYPESAFE_API_KEY":""}}}`, true, ""},
+		// Only the errors branch can refuse this: the map itself is readable and clean.
+		{"populated errors beside both keys empty", `{"errors":[{"message":"x"}],"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""}}}`, false, ""},
 	}
 
 	for _, tc := range cases {
@@ -685,6 +898,8 @@ func TestAIKeyVerdictUnreadableNamesBothKeys(t *testing.T) {
 	cases := []struct{ name, json string }{
 		{"variables null", `{"data":{"variables":null}}`},
 		{"graphql error", `{"errors":[{"message":"x"}],"data":null}`},
+		// Readable map: only the errors message can name the keys here.
+		{"graphql error beside a readable map", `{"errors":[{"message":"x"}],"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""}}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

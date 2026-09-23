@@ -245,7 +245,7 @@ const jpReader = "importer.Decode (csv)"
 // http.Client.Timeout, so ctx is the walk's only clock.
 const jpCallTimeout = 30 * time.Second
 
-const jpModel = "systemone-default"
+const jpModel = jev.Model
 
 func jpResolveModel() string {
 	if m := os.Getenv("JEV_MODEL"); m != "" {

@@ -357,9 +357,7 @@ func jvPathAllowed(path, out string) bool {
 // only clock (design 1.1).
 const jvCallTimeout = 30 * time.Second
 
-// jvModel is the vendor model id CHECK-02 still owes (R-14); JEV_MODEL overrides it at the live
-// run so an operator can see and swap what gets sent.
-const jvModel = "systemone-default"
+const jvModel = jev.Model
 
 // jvReader: this suite always runs Docling (design §1, "Import wizard deployed vs sysmap").
 const jvReader = "docling"

@@ -53,6 +53,17 @@ Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on clos
 ### 4. One branch, one PR per story
 All subtasks share one feature branch, one draft PR and one worktree.
 
+### 5. Keep going
+Every `/ralph` phase is unattended. Put each status note in the same message as the next action.
+End a turn only in these cases:
+- Phase 0.6d halts at `AWAITING_ANSWERS`.
+- A spawn fails a third time (HALT, Phase 1).
+- Phase 3.5 escalates to the user.
+- The run outputs `ALL_TASKS_COMPLETE`.
+- A background command or Monitor you started is still running. Its completion wakes you.
+
+In every other case, take the next step. Do not end a turn on "Starting X now", "Next: subtask 4", or an offer to continue.
+
 ---
 
 ## MCP servers
@@ -143,7 +154,7 @@ Run `/subtask-generator` on the finalized story: one Backlog task per subtask, l
 - Do not emit `SUBTASKS_READY` while a fact the story asserts lacks a `premise —` entry with pasted output.
 - **Checkpoint:** `SUBTASKS_READY`
 
-#### d. Critical-fork gate — the ONE place the run stops
+#### d. Critical-fork gate — the one place the run asks a question
 Test every `## Decisions` entry (conservative defaults and `premise —` entries included) against five questions:
 
 - Does it decide **who is allowed** to do something?
@@ -348,7 +359,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 | Querying as superuser to get past RLS | `WithinTenantTx` as `invoice_app` |
 | Working in the main checkout | Always `$WORKTREE_PATH`; main is the user's space |
 | Finding subtasks by title | Use the `story:<slug>` label |
-| Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only stop |
+| Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only question |
 | Architect inventing scope | Every derived AC traces to the Objective / a Core AC |
 | Bouncing the executor on uncited taste | Cite a design-system or prototype rule; taste is advisory |
 | Renaming a variable and checking only the rename | Search every other variable's rendered value for the old name before merge |

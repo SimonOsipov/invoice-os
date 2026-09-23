@@ -53,6 +53,17 @@ Not part of the gate: `dev-env-teardown.yml` (deletes the PR environment on clos
 ### 4. One branch, one PR per story
 All subtasks share one feature branch, one draft PR and one worktree.
 
+### 5. Keep going
+Every `/ralph` phase is unattended. Put each status note in the same message as the next action.
+End a turn only in these cases:
+- Phase 0.6d halts at `AWAITING_ANSWERS`.
+- A spawn fails a third time (HALT, Phase 1).
+- Phase 3.5 escalates to the user.
+- The run outputs `ALL_TASKS_COMPLETE`.
+- A background command or Monitor you started is still running. Its completion wakes you.
+
+In every other case, take the next step. Do not end a turn on "Starting X now", "Next: subtask 4", or an offer to continue.
+
 ---
 
 ## MCP servers
@@ -86,7 +97,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
 4. **Backlog subtasks:** `mcp__backlog__task_list({ labels: ["story:<lowercase-id>"], status: "To Do" })`.
-5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and print them. Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
+5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and ask the first open one (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
 6. **Classify the story state:**
    - `STORY_SOURCE=sysmap` → **BASIC**.
    - Zero subtasks + Objective/Core ACs → **BASIC** → `PLANNING_REQUIRED=true`.
@@ -143,7 +154,7 @@ Run `/subtask-generator` on the finalized story: one Backlog task per subtask, l
 - Do not emit `SUBTASKS_READY` while a fact the story asserts lacks a `premise —` entry with pasted output.
 - **Checkpoint:** `SUBTASKS_READY`
 
-#### d. Critical-fork gate — the ONE place the run stops
+#### d. Critical-fork gate — the one place the run asks a question
 Test every `## Decisions` entry (conservative defaults and `premise —` entries included) against five questions:
 
 - Does it decide **who is allowed** to do something?
@@ -162,9 +173,10 @@ Match on the question, not on shared nouns.
 
 With critical forks left:
 1. Write each under `## Blocking Questions` (exact heading): the question in one line, the default, the alternative.
-2. Print the list and **halt**. **Checkpoint:** `AWAITING_ANSWERS`.
+2. Ask the first question alone, in plain words, with 2–3 options and the default marked. **Halt.** **Checkpoint:** `AWAITING_ANSWERS`.
+3. After each answer, ask the next. When the user pushes back or says "your call", take the default for every question left.
 
-When the user answers, record each as `user — <choice>` in `## Decisions`, delete `## Blocking Questions`, and continue without re-planning.
+When every question is answered or defaulted, record each as `user — <choice>` in `## Decisions`, delete `## Blocking Questions`, and continue without re-planning.
 
 **Boundary:** pre-planned stories skip Phase 0.6 and so skip this gate.
 
@@ -174,6 +186,12 @@ Tell the FIRST subtask's executor to put the story's `## Decisions` section and 
 ### Phase 1: Sequential subtask execution
 
 For each subtask in dependency order, run the stages below. Stage numbers start at 2.5 because code comments cite them. Run one stage agent at a time, and run no suite while a stage agent runs: agents in one worktree share its files and its dev Postgres.
+
+Before every spawn, run `git -C "$WORKTREE_PATH" status --short` and `git -C "$WORKTREE_PATH" log --oneline -3`. A report that says "committed" is not evidence; the log is. Commit orphaned work under its own subtask's message with explicit paths, never `git add -A`.
+
+After a context compaction, also run `mcp__backlog__task_list` for `story:<slug>` and `gh pr checks` before the next spawn. The summary says where the run was; git, Backlog and CI say where it is.
+
+Every stage brief (Test-Spec, Execution, QA Verify) says: **terse comments** — one or two lines for the non-obvious why, per `CLAUDE.md` "Code Comments". Do not copy the density of the file being edited.
 
 If a spawn fails, retry twice. On a third failure, HALT: leave the subtask "In Progress" and report the stage and error. Never perform a stage yourself — a same-context QA pass of your own work is worthless evidence.
 
@@ -213,7 +231,7 @@ L="$WORKTREE_PATH/.ralph"; mkdir -p "$L"
 (cd "$WORKTREE_PATH" && pnpm -r --filter '!@invoice-os/e2e' test && pnpm --filter @invoice-os/e2e test:unit) > "$L/unit.log" 2>&1; echo "unit=$?"
 grep -hE '^(ok|FAIL|--- FAIL|Test Files|Tests)' "$L"/*.log | tail -40
 ```
-- Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Run the block in the background and poll its logs.
+- Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Run the block in the background. Its exit wakes you.
 - A zero exit and its summary line are the evidence. Read a full log only when its suite failed.
 - A subagent's report of a suite is not the suite's result.
 - **Checkpoint:** `EXECUTION_DONE`
@@ -244,13 +262,13 @@ When QA returns, **replay the mutation rows yourself**, with no other agent runn
 If issues are found, spawn `product-executor` to fix, then re-verify. Update the Backlog task's implementation_notes with QA findings.
 - **Checkpoint:** `QA_VERIFIED`
 
-After each subtask, wait for `CI` on the pushed commit:
+After each subtask, wait for `CI` on the pushed commit (CI Monitoring Protocol):
 ```bash
 SHA="$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
 RUN_ID="$(gh run list --workflow ci.yml --commit "$SHA" --limit 1 --json databaseId -q '.[0].databaseId')"
 gh run watch "$RUN_ID" --exit-status
 ```
-An empty `RUN_ID` means GitHub has not registered the push; poll again. A red run stops the next subtask until it is green. Then take the next subtask.
+A red run stops the next subtask until it is green. Then take the next subtask.
 
 ### Phase 2: PR lifecycle
 
@@ -263,7 +281,9 @@ The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
 
 ### Phase 3: CI
 
-After the FINAL subtask's QA, poll `gh pr checks [PR_NUMBER]` every 270 s until the aggregate `CI` is green (CI Monitoring Protocol). No automated code review runs on this repo; do not report one.
+After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol.
+
+While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo.
 
 ### Phase 3.5: Story-level deploy gate
 
@@ -277,12 +297,12 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    RUN_ID="$(gh run list --workflow dev-env.yml --commit "$SHA" --limit 10 --json databaseId,event,conclusion \
      -q '[.[] | select(.event == "pull_request" and .conclusion != "skipped")][0].databaseId')"
    ```
-   - `gh pr ready` does not reliably start a run. If `RUN_ID` is empty after one poll, push an empty commit: `git -C "$WORKTREE_PATH" commit --allow-empty -m "ci: run the deploy gate" && git -C "$WORKTREE_PATH" push`. GitHub applies the path filter to the whole PR diff, so this starts the gate.
+   - `gh pr ready` does not reliably start a run. If `RUN_ID` is empty on the first lookup, push an empty commit: `git -C "$WORKTREE_PATH" commit --allow-empty -m "ci: run the deploy gate" && git -C "$WORKTREE_PATH" push`. GitHub applies the path filter to the whole PR diff, so this starts the gate.
    - A `skipped` run is a draft run: neither pass nor fail.
    - `gh workflow run dev-env.yml --ref "$BRANCH"` is for diagnosis only. It targets `development`, not the PR environment, so it proves nothing about this PR.
    - `dev-env.yml` is paths-filtered (`frontend/ packages/ e2e/ cmd/ internal/ migrations/ db/ tools/prenv/ scripts/ci/`, go.mod/sum, Dockerfile, Caddyfile, package.json, pnpm-*, the workflow file). A docs-only PR never fires it; escalate to the user rather than faking it green.
    - **Freshness:** `git -C "$WORKTREE_PATH" fetch origin`. If `origin/main` has commits the branch lacks, merge, push, and let `CI` and the gate re-run. A base missing main's migrations crash-loops the gateway.
-3. **Watch the run** to conclusion (`gh run watch "$RUN_ID" --exit-status`, or poll per the protocol).
+3. **Watch the run** to conclusion per the CI Monitoring Protocol.
    - Re-run a red gate whole: `gh run rerun "$RUN_ID"`, never `--failed`. The database resets only when the gateway deploys.
    - A spec this PR changed that passed only on retry fails `e2e`. Fix the spec or the race; do not re-run for luck.
    Green means: fleet deployed, gateway migrated, DB bootstrapped + demo-purged + seeded, all 8 backends up, smoke + topology E2E passed, including cross-tenant isolation.
@@ -295,7 +315,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - No holistic "looks done": every AC needs its own evidence.
 5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, escalate the rest to the user; each gate run rebuilds an 11-service environment.
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
-7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): move all subtasks to "Done" and output `<promise>ALL_TASKS_COMPLETE</promise>`.
+7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): move all subtasks to "Done". End with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
    **Otherwise:** leave subtasks "In Progress", do not emit completion, escalate to the user.
 
 ### Phase 4: Worktree cleanup
@@ -308,7 +328,11 @@ Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close 
 
 ## CI Monitoring Protocol
 
-Poll `gh pr checks [PR_NUMBER]` every **270 s** (the one poll constant in this pipeline).
+Wait with a background watcher. Run `gh run watch "$RUN_ID" --exit-status` through Bash with `run_in_background: true`. Its exit wakes you.
+
+If `RUN_ID` is empty, GitHub has not registered the run yet. Start a background until-loop that repeats the `gh run list` query every 30 s and exits on the first id. Phase 3.5 step 2 owns a deploy-gate run that never starts.
+
+Foreground `sleep` is blocked. Never end a turn on a wait you did not start.
 
 1. **A check failed?** `gh run view [RUN_ID] --log 2>&1 | tail -60`, fix in the worktree, commit, push. CI (and `dev-env.yml` on a ready PR) restart on push.
 2. **`CI` green?** → Phase 3.5.
@@ -348,7 +372,7 @@ An agent parses these instructions with no one to ask. Write for that reader.
 | Querying as superuser to get past RLS | `WithinTenantTx` as `invoice_app` |
 | Working in the main checkout | Always `$WORKTREE_PATH`; main is the user's space |
 | Finding subtasks by title | Use the `story:<slug>` label |
-| Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only stop |
+| Blocking on the user in an unattended phase | Conservative default + `## Decisions`; Phase 0.6d is the only question |
 | Architect inventing scope | Every derived AC traces to the Objective / a Core AC |
 | Bouncing the executor on uncited taste | Cite a design-system or prototype rule; taste is advisory |
 | Renaming a variable and checking only the rename | Search every other variable's rendered value for the old name before merge |

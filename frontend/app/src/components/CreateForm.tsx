@@ -224,7 +224,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           {filing && <span style={{ width: 13, height: 13, borderRadius: 99, border: '2px solid var(--line-2)', borderTopColor: 'var(--fg-4)', display: 'block', animation: 'spin 0.7s linear infinite' }} />}
           {primary.label}
         </button>
-        {/* The server's own words, verbatim — including 409 `duplicate invoice number`,
+        {/* verbatim — including 409 `duplicate invoice number`,
             which the editable number field above makes resolvable without leaving. In
             carried mode the 409 is the register sentence. */}
         {filingError && (

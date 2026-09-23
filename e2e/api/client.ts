@@ -407,8 +407,7 @@ export interface GetInvoiceResult extends Invoice {
   resolve_outside_blocked_reason: string | null
   // CanApprove/ApproveBlockedReason/CanReject/RejectBlockedReason (APPR-08-06): same
   // no-omitempty convention. One backend gate feeds both pairs, so can_approve always
-  // equals can_reject and the two reasons are the same string. NOT gated by
-  // APPROVALS_ENFORCED -- the decision endpoint is unflagged.
+  // equals can_reject and the two reasons are the same string.
   can_approve: boolean
   approve_blocked_reason: string | null
   can_reject: boolean

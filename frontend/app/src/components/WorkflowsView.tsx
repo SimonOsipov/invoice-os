@@ -17,10 +17,8 @@ import { policyStanding } from '../lib/policies'
 import { policySummary, type Policy } from '../lib/workflows'
 import type { PlatformCtx } from '../types'
 
-// Arming is not flag-gated — publishing really does open a run. What APPROVALS_ENFORCED
-// still gates is whether an open run refuses a transmit, hence the second sentence.
 const INTRO =
-  'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice. Transmission is not held for approval yet.'
+  'Each policy decides who signs off before an invoice is stamped and transmitted. Steps run top to bottom; conditions split the flow. Publishing a policy opens an approval on every matching invoice.'
 
 // Two nodes, not one: `EmptyState` takes {title, message}, so the shipped sentence splits
 // at its em dash. Module scope, the RolesView.tsx:34-37 shape.

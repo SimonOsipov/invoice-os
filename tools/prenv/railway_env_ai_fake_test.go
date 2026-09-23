@@ -1,8 +1,6 @@
 // railway_env_ai_fake_test.go pins the contract of
-// `scripts/ci/railway-env.sh set-ai-fake`, `ai_key_verdict` and
-// `ai_fake_self_test`. T09 is the no-regression oracle for the shared-helper
-// label argument added to service_id_by_name and
-// assert_environment_is_ephemeral.
+// `scripts/ci/railway-env.sh set-ai-fake`, `ai_key_verdict`, `ai_fake_self_test`,
+// and the shared service selector it resolves services through (R6, R7).
 //
 // NOT COVERED HERE: the live GraphQL write, verify_variable's mismatch
 // branch on OPENROUTER_API_KEY (deliberately never called — an absent and an
@@ -23,10 +21,10 @@ import (
 	"testing"
 )
 
-// runAIFakeCmd execs `railway-env.sh set-ai-fake <args...>`. Deliberate copy
-// of runApprovalsCmd (same env-filter loop) rather than a shared helper — the
-// two differ by subcommand name and refactoring a green file is out of scope
-// here.
+// persistentEnvironmentID is the id dev-env.yml, dev-env-teardown.yml and dev-env-sweeper.yml pin as RAILWAY_DEV_ENVIRONMENT_ID, so the refusal tests compare against CI's exact string.
+const persistentEnvironmentID = "6c864094-6a06-452f-8495-be77d8a94fe7"
+
+// runAIFakeCmd execs `railway-env.sh set-ai-fake <args...>` with unsetVars removed from the environment and extraEnv appended.
 func runAIFakeCmd(t *testing.T, args []string, extraEnv []string, unsetVars ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 
@@ -253,11 +251,11 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 // T07: dev-env.yml must run set-ai-fake exactly once, inside prepare-env,
 // PR-only, with no continue-on-error (AC #6).
 //
-// WEAK BY DESIGN, same as the approvals wiring test: proves the wiring, not
-// the write.
+// WEAK BY DESIGN: proves the wiring, not the write.
 //
 // KILLS: the step omitted; the step gated on the wrong event; a silent
-// continue-on-error swallowing a failed write.
+// continue-on-error swallowing a failed write; deploy-gateway's needs: list
+// dropping prepare-env.
 func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 	path := filepath.Join(repoRoot(t), ".github", "workflows", "dev-env.yml")
 	raw, err := os.ReadFile(path)
@@ -284,9 +282,8 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 		t.Errorf("set-ai-fake is called at byte offset %d, outside the prepare-env job (%d-%d)", callAt, prepareEnvAt, deployGatewayAt)
 	}
 
-	// Scoped to the CURRENT step only, same reasoning as the approvals wiring
-	// test: a fixed byte window risks bleeding into the PRECEDING step's own
-	// if: line.
+	// Scoped to the CURRENT step only: a fixed byte window risks bleeding into the
+	// PRECEDING step's own if: line.
 	nameLines := regexp.MustCompile(`(?m)^\s*- name:`).FindAllStringIndex(content[:callAt], -1)
 	if len(nameLines) == 0 {
 		t.Fatalf("no '- name:' step header found before the set-ai-fake call site in %s", path)
@@ -302,6 +299,21 @@ func TestDevEnvYmlWiresSetAIFakeIntoPrepareEnv(t *testing.T) {
 	}
 	if strings.Contains(window, "continue-on-error") {
 		t.Errorf("the set-ai-fake step carries continue-on-error — a silent failure would leave a PR environment holding a usable key; window = %q", window)
+	}
+
+	// Scoped to the deploy-gateway job with comments stripped, so a commented-out
+	// needs: list cannot satisfy it. Case-sensitive: YAML keys are.
+	gw := content[deployGatewayAt+1:]
+	if next := regexp.MustCompile(`\n  [A-Za-z_]`).FindStringIndex(gw); next != nil {
+		gw = gw[:next[0]]
+	}
+	gw = regexp.MustCompile(`(?m)(^|\s)#.*$`).ReplaceAllString(gw, "")
+	needsMatch := regexp.MustCompile(`(?m)^    needs:\s*\[([^\]]*)\]`).FindStringSubmatch(gw)
+	if needsMatch == nil {
+		t.Fatalf("could not find deploy-gateway's needs: list in %s", path)
+	}
+	if !strings.Contains(needsMatch[1], "prepare-env") {
+		t.Errorf("deploy-gateway's needs: list %q does not name prepare-env — the gate that stops the whole deploy on a failed prepare-env step (needs.prepare-env.result == 'success') would not apply", needsMatch[1])
 	}
 }
 
@@ -335,20 +347,78 @@ func TestRailwayInvariantsYmlWiresSetAIFakeSelfTest(t *testing.T) {
 	}
 }
 
-// T09: no-regression oracle for the shared-helper label argument added to
-// service_id_by_name and assert_environment_is_ephemeral — the label
-// default must keep every approvals message and the approvals fixture count
-// byte-identical. Reuses runApprovalsCmd, already declared in
-// railway_env_approvals_test.go.
-func TestApprovalsSelfTestUnchangedByTheLabelArgument(t *testing.T) {
-	stdout, _, code := runApprovalsCmd(t, []string{"--self-test"}, nil, "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID")
+// R6: set-ai-fake --self-test runs the shared service selector's 11 fixtures, so the ai-fake-self-test job keeps service_id_by_name under CI.
+func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
+		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 
 	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stdout = %q", code, stdout)
+		t.Fatalf("exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	const want = "Approvals enforcement self-test: 11 fixtures passed, no token read, no network call."
-	if !strings.Contains(stdout, want) {
-		t.Errorf("stdout does not contain %q byte-for-byte; stdout = %q", want, stdout)
+	if !strings.Contains(stdout, "Service selector self-test: 11 fixtures passed, no token read, no network call.") {
+		t.Errorf("stdout does not contain the selector self-test's closing line; stdout = %q", stdout)
+	}
+	if !strings.Contains(stdout, "AI fake self-test: 10 fixtures passed") {
+		t.Errorf("stdout does not contain the ai-fake self-test's closing line; stdout = %q", stdout)
+	}
+}
+
+// The selector's closing line is a literal that still says 11 after a fixture
+// is deleted; this counts the fixtures that actually reported.
+func TestServiceSelectorSelfTestReportsEveryFixture(t *testing.T) {
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
+		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	end := strings.Index(stdout, "Service selector self-test: 11 fixtures passed")
+	if end < 0 {
+		t.Fatalf("no selector closing line; stdout = %q", stdout)
+	}
+	reported := regexp.MustCompile(`(?m)^  (A\d+) ok -> `).FindAllStringSubmatch(stdout[:end], -1)
+	if len(reported) == 0 {
+		t.Fatalf("no selector fixture reported ok before the closing line; stdout = %q", stdout)
+	}
+	seen := map[string]int{}
+	for _, m := range reported {
+		seen[m[1]]++
+	}
+	for i := 1; i <= 11; i++ {
+		if id := "A" + strconv.Itoa(i); seen[id] != 1 {
+			t.Errorf("fixture %s reported ok %d time(s), want 1", id, seen[id])
+		}
+	}
+	if len(reported) != 11 {
+		t.Errorf("%d selector fixtures reported ok, the closing line claims 11", len(reported))
+	}
+}
+
+// --self-test's "no network call", observed: curl is shimmed to record each
+// call. The live path is the control that proves the shim is on the script's PATH.
+func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "curl-calls")
+	shim := "#!/bin/sh\necho called >> '" + calls + "'\necho '{\"data\":{\"environments\":{\"edges\":[]}}}'\n"
+	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
+		t.Fatalf("writing the curl shim: %v", err)
+	}
+	path := "PATH=" + dir + ":" + os.Getenv("PATH")
+	railway := []string{"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID"}
+
+	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, []string{path}, railway...)
+	if code != 0 {
+		t.Fatalf("--self-test exit code = %d, want 0; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if _, err := os.Stat(calls); err == nil {
+		t.Errorf("--self-test called curl; stdout = %q", stdout)
+	}
+
+	live := []string{path, "RAILWAY_API_TOKEN=not-a-token", "RAILWAY_PROJECT_ID=p", "RAILWAY_DEV_ENVIRONMENT_ID=" + persistentEnvironmentID}
+	if out, _, code := runAIFakeCmd(t, []string{"env-x"}, live, railway...); code == 0 {
+		t.Errorf("control: the live path exited 0 against an empty environment list; stdout = %q", out)
+	}
+	if _, err := os.Stat(calls); err != nil {
+		t.Fatalf("control: the live path never reached the curl shim, so --self-test's silence proves nothing: %v", err)
 	}
 }
 
@@ -558,53 +628,62 @@ func TestAIFakeSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
 	}
 }
 
-// T13: the label argument added to service_id_by_name and
-// assert_environment_is_ephemeral must DEFAULT to APPROVALS_ENFORCED, and the
-// six refusal messages must still render the pre-existing wording. T09 cannot
-// see this: the approvals self-test discards service_id_by_name's stderr.
-func TestSharedHelperLabelDefaultsToApprovalsEnforced(t *testing.T) {
-	raw, err := os.ReadFile(railwayEnvScript(t))
-	if err != nil {
-		t.Fatalf("reading railway-env.sh: %v", err)
-	}
-	content := string(raw)
+// R7: neither shared helper has a default label; a call without one refuses before it reads anything.
+func TestServiceSelectorLabelIsRequired(t *testing.T) {
+	// A1's 11-instance fleet (service_selector_self_test), copied verbatim: selects svc-inv.
+	const fleetJSON = `{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}`
 
-	for _, decl := range []string{
-		`local resp="$1" name="$2" ctx="$3" label="${4:-APPROVALS_ENFORCED}" total count`,
-		`local env_id="$1" label="${2:-APPROVALS_ENFORCED}" count ephemeral`,
-	} {
-		if n := strings.Count(content, decl); n != 1 {
-			t.Errorf("found %d occurrence(s) of %q, want exactly 1 — every existing 3-arg and 1-arg call site depends on this default", n, decl)
+	t.Run("service_id_by_name without a label refuses", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name") +
+			`rc=0; out=$(service_id_by_name "$1" invoice "self-test R7" 2>/dev/null) || rc=$?; printf '%s' "$out"; exit "$rc"`
+		stdout, _, code := runBashScript(t, script, fleetJSON)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: no label given, must refuse; stdout = %q", stdout)
 		}
-	}
-	if n := strings.Count(content, "APPROVALS_ENFORCED was NOT set."); n != 0 {
-		t.Errorf("%d refusal message(s) still hardcode APPROVALS_ENFORCED — set-ai-fake would name the wrong variable", n)
-	}
-	if n := strings.Count(content, `$label was NOT set.`); n != 6 {
-		t.Errorf("%d `$label was NOT set.` message(s), want 6: four in service_id_by_name and two in assert_environment_is_ephemeral", n)
-	}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty: a leak here would upsert against a garbage serviceId", stdout)
+		}
+	})
 
-	const zeroInstances = `{"data":{"environment":{"serviceInstances":{"edges":[]}}}}`
-	prelude := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name")
-	for _, tc := range []struct {
-		name     string
-		call     string
-		wantTail string
-	}{
-		{"three args keep the approvals wording", `service_id_by_name "$1" invoice "environment env-x"`, "APPROVALS_ENFORCED was NOT set."},
-		{"a fourth argument replaces it", `service_id_by_name "$1" invoice "environment env-x" AI_FAKE`, "AI_FAKE was NOT set."},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			script := prelude + "\nrc=0\nout=$(" + tc.call + " 2>&1 >/dev/null) || rc=$?\nprintf '%s' \"$out\"\nexit \"$rc\"\n"
-			stdout, _, code := runBashScript(t, script, zeroInstances)
-			if code == 0 {
-				t.Fatalf("service_id_by_name exited 0 on a zero-instance response; stdout = %q", stdout)
-			}
-			if !strings.HasSuffix(strings.TrimSpace(stdout), tc.wantTail) {
-				t.Errorf("refusal does not end with %q; got %q", tc.wantTail, strings.TrimSpace(stdout))
-			}
-		})
-	}
+	t.Run("service_id_by_name with a label selects", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "service_id_by_name") +
+			`rc=0; out=$(service_id_by_name "$1" invoice "self-test R7" AI_FAKE 2>/dev/null) || rc=$?; printf '%s' "$out"; exit "$rc"`
+		stdout, _, code := runBashScript(t, script, fleetJSON)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 with a label given; stdout = %q", code, stdout)
+		}
+		if stdout != "svc-inv" {
+			t.Errorf("stdout = %q, want %q", stdout, "svc-inv")
+		}
+	})
+
+	t.Run("assert_environment_is_ephemeral without a label exits before the read", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "assert_environment_is_ephemeral") + `
+fetch_environment_list() { echo FETCHED; GQL_RESPONSE='{"data":{"environments":{"edges":[{"node":{"id":"env-x","isEphemeral":true}}]}}}'; }
+assert_environment_is_ephemeral env-x
+`
+		stdout, _, code := runBashScript(t, script)
+		if code == 0 {
+			t.Errorf("exit code = 0, want non-zero: no label given, must refuse before reading; stdout = %q", stdout)
+		}
+		if strings.Contains(stdout, "FETCHED") {
+			t.Errorf("stdout contains FETCHED — fetch_environment_list ran before the label was checked; stdout = %q", stdout)
+		}
+	})
+
+	t.Run("assert_environment_is_ephemeral with a label passes an ephemeral env", func(t *testing.T) {
+		script := "set -uo pipefail\n" + shellFunctionSource(t, "assert_environment_is_ephemeral") + `
+fetch_environment_list() { echo FETCHED; GQL_RESPONSE='{"data":{"environments":{"edges":[{"node":{"id":"env-x","isEphemeral":true}}]}}}'; }
+assert_environment_is_ephemeral env-x AI_FAKE
+`
+		stdout, _, code := runBashScript(t, script)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 with a label given; stdout = %q", code, stdout)
+		}
+		if !strings.Contains(stdout, "FETCHED") {
+			t.Errorf("stdout does not contain FETCHED; stdout = %q", stdout)
+		}
+	})
 }
 
 // T14: with every Railway variable unset, an empty argument must still exit 2

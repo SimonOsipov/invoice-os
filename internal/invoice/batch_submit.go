@@ -193,12 +193,9 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 		// After every row lock, per the invoices -> approval_* lock order (decision.go).
 		// One call over the distinct set, so the cost is constant in batch size
 		// (TestBatchSubmit_ApprovalReadIsConstantInBatchSize).
-		var clear map[string]bool
-		if s.store.approvalsEnforced {
-			var err error
-			if clear, err = approval.TransmitClearTx(ctx, tx, distinct); err != nil {
-				return err
-			}
+		clear, err := approval.TransmitClearTx(ctx, tx, distinct)
+		if err != nil {
+			return err
 		}
 
 		// Classify per REQUESTED LIST POSITION (duplicates preserved, one result item
@@ -217,10 +214,7 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 				continue
 			}
 
-			// The approvalsEnforced conjunct is load-bearing: clear is nil with the flag
-			// off and a nil-map read yields false, which would skip every invoice in
-			// every batch (TestBatchSubmit_FlagOffWithNilClearMapDoesNotSkipEverything).
-			if s.store.approvalsEnforced && !clear[id] {
+			if !clear[id] {
 				results = append(results, BatchSubmitResultItem{
 					InvoiceID: id,
 					Enqueued:  false,

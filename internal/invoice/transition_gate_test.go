@@ -166,7 +166,7 @@ func tracedAppPool(t *testing.T) (*pgxpool.Pool, *sqlRecorder) {
 
 // --- AC-3/AC-7: an open run refuses the move into queued ---------------------
 
-// TestTransition_QueuedRefusedWhenAwaitingApproval: flag ON, active policy, an open
+// TestTransition_QueuedRefusedWhenAwaitingApproval: active policy, an open
 // run -> ErrAwaitingApproval, and the whole tx rolls back (status, history and
 // audit all unchanged).
 func TestTransition_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
@@ -175,7 +175,7 @@ func TestTransition_QueuedRefusedWhenAwaitingApproval(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-03-GATED", StatusValidated)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // defaults to open
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	beforeHistory := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, fx.invID)
 	beforeAudit := auditCount(t, app, fx.tenantID, "invoice.transitioned")
@@ -202,7 +202,7 @@ func TestTransition_QueuedRefusedWhenValidatedWithNoRun(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedGatedTenant(t, super, "APPR-08-03-NORUN", StatusValidated)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	_, err := store.Transition(fx.ctx, fx.invID, StatusQueued)
 	if !errors.Is(err, ErrAwaitingApproval) {
@@ -223,7 +223,7 @@ func TestTransition_UppercaseIdOnAGatedInvoiceStillRefuses(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-03-UPPER-GATED", StatusValidated)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	upper := strings.ToUpper(fx.invID)
 	if upper == fx.invID {
@@ -251,7 +251,7 @@ func TestTransition_QueuedAllowedWhenRunApproved(t *testing.T) {
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	got, err := store.Transition(fx.ctx, fx.invID, StatusQueued)
 	if err != nil {
@@ -276,7 +276,7 @@ func TestTransition_UppercaseIdOnAnApprovedInvoiceReachesQueued(t *testing.T) {
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	upper := strings.ToUpper(fx.invID)
 	if upper == fx.invID {
@@ -308,43 +308,13 @@ func TestTransition_QueuedAllowedWhenNoActivePolicy(t *testing.T) {
 	invID := seedInvoiceAtStatus(t, super, tenantID, entityID, label, StatusValidated)
 	seedApprovalRunFor(t, super, tenantID, invID, versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(gateCtx(tenantID), invID, StatusQueued); err != nil {
 		t.Fatalf("Transition(validated -> queued) with no ACTIVE policy version: %v (want nil)", err)
 	}
 	if s := statusOf(t, super, invID); s != StatusQueued {
 		t.Errorf("stored status = %q, want %q", s, StatusQueued)
-	}
-}
-
-// TestTransition_FlagOffLeavesQueuedUnchanged (AC #4): with the flag off the store
-// must be byte-for-byte the store it was — not merely permissive, but silent. The
-// traced pool proves no approval statement is issued at all.
-func TestTransition_FlagOffLeavesQueuedUnchanged(t *testing.T) {
-	super, _ := dbTestPools(t)
-	tracedApp, rec := tracedAppPool(t)
-
-	fx := seedGatedTenant(t, super, "APPR-08-03-FLAGOFF", StatusValidated)
-	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
-
-	store := NewStore(tracedApp) // flag OFF
-
-	rec.reset()
-	if _, err := store.Transition(fx.ctx, fx.invID, StatusQueued); err != nil {
-		t.Fatalf("Transition(validated -> queued) with the flag off: %v (want nil)", err)
-	}
-	if s := statusOf(t, super, fx.invID); s != StatusQueued {
-		t.Errorf("stored status = %q, want %q", s, StatusQueued)
-	}
-	if got := rec.mentioning("approval_runs"); len(got) != 0 {
-		t.Errorf("flag-off Transition issued %d statement(s) mentioning approval_runs: %v", len(got), got)
-	}
-	if got := rec.mentioning("approval_policy_versions"); len(got) != 0 {
-		t.Errorf("flag-off Transition issued %d statement(s) mentioning approval_policy_versions: %v", len(got), got)
-	}
-	if s := runStateOf(t, super, runID); s != "open" {
-		t.Errorf("run state = %q, want unchanged %q", s, "open")
 	}
 }
 
@@ -357,10 +327,10 @@ func TestTransition_GateOnlyBitesTargetQueued(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-03-TODRAFT", StatusValidated)
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(fx.ctx, fx.invID, StatusDraft); err != nil {
-		t.Fatalf("Transition(validated -> draft) under the flag: %v (want nil)", err)
+		t.Fatalf("Transition(validated -> draft): %v (want nil)", err)
 	}
 	if s := statusOf(t, super, fx.invID); s != StatusDraft {
 		t.Errorf("stored status = %q, want %q", s, StatusDraft)
@@ -379,7 +349,7 @@ func TestTransition_RedundantTransitionStillPrecedesTheGate(t *testing.T) {
 	fx := seedGatedTenant(t, super, "APPR-08-03-REDUNDANT", StatusQueued)
 	seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	_, err := store.Transition(fx.ctx, fx.invID, StatusQueued)
 	if errors.Is(err, ErrAwaitingApproval) {
@@ -396,7 +366,7 @@ func TestTransition_RedundantTransitionStillPrecedesTheGate(t *testing.T) {
 // canTransition conjunct would answer ErrAwaitingApproval for.
 func TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	for _, from := range []Status{StatusDraft, StatusSubmitted, StatusAccepted, StatusRejected, StatusFailed} {
 		t.Run(string(from)+"->queued", func(t *testing.T) {
@@ -418,13 +388,13 @@ func TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal(t *testing.T) {
 	}
 }
 
-// TestTransition_MalformedIdUnderTheFlagIsStillValidation: a non-uuid id raises
+// TestTransition_MalformedIdIsStillValidation: a non-uuid id raises
 // 22P02 in the lock SELECT, before the gate can have an opinion.
-func TestTransition_MalformedIdUnderTheFlagIsStillValidation(t *testing.T) {
+func TestTransition_MalformedIdIsStillValidation(t *testing.T) {
 	super, app := dbTestPools(t)
 
 	fx := seedGatedTenant(t, super, "APPR-08-03-MALFORMED", StatusValidated)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	_, err := store.Transition(fx.ctx, "not-a-uuid", StatusQueued)
 	if !errors.Is(err, ErrValidation) {
@@ -454,7 +424,7 @@ func TestTransition_GateRunsAfterTheRowLock(t *testing.T) {
 
 		fx := seedGatedTenant(t, super, label, StatusValidated)
 		runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
-		store := NewStore(app, WithApprovalsEnforced(true))
+		store := NewStore(app)
 
 		holder, err := super.Begin(ctx)
 		if err != nil {
@@ -554,7 +524,7 @@ func TestTransition_ApprovedRunSurvivesForwardWalkToAccepted(t *testing.T) {
 	}
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	assertRunSurvives := func(t *testing.T, step string) {
 		t.Helper()
@@ -591,7 +561,7 @@ func TestTransition_ApprovedRunSurvivesForwardWalkToAccepted(t *testing.T) {
 // them target StatusDraft.
 func TestTransition_TerminalRefusalEdgesLeaveNoOpenRun(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	cases := []struct {
 		name string

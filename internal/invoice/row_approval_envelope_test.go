@@ -17,7 +17,7 @@
 //	AC-4  TestListHandler_ApprovalKeyedOnTheStoreReturnedRowID
 //	AC-5  TestListHandler_RowFactsNotCalledOnAnEmptyPage
 //
-// AC-6 (the flag does not gate the row facts) is DB-backed and lives in
+// AC-6 (the row facts are populated) is DB-backed and lives in
 // row_facts_store_test.go. The two shipped guards this subtask must not break --
 // TestListHandler_EmptyState (handlers_test.go) and TestListHandler_NoActionFlagKeys
 // (handlers_test.go) -- stay where they are, unwidened.
@@ -386,10 +386,10 @@ func TestListItem_SubmitFlagsCarryNoOmitempty(t *testing.T) {
 // are PRESENCE-only, so a PendingRoleKey that shipped without its tag would put
 // `pending_role_key` on the public wire with no Go test failing.
 //
-// GREEN before and after. It is the tag's DIRECT oracle: TestListHandler_ApprovalFacts-
-// IgnoreTheEnforcementFlag also reds on an untagged field, but only because its decoded
-// expectation (wantArmedRowFactsOnTheWire) was split out for this change -- a reshaped
-// expectation there would silently take that second oracle away again.
+// GREEN before and after. It is the tag's DIRECT oracle:
+// TestListHandler_ApprovalObjectCarriesTheArmedStanding also reds on an untagged field, but
+// only because its decoded expectation (wantArmedRowFactsOnTheWire) was split out for this
+// change -- a reshaped expectation there would silently take that second oracle away again.
 func TestListItem_ApprovalObjectHasExactlySixKeys(t *testing.T) {
 	facts := armedRowFacts()
 	wrapped, err := json.Marshal(listItem{Invoice: populatedInvoice(t, uuid.NewString()), Approval: &facts})

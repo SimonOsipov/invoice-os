@@ -32,7 +32,7 @@ import (
 // A predicate written as "no OPEN run" instead would let both of these through.
 func TestTransition_NonApprovedClosedRunStatesStillRefuse(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	for _, state := range []string{"cancelled", "rejected"} {
 		t.Run(state, func(t *testing.T) {
@@ -133,7 +133,7 @@ func TestTransition_TransmitClearTxErrorIsReturnedNotSwallowed(t *testing.T) {
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture") // would otherwise CLEAR
 
-	store := NewStore(failing, WithApprovalsEnforced(true))
+	store := NewStore(failing)
 
 	_, err := store.Transition(fx.ctx, fx.invID, StatusQueued)
 	if err == nil {
@@ -163,7 +163,7 @@ func TestTransition_GateStatementsFollowTheLockStatement(t *testing.T) {
 	runID := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
 	closeApprovalRunFor(t, super, runID, "approved", "fixture")
 
-	store := NewStore(tracedApp, WithApprovalsEnforced(true))
+	store := NewStore(tracedApp)
 
 	rec.reset()
 	if _, err := store.Transition(fx.ctx, fx.invID, StatusQueued); err != nil {
@@ -189,7 +189,7 @@ func TestTransition_GateStatementsFollowTheLockStatement(t *testing.T) {
 // ErrAwaitingApproval for the open one.
 func TestTransition_CrossTenantQueuedIsNotFound(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	intruder := gateCtx(seedTenant(t, super, "APPR-08-03-INTRUDER tenant"))
 
@@ -214,13 +214,13 @@ func TestTransition_CrossTenantQueuedIsNotFound(t *testing.T) {
 
 // --- every uuid form Postgres accepts, and one it does not -------------------
 
-// TestTransition_NonCanonicalIdFormsUnderTheFlag widens AC #9 past uppercase. Postgres
+// TestTransition_NonCanonicalIdForms widens AC #9 past uppercase. Postgres
 // accepts braces and bare hex as well, and each reaches TransmitClearTx as the caller
 // typed it — keying the gate on the LOCKED row's id is what makes all of them work, and
 // a uuid.Parse normalisation would have covered only two of the three.
-func TestTransition_NonCanonicalIdFormsUnderTheFlag(t *testing.T) {
+func TestTransition_NonCanonicalIdForms(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	forms := map[string]func(string) string{
 		"braced":    func(id string) string { return "{" + id + "}" },
@@ -258,7 +258,7 @@ func TestTransition_NonCanonicalIdFormsUnderTheFlag(t *testing.T) {
 	}
 
 	// urn:uuid: is the one common form Postgres rejects: 22P02 in the lock SELECT, before
-	// the gate exists (TestTransition_MalformedIdUnderTheFlagIsStillValidation's sibling).
+	// the gate exists (TestTransition_MalformedIdIsStillValidation's sibling).
 	t.Run("urn form is validation, not a gate answer", func(t *testing.T) {
 		fx := seedGatedTenant(t, super, "APPR-08-03-FORM-URN", StatusValidated)
 		seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID)
@@ -272,14 +272,14 @@ func TestTransition_NonCanonicalIdFormsUnderTheFlag(t *testing.T) {
 
 // --- all seven statuses, one oracle -----------------------------------------
 
-// TestTransition_FlagOnAllSevenStatusesIntoQueued is the flag-ON mirror of
+// TestTransition_AllSevenStatusesIntoQueued is the gated mirror of
 // TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's queued column: every one of the 7
 // starting statuses, under an ACTIVE policy and an open run, with the exact sentinel each
-// must answer. validated is the ONE cell the flag moves; a guard that widened by even one
+// must answer. validated is the ONE cell the gate moves; a guard that widened by even one
 // status flips a cell here.
-func TestTransition_FlagOnAllSevenStatusesIntoQueued(t *testing.T) {
+func TestTransition_AllSevenStatusesIntoQueued(t *testing.T) {
 	super, app := dbTestPools(t)
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	want := map[Status]error{
 		StatusDraft:     ErrIllegalTransition,
@@ -301,7 +301,7 @@ func TestTransition_FlagOnAllSevenStatusesIntoQueued(t *testing.T) {
 
 			_, err := store.Transition(fx.ctx, fx.invID, StatusQueued)
 			if !errors.Is(err, want[from]) {
-				t.Fatalf("Transition(%s -> queued) under the flag: err = %v, want %v", from, err, want[from])
+				t.Fatalf("Transition(%s -> queued): err = %v, want %v", from, err, want[from])
 			}
 			if s := statusOf(t, super, fx.invID); s != from {
 				t.Errorf("stored status = %q, want unchanged %q", s, from)
@@ -335,7 +335,7 @@ func TestTransition_AnApprovedRunAlongsideAnOpenOneStillClearsTheDoor(t *testing
 	closeApprovalRunFor(t, super, approved, "approved", "fixture")
 	fresh := seedApprovalRunFor(t, super, fx.tenantID, fx.invID, fx.versionID) // open
 
-	store := NewStore(app, WithApprovalsEnforced(true))
+	store := NewStore(app)
 
 	if _, err := store.Transition(fx.ctx, fx.invID, StatusQueued); err != nil {
 		t.Fatalf("Transition(validated -> queued) with an approved AND an open run: %v (want nil — EXISTS over every run)", err)

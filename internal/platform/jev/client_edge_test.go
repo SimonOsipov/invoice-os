@@ -629,3 +629,21 @@ func TestFromEnv_TheRealWaitLastsItsDuration(t *testing.T) {
 		t.Errorf("cfg.sleep(50ms) returned after %v, want at least 50ms", wall)
 	}
 }
+
+// Only a missing usage is harmless; a malformed one fails the decode and the call.
+func TestAsk_AMalformedUsageFailsTheCall(t *testing.T) {
+	const answers = `{"answers":{"q1":{"type":"noul","noul":0.95}},"usage":{"input_tokens":`
+	t.Run("integer_usage_control", func(t *testing.T) {
+		ts := newServer(t, replyWith(http.StatusOK, answers+`1,"output_tokens":0}}`))
+		if _, err := clockClient(ts, newFakeClock()).Ask(t.Context(), noulReq("s")); err != nil {
+			t.Fatalf("Ask() err = %v, want nil: the fixture's answers must pass on their own", err)
+		}
+	})
+	t.Run("fractional_input_tokens", func(t *testing.T) {
+		ts := newServer(t, replyWith(http.StatusOK, answers+`1.5,"output_tokens":0}}`))
+		resp, err := clockClient(ts, newFakeClock()).Ask(t.Context(), noulReq("s"))
+		wantHits(t, ts, 1)
+		wantSkipped(t, err, textUnavailable)
+		wantNoAnswers(t, resp)
+	})
+}

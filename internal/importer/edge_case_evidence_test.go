@@ -1,4 +1,4 @@
-// M4-15-04: the umbrella evidence map proving the four Build-Plan-required
+// M4-15-04: the umbrella evidence map proving the four required
 // edge-case categories -- wrong encodings, malformed/ragged/bad-mapping
 // rows, in-file duplicates, oversized files -- are auditable-as-done.
 // Recon (story M4-15) found the four categories already ~90% covered by

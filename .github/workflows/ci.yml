@@ -604,9 +604,9 @@ jobs:
   # and migrates exactly like the `migrations` job, then runs the suite as the
   # app/migrator/reader roles. The suite SKIPS itself when these DATABASE_* URLs are
   # absent, so the `go` job above and a bare local `go test ./...` stay green without
-  # a database. See docs/migrations.md §6, §8. (The build plan floated testcontainers;
-  # we reuse this service-container + Makefile-bootstrap path instead — no new Go
-  # dependency, one canonical bootstrap, CI-consistent.)
+  # a database. See docs/migrations.md §6, §8. Deliberately not testcontainers — this
+  # service-container + Makefile-bootstrap path adds no Go dependency and keeps one
+  # canonical bootstrap.
   rls:
     name: RLS isolation (adversarial)
     needs: changes

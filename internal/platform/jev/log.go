@@ -9,8 +9,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// logCall writes counts and the outcome only: no state, question, option,
-// answer, key or body.
+// logCall writes no state, question, option, answer, key or body.
 func (c *Client) logCall(ctx context.Context, req Request, r result, latency time.Duration) {
 	if c.logger == nil {
 		return

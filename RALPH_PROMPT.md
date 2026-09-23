@@ -97,7 +97,7 @@ Design references for UI stories: Claude Design **prototype** project `6269a212-
    - *Obsidian:* `get_vault_file` on `Simon Vault/Projects/ASComply Africa/User Stories/<EPIC>/<STORY>*.md`; also check `User Stories/Archive/<EPIC>/`. Set `STORY_SOURCE=obsidian`. If no file exists, error: "run /pm-story first".
 3. **Branch slug.** Use the story's `## Branch Strategy` if present. Otherwise `feature/<lowercase-id>-<kebab-title>` (`F-192 Notice a submission failure` → `feature/f-192-notice-a-submission-failure`).
 4. **Backlog subtasks:** `mcp__backlog__task_list({ labels: ["story:<lowercase-id>"], status: "To Do" })`.
-5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and print them. Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
+5. **Refuse a story with unanswered questions.** If `## Blocking Questions` has any entry, stop and ask the first open one (Phase 0.6d rules). Never default them or delete the section to proceed. (`## Open Questions` is a different, non-blocking section.)
 6. **Classify the story state:**
    - `STORY_SOURCE=sysmap` → **BASIC**.
    - Zero subtasks + Objective/Core ACs → **BASIC** → `PLANNING_REQUIRED=true`.
@@ -173,9 +173,10 @@ Match on the question, not on shared nouns.
 
 With critical forks left:
 1. Write each under `## Blocking Questions` (exact heading): the question in one line, the default, the alternative.
-2. Print the list and **halt**. **Checkpoint:** `AWAITING_ANSWERS`.
+2. Ask the first question alone, in plain words, with 2–3 options and the default marked. **Halt.** **Checkpoint:** `AWAITING_ANSWERS`.
+3. After each answer, ask the next. When the user pushes back or says "your call", take the default for every question left.
 
-When the user answers, record each as `user — <choice>` in `## Decisions`, delete `## Blocking Questions`, and continue without re-planning.
+When every question is answered or defaulted, record each as `user — <choice>` in `## Decisions`, delete `## Blocking Questions`, and continue without re-planning.
 
 **Boundary:** pre-planned stories skip Phase 0.6 and so skip this gate.
 

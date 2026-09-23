@@ -1,10 +1,6 @@
 #!/usr/bin/env sh
-# scripts/ci/stamp-mock-issuer.sh
-#
-# Writes the mockissuer build tag into cmd/gateway/build.tags, which the Dockerfile
-# passes to `go build -tags`. PR builds only: the committed file stays empty.
-#
-# POSIX sh (not bash): runs inside the minimal ghcr.io/railwayapp/cli container.
+# Stamps mockissuer into cmd/gateway/build.tags, which the Dockerfile passes to go build -tags.
+# Non-production builds only: the committed file stays empty.
 set -eu
 
 target="cmd/gateway/build.tags"

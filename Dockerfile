@@ -37,7 +37,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG SERVICE
-# cmd/${SERVICE}/build.tags is optional; gateway's is empty on main and stamped only on PR builds.
+# cmd/${SERVICE}/build.tags is optional; gateway's is empty on main and stamped only for PR deploys and the CI canary.
 RUN test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >&2; exit 1; }; \
     CGO_ENABLED=0 go build -tags "$(cat "cmd/${SERVICE}/build.tags" 2>/dev/null)" -o /out/service ./cmd/${SERVICE}
 

@@ -200,8 +200,10 @@ CHECK-03, CHECK-04 and CHECK-05 keep this rule when they wire the client.
 
 ## Data terms
 
-In real mode each `Ask` sends `State`, the caller's content, and the question text to
-TypeSafe. The data terms for that transfer are unresolved. The user owns them. No production
+In real mode each `Ask` sends `State` to TypeSafe, and for each question its id, its
+`Instructions` and its `criteria` as the type table under "What it is" defines them: a
+`noul`'s `True` and `False` text, every `choice` option `Name` with its `Description`, and
+every `score` level description. The data terms for that transfer are unresolved. The user owns them. No production
 key exists, and none is set until the user resolves them.
 
 The vendor's Legal page (`https://docs.typesafe.ai/legal.md`, read 2026-09-23) lists a Data

@@ -72,7 +72,8 @@ func TestLog_ANilLoggerWritesNothingToTheDefaultLogger(t *testing.T) {
 	wantHits(t, ts, 1)
 }
 
-// Rows C23 names that TestLog_OutcomePerPath does not; every line is one INFO "jev call".
+// Paths TestLog_OutcomePerPath leaves out: retries, 422, a bad 200, the spent budget, a cancelled
+// retry wait, an empty off request and the fake doubt and choice markers. Each logs one INFO "jev call".
 func TestLog_OutcomeOnTheRemainingPaths(t *testing.T) {
 	wire := func(h func(int32, http.ResponseWriter, *http.Request)) func(*testing.T, *slog.Logger) {
 		return func(t *testing.T, l *slog.Logger) {

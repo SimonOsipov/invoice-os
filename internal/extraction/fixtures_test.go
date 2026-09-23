@@ -108,6 +108,8 @@ var fxCorpus = []struct {
 	{fxAISteered, fxBuildAISteeredInvoice},
 	// AIR-04-04's deployed-unavailable fixture: outside every corpus_ ratchet.
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
+	// The value check's one-doubt fixture: outside every corpus_ ratchet.
+	{fxJevDoubt, fxBuildJevDoubtInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
 	// CHECK-01-03's seven non-invoice types: the document-type check's negative half.
@@ -1803,11 +1805,16 @@ const fxJevDoubt = "jev_doubt_invoice.pdf"
 const fxJevDoubtMarker = "JEVFAKE-DOUBT"
 
 func fxJevDoubtLines() []fxLine {
-	return nil
+	return []fxLine{
+		{12, 72, 690, "Invoice Number: JD-3310"},
+		{12, 72, 672, "From: Kaduna Textiles Limited"},
+		{12, 72, 654, "Supplier TIN: 23456789-0001"},
+		{3, 72, 38, fxJevDoubtMarker},
+	}
 }
 
 func fxBuildJevDoubtInvoice() []byte {
-	return fxTextPage()
+	return fxTextPage(fxJevDoubtLines()...)
 }
 
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
@@ -2970,7 +2977,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

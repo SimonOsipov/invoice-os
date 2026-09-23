@@ -253,7 +253,7 @@ func MergeAIForTest(engine []FieldResult, answer map[string]string, pages []Toke
 
 // CheckValuesForTest hands the external fixtures test the value check over a fixture-built page.
 func CheckValuesForTest(ctx context.Context, j JevAsker, pages []TokenPage, results []FieldResult) []FieldResult {
-	return results
+	return checkValues(ctx, j, pages, results)
 }
 
 // MergeAILinesForTest hands the external fixtures test the line-merge step over a fixture-built

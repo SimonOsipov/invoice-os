@@ -233,7 +233,38 @@ jobs:
           file: Dockerfile
           build-args: |
             SERVICE=gateway
+          load: true
+          tags: gateway:canary
           push: false
+      - name: Copy the production-shaped gateway binary out of the image
+        run: |
+          id=$(docker create gateway:canary)
+          docker cp "$id:/service" /tmp/gateway-prod
+      - name: Stamp the mock-issuer build tag
+        run: sh scripts/ci/stamp-mock-issuer.sh
+      # context: . builds the working tree, so this build sees the stamped build.tags.
+      - name: Build the PR-shaped gateway image (-tags mockissuer)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            SERVICE=gateway
+          load: true
+          tags: gateway:canary-mockissuer
+          push: false
+      - name: Copy the PR-shaped gateway binary out of the image
+        run: |
+          id=$(docker create gateway:canary-mockissuer)
+          docker cp "$id:/service" /tmp/gateway-mockissuer
+      # TestCommittedGatewayBuildTagsAreEmpty reads this file.
+      - name: Restore the committed build.tags
+        run: git checkout -- cmd/gateway/build.tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan both gateway binaries for the minting path
+        run: GATEWAY_BINARY=/tmp/gateway-prod GATEWAY_BINARY_MOCKISSUER=/tmp/gateway-mockissuer go test ./cmd/gateway/ -count=1 -v
 
   # Core AC 5 ("version-pinned, and the models are baked into the image rather
   # than downloaded at boot"), proved offline: build the docling sidecar image

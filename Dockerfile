@@ -37,8 +37,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG SERVICE
+# cmd/${SERVICE}/build.tags is optional; gateway's is empty on main and stamped only on PR builds.
 RUN test -n "${SERVICE}" || { echo "Dockerfile: SERVICE build arg is required" >&2; exit 1; }; \
-    CGO_ENABLED=0 go build -o /out/service ./cmd/${SERVICE}
+    CGO_ENABLED=0 go build -tags "$(cat "cmd/${SERVICE}/build.tags" 2>/dev/null)" -o /out/service ./cmd/${SERVICE}
 
 # ---- Run: distroless static (CA certs + nonroot user), binary only ----
 # The service binds :$PORT on all interfaces (Railway private networking is

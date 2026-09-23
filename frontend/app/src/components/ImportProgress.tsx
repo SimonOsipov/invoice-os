@@ -133,6 +133,10 @@ export function ImportProgress({ ctx }: { ctx: PlatformCtx }) {
         <p style={{ fontSize: 12.5, color: 'var(--status-amber-text)', margin: 0, lineHeight: 1.55 }}>
           Do not close this tab — each file imports on its own request, and closing it can leave the file in progress half-written.
         </p>
+        {/* While a run is active only a refused click sets importError: both run starts clear it. */}
+        {ctx.importError && (
+          <p style={{ fontSize: 12.5, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.55 }}>{ctx.importError.message}</p>
+        )}
       </div>
     </div>
   )

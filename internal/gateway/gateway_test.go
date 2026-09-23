@@ -1047,7 +1047,7 @@ func TestMockIssuerEnabled(t *testing.T) {
 		{"production", "true", false}, // refused in production regardless
 		{"production", "", false},
 
-		// --- normalization added for M8-07's demo-side half: trim + lowercase
+		// --- normalization added for the demo-side half: trim + lowercase
 		// before comparing to "production" (mirrors submission.IsProduction) ---
 		{"", "true", true},              // unset env stays permissive, same as "development"
 		{"Production", "true", false},   // AC-3: casing bypass closed

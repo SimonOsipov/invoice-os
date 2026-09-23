@@ -184,6 +184,9 @@ jobs:
           else
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
+      # Untagged build/vet/test never compile cmd/gateway/mockissuer.go.
+      - name: Test the mock-issuer build (-tags mockissuer)
+        run: go vet -tags mockissuer ./cmd/gateway/ && go test -tags mockissuer ./cmd/gateway/
       - name: Report the Tier-1 accuracy table
         run: |
           # The rls job runs this package through a gate that DELETES a passing test's buffered

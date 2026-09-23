@@ -148,10 +148,11 @@ func injectIdentity(pr *httputil.ProxyRequest) {
 }
 
 // MockIssuerEnabled reports whether the mock issuer should be wired in: every
-// non-production environment, the public demo included. It is refused in production
-// regardless of the flag, and environment is trimmed and lowercased first (the same
-// normalization submission.IsProduction applies), so "Production" or " production"
-// cannot defeat it. M8-07 still owes the verifier refusing mock-issued tokens.
+// non-production environment. It is refused in production regardless of the flag,
+// and environment is trimmed and lowercased first (the same normalization
+// submission.IsProduction applies), so "Production" or " production" cannot defeat
+// it. The production gateway is built without -tags mockissuer (AUTH-01), so this
+// gate only filters builds that opted in.
 func MockIssuerEnabled(environment, flag string) bool {
 	return flag == "true" && strings.ToLower(strings.TrimSpace(environment)) != "production"
 }

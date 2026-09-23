@@ -70,6 +70,9 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	if DemoPurge != "" {
 		body["demo_purge"] = DemoPurge
 	}
+	if MockIssuer != "" {
+		body["mock_issuer"] = MockIssuer
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 

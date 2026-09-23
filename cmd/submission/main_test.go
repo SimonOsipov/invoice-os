@@ -1033,11 +1033,16 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 		if i+1 >= len(body) {
 			continue
 		}
-		ifs, ok := body[i+1].(*ast.IfStmt)
-		if !ok {
+		// The call's own err, tested `err != nil`, fatal in the body: `x, _ :=`, `err == nil` or
+		// a fatal only in an else checks nothing (TestSubmissionMain_FatalAfterRefusesAWeakCheck).
+		if last, ok := as.Lhs[len(as.Lhs)-1].(*ast.Ident); !ok || last.Name != "err" {
 			continue
 		}
-		ast.Inspect(ifs, func(n ast.Node) bool {
+		ifs, ok := body[i+1].(*ast.IfStmt)
+		if !ok || ifs.Init != nil || !wtIsErrNotNil(ifs.Cond) {
+			continue
+		}
+		ast.Inspect(ifs.Body, func(n ast.Node) bool {
 			if c, ok := n.(*ast.CallExpr); ok {
 				if name := wtCallName(c.Fun); name == "log.Fatalf" || name == "log.Fatal" {
 					fatal = true
@@ -1047,6 +1052,16 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 		})
 	}
 	return calls, fatal
+}
+
+func wtIsErrNotNil(e ast.Expr) bool {
+	b, ok := e.(*ast.BinaryExpr)
+	if !ok || b.Op != token.NEQ {
+		return false
+	}
+	x, xok := b.X.(*ast.Ident)
+	y, yok := b.Y.(*ast.Ident)
+	return xok && yok && x.Name == "err" && y.Name == "nil"
 }
 
 // TestSubmissionMain_FatalOnDocumentConfigError: AC #8. Both object-store calls sit at the top
@@ -1143,6 +1158,135 @@ func TestSubmissionMain_FatalOnJevClientError(t *testing.T) {
 	}
 	if !fatal {
 		t.Error("the statement after jev.FromEnv is not an error check that calls log.Fatal")
+	}
+}
+
+// The matcher reads main()'s top-level statements only, as AST, so layout and comments never count.
+func TestSubmissionMain_FatalAfterRefusesAWeakCheck(t *testing.T) {
+	const head = "package main\nfunc main() {\n"
+	cases := []struct {
+		name      string
+		body      string
+		wantCalls int
+		wantFatal bool
+	}{
+		{"control", "c, err := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, true},
+		{"control reformatted", "c,err:=jev.FromEnv(\n l,\n)\nif err!=nil{\nlog.Fatal(err)}", 1, true},
+		{"blank error", "c, _ := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, false},
+		{"inverted check", "c, err := jev.FromEnv(l)\nif err == nil { log.Fatalf(\"x: %v\", err) }", 1, false},
+		{"fatal only in else", "c, err := jev.FromEnv(l)\nif err != nil { l.Error(\"x\") } else { log.Fatal(err) }", 1, false},
+		{"init shadows err", "c, err := jev.FromEnv(l)\nif err := f(); err != nil { log.Fatal(err) }", 1, false},
+		{"statement between", "c, err := jev.FromEnv(l)\n_ = c\nif err != nil { log.Fatal(err) }", 1, false},
+		{"inside an if", "if ok { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }", 0, false},
+		{"inside a func literal", "func() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }()", 0, false},
+		{"comment only", "// c, err := jev.FromEnv(l)\n// if err != nil { log.Fatal(err) }\n_ = 1", 0, false},
+		{"other func", "}\nfunc other() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) }", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "x.go", head+tc.body+"\n}\n", parser.ParseComments)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			calls, fatal := wtFatalAfter(t, f, "jev.FromEnv")
+			if calls != tc.wantCalls || fatal != tc.wantFatal {
+				t.Errorf("wtFatalAfter = (%d, %v), want (%d, %v)", calls, fatal, tc.wantCalls, tc.wantFatal)
+			}
+		})
+	}
+}
+
+// The Jev client is built after the AI client and before the extract worker and the queue, so a
+// bad JEV_FAKE stops the process before River starts; nothing reassigns it on the way.
+func TestSubmissionMain_JevClientIsBuiltOnceBeforeTheQueue(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	body := wtMainBody(t, f)
+	at := func(want string) int {
+		t.Helper()
+		idx := -1
+		for i, stmt := range body {
+			as, ok := stmt.(*ast.AssignStmt)
+			if !ok || len(as.Rhs) != 1 {
+				continue
+			}
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(call.Fun) == want {
+				if idx != -1 {
+					t.Fatalf("main() assigns from %s twice at top level", want)
+				}
+				idx = i
+			}
+		}
+		if idx == -1 {
+			t.Fatalf("main() has no top-level assignment from %s", want)
+		}
+		return idx
+	}
+	aiAt, jevAt, ewAt, qAt := at("ai.FromEnv"), at("jev.FromEnv"), at("newExtractWorker"), at("queue.New")
+	if !(aiAt < jevAt && jevAt < ewAt && ewAt < qAt) {
+		t.Errorf("statement order ai.FromEnv=%d jev.FromEnv=%d newExtractWorker=%d queue.New=%d, want strictly increasing", aiAt, jevAt, ewAt, qAt)
+	}
+
+	// The fatal names the service, like every other boot fatal in main().
+	ifs, ok := body[jevAt+1].(*ast.IfStmt)
+	if !ok || len(ifs.Body.List) != 1 {
+		t.Fatalf("the statement after jev.FromEnv is %T, want an if with one statement", body[jevAt+1])
+	}
+	var call *ast.CallExpr
+	if es, ok := ifs.Body.List[0].(*ast.ExprStmt); ok {
+		call, _ = es.X.(*ast.CallExpr)
+	}
+	if call == nil || wtCallName(call.Fun) != "log.Fatalf" || len(call.Args) == 0 {
+		t.Fatal("the jev.FromEnv error branch is not one log.Fatalf call")
+	}
+	if lit, ok := call.Args[0].(*ast.BasicLit); !ok || !strings.HasPrefix(lit.Value, `"submission: `) {
+		t.Errorf("the jev.FromEnv fatal format is %s, want it to start with \"submission: \"", wtRender(call.Args[0]))
+	}
+
+	// Exactly one write to the client's name anywhere in main(), nested blocks included.
+	jevName := body[jevAt].(*ast.AssignStmt).Lhs[0].(*ast.Ident).Name
+	writes := 0
+	ast.Inspect(&ast.BlockStmt{List: body}, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == jevName {
+					writes++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				if id.Name == jevName {
+					writes++
+				}
+			}
+		}
+		return true
+	})
+	if writes != 1 {
+		t.Errorf("main() writes %s %d time(s), want 1: a later write hands newExtractWorker something jev.FromEnv did not build", jevName, writes)
+	}
+}
+
+// An unset key boots with the client off: the worker gets a non-nil asker that asks nothing.
+func TestNewExtractWorker_AnOffJevClientIsWiredAndDisabled(t *testing.T) {
+	t.Setenv(jev.EnvKey, "")
+	t.Setenv(jev.EnvFake, "")
+	c, err := jev.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("jev.FromEnv with no key: %v", err)
+	}
+	ew := newExtractWorker(&pgxpool.Pool{}, extraction.NewMockExtractor(), nil, nil, nil, nil, nil, nil, c, nil, nil)
+	if ew.Jev == nil {
+		t.Fatal("ExtractWorker.Jev is nil, want the off client")
+	}
+	if ew.Jev != extraction.JevAsker(c) {
+		t.Error("ExtractWorker.Jev is not the jev.FromEnv client passed in")
+	}
+	if ew.Jev.Enabled() {
+		t.Error("ExtractWorker.Jev.Enabled() = true with no key and JEV_FAKE unset, want false")
 	}
 }
 

@@ -1,7 +1,7 @@
 # TypeSafe Jev client
 
 **Audience:** anyone setting the TypeSafe key on a Railway service, anyone debugging a
-`jev call` log line, and CHECK-03, CHECK-04 and CHECK-05, the stories that call this
+`jev call` log line, and CHECK-03, CHECK-04 and CHECK-05, the stories that wire this
 client.
 
 > `internal/platform/jev/doc_test.go` is this page's doc-sync gate. It reads every variable,
@@ -56,9 +56,10 @@ An enabled client refuses a request before it sends anything when:
 
 The refusal is `skipped_refused` with `attempts` `0`, in real and fake mode alike.
 
-`submission`'s extraction worker calls the client once per document
-(`internal/extraction/jevcheck.go`). CHECK-04 and CHECK-05 are still to come: CHECK-04 will also
-call it from that worker, and CHECK-05 from `invoice`'s importer.
+`submission`'s extraction worker calls the client at most once per extraction run, on its
+Docling text branch only (`internal/extraction/jevcheck.go`). CHECK-04 and CHECK-05 are
+still to come: CHECK-04 will also call it from that worker, and CHECK-05 from `invoice`'s
+importer.
 
 ## Env knobs
 
@@ -69,8 +70,8 @@ call it from that worker, and CHECK-05 from `invoice`'s importer.
 
 `FromEnv` never exits the process. It returns an error in two cases: an unparseable
 `JEV_FAKE`, and `JEV_FAKE` true with a key set. The error text never holds the key. A caller
-treats that error as fatal at boot, as `cmd/invoice` and `cmd/submission` treat an
-`ai.FromEnv` error today.
+treats that error as fatal at boot. `cmd/submission` does, as it and `cmd/invoice` do for an
+`ai.FromEnv` error.
 
 The model, the endpoint, the budget and the retry wait are constants. No variable changes
 them.

@@ -315,7 +315,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
    - No holistic "looks done": every AC needs its own evidence.
 5. **Fix loop (cap 2 cycles):** batch all fails into one report → `product-executor` fixes → push (re-fires `dev-env.yml`) → wait → re-verify only the failed items. Every bounce cites an AC id, a design-system rule or a prototype CSS rule. After 2 cycles, escalate the rest to the user; each gate run rebuilds an 11-service environment.
 6. **Log** under `## Post-Deploy QA — <date>` in the QA Debate Log: per-AC verdict + evidence, fidelity deltas, fix cycles, run ids, advisory notes.
-7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): move all subtasks to "Done" and output `<promise>ALL_TASKS_COMPLETE</promise>`.
+7. **On PASS** (all original ACs pass on a green run, no unresolved bounces, fidelity evidence for UI stories): move all subtasks to "Done". End with a short report in this order: **Needs you** (merge PR #N; each default or advisory finding a reviewer should see), **Changed** (subtasks, PR), **Found** (corrected premises; what you could not confirm and where you looked). Then output `<promise>ALL_TASKS_COMPLETE</promise>`.
    **Otherwise:** leave subtasks "In Progress", do not emit completion, escalate to the user.
 
 ### Phase 4: Worktree cleanup

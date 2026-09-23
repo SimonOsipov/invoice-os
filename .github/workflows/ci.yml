@@ -49,6 +49,8 @@ jobs:
               - 'Dockerfile'
               - 'Dockerfile.dockerignore'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/dev-env.yml'
+              - '.github/workflows/railway-invariants.yml'
             migrations:
               - 'migrations/**'
               - 'db/**'

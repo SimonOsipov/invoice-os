@@ -75,6 +75,8 @@ are durable Railway **reference variables** on `development` (M4-21-05, task-129
 carried into every PR environment along with the rest of `development`'s variable topology
 by the `environmentCreate` fork `prepare-env` issues (not by Railway's PR Environments
 feature, which is off), so the workflow no longer sets any of them per-run.
+`GATEWAY_MOCK_ISSUER` forks, but only a `-tags mockissuer` gateway build honours it.
+`deploy-gateway` stamps that tag on `pull_request` only (`scripts/ci/stamp-mock-issuer.sh`).
 
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service

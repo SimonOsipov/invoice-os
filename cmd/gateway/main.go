@@ -69,16 +69,12 @@ func main() {
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
 		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
-		// (db.Reset, gated by db.ResetEnabled) needs a signal that actually
-		// differs between a PR fork and its persistent source. ENVIRONMENT is an
-		// ordinary app variable that forks verbatim, so it reads the literal
-		// string "development" inside every PR environment too
-		// (docs/deploy-model.md "ENVIRONMENT is decorative in a fork") — it
-		// cannot tell the two apart. RAILWAY_ENVIRONMENT_NAME is a Railway-
-		// injected system variable (docs/add-a-service.md; never set manually)
-		// that always reflects the CURRENT environment's real name: "pr-<N>"
-		// inside a fork, whatever the persistent environment is actually named
-		// ("production", post-2026-07-27-rename) on that environment. See
+		// (db.Reset, gated by db.ResetEnabled) keys on a name no one hand-sets.
+		// ENVIRONMENT is an ordinary app variable that CI writes in every fork
+		// (docs/deploy-model.md "ENVIRONMENT in a fork is set by CI").
+		// RAILWAY_ENVIRONMENT_NAME is a Railway-injected system variable
+		// (docs/add-a-service.md; never set manually): "pr-<N>" inside a fork,
+		// the persistent environment's real name on that environment. See
 		// db.ResetEnabled's doc comment for the full reasoning.
 		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
 		// A SEPARATE opt-in from GATEWAY_DB_BOOTSTRAP: Reset is strictly more

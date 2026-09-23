@@ -45,11 +45,10 @@ import (
 //     wiped just because it would satisfy the (looser) seed gate.
 //  2. It would be actively WRONG even ignoring (1): `provisionableEnvironment`'s
 //     "development" branch is what makes Bootstrap/Seed fire inside a REAL PR
-//     fork today, because ENVIRONMENT is inherited VERBATIM from the fork's
-//     source and resolves to the literal string "development" inside every
-//     PR environment (docs/deploy-model.md "ENVIRONMENT is decorative in a
-//     fork"; scripts/ci/railway-env.sh's record_environment_variable measures
-//     this and deliberately sets nothing, Decision [env-name-is-convention]).
+//     fork today, because ENVIRONMENT reads the literal string "development"
+//     inside every PR environment (docs/deploy-model.md "ENVIRONMENT in a fork
+//     is set by CI"; set-fork-environment sets it to `development` in every
+//     fork, Decision [env-name-is-convention]).
 //     If Reset's gate accepted that same "development" branch, it would fire
 //     on every PR fork under the SAME string that also matches the persistent
 //     environment's own pre-rename name — the one string this function must

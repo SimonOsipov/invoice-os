@@ -429,22 +429,15 @@ finding for a deployment that read `SUCCESS` moments later. Any early-fail thres
 guess about how long `CRASHED` can persist, and every such guess reintroduces that false
 fatal.
 
-### `ENVIRONMENT` is decorative in a fork
+### `ENVIRONMENT` in a fork is set by CI
 
-`ENVIRONMENT` is inherited **verbatim**, so inside `pr-<N>` it resolves to the literal
-string `development`, while `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
+`ENVIRONMENT` forks verbatim, and production's gateway reads `production`. On `pull_request`,
+`prepare-env` runs `railway-env.sh set-fork-environment`, which sets the fork **gateway's**
+`ENVIRONMENT` to the constant `development` and re-reads it. The other services keep the
+inherited value. `RAILWAY_ENVIRONMENT_NAME` is `pr-<N>`.
 
-`provisionableEnvironment` (`internal/platform/db/bootstrap.go`) returns true for exactly
-`development` or `^(?:.+-)?pr-[0-9]+$`. A fork passes on the **first** branch; a fork whose
-`ENVIRONMENT` were "correctly" `pr-<N>` would pass on the **second**. Both pass — so in a
-PR environment the fail-closed allowlist **distinguishes nothing**. It retains full value
-on the paths it was written for: `production`, `staging`, and empty.
-
-This is recorded, **not repaired**. Setting `ENVIRONMENT` per-fork would be a regression,
-not a fix: the environment *name* is a CI convention this workflow is free to change
-(`[env-name-is-convention]`), and coupling provisioning behaviour to it would make a
-rename silently change whether a database bootstraps. No variable is set and no app code
-is touched.
+The value is a constant, not the environment name, so `[env-name-is-convention]` still holds:
+renaming the fork convention cannot change whether a fork's database bootstraps.
 
 ## Related
 

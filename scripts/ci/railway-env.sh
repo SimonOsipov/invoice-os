@@ -8,6 +8,7 @@
 #                            verify-gateway-domain <environment-id>|
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            set-ai-fake <environment-id|--self-test>|
+#                            set-fork-environment <environment-id|--self-test>|
 #                            delete-environment <name>|list-environments>
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
@@ -1903,32 +1904,6 @@ ensure_bucket() {
   exit 1
 }
 
-# --- ENVIRONMENT audit (RECORD ONLY — sets nothing) --------------------------
-#
-# MEASURED: `ENVIRONMENT` in a fork resolves to the literal `development`
-# (inherited verbatim), while RAILWAY_ENVIRONMENT_NAME is `pr-<N>`. Consequence
-# is documented in docs/deploy-model.md. Nothing is set here
-# ([env-name-is-convention]) and no app code is touched.
-record_environment_variable() {
-  local env_id="$1" env_value rw_value
-
-  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
-    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$RAILWAY_SVC_GATEWAY_ID" '{p: $p, e: $e, s: $s}')")" \
-    "reading the gateway variables in environment $env_id"
-
-  # Only the two named keys are read out. The map also carries live credentials,
-  # so it is never logged wholesale.
-  env_value=$(echo "$GQL_RESPONSE" | jq -r '.data.variables.ENVIRONMENT // "<unset>"')
-  rw_value=$(echo "$GQL_RESPONSE" | jq -r '.data.variables.RAILWAY_ENVIRONMENT_NAME // "<unset>"')
-
-  echo "RECORD (no variable is set): gateway ENVIRONMENT=$env_value RAILWAY_ENVIRONMENT_NAME=$rw_value in $env_id."
-  if [ "$env_value" = "development" ]; then
-    echo "  As documented in docs/deploy-model.md, ENVIRONMENT is inherited verbatim from the source environment, so the fail-closed provisioning allowlist is DECORATIVE in a fork: it passes on its == \"development\" branch rather than its pr-<N> branch. It retains full value on the paths it was written for (production, staging, empty)."
-  else
-    echo "::warning::gateway ENVIRONMENT resolved to '$env_value', not the measured-expected literal 'development'. Recorded, not repaired — update docs/deploy-model.md if fork inheritance has changed."
-  fi
-}
-
 # cmd_reconcile_fork <environment-id>
 # The reconciles are one command on purpose: they are strictly sequential,
 # share the fork environment id and the auth context, and produce one coherent
@@ -1958,7 +1933,6 @@ cmd_reconcile_fork() {
   ensure_postgres_volume "$env_id"
   ensure_postgres_running "$env_id" "$POSTGRES_VOLUME_CREATED"
   ensure_bucket "$env_id"
-  record_environment_variable "$env_id"
   echo "Fork reconciliation complete for $env_id."
 }
 
@@ -2291,6 +2265,138 @@ cmd_set_ai_fake() {
   echo "AI fake mode confirmed in environment $env_id: AI_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
 }
 
+# --- Fork gateway ENVIRONMENT ------------------------------------------------
+#
+# A fork inherits its source's ENVIRONMENT, and production reads `production`.
+# Only the gateway's value gates the mock issuer and boot provisioning.
+
+# environment_verdict <variables-response-json> <want>
+# Pure: no token, no network. Exit 0 only on an exact match. Prints only
+# ENVIRONMENT's value: the rendered map carries DSNs and keys.
+environment_verdict() {
+  local resp="$1" want="$2" kind got
+
+  if ! kind=$(printf '%s' "$resp" | jq -r '
+    if type != "object" then "unreadable"
+    elif (has("errors") and ((.errors | length) > 0)) then "errors"
+    elif ((.data | type) != "object") or ((.data.variables | type) != "object") then "unreadable"
+    elif ((.data.variables | has("ENVIRONMENT")) | not) then "absent"
+    elif .data.variables.ENVIRONMENT == "" then "empty"
+    else "set" end' 2>/dev/null); then
+    kind="unreadable"
+  fi
+
+  case "$kind" in
+    set) ;;
+    absent|empty)
+      echo "::error::gateway ENVIRONMENT is $kind; want '$want'."
+      return 1 ;;
+    errors)
+      echo "::error::Could not read the gateway's variables (GraphQL error). This is NOT evidence that ENVIRONMENT is unset."
+      return 1 ;;
+    *)
+      echo "::error::The gateway's rendered variable map is unreadable, so ENVIRONMENT could not be checked."
+      return 1 ;;
+  esac
+
+  got=$(printf '%s' "$resp" | jq -r '.data.variables.ENVIRONMENT')
+  if [ "$got" != "$want" ]; then
+    echo "::error::gateway ENVIRONMENT reads '$got'; want '$want'."
+    return 1
+  fi
+  echo "  gateway ENVIRONMENT reads '$got'."
+}
+
+# env_expect <id> <json> [message]: no message expects a pass, a message expects
+# a refusal that prints it. Increments `failures`, a local of environment_self_test.
+env_expect() {
+  local id="$1" json="$2" message="${3:-}" out rc=0
+  out=$(environment_verdict "$json" development 2>&1) || rc=$?
+  if [[ "$out" == *sentinel-secret-dsn* ]]; then
+    echo "::error::self-test $id FAILED: the verdict printed a sibling variable's value"
+    failures=$((failures + 1)); return 0
+  fi
+  if [ -z "$message" ] && [ "$rc" != "0" ]; then
+    echo "::error::self-test $id FAILED: expected exit 0, got exit $rc and '$out'"
+    failures=$((failures + 1)); return 0
+  fi
+  if [ -n "$message" ] && { [ "$rc" = "0" ] || [[ "$out" != *"$message"* ]]; }; then
+    echo "::error::self-test $id FAILED: expected a refusal saying \"$message\", got exit $rc and '$out'"
+    failures=$((failures + 1)); return 0
+  fi
+  echo "  $id ok -> exit $rc, no sibling value printed"
+}
+
+environment_self_test() {
+  local failures=0
+  local absent='{"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn"}}}'
+  local empty='{"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn","ENVIRONMENT":""}}}'
+
+  # Every fixture carries a DSN sibling; env_expect fails if its value is printed.
+  env_expect E1 '{"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn","ENVIRONMENT":"development"}}}'
+  env_expect E2 "$absent" "is absent"
+  env_expect E3 "$empty" "is empty"
+  env_expect E4 '{"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn","ENVIRONMENT":"production"}}}' "reads 'production'"
+  env_expect E5 'not json {"DATABASE_URL":"sentinel-secret-dsn"}' "unreadable"
+  env_expect E6 '{"errors":[{"message":"Not Authorized"}],"data":{"variables":{"DATABASE_URL":"sentinel-secret-dsn"}}}' "GraphQL error"
+
+  # E7: verify_variable reads absent and empty alike; this verdict must not.
+  local msg_absent msg_empty
+  msg_absent=$(environment_verdict "$absent" development 2>&1) || true
+  msg_empty=$(environment_verdict "$empty" development 2>&1) || true
+  if [ "$msg_absent" = "$msg_empty" ]; then
+    echo "::error::self-test E7 FAILED: the absent and empty refusals produced the SAME message"
+    failures=$((failures + 1))
+  else
+    echo "  E7 ok -> absent and empty refusals are distinguishable"
+  fi
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::Fork ENVIRONMENT self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Fork ENVIRONMENT self-test: 7 fixtures passed, no token read, no network call."
+}
+
+# cmd_set_fork_environment <environment-id|--self-test>
+# Same guard order as cmd_set_ai_fake. Writes the gateway's ENVIRONMENT only;
+# the other services keep the inherited value.
+cmd_set_fork_environment() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    environment_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-environment <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set ENVIRONMENT in the persistent environment ($env_id). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" ENVIRONMENT
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  # Own line: `local svc_id=$(...)` would mask a refusal's exit status from set -e.
+  local svc_id
+  svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
+
+  upsert_variable "$env_id" "$svc_id" gateway ENVIRONMENT development
+
+  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading gateway variables in environment $env_id"
+  environment_verdict "$GQL_RESPONSE" development || exit 1
+  echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -2303,10 +2409,11 @@ case "${1:-}" in
   verify-gateway-domain)     cmd_verify_gateway_domain "${2:-}" ;;
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   set-ai-fake)               cmd_set_ai_fake "${2:-}" ;;
+  set-fork-environment)      cmd_set_fork_environment "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

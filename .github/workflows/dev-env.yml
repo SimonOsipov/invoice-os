@@ -345,11 +345,11 @@ jobs:
         run: bash scripts/ci/railway-env.sh assert-db-dsns --source-only
 
       # PR ONLY. This mutates the target environment (domains, Postgres volume,
-      # environment record) to make a fresh fork resemble its source. The
+      # bucket) to make a fresh fork resemble its source. The
       # persistent environment is not a fork and is the thing being resembled —
       # reconciling it against itself is at best a no-op and at worst rewrites
       # live infrastructure.
-      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, environment record)
+      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -542,10 +542,20 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"
 
+      # PR ONLY: a fork inherits production's ENVIRONMENT, and the gateway needs
+      # `development` there to serve the mock issuer and seed.
+      - name: Set the fork gateway's ENVIRONMENT to development (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
-  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine.
+  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine; only
+  #    a `-tags mockissuer` (PR) build honours it.
   #    CORS_ALLOWED_ORIGINS is set per-environment by prepare-env's
   #    `reconcile-urls`: measured in pr-67, a fork inherits development's list.
   deploy-gateway:
@@ -574,6 +584,9 @@ jobs:
       # env key. Hence two steps rather than one.
       - name: Stamp the build sha into the upload
         run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
+      - name: Stamp the mock issuer into the PR build
+        if: github.event_name == 'pull_request'
+        run: sh scripts/ci/stamp-mock-issuer.sh
       - name: railway up gateway (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:

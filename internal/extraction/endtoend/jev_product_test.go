@@ -32,7 +32,7 @@ func TestJevProduct_TheValueQuestionIsTheMeasuredQuestion(t *testing.T) {
 		if string(got.Type) != want.Type || got.Type != jev.TypeNoul {
 			t.Errorf("%s: Type = %q, want %q", f, got.Type, want.Type)
 		}
-		// The measured wording states the normalisation; CHECK-01's provisional wording does not.
+		// The measured wording states the normalisation.
 		if !strings.Contains(got.Instructions, "normalised form") {
 			t.Errorf("%s: Instructions %q do not carry the measured wording", f, got.Instructions)
 		}

@@ -477,3 +477,68 @@ func TestValueCheck_AnAIWithheldValueIsNotAskedAndADoubtedValueStays(t *testing.
 		t.Errorf("vat = %+v, want unreadable with its value %q kept", out[1].Field, *before[1].Value)
 	}
 }
+
+func TestValueCheck_ADoubtAddsNoRegionToARowWithout(t *testing.T) {
+	results := vcRows("vat", "total")
+	results[0].Region = nil
+	before := cloneResults(results)
+
+	out := applyValueCheck(results, []int{0, 1}, vcAnswers(0, "vat", "total"))
+
+	if len(out) != 2 {
+		t.Fatalf("%d rows out, want 2", len(out))
+	}
+	for i, o := range out {
+		if o.Reason != ReasonUnreadable {
+			t.Errorf("%s Reason = %q, want %q", o.Name, o.Reason, ReasonUnreadable)
+		}
+		if !reflect.DeepEqual(o.Region, before[i].Region) {
+			t.Errorf("%s Region = %+v, want %+v", o.Name, o.Region, before[i].Region)
+		}
+	}
+	if out[0].Region != nil || out[1].Region == nil {
+		t.Errorf("Regions = %+v, %+v; want nil kept nil and non-nil kept", out[0].Region, out[1].Region)
+	}
+}
+
+func TestValueCheck_AnAnswerForAnUnaskedIDChangesNothing(t *testing.T) {
+	results := vcRows("supplier_tin", "supplier_name", "invoice_number")
+	results = append(results, FieldResult{Field: Field{Name: "line_items[1].description", Value: mgStr("Cement 50kg")}, Alternatives: []Field{}})
+	before := cloneResults(results)
+	resp := vcAnswers(0, "supplier_tin", "supplier_name", "line_items[1].description")
+	resp.Answers["invoice_number"] = jev.Answer{Type: jev.TypeNoul, Noul: 0.2}
+	a := &vcAsker{enabled: true, resp: resp}
+
+	out := checkValues(t.Context(), a, vcPages(), results)
+
+	if len(a.calls) != 1 || len(out) != len(before) {
+		t.Fatalf("%d Ask calls and %d rows out, want 1 and %d", len(a.calls), len(out), len(before))
+	}
+	// Control: the one asked field is flagged.
+	if out[2].Reason != ReasonUnreadable {
+		t.Errorf("invoice_number Reason = %q, want %q", out[2].Reason, ReasonUnreadable)
+	}
+	for _, i := range []int{0, 1, 3} {
+		if !reflect.DeepEqual(out[i], before[i]) {
+			t.Errorf("unasked %s = %+v, want it unchanged", before[i].Name, out[i])
+		}
+	}
+}
+
+func TestValueCheck_AnEmptyDecidedValueIsAsked(t *testing.T) {
+	empty := vcDecided("buyer_name")
+	empty.Value = mgStr("")
+	results := []FieldResult{empty, vcDecided("total")}
+
+	req, asked := valueCheckRequest(vcPages(), results)
+
+	if got := vcIDs(req); !slices.Equal(got, []string{"buyer_name", "total"}) {
+		t.Fatalf("question ids = %v, want [buyer_name total]", got)
+	}
+	if !slices.Equal(asked, []int{0, 1}) {
+		t.Errorf("asked indexes = %v, want [0 1]", asked)
+	}
+	if got := req.Questions["buyer_name"].Instructions; !strings.HasSuffix(got, " Field: buyer_name. Value: .") {
+		t.Errorf("buyer_name instructions = %q, want the empty value composed", got)
+	}
+}

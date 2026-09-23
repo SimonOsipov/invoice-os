@@ -56,8 +56,8 @@ An enabled client refuses a request before it sends anything when:
 
 The refusal is `skipped_refused` with `attempts` `0`, in real and fake mode alike.
 
-`submission`'s extraction worker calls the client at most once per extraction run, on its
-Docling text branch only (`internal/extraction/jevcheck.go`). CHECK-04 and CHECK-05 are
+`submission`'s extraction worker calls the client once per extraction attempt, on its
+Docling text branch only (`internal/extraction/jevcheck.go`); a retried job asks again. CHECK-04 and CHECK-05 are
 still to come: CHECK-04 will also call it from that worker, and CHECK-05 from `invoice`'s
 importer.
 

@@ -25,7 +25,7 @@ func TestDocumentCreateInput_ADoubtedValueReachesTheDraft(t *testing.T) {
 	}
 }
 
-// AIR-03's withheld AI value is rank 0 with value NULL; a Jev doubt is rank 0 with its value.
+// An AI value withheld by its own check is rank 0 with value NULL; a Jev doubt is rank 0 with its value.
 func TestDocumentCreateInput_AnAIWithheldValueNeverReachesTheDraftButADoubtedOneDoes(t *testing.T) {
 	ex := SettledExtraction{JobID: "job-jev-2", Fields: []extractedField{
 		{Name: "invoice_number", Value: mpPtr("JD-3310"), Reason: mpPtr("unreadable")},

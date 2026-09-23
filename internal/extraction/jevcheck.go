@@ -1,4 +1,4 @@
-// jevcheck.go asks Jev once per document whether each decided header value is what the page prints.
+// jevcheck.go asks Jev, once per extraction attempt, whether each decided header value is what the page prints.
 package extraction
 
 import (

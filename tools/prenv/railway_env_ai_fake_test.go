@@ -111,7 +111,7 @@ func TestSetAIFakeSelfTestNeverPrintsAKeyValue(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0: a token being present must not change --self-test's outcome; stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	for _, leak := range []string{sentinel, "a-present-key-fixture", "pw-fixture"} {
+	for _, leak := range []string{sentinel, "a-present-key-fixture", "pw-fixture", "a-present-typesafe-fixture"} {
 		if strings.Contains(stdout, leak) {
 			t.Errorf("stdout leaked %q; stdout = %q", leak, stdout)
 		}
@@ -212,6 +212,41 @@ func TestSetAIFakeBodySetsAndChecksBothServices(t *testing.T) {
 	if serviceVarsAt >= 0 && verdictAt >= 0 && verdictAt < serviceVarsAt {
 		t.Errorf("ai_key_verdict is called BEFORE SERVICE_VARIABLES_QUERY — the verdict must run on a FRESH read, not the mutation's own response")
 	}
+
+	// Comment lines dropped: the body's own comment names verify_variable above the upserts.
+	stmts := statements(shellFunctionBody(t, "cmd_set_ai_fake"))
+	loopStart, loopEnd := -1, -1
+	for i, s := range stmts {
+		if loopStart < 0 && strings.HasPrefix(s, "for svc in submission invoice") {
+			loopStart = i
+		} else if loopStart >= 0 && s == "done" {
+			loopEnd = i
+			break
+		}
+	}
+	if loopStart < 0 || loopEnd < 0 {
+		t.Fatalf("no `for svc in submission invoice ... done` loop in cmd_set_ai_fake's statements; stmts = %q", stmts)
+	}
+	loop := strings.Join(stmts[loopStart+1:loopEnd], "\n")
+	for _, n := range []string{
+		`upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true`, // control: present today
+		`upsert_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
+		`upsert_variable "$env_id" "$svc_id" "$svc" TYPESAFE_API_KEY ""`,
+		`verify_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true`,
+	} {
+		if !strings.Contains(loop, n) {
+			t.Errorf("the per-service loop of cmd_set_ai_fake does not contain %q (comment lines excluded)", n)
+		}
+	}
+	code := strings.Join(stmts, "\n")
+	lastUpsert := strings.LastIndex(code, "upsert_variable")
+	firstVerify := strings.Index(code, "verify_variable")
+	if lastUpsert < 0 || firstVerify < 0 {
+		t.Fatalf("cmd_set_ai_fake's statements lack upsert_variable (%d) or verify_variable (%d)", lastUpsert, firstVerify)
+	}
+	if firstVerify < lastUpsert {
+		t.Errorf("a verify_variable precedes the last upsert_variable — every write must land before the first read-back")
+	}
 }
 
 // T06: ai_fake_self_test must cover every verdict shape ai_key_verdict can
@@ -236,6 +271,17 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 	for _, n := range needles {
 		if !strings.Contains(body, n) {
 			t.Errorf("ai_fake_self_test does not cover the fixture shape %q", n)
+		}
+	}
+
+	code := strings.Join(statements(shellFunctionBody(t, "ai_fake_self_test")), "\n")
+	for _, n := range []string{
+		`"OPENROUTER_API_KEY":"a-present-key-fixture"`,    // control: F3, present today
+		`"TYPESAFE_API_KEY":"a-present-typesafe-fixture"`, // F11
+		`"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""`,   // F12
+	} {
+		if !strings.Contains(code, n) {
+			t.Errorf("ai_fake_self_test's statements (comment lines excluded) do not contain the fixture %q", n)
 		}
 	}
 
@@ -358,7 +404,7 @@ func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
 	if !strings.Contains(stdout, "Service selector self-test: 11 fixtures passed, no token read, no network call.") {
 		t.Errorf("stdout does not contain the selector self-test's closing line; stdout = %q", stdout)
 	}
-	if !strings.Contains(stdout, "AI fake self-test: 10 fixtures passed") {
+	if !strings.Contains(stdout, "AI fake self-test: 12 fixtures passed") {
 		t.Errorf("stdout does not contain the ai-fake self-test's closing line; stdout = %q", stdout)
 	}
 }
@@ -520,6 +566,20 @@ func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 		{"not json at all", `mk-9f2a-garbage{`, false, "mk-9f2a-garbage"},
 		{"empty input", ``, false, ""},
 		{"two json documents", `{"data":{"variables":{}}} {"data":{"variables":{"OPENROUTER_API_KEY":"mk-9f2a-two"}}}`, false, "mk-9f2a-two"},
+		{"both keys empty", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""}}}`, true, ""},
+		{"both keys absent", `{"data":{"variables":{"AI_FAKE":"true","JEV_FAKE":"true"}}}`, true, ""},
+		{"lower-case typesafe key name", `{"data":{"variables":{"OPENROUTER_API_KEY":"","typesafe_api_key":"ts-9f2a-lower"}}}`, true, "ts-9f2a-lower"},
+		{"typesafe key beside an empty openrouter key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":"ts-9f2a-plain"}}}`, false, "ts-9f2a-plain"},
+		{"openrouter key beside an empty typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"mk-9f2a-beside","TYPESAFE_API_KEY":""}}}`, false, "mk-9f2a-beside"},
+		{"whitespace typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":" \t "}}}`, false, ""},
+		{"json null typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":null}}}`, false, ""},
+		{"numeric typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":91827364}}}`, false, "91827364"},
+		{"boolean true typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":true}}}`, false, ""},
+		// A `// empty` read takes false for absent.
+		{"boolean false typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":false}}}`, false, ""},
+		{"object typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":{"v":"ts-9f2a-nested"}}}}`, false, "ts-9f2a-nested"},
+		{"array typesafe key", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":["ts-9f2a-array"]}}}`, false, "ts-9f2a-array"},
+		{"unrendered typesafe reference", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":"${{ secrets.TYPESAFE_API_KEY }}"}}}`, false, "secrets.TYPESAFE_API_KEY"},
 	}
 
 	for _, tc := range cases {
@@ -541,6 +601,113 @@ func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 				if strings.Contains(stderr, tc.marker) {
 					t.Errorf("stderr printed %q out of the rendered variable map; stderr = %q", tc.marker, stderr)
 				}
+			}
+		})
+	}
+}
+
+// runAIKeyVerdict drives ai_key_verdict through the truth table's source path.
+func runAIKeyVerdict(t *testing.T, json string) (stdout, stderr string, exitCode int) {
+	t.Helper()
+	return runBashScript(t, "set -uo pipefail\n"+shellFunctionSource(t, "ai_key_verdict")+verdictDriver, json)
+}
+
+func TestAIKeyVerdictRefusesOnEitherVendorsKey(t *testing.T) {
+	const value = "ts-9f2a-live"
+	stdout, stderr, code := runAIKeyVerdict(t, `{"data":{"variables":{"TYPESAFE_API_KEY":"`+value+`"}}}`)
+
+	if code == 0 {
+		t.Errorf("exit code = 0, want non-zero: a present TYPESAFE_API_KEY is a usable key; output = %q", stdout)
+	}
+	if !strings.Contains(stdout, "::error::") {
+		t.Errorf("the refusal carries no ::error:: annotation; output = %q", stdout)
+	}
+	if strings.Contains(stdout, value) || strings.Contains(stderr, value) {
+		t.Errorf("the verdict printed the key's value; stdout = %q, stderr = %q", stdout, stderr)
+	}
+}
+
+func TestAIKeyVerdictNamesTheOffendingVariable(t *testing.T) {
+	cases := []struct{ name, json, named, notNamed, value string }{
+		{"typesafe set", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":"ts-9f2a-named"}}}`,
+			"TYPESAFE_API_KEY is SET", "OPENROUTER_API_KEY is SET", "ts-9f2a-named"},
+		{"openrouter set", `{"data":{"variables":{"OPENROUTER_API_KEY":"mk-9f2a-named","TYPESAFE_API_KEY":""}}}`,
+			"OPENROUTER_API_KEY is SET", "TYPESAFE_API_KEY is SET", "mk-9f2a-named"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr, code := runAIKeyVerdict(t, tc.json)
+			if code == 0 {
+				t.Errorf("exit code = 0, want non-zero; output = %q", stdout)
+			}
+			if !strings.Contains(stdout, tc.named) {
+				t.Errorf("output does not contain %q; output = %q", tc.named, stdout)
+			}
+			if strings.Contains(stdout, tc.notNamed) {
+				t.Errorf("output contains %q, which names the wrong variable; output = %q", tc.notNamed, stdout)
+			}
+			if strings.Contains(stdout, tc.value) || strings.Contains(stderr, tc.value) {
+				t.Errorf("the verdict printed %q; stdout = %q, stderr = %q", tc.value, stdout, stderr)
+			}
+		})
+	}
+}
+
+// Line shape is the prepare-env evidence: "submission.TYPESAFE_API_KEY is empty".
+func TestAIKeyVerdictReportsBothKeysOnAPass(t *testing.T) {
+	cases := []struct{ name, json, kind string }{
+		{"both empty", `{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""}}}`, "empty"},
+		{"both absent", `{"data":{"variables":{"AI_FAKE":"true","JEV_FAKE":"true"}}}`, "absent"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, _, code := runAIKeyVerdict(t, tc.json)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; output = %q", code, stdout)
+			}
+			if strings.Contains(stdout, "::error::") {
+				t.Errorf("a pass carries an ::error:: line; output = %q", stdout)
+			}
+			for _, key := range []string{"OPENROUTER_API_KEY", "TYPESAFE_API_KEY"} {
+				if want := "submission." + key + " is " + tc.kind; !strings.Contains(stdout, want) {
+					t.Errorf("output does not contain %q; output = %q", want, stdout)
+				}
+				if n := strings.Count(stdout, "submission."+key+" is "); n != 1 {
+					t.Errorf("output reports submission.%s %d times, want 1; output = %q", key, n, stdout)
+				}
+			}
+		})
+	}
+}
+
+func TestAIKeyVerdictUnreadableNamesBothKeys(t *testing.T) {
+	cases := []struct{ name, json string }{
+		{"variables null", `{"data":{"variables":null}}`},
+		{"graphql error", `{"errors":[{"message":"x"}],"data":null}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, _, code := runAIKeyVerdict(t, tc.json)
+			if code == 0 {
+				t.Errorf("exit code = 0, want non-zero; output = %q", stdout)
+			}
+			var errLines []string
+			for _, l := range strings.Split(stdout, "\n") {
+				if strings.Contains(l, "::error::") {
+					errLines = append(errLines, l)
+				}
+			}
+			if len(errLines) == 0 {
+				t.Fatalf("no ::error:: line; output = %q", stdout)
+			}
+			named := false
+			for _, l := range errLines {
+				if strings.Contains(l, "OPENROUTER_API_KEY") && strings.Contains(l, "TYPESAFE_API_KEY") {
+					named = true
+				}
+			}
+			if !named {
+				t.Errorf("no ::error:: line names both OPENROUTER_API_KEY and TYPESAFE_API_KEY; lines = %q", errLines)
 			}
 		})
 	}

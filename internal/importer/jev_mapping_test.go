@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/jevmeasure"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
 
 // jpLayout is one $JEV_OUT/layouts.json entry. Key[f] is the list of headers the generator
@@ -244,13 +245,29 @@ const jpReader = "importer.Decode (csv)"
 // http.Client.Timeout, so ctx is the walk's only clock.
 const jpCallTimeout = 30 * time.Second
 
-const jpModel = "systemone-default"
+const jpModel = jev.Model
 
 func jpResolveModel() string {
 	if m := os.Getenv("JEV_MODEL"); m != "" {
 		return m
 	}
 	return jpModel
+}
+
+// The harness and the product client send one model id; JEV_MODEL still overrides it.
+func TestJevMapping_TheDefaultModelIsTheClientsModel(t *testing.T) {
+	t.Setenv("JEV_MODEL", "")
+	if err := os.Unsetenv("JEV_MODEL"); err != nil {
+		t.Fatalf("unset JEV_MODEL: %v", err)
+	}
+	if got := jpResolveModel(); got != jev.Model {
+		t.Errorf("jpResolveModel() with JEV_MODEL unset = %q, want jev.Model %q", got, jev.Model)
+	}
+
+	t.Setenv("JEV_MODEL", "x")
+	if got := jpResolveModel(); got != "x" {
+		t.Errorf("jpResolveModel() with JEV_MODEL=x = %q, want %q", got, "x")
+	}
 }
 
 // jpResolvePricing reads the operator's two $ rates per million tokens (A50); either absent or
@@ -697,7 +714,8 @@ func TestJevMapping_UsesTheShippedGuard(t *testing.T) {
 // Row 3, respecified (J-3/D-6): the mapping walk reaches no client. AST-scan this file itself:
 // no import of internal/platform/ai, no call to askMapping or ai.FromEnv, no reference to
 // MappingSuggester. Control: guardPlacements and guardHeaderRow ARE referenced (the walk must
-// still use the shipped guards). Floor: a truncated parse must not report clean.
+// still use the shipped guards). Floor: a truncated parse must not report clean. The only
+// internal/platform/jev symbol allowed is jev.Model, and it must be seen.
 func TestJevMapping_TheWalkNamesNoClient(t *testing.T) {
 	src, err := os.ReadFile("jev_mapping_test.go")
 	if err != nil {
@@ -710,15 +728,35 @@ func TestJevMapping_TheWalkNamesNoClient(t *testing.T) {
 	if len(f.Decls) < 10 {
 		t.Fatalf("parsed %d top-level decl(s), want at least 10 -- a truncated parse would report clean vacuously", len(f.Decls))
 	}
+	jevName := ""
 	for _, imp := range f.Imports {
-		if strings.Trim(imp.Path.Value, `"`) == "github.com/SimonOsipov/invoice-os/internal/platform/ai" {
+		switch strings.Trim(imp.Path.Value, `"`) {
+		case "github.com/SimonOsipov/invoice-os/internal/platform/ai":
 			t.Errorf("jev_mapping_test.go imports internal/platform/ai -- the walk must reach no live client")
+		case "github.com/SimonOsipov/invoice-os/internal/platform/jev":
+			jevName = "jev"
+			if imp.Name != nil {
+				jevName = imp.Name.Name
+			}
 		}
 	}
+	if jevName == "" || jevName == "." || jevName == "_" {
+		t.Fatalf("internal/platform/jev import name = %q, want a named import -- jev.Model cannot be seen as a selector", jevName)
+	}
 
-	var sawAskMapping, sawFromEnv, sawSuggester, sawGuardPlacements, sawGuardHeaderRow bool
+	var sawAskMapping, sawFromEnv, sawSuggester, sawGuardPlacements, sawGuardHeaderRow, sawJevModel bool
+	var otherJev []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			// Exact case on purpose: Go selectors are case-sensitive.
+			if id, ok := x.X.(*ast.Ident); ok && id.Name == jevName {
+				if x.Sel.Name == "Model" {
+					sawJevModel = true
+				} else {
+					otherJev = append(otherJev, jevName+"."+x.Sel.Name)
+				}
+			}
 		case *ast.CallExpr:
 			switch fn := x.Fun.(type) {
 			case *ast.Ident:
@@ -756,6 +794,12 @@ func TestJevMapping_TheWalkNamesNoClient(t *testing.T) {
 	}
 	if !sawGuardHeaderRow {
 		t.Fatalf("control needle guardHeaderRow not found -- the scan itself is broken")
+	}
+	if !sawJevModel {
+		t.Fatalf("control needle jev.Model not found -- the scan itself is broken")
+	}
+	if len(otherJev) > 0 {
+		t.Errorf("jev_mapping_test.go names %v -- only jev.Model may appear; the walk's calls go through jevmeasure", otherJev)
 	}
 }
 

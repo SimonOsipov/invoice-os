@@ -1402,7 +1402,7 @@ verify_variable() {
 
   got=$(echo "$GQL_RESPONSE" | jq -r --arg n "$name" '.data.variables[$n] // empty')
   if [ "$got" != "$want" ]; then
-    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'. The fork would deploy pointing at the wrong environment."
+    echo "::error::$label.$name in environment $env_id is '$got' after upsert, expected '$want'."
     exit 1
   fi
 }
@@ -2099,45 +2099,46 @@ service_selector_self_test() {
   echo "Service selector self-test: 11 fixtures passed, no token read, no network call."
 }
 
-# --- AI fake mode: force it ON and blank the key in a fork -------------------
+# --- AI and Jev fake mode: force both ON and blank both keys in a fork -------
 #
 # AIR-02-04. Both `submission` and `invoice` call the AI client; resolved by
 # NAME via service_id_by_name.
 
 # ai_key_verdict <variables-response-json> <service>
 # Pure: no token, no network. Passes only when the rendered map is an object
-# AND OPENROUTER_API_KEY is absent or exactly "". Never prints the value —
-# this map carries live credentials.
+# AND each of OPENROUTER_API_KEY and TYPESAFE_API_KEY is absent or exactly "".
+# Never prints a value — this map carries live credentials.
 ai_key_verdict() {
-  local resp="$1" svc="$2" kind
+  local resp="$1" svc="$2" name kind
 
-  if ! kind=$(printf '%s' "$resp" | jq -r '
-    if type != "object" then "unreadable"
-    elif (has("errors") and ((.errors | length) > 0)) then "errors"
-    elif ((.data | type) != "object") or ((.data.variables | type) != "object") then "unreadable"
-    elif ((.data.variables | has("OPENROUTER_API_KEY")) | not) then "absent"
-    elif .data.variables.OPENROUTER_API_KEY == "" then "empty"
-    else "present" end' 2>/dev/null); then
-    kind="unreadable"
-  fi
-  [ -n "$kind" ] || kind="unreadable"
+  for name in OPENROUTER_API_KEY TYPESAFE_API_KEY; do
+    if ! kind=$(printf '%s' "$resp" | jq -r --arg n "$name" '
+      if type != "object" then "unreadable"
+      elif (has("errors") and ((.errors | length) > 0)) then "errors"
+      elif ((.data | type) != "object") or ((.data.variables | type) != "object") then "unreadable"
+      elif ((.data.variables | has($n)) | not) then "absent"
+      elif .data.variables[$n] == "" then "empty"
+      else "present" end' 2>/dev/null); then
+      kind="unreadable"
+    fi
+    [ -n "$kind" ] || kind="unreadable"
 
-  # "Cannot read" never reduces to "absent" — same discipline service_id_by_name
-  # and cmd_audit_sealed_variables already apply.
-  case "$kind" in
-    absent|empty)
-      echo "  $svc.OPENROUTER_API_KEY is $kind — no usable key in this environment."
-      return 0 ;;
-    errors)
-      echo "::error::Could not read $svc's variables (GraphQL error). This is NOT evidence that OPENROUTER_API_KEY is unset."
-      return 1 ;;
-    unreadable)
-      echo "::error::$svc's rendered variable map is not an object, so OPENROUTER_API_KEY could not be checked. This is NOT evidence that it is unset."
-      return 1 ;;
-    *)
-      echo "::error::$svc.OPENROUTER_API_KEY is SET in this environment. A PR environment must never hold a usable key. Value not printed."
-      return 1 ;;
-  esac
+    # "Cannot read" never reduces to "absent" — same discipline service_id_by_name
+    # and cmd_audit_sealed_variables already apply.
+    case "$kind" in
+      absent|empty)
+        echo "  $svc.$name is $kind — no usable key in this environment." ;;
+      errors)
+        echo "::error::Could not read $svc's variables (GraphQL error). This is NOT evidence that OPENROUTER_API_KEY or TYPESAFE_API_KEY is unset."
+        return 1 ;;
+      unreadable)
+        echo "::error::$svc's rendered variable map is not an object, so OPENROUTER_API_KEY and TYPESAFE_API_KEY could not be checked. This is NOT evidence that either is unset."
+        return 1 ;;
+      *)
+        echo "::error::$svc.$name is SET in this environment. A PR environment must never hold a usable key. Value not printed."
+        return 1 ;;
+    esac
+  done
 }
 
 # Both helpers increment `failures`, a `local` of ai_fake_self_test (bash
@@ -2208,12 +2209,16 @@ ai_fake_self_test() {
   # F10 a present unrelated var alongside an empty key still passes, and the
   # unrelated var's value must not leak either.
   ai_expect_pass F10 '{"data":{"variables":{"DATABASE_URL":"postgres://u:pw-fixture@h/db","OPENROUTER_API_KEY":""}}}' "pw-fixture"
+  # F11 a present TypeSafe key refuses beside an empty OpenRouter key, unleaked.
+  ai_expect_refusal F11 '{"data":{"variables":{"OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":"a-present-typesafe-fixture"}}}' "a-present-typesafe-fixture"
+  # F12 both keys empty passes.
+  ai_expect_pass F12 '{"data":{"variables":{"AI_FAKE":"true","JEV_FAKE":"true","OPENROUTER_API_KEY":"","TYPESAFE_API_KEY":""}}}'
 
   if [ "$failures" != "0" ]; then
     echo "::error::AI fake self-test: $failures fixture(s) FAILED."
     exit 1
   fi
-  echo "AI fake self-test: 10 fixtures passed, no token read, no network call."
+  echo "AI fake self-test: 12 fixtures passed, no token read, no network call."
 }
 
 # cmd_set_ai_fake <environment-id|--self-test>
@@ -2255,18 +2260,21 @@ cmd_set_ai_fake() {
     svc_id=$(service_id_by_name "$settle" "$svc" "environment $env_id" AI_FAKE)
 
     upsert_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
+    upsert_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true
     # No verify_variable here: it reads `.data.variables[$n] // empty`, so an
     # absent key and an empty key both read back as "" — a want="" compare
     # would pass vacuously. The fresh-read check below is the real one.
     upsert_variable "$env_id" "$svc_id" "$svc" OPENROUTER_API_KEY ""
+    upsert_variable "$env_id" "$svc_id" "$svc" TYPESAFE_API_KEY ""
     verify_variable "$env_id" "$svc_id" "$svc" AI_FAKE true
+    verify_variable "$env_id" "$svc_id" "$svc" JEV_FAKE true
 
     graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
       "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
       "re-reading $svc variables in environment $env_id"
     ai_key_verdict "$GQL_RESPONSE" "$svc" || exit 1
   done
-  echo "AI fake mode confirmed in environment $env_id: AI_FAKE=true and no usable OPENROUTER_API_KEY on submission and invoice."
+  echo "AI and Jev fake mode confirmed in environment $env_id: AI_FAKE=true, JEV_FAKE=true and no usable OPENROUTER_API_KEY or TYPESAFE_API_KEY on submission and invoice."
 }
 
 # --- Fork gateway ENVIRONMENT ------------------------------------------------

@@ -27,7 +27,7 @@ var documentTypeOrder = []string{
 // slice a caller may reorder.
 func DocumentTypeOptions() []string { return slices.Clone(documentTypeOrder) }
 
-// The two question-type spellings CHECK-02 will match against the vendor's API reference.
+// The two question-type spellings.
 const (
 	QuestionTypeNoul   = "noul"
 	QuestionTypeChoice = "choice"

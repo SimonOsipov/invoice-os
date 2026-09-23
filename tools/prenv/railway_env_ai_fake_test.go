@@ -3,10 +3,11 @@
 // and the shared service selector it resolves services through (R6, R7).
 //
 // NOT COVERED HERE: the live GraphQL write, verify_variable's mismatch
-// branch on OPENROUTER_API_KEY (deliberately never called — an absent and an
-// empty key both read back as "" through it, so a want="" compare would pass
-// vacuously; ai_key_verdict's has() read is the discriminating check), and
-// whether Railway's variableUpsert mutation accepts an empty string value.
+// branch on OPENROUTER_API_KEY and TYPESAFE_API_KEY (deliberately never
+// called — an absent and an empty key both read back as "" through it, so a
+// want="" compare would pass vacuously; ai_key_verdict's has() read is the
+// discriminating check), and whether Railway's variableUpsert mutation
+// accepts an empty string value.
 // The only oracle for those is a green prepare-env run on a ready PR.
 package main
 
@@ -87,7 +88,7 @@ func TestSetAIFakeSelfTestPassesWithoutAToken(t *testing.T) {
 		t.Fatalf("could not parse fixture count %q: %v", m[1], err)
 	}
 	if count < 7 {
-		t.Errorf("fixture count = %d, want >= 7 (F1-F8, F10 reusing a shape)", count)
+		t.Errorf("fixture count = %d, want >= 7 (F1-F8, F10-F12 reusing a shape)", count)
 	}
 	if strings.Contains(stdout, "RAILWAY_API_TOKEN") || strings.Contains(stderr, "RAILWAY_API_TOKEN") {
 		t.Errorf("output mentions RAILWAY_API_TOKEN — the self-test reached require_env; stdout = %q, stderr = %q", stdout, stderr)
@@ -290,7 +291,7 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 		t.Fatalf("ai_fake_self_test has no ai_expect_pass/ai_expect_refusal call line — a dropped fixture would leave the printed count unchanged with nothing to notice it")
 	}
 	if len(calls) < 7 {
-		t.Errorf("ai_fake_self_test has %d ai_expect_pass/ai_expect_refusal call lines, want at least 7 (F1-F8, F10 reusing a shape)", len(calls))
+		t.Errorf("ai_fake_self_test has %d ai_expect_pass/ai_expect_refusal call lines, want at least 7 (F1-F8, F10-F12 reusing a shape)", len(calls))
 	}
 }
 
@@ -589,7 +590,7 @@ func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
 				t.Errorf("exit code = %d, want 0 (no usable key); output = %q", code, stdout)
 			}
 			if !tc.wantPass && code == 0 {
-				t.Errorf("exit code = 0, want non-zero: this shape is not evidence that OPENROUTER_API_KEY is unset; output = %q", stdout)
+				t.Errorf("exit code = 0, want non-zero: this shape is not evidence that both OPENROUTER_API_KEY and TYPESAFE_API_KEY are unset; output = %q", stdout)
 			}
 			if !tc.wantPass && !strings.Contains(stdout, "::error::") {
 				t.Errorf("a refusal carries no ::error:: annotation, so the job log would not surface it; output = %q", stdout)
@@ -715,7 +716,7 @@ func TestAIKeyVerdictUnreadableNamesBothKeys(t *testing.T) {
 
 // T11: negative controls for ai_fake_self_test's own machinery. Without these
 // the failures counter and both leak needles can be removed with every test
-// still green — the self-test would print "10 fixtures passed" on a suite that
+// still green — the self-test would print "12 fixtures passed" on a suite that
 // failed every fixture.
 func TestAIFakeSelfTestNegativeControlsAreLive(t *testing.T) {
 	funcs := shellFunctionSource(t,

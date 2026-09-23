@@ -279,7 +279,9 @@ The orchestrator never runs `git checkout -b`, `gh pr create` or `gh pr ready`.
 
 ### Phase 3: CI
 
-After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol. No automated code review runs on this repo; do not report one.
+After the FINAL subtask's QA, wait for the aggregate `CI` per the CI Monitoring Protocol.
+
+While it runs, review the whole diff: run `/code-review high <PR_NUMBER>`, never with `--fix`. Give `product-executor` every finding that would block the merge, in one batch: file and line, why it is wrong, how to show it fails. Add the other findings to the PR body as advisory (`gh pr edit`). Run one review cycle. No other automated review runs on this repo.
 
 ### Phase 3.5: Story-level deploy gate
 

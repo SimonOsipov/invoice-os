@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -140,11 +141,32 @@ func TestSetForkEnvironmentUsageExitsTwo(t *testing.T) {
 	}
 }
 
+// shellGuard is one step a subcommand body must take, found by re.
+type shellGuard struct {
+	name string
+	re   *regexp.Regexp
+}
+
+// guardOrderFaults reports each guard missing from code, or found before the guard listed ahead of it.
+func guardOrderFaults(code string, guards []shellGuard) []string {
+	var faults []string
+	prev, prevName := -1, ""
+	for _, g := range guards {
+		loc := g.re.FindStringIndex(code)
+		if loc == nil {
+			faults = append(faults, "no "+g.name)
+			continue
+		}
+		if loc[0] < prev {
+			faults = append(faults, fmt.Sprintf("%s comes before %s", g.name, prevName))
+		}
+		prev, prevName = loc[0], g.name
+	}
+	return faults
+}
+
 var (
-	forkEnvironmentGuards = []struct {
-		name string
-		re   *regexp.Regexp
-	}{
+	forkEnvironmentGuards = []shellGuard{
 		{"the --self-test branch", regexp.MustCompile(`--self-test`)},
 		{"the usage guard", regexp.MustCompile(regexp.QuoteMeta(forkEnvironmentUsage))},
 		{"require_source_env", regexp.MustCompile(`\brequire_source_env\b`)},
@@ -162,19 +184,7 @@ var (
 // forkEnvironmentBodyFaults reports each way comment-stripped cmd_set_fork_environment code
 // departs from the guard order and the gateway-only write.
 func forkEnvironmentBodyFaults(code string) []string {
-	var faults []string
-	prev, prevName := -1, ""
-	for _, g := range forkEnvironmentGuards {
-		loc := g.re.FindStringIndex(code)
-		if loc == nil {
-			faults = append(faults, "no "+g.name)
-			continue
-		}
-		if loc[0] < prev {
-			faults = append(faults, fmt.Sprintf("%s comes before %s", g.name, prevName))
-		}
-		prev, prevName = loc[0], g.name
-	}
+	faults := guardOrderFaults(code, forkEnvironmentGuards)
 
 	upserts := regexp.MustCompile(`\bupsert_variable\b`).FindAllStringIndex(code, -1)
 	if len(upserts) != 1 {
@@ -1006,5 +1016,347 @@ func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
 	}
 	for _, w := range missing(ci) {
 		t.Errorf("ci.yml's go paths filter does not list %s; an edit to it alone skips the go job that holds its pins", w)
+	}
+}
+
+const (
+	productionEnvironmentUsage = "usage: railway-env.sh set-production-environment <environment-id>"
+	productionConfirmation     = "gateway ENVIRONMENT=production confirmed in environment " + persistentEnvironmentID
+	productionGatewayID        = "svc-gw-production"
+	productionNeedle           = "set-production-environment"
+)
+
+var onlyThePersistentEnvironment = regexp.MustCompile(`(?i)only the persistent environment`)
+
+// runSetProductionEnvironment runs the subcommand through runBashScript, which strips every RAILWAY_* variable.
+func runSetProductionEnvironment(t *testing.T, prelude, exports string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	return runBashScript(t, prelude+exports+"bash '"+railwayEnvScript(t)+"' set-production-environment \"$@\"\n", args...)
+}
+
+func TestSetProductionEnvironmentRefusesAnyOtherEnvironment(t *testing.T) {
+	t.Run("another environment id", func(t *testing.T) {
+		shim := newCurlShim(t)
+		stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude,
+			"export RAILWAY_DEV_ENVIRONMENT_ID="+persistentEnvironmentID+"\n", "pr-fork-id")
+		out := stdout + stderr
+
+		if code != 1 {
+			t.Errorf("exit code = %d, want 1: only the persistent environment may be written; output = %q", code, out)
+		}
+		if !strings.Contains(out, "pr-fork-id") || !onlyThePersistentEnvironment.MatchString(out) {
+			t.Errorf("output does not name the refused id pr-fork-id and say it writes only the persistent environment; output = %q", out)
+		}
+		if strings.Contains(out, "RAILWAY_API_TOKEN is not set") {
+			t.Errorf("the run reached require_env before refusing, so the refusal needs a token to say no; output = %q", out)
+		}
+		if calls := shim.calls(t); calls != "" {
+			t.Errorf("the refusal called curl:\n%s", calls)
+		}
+		shim.requireOnPath(t)
+	})
+
+	t.Run("no argument", func(t *testing.T) {
+		shim := newCurlShim(t)
+		stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, "")
+		out := stdout + stderr
+
+		if code != 2 {
+			t.Errorf("exit code = %d, want 2 with no argument; output = %q", code, out)
+		}
+		if !strings.Contains(out, productionEnvironmentUsage) {
+			t.Errorf("output does not carry %q; output = %q", productionEnvironmentUsage, out)
+		}
+		if strings.Contains(out, "RAILWAY_DEV_ENVIRONMENT_ID is not set") || strings.Contains(out, "RAILWAY_API_TOKEN is not set") {
+			t.Errorf("the run passed the usage guard into require_source_env or require_env; output = %q", out)
+		}
+		if calls := shim.calls(t); calls != "" {
+			t.Errorf("the usage guard called curl:\n%s", calls)
+		}
+
+		// Control: the catch-all also exits 2, so only the phrase proves the subcommand's own guard ran.
+		gout, gerr, gcode := runBashScript(t, shim.prelude+"bash '"+railwayEnvScript(t)+"'\n")
+		generic := gout + gerr
+		if gcode != 2 || !strings.Contains(generic, "usage: railway-env.sh <") {
+			t.Fatalf("control: the dispatcher's generic usage did not print (exit %d); output = %q", gcode, generic)
+		}
+		if strings.Contains(generic, productionEnvironmentUsage) {
+			t.Errorf("the generic usage carries %q, so it cannot tell the subcommand's guard from the catch-all; output = %q", productionEnvironmentUsage, generic)
+		}
+	})
+}
+
+func productionVariables(environment string) string {
+	return `{"data":{"variables":{` + forkEnvSecretSibling + `,"RAILWAY_ENVIRONMENT_NAME":"production"` + environment + `}}}`
+}
+
+// productionRailway scripts the persistent environment: one gateway, an accepted upsert, and reRead.
+func productionRailway(reRead string) map[string]string {
+	return map[string]string{
+		"settle":    forkSettle(`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`),
+		"varUpsert": `{"data":{"variableUpsert":true}}`,
+		"svcVars":   reRead,
+		"vars":      reRead,
+	}
+}
+
+func errorLines(out string) string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "::error::") {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestSetProductionEnvironmentReportsEmptyAndAbsentApart(t *testing.T) {
+	cases := []struct {
+		name, reRead string
+		code         int
+		says         string
+	}{
+		{"re-read production", productionVariables(`,"ENVIRONMENT":"production"`), 0, productionConfirmation},
+		{"re-read empty", productionVariables(`,"ENVIRONMENT":""`), 1, "is empty"},
+		{"re-read absent", productionVariables(""), 1, "is absent"},
+		{"re-read development", productionVariables(`,"ENVIRONMENT":"development"`), 1, "reads 'development'"},
+		{"re-read production with a trailing newline", productionVariables(`,"ENVIRONMENT":"production\n"`), 1, "reads 'production"},
+	}
+	refusals := map[string]string{}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			shim := newRailwayShim(t, productionRailway(c.reRead))
+			stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, forkExports(true, true, true), persistentEnvironmentID)
+			out := stdout + stderr
+			calls := shim.calls(t)
+
+			if code != c.code {
+				t.Errorf("exit code = %d, want %d; output = %q", code, c.code, out)
+			}
+			if !strings.Contains(out, c.says) {
+				t.Errorf("output does not carry %q; output = %q", c.says, out)
+			}
+			if c.code != 0 {
+				if strings.Contains(out, "confirmed") {
+					t.Errorf("a failed run printed the confirmation line; output = %q", out)
+				}
+				refusals[c.name] = errorLines(out)
+			}
+			for _, leak := range []string{forkEnvSecret, forkToken} {
+				if strings.Contains(out, leak) {
+					t.Errorf("the output carries %q; output = %q", leak, out)
+				}
+			}
+
+			ops := operations(calls)
+			if len(ops) != 3 || ops[0] != "settle" || ops[1] != "varUpsert" || (ops[2] != "svcVars" && ops[2] != "vars") {
+				t.Errorf("Railway calls = %v, want [settle varUpsert svcVars]: resolve the gateway, write once, re-read", ops)
+			}
+			for i, call := range calls {
+				var want map[string]any
+				switch ops[i] {
+				case "settle":
+					want = map[string]any{"e": persistentEnvironmentID}
+				case "varUpsert":
+					want = map[string]any{"input": map[string]any{
+						"projectId": forkProjectID, "environmentId": persistentEnvironmentID, "serviceId": productionGatewayID,
+						"name": "ENVIRONMENT", "value": "production", "skipDeploys": true,
+					}}
+				case "svcVars", "vars":
+					want = map[string]any{"p": forkProjectID, "e": persistentEnvironmentID, "s": productionGatewayID}
+				default:
+					continue
+				}
+				if !reflect.DeepEqual(call.Variables, want) {
+					t.Errorf("%s variables = %v, want %v", ops[i], call.Variables, want)
+				}
+			}
+			shim.requireLogs(t)
+		})
+	}
+
+	empty, absent := refusals["re-read empty"], refusals["re-read absent"]
+	if empty == "" || absent == "" || empty == absent {
+		t.Errorf("the empty and absent refusals are not two distinct messages: empty %q, absent %q", empty, absent)
+	}
+}
+
+var (
+	productionVerdict           = regexp.MustCompile(`\benvironment_verdict\s+\S+\s+"?production"?(\s|$)`)
+	productionEnvironmentGuards = []shellGuard{
+		{"the usage guard", regexp.MustCompile(regexp.QuoteMeta(productionEnvironmentUsage))},
+		{"require_source_env", regexp.MustCompile(`\brequire_source_env\b`)},
+		{"the persistent-id compare", regexp.MustCompile(`"\$\{?env_id\}?"\s*!=\s*"\$\{?RAILWAY_DEV_ENVIRONMENT_ID\}?"|"\$\{?RAILWAY_DEV_ENVIRONMENT_ID\}?"\s*!=\s*"\$\{?env_id\}?"`)},
+		{"require_env", regexp.MustCompile(`\brequire_env\b`)},
+		{"service_id_by_name", regexp.MustCompile(`\bservice_id_by_name\b`)},
+		{"upsert_variable", regexp.MustCompile(`\bupsert_variable\b`)},
+		{"the fresh re-read", variablesReRead},
+		{"environment_verdict … production", productionVerdict},
+	}
+)
+
+// productionEnvironmentBodyFaults reports each way comment-stripped cmd_set_production_environment
+// code departs from the guard order and the one gateway write.
+func productionEnvironmentBodyFaults(code string) []string {
+	faults := guardOrderFaults(code, productionEnvironmentGuards)
+	if n := len(regexp.MustCompile(`\bupsert_variable\b`).FindAllStringIndex(code, -1)); n != 1 {
+		faults = append(faults, fmt.Sprintf("%d upsert_variable calls, want exactly 1", n))
+	}
+	for _, banned := range []struct{ s, why string }{
+		{"RAILWAY_SVC_GATEWAY_ID", "the gateway must be resolved by name"},
+		{"--self-test", "this subcommand has no self-test mode"},
+		{"assert_environment_is_ephemeral", "it refuses the persistent environment, the only one this subcommand writes"},
+	} {
+		if strings.Contains(code, banned.s) {
+			faults = append(faults, "names "+banned.s+"; "+banned.why)
+		}
+	}
+	if !strings.Contains(code, "SETTLE_QUERY") {
+		faults = append(faults, "no SETTLE_QUERY read for service_id_by_name")
+	}
+	if m := gatewayIDByName.FindStringSubmatch(code); m == nil {
+		faults = append(faults, "no `<id>=$(service_id_by_name … gateway …)`")
+	} else {
+		write := regexp.MustCompile(`(?m)\bupsert_variable\s+"\$\{?env_id\}?"\s+"\$\{?` + regexp.QuoteMeta(m[1]) + `\}?"\s+"?gateway"?\s+"?ENVIRONMENT"?\s+"?production"?\s*$`)
+		if !write.MatchString(code) {
+			faults = append(faults, fmt.Sprintf(`no upsert_variable "$env_id" "$%s" gateway ENVIRONMENT production`, m[1]))
+		}
+	}
+	return faults
+}
+
+const (
+	prodBodyUsage = `  local env_id="${1:-}"
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-production-environment <environment-id>"
+    exit 2
+  fi
+`
+	prodBodyCompare = `  if [ "$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing $env_id: this command writes only the persistent environment."
+    exit 1
+  fi
+`
+	prodBodySettle = `  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local svc_id
+`
+	prodBodyUpsert  = "  upsert_variable \"$env_id\" \"$svc_id\" gateway ENVIRONMENT production\n"
+	prodBodyVerdict = `  environment_verdict "$GQL_RESPONSE" production || exit 1
+  echo "gateway ENVIRONMENT=production confirmed in environment $env_id."
+`
+)
+
+func TestSetProductionEnvironmentWritesOnlyTheGateway(t *testing.T) {
+	good := prodBodyUsage + "  require_source_env\n" + prodBodyCompare + "  require_env\n" + prodBodySettle +
+		forkBodyResolve + prodBodyUpsert + forkBodyReRead + prodBodyVerdict
+	fixtures := []struct{ name, body string }{
+		{"require_env swapped with require_source_env", swapOnce(good, "  require_source_env\n", "  require_env\n")},
+		{"usage after require_source_env", swapOnce(good, prodBodyUsage, "  require_source_env\n")},
+		{"the compare after require_env", swapOnce(good, prodBodyCompare, "  require_env\n")},
+		{"the compare refuses the persistent id instead", strings.Replace(good, `"$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID"`, `"$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID"`, 1)},
+		{"service_id_by_name before require_env", swapOnce(good, "  require_env\n", forkBodyResolve)},
+		{"the constant gateway id", strings.Replace(good, forkBodyResolve, "  svc_id=\"$RAILWAY_SVC_GATEWAY_ID\"\n", 1)},
+		{"a second variable written", strings.Replace(good, prodBodyUpsert, prodBodyUpsert+"  upsert_variable \"$env_id\" \"$svc_id\" gateway GATEWAY_MOCK_ISSUER false\n", 1)},
+		{"the value development", strings.Replace(good, "ENVIRONMENT production\n", "ENVIRONMENT development\n", 1)},
+		{"a service other than gateway", strings.Replace(good, `"$GQL_RESPONSE" gateway "environment`, `"$GQL_RESPONSE" submission "environment`, 1)},
+		{"require_env commented out", strings.Replace(good, "  require_env\n", "  # require_env\n", 1)},
+		{"a self-test branch", strings.Replace(good, prodBodyUsage, prodBodyUsage+forkBodySelfTest, 1)},
+		{"the ephemeral guard", strings.Replace(good, "  require_env\n", "  require_env\n  assert_environment_is_ephemeral \"$env_id\" ENVIRONMENT\n", 1)},
+		{"no fresh re-read", strings.Replace(good, forkBodyReRead, "", 1)},
+		{"the verdict before the re-read", swapOnce(good, forkBodyReRead, prodBodyVerdict)},
+		{"the verdict wants development", strings.Replace(good, `"$GQL_RESPONSE" production`, `"$GQL_RESPONSE" development`, 1)},
+	}
+	t.Run("fixtures", func(t *testing.T) {
+		if faults := productionEnvironmentBodyFaults(shellCode(strings.Split(good, "\n"))); len(faults) != 0 {
+			t.Fatalf("the planned body reports %v", faults)
+		}
+		for _, f := range fixtures {
+			if f.body == good {
+				t.Fatalf("fixture %q: the edit did not apply", f.name)
+			}
+			if faults := productionEnvironmentBodyFaults(shellCode(strings.Split(f.body, "\n"))); len(faults) == 0 {
+				t.Errorf("fixture %q: no fault reported", f.name)
+			}
+		}
+	})
+
+	for _, fault := range productionEnvironmentBodyFaults(shellCode(shellFunctionBody(t, "cmd_set_production_environment"))) {
+		t.Errorf("cmd_set_production_environment: %s", fault)
+	}
+}
+
+func TestSetProductionEnvironmentRefusesAnUnmatchedGateway(t *testing.T) {
+	responses := productionRailway(productionVariables(`,"ENVIRONMENT":"production"`))
+	responses["settle"] = forkSettle()
+	shim := newRailwayShim(t, responses)
+	stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, forkExports(true, true, true), persistentEnvironmentID)
+	out := stdout + stderr
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 with no service named gateway; output = %q", code, out)
+	}
+	if !strings.Contains(out, "is named 'gateway'") {
+		t.Errorf("output does not carry service_id_by_name's refusal %q; output = %q", "is named 'gateway'", out)
+	}
+	if ops := operations(shim.calls(t)); !slices.Equal(ops, []string{"settle"}) {
+		t.Errorf("Railway calls = %v, want [settle]: nothing may be written without one resolved gateway", ops)
+	}
+	for _, id := range []string{"svc-sub", "svc-inv"} {
+		if strings.Contains(stdout, id) {
+			t.Errorf("stdout carries the service id %s; stdout = %q", id, stdout)
+		}
+	}
+	if strings.Contains(out, "confirmed") {
+		t.Errorf("a failed run printed the confirmation line; output = %q", out)
+	}
+	shim.requireLogs(t)
+}
+
+// workflowsNaming returns the files in dir whose comment-stripped text names needle, and how many it read.
+func workflowsNaming(t *testing.T, dir, needle string) (hits []string, read int) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		read++
+		if strings.Contains(shellCode(strings.Split(string(raw), "\n")), needle) {
+			hits = append(hits, e.Name())
+		}
+	}
+	return hits, read
+}
+
+func TestNoWorkflowRunsSetProductionEnvironment(t *testing.T) {
+	t.Run("planted fixture", func(t *testing.T) {
+		dir := t.TempDir()
+		runs := "on: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash scripts/ci/railway-env.sh " + productionNeedle + " \"$ENV_ID\"\n"
+		for name, body := range map[string]string{"runs.yml": runs, "commented.yml": commentOut(runs)} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if hits, read := workflowsNaming(t, dir, productionNeedle); read != 2 || !slices.Equal(hits, []string{"runs.yml"}) {
+			t.Fatalf("planted: read %d file(s) and reported %v, want 2 and [runs.yml]", read, hits)
+		}
+	})
+
+	dir := filepath.Join(repoRoot(t), ".github", "workflows")
+	// Floor and control: every workflow is read, and a sibling subcommand two of them run is found.
+	control, read := workflowsNaming(t, dir, "set-fork-environment")
+	if read < 3 || !slices.Contains(control, "dev-env.yml") || !slices.Contains(control, "railway-invariants.yml") {
+		t.Fatalf("control: read %d workflow file(s) and found set-fork-environment in %v; the scan is broken", read, control)
+	}
+	if hits, _ := workflowsNaming(t, dir, productionNeedle); len(hits) != 0 {
+		t.Errorf("%v run or name %s; production's ENVIRONMENT is written by hand, once, and no workflow writes it", hits, productionNeedle)
 	}
 }

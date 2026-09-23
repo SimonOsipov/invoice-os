@@ -137,3 +137,42 @@ func TestResetIsAssertedByTheDevEnvGate(t *testing.T) {
 		}
 	}
 }
+
+// TestResetGateBlockKeepsBothDirections executes the health-gate's db_reset
+// block: a fork must report a reset, and the persistent environment must not.
+func TestResetGateBlockKeepsBothDirections(t *testing.T) {
+	cases := []struct {
+		isPR, reset string
+		want        int
+	}{
+		{"true", "true", 0}, {"true", "false", 1}, {"true", "", 1},
+		{"false", "true", 1}, {"false", "false", 0}, {"false", "", 0},
+	}
+	run := func(t *testing.T, block, isPR, reset string) int {
+		t.Helper()
+		return runShellBlock(t, block, "IS_PR="+isPR, "reset="+reset)
+	}
+
+	t.Run("control needle", func(t *testing.T) {
+		const equivalent = "if [ \"$IS_PR\" = \"true\" ]; then\nif [ \"$reset\" != \"true\" ]; then\nexit 1\nfi\nelif [ \"$reset\" = \"true\" ]; then\nexit 1\nfi"
+		for _, c := range cases {
+			if got := run(t, equivalent, c.isPR, c.reset); got != c.want {
+				t.Fatalf("the runner reports exit %d for IS_PR=%s reset=%q against a hand-written equivalent block, want %d", got, c.isPR, c.reset, c.want)
+			}
+		}
+		const prOnly = "if [ \"$IS_PR\" = \"true\" ]; then\nif [ \"$reset\" != \"true\" ]; then\nexit 1\nfi\nfi"
+		if got := run(t, prOnly, "false", "true"); got != 0 {
+			t.Fatalf("a block without the elif exits %d for a persistent reset, want 0 — the table cannot tell a dropped elif from the real gate", got)
+		}
+	})
+
+	block := gateScript(devEnvHealthGate(t), "reset", "want_reset")
+	if block == "" {
+		t.Fatal(`dev-env.yml's health-gate carries no if-block on "$reset" to run`)
+	}
+	for _, c := range cases {
+		if got := run(t, block, c.isPR, c.reset); got != c.want {
+			t.Errorf("IS_PR=%s db_reset=%q exits %d, want %d", c.isPR, c.reset, got, c.want)
+		}
+	}
+}

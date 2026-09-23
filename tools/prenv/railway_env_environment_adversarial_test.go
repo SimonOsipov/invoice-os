@@ -283,6 +283,9 @@ func TestEnvironmentVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T
 		{"the fork's own name", vars(`,"ENVIRONMENT":"pr-900"`), "development", `reads 'pr-900'`},
 		{"json null", vars(`,"ENVIRONMENT":null`), "development", `reads 'null'`},
 		{"number", vars(`,"ENVIRONMENT":7`), "development", `reads '7'`},
+		// JSON \n is a real newline; $(...) strips it before a shell compare.
+		{"trailing newline", vars(`,"ENVIRONMENT":"development\n"`), "development", `reads`},
+		{"trailing newline, want production", vars(`,"ENVIRONMENT":"production\n"`), "production", `reads`},
 		{"lower-case key only", vars(`,"environment":"development"`), "development", absent},
 		{"empty beside an empty errors array", `{"errors":[],"data":{"variables":{` + forkEnvSecretSibling + `,"ENVIRONMENT":""}}}`, "development", empty},
 		{"errors carrying a secret", `{"errors":[{"message":"` + forkEnvSecret + `"}],"data":{"variables":{` + forkEnvSecretSibling + `,"ENVIRONMENT":"development"}}}`, "development", gqlError},

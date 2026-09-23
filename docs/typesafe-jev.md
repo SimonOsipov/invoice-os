@@ -35,7 +35,8 @@ has one of three types:
 `Ask` returns a `Response`. `Answers` holds one `Answer` per asked question id. `Usage`
 holds `InputTokens` and `OutputTokens`, summed over attempts. An answer id nobody asked is
 dropped. A missing `usage` object counts as zero tokens. A missing answer, an answer of the
-wrong type, a `null` required field or a value out of range fails the whole call.
+wrong type, a `null` required field, a value out of range or a malformed `usage` (such as a
+fractional `input_tokens`) fails the whole call.
 
 Every error `Ask` returns satisfies `errors.Is(err, jev.ErrCheckSkipped)`. The text names
 the outcome only: `jev: check skipped: off`, `jev: check skipped: refused` or
@@ -124,10 +125,12 @@ break. In `scan-JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU_v2.pdf`, `_v2` joins the payload,
 with a `choice` question is refused. The payload needs at least one character: a bare
 `JEVFAKE-CHOICE-` is not a marker, so a later marker in `State` can still match.
 
-Every fake result logs outcome `fake`, `attempts` `1` and `input_tokens` `0`, the two
-marker errors included. Fake mode validates the request exactly as the real path does. An
-invalid request is `skipped_refused` with `attempts` `0` and the text
-`jev: check skipped: refused`, with no `(fake)`, because the fake never ran.
+Every fake result logs outcome `fake`, `attempts` `1` and `input_tokens` `0`, the marker
+errors included: `JEVFAKE-UNAVAILABLE`, `JEVFAKE-REFUSED`, and a `JEVFAKE-CHOICE-` payload
+the call refuses, which returns `jev: check skipped: refused (fake)`. Fake mode validates the
+request exactly as the real path does. An invalid request is `skipped_refused` with
+`attempts` `0` and the text `jev: check skipped: refused`, with no `(fake)`, because the fake
+never ran.
 
 The fake ignores the caller's context. A cancelled or expired context in fake mode still
 gets the result the marker table names: the fake answers with a nil error, or returns the
@@ -182,7 +185,7 @@ appears on this line. In a deployed binary the process logger adds its own base 
 | `skipped_unavailable` | A transport error, an attempt timeout, 408, 429 or 500–599 once the retry is spent or does not fit. A 2xx whose body does not decode or fails the answer check. The caller's context cancelled or expired. | once, for the first group only | `jev: check skipped: unavailable`, plus the caller's `ctx.Err()` when its context ended |
 | `skipped_refused` | 401, 422 and every other non-2xx, including a 3xx with no `Location`. A request refused by validation, or a key holding a byte invalid in a header value: nothing is sent, and `attempts` is `0`. | no | `jev: check skipped: refused` |
 | `off` | No key, and `JEV_FAKE` not true. Nothing is sent. | – | `jev: check skipped: off` |
-| `fake` | Fake mode answered once validation passed, including the `JEVFAKE-UNAVAILABLE` and `JEVFAKE-REFUSED` errors. | – | none, or the marker's error with `(fake)` |
+| `fake` | Fake mode answered once validation passed, including the `JEVFAKE-UNAVAILABLE` and `JEVFAKE-REFUSED` errors and a refused `JEVFAKE-CHOICE-` payload. | – | none, or the marker's error with `(fake)` |
 
 ## A skipped check changes nothing on screen
 
@@ -234,8 +237,8 @@ adequate.
    CHECK-03 (`cmd/submission`) and CHECK-05 (`cmd/invoice`) each re-prove it with the client
    wired. Once a caller is wired, the two `FromEnv` errors stop its binary at boot by
    design.
-7. A key holding a control byte, such as a pasted trailing newline, refuses every call.
-   `FromEnv` does not trim it.
+7. A key holding a control byte other than tab, such as a pasted trailing newline, refuses
+   every call. `FromEnv` does not trim it.
 8. `net/http` follows a 3xx that carries a `Location`: 301, 302 and 303 turn the `POST`
    into a `GET`, and `Authorization` is forwarded only to the same host or a subdomain. The
    response body is read with no size cap. Both match the AI client.

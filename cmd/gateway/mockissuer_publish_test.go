@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +19,8 @@ const platformImportPath = "github.com/SimonOsipov/invoice-os/internal/platform"
 
 // platformAssignments returns the value of every assignment to platform.<name> in
 // one file: a string literal unquoted, anything else as "<non-literal>". It parses
-// without comments, so a commented-out assignment is not one.
+// without comments, so a commented-out assignment is not one. Exact case: Go
+// identifiers and the health-gate's values are case-sensitive.
 func platformAssignments(filename string, src any, name string) ([]string, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), filename, src, 0)
 	if err != nil {
@@ -124,6 +127,155 @@ func main() {
 	}
 }
 
+// mockIssuerStateFaults reads func main only, without comments, and reports every
+// publication of platform.MockIssuer that does not match the build and the routes:
+// "absent" unconditionally, then "off" under mockIssuerCompiled alone, then "on" in the
+// branch that registers the mint routes from the raw ENVIRONMENT and flag reads.
+// Exact case: Go identifiers and the health-gate's string compare are case-sensitive.
+func mockIssuerStateFaults(filename string, src any) []string {
+	f, err := parser.ParseFile(token.NewFileSet(), filename, src, 0)
+	if err != nil {
+		return []string{"parse: " + err.Error()}
+	}
+	var body *ast.BlockStmt
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "main" {
+			body = fn.Body
+		}
+	}
+	if body == nil {
+		return []string{"no func main"}
+	}
+
+	type publication struct {
+		val   string
+		guard []ast.Node // enclosing non-block nodes, outermost first
+	}
+	var pubs []publication
+	var stack []ast.Node
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for i, lhs := range as.Lhs {
+				if types.ExprString(lhs) != "platform.MockIssuer" {
+					continue
+				}
+				val := "<non-literal>"
+				if lit, ok := as.Rhs[min(i, len(as.Rhs)-1)].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					val, _ = strconv.Unquote(lit.Value)
+				}
+				var guard []ast.Node
+				for _, s := range stack[1:] {
+					if _, block := s.(*ast.BlockStmt); !block {
+						guard = append(guard, s)
+					}
+				}
+				pubs = append(pubs, publication{val, guard})
+			}
+		}
+		stack = append(stack, n)
+		return true
+	})
+
+	var faults []string
+	var got []string
+	for _, p := range pubs {
+		got = append(got, p.val)
+	}
+	if !slices.Equal(got, []string{"absent", "off", "on"}) {
+		return append(faults, fmt.Sprintf("main publishes platform.MockIssuer as %v, want [absent off on] in that order", got))
+	}
+	if len(pubs[0].guard) != 0 {
+		faults = append(faults, `"absent" is published under a condition; it must be the unconditional default`)
+	}
+	if ifs, ok := soleIf(pubs[1].guard); !ok || ifs.Init != nil || ifs.Else != nil || types.ExprString(ifs.Cond) != "mockIssuerCompiled" {
+		faults = append(faults, `"off" is not published under exactly "if mockIssuerCompiled"`)
+	}
+	ifs, ok := soleIf(pubs[2].guard)
+	if !ok || ifs.Else != nil || types.ExprString(ifs.Cond) != "jwks != nil" {
+		return append(faults, `"on" is not published under exactly "if jwks, login := mockIssuerRoutes(...); jwks != nil"`)
+	}
+	init, _ := ifs.Init.(*ast.AssignStmt)
+	var call *ast.CallExpr
+	if init != nil && len(init.Rhs) == 1 {
+		call, _ = init.Rhs[0].(*ast.CallExpr)
+	}
+	if call == nil || types.ExprString(call.Fun) != "mockIssuerRoutes" || len(call.Args) < 2 ||
+		types.ExprString(call.Args[0]) != `os.Getenv("ENVIRONMENT")` ||
+		types.ExprString(call.Args[1]) != `os.Getenv("GATEWAY_MOCK_ISSUER")` {
+		faults = append(faults, `the "on" branch does not call mockIssuerRoutes(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER"), ...)`)
+	}
+	var handled []string
+	for _, s := range ifs.Body.List {
+		if es, ok := s.(*ast.ExprStmt); ok {
+			handled = append(handled, types.ExprString(es.X))
+		}
+	}
+	for _, want := range []string{
+		`app.Mux.Handle("GET /.well-known/jwks.json", jwks)`,
+		`app.Mux.Handle("POST /auth/login", login)`,
+		`app.Mux.Handle("OPTIONS /auth/login", login)`,
+	} {
+		if !slices.Contains(handled, want) {
+			faults = append(faults, fmt.Sprintf("the \"on\" branch does not run %s", want))
+		}
+	}
+	return faults
+}
+
+// soleIf returns the only enclosing node when it is an if statement.
+func soleIf(guard []ast.Node) (*ast.IfStmt, bool) {
+	if len(guard) != 1 {
+		return nil, false
+	}
+	ifs, ok := guard[0].(*ast.IfStmt)
+	return ifs, ok
+}
+
+func TestMockIssuerStateMatchesTheBuildAndTheRoutes(t *testing.T) {
+	const good = `package main
+
+func main() {
+	platform.MockIssuer = "absent"
+	if mockIssuerCompiled {
+		platform.MockIssuer = "off"
+	}
+	if jwks, login := mockIssuerRoutes(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER"), withCORS, app.Logger); jwks != nil {
+		app.Mux.Handle("GET /.well-known/jwks.json", jwks)
+		app.Mux.Handle("POST /auth/login", login)
+		app.Mux.Handle("OPTIONS /auth/login", login)
+		platform.MockIssuer = "on"
+	}
+}
+`
+	for _, c := range []struct{ name, find, replace string }{
+		{"negated build check", "if mockIssuerCompiled {", "if !mockIssuerCompiled {"},
+		{"on outside its branch", "\t\tplatform.MockIssuer = \"on\"\n\t}", "\t}\n\tplatform.MockIssuer = \"on\""},
+		{"absent commented out", "\tplatform.MockIssuer = \"absent\"", "\t// platform.MockIssuer = \"absent\""},
+		{"hardcoded environment", `mockIssuerRoutes(os.Getenv("ENVIRONMENT"),`, `mockIssuerRoutes("development",`},
+		{"hardcoded flag", `os.Getenv("GATEWAY_MOCK_ISSUER")`, `"true"`},
+		{"a mint route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/login\", login)\n", ""},
+		{"a fourth value", "platform.MockIssuer = \"on\"", "platform.MockIssuer = \"on\"\n\t\tplatform.MockIssuer = \"yes\""},
+	} {
+		if !strings.Contains(good, c.find) {
+			t.Fatalf("fixture %q: %q is not in the good fixture", c.name, c.find)
+		}
+		if faults := mockIssuerStateFaults("fixture.go", strings.Replace(good, c.find, c.replace, 1)); len(faults) == 0 {
+			t.Errorf("fixture %q: no fault reported", c.name)
+		}
+	}
+	if faults := mockIssuerStateFaults("fixture.go", good); len(faults) != 0 {
+		t.Fatalf("the good fixture reports %v", faults)
+	}
+
+	for _, fault := range mockIssuerStateFaults(filepath.Join("..", "gateway", "main.go"), nil) {
+		t.Errorf("cmd/gateway/main.go: %s", fault)
+	}
+}
+
 // yamlCode drops YAML and shell comments, so a commented-out step cannot satisfy a scan.
 func yamlCode(src string) []string {
 	lines := strings.Split(src, "\n")
@@ -201,6 +353,7 @@ func runText(block []string) string {
 	return b.String()
 }
 
+// Exact case: go's flags and package paths are case-sensitive.
 var (
 	taggedGatewayVet  = regexp.MustCompile(`(?m)\bgo vet -tags[ =]mockissuer \./cmd/gateway/?(\s|$)`)
 	taggedGatewayTest = regexp.MustCompile(`(?m)\bgo test -tags[ =]mockissuer \./cmd/gateway/?(\s|$)`)
@@ -262,6 +415,7 @@ func TestGoJobVetsAndTestsTheMockIssuerBuild(t *testing.T) {
 }
 
 func TestNoCommentCitesTheRetiredMilestone(t *testing.T) {
+	// Exact case: milestone and story IDs are written upper-case, as breaklist matches them.
 	retired := "M8" + "-07"
 	if !strings.Contains("// "+"M8-"+"07 still owes the verifier", retired) {
 		t.Fatalf("needle %q does not match a planted citation", retired)

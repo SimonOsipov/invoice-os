@@ -8,6 +8,13 @@ docling[rapidocr]==2.123.1
 rapidocr==3.9.2
 onnxruntime==1.29.0
 
+# docling's own transitives, pinned: both float, and both own PDF word segmentation.
+# docling-parse 7.21.0 / docling-core 2.98.0 (2026-09-22) merged two adjacent header
+# cells into one token and reddened wild_ruled_lines_totals against an unchanged image.
+# Bump these deliberately, regenerating every golden -- never let a release do it.
+docling-core==2.97.2
+docling-parse==7.20.0
+
 # opencv-python-headless==5.0.0.93 (cv2, no X11/GL libs) is pinned and installed in
 # the Dockerfile instead of here -- it replaces rapidocr's transitive opencv-python
 # and needs an uninstall step between the two installs, which a requirements.txt

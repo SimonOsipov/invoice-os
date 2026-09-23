@@ -199,9 +199,9 @@ func TestAskAI_DropsWhitespaceOnlyAndNonHeaderAnswers(t *testing.T) {
 }
 
 func TestAIPromptText_EmptyPageStillPrintsItsHeader(t *testing.T) {
-	got := aiPromptText([]TokenPage{{Number: 1}, {Number: 2, Tokens: []Token{tok("X", 2, 0.5, 0.25, 0.6, 0.3)}}})
+	got := DoclingPromptText([]TokenPage{{Number: 1}, {Number: 2, Tokens: []Token{tok("X", 2, 0.5, 0.25, 0.6, 0.3)}}})
 	want := aiTextIntro + "\n\n--- page 1 ---\n--- page 2 ---\ny=0.250 | x=0.50 X"
 	if got != want {
-		t.Errorf("aiPromptText = %q, want %q", got, want)
+		t.Errorf("DoclingPromptText = %q, want %q", got, want)
 	}
 }

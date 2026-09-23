@@ -157,8 +157,8 @@ func TestAskAILines_SendsOneLineItemCallWithTheText(t *testing.T) {
 	if req.SchemaName != "invoice_line_items" {
 		t.Errorf("SchemaName = %q, want invoice_line_items", req.SchemaName)
 	}
-	if want := aiPromptText(pages); req.Text != want {
-		t.Errorf("Text = %q, want aiPromptText(pages) = %q", req.Text, want)
+	if want := DoclingPromptText(pages); req.Text != want {
+		t.Errorf("Text = %q, want DoclingPromptText(pages) = %q", req.Text, want)
 	}
 	if req.Pages != nil {
 		t.Errorf("Pages = %v, want nil", req.Pages)

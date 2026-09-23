@@ -108,6 +108,15 @@ var fxCorpus = []struct {
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
+	// CHECK-01-03's seven non-invoice types: the document-type check's negative half.
+	// Byte-compared like the rest, outside every corpus_ ratchet.
+	{fxNonInvoiceReceipt, fxBuildNonInvoiceReceipt},
+	{fxNonInvoiceProforma, fxBuildNonInvoiceProforma},
+	{fxNonInvoiceQuotation, fxBuildNonInvoiceQuotation},
+	{fxNonInvoiceCreditNote, fxBuildNonInvoiceCreditNote},
+	{fxNonInvoiceDeliveryNote, fxBuildNonInvoiceDeliveryNote},
+	{fxNonInvoiceStatement, fxBuildNonInvoiceStatement},
+	{fxNonInvoicePurchaseOrder, fxBuildNonInvoicePurchaseOrder},
 }
 
 // --- the generator ----------------------------------------------------------
@@ -3497,4 +3506,109 @@ func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
 		t.Errorf("marker of %d chars at %dpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
 			len(marker), fxAILinesMarkerPt, fxAILinesMarkerX, right, limit, fxPageWidthPt)
 	}
+}
+
+// --- CHECK-01-03: the seven non-invoice builders -----------------------------
+
+func fxBuildNonInvoiceReceipt() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "RECEIPT"},
+		fxLine{12, 72, 690, "Receipt No: RCP-3101"},
+		fxLine{12, 72, 672, "Date: 2026-02-11"},
+		fxLine{12, 72, 654, "Received from: Honeywell Group"},
+		fxLine{12, 72, 636, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 618, "Supplier TIN: 99999999-1401"},
+		fxLine{12, 72, 600, "Payment method: Bank transfer"},
+		fxLine{12, 72, 582, "Amount received: NGN 1,075.00"},
+		fxLine{12, 72, 564, "PAID IN FULL"},
+		fxLine{12, 72, 546, "This receipt acknowledges payment. It is not a tax invoice."},
+	)
+}
+
+func fxBuildNonInvoiceProforma() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "PROFORMA INVOICE"},
+		fxLine{12, 72, 690, "Proforma No: PF-3201"},
+		fxLine{12, 72, 672, "Date: 2026-02-18"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1402"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Currency: NGN"},
+		fxLine{12, 72, 582, "Estimated total: NGN 2,150.00"},
+		fxLine{12, 72, 564, "This is not a tax invoice. No payment is due on this document."},
+		fxLine{12, 72, 546, "Prices are indicative and valid for 14 days."},
+	)
+}
+
+func fxBuildNonInvoiceQuotation() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "QUOTATION"},
+		fxLine{12, 72, 690, "Quotation No: QT-3301"},
+		fxLine{12, 72, 672, "Date: 2026-03-03"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1403"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Quoted total: NGN 4,300.00"},
+		fxLine{12, 72, 582, "Valid for 30 days from the date above."},
+		fxLine{12, 72, 564, "Acceptance of this quotation is required before supply."},
+	)
+}
+
+func fxBuildNonInvoiceCreditNote() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "CREDIT NOTE"},
+		fxLine{12, 72, 690, "Credit Note No: CN-3401"},
+		fxLine{12, 72, 672, "Date: 2026-03-19"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1404"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Reason: goods returned"},
+		fxLine{12, 72, 582, "Credit amount: NGN -750.00"},
+		fxLine{12, 72, 564, "This document reduces the amount owed. It requests no payment."},
+	)
+}
+
+func fxBuildNonInvoiceDeliveryNote() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "DELIVERY NOTE"},
+		fxLine{12, 72, 690, "Delivery Note No: DN-3501"},
+		fxLine{12, 72, 672, "Date: 2026-04-08"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1405"},
+		fxLine{12, 72, 618, "Deliver to: Honeywell Group"},
+		fxLine{12, 72, 600, "Address: 14 Kofo Abayomi Street, Victoria Island, Lagos"},
+		fxLine{12, 72, 582, "Item: 40 cartons of bottled water"},
+		fxLine{12, 72, 564, "Quantity dispatched: 40"},
+		fxLine{12, 72, 546, "Goods received by: ____________"},
+		fxLine{12, 72, 528, "No charges are shown on this document."},
+	)
+}
+
+func fxBuildNonInvoiceStatement() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "STATEMENT OF ACCOUNT"},
+		fxLine{12, 72, 690, "Statement No: ST-3601"},
+		fxLine{12, 72, 672, "Period: 01/04/2026 to 30/04/2026"},
+		fxLine{12, 72, 654, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 636, "Supplier TIN: 99999999-1406"},
+		fxLine{12, 72, 618, "Customer: Honeywell Group"},
+		fxLine{12, 72, 600, "Opening balance: NGN 12,000.00"},
+		fxLine{12, 72, 582, "Payments received: NGN 5,000.00"},
+		fxLine{12, 72, 564, "Closing balance: NGN 7,000.00"},
+		fxLine{12, 72, 546, "This statement summarises several documents. It is not a tax invoice."},
+	)
+}
+
+func fxBuildNonInvoicePurchaseOrder() []byte {
+	return fxTextPage(
+		fxLine{24, 72, 720, "PURCHASE ORDER"},
+		fxLine{12, 72, 690, "PO No: PO-3701"},
+		fxLine{12, 72, 672, "Date: 2026-05-12"},
+		fxLine{12, 72, 654, "Ordered by: Honeywell Group"},
+		fxLine{12, 72, 636, "Buyer TIN: 99999999-1407"},
+		fxLine{12, 72, 618, "Supplier: Adeyemi Trading Limited"},
+		fxLine{12, 72, 600, "Item: 200 reams of A4 paper"},
+		fxLine{12, 72, 582, "Order value: NGN 3,600.00"},
+		fxLine{12, 72, 564, "Please supply the goods above and invoice on delivery."},
+	)
 }

@@ -108,26 +108,31 @@ func newClient(cfg config, logger *slog.Logger) *Client {
 // Ask sends req and returns the typed answers, retrying once within the
 // budget. Every error wraps ErrCheckSkipped.
 func (c *Client) Ask(ctx context.Context, req Request) (Response, error) {
+	start := c.cfg.now()
 	r := c.call(ctx, req)
+	c.logCall(ctx, req, r, c.cfg.now().Sub(start))
 	return r.resp, r.err
 }
 
 type result struct {
 	resp     Response
 	err      error
-	outcome  string // "ok" | "skipped_unavailable" | "skipped_refused" | "off"
+	outcome  string // "ok" | "skipped_unavailable" | "skipped_refused" | "off" | "fake"
 	attempts int
 	usage    Usage // summed over attempts, failed ones included
 }
 
-// call runs the mode order off, validation, key check, then the wire request
-// and the retry loop.
+// call runs the mode order off, validation, key check, fake, then the wire
+// request and the retry loop.
 func (c *Client) call(ctx context.Context, req Request) result {
 	if !c.Enabled() {
 		return result{err: errOff, outcome: "off"}
 	}
 	if !validRequest(req) || !validKey(c.cfg.key) {
 		return result{err: errRefused, outcome: "skipped_refused"}
+	}
+	if c.cfg.fake {
+		return fakeCall(req)
 	}
 	body, err := json.Marshal(buildWireRequest(req))
 	if err != nil {

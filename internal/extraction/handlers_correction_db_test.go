@@ -1519,7 +1519,7 @@ func TestRLS_ARefusedRenameAnswers409AndRollsBackEveryWrite(t *testing.T) {
 	}
 }
 
-// An undo on an unreadable invoice_number hands the seam nil (rank 0 holds no value). The
+// An undo on a valueless unreadable invoice_number hands the seam nil. The
 // production applier refuses a nil number (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn),
 // so the answer is 400 and nothing is written.
 func TestRLS_AnUndoOnAnUnreadableInvoiceNumberIsRefusedAndWritesNothing(t *testing.T) {

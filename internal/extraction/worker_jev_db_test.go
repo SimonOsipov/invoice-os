@@ -410,3 +410,93 @@ func TestRLS_ExtractWorkerAsksJevUnderEachJobsOwnTenant(t *testing.T) {
 		t.Errorf("jev call lines carry outcome %v, want %v", outcomes, want)
 	}
 }
+
+// A decided header row never carries rank >= 1 rows in the pipeline, so the candidates checked
+// here belong to an ambiguous field the check must neither ask nor touch.
+func TestRLS_ExtractWorkerJevLeavesAnAmbiguousFieldsCandidatesAlone(t *testing.T) {
+	ctx := t.Context()
+	page := wjPage()
+	page.Tokens = append(page.Tokens,
+		extraction.Token{Text: "Issue Date: 2026-03-01", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.30, X1: 0.5, Y1: 0.32}},
+		extraction.Token{Text: "Issue Date: 2026-03-02", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.40, X1: 0.5, Y1: 0.42}},
+	)
+	pages := []extraction.Page{page}
+	off := wkRunJev(t, ctx, 954120, pages, wjAI(), nil)
+	wpAssertRankZero(t, off.rows, "issue_date", stPtr("2026-03-01"), stPtr("ambiguous"))
+	candidates := wjRankOneOrMore(off.rows)
+	if len(candidates) == 0 {
+		t.Fatalf("the Jev-nil run wrote no rank >= 1 row; the comparison below holds over nothing: %v", off.rows)
+	}
+
+	stub := &wkJev{enabled: true, resp: wjDoubtAll()}
+	on := wkRunJev(t, ctx, 954121, pages, wjAI(), stub)
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the Jev seam saw %d call(s), want 1", n)
+	}
+	if ids := slices.Sorted(maps.Keys(stub.reqs[0].Questions)); !slices.Equal(ids, []string{"invoice_number", "total"}) {
+		t.Errorf("question ids = %v, want [invoice_number total]: an ambiguous field is never asked", ids)
+	}
+	wpAssertRankZero(t, on.rows, "total", stPtr("1935.00"), stPtr("unreadable"))
+	wpAssertRankZero(t, on.rows, "invoice_number", stPtr("20417"), stPtr("unreadable"))
+	wpAssertRankZero(t, on.rows, "issue_date", stPtr("2026-03-01"), stPtr("ambiguous"))
+	if got := wjRankOneOrMore(on.rows); !slices.Equal(got, candidates) {
+		t.Errorf("rank >= 1 rows = %v, want the Jev-nil run's %v", got, candidates)
+	}
+	if a, b := wkStrBoxes(off.boxes), wkStrBoxes(on.boxes); !slices.Equal(a, b) {
+		t.Errorf("boxes differ from the Jev-nil run:\n nil: %v\n on:  %v", a, b)
+	}
+}
+
+func wjRankOneOrMore(rows []wpRow) []string {
+	var out []string
+	for _, r := range rows {
+		if r.rank >= 1 {
+			out = append(out, r.String())
+		}
+	}
+	return out
+}
+
+// One asker serves every tenant's jobs; each request carries only its own job's page and tenant.
+func TestRLS_ExtractWorkerJevRequestCarriesOnlyItsOwnJobsDocument(t *testing.T) {
+	ctx := t.Context()
+	pageB := extraction.Page{Number: 1, WidthPt: 612, HeightPt: 792, Tokens: []extraction.Token{
+		{Text: "Total: 7,264.50", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.18, X1: 0.5, Y1: 0.20}},
+	}}
+	stub := &wkJev{enabled: true, resp: wjNoul(map[string]float64{"invoice_number": 1, "total": 1})}
+	a := wkRunJev(t, ctx, 954130, []extraction.Page{wjPage()}, wjAI(), stub)
+	b := wkRunJev(t, ctx, 954131, []extraction.Page{pageB}, nil, stub)
+
+	if a.tenantID == b.tenantID {
+		t.Fatalf("both jobs ran on tenant %s; the isolation below proves nothing", a.tenantID)
+	}
+	if n := stub.count(); n != 2 {
+		t.Fatalf("the Jev seam saw %d call(s), want 2 (one per job)", n)
+	}
+	if want := []string{a.tenantID, b.tenantID}; !slices.Equal(stub.tenants, want) {
+		t.Errorf("the Jev calls carried tenant(s) %v, want %v in job order", stub.tenants, want)
+	}
+	for _, c := range []struct {
+		job                              string
+		req                              jev.Request
+		own, other, ownPrint, otherPrint string
+	}{
+		{"A", stub.reqs[0], "1935.00", "7264.50", "1,935.00", "7,264.50"},
+		{"B", stub.reqs[1], "7264.50", "1935.00", "7,264.50", "1,935.00"},
+	} {
+		q, ok := c.req.Questions["total"]
+		if !ok {
+			t.Errorf("job %s: total was not asked: %v", c.job, slices.Sorted(maps.Keys(c.req.Questions)))
+			continue
+		}
+		if !strings.Contains(q.Instructions, c.own) || strings.Contains(q.Instructions, c.other) {
+			t.Errorf("job %s: the total question %q, want %s and never %s", c.job, q.Instructions, c.own, c.other)
+		}
+		if !strings.Contains(c.req.State, c.ownPrint) || strings.Contains(c.req.State, c.otherPrint) {
+			t.Errorf("job %s: State %q, want its own page's %s and never %s", c.job, c.req.State, c.ownPrint, c.otherPrint)
+		}
+	}
+	if _, ok := stub.reqs[1].Questions["invoice_number"]; ok {
+		t.Errorf("job B was asked invoice_number, which only job A's page decides")
+	}
+}

@@ -28,7 +28,7 @@ import (
 // no longer shared: extraction.detailFieldsTx reads every rank and nests the alternatives.
 type extractedField struct {
 	Name   string
-	Value  *string // NULL for an unreadable/missing field
+	Value  *string // NULL for a missing field
 	Reason *string // extraction_field_results.reason_code; NULL when the field is clean
 }
 

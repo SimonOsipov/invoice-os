@@ -75,7 +75,7 @@ type Response struct {
 	Usage   Usage
 }
 
-// ErrCheckSkipped wraps every error Ask returns; the caller skips the check.
+// ErrCheckSkipped means the caller skips the check.
 var ErrCheckSkipped = errors.New("jev: check skipped")
 
 // Each text names the outcome only: never a status, body, state, key or URL.

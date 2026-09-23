@@ -746,9 +746,17 @@ func TestAsk_BudgetSpentSkipsWithoutARetry(t *testing.T) {
 	})
 	c := clockClient(ts, fc)
 
+	before := dials.Load()
 	_, err := c.Ask(t.Context(), noulReq("s"))
 	wantHits(t, ts, 1)
 	wantSkipped(t, err, textUnavailable)
+	// Hits cannot see a retry whose deadline has already passed; the wait and the round trip can.
+	if got := fc.sleepCalls(); len(got) != 0 {
+		t.Errorf("sleep calls = %v, want none", got)
+	}
+	if got := dials.Load() - before; got != 1 {
+		t.Errorf("round trips = %d, want 1", got)
+	}
 }
 
 // Asserts on the sleep, not on hit 2: after a 2.749s advance the second

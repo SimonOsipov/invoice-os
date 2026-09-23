@@ -599,7 +599,7 @@ func TestAsk_ConcurrentRetriesKeepTheirOwnUsage(t *testing.T) {
 	}
 }
 
-// Retyped on purpose: the PR-environment scrub and the vendor SDK both name this variable.
+// Retyped on purpose: the vendor SDK and the measurement harness read this exact name.
 func TestFromEnv_ReadsTheTypesafeAPIKeyVariable(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "k")
 	unsetEnv(t, EnvFake)

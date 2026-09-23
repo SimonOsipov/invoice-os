@@ -2286,6 +2286,13 @@ function uniqueAiUnavailablePdfBytes(): Buffer {
   return Buffer.concat([AI_UNAVAILABLE_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// fxJevDoubt (fxE2ECopies): JEVFAKE-DOUBT makes the fake Jev doubt the one checked field.
+const JEV_DOUBT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_doubt_invoice.pdf'))
+
+function uniqueJevDoubtPdfBytes(): Buffer {
+  return Buffer.concat([JEV_DOUBT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // AIR-08-13's deployed fixture (fxE2ECopies): a ruled 2-row table plus an AIFAKE-LINES-ANSWER
 // marker steering three line-item rows. Same recipe as the others above.
 const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'))
@@ -9499,6 +9506,189 @@ test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollb
     body: JSON.stringify(measured, null, 2),
     contentType: 'application/json',
   })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// read: fxJevDoubtLines (internal/extraction/fixtures_test.go)
+const JEV_DOUBT_READ = { invoice_number: 'JD-3310', supplier_name: 'Kaduna Textiles Limited', supplier_tin: '23456789-0001' }
+
+test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // extractOneDocument already waited on invoice-detail: the doubted number still filed a draft.
+  await extractOneDocument(page, 'Zz CHECK-03 doubt', { name: 'jev_doubt_invoice.pdf', buffer: uniqueJevDoubtPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the doubted document must land on the real invoice detail, not the quarantine').not.toBeNull()
+  const invoiceId = invoiceMatch![1]
+
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+
+  // The doubt flags the value and keeps it, and a flagged number drops its lock.
+  const numberCell = page.getByTestId('extraction-field-invoice_number')
+  await expect(numberCell.getByText(REASON_PILL.unreadable, { exact: true })).toBeVisible()
+  const numberInput = page.getByTestId('extraction-input-invoice_number')
+  await expect(numberInput).toHaveValue(JEV_DOUBT_READ.invoice_number)
+  await expect(numberInput).toHaveJSProperty('readOnly', false)
+  expect(await numberInput.getAttribute('aria-readonly'), 'a doubted invoice number still announces itself read-only').not.toBe('true')
+  await expect(page.getByTestId('extraction-lock-invoice_number')).toHaveCount(0)
+  // lock note: INVOICE_NUMBER_LOCKED
+  await expect(
+    numberCell.getByText("The invoice number is this invoice's identity and cannot be changed here.", { exact: true }),
+  ).toHaveCount(0)
+  const numberWire = wire.get('invoice_number')
+  expect({ value: numberWire?.value, reason: numberWire?.reason }).toEqual({
+    value: JEV_DOUBT_READ.invoice_number,
+    reason: 'unreadable',
+  })
+
+  // The supplier pair is never asked, so it stays decided with no pill.
+  for (const name of ['supplier_name', 'supplier_tin'] as const) {
+    const w = wire.get(name)
+    expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: JEV_DOUBT_READ[name], reason: '' })
+    await expect(page.getByTestId(`extraction-field-${name}`).locator('.mono'), `${name} renders a pill`).toHaveCount(0)
+  }
+
+  // The other seven header fields were never read, so never asked.
+  const decided: string[] = Object.keys(JEV_DOUBT_READ)
+  for (const name of VOCABULARY.filter((n) => !decided.includes(n))) {
+    const w = wire.get(name)
+    expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: null, reason: 'missing' })
+  }
+
+  const pilled = page.locator('[data-testid^="extraction-field-"]').filter({ hasText: REASON_PILL.unreadable })
+  await expect(pilled, 'a cell other than invoice_number renders the doubt pill').toHaveCount(1)
+  await expect(pilled).toHaveAttribute('data-testid', 'extraction-field-invoice_number')
+
+  // marker prefix: jev fake.go's markers (fxJevDoubtMarker). Docling must not read it into a value.
+  const leaked = detail.fields.flatMap((f) =>
+    [f.value, ...f.alternatives.map((a) => a.value)].filter((v) => v?.includes('JEVFAKE')).map((v) => `${f.name}=${v}`),
+  )
+  expect(leaked, 'the Jev marker reached a wire value').toEqual([])
+
+  const invoice = await getInvoice(token, invoiceId)
+  expect(invoice.invoice_number).toBe(JEV_DOUBT_READ.invoice_number)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width", async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  await extractOneDocument(page, 'Zz CHECK-03 layout', { name: 'jev_doubt_invoice.pdf', buffer: uniqueJevDoubtPdfBytes() })
+  await openExtractionReview(page)
+
+  const pane = page.getByTestId('extraction-fields')
+  const paneBody = fieldsPaneBody(page)
+  const cell = page.getByTestId('extraction-field-invoice_number')
+  const pill = cell.getByText(REASON_PILL.unreadable, { exact: true })
+
+  // Non-empty floor: the sweep below measures the pill, so it must actually be on screen.
+  await expect(pill, 'invoice_number renders no doubt pill -- the sweep below would measure nothing').toBeVisible({
+    timeout: 30_000,
+  })
+
+  const measured: { width: number; left: number; right: number; bodyScrollWidth: number; bodyClientWidth: number }[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [p, c] = await Promise.all([pill.boundingBox(), cell.boundingBox()])
+        const flow = await paneBody.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { p, c, flow }
+      }, `doubt pill containment at ${width}px`)
+
+      expect(m.p && m.c, `both the pill and its cell must render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed to zero is inside anything and passes vacuously.
+      expect(m.p!.width, `the pill collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      const g = gaps(m.p as Rect, m.c as Rect)
+      expect(g.left, `the pill starts ${(-g.left).toFixed(1)}px left of its cell at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the pill ends ${(-g.right).toFixed(1)}px right of its cell at ${width}px`).toBeGreaterThanOrEqual(-1)
+
+      expect(
+        m.flow.scrollWidth,
+        `the pane body holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+
+      measured.push({
+        width,
+        left: g.left,
+        right: g.right,
+        bodyScrollWidth: m.flow.scrollWidth,
+        bodyClientWidth: m.flow.clientWidth,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  // The pane reaches its 470px floor at no WIDE_WIDTHS entry, so descend until it does.
+  let floorWidth: number | null = null
+  const descent: { width: number; paneWidth: number }[] = []
+  try {
+    for (let width = 1280; width >= 1000; width -= 40) {
+      await page.setViewportSize({ width, height: 1080 })
+      const paneWidth = await settledRead(async () => (await pane.boundingBox())?.width ?? 0, `pane width at ${width}px`)
+      descent.push({ width, paneWidth })
+      if (paneWidth > 0 && paneWidth <= 471) {
+        floorWidth = width
+        break
+      }
+    }
+
+    await testInfo.attach('check03-doubt-pill-descent.json', {
+      body: JSON.stringify({ wide: measured, descent, floorWidth }, null, 2),
+      contentType: 'application/json',
+    })
+    expect(floorWidth, 'the 470px floor is unreachable at or above 1000px -- the pill cannot be measured at it').not.toBeNull()
+
+    const spill = await cell.evaluate((el) => {
+      const c = el.getBoundingClientRect()
+      let worst = { node: '', outLeft: 0, outRight: 0 }
+      for (const d of Array.from(el.querySelectorAll<HTMLElement>('*'))) {
+        const r = d.getBoundingClientRect()
+        // A rect collapsed on both axes is inside anything and would pass vacuously.
+        if (r.width === 0 && r.height === 0) continue
+        const outLeft = c.left - r.left
+        const outRight = r.right - c.right
+        if (Math.max(outLeft, outRight) > Math.max(worst.outLeft, worst.outRight)) {
+          worst = { node: d.dataset.testid ?? d.tagName.toLowerCase(), outLeft, outRight }
+        }
+      }
+      return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, worst }
+    })
+
+    await testInfo.attach('check03-doubt-pill-floor.json', {
+      body: JSON.stringify({ floorWidth, spill }, null, 2),
+      contentType: 'application/json',
+    })
+
+    expect(spill.clientWidth, `invoice_number has no width at the ${floorWidth}px floor -- its edges are vacuous`).toBeGreaterThan(0)
+    expect(
+      spill.worst.outLeft,
+      `${spill.worst.node} starts ${spill.worst.outLeft.toFixed(2)}px left of the invoice_number cell at ${floorWidth}px`,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      spill.worst.outRight,
+      `${spill.worst.node} ends ${spill.worst.outRight.toFixed(2)}px right of the invoice_number cell at ${floorWidth}px`,
+    ).toBeLessThanOrEqual(1)
+    expect(
+      spill.scrollWidth,
+      `invoice_number holds ${spill.scrollWidth}px of content in a ${spill.clientWidth}px box at ${floorWidth}px`,
+    ).toBeLessThanOrEqual(spill.clientWidth + 1)
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

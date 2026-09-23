@@ -115,7 +115,9 @@ In fake mode `Ask` sends nothing. The leftmost marker in `State` steers the resu
 
 The marker is read from `State` only. Question text and option descriptions never steer the
 fake. Matching is case-sensitive and needs no word boundary, so `scan-JEVFAKE-DOUBT.pdf`
-matches. An `AIFAKE-` marker does not steer this fake.
+matches. An `AIFAKE-` marker does not steer this fake. `JEVFAKE-DOUBT` doubts every checked
+field of a document, so `jev_doubt_invoice.pdf`, which has one checked field, is the deployed
+fixture that uses it.
 
 **Building a choice marker.** Encode the option's `Name` with `base64.RawURLEncoding`: the
 URL-safe alphabet, with no padding. For the option `credit note` the marker is

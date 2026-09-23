@@ -68,7 +68,7 @@ describe('frontend/app/src holds no non-test jev harness file', () => {
       'the known live positive no longer matches -- the needle, not the walk, has regressed',
     ).toHaveLength(1)
 
-    const nonTest = matches.filter((f) => !f.path.endsWith('.test.ts')).map((f) => f.path)
+    const nonTest = matches.filter((f) => !/\.test\.tsx?$/.test(f.path)).map((f) => f.path)
     expect(nonTest, 'a non-test file carries a jev/typesafe/autoplacement string').toEqual([])
   })
 })

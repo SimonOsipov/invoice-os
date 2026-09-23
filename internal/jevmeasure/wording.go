@@ -2,15 +2,12 @@ package jevmeasure
 
 import "slices"
 
-// Provisional wording (A37): CHECK-01-02 authors and pins this text so the
-// report can quote it byte-for-byte. Reconciling it with the real
-// TypeSafe-console wording that produced the chosen thresholds is owed at
-// the live run, not here.
+// The value-check wording is the one measured in CHECK-00 Jev Measurement Results.
 
 const (
-	ValueCheckInstructions    = "State whether the following statement about this Nigerian tax invoice is true: the value shown for this field is exactly the value printed on the document."
-	ValueCheckCriteriaTrue    = "The stated value matches what is printed on the invoice, character for character."
-	ValueCheckCriteriaFalse   = "The stated value does not match what is printed on the invoice, or the field is missing, corrupted, or transposed."
+	ValueCheckInstructions    = "State whether the following statement about this Nigerian tax invoice is true: the value shown for this field is the value the document prints for that field. The value is written in a normalised form: amounts without thousands separators or currency symbols, dates as YYYY-MM-DD, and currency as a three-letter ISO code."
+	ValueCheckCriteriaTrue    = "The stated value is the same value the invoice prints for this field, ignoring only formatting such as thousands separators, currency symbols, and date format."
+	ValueCheckCriteriaFalse   = "The stated value differs from what the invoice prints for this field: a digit, character, amount, or date is different, missing, or transposed, or the value belongs to another field."
 	MappingCheckInstructions  = "State whether the following statement about this spreadsheet column mapping is true: the column header was correctly mapped to the invoice field it names."
 	MappingCheckCriteriaTrue  = "The column holds the data the mapped field expects, and no other field better matches the column's contents."
 	MappingCheckCriteriaFalse = "The column's data belongs to a different invoice field, or the column does not correspond to any invoice field."

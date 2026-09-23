@@ -21,9 +21,9 @@
 //
 // The paragraph above still describes Reset exactly, but Reset is no longer the
 // only boot-time destruction here: DEMO-04's demo-tenant purge (demopurge.go)
-// runs from the same seam with NO environment gate, so it DOES reach the
-// persistent environment. It is narrowed by allowlist instead — only the four
-// tenants DemoTenants names, and db.Seed restores them in the same call.
+// runs from the same seam, gated like Seed on ENVIRONMENT, not on the Railway
+// name. It is narrowed by allowlist instead — only the four tenants DemoTenants
+// names, and db.Seed restores them in the same call.
 package db
 
 import (
@@ -78,12 +78,13 @@ func resettableEnvironment(environment string) bool {
 // system variable that reflects the CURRENT environment's real name (docs/
 // add-a-service.md: "Railway injects RAILWAY_* variables automatically...
 // never set these manually") — NOT os.Getenv("ENVIRONMENT") /
-// app.Config.Environment. Unlike ENVIRONMENT (an ordinary app variable that
-// forks along with everything else and is therefore identical inside a PR
-// environment and its persistent source), RAILWAY_ENVIRONMENT_NAME is exactly
+// app.Config.Environment. ENVIRONMENT is an ordinary app variable that CI or a
+// human writes: set-fork-environment sets `development` in every fork, and
+// production's gateway reads `production`. RAILWAY_ENVIRONMENT_NAME is exactly
 // "pr-<N>" inside a fork and exactly whatever the persistent environment is
-// actually named ("production", post-rename) on that environment — it is the
-// only variable available at gateway boot that can tell the two apart. See
+// actually named ("production", post-rename) on that environment, and nobody
+// sets it, so no lost or wrong write can make the persistent environment look
+// like a fork. See
 // resettableEnvironment's doc comment for the full reasoning and
 // cmd/gateway/main.go's ProvisionConfig construction for the call site this
 // pins.

@@ -9,8 +9,9 @@ tenant-owned tables, then re-seeds them from `db/seed.dev.sql`. It runs inside
 `db.Provision`, between `Reset` and `Seed` (`internal/platform/db/provision.go`), and the
 primitive is `db.PurgeDemoTenants` (`internal/platform/db/demopurge.go`).
 
-**On the persistent production environment, this is the only place a row covered by a
-retention claim is deleted.** Ordinary request handling does delete committed rows —
+**Apart from `db.Reset` in a PR environment, this is the only place a row covered by a
+retention claim is deleted.** It does not run on production, whose gateway reads
+`ENVIRONMENT=production`. Ordinary request handling does delete committed rows —
 `line_items` on a re-import, `workflow_role_members` when a role's staffing changes,
 `approval_policy_steps` when a policy version is edited, plus River's own job cleanup — but
 `invoice_app` holds no `DELETE` grant on any table those claims are about (`audit_log`,
@@ -38,21 +39,21 @@ destructive delete. `TestPurgeAllowlistMatchesSeedFileTenants` compares the two 
 directions, and `TestPurgeHasNoUnscopedDeleteStatement` proves the tenant predicate lives
 in the same string literal as the `DELETE`.
 
-**The tenant list is the safety boundary, not the environment.** `ENVIRONMENT` reads
-`development` on the persistent production environment and is inherited verbatim by a
-`pr-<N>` fork, so gating on it would be fail-open — see
-[`docs/deploy-model.md`](deploy-model.md), which is where that trap is recorded. The purge
-therefore runs on production too. It cannot reach a real tenant's data anywhere, because
-no real tenant holds one of those four uuids.
+**The tenant list is the safety boundary, not the environment.** `ENVIRONMENT` decides
+where the purge runs: CI's `set-fork-environment` sets `development` in every `pr-<N>`
+fork, so it runs there, and production's gateway reads `production`, so it does not — see
+[`docs/deploy-model.md`](deploy-model.md). But `ENVIRONMENT` is a hand-set variable that
+can rot. Wherever the purge runs, it cannot reach a real tenant's data, because no real
+tenant holds one of those four uuids.
 
 ### This is not `db.Reset`
 
 `db.Reset` is destructive in a different shape: it `TRUNCATE`s whole tables — every
 tenant's rows, plus River's queue tables — rather than four tenants' rows. But it only
 ever runs where `RAILWAY_ENVIRONMENT_NAME` matches `^(?:.+-)?pr-[0-9]+$` — a per-PR
-ephemeral fork, which nobody reads as a compliance record. Until this purge shipped,
-nothing deleted a committed row on the persistent production environment. That is what
-changed, and it changed for the four tenants above only.
+ephemeral fork, which nobody reads as a compliance record. The purge deletes committed
+rows wherever `ENVIRONMENT` lets it run, for the four tenants above only. Neither it nor
+`db.Reset` reaches production.
 
 ## What a deploy resets
 
@@ -137,7 +138,9 @@ is a service restart, not a redeploy, so nothing rebuilds and no test suite re-r
 
 1. **Restart the gateway.** It runs `Provision`: bootstrap, migrate, reset (PR
    environments only), purge, seed. When its `/healthz` returns 200 with
-   `demo_purge: "true"`, the demo tenants have been emptied and re-seeded.
+   `demo_purge: "true"`, the demo tenants have been emptied and re-seeded. Only a PR
+   environment reports `"true"`; production reports `"false"`, because it no longer
+   purges or seeds.
 2. **Restart the invoice service.** It runs the two seeders the gateway does not have:
    `internal/demodocs` writes each demo invoice's source document, and
    `internal/demopolicy` publishes each persona tenant's approval policy and re-arms its
@@ -162,8 +165,7 @@ silent in both:
 - **The approval backlog is unarmed.** `approval_runs` was purged while the three policy
   tables were spared, and `awaiting_approval` is satisfied *vacuously* by an invoice with
   zero runs — so the Approvals badge silently reads `counts.validated` instead of a real
-  count. That residual, and the fact that it now costs the production demo rather than
-  only a PR environment, is recorded in [`docs/approvals.md`](approvals.md) beside the
+  count. That residual is recorded in [`docs/approvals.md`](approvals.md) beside the
   seeder's convergence contract; that page is the authority on it and this one does not
   restate it.
 
@@ -177,7 +179,7 @@ is a step and not a note.
 `db/seed.dev.sql` inserts `business_entities` and `invoices` **without** an explicit `id`,
 so both take `DEFAULT gen_random_uuid()`. The purge deletes the rows and the seed inserts
 fresh ones, which means **every demo entity and every demo invoice gets a new uuid on
-every deploy**.
+every deploy** of a PR environment. Production no longer purges or re-seeds.
 
 Consequences, all of them intended:
 
@@ -237,12 +239,13 @@ It runs from the `Point the fork's URL variables at the fork` step
 the enclosing `prepare-env` job, on the PR being non-draft (`:229-239`) — so a draft PR's
 environment never gets the flag and never deploys at all.
 
-**Owed: production.** `VITE_DEMO_MODE` is not set on the persistent environment. Until an
-operator sets it on the `app` service and redeploys, the persona switcher is absent from
-`app.ascomply.com`. CI is refused write access to that environment by design —
-`reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`
-(`railway-env.sh:1227-1230`), the same refusal that protects every other URL variable this
-function reconciles.
+**Production.** The `app` service has `VITE_DEMO_MODE=true` (measured 2026-09-23), so the
+persona switcher ships on `app.ascomply.com`. It mints through `POST /auth/login`, which
+production no longer serves, so it does not work there. The production gateway's
+`ENVIRONMENT` was set to `production` once, by hand, with `railway-env.sh
+set-production-environment`. CI still writes nothing to that environment —
+`reconcile_url_variables` exits 1 the moment `env_id` matches `$RAILWAY_DEV_ENVIRONMENT_ID`,
+the same refusal that protects every other URL variable this function reconciles.
 
 ## Related
 

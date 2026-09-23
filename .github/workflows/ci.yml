@@ -586,8 +586,7 @@ jobs:
         # short-circuits on the first error EXCEPT at the purge, which logs and
         # continues, honors the raw-ENVIRONMENT allowlist guard for bootstrap/seed,
         # and never retains the superuser DSN past boot (QA F1/F3). The purge has no
-        # environment gate of its own — BootstrapEnabled is its only one, so it runs
-        # on the persistent environment too, narrowed to db.DemoTenants. `TestReset`
+        # gate of its own beyond BootstrapEnabled, and is narrowed to db.DemoTenants. `TestReset`
         # and `TestPurge` are included here (not just matched by `TestProvision`)
         # because db.Reset/db.ResetEnabled and db.PurgeDemoTenants also have DB-backed
         # and pure-logic tests exercised directly, not only through Provision — see

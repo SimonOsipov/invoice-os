@@ -9,7 +9,11 @@
 #                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
 #                            set-ai-fake <environment-id|--self-test>|
 #                            set-fork-environment <environment-id|--self-test>|
+#                            set-production-environment <environment-id>|
 #                            delete-environment <name>|list-environments>
+#
+# `set-production-environment` is run by hand, once, never from a workflow: it
+# sets the persistent environment's gateway ENVIRONMENT=production.
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -2399,6 +2403,41 @@ cmd_set_fork_environment() {
   echo "gateway ENVIRONMENT=development confirmed in environment $env_id."
 }
 
+# cmd_set_production_environment <environment-id>
+# Run by hand, once, never from a workflow. Writes the persistent environment's
+# gateway ENVIRONMENT only; the other services keep theirs.
+cmd_set_production_environment() {
+  local env_id="${1:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-production-environment <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  # Before require_env, so a wrong id is refused without a token.
+  if [ "$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set ENVIRONMENT=production in $env_id. This command writes only the persistent environment ($RAILWAY_DEV_ENVIRONMENT_ID)."
+    exit 1
+  fi
+
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  # Own line: `local svc_id=$(...)` would mask a refusal's exit status from set -e.
+  local svc_id
+  svc_id=$(service_id_by_name "$GQL_RESPONSE" gateway "environment $env_id" ENVIRONMENT)
+
+  upsert_variable "$env_id" "$svc_id" gateway ENVIRONMENT production
+
+  graphql_post "$(gql_body "$SERVICE_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading gateway variables in environment $env_id"
+  environment_verdict "$GQL_RESPONSE" production || exit 1
+  echo "gateway ENVIRONMENT=production confirmed in environment $env_id."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -2412,10 +2451,11 @@ case "${1:-}" in
   reconcile-urls)            shift; cmd_reconcile_urls "$@" ;;
   set-ai-fake)               cmd_set_ai_fake "${2:-}" ;;
   set-fork-environment)      cmd_set_fork_environment "${2:-}" ;;
+  set-production-environment) cmd_set_production_environment "${2:-}" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

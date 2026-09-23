@@ -233,9 +233,9 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 // BootstrapEnabled permits (see ResetEnabled's doc comment), so this nesting
 // never silently skips a reset that should have run.
 //
-// The purge has no such second gate. Unlike Reset it runs on the persistent
-// environment too, narrowed only by the four tenants DemoTenants names
-// (demopurge.go) — see TestProvisionPurgeRunsAgainstThePersistentEnvironmentName.
+// The purge has no such second gate: it is not gated on the environment name,
+// and is narrowed only by the four tenants DemoTenants names (demopurge.go) —
+// see TestProvisionPurgeRunsAgainstThePersistentEnvironmentName.
 func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	// Set before the early returns below, so "false" is truthful on every path
 	// that never reaches the purge.

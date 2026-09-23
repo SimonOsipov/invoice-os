@@ -48,7 +48,7 @@ func main() {
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
-	// (gated, every environment, DEMO-04) -> seed (gated), all complete before
+	// (gated, DEMO-04) -> seed (gated), all complete before
 	// app.Run opens the listener, so a green /healthz continues to mean "fully
 	// provisioned" (task-128). Every step is fatal on error except the purge,
 	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator

@@ -28,10 +28,10 @@ import (
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
-// productionShapedProvisionConfig is the field shape cmd/gateway/main.go
-// constructs on the persistent environment: ENVIRONMENT forks verbatim as
-// "development", RAILWAY_ENVIRONMENT_NAME is "production" and GATEWAY_DB_RESET
-// is unset, so the purge runs where Reset refuses.
+// productionShapedProvisionConfig is a non-PR name with ENVIRONMENT=development:
+// RAILWAY_ENVIRONMENT_NAME is "production" and GATEWAY_DB_RESET is unset, so the
+// purge runs where Reset refuses. The deployed production gateway reads
+// ENVIRONMENT=production and no longer has this shape.
 func productionShapedProvisionConfig(superDSN, migDSN string) db.ProvisionConfig {
 	return db.ProvisionConfig{
 		Environment:            "development",

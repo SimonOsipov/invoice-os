@@ -188,8 +188,8 @@ func TestNameParsePRRoundTrip(t *testing.T) {
 // os.Getenv("ENVIRONMENT") into db.Provision's Environment field, and
 // provisionableEnvironment (internal/platform/db/bootstrap.go:47)
 // short-circuits on the literal "development" before prEnvironmentPattern
-// ever runs. ENVIRONMENT is set nowhere in this repo today, so every
-// fork inherits "development" -- this test does not reflect a real
+// ever runs. railway-env.sh set-fork-environment sets the gateway's
+// ENVIRONMENT to "development" in every fork -- this test does not reflect a real
 // coupling as of M4-23-01. It exists purely as a tripwire: if anyone
 // later sets ENVIRONMENT=pr-<N>, a Name() shape that stopped matching
 // this allowlist pattern would be caught here, instead of silently

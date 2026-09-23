@@ -63,7 +63,8 @@ seed; Decision [pr-only-reset], 2026-07-28, `internal/platform/db/reset.go`, and
 therefore starts from the seed, never from another run's leftovers, and the health-gate
 fails the run outright if that reset did not happen — it is armed by a hand-set Railway
 variable that otherwise fails closed and silent. The purge needs no such variable: it is
-gated by `GATEWAY_DB_BOOTSTRAP` alone and so runs on every environment, PR fork or not.
+gated like the seed, by `GATEWAY_DB_BOOTSTRAP` and the `ENVIRONMENT` that CI's
+`set-fork-environment` sets in every PR fork.
 
 What a spec still cannot assume is an empty table:
 

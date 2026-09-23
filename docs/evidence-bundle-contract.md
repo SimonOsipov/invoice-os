@@ -361,7 +361,7 @@ Bitmap Heap Scan on app_exchange  (cost=10.26..298.21 rows=83)
 ```
 
 Nothing in the query design can prevent that; only current statistics can. **This is a live,
-bounded, ownerless production residual.** Every environment is reset and re-seeded at boot
+bounded, ownerless PR-environment residual.** Every PR environment is reset and re-seeded at boot
 (bootstrap → migrate → reset → purge → seed), leaving `app_exchange` at whatever statistics it
 last had, and nothing in that boot sequence runs `ANALYZE`. Consequence is bounded — results
 stay correct, only the plan is bad, and autovacuum closes the gap on its own within roughly a

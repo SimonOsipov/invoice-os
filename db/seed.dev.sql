@@ -224,7 +224,7 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 -- too -- internal/invoice/gate.go).
 --
 -- Idempotent DO UPDATE, not DO NOTHING, matching the entities block's own rationale: a
--- re-run (every deploy, [demo-seed-shape]) REPAIRS a hand-edited demo row rather than
+-- re-run (every gated boot, [demo-seed-shape]) REPAIRS a hand-edited demo row rather than
 -- leaving it drifted. Conflict target is invoices_tenant_entity_number_uq (tenant_id,
 -- entity_id, invoice_number) -- every invoice_number below is additionally globally
 -- unique tenant-wide (the DEMO-2026-#### prefix, never reused by any real import or e2e

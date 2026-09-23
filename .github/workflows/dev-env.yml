@@ -25,18 +25,13 @@ name: Dev Env (deploy full fleet + verify)
 # gating rationale, including why it deliberately does NOT reuse ENVIRONMENT/
 # GATEWAY_DB_BOOTSTRAP the way the existing seed gate does.
 #
-# DEMO-04 overrides the "PR forks only" property above for a SECOND destructive
-# step, and the paragraph above no longer covers everything Provision destroys.
-# The demo-tenant purge (internal/platform/db/demopurge.go) runs from the same
-# boot seam, between the reset and the seed, but has NO environment gate at all
-# — only GATEWAY_DB_BOOTSTRAP — so it DOES run against the persistent
-# environment on the push/workflow_dispatch path. It is narrowed by allowlist
-# instead of by environment: it reaches no tenant outside the four seeded demo
-# tenants (db.DemoTenants), spares four of their tables (db.purgeExcludedTables —
-# memberships and the three approval-policy tables, which nothing would restore),
-# and db.Seed restores their curated state in the same call. Anything an operator
-# created by hand on those four tenants — a pending invitation, a runtime-created
-# workflow role, a staffing edit — is gone on every deploy, production included.
+# DEMO-04 adds a SECOND destructive step: the demo-tenant purge
+# (internal/platform/db/demopurge.go), between the reset and the seed. It is gated
+# like the seed, by ENVIRONMENT and GATEWAY_DB_BOOTSTRAP (db.BootstrapEnabled),
+# and reaches only the four seeded demo tenants (db.DemoTenants). A fork's gateway
+# gets ENVIRONMENT=development from set-fork-environment, so it purges.
+# Production's gateway reads ENVIRONMENT=production, set once by hand with
+# railway-env.sh set-production-environment, so it does not.
 #
 # THE TARGET DISCRIMINATOR IS `github.event_name == 'pull_request'`, NOT
 # `!= 'workflow_dispatch'`. Only a PR targets an ephemeral fork; push and
@@ -345,11 +340,11 @@ jobs:
         run: bash scripts/ci/railway-env.sh assert-db-dsns --source-only
 
       # PR ONLY. This mutates the target environment (domains, Postgres volume,
-      # environment record) to make a fresh fork resemble its source. The
+      # bucket) to make a fresh fork resemble its source. The
       # persistent environment is not a fork and is the thing being resembled —
       # reconciling it against itself is at best a no-op and at worst rewrites
       # live infrastructure.
-      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up, environment record)
+      - name: Reconcile fork fidelity (domains, Postgres volume + bring-up)
         if: github.event_name == 'pull_request'
         env:
           RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
@@ -542,10 +537,20 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh set-ai-fake "$ENV_ID"
 
+      # PR ONLY: a fork inherits production's ENVIRONMENT, and the gateway needs
+      # `development` there to serve the mock issuer and seed.
+      - name: Set the fork gateway's ENVIRONMENT to development (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-environment "$ENV_ID"
+
   # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
   #    migrations.md §2). `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
-  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine.
+  #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine; only
+  #    a `-tags mockissuer` (PR) build honours it.
   #    CORS_ALLOWED_ORIGINS is set per-environment by prepare-env's
   #    `reconcile-urls`: measured in pr-67, a fork inherits development's list.
   deploy-gateway:
@@ -574,6 +579,9 @@ jobs:
       # env key. Hence two steps rather than one.
       - name: Stamp the build sha into the upload
         run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
+      - name: Stamp the mock issuer into the PR build
+        if: github.event_name == 'pull_request'
+        run: sh scripts/ci/stamp-mock-issuer.sh
       - name: railway up gateway (PR/push — account token)
         if: github.event_name != 'workflow_dispatch'
         env:
@@ -636,6 +644,7 @@ jobs:
           seen=""
           reset=""
           purge=""
+          mock=""
           # 900s (180 x 5s): EVERY environment is now a cold build of all 11
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
@@ -659,7 +668,8 @@ jobs:
               # the build field exists.
               reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
               purge=$(printf '%s' "$body" | jq -r '.demo_purge // empty' 2>/dev/null || echo '')
-              echo "  gateway healthy on $seen (schema migrated, seed complete; db_reset=${reset:-none}, demo_purge=${purge:-none})"
+              mock=$(printf '%s' "$body" | jq -r '.mock_issuer // empty' 2>/dev/null || echo '')
+              echo "  gateway healthy on $seen (schema migrated; db_reset=${reset:-none}, demo_purge=${purge:-none}, mock_issuer=${mock:-none})"
               ok=1
               break
             fi
@@ -698,29 +708,46 @@ jobs:
             exit 1
           fi
 
-          # The purge barrier. NOT directional the way db_reset above is, and
-          # deliberately outside that if/elif: the purge's only gate is
-          # BootstrapEnabled (db/bootstrap.go), which is true on the persistent
-          # environment too, so "true" is the expected answer on all three
-          # triggers. Nesting this inside the IS_PR branch would disarm the
-          # production half and look identical in review
-          # (TestPurgeGateAssertionCoversBothPaths).
-          #
-          # The policy it encodes: every environment this workflow deploys to is
-          # expected to have deploy-time provisioning ON. Turning
-          # GATEWAY_DB_BOOTSTRAP off on the persistent environment is a red
-          # deploy, deliberately.
-          #
-          # What it does NOT prove, so do not read it as more than it is:
-          # "true" means one transaction committed — a purge narrowed to zero
-          # tables or zero tenants commits identically. It says nothing about
-          # whether the demo state a viewer sees is correct after purge+seed,
-          # nothing about a Railway-side restart no gate is watching, and
-          # nothing about the second service an operator still has to restart
-          # by hand.
-          if [ "$purge" != "true" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}' — the boot-time demo purge did not run, so the seed's upserts landed on top of whatever residue was already there instead of on curated state. 'error' means PurgeDemoTenants failed and Provision swallowed it to keep the fleet up (the gateway logs it at ERROR: look for 'demo-tenant purge failed'). 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true is still set on the gateway service (it fails closed and is lost when a service is recreated) and that ENVIRONMENT is one db.provisionableEnvironment allowlists. 'none' means the gateway predates the /healthz demo_purge field, or cmd/gateway/main.go's assignment was deleted."
+          # The purge and mock-issuer barriers, directional like db_reset.
+          # set-fork-environment sets a fork gateway's ENVIRONMENT to development,
+          # so its purge runs and its tagged binary serves the mock issuer.
+          # Production's gateway reads ENVIRONMENT=production, which
+          # db.provisionableEnvironment refuses, and its binary is untagged.
+          # "true" proves one purge transaction committed, not that the demo is right.
+          if [ "$IS_PR" = "true" ]; then
+            want_purge=true;  want_mock=on
+          else
+            want_purge=false; want_mock=absent
+          fi
+          if [ "$purge" != "$want_purge" ]; then
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that set-fork-environment set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production' (docs/deploy-model.md)."
             exit 1
+          fi
+          if [ "$mock" != "$want_mock" ]; then
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports mock_issuer='${mock:-none}', want '$want_mock'. On a PR, 'absent' means scripts/ci/stamp-mock-issuer.sh did not tag the build, and 'off' means ENVIRONMENT or GATEWAY_MOCK_ISSUER gated it off. On the persistent environment, anything but 'absent' means a tagged gateway binary was deployed there. 'none' means the gateway predates the field."
+            exit 1
+          fi
+
+          # Production serves neither mint route. The old container answers
+          # (jwks 200, login 403) until the rolling deploy drains, so poll for 404.
+          if [ "$IS_PR" != "true" ]; then
+            for probe in "GET /.well-known/jwks.json" "POST /auth/login"; do
+              method=${probe%% *}
+              route=${probe#* }
+              code=""
+              for _ in $(seq 1 36); do
+                code=$(curl -s --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' -X "$method" "$GATEWAY_URL$route" || true)
+                if [ "$code" = "404" ]; then
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$code" != "404" ]; then
+                echo "::error::$method $route on $GATEWAY_URL answered $code, not 404, for 36 attempts 5s apart. The persistent gateway must serve no mint route; 000 means it never answered."
+                exit 1
+              fi
+              echo "  $method $route answered 404"
+            done
           fi
 
   # 3. Deploy the eight context services and the `docling` sidecar, only after the

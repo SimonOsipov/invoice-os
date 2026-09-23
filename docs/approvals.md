@@ -440,8 +440,7 @@ The other three events on the same policy carry the same two payload keys:
 `audit_log` is append-only and permanently retained for every real tenant: it holds no
 `UPDATE`/`DELETE` grant for the application role and carries triggers refusing both, plus
 `TRUNCATE`. The one exception is the four seeded demo tenants, whose rows the gateway
-deletes as superuser on every gated boot, production included
-([`docs/demo-reset.md`](demo-reset.md)).
+deletes as superuser on every gated boot ([`docs/demo-reset.md`](demo-reset.md)).
 
 ---
 
@@ -727,8 +726,7 @@ record of who approved what. Three independent mechanisms guarantee it:
 On every real tenant, approval decisions are retained **permanently**, matching the audit
 log's posture: there is no TTL, no archival table, no purge job and no deletion endpoint.
 The four seeded demo tenants are the one exception — the gateway deletes their runs, steps
-and decisions as superuser on every gated boot, production included
-([`docs/demo-reset.md`](demo-reset.md)).
+and decisions as superuser on every gated boot ([`docs/demo-reset.md`](demo-reset.md)).
 
 > **Open, and not an engineering question.** The Nigerian FIRS/NRS statutory retention
 > requirement is **unconfirmed**. Permanent retention is a safe default, not a verified
@@ -949,7 +947,7 @@ The seeder **converges** rather than inserting-if-absent: it re-runs the validat
 sweep on every boot, whether or not it wrote the policy on that boot, because the gateway
 empties `approval_runs` underneath it while deliberately leaving the three policy tables
 standing — `db.Reset` in PR environments, and since DEMO-04 the demo-tenant purge on every
-gated boot, production included. A seeder that no-opped on finding its own policy would
+gated boot. A seeder that no-opped on finding its own policy would
 arm nothing on the second deploy, and `awaiting_approval` would silently equal
 `counts.validated`. Convergence has
 three writes: publish when nothing of that name exists, **reactivate** the sealed version
@@ -960,18 +958,18 @@ must actually differ — so a version a human published is left strictly alone e
 An invoice already armed under version N keeps version N's trail; only invoices validated
 after the supersede render the new shape.
 
-**Known residual, recorded and undefended — production-wide since DEMO-04.** A gateway
+**Known residual, recorded and undefended.** A gateway
 restarted out of band — a single-service redeploy, an OOM, a manual restart — empties
 `approval_runs` again, and nothing re-runs the seeder, because the invoice service did not
 restart. The fleet stays green, `/healthz` stays 200, and `awaiting_approval` silently
 reads `counts.validated` with no alarm anywhere. **Recovery is one operator action: restart
 the invoice service.**
 
-Until DEMO-04 this was a PR-environment problem only, because `Reset` is gated off the
-persistent environment. The demo-tenant purge is not: it runs on every gated gateway boot,
-production included, and deletes `approval_runs`, `approval_run_steps` and
-`approval_decisions` for the four demo tenants. The same residual now costs the production
-demo its armed runs, on the same one-action recovery.
+`Reset` is gated off the persistent environment. The demo-tenant purge runs on every gated
+gateway boot and deletes `approval_runs`, `approval_run_steps` and `approval_decisions` for
+the four demo tenants, but production's gateway reads `ENVIRONMENT=production`, which
+`db.BootstrapEnabled` refuses, so neither reaches production and the residual is a
+PR-environment problem.
 
 ---
 

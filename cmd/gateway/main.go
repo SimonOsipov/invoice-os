@@ -1,9 +1,8 @@
 // Command gateway is the ASComply API edge (M2-11). It verifies caller JWTs,
 // injects the verified tenant/user/role context that downstream services and RLS
 // depend on, and reverse-proxies each request to the owning context service.
-// Outside production it also embeds a mock issuer (mint + JWKS) so a token can be
-// minted and verified with the exact code path used against Supabase GoTrue after
-// M8 — the cutover is then a change to AUTH_ISSUER/AUTH_JWKS_URL, not to code.
+// A mock issuer (mint + JWKS) is compiled in only under -tags mockissuer (PR
+// environments and local test builds); the production build carries no minting code.
 package main
 
 import (
@@ -49,7 +48,7 @@ func main() {
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
-	// (gated, every environment, DEMO-04) -> seed (gated), all complete before
+	// (gated, DEMO-04) -> seed (gated), all complete before
 	// app.Run opens the listener, so a green /healthz continues to mean "fully
 	// provisioned" (task-128). Every step is fatal on error except the purge,
 	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator
@@ -70,16 +69,12 @@ func main() {
 		Environment:   os.Getenv("ENVIRONMENT"),
 		BootstrapFlag: os.Getenv("GATEWAY_DB_BOOTSTRAP"),
 		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
-		// (db.Reset, gated by db.ResetEnabled) needs a signal that actually
-		// differs between a PR fork and its persistent source. ENVIRONMENT is an
-		// ordinary app variable that forks verbatim, so it reads the literal
-		// string "development" inside every PR environment too
-		// (docs/deploy-model.md "ENVIRONMENT is decorative in a fork") — it
-		// cannot tell the two apart. RAILWAY_ENVIRONMENT_NAME is a Railway-
-		// injected system variable (docs/add-a-service.md; never set manually)
-		// that always reflects the CURRENT environment's real name: "pr-<N>"
-		// inside a fork, whatever the persistent environment is actually named
-		// ("production", post-2026-07-27-rename) on that environment. See
+		// (db.Reset, gated by db.ResetEnabled) keys on a name no one hand-sets.
+		// ENVIRONMENT is an ordinary app variable that CI writes in every fork
+		// (docs/deploy-model.md "ENVIRONMENT in a fork is set by CI").
+		// RAILWAY_ENVIRONMENT_NAME is a Railway-injected system variable
+		// (docs/add-a-service.md; never set manually): "pr-<N>" inside a fork,
+		// the persistent environment's real name on that environment. See
 		// db.ResetEnabled's doc comment for the full reasoning.
 		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
 		// A SEPARATE opt-in from GATEWAY_DB_BOOTSTRAP: Reset is strictly more
@@ -145,27 +140,17 @@ func main() {
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
-	// Embed the mock issuer wherever ENVIRONMENT is not production and the flag is
-	// set — the public demo included; under Hosted posture the mint serves only
-	// seeded personas. ENVIRONMENT is read raw, for the reason gate 1 above gives.
-	if gateway.MockIssuerEnabled(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER")) {
-		issuer, err := auth.NewMockIssuer(mustEnv("AUTH_ISSUER"))
-		if err != nil {
-			fatal(app.Logger, "gateway: mock issuer: %v", err)
-		}
-		// Read raw rather than off app.Config, which substitutes a literal default for
-		// an unset value — that would classify a local or CI run as a real deployment.
-		posture := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME"))
-
-		app.Mux.Handle("GET /.well-known/jwks.json", issuer.JWKSHandler())
-		// /auth/login is called cross-origin by the browser, so wrap it in the same CORS
-		// layer. Register POST (the mint) and OPTIONS (the preflight CORS answers) — a
-		// method-scoped POST route alone would 405 the preflight instead of letting CORS
-		// handle it.
-		login := withCORS(gateway.MockLoginHandler(issuer, posture))
+	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
+	platform.MockIssuer = "absent"
+	if mockIssuerCompiled {
+		platform.MockIssuer = "off"
+	}
+	if jwks, login := mockIssuerRoutes(os.Getenv("ENVIRONMENT"), os.Getenv("GATEWAY_MOCK_ISSUER"), withCORS, app.Logger); jwks != nil {
+		app.Mux.Handle("GET /.well-known/jwks.json", jwks)
+		// OPTIONS too: a POST-only route would 405 the CORS preflight.
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
-		app.Logger.Warn("mock issuer enabled — unauthenticated login is live on this deployment")
+		platform.MockIssuer = "on"
 	}
 
 	if err := app.Run(context.Background()); err != nil {

@@ -110,55 +110,68 @@ func TestPurgeGateReadsTheSameBodyItMatchedTheBuildAgainst(t *testing.T) {
 	})
 }
 
-// purgeBarrierComment returns the contiguous comment block immediately above the
-// purge assertion in the RAW workflow. Empty when there is none.
-func purgeBarrierComment(raw string) string {
-	lines := strings.Split(raw, "\n")
-	at := lineIndex(lines, `if [ "$purge" != "true" ]`)
-	if at < 0 {
-		return ""
+// purgeBarrierComment returns the contiguous comment blocks immediately above each
+// top-level block of the purge gate in the RAW job. Empty when there are none.
+func purgeBarrierComment(rawJob string) string {
+	lines := strings.Split(rawJob, "\n")
+	var parts []string
+	for _, b := range gateBlocks(rawJob, "purge", "want_purge") {
+		at := b[0].line
+		first := at
+		for first > 0 && strings.HasPrefix(strings.TrimSpace(lines[first-1]), "#") {
+			first--
+		}
+		if first < at {
+			parts = append(parts, strings.Join(lines[first:at], "\n"))
+		}
 	}
-	first := at
-	for first > 0 && strings.HasPrefix(strings.TrimSpace(lines[first-1]), "#") {
-		first--
-	}
-	return strings.Join(lines[first:at], "\n")
+	return strings.Join(parts, "\n")
 }
 
-// TestPurgeGateCommentExplainsWhyItIsNotDirectional (AC-6): db_reset is asserted
-// in both directions and demo_purge is not, three lines apart. Without the
-// reason written down the next reader reads that as an oversight, moves the
-// purge assertion into the IS_PR branch to match, and silently disarms the
-// production half. devEnvExecutable strips comments, so no other test in this
-// package can see this.
-func TestPurgeGateCommentExplainsWhyItIsNotDirectional(t *testing.T) {
-	comment := purgeBarrierComment(devEnvRaw(t))
+// TestPurgeGateCommentExplainsWhyItIsDirectional: db_reset and demo_purge are
+// both asserted per target now, for different reasons. The comment must say why
+// production expects "false", or the next reader restores the old all-targets
+// "true". devEnvExecutable strips comments, so no other test can see this.
+func TestPurgeGateCommentExplainsWhyItIsDirectional(t *testing.T) {
+	job := strings.Join(healthGateJob(devEnvRaw(t)), "\n")
+	if !strings.Contains(job, `.build // empty`) {
+		t.Fatal("the raw dev-env.yml has no health-gate job that reads .build; the comment scan would examine nothing")
+	}
+	comment := purgeBarrierComment(job)
 	if comment == "" {
-		t.Fatal("the purge assertion in dev-env.yml carries no comment above it at all")
+		t.Fatal("the purge gate in dev-env.yml's health-gate carries no comment above it at all")
 	}
 
-	want := []string{"BootstrapEnabled", "db_reset", "IS_PR"}
+	want := []string{"ENVIRONMENT", "provisionableEnvironment", "set-fork-environment"}
 	if missing := missingFragments(comment, want); len(missing) != 0 {
-		t.Errorf("the comment above dev-env.yml's purge assertion never mentions %v, so it does not say why the assertion is not directional the way db_reset's is:\n%s", missing, comment)
+		t.Errorf("the comment above dev-env.yml's purge gate never mentions %v, so it does not say why a fork expects \"true\" and production expects \"false\":\n%s", missing, comment)
 	}
 
 	t.Run("control needle", func(t *testing.T) {
 		const explains = `
-          # NOT directional the way db_reset above is, and deliberately outside
-          # that if/elif: the purge's only gate is BootstrapEnabled, true on the
-          # persistent environment too. Nesting it in the IS_PR branch disarms
-          # the production half.
-          if [ "$purge" != "true" ]; then
+          # Directional: set-fork-environment sets a fork's gateway ENVIRONMENT to
+          # development, so its purge runs. Production reads ENVIRONMENT=production,
+          # which db.provisionableEnvironment refuses, so its purge never runs.
+          if [ "$IS_PR" = "true" ]; then
+            want_purge=true
+          else
+            want_purge=false
+          fi
+          if [ "$purge" != "$want_purge" ]; then
+            exit 1
+          fi
 `
 		if got := purgeBarrierComment(explains); got == "" {
-			t.Fatal("the extractor found no comment above a fixture that carries four lines of one")
+			t.Fatal("the extractor found no comment above a fixture that carries three lines of one")
 		} else if missing := missingFragments(got, want); len(missing) != 0 {
 			t.Fatalf("the scanner calls %v missing from a fixture that carries all of them", missing)
 		}
 
 		const explainsNothing = `
           # The purge barrier.
-          if [ "$purge" != "true" ]; then
+          if [ "$purge" != "$want_purge" ]; then
+            exit 1
+          fi
 `
 		if got := missingFragments(purgeBarrierComment(explainsNothing), want); len(got) != len(want) {
 			t.Fatalf("the scanner found only %d of %d fragment(s) missing from a bare comment — a clean report from it would prove nothing", len(got), len(want))
@@ -166,61 +179,42 @@ func TestPurgeGateCommentExplainsWhyItIsNotDirectional(t *testing.T) {
 	})
 }
 
-// purgeConditionBlock returns the health-gate's `if`-on-$purge block as runnable
-// shell, whatever condition it is written with. Deliberately looser than
-// purgeAssertionBlock, which pins one exact condition: a gate loosened to some
-// other test must still be EXECUTED here, not merely reported missing.
-func purgeConditionBlock(yaml string) string {
-	lines := strings.Split(yaml, "\n")
-	start := -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "if [") && strings.Contains(trimmed, "$purge") {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return ""
-	}
-	var block []string
-	for _, line := range lines[start:] {
-		trimmed := strings.TrimSpace(line)
-		block = append(block, trimmed)
-		if trimmed == "fi" {
-			return strings.Join(block, "\n")
-		}
-	}
-	return ""
-}
-
 // TestPurgeGateFailsOnAValueOutsideThePurgeOutcomeDomain: the gate must fail
-// closed, not open. PurgeOutcome has three values today, but /healthz relays a
-// plain string and the field survives a gateway of any age — a truthy-looking
-// value that is not exactly "true" must still be a red deploy.
+// closed, not open, on both targets. /healthz relays a plain string and the field
+// survives a gateway of any age, so a value that only looks like the expected one
+// must still be a red deploy. Each target's own expected value must still pass,
+// or a gate that fails everything would clear this test.
 func TestPurgeGateFailsOnAValueOutsideThePurgeOutcomeDomain(t *testing.T) {
-	offDomain := []string{"TRUE", "True", "1", "yes", "ok", "true ", " true", "skipped", "null"}
-	if len(offDomain) == 0 {
+	offDomain := []string{"TRUE", "True", "1", "yes", "ok", "true ", " true", "skipped", "null", "FALSE", "False", "0", "no", "false ", " false"}
+	targets := []struct{ isPR, passes string }{{"true", "true"}, {"false", "false"}}
+	if len(offDomain) == 0 || len(targets) == 0 {
 		t.Fatal("no values to try — the loop below would assert nothing")
 	}
 
 	t.Run("control needle", func(t *testing.T) {
 		const inverted = "if [ \"$purge\" = \"true\" ]; then\nexit 1\nfi"
-		for _, v := range offDomain {
-			if got := runGateBlock(t, inverted, v); got != 0 {
-				t.Fatalf("the runner reports exit %d for purge=%q against a block that exits 0 for everything but \"true\" — it is not observing the block it was given", got, v)
+		for _, tg := range targets {
+			for _, v := range offDomain {
+				if got := runGateBlock(t, inverted, tg.isPR, v); got != 0 {
+					t.Fatalf("the runner reports exit %d for IS_PR=%s purge=%q against a block that exits 0 for everything but \"true\" — it is not observing the block it was given", got, tg.isPR, v)
+				}
 			}
 		}
 	})
 
-	block := purgeConditionBlock(devEnvExecutable(t))
+	block := gateScript(devEnvHealthGate(t), "purge", "want_purge")
 	if block == "" {
-		t.Fatal("dev-env.yml's health-gate carries no complete `if [ ... $purge ... ]; then ... fi` block to run")
+		t.Fatal(`dev-env.yml's health-gate carries no if-block on "$purge" to run`)
 	}
 
-	for _, v := range offDomain {
-		if got := runGateBlock(t, block, v); got != 1 {
-			t.Errorf("demo_purge=%q exits %d, want 1 — anything that is not exactly \"true\" is not a purge that ran", v, got)
+	for _, tg := range targets {
+		if got := runGateBlock(t, block, tg.isPR, tg.passes); got != 0 {
+			t.Errorf("IS_PR=%s demo_purge=%q exits %d, want 0 — the gate refuses the one outcome this target expects", tg.isPR, tg.passes, got)
+		}
+		for _, v := range offDomain {
+			if got := runGateBlock(t, block, tg.isPR, v); got != 1 {
+				t.Errorf("IS_PR=%s demo_purge=%q exits %d, want 1 — only exactly %q passes on this target", tg.isPR, v, got, tg.passes)
+			}
 		}
 	}
 }

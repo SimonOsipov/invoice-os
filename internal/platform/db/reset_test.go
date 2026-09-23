@@ -801,8 +801,8 @@ func TestResetIsIdempotent(t *testing.T) {
 // has accumulated E2E test residue converges to EXACTLY the curated 10-entity
 // demo portfolio + its fixture invoices after one Provision call, not the
 // residue plus the curated set. Uses the REAL field shape cmd/gateway/main.go
-// constructs: Environment stays "development" (ENVIRONMENT forks verbatim —
-// see ResetEnabled's doc comment), and RailwayEnvironmentName is the
+// constructs: Environment is "development" (set-fork-environment writes it into
+// every fork — see ResetEnabled's doc comment), and RailwayEnvironmentName is the
 // PR-shaped value that actually distinguishes the fork.
 func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)
@@ -837,7 +837,7 @@ func TestProvisionResetWipesResidueThenReseedsCuratedDemo(t *testing.T) {
 	}
 
 	cfg := db.ProvisionConfig{
-		Environment:            "development", // ENVIRONMENT forks verbatim — see ResetEnabled doc comment
+		Environment:            "development", // set-fork-environment writes this into every fork
 		BootstrapFlag:          "true",
 		RailwayEnvironmentName: "pr-110",
 		ResetFlag:              "true",

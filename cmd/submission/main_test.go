@@ -551,7 +551,7 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	const ewTextArg = 5
 	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
-			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, the rest panic", i)
+			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, a nil Jev silently turns the value check off, the rest panic", i)
 		}
 	}
 

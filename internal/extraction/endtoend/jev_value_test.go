@@ -20,6 +20,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/jevmeasure"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
 
 // --- CHECK-01-03: the ratchet guard ---
@@ -356,9 +357,7 @@ func jvPathAllowed(path, out string) bool {
 // only clock (design 1.1).
 const jvCallTimeout = 30 * time.Second
 
-// jvModel is the vendor model id CHECK-02 still owes (R-14); JEV_MODEL overrides it at the live
-// run so an operator can see and swap what gets sent.
-const jvModel = "systemone-default"
+const jvModel = jev.Model
 
 // jvReader: this suite always runs Docling (design §1, "Import wizard deployed vs sysmap").
 const jvReader = "docling"
@@ -368,6 +367,22 @@ func jvResolveModel() string {
 		return m
 	}
 	return jvModel
+}
+
+// The harness and the product client send one model id; JEV_MODEL still overrides it.
+func TestJevValue_TheDefaultModelIsTheClientsModel(t *testing.T) {
+	t.Setenv("JEV_MODEL", "")
+	if err := os.Unsetenv("JEV_MODEL"); err != nil {
+		t.Fatalf("unset JEV_MODEL: %v", err)
+	}
+	if got := jvResolveModel(); got != jev.Model {
+		t.Errorf("jvResolveModel() with JEV_MODEL unset = %q, want jev.Model %q", got, jev.Model)
+	}
+
+	t.Setenv("JEV_MODEL", "x")
+	if got := jvResolveModel(); got != "x" {
+		t.Errorf("jvResolveModel() with JEV_MODEL=x = %q, want %q", got, "x")
+	}
 }
 
 // jvResolvePricing reads the operator's two $ rates per million tokens (A50); either absent or

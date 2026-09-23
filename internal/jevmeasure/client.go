@@ -18,8 +18,7 @@ import (
 // to NewClient; tests pass an httptest server URL instead.
 const Endpoint = "https://api.typesafe.ai/v1/systemone"
 
-// AuthHeaderName/AuthHeaderPrefix: the spelling isn't in the vendor docs read
-// so far. Kept as named constants so CHECK-02 can correct them in one place.
+// AuthHeaderName/AuthHeaderPrefix are the vendor's documented auth header.
 const (
 	AuthHeaderName   = "Authorization"
 	AuthHeaderPrefix = "Bearer "

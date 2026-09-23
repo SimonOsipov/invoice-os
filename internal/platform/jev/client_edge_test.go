@@ -598,3 +598,34 @@ func TestAsk_ConcurrentRetriesKeepTheirOwnUsage(t *testing.T) {
 		}
 	}
 }
+
+// Retyped on purpose: the PR-environment scrub and the vendor SDK both name this variable.
+func TestFromEnv_ReadsTheTypesafeAPIKeyVariable(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "k")
+	unsetEnv(t, EnvFake)
+
+	c, err := FromEnv(nil)
+	if err != nil {
+		t.Fatalf("FromEnv() err = %v, want nil", err)
+	}
+	if c.cfg.key != "k" {
+		t.Errorf("cfg.key = %q, want %q read from TYPESAFE_API_KEY", c.cfg.key, "k")
+	}
+}
+
+func TestFromEnv_TheRealWaitLastsItsDuration(t *testing.T) {
+	t.Setenv(EnvKey, "k")
+	unsetEnv(t, EnvFake)
+
+	c, err := FromEnv(nil)
+	if err != nil {
+		t.Fatalf("FromEnv() err = %v, want nil", err)
+	}
+	start := time.Now()
+	if err := c.cfg.sleep(t.Context(), 50*time.Millisecond); err != nil {
+		t.Fatalf("cfg.sleep() = %v, want nil", err)
+	}
+	if wall := time.Since(start); wall < 50*time.Millisecond {
+		t.Errorf("cfg.sleep(50ms) returned after %v, want at least 50ms", wall)
+	}
+}

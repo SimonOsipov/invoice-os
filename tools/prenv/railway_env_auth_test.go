@@ -90,6 +90,10 @@ printf '%s' "$data" | jq -c . >> "$dir/calls.jsonl"
 q=$(printf '%s' "$data" | jq -r '.query')
 case "$q" in
   *"variableUpsert("*)
+    n=$(printf '%s' "$data" | jq -r '.variables.input.name')
+    # upsert-<NAME>.fail fails the transport; upsert-<NAME>.json is the reply and nothing is stored.
+    if [ -f "$dir/upsert-$n.fail" ]; then cat "$dir/upsert-$n.fail" >&2; exit 22; fi
+    if [ -f "$dir/upsert-$n.json" ]; then cat "$dir/upsert-$n.json"; exit 0; fi
     s=$(printf '%s' "$data" | jq -r '.variables.input.serviceId')
     st="$dir/store-$s.json"; [ -f "$st" ] || echo '{}' > "$st"
     printf '%s' "$data" | jq -c --slurpfile st "$st" '$st[0] + {(.variables.input.name): .variables.input.value}' > "$st.tmp" && mv "$st.tmp" "$st"

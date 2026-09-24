@@ -104,6 +104,16 @@ key, JWT secret and admin password. The gateway health gate asserts `auth_issuer
 PR. If the round trip 401s on a PR environment, check that step first. See
 [identity-provider.md](./identity-provider.md).
 
+**A fork accepts registrations but sends no mail.** `set-fork-auth` also writes
+`auth.GOTRUE_DISABLE_SIGNUP=false`, so the fork's GoTrue accepts `/signup`; the image
+default keeps production closed. It blanks `GOTRUE_SMTP_HOST` and `GOTRUE_SMTP_PASS`, and a
+blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a fork and
+`GOTRUE_MAILER_URLPATHS_CONFIRMATION` is not written. `set-fork-auth-site` (after the
+`urls` step) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
+`gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register` and `/auth/verify`
+answer 503 `registration is not configured`. The emailed-link half is proven only by the
+CI `idp` job's `idp-mail` container and mailpit.
+
 ### GitHub secrets
 
 | Secret | Value |

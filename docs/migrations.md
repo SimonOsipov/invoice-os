@@ -81,6 +81,23 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
+**The one path that creates a tenant at runtime: `public.provision_workspace` (AUTH-03).**
+`invoice_app` stays `SELECT`-only on `tenants`. It creates a tenant only through this
+SECURITY DEFINER function, which `invoice_migrator` owns
+(`migrations/20260924184759_provision_workspace.sql`):
+- The function inserts the `tenants` row and then its first `memberships` row. Role
+  `admin` and status `active` are literals in the body, not parameters. It cannot update,
+  delete, or write any other table.
+- `EXECUTE` is revoked from `PUBLIC` and granted to `invoice_app` only.
+- The owner is `NOBYPASSRLS` and both tables are `FORCE`d, so `tenant_isolation` still
+  applies inside the function. The caller must set `app.current_tenant` to the new tenant id
+  first; a mismatched or unset GUC fails with 42501.
+- The only caller is `tenancy.Store.ProvisionWorkspace`, through the ungated
+  `db.WithinTenantTx` (§4); a source scan pins that. Nothing restricts which `invoice_app`
+  connection may call it; that application guard is the limit.
+- Down drops the function. No `SET ROLE` is needed, because the migrator owns it.
+- Proven by `internal/platform/db/tenants_provision_rls_test.go` in the `rls` job.
+
 `bootstrap.sql` is idempotent (DO-block role creation + `ALTER ROLE` re-assertion), run
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
 passwords live only in Railway.
@@ -182,7 +199,7 @@ a new object is granted **in the same migration that creates the object**:
 ```sql
 -- +goose Up
 CREATE TABLE tenants (...);              -- owned by invoice_migrator
-GRANT SELECT, INSERT, UPDATE ON tenants TO invoice_app;   -- explicit, minimal
+GRANT SELECT ON tenants TO invoice_app;  -- explicit, minimal; writes go through provision_workspace (§1)
 ```
 
 **Do not** use blanket `ALTER DEFAULT PRIVILEGES … GRANT ALL … TO invoice_app`. The point
@@ -358,7 +375,8 @@ environment is created from, and the target of live demo calls.
 > `db.PurgeDemoTenants` runs inside `db.Provision` on **every** gated boot and deletes the
 > four demo tenants' (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
 > curated state. Four tenant-owned tables are spared (`db.purgeExcludedTables`):
-> `memberships`, which has no runtime INSERT path, and the three approval-policy tables,
+> `memberships`, whose only runtime INSERT (`provision_workspace`, §1) creates a new
+> tenant's first admin and never a demo tenant's row, and the three approval-policy tables,
 > which `internal/demopolicy` rebuilds for two of the four tenants only — purging them
 > would leave the other two with no policy and nothing to restore it. The purge is gated
 > like the seed, by `db.BootstrapEnabled`; this environment's gateway reads

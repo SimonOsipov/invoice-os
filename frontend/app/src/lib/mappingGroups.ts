@@ -16,7 +16,7 @@
 // selection-half (BULK-01-03).
 
 import { canSubmitMapping, fillUnplacedFromAliases, initMappingFromHeaders, restoreMapping } from './mapping'
-import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
+import type { CheckMapping, ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 import { fmtDateTime } from './format'
 
@@ -214,6 +214,17 @@ export async function suggestGroups(
     }
   }
   return result
+}
+
+export function applyDoubts(group: MappingGroup, _doubted: string[]): MappingGroup {
+  return group
+}
+
+export async function checkGroups(
+  groups: MappingGroup[],
+  _check: ((documentId: string, mapping: Record<string, string>) => Promise<CheckMapping>) | null,
+): Promise<MappingGroup[]> {
+  return groups
 }
 
 // Delegates to the shipped lib/mapping.ts canSubmitMapping (invoice_number-only

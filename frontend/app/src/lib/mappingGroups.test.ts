@@ -28,15 +28,19 @@
 // coverageSentence/groupOfFile/canSubmitAllMappings's stub bodies throw
 // new Error('not implemented') before ever returning anything — that IS the correct RED
 // reason (assertion / not-implemented), not an import/compile error.
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import { CANON } from '../data'
 import { fmtDateTime } from './format'
-import { fillUnplacedFromAliases, initMappingFromHeaders, recognize, restoreMapping } from './mapping'
+import { fillUnplacedFromAliases, initMappingFromHeaders, recognize, restoreMapping, toImportMapping } from './mapping'
 import {
+  applyDoubts,
   applySavedMapping,
   applySuggestion,
   canSubmitAllMappings,
+  checkGroups,
   columnSignature,
   coverageSentence,
   groupByLayout,
@@ -50,7 +54,7 @@ import {
   suggestGroups,
   type MappingGroup,
 } from './mappingGroups'
-import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
+import type { CheckMapping, ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 
 // Fixture filenames deliberately avoid the two single-quoted CreateStep-literal words
@@ -1358,5 +1362,124 @@ describe('the alias fallback — adversarial (QA Mode B)', () => {
     expect(after.length).toBe(before.length + 1)
     expect(after.filter((h) => h === 'VAT')).toHaveLength(2)
     expect(new Set(after).size).toBe(after.length - 1)
+  })
+})
+
+describe('applyDoubts and checkGroups', () => {
+  // Aliases seed issue_date, vat ('VAT %' normalises to 'vat') and total; invoice_number never.
+  const CHECK_COLS = ['Invoice No', 'Issue Date', 'VAT %', 'Total']
+  const NO_ALIAS_COLS = ['Ref Code', 'Memo']
+
+  function suggestedGroup(docId = 'doc-check'): MappingGroup {
+    const g = mkGroup(['f1'], { ...initMappingFromHeaders(CHECK_COLS), invoice_number: 'Invoice No' }, CHECK_COLS)
+    return {
+      ...g,
+      preview: { ...g.preview, document_id: docId },
+      headerRow: 2,
+      suggested: { headerRow: 2, mapping: { invoice_number: 'Invoice No' } },
+    }
+  }
+
+  it('CHK-01: applyDoubts unplaces each doubted placement and nothing else', () => {
+    const g = suggestedGroup()
+    expect(g.mapping.vat, 'control: the seed places vat').toBe('VAT %')
+    expect(g.mapping.invoice_number, 'control: invoice_number is placed').toBe('Invoice No')
+
+    const out = applyDoubts(g, ['vat', 'invoice_number'])
+
+    expect(out.mapping.vat).toBeNull()
+    expect(out.mapping.invoice_number).toBeNull()
+    expect(out.mapping).toEqual({ ...g.mapping, vat: null, invoice_number: null })
+    expect(out.mapping.issue_date).toBe('Issue Date')
+    expect(out.mapping.total).toBe('Total')
+    expect(out.restored).toEqual(g.restored)
+    expect(out.suggested).toEqual(g.suggested)
+    expect(out.headerRow).toBe(g.headerRow)
+    expect(out.preview).toEqual(g.preview)
+    expect(out.fileIds).toEqual(g.fileIds)
+    expect(out.id).toBe(g.id)
+    expect(out.signature).toBe(g.signature)
+  })
+
+  it('CHK-02: applyDoubts never places or moves a field', () => {
+    const g = suggestedGroup()
+    expect(applyDoubts(g, ['vat']).mapping.vat, 'control: a placed doubted field is unplaced').toBeNull()
+
+    expect(g.mapping.buyer_name, 'fixture: buyer_name starts unplaced').toBeNull()
+    const noise = ['buyer_name', 'supplier_tin', 'constructor', 1 as unknown as string, null as unknown as string]
+    const out = applyDoubts(g, noise)
+    expect(out.mapping).toEqual(g.mapping)
+    const keys = Object.keys(out.mapping)
+    expect(keys.length, 'the mapping must keep its keys').toBeGreaterThan(0)
+    expect([...keys].sort()).toEqual(Object.keys(g.mapping).sort())
+    for (const k of keys) {
+      expect(out.mapping[k] === null || out.mapping[k] === g.mapping[k], `${k} was placed or moved`).toBe(true)
+    }
+  })
+
+  it('CHK-03: a doubted placement loses its SUGGESTED or AUTO badge', () => {
+    const g = suggestedGroup()
+    const recognized = recognize(CHECK_COLS)
+    expect(placementBadge(g, 'invoice_number', 'Invoice No', recognized)).toBe('suggested')
+    expect(placementBadge(g, 'vat', 'VAT %', recognized)).toBe('auto')
+
+    const out = applyDoubts(g, ['invoice_number', 'vat'])
+
+    expect(placementBadge(out, 'invoice_number', 'Invoice No', recognized)).toBeNull()
+    expect(placementBadge(out, 'vat', 'VAT %', recognized)).toBeNull()
+    expect(placementBadge(out, 'total', 'Total', recognized)).toBe('auto')
+    expect(placementBadge(out, 'issue_date', 'Issue Date', recognized)).toBe('auto')
+  })
+
+  it('CHK-04: checkGroups asks once per unrestored group with a placement, in order', async () => {
+    const restoredG = mkRestored(
+      ['f0'],
+      CHECK_COLS,
+      { ...initMappingFromHeaders(CHECK_COLS), invoice_number: 'Invoice No' },
+      LAGOS_SAVE.saved_at,
+      'doc-restored',
+    )
+    const placed = suggestedGroup('doc-placed')
+    const empty = mkGroup(['f2'], initMappingFromHeaders(NO_ALIAS_COLS), NO_ALIAS_COLS)
+    expect(toImportMapping(empty.mapping), 'fixture: nothing placed').toEqual({})
+
+    const check = vi.fn((_doc: string, _m: Record<string, string>): Promise<CheckMapping> => Promise.resolve({ doubted: [] }))
+    await checkGroups([restoredG, placed, empty], check)
+    expect(check).toHaveBeenCalledTimes(1)
+    expect(check).toHaveBeenCalledWith('doc-placed', toImportMapping(placed.mapping))
+
+    const calls: string[] = []
+    const ordered = (doc: string): Promise<CheckMapping> => {
+      calls.push(doc)
+      return Promise.resolve({ doubted: [] })
+    }
+    await checkGroups([suggestedGroup('doc-1'), restoredG, suggestedGroup('doc-3'), suggestedGroup('doc-4')], ordered)
+    expect(calls).toEqual(['doc-1', 'doc-3', 'doc-4'])
+  })
+
+  type Check = ((doc: string, m: Record<string, string>) => Promise<CheckMapping>) | null
+  const skipped: [string, Check][] = [
+    ['a null check', null],
+    ['a rejecting check', () => Promise.reject(new Error('boom'))],
+    ['{}', () => Promise.resolve({} as CheckMapping)],
+    ['{doubted: null}', () => Promise.resolve({ doubted: null } as unknown as CheckMapping)],
+    ["{doubted: 'vat'}", () => Promise.resolve({ doubted: 'vat' } as unknown as CheckMapping)],
+    ['{doubted: [1]}', () => Promise.resolve({ doubted: [1] } as unknown as CheckMapping)],
+    ['{doubted: []}', () => Promise.resolve({ doubted: [] })],
+  ]
+
+  it.each(skipped)('CHK-05: a skipped check leaves every group as it was (%s)', async (_name, answer) => {
+    const control = await checkGroups([suggestedGroup()], () => Promise.resolve({ doubted: ['vat'] }))
+    expect(control[0].mapping.vat, "control: a ['vat'] answer unplaces vat").toBeNull()
+
+    const groups = [suggestedGroup('doc-a'), suggestedGroup('doc-b')]
+    const out = await checkGroups(groups, answer)
+    expect(out).toEqual(groups)
+  })
+
+  it("CHK-06: PlacementBadge's union is unchanged", () => {
+    const src = readFileSync(new URL('./mappingGroups.ts', import.meta.url), 'utf8')
+    expect(src, 'control: the placementBadge anchor').toContain('export function placementBadge(')
+    expect(src).toContain("export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null\n")
   })
 })

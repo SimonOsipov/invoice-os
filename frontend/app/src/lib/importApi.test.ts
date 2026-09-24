@@ -59,7 +59,9 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
 import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch } from './authedFetch'
+import type { AuthedFetch } from './portfolio'
 import {
+  checkMapping,
   createImport,
   getImportBatch,
   getSavedMapping,
@@ -72,6 +74,8 @@ import {
   supplyInvoiceNumber,
   uploadPercent,
   type CarriedReading,
+  type CheckMapping,
+  type CheckMappingRequest,
   type CreateImportRequest,
   type ImportAuth,
   type ImportPreview,
@@ -1276,5 +1280,21 @@ describe('AUDIT-10-07: a suspended member on the multipart transport', () => {
     const auth = makeImportAuth(buildSession('tok'), vi.fn(), onSuspended)
 
     expect(auth.onSuspended, 'the factory dropped onSuspended').toBe(onSuspended)
+  })
+})
+
+describe('checkMapping', () => {
+  it('checkMapping POSTs the placements and resolves the doubted fields', async () => {
+    const req: CheckMappingRequest = { document_id: DOC_ID, mapping: { invoice_number: 'Invoice No', vat: 'VAT %' } }
+    const answer: CheckMapping = { doubted: ['vat'] }
+    const af = vi.fn((_url: string, _opts?: unknown) => Promise.resolve(answer))
+
+    await expect(checkMapping(af as unknown as AuthedFetch, 'https://gw.test', req)).resolves.toEqual(answer)
+    expect(af).toHaveBeenCalledTimes(1)
+    expect(af).toHaveBeenCalledWith('https://gw.test/api/invoice/v1/imports/check-mapping', { method: 'POST', body: req })
+
+    const refused = new ApiError('http', 'boom', 500)
+    const failing = vi.fn(() => Promise.reject(refused)) as unknown as AuthedFetch
+    await expect(checkMapping(failing, 'https://gw.test', req)).rejects.toBe(refused)
   })
 })

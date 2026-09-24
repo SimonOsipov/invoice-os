@@ -1835,7 +1835,7 @@ func fxJevReceiptLines() []fxLine {
 }
 
 func fxBuildJevReceiptInvoice() []byte {
-	return fxTextPage()
+	return fxTextPage(fxJevReceiptLines()...)
 }
 
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the

@@ -414,6 +414,21 @@ func TestSetForkAuthRunsFirstAfterResolveOnPullRequestOnly(t *testing.T) {
 	}
 }
 
+func TestDevEnvAuditStepNamesTheAllowlist(t *testing.T) {
+	steps := prepareEnvSteps(t)
+	got := stepsRunning(steps, auditSealedRE)
+	if len(got) != 1 {
+		t.Fatalf("dev-env.yml prepare-env has %d step(s) running `railway-env.sh audit-sealed-variables`, want 1", len(got))
+	}
+	step := steps[got[0]]
+	if g := stepIf(step); g != prOnlyIf {
+		t.Errorf("the audit step's if: reads %q, want %q", g, prOnlyIf)
+	}
+	if name, _ := stepKey(step, "name"); !strings.Contains(name, "auth allowlist") {
+		t.Errorf("the audit step is named %q; it must say only the auth allowlist may be sealed", name)
+	}
+}
+
 func TestSetForkAuthSiteRunsRightAfterURLs(t *testing.T) {
 	lines := devEnvCode(t)
 	if needs := jobNeeds(jobBlock(lines, "deploy-gateway")); !slices.Contains(needs, "prepare-env") {

@@ -421,6 +421,14 @@ func TestSetForkAuth_SealedSourceVariablesAbsent(t *testing.T) {
 	if !hex64.MatchString(oneUpsert(t, ups, authForkAuthID, "GOTRUE_JWT_SECRET")) {
 		t.Error("GOTRUE_JWT_SECRET is not 64 lowercase hex characters")
 	}
+	if got := upsertsOf(ups, authForkAuthID, "GOTRUE_SMTP_PASS"); len(got) != 1 || got[0].Value != "" {
+		t.Errorf("auth.GOTRUE_SMTP_PASS upserts = %v, want exactly one, set to \"\"", got)
+	}
+	for _, n := range []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS"} {
+		if i := s.lastCallIndex(t, authForkAuthID, n); i < 0 || !s.readAfter(t, authForkAuthID, i) {
+			t.Errorf("auth.%s was not re-read after its write", n)
+		}
+	}
 }
 
 func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {

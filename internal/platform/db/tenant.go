@@ -55,7 +55,7 @@ func WithinRequestTenantTxOpts(ctx context.Context, pool *pgxpool.Pool, opts pgx
 		return ErrNoTenant
 	}
 	// memberships.user_id is uuid: a non-uuid subject can match no row, and a
-	// failed statement would poison the batch's transaction. Not a hole: verify.go:147
+	// failed statement would poison the batch's transaction. Not a hole: Verifier.validate
 	// already rejects any token whose subject is not a uuid before an Identity is ever
 	// built, so no caller reaches this arm with one.
 	if _, err := uuid.Parse(id.Subject); err != nil {

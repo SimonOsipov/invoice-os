@@ -32,9 +32,8 @@ const (
 	maxJWKSResponseSize = 1 << 20 // 1 MiB
 )
 
-// Config configures a Verifier. Issuer and JWKSURL are the only values that
-// differ between the mock issuer (dev/CI) and Supabase GoTrue (M8), so the M8
-// cutover is a config change rather than a code change.
+// Config configures a Verifier. The M8 cutover is a config change rather than
+// a code change.
 type Config struct {
 	Issuer     string          // required: expected "iss"
 	JWKSURL    string          // required: where the signing public keys are served

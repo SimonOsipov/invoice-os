@@ -116,6 +116,8 @@ GRANT USAGE ON SCHEMA public TO invoice_tenant_reader;
 
 --    GoTrue migrates its own tables into `auth`; in `public` it only calls the hook.
 CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
+--    IF NOT EXISTS skips a pre-existing schema, so re-assert the owner.
+ALTER SCHEMA auth OWNER TO supabase_auth_admin;
 ALTER ROLE supabase_auth_admin SET search_path = auth;
 GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
 

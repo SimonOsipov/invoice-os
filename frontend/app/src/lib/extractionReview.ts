@@ -146,7 +146,7 @@ export const DOCUMENT_TYPE_NOTICE: Record<DocumentType, string> = {
   receipt: 'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
   proforma: 'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
   quotation: 'This looks like a quotation, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
-  'credit note': 'This looks like a credit note, not a tax invoice. Its import was not changed. A credit note files here as an ordinary invoice with negative amounts. Check it before you submit an invoice from it.',
+  'credit note': 'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
   'delivery note': 'This looks like a delivery note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
   statement: 'This looks like a statement of account, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
   'purchase order': 'This looks like a purchase order, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',

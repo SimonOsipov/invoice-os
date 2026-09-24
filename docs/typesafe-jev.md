@@ -252,7 +252,7 @@ adequate.
 9. `State` holding invalid UTF-8 is not sent byte for byte. `encoding/json` replaces each
    invalid byte with U+FFFD, because JSON cannot carry such bytes.
 10. The value questions and the `document_type` question share one call, and the client
-    refuses a response with any unusable answer. So one bad answer of either kind skips both
+    fails the whole call on any unusable answer. So one bad answer of either kind skips both
     checks for that document: it is logged `skipped_unavailable`, and the screen is unchanged.
     `TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall` proves it.
 

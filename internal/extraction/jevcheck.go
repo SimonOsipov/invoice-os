@@ -121,7 +121,8 @@ func documentTypeVerdict(resp jev.Response) string {
 }
 
 // checkDocument returns results unchanged and no verdict when the call fails.
-// An unusable answer of one kind leaves the other kind's answer in force.
+// At the JevAsker seam an unusable answer of one kind leaves the other kind's answer in force;
+// the real client fails the whole call (TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall).
 func checkDocument(ctx context.Context, j JevAsker, pages []TokenPage, results []FieldResult) ([]FieldResult, string) {
 	if j == nil || !j.Enabled() {
 		return results, ""

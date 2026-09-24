@@ -29,6 +29,7 @@ const (
 	authProdIssuer   = "urn:ascomply:auth:production"
 	authForkIssuer   = "urn:ascomply:auth:" + authForkName
 	authProdSiteURL  = "https://www.ascomply.com"
+	forkSiteURL      = "https://landing-pr-7.up.railway.app"
 	authDSNReference = "postgresql://supabase_auth_admin:${{gateway.AUTH_ADMIN_PASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.PGDATABASE}}"
 
 	// Planted source values: what a fork inherits. None may be written back or printed.
@@ -324,47 +325,63 @@ func runForkAuthOK(t *testing.T, sourceJWK string) (authShim, string) {
 	return s, out
 }
 
+// Both fork commands refuse before any write.
 func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
-	t.Run("control: a pr fork is written", func(t *testing.T) {
-		s, _ := runForkAuthOK(t, freshJWK(t))
-		if len(s.mutations(t)) == 0 {
-			t.Fatal("control: the fork run wrote nothing, so a zero-write refusal proves nothing")
+	for _, c := range []struct {
+		sub  string
+		args []string
+	}{
+		{"set-fork-auth", nil},
+		{"set-fork-auth-site", []string{forkSiteURL}},
+	} {
+		run := func(s authShim, env string) (string, int) {
+			stdout, stderr, code := s.run(t, forkAuthExports(), c.sub, append([]string{env}, c.args...)...)
+			return stdout + stderr, code
 		}
-	})
-	t.Run("the persistent id", func(t *testing.T) {
-		s := newForkAuthShim(t, freshJWK(t))
-		stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", persistentEnvironmentID)
-		out := stdout + stderr
-		if code != 1 {
-			t.Errorf("exit %d, want 1; output = %q", code, out)
-		}
-		if !authPersisted.MatchString(errorLines(out)) {
-			t.Errorf("no ::error:: line refuses the persistent environment (%s) by id; output = %q", persistentEnvironmentID, out)
-		}
-		if calls := s.calls(t); len(calls) != 0 {
-			t.Errorf("the persistent-id refusal called Railway %v; it must refuse before any network call", operations(calls))
-		}
-		s.requireLogs(t)
-	})
-	t.Run("a non-ephemeral id", func(t *testing.T) {
-		resp := forkAuthRailway()
-		resp["envList"] = authEnvList(false)
-		s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
-		stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authStaleEnvID)
-		out := stdout + stderr
-		if code != 1 {
-			t.Errorf("exit %d, want 1; output = %q", code, out)
-		}
-		if !strings.Contains(errorLines(out), "is NOT ephemeral") {
-			t.Errorf("no ::error:: line says the environment is NOT ephemeral; output = %q", out)
-		}
-		if m := s.mutations(t); len(m) != 0 {
-			t.Errorf("a non-ephemeral environment received mutations %v", m)
-		}
-		if ops := operations(s.calls(t)); !slices.Contains(ops, "envList") {
-			t.Errorf("Railway calls = %v; the ephemeral check never listed environments", ops)
-		}
-	})
+		t.Run(c.sub, func(t *testing.T) {
+			t.Run("control: a pr fork is written", func(t *testing.T) {
+				s := newForkAuthShim(t, freshJWK(t))
+				if out, code := run(s, authForkEnvID); code != 0 {
+					t.Fatalf("control: exit %d, want 0; output = %q", code, out)
+				}
+				if len(s.mutations(t)) == 0 {
+					t.Fatal("control: the fork run wrote nothing, so a zero-write refusal proves nothing")
+				}
+			})
+			t.Run("the persistent id", func(t *testing.T) {
+				s := newForkAuthShim(t, freshJWK(t))
+				out, code := run(s, persistentEnvironmentID)
+				if code != 1 {
+					t.Errorf("exit %d, want 1; output = %q", code, out)
+				}
+				if !authPersisted.MatchString(errorLines(out)) {
+					t.Errorf("no ::error:: line refuses the persistent environment (%s) by id; output = %q", persistentEnvironmentID, out)
+				}
+				if calls := s.calls(t); len(calls) != 0 {
+					t.Errorf("the persistent-id refusal called Railway %v; it must refuse before any network call", operations(calls))
+				}
+				s.requireLogs(t)
+			})
+			t.Run("a non-ephemeral id", func(t *testing.T) {
+				resp := forkAuthRailway()
+				resp["envList"] = authEnvList(false)
+				s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
+				out, code := run(s, authStaleEnvID)
+				if code != 1 {
+					t.Errorf("exit %d, want 1; output = %q", code, out)
+				}
+				if !strings.Contains(errorLines(out), "is NOT ephemeral") {
+					t.Errorf("no ::error:: line says the environment is NOT ephemeral; output = %q", out)
+				}
+				if m := s.mutations(t); len(m) != 0 {
+					t.Errorf("a non-ephemeral environment received mutations %v", m)
+				}
+				if ops := operations(s.calls(t)); !slices.Contains(ops, "envList") {
+					t.Errorf("Railway calls = %v; the ephemeral check never listed environments", ops)
+				}
+			})
+		})
+	}
 }
 
 func TestSetForkAuth_WritesFreshKeysNeverTheSourceValue(t *testing.T) {
@@ -432,7 +449,7 @@ func TestSetForkAuth_SealedSourceVariablesAbsent(t *testing.T) {
 }
 
 func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
-	const site = "https://landing-pr-7.up.railway.app"
+	const site = forkSiteURL
 
 	t.Run("a valid https URL", func(t *testing.T) {
 		s := newForkAuthShim(t, freshJWK(t))
@@ -442,8 +459,9 @@ func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
 			t.Fatalf("exit %d, want 0; output = %q", code, out)
 		}
 		ups := s.upserts(t)
-		if len(ups) != 1 || ups[0] != (authUpsert{authForkAuthID, "GOTRUE_SITE_URL", site}) {
-			t.Errorf("upserts = %v, want exactly auth.GOTRUE_SITE_URL=%s", ups, site)
+		want := []authUpsert{{authForkAuthID, "GOTRUE_SITE_URL", site}, {authForkGatewayID, "AUTH_SITE_URL", site}}
+		if !slices.Equal(ups, want) {
+			t.Errorf("upserts = %v, want exactly %v in that order", ups, want)
 		}
 		if at := s.lastCallIndex(t, authForkAuthID, "GOTRUE_SITE_URL"); at < 0 || !s.readAfter(t, authForkAuthID, at) {
 			t.Error("auth's variables were not re-read after the GOTRUE_SITE_URL write")
@@ -494,6 +512,100 @@ func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
 			t.Errorf("set-fork-auth upserted GOTRUE_SITE_URL %d time(s); only set-fork-auth-site may", len(got))
 		}
 	})
+}
+
+func TestSetForkAuth_OpensSignupInTheFork(t *testing.T) {
+	s, _ := runForkAuthOK(t, freshJWK(t))
+	ups := s.upserts(t)
+	if len(ups) == 0 {
+		t.Fatal("control: set-fork-auth wrote nothing")
+	}
+	if got := oneUpsert(t, ups, authForkAuthID, "GOTRUE_DISABLE_SIGNUP"); got != "false" {
+		t.Errorf("auth.GOTRUE_DISABLE_SIGNUP = %q, want \"false\"", got)
+	}
+	if at := s.lastCallIndex(t, authForkAuthID, "GOTRUE_DISABLE_SIGNUP"); at < 0 || !s.readAfter(t, authForkAuthID, at) {
+		t.Error("auth's variables were not re-read after the GOTRUE_DISABLE_SIGNUP write")
+	}
+	if got := upsertsOf(ups, authForkGatewayID, "GOTRUE_DISABLE_SIGNUP"); len(got) != 0 {
+		t.Errorf("gateway received GOTRUE_DISABLE_SIGNUP %v; it belongs to auth only", got)
+	}
+}
+
+func TestSetForkAuth_SignupReReadMismatchFails(t *testing.T) {
+	for _, c := range []struct{ name, filter string }{
+		{"reads true", `.GOTRUE_DISABLE_SIGNUP = "true"`},
+		{"absent", `del(.GOTRUE_DISABLE_SIGNUP)`},
+		{"empty", `.GOTRUE_DISABLE_SIGNUP = ""`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newForkAuthShim(t, freshJWK(t))
+			s.bendRead(t, authForkAuthID, c.filter)
+			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
+			out := stdout + stderr
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if !strings.Contains(errorLines(out), "GOTRUE_DISABLE_SIGNUP") {
+				t.Errorf("no ::error:: line names GOTRUE_DISABLE_SIGNUP; error lines = %q", errorLines(out))
+			}
+			if len(upsertsOf(s.upserts(t), authForkAuthID, "GOTRUE_DISABLE_SIGNUP")) == 0 {
+				t.Error("GOTRUE_DISABLE_SIGNUP was never written, so the failure is not a re-read failure")
+			}
+		})
+	}
+}
+
+// newForkSiteShim is a fork whose gateway inherited production's AUTH_SITE_URL.
+func newForkSiteShim(t *testing.T) authShim {
+	t.Helper()
+	stores := forkAuthStores(freshJWK(t))
+	stores[authForkGatewayID]["AUTH_SITE_URL"] = authProdSiteURL
+	return newAuthShim(t, forkAuthRailway(), stores)
+}
+
+func TestSetForkAuthSite_WritesGatewaySiteURL(t *testing.T) {
+	s := newForkSiteShim(t)
+	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
+	out := stdout + stderr
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, out)
+	}
+	ups := s.upserts(t)
+	if got := oneUpsert(t, ups, authForkGatewayID, "AUTH_SITE_URL"); got != forkSiteURL {
+		t.Errorf("gateway.AUTH_SITE_URL = %q, want the landing URL %q", got, forkSiteURL)
+	}
+	if at := s.lastCallIndex(t, authForkGatewayID, "AUTH_SITE_URL"); at < 0 || !s.readAfter(t, authForkGatewayID, at) {
+		t.Error("gateway's variables were not re-read after the AUTH_SITE_URL write")
+	}
+	if got := upsertsOf(ups, authForkAuthID, "AUTH_SITE_URL"); len(got) != 0 {
+		t.Errorf("auth received AUTH_SITE_URL %v; it belongs to gateway only", got)
+	}
+}
+
+func TestSetForkAuthSite_GatewayReReadMismatchFails(t *testing.T) {
+	for _, c := range []struct{ name, filter string }{
+		{"differs", `.AUTH_SITE_URL = "https://elsewhere.example"`},
+		{"still the inherited value", `.AUTH_SITE_URL = "` + authProdSiteURL + `"`},
+		{"absent", `del(.AUTH_SITE_URL)`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newForkSiteShim(t)
+			s.bendRead(t, authForkGatewayID, c.filter)
+			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
+			out := stdout + stderr
+			if code != 1 {
+				t.Errorf("exit %d, want 1; output = %q", code, out)
+			}
+			if !strings.Contains(errorLines(out), "AUTH_SITE_URL") {
+				t.Errorf("no ::error:: line names AUTH_SITE_URL; error lines = %q", errorLines(out))
+			}
+			if len(upsertsOf(s.upserts(t), authForkGatewayID, "AUTH_SITE_URL")) == 0 {
+				t.Error("gateway.AUTH_SITE_URL was never written, so the failure is not a re-read failure")
+			}
+		})
+	}
 }
 
 func TestSetForkAuth_IssuerAndAdditionalSetAgree(t *testing.T) {

@@ -81,11 +81,27 @@ them.
 
 | Environment | `TYPESAFE_API_KEY` | `JEV_FAKE` | Client | Set by |
 |---|---|---|---|---|
-| production (persistent) | unset | unset | off | Nobody. No production key exists until the user resolves the data terms (see "Data terms"). `set-ai-fake` refuses this environment's id. |
+| production (persistent) | set on `submission` and `invoice`, not sealed (2026-09-24) | unset | real | The user (see "Enable and roll back"). `set-ai-fake` refuses this environment's id. |
 | `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
 The key goes on `submission` and `invoice` only. Both services call the client.
+
+**Enable and roll back.** Both steps target the persistent environment, on `submission` and
+`invoice` each. `--skip-deploys` stops a variable write from rebuilding `main` unstamped;
+`railway redeploy` restarts the CI-built image with the new value.
+
+```sh
+E=6c864094-6a06-452f-8495-be77d8a94fe7
+# enable: read the key silently, then per service
+printf %s "$JEV_KEY" | railway variable set TYPESAFE_API_KEY --stdin --skip-deploys -s <svc> -e $E
+# roll back: per service
+railway variable delete TYPESAFE_API_KEY -s <svc> -e $E
+# then, per service
+railway redeploy -y -s <svc> -e $E
+```
+
+A set key is not proof the check runs. Read a `jev call` line with `outcome` `ok`.
 
 **Fork rule.** `prepare-env` creates each `pr-<N>` as a fork of the persistent environment,
 and the fork copies its variables. A key set on production would therefore reach every fork.
@@ -212,8 +228,8 @@ CHECK-03, CHECK-04 and CHECK-05 keep this rule. A skipped mapping check answers
 In real mode each `Ask` sends `State` to TypeSafe, and for each question its id, its
 `Instructions` and its `criteria` as the type table under "What it is" defines them: a
 `noul`'s `True` and `False` text, every `choice` option `Name` with its `Description`, and
-every `score` level description. The data terms for that transfer are unresolved. The user owns them. No production
-key exists, and none is set until the user resolves them.
+every `score` level description. The user owns the data terms for that transfer and set
+the production key on 2026-09-24.
 
 The vendor's Legal page (`https://docs.typesafe.ai/legal.md`, read 2026-09-23) lists a Data
 Processing Agreement. The listing says the agreement covers how the vendor processes customer
@@ -232,7 +248,7 @@ adequate.
    The mapping threshold `0.10` and its wording were measured once, on 48 synthetic csvgen
    layouts (`CHECK-00 Jev Measurement Results` § "Mapping check", 2026-09-24). No cut is
    clean on AI placements: at `0.10` the check caught 1 of 5 wrong ones and unplaced 5 of 313
-   right ones. Re-measure on real spreadsheets before a production key is set.
+   right ones. The production key is set; re-measure on real spreadsheets.
 2. `skipped_refused` conflates 401 (a revoked key), 422 (a client bug, or a `state` beyond
    the vendor's context limit), a key refused by the header check, and every other
    non-retryable status. Neither the error nor the log names the status. A revoked key

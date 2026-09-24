@@ -84,8 +84,7 @@ them.
 | `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
-The key goes on `submission` and `invoice` only. `submission` calls the client; `invoice`
-will from CHECK-05.
+The key goes on `submission` and `invoice` only.
 
 **Fork rule.** `prepare-env` creates each `pr-<N>` as a fork of the persistent environment,
 and the fork copies its variables. A key set on production would therefore reach every fork.

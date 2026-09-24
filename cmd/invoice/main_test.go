@@ -9,6 +9,8 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -409,8 +411,13 @@ func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
 	for _, msg := range aiGuard(src) {
 		t.Error(msg)
 	}
+}
 
-	// Each guard reds on its own branch's deletion and only on that.
+// TestInvoiceMain_EachFromEnvGuardRedsOnlyOnItsOwnBranch: each guard reds on its own
+// branch's deletion and only on that. A separate test, so a Jev regression does not red
+// the AI guard's test.
+func TestInvoiceMain_EachFromEnvGuardRedsOnlyOnItsOwnBranch(t *testing.T) {
+	src := sourceWithoutComments(t, "main.go")
 	t.Run("AIBranchDeleted", func(t *testing.T) {
 		mut := dropErrBranchAfter(t, src, "ai.FromEnv")
 		if len(aiGuard(mut)) == 0 {
@@ -662,4 +669,257 @@ func isSelector(e ast.Expr, recv, name string) bool {
 func isSelectorCall(e ast.Expr, pkg, name string) bool {
 	call, ok := e.(*ast.CallExpr)
 	return ok && isSelector(call.Fun, pkg, name)
+}
+
+func parseMain(t *testing.T) (*ast.File, *ast.FuncDecl) {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" && fd.Body != nil {
+			return f, fd
+		}
+	}
+	t.Fatal("no func main() in cmd/invoice/main.go")
+	return nil, nil
+}
+
+// TestInvoiceMain_MountsTheCheckPathOnceForPostOnly: no second registration of the check
+// path under any method, and CheckMappingHandler is built once.
+func TestInvoiceMain_MountsTheCheckPathOnceForPostOnly(t *testing.T) {
+	f, _ := parseMain(t)
+	byPath := map[string][]string{}
+	var handlers, total int
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isSelector(call.Fun, "importer", "CheckMappingHandler") {
+			handlers++
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") || len(call.Args) == 0 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		total++
+		pattern := strings.Trim(lit.Value, `"`)
+		method, path, found := strings.Cut(pattern, " ")
+		if !found {
+			method, path = "", pattern
+		}
+		byPath[path] = append(byPath[path], method)
+		return true
+	})
+	if total < 20 || len(byPath["/v1/imports/suggest-mapping"]) != 1 {
+		t.Fatalf("control: walked %d registration(s), suggest-mapping %q -- the walk is broken", total, byPath["/v1/imports/suggest-mapping"])
+	}
+	if got := byPath["/v1/imports/check-mapping"]; len(got) != 1 || got[0] != "POST" {
+		t.Errorf("/v1/imports/check-mapping is registered with methods %q, want exactly [POST]", got)
+	}
+	if handlers != 1 {
+		t.Errorf("importer.CheckMappingHandler is called %d time(s), want 1", handlers)
+	}
+}
+
+// TestInvoiceMain_PatternsRegisterWithoutConflict: every literal pattern main.go mounts
+// registers on one ServeMux; net/http panics on a conflicting pair.
+func TestInvoiceMain_PatternsRegisterWithoutConflict(t *testing.T) {
+	f, _ := parseMain(t)
+	var patterns []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+			return true
+		}
+		if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			patterns = append(patterns, strings.Trim(lit.Value, `"`))
+		}
+		return true
+	})
+	if len(patterns) < 20 || !slices.Contains(patterns, "POST /v1/imports/check-mapping") {
+		t.Fatalf("control: %d pattern(s) walked, check-mapping among them=%v", len(patterns), slices.Contains(patterns, "POST /v1/imports/check-mapping"))
+	}
+	mux := http.NewServeMux()
+	for _, p := range patterns {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("registering %q panics: %v", p, r)
+				}
+			}()
+			mux.HandleFunc(p, func(http.ResponseWriter, *http.Request) {})
+		}()
+	}
+}
+
+// TestInvoiceMain_JevFromEnvErrorIsTheOneThatStopsTheBoot: the statement after
+// `c, err := jev.FromEnv(app.Logger)` is `if err != nil { fatal(app.Logger, ..., err) }`.
+// The window guards cannot see a flipped condition or a dropped logger.
+func TestInvoiceMain_JevFromEnvErrorIsTheOneThatStopsTheBoot(t *testing.T) {
+	_, mainFn := parseMain(t)
+	body := mainFn.Body.List
+	for _, pkg := range []string{"ai", "jev"} { // ai is the control: the shipped shape matches
+		var matched int
+		for i, st := range body {
+			a, ok := st.(*ast.AssignStmt)
+			if !ok || len(a.Rhs) != 1 || !isSelectorCall(a.Rhs[0], pkg, "FromEnv") {
+				continue
+			}
+			matched++
+			call := a.Rhs[0].(*ast.CallExpr)
+			if len(call.Args) != 1 || !isSelector(call.Args[0], "app", "Logger") {
+				t.Errorf("%s.FromEnv is not called with exactly app.Logger", pkg)
+			}
+			if len(a.Lhs) != 2 || a.Tok != token.DEFINE {
+				t.Errorf("%s.FromEnv's result is not `client, err :=`", pkg)
+				continue
+			}
+			errID, ok := a.Lhs[1].(*ast.Ident)
+			if !ok || i+1 >= len(body) {
+				t.Errorf("%s.FromEnv's error is not a named identifier followed by a statement", pkg)
+				continue
+			}
+			ifs, ok := body[i+1].(*ast.IfStmt)
+			if !ok || ifs.Init != nil || ifs.Else != nil {
+				t.Errorf("the statement after %s.FromEnv is not a plain if with no else", pkg)
+				continue
+			}
+			cond, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok {
+				t.Errorf("%s.FromEnv's branch condition is not a comparison", pkg)
+				continue
+			}
+			x, xok := cond.X.(*ast.Ident)
+			y, yok := cond.Y.(*ast.Ident)
+			if cond.Op != token.NEQ || !xok || x.Name != errID.Name || !yok || y.Name != "nil" {
+				t.Errorf("%s.FromEnv's branch condition is not `%s != nil`", pkg, errID.Name)
+				continue
+			}
+			if len(ifs.Body.List) != 1 {
+				t.Errorf("%s.FromEnv's error branch holds %d statement(s), want the fatal call alone", pkg, len(ifs.Body.List))
+				continue
+			}
+			es, ok := ifs.Body.List[0].(*ast.ExprStmt)
+			if !ok {
+				t.Errorf("%s.FromEnv's error branch is not a call", pkg)
+				continue
+			}
+			fc, ok := es.X.(*ast.CallExpr)
+			if !ok {
+				t.Errorf("%s.FromEnv's error branch is not a call", pkg)
+				continue
+			}
+			fn, ok := fc.Fun.(*ast.Ident)
+			if !ok || fn.Name != "fatal" || len(fc.Args) < 3 || !isSelector(fc.Args[0], "app", "Logger") {
+				t.Errorf("%s.FromEnv's error branch is not fatal(app.Logger, format, ..., %s)", pkg, errID.Name)
+				continue
+			}
+			if id, ok := fc.Args[len(fc.Args)-1].(*ast.Ident); !ok || id.Name != errID.Name {
+				t.Errorf("%s.FromEnv's fatal does not report %s", pkg, errID.Name)
+			}
+		}
+		if matched != 1 {
+			t.Errorf("found %d top-level %s.FromEnv assignment(s), want 1", matched, pkg)
+		}
+	}
+}
+
+// TestInvoiceMain_TheJevClientIsNeverReassigned: the variable jev.FromEnv fills is not
+// overwritten or taken by address before the handler reads it.
+func TestInvoiceMain_TheJevClientIsNeverReassigned(t *testing.T) {
+	f, mainFn := parseMain(t)
+	var client string
+	for _, st := range mainFn.Body.List {
+		a, ok := st.(*ast.AssignStmt)
+		if ok && len(a.Rhs) == 1 && len(a.Lhs) > 0 && isSelectorCall(a.Rhs[0], "jev", "FromEnv") {
+			if id, ok := a.Lhs[0].(*ast.Ident); ok {
+				client = id.Name
+			}
+		}
+	}
+	if client == "" || client == "_" {
+		t.Fatalf("no named top-level jev.FromEnv assignment (got %q)", client)
+	}
+	var assigns, addrs, uses int
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range n.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == client {
+					assigns++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range n.Names {
+				if id.Name == client {
+					assigns++
+				}
+			}
+		case *ast.UnaryExpr:
+			if id, ok := n.X.(*ast.Ident); ok && n.Op == token.AND && id.Name == client {
+				addrs++
+			}
+		case *ast.Ident:
+			if n.Name == client {
+				uses++
+			}
+		}
+		return true
+	})
+	if uses < 2 {
+		t.Fatalf("control: %s appears %d time(s), want its assignment and the handler argument at least", client, uses)
+	}
+	if assigns != 1 || addrs != 0 {
+		t.Errorf("%s is assigned %d time(s) and has its address taken %d time(s), want 1 and 0", client, assigns, addrs)
+	}
+}
+
+// TestInvoiceMain_NamesNoJevVariableAnyOtherWay: neither jev.EnvKey nor jev.EnvFake, nor a
+// string literal naming either variable in any case, appears in main.go.
+func TestInvoiceMain_NamesNoJevVariableAnyOtherWay(t *testing.T) {
+	f, _ := parseMain(t)
+	var lits int
+	var sawInvoice, sawFromEnv bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.SelectorExpr:
+			if x, ok := n.X.(*ast.Ident); ok && x.Name == "jev" {
+				switch n.Sel.Name {
+				case "FromEnv":
+					sawFromEnv = true
+				case "EnvKey", "EnvFake":
+					t.Errorf("main.go names jev.%s -- read it only inside jev.FromEnv", n.Sel.Name)
+				}
+			}
+		case *ast.BasicLit:
+			if n.Kind != token.STRING {
+				return true
+			}
+			lits++
+			v := strings.ToLower(n.Value)
+			if v == `"invoice"` {
+				sawInvoice = true
+			}
+			for _, name := range []string{"typesafe_api_key", "jev_fake"} {
+				if strings.Contains(v, name) {
+					t.Errorf("main.go holds the string literal %s, which names %s", n.Value, strings.ToUpper(name))
+				}
+			}
+		}
+		return true
+	})
+	if lits < 50 || !sawInvoice || !sawFromEnv {
+		t.Fatalf("control: %d string literal(s), \"invoice\" seen=%v, jev.FromEnv seen=%v -- the walk is broken", lits, sawInvoice, sawFromEnv)
+	}
 }

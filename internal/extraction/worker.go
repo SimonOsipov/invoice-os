@@ -58,7 +58,7 @@ type ExtractWorker struct {
 	Rules LoadAnchorRules
 	// AI is the per-document AI reading step. nil is off.
 	AI AIReader
-	// Jev checks the decided header values once per attempt; a retried job asks again. nil is off.
+	// Jev asks the value and document-type questions in one call per attempt; a retried job asks again. nil is off.
 	Jev JevAsker
 	// PageBytes reads a stored page image back by key. nil is off.
 	PageBytes PageObject
@@ -140,6 +140,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 	})
 
 	var results []FieldResult
+	var docType string // a non-invoice verdict, or empty
 	var images []PageImage
 	var tokenPages []TokenPage // PDFium's, from Pages.Ingest: the fingerprint source
 	var textPages []Page       // Text's, for LineItems
@@ -279,7 +280,7 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 					}), answer, textTokens, lines)
 					results = mergeAILines(merged, lineAnswer, textTokens)
 					// octx, not ctx: the jev call line reads tenant_id off it.
-					results = checkValues(octx, w.Jev, textTokens, results)
+					results, docType = checkDocument(octx, w.Jev, textTokens, results)
 				}
 			}
 		}
@@ -323,6 +324,11 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 		_, err := queue.OncePerJob(ctx, tx, args.TenantID, job.ID, func() error {
 			if err := writeFieldResultsTx(ctx, tx, args.TenantID, row.ID, results); err != nil {
 				return err
+			}
+			if docType != "" {
+				if err := writeDocumentTypeTx(ctx, tx, args.TenantID, row.ID, docType); err != nil {
+					return err
+				}
 			}
 			if err := advanceJobTx(ctx, tx, args.TenantID, row.ID, "succeeded", "", job.Attempt, ""); err != nil {
 				return err

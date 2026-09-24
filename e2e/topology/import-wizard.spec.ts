@@ -2293,6 +2293,13 @@ function uniqueJevDoubtPdfBytes(): Buffer {
   return Buffer.concat([JEV_DOUBT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// fxJevReceipt (fxE2ECopies): JEVFAKE-CHOICE-cmVjZWlwdA makes the fake Jev answer `receipt`.
+const JEV_RECEIPT_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'jev_receipt_invoice.pdf'))
+
+function uniqueJevReceiptPdfBytes(): Buffer {
+  return Buffer.concat([JEV_RECEIPT_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // AIR-08-13's deployed fixture (fxE2ECopies): a ruled 2-row table plus an AIFAKE-LINES-ANSWER
 // marker steering three line-item rows. Same recipe as the others above.
 const AI_LINES_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_lines_invoice.pdf'))
@@ -3498,7 +3505,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // EXTR-15-01: failure_kind carries no omitempty, so a job that settled cleanly still sends
   // the key with an explicit null -- the deployed proof that the tag was not written with one.
   expect(Object.keys(detail).sort(), 'the top-level key set drifted from internal/extraction/reader.go').toEqual(
-    ['document', 'document_id', 'failure_kind', 'fields', 'id', 'pages', 'state'].sort(),
+    ['document', 'document_id', 'document_type', 'failure_kind', 'fields', 'id', 'pages', 'state'].sort(),
   )
   expect(
     (detail as unknown as Record<string, unknown>).failure_kind,
@@ -9692,6 +9699,120 @@ test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell
   } finally {
     if (entryViewport) await page.setViewportSize(entryViewport)
   }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// read: fxJevReceiptLines (internal/extraction/fixtures_test.go)
+const JEV_RECEIPT_READ = { invoice_number: 'JR-4410', supplier_name: 'Owerri Traders Limited', supplier_tin: '34567890-0001' }
+// copy: DOCUMENT_TYPE_NOTICE.receipt (frontend/app/src/lib/extractionReview.ts)
+const RECEIPT_NOTICE =
+  'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
+
+test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none', async ({ page }, testInfo) => {
+  // Two extractions on a possibly cold sidecar, then a four-width sweep.
+  test.setTimeout(600_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  // -- receipt leg -- extractOneDocument already waited on invoice-detail: the receipt filed a draft.
+  await extractOneDocument(page, 'Zz CHECK-04 receipt', { name: 'jev_receipt_invoice.pdf', buffer: uniqueJevReceiptPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the receipt must land on the real invoice detail, not the quarantine').not.toBeNull()
+  const invoiceId = invoiceMatch![1]
+
+  const detail = await openExtractionReview(page)
+  expect(detail.document_type, 'the wire carries no receipt verdict').toBe('receipt')
+  const strip = page.getByTestId('extraction-document-type')
+  await expect(strip).toBeVisible()
+  await expect(strip).toHaveText(RECEIPT_NOTICE)
+
+  await expect(page.locator('[data-testid^="extraction-field-"]'), 'the pane does not render one cell per header field').toHaveCount(
+    VOCABULARY.length,
+  )
+  // The verdict moves no row: the three printed values stay decided with no pill.
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+  for (const name of Object.keys(JEV_RECEIPT_READ) as (keyof typeof JEV_RECEIPT_READ)[]) {
+    const w = wire.get(name)
+    expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: JEV_RECEIPT_READ[name], reason: '' })
+    await expect(page.getByTestId(`extraction-field-${name}`).locator('.mono'), `${name} renders a pill`).toHaveCount(0)
+  }
+  const decided: string[] = Object.keys(JEV_RECEIPT_READ)
+  for (const name of VOCABULARY.filter((n) => !decided.includes(n))) {
+    const w = wire.get(name)
+    expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: null, reason: 'missing' })
+  }
+  expect(
+    detail.fields.map((f) => f.name),
+    'the verdict became a field row',
+  ).not.toContain('document_type')
+
+  // marker prefix: jev fake.go's markers (fxJevReceiptMarker). Docling must not read it into a value.
+  const leaked = detail.fields.flatMap((f) =>
+    [f.value, ...f.alternatives.map((a) => a.value)].filter((v) => v?.includes('JEVFAKE')).map((v) => `${f.name}=${v}`),
+  )
+  expect(leaked, 'the Jev marker reached a wire value').toEqual([])
+
+  const invoice = await getInvoice(token, invoiceId)
+  expect(invoice.invoice_number).toBe(JEV_RECEIPT_READ.invoice_number)
+
+  // The strip wraps inside the review and leaves the body room below it, at every width.
+  const review = page.getByTestId('extraction-review')
+  const body = page.getByTestId('extraction-review-body')
+  const measured: { width: number; left: number; right: number; scrollWidth: number; clientWidth: number; bodyHeight: number }[] =
+    []
+  const entryViewport = page.viewportSize()
+  try {
+    // Widest first, WIDE_WIDTHS' own order.
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+
+      const m = await settledRead(async () => {
+        const [s, r, b] = await Promise.all([strip.boundingBox(), review.boundingBox(), body.boundingBox()])
+        const flow = await strip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+        return { s, r, b, flow }
+      }, `document-type strip containment at ${width}px`)
+
+      expect(m.s && m.r && m.b, `the strip, the review and its body must render at ${width}px`).toBeTruthy()
+      // Non-empty first: a rect collapsed to zero is inside anything and passes vacuously.
+      expect(m.s!.width, `the strip collapsed to zero width at ${width}px`).toBeGreaterThan(0)
+
+      const g = gaps(m.s as Rect, m.r as Rect)
+      expect(g.left, `the strip starts ${(-g.left).toFixed(1)}px left of the review at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(g.right, `the strip ends ${(-g.right).toFixed(1)}px right of the review at ${width}px`).toBeGreaterThanOrEqual(-1)
+      expect(
+        m.flow.scrollWidth,
+        `the strip holds ${m.flow.scrollWidth}px of content in a ${m.flow.clientWidth}px box at ${width}px`,
+      ).toBeLessThanOrEqual(m.flow.clientWidth + 1)
+      expect(m.b!.height, `the review body has no height below the strip at ${width}px`).toBeGreaterThan(0)
+      expect(m.b!.y, `the review body starts above the strip's bottom at ${width}px`).toBeGreaterThanOrEqual(
+        m.s!.y + m.s!.height - 1,
+      )
+
+      measured.push({
+        width,
+        left: g.left,
+        right: g.right,
+        scrollWidth: m.flow.scrollWidth,
+        clientWidth: m.flow.clientWidth,
+        bodyHeight: m.b!.height,
+      })
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+  await testInfo.attach('check04-document-type-strip.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  // -- plain leg -- the fake's default answer is a tax invoice, so no verdict and no strip.
+  await extractOneDocument(page, 'Zz CHECK-04 plain')
+  const plain = await openExtractionReview(page)
+  expect(plain.document_type, 'a plain upload carries a verdict').toBeNull()
+  await expect(page.getByTestId('extraction-document-type')).toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

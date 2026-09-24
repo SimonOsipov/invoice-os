@@ -308,19 +308,19 @@ func TestValueCheck_NilOrOffAskerAsksNothing(t *testing.T) {
 	doubt := vcAnswers(0, "invoice_number", "vat", "total")
 
 	off := &vcAsker{enabled: false, resp: doubt}
-	if out := checkValues(t.Context(), off, vcPages(), results); !reflect.DeepEqual(out, before) {
+	if out, _ := checkDocument(t.Context(), off, vcPages(), results); !reflect.DeepEqual(out, before) {
 		t.Errorf("off asker: output = %+v, want the input", out)
 	}
 	if len(off.calls) != 0 {
 		t.Errorf("off asker: %d Ask calls, want 0", len(off.calls))
 	}
-	if out := checkValues(t.Context(), nil, vcPages(), results); !reflect.DeepEqual(out, before) {
+	if out, _ := checkDocument(t.Context(), nil, vcPages(), results); !reflect.DeepEqual(out, before) {
 		t.Errorf("nil asker: output = %+v, want the input", out)
 	}
 
 	// Control: the same answer through an enabled asker does flag.
 	on := &vcAsker{enabled: true, resp: doubt}
-	out := checkValues(t.Context(), on, vcPages(), results)
+	out, _ := checkDocument(t.Context(), on, vcPages(), results)
 	if len(on.calls) != 1 {
 		t.Fatalf("enabled asker: %d Ask calls, want 1", len(on.calls))
 	}
@@ -329,7 +329,7 @@ func TestValueCheck_NilOrOffAskerAsksNothing(t *testing.T) {
 	}
 }
 
-func TestValueCheck_NothingCheckableAsksNothing(t *testing.T) {
+func TestValueCheck_NothingCheckableAsksOnlyTheDocumentType(t *testing.T) {
 	reasons := []Reason{ReasonMissing, ReasonAmbiguous, ReasonUnreadable, ReasonInconsistent}
 	var results []FieldResult
 	for i, name := range HeaderFields {
@@ -347,20 +347,36 @@ func TestValueCheck_NothingCheckableAsksNothing(t *testing.T) {
 	before := cloneResults(results)
 	a := &vcAsker{enabled: true, resp: vcAnswers(0, HeaderFields...)}
 
-	out := checkValues(t.Context(), a, vcPages(), results)
+	out, _ := checkDocument(t.Context(), a, vcPages(), results)
 
-	if len(a.calls) != 0 {
-		t.Errorf("%d Ask calls, want 0", len(a.calls))
-	}
 	if !reflect.DeepEqual(out, before) {
 		t.Errorf("output = %+v, want the input", out)
+	}
+	if len(a.calls) != 1 {
+		t.Fatalf("%d Ask calls, want 1", len(a.calls))
+	}
+	req := a.calls[0]
+	if got := vcIDs(req); !slices.Equal(got, []string{"document_type"}) {
+		t.Errorf("question ids = %v, want [document_type]", got)
+	}
+	if req.Purpose != jev.PurposeDocumentType {
+		t.Errorf("Purpose = %q, want %q", req.Purpose, jev.PurposeDocumentType)
+	}
+	if want := DoclingPromptText(vcPages()); want == "" || req.State != want {
+		t.Errorf("State = %q, want DoclingPromptText(vcPages()) = %q", req.State, want)
 	}
 
 	// Control: one decided header field makes the same results checkable.
 	a.calls = nil
-	checkValues(t.Context(), a, vcPages(), append(cloneResults(before), vcDecided("invoice_number")))
+	checkDocument(t.Context(), a, vcPages(), append(cloneResults(before), vcDecided("invoice_number")))
 	if len(a.calls) != 1 {
-		t.Errorf("with a decided invoice_number: %d Ask calls, want 1", len(a.calls))
+		t.Fatalf("with a decided invoice_number: %d Ask calls, want 1", len(a.calls))
+	}
+	if got := vcIDs(a.calls[0]); !slices.Equal(got, []string{"document_type", "invoice_number"}) {
+		t.Errorf("with a decided invoice_number: question ids = %v, want [document_type invoice_number]", got)
+	}
+	if a.calls[0].Purpose != jev.PurposeValueCheck {
+		t.Errorf("with a decided invoice_number: Purpose = %q, want %q", a.calls[0].Purpose, jev.PurposeValueCheck)
 	}
 }
 
@@ -377,7 +393,7 @@ func TestValueCheck_AnyAskErrorLeavesTheResults(t *testing.T) {
 		before := cloneResults(results)
 		a := &vcAsker{enabled: true, resp: vcAnswers(0, names...), err: err}
 
-		out := checkValues(t.Context(), a, vcPages(), results)
+		out, _ := checkDocument(t.Context(), a, vcPages(), results)
 
 		if len(a.calls) != 1 {
 			t.Errorf("%s: %d Ask calls, want 1", label, len(a.calls))
@@ -389,7 +405,7 @@ func TestValueCheck_AnyAskErrorLeavesTheResults(t *testing.T) {
 
 	// Control: the same doubting answer with no error flags every field.
 	a := &vcAsker{enabled: true, resp: vcAnswers(0, names...)}
-	if out := checkValues(t.Context(), a, vcPages(), vcRows(names...)); flaggedCount(out) != len(names) {
+	if out, _ := checkDocument(t.Context(), a, vcPages(), vcRows(names...)); flaggedCount(out) != len(names) {
 		t.Errorf("no error: %d flagged, want %d", flaggedCount(out), len(names))
 	}
 }
@@ -405,7 +421,7 @@ func TestValueCheck_AnUnusableAnswerLeavesTheResults(t *testing.T) {
 		before := cloneResults(results)
 		a := &vcAsker{enabled: true, resp: resp}
 
-		out := checkValues(t.Context(), a, vcPages(), results)
+		out, _ := checkDocument(t.Context(), a, vcPages(), results)
 
 		if len(a.calls) != 1 {
 			t.Errorf("%s: %d Ask calls, want 1", label, len(a.calls))
@@ -416,7 +432,7 @@ func TestValueCheck_AnUnusableAnswerLeavesTheResults(t *testing.T) {
 	}
 
 	a := &vcAsker{enabled: true, resp: vcAnswers(0, names...)}
-	if out := checkValues(t.Context(), a, vcPages(), vcRows(names...)); flaggedCount(out) != len(names) {
+	if out, _ := checkDocument(t.Context(), a, vcPages(), vcRows(names...)); flaggedCount(out) != len(names) {
 		t.Errorf("complete answer: %d flagged, want %d", flaggedCount(out), len(names))
 	}
 }
@@ -433,7 +449,7 @@ func TestValueCheck_TheFlaggedCountGrowsByTheDoubtedFields(t *testing.T) {
 		t.Fatalf("flaggedCount(in) = %d, want 1", in)
 	}
 
-	out := checkValues(t.Context(), &vcAsker{enabled: true, resp: resp}, vcPages(), results)
+	out, _ := checkDocument(t.Context(), &vcAsker{enabled: true, resp: resp}, vcPages(), results)
 
 	if got := flaggedCount(out) - in; got != 2 {
 		t.Errorf("flaggedCount grew by %d, want 2", got)
@@ -456,7 +472,7 @@ func TestValueCheck_AnAIWithheldValueIsNotAskedAndADoubtedValueStays(t *testing.
 	before := cloneResults(results)
 	a := &vcAsker{enabled: true, resp: vcAnswers(0, "vat")}
 
-	out := checkValues(t.Context(), a, pages, results)
+	out, _ := checkDocument(t.Context(), a, pages, results)
 
 	if len(a.calls) != 1 {
 		t.Fatalf("%d Ask calls, want 1", len(a.calls))
@@ -509,7 +525,7 @@ func TestValueCheck_AnAnswerForAnUnaskedIDChangesNothing(t *testing.T) {
 	resp.Answers["invoice_number"] = jev.Answer{Type: jev.TypeNoul, Noul: 0.2}
 	a := &vcAsker{enabled: true, resp: resp}
 
-	out := checkValues(t.Context(), a, vcPages(), results)
+	out, _ := checkDocument(t.Context(), a, vcPages(), results)
 
 	if len(a.calls) != 1 || len(out) != len(before) {
 		t.Fatalf("%d Ask calls and %d rows out, want 1 and %d", len(a.calls), len(out), len(before))
@@ -540,5 +556,222 @@ func TestValueCheck_AnEmptyDecidedValueIsAsked(t *testing.T) {
 	}
 	if got := req.Questions["buyer_name"].Instructions; !strings.HasSuffix(got, " Field: buyer_name. Value: .") {
 		t.Errorf("buyer_name instructions = %q, want the empty value composed", got)
+	}
+}
+
+// dtNonInvoice is the seven names a verdict may carry, written out independently of documentTypeOptions.
+var dtNonInvoice = []string{"receipt", "proforma", "quotation", "credit note", "delivery note", "statement", "purchase order"}
+
+func dtAnswer(choice string, confidence float64) jev.Response {
+	return jev.Response{Answers: map[string]jev.Answer{
+		"document_type": {Type: jev.TypeChoice, Choice: choice, Confidence: confidence},
+	}}
+}
+
+func TestDocumentType_TheQuestionIsAChoiceOverTheEightTypes(t *testing.T) {
+	q := DocumentTypeQuestion()
+
+	if q.Type != jev.TypeChoice {
+		t.Errorf("Type = %q, want %q", q.Type, jev.TypeChoice)
+	}
+	if q.Instructions == "" || q.Instructions != documentTypeInstructions {
+		t.Errorf("Instructions = %q, want %q", q.Instructions, documentTypeInstructions)
+	}
+	names := make([]string, len(q.Options))
+	for i, o := range q.Options {
+		names[i] = o.Name
+		if o.Description == "" {
+			t.Errorf("option %q has an empty description", o.Name)
+		}
+	}
+	if want := append([]string{"tax invoice"}, dtNonInvoice...); !slices.Equal(names, want) {
+		t.Errorf("option names = %v, want %v", names, want)
+	}
+	if q.Default != "tax invoice" {
+		t.Errorf("Default = %q, want %q", q.Default, "tax invoice")
+	}
+	if q.True != "" || q.False != "" {
+		t.Errorf("True = %q, False = %q, want both empty", q.True, q.False)
+	}
+}
+
+func TestDocumentType_OneRequestCarriesTheValueQuestionsAndTheTypeQuestion(t *testing.T) {
+	names := []string{"invoice_number", "vat", "total"}
+	results := vcRows(names...)
+	a := &vcAsker{enabled: true, resp: vcAnswers(1, names...)}
+
+	checkDocument(t.Context(), a, vcPages(), results)
+
+	if len(a.calls) != 1 {
+		t.Fatalf("%d Ask calls, want 1", len(a.calls))
+	}
+	req := a.calls[0]
+	if got := vcIDs(req); !slices.Equal(got, []string{"document_type", "invoice_number", "total", "vat"}) {
+		t.Errorf("question ids = %v, want [document_type invoice_number total vat]", got)
+	}
+	want, _ := valueCheckRequest(vcPages(), results)
+	if len(want.Questions) != len(names) {
+		t.Fatalf("valueCheckRequest asked %v, want the three names", vcIDs(want))
+	}
+	for id, q := range want.Questions {
+		if !reflect.DeepEqual(req.Questions[id], q) {
+			t.Errorf("%s question = %+v, want valueCheckRequest's %+v", id, req.Questions[id], q)
+		}
+	}
+	dt, ok := req.Questions["document_type"]
+	if !ok {
+		t.Fatal("document_type was not asked")
+	}
+	if dt.Type != jev.TypeChoice || !reflect.DeepEqual(dt, DocumentTypeQuestion()) {
+		t.Errorf("document_type question = %+v, want DocumentTypeQuestion()", dt)
+	}
+	if s := DoclingPromptText(vcPages()); s == "" || req.State != s {
+		t.Errorf("State = %q, want DoclingPromptText(vcPages()) = %q", req.State, s)
+	}
+}
+
+func TestDocumentType_NoHeaderFieldCollidesWithTheQuestionID(t *testing.T) {
+	if len(HeaderFields) == 0 || documentTypeQuestionID != "document_type" {
+		t.Fatalf("HeaderFields = %v, documentTypeQuestionID = %q", HeaderFields, documentTypeQuestionID)
+	}
+	for _, f := range HeaderFields {
+		if f == documentTypeQuestionID {
+			t.Errorf("header field %q collides with the document-type question id", f)
+		}
+	}
+}
+
+func TestDocumentType_TheThresholdIsTheHighestSwept(t *testing.T) {
+	if documentTypeThreshold != 0.9 {
+		t.Errorf("documentTypeThreshold = %v, want 0.9", float64(documentTypeThreshold))
+	}
+}
+
+func TestDocumentType_TheBoundaryIsInclusive(t *testing.T) {
+	cases := []struct {
+		confidence float64
+		want       string
+	}{
+		{0.9, "receipt"},
+		{1.0, "receipt"},
+		{math.Nextafter(0.9, 0), ""},
+		{0.5, ""},
+	}
+	for _, c := range cases {
+		if got := documentTypeVerdict(dtAnswer("receipt", c.confidence)); got != c.want {
+			t.Errorf("receipt at %v: verdict = %q, want %q", c.confidence, got, c.want)
+		}
+	}
+}
+
+func TestDocumentType_ATaxInvoiceNeverRecords(t *testing.T) {
+	for _, c := range []float64{1.0, 0.95} {
+		if got := documentTypeVerdict(dtAnswer("tax invoice", c)); got != "" {
+			t.Errorf("tax invoice at %v: verdict = %q, want none", c, got)
+		}
+	}
+	// Control: the same answer naming a receipt records.
+	if got := documentTypeVerdict(dtAnswer("receipt", 1.0)); got != "receipt" {
+		t.Errorf("receipt at 1: verdict = %q, want %q", got, "receipt")
+	}
+}
+
+func TestDocumentType_EverySevenNonInvoiceTypeRecordsItsName(t *testing.T) {
+	if len(dtNonInvoice) != 7 {
+		t.Fatalf("dtNonInvoice has %d names, want 7", len(dtNonInvoice))
+	}
+	for _, name := range dtNonInvoice {
+		if got := documentTypeVerdict(dtAnswer(name, 1)); got != name {
+			t.Errorf("%s at 1: verdict = %q, want %q", name, got, name)
+		}
+	}
+}
+
+func TestDocumentType_AnUnusableTypeAnswerRecordsNothing(t *testing.T) {
+	cases := map[string]jev.Response{
+		"absent":     {Answers: map[string]jev.Answer{}},
+		"noul typed": {Answers: map[string]jev.Answer{"document_type": {Type: jev.TypeNoul, Noul: 0}}},
+		"other":      dtAnswer("other", 1),
+		"empty name": dtAnswer("", 1),
+	}
+	for label, resp := range cases {
+		if got := documentTypeVerdict(resp); got != "" {
+			t.Errorf("%s: verdict = %q, want none", label, got)
+		}
+	}
+	// Control: a usable answer records.
+	if got := documentTypeVerdict(dtAnswer("receipt", 1)); got != "receipt" {
+		t.Errorf("receipt at 1: verdict = %q, want %q", got, "receipt")
+	}
+}
+
+func TestDocumentType_TheTwoAnswersAreIndependent(t *testing.T) {
+	// A usable doubt with no type answer still flags.
+	a := &vcAsker{enabled: true, resp: vcAnswers(0.1, "vat")}
+	out, verdict := checkDocument(t.Context(), a, vcPages(), vcRows("vat"))
+	if len(out) != 1 || out[0].Reason != ReasonUnreadable {
+		t.Errorf("no type answer: rows = %+v, want vat %q", out, ReasonUnreadable)
+	}
+	if verdict != "" {
+		t.Errorf("no type answer: verdict = %q, want none", verdict)
+	}
+
+	// A usable type answer with the value answer missing still records.
+	results := vcRows("vat")
+	before := cloneResults(results)
+	b := &vcAsker{enabled: true, resp: dtAnswer("receipt", 1)}
+	out, verdict = checkDocument(t.Context(), b, vcPages(), results)
+	if !reflect.DeepEqual(out, before) || flaggedCount(out) != 0 {
+		t.Errorf("no value answer: rows = %+v, want the input unflagged", out)
+	}
+	if verdict != "receipt" {
+		t.Errorf("no value answer: verdict = %q, want %q", verdict, "receipt")
+	}
+}
+
+func TestDocumentType_OffNilOrErrorRecordsNothing(t *testing.T) {
+	names := []string{"invoice_number", "vat", "total"}
+	resp := vcAnswers(0, names...)
+	resp.Answers["document_type"] = jev.Answer{Type: jev.TypeChoice, Choice: "receipt", Confidence: 1}
+
+	results := vcRows(names...)
+	before := cloneResults(results)
+	if out, verdict := checkDocument(t.Context(), nil, vcPages(), results); !reflect.DeepEqual(out, before) || verdict != "" {
+		t.Errorf("nil asker: rows = %+v, verdict = %q; want the input and none", out, verdict)
+	}
+	off := &vcAsker{enabled: false, resp: resp}
+	if out, verdict := checkDocument(t.Context(), off, vcPages(), results); !reflect.DeepEqual(out, before) || verdict != "" {
+		t.Errorf("off asker: rows = %+v, verdict = %q; want the input and none", out, verdict)
+	}
+	if len(off.calls) != 0 {
+		t.Errorf("off asker: %d Ask calls, want 0", len(off.calls))
+	}
+
+	errs := map[string]error{
+		"refused":           fmt.Errorf("%w: refused", jev.ErrCheckSkipped),
+		"unavailable":       fmt.Errorf("%w: unavailable", jev.ErrCheckSkipped),
+		"deadline exceeded": fmt.Errorf("%w: unavailable: %w", jev.ErrCheckSkipped, context.DeadlineExceeded),
+		"plain":             errors.New("x"),
+	}
+	for label, err := range errs {
+		results := vcRows(names...)
+		before := cloneResults(results)
+		a := &vcAsker{enabled: true, resp: resp, err: err}
+
+		out, verdict := checkDocument(t.Context(), a, vcPages(), results)
+
+		if len(a.calls) != 1 {
+			t.Errorf("%s: %d Ask calls, want 1", label, len(a.calls))
+		}
+		if !reflect.DeepEqual(out, before) || verdict != "" {
+			t.Errorf("%s: rows = %+v, verdict = %q; want the input and none", label, out, verdict)
+		}
+	}
+
+	// Control: the same answer with no error flags and records.
+	a := &vcAsker{enabled: true, resp: resp}
+	out, verdict := checkDocument(t.Context(), a, vcPages(), vcRows(names...))
+	if flaggedCount(out) != len(names) || verdict != "receipt" {
+		t.Errorf("no error: %d flagged, verdict %q; want %d and %q", flaggedCount(out), verdict, len(names), "receipt")
 	}
 }

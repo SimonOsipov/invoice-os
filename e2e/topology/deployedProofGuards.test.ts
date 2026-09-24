@@ -176,6 +176,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width',
     'CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files',
     "CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width",
+    'CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none',
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -509,5 +510,35 @@ describe('[check-03] the deployed reading tracks its fixture', () => {
       /const JEV_DOUBT_READ = \{ invoice_number: '([^']+)', supplier_name: '([^']+)', supplier_tin: '([^']+)' \}/.exec(source)
     expect(spec, 'no JEV_DOUBT_READ literal in import-wizard.spec.ts').not.toBeNull()
     expect(spec!.slice(1)).toEqual([printed('Invoice Number'), printed('From'), printed('Supplier TIN')])
+  })
+})
+
+// JEV_RECEIPT_READ and RECEIPT_NOTICE pin different owners (no shared module e2e/ can import).
+describe('[check-04] the deployed literals track their owners', () => {
+  const fixturesSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/fixtures_test.go'), 'utf8')
+  const extractionReviewSrc = stripComments(readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/extractionReview.ts'), 'utf8'))
+
+  it('JEV_RECEIPT_READ is what fxJevReceiptLines prints, byte for byte', () => {
+    const lines = /func fxJevReceiptLines\(\) \[\]fxLine \{([\s\S]*?)\n\}/.exec(fixturesSrc)
+    expect(lines, 'fxJevReceiptLines is gone from internal/extraction/fixtures_test.go').not.toBeNull()
+    const printed = (label: string) => {
+      const m = new RegExp(`"${label}: ([^"]+)"`).exec((lines as RegExpExecArray)[1])
+      expect(m, `fxJevReceiptLines no longer prints "${label}:"`).not.toBeNull()
+      return (m as RegExpExecArray)[1]
+    }
+    const spec =
+      /const JEV_RECEIPT_READ = \{ invoice_number: '([^']+)', supplier_name: '([^']+)', supplier_tin: '([^']+)' \}/.exec(source)
+    expect(spec, 'no JEV_RECEIPT_READ literal in import-wizard.spec.ts').not.toBeNull()
+    expect(spec!.slice(1)).toEqual([printed('Invoice Number'), printed('From'), printed('Supplier TIN')])
+  })
+
+  it("RECEIPT_NOTICE is DOCUMENT_TYPE_NOTICE's receipt entry, byte for byte", () => {
+    const table = /export const DOCUMENT_TYPE_NOTICE: Record<DocumentType, string> = \{([\s\S]*?)\n\}/.exec(extractionReviewSrc)
+    expect(table, 'DOCUMENT_TYPE_NOTICE is gone from frontend/app/src/lib/extractionReview.ts').not.toBeNull()
+    const entry = /^\s*receipt:\s*'([^']+)',?$/m.exec((table as RegExpExecArray)[1])
+    expect(entry, 'DOCUMENT_TYPE_NOTICE has no receipt entry').not.toBeNull()
+    const spec = /const RECEIPT_NOTICE =\s*\n?\s*'([^']+)'/.exec(stripComments(source))
+    expect(spec, 'RECEIPT_NOTICE is gone from import-wizard.spec.ts').not.toBeNull()
+    expect((spec as RegExpExecArray)[1]).toBe((entry as RegExpExecArray)[1])
   })
 })

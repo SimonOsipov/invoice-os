@@ -1,11 +1,13 @@
-// jev_product_test.go: the product's value question is the one CHECK-01's harness measured.
+// jev_product_test.go: the product's value and document-type questions are the ones CHECK-01's harness measured.
 package endtoend
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/jevmeasure"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
 
@@ -40,5 +42,31 @@ func TestJevProduct_TheValueQuestionIsTheMeasuredQuestion(t *testing.T) {
 		if extraction.ValueCheckQuestion(f, value+"9").Instructions == want.Instructions {
 			t.Errorf("%s: a changed value composes the same instructions", f)
 		}
+	}
+}
+
+func TestJevProduct_TheDocumentTypeQuestionIsTheMeasuredQuestion(t *testing.T) {
+	wantNames := jevmeasure.DocumentTypeOptions()
+	if len(jevmeasure.DocumentTypeCriteria) != 8 || len(wantNames) != 8 || jevmeasure.DocumentTypeInstructions == "" {
+		t.Fatalf("the harness question is not eight described options: %d criteria, %d names", len(jevmeasure.DocumentTypeCriteria), len(wantNames))
+	}
+
+	got := extraction.DocumentTypeQuestion()
+
+	if got.Instructions != jevmeasure.DocumentTypeInstructions {
+		t.Errorf("Instructions\ngot:  %q\nwant: %q", got.Instructions, jevmeasure.DocumentTypeInstructions)
+	}
+	if string(got.Type) != jevmeasure.QuestionTypeChoice || got.Type != jev.TypeChoice {
+		t.Errorf("Type = %q, want %q", got.Type, jevmeasure.QuestionTypeChoice)
+	}
+	gotNames := make([]string, len(got.Options))
+	for i, o := range got.Options {
+		gotNames[i] = o.Name
+		if want := jevmeasure.DocumentTypeCriteria[o.Name]; want == "" || o.Description != want {
+			t.Errorf("%s: Description\ngot:  %q\nwant: %q", o.Name, o.Description, want)
+		}
+	}
+	if !slices.Equal(gotNames, wantNames) {
+		t.Errorf("option names = %v, want %v", gotNames, wantNames)
 	}
 }

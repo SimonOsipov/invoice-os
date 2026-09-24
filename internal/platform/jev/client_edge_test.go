@@ -647,3 +647,37 @@ func TestAsk_AMalformedUsageFailsTheCall(t *testing.T) {
 		wantNoAnswers(t, resp)
 	})
 }
+
+func TestAsk_AMixedRequestWithAnyAnswerOffSpecFailsTheWholeCall(t *testing.T) {
+	req := noulReq("s")
+	req.Questions["document_type"] = Question{Type: TypeChoice, Instructions: "Which document type?", Options: []Option{
+		{Name: "tax invoice", Description: "A tax invoice"}, {Name: "receipt", Description: "A receipt"},
+	}, Default: "tax invoice"}
+	const usage = `},"usage":{"input_tokens":1,"output_tokens":0}}`
+
+	t.Run("control_both_valid", func(t *testing.T) {
+		ts := newServer(t, replyWith(http.StatusOK, `{"answers":{"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"receipt","confidence":0.9}`+usage))
+		resp, err := clockClient(ts, newFakeClock()).Ask(t.Context(), req)
+		if err != nil || len(resp.Answers) != 2 {
+			t.Fatalf("Ask() = %+v, %v; want both answers", resp.Answers, err)
+		}
+	})
+	cases := map[string]string{
+		"types_swapped":         `"q1":{"type":"choice","choice":"receipt","confidence":0.9},"document_type":{"type":"noul","noul":0.9}`,
+		"choice_confidence_gt1": `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"receipt","confidence":1.5}`,
+		"choice_confidence_neg": `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"receipt","confidence":-0.1}`,
+		"choice_null":           `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":null,"confidence":0.9}`,
+		"choice_wrong_case":     `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"Receipt","confidence":0.9}`,
+		"noul_out_of_range":     `"q1":{"type":"noul","noul":1.2},"document_type":{"type":"choice","choice":"receipt","confidence":0.9}`,
+		"document_type_missing": `"q1":{"type":"noul","noul":0.9}`,
+	}
+	for name, answers := range cases {
+		t.Run(name, func(t *testing.T) {
+			ts := newServer(t, replyWith(http.StatusOK, `{"answers":{`+answers+usage))
+			resp, err := clockClient(ts, newFakeClock()).Ask(t.Context(), req)
+			wantHits(t, ts, 1)
+			wantSkipped(t, err, textUnavailable)
+			wantNoAnswers(t, resp)
+		})
+	}
+}

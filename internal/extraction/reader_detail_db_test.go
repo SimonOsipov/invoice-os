@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"regexp"
@@ -43,7 +45,7 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.
-	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document", "pages", "fields"}},
+	{rdReaderSource, "ExtractionDetail", []string{"id", "document_id", "state", "failure_kind", "document_type", "document", "pages", "fields"}},
 	{rdCorrectionSource, "CorrectionResponse", []string{"id", "field_name", "value", "method", "region", "invoice_id", "created_at"}},
 }
 
@@ -1866,10 +1868,126 @@ func TestExtractionDetail_FailureKindMarshalsAsExplicitNull(t *testing.T) {
 		gotKeys = append(gotKeys, k)
 	}
 	slices.Sort(gotKeys)
-	wantKeys := []string{"document", "document_id", "failure_kind", "fields", "id", "pages", "state"}
+	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
 	if !slices.Equal(gotKeys, wantKeys) {
 		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
 	}
+}
+
+// No omitempty: a job with no verdict serialises an explicit null.
+func TestExtractionDetail_DocumentTypeMarshalsAsExplicitNull(t *testing.T) {
+	b, err := json.Marshal(extraction.ExtractionDetail{})
+	if err != nil {
+		t.Fatalf("marshal a zero ExtractionDetail: %v", err)
+	}
+	if got := rvdJSONKey(t, b, "document_type"); got != "null" {
+		t.Errorf("a zero ExtractionDetail marshals document_type as %s, want null", got)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal the detail: %v", err)
+	}
+	gotKeys := slices.Sorted(maps.Keys(decoded))
+	wantKeys := []string{"document", "document_id", "document_type", "failure_kind", "fields", "id", "pages", "state"}
+	if !slices.Equal(gotKeys, wantKeys) {
+		t.Errorf("ExtractionDetail carries keys %v, want exactly %v", gotKeys, wantKeys)
+	}
+}
+
+func TestRLS_ExtractionDetailServesTheDocumentType(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	reqCtx, tenantID, docA := rdTenant(t, ctx, "active")
+	docB := rdSeedDocument(t, ctx, tenantID)
+	verdictJob := rdSeedJob(t, ctx, tenantID, docA, "succeeded", time.Now().UTC(), nil)
+	plainJob := rdSeedJob(t, ctx, tenantID, docB, "succeeded", time.Now().UTC(), nil)
+	ct, err := stRequire(t).super.Exec(ctx,
+		`UPDATE extraction_jobs SET document_type = 'credit note' WHERE id = $1`, verdictJob)
+	if err != nil || ct.RowsAffected() != 1 {
+		t.Fatalf("plant document_type on job %s: rows %d, err %v", verdictJob, ct.RowsAffected(), err)
+	}
+
+	for _, tc := range []struct {
+		name, jobID, want string
+	}{
+		{"a recorded verdict", verdictJob, `"credit note"`},
+		{"no verdict", plainJob, "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v1/extractions/"+tc.jobID, nil)
+			req.SetPathValue("id", tc.jobID)
+			req = req.WithContext(reqCtx)
+			w := httptest.NewRecorder()
+			extraction.DetailHandler(r.Detail, nil)(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET /v1/extractions/%s = %d, want 200: %s", tc.jobID, w.Code, w.Body.String())
+			}
+			if got := rvdJSONKey(t, w.Body.Bytes(), "document_type"); got != tc.want {
+				t.Errorf("GET /v1/extractions/%s serves document_type %s, want %s", tc.jobID, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRLS_ExtractionDetailServesEveryVerdictVerbatimAndNoOtherTenants(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	ctxB, tenantB, docB := rdTenant(t, ctx, "active")
+	plant := func(tenantID, documentID, verdict string) string {
+		t.Helper()
+		jobID := rdSeedJob(t, ctx, tenantID, documentID, "succeeded", time.Now().UTC(), nil)
+		ct, err := stRequire(t).super.Exec(ctx,
+			`UPDATE extraction_jobs SET document_type = $2 WHERE id = $1`, jobID, verdict)
+		if err != nil || ct.RowsAffected() != 1 {
+			t.Fatalf("plant %q on job %s: rows %d, err %v", verdict, jobID, ct.RowsAffected(), err)
+		}
+		return jobID
+	}
+	get := func(reqCtx context.Context, jobID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/v1/extractions/"+jobID, nil)
+		req.SetPathValue("id", jobID)
+		w := httptest.NewRecorder()
+		extraction.DetailHandler(r.Detail, nil)(w, req.WithContext(reqCtx))
+		return w
+	}
+
+	verdicts := extraction.DocumentTypeVerdictsForTest()
+	if len(verdicts) != 7 {
+		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want seven names", verdicts)
+	}
+	for _, v := range verdicts {
+		t.Run(v, func(t *testing.T) {
+			jobID := plant(tenantA, docA, v)
+			w := get(ctxA, jobID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			want, _ := json.Marshal(v)
+			if got := rvdJSONKey(t, w.Body.Bytes(), "document_type"); got != string(want) {
+				t.Errorf("document_type = %s, want %s", got, want)
+			}
+		})
+	}
+
+	t.Run("tenant B reads tenant A's verdict", func(t *testing.T) {
+		jobA := plant(tenantA, docA, "credit note")
+		if _, err := r.Detail(ctxB, jobA); !errors.Is(err, extraction.ErrNotFound) {
+			t.Errorf("tenant B's Detail of tenant A's job returned %v, want ErrNotFound", err)
+		}
+		w := get(ctxB, jobA)
+		if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "credit note") {
+			t.Errorf("tenant B's GET of tenant A's job = %d %s, want 404 without the verdict", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("control: tenant B reads its own verdict", func(t *testing.T) {
+		jobB := plant(tenantB, docB, "statement")
+		got, err := r.Detail(ctxB, jobB)
+		if err != nil || got.DocumentType == nil || *got.DocumentType != "statement" {
+			t.Errorf("tenant B's own Detail = %s, %v; want statement", wkStr(got.DocumentType), err)
+		}
+	})
 }
 
 // FK-8 (AC-7/8). The two extraction DTOs answer the same question about the same job with the

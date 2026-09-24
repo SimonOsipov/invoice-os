@@ -2679,7 +2679,7 @@ auth_refuse_persistent() {
 
 # cmd_set_fork_auth <environment-id|--self-test>
 # Same guard order as cmd_set_ai_fake. Runs before the `urls` step, so it
-# writes everything except GOTRUE_SITE_URL (set-fork-auth-site).
+# writes everything except the site URLs (set-fork-auth-site).
 cmd_set_fork_auth() {
   local env_id="${1:-}"
 

@@ -1254,6 +1254,15 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 			t.Errorf("%s:%d classifies `%s`, which no walked root registers — delete the row or fix the path", scDocPath, row.line, route)
 		}
 	}
+
+	// The count line is exact; cmd/submission's readers only floor it.
+	counts := regexp.MustCompile(`(\d+) distinct routes, (\d+) registrations`).FindAllStringSubmatch(string(raw), -1)
+	if len(counts) != 1 {
+		t.Fatalf("%s holds %d \"N distinct routes, M registrations\" line(s), want 1", scDocPath, len(counts))
+	}
+	if want := strconv.Itoa(len(registered)) + " distinct routes, " + strconv.Itoa(len(routes)) + " registrations"; counts[0][0] != want {
+		t.Errorf("%s says %q, the walk counts %q", scDocPath, counts[0][0], want)
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -298,3 +298,35 @@ func flip(s string) string {
 	}
 	return string(b)
 }
+
+func TestVerify_EmailClaimReachesIdentity(t *testing.T) {
+	iss := mustIssuer(t)
+	v, _ := jwksServer(t, iss)
+	const email = "ada@example.test"
+
+	withEmail := validClaims(iss)
+	withEmail.Email = email
+	cases := []struct {
+		name, token, want string
+	}{
+		{"minted with email", mustMint(t, iss, MintOptions{Subject: testSubject, TenantID: "tenant-x", Email: email}), email},
+		// Isolates verify.go from the mint path.
+		{"signed claims with email", signClaims(t, iss, withEmail), email},
+		{"minted without email", mustMint(t, iss, MintOptions{Subject: testSubject, TenantID: "tenant-x"}), ""},
+		{"signed claims without email", signClaims(t, iss, validClaims(iss)), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := v.Verify(t.Context(), tc.token)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if id.Email != tc.want {
+				t.Fatalf("Identity.Email = %q, want %q", id.Email, tc.want)
+			}
+			if id.Subject != testSubject || id.TenantID != "tenant-x" {
+				t.Fatalf("identity = %+v", id)
+			}
+		})
+	}
+}

@@ -1099,6 +1099,85 @@ func TestS2STokenNeverReachesUpstream(t *testing.T) {
 	}
 }
 
+const (
+	provisioningPath = "/api/tenancy/v1/workspaces"
+	testEmail        = "ada@example.test"
+)
+
+func TestTenantlessTokenAllowedOnlyOnProvisioning(t *testing.T) {
+	tg := setupGateway(t)
+	tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, Email: testEmail})
+
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, request("POST", provisioningPath, tok))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	cap := tg.caps["tenancy"]
+	if cap.hits != 1 {
+		t.Fatalf("tenancy hits = %d, want 1", cap.hits)
+	}
+	if cap.path != "/v1/workspaces" {
+		t.Errorf("upstream path = %q, want %q", cap.path, "/v1/workspaces")
+	}
+	assertHeader(t, cap.header, headerTenantID, "")
+	assertHeader(t, cap.header, headerUserID, testSubject)
+	assertHeader(t, cap.header, headerUserEmail, testEmail)
+}
+
+func TestTenantlessTokenForbiddenElsewhere(t *testing.T) {
+	cases := []struct{ method, path, service string }{
+		{"GET", provisioningPath, "tenancy"},
+		{"POST", provisioningPath + "/", "tenancy"},
+		{"POST", "/api/tenancy/v1/me", "tenancy"},
+		{"POST", "/api/portfolio/v1/workspaces", "portfolio"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			tg := setupGateway(t)
+			tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, Email: testEmail})
+
+			rec := httptest.NewRecorder()
+			tg.handler.ServeHTTP(rec, request(tc.method, tc.path, tok))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("tenant-less: status = %d, want 403", rec.Code)
+			}
+			for svc, c := range tg.caps {
+				if c.hits != 0 {
+					t.Fatalf("tenant-less: %s upstream hit %d time(s), want 0", svc, c.hits)
+				}
+			}
+
+			// Same route with a tenant is proxied, so the 403 above is authorization, not routing.
+			rec = httptest.NewRecorder()
+			tg.handler.ServeHTTP(rec, request(tc.method, tc.path, tg.validToken(t)))
+			if rec.Code != http.StatusOK || tg.caps[tc.service].hits != 1 {
+				t.Fatalf("with tenant: status = %d, %s hits = %d, want 200 and 1", rec.Code, tc.service, tg.caps[tc.service].hits)
+			}
+		})
+	}
+}
+
+func TestUserEmailHeaderInjectedAndClientCopyStripped(t *testing.T) {
+	tg := setupGateway(t)
+	tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant, Email: testEmail})
+	r := request("GET", "/api/tenancy/v1/ping", tok)
+	r.Header.Set(headerUserEmail, "evil@x")
+
+	rec := httptest.NewRecorder()
+	tg.handler.ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	cap := tg.caps["tenancy"]
+	if cap.hits != 1 {
+		t.Fatalf("tenancy hits = %d, want 1", cap.hits)
+	}
+	assertHeader(t, cap.header, headerUserEmail, testEmail)
+}
+
 func assertHeader(t *testing.T, h http.Header, key, want string) {
 	t.Helper()
 	if got := h.Get(key); got != want {

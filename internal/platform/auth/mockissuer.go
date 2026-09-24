@@ -43,6 +43,7 @@ type MintOptions struct {
 	Subject  string
 	Role     string
 	TenantID string
+	Email    string // minted only when non-empty
 	TTL      time.Duration
 }
 

@@ -28,6 +28,7 @@ const (
 	headerTenantID  = "X-Tenant-ID"
 	headerUserID    = "X-User-ID"
 	headerUserRole  = "X-User-Role"
+	headerUserEmail = "X-User-Email"
 	headerRequestID = "X-Request-ID"
 	// headerS2SToken is 04's service-to-service peer credential
 	// (internal/validation/s2s.go). The gateway never mints it and never

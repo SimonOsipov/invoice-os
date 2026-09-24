@@ -47,3 +47,76 @@ func TestIdentityMiddlewareAbsent(t *testing.T) {
 		t.Error("expected no identity in context when the tenant header is absent")
 	}
 }
+
+// contextKeys runs identityMiddleware on req and reports what each context key holds.
+func contextKeys(req *http.Request) (id auth.Identity, idOK bool, caller auth.Identity, callerOK bool) {
+	identityMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		id, idOK = auth.IdentityFromContext(r.Context())
+		caller, callerOK = auth.TenantlessCallerFromContext(r.Context())
+	})).ServeHTTP(httptest.NewRecorder(), req)
+	return
+}
+
+func TestIdentityMiddleware_TenantlessCaller(t *testing.T) {
+	req := httptest.NewRequest("POST", "/v1/workspaces", nil)
+	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-Role", "authenticated")
+	req.Header.Set("X-User-Email", "ada@example.test")
+
+	id, idOK, caller, callerOK := contextKeys(req)
+	if !callerOK {
+		t.Fatal("expected a tenant-less caller when X-User-ID is set and X-Tenant-ID is not")
+	}
+	want := auth.Identity{Subject: "user-42", Role: "authenticated", Email: "ada@example.test"}
+	if caller != want {
+		t.Errorf("tenant-less caller = %+v, want %+v", caller, want)
+	}
+	if idOK {
+		t.Errorf("IdentityFromContext = %+v, want none for a tenant-less caller", id)
+	}
+}
+
+func TestIdentityMiddleware_TenantHeaderStillBuildsIdentity(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Tenant-ID", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	req.Header.Set("X-User-ID", "user-42")
+	req.Header.Set("X-User-Role", "authenticated")
+	req.Header.Set("X-User-Email", "ada@example.test")
+
+	id, idOK, caller, callerOK := contextKeys(req)
+	if !idOK {
+		t.Fatal("expected an identity when X-Tenant-ID is set")
+	}
+	want := auth.Identity{
+		Subject:  "user-42",
+		Role:     "authenticated",
+		TenantID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:    "ada@example.test",
+	}
+	if id != want {
+		t.Errorf("identity = %+v, want %+v", id, want)
+	}
+	if callerOK {
+		t.Errorf("TenantlessCallerFromContext = %+v, want none when a tenant is present", caller)
+	}
+}
+
+func TestIdentityMiddleware_NoUserNoIdentity(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-User-Role", "authenticated")
+	req.Header.Set("X-User-Email", "ada@example.test")
+
+	id, idOK, caller, callerOK := contextKeys(req)
+	if idOK {
+		t.Errorf("IdentityFromContext = %+v, want none without X-Tenant-ID and X-User-ID", id)
+	}
+	if callerOK {
+		t.Errorf("TenantlessCallerFromContext = %+v, want none without X-Tenant-ID and X-User-ID", caller)
+	}
+
+	// Control: the same request plus X-User-ID does build a caller.
+	req.Header.Set("X-User-ID", "user-42")
+	if _, _, _, ok := contextKeys(req); !ok {
+		t.Error("control: adding X-User-ID built no tenant-less caller")
+	}
+}

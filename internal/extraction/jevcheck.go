@@ -1,4 +1,4 @@
-// jevcheck.go asks Jev, once per extraction attempt, whether each decided header value is what the page prints.
+// jevcheck.go asks Jev, once per extraction attempt, whether each decided header value is what the page prints, and what kind of document it is.
 package extraction
 
 import (
@@ -67,23 +67,80 @@ func applyValueCheck(results []FieldResult, asked []int, resp jev.Response) []Fi
 	return out
 }
 
-// checkValues returns results unchanged whenever the check cannot run in full.
-func checkValues(ctx context.Context, j JevAsker, pages []TokenPage, results []FieldResult) []FieldResult {
-	if j == nil || !j.Enabled() {
-		return results
+const documentTypeQuestionID = "document_type"
+
+const taxInvoice = "tax invoice"
+
+// A choice at or above this confidence records a verdict (CHECK-00 Jev Measurement Results).
+// ceiling: unmeasured cut, all 21 synthetic answers scored >= 0.9; re-measure on real non-invoices before a key is set
+const documentTypeThreshold = 0.9
+
+// internal/jevmeasure/wording.go's document-type text and order, byte for byte
+// (TestJevProduct_TheDocumentTypeQuestionIsTheMeasuredQuestion).
+const documentTypeInstructions = "Classify which of the following document types this file is, based on its layout, headings and language."
+
+var documentTypeOptions = []jev.Option{
+	{Name: "tax invoice", Description: "A demand for payment for goods or services already supplied, addressed to a specific buyer, carrying a VAT amount and a total due."},
+	{Name: "receipt", Description: "A confirmation that a payment has already been received, not a demand for future payment."},
+	{Name: "proforma", Description: "A preliminary bill sent before the goods or services are supplied, declaring a price in advance of a sale."},
+	{Name: "quotation", Description: "An offer of a price for goods or services not yet agreed to or supplied."},
+	{Name: "credit note", Description: "A document reducing or reversing a previously issued invoice, not a new demand for payment."},
+	{Name: "delivery note", Description: "A record that goods were delivered, carrying quantities but no prices or payment demand."},
+	{Name: "statement", Description: "A running list of an account's transactions over a period, not a single demand for payment."},
+	{Name: "purchase order", Description: "A buyer's own request to a supplier to provide goods or services, not a supplier's demand for payment."},
+}
+
+func DocumentTypeQuestion() jev.Question {
+	return jev.Question{
+		Type:         jev.TypeChoice,
+		Instructions: documentTypeInstructions,
+		Options:      slices.Clone(documentTypeOptions),
+		Default:      taxInvoice,
 	}
+}
+
+// documentRequest always asks the type question, even with no value to check.
+func documentRequest(pages []TokenPage, results []FieldResult) (jev.Request, []int) {
 	req, asked := valueCheckRequest(pages, results)
 	if len(asked) == 0 {
-		return results
+		req = jev.Request{Purpose: jev.PurposeDocumentType, State: DoclingPromptText(pages), Questions: map[string]jev.Question{}}
 	}
+	req.Questions[documentTypeQuestionID] = DocumentTypeQuestion()
+	return req, asked
+}
+
+// documentTypeVerdict returns "" for no verdict; only a known non-invoice name may reach the column's CHECK.
+func documentTypeVerdict(resp jev.Response) string {
+	a, ok := resp.Answers[documentTypeQuestionID]
+	// !(>=), not <, so a NaN confidence records nothing.
+	if !ok || a.Type != jev.TypeChoice || a.Choice == taxInvoice || !(a.Confidence >= documentTypeThreshold) ||
+		!slices.ContainsFunc(documentTypeOptions, func(o jev.Option) bool { return o.Name == a.Choice }) {
+		return ""
+	}
+	return a.Choice
+}
+
+// checkDocument returns results unchanged and no verdict when the call fails.
+// At the JevAsker seam an unusable answer of one kind leaves the other kind's answer in force;
+// the real client fails the whole call (TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall).
+func checkDocument(ctx context.Context, j JevAsker, pages []TokenPage, results []FieldResult) ([]FieldResult, string) {
+	if j == nil || !j.Enabled() {
+		return results, ""
+	}
+	req, asked := documentRequest(pages, results)
 	resp, err := j.Ask(ctx, req)
 	if err != nil {
-		return results
+		return results, ""
 	}
+	usable := len(asked) > 0
 	for _, i := range asked {
 		if a, ok := resp.Answers[results[i].Name]; !ok || a.Type != jev.TypeNoul {
-			return results
+			usable = false
 		}
 	}
-	return applyValueCheck(results, asked, resp)
+	out := results
+	if usable {
+		out = applyValueCheck(results, asked, resp)
+	}
+	return out, documentTypeVerdict(resp)
 }

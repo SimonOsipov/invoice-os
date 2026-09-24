@@ -1785,3 +1785,84 @@ func TestExtractionJobs_FailureKindEmptyStringIsRefusedAndUnreachable(t *testing
 		t.Errorf("%d extraction_jobs row(s) carry failure_kind = '', want 0", empties)
 	}
 }
+
+func TestRLS_WriteDocumentTypeAcceptsEveryVerdictAndTheCheckRefusesTaxInvoice(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+	verdicts := extraction.DocumentTypeVerdictsForTest()
+	if len(verdicts) != 7 {
+		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want the seven non-invoice names", verdicts)
+	}
+	tenantID, documentID := stTenant(t, ctx)
+	write := func(jobID, docType string) error {
+		return db.WithinTenantTx(ctx, h.app, tenantID, func(tx pgx.Tx) error {
+			return extraction.WriteDocumentTypeForTest(ctx, tx, tenantID, jobID, docType)
+		})
+	}
+	read := func(jobID string) *string {
+		var got *string
+		if err := h.super.QueryRow(ctx,
+			`SELECT document_type FROM extraction_jobs WHERE id = $1`, jobID).Scan(&got); err != nil {
+			t.Fatalf("read document_type for job %s: %v", jobID, err)
+		}
+		return got
+	}
+
+	for _, v := range verdicts {
+		jobID := rdSeedJob(t, ctx, tenantID, documentID, "succeeded", time.Now().UTC(), nil)
+		if err := write(jobID, v); err != nil {
+			t.Errorf("write %q: %v", v, err)
+			continue
+		}
+		if got := read(jobID); got == nil || *got != v {
+			t.Errorf("after writing %q the column reads %s", v, wkStr(got))
+		}
+	}
+
+	jobID := rdSeedJob(t, ctx, tenantID, documentID, "succeeded", time.Now().UTC(), nil)
+	err := write(jobID, "tax invoice")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "extraction_jobs_document_type_check" {
+		t.Errorf("write %q returned %v, want SQLSTATE 23514 naming extraction_jobs_document_type_check", "tax invoice", err)
+	}
+	if got := read(jobID); got != nil {
+		t.Errorf("the refused write left document_type %q, want NULL", *got)
+	}
+
+	if err := write(uuid.NewString(), verdicts[0]); err == nil {
+		t.Error("a write to a job that does not exist returned nil, want an error for zero rows affected")
+	}
+}
+
+func TestRLS_WriteDocumentTypeNeverReachesAnotherTenantsJob(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+	tenantA, documentA := stTenant(t, ctx)
+	tenantB, _ := stTenant(t, ctx)
+	jobA := rdSeedJob(t, ctx, tenantA, documentA, "succeeded", time.Now().UTC(), nil)
+	write := func(txTenant, argTenant string) error {
+		return db.WithinTenantTx(ctx, h.app, txTenant, func(tx pgx.Tx) error {
+			return extraction.WriteDocumentTypeForTest(ctx, tx, argTenant, jobA, "receipt")
+		})
+	}
+
+	for _, tc := range []struct{ name, txTenant, argTenant string }{
+		{"tenant B's transaction and tenant", tenantB, tenantB},
+		{"tenant A's transaction, tenant B named", tenantA, tenantB},
+		{"tenant B's transaction, tenant A named", tenantB, tenantA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := write(tc.txTenant, tc.argTenant); err == nil {
+				t.Error("the write returned nil, want the zero-rows error")
+			}
+			wjAssertNoVerdict(t, ctx, "tenant A's job", jobA)
+		})
+	}
+
+	t.Run("control: tenant A writes its own job", func(t *testing.T) {
+		if err := write(tenantA, tenantA); err != nil {
+			t.Fatalf("tenant A's own write: %v", err)
+		}
+		wjAssertVerdict(t, ctx, "tenant A's job", jobA, "receipt")
+	})
+}

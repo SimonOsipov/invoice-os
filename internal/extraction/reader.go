@@ -181,10 +181,12 @@ type ExtractionDetail struct {
 	State      string `json:"state"`
 	// Beside state, the other scalar a reader consults to explain a terminal job. No
 	// omitempty (TestExtractionDetail_FailureKindMarshalsAsExplicitNull).
-	FailureKind *string                `json:"failure_kind"`
-	Document    ExtractionDocument     `json:"document"`
-	Pages       []ExtractionPage       `json:"pages"`
-	Fields      []ExtractionFieldState `json:"fields"`
+	FailureKind *string `json:"failure_kind"`
+	// NULL on the wire unless the worker recorded a non-invoice verdict.
+	DocumentType *string                `json:"document_type"`
+	Document     ExtractionDocument     `json:"document"`
+	Pages        []ExtractionPage       `json:"pages"`
+	Fields       []ExtractionFieldState `json:"fields"`
 }
 
 // emptyDetail is what every failure path returns: a nil slice marshals to JSON null and every
@@ -228,12 +230,12 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 
 	var storedAt time.Time
 	err := tx.QueryRow(ctx,
-		`SELECT j.id, j.document_id, j.state, j.failure_kind,
+		`SELECT j.id, j.document_id, j.state, j.failure_kind, j.document_type,
 		        d.filename, d.declared_content_type, d.size_bytes, d.created_at
 		   FROM extraction_jobs j
 		   JOIN documents d ON d.id = j.document_id
 		  WHERE j.id = $1`,
-		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind,
+		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind, &out.DocumentType,
 		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

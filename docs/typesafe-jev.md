@@ -56,10 +56,10 @@ An enabled client refuses a request before it sends anything when:
 
 The refusal is `skipped_refused` with `attempts` `0`, in real and fake mode alike.
 
-`submission`'s extraction worker calls the client once per extraction attempt, on its
-Docling text branch only (`internal/extraction/jevcheck.go`); a retried job asks again. CHECK-04 and CHECK-05 are
-still to come: CHECK-04 will also call it from that worker, and CHECK-05 from `invoice`'s
-importer.
+`submission`'s extraction worker asks the value questions and the `document_type` question
+in one call per extraction attempt, on its Docling text branch only
+(`internal/extraction/jevcheck.go`); a retried job asks again. Only CHECK-05 is still to
+come: it will call the client from `invoice`'s importer.
 
 ## Env knobs
 
@@ -128,6 +128,8 @@ it. End the marker with a non-word character other than `-`, such as a space, a 
 break. In `scan-JEVFAKE-CHOICE-Y3JlZGl0IG5vdGU_v2.pdf`, `_v2` joins the payload, so a call
 with a `choice` question is refused. The payload needs at least one character: a bare
 `JEVFAKE-CHOICE-` is not a marker, so a later marker in `State` can still match.
+`jev_receipt_invoice.pdf` is the deployed fixture that uses `JEVFAKE-CHOICE-`: it prints
+`JEVFAKE-CHOICE-cmVjZWlwdA`, which answers `receipt`.
 
 Every fake result logs outcome `fake`, `attempts` `1` and `input_tokens` `0`, the marker
 errors included: `JEVFAKE-UNAVAILABLE`, `JEVFAKE-REFUSED`, and a `JEVFAKE-CHOICE-` payload
@@ -221,6 +223,9 @@ adequate.
    (`CHECK-00 Jev Measurement Results`). Re-measure them on real documents before trusting the
    check in production. No versioned id is pinned: `jev-latest` can move under that threshold
    (on 2026-09-23 it pointed at `jev-1.13.0`), and the version that answered is not logged.
+   The document-type threshold `0.9` is unmeasured: every answer on the same 21 synthetic
+   documents, whose non-invoices announce their type, scored at least `0.9`, so no swept cut
+   from `0.30` to `0.90` removed one. It shipped as it is (user decision, 2026-09-24).
 2. `skipped_refused` conflates 401 (a revoked key), 422 (a client bug, or a `state` beyond
    the vendor's context limit), a key refused by the header check, and every other
    non-retryable status. Neither the error nor the log names the status. A revoked key
@@ -246,6 +251,10 @@ adequate.
    response body is read with no size cap. Both match the AI client.
 9. `State` holding invalid UTF-8 is not sent byte for byte. `encoding/json` replaces each
    invalid byte with U+FFFD, because JSON cannot carry such bytes.
+10. The value questions and the `document_type` question share one call, and the client
+    fails the whole call on any unusable answer. So one bad answer of either kind skips both
+    checks for that document: it is logged `skipped_unavailable`, and the screen is unchanged.
+    `TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall` proves it.
 
 ## See also
 

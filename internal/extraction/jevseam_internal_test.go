@@ -218,7 +218,7 @@ func jsFakeJev(t *testing.T) *jev.Client {
 		t.Fatalf("jev.FromEnv: %v", err)
 	}
 	if !c.Enabled() {
-		t.Fatal("the fake client is not enabled; checkValues would never ask it")
+		t.Fatal("the fake client is not enabled; checkDocument would never ask it")
 	}
 	return c
 }
@@ -227,10 +227,12 @@ func jsFakeJev(t *testing.T) *jev.Client {
 type jsCountingAsker struct {
 	JevAsker
 	calls int
+	last  jev.Request
 }
 
 func (a *jsCountingAsker) Ask(ctx context.Context, req jev.Request) (jev.Response, error) {
 	a.calls++
+	a.last = req
 	return a.JevAsker.Ask(ctx, req)
 }
 
@@ -255,7 +257,7 @@ func TestJevSeam_TheFakeDefaultChangesNoLayout(t *testing.T) {
 		t.Fatalf("jsLayouts has %d entries, want at least %d", len(jsLayouts), jsWantLayouts)
 	}
 	client := jsFakeJev(t)
-	walked, asking := 0, 0
+	walked, asking, checkable := 0, 0, 0
 	for _, layout := range jsLayouts {
 		results, tokens := jsDecided(t, layout)
 		if strings.Contains(DoclingPromptText(tokens), "JEVFAKE-") {
@@ -264,24 +266,65 @@ func TestJevSeam_TheFakeDefaultChangesNoLayout(t *testing.T) {
 		before := cloneResults(results)
 		a := &jsCountingAsker{JevAsker: client}
 
-		out := checkValues(t.Context(), a, tokens, results)
+		out, verdict := checkDocument(t.Context(), a, tokens, results)
 
 		walked++
 		if !reflect.DeepEqual(out, before) {
 			t.Errorf("%s: the fake default changed the decided rows\ngot:  %+v\nwant: %+v", layout, out, before)
 		}
-		// Control: the identity only means something if the fake was asked.
-		wantCalls := 0
-		if slices.ContainsFunc(before, vcCheckable) {
-			wantCalls = 1
-			asking++
+		if verdict != "" {
+			t.Errorf("%s: verdict = %q, want none under the fake default", layout, verdict)
 		}
-		if a.calls != wantCalls {
-			t.Errorf("%s: %d Ask calls, want %d", layout, a.calls, wantCalls)
+		// Control: the identity only means something if the fake was asked.
+		if a.calls != 1 {
+			t.Errorf("%s: %d Ask calls, want 1", layout, a.calls)
+		}
+		if _, ok := a.last.Questions[documentTypeQuestionID]; !ok {
+			t.Errorf("%s: the call asked %v, want %s among them", layout, vcIDs(a.last), documentTypeQuestionID)
+		}
+		if slices.ContainsFunc(before, vcCheckable) {
+			checkable++
+		}
+		for _, q := range a.last.Questions {
+			if q.Type == jev.TypeNoul {
+				asking++
+				break
+			}
 		}
 	}
 	if walked < jsWantLayouts || asking == 0 {
-		t.Fatalf("walked %d layouts (want %d), %d with a checkable field (want > 0)", walked, jsWantLayouts, asking)
+		t.Fatalf("walked %d layouts (want %d), %d asked a value question (want > 0)", walked, jsWantLayouts, asking)
+	}
+	if asking != checkable {
+		t.Errorf("%d layouts asked a value question, want %d (the layouts with a checkable field)", asking, checkable)
+	}
+}
+
+func TestJevSeam_TheReceiptMarkerRecordsAReceiptAndMovesNoRow(t *testing.T) {
+	if len(jsLayouts) < jsWantLayouts {
+		t.Fatalf("jsLayouts has %d entries, want at least %d", len(jsLayouts), jsWantLayouts)
+	}
+	client := jsFakeJev(t)
+	walked := 0
+	for _, layout := range jsLayouts {
+		results, tokens := jsDecided(t, layout)
+		n := len(tokens) + 1
+		// base64url("receipt"): the fake answers the choice question with that name.
+		marked := append(slices.Clone(tokens), TokenPage{Number: n, Tokens: []Token{tok("JEVFAKE-CHOICE-cmVjZWlwdA", n, 0.10, 0.10, 0.30, 0.12)}})
+		before := cloneResults(results)
+
+		out, verdict := checkDocument(t.Context(), client, marked, results)
+
+		walked++
+		if verdict != "receipt" {
+			t.Errorf("%s: verdict = %q, want %q", layout, verdict, "receipt")
+		}
+		if !reflect.DeepEqual(out, before) {
+			t.Errorf("%s: the receipt marker changed the decided rows\ngot:  %+v\nwant: %+v", layout, out, before)
+		}
+	}
+	if walked < jsWantLayouts {
+		t.Fatalf("walked %d layouts, want %d", walked, jsWantLayouts)
 	}
 }
 
@@ -297,7 +340,7 @@ func TestJevSeam_TheDoubtMarkerFlipsEveryAskedFieldOnly(t *testing.T) {
 		marked := append(slices.Clone(tokens), TokenPage{Number: n, Tokens: []Token{tok("JEVFAKE-DOUBT", n, 0.10, 0.10, 0.30, 0.12)}})
 		before := cloneResults(results)
 
-		out := checkValues(t.Context(), client, marked, results)
+		out, _ := checkDocument(t.Context(), client, marked, results)
 
 		if len(out) != len(before) {
 			t.Fatalf("%s: %d rows out, want %d", layout, len(out), len(before))

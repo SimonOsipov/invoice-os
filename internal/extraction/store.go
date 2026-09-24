@@ -176,6 +176,22 @@ func writeLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string,
 	return nil
 }
 
+// writeDocumentTypeTx records a non-invoice verdict in the result transaction. Zero rows
+// affected is an error for writeLayoutTx's reason: the row is the caller's own.
+func writeDocumentTypeTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, docType string) error {
+	ct, err := tx.Exec(ctx,
+		`UPDATE extraction_jobs SET document_type = $3
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID, docType)
+	if err != nil {
+		return fmt.Errorf("extraction: write document type for job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("extraction: write document type for job %s: no row affected", jobID)
+	}
+	return nil
+}
+
 // writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
 // alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
 // the reason_code CHECK admits four words or NULL, and the all-NULL arm is what

@@ -8,9 +8,11 @@ import { useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 import { ErrorState, Loading, gatewayBase, useAsync } from '@invoice-os/api-client'
 
+import { infoGlyph } from '../glyphs'
 import { AI_UNAVAILABLE_REFUSAL, deadLetterRefusal } from '../lib/documentRun'
 import {
   applyDraft,
+  documentTypeNotice,
   getExtractionDetail,
   isAIUnavailable,
   pointedEntry,
@@ -66,6 +68,17 @@ const SAVE_DISABLED: CSSProperties = {
   color: 'var(--fg-4)',
   cursor: 'not-allowed',
   filter: 'none',
+}
+
+// ExtractionCanvas's `extraction-no-region` strip, the nearest sibling on this screen.
+const DOCUMENT_TYPE_BANNER: CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 9,
+  padding: '9px 16px',
+  background: 'var(--bg-3)',
+  borderBottom: '1px solid var(--line-1)',
 }
 
 const WRITE_ERROR: CSSProperties = { flex: 1, minWidth: 0, fontSize: 12, color: 'var(--status-red-text)' }
@@ -163,6 +176,7 @@ export function ExtractionReview({
     content = <div style={SENTENCE}>{AI_UNAVAILABLE_REFUSAL}</div>
   } else {
     const wire = data.fields
+    const notice = documentTypeNotice(data.document_type)
     // The canvas follows the draft: a chosen chip moves the highlight to that alternative's own
     // box before anything is saved, which is the both-ways binding read the other way round.
     const shown = applyDraft(wire, entries)
@@ -273,6 +287,12 @@ export function ExtractionReview({
 
     content = (
       <>
+        {notice === null ? null : (
+          <div data-testid="extraction-document-type" style={DOCUMENT_TYPE_BANNER}>
+            <span style={{ display: 'flex', flex: 'none', color: 'var(--fg-3)' }}>{infoGlyph}</span>
+            <span style={{ fontSize: 12, color: 'var(--fg-2)' }}>{notice}</span>
+          </div>
+        )}
         <div data-testid="extraction-review-body" style={BODY}>
           <ExtractionCanvas
             ctx={ctx}

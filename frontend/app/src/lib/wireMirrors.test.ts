@@ -10,8 +10,11 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
+
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
-import { AI_UNAVAILABLE_FIELD } from './extractionReview'
+import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
+import type { DocumentType } from './extractionReview'
 
 function repoFile(rel: string): string {
   return readFileSync(fileURLToPath(new URL(`../../../../${rel}`, import.meta.url)), 'utf8')
@@ -113,9 +116,9 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export async function getExtractionDetail(',
     e2eAnchor: 'export function getExtractionDetail(',
-    // EXTR-15-01 AC-7/8: 6 -> 7 for failure_kind. The three-way equality is set-based and
-    // therefore blind to a key added to all three legs at once; the floor is what bites.
-    floor: 7,
+    // The three-way equality is set-based and therefore blind to a
+    // key added to all three legs at once; the floor is what bites.
+    floor: 8,
   },
   // EXTR-15-01 AC-5. The jobs list feeds documentRun.ts's newestJob/pollVerdict, so the SPA
   // does read it -- see jobsList_theStaleNoSpaCopyExclusionIsGone.
@@ -515,6 +518,52 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(
       tsInterfaceKeys(repoFile('frontend/app/src/lib/invoices.ts'), 'InvoiceCreateInput').length,
     ).toBeGreaterThan(0)
+  })
+
+  it('wireMirrors_theDocumentTypeKeyIsSeenOnEveryLeg', () => {
+    const legs = {
+      go: goStructKeys(repoFile('internal/extraction/reader.go'), 'ExtractionDetail'),
+      spa: tsInterfaceKeys(repoFile('frontend/app/src/lib/extractionReview.ts'), 'ExtractionDetail'),
+      e2e: tsInterfaceKeys(repoFile(E2E_CLIENT), 'ExtractionDetail'),
+    }
+    for (const [leg, keys] of Object.entries(legs)) {
+      expect(keys, `${leg}: extractor read nothing`).toContain('failure_kind')
+      expect(keys, `${leg}: ExtractionDetail lacks document_type`).toContain('document_type')
+    }
+  })
+})
+
+// The Go option names minus the default are the stored values the notice table must key.
+describe('wire mirror: the document-type options <-> DOCUMENT_TYPE_NOTICE', () => {
+  function goOptionNames(src: string): string[] {
+    const block = /var\s+documentTypeOptions\s*=\s*\[\]jev\.Option\{\n([\s\S]*?)\n\}/.exec(stripComments(src))?.[1] ?? ''
+    return [...block.matchAll(/\bName:\s*"([^"\\]*)"/g)].map((m) => m[1])
+  }
+
+  it('wire mirror: the document-type options <-> DOCUMENT_TYPE_NOTICE', () => {
+    const names = goOptionNames(repoFile('internal/extraction/jevcheck.go'))
+    expect(names.length, 'documentTypeOptions block yielded too few Name: values').toBeGreaterThanOrEqual(8)
+    expect(names).toContain('tax invoice')
+    const stored = names.filter((n) => n !== 'tax invoice').sort()
+    expect(Object.keys(DOCUMENT_TYPE_NOTICE).sort()).toEqual(stored)
+    for (const k of stored) {
+      expect(DOCUMENT_TYPE_NOTICE[k as DocumentType], `${k}: no sentence`).not.toBe('')
+    }
+  })
+
+  it('the options extractor is block-scoped and skips a commented-out option', () => {
+    const src = [
+      'var otherOptions = []jev.Option{',
+      '\t{Name: "outside", Description: "x"},',
+      '}',
+      'var documentTypeOptions = []jev.Option{',
+      '\t{Name: "a", Description: "x"},',
+      '\t// {Name: "commented", Description: "x"},',
+      '\t{Name: "b", Description: "x"},',
+      '}',
+      'var after = []jev.Option{{Name: "later"}}',
+    ].join('\n')
+    expect(goOptionNames(src)).toEqual(['a', 'b'])
   })
 })
 

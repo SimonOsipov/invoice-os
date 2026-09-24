@@ -33,7 +33,7 @@ const (
 
 // The four trees the detection command walks:
 //
-//	grep -rnE '\b(13|14)\b' \
+//	grep -rnE '\b(14|15)\b' \
 //	  .github/workflows docs scripts/ci internal/tools \
 //	  | grep -iE 'service'
 //
@@ -44,12 +44,12 @@ var scanTrees = []string{".github/workflows", "docs", "scripts/ci", "internal/to
 // The two halves of that command, kept on separate lines so neither line is
 // itself a hit.
 var (
-	countRe   = regexp.MustCompile(`\b(13|14)\b`)
+	countRe   = regexp.MustCompile(`\b(14|15)\b`)
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors. Measured at plan time: 12 hits across 5 files, none of
-// which this subtask deletes, so this leaves 2 hits of headroom.
+// Population floors. Re-measured with the old and new fleet size in countRe:
+// 13 hits across 6 files, this gate's own source excluded.
 const (
 	minHits  = 10
 	minFiles = 5
@@ -63,9 +63,10 @@ type allowEntry struct {
 	Why          string
 }
 
-// Empty today; TestFleetGate_AllowlistFaultsFireOnAPlantedTree proves the
-// carve-out machinery without a live entry.
-var allowlist = []allowEntry{}
+// TestFleetGate_AllowlistFaultsFireOnAPlantedTree drives the carve-out machinery.
+var allowlist = []allowEntry{
+	{File: "docs/docling-sidecar.md", LineContains: "since EXTR-15-04 the worker", Why: "a story ID, not a fleet size"},
+}
 
 type hit struct {
 	File   string
@@ -306,6 +307,16 @@ func TestDevEnv_ExpectedJSONNamesEveryDeployedService(t *testing.T) {
 	if contains(spas, "docling") {
 		t.Errorf("%s: the deploy-spas matrix names `docling` -- it is a backend sidecar, not a static front end", devEnvRel)
 	}
+
+	if !contains(expected, "auth") {
+		t.Errorf("%s: expected_json omits `auth` -- the identity provider can vanish from the environment and the fleet gate stays green", devEnvRel)
+	}
+	if !contains(ctx, "auth") {
+		t.Errorf("%s: the deploy-context matrix omits `auth` -- nothing ships the identity provider after health-gate", devEnvRel)
+	}
+	if contains(spas, "auth") {
+		t.Errorf("%s: the deploy-spas matrix names `auth` -- it is a backend, not a static front end", devEnvRel)
+	}
 }
 
 // --- AC-2 ---
@@ -323,6 +334,9 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 	// agreement proves nothing.
 	if !contains(expected, "docling") {
 		t.Errorf("%s: expected_json omits `docling`, so want=%d is the pre-sidecar fleet -- agreement with it is not evidence", devEnvRel, want)
+	}
+	if !contains(expected, "auth") {
+		t.Errorf("%s: expected_json omits `auth`, so want=%d is the pre-IdP fleet -- agreement with it is not evidence", devEnvRel, want)
 	}
 
 	hits := scanRepo(t)
@@ -344,6 +358,54 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatalf("all %d hit(s) were allowlisted -- the allowlist has swallowed the population it was meant to carve one line out of", len(hits))
+	}
+}
+
+// backendCountRe finds "<n> backends" prose; countRe cannot, as it needs the word "service".
+var backendCountRe = regexp.MustCompile(`(?i)\b([0-9]+|eight|nine|ten|eleven|twelve)\s+backends?\b`)
+
+var countWords = map[string]int{"eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+
+// The roll-up's backends are the deploy-context matrix; docs sites belong to the docs sweep.
+func TestFleetGate_BackendCountSitesAgreeWithDeployContext(t *testing.T) {
+	root := repoRoot(t)
+	ctx := matrixList(t, readFile(t, filepath.Join(root, devEnvRel)), "deploy-context")
+	if !contains(ctx, "auth") {
+		t.Errorf("%s: the deploy-context matrix %v omits `auth`, so want=%d is the pre-IdP backend count", devEnvRel, ctx, len(ctx))
+	}
+	want := len(ctx)
+
+	sites := 0
+	for _, tree := range []string{".github", "scripts"} {
+		err := filepath.WalkDir(filepath.Join(root, tree), func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			for i, line := range strings.Split(string(raw), "\n") {
+				for _, m := range backendCountRe.FindAllStringSubmatch(line, -1) {
+					sites++
+					n, ok := countWords[strings.ToLower(m[1])]
+					if !ok {
+						n, _ = strconv.Atoi(m[1])
+					}
+					if n != want {
+						t.Errorf("%s:%d: says %d backends, deploy-context deploys %d -- %s", filepath.ToSlash(rel), i+1, n, want, strings.TrimSpace(line))
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", tree, err)
+		}
+	}
+	if sites == 0 {
+		t.Fatal("found no backend-count site under .github or scripts -- the pattern or the trees have drifted")
 	}
 }
 
@@ -388,10 +450,10 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	// this file carries both a count and the subject word, which would make
 	// the fixture a hit in the real scan.
 	const subject = "service"
-	write("quiet.md", "a count of 13 with no subject word\n"+
+	write("quiet.md", "a count of 14 with no subject word\n"+
 		"the subject word alone: "+subject+", no count\n")
 	write("stale.md", "nothing on this line\n"+
-		"all 13 of them, one per "+subject+"\n")
+		"all 14 of them, one per "+subject+"\n")
 
 	hits, err := scanUnder(root, []string{"docs"})
 	if err != nil {
@@ -404,8 +466,8 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	if got.File != "docs/stale.md" || got.Line != 2 {
 		t.Errorf("control needle reported at %s:%d, planted at docs/stale.md:2", got.File, got.Line)
 	}
-	if len(got.Counts) != 1 || got.Counts[0] != 13 {
-		t.Errorf("control needle read as %v, planted as [13]", got.Counts)
+	if len(got.Counts) != 1 || got.Counts[0] != 14 {
+		t.Errorf("control needle read as %v, planted as [14]", got.Counts)
 	}
 }
 
@@ -431,7 +493,7 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	// Spliced, as in TestFleetGate_FindsAPlantedControlNeedle, so no line of
 	// this file is itself a hit.
 	const subject = "service"
-	line := "all 13 of them, one per " + subject
+	line := "all 14 of them, one per " + subject
 	body := line + " CARVE\n" + line + " WIDE\n" + line + " WIDE\n" + line + "\n" + line + "\n" + line + "\n"
 	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)

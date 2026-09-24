@@ -53,7 +53,7 @@ func provisionCfg(env, superuser, migration string) db.ProvisionConfig {
 		BootstrapFlag: "true",
 		SuperuserDSN:  superuser,
 		MigrationDSN:  migration,
-		Passwords:     db.RolePasswords{Migrator: "m-pw", App: "a-pw", Reader: "r-pw"},
+		Passwords:     db.RolePasswords{Migrator: "m-pw", App: "a-pw", Reader: "r-pw", AuthAdmin: "aa-pw"},
 		BootstrapFS:   dbsql.FS,
 		MigrationsFS:  migrations.FS,
 		SeedFS:        dbsql.FS,

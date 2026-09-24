@@ -43,7 +43,8 @@ type ServiceHealth struct {
 	Status string `json:"status"`          // statusUp | statusDown
 	Error  string `json:"error,omitempty"` // set only when Status == statusDown
 	// Build is the commit the service reported on /healthz. Empty when the
-	// probe failed or the service is older than platform.BuildSHA. Deliberately
+	// probe failed, the service is older than platform.BuildSHA, or it is probed
+	// at a custom health path (auth). Deliberately
 	// NOT part of the up/down verdict: a fleet running the wrong commit is
 	// healthy, just not the one under test, and conflating the two would make
 	// /healthz/fleet lie in the other direction. The deploy gate compares it.
@@ -57,16 +58,17 @@ type FleetHealth struct {
 }
 
 // FleetHealthHandler returns GET /healthz/fleet: a public, unauthenticated roll-up of
-// every backend's /healthz. Every upstream is private-network-only, so only
+// every backend's health path. Every upstream is private-network-only, so only
 // the gateway can reach them — this route is how CI (and a future status page) observes
 // fleet health through the one public backend surface. The gateway reports itself up (it
-// is answering this request); each upstream is probed at <base>/healthz. Overall 200 when
+// is answering this request); each upstream is probed at <base>/<healthPaths[name]>,
+// defaulting to healthz. Overall 200 when
 // all are up, 503 when any is down, with the culprit(s) named in the body. Fan-out is
 // bounded (per-probe timeout + concurrency cap) so one dead backend cannot hang it.
 //
 // Registered on the platform mux OUTSIDE /api/ and outside the JWT verifier: it is an
 // operational endpoint, not tenant data.
-func FleetHealthHandler(upstreams map[string]*url.URL, log *slog.Logger) http.HandlerFunc {
+func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]string, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -90,7 +92,7 @@ func FleetHealthHandler(upstreams map[string]*url.URL, log *slog.Logger) http.Ha
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				probed[i] = probeService(r.Context(), client, name, base)
+				probed[i] = probeService(r.Context(), client, name, base, healthPaths[name])
 			}(i, name, upstreams[name])
 		}
 		wg.Wait()
@@ -120,14 +122,18 @@ func FleetHealthHandler(upstreams map[string]*url.URL, log *slog.Logger) http.Ha
 	}
 }
 
-// probeService issues GET <base>/healthz with a per-probe timeout and maps the outcome to
-// up/down. Any transport error or non-2xx status is down, with the reason recorded so the
-// body names why the service failed.
-func probeService(ctx context.Context, client *http.Client, name string, base *url.URL) ServiceHealth {
+// probeService issues GET <base>/<path> (healthz when path is empty) with a per-probe
+// timeout and maps the outcome to up/down. Any transport error or non-2xx status is down,
+// with the reason recorded so the body names why the service failed.
+func probeService(ctx context.Context, client *http.Client, name string, base *url.URL, path string) ServiceHealth {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
-	target := base.JoinPath("healthz").String()
+	custom := path != ""
+	if !custom {
+		path = "healthz"
+	}
+	target := base.JoinPath(path).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return ServiceHealth{Name: name, Status: statusDown, Error: err.Error()}
@@ -138,7 +144,11 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ServiceHealth{Name: name, Status: statusDown, Error: fmt.Sprintf("healthz returned %d", resp.StatusCode)}
+		return ServiceHealth{Name: name, Status: statusDown, Error: fmt.Sprintf("%s returned %d", path, resp.StatusCode)}
+	}
+	// A custom path is not a /healthz body: nothing in it reaches the public roll-up.
+	if custom {
+		return ServiceHealth{Name: name, Status: statusUp}
 	}
 	// A body that will not decode leaves Build empty rather than failing the
 	// probe: 2xx already settled up/down, and the deploy gate reports a missing

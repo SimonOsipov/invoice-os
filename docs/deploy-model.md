@@ -1,6 +1,6 @@
 # Dev Deploy Model — per-PR ephemeral environments (M2-14, reworked M4-21, M4-23)
 
-How the full fleet — the gateway, the 8 context services, the `docling` sidecar, and the four frontend SPAs
+How the full fleet — the gateway, the 8 context services, the `docling` and `auth` sidecars, and the four frontend SPAs
 (`landing`, `app`, `ops-console`, `support-console`) — is deployed to Railway. Adopted in M2-14 (one unified
 fleet deploy, superseding the M1-08 split model); reworked in M4-21 to end the shared-
 `development` model, and completed in **M4-23**, which is when per-PR environments started
@@ -91,8 +91,9 @@ PR opened ──> dev-env.yml:
                 gateway ──> gate on /healthz (schema migrated + seeded at boot,
                 M4-21-04; the demo-tenant purge runs in the same sequence and is
                 NON-fatal, so /healthz carries a `demo_purge` field the gate
-                asserts == "true" separately — DEMO-04; mock_issuer == "on")
-                ──> 8 context services + docling + 4 SPAs (app is gateway-wired)
+                asserts == "true" separately — DEMO-04; mock_issuer == "on";
+                auth_issuers == "2": the mock plus the fork's own GoTrue)
+                ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + both consoles) + api + topology (app login,
                     cross-tenant isolation, fleet /healthz/fleet gate) + demo
               ──> PR stays open: environment stays up
@@ -104,8 +105,9 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                   ──> targets the PERSISTENT environment BY ID (never a fork; the
                       fork-reconciliation steps are all `== 'pull_request'`)
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
-                      "absent", then GET /.well-known/jwks.json and POST /auth/login
-                      must answer 404) ──> 8 context + docling + 4 SPAs ──> fleet gate
+                      "absent", auth_issuers == "1", then GET /.well-known/jwks.json and
+                      POST /auth/login must answer 404) ──> 8 context + docling + auth +
+                      4 SPAs ──> fleet gate
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),
@@ -245,7 +247,7 @@ environment, and `railway-invariants.yml` re-asserts that on every PR — any tr
 reappearing fails the build. The procedure below is retained for the case where a service
 is recreated and arrives with a trigger attached.
 
-For each of the 14 services (gateway, the 8 context services, the `docling` sidecar, and
+For each of the 15 services (gateway, the 8 context services, the `docling` sidecar, `auth`, and
 `landing`, `app`, `ops-console`, `support-console`) **on the `development` environment**:
 
 1. Railway dashboard → the service → **Settings**.
@@ -279,7 +281,7 @@ setting (a monorepo build filter, configured in the dashboard) that suppresses
 watched paths — printing `no changes detected in watch paths, build will
 skip` and creating no deployment. Since every environment (a fresh PR fork, or a
 `workflow_dispatch` run against `development`) is now potentially a cold, from-scratch
-14-service build, a service whose Watch Paths aren't empty would silently skip and never
+15-service build, a service whose Watch Paths aren't empty would silently skip and never
 come up — and since `dev-env.yml` gates on the gateway's `/healthz` before deploying the
 rest of the fleet, one such skip fails the whole run. This is distinct from
 `railway.json`'s `build.watchPatterns` field, which Railway silently **ignores** — it never
@@ -381,13 +383,13 @@ contradict what the docs imply.
 
 | Thing | Carries into a fork? | Consequence for `prepare-env` |
 |---|---|---|
-| Service instances | Yes — all 14, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
+| Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. The settle poll is insurance only. |
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
-| Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
+| Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
-| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. |
+| Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exception: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `set-fork-auth` writes per fork. |
 | Leftover PR environments | None existed before the probe | Independent confirmation that Railway's PR Environments feature never created any here. |
 
 ### Correction, 2026-07-19 — "no volume is fine" was false

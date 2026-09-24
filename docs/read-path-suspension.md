@@ -55,7 +55,7 @@ no identity, or with a malformed tenant id, is refused with `db.ErrNoTenant` bef
 statement is issued at all (`TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest`).
 
 **Why this is not a hole.** Over HTTP the arm above can never fire. `Verifier.validate`
-(`internal/platform/auth/verify.go:147`) rejects any token whose `sub` claim is not a
+rejects any token whose `sub` claim is not a
 well-formed uuid with `ErrUnauthorized` — a 401 at token verification, before an `Identity` is
 ever built, let alone reaches this seam. The only way to reach this arm at all is to construct
 an `auth.Identity` by hand, in-process — exactly what §8.1's operator CLIs and boot-time seeders

@@ -162,7 +162,7 @@ func TestRLS_NoRoleCanBypassRLS(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
-	for _, role := range []string{"invoice_app", "invoice_migrator", "invoice_tenant_reader"} {
+	for _, role := range []string{"invoice_app", "invoice_migrator", "invoice_tenant_reader", "supabase_auth_admin", "auth_hook_reader"} {
 		var bypass, super bool
 		if err := h.super.QueryRow(ctx,
 			`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = $1`, role,

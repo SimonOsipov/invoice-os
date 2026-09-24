@@ -35,16 +35,19 @@ var routedServices = []string{
 }
 
 // probedServices are reached by /healthz/fleet but get NO public proxy route:
-// the sidecar has no public domain, so the roll-up is CI's only view of it, and
-// nothing outside the private network should be able to call it.
+// neither has a public domain, so the roll-up is CI's only view of them, and
+// nothing outside the private network should be able to call them.
 // TestGatewayHandlersPublishNoProxyRouteForAProbedService holds that line.
-var probedServices = []string{"docling"}
+var probedServices = []string{"docling", "auth"}
 
 func main() {
 	app, err := platform.New("gateway")
 	if err != nil {
 		log.Fatalf("gateway: startup: %v", err)
 	}
+
+	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
+	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
@@ -61,7 +64,7 @@ func main() {
 	// "development" for an unset ENVIRONMENT, which would silently re-open the
 	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
 	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
-	// APP_PASSWORD / READER_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
+	// APP_PASSWORD / READER_PASSWORD / AUTH_ADMIN_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
 	// fallbacks, see resolveRolePassword below) are required — production boots
 	// without any of them set. The reset guard is separate — see
 	// RailwayEnvironmentName/ResetFlag below and db.ResetEnabled's doc comment.
@@ -88,6 +91,8 @@ func main() {
 			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
 			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),
 			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
+			// No deprecated name ever existed, so no fallback to resolve.
+			AuthAdmin: os.Getenv("AUTH_ADMIN_PASSWORD"),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,
@@ -114,13 +119,16 @@ func main() {
 	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
 	verifier, err := auth.NewVerifier(auth.Config{
-		Issuer:  mustEnv("AUTH_ISSUER"),
-		JWKSURL: mustEnv("AUTH_JWKS_URL"),
-		Logger:  app.Logger,
+		Issuer:     mustEnv("AUTH_ISSUER"),
+		JWKSURL:    mustEnv("AUTH_JWKS_URL"),
+		Additional: additional,
+		Logger:     app.Logger,
 	})
 	if err != nil {
 		fatal(app.Logger, "gateway: verifier: %v", err)
 	}
+	// The primary issuer plus the additional set; the deploy gate asserts the count.
+	platform.AuthIssuers = strconv.Itoa(1 + len(additional))
 
 	routed, probed, err := loadUpstreams()
 	if err != nil {
@@ -133,7 +141,7 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -189,6 +197,7 @@ const dbConnectWait = 120 * time.Second
 func gatewayHandlers(
 	verifier *auth.Verifier,
 	routed, probed map[string]*url.URL,
+	healthPaths map[string]string,
 	log *slog.Logger,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
@@ -200,7 +209,7 @@ func gatewayHandlers(
 	all := make(map[string]*url.URL, len(routed)+len(probed))
 	maps.Copy(all, routed)
 	maps.Copy(all, probed)
-	return api, gateway.FleetHealthHandler(all, log)
+	return api, gateway.FleetHealthHandler(all, healthPaths, log)
 }
 
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the
@@ -231,6 +240,15 @@ func loadUpstreams() (routed, probed map[string]*url.URL, err error) {
 		return nil, nil, err
 	}
 	return routed, probed, nil
+}
+
+// mustParseIssuers parses AUTH_ADDITIONAL_ISSUERS and stops boot on a malformed value.
+func mustParseIssuers(raw string) []auth.TrustedIssuer {
+	issuers, err := auth.ParseTrustedIssuers(raw)
+	if err != nil {
+		fatal(slog.Default(), "gateway: AUTH_ADDITIONAL_ISSUERS: %v", err)
+	}
+	return issuers
 }
 
 func mustEnv(key string) string {

@@ -21,6 +21,7 @@ APP_PASSWORD      ?= app
 # its first consumer). NOTE: an inline `# comment` here would land trailing spaces in
 # the value and produce an invalid connection URL — keep the comment on its own line.
 READER_PASSWORD   ?= reader
+AUTH_ADMIN_PASSWORD ?= auth_admin
 
 # Migrator URL for the local docker-compose Postgres (make dev-db). Kept separate
 # from DATABASE_MIGRATION_URL so `make dev-db` always targets the compose DB on
@@ -39,13 +40,14 @@ DEV_DB_MIGRATION_URL := postgres://invoice_migrator:$(MIGRATOR_PASSWORD)@localho
 DEV_DB_APP_URL       := postgres://invoice_app:$(APP_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 DEV_DB_READER_URL    := postgres://invoice_tenant_reader:$(READER_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 DEV_DB_SUPERUSER_URL := postgres://postgres:postgres@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
+DEV_DB_AUTH_ADMIN_URL := postgres://supabase_auth_admin:$(AUTH_ADMIN_PASSWORD)@localhost:$(DEV_DB_PORT)/invoice_os?sslmode=disable
 
 # goose against Postgres as the migrator role.
 GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive
+.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive test-idp
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -62,6 +64,7 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -92,6 +95,7 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
 		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"
@@ -121,6 +125,7 @@ test-rls: ## Run the M2-07 adversarial RLS suite against the local dev DB (run `
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	DATABASE_READER_URL="$(DEV_DB_READER_URL)" \
+	DATABASE_AUTH_ADMIN_URL="$(DEV_DB_AUTH_ADMIN_URL)" \
 	go test -p 1 -count=1 -run TestRLS ./internal/platform/db/...
 
 test-queue: ## Run the M2-08 smoke + M2-09 exactly-once queue suites against the local dev DB (run `make dev-db` first)
@@ -170,6 +175,15 @@ test-archive: ## Run the AUDIT-05 evidence-bundle suite against the local dev DB
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/archive/...
+
+# Needs Docker. The containers connect as supabase_auth_admin; the trap removes them even on failure.
+test-idp: ## Run the TestIdP suite against real supabase/auth containers on the local dev DB (run `make dev-db` first)
+	@trap 'scripts/ci/idp-down.sh' EXIT; \
+	urls="$$(scripts/ci/idp-up.sh "$(DEV_DB_AUTH_ADMIN_URL)" $(DEV_DB_PORT))" || exit 1; \
+	export $$urls; \
+	IDP_PINNED_TAG="$$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	go test -p 1 -count=1 -run TestIdP ./internal/platform/auth/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

@@ -174,6 +174,8 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images',
     'AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid',
     'AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width',
+    'CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files',
+    "CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width",
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
@@ -488,5 +490,24 @@ describe('[air-05] the deployed literals track their owners', () => {
     const m = /const NO_REGION = '([^']+)'/.exec(extractionCanvasSrc)
     expect(m, 'NO_REGION is gone from ExtractionCanvas.tsx').not.toBeNull()
     expect(literalOf('NO_REGION_NOTE')).toBe((m as RegExpExecArray)[1])
+  })
+})
+
+// JEV_DOUBT_READ copies the values fxJevDoubtLines prints (no shared module e2e/ can import).
+describe('[check-03] the deployed reading tracks its fixture', () => {
+  const fixturesSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/fixtures_test.go'), 'utf8')
+
+  it('JEV_DOUBT_READ is what fxJevDoubtLines prints, byte for byte', () => {
+    const lines = /func fxJevDoubtLines\(\) \[\]fxLine \{([\s\S]*?)\n\}/.exec(fixturesSrc)
+    expect(lines, 'fxJevDoubtLines is gone from internal/extraction/fixtures_test.go').not.toBeNull()
+    const printed = (label: string) => {
+      const m = new RegExp(`"${label}: ([^"]+)"`).exec((lines as RegExpExecArray)[1])
+      expect(m, `fxJevDoubtLines no longer prints "${label}:"`).not.toBeNull()
+      return (m as RegExpExecArray)[1]
+    }
+    const spec =
+      /const JEV_DOUBT_READ = \{ invoice_number: '([^']+)', supplier_name: '([^']+)', supplier_tin: '([^']+)' \}/.exec(source)
+    expect(spec, 'no JEV_DOUBT_READ literal in import-wizard.spec.ts').not.toBeNull()
+    expect(spec!.slice(1)).toEqual([printed('Invoice Number'), printed('From'), printed('Supplier TIN')])
   })
 })

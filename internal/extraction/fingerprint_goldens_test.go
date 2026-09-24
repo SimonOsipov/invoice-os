@@ -35,6 +35,7 @@ var fingerprintGoldens = map[string]string{
 	"corpus_two_column.pdf":                 "v3:02a5a7038b265c0df8ceb8a4633568cc8ac77d827361211e7bd2436d2ce2938c",
 	"dense_invoice.pdf":                     "v3:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	"hybrid_invoice.pdf":                    "v3:e5a2e2bbd74717a0a69fe1f33899477d152f27b5a5ff56dd234a26eb5f4b288a",
+	"jev_doubt_invoice.pdf":                 "v3:4e836246c2b250eb4079bf7f2d4f31617ad6835a23c94843c6afad6efef20a9a",
 	"learned_two_party.pdf":                 "v3:f7595e9a6f5be109935a8bb9bc4fef5e6482be32133b85ba59842c662f6d7689",
 	"learned_typed_total.pdf":               "v3:614948e82bdde21efd352bcbb767056213401e829e767bb94ddbe0edca47251f",
 	"learned_typed_total_twin.pdf":          "v3:614948e82bdde21efd352bcbb767056213401e829e767bb94ddbe0edca47251f",

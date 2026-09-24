@@ -1,7 +1,7 @@
 # TypeSafe Jev client
 
 **Audience:** anyone setting the TypeSafe key on a Railway service, anyone debugging a
-`jev call` log line, and CHECK-03, CHECK-04 and CHECK-05, the stories that will call this
+`jev call` log line, and CHECK-03, CHECK-04 and CHECK-05, the stories that wire this
 client.
 
 > `internal/platform/jev/doc_test.go` is this page's doc-sync gate. It reads every variable,
@@ -56,8 +56,10 @@ An enabled client refuses a request before it sends anything when:
 
 The refusal is `skipped_refused` with `attempts` `0`, in real and fake mode alike.
 
-Nothing calls the client yet. CHECK-03 and CHECK-04 will call it from `submission`'s
-extraction worker. CHECK-05 will call it from `invoice`'s importer.
+`submission`'s extraction worker calls the client once per extraction attempt, on its
+Docling text branch only (`internal/extraction/jevcheck.go`); a retried job asks again. CHECK-04 and CHECK-05 are
+still to come: CHECK-04 will also call it from that worker, and CHECK-05 from `invoice`'s
+importer.
 
 ## Env knobs
 
@@ -68,8 +70,8 @@ extraction worker. CHECK-05 will call it from `invoice`'s importer.
 
 `FromEnv` never exits the process. It returns an error in two cases: an unparseable
 `JEV_FAKE`, and `JEV_FAKE` true with a key set. The error text never holds the key. A caller
-treats that error as fatal at boot, as `cmd/invoice` and `cmd/submission` treat an
-`ai.FromEnv` error today.
+treats that error as fatal at boot. `cmd/submission` does, as it and `cmd/invoice` do for an
+`ai.FromEnv` error.
 
 The model, the endpoint, the budget and the retry wait are constants. No variable changes
 them.
@@ -82,8 +84,8 @@ them.
 | `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
-The key goes on `submission` and `invoice` only. They are the two binaries that will call
-the client.
+The key goes on `submission` and `invoice` only. `submission` calls the client; `invoice`
+will from CHECK-05.
 
 **Fork rule.** `prepare-env` creates each `pr-<N>` as a fork of the persistent environment,
 and the fork copies its variables. A key set on production would therefore reach every fork.
@@ -113,7 +115,9 @@ In fake mode `Ask` sends nothing. The leftmost marker in `State` steers the resu
 
 The marker is read from `State` only. Question text and option descriptions never steer the
 fake. Matching is case-sensitive and needs no word boundary, so `scan-JEVFAKE-DOUBT.pdf`
-matches. An `AIFAKE-` marker does not steer this fake.
+matches. An `AIFAKE-` marker does not steer this fake. `JEVFAKE-DOUBT` doubts every checked
+field of a document, so `jev_doubt_invoice.pdf`, which has one checked field, is the deployed
+fixture that uses it.
 
 **Building a choice marker.** Encode the option's `Name` with `base64.RawURLEncoding`: the
 URL-safe alphabet, with no padding. For the option `credit note` the marker is
@@ -213,32 +217,28 @@ adequate.
 
 ## Known limitations
 
-1. `jev-latest` is an alias, and it can move under a tuned threshold.
-   On 2026-09-23 it pointed at `jev-1.13.0`.
-   The version that answered is not logged. CHECK-03, CHECK-04 and CHECK-05 own thresholds
-   and decide whether to pin a versioned id.
+1. The value check's threshold `0.5` and its wording were measured on 21 synthetic documents
+   (`CHECK-00 Jev Measurement Results`). Re-measure them on real documents before trusting the
+   check in production. No versioned id is pinned: `jev-latest` can move under that threshold
+   (on 2026-09-23 it pointed at `jev-1.13.0`), and the version that answered is not logged.
 2. `skipped_refused` conflates 401 (a revoked key), 422 (a client bug, or a `state` beyond
    the vendor's context limit), a key refused by the header check, and every other
    non-retryable status. Neither the error nor the log names the status. A revoked key
    refuses every call; an over-long `state` refuses only the calls that carry one. The
    context limit is 32k tokens for
-   `state` plus the longest question (the vendor's `models.md`). CHECK-03 keeps `state`
-   under that limit.
+   `state` plus the longest question (the vendor's `models.md`). No size guard exists: an
+   over-limit document is refused by the vendor, logged `skipped_refused`, and written as
+   decided.
 3. `skipped_unavailable` conflates a spent budget, a failed answer check and a cancelled
    caller context. The error tells the last one apart: it wraps `ctx.Err()`.
 4. The PR key audit reads `submission` and `invoice` only. A key an operator set anywhere
    else would fork unaudited. The `OPENROUTER_API_KEY` audit has the same scope.
-5. The `3s` budget and its `1.375s` per-attempt cap are a default, not a measurement. A
-   timed-out attempt may still be processed and billed by the vendor, so a retry can bill a
-   call twice. The latency measurement comes from CHECK-01's owed live run. CHECK-03, the
-   first caller, owns the decision: it sets `budget` from that run's all-attempts latency, or
-   it accepts the `3s` default in its own Decisions.
-6. No caller exists yet. The fake's markers and the PR variables are inert until CHECK-03,
-   CHECK-04 and CHECK-05 wire the client. CHECK-02's boot guarantee (an unset or empty key
-   boots) is proved here for `FromEnv` alone, by `TestFromEnv_DoesNotExitTheProcess`.
-   CHECK-03 (`cmd/submission`) and CHECK-05 (`cmd/invoice`) each re-prove it with the client
-   wired. Once a caller is wired, the two `FromEnv` errors stop its binary at boot by
-   design.
+5. The `3s` budget and its `1.375s` per-attempt cap are accepted as they are; the measured
+   all-attempts latency max was 517 ms (`CHECK-00 Jev Measurement Results`). A timed-out
+   attempt may still be processed and billed by the vendor, so a retry can bill a call twice.
+6. `cmd/submission` is wired: an unset or empty key boots it, and either `FromEnv` error
+   stops it at boot by design. `FromEnv` alone is proved by
+   `TestFromEnv_DoesNotExitTheProcess`. `invoice` stays inert until CHECK-05 wires it.
 7. A key holding a control byte other than tab, such as a pasted trailing newline, refuses
    every call. `FromEnv` does not trim it.
 8. `net/http` follows a 3xx that carries a `Location`: 301, 302 and 303 turn the `POST`

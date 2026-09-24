@@ -1113,7 +1113,7 @@ func TestDocumentCreateInput_MockDefaultProducesTheStatedInvoice(t *testing.T) {
 	if got.Subtotal == nil || *got.Subtotal != "950.00" {
 		t.Errorf("Subtotal = %v, want %q", got.Subtotal, "950.00")
 	}
-	// An unreadable field carries no reading, so it maps to NULL rather than to an empty string.
+	// A field with no reading maps to NULL rather than to an empty string.
 	if got.VAT != nil {
 		t.Errorf("VAT = %q, want nil -- the mock's vat is unreadable and carries no value", *got.VAT)
 	}

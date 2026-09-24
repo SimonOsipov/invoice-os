@@ -31,6 +31,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
@@ -328,6 +329,17 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		t.Fatalf("ai.FromEnv: %v", err)
 	}
 
+	// Real, non-nil JevAsker: fake mode needs no network and Enabled() reports true.
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	jevClient, err := jev.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	if !jevClient.Enabled() {
+		t.Fatal("jev.FromEnv under JEV_FAKE=true returned a disabled client")
+	}
+
 	// Sentinel, non-nil PageObject: reaching it proves the constructor wired the argument
 	// through rather than leaving the field nil.
 	const pageBytesSentinel = "sentinel/page-bytes"
@@ -337,7 +349,7 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 		return io.NopCloser(strings.NewReader(pageBytesSentinel)), int64(len(pageBytesSentinel)), nil
 	}
 
-	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, aiClient, pageBytes, logger)
+	ew := newExtractWorker(pool, ext, open, pages, auditor, textFake, rules, aiClient, jevClient, pageBytes, logger)
 	if ew == nil {
 		t.Fatal("newExtractWorker returned nil")
 	}
@@ -357,8 +369,8 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 			}
 		}
 	}
-	if checked < 10 {
-		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 10 (Pool, Extractor, Open, Pages, Audit, Text, Rules, AI, PageBytes, Logger) -- the loop above examined almost nothing", checked)
+	if checked < 11 {
+		t.Fatalf("only %d nillable collaborator field(s) inspected on ExtractWorker, want at least 11 (Pool, Extractor, Open, Pages, Audit, Text, Rules, AI, Jev, PageBytes, Logger) -- the loop above examined almost nothing", checked)
 	}
 
 	if ew.Pool != pool {
@@ -399,6 +411,9 @@ func TestNewExtractWorker_SetsEveryCollaborator(t *testing.T) {
 	}
 	if ew.AI != extraction.AIReader(aiClient) {
 		t.Error("ExtractWorker.AI is not the ai.FromEnv client passed in")
+	}
+	if ew.Jev != extraction.JevAsker(jevClient) {
+		t.Errorf("ExtractWorker.Jev is %v, want the jev.FromEnv client passed in", ew.Jev)
 	}
 	if ew.PageBytes == nil {
 		t.Fatal("ExtractWorker.PageBytes is nil")
@@ -528,15 +543,15 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	svcName, svcArgs := wtOneCall(t, f, "document.NewService")
 	ewName, ewArgs := wtOneCall(t, f, "newExtractWorker")
 
-	if len(ewArgs) != 10 {
-		t.Fatalf("newExtractWorker is called with %d argument(s), want 10 (pool, extractor, opener, pages, auditor, text, rules, ai, pageBytes, logger)", len(ewArgs))
+	if len(ewArgs) != 11 {
+		t.Fatalf("newExtractWorker is called with %d argument(s), want 11 (pool, extractor, opener, pages, auditor, text, rules, ai, jev, pageBytes, logger)", len(ewArgs))
 	}
-	// EXTR-17-03 AC-8: the walk covers all 10 arguments. Argument 5's exemption is gone with the
+	// EXTR-17-03 AC-8: the walk covers all 11 arguments. Argument 5's exemption is gone with the
 	// literal nil it protected.
 	const ewTextArg = 5
 	for i, arg := range ewArgs {
 		if id, ok := arg.(*ast.Ident); ok && id.Name == "nil" {
-			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, the rest panic", i)
+			t.Errorf("newExtractWorker argument %d is nil: it compiles, registers, and breaks on the first job -- a nil auditor errors out on Work's own guard, a nil Jev silently turns the value check off, the rest panic", i)
 		}
 	}
 
@@ -580,6 +595,18 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	}
 	if sel, ok := aiArgs[0].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
 		t.Errorf("ai.FromEnv's argument is %s, want the logger", wtRender(aiArgs[0]))
+	}
+
+	// The Jev client, followed back to the one jev.FromEnv call main() fatals on.
+	jevName, jevArgs := wtOneCall(t, f, "jev.FromEnv")
+	if id, ok := ewArgs[8].(*ast.Ident); !ok || id.Name != jevName {
+		t.Errorf("newExtractWorker's jev argument is %s, want %s -- the client jev.FromEnv built and main() already fatals on", wtRender(ewArgs[8]), jevName)
+	}
+	if len(jevArgs) != 1 {
+		t.Fatalf("jev.FromEnv is called with %d argument(s), want 1 (the logger)", len(jevArgs))
+	}
+	if sel, ok := jevArgs[0].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("jev.FromEnv's argument is %s, want the logger", wtRender(jevArgs[0]))
 	}
 
 	// 1. The worker on the bundle is the one newExtractWorker built. A bare
@@ -656,16 +683,16 @@ func TestSubmissionMain_WiresTheQueueSeams(t *testing.T) {
 	// AIR-05-03: the page-image reader, followed back to the same newPageObjectReader(...) call
 	// the pages route above already builds. Any other value here reads no page image the
 	// render actually wrote.
-	if call, ok := ewArgs[8].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newPageObjectReader" {
-		t.Errorf("newExtractWorker's pageBytes argument is %s, want a newPageObjectReader(...) call", wtRender(ewArgs[8]))
+	if call, ok := ewArgs[9].(*ast.CallExpr); !ok || wtCallName(call.Fun) != "newPageObjectReader" {
+		t.Errorf("newExtractWorker's pageBytes argument is %s, want a newPageObjectReader(...) call", wtRender(ewArgs[9]))
 	} else if len(call.Args) != 1 {
 		t.Errorf("newPageObjectReader is called with %d argument(s), want 1", len(call.Args))
 	} else if id, ok := call.Args[0].(*ast.Ident); !ok || id.Name != objName {
 		t.Errorf("newPageObjectReader is given %s, want %s -- the store document.NewS3Store built and main() already fatals on", wtRender(call.Args[0]), objName)
 	}
 
-	if sel, ok := ewArgs[9].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
-		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[9]))
+	if sel, ok := ewArgs[10].(*ast.SelectorExpr); !ok || sel.Sel.Name != "Logger" {
+		t.Errorf("newExtractWorker's last argument is %s, want the logger: every constructor in this file keeps logger last, and an auditor appended after it silently swaps the two", wtRender(ewArgs[10]))
 	}
 }
 
@@ -1006,11 +1033,16 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 		if i+1 >= len(body) {
 			continue
 		}
-		ifs, ok := body[i+1].(*ast.IfStmt)
-		if !ok {
+		// The call's own err, tested `err != nil`, fatal in the body: `x, _ :=`, `err == nil` or
+		// a fatal only in an else checks nothing (TestSubmissionMain_FatalAfterRefusesAWeakCheck).
+		if last, ok := as.Lhs[len(as.Lhs)-1].(*ast.Ident); !ok || last.Name != "err" {
 			continue
 		}
-		ast.Inspect(ifs, func(n ast.Node) bool {
+		ifs, ok := body[i+1].(*ast.IfStmt)
+		if !ok || ifs.Init != nil || !wtIsErrNotNil(ifs.Cond) {
+			continue
+		}
+		ast.Inspect(ifs.Body, func(n ast.Node) bool {
 			if c, ok := n.(*ast.CallExpr); ok {
 				if name := wtCallName(c.Fun); name == "log.Fatalf" || name == "log.Fatal" {
 					fatal = true
@@ -1020,6 +1052,16 @@ func wtFatalAfter(t *testing.T, f *ast.File, want string) (calls int, fatal bool
 		})
 	}
 	return calls, fatal
+}
+
+func wtIsErrNotNil(e ast.Expr) bool {
+	b, ok := e.(*ast.BinaryExpr)
+	if !ok || b.Op != token.NEQ {
+		return false
+	}
+	x, xok := b.X.(*ast.Ident)
+	y, yok := b.Y.(*ast.Ident)
+	return xok && yok && x.Name == "err" && y.Name == "nil"
 }
 
 // TestSubmissionMain_FatalOnDocumentConfigError: AC #8. Both object-store calls sit at the top
@@ -1098,6 +1140,153 @@ func TestSubmissionMain_FatalOnAIClientError(t *testing.T) {
 	}
 	if !fatal {
 		t.Error("the statement after ai.FromEnv is not an error check that calls log.Fatal")
+	}
+}
+
+// A JEV_FAKE the process cannot parse, or fake plus a key, must refuse to boot.
+func TestSubmissionMain_FatalOnJevClientError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d unconditional submission.MockConfigFromEnv call(s), fatal=%v, want 1 and true -- it cannot recognise a known-good boot fatal", calls, fatal)
+	}
+	calls, fatal := wtFatalAfter(t, f, "jev.FromEnv")
+	if calls != 1 {
+		t.Fatalf("main() assigns from jev.FromEnv %d time(s) at the top level, want 1", calls)
+	}
+	if !fatal {
+		t.Error("the statement after jev.FromEnv is not an error check that calls log.Fatal")
+	}
+}
+
+// The matcher reads main()'s top-level statements only, as AST, so layout and comments never count.
+func TestSubmissionMain_FatalAfterRefusesAWeakCheck(t *testing.T) {
+	const head = "package main\nfunc main() {\n"
+	cases := []struct {
+		name      string
+		body      string
+		wantCalls int
+		wantFatal bool
+	}{
+		{"control", "c, err := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, true},
+		{"control reformatted", "c,err:=jev.FromEnv(\n l,\n)\nif err!=nil{\nlog.Fatal(err)}", 1, true},
+		{"blank error", "c, _ := jev.FromEnv(l)\nif err != nil { log.Fatalf(\"x: %v\", err) }", 1, false},
+		{"inverted check", "c, err := jev.FromEnv(l)\nif err == nil { log.Fatalf(\"x: %v\", err) }", 1, false},
+		{"fatal only in else", "c, err := jev.FromEnv(l)\nif err != nil { l.Error(\"x\") } else { log.Fatal(err) }", 1, false},
+		{"init shadows err", "c, err := jev.FromEnv(l)\nif err := f(); err != nil { log.Fatal(err) }", 1, false},
+		{"statement between", "c, err := jev.FromEnv(l)\n_ = c\nif err != nil { log.Fatal(err) }", 1, false},
+		{"inside an if", "if ok { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }", 0, false},
+		{"inside a func literal", "func() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) } }()", 0, false},
+		{"comment only", "// c, err := jev.FromEnv(l)\n// if err != nil { log.Fatal(err) }\n_ = 1", 0, false},
+		{"other func", "}\nfunc other() { c, err := jev.FromEnv(l)\nif err != nil { log.Fatal(err) }", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := parser.ParseFile(token.NewFileSet(), "x.go", head+tc.body+"\n}\n", parser.ParseComments)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			calls, fatal := wtFatalAfter(t, f, "jev.FromEnv")
+			if calls != tc.wantCalls || fatal != tc.wantFatal {
+				t.Errorf("wtFatalAfter = (%d, %v), want (%d, %v)", calls, fatal, tc.wantCalls, tc.wantFatal)
+			}
+		})
+	}
+}
+
+// The Jev client is built after the AI client and before the extract worker and the queue, so a
+// bad JEV_FAKE stops the process before River starts; nothing reassigns it on the way.
+func TestSubmissionMain_JevClientIsBuiltOnceBeforeTheQueue(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	body := wtMainBody(t, f)
+	at := func(want string) int {
+		t.Helper()
+		idx := -1
+		for i, stmt := range body {
+			as, ok := stmt.(*ast.AssignStmt)
+			if !ok || len(as.Rhs) != 1 {
+				continue
+			}
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok && wtCallName(call.Fun) == want {
+				if idx != -1 {
+					t.Fatalf("main() assigns from %s twice at top level", want)
+				}
+				idx = i
+			}
+		}
+		if idx == -1 {
+			t.Fatalf("main() has no top-level assignment from %s", want)
+		}
+		return idx
+	}
+	aiAt, jevAt, ewAt, qAt := at("ai.FromEnv"), at("jev.FromEnv"), at("newExtractWorker"), at("queue.New")
+	if !(aiAt < jevAt && jevAt < ewAt && ewAt < qAt) {
+		t.Errorf("statement order ai.FromEnv=%d jev.FromEnv=%d newExtractWorker=%d queue.New=%d, want strictly increasing", aiAt, jevAt, ewAt, qAt)
+	}
+
+	// The fatal names the service, like every other boot fatal in main().
+	ifs, ok := body[jevAt+1].(*ast.IfStmt)
+	if !ok || len(ifs.Body.List) != 1 {
+		t.Fatalf("the statement after jev.FromEnv is %T, want an if with one statement", body[jevAt+1])
+	}
+	var call *ast.CallExpr
+	if es, ok := ifs.Body.List[0].(*ast.ExprStmt); ok {
+		call, _ = es.X.(*ast.CallExpr)
+	}
+	if call == nil || wtCallName(call.Fun) != "log.Fatalf" || len(call.Args) == 0 {
+		t.Fatal("the jev.FromEnv error branch is not one log.Fatalf call")
+	}
+	if lit, ok := call.Args[0].(*ast.BasicLit); !ok || !strings.HasPrefix(lit.Value, `"submission: `) {
+		t.Errorf("the jev.FromEnv fatal format is %s, want it to start with \"submission: \"", wtRender(call.Args[0]))
+	}
+
+	// Exactly one write to the client's name anywhere in main(), nested blocks included.
+	jevName := body[jevAt].(*ast.AssignStmt).Lhs[0].(*ast.Ident).Name
+	writes := 0
+	ast.Inspect(&ast.BlockStmt{List: body}, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if id, ok := l.(*ast.Ident); ok && id.Name == jevName {
+					writes++
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				if id.Name == jevName {
+					writes++
+				}
+			}
+		}
+		return true
+	})
+	if writes != 1 {
+		t.Errorf("main() writes %s %d time(s), want 1: a later write hands newExtractWorker something jev.FromEnv did not build", jevName, writes)
+	}
+}
+
+// An unset key boots with the client off: the worker gets a non-nil asker that asks nothing.
+func TestNewExtractWorker_AnOffJevClientIsWiredAndDisabled(t *testing.T) {
+	t.Setenv(jev.EnvKey, "")
+	t.Setenv(jev.EnvFake, "")
+	c, err := jev.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("jev.FromEnv with no key: %v", err)
+	}
+	ew := newExtractWorker(&pgxpool.Pool{}, extraction.NewMockExtractor(), nil, nil, nil, nil, nil, nil, c, nil, nil)
+	if ew.Jev == nil {
+		t.Fatal("ExtractWorker.Jev is nil, want the off client")
+	}
+	if ew.Jev != extraction.JevAsker(c) {
+		t.Error("ExtractWorker.Jev is not the jev.FromEnv client passed in")
+	}
+	if ew.Jev.Enabled() {
+		t.Error("ExtractWorker.Jev.Enabled() = true with no key and JEV_FAKE unset, want false")
 	}
 }
 

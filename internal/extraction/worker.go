@@ -58,6 +58,8 @@ type ExtractWorker struct {
 	Rules LoadAnchorRules
 	// AI is the per-document AI reading step. nil is off.
 	AI AIReader
+	// Jev checks the decided header values once per attempt; a retried job asks again. nil is off.
+	Jev JevAsker
 	// PageBytes reads a stored page image back by key. nil is off.
 	PageBytes PageObject
 	Logger    *slog.Logger
@@ -276,6 +278,8 @@ func (w *ExtractWorker) Work(ctx context.Context, job *river.Job[extractArgs]) e
 						Pages:      textTokens,
 					}), answer, textTokens, lines)
 					results = mergeAILines(merged, lineAnswer, textTokens)
+					// octx, not ctx: the jev call line reads tenant_id off it.
+					results = checkValues(octx, w.Jev, textTokens, results)
 				}
 			}
 		}

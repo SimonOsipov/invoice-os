@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../dist/assets')
 
@@ -49,12 +50,12 @@ function walkSrc(): Array<{ path: string; content: string }> {
     .filter((e) => e.isFile())
     .map((e) => {
       const full = join(e.parentPath, e.name)
-      return { path: full, content: readFileSync(full, 'utf8') }
+      return { path: full, content: stripComments(readFileSync(full, 'utf8')) }
     })
 }
 
 describe('frontend/app/src holds no non-test jev harness file', () => {
-  it('every harness-needle match is a .test.ts file, and at least one match exists', () => {
+  it('every harness-needle match is a test file, and at least one match exists', () => {
     const files = walkSrc()
     // Floor: measured today 283 (not the plan's 282 -- every file under src, not just .ts/.tsx).
     expect(files.length, 'the src scan read too few files -- looks truncated').toBeGreaterThan(200)
@@ -68,7 +69,7 @@ describe('frontend/app/src holds no non-test jev harness file', () => {
       'the known live positive no longer matches -- the needle, not the walk, has regressed',
     ).toHaveLength(1)
 
-    const nonTest = matches.filter((f) => !f.path.endsWith('.test.ts')).map((f) => f.path)
+    const nonTest = matches.filter((f) => !/\.test\.tsx?$/.test(f.path)).map((f) => f.path)
     expect(nonTest, 'a non-test file carries a jev/typesafe/autoplacement string').toEqual([])
   })
 })

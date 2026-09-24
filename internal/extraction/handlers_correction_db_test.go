@@ -1103,6 +1103,14 @@ func TestRLS_AFlaggedLockedFieldIsCorrected(t *testing.T) {
 				},
 				method: "typed", value: cxLockedFieldValue(lf.field),
 			},
+			{
+				// A Jev doubt keeps the value it flags.
+				name: "unreadable with a value",
+				seed: func(t *testing.T, ctx context.Context, tenantID, jobID string) {
+					cxFlag(t, ctx, tenantID, jobID, lf.field, 0, cxStr("JD-3310"), cxStr("unreadable"), seedTime)
+				},
+				method: "typed", value: cxLockedFieldValue(lf.field),
+			},
 		} {
 			t.Run(lf.field+"/"+tc.name, func(t *testing.T) {
 				ctx := t.Context()
@@ -1266,6 +1274,34 @@ func TestRLS_AnUndoOnAFlaggedInvoiceNumberHandsTheSeamTheRankZeroReading(t *test
 	}
 	if seen.field != "invoice_number" {
 		t.Errorf("the invoice seam was handed field %q, want %q", seen.field, "invoice_number")
+	}
+}
+
+// A Jev doubt keeps its value at rank 0, so the undo hands the seam that reading, not the typed one.
+func TestRLS_AnUndoOnAJevDoubtedInvoiceNumberHandsTheSeamItsOwnReading(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "JD-3310", "draft")
+	cxFlag(t, ctx, tenantID, jobID, "invoice_number", 0, cxStr("JD-3310"), cxStr("unreadable"), cxEpoch)
+
+	var typed cxSeamCall
+	w := cxServe(t, reqCtx, jobID, "invoice_number", corBody("JD-9999", "typed", ""), cxRecorder(&typed, false), cxAuditor(nil))
+	if w.Code != http.StatusCreated || typed.calls != 1 {
+		t.Fatalf("the typed correction: status %d, seam calls %d, want %d and 1 (body=%q)", w.Code, typed.calls, http.StatusCreated, w.Body.String())
+	}
+
+	var seen cxSeamCall
+	w = cxServe(t, reqCtx, jobID, "invoice_number", corBody("X", "undone", ""), cxRecorder(&seen, false), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("undo status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if seen.calls != 1 {
+		t.Fatalf("the invoice seam ran %d time(s) on the undo, want 1", seen.calls)
+	}
+	if seen.field != "invoice_number" || seen.value == nil || *seen.value != "JD-3310" {
+		t.Errorf("the invoice seam was handed (%q, %s) for an undo, want (%q, %q)", seen.field, cxShowValue(seen.value), "invoice_number", "JD-3310")
 	}
 }
 
@@ -1483,7 +1519,7 @@ func TestRLS_ARefusedRenameAnswers409AndRollsBackEveryWrite(t *testing.T) {
 	}
 }
 
-// An undo on an unreadable invoice_number hands the seam nil (rank 0 holds no value). The
+// An undo on a valueless unreadable invoice_number hands the seam nil. The
 // production applier refuses a nil number (TestInvoiceEditFor_ANilValueClearsEveryWritableColumn),
 // so the answer is 400 and nothing is written.
 func TestRLS_AnUndoOnAnUnreadableInvoiceNumberIsRefusedAndWritesNothing(t *testing.T) {

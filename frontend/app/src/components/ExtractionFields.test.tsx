@@ -1780,6 +1780,21 @@ describe('a flagged locked field (AIR-03-06)', () => {
     ])
   })
 
+  it('a Jev-doubted invoice number keeps its own value, is editable and states no lock', () => {
+    render(fieldsPane({ fields: [mkField({ name: 'invoice_number', value: 'JD-3310', reason: 'unreadable' })] }))
+
+    expect(within(row('invoice_number')).queryByText(PILL_UNREADABLE), 'the doubted field rendered no pill').toBeTruthy()
+    const input = inputOf('invoice_number')
+    expect(input, 'the doubted field rendered no input').toBeTruthy()
+    expect(input!.value, 'the doubted field lost its own value').toBe('JD-3310')
+    expect(input!.readOnly, 'a doubted invoice number is still read-only').toBe(false)
+    expect(input!.getAttribute('aria-readonly'), 'a doubted invoice number still announces itself read-only').not.toBe('true')
+    expect(
+      within(row('invoice_number')).queryByText(INVOICE_NUMBER_LOCKED),
+      'a doubted field still states the lock reason',
+    ).toBeNull()
+  })
+
   it('a corrected locked field stays open for undo and re-edit', () => {
     render(
       fieldsPane({

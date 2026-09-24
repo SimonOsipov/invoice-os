@@ -37,6 +37,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -154,9 +155,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("submission: %v", err)
 	}
+	jevClient, err := jev.FromEnv(app.Logger)
+	if err != nil {
+		log.Fatalf("submission: %v", err)
+	}
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
-		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient,
+		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, jevClient,
 		newPageObjectReader(docObjects), app.Logger)
 
 	// Build the working River client and register it on the platform kit's lifecycle, so it
@@ -590,9 +595,10 @@ func selectTextReader(extractorName, doclingURL string) (extraction.PageReader, 
 func newExtractWorker(pool *pgxpool.Pool, ext extraction.Extractor, open extraction.OpenDocument,
 	pages *extraction.PageStore, auditor extraction.RecordExtractionAudit,
 	text extraction.PageReader, rules extraction.LoadAnchorRules,
-	aiReader extraction.AIReader, pageBytes extraction.PageObject, logger *slog.Logger) *extraction.ExtractWorker {
+	aiReader extraction.AIReader, jevAsker extraction.JevAsker, pageBytes extraction.PageObject,
+	logger *slog.Logger) *extraction.ExtractWorker {
 	return &extraction.ExtractWorker{Pool: pool, Extractor: ext, Open: open, Pages: pages,
-		Audit: auditor, Text: text, Rules: rules, AI: aiReader, PageBytes: pageBytes, Logger: logger}
+		Audit: auditor, Text: text, Rules: rules, AI: aiReader, Jev: jevAsker, PageBytes: pageBytes, Logger: logger}
 }
 
 // queueConfigs is the one map the client fetches from. Extraction gets its own queue so a slow

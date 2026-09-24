@@ -11,7 +11,10 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
 
 // jsWantLayouts pins the corpus size: any list below it must have shrunk.
@@ -202,5 +205,132 @@ func TestJevSeam_ANonBlankAnswerMovesARow(t *testing.T) {
 	}
 	if got[0].Region == nil {
 		t.Error("row Region is nil, want the token's own region")
+	}
+}
+
+// jsFakeJev is the real client in fake mode, as a PR environment runs it.
+func jsFakeJev(t *testing.T) *jev.Client {
+	t.Helper()
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	c, err := jev.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	if !c.Enabled() {
+		t.Fatal("the fake client is not enabled; checkValues would never ask it")
+	}
+	return c
+}
+
+// jsCountingAsker counts Ask calls through to the real client.
+type jsCountingAsker struct {
+	JevAsker
+	calls int
+}
+
+func (a *jsCountingAsker) Ask(ctx context.Context, req jev.Request) (jev.Response, error) {
+	a.calls++
+	return a.JevAsker.Ask(ctx, req)
+}
+
+// jsDecided is what the worker hands the check: the decided rows under a blank AI answer.
+func jsDecided(t *testing.T, layout string) ([]FieldResult, []TokenPage) {
+	t.Helper()
+	pages, tokens := jsGoldenRead(t, layout)
+	if jsTokenCount(tokens) == 0 {
+		t.Fatalf("%s: golden replay yielded zero tokens", layout)
+	}
+	lines := LineItems(pages)
+	in := Input{Candidates: Resolve(tokens, RuleSet{Tier1: Tier1Rules}), Lines: lines, Entity: Entity{}, Pages: tokens}
+	results := mergeAILines(mergeAI(Reconcile(in), nil, tokens, lines), nil, tokens)
+	if len(results) == 0 {
+		t.Fatalf("%s: zero decided rows", layout)
+	}
+	return results, tokens
+}
+
+func TestJevSeam_TheFakeDefaultChangesNoLayout(t *testing.T) {
+	if len(jsLayouts) < jsWantLayouts {
+		t.Fatalf("jsLayouts has %d entries, want at least %d", len(jsLayouts), jsWantLayouts)
+	}
+	client := jsFakeJev(t)
+	walked, asking := 0, 0
+	for _, layout := range jsLayouts {
+		results, tokens := jsDecided(t, layout)
+		if strings.Contains(DoclingPromptText(tokens), "JEVFAKE-") {
+			t.Fatalf("%s: the golden text already holds a fake marker", layout)
+		}
+		before := cloneResults(results)
+		a := &jsCountingAsker{JevAsker: client}
+
+		out := checkValues(t.Context(), a, tokens, results)
+
+		walked++
+		if !reflect.DeepEqual(out, before) {
+			t.Errorf("%s: the fake default changed the decided rows\ngot:  %+v\nwant: %+v", layout, out, before)
+		}
+		// Control: the identity only means something if the fake was asked.
+		wantCalls := 0
+		if slices.ContainsFunc(before, vcCheckable) {
+			wantCalls = 1
+			asking++
+		}
+		if a.calls != wantCalls {
+			t.Errorf("%s: %d Ask calls, want %d", layout, a.calls, wantCalls)
+		}
+	}
+	if walked < jsWantLayouts || asking == 0 {
+		t.Fatalf("walked %d layouts (want %d), %d with a checkable field (want > 0)", walked, jsWantLayouts, asking)
+	}
+}
+
+func TestJevSeam_TheDoubtMarkerFlipsEveryAskedFieldOnly(t *testing.T) {
+	if len(jsLayouts) < jsWantLayouts {
+		t.Fatalf("jsLayouts has %d entries, want at least %d", len(jsLayouts), jsWantLayouts)
+	}
+	client := jsFakeJev(t)
+	maxAsked, suppliersSeen := 0, 0
+	for _, layout := range jsLayouts {
+		results, tokens := jsDecided(t, layout)
+		n := len(tokens) + 1
+		marked := append(slices.Clone(tokens), TokenPage{Number: n, Tokens: []Token{tok("JEVFAKE-DOUBT", n, 0.10, 0.10, 0.30, 0.12)}})
+		before := cloneResults(results)
+
+		out := checkValues(t.Context(), client, marked, results)
+
+		if len(out) != len(before) {
+			t.Fatalf("%s: %d rows out, want %d", layout, len(out), len(before))
+		}
+		asked := 0
+		for i, b := range before {
+			switch {
+			case vcCheckable(b):
+				asked++
+				want := b
+				want.Reason = ReasonUnreadable
+				if !reflect.DeepEqual(out[i], want) {
+					t.Errorf("%s: %s Reason = %q, want %q with value, region and alternatives kept", layout, b.Name, out[i].Reason, ReasonUnreadable)
+				}
+			case b.Name == "supplier_tin" || b.Name == "supplier_name":
+				if b.Reason == ReasonNone && b.Value != nil {
+					suppliersSeen++
+				}
+				if out[i].Reason != b.Reason {
+					t.Errorf("%s: %s Reason = %q, want %q -- the supplier pair is never asked", layout, b.Name, out[i].Reason, b.Reason)
+				}
+			default:
+				if !reflect.DeepEqual(out[i], b) {
+					t.Errorf("%s: unasked row %s changed: %+v", layout, b.Name, out[i])
+				}
+			}
+		}
+		maxAsked = max(maxAsked, asked)
+	}
+	if maxAsked < 3 {
+		t.Errorf("the most fields any layout asks is %d, want at least 3", maxAsked)
+	}
+	if suppliersSeen == 0 {
+		t.Error("no layout decided a supplier field, so the supplier-pair leg is vacuous")
 	}
 }

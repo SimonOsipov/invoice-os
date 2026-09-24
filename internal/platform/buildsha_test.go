@@ -167,6 +167,42 @@ func TestHealthzCarriesMockIssuerOnlyWhenSet(t *testing.T) {
 	}
 }
 
+// AuthIssuers is gateway-only, like MockIssuer.
+func TestHealthzCarriesAuthIssuersOnlyWhenSet(t *testing.T) {
+	t.Cleanup(func(original string) func() {
+		return func() { AuthIssuers = original }
+	}(AuthIssuers))
+
+	for _, c := range []struct {
+		set    string
+		wantOK bool
+	}{
+		{"", false},
+		{"1", true},
+		{"2", true},
+	} {
+		AuthIssuers = c.set
+
+		rec := httptest.NewRecorder()
+		healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))
+
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("AuthIssuers=%q: decode %q: %v", c.set, rec.Body.String(), err)
+		}
+		got, ok := body["auth_issuers"]
+		if ok != c.wantOK {
+			t.Errorf("AuthIssuers=%q: auth_issuers present = %v, want %v (body %q)", c.set, ok, c.wantOK, rec.Body.String())
+		}
+		if got != c.set {
+			t.Errorf("AuthIssuers=%q: auth_issuers = %q, want %q", c.set, got, c.set)
+		}
+		if body["build"] != BuildSHA {
+			t.Errorf("AuthIssuers=%q: build field = %q, want %q", c.set, body["build"], BuildSHA)
+		}
+	}
+}
+
 // TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions: eight of the nine
 // fleet binaries never set these package vars, so their /healthz bodies must
 // stay byte-identical to what they were before the fields existed. Asserting the
@@ -174,11 +210,11 @@ func TestHealthzCarriesMockIssuerOnlyWhenSet(t *testing.T) {
 // added on the same reasoning would pass the absence check and still change every
 // non-gateway body.
 func TestHealthzBodyIsUnchangedOnAServiceThatNeverProvisions(t *testing.T) {
-	t.Cleanup(func(issuer, purge, reset string) func() {
-		return func() { MockIssuer, DemoPurge, DBReset = issuer, purge, reset }
-	}(MockIssuer, DemoPurge, DBReset))
+	t.Cleanup(func(issuers, issuer, purge, reset string) func() {
+		return func() { AuthIssuers, MockIssuer, DemoPurge, DBReset = issuers, issuer, purge, reset }
+	}(AuthIssuers, MockIssuer, DemoPurge, DBReset))
 
-	MockIssuer, DemoPurge, DBReset = "", "", ""
+	AuthIssuers, MockIssuer, DemoPurge, DBReset = "", "", "", ""
 
 	rec := httptest.NewRecorder()
 	healthzHandler(rec, httptest.NewRequest("GET", "/healthz", nil))

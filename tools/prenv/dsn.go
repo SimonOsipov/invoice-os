@@ -95,6 +95,8 @@ var DSNRequirements = []DSNRequirement{
 	// cmd/notifications/main.go opens no pool -- it has no db/pgxpool/sql
 	// reference at all -- so an absent DATABASE_URL is not a defect there.
 	{"notifications", "DATABASE_URL", IfPresent, KindDSN},
+	// Production has none until the post-merge write; every fork writes one.
+	{"auth", "DATABASE_URL", IfPresent, KindDSN},
 }
 
 // DSNDefect is why a variable is an offender. The defects are kept DISTINCT

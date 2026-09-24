@@ -2,9 +2,13 @@ package gateway
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -34,7 +38,7 @@ func healthzUpstream(t *testing.T, down bool) *url.URL {
 func doFleet(t *testing.T, upstreams map[string]*url.URL) (*httptest.ResponseRecorder, FleetHealth) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	FleetHealthHandler(upstreams, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
+	FleetHealthHandler(upstreams, nil, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
 	var body FleetHealth
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode fleet body %q: %v", rec.Body.String(), err)
@@ -220,5 +224,183 @@ func TestFleetUndecodableHealthzBodyStaysUpWithEmptyBuild(t *testing.T) {
 				t.Errorf("build = %q, want empty", s.Build)
 			}
 		}
+	}
+}
+
+const jwksPath = "/.well-known/jwks.json"
+
+// authPaths is the per-service health path the gateway passes for `auth`.
+var authPaths = map[string]string{"auth": ".well-known/jwks.json"}
+
+// pathRecordingUpstream answers only okPath, with status and body, and 404s every
+// other path. It returns the paths it was asked for.
+func pathRecordingUpstream(t *testing.T, okPath string, status int, body string) (*url.URL, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path != okPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	return u, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(hits)
+	}
+}
+
+func healthzWithBuild(t *testing.T, build string) (*url.URL, func() []string) {
+	t.Helper()
+	return pathRecordingUpstream(t, "/healthz", http.StatusOK, `{"status":"ok","build":"`+build+`"}`)
+}
+
+func doFleetWithPaths(t *testing.T, upstreams map[string]*url.URL, paths map[string]string) (*httptest.ResponseRecorder, FleetHealth) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	FleetHealthHandler(upstreams, paths, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
+	var body FleetHealth
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode fleet body %q: %v", rec.Body.String(), err)
+	}
+	return rec, body
+}
+
+func TestFleetProbesAuthAtJWKSPath(t *testing.T) {
+	authURL, authHits := pathRecordingUpstream(t, jwksPath, http.StatusOK, `{"keys":[{"kty":"EC","crv":"P-256","kid":"k1","x":"x","y":"y"}]}`)
+	invoiceURL, invoiceHits := healthzWithBuild(t, "abc1234")
+
+	rec, body := doFleetWithPaths(t, map[string]*url.URL{"auth": authURL, "invoice": invoiceURL}, authPaths)
+
+	byName := statusByName(body)
+	a, ok := byName["auth"]
+	if !ok {
+		t.Fatalf("roll-up omits auth: %s", rec.Body.String())
+	}
+	if a.Status != statusUp {
+		t.Errorf("auth = %+v, want up on a 200 from %s", a, jwksPath)
+	}
+	if a.Build != "" {
+		t.Errorf("auth build = %q, want empty: a JWKS body carries no build", a.Build)
+	}
+	if hits := authHits(); !slices.Contains(hits, jwksPath) || slices.Contains(hits, "/healthz") {
+		t.Errorf("auth upstream was asked for %v, want %s and never /healthz", hits, jwksPath)
+	}
+
+	// Every other service is still probed at /healthz and keeps its build.
+	if inv := byName["invoice"]; inv.Status != statusUp || inv.Build != "abc1234" {
+		t.Errorf("invoice = %+v, want up with build abc1234", inv)
+	}
+	if hits := invoiceHits(); len(hits) == 0 || slices.ContainsFunc(hits, func(p string) bool { return p != "/healthz" }) {
+		t.Errorf("invoice upstream was asked for %v, want /healthz only", hits)
+	}
+	if rec.Code != http.StatusOK || body.Status != fleetOK {
+		t.Errorf("roll-up = %d %q, want 200 %q", rec.Code, body.Status, fleetOK)
+	}
+}
+
+func TestFleetAuthJWKSDownIsDown(t *testing.T) {
+	authURL, authHits := pathRecordingUpstream(t, jwksPath, http.StatusServiceUnavailable, `{}`)
+
+	rec, body := doFleetWithPaths(t, map[string]*url.URL{"auth": authURL}, authPaths)
+
+	// Without this, a probe of /healthz (404, also down) would pass the checks below.
+	if hits := authHits(); !slices.Contains(hits, jwksPath) {
+		t.Errorf("auth upstream was asked for %v, want %s", hits, jwksPath)
+	}
+	a, ok := statusByName(body)["auth"]
+	if !ok {
+		t.Fatalf("roll-up omits auth: %s", rec.Body.String())
+	}
+	if a.Status != statusDown {
+		t.Errorf("auth = %+v, want down on a 503", a)
+	}
+	if !strings.Contains(a.Error, "503") {
+		t.Errorf("auth error = %q, want it to name the 503", a.Error)
+	}
+	if rec.Code != http.StatusServiceUnavailable || body.Status != fleetDegraded {
+		t.Errorf("roll-up = %d %q, want 503 %q", rec.Code, body.Status, fleetDegraded)
+	}
+}
+
+// A nil map, or a map without the service, keeps every probe on /healthz.
+func TestFleetDefaultHealthPathUnchanged(t *testing.T) {
+	for name, paths := range map[string]map[string]string{
+		"nil map":       nil,
+		"entry missing": authPaths,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, aHits := healthzWithBuild(t, "abc1234")
+			b, bHits := healthzWithBuild(t, "abc1234")
+
+			rec, body := doFleetWithPaths(t, map[string]*url.URL{"invoice": a, "tenancy": b}, paths)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			for svc, hits := range map[string][]string{"invoice": aHits(), "tenancy": bHits()} {
+				if len(hits) == 0 {
+					t.Errorf("%s was never probed", svc)
+				}
+				for _, p := range hits {
+					if p != "/healthz" {
+						t.Errorf("%s was probed at %q, want /healthz", svc, p)
+					}
+				}
+			}
+			for _, svc := range []string{"invoice", "tenancy"} {
+				if s := statusByName(body)[svc]; s.Status != statusUp || s.Build != "abc1234" {
+					t.Errorf("%s = %+v, want up with build abc1234", svc, s)
+				}
+			}
+		})
+	}
+}
+
+// The roll-up is public, so GoTrue's version must not reach it even when the
+// JWKS body carries one. The stray build key proves the entry takes nothing from the body.
+func TestFleetRollupPublishesNoAuthVersion(t *testing.T) {
+	authURL, _ := pathRecordingUpstream(t, jwksPath, http.StatusOK, `{"keys":[{"kty":"EC","kid":"k1"}],"version":"v9","build":"leaked"}`)
+
+	rec, _ := doFleetWithPaths(t, map[string]*url.URL{"auth": authURL}, authPaths)
+
+	var raw struct {
+		Services []map[string]any `json:"services"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	if len(raw.Services) == 0 {
+		t.Fatalf("roll-up has no services: %s", rec.Body.String())
+	}
+	var entry map[string]any
+	for _, s := range raw.Services {
+		if s["name"] == "auth" {
+			entry = s
+		}
+	}
+	if entry == nil {
+		t.Fatalf("roll-up omits auth: %s", rec.Body.String())
+	}
+	if keys := slices.Sorted(maps.Keys(entry)); !slices.Equal(keys, []string{"name", "status"}) {
+		t.Errorf("auth entry keys = %v, want [name status] (entry %v)", keys, entry)
+	}
+	if entry["status"] != statusUp {
+		t.Errorf("auth status = %v, want %q", entry["status"], statusUp)
+	}
+	if b := rec.Body.String(); strings.Contains(strings.ToLower(b), "version") || strings.Contains(b, "v9") {
+		t.Errorf("roll-up body names a version: %s", b)
 	}
 }

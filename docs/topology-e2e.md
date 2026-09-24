@@ -11,7 +11,7 @@ M2-14.4).
 ## What it asserts
 
 1. **Fleet /healthz gate** — the gateway's public `GET /healthz/fleet` roll-up reports all
-   9 backends (gateway + 7 routed context services + the `docling` sidecar) green; the run
+   10 backends (gateway + 7 routed context services + the `docling` and `auth` sidecars) green; the run
    fails naming any that are down.
    The context services are private-network-only, so this route is the only way CI sees
    their health through the one public backend surface.
@@ -41,7 +41,7 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 seeded, and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
+            ──> deploy 8 context services + docling + auth + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
                 is a durable Railway reference variable, M4-21-05)
             ──> verify: smoke (landing + consoles) + api (typed contract suite) +
                 topology (fleet gate, browser login, isolation)
@@ -92,13 +92,17 @@ added to — a missing `GATEWAY_DB_RESET` fails closed (no reset), not open.
 
 **Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
 `development` would simply be absent in every PR environment. `prepare-env` therefore fails
-loudly if `development` holds any — do not add one.
+loudly if `development` holds any — do not add one. The only exception is `GOTRUE_JWT_KEYS`,
+`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`: `set-fork-auth` writes the fork's own.
 
-**Assumed already present on the gateway (from M2-12/M2-13):** `AUTH_ISSUER`, and
-`AUTH_JWKS_URL` pointing at the gateway's **own**
-`<discovered gateway URL>/.well-known/jwks.json` so the mock round trip verifies — this,
-too, is carried into each PR environment by that same fork. If the round trip 401s on a PR
-environment, this is the first thing to check.
+**Written per fork, not inherited:** a fork no longer relies on the gateway's `AUTH_ISSUER`
+and `AUTH_JWKS_URL` it copied from production. `set-fork-auth` (the first prepare-env step
+after `resolve`) writes them: `AUTH_ISSUER=https://mock.ascomply.dev`, `AUTH_JWKS_URL` at the
+gateway's own loopback `/.well-known/jwks.json` so the mock round trip verifies, and
+`AUTH_ADDITIONAL_ISSUERS` naming the fork's own GoTrue. It also writes the fork's `auth`
+key, JWT secret and admin password. The gateway health gate asserts `auth_issuers=2` on a
+PR. If the round trip 401s on a PR environment, check that step first. See
+[identity-provider.md](./identity-provider.md).
 
 ### GitHub secrets
 
@@ -171,7 +175,7 @@ of a PR environment.
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
 up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Every
-environment is now a **fresh, cold, from-scratch 14-service build** (a new PR fork,
+environment is now a **fresh, cold, from-scratch 15-service build** (a new PR fork,
 or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
 an edge case: each Railway service has a service-level **Watch Paths** filter that makes
 `railway up` skip (no deployment created) when the diff misses the service's watched
@@ -193,7 +197,7 @@ experiments falsified scale-to-0 and diff-driven alternatives).
 
 The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
 `fleet-gate` / the e2e SPA `/health` wait (200s → 600s) — since every environment is now a
-cold 14-service build, not the exception a warm redeploy used to be (Decision
+cold 15-service build, not the exception a warm redeploy used to be (Decision
 `[gate-windows-provisional]`).
 
 ## Related

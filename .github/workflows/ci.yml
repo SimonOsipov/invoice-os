@@ -24,6 +24,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       migrations: ${{ steps.filter.outputs.migrations }}
       sidecar: ${{ steps.filter.outputs.sidecar }}
+      idp: ${{ steps.filter.outputs.idp }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -51,6 +52,7 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/workflows/dev-env.yml'
               - '.github/workflows/railway-invariants.yml'
+              - '.github/workflows/idp-release-watch.yml'
             migrations:
               - 'migrations/**'
               - 'db/**'
@@ -76,6 +78,19 @@ jobs:
               - 'package.json'
               - 'pnpm-workspace.yaml'
               - 'pnpm-lock.yaml'
+              - '.github/workflows/ci.yml'
+            # Every input to the supabase/auth image, its DB prerequisites and the TestIdP suite.
+            idp:
+              - 'sidecar/auth/**'
+              - 'internal/platform/auth/**'
+              - 'migrations/**'
+              - 'db/**'
+              - 'tools/prenv/**'
+              - 'internal/tools/idppin/**'
+              - 'scripts/ci/idp-*.sh'
+              - 'Makefile'
+              - 'go.mod'
+              - 'go.sum'
               - '.github/workflows/ci.yml'
             sidecar:
               - 'sidecar/**'
@@ -186,6 +201,8 @@ jobs:
           else
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
+      - name: JWKS failure budget under the race detector
+        run: go test -race -count=1 -run 'TestJWKS_' ./internal/platform/auth/
       # Untagged build/vet never compile cmd/gateway/mockissuer.go.
       - name: Test the mock-issuer build (-tags mockissuer)
         run: go vet -tags mockissuer ./cmd/gateway/ && go test -tags mockissuer ./cmd/gateway/
@@ -523,6 +540,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -570,7 +589,7 @@ jobs:
         # an over-broad Down, because the re-up restores whatever it took with it.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestDemoRepairMigration|TestExtraction|TestImportBatchesHeaderRow' ./internal/platform/db/...
       - name: Bootstrap-SQL pgx-caller suite (fail-closed GUCs, idempotency, rotation) + per-test visibility & skip gate
-        # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its three
+        # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its
         # role passwords from session GUCs instead of psql-only \set/:'var', so a pgx
         # caller (not just psql) can execute the identical file (Decision
         # [one-bootstrap-file]). Covers create-or-converge, security-attribute
@@ -638,6 +657,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -740,6 +761,57 @@ jobs:
         # last in the job since db.Seed re-anchors created_at and re-enables every rule.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestSeed|TestCIRunFilters' ./internal/platform/db/...
 
+  # Real supabase/auth containers against a bootstrapped, migrated Postgres. They connect as
+  # supabase_auth_admin: a superuser bypasses the grants and search_path this job exists to prove.
+  idp:
+    name: IdP integration (supabase/auth)
+    needs: changes
+    if: needs.changes.outputs.idp == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: invoice_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      MIGRATOR_PASSWORD: migrator
+      APP_PASSWORD: app
+      READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bootstrap non-superuser roles (as superuser)
+        run: make db-bootstrap
+      - name: Apply all migrations (as migrator)
+        run: make migrate-up
+      - name: Start idp-es256, idp-hs256 and idp-rebuild (stdout is the three URLs only)
+        run: scripts/ci/idp-up.sh "$DATABASE_AUTH_ADMIN_URL" 5432 >> "$GITHUB_ENV"
+      - name: Read the pinned supabase/auth tag
+        run: echo "IDP_PINNED_TAG=$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" >> "$GITHUB_ENV"
+      - name: Measured /health version of idp-es256
+        run: curl -fsS "$IDP_ES256_URL/health"
+      - name: TestIdP suite + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 -run TestIdP ./internal/platform/auth/...
+      - name: Container logs on failure
+        if: failure()
+        run: for c in idp-es256 idp-hs256 idp-rebuild; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
+
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-
   # outbox enqueue commits a job + its idempotency key atomically (a rollback leaves
@@ -782,6 +854,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -866,6 +940,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -1093,7 +1169,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
+    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1106,6 +1182,7 @@ jobs:
           echo "docling-test:  ${{ needs.docling-test.result }}"
           echo "migrations:    ${{ needs.migrations.result }}"
           echo "rls:           ${{ needs.rls.result }}"
+          echo "idp:           ${{ needs.idp.result }}"
           echo "queue:         ${{ needs.queue.result }}"
           echo "audit:         ${{ needs.audit.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
@@ -1134,6 +1211,9 @@ jobs:
           fi
           if [ "${{ needs.rls.result }}" = "failure" ] || [ "${{ needs.rls.result }}" = "cancelled" ]; then
             echo "::error::RLS isolation suite failed"; exit 1
+          fi
+          if [ "${{ needs.idp.result }}" = "failure" ] || [ "${{ needs.idp.result }}" = "cancelled" ]; then
+            echo "::error::IdP integration suite failed"; exit 1
           fi
           if [ "${{ needs.queue.result }}" = "failure" ] || [ "${{ needs.queue.result }}" = "cancelled" ]; then
             echo "::error::Queue smoke suite failed"; exit 1

@@ -15,14 +15,14 @@
 //     with no database. Self-contained: does NOT depend on the shared RLS harness
 //     (rls_harness_test.go) — like migrate_test.go, it opens its own pool.
 //   - The dev/CI Postgres this suite runs against (`make dev-db`, or the CI service
-//     container) already has the three real roles bootstrapped and OWNING the entire
+//     container) already has the real roles bootstrapped and OWNING the entire
 //     migrated schema (invoice_migrator owns every table). Forcibly dropping them to
 //     satisfy a literal "roles absent" precondition would destroy that shared schema
 //     out from under every other test in this package — instead, TestBootstrapSQL-
 //     CreatesRolesWithGivenPasswords exercises the create-or-converge path bootstrap.sql
 //     itself is idempotent over, which is exactly what runs the FIRST time in a genuinely
 //     fresh CI container.
-//   - Every test mutates the SAME three shared roles, so none of them use t.Parallel()
+//   - Every test mutates the SAME shared roles, so none of them use t.Parallel()
 //     (matches demo_reset_test.go's rationale for shared global state), and every test
 //     registers a t.Cleanup that restores passwords/attributes to the dev/CI baseline
 //     BEFORE it mutates anything — so a RED failure (or any panic) never leaves the
@@ -33,12 +33,15 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -56,9 +59,9 @@ import (
 // (internal/platform/db), i.e. the repo root's db/bootstrap.sql.
 const bootstrapSQLPath = "../../../db/bootstrap.sql"
 
-// bootstrapRoles are the three roles db/bootstrap.sql creates/re-asserts, in the order
-// the file itself declares them.
-var bootstrapRoles = []string{"invoice_migrator", "invoice_app", "invoice_tenant_reader"}
+// bootstrapRoles are the LOGIN roles db/bootstrap.sql creates/re-asserts, in the order
+// the file itself declares them. The NOLOGIN auth_hook_reader is not one of them.
+var bootstrapRoles = []string{"invoice_migrator", "invoice_app", "invoice_tenant_reader", "supabase_auth_admin"}
 
 // gucValue distinguishes "leave this session GUC unset" (current_setting(name, true)
 // then reads NULL) from "explicitly set it to the empty string" — the Test Spec's two
@@ -73,23 +76,24 @@ func unsetGUC() gucValue      { return gucValue{} }
 func emptyGUC() gucValue      { return gucValue{set: true, value: ""} }
 func pwGUC(v string) gucValue { return gucValue{set: true, value: v} }
 
-// bootstrapGUCs bundles the three ascomply.*_password session GUCs a pgx caller
+// bootstrapGUCs bundles the four ascomply.*_password session GUCs a pgx caller
 // (or the Makefile's `-c "SELECT set_config(...)" -f` psql invocation) must set before
 // running db/bootstrap.sql.
 type bootstrapGUCs struct {
-	migrator, app, reader gucValue
+	migrator, app, reader, authAdmin gucValue
 }
 
-// devDefaultGUCs returns the three password values matching every CI job's and the
-// Makefile's own dev-bootstrap defaults (MIGRATOR_PASSWORD/APP_PASSWORD/
-// READER_PASSWORD, `?= migrator/app/reader`; see .github/workflows/ci.yml and
+// devDefaultGUCs returns the four password values matching every CI job's and the
+// Makefile's own dev-bootstrap defaults (MIGRATOR_PASSWORD/APP_PASSWORD/READER_PASSWORD/
+// AUTH_ADMIN_PASSWORD, `?= migrator/app/reader/auth_admin`; see .github/workflows/ci.yml and
 // Makefile). Env override honored, so a customized .env dev DB restores to ITS
 // defaults, not a hardcoded stranger value.
 func devDefaultGUCs() bootstrapGUCs {
 	return bootstrapGUCs{
-		migrator: pwGUC(envOr("MIGRATOR_PASSWORD", "migrator")),
-		app:      pwGUC(envOr("APP_PASSWORD", "app")),
-		reader:   pwGUC(envOr("READER_PASSWORD", "reader")),
+		migrator:  pwGUC(envOr("MIGRATOR_PASSWORD", "migrator")),
+		app:       pwGUC(envOr("APP_PASSWORD", "app")),
+		reader:    pwGUC(envOr("READER_PASSWORD", "reader")),
+		authAdmin: pwGUC(envOr("AUTH_ADMIN_PASSWORD", "auth_admin")),
 	}
 }
 
@@ -132,7 +136,7 @@ func readBootstrapSQL(t *testing.T) string {
 	return string(b)
 }
 
-// applyBootstrap runs db/bootstrap.sql over ONE acquired connection: the three
+// applyBootstrap runs db/bootstrap.sql over ONE acquired connection: the four
 // ascomply.* GUCs set (session-scoped, is_local=false — matching the Makefile's
 // `-c "SELECT set_config(..., false)" -f` precedent) on that connection first, then the
 // file executed as a single zero-arg Exec so pgx uses the simple query protocol its
@@ -156,6 +160,7 @@ func applyBootstrap(t *testing.T, pool *pgxpool.Pool, guc bootstrapGUCs, sql str
 		{"ascomply.migrator_password", guc.migrator},
 		{"ascomply.app_password", guc.app},
 		{"ascomply.reader_password", guc.reader},
+		{"ascomply.auth_admin_password", guc.authAdmin},
 	} {
 		if !kv.v.set {
 			continue // leave unset: current_setting(name, true) then reads NULL.
@@ -188,9 +193,9 @@ func alterRolePassword(t *testing.T, pool *pgxpool.Pool, role, password string) 
 	}
 }
 
-// restoreDevDefaultPasswords sets all three roles' passwords back to the shared dev/CI
+// restoreDevDefaultPasswords sets all four login roles' passwords back to the shared dev/CI
 // default directly (not via db/bootstrap.sql). Later tests in this package dial
-// DATABASE_MIGRATION_URL / DATABASE_URL / DATABASE_READER_URL built from these exact
+// DATABASE_MIGRATION_URL / DATABASE_URL / DATABASE_READER_URL / DATABASE_AUTH_ADMIN_URL built from these exact
 // defaults (see Makefile), so this must run in t.Cleanup after any test in this file
 // rotates a password.
 func restoreDevDefaultPasswords(t *testing.T, pool *pgxpool.Pool) {
@@ -202,6 +207,10 @@ func restoreDevDefaultPasswords(t *testing.T, pool *pgxpool.Pool) {
 		{"invoice_tenant_reader", def.reader.value},
 	} {
 		alterRolePassword(t, pool, kv.role, kv.password)
+	}
+	// Absent until bootstrap creates it; later TestRLS_* tests dial it with the default.
+	if roleExists(t, pool, authAdminRole) {
+		alterRolePassword(t, pool, authAdminRole, def.authAdmin.value)
 	}
 }
 
@@ -286,8 +295,8 @@ func hasSchemaPrivilege(t *testing.T, pool *pgxpool.Pool, role, priv string) boo
 }
 
 // TestBootstrapSQLCreatesRolesWithGivenPasswords: Test Spec row 1 / Core AC-2. Sets the
-// three GUCs to unique per-run passwords and applies db/bootstrap.sql from disk; all
-// three roles must exist (LOGIN) and each must accept a NEW connection authenticated
+// four GUCs to unique per-run passwords and applies db/bootstrap.sql from disk; all
+// four roles must exist (LOGIN) and each must accept a NEW connection authenticated
 // with EXACTLY the password its GUC carried — verified by an actual login, not by
 // reading a catalog (a catalog only proves a password hash was set, not which one).
 func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
@@ -297,9 +306,10 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-adm-" + uuid.NewString()),
 	}
 
 	if err := applyBootstrap(t, pool, guc, sql); err != nil {
@@ -310,6 +320,7 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		attrs := readRoleAttrs(t, pool, tc.role)
 		if !attrs.canLogin {
@@ -322,7 +333,7 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 }
 
 // TestBootstrapSQLAssertsSecurityAttributes: Test Spec row 2 / Core AC-2. Pre-mutates
-// all three roles to the WRONG attributes (SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE
+// all four login roles to the WRONG attributes (SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE
 // all granted) then applies db/bootstrap.sql; every role must come back exactly
 // NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, LOGIN — the attribute
 // re-assertion db/bootstrap.sql's step 2 performs unconditionally on every run.
@@ -371,7 +382,7 @@ func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 
 // TestBootstrapSQLFailsClosedOnMissingPassword: Test Spec row 3 / Core AC-3. Covers
 // both wordings of the Given (GUCs unset, or set to an empty string): a subtest where
-// the three GUCs are never set at all, and one where they are explicitly set to the
+// the four GUCs are never set at all, and one where they are explicitly set to the
 // empty string. Either way, applying db/bootstrap.sql must return an error naming the
 // missing setting, and — checked via an actual login against a known sentinel
 // password planted beforehand, not a catalog read — no role's password may have
@@ -385,6 +396,7 @@ func TestBootstrapSQLFailsClosedOnMissingPassword(t *testing.T) {
 		"invoice_migrator":      "boot-sentinel-mig",
 		"invoice_app":           "boot-sentinel-app",
 		"invoice_tenant_reader": "boot-sentinel-rdr",
+		"supabase_auth_admin":   "boot-sentinel-adm",
 	}
 	for role, pw := range sentinels {
 		alterRolePassword(t, pool, role, pw)
@@ -400,8 +412,8 @@ func TestBootstrapSQLFailsClosedOnMissingPassword(t *testing.T) {
 		name string
 		guc  bootstrapGUCs
 	}{
-		{"unset", bootstrapGUCs{migrator: unsetGUC(), app: unsetGUC(), reader: unsetGUC()}},
-		{"empty string", bootstrapGUCs{migrator: emptyGUC(), app: emptyGUC(), reader: emptyGUC()}},
+		{"unset", bootstrapGUCs{migrator: unsetGUC(), app: unsetGUC(), reader: unsetGUC(), authAdmin: unsetGUC()}},
+		{"empty string", bootstrapGUCs{migrator: emptyGUC(), app: emptyGUC(), reader: emptyGUC(), authAdmin: emptyGUC()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := applyBootstrap(t, pool, tc.guc, sql)
@@ -430,9 +442,10 @@ func TestBootstrapSQLIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-idem-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-idem-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-idem-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-idem-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-idem-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-idem-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-idem-adm-" + uuid.NewString()),
 	}
 
 	if err := applyBootstrap(t, pool, guc, sql); err != nil {
@@ -446,6 +459,7 @@ func TestBootstrapSQLIsIdempotent(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		attrs := readRoleAttrs(t, pool, tc.role)
 		if attrs.super || attrs.bypassRLS || attrs.createDB || attrs.createRole || !attrs.canLogin {
@@ -477,14 +491,14 @@ func TestBootstrapSQLRotatesPasswordDeterministically(t *testing.T) {
 	p1 := "boot-rot-p1-" + uuid.NewString()
 	p2 := "boot-rot-p2-" + uuid.NewString()
 
-	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p1), app: pwGUC(p1), reader: pwGUC(p1)}, sql); err != nil {
+	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p1), app: pwGUC(p1), reader: pwGUC(p1), authAdmin: pwGUC(p1)}, sql); err != nil {
 		t.Fatalf("bootstrap with p1: %v", err)
 	}
 	if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", p1)); err != nil {
 		t.Fatalf("sanity: login with p1 right after bootstrapping with p1: %v", err)
 	}
 
-	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p2), app: pwGUC(p2), reader: pwGUC(p2)}, sql); err != nil {
+	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p2), app: pwGUC(p2), reader: pwGUC(p2), authAdmin: pwGUC(p2)}, sql); err != nil {
 		t.Fatalf("re-bootstrap with p2: %v", err)
 	}
 
@@ -594,7 +608,7 @@ func TestBootstrapSQLPasswordSpecialCharactersRoundTrip(t *testing.T) {
 		{"dollar_quote_tag_collision", `pw$pw$injected-` + uuid.NewString()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			guc := bootstrapGUCs{migrator: pwGUC(tc.pw), app: pwGUC(tc.pw), reader: pwGUC(tc.pw)}
+			guc := bootstrapGUCs{migrator: pwGUC(tc.pw), app: pwGUC(tc.pw), reader: pwGUC(tc.pw), authAdmin: pwGUC(tc.pw)}
 			if err := applyBootstrap(t, pool, guc, sql); err != nil {
 				t.Fatalf("apply db/bootstrap.sql with a %s password: %v", tc.name, err)
 			}
@@ -631,7 +645,7 @@ func TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
 
 	const whitespacePW = "   "
-	guc := bootstrapGUCs{migrator: pwGUC(whitespacePW), app: pwGUC("app"), reader: pwGUC("reader")}
+	guc := bootstrapGUCs{migrator: pwGUC(whitespacePW), app: pwGUC("app"), reader: pwGUC("reader"), authAdmin: pwGUC("auth_admin")}
 
 	err := applyBootstrap(t, pool, guc, sql)
 	if err != nil {
@@ -669,9 +683,10 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 	ctx := context.Background()
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-conc-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-conc-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-conc-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-conc-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-conc-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-conc-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-conc-adm-" + uuid.NewString()),
 	}
 
 	const n = 3
@@ -691,6 +706,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 				{"ascomply.migrator_password", guc.migrator.value},
 				{"ascomply.app_password", guc.app.value},
 				{"ascomply.reader_password", guc.reader.value},
+				{"ascomply.auth_admin_password", guc.authAdmin.value},
 			} {
 				if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 					errs <- fmt.Errorf("set_config(%s): %w", kv.name, err)
@@ -727,6 +743,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login after the concurrent race + serial re-apply failed — end state did not converge: %v", tc.role, err)
@@ -744,7 +761,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 // given — it exits 0, emits none of db/bootstrap.sql's command tags (no DO/ALTER
 // ROLE/GRANT/REVOKE), and leaves every role's password untouched — unless the input
 // is also named explicitly via `-f -`. `make dev-db`'s in-container invocation sets
-// three `-c "SELECT set_config(...)"` GUCs and pipes db/bootstrap.sql over stdin, so
+// four `-c "SELECT set_config(...)"` GUCs and pipes db/bootstrap.sql over stdin, so
 // it depends entirely on that explicit `-f -` to not be a silent no-op. This guards
 // against a future edit reverting to bare `< db/bootstrap.sql` redirection.
 func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
@@ -776,7 +793,7 @@ func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
 // below fails on an ASSERTION against that stub, never on a missing symbol.
 //
 // DB-backed cases follow the same conventions as the M4-21-02 section above: skip
-// on DATABASE_SUPERUSER_URL only, mutate the SAME three shared roles as the rest
+// on DATABASE_SUPERUSER_URL only, mutate the SAME shared roles as the rest
 // of this file so none use t.Parallel(), and register their restore-to-baseline
 // t.Cleanup BEFORE mutating anything, so a RED failure never leaves the shared
 // roles rotated for the rest of the package's run. TestBootstrapEnabledAllowlist
@@ -925,7 +942,7 @@ func acquireAdvisoryLockRoundTrip(t *testing.T, pool *pgxpool.Pool, key int64) {
 // readBootstrapSQL(t) uses elsewhere in this file — this is what proves the
 // embedded copy is complete, exactly as TestMigrateUpFromEmbedded does for
 // migrations. As with the M4-21-02 section's tests, this package's shared dev/CI
-// Postgres already has the three roles bootstrapped and owning the migrated
+// Postgres already has the roles bootstrapped and owning the migrated
 // schema; forcibly dropping them to honor a literal "empty DB" precondition would
 // destroy that schema out from under every other test in this package, so — like
 // TestBootstrapSQLCreatesRolesWithGivenPasswords — this exercises the
@@ -938,9 +955,10 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-embed-mig-" + uuid.NewString(),
-		App:      "boot-embed-app-" + uuid.NewString(),
-		Reader:   "boot-embed-rdr-" + uuid.NewString(),
+		Migrator:  "boot-embed-mig-" + uuid.NewString(),
+		App:       "boot-embed-app-" + uuid.NewString(),
+		Reader:    "boot-embed-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-embed-adm-" + uuid.NewString(),
 	}
 
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
@@ -951,6 +969,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 		{"invoice_migrator", pw.Migrator},
 		{"invoice_app", pw.App},
 		{"invoice_tenant_reader", pw.Reader},
+		{"supabase_auth_admin", pw.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login with the Bootstrap-injected password failed: %v", tc.role, err)
@@ -960,7 +979,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 
 // TestBootstrapRejectsEmptyPasswords: Test Spec row 3 / AC-4. A RolePasswords with
 // any ONE field empty must be rejected — with an error naming that field — before
-// any statement touches the database. Sentinel passwords are planted on all three
+// any statement touches the database. Sentinel passwords are planted on all four
 // roles beforehand (mirroring TestBootstrapSQLFailsClosedOnMissingPassword) and
 // re-checked afterward: if Bootstrap validated only the empty field and still
 // applied the other two (valid) passwords it supplied, that would be a partial,
@@ -974,6 +993,7 @@ func TestBootstrapRejectsEmptyPasswords(t *testing.T) {
 		"invoice_migrator":      "boot-empty-sentinel-mig",
 		"invoice_app":           "boot-empty-sentinel-app",
 		"invoice_tenant_reader": "boot-empty-sentinel-rdr",
+		"supabase_auth_admin":   "boot-empty-sentinel-adm",
 	}
 	for role, pw := range sentinels {
 		alterRolePassword(t, pool, role, pw)
@@ -992,18 +1012,23 @@ func TestBootstrapRejectsEmptyPasswords(t *testing.T) {
 	}{
 		{
 			name:      "empty migrator",
-			pw:        db.RolePasswords{Migrator: "", App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString()},
+			pw:        db.RolePasswords{Migrator: "", App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "migrator",
 		},
 		{
 			name:      "empty app",
-			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "", Reader: "boot-empty-rdr-" + uuid.NewString()},
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "", Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "app",
 		},
 		{
 			name:      "empty reader",
-			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: ""},
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: "", AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "reader",
+		},
+		{
+			name:      "empty auth admin",
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: ""},
+			wantField: "authadmin",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1038,9 +1063,10 @@ func TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-conc-run-mig-" + uuid.NewString(),
-		App:      "boot-conc-run-app-" + uuid.NewString(),
-		Reader:   "boot-conc-run-rdr-" + uuid.NewString(),
+		Migrator:  "boot-conc-run-mig-" + uuid.NewString(),
+		App:       "boot-conc-run-app-" + uuid.NewString(),
+		Reader:    "boot-conc-run-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-conc-run-adm-" + uuid.NewString(),
 	}
 
 	const n = 4
@@ -1066,6 +1092,7 @@ func TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock(t *testing.T) {
 		{"invoice_migrator", pw.Migrator},
 		{"invoice_app", pw.App},
 		{"invoice_tenant_reader", pw.Reader},
+		{"supabase_auth_admin", pw.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login after the concurrent Bootstrap calls failed — end state did not converge: %v", tc.role, err)
@@ -1084,9 +1111,10 @@ func TestBootstrapReleasesAdvisoryLock(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-lock-mig-" + uuid.NewString(),
-		App:      "boot-lock-app-" + uuid.NewString(),
-		Reader:   "boot-lock-rdr-" + uuid.NewString(),
+		Migrator:  "boot-lock-mig-" + uuid.NewString(),
+		App:       "boot-lock-app-" + uuid.NewString(),
+		Reader:    "boot-lock-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-lock-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -1108,7 +1136,7 @@ func TestBootstrapReleasesAdvisoryLock(t *testing.T) {
 func TestBootstrapRetriesThenFailsOnUnreachableDB(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	dsn := closedPortDSN(t, superDSN)
-	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x", AuthAdmin: "x"}
 
 	start := time.Now()
 	done := make(chan error, 1)
@@ -1141,9 +1169,10 @@ func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-mig-e2e-" + uuid.NewString(),
-		App:      "boot-app-e2e-" + uuid.NewString(),
-		Reader:   "boot-rdr-e2e-" + uuid.NewString(),
+		Migrator:  "boot-mig-e2e-" + uuid.NewString(),
+		App:       "boot-app-e2e-" + uuid.NewString(),
+		Reader:    "boot-rdr-e2e-" + uuid.NewString(),
+		AuthAdmin: "boot-adm-e2e-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -1167,7 +1196,7 @@ func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
 
 // TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords: adversarial
 // coverage for AC-1/AC-7's "one-source invariant" under a precondition no Test
-// Spec row exercises: NOT a fresh/empty DB, but one where all three roles already
+// Spec row exercises: NOT a fresh/empty DB, but one where all four login roles already
 // exist with a DIFFERENT password from a prior Bootstrap run (e.g. a redeployed
 // gateway rotating its own secrets). db.Bootstrap must converge every role to the
 // NEW password and the OLD password must stop working — proving the Go runner
@@ -1180,9 +1209,10 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	original := db.RolePasswords{
-		Migrator: "boot-rot-old-mig-" + uuid.NewString(),
-		App:      "boot-rot-old-app-" + uuid.NewString(),
-		Reader:   "boot-rot-old-rdr-" + uuid.NewString(),
+		Migrator:  "boot-rot-old-mig-" + uuid.NewString(),
+		App:       "boot-rot-old-app-" + uuid.NewString(),
+		Reader:    "boot-rot-old-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-rot-old-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, original, dbsql.FS); err != nil {
 		t.Fatalf("first Bootstrap (planting the OLD passwords): %v", err)
@@ -1192,9 +1222,10 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 	}
 
 	rotated := db.RolePasswords{
-		Migrator: "boot-rot-new-mig-" + uuid.NewString(),
-		App:      "boot-rot-new-app-" + uuid.NewString(),
-		Reader:   "boot-rot-new-rdr-" + uuid.NewString(),
+		Migrator:  "boot-rot-new-mig-" + uuid.NewString(),
+		App:       "boot-rot-new-app-" + uuid.NewString(),
+		Reader:    "boot-rot-new-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-rot-new-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, rotated, dbsql.FS); err != nil {
 		t.Fatalf("second Bootstrap (rotating to NEW passwords over already-provisioned roles): %v", err)
@@ -1204,6 +1235,7 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 		{"invoice_migrator", rotated.Migrator},
 		{"invoice_app", rotated.App},
 		{"invoice_tenant_reader", rotated.Reader},
+		{"supabase_auth_admin", rotated.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login with the NEW password failed after rotation: %v", tc.role, err)
@@ -1248,9 +1280,10 @@ func TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention(t *testing.
 	}()
 
 	pw := db.RolePasswords{
-		Migrator: "boot-contend-mig-" + uuid.NewString(),
-		App:      "boot-contend-app-" + uuid.NewString(),
-		Reader:   "boot-contend-rdr-" + uuid.NewString(),
+		Migrator:  "boot-contend-mig-" + uuid.NewString(),
+		App:       "boot-contend-app-" + uuid.NewString(),
+		Reader:    "boot-contend-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-contend-adm-" + uuid.NewString(),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1289,7 +1322,7 @@ func TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber(t *testing.T) 
 // OS's own multi-minute TCP retransmission timeout.
 func TestBootstrapBoundedAgainstBlackHoleHost(t *testing.T) {
 	dsn := "postgres://postgres:x@203.0.113.1:5432/invoice_os?sslmode=disable"
-	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x", AuthAdmin: "x"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -1308,7 +1341,7 @@ func TestBootstrapBoundedAgainstBlackHoleHost(t *testing.T) {
 // TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure: adversarial coverage
 // for AC-5. TestBootstrapReleasesAdvisoryLock above only covers the HAPPY path;
 // this proves release also happens when bootstrap.sql itself fails PARTWAY
-// through execution (after the lock is acquired and the three GUCs are set,
+// through execution (after the lock is acquired and the four GUCs are set,
 // unlike a Go-level validation rejection which never acquires the lock at all).
 // Uses an in-memory fs.FS with a deliberately broken bootstrap.sql so the failure
 // is deterministic and doesn't depend on mutating the real file.
@@ -1329,9 +1362,10 @@ func TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure(t *testing.T) {
 	pool := bootstrapSuperuserPool(t, superDSN)
 
 	pw := db.RolePasswords{
-		Migrator: "boot-midfail-mig-" + uuid.NewString(),
-		App:      "boot-midfail-app-" + uuid.NewString(),
-		Reader:   "boot-midfail-rdr-" + uuid.NewString(),
+		Migrator:  "boot-midfail-mig-" + uuid.NewString(),
+		App:       "boot-midfail-app-" + uuid.NewString(),
+		Reader:    "boot-midfail-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-midfail-adm-" + uuid.NewString(),
 	}
 	brokenFS := fstest.MapFS{
 		"bootstrap.sql": &fstest.MapFile{Data: []byte(
@@ -1347,4 +1381,397 @@ func TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure(t *testing.T) {
 		t.Errorf("pg_locks still shows advisory key %d granted after a MID-SEQUENCE Bootstrap failure — the lock was not released on the error path", db.BootstrapAdvisoryLockKey)
 	}
 	acquireAdvisoryLockRoundTrip(t, pool, db.BootstrapAdvisoryLockKey)
+}
+
+// ---- The GoTrue login role, its schema and the hook owner --------------------
+
+const (
+	authAdminRole  = "supabase_auth_admin"
+	hookReaderRole = "auth_hook_reader"
+)
+
+func roleExists(t *testing.T, pool *pgxpool.Pool, role string) bool {
+	t.Helper()
+	return mustCount(t, pool, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, role) > 0
+}
+
+func mustExecSQL(t *testing.T, pool *pgxpool.Pool, stmt string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), stmt); err != nil {
+		t.Fatalf("%s: %v", stmt, err)
+	}
+}
+
+// restoreAuthRoles puts both roles back to the bootstrap baseline after a test elevates or strips them.
+func restoreAuthRoles(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	var stmts []string
+	if roleExists(t, pool, authAdminRole) {
+		stmts = append(stmts,
+			`ALTER ROLE supabase_auth_admin WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+			`ALTER ROLE supabase_auth_admin SET search_path = auth`,
+			`GRANT USAGE ON SCHEMA public TO supabase_auth_admin`,
+			`REVOKE CREATE ON SCHEMA public FROM supabase_auth_admin`,
+		)
+	}
+	if roleExists(t, pool, hookReaderRole) {
+		stmts = append(stmts,
+			`ALTER ROLE auth_hook_reader WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+			`GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader`,
+			`GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE`,
+		)
+	}
+	for _, stmt := range stmts {
+		if _, err := pool.Exec(ctx, stmt); err != nil {
+			t.Errorf("restore: %s: %v", stmt, err)
+		}
+	}
+}
+
+// revokePublicSchemaUsage hides PUBLIC's default USAGE on schema public (PG15+), which
+// would otherwise satisfy a role's USAGE check with no explicit grant. Restored on cleanup.
+func revokePublicSchemaUsage(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `GRANT USAGE ON SCHEMA public TO PUBLIC`); err != nil {
+			t.Errorf("restore PUBLIC USAGE on schema public: %v", err)
+		}
+	})
+	mustExecSQL(t, pool, `REVOKE USAGE ON SCHEMA public FROM PUBLIC`)
+}
+
+func TestBootstrapCreatesAuthAdminRoleWithSafeAttributes(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool); restoreAuthRoles(t, pool) })
+
+	// A role left by an earlier bootstrap would pass unaided; elevate it so only re-assertion passes.
+	if roleExists(t, pool, authAdminRole) {
+		mustExecSQL(t, pool, `ALTER ROLE supabase_auth_admin WITH NOLOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE`)
+		mustExecSQL(t, pool, `ALTER ROLE supabase_auth_admin RESET search_path`)
+	}
+
+	pw := db.RolePasswords{
+		Migrator:  "boot-aa-mig-" + uuid.NewString(),
+		App:       "boot-aa-app-" + uuid.NewString(),
+		Reader:    "boot-aa-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-aa-adm-" + uuid.NewString(),
+	}
+	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	if !roleExists(t, pool, authAdminRole) {
+		t.Fatalf("role %s not found in pg_roles after Bootstrap", authAdminRole)
+	}
+	attrs := readRoleAttrs(t, pool, authAdminRole)
+	if !attrs.canLogin {
+		t.Errorf("%s: rolcanlogin = false, want true (LOGIN)", authAdminRole)
+	}
+	if attrs.super {
+		t.Errorf("%s: rolsuper = true, want false (NOSUPERUSER)", authAdminRole)
+	}
+	if attrs.bypassRLS {
+		t.Errorf("%s: rolbypassrls = true, want false (NOBYPASSRLS)", authAdminRole)
+	}
+	if attrs.createDB {
+		t.Errorf("%s: rolcreatedb = true, want false (NOCREATEDB)", authAdminRole)
+	}
+	if attrs.createRole {
+		t.Errorf("%s: rolcreaterole = true, want false (NOCREATEROLE)", authAdminRole)
+	}
+
+	if err := attemptLogin(t, loginDSN(t, superDSN, authAdminRole, pw.AuthAdmin)); err != nil {
+		t.Errorf("%s: login with the RolePasswords.AuthAdmin password failed: %v", authAdminRole, err)
+	}
+
+	var rolconfig []string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT coalesce(rolconfig, '{}'::text[]) FROM pg_roles WHERE rolname = $1`, authAdminRole,
+	).Scan(&rolconfig); err != nil {
+		t.Fatalf("read rolconfig for %s: %v", authAdminRole, err)
+	}
+	if len(rolconfig) == 0 {
+		t.Fatalf("%s: rolconfig is empty, want it to carry search_path=auth", authAdminRole)
+	}
+	if !slices.Contains(rolconfig, "search_path=auth") {
+		t.Errorf("%s: rolconfig = %v, want it to contain search_path=auth", authAdminRole, rolconfig)
+	}
+}
+
+func TestBootstrapCreatesAuthSchemaOwnedByAuthAdmin(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreAuthRoles(t, pool) })
+
+	// Strip the grant an earlier bootstrap left, so only this run can supply it.
+	revokePublicSchemaUsage(t, pool)
+	if roleExists(t, pool, authAdminRole) {
+		mustExecSQL(t, pool, `REVOKE USAGE ON SCHEMA public FROM supabase_auth_admin`)
+	}
+
+	if err := applyBootstrap(t, pool, devDefaultGUCs(), sql); err != nil {
+		t.Fatalf("apply db/bootstrap.sql: %v", err)
+	}
+
+	var owner string
+	err := pool.QueryRow(context.Background(),
+		`SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'auth'`,
+	).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("schema auth not found in pg_namespace after bootstrap")
+	}
+	if err != nil {
+		t.Fatalf("read owner of schema auth: %v", err)
+	}
+	if owner != authAdminRole {
+		t.Errorf("schema auth owner = %q, want %q", owner, authAdminRole)
+	}
+
+	if !roleExists(t, pool, authAdminRole) {
+		t.Fatalf("role %s not found in pg_roles after bootstrap", authAdminRole)
+	}
+	if !hasSchemaPrivilege(t, pool, authAdminRole, "USAGE") {
+		t.Errorf("%s lacks USAGE on schema public", authAdminRole)
+	}
+	if hasSchemaPrivilege(t, pool, authAdminRole, "CREATE") {
+		t.Errorf("%s has CREATE on schema public, want none", authAdminRole)
+	}
+}
+
+const hookReaderMembershipSQL = `SELECT m.inherit_option, m.set_option FROM pg_auth_members m
+	JOIN pg_roles r ON r.oid = m.roleid JOIN pg_roles u ON u.oid = m.member
+	WHERE r.rolname = 'auth_hook_reader' AND u.rolname = 'invoice_migrator'`
+
+func TestBootstrapCreatesAuthHookReaderAsNologinSetOnlyMember(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreAuthRoles(t, pool) })
+
+	// Put every asserted property in its wrong state, so only this run can fix it.
+	revokePublicSchemaUsage(t, pool)
+	if roleExists(t, pool, hookReaderRole) {
+		mustExecSQL(t, pool, `ALTER ROLE auth_hook_reader WITH LOGIN SUPERUSER BYPASSRLS CREATEDB CREATEROLE`)
+		mustExecSQL(t, pool, `REVOKE USAGE, CREATE ON SCHEMA public FROM auth_hook_reader`)
+		mustExecSQL(t, pool, `REVOKE auth_hook_reader FROM invoice_migrator`)
+		if n := mustCount(t, pool, `SELECT count(*) FROM (`+hookReaderMembershipSQL+`) m`); n != 0 {
+			t.Fatalf("pre-mutation left %d auth_hook_reader -> invoice_migrator membership row(s), want 0", n)
+		}
+	}
+
+	if err := applyBootstrap(t, pool, devDefaultGUCs(), sql); err != nil {
+		t.Fatalf("apply db/bootstrap.sql: %v", err)
+	}
+
+	if !roleExists(t, pool, hookReaderRole) {
+		t.Fatalf("role %s not found in pg_roles after bootstrap", hookReaderRole)
+	}
+	attrs := readRoleAttrs(t, pool, hookReaderRole)
+	if attrs.canLogin {
+		t.Errorf("%s: rolcanlogin = true, want false (NOLOGIN)", hookReaderRole)
+	}
+	if attrs.super {
+		t.Errorf("%s: rolsuper = true, want false (NOSUPERUSER)", hookReaderRole)
+	}
+	if attrs.bypassRLS {
+		t.Errorf("%s: rolbypassrls = true, want false (NOBYPASSRLS)", hookReaderRole)
+	}
+	if attrs.createDB {
+		t.Errorf("%s: rolcreatedb = true, want false (NOCREATEDB)", hookReaderRole)
+	}
+	if attrs.createRole {
+		t.Errorf("%s: rolcreaterole = true, want false (NOCREATEROLE)", hookReaderRole)
+	}
+
+	if !hasSchemaPrivilege(t, pool, hookReaderRole, "USAGE") {
+		t.Errorf("%s lacks USAGE on schema public", hookReaderRole)
+	}
+	// ALTER FUNCTION ... OWNER TO needs the new owner to hold CREATE on the schema.
+	if !hasSchemaPrivilege(t, pool, hookReaderRole, "CREATE") {
+		t.Errorf("%s lacks CREATE on schema public", hookReaderRole)
+	}
+
+	rows, err := pool.Query(context.Background(), hookReaderMembershipSQL)
+	if err != nil {
+		t.Fatalf("read pg_auth_members: %v", err)
+	}
+	type memberOpts struct{ inherit, set bool }
+	var got []memberOpts
+	for rows.Next() {
+		var o memberOpts
+		if err := rows.Scan(&o.inherit, &o.set); err != nil {
+			t.Fatalf("scan pg_auth_members: %v", err)
+		}
+		got = append(got, o)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate pg_auth_members: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatalf("invoice_migrator is not a member of %s after bootstrap", hookReaderRole)
+	}
+	for _, o := range got {
+		if o.inherit {
+			t.Errorf("membership %s -> invoice_migrator: inherit_option = true, want false", hookReaderRole)
+		}
+		if !o.set {
+			t.Errorf("membership %s -> invoice_migrator: set_option = false, want true", hookReaderRole)
+		}
+	}
+}
+
+// countingListenerDSN returns a DSN pointing at a local listener that counts accepted connections.
+func countingListenerDSN(t *testing.T) (string, func() int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var dials atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dials.Add(1)
+			_ = c.Close()
+		}
+	}()
+	dsn := "postgres://postgres:x@" + ln.Addr().String() + "/invoice_os?sslmode=disable&connect_timeout=2"
+	return dsn, dials.Load
+}
+
+// Plan name TestValidateRolePasswordsRefusesEmptyAuthAdmin; renamed so the CI 'TestBootstrap' filter runs it.
+func TestBootstrapRefusesEmptyAuthAdminBeforeDialing(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		authAdmin string
+		wantDial  bool
+	}{
+		{"empty AuthAdmin is refused before any dial", "", false},
+		{"control: all four set reaches the dial", "boot-aa-control", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dsn, dials := countingListenerDSN(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x", AuthAdmin: tc.authAdmin}
+			err := db.Bootstrap(ctx, dsn, pw, dbsql.FS)
+			if err == nil {
+				t.Fatalf("Bootstrap against a non-Postgres listener returned nil, want an error")
+			}
+			n := dials()
+			if tc.wantDial {
+				if n == 0 {
+					t.Fatalf("control: the listener saw no dial, so it cannot observe one (err: %v)", err)
+				}
+				return
+			}
+			if !strings.Contains(err.Error(), "RolePasswords.AuthAdmin") {
+				t.Errorf("error = %q, want it to name RolePasswords.AuthAdmin", err.Error())
+			}
+			if n != 0 {
+				t.Errorf("Bootstrap opened %d connection(s) before refusing an empty AuthAdmin, want 0", n)
+			}
+		})
+	}
+}
+
+func TestBootstrapSQLRefusesMissingAuthAdminGUC(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+
+	sentinels := map[string]string{
+		"invoice_migrator":      "boot-aa-sentinel-mig",
+		"invoice_app":           "boot-aa-sentinel-app",
+		"invoice_tenant_reader": "boot-aa-sentinel-rdr",
+	}
+	for role, pw := range sentinels {
+		alterRolePassword(t, pool, role, pw)
+	}
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+	for role, pw := range sentinels {
+		if err := attemptLogin(t, loginDSN(t, superDSN, role, pw)); err != nil {
+			t.Fatalf("sanity: login as %s with its sentinel password before the test: %v", role, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		authAdmin gucValue
+	}{
+		{"unset", unsetGUC()},
+		{"empty string", emptyGUC()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The other three differ from the sentinels, so any rotation fails a sentinel login.
+			guc := bootstrapGUCs{
+				migrator:  pwGUC("boot-aa-miss-mig-" + uuid.NewString()),
+				app:       pwGUC("boot-aa-miss-app-" + uuid.NewString()),
+				reader:    pwGUC("boot-aa-miss-rdr-" + uuid.NewString()),
+				authAdmin: tc.authAdmin,
+			}
+			err := applyBootstrap(t, pool, guc, sql)
+			if err == nil {
+				t.Fatalf("apply db/bootstrap.sql with ascomply.auth_admin_password %s: got nil error, want a fail-closed error", tc.name)
+			}
+			if !strings.Contains(err.Error(), "ascomply.auth_admin_password") {
+				t.Errorf("error = %q, want it to name ascomply.auth_admin_password", err.Error())
+			}
+			for role, pw := range sentinels {
+				if loginErr := attemptLogin(t, loginDSN(t, superDSN, role, pw)); loginErr != nil {
+					t.Errorf("%s: sentinel password no longer works, so a password was rotated despite the missing GUC: %v", role, loginErr)
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapRotatesAuthAdminPasswordIdempotently(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	// Restores the fourth password too: later TestRLS_* tests dial supabase_auth_admin with the default.
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+
+	p1 := "boot-aa-rot-p1-" + uuid.NewString()
+	p2 := "boot-aa-rot-p2-" + uuid.NewString()
+	withAuthAdmin := func(pw string) bootstrapGUCs {
+		g := devDefaultGUCs()
+		g.authAdmin = pwGUC(pw)
+		return g
+	}
+	roleCount := func() int {
+		return mustCount(t, pool, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, authAdminRole)
+	}
+
+	if err := applyBootstrap(t, pool, withAuthAdmin(p1), sql); err != nil {
+		t.Fatalf("bootstrap with p1: %v", err)
+	}
+	if n := roleCount(); n != 1 {
+		t.Fatalf("role %s: pg_roles count = %d after the first run, want 1", authAdminRole, n)
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, authAdminRole, p1)); err != nil {
+		t.Fatalf("sanity: login with p1 right after bootstrapping with p1: %v", err)
+	}
+
+	if err := applyBootstrap(t, pool, withAuthAdmin(p2), sql); err != nil {
+		t.Fatalf("re-bootstrap with p2: %v", err)
+	}
+	if n := roleCount(); n != 1 {
+		t.Errorf("role %s: pg_roles count = %d after the second run, want 1", authAdminRole, n)
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, authAdminRole, p2)); err != nil {
+		t.Errorf("login with the new password p2 failed: %v", err)
+	}
+	if err := attemptLogin(t, loginDSN(t, superDSN, authAdminRole, p1)); err == nil {
+		t.Errorf("login with the old password p1 still succeeded after rotation to p2")
+	}
 }

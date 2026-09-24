@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -383,7 +384,7 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 		t.Fatalf("loadUpstreams: %v", err)
 	}
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, nil, slog.Default())
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)
@@ -396,7 +397,8 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 		return rec.Code
 	}
 
-	for _, svc := range probedServices {
+	// `auth` is named explicitly: its 404 is only meaningful once the roll-up below sees it.
+	for _, svc := range append(slices.Clone(probedServices), "auth") {
 		if got := get("/api/" + svc + "/x"); got != http.StatusNotFound {
 			t.Errorf("GET /api/%s/x = %d, want 404 -- a probed sidecar is exposed as a public proxy route", svc, got)
 		}
@@ -421,7 +423,7 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 	for _, s := range fleet.Services {
 		seen[s.Name] = true
 	}
-	for _, svc := range append(append([]string{"gateway"}, routedServices...), probedServices...) {
+	for _, svc := range append(append([]string{"gateway", "auth"}, routedServices...), probedServices...) {
 		if !seen[svc] {
 			t.Errorf("/healthz/fleet omits %q -- the deploy gate cannot block on a service the roll-up never names", svc)
 		}
@@ -505,5 +507,379 @@ func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
 	})
 	if fatals != 1 {
 		t.Errorf("%s: the `%s != nil` guard calls fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
+	}
+}
+
+// TestGatewayMainPassesAuthAdminPassword accepts either wiring the plan allows:
+// resolveRolePassword("AUTH_ADMIN_PASSWORD", "", app.Logger) or os.Getenv("AUTH_ADMIN_PASSWORD").
+func TestGatewayMainPassesAuthAdminPassword(t *testing.T) {
+	const path = "main.go"
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var lits []*ast.CompositeLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if sel, ok := cl.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "RolePasswords" {
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "db" {
+				lits = append(lits, cl)
+			}
+		}
+		return true
+	})
+	if len(lits) != 1 {
+		t.Fatalf("%s: found %d db.RolePasswords literal(s), want exactly 1", path, len(lits))
+	}
+
+	fields := map[string]ast.Expr{}
+	for _, e := range lits[0].Elts {
+		if kv, ok := e.(*ast.KeyValueExpr); ok {
+			if id, ok := kv.Key.(*ast.Ident); ok {
+				fields[id.Name] = kv.Value
+			}
+		}
+	}
+	if _, ok := fields["Reader"]; !ok {
+		t.Fatalf("%s: the db.RolePasswords literal has no Reader field -- this scan found the wrong literal", path)
+	}
+	val, ok := fields["AuthAdmin"]
+	if !ok {
+		t.Fatalf("%s: the db.RolePasswords literal has no AuthAdmin field", path)
+	}
+
+	call, ok := val.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("%s: AuthAdmin is %T, want a call reading AUTH_ADMIN_PASSWORD", path, val)
+	}
+	strArg := func(i int) (string, bool) {
+		if i >= len(call.Args) {
+			return "", false
+		}
+		lit, ok := call.Args[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(lit.Value)
+		return s, err == nil
+	}
+
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		if fn.Name != "resolveRolePassword" {
+			t.Fatalf("%s: AuthAdmin calls %s, want resolveRolePassword or os.Getenv", path, fn.Name)
+		}
+		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
+			t.Errorf("%s: AuthAdmin's resolveRolePassword first argument = %q, want \"AUTH_ADMIN_PASSWORD\"", path, name)
+		}
+		// No deprecated name exists for this variable.
+		if old, ok := strArg(1); !ok || old != "" {
+			t.Errorf("%s: AuthAdmin's resolveRolePassword fallback = %q, want \"\"", path, old)
+		}
+	case *ast.SelectorExpr:
+		pkg, ok := fn.X.(*ast.Ident)
+		if !ok || pkg.Name != "os" || fn.Sel.Name != "Getenv" {
+			t.Fatalf("%s: AuthAdmin calls a selector other than os.Getenv", path)
+		}
+		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
+			t.Errorf("%s: AuthAdmin reads os.Getenv(%q), want \"AUTH_ADMIN_PASSWORD\"", path, name)
+		}
+	default:
+		t.Fatalf("%s: AuthAdmin calls %T, want resolveRolePassword or os.Getenv", path, call.Fun)
+	}
+}
+
+// TestLoadUpstreamsRequiresAuthURL: `auth` is probed, never routed, and a gateway
+// that cannot see it must not boot.
+func TestLoadUpstreamsRequiresAuthURL(t *testing.T) {
+	if !slices.Contains(probedServices, "auth") {
+		t.Errorf("probedServices = %v, want it to carry `auth`", probedServices)
+	}
+
+	setUpstreamEnv(t, "http://127.0.0.1:1")
+	t.Setenv("AUTH_URL", "")
+	_, _, err := loadUpstreams()
+	if err == nil {
+		t.Error("loadUpstreams succeeded with AUTH_URL unset, want a named boot failure")
+	} else if !strings.Contains(err.Error(), "AUTH_URL") {
+		t.Errorf("error %q does not name AUTH_URL", err)
+	}
+
+	t.Setenv("AUTH_URL", "http://127.0.0.1:2")
+	routed, probed, err := loadUpstreams()
+	if err != nil {
+		t.Fatalf("loadUpstreams with AUTH_URL set: %v", err)
+	}
+	if u, ok := probed["auth"]; !ok || u.String() != "http://127.0.0.1:2" {
+		t.Errorf("probed[auth] = %v (present %v), want http://127.0.0.1:2", u, ok)
+	}
+	if _, ok := routed["auth"]; ok {
+		t.Error("auth is in the routed map -- it would get a public /api/auth/* proxy route")
+	}
+}
+
+// parseMain returns main.go's func main body; the AST scans below read main's wiring.
+func parseMain(t *testing.T) (*ast.File, *ast.BlockStmt) {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			return f, fn.Body
+		}
+	}
+	t.Fatal("main.go declares no func main")
+	return nil, nil
+}
+
+func isCallTo(e ast.Expr, pkg, name string) (*ast.CallExpr, bool) {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return call, pkg == "" && fn.Name == name
+	case *ast.SelectorExpr:
+		x, ok := fn.X.(*ast.Ident)
+		return call, ok && x.Name == pkg && fn.Sel.Name == name
+	}
+	return call, false
+}
+
+func isStringLit(e ast.Expr, want string) bool {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	return err == nil && s == want
+}
+
+// TestGatewayAuthIssuersCountsPrimaryPlusAdditional pins main's wiring: the
+// additional set comes from AUTH_ADDITIONAL_ISSUERS through a helper that is
+// fatal on a parse error, feeds the verifier, and publishes 1 + its length
+// before app.Run. main needs Postgres, so it is scanned, not run.
+func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
+	f, body := parseMain(t)
+
+	var helper *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "mustParseIssuers" && fn.Recv == nil {
+			helper = fn
+		}
+	}
+	if helper == nil {
+		t.Errorf("main.go declares no mustParseIssuers")
+	} else {
+		parses, fatals := 0, 0
+		ast.Inspect(helper.Body, func(n ast.Node) bool {
+			if e, ok := n.(ast.Expr); ok {
+				if _, ok := isCallTo(e, "auth", "ParseTrustedIssuers"); ok {
+					parses++
+				}
+				if _, ok := isCallTo(e, "", "fatal"); ok {
+					fatals++
+				}
+			}
+			return true
+		})
+		if parses != 1 || fatals != 1 {
+			t.Errorf("mustParseIssuers calls auth.ParseTrustedIssuers %d time(s) and fatal %d time(s), want 1 and 1 -- a malformed AUTH_ADDITIONAL_ISSUERS must stop boot at ERROR", parses, fatals)
+		}
+	}
+
+	// setVar is the local that holds mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS")).
+	setVar, setAt := "", -1
+	for i, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		call, ok := isCallTo(as.Rhs[0], "", "mustParseIssuers")
+		if !ok || len(call.Args) != 1 {
+			continue
+		}
+		env, ok := isCallTo(call.Args[0], "os", "Getenv")
+		if !ok || len(env.Args) != 1 || !isStringLit(env.Args[0], "AUTH_ADDITIONAL_ISSUERS") {
+			continue
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			setVar, setAt = id.Name, i
+		}
+	}
+	if setVar == "" {
+		t.Fatal(`main never assigns mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS")) to a local`)
+	}
+
+	// The verifier trusts exactly the set that is counted.
+	fedToVerifier := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if sel, ok := cl.Type.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Config" {
+			return true
+		}
+		for _, e := range cl.Elts {
+			kv, ok := e.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			k, _ := kv.Key.(*ast.Ident)
+			v, _ := kv.Value.(*ast.Ident)
+			if k != nil && v != nil && k.Name == "Additional" && v.Name == setVar {
+				fedToVerifier = true
+			}
+		}
+		return true
+	})
+	if !fedToVerifier {
+		t.Errorf("main's auth.Config has no `Additional: %s`", setVar)
+	}
+
+	isOnePlusLen := func(e ast.Expr) bool {
+		bin, ok := e.(*ast.BinaryExpr)
+		if !ok || bin.Op != token.ADD {
+			return false
+		}
+		isOne := func(x ast.Expr) bool { l, ok := x.(*ast.BasicLit); return ok && l.Value == "1" }
+		isLen := func(x ast.Expr) bool {
+			c, ok := isCallTo(x, "", "len")
+			if !ok || len(c.Args) != 1 {
+				return false
+			}
+			id, ok := c.Args[0].(*ast.Ident)
+			return ok && id.Name == setVar
+		}
+		return (isOne(bin.X) && isLen(bin.Y)) || (isLen(bin.X) && isOne(bin.Y))
+	}
+	publishAt, runAt := -1, -1
+	for i, st := range body.List {
+		if as, ok := st.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if sel, ok := as.Lhs[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "AuthIssuers" {
+				if x, ok := sel.X.(*ast.Ident); ok && x.Name == "platform" {
+					if c, ok := isCallTo(as.Rhs[0], "strconv", "Itoa"); ok && len(c.Args) == 1 && isOnePlusLen(c.Args[0]) {
+						publishAt = i
+					}
+				}
+			}
+		}
+		if ifs, ok := st.(*ast.IfStmt); ok && runAt < 0 {
+			if as, ok := ifs.Init.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
+				if c, ok := as.Rhs[0].(*ast.CallExpr); ok {
+					if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Run" {
+						runAt = i
+					}
+				}
+			}
+		}
+	}
+	if runAt < 0 {
+		t.Fatal("main has no `if err := app.Run(...)` statement -- the ordering check below has no anchor")
+	}
+	if publishAt < 0 {
+		t.Errorf("main never sets platform.AuthIssuers = strconv.Itoa(1 + len(%s))", setVar)
+	} else if publishAt < setAt || publishAt > runAt {
+		t.Errorf("platform.AuthIssuers is set at statement %d, want it after the parse (%d) and before app.Run (%d)", publishAt, setAt, runAt)
+	}
+}
+
+// A malformed AUTH_ADDITIONAL_ISSUERS must stop boot before Provision bootstraps, resets or seeds.
+func TestGatewayMainParsesIssuersBeforeProvision(t *testing.T) {
+	_, body := parseMain(t)
+
+	parseAt, provisionAt := -1, -1
+	for i, st := range body.List {
+		ast.Inspect(st, func(n ast.Node) bool {
+			e, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if _, ok := isCallTo(e, "", "mustParseIssuers"); ok && parseAt < 0 {
+				parseAt = i
+			}
+			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
+				provisionAt = i
+			}
+			return true
+		})
+	}
+	if parseAt < 0 || provisionAt < 0 {
+		t.Fatalf("main calls mustParseIssuers at statement %d and db.Provision at %d, want both", parseAt, provisionAt)
+	}
+	if parseAt >= provisionAt {
+		t.Errorf("mustParseIssuers runs at statement %d, want it before db.Provision (%d)", parseAt, provisionAt)
+	}
+}
+
+// TestGatewayMainProbesAuthAtItsJWKSPath: FleetHealthHandler's per-service path is
+// inert unless main passes it. The fleet tests cannot see this call.
+func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {
+	_, body := parseMain(t)
+
+	var arg ast.Expr
+	calls := 0
+	ast.Inspect(body, func(n ast.Node) bool {
+		if e, ok := n.(ast.Expr); ok {
+			if c, ok := isCallTo(e, "", "gatewayHandlers"); ok {
+				calls++
+				if len(c.Args) == 5 {
+					arg = c.Args[3]
+				}
+			}
+		}
+		return true
+	})
+	if calls != 1 || arg == nil {
+		t.Fatalf("main calls gatewayHandlers %d time(s) with a healthPaths argument %v, want once", calls, arg)
+	}
+
+	// Accept the literal inline, or a local assigned from one.
+	lit, _ := arg.(*ast.CompositeLit)
+	if id, ok := arg.(*ast.Ident); ok && id.Name != "nil" {
+		ast.Inspect(body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			if l, ok := as.Lhs[0].(*ast.Ident); ok && l.Name == id.Name {
+				if cl, ok := as.Rhs[0].(*ast.CompositeLit); ok {
+					lit = cl
+				}
+			}
+			return true
+		})
+	}
+	if lit == nil {
+		t.Fatalf("gatewayHandlers' healthPaths argument is %T, want a map literal (or a local assigned from one)", arg)
+	}
+	if len(lit.Elts) == 0 {
+		t.Fatal("the healthPaths literal is empty")
+	}
+	found := false
+	for _, e := range lit.Elts {
+		kv, ok := e.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if isStringLit(kv.Key, "auth") {
+			found = true
+			if !isStringLit(kv.Value, ".well-known/jwks.json") {
+				t.Errorf("healthPaths[auth] is not \".well-known/jwks.json\"")
+			}
+		} else {
+			t.Errorf("healthPaths carries a key other than auth; every other service stays on /healthz")
+		}
+	}
+	if !found {
+		t.Error("healthPaths has no `auth` entry")
 	}
 }

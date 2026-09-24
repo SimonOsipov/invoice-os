@@ -2,11 +2,11 @@
 // surface -- the fleet's first context-service -> context-service BUSINESS
 // call ([03->04 transport]).
 //
-// (Outbound HTTP itself is not new: internal/platform/auth/verify.go:181
+// (Outbound HTTP itself is not new: internal/platform/auth/verify.go
 // fetches JWKS and internal/gateway/fleet.go:60,118 probe health, both with
 // explicit-timeout clients. What is new is one context service asking another
 // to do domain work -- Stage-1 F6 corrects the "fleet's first s2s HTTP caller"
-// framing, and verify.go:74-78 is the cited precedent for the nil->default
+// framing, and verify.go is the cited precedent for the nil->default
 // client idiom below.)
 //
 // THE ONE PROPERTY THIS FILE EXISTS TO HOLD: a failure is NEVER laundered
@@ -155,7 +155,7 @@ type Validator struct {
 //
 // A nil hc yields a client with an EXPLICIT timeout -- never
 // http.DefaultClient, which has none: an unbounded hang on the import path is
-// a 500-invoice outage. Same nil->default idiom as auth/verify.go:74-78, a
+// a 500-invoice outage. Same nil->default idiom as auth/verify.go, a
 // different value (see defaultValidateTimeout). The injectable hc exists so
 // tests can bound the call in milliseconds instead of sleeping out the
 // production default. [AC#5, Stage-1 F4]

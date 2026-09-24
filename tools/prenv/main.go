@@ -41,7 +41,10 @@ const usage = `usage:
                                (exit 0 = reap, 1 = skip; reason on stdout)
   prenv dsn-check              report every DB DSN defect in the rendered
                                {service:{variable:value}} JSON map read on STDIN
-                               (exit 0 = clean, 1 = defects or unreadable input)`
+                               (exit 0 = clean, 1 = defects or unreadable input)
+  prenv jwk-es256              print a fresh one-key ES256 private JWK array
+  prenv jwk-check              validate a JWK array read on STDIN
+                               (exit 0 = one ES256 signing key, 1 = refused)`
 
 // main dispatches the subcommands. Exit codes are a contract, not an
 // afterthought: 2 means "you called me wrong" (unknown subcommand, wrong
@@ -132,6 +135,21 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(RunDSNCheck(os.Stdin, os.Stdout))
+
+	case "jwk-es256":
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
+		}
+		os.Exit(RunJWKES256(os.Stdout))
+
+	case "jwk-check":
+		// STDIN, not argv: the input is a private key.
+		if len(os.Args) != 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			os.Exit(2)
+		}
+		os.Exit(RunJWKCheck(os.Stdin, os.Stdout))
 
 	default:
 		fmt.Fprintf(os.Stderr, "prenv: unknown subcommand %q\n%s\n", os.Args[1], usage)

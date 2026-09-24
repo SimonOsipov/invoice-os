@@ -9,7 +9,7 @@ judgment call, the recipe is broken: fix the recipe, then the service.
 also gets its own ephemeral environment, forked from `development` by `dev-env.yml`'s
 `prepare-env` job, but a new service is never created *in* one of those directly: it is
 created once, here, on `development`, and every subsequent PR fork inherits it. Measured
-(M4-23-04): a fork inherits all 14 service instances with `watchPatterns: []`, the service
+(M4-23-04): a fork inherits every service instance with `watchPatterns: []`, the service
 domains (auto-renamed) and the Postgres TCP proxy. It does **not** inherit a Postgres
 *deployment* (started explicitly), a *volume*, or **sealed variables**.
 `$ENV` throughout this recipe always means `development`'s id below:
@@ -332,16 +332,18 @@ trigger, which had to be `deploymentTriggerDelete`d before the invariants workfl
 **The `docling` service exists in the Railway fleet** (`2fd6a6f2-8ba2-488d-a686-3a4b73f2046d`),
 is deployed by `dev-env.yml`'s `deploy-context` matrix and is named in `expected_json`. It
 is the one worked example of this variant; the table below is the shape a Python sidecar
-takes, so the next one has a recipe.
+takes, so the next one has a recipe. The `auth` sidecar (`supabase/auth`, see
+[identity-provider.md](./identity-provider.md)) is a pinned third-party image, not our code;
+its column shows where it departs.
 
-| | Compute (this recipe) | Python sidecar (shape) |
-|---|---|---|
-| Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) |
-| Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` |
-| Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` |
-| Health | `/healthz` | `/healthz` (same contract, same `build` field) |
-| Ingress | private-networking only (gateway is the exception) | private-networking only |
-| Watch patterns | empty (§3) | empty (§3) |
+| | Compute (this recipe) | Python sidecar (shape) | `auth` (pinned image) |
+|---|---|---|---|
+| Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) | `sidecar/auth/Dockerfile` only: `FROM` the digest-pinned image plus `ENV` |
+| Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` | `sidecar/auth/railway.json` (values also set on the instance) |
+| Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` | per-service, no `ARG SERVICE` |
+| Health | `/healthz` | `/healthz` (same contract, same `build` field) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
+| Ingress | private-networking only (gateway is the exception) | private-networking only | private-networking only |
+| Watch patterns | empty (§3) | empty (§3) | empty (§3) |
 
 All three provisioning steps are done: the service exists, `DOCLING_URL` is set on
 `cmd/submission` (its only caller, and only when `EXTRACTOR=docling`) and on `gateway`, and

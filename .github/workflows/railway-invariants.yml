@@ -103,3 +103,13 @@ jobs:
 
       - name: Run set-fork-environment --self-test
         run: bash scripts/ci/railway-env.sh set-fork-environment --self-test
+
+  fork-auth-self-test:
+    name: Fork auth configuration self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run set-fork-auth --self-test
+        run: bash scripts/ci/railway-env.sh set-fork-auth --self-test

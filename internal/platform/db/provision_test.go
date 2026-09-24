@@ -85,7 +85,7 @@ func requireProvisionDSNs(t *testing.T) (superDSN, migDSN string) {
 // db.RolePasswords shape db.Provision/db.Bootstrap take directly.
 func devRolePasswords() db.RolePasswords {
 	g := devDefaultGUCs()
-	return db.RolePasswords{Migrator: g.migrator.value, App: g.app.value, Reader: g.reader.value}
+	return db.RolePasswords{Migrator: g.migrator.value, App: g.app.value, Reader: g.reader.value, AuthAdmin: g.authAdmin.value}
 }
 
 // ---- Pure-logic: guard, ordering, short-circuit (no database) --------------
@@ -225,7 +225,7 @@ func TestProvisionMissingPasswordFailsLoudly(t *testing.T) {
 		BootstrapFlag: "true",
 		SuperuserDSN:  superuserPoisonDSN,
 		MigrationDSN:  migrationPoisonDSN,
-		Passwords:     db.RolePasswords{Migrator: "", App: "app-pw", Reader: "reader-pw"},
+		Passwords:     db.RolePasswords{Migrator: "", App: "app-pw", Reader: "reader-pw", AuthAdmin: "auth-admin-pw"},
 		BootstrapFS:   dbsql.FS,
 		MigrationsFS:  migrations.FS,
 		SeedFS:        dbsql.FS,
@@ -722,6 +722,39 @@ func TestProvisionPRShapedEnvironmentEndToEnd(t *testing.T) {
 		if count != 1 {
 			t.Errorf("tenant %s (%s): found %d rows after a pr-42 Provision, want exactly 1 (no duplicate seed rows)", tc.id, tc.name, count)
 		}
+	}
+}
+
+func TestProvisionCreatesAuthAdminOnAPREnvironment(t *testing.T) {
+	superDSN, migDSN := requireProvisionDSNs(t)
+	ctx := context.Background()
+	pool := bootstrapSuperuserPool(t, superDSN)
+	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
+
+	cfg := db.ProvisionConfig{
+		Environment:   "pr-42",
+		BootstrapFlag: "true",
+		SuperuserDSN:  superDSN,
+		MigrationDSN:  migDSN,
+		Passwords:     devRolePasswords(),
+		BootstrapFS:   dbsql.FS,
+		MigrationsFS:  migrations.FS,
+		SeedFS:        dbsql.FS,
+	}
+	// A fresh password: the dev default could already be on the role from an earlier bootstrap.
+	cfg.Passwords.AuthAdmin = "prov-aa-" + uuid.NewString()
+	if err := db.Provision(ctx, cfg); err != nil {
+		t.Fatalf("Provision with ENVIRONMENT=pr-42: %v", err)
+	}
+
+	for _, role := range []string{authAdminRole, hookReaderRole} {
+		if n := mustCount(t, pool, `SELECT count(*) FROM pg_roles WHERE rolname = $1`, role); n != 1 {
+			t.Errorf("role %s: found %d rows in pg_roles after a pr-42 Provision, want exactly 1", role, n)
+		}
+	}
+	// Proves Provision hands RolePasswords.AuthAdmin to Bootstrap, not just that the role exists.
+	if err := attemptLogin(t, loginDSN(t, superDSN, authAdminRole, cfg.Passwords.AuthAdmin)); err != nil {
+		t.Errorf("%s: login with the Provision-supplied password failed: %v", authAdminRole, err)
 	}
 }
 

@@ -2998,7 +2998,7 @@ describe('the document type', () => {
 
     const s = strip()
     expect(s, 'no strip for a credit note').not.toBeNull()
-    expect(s!.textContent).toContain('files as an ordinary invoice with negative amounts')
+    expect(s!.textContent).toContain('files here as an ordinary invoice with negative amounts')
     expect(s!.textContent).toContain('not a tax invoice')
   })
 

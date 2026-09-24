@@ -112,7 +112,8 @@ func documentRequest(pages []TokenPage, results []FieldResult) (jev.Request, []i
 // documentTypeVerdict returns "" for no verdict; only a known non-invoice name may reach the column's CHECK.
 func documentTypeVerdict(resp jev.Response) string {
 	a, ok := resp.Answers[documentTypeQuestionID]
-	if !ok || a.Type != jev.TypeChoice || a.Choice == taxInvoice || a.Confidence < documentTypeThreshold ||
+	// !(>=), not <, so a NaN confidence records nothing.
+	if !ok || a.Type != jev.TypeChoice || a.Choice == taxInvoice || !(a.Confidence >= documentTypeThreshold) ||
 		!slices.ContainsFunc(documentTypeOptions, func(o jev.Option) bool { return o.Name == a.Choice }) {
 		return ""
 	}

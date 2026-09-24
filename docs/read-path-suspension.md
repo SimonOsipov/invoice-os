@@ -267,6 +267,8 @@ predicates it would previously have hit inside the transaction.
 | `GET /healthz/fleet` | gateway | exempt | fleet roll-up across services, deliberately outside the verifier |
 | `POST /auth/login` | gateway | exempt | unauthenticated by definition; there is no caller yet to hold a membership |
 | `OPTIONS /auth/login` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
+| `POST /auth/register` | gateway | exempt | no database; calls GoTrue |
+| `GET /auth/verify` | gateway | exempt | no database; calls GoTrue |
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
 | `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services whose own routes are listed here |
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
@@ -331,7 +333,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-69 distinct routes, 75 registrations (`GET /v1/ping` is registered once per service).
+71 distinct routes, 77 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

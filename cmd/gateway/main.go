@@ -48,6 +48,7 @@ func main() {
 
 	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
 	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
+	siteURL := mustParseSiteURL(os.Getenv("AUTH_SITE_URL"), app.Logger)
 
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
@@ -148,6 +149,12 @@ func main() {
 	// operational, not tenant data.
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
+	// Public registration, outside /api/ and the verifier, in every build. No CORS wrap:
+	// no browser client calls it yet (D9).
+	reg := registrationHandlers(probed["auth"], siteURL, app.Logger)
+	app.Mux.Handle("POST /auth/register", reg.Register)
+	app.Mux.Handle("GET /auth/verify", reg.Verify)
+
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
 	if mockIssuerCompiled {
@@ -218,12 +225,34 @@ type registration struct {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil siteURL means AUTH_SITE_URL is unset.
+// A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503 (D22).
 func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {
-	return registration{
-		Register: gateway.RegisterHandler(authURL, nil, log),
-		Verify:   gateway.VerifyHandler(authURL, siteURL, nil, log),
+	if authURL == nil || siteURL == nil {
+		nc := gateway.RegistrationNotConfigured()
+		return registration{Register: nc, Verify: nc}
 	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return registration{
+		Register: gateway.RegisterHandler(authURL, client, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log),
+	}
+}
+
+// mustParseSiteURL parses AUTH_SITE_URL. Unset is allowed and logged; a value that is not
+// an absolute http(s) URL stops boot.
+func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
+	if raw == "" {
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register and /auth/verify answer 503")
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		fatal(log, "gateway: AUTH_SITE_URL=%q is not an absolute http(s) URL", raw)
+	}
+	return u
 }
 
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the

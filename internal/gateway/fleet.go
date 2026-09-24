@@ -66,7 +66,7 @@ type FleetHealth struct {
 //
 // Registered on the platform mux OUTSIDE /api/ and outside the JWT verifier: it is an
 // operational endpoint, not tenant data.
-func FleetHealthHandler(upstreams map[string]*url.URL, log *slog.Logger) http.HandlerFunc {
+func FleetHealthHandler(upstreams map[string]*url.URL, healthPaths map[string]string, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}

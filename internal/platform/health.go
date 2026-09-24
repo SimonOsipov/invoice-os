@@ -61,6 +61,9 @@ var DemoPurge string
 // 404 on the mint routes cannot tell an untagged build from a gated-off one.
 var MockIssuer string
 
+// AuthIssuers is the gateway's trusted-issuer count; empty elsewhere.
+var AuthIssuers string
+
 // healthzHandler is a liveness probe: 200 as long as the process is running.
 func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	body := map[string]string{"status": "ok", "build": BuildSHA}

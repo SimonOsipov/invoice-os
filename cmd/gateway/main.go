@@ -135,7 +135,7 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, nil, app.Logger)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -191,6 +191,7 @@ const dbConnectWait = 120 * time.Second
 func gatewayHandlers(
 	verifier *auth.Verifier,
 	routed, probed map[string]*url.URL,
+	healthPaths map[string]string,
 	log *slog.Logger,
 ) (api http.Handler, fleet http.HandlerFunc) {
 	api = gateway.Handler(gateway.Options{
@@ -202,7 +203,7 @@ func gatewayHandlers(
 	all := make(map[string]*url.URL, len(routed)+len(probed))
 	maps.Copy(all, routed)
 	maps.Copy(all, probed)
-	return api, gateway.FleetHealthHandler(all, log)
+	return api, gateway.FleetHealthHandler(all, healthPaths, log)
 }
 
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the

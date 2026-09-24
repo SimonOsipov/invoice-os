@@ -34,7 +34,7 @@ func healthzUpstream(t *testing.T, down bool) *url.URL {
 func doFleet(t *testing.T, upstreams map[string]*url.URL) (*httptest.ResponseRecorder, FleetHealth) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	FleetHealthHandler(upstreams, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
+	FleetHealthHandler(upstreams, nil, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
 	var body FleetHealth
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode fleet body %q: %v", rec.Body.String(), err)

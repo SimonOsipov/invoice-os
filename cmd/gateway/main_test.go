@@ -384,7 +384,7 @@ func TestGatewayHandlersPublishNoProxyRouteForAProbedService(t *testing.T) {
 		t.Fatalf("loadUpstreams: %v", err)
 	}
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, slog.Default())
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, nil, slog.Default())
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
 	mux.HandleFunc("GET /healthz/fleet", fleetHandler)

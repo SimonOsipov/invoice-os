@@ -21,7 +21,7 @@ import (
 var ErrUnauthorized = errors.New("auth: unauthorized")
 
 // errStaleKey is an internal sentinel: the signing key was missing from — or did
-// not verify against — the cached JWKS. It drives exactly one refetch-and-retry
+// not verify against — the cached JWKS. It drives exactly one retry
 // (the key-rotation path) and is never returned to callers.
 var errStaleKey = errors.New("auth: signing key not in cached jwks")
 
@@ -128,7 +128,7 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Identity, error) {
 	}
 	id, err := v.verifyWith(ctx, ks, token, false)
 	if errors.Is(err, errStaleKey) {
-		// Cached keys were stale (rotation): refetch once and retry.
+		// Cached keys were stale (rotation): retry.
 		id, err = v.verifyWith(ctx, ks, token, true)
 	}
 	if err != nil {

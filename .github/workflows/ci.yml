@@ -52,6 +52,7 @@ jobs:
               - '.github/workflows/ci.yml'
               - '.github/workflows/dev-env.yml'
               - '.github/workflows/railway-invariants.yml'
+              - '.github/workflows/idp-release-watch.yml'
             migrations:
               - 'migrations/**'
               - 'db/**'

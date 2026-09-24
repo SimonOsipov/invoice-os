@@ -424,7 +424,7 @@ jobs:
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
       # earlier: that step queries all 15 service names and hard-fails if any is
       # missing, which is what proves the 8 context services and the `docling`
-      # sidecar have materialised.
+      # and `auth` sidecars have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the 6 service
       # ids reconcile-fork acts on (the RAILWAY_SVC_*_ID list in
       # require_service_ids, railway-env.sh), which excludes the 8 contexts and the sidecar.

@@ -13,8 +13,8 @@ Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 
 ## The pin
 
-- **Where:** `sidecar/auth/Dockerfile`, the `FROM` line, and nowhere else:
-  `ghcr.io/supabase/auth:v2.197.0@sha256:1736a630…c12c6b`.
+- **Where:** `sidecar/auth/Dockerfile`, the `FROM` line (tag and digest), and nowhere else.
+  Print the tag with `go run ./internal/tools/idppin tag sidecar/auth/Dockerfile`.
 - **Who reads it:** `internal/tools/idppin`. `idppin tag sidecar/auth/Dockerfile` prints the
   tag. `idppin latest-check sidecar/auth/Dockerfile <tag>` exits 0 on a match, 1 on a
   mismatch and 2 on a malformed call or an unreadable pin. The parser refuses a `FROM`
@@ -78,7 +78,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_DB_DRIVER` | `postgres` | |
 | `GOTRUE_DB_MAX_POOL_SIZE` | `10` | GoTrue shares the application database. `ceiling:` raise it when GoTrue's logs show pool waits. |
 | `GOTRUE_JWT_AUD` | `authenticated` | The verifier's audience constant |
-| `GOTRUE_JWT_DEFAULT_GROUP_NAME` | `authenticated` | The `role` claim |
+| `GOTRUE_JWT_DEFAULT_GROUP_NAME` | `authenticated` | The `role` claim. v2.197.0 logs a deprecation warning for it |
 | `GOTRUE_JWT_EXP` | `3600` | Access-token lifetime, seconds |
 | `GOTRUE_DISABLE_SIGNUP` | `true` | No registration ships yet; only CI containers override it |
 | `GOTRUE_MAILER_AUTOCONFIRM` | `false` | |
@@ -129,7 +129,8 @@ every fork overwrites it with its own.
   one ES256 signing key (`prenv jwk-check`).
 - **A production variable written any other way redeploys.** A Railway variable write on
   production that does not skip deploys makes Railway rebuild that service from GitHub
-  `main`, without the build-SHA stamp. Pass `--skip-deploys` to `railway variables --set`
+  `main`, without the build-SHA stamp. Measured 2026-09-24: gateway deployment `a97b3979`
+  rebuilt from `main` `a724bef7` and reported `/healthz` build `dev`. Pass `--skip-deploys` to `railway variables --set`
   on production when no redeploy is wanted.
 
 ## First-time production setup (U1–U4)
@@ -302,27 +303,52 @@ Every step is a dashboard edit of `GOTRUE_JWT_KEYS` with a newly composed value.
 
 1. Read the served JWKS from inside the private network, for example from the `auth`
    container (`railway ssh --service auth`, then fetch
-   `http://localhost:8080/.well-known/jwks.json`). Keep the current key's public JWK
-   (`kty`, `crv`, `x`, `y`, `kid`, `alg`) and set its `key_ops` to `["verify"]`.
-   Unmeasured: whether the image has a shell and a fetch tool for this.
+   `http://localhost:8080/.well-known/jwks.json` with `wget -qO-`). Keep the current key's
+   public JWK (`kty`, `crv`, `x`, `y`, `kid`, `alg`) and set its `key_ops` to `["verify"]`.
+   The v2.197.0 image has `/bin/sh`, `wget` and `nc`. Unmeasured: whether `railway ssh`
+   reaches the `auth` container.
 2. Generate the new key with `go run ./tools/prenv jwk-es256`.
-3. Compose `[<new private key, sign+verify>, <old public key, verify>]` and paste it into
-   `GOTRUE_JWT_KEYS` on production's `auth` in the dashboard (edit, not Raw Editor). The
-   old private half is not recoverable, so there is no separate "new key verify-only" stage:
-   this edit adds the new key and moves `sign` to it together.
+3. Compose `[<new private key, sign+verify>, <old public key, verify>]`, validate it (below),
+   and paste it into `GOTRUE_JWT_KEYS` on production's `auth` in the dashboard (edit, not
+   Raw Editor). The old private half is not recoverable, so there is no separate "new key
+   verify-only" stage: this edit adds the new key and moves `sign` to it together.
 4. Let the edit deploy `auth` so GoTrue loads the new set. A production variable change
    rebuilds the service from `main` without the build-SHA stamp; `auth` is exempt from the
    stamp check, so this is safe while `main` holds the deployed pin. The gateway verifier refetches the JWKS when a
    token names an unknown `kid` (at most every 30 s per issuer), so tokens signed by the new
    key verify without a gateway redeploy.
 5. After at least 8 h, compose `[<new private key>]` again (you still hold it from step 2
-   until this edit) and paste it as the whole value. Let it deploy `auth`. Then discard your copy of
+   until this edit), validate it, and paste it as the whole value. Let it deploy `auth`. Then discard your copy of
    the private key.
 
-`ceiling:` whether GoTrue accepts a public-only `verify` key in `GOTRUE_JWT_KEYS` is
-unmeasured; it documents the value as private JWKs. Measure it in the `idp` CI job before the
-first rotation. If it refuses, a sealed-form rotation cannot keep old tokens valid: step 3
-becomes `[<new private key>]`, and every live session ends at the switch.
+**Validate every composed value before you paste it.** A malformed `GOTRUE_JWT_KEYS` makes
+GoTrue fail at boot and log the whole value, private `d` included, in the fatal config error
+(measured on v2.197.0). That paste would put the private key in the Railway deploy logs.
+Keep the composed value in a file only you can read (`umask 077`), never on a command line.
+Run this offline check on it. It prints `ok` or `REFUSED`, never the value:
+
+```
+jwt_keys_ok='def signs: (.key_ops | type) == "array" and any(.key_ops[]; . == "sign");
+  type == "array"
+  and all(.[]; type == "object" and .kty == "EC" and .crv == "P-256" and .alg == "ES256"
+    and (.kid | type) == "string" and .kid != "")
+  and ([.[] | select(has("d") and signs)] | length) == 1
+  and all(.[]; (has("d") and signs) or ((has("d") | not) and (signs | not)))
+  and ([.[].kid] | unique | length) == length'
+jq -e "$jwt_keys_ok" composed.json >/dev/null 2>&1 && echo ok || echo REFUSED
+pbpaste | jq -e "$jwt_keys_ok" >/dev/null 2>&1 && echo ok || echo REFUSED   # from the clipboard
+```
+
+It passes only an array in which exactly one key has `d` and `sign`, every other key has
+neither, every key is EC P-256 with `alg` ES256 and a `kid`, and no two kids are equal.
+`prenv jwk-check` refuses an array of more than one key, so it fits only step 5's value.
+Delete `composed.json` after the paste.
+
+`ceiling:` measured locally on image v2.197.0, 2026-09-24: GoTrue boots on
+`[<new private key, sign+verify>, <old public key, verify>]`, its JWKS serves both kids, new
+tokens carry the new kid, and the gateway verifier accepts old and new tokens. It refuses to
+boot with two signing keys ("multiple signing keys detected"). Re-measure on a new image
+version before the next rotation.
 
 Rotating `GOTRUE_JWT_SECRET` or `GOTRUE_SMTP_PASS` is a single dashboard edit with a new
 value (`openssl rand -hex 32`, or the new Resend key); the edit deploys `auth`.

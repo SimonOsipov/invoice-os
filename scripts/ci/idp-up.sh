@@ -2,12 +2,14 @@
 # scripts/ci/idp-up.sh <auth-admin-dsn> <db-host-port>
 #
 # Builds sidecar/auth/Dockerfile and starts idp-es256, idp-hs256 and idp-rebuild on 9991-9993.
-# Stdout carries only the three NAME=url lines (safe for $GITHUB_ENV); everything else goes to stderr.
+# Stdout carries only the three NAME=url lines and IDP_ISSUER (safe for $GITHUB_ENV); the rest goes to stderr.
 # The DSN must be supabase_auth_admin's: a superuser would hide a missing grant or search_path.
 set -euo pipefail
 
 dsn="${1:?usage: idp-up.sh <auth-admin-dsn> <db-host-port>}"
 db_port="${2:?usage: idp-up.sh <auth-admin-dsn> <db-host-port>}"
+# One issuer for every container; the tests read it back as IDP_ISSUER.
+issuer="urn:ascomply:auth:ci"
 cd "$(git rev-parse --show-toplevel)"
 
 case "$dsn" in
@@ -43,7 +45,7 @@ start() {
       -e PORT="$port" \
       -e API_EXTERNAL_URL="http://localhost:$port" \
       -e GOTRUE_SITE_URL="http://localhost:3000" \
-      -e GOTRUE_JWT_ISSUER="urn:ascomply:auth:ci" \
+      -e GOTRUE_JWT_ISSUER="$issuer" \
       -e GOTRUE_DISABLE_SIGNUP=false \
       -e GOTRUE_MAILER_AUTOCONFIRM=true \
       -e GOTRUE_SMTP_HOST= \
@@ -82,3 +84,4 @@ start idp-rebuild 9993 -e GOTRUE_JWT_KEYS \
 echo "IDP_ES256_URL=http://localhost:9991"
 echo "IDP_HS256_URL=http://localhost:9992"
 echo "IDP_REBUILD_URL=http://localhost:9993"
+echo "IDP_ISSUER=$issuer"

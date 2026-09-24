@@ -77,14 +77,23 @@ func jwkDefect(in io.Reader) string {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return "empty input"
 	}
-	var keys []esJWK
+	// A map keeps member names exact; struct decoding folds case, and RFC 7517 names are case-sensitive.
+	var keys []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &keys); err != nil {
 		return "not a JSON array of JWK objects"
 	}
 	if len(keys) != 1 {
 		return fmt.Sprintf("%d keys, want exactly 1", len(keys))
 	}
-	k := keys[0]
+	var k esJWK
+	for name, dst := range map[string]any{
+		"kty": &k.Kty, "crv": &k.Crv, "alg": &k.Alg, "kid": &k.Kid,
+		"key_ops": &k.KeyOps, "x": &k.X, "y": &k.Y, "d": &k.D,
+	} {
+		if v, ok := keys[0][name]; ok && json.Unmarshal(v, dst) != nil {
+			return "a member has the wrong JSON type"
+		}
+	}
 	switch {
 	case k.Kty != "EC" || k.Crv != "P-256":
 		return "not an EC P-256 key"

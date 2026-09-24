@@ -35,10 +35,10 @@ var routedServices = []string{
 }
 
 // probedServices are reached by /healthz/fleet but get NO public proxy route:
-// the sidecar has no public domain, so the roll-up is CI's only view of it, and
-// nothing outside the private network should be able to call it.
+// neither has a public domain, so the roll-up is CI's only view of them, and
+// nothing outside the private network should be able to call them.
 // TestGatewayHandlersPublishNoProxyRouteForAProbedService holds that line.
-var probedServices = []string{"docling"}
+var probedServices = []string{"docling", "auth"}
 
 func main() {
 	app, err := platform.New("gateway")
@@ -115,14 +115,18 @@ func main() {
 	// only thing that tells a green boot from a swallowed purge failure.
 	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
+	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	verifier, err := auth.NewVerifier(auth.Config{
-		Issuer:  mustEnv("AUTH_ISSUER"),
-		JWKSURL: mustEnv("AUTH_JWKS_URL"),
-		Logger:  app.Logger,
+		Issuer:     mustEnv("AUTH_ISSUER"),
+		JWKSURL:    mustEnv("AUTH_JWKS_URL"),
+		Additional: additional,
+		Logger:     app.Logger,
 	})
 	if err != nil {
 		fatal(app.Logger, "gateway: verifier: %v", err)
 	}
+	// The primary issuer plus the additional set; the deploy gate asserts the count.
+	platform.AuthIssuers = strconv.Itoa(1 + len(additional))
 
 	routed, probed, err := loadUpstreams()
 	if err != nil {
@@ -135,7 +139,7 @@ func main() {
 	// (comma-separated); empty grants no browser origin (the production default).
 	withCORS := gateway.CORS(strings.Split(os.Getenv("CORS_ALLOWED_ORIGINS"), ","))
 
-	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, nil, app.Logger)
+	apiHandler, fleetHandler := gatewayHandlers(verifier, routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, app.Logger)
 	app.Mux.Handle(routePrefix, withCORS(apiHandler))
 
 	// Public fleet-health roll-up, outside /api/ and outside the verifier —
@@ -234,6 +238,15 @@ func loadUpstreams() (routed, probed map[string]*url.URL, err error) {
 		return nil, nil, err
 	}
 	return routed, probed, nil
+}
+
+// mustParseIssuers parses AUTH_ADDITIONAL_ISSUERS and stops boot on a malformed value.
+func mustParseIssuers(raw string) []auth.TrustedIssuer {
+	issuers, err := auth.ParseTrustedIssuers(raw)
+	if err != nil {
+		fatal(slog.Default(), "gateway: AUTH_ADDITIONAL_ISSUERS: %v", err)
+	}
+	return issuers
 }
 
 func mustEnv(key string) string {

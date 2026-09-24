@@ -76,6 +76,9 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	if MockIssuer != "" {
 		body["mock_issuer"] = MockIssuer
 	}
+	if AuthIssuers != "" {
+		body["auth_issuers"] = AuthIssuers
+	}
 	writeJSON(w, http.StatusOK, body)
 }
 

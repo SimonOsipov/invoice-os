@@ -143,7 +143,7 @@ func TestRLS_ExtractWorkerAsksJevOnceAfterTheDecision(t *testing.T) {
 	}
 	req := stub.reqs[0]
 	ids := slices.Sorted(maps.Keys(req.Questions))
-	if want := []string{"invoice_number", "total"}; !slices.Equal(ids, want) {
+	if want := []string{"document_type", "invoice_number", "total"}; !slices.Equal(ids, want) {
 		t.Errorf("question ids = %v, want %v", ids, want)
 	}
 	if req.Purpose != jev.PurposeValueCheck {
@@ -164,15 +164,15 @@ func TestRLS_ExtractWorkerAsksJevOnceAfterTheDecision(t *testing.T) {
 		t.Errorf("the Jev call carried tenant(s) %v, want %v", stub.tenants, want)
 	}
 
-	// Control: with the AI off, invoice_number stays missing and only total is asked.
+	// Control: with the AI off, invoice_number stays missing and only document_type and total are asked.
 	ctl := &wkJev{enabled: true, resp: wjNoul(map[string]float64{"total": 1})}
 	off := wkRunJev(t, ctx, 954002, []extraction.Page{page}, nil, ctl)
 	wpAssertRankZero(t, off.rows, "invoice_number", nil, stPtr("missing"))
 	if n := ctl.count(); n != 1 {
 		t.Fatalf("the control's Jev seam saw %d call(s), want 1", n)
 	}
-	if ids := slices.Sorted(maps.Keys(ctl.reqs[0].Questions)); !slices.Equal(ids, []string{"total"}) {
-		t.Errorf("control question ids = %v, want [total]", ids)
+	if ids := slices.Sorted(maps.Keys(ctl.reqs[0].Questions)); !slices.Equal(ids, []string{"document_type", "total"}) {
+		t.Errorf("control question ids = %v, want [document_type total]", ids)
 	}
 }
 
@@ -433,8 +433,8 @@ func TestRLS_ExtractWorkerJevLeavesAnAmbiguousFieldsCandidatesAlone(t *testing.T
 	if n := stub.count(); n != 1 {
 		t.Fatalf("the Jev seam saw %d call(s), want 1", n)
 	}
-	if ids := slices.Sorted(maps.Keys(stub.reqs[0].Questions)); !slices.Equal(ids, []string{"invoice_number", "total"}) {
-		t.Errorf("question ids = %v, want [invoice_number total]: an ambiguous field is never asked", ids)
+	if ids := slices.Sorted(maps.Keys(stub.reqs[0].Questions)); !slices.Equal(ids, []string{"document_type", "invoice_number", "total"}) {
+		t.Errorf("question ids = %v, want [document_type invoice_number total]: an ambiguous field is never asked", ids)
 	}
 	wpAssertRankZero(t, on.rows, "total", stPtr("1935.00"), stPtr("unreadable"))
 	wpAssertRankZero(t, on.rows, "invoice_number", stPtr("20417"), stPtr("unreadable"))

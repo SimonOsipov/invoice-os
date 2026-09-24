@@ -291,6 +291,9 @@ func TestImporterPackage_ImportsTheJevClientNotTheHarness(t *testing.T) {
 		t.Fatalf("go list -deps ./internal/importer: %v\n%s", err, out)
 	}
 	deps := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(deps) < sxMinDepsFloor {
+		t.Fatalf("go list -deps named %d packages, want at least %d; the scan looks truncated", len(deps), sxMinDepsFloor)
+	}
 	if !slices.Contains(deps, "context") {
 		t.Fatalf("control: go list -deps never named context; the scan is broken")
 	}
@@ -299,5 +302,162 @@ func TestImporterPackage_ImportsTheJevClientNotTheHarness(t *testing.T) {
 	}
 	if slices.Contains(deps, "github.com/SimonOsipov/invoice-os/internal/jevmeasure") {
 		t.Errorf("internal/importer imports internal/jevmeasure; product code must copy the wording")
+	}
+}
+
+// Every placement doubted but one unusable: a partial result would still unplace fields.
+func TestMappingCheck_OneUnusableAnswerDropsEveryDoubt(t *testing.T) {
+	placements := map[string]string{
+		"invoice_number": "Invoice No", "issue_date": "Date", "buyer_tin": "TIN", "buyer_name": "Buyer",
+		"currency": "Ccy", "subtotal": "Net", "vat": "VAT", "total": "Total",
+	}
+	for _, bad := range []struct {
+		name   string
+		answer *jev.Answer
+	}{
+		{"missing", nil},
+		{"choice", &jev.Answer{Type: jev.TypeChoice, Choice: "x", Confidence: 1}},
+		{"untyped", &jev.Answer{Noul: 0}},
+	} {
+		t.Run(bad.name, func(t *testing.T) {
+			answers := map[string]jev.Answer{}
+			for f := range placements {
+				answers[f] = jev.Answer{Type: jev.TypeNoul, Noul: 0}
+			}
+			if bad.answer == nil {
+				delete(answers, "total")
+			} else {
+				answers["total"] = *bad.answer
+			}
+			s := &mcStub{enabled: true, resp: jev.Response{Answers: answers}}
+			// Map order is random; repeat so the bad field is rarely visited first.
+			for range 20 {
+				if got := checkPlacements(context.Background(), s, mcWindow, placements); got == nil || len(got) != 0 {
+					t.Fatalf("got %#v, want non-nil empty", got)
+				}
+			}
+			// Control: the same answers with total usable doubt all eight.
+			answers["total"] = jev.Answer{Type: jev.TypeNoul, Noul: 0}
+			if got := checkPlacements(context.Background(), s, mcWindow, placements); len(got) != len(placements) {
+				t.Errorf("control: got %v, want all %d fields", got, len(placements))
+			}
+		})
+	}
+}
+
+func TestMappingCheck_AnAnswerNobodyAskedIsIgnored(t *testing.T) {
+	s := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"vat": 1, "total": 0, "": 0, "VAT %": 0})}
+	got := checkPlacements(context.Background(), s, mcWindow, map[string]string{"vat": "VAT %"})
+	if got == nil || len(got) != 0 {
+		t.Errorf("got %#v, want non-nil empty", got)
+	}
+	// Control: the asked field's own doubt still counts beside the extras.
+	s.resp = mcNouls(map[string]float64{"vat": 0, "total": 0})
+	if got := checkPlacements(context.Background(), s, mcWindow, map[string]string{"vat": "VAT %"}); !slices.Equal(got, []string{"vat"}) {
+		t.Errorf("control: got %v, want [vat]", got)
+	}
+}
+
+// One column on two fields, and a header the window lacks: each placement is still its own question.
+func TestMappingCheck_EveryPlacementIsAskedWhateverItsHeader(t *testing.T) {
+	window := [][]string{{"Total", "Total", "Notes"}, {"100", "100", "x"}}
+	placements := map[string]string{"vat": "Total", "total": "Total", "buyer_name": "Customer"}
+	s := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"vat": 0, "total": 1, "buyer_name": 0.05})}
+
+	got := checkPlacements(context.Background(), s, window, placements)
+
+	if len(s.calls) != 1 {
+		t.Fatalf("Ask called %d times, want 1", len(s.calls))
+	}
+	qs := s.calls[0].Questions
+	if len(qs) != len(placements) {
+		t.Fatalf("asked %d questions, want %d", len(qs), len(placements))
+	}
+	for field, header := range placements {
+		q, ok := qs[field]
+		if !ok {
+			t.Errorf("field %s not asked", field)
+			continue
+		}
+		if want := fmt.Sprintf(" Field: %s. Column header: %s.", field, header); !strings.HasSuffix(q.Instructions, want) {
+			t.Errorf("field %s: Instructions do not end with %q", field, want)
+		}
+	}
+	if !slices.Equal(got, []string{"buyer_name", "vat"}) {
+		t.Errorf("got %v, want [buyer_name vat]", got)
+	}
+}
+
+// The design's comparator is noul <= cut; the real client never passes a noul outside [0, 1].
+func TestMappingCheck_AnInfiniteNoulFollowsTheComparator(t *testing.T) {
+	for _, tc := range []struct {
+		noul float64
+		want []string
+	}{
+		{math.Inf(1), []string{}},
+		{math.Inf(-1), []string{"vat"}},
+	} {
+		s := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"vat": tc.noul})}
+		if got := checkPlacements(context.Background(), s, mcWindow, map[string]string{"vat": "VAT %"}); !slices.Equal(got, tc.want) {
+			t.Errorf("noul %v: got %v, want %v", tc.noul, got, tc.want)
+		}
+	}
+}
+
+func TestMappingCheck_EmptyInputsInEveryShapeAskNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		window     [][]string
+		placements map[string]string
+	}{
+		{"nil placements", mcWindow, nil},
+		{"empty non-nil window", [][]string{}, map[string]string{"vat": "VAT %"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"vat": 0})}
+			got := checkPlacements(context.Background(), s, tc.window, tc.placements)
+			if len(s.calls) != 0 || got == nil || len(got) != 0 {
+				t.Errorf("%d Ask, got %#v; want 0 Ask and non-nil empty", len(s.calls), got)
+			}
+		})
+	}
+	t.Run("no answers at all", func(t *testing.T) {
+		s := &mcStub{enabled: true}
+		got := checkPlacements(context.Background(), s, mcWindow, map[string]string{"vat": "VAT %"})
+		if len(s.calls) != 1 || got == nil || len(got) != 0 {
+			t.Errorf("%d Ask, got %#v; want 1 Ask and non-nil empty", len(s.calls), got)
+		}
+	})
+}
+
+type mcCtxKey struct{}
+
+// mcCtxStub answers from the context it receives, so a dropped caller context shows.
+type mcCtxStub struct{ seen []context.Context }
+
+func (s *mcCtxStub) Enabled() bool { return true }
+
+func (s *mcCtxStub) Ask(ctx context.Context, req jev.Request) (jev.Response, error) {
+	s.seen = append(s.seen, ctx)
+	if err := ctx.Err(); err != nil {
+		return jev.Response{}, fmt.Errorf("%w: unavailable: %w", jev.ErrCheckSkipped, err)
+	}
+	return mcNouls(map[string]float64{"vat": 0}), nil
+}
+
+func TestMappingCheck_TheCallersContextReachesAsk(t *testing.T) {
+	s := &mcCtxStub{}
+	ctx := context.WithValue(context.Background(), mcCtxKey{}, "caller")
+	if got := checkPlacements(ctx, s, mcWindow, map[string]string{"vat": "VAT %"}); !slices.Equal(got, []string{"vat"}) {
+		t.Fatalf("control: got %v, want [vat]", got)
+	}
+	if len(s.seen) != 1 || s.seen[0].Value(mcCtxKey{}) != "caller" {
+		t.Fatalf("Ask did not receive the caller's context")
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := checkPlacements(cancelled, s, mcWindow, map[string]string{"vat": "VAT %"}); got == nil || len(got) != 0 {
+		t.Errorf("cancelled context: got %#v, want non-nil empty", got)
 	}
 }

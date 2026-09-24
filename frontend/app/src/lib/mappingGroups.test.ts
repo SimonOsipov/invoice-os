@@ -30,6 +30,7 @@
 // reason (assertion / not-implemented), not an import/compile error.
 import { readFileSync } from 'node:fs'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it, vi } from 'vitest'
 
 import { CANON } from '../data'
@@ -1477,9 +1478,145 @@ describe('applyDoubts and checkGroups', () => {
     expect(out).toEqual(groups)
   })
 
+  // Code only, one declaration line: a commented-out copy beside a widened union must not pass.
   it("CHK-06: PlacementBadge's union is unchanged", () => {
-    const src = readFileSync(new URL('./mappingGroups.ts', import.meta.url), 'utf8')
+    const src = stripComments(readFileSync(new URL('./mappingGroups.ts', import.meta.url), 'utf8'))
     expect(src, 'control: the placementBadge anchor').toContain('export function placementBadge(')
-    expect(src).toContain("export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null\n")
+    const decls = src.split('\n').filter((l) => /\btype\s+placementbadge\b/i.test(l))
+    expect(decls).toEqual(["export type PlacementBadge = 'restored' | 'suggested' | 'auto' | null"])
+  })
+})
+
+describe('applyDoubts and checkGroups — adversarial (QA Mode B)', () => {
+  const COLS = ['Invoice No', 'Issue Date', 'VAT %', 'Total']
+  const recognized = recognize(COLS)
+
+  function g(docId = 'doc-q'): MappingGroup {
+    const base = mkGroup([`f-${docId}`], { ...initMappingFromHeaders(COLS), invoice_number: 'Invoice No' }, COLS)
+    return {
+      ...base,
+      preview: { ...base.preview, document_id: docId },
+      suggested: { headerRow: 1, mapping: { invoice_number: 'Invoice No' } },
+    }
+  }
+  const answer = (doubted: unknown) => (): Promise<CheckMapping> => Promise.resolve({ doubted } as CheckMapping)
+
+  it('QA-CHK-01: a duplicated doubted name unplaces once and touches nothing else', () => {
+    const in_ = g()
+    expect(in_.mapping.vat, 'control: vat starts placed').toBe('VAT %')
+    expect(applyDoubts(in_, ['vat', 'vat']).mapping).toEqual({ ...in_.mapping, vat: null })
+  })
+
+  it('QA-CHK-02: applyDoubts never writes into the input group', () => {
+    const in_ = g()
+    const before = structuredClone(in_)
+    const out = applyDoubts(in_, ['vat', 'invoice_number'])
+    expect(out.mapping.vat, 'control: the doubt applied').toBeNull()
+    expect(in_).toEqual(before)
+    expect(out.mapping).not.toBe(in_.mapping)
+  })
+
+  it("QA-CHK-03: a doubted field whose value is '' stays '' (it is not placed)", () => {
+    const in_ = { ...g(), mapping: { ...g().mapping, vat: '' } }
+    expect(toImportMapping(in_.mapping).vat, "fixture: '' is not a placement").toBeUndefined()
+    const out = applyDoubts(in_, ['vat', 'total'])
+    expect(out.mapping.total, 'control: a placed doubted field in the same call is unplaced').toBeNull()
+    expect(out.mapping.vat).toBe('')
+  })
+
+  it('QA-CHK-04: an all-string answer applies its canonical names and ignores the rest', async () => {
+    const [out] = await checkGroups([g()], answer(['vat', 'not_a_field', 'Total', 'VAT']))
+    expect(out.mapping).toEqual({ ...g().mapping, vat: null })
+  })
+
+  it('QA-CHK-05: an answer mixing strings with a non-string is not an array of strings, so nothing applies', async () => {
+    const control = await checkGroups([g()], answer(['vat']))
+    expect(control[0].mapping.vat, "control: ['vat'] alone unplaces vat").toBeNull()
+    for (const mixed of [['vat', 1], ['vat', null], [['vat']], ['vat', { f: 'vat' }]]) {
+      const groups = [g()]
+      expect(await checkGroups(groups, answer(mixed)), JSON.stringify(mixed)).toEqual(groups)
+    }
+  })
+
+  it('QA-CHK-06: one group rejecting does not stop the next; order and identity are kept', async () => {
+    const seen: string[] = []
+    const check = (doc: string): Promise<CheckMapping> => {
+      seen.push(doc)
+      if (doc === 'doc-1') return Promise.reject(new Error('boom'))
+      if (doc === 'doc-2') return Promise.resolve({ doubted: 'vat' } as unknown as CheckMapping)
+      return Promise.resolve({ doubted: ['invoice_number'] })
+    }
+    const groups = [g('doc-1'), g('doc-2'), g('doc-3')]
+    const out = await checkGroups(groups, check)
+    expect(seen).toEqual(['doc-1', 'doc-2', 'doc-3'])
+    expect(out.map((x) => x.preview.document_id)).toEqual(['doc-1', 'doc-2', 'doc-3'])
+    expect(out[0]).toBe(groups[0])
+    expect(out[1]).toBe(groups[1])
+    expect(out[2].mapping).toEqual({ ...groups[2].mapping, invoice_number: null })
+  })
+
+  it('QA-CHK-07: a check that throws synchronously leaves that group and still checks the next', async () => {
+    const seen: string[] = []
+    const check = (doc: string): Promise<CheckMapping> => {
+      seen.push(doc)
+      if (doc === 'doc-1') throw new Error('sync boom')
+      return Promise.resolve({ doubted: ['vat'] })
+    }
+    const groups = [g('doc-1'), g('doc-2')]
+    const out = await checkGroups(groups, check)
+    expect(seen).toEqual(['doc-1', 'doc-2'])
+    expect(out[0]).toBe(groups[0])
+    expect(out[1].mapping.vat).toBeNull()
+  })
+
+  it('QA-CHK-08: doubting every placement keeps the group and closes the invoice-number gate', async () => {
+    const in_ = g()
+    const placed = Object.keys(toImportMapping(in_.mapping))
+    expect([...placed].sort(), 'fixture: four placements').toEqual(['invoice_number', 'issue_date', 'total', 'vat'])
+    expect(canSubmitAllMappings([in_]), 'control: the gate is open before the doubt').toBe(true)
+
+    const out = await checkGroups([in_], answer(placed))
+    expect(out).toHaveLength(1)
+    expect(toImportMapping(out[0].mapping)).toEqual({})
+    expect(Object.keys(out[0].mapping).sort()).toEqual(Object.keys(in_.mapping).sort())
+    expect(canSubmitAllMappings(out)).toBe(false)
+    expect(out[0].suggested).toEqual(in_.suggested)
+  })
+
+  it('QA-CHK-09: a doubted field placed by hand elsewhere has no badge; back on its old column its badge returns', () => {
+    const out = applyDoubts(g(), ['invoice_number', 'vat'])
+    expect(placementBadge(out, 'invoice_number', 'Invoice No', recognized), 'control: unplaced').toBeNull()
+
+    const moved = { ...out, mapping: { ...out.mapping, invoice_number: 'Issue Date', vat: 'Total' } }
+    expect(placementBadge(moved, 'invoice_number', 'Issue Date', recognized)).toBeNull()
+    expect(placementBadge(moved, 'vat', 'Total', recognized)).toBeNull()
+
+    const back = { ...out, mapping: { ...out.mapping, invoice_number: 'Invoice No', vat: 'VAT %' } }
+    expect(placementBadge(back, 'invoice_number', 'Invoice No', recognized)).toBe('suggested')
+    expect(placementBadge(back, 'vat', 'VAT %', recognized)).toBe('auto')
+  })
+
+  it('QA-CHK-10: no groups, no call; a null body or a missing doubted key keeps the group', async () => {
+    const check = vi.fn((): Promise<CheckMapping> => Promise.resolve({ doubted: ['vat'] }))
+    expect(await checkGroups([], check)).toEqual([])
+    expect(check).not.toHaveBeenCalled()
+    const hit = await checkGroups([g()], check)
+    expect(check, 'control: the recorder sees a call').toHaveBeenCalledTimes(1)
+    expect(hit[0].mapping.vat).toBeNull()
+
+    for (const body of [null, undefined, { doubted: undefined }]) {
+      const groups = [g()]
+      expect(await checkGroups(groups, () => Promise.resolve(body as unknown as CheckMapping))).toEqual(groups)
+    }
+  })
+
+  it('QA-CHK-11: the check receives the placed mapping only, never a null or blank placement', async () => {
+    const in_ = { ...g(), mapping: { ...g().mapping, total: '' } }
+    const check = vi.fn((_d: string, _m: Record<string, string>): Promise<CheckMapping> => Promise.resolve({ doubted: [] }))
+    await checkGroups([in_], check)
+    expect(check).toHaveBeenCalledTimes(1)
+    const sent = check.mock.calls[0]![1]
+    expect(Object.keys(sent).length, 'control: something was sent').toBeGreaterThan(0)
+    expect(sent).toEqual({ invoice_number: 'Invoice No', issue_date: 'Issue Date', vat: 'VAT %' })
   })
 })

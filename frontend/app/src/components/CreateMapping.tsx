@@ -2,7 +2,8 @@
 // Ported from Platform.dc.html ~L471-540 (markup) + ~L1549-1589 (render values).
 //
 // One spreadsheet row is one invoice LINE ITEM; rows group into invoices by the
-// column mapped to `invoice_number`. Recognised columns arrive pre-placed and
+// column mapped to `invoice_number`. A recognised column the placement check does not
+// doubt (CHKA-02) arrives pre-placed and
 // badged AUTO — the invoice number is never matched by name: only suggested from the file's own rows, or restored from this client's earlier import, and confirmed with Continue.
 //
 // Every column, sample cell and file fact on this screen now comes from the SERVER's

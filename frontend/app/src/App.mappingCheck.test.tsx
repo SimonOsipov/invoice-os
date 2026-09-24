@@ -451,3 +451,60 @@ describe('a doubted placement is left unplaced on the Map step', () => {
     expect(checkBodies.map((b) => b.document_id), 'both runs were checked').toEqual(['doc-d1', 'doc-d2'])
   })
 })
+
+describe('the placement check — adversarial (QA Mode B)', () => {
+  it('QA-CHKA-01: the check follows the suggestion and precedes the Map step', async () => {
+    const atCheck: { suggests: number; step: string | undefined }[] = []
+    const recordThenDoubt: Answer = () => {
+      atCheck.push({ suggests: suggestBodies.length, step: capturedCtx?.createStep })
+      return doubts([])()
+    }
+    await boot({ suggest: { 'doc-o1': suggestAi(TWO_COL, { invoice_number: 'Invoice No' }) }, check: { 'doc-o1': recordThenDoubt } })
+    await readToMapStep([{ name: 'a.csv', cols: TWO_COL, doc: 'doc-o1' }])
+
+    expect(atCheck, 'control: the check ran').toHaveLength(1)
+    expect(atCheck[0]!.suggests, 'the suggestion was requested before the check').toBe(1)
+    expect(atCheck[0]!.step, 'the Map step was not open when the check was sent').not.toBe('mapping')
+    expect(checkBodies[0]!.mapping, "the check carries the suggestion's placement").toEqual({ invoice_number: 'Invoice No' })
+  })
+
+  it('QA-CHKA-02: a failed check on one group leaves it, while the next group takes its doubt', async () => {
+    await boot({
+      suggest: {
+        'doc-m1': suggestAi(TWO_COL, { invoice_number: 'Invoice No' }),
+        'doc-m2': suggestAi(ALT_COL, { invoice_number: 'Ref Number' }),
+      },
+      check: { 'doc-m1': fail(500), 'doc-m2': doubts(['invoice_number']) },
+    })
+    await readToMapStep([
+      { name: 'a.csv', cols: TWO_COL, doc: 'doc-m1' },
+      { name: 'b.csv', cols: ALT_COL, doc: 'doc-m2' },
+    ])
+
+    expect(checkBodies.map((b) => b.document_id), 'both groups were checked, in order').toEqual(['doc-m1', 'doc-m2'])
+    const groups = requireCtx().groups
+    expect(groups.map((g) => g.preview.document_id)).toEqual(['doc-m1', 'doc-m2'])
+    expect(groups[0]!.mapping.invoice_number, 'the failed check left group 1 as suggested').toBe('Invoice No')
+    expect(groups[1]!.mapping.invoice_number, "group 2's doubt applied").toBeNull()
+    expect(requireCtx().groupIndex).toBe(0)
+  })
+
+  it('QA-CHKA-03: doubting every placement opens a Map step with nothing placed and Import gated', async () => {
+    await boot({
+      suggest: { 'doc-all': suggestAi(AUTO_COLS, { invoice_number: 'Invoice No' }) },
+      check: { 'doc-all': doubts(['invoice_number', 'issue_date', 'vat', 'total']) },
+    })
+    await readToMapStep([{ name: 'a.csv', cols: AUTO_COLS, doc: 'doc-all' }])
+
+    expect(Object.keys(checkBodies[0]!.mapping).sort(), 'control: four placements were checked').toEqual([
+      'invoice_number',
+      'issue_date',
+      'total',
+      'vat',
+    ])
+    const snap = mapStepSnapshot()
+    expect(snap).toEqual(AUTO_COLS.map((h) => [h, 'drop field']))
+    expect(buttonByText('Map invoice number to continue'), 'Import stays gated').toBeDefined()
+    expect(buttonByText('Import 1 rows')).toBeUndefined()
+  })
+})

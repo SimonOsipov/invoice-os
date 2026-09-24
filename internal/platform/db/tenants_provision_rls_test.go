@@ -364,7 +364,7 @@ func snapshotProvisionSchema(t *testing.T, ctx context.Context, tx pgx.Tx) provi
 	return provisionSchemaSnapshot{
 		Functions: collect(`SELECT p.oid::regprocedure::text FROM pg_proc p
 			JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' ORDER BY 1`),
-		Relations: collect(`SELECT c.relname || ':' || c.relkind FROM pg_class c
+		Relations: collect(`SELECT c.relname || ':' || c.relkind::text FROM pg_class c
 			JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' ORDER BY 1`),
 		Columns: collect(`SELECT table_name || '.' || column_name || ':' || data_type || ':' || is_nullable || ':' || coalesce(column_default, '')
 			FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('tenants', 'memberships') ORDER BY 1`),

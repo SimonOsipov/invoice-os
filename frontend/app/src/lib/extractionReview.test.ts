@@ -1583,3 +1583,13 @@ describe('document-type notice', () => {
     }
   })
 })
+
+describe('document-type notice, adversarial', () => {
+  it.each(['__proto__', 'toString', 'hasOwnProperty', 'valueOf', 'Receipt', 'receipt ', ''])(
+    'documentTypeNotice(%j) is null',
+    (t) => {
+      expect(documentTypeNotice('receipt'), 'control: the receipt key returned nothing').toMatch(/^This looks like a receipt,/)
+      expect(documentTypeNotice(t as DocumentType)).toBeNull()
+    },
+  )
+})

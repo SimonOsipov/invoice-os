@@ -3098,3 +3098,106 @@ describe('the document type', () => {
     expect(s!.textContent).toBe(RECEIPT)
   })
 })
+
+describe('the document type, adversarial', () => {
+  const RECEIPT =
+    'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
+  const CREDIT_NOTE =
+    'This looks like a credit note, not a tax invoice. Its import was not changed. A credit note files here as an ordinary invoice with negative amounts. Check it before you submit an invoice from it.'
+
+  function strip(): HTMLElement | null {
+    return screen.queryByTestId('extraction-document-type')
+  }
+
+  /** JOB_ID reads as a receipt; OTHER_JOB_ID gets `other`. */
+  function twoJobs(other: () => Promise<ExtractionDetail>): Wire {
+    return wire((jobId) => (jobId === JOB_ID ? Promise.resolve(mkDetail({ document_type: 'receipt' })) : other()))
+  }
+
+  async function showsReceipt(): Promise<void> {
+    await flush()
+    expect(strip()?.textContent, 'control: the receipt job rendered no strip').toBe(RECEIPT)
+  }
+
+  // An inherited key would read a function off Object.prototype; '' is no key at all.
+  it.each(['__proto__', 'toString', 'hasOwnProperty', 'valueOf', ''])(
+    'an inherited or empty document_type renders no strip (%j)',
+    async (t) => {
+      render(review({ ctx: serving(mkDetail({ document_type: t as DocumentType })).ctx }))
+      await flush()
+
+      expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
+      expect(fieldRows(), 'the fields pane rendered no row').toHaveLength(3)
+      expect(strip()).toBeNull()
+
+      cleanup()
+      render(review({ ctx: serving(mkDetail({ document_type: 'receipt' })).ctx }))
+      await showsReceipt()
+    },
+  )
+
+  it.each([...UNSETTLED])('the %s rung ignores a verdict', async (state) => {
+    render(review({ ctx: serving(mkDetail({ state, document_type: 'receipt' })).ctx }))
+    await flush()
+
+    expect(screen.getByText(STILL_READING), 'the still-reading sentence did not render').toBeTruthy()
+    expect(strip()).toBeNull()
+  })
+
+  it('the strip leaves with its job when the next read is still loading', async () => {
+    const w = twoJobs(() => new Promise<ExtractionDetail>(() => {}))
+    const { rerender } = render(review({ ctx: w.ctx }))
+    await showsReceipt()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(w.asked()).toEqual([JOB_ID, OTHER_JOB_ID])
+    expect(document.querySelector(LOADING_SPINNER), 'the loading surface did not render').toBeTruthy()
+    expect(strip()).toBeNull()
+  })
+
+  it('the strip leaves with its job when the next read fails', async () => {
+    const w = twoJobs(() => Promise.reject(new ApiError('http', 'Not Found', 404)))
+    const { rerender } = render(review({ ctx: w.ctx }))
+    await showsReceipt()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(screen.getByText(ERROR_HEADING), 'the error surface did not render').toBeTruthy()
+    expect(strip()).toBeNull()
+  })
+
+  it('the strip follows the detail: a verdict, then none, then another verdict', async () => {
+    let next: DocumentType | null = null
+    const w = twoJobs(async () => mkDetail({ id: OTHER_JOB_ID, document_type: next }))
+    const { rerender } = render(review({ ctx: w.ctx }))
+    await showsReceipt()
+
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(frames(), 'the second job rendered no frame').toHaveLength(3)
+    expect(strip(), 'a verdict survived into a job without one').toBeNull()
+
+    next = 'credit note'
+    rerender(review({ ctx: w.ctx, jobId: JOB_ID }))
+    await showsReceipt()
+    rerender(review({ ctx: w.ctx, jobId: OTHER_JOB_ID }))
+    await flush()
+    expect(strip()?.textContent).toBe(CREDIT_NOTE)
+  })
+
+  it("the glyph span copies extraction-no-region's", async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: 'receipt' })).ctx }))
+    await flush()
+
+    const s = strip()
+    expect(s, 'no strip for a receipt').not.toBeNull()
+    const spans = Array.from(s!.children) as HTMLElement[]
+    expect(spans.map((c) => c.tagName)).toEqual(['SPAN', 'SPAN'])
+    expect(spans[0].querySelector('svg'), 'the first span holds no glyph').not.toBeNull()
+    expect(spans[0].style.display).toBe('flex')
+    expect(spans[0].style.flex).toBe('0 0 auto')
+    expect(spans[0].style.color).toBe('var(--fg-3)')
+    expect(spans[1].textContent).toBe(RECEIPT)
+  })
+})

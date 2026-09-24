@@ -1501,7 +1501,7 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
   })
 
   // AC8 [suspend-copy-is-true], as AUDIT-10-07 left it: sign-in itself is still not blocked
-  // (GET /v1/me is the gate's one exemption), but every tenant-scoped read now refuses, so
+  // (GET /v1/me is exempt from the gate), but every tenant-scoped read now refuses, so
   // "not blocked yet" understated what suspension does.
   it('AC8: SUSPEND_EXPLANATION says what suspension now does', () => {
     expect(SUSPEND_EXPLANATION).not.toContain('Blocks sign-in')

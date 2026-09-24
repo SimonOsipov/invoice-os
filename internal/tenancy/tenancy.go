@@ -1,10 +1,7 @@
-// Package tenancy is the 01 Tenancy context service. Its first real endpoint,
-// GET /v1/me, resolves the caller injected by the gateway (X-Tenant-ID /
-// X-User-ID / X-User-Role) to their tenant by reading the tenants table under
-// Row-Level Security — the app-role query is scoped by the app.current_tenant GUC
-// (SET LOCAL), so the policy, not a WHERE clause, is what limits it to the one
-// tenant the caller acts within. It is the endpoint M2-13's mock-login round trip
-// calls to prove the auth -> gateway -> SET LOCAL -> RLS path end to end.
+// Package tenancy is the 01 Tenancy context service: workspaces and their
+// memberships, read under Row-Level Security scoped by the app.current_tenant GUC.
+// GET /v1/me resolves the gateway-injected caller to their tenant and role;
+// POST /v1/workspaces provisions a tenant-less caller's first workspace.
 package tenancy
 
 import (
@@ -13,6 +10,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -268,15 +267,73 @@ type ProvisionInput struct {
 // subject: the handler cannot read the tenant-less caller itself.
 type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string, error)
 
-// ProvisionHandler returns POST /v1/workspaces. D17 scaffold: 501, no behaviour.
+// maxNameChars caps workspace_name and display_name after trimming.
+const maxNameChars = 200
+
+// provisionRequest is the POST /v1/workspaces wire body. Kind is a pointer so an
+// absent kind lets the database default apply.
+type provisionRequest struct {
+	WorkspaceName string  `json:"workspace_name"`
+	DisplayName   string  `json:"display_name"`
+	Kind          *string `json:"kind"`
+}
+
+// ProvisionHandler returns POST /v1/workspaces: capped decode and validation
+// (400), then provision, then 201 in the GET /v1/me shape. The caller check is
+// the store's: the handler cannot see a tenant-less caller.
 func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
+		var req provisionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		in := ProvisionInput{
+			WorkspaceName: strings.TrimSpace(req.WorkspaceName),
+			DisplayName:   strings.TrimSpace(req.DisplayName),
+		}
+		if n := utf8.RuneCountInString(in.WorkspaceName); n == 0 || n > maxNameChars {
+			writeError(w, http.StatusBadRequest, "workspace_name must be 1 to 200 characters")
+			return
+		}
+		if n := utf8.RuneCountInString(in.DisplayName); n == 0 || n > maxNameChars {
+			writeError(w, http.StatusBadRequest, "display_name must be 1 to 200 characters")
+			return
+		}
+		if req.Kind != nil {
+			if *req.Kind != "firm" && *req.Kind != "in_house" {
+				writeError(w, http.StatusBadRequest, `kind must be "firm" or "in_house"`)
+				return
+			}
+			in.Kind = *req.Kind
+		}
+
+		tenant, subject, err := provision(r.Context(), in)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "tenancy: provision workspace", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+
+		var resp meResponse
+		resp.Tenant.ID = tenant.ID
+		resp.Tenant.Name = tenant.Name
+		resp.Tenant.Kind = tenant.Kind
+		resp.User.ID = subject
+		resp.User.Role = "admin"
+		writeJSON(w, http.StatusCreated, resp)
 	}
 }
 
 // statusForErr maps a store error to the HTTP status + message, in the
-// internal/portfolio shape. The two 409 messages are hand-written rather than
+// internal/portfolio shape. The 409 messages are hand-written rather than
 // err.Error() so the "tenancy: " sentinel prefix never reaches the SPA, which
 // renders them as the reason.
 func statusForErr(err error) (status int, msg string) {
@@ -295,6 +352,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "an invited member has no sign-in to suspend or reactivate"
 	case errors.Is(err, ErrLastActiveAdmin):
 		return http.StatusConflict, "this is the tenant's last active admin — make another member an active admin first"
+	case errors.Is(err, ErrAlreadyProvisioned):
+		return http.StatusConflict, "this account already has a workspace"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

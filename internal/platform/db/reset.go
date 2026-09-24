@@ -259,11 +259,10 @@ func ResetEnabled(environment, flag string) bool {
 //
 // Deliberately EXCLUDED, with reasons (do not add on a whim):
 //
-//	tenants, memberships,     never test residue: no code path in this repo
-//	invitations               creates a tenant/membership/invitation at
-//	                          runtime (no CreateTenant handler, no INSERT INTO
-//	                          tenants outside migrations and db/seed.dev.sql).
-//	                          seed.dev.sql UPSERTs (ON CONFLICT DO UPDATE / DO
+//	tenants, memberships,     tenancy.Store.ProvisionWorkspace creates a
+//	invitations               tenant and membership at runtime, but each is
+//	                          keyed to one identity and never collides with
+//	                          the fixtures. seed.dev.sql UPSERTs (ON CONFLICT DO UPDATE / DO
 //	                          NOTHING) the 4 fixture tenants + 4 memberships
 //	                          regardless of what Reset does, so leaving them
 //	                          untouched and letting Seed reconcile them is

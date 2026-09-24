@@ -227,7 +227,7 @@ with no configuration. That is why the M2-01 skeleton migration is a no-op.
 ### The helper (M2-06): `WithinTenantTx`
 
 Application code never issues `SET LOCAL` by hand. The two sanctioned entry points are
-`db.WithinTenantTx` (workers, CLIs, `GET /v1/me`) and `db.WithinRequestTenantTx` (every
+`db.WithinTenantTx` (workers, CLIs, `GET /v1/me`, `POST /v1/workspaces`) and `db.WithinRequestTenantTx` (every
 other HTTP read), both in `internal/platform/db`. The core is:
 
 ```go
@@ -249,7 +249,7 @@ What it guarantees:
   input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
   unscoped query.
 - **Explicit tenant, not context-derived.** The core helper takes the tenant as an
-  argument, so it serves the worker (§8), the `tools/*` CLIs and `GET /v1/me`.
+  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me` and `POST /v1/workspaces`.
   `WithinRequestTenantTx` pulls the tenant from the request `auth.Identity` for handlers.
 
 `WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
@@ -261,7 +261,7 @@ no-row exception). The gate's `SELECT status FROM memberships WHERE user_id = $1
 `set_config` above in a single `pgx.Batch`, so on the HTTP path **neither statement is
 visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.BatchTracer`.
 A subject that is not a UUID skips the lookup and delegates to the core unchanged, and
-`GET /v1/me` is the one deliberate exemption (it calls `WithinTenantTx` directly).
+`GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions (they call `WithinTenantTx` directly).
 
 ---
 

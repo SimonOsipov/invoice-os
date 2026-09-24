@@ -454,7 +454,7 @@ export function invitedNotice(count: number): string {
 
 /**
  * What suspension actually does, as of the read-path gate (AUDIT-10). Sign-in itself is
- * still not blocked — GET /v1/me is the gate's one exemption — but every tenant-scoped read
+ * still not blocked — GET /v1/me is exempt from the gate — but every tenant-scoped read
  * refuses, so the workspace is replaced by a notice.
  *
  * Rendered under the suspend control only, never beside `Reactivate` (MemberDrawer.tsx). The

@@ -95,12 +95,12 @@ in the UI rather than as a suspension.
 is immediate and needs no new session: the gate reads status per request
 (`TestRLS_RequestSeamAdmitsAReactivatedCaller`, `…RefusesAfterALiveSuspension`).
 
-## 4. `GET /v1/me` is the one deliberate exemption
+## 4. `GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions
 
 `tenancy.Store.Me` calls `db.WithinTenantTx` directly, skipping the gate. Scan 2 (§9) pins that
 exemption to that one **func**, not to its file.
 
-It is exempt because it is the SPA's only boot round trip, and `signIn` throws when it fails.
+`Me` is exempt because it is the SPA's only boot round trip, and `signIn` throws when it fails.
 Gating it turns every suspended session into an unexplained sign-in failure — with nothing left
 able to say why, since the screen that would carry the 403 never mounts. Exempting `/v1/me`
 is what makes the 403 reachable at all.
@@ -110,6 +110,11 @@ The exemption is narrow by construction: `Me` returns only the caller's **own** 
 two file-mates, `ListMemberships` and `SetMembershipStatus`, are gated — which is why the
 exemption is func-scoped: a method added beside `Me` inherits the gate, and the guard fails if
 anyone widens it.
+
+`tenancy.Store.ProvisionWorkspace` (`POST /v1/workspaces`) is the second exemption, also
+func-scoped. Its caller has no membership yet, so the gate would refuse before the workspace
+exists (AUTH-03 AC-5). It creates only the tenant its transaction's GUC names, with the caller as
+its first admin.
 
 ### 4.1 What the exemption discloses, named plainly
 
@@ -246,7 +251,7 @@ fragile part of it.
 **`covered` is structural, not per-route inspection.** Scans 1 and 2 (§9) make the gated seam a
 monopoly: outside eight named files and one named func, nothing in `internal/` **or `cmd/`** can
 obtain a database handle at all, and the only callers allowed to reach the identity-free core
-are workers, boot-time seeders, two operator CLIs and `GET /v1/me`. Every route that touches
+are workers, boot-time seeders, two operator CLIs, `GET /v1/me` and `POST /v1/workspaces`. Every route that touches
 tenant data is therefore gated by construction, and `covered` records that. `exempt` rows each
 state their own reason.
 
@@ -265,6 +270,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /.well-known/jwks.json` | gateway | exempt | serves the public verification keys; unauthenticated by design |
 | `/api/` | gateway | exempt | the proxy mount, not an endpoint — it forwards to the seven services whose own routes are listed here |
 | `GET /v1/me` | tenancy | exempt | §4 — the SPA's boot round trip; gating it would make the 403 unreachable |
+| `POST /v1/workspaces` | tenancy | exempt | the caller has no membership yet (AC-5) |
 | `POST /v1/validate/batch` | validation | exempt | `S2SMiddleware` peer call with no caller identity by construction, and the gateway strips any client-supplied `X-S2S-Token` (`internal/gateway/gateway.go`, `injectIdentity`) |
 | `GET /v1/memberships` | tenancy | covered | |
 | `PATCH /v1/memberships/{user_id}` | tenancy | covered | |
@@ -325,7 +331,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-68 distinct routes, 74 registrations (`GET /v1/ping` is registered once per service).
+69 distinct routes, 75 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 
@@ -357,7 +363,7 @@ it", so a stale exemption cannot outlive its reason.
 | Guard | What it asserts | Needles | Floor (measured at AUDIT-10-04) |
 |---|---|---|---|
 | `TestRLS_NoDirectPoolUseOutsideTheSeam` | **no database handle is acquired outside eight named files and one named func**: no pool method on a `*pgxpool.Pool`-typed name, and no `pgx.Connect`, `pgxpool.New`, `pgconn.Connect` or `sql.Open` off a DSN | a fixture holding both `r.ReaderPool.Query(...)` and `r.URL.Query()` must find **exactly 1**; a bare pool parameter; a non-database method; an aliased local; all three DSN entry points; a renamed import; an acquisition inside a func literal, attributed to the literal | ≥130 files walked (139); ≥4 pool-typed names (4); ≥9 sites across ≥8 files (10 across 9) |
-| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
+| `TestRLS_UngatedCoreIsWorkerAndExemptionOnly` | every call of the identity-free `db.WithinTenantTx`/`Opts` is a worker, a boot-time seeder, an operator CLI, or `tenancy` func `Me` or `ProvisionWorkspace` | a call in a named func; a doc comment naming the seam (0 sites); a call inside a func literal, attributed to the literal | ≥130 files walked (139); ≥12 sites across ≥6 packages (14 across 7) |
 | `TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute` | every `app.Mux` route in `cmd/*/main.go` and `internal/platform/server.go` has a row in §8 with a verdict, and no row classifies a route nobody registers | a const-indirected route resolves; an unresolvable argument fails loudly; a verdict cell must read exactly `covered` or `exempt`; a longer path cannot answer for a shorter one | ≥8 roots yielding routes (9); ≥55 registrations (63) |
 | `TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim` | this page carries no sentence still asserting AUDIT-10's narrow rule (§5) | a fixture planting both stale phrases must be flagged; a fixture holding only the legitimate active-row line must not | this file parses to ≥10 top-level (`## `) section headings |
 

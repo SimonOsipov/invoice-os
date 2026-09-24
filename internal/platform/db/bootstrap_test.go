@@ -59,9 +59,9 @@ import (
 // (internal/platform/db), i.e. the repo root's db/bootstrap.sql.
 const bootstrapSQLPath = "../../../db/bootstrap.sql"
 
-// bootstrapRoles are the three roles db/bootstrap.sql creates/re-asserts, in the order
-// the file itself declares them.
-var bootstrapRoles = []string{"invoice_migrator", "invoice_app", "invoice_tenant_reader"}
+// bootstrapRoles are the LOGIN roles db/bootstrap.sql creates/re-asserts, in the order
+// the file itself declares them. The NOLOGIN auth_hook_reader is not one of them.
+var bootstrapRoles = []string{"invoice_migrator", "invoice_app", "invoice_tenant_reader", "supabase_auth_admin"}
 
 // gucValue distinguishes "leave this session GUC unset" (current_setting(name, true)
 // then reads NULL) from "explicitly set it to the empty string" — the Test Spec's two
@@ -76,7 +76,7 @@ func unsetGUC() gucValue      { return gucValue{} }
 func emptyGUC() gucValue      { return gucValue{set: true, value: ""} }
 func pwGUC(v string) gucValue { return gucValue{set: true, value: v} }
 
-// bootstrapGUCs bundles the three ascomply.*_password session GUCs a pgx caller
+// bootstrapGUCs bundles the four ascomply.*_password session GUCs a pgx caller
 // (or the Makefile's `-c "SELECT set_config(...)" -f` psql invocation) must set before
 // running db/bootstrap.sql.
 type bootstrapGUCs struct {
@@ -306,9 +306,10 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-adm-" + uuid.NewString()),
 	}
 
 	if err := applyBootstrap(t, pool, guc, sql); err != nil {
@@ -319,6 +320,7 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		attrs := readRoleAttrs(t, pool, tc.role)
 		if !attrs.canLogin {
@@ -394,6 +396,7 @@ func TestBootstrapSQLFailsClosedOnMissingPassword(t *testing.T) {
 		"invoice_migrator":      "boot-sentinel-mig",
 		"invoice_app":           "boot-sentinel-app",
 		"invoice_tenant_reader": "boot-sentinel-rdr",
+		"supabase_auth_admin":   "boot-sentinel-adm",
 	}
 	for role, pw := range sentinels {
 		alterRolePassword(t, pool, role, pw)
@@ -409,8 +412,8 @@ func TestBootstrapSQLFailsClosedOnMissingPassword(t *testing.T) {
 		name string
 		guc  bootstrapGUCs
 	}{
-		{"unset", bootstrapGUCs{migrator: unsetGUC(), app: unsetGUC(), reader: unsetGUC()}},
-		{"empty string", bootstrapGUCs{migrator: emptyGUC(), app: emptyGUC(), reader: emptyGUC()}},
+		{"unset", bootstrapGUCs{migrator: unsetGUC(), app: unsetGUC(), reader: unsetGUC(), authAdmin: unsetGUC()}},
+		{"empty string", bootstrapGUCs{migrator: emptyGUC(), app: emptyGUC(), reader: emptyGUC(), authAdmin: emptyGUC()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := applyBootstrap(t, pool, tc.guc, sql)
@@ -439,9 +442,10 @@ func TestBootstrapSQLIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-idem-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-idem-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-idem-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-idem-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-idem-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-idem-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-idem-adm-" + uuid.NewString()),
 	}
 
 	if err := applyBootstrap(t, pool, guc, sql); err != nil {
@@ -455,6 +459,7 @@ func TestBootstrapSQLIsIdempotent(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		attrs := readRoleAttrs(t, pool, tc.role)
 		if attrs.super || attrs.bypassRLS || attrs.createDB || attrs.createRole || !attrs.canLogin {
@@ -486,14 +491,14 @@ func TestBootstrapSQLRotatesPasswordDeterministically(t *testing.T) {
 	p1 := "boot-rot-p1-" + uuid.NewString()
 	p2 := "boot-rot-p2-" + uuid.NewString()
 
-	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p1), app: pwGUC(p1), reader: pwGUC(p1)}, sql); err != nil {
+	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p1), app: pwGUC(p1), reader: pwGUC(p1), authAdmin: pwGUC(p1)}, sql); err != nil {
 		t.Fatalf("bootstrap with p1: %v", err)
 	}
 	if err := attemptLogin(t, loginDSN(t, superDSN, "invoice_migrator", p1)); err != nil {
 		t.Fatalf("sanity: login with p1 right after bootstrapping with p1: %v", err)
 	}
 
-	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p2), app: pwGUC(p2), reader: pwGUC(p2)}, sql); err != nil {
+	if err := applyBootstrap(t, pool, bootstrapGUCs{migrator: pwGUC(p2), app: pwGUC(p2), reader: pwGUC(p2), authAdmin: pwGUC(p2)}, sql); err != nil {
 		t.Fatalf("re-bootstrap with p2: %v", err)
 	}
 
@@ -603,7 +608,7 @@ func TestBootstrapSQLPasswordSpecialCharactersRoundTrip(t *testing.T) {
 		{"dollar_quote_tag_collision", `pw$pw$injected-` + uuid.NewString()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			guc := bootstrapGUCs{migrator: pwGUC(tc.pw), app: pwGUC(tc.pw), reader: pwGUC(tc.pw)}
+			guc := bootstrapGUCs{migrator: pwGUC(tc.pw), app: pwGUC(tc.pw), reader: pwGUC(tc.pw), authAdmin: pwGUC(tc.pw)}
 			if err := applyBootstrap(t, pool, guc, sql); err != nil {
 				t.Fatalf("apply db/bootstrap.sql with a %s password: %v", tc.name, err)
 			}
@@ -640,7 +645,7 @@ func TestBootstrapSQLWhitespaceOnlyGUCIsAcceptedNotRejected(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool) })
 
 	const whitespacePW = "   "
-	guc := bootstrapGUCs{migrator: pwGUC(whitespacePW), app: pwGUC("app"), reader: pwGUC("reader")}
+	guc := bootstrapGUCs{migrator: pwGUC(whitespacePW), app: pwGUC("app"), reader: pwGUC("reader"), authAdmin: pwGUC("auth_admin")}
 
 	err := applyBootstrap(t, pool, guc, sql)
 	if err != nil {
@@ -678,9 +683,10 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 	ctx := context.Background()
 
 	guc := bootstrapGUCs{
-		migrator: pwGUC("boot-conc-mig-" + uuid.NewString()),
-		app:      pwGUC("boot-conc-app-" + uuid.NewString()),
-		reader:   pwGUC("boot-conc-rdr-" + uuid.NewString()),
+		migrator:  pwGUC("boot-conc-mig-" + uuid.NewString()),
+		app:       pwGUC("boot-conc-app-" + uuid.NewString()),
+		reader:    pwGUC("boot-conc-rdr-" + uuid.NewString()),
+		authAdmin: pwGUC("boot-conc-adm-" + uuid.NewString()),
 	}
 
 	const n = 3
@@ -700,6 +706,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 				{"ascomply.migrator_password", guc.migrator.value},
 				{"ascomply.app_password", guc.app.value},
 				{"ascomply.reader_password", guc.reader.value},
+				{"ascomply.auth_admin_password", guc.authAdmin.value},
 			} {
 				if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 					errs <- fmt.Errorf("set_config(%s): %w", kv.name, err)
@@ -736,6 +743,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 		{"invoice_migrator", guc.migrator.value},
 		{"invoice_app", guc.app.value},
 		{"invoice_tenant_reader", guc.reader.value},
+		{"supabase_auth_admin", guc.authAdmin.value},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login after the concurrent race + serial re-apply failed — end state did not converge: %v", tc.role, err)
@@ -947,9 +955,10 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-embed-mig-" + uuid.NewString(),
-		App:      "boot-embed-app-" + uuid.NewString(),
-		Reader:   "boot-embed-rdr-" + uuid.NewString(),
+		Migrator:  "boot-embed-mig-" + uuid.NewString(),
+		App:       "boot-embed-app-" + uuid.NewString(),
+		Reader:    "boot-embed-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-embed-adm-" + uuid.NewString(),
 	}
 
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
@@ -960,6 +969,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 		{"invoice_migrator", pw.Migrator},
 		{"invoice_app", pw.App},
 		{"invoice_tenant_reader", pw.Reader},
+		{"supabase_auth_admin", pw.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login with the Bootstrap-injected password failed: %v", tc.role, err)
@@ -983,6 +993,7 @@ func TestBootstrapRejectsEmptyPasswords(t *testing.T) {
 		"invoice_migrator":      "boot-empty-sentinel-mig",
 		"invoice_app":           "boot-empty-sentinel-app",
 		"invoice_tenant_reader": "boot-empty-sentinel-rdr",
+		"supabase_auth_admin":   "boot-empty-sentinel-adm",
 	}
 	for role, pw := range sentinels {
 		alterRolePassword(t, pool, role, pw)
@@ -1001,18 +1012,23 @@ func TestBootstrapRejectsEmptyPasswords(t *testing.T) {
 	}{
 		{
 			name:      "empty migrator",
-			pw:        db.RolePasswords{Migrator: "", App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString()},
+			pw:        db.RolePasswords{Migrator: "", App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "migrator",
 		},
 		{
 			name:      "empty app",
-			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "", Reader: "boot-empty-rdr-" + uuid.NewString()},
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "", Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "app",
 		},
 		{
 			name:      "empty reader",
-			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: ""},
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: "", AuthAdmin: "boot-empty-adm-" + uuid.NewString()},
 			wantField: "reader",
+		},
+		{
+			name:      "empty auth admin",
+			pw:        db.RolePasswords{Migrator: "boot-empty-mig-" + uuid.NewString(), App: "boot-empty-app-" + uuid.NewString(), Reader: "boot-empty-rdr-" + uuid.NewString(), AuthAdmin: ""},
+			wantField: "authadmin",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1047,9 +1063,10 @@ func TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-conc-run-mig-" + uuid.NewString(),
-		App:      "boot-conc-run-app-" + uuid.NewString(),
-		Reader:   "boot-conc-run-rdr-" + uuid.NewString(),
+		Migrator:  "boot-conc-run-mig-" + uuid.NewString(),
+		App:       "boot-conc-run-app-" + uuid.NewString(),
+		Reader:    "boot-conc-run-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-conc-run-adm-" + uuid.NewString(),
 	}
 
 	const n = 4
@@ -1075,6 +1092,7 @@ func TestBootstrapConcurrentCallsSerialiseUnderAdvisoryLock(t *testing.T) {
 		{"invoice_migrator", pw.Migrator},
 		{"invoice_app", pw.App},
 		{"invoice_tenant_reader", pw.Reader},
+		{"supabase_auth_admin", pw.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login after the concurrent Bootstrap calls failed — end state did not converge: %v", tc.role, err)
@@ -1093,9 +1111,10 @@ func TestBootstrapReleasesAdvisoryLock(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-lock-mig-" + uuid.NewString(),
-		App:      "boot-lock-app-" + uuid.NewString(),
-		Reader:   "boot-lock-rdr-" + uuid.NewString(),
+		Migrator:  "boot-lock-mig-" + uuid.NewString(),
+		App:       "boot-lock-app-" + uuid.NewString(),
+		Reader:    "boot-lock-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-lock-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -1117,7 +1136,7 @@ func TestBootstrapReleasesAdvisoryLock(t *testing.T) {
 func TestBootstrapRetriesThenFailsOnUnreachableDB(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	dsn := closedPortDSN(t, superDSN)
-	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x", AuthAdmin: "x"}
 
 	start := time.Now()
 	done := make(chan error, 1)
@@ -1150,9 +1169,10 @@ func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	pw := db.RolePasswords{
-		Migrator: "boot-mig-e2e-" + uuid.NewString(),
-		App:      "boot-app-e2e-" + uuid.NewString(),
-		Reader:   "boot-rdr-e2e-" + uuid.NewString(),
+		Migrator:  "boot-mig-e2e-" + uuid.NewString(),
+		App:       "boot-app-e2e-" + uuid.NewString(),
+		Reader:    "boot-rdr-e2e-" + uuid.NewString(),
+		AuthAdmin: "boot-adm-e2e-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, pw, dbsql.FS); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -1189,9 +1209,10 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 	t.Cleanup(func() { restoreDevDefaultPasswords(t, pool); restoreSafeAttributes(t, pool) })
 
 	original := db.RolePasswords{
-		Migrator: "boot-rot-old-mig-" + uuid.NewString(),
-		App:      "boot-rot-old-app-" + uuid.NewString(),
-		Reader:   "boot-rot-old-rdr-" + uuid.NewString(),
+		Migrator:  "boot-rot-old-mig-" + uuid.NewString(),
+		App:       "boot-rot-old-app-" + uuid.NewString(),
+		Reader:    "boot-rot-old-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-rot-old-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, original, dbsql.FS); err != nil {
 		t.Fatalf("first Bootstrap (planting the OLD passwords): %v", err)
@@ -1201,9 +1222,10 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 	}
 
 	rotated := db.RolePasswords{
-		Migrator: "boot-rot-new-mig-" + uuid.NewString(),
-		App:      "boot-rot-new-app-" + uuid.NewString(),
-		Reader:   "boot-rot-new-rdr-" + uuid.NewString(),
+		Migrator:  "boot-rot-new-mig-" + uuid.NewString(),
+		App:       "boot-rot-new-app-" + uuid.NewString(),
+		Reader:    "boot-rot-new-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-rot-new-adm-" + uuid.NewString(),
 	}
 	if err := db.Bootstrap(context.Background(), superDSN, rotated, dbsql.FS); err != nil {
 		t.Fatalf("second Bootstrap (rotating to NEW passwords over already-provisioned roles): %v", err)
@@ -1213,6 +1235,7 @@ func TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords(t *testing.T) 
 		{"invoice_migrator", rotated.Migrator},
 		{"invoice_app", rotated.App},
 		{"invoice_tenant_reader", rotated.Reader},
+		{"supabase_auth_admin", rotated.AuthAdmin},
 	} {
 		if err := attemptLogin(t, loginDSN(t, superDSN, tc.role, tc.password)); err != nil {
 			t.Errorf("%s: login with the NEW password failed after rotation: %v", tc.role, err)
@@ -1257,9 +1280,10 @@ func TestBootstrapRespectsContextDeadlineUnderAdvisoryLockContention(t *testing.
 	}()
 
 	pw := db.RolePasswords{
-		Migrator: "boot-contend-mig-" + uuid.NewString(),
-		App:      "boot-contend-app-" + uuid.NewString(),
-		Reader:   "boot-contend-rdr-" + uuid.NewString(),
+		Migrator:  "boot-contend-mig-" + uuid.NewString(),
+		App:       "boot-contend-app-" + uuid.NewString(),
+		Reader:    "boot-contend-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-contend-adm-" + uuid.NewString(),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1298,7 +1322,7 @@ func TestBootstrapEnabledAllowlistAcceptsArbitrarilyLargePRNumber(t *testing.T) 
 // OS's own multi-minute TCP retransmission timeout.
 func TestBootstrapBoundedAgainstBlackHoleHost(t *testing.T) {
 	dsn := "postgres://postgres:x@203.0.113.1:5432/invoice_os?sslmode=disable"
-	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x"}
+	pw := db.RolePasswords{Migrator: "x", App: "x", Reader: "x", AuthAdmin: "x"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
@@ -1338,9 +1362,10 @@ func TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure(t *testing.T) {
 	pool := bootstrapSuperuserPool(t, superDSN)
 
 	pw := db.RolePasswords{
-		Migrator: "boot-midfail-mig-" + uuid.NewString(),
-		App:      "boot-midfail-app-" + uuid.NewString(),
-		Reader:   "boot-midfail-rdr-" + uuid.NewString(),
+		Migrator:  "boot-midfail-mig-" + uuid.NewString(),
+		App:       "boot-midfail-app-" + uuid.NewString(),
+		Reader:    "boot-midfail-rdr-" + uuid.NewString(),
+		AuthAdmin: "boot-midfail-adm-" + uuid.NewString(),
 	}
 	brokenFS := fstest.MapFS{
 		"bootstrap.sql": &fstest.MapFile{Data: []byte(

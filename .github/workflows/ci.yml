@@ -525,6 +525,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -640,6 +642,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -784,6 +788,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -868,6 +874,8 @@ jobs:
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
+      AUTH_ADMIN_PASSWORD: auth_admin
+      DATABASE_AUTH_ADMIN_URL: postgres://supabase_auth_admin:auth_admin@localhost:5432/invoice_os?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

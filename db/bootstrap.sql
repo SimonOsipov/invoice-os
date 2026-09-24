@@ -9,6 +9,10 @@
 --     on `tenants` (added by the M2-06 migration) lets this role — and only this role
 --     — see every tenant row, while invoice_app still sees only its current tenant.
 --     Still NOBYPASSRLS: its reach is exactly what its policies+grants allow, no more.
+--   supabase_auth_admin    — GoTrue's login role; owns schema `auth`, nothing in `public`.
+-- And one NOLOGIN role:
+--   auth_hook_reader       — owns the SECURITY DEFINER access-token hook; invoice_migrator
+--     may SET ROLE to it but does not inherit it, so the migrator's own reads stay scoped.
 --
 -- Why non-superuser + NOBYPASSRLS matters: Row-Level Security is only *enforceable*
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner
@@ -16,7 +20,7 @@
 -- migrator (table owner) and the app (query identity) are deliberately distinct, and
 -- neither is the Railway superuser. See docs/migrations.md.
 --
--- Run ONCE as the Postgres superuser. Password values come from three session GUCs
+-- Run ONCE as the Postgres superuser. Password values come from four session GUCs
 -- the caller sets on the SAME connection before this file runs — no psql-only
 -- meta-commands or client-side interpolation, so both psql and a pgx caller (the
 -- migration runner, M4-21-03) execute this identical file (Decision
@@ -25,6 +29,7 @@
 --     -c "SELECT set_config('ascomply.migrator_password', '…', false)" \
 --     -c "SELECT set_config('ascomply.app_password',      '…', false)" \
 --     -c "SELECT set_config('ascomply.reader_password',   '…', false)" \
+--     -c "SELECT set_config('ascomply.auth_admin_password', '…', false)" \
 --     -f db/bootstrap.sql
 -- `make db-bootstrap` / `make dev-db` do exactly this with dev-default passwords.
 -- Idempotent: safe to re-run (it also rotates the passwords and re-asserts the
@@ -46,6 +51,12 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'invoice_tenant_reader') THEN
     CREATE ROLE invoice_tenant_reader LOGIN;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_auth_admin') THEN
+    CREATE ROLE supabase_auth_admin LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'auth_hook_reader') THEN
+    CREATE ROLE auth_hook_reader NOLOGIN;
+  END IF;
 END
 $$;
 
@@ -56,9 +67,12 @@ $$;
 ALTER ROLE invoice_migrator      WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE supabase_auth_admin   WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE auth_hook_reader      WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 
--- 3. Set / rotate passwords, read from three session GUCs the caller sets beforehand
---    (`ascomply.migrator_password` / `.app_password` / `.reader_password`) —
+-- 3. Set / rotate passwords, read from four session GUCs the caller sets beforehand
+--    (`ascomply.migrator_password` / `.app_password` / `.reader_password` /
+--    `.auth_admin_password`; auth_hook_reader is NOLOGIN and has none) —
 --    replaces psql's :'var' client-side interpolation, which a pgx caller has no
 --    equivalent of. Fail closed: every GUC is checked BEFORE any password is
 --    applied, so a partial run never rotates one role while leaving another's GUC
@@ -80,10 +94,14 @@ BEGIN
   IF coalesce(current_setting('ascomply.reader_password', true), '') = '' THEN
     RAISE EXCEPTION 'ascomply.reader_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
   END IF;
+  IF coalesce(current_setting('ascomply.auth_admin_password', true), '') = '' THEN
+    RAISE EXCEPTION 'ascomply.auth_admin_password is not set (or empty) — set it via SELECT set_config(...) on this session before running db/bootstrap.sql';
+  END IF;
 
   EXECUTE format('ALTER ROLE invoice_migrator      PASSWORD %L', current_setting('ascomply.migrator_password'));
   EXECUTE format('ALTER ROLE invoice_app           PASSWORD %L', current_setting('ascomply.app_password'));
   EXECUTE format('ALTER ROLE invoice_tenant_reader PASSWORD %L', current_setting('ascomply.reader_password'));
+  EXECUTE format('ALTER ROLE supabase_auth_admin   PASSWORD %L', current_setting('ascomply.auth_admin_password'));
 END
 $$;
 
@@ -95,6 +113,17 @@ GRANT USAGE, CREATE ON SCHEMA public TO invoice_migrator;
 --    granted SELECT on (that per-table SELECT — e.g. on `tenants` — is granted in the
 --    migration, per the convention below). USAGE alone touches no data.
 GRANT USAGE ON SCHEMA public TO invoice_tenant_reader;
+
+--    GoTrue migrates its own tables into `auth`; in `public` it only calls the hook.
+CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
+ALTER ROLE supabase_auth_admin SET search_path = auth;
+GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+
+--    ALTER FUNCTION ... OWNER TO auth_hook_reader needs the new owner to hold CREATE.
+GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader;
+--    SET without INHERIT: the migrator can hand the hook over and drop it, but never
+--    inherits the role's cross-tenant read policy.
+GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
 
 --    Lock down the public schema: revoke the ambient CREATE that PUBLIC has by
 --    default (a no-op on PG15+, where PUBLIC already lacks it — kept explicit for

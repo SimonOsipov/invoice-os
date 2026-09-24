@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// RolePasswords carries the three ascomply.*_password values Bootstrap sets
-// via set_config before executing db/bootstrap.sql. All three are required —
+// RolePasswords carries the four ascomply.*_password values Bootstrap sets
+// via set_config before executing db/bootstrap.sql. All four are required —
 // Bootstrap validates them before opening any connection (AC-4).
 type RolePasswords struct {
 	Migrator string
@@ -118,13 +118,16 @@ func validateRolePasswords(pw RolePasswords) error {
 	if pw.Reader == "" {
 		return errors.New("db: RolePasswords.Reader is empty")
 	}
+	if pw.AuthAdmin == "" {
+		return errors.New("db: RolePasswords.AuthAdmin is empty")
+	}
 	return nil
 }
 
 // Bootstrap provisions a fresh/empty database: connects as superuser on a
 // single pinned connection, holds BootstrapAdvisoryLockKey for the duration
 // (QA F7 — proven empirically necessary: concurrent bootstrap without it raises
-// Postgres's "tuple concurrently updated", SQLSTATE XX000), sets the three
+// Postgres's "tuple concurrently updated", SQLSTATE XX000), sets the four
 // ascomply.* password GUCs, and executes bootstrap.sql read from fsys in a
 // single argument-less Exec (so pgx uses the simple protocol its multi-statement
 // body requires — passing any argument would switch to the extended protocol,
@@ -173,6 +176,7 @@ func Bootstrap(ctx context.Context, superuserDSN string, pw RolePasswords, fsys 
 		{"ascomply.migrator_password", pw.Migrator},
 		{"ascomply.app_password", pw.App},
 		{"ascomply.reader_password", pw.Reader},
+		{"ascomply.auth_admin_password", pw.AuthAdmin},
 	} {
 		if _, err := conn.Exec(ctx, `SELECT set_config($1, $2, false)`, kv.name, kv.value); err != nil {
 			return fmt.Errorf("db: set_config(%s): %w", kv.name, err)

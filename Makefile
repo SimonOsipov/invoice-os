@@ -64,6 +64,7 @@ db-bootstrap: ## Create/rotate the non-superuser roles (runs as SUPERUSER; needs
 		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
 		-f db/bootstrap.sql
 
 migrate-up: guard-migration-url ## Apply all pending migrations (as migrator)
@@ -94,6 +95,7 @@ dev-db: ## One command: local Postgres up (compose) -> bootstrap roles -> migrat
 		-c "SELECT set_config('ascomply.migrator_password', '$(MIGRATOR_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.app_password', '$(APP_PASSWORD)', false)" \
 		-c "SELECT set_config('ascomply.reader_password', '$(READER_PASSWORD)', false)" \
+		-c "SELECT set_config('ascomply.auth_admin_password', '$(AUTH_ADMIN_PASSWORD)', false)" \
 		-f - \
 		< db/bootstrap.sql
 	$(MAKE) migrate-up DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)"

@@ -61,7 +61,7 @@ func main() {
 	// "development" for an unset ENVIRONMENT, which would silently re-open the
 	// fail-open hole BootstrapEnabled's allowlist exists to close (QA F1). With
 	// the guard off, none of DATABASE_SUPERUSER_URL / MIGRATOR_PASSWORD /
-	// APP_PASSWORD / READER_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
+	// APP_PASSWORD / READER_PASSWORD / AUTH_ADMIN_PASSWORD (nor their deprecated INVOICE_*_PASSWORD
 	// fallbacks, see resolveRolePassword below) are required — production boots
 	// without any of them set. The reset guard is separate — see
 	// RailwayEnvironmentName/ResetFlag below and db.ResetEnabled's doc comment.
@@ -88,6 +88,8 @@ func main() {
 			Migrator: resolveRolePassword("MIGRATOR_PASSWORD", "INVOICE_MIGRATOR_PASSWORD", app.Logger),
 			App:      resolveRolePassword("APP_PASSWORD", "INVOICE_APP_PASSWORD", app.Logger),
 			Reader:   resolveRolePassword("READER_PASSWORD", "INVOICE_TENANT_READER_PASSWORD", app.Logger),
+			// No deprecated name ever existed, so no fallback to resolve.
+			AuthAdmin: os.Getenv("AUTH_ADMIN_PASSWORD"),
 		},
 		BootstrapFS:  dbsql.FS,
 		MigrationsFS: migrations.FS,

@@ -43,6 +43,7 @@ gofmt -l "$TARGET"
   DATABASE_MIGRATION_URL="postgres://invoice_migrator:migrator@localhost:$PORT/invoice_os?sslmode=disable" \
   DATABASE_SUPERUSER_URL="postgres://postgres:postgres@localhost:$PORT/invoice_os?sslmode=disable" \
   DATABASE_READER_URL="postgres://invoice_tenant_reader:reader@localhost:$PORT/invoice_os?sslmode=disable" \
+  DATABASE_AUTH_ADMIN_URL="postgres://supabase_auth_admin:auth_admin@localhost:$PORT/invoice_os?sslmode=disable" \
   go test -count=1 -p 1 ./internal/... ) >"$LOG" 2>&1
 
 # Top-level failures only: a --- FAIL line with no leading indent is a Test func,

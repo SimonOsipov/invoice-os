@@ -225,7 +225,7 @@ func TestProvisionMissingPasswordFailsLoudly(t *testing.T) {
 		BootstrapFlag: "true",
 		SuperuserDSN:  superuserPoisonDSN,
 		MigrationDSN:  migrationPoisonDSN,
-		Passwords:     db.RolePasswords{Migrator: "", App: "app-pw", Reader: "reader-pw"},
+		Passwords:     db.RolePasswords{Migrator: "", App: "app-pw", Reader: "reader-pw", AuthAdmin: "auth-admin-pw"},
 		BootstrapFS:   dbsql.FS,
 		MigrationsFS:  migrations.FS,
 		SeedFS:        dbsql.FS,

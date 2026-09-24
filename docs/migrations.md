@@ -90,6 +90,16 @@ passwords live only in Railway.
 > `bootstrap.sql` on every gateway boot, so a role added to it is picked up automatically
 > on that environment's next deploy rather than requiring a manual re-run. This history
 > stands as the reason that behavior exists.
+>
+> **`supabase_auth_admin` and `auth_hook_reader` (AUTH-02).** Bootstrap now also creates
+> GoTrue's login role `supabase_auth_admin` (owns schema `auth`; password from
+> `ascomply.auth_admin_password` / `AUTH_ADMIN_PASSWORD`) and the NOLOGIN hook owner
+> `auth_hook_reader` (`invoice_migrator` is a member with `INHERIT FALSE, SET TRUE`).
+> The access-token hook migration grants to both, so each must exist before it runs:
+> - **Production** runs no boot-time bootstrap, so the user creates both roles and the
+>   schema by hand before merge (story AUTH-02, user action U2).
+> - **A local dev DB bootstrapped earlier** lacks both roles, and `make migrate-up` fails
+>   at the hook migration's `GRANT`. Run `make db-bootstrap` (or `make dev-db`) once.
 
 ---
 

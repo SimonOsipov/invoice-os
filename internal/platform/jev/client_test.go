@@ -608,6 +608,51 @@ func TestAsk_AnAnswerOfTheWrongTypeFails(t *testing.T) {
 	}
 }
 
+func TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall(t *testing.T) {
+	req := noulReq("s")
+	req.Questions["document_type"] = Question{Type: TypeChoice, Instructions: "Which document type?", Options: []Option{
+		{Name: "tax invoice", Description: "A tax invoice"}, {Name: "receipt", Description: "A receipt"},
+	}, Default: "tax invoice"}
+
+	cases := []struct {
+		name    string
+		answers string
+		ok      bool
+	}{
+		{"choice_names_no_option", `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"invoice","confidence":0.9}`, false},
+		{"noul_missing", `"document_type":{"type":"choice","choice":"receipt","confidence":0.9}`, false},
+		{"control_both_valid", `"q1":{"type":"noul","noul":0.9},"document_type":{"type":"choice","choice":"receipt","confidence":0.9}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newServer(t, func(_ int32, w http.ResponseWriter, r *http.Request) {
+				reply(w, http.StatusOK, `{"answers":{`+tc.answers+`},"usage":{"input_tokens":1,"output_tokens":0}}`)
+			})
+			c := clockClient(ts, newFakeClock())
+
+			resp, err := c.Ask(t.Context(), req)
+			wantHits(t, ts, 1)
+			if !tc.ok {
+				wantSkipped(t, err, textUnavailable)
+				if len(resp.Answers) != 0 {
+					t.Errorf("answers = %+v, want none from a failed call", resp.Answers)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Ask() err = %v, want nil", err)
+			}
+			want := map[string]Answer{
+				"q1":            {Type: TypeNoul, Noul: 0.9},
+				"document_type": {Type: TypeChoice, Choice: "receipt", Confidence: 0.9},
+			}
+			if !reflect.DeepEqual(resp.Answers, want) {
+				t.Errorf("answers = %+v, want %+v", resp.Answers, want)
+			}
+		})
+	}
+}
+
 func TestAsk_MalformedBodyFailsWithoutARetry(t *testing.T) {
 	ts := newServer(t, func(_ int32, w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, "not json")

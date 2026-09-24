@@ -343,3 +343,48 @@ func TestJWKS_StaleWarnCarriesNoTokenOrKeyMaterial(t *testing.T) {
 		}
 	}
 }
+
+// panicOnceTransport panics on its first round trip, then behaves normally.
+type panicOnceTransport struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (p *panicOnceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	p.n++
+	first := p.n == 1
+	p.mu.Unlock()
+	if first {
+		panic("jwks transport panic")
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestJWKS_PanickingFetchDoesNotWedgeTheIssuer(t *testing.T) {
+	r := newBudgetRig(t)
+	r.v.http = &http.Client{Transport: &panicOnceTransport{}}
+	tok := r.token(t)
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("first Verify did not panic; the repro is broken")
+			}
+		}()
+		_, _ = r.v.Verify(context.Background(), tok)
+	}()
+	r.wantFetches(t, 0, "panicking fetch never reached the server")
+
+	r.clock.at(30 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	id, err := r.v.Verify(ctx, tok)
+	if err != nil {
+		t.Fatalf("Verify after a panicking fetch: %v (issuer wedged; JWKS fetches = %d)", err, r.jwks.count())
+	}
+	if id.Subject != testSubject || id.TenantID != "tenant-x" {
+		t.Fatalf("identity = %+v, want subject %s tenant tenant-x", id, testSubject)
+	}
+	r.wantFetches(t, 1, "fetch after the panic")
+}

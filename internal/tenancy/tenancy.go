@@ -189,11 +189,9 @@ type membershipsResponse struct {
 // the production implementation.
 type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
 
-// maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
-// platform server applies no request body limit of its own. A legitimate body
-// is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
-// unbounded allocation. Over-cap is a 400, not a 413
-// (TestMembership_BodyOverCapRejected).
+// maxSetStatusBodyBytes bounds a request body BEFORE it is decoded — the
+// platform server applies no request body limit of its own. Over-cap is a 400,
+// not a 413 (TestMembership_BodyOverCapRejected).
 const maxSetStatusBodyBytes = 4 * 1024
 
 // setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.

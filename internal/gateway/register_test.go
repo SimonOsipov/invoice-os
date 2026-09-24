@@ -53,7 +53,7 @@ const (
 const (
 	regEmail     = "new@corp.example"
 	regPassword  = "Corr3ct-Horse-Battery"
-	verifyToken  = "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d"
+	verifyToken  = "verify-token-hash-value-q7"
 	sessionAT    = "eyJhbGciOiJFUzI1NiJ9.access-token-value.sig"
 	sessionRT    = "refresh-token-value-4q2x"
 	siteURLValue = "https://site.example"

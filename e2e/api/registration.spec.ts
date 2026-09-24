@@ -54,9 +54,8 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
   test('a bogus verification link redirects 303 to the landing failure page', async () => {
     const res = await rawFetch('/auth/verify?token=bogus&type=signup', { redirect: 'manual' })
     expect(res.status).toBe(303)
-    expect(res.location, 'the Location header').not.toBeNull()
-    expect(res.location!.startsWith(resolveTarget('LANDING_URL')), `Location ${res.location}`).toBe(true)
-    expect(res.location!.endsWith(VERIFY_FAILED), `Location ${res.location}`).toBe(true)
+    // Exact, so a lookalike host (landing.example.evil) cannot pass a prefix match.
+    expect(res.location, 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`)
   })
 })
 

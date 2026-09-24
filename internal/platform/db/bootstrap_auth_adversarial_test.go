@@ -115,6 +115,27 @@ func TestBootstrapSQLAuthCreatesTheAuthSchemaWhenAbsent(t *testing.T) {
 	}
 }
 
+// A pre-existing `auth` (a hand-run U2 without AUTHORIZATION, or an older dev DB)
+// must converge to the AC-2 owner like every other property bootstrap re-asserts.
+func TestBootstrapSQLAuthReassertsTheAuthSchemaOwner(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	applyDevBootstrap(t, pool, sql)
+	t.Cleanup(func() { mustExecSQL(t, pool, `ALTER SCHEMA auth OWNER TO supabase_auth_admin`) })
+
+	mustExecSQL(t, pool, `ALTER SCHEMA auth OWNER TO CURRENT_USER`)
+	if owner, _ := schemaOwner(t, pool, "auth"); owner == authAdminRole {
+		t.Fatalf("pre-mutation left schema auth owned by %s, so this test cannot observe re-assertion", owner)
+	}
+
+	applyDevBootstrap(t, pool, sql)
+
+	if owner, _ := schemaOwner(t, pool, "auth"); owner != authAdminRole {
+		t.Errorf("schema auth owner after re-bootstrap = %q, want %q", owner, authAdminRole)
+	}
+}
+
 func TestBootstrapSQLAuthAdminCannotSetRoleToAnyOtherRole(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)

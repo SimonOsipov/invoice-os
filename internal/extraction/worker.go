@@ -58,7 +58,7 @@ type ExtractWorker struct {
 	Rules LoadAnchorRules
 	// AI is the per-document AI reading step. nil is off.
 	AI AIReader
-	// Jev checks the decided header values once per attempt; a retried job asks again. nil is off.
+	// Jev asks the value and document-type questions in one call per attempt; a retried job asks again. nil is off.
 	Jev JevAsker
 	// PageBytes reads a stored page image back by key. nil is off.
 	PageBytes PageObject

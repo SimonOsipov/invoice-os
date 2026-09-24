@@ -148,7 +148,7 @@ func argvEnv(argv, name string) string {
 	return ""
 }
 
-func TestIdpUpStdoutIsTheThreeURLsAndTheIssuer(t *testing.T) {
+func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
 	dsn := "postgres://supabase_auth_admin:" + stubDSNPassword + "@localhost:5448/invoice_os?sslmode=disable"
 	for _, osName := range []string{"Linux", "Darwin"} {
 		t.Run(osName, func(t *testing.T) {
@@ -158,7 +158,8 @@ func TestIdpUpStdoutIsTheThreeURLsAndTheIssuer(t *testing.T) {
 			}
 			want := []string{
 				"IDP_ES256_URL=http://localhost:9991", "IDP_HS256_URL=http://localhost:9992",
-				"IDP_REBUILD_URL=http://localhost:9993", "IDP_ISSUER=" + idpIssuer,
+				"IDP_REBUILD_URL=http://localhost:9993", "IDP_MAIL_URL=http://localhost:9994",
+				"MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
 			}
 			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
 			if !strings.HasSuffix(r.stdout, "\n") || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
@@ -305,6 +306,7 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
 	"sidecar/auth/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
+	"internal/gateway/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 

@@ -20,6 +20,8 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ApprovalRun } from './client'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 
 const requested: string[] = []
 // calls: url + method, additive to `requested` -- lets AC-7/AC-8 tell a GET /approval
@@ -487,5 +489,46 @@ describe('wire mirror: the e2e invoice list item carries the submit gate (BUG-12
       )
     }
     expect(listItem.length, 'InvoiceListItem must carry the pair on top of its floor').toBeGreaterThanOrEqual(5)
+  })
+})
+
+// A local server stands in for the gateway, so the redirect seam runs without a network.
+describe('rawFetch redirect', () => {
+  async function withServer(run: () => Promise<void>): Promise<void> {
+    const server = createServer((req, res) => {
+      if (req.url === '/go') {
+        res.writeHead(303, { Location: '/landed?verify=failed' }).end()
+        return
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"landed":true}')
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const previous = process.env.GATEWAY_URL
+    process.env.GATEWAY_URL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      await run()
+    } finally {
+      process.env.GATEWAY_URL = previous
+      await new Promise((resolve) => server.close(resolve))
+    }
+  }
+
+  it("redirect: 'manual' returns the 3xx and its Location", async () => {
+    const { rawFetch } = await import('./client')
+    await withServer(async () => {
+      const res = await rawFetch('/go', { redirect: 'manual' })
+      expect(res.status).toBe(303)
+      expect(res.location).toBe('/landed?verify=failed')
+    })
+  })
+
+  it('without redirect, the 3xx is followed and location is null', async () => {
+    const { rawFetch } = await import('./client')
+    await withServer(async () => {
+      const res = await rawFetch('/go')
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ landed: true })
+      expect(res.location).toBeNull()
+    })
   })
 })

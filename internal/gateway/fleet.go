@@ -43,7 +43,8 @@ type ServiceHealth struct {
 	Status string `json:"status"`          // statusUp | statusDown
 	Error  string `json:"error,omitempty"` // set only when Status == statusDown
 	// Build is the commit the service reported on /healthz. Empty when the
-	// probe failed or the service is older than platform.BuildSHA. Deliberately
+	// probe failed, the service is older than platform.BuildSHA, or it is probed
+	// at a custom health path (auth). Deliberately
 	// NOT part of the up/down verdict: a fleet running the wrong commit is
 	// healthy, just not the one under test, and conflating the two would make
 	// /healthz/fleet lie in the other direction. The deploy gate compares it.
@@ -57,7 +58,7 @@ type FleetHealth struct {
 }
 
 // FleetHealthHandler returns GET /healthz/fleet: a public, unauthenticated roll-up of
-// every backend's /healthz. Every upstream is private-network-only, so only
+// every backend's health path. Every upstream is private-network-only, so only
 // the gateway can reach them — this route is how CI (and a future status page) observes
 // fleet health through the one public backend surface. The gateway reports itself up (it
 // is answering this request); each upstream is probed at <base>/<healthPaths[name]>,

@@ -498,6 +498,8 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   await suggestResp
 
   const columns = page.locator('[data-testid="map-column"]')
+  // The Map step opens after the placement check, not the suggest response.
+  await expect(columns.first()).toBeVisible()
   expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
   const anyChip = columns.locator('span[draggable]')
   expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)
@@ -708,6 +710,145 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
   const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
   await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
   await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// AIRL01's steered file plus a twelfth, unaliased column. A JEVFAKE-DOUBT header makes the
+// mapping-check fake doubt every placement of that file's layout group.
+function buildCheck05Csv(num: string, notesHeader: string): string {
+  const header = `Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price,${notesHeader}`
+  const row = [num, '2026-01-01', '12345678-0001', steerMarker(AIRL01_ANSWER), 'NGN', '1000.00', '75.00', '1075.00', 'Consulting', '1', '1000.00', '']
+  return `${header}\n${row.join(',')}\n`
+}
+
+// The steered invoice_number plus the seven alias placements, sorted as the endpoint answers.
+const CHECK05_AUTOMATIC = ['buyer_tin', 'currency', 'invoice_number', 'issue_date', 'line_quantity', 'line_unit_price', 'total', 'vat']
+
+test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were", async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `CHECK-05 doubt ${Date.now()}`, tin: freshTin() })
+  const stamp = Date.now()
+  const numA = `INV-CHECK05A-${stamp}`
+  const numB = `INV-CHECK05B-${stamp}`
+  const headersA = [...PERF_HEADER.split(','), 'Notes JEVFAKE-DOUBT']
+  const headersB = [...PERF_HEADER.split(','), 'Notes']
+
+  const isPost = (r: Request, suffix: string) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith(suffix)
+  const suggests: Promise<{ documentId: string; body: { source: string; columns: string[]; mapping: Record<string, string> } }>[] = []
+  const checkRequests: { document_id: string; mapping: Record<string, string> }[] = []
+  const checkAnswers: Promise<{ documentId: string; status: number; body: { doubted: string[] } }>[] = []
+  const createRequests: string[] = []
+  const createStatuses: number[] = []
+  page.on('request', (req) => {
+    if (isPost(req, '/api/invoice/v1/imports/check-mapping')) checkRequests.push(JSON.parse(req.postData() ?? '{}'))
+    if (isPost(req, '/api/invoice/v1/imports')) createRequests.push(requestBody(req))
+  })
+  page.on('response', (res) => {
+    const req = res.request()
+    if (isPost(req, '/api/invoice/v1/imports/suggest-mapping')) {
+      suggests.push(res.json().then((body) => ({ documentId: JSON.parse(req.postData() ?? '{}').document_id, body })))
+    }
+    if (isPost(req, '/api/invoice/v1/imports/check-mapping')) {
+      checkAnswers.push(res.json().then((body) => ({ documentId: JSON.parse(req.postData() ?? '{}').document_id, status: res.status(), body })))
+    }
+    if (isPost(req, '/api/invoice/v1/imports')) createStatuses.push(res.status())
+  })
+
+  await signInFirm(page)
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+
+  // File A first, so it is group 1.
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles([
+    { name: 'check05-doubted.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numA, 'Notes JEVFAKE-DOUBT'), 'utf8') },
+    { name: 'check05-plain.csv', mimeType: 'text/csv', buffer: Buffer.from(buildCheck05Csv(numB, 'Notes'), 'utf8') },
+  ])
+  await page.getByRole('button', { name: 'Read columns' }).click()
+  await expect(page.getByText('GROUP 1 OF 2', { exact: true })).toBeVisible({ timeout: 120_000 })
+
+  // The Map step renders only after every check has answered.
+  const suggestAnswers = await Promise.all(suggests)
+  expect(suggestAnswers, 'one suggestion per group').toHaveLength(2)
+  for (const s of suggestAnswers) {
+    expect(s.body.source, 'control: each group must have reached the AI path').toBe('ai')
+    expect(s.body.mapping.invoice_number, 'control: the AI must have placed invoice_number').toBe('Invoice No')
+  }
+  const docA = suggestAnswers.find((s) => s.body.columns.at(-1) === 'Notes JEVFAKE-DOUBT')?.documentId
+  const docB = suggestAnswers.find((s) => s.body.columns.at(-1) === 'Notes')?.documentId
+  expect(docA, "file A's stored document").toBeTruthy()
+  expect(docB, "file B's stored document").toBeTruthy()
+  expect(docA).not.toBe(docB)
+
+  const answers = await Promise.all(checkAnswers)
+  expect(checkRequests.map((r) => r.document_id), 'exactly one check per group, in group order').toEqual([docA, docB])
+  expect(answers.map((a) => a.status)).toEqual([200, 200])
+  expect(answers.find((a) => a.documentId === docA)?.body.doubted, "file A's check doubts every automatic placement").toEqual(CHECK05_AUTOMATIC)
+  expect(answers.find((a) => a.documentId === docB)?.body.doubted, "file B's check doubts nothing").toEqual([])
+
+  // Group 1: nothing placed, nothing added.
+  const columns = page.getByTestId('map-column')
+  const palette = page.locator('main button[draggable]')
+  const paletteKeys = async () => (await palette.allTextContents()).map((t) => t.replace('*', '').trim()).sort()
+  await expect(columns, 'control: group 1 renders its twelve columns').toHaveCount(12)
+  await expect(columns.locator('span[draggable]'), 'no placed chip in the doubted group').toHaveCount(0)
+  await expect(page.getByTestId('map-suggested-badge')).toHaveCount(0)
+  await expect(page.locator('main div.mono'), 'the header cells are exactly the file headers').toHaveText(headersA)
+  await expect(columns.locator('div.mono + *'), 'every placement cell reads only "drop field"').toHaveText(Array(12).fill('drop field'))
+  await expect(palette).toHaveCount(11)
+  expect(await paletteKeys(), 'the palette offers all eleven fields').toEqual(
+    ['buyer_name', 'buyer_tin', 'currency', 'invoice_number', 'issue_date', 'line_description', 'line_quantity', 'line_unit_price', 'subtotal', 'total', 'vat'],
+  )
+
+  const continueBtn = page.locator('main button', { hasText: /^(Map invoice number to continue|Continue to next file|Import \d+ rows)$/ })
+  await expect(continueBtn).toHaveText('Map invoice number to continue')
+  await page.getByRole('button', { name: 'invoice_number' }).click()
+  await page.getByText('Invoice No', { exact: true }).click()
+  await expect(continueBtn).toHaveText('Continue to next file')
+  await continueBtn.click()
+
+  // Group 2: every automatic placement as it was.
+  await expect(page.getByText('GROUP 2 OF 2', { exact: true })).toBeVisible()
+  await expect(page.locator('main div.mono')).toHaveText(headersB)
+  const invoiceNoColumn = columns.filter({ has: page.locator('div.mono', { hasText: /^Invoice No$/ }) })
+  await expect(invoiceNoColumn.getByTestId('map-suggested-badge')).toHaveCount(1)
+  await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the page').toHaveCount(1)
+  await expect(columns.locator('div.mono + span[draggable]'), 'eight placed chips').toHaveCount(8)
+  await expect(columns.locator('div.mono + div'), 'four unplaced columns').toHaveText(Array(4).fill('drop field'))
+  await expect(palette).toHaveCount(3)
+  expect(await paletteKeys()).toEqual(['buyer_name', 'line_description', 'subtotal'])
+  await expect(continueBtn).toHaveText('Import 1 rows')
+
+  await continueBtn.click()
+  await expect(page.getByRole('heading', { name: '2 invoices imported' })).toBeVisible({ timeout: 120_000 })
+
+  expect(createRequests, 'one create request per file').toHaveLength(2)
+  expect(createStatuses).toEqual([201, 201])
+  const mappingPart = (docId: string) => {
+    const body = createRequests.find((b) => b.includes(docId))
+    expect(body, `a create request names ${docId}`).toBeTruthy()
+    return /name="mapping"\r\n\r\n([^\r]*)\r\n/.exec(body!)?.[1]
+  }
+  expect(mappingPart(docA!), 'file A imports with only the hand placement').toBe('{"invoice_number":"Invoice No"}')
+  expect(JSON.parse(mappingPart(docB!) ?? '{}'), 'file B imports with all eight automatic placements').toEqual({
+    invoice_number: 'Invoice No',
+    issue_date: 'Issue Date',
+    buyer_tin: 'Buyer TIN',
+    currency: 'Currency',
+    vat: 'VAT',
+    total: 'Total',
+    line_quantity: 'Qty',
+    line_unit_price: 'Unit Price',
+  })
+
+  const { invoices } = await listInvoices(token, { entity_id: entity.id })
+  expect(invoices.map((i) => i.invoice_number).sort()).toEqual([numA, numB].sort())
+  expect(checkRequests, 'no check after the Map step opened').toHaveLength(2)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -1892,10 +2033,10 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   // own [coverage-sentence-is-unconditional] pairs with CreateMapping's own
   // `groups.length > 1` gate on the pager: this run's ONE group renders NO "GROUP X OF Y"
   // span at all), and the coverage sentence names both files by filename.
-  await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
   await expect(
     page.getByText('This mapping applies to 2 files: shared-layout-lagos.csv and shared-layout-abuja.csv.', { exact: true }),
   ).toBeVisible()
+  await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
 
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
@@ -2043,6 +2184,8 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
   await previewResp
 
   // Same shared header on both files -- one group, one Map step (mirrors BULK-E2E-01d).
+  // The Map step opens after the placement check, not the preview response.
+  await expect(page.locator('[data-testid="map-column"]').first()).toBeVisible()
   await expect(page.getByText(/^GROUP \d+ OF \d+$/)).toHaveCount(0)
 
   await page.getByRole('button', { name: 'invoice_number' }).click()

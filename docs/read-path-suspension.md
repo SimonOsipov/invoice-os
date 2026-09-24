@@ -303,6 +303,7 @@ predicates it would previously have hit inside the transaction.
 | `GET /v1/imports/document/reading` | invoice | covered | |
 | `GET /v1/imports/saved-mapping` | invoice | covered | |
 | `POST /v1/imports/suggest-mapping` | invoice | covered | |
+| `POST /v1/imports/check-mapping` | invoice | covered | |
 | `POST /v1/imports/document/invoice` | invoice | covered | |
 | `GET /v1/documents/{id}` | invoice | covered | |
 | `GET /v1/documents/{id}/sheet` | invoice | covered | |
@@ -324,7 +325,7 @@ predicates it would previously have hit inside the transaction.
 | `POST /v1/extractions/{id}/fields/{name}/corrections` | submission | covered | |
 | `POST /v1/extractions/{id}/line-items` | submission | covered | |
 
-66 distinct routes, 72 registrations (`GET /v1/ping` is registered once per service).
+68 distinct routes, 74 registrations (`GET /v1/ping` is registered once per service).
 
 ### 8.1 The non-HTTP callers, so nobody looks for them above
 

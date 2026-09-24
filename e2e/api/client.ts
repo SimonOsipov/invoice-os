@@ -674,6 +674,21 @@ export function suggestMapping(token: string, body: SuggestMappingRequest): Prom
   return apiFetch<SuggestMapping>(`${apiBase()}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body, token })
 }
 
+// POST /v1/imports/check-mapping. Mirrors internal/importer/handlers_check.go's
+// checkMappingRequest/checkMappingResponse.
+export interface CheckMappingRequest {
+  document_id: string
+  mapping: Record<string, string>
+}
+
+export interface CheckMapping {
+  doubted: string[]
+}
+
+export function checkMapping(token: string, body: CheckMappingRequest): Promise<CheckMapping> {
+  return apiFetch<CheckMapping>(`${apiBase()}/api/invoice/v1/imports/check-mapping`, { method: 'POST', body, token })
+}
+
 // transitionInvoice(): POST /v1/invoices/{id}/transitions ([D12], body {"target":...}).
 // The typed setup wrapper completing the invoice seam. `validated` is guarded (409) —
 // earned via validateInvoice, not this endpoint. Contract specs observe the raw code via rawFetch.

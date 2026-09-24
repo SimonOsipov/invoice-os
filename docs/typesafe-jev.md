@@ -58,8 +58,9 @@ The refusal is `skipped_refused` with `attempts` `0`, in real and fake mode alik
 
 `submission`'s extraction worker asks the value questions and the `document_type` question
 in one call per extraction attempt, on its Docling text branch only
-(`internal/extraction/jevcheck.go`); a retried job asks again. Only CHECK-05 is still to
-come: it will call the client from `invoice`'s importer.
+(`internal/extraction/jevcheck.go`); a retried job asks again. `invoice`'s importer asks the
+mapping questions in one call per unrestored layout group, through
+`POST /v1/imports/check-mapping` (`internal/importer/jevcheck.go`).
 
 ## Env knobs
 
@@ -70,8 +71,8 @@ come: it will call the client from `invoice`'s importer.
 
 `FromEnv` never exits the process. It returns an error in two cases: an unparseable
 `JEV_FAKE`, and `JEV_FAKE` true with a key set. The error text never holds the key. A caller
-treats that error as fatal at boot. `cmd/submission` does, as it and `cmd/invoice` do for an
-`ai.FromEnv` error.
+treats that error as fatal at boot. `cmd/submission` and `cmd/invoice` both do, as they do
+for an `ai.FromEnv` error.
 
 The model, the endpoint, the budget and the retry wait are constants. No variable changes
 them.
@@ -84,8 +85,7 @@ them.
 | `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
-The key goes on `submission` and `invoice` only. `submission` calls the client; `invoice`
-will from CHECK-05.
+The key goes on `submission` and `invoice` only. Both services call the client.
 
 **Fork rule.** `prepare-env` creates each `pr-<N>` as a fork of the persistent environment,
 and the fork copies its variables. A key set on production would therefore reach every fork.
@@ -118,7 +118,8 @@ The marker is read from `State` only. Question text and option descriptions neve
 fake. Matching is case-sensitive and needs no word boundary, so `scan-JEVFAKE-DOUBT.pdf`
 matches. An `AIFAKE-` marker does not steer this fake. `JEVFAKE-DOUBT` doubts every checked
 field of a document, so `jev_doubt_invoice.pdf`, which has one checked field, is the deployed
-fixture that uses it.
+fixture that uses it. In a spreadsheet's first ten rows it doubts every checked placement of
+that layout group; `CHECK05-E2E-01`'s first file prints it in a header.
 
 **Building a choice marker.** Encode the option's `Name` with `base64.RawURLEncoding`: the
 URL-safe alphabet, with no padding. For the option `credit note` the marker is
@@ -203,7 +204,8 @@ So does a `fake` result that returns an error. A caller tests
 - A skipped check never sends a document to manual entry. This differs from the AI client,
   where a failed read quarantines the document for manual entry.
 
-CHECK-03, CHECK-04 and CHECK-05 keep this rule when they wire the client.
+CHECK-03, CHECK-04 and CHECK-05 keep this rule. A skipped mapping check answers
+`{"doubted":[]}`, so the Map step opens as it would without the check.
 
 ## Data terms
 
@@ -227,6 +229,10 @@ adequate.
    The document-type threshold `0.9` is unmeasured: every answer on the same 21 synthetic
    documents, whose non-invoices announce their type, scored at least `0.9`, so no swept cut
    from `0.30` to `0.90` removed one. It shipped as it is (user decision, 2026-09-24).
+   The mapping threshold `0.10` and its wording were measured once, on 48 synthetic csvgen
+   layouts (`CHECK-00 Jev Measurement Results` § "Mapping check", 2026-09-24). No cut is
+   clean on AI placements: at `0.10` the check caught 1 of 5 wrong ones and unplaced 5 of 313
+   right ones. Re-measure on real spreadsheets before a production key is set.
 2. `skipped_refused` conflates 401 (a revoked key), 422 (a client bug, or a `state` beyond
    the vendor's context limit), a key refused by the header check, and every other
    non-retryable status. Neither the error nor the log names the status. A revoked key
@@ -234,7 +240,8 @@ adequate.
    context limit is 32k tokens for
    `state` plus the longest question (the vendor's `models.md`). No size guard exists: an
    over-limit document is refused by the vendor, logged `skipped_refused`, and written as
-   decided.
+   decided. A spreadsheet's ten-row `state` has no per-cell cap either; an over-limit
+   mapping check is refused the same way, and the Map step opens unchecked.
 3. `skipped_unavailable` conflates a spent budget, a failed answer check and a cancelled
    caller context. The error tells the last one apart: it wraps `ctx.Err()`.
 4. The PR key audit reads `submission` and `invoice` only. A key an operator set anywhere
@@ -244,7 +251,8 @@ adequate.
    attempt may still be processed and billed by the vendor, so a retry can bill a call twice.
 6. `cmd/submission` is wired: an unset or empty key boots it, and either `FromEnv` error
    stops it at boot by design. `FromEnv` alone is proved by
-   `TestFromEnv_DoesNotExitTheProcess`. `invoice` stays inert until CHECK-05 wires it.
+   `TestFromEnv_DoesNotExitTheProcess`. `cmd/invoice` is wired the same way: an unset or
+   empty key boots it, and either `FromEnv` error stops it at boot.
 7. A key holding a control byte other than tab, such as a pasted trailing newline, refuses
    every call. `FromEnv` does not trim it.
 8. `net/http` follows a 3xx that carries a `Location`: 301, 302 and 303 turn the `POST`
@@ -256,6 +264,9 @@ adequate.
     fails the whole call on any unusable answer. So one bad answer of either kind skips both
     checks for that document: it is logged `skipped_unavailable`, and the screen is unchanged.
     `TestAsk_OneUnusableAnswerInAMixedRequestFailsTheWholeCall` proves it.
+11. The mapping `state` is the first ten rows of the file. When the AI picks a header row low
+    in that window, `state` holds few or no data rows below it, so Jev judges those columns
+    mostly by their headers. Real mode only; unmeasured.
 
 ## See also
 

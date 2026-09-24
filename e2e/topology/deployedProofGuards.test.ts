@@ -177,6 +177,7 @@ describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 3
     'CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files',
     "CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width",
     'CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none',
+    "CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were",
   ]
 
   const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)

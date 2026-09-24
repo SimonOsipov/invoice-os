@@ -30,7 +30,14 @@ const (
 	defaultHTTPTimeout  = 10 * time.Second
 	defaultAudience     = "authenticated"
 	maxJWKSResponseSize = 1 << 20 // 1 MiB
+
+	// Tokens live 1h, so 6h rides out an outage while bounding how long a withdrawn key stays trusted.
+	// ceiling: fixed constants, make them Config fields if an environment needs other values.
+	staleGrace         = 6 * time.Hour
+	minRefetchInterval = 30 * time.Second
 )
+
+var errRefetchThrottled = errors.New("refetch throttled")
 
 // Config configures a Verifier. The M8 cutover is a config change rather than
 // a code change.
@@ -62,9 +69,20 @@ type keySet struct {
 	issuer  string
 	jwksURL string
 
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	keys      map[string]crypto.PublicKey
 	fetchedAt time.Time
+	// lastForced anchors the refetch window: the start of the last forced or
+	// failed fetch. A successful unforced fetch leaves it alone.
+	lastForced time.Time
+	failed     bool       // the last fetch failed
+	inflight   *fetchCall // coalesces concurrent fetches
+}
+
+type fetchCall struct {
+	done chan struct{}
+	keys map[string]crypto.PublicKey
+	err  error
 }
 
 // NewVerifier validates the config and returns a ready Verifier.
@@ -194,24 +212,72 @@ func (v *Verifier) validate(c *gotrueClaims, issuer string) (Identity, error) {
 
 // jwksKeys returns the issuer's current key set. Unless forceRefresh is set it
 // serves a fresh cache; usedCache reports whether the returned keys came from
-// the cache (only then is a rotation retry meaningful).
+// the cache (only then is a rotation retry meaningful). Forced refetches and
+// refetches after a failure run at most once per minRefetchInterval.
 func (v *Verifier) jwksKeys(ctx context.Context, ks *keySet, forceRefresh bool) (map[string]crypto.PublicKey, bool, error) {
-	if !forceRefresh {
-		ks.mu.RLock()
-		keys, fresh := ks.keys, ks.keys != nil && v.now().Sub(ks.fetchedAt) < v.cfg.CacheTTL
-		ks.mu.RUnlock()
-		if fresh {
-			return keys, true, nil
+	ks.mu.Lock()
+	now := v.now()
+	if !forceRefresh && ks.keys != nil && now.Sub(ks.fetchedAt) < v.cfg.CacheTTL {
+		keys := ks.keys
+		ks.mu.Unlock()
+		return keys, true, nil
+	}
+	call := ks.inflight
+	if call == nil {
+		throttled := (forceRefresh || ks.failed) && !ks.lastForced.IsZero() && now.Sub(ks.lastForced) < minRefetchInterval
+		if throttled {
+			defer ks.mu.Unlock()
+			return v.cachedOrStale(ks, now, errRefetchThrottled)
+		}
+		call = &fetchCall{done: make(chan struct{})}
+		ks.inflight = call
+		if forceRefresh {
+			ks.lastForced = now
+		}
+		ks.mu.Unlock()
+
+		// The fetch is shared, so one caller's cancellation must not fail it for the rest.
+		call.keys, call.err = v.fetchJWKS(context.WithoutCancel(ctx), ks.jwksURL)
+		ks.mu.Lock()
+		if call.err != nil {
+			ks.failed, ks.lastForced = true, now
+		} else {
+			ks.keys, ks.fetchedAt, ks.failed = call.keys, v.now(), false
+		}
+		ks.inflight = nil
+		ks.mu.Unlock()
+		close(call.done)
+	} else {
+		ks.mu.Unlock()
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
 		}
 	}
-	keys, err := v.fetchJWKS(ctx, ks.jwksURL)
-	if err != nil {
-		return nil, false, err
+	if call.err == nil {
+		return call.keys, false, nil
 	}
 	ks.mu.Lock()
-	ks.keys, ks.fetchedAt = keys, v.now()
-	ks.mu.Unlock()
-	return keys, false, nil
+	defer ks.mu.Unlock()
+	return v.cachedOrStale(ks, v.now(), call.err)
+}
+
+// cachedOrStale answers when no fetch result is usable: the cached keys while
+// they are within CacheTTL + staleGrace, else err. Caller holds ks.mu.
+func (v *Verifier) cachedOrStale(ks *keySet, now time.Time, err error) (map[string]crypto.PublicKey, bool, error) {
+	if ks.keys == nil {
+		return nil, false, err
+	}
+	age := now.Sub(ks.fetchedAt)
+	if age < v.cfg.CacheTTL {
+		return ks.keys, true, nil
+	}
+	if age < v.cfg.CacheTTL+staleGrace {
+		v.log.Warn("auth: serving stale JWKS", "issuer", ks.issuer, "age", age, "err", err)
+		return ks.keys, true, nil
+	}
+	return nil, false, err
 }
 
 func (v *Verifier) fetchJWKS(ctx context.Context, jwksURL string) (map[string]crypto.PublicKey, error) {

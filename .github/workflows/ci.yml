@@ -186,6 +186,8 @@ jobs:
           else
             echo "No Go packages yet — skipping test (wired for M2)."
           fi
+      - name: JWKS failure budget under the race detector
+        run: go test -race -count=1 -run 'TestJWKS_' ./internal/platform/auth/
       # Untagged build/vet never compile cmd/gateway/mockissuer.go.
       - name: Test the mock-issuer build (-tags mockissuer)
         run: go vet -tags mockissuer ./cmd/gateway/ && go test -tags mockissuer ./cmd/gateway/

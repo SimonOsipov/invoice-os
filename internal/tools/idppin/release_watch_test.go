@@ -143,19 +143,27 @@ func TestReleaseWatchRunsTheBuiltIdppin(t *testing.T) {
 	}
 }
 
-func TestReleaseWatchIssueStepRunsOnlyOnAScheduledFinding(t *testing.T) {
+func TestReleaseWatchIssueStepRunsOnAnyScheduledCompareFailure(t *testing.T) {
 	lines := readWatch(t)
 	if got := stepField(step(t, lines, "Compare the pin with the latest release and published advisories"), "id"); got != "compare" {
 		t.Errorf("compare step id = %q, want compare", got)
 	}
-	cond := stepField(step(t, lines, "Open or update the patch-due issue"), "if")
-	for _, want := range []string{"failure()", "steps.compare.outputs.finding == 'true'", "github.event_name != 'pull_request'"} {
+	st := step(t, lines, "Open or update the patch-due issue")
+	cond := stepField(st, "if")
+	for _, want := range []string{"failure()", "steps.compare.outcome == 'failure'", "github.event_name != 'pull_request'"} {
 		if !strings.Contains(cond, want) {
 			t.Errorf("issue step if: %q lacks %q", cond, want)
 		}
 	}
+	if strings.Contains(cond, "finding") {
+		t.Errorf("issue step if: %q gates on the finding output, so an API error opens no issue", cond)
+	}
 	if strings.Contains(cond, "||") {
 		t.Errorf("issue step if: %q has an ||, which can bypass the pull_request guard", cond)
+	}
+	env := trimmed(block(st, "env:"))
+	if !slices.Contains(env, "FINDING: ${{ steps.compare.outputs.finding }}") {
+		t.Errorf("issue step env = %q, want FINDING from steps.compare.outputs.finding", env)
 	}
 }
 
@@ -192,7 +200,7 @@ type watchRun struct {
 }
 
 // runWatchStep runs one step's script in a fake runner: stub gh, the built idppin, a fixture Dockerfile.
-func runWatchStep(t *testing.T, stepName, dockerfile string, fixtures map[string]string) watchRun {
+func runWatchStep(t *testing.T, stepName, dockerfile string, fixtures map[string]string, env ...string) watchRun {
 	t.Helper()
 	script := runScript(t, step(t, readWatch(t), stepName))
 
@@ -235,6 +243,7 @@ func runWatchStep(t *testing.T, stepName, dockerfile string, fixtures map[string
 		"GITHUB_SERVER_URL=https://github.example", "GITHUB_REPOSITORY=o/r", "GITHUB_RUN_ID=42",
 		"ISSUE_TITLE="+issueTitle,
 	)
+	cmd.Env = append(cmd.Env, env...)
 	out, err := cmd.CombinedOutput()
 	r := watchRun{out: string(out)}
 	var ee *exec.ExitError
@@ -297,8 +306,8 @@ func TestReleaseWatchCompare(t *testing.T) {
 			if finding != (c.wantExit == 1) {
 				t.Errorf("finding output = %v, want %v (GITHUB_OUTPUT %q)", finding, c.wantExit == 1, r.ghOut)
 			}
-			if c.wantExit == 1 && r.body == "" {
-				t.Fatalf("finding with no issue body\n%s", r.out)
+			if c.wantExit == 1 && !strings.HasPrefix(r.body, "Kind: finding.") {
+				t.Fatalf("finding body does not open with its kind\nbody:\n%s\nlog:\n%s", r.body, r.out)
 			}
 			for _, s := range c.wantIn {
 				if !strings.Contains(r.body+r.out, s) {
@@ -337,7 +346,7 @@ func TestReleaseWatchIssueFoundByExactTitle(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := runWatchStep(t, issueStep, plannedBody, map[string]string{
 				"issues.json": c.issues, "finding.md": "Pinned: `v2.197.0`\n",
-			})
+			}, "FINDING=true")
 			if r.exit != 0 {
 				t.Fatalf("exit = %d, want 0\n%s", r.exit, r.out)
 			}
@@ -353,6 +362,39 @@ func TestReleaseWatchIssueFoundByExactTitle(t *testing.T) {
 				if strings.Contains(r.ghCall, s) {
 					t.Errorf("calls include %q; calls:\n%s", s, r.ghCall)
 				}
+			}
+		})
+	}
+}
+
+// A compare error opens the issue too, and the body says it is an error, not a finding.
+func TestReleaseWatchIssueBodyNamesTheFailureKind(t *testing.T) {
+	for _, c := range []struct {
+		name, finding string
+		fixtures      map[string]string
+		want          []string
+		notWant       string
+	}{
+		{"finding", "true", map[string]string{"issues.json": "[]", "finding.md": "Kind: finding.\nPinned: `v2.197.0`\n"},
+			[]string{"Kind: finding.", "Pinned: `v2.197.0`"}, "Kind: error."},
+		{"error", "", map[string]string{"issues.json": "[]"},
+			[]string{"Kind: error.", "https://github.example/o/r/actions/runs/42"}, "Kind: finding."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := runWatchStep(t, issueStep, plannedBody, c.fixtures, "FINDING="+c.finding)
+			if r.exit != 0 {
+				t.Fatalf("exit = %d, want 0\n%s", r.exit, r.out)
+			}
+			if !strings.Contains(r.ghCall, "issue create --title "+issueTitle+" --body-file ") {
+				t.Fatalf("no issue create; calls:\n%s", r.ghCall)
+			}
+			for _, s := range c.want {
+				if !strings.Contains(r.body, s) {
+					t.Errorf("issue body lacks %q\n%s", s, r.body)
+				}
+			}
+			if strings.Contains(r.body, c.notWant) {
+				t.Errorf("issue body says %q\n%s", c.notWant, r.body)
 			}
 		})
 	}

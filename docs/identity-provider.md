@@ -43,9 +43,11 @@ Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 3. Independently of step 2, it lists advisories from
    `repos/supabase/auth/security-advisories` published after the pinned release.
 4. Either finding fails the run, naming the pinned tag, the latest tag and the advisory IDs.
-5. On `schedule` and `workflow_dispatch` only, a finding also opens or updates the issue
-   titled `supabase/auth patch due`. The issue is found by exact title, open or closed, so
-   a finding never opens a second one; a closed one is reopened.
+5. On `schedule` and `workflow_dispatch` only, any failure of the compare step also opens
+   or updates the issue titled `supabase/auth patch due`. The body opens with
+   `Kind: finding.` or `Kind: error.` (an API error, a missing release or an unreadable pin).
+   The issue is found by exact title, open or closed, so a rerun never opens a second one;
+   a closed one is reopened.
 
 `schedule` and `workflow_dispatch` run only from the default branch. The PR run is the
 pre-merge evidence; it cannot write the issue.

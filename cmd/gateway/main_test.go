@@ -792,6 +792,34 @@ func TestGatewayAuthIssuersCountsPrimaryPlusAdditional(t *testing.T) {
 	}
 }
 
+// A malformed AUTH_ADDITIONAL_ISSUERS must stop boot before Provision bootstraps, resets or seeds.
+func TestGatewayMainParsesIssuersBeforeProvision(t *testing.T) {
+	_, body := parseMain(t)
+
+	parseAt, provisionAt := -1, -1
+	for i, st := range body.List {
+		ast.Inspect(st, func(n ast.Node) bool {
+			e, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if _, ok := isCallTo(e, "", "mustParseIssuers"); ok && parseAt < 0 {
+				parseAt = i
+			}
+			if _, ok := isCallTo(e, "db", "Provision"); ok && provisionAt < 0 {
+				provisionAt = i
+			}
+			return true
+		})
+	}
+	if parseAt < 0 || provisionAt < 0 {
+		t.Fatalf("main calls mustParseIssuers at statement %d and db.Provision at %d, want both", parseAt, provisionAt)
+	}
+	if parseAt >= provisionAt {
+		t.Errorf("mustParseIssuers runs at statement %d, want it before db.Provision (%d)", parseAt, provisionAt)
+	}
+}
+
 // TestGatewayMainProbesAuthAtItsJWKSPath: FleetHealthHandler's per-service path is
 // inert unless main passes it. The fleet tests cannot see this call.
 func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {

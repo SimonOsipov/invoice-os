@@ -46,6 +46,9 @@ func main() {
 		log.Fatalf("gateway: startup: %v", err)
 	}
 
+	// Parsed before Provision so a malformed value stops boot before any bootstrap, reset or seed.
+	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
+
 	// Bootstrap (gated) -> migrate (unconditional) -> reset (gated, PR
 	// environments only, persona-handoff-fix Decision [pr-only-reset]) -> purge
 	// (gated, DEMO-04) -> seed (gated), all complete before
@@ -115,7 +118,6 @@ func main() {
 	// only thing that tells a green boot from a swallowed purge failure.
 	platform.DemoPurge = string(db.DemoPurgeOutcome)
 
-	additional := mustParseIssuers(os.Getenv("AUTH_ADDITIONAL_ISSUERS"))
 	verifier, err := auth.NewVerifier(auth.Config{
 		Issuer:     mustEnv("AUTH_ISSUER"),
 		JWKSURL:    mustEnv("AUTH_JWKS_URL"),

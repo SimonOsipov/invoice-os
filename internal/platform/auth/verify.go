@@ -80,6 +80,7 @@ type keySet struct {
 	lastForced time.Time
 	failed     bool       // the last fetch failed
 	inflight   *fetchCall // coalesces concurrent fetches
+	warnedAt   time.Time  // last stale-serve WARN; at most one per minRefetchInterval
 }
 
 type fetchCall struct {
@@ -285,7 +286,10 @@ func (v *Verifier) cachedOrStale(ks *keySet, now time.Time, err error) (map[stri
 		return ks.keys, true, nil
 	}
 	if age < v.cfg.CacheTTL+staleGrace {
-		v.log.Warn("auth: serving stale JWKS", "issuer", ks.issuer, "age", age, "err", err)
+		if ks.warnedAt.IsZero() || now.Sub(ks.warnedAt) >= minRefetchInterval {
+			ks.warnedAt = now
+			v.log.Warn("auth: serving stale JWKS", "issuer", ks.issuer, "age", age, "err", err)
+		}
 		return ks.keys, true, nil
 	}
 	return nil, false, err

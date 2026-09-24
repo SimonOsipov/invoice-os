@@ -89,6 +89,8 @@ jobs:
               - 'internal/tools/idppin/**'
               - 'scripts/ci/idp-*.sh'
               - 'Makefile'
+              - 'go.mod'
+              - 'go.sum'
               - '.github/workflows/ci.yml'
             sidecar:
               - 'sidecar/**'

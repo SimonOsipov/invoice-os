@@ -83,7 +83,7 @@ func TestJWKS_StaleWindowBoundaryIsExclusive(t *testing.T) {
 	r.wantFetches(t, 2, "exactly fetchedAt+TTL+6h (inside failure window)")
 }
 
-func TestJWKS_StaleServeAfterFailureBacksOffAndWarnsEachTime(t *testing.T) {
+func TestJWKS_StaleServeAfterFailureBacksOffAndWarnsOncePerWindow(t *testing.T) {
 	r := newBudgetRig(t)
 	r.prime(t)
 	r.jwks.set(failing())
@@ -91,8 +91,8 @@ func TestJWKS_StaleServeAfterFailureBacksOffAndWarnsEachTime(t *testing.T) {
 	for i, at := range []time.Duration{2 * time.Hour, 2*time.Hour + time.Second, 2*time.Hour + 29*time.Second} {
 		r.clock.at(at)
 		assertVerifies(t, r.v, r.token(t), "tenant-x", "stale serve")
-		if got := warnCount(r); got != i+1 {
-			t.Fatalf("after stale serve #%d: WARN lines = %d, want %d", i+1, got, i+1)
+		if got := warnCount(r); got != 1 {
+			t.Fatalf("after stale serve #%d: WARN lines = %d, want 1", i+1, got)
 		}
 	}
 	r.wantFetches(t, 2, "three stale serves inside one failure window")
@@ -100,6 +100,9 @@ func TestJWKS_StaleServeAfterFailureBacksOffAndWarnsEachTime(t *testing.T) {
 	r.clock.at(2*time.Hour + 30*time.Second)
 	assertVerifies(t, r.v, r.token(t), "tenant-x", "stale serve after the window")
 	r.wantFetches(t, 3, "failure window elapsed")
+	if got := warnCount(r); got != 2 {
+		t.Fatalf("after the window: WARN lines = %d, want 2", got)
+	}
 }
 
 func TestJWKS_RecoveryAfterStaleServeStopsWarning(t *testing.T) {
@@ -237,8 +240,8 @@ func TestJWKS_ConcurrentFailedRefetchCoalescesAndServesStale(t *testing.T) {
 		t.Fatalf("collected %d results, want %d", got, n)
 	}
 	r.wantFetches(t, 2, "16 concurrent verifies, failing refetch")
-	if warnCount(r) != n {
-		t.Fatalf("WARN lines = %d, want %d (one per stale serve)", warnCount(r), n)
+	if warnCount(r) != 1 {
+		t.Fatalf("WARN lines = %d, want 1 (one per refetch interval)", warnCount(r))
 	}
 }
 

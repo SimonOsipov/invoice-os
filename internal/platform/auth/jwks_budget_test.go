@@ -170,6 +170,26 @@ func TestJWKS_ServesStaleWhenRefetchFails(t *testing.T) {
 	}
 }
 
+func TestJWKS_StaleServeWarnsOncePerRefetchInterval(t *testing.T) {
+	r := newBudgetRig(t)
+	r.prime(t)
+	r.jwks.set(failing())
+
+	for i := 0; i < 50; i++ {
+		r.clock.at(2*time.Hour + time.Duration(i)*29*time.Second/49)
+		assertVerifies(t, r.v, r.token(t), "tenant-x", fmt.Sprintf("stale serve #%d", i))
+	}
+	if n := strings.Count(r.logs.String(), "level=WARN"); n != 1 {
+		t.Fatalf("50 stale serves inside one interval: WARN lines = %d, want 1", n)
+	}
+
+	r.clock.at(2*time.Hour + 30*time.Second)
+	assertVerifies(t, r.v, r.token(t), "tenant-x", "stale serve after the interval")
+	if n := strings.Count(r.logs.String(), "level=WARN"); n != 2 {
+		t.Fatalf("after the interval: WARN lines = %d, want 2", n)
+	}
+}
+
 func TestJWKS_StaleWindowEnds(t *testing.T) {
 	r := newBudgetRig(t)
 	r.prime(t)

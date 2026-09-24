@@ -145,6 +145,42 @@ func TestRLS_CustomAccessTokenHookOverwritesIncomingTenantID(t *testing.T) {
 	}
 }
 
+// Only exactly one active membership may put a tenant in the token; an incoming one never survives.
+func TestRLS_CustomAccessTokenHookStripsIncomingTenantIDWithoutOneActiveMembership(t *testing.T) {
+	h := requireHarness(t)
+	auth := authAdminPool(t)
+
+	for _, tc := range []struct {
+		name    string
+		tenants []string
+		want    string
+	}{
+		{"zero_memberships", nil, ""},
+		{"two_active", []string{h.tenantA, h.tenantB}, ""},
+		{"one_active", []string{h.tenantA}, h.tenantA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := uuid.NewString()
+			for _, tenant := range tc.tenants {
+				seedHookMembership(t, tenant, userID, "active")
+			}
+			raw, _ := hookEvent(t, userID)
+			event := editEvent(t, raw, func(_, c map[string]any) {
+				c["app_metadata"].(map[string]any)["tenant_id"] = "stale-tenant"
+			})
+			want := outputClaims(t, decodeJSON(t, event))
+			delete(want["app_metadata"].(map[string]any), "tenant_id")
+			if tc.want != "" {
+				want["app_metadata"].(map[string]any)["tenant_id"] = tc.want
+			}
+
+			if got := outputClaims(t, callHook(t, auth, event)); !reflect.DeepEqual(got, want) {
+				t.Errorf("claims\n got: %v\nwant: %v", got, want)
+			}
+		})
+	}
+}
+
 // A non-uuid user_id fails the call, so GoTrue refuses the token (fail closed).
 // A null or absent user_id matches no row and leaves the claims as issued.
 func TestRLS_CustomAccessTokenHookMalformedUserID(t *testing.T) {

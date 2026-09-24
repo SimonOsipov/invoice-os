@@ -7,12 +7,12 @@
 -- +goose StatementBegin
 CREATE FUNCTION public.custom_access_token_hook(event jsonb) RETURNS jsonb
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
-    -- Exactly one active membership projects a tenant; zero or several leave the claims as issued.
+    -- Exactly one active membership projects a tenant; zero or several strip any incoming one.
     SELECT jsonb_build_object('claims', CASE WHEN count(*) = 1
         THEN jsonb_set(event->'claims', '{app_metadata}',
                  coalesce(event->'claims'->'app_metadata', '{}'::jsonb)
                      || jsonb_build_object('tenant_id', min(m.tenant_id::text)))
-        ELSE event->'claims' END)
+        ELSE (event->'claims') #- '{app_metadata,tenant_id}' END)
     FROM public.memberships m
     WHERE m.user_id = (event->>'user_id')::uuid AND m.status = 'active'
 $$;

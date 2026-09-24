@@ -1,6 +1,6 @@
 name: IdP release watch
 
-# Nothing alerts on a red scheduled run here, so a finding also opens an issue.
+# Nothing alerts on a red scheduled run here, so any compare failure also opens an issue.
 # schedule and workflow_dispatch run only from main; pull_request is the pre-merge run.
 on:
   schedule:
@@ -68,6 +68,7 @@ jobs:
           fi
           body="$RUNNER_TEMP/finding.md"
           {
+            echo "Kind: finding."
             echo "Pinned: \`$pin\` (published $pinned_at), in \`sidecar/auth/Dockerfile\`."
             echo "Latest release: \`$latest\`."
             echo "Advisories published after the pin: ${advisories:-none}."
@@ -78,12 +79,21 @@ jobs:
           echo "::error::supabase/auth patch due: pinned $pin, latest $latest, advisories after the pin: ${advisories:-none}."
           exit 1
 
-      # Found by exact title across open and closed issues, so a finding never opens a duplicate.
+      # Found by exact title across open and closed issues, so a rerun never opens a duplicate.
       - name: Open or update the patch-due issue
-        if: failure() && steps.compare.outputs.finding == 'true' && github.event_name != 'pull_request'
+        if: failure() && steps.compare.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          FINDING: ${{ steps.compare.outputs.finding }}
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/finding.md"
+          if [ "$FINDING" != true ]; then
+            {
+              echo "Kind: error."
+              echo "The compare step failed without a finding: a GitHub API error, a missing release or an unreadable pin."
+              echo "The pin is unchecked until a run passes. Log: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            } > "$body"
+          fi
           found=$(gh issue list --state all --limit 100 --search "in:title \"$ISSUE_TITLE\"" --json number,title,state \
             | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | sort_by(.number) | last // empty | "\(.number) \(.state)"')
           if [ -z "$found" ]; then

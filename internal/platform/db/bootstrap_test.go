@@ -15,14 +15,14 @@
 //     with no database. Self-contained: does NOT depend on the shared RLS harness
 //     (rls_harness_test.go) — like migrate_test.go, it opens its own pool.
 //   - The dev/CI Postgres this suite runs against (`make dev-db`, or the CI service
-//     container) already has the three real roles bootstrapped and OWNING the entire
+//     container) already has the real roles bootstrapped and OWNING the entire
 //     migrated schema (invoice_migrator owns every table). Forcibly dropping them to
 //     satisfy a literal "roles absent" precondition would destroy that shared schema
 //     out from under every other test in this package — instead, TestBootstrapSQL-
 //     CreatesRolesWithGivenPasswords exercises the create-or-converge path bootstrap.sql
 //     itself is idempotent over, which is exactly what runs the FIRST time in a genuinely
 //     fresh CI container.
-//   - Every test mutates the SAME three shared roles, so none of them use t.Parallel()
+//   - Every test mutates the SAME shared roles, so none of them use t.Parallel()
 //     (matches demo_reset_test.go's rationale for shared global state), and every test
 //     registers a t.Cleanup that restores passwords/attributes to the dev/CI baseline
 //     BEFORE it mutates anything — so a RED failure (or any panic) never leaves the
@@ -83,9 +83,9 @@ type bootstrapGUCs struct {
 	migrator, app, reader, authAdmin gucValue
 }
 
-// devDefaultGUCs returns the three password values matching every CI job's and the
-// Makefile's own dev-bootstrap defaults (MIGRATOR_PASSWORD/APP_PASSWORD/
-// READER_PASSWORD, `?= migrator/app/reader`; see .github/workflows/ci.yml and
+// devDefaultGUCs returns the four password values matching every CI job's and the
+// Makefile's own dev-bootstrap defaults (MIGRATOR_PASSWORD/APP_PASSWORD/READER_PASSWORD/
+// AUTH_ADMIN_PASSWORD, `?= migrator/app/reader/auth_admin`; see .github/workflows/ci.yml and
 // Makefile). Env override honored, so a customized .env dev DB restores to ITS
 // defaults, not a hardcoded stranger value.
 func devDefaultGUCs() bootstrapGUCs {
@@ -136,7 +136,7 @@ func readBootstrapSQL(t *testing.T) string {
 	return string(b)
 }
 
-// applyBootstrap runs db/bootstrap.sql over ONE acquired connection: the three
+// applyBootstrap runs db/bootstrap.sql over ONE acquired connection: the four
 // ascomply.* GUCs set (session-scoped, is_local=false — matching the Makefile's
 // `-c "SELECT set_config(..., false)" -f` precedent) on that connection first, then the
 // file executed as a single zero-arg Exec so pgx uses the simple query protocol its
@@ -193,9 +193,9 @@ func alterRolePassword(t *testing.T, pool *pgxpool.Pool, role, password string) 
 	}
 }
 
-// restoreDevDefaultPasswords sets all three roles' passwords back to the shared dev/CI
+// restoreDevDefaultPasswords sets all four login roles' passwords back to the shared dev/CI
 // default directly (not via db/bootstrap.sql). Later tests in this package dial
-// DATABASE_MIGRATION_URL / DATABASE_URL / DATABASE_READER_URL built from these exact
+// DATABASE_MIGRATION_URL / DATABASE_URL / DATABASE_READER_URL / DATABASE_AUTH_ADMIN_URL built from these exact
 // defaults (see Makefile), so this must run in t.Cleanup after any test in this file
 // rotates a password.
 func restoreDevDefaultPasswords(t *testing.T, pool *pgxpool.Pool) {
@@ -295,8 +295,8 @@ func hasSchemaPrivilege(t *testing.T, pool *pgxpool.Pool, role, priv string) boo
 }
 
 // TestBootstrapSQLCreatesRolesWithGivenPasswords: Test Spec row 1 / Core AC-2. Sets the
-// three GUCs to unique per-run passwords and applies db/bootstrap.sql from disk; all
-// three roles must exist (LOGIN) and each must accept a NEW connection authenticated
+// four GUCs to unique per-run passwords and applies db/bootstrap.sql from disk; all
+// four roles must exist (LOGIN) and each must accept a NEW connection authenticated
 // with EXACTLY the password its GUC carried — verified by an actual login, not by
 // reading a catalog (a catalog only proves a password hash was set, not which one).
 func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
@@ -333,7 +333,7 @@ func TestBootstrapSQLCreatesRolesWithGivenPasswords(t *testing.T) {
 }
 
 // TestBootstrapSQLAssertsSecurityAttributes: Test Spec row 2 / Core AC-2. Pre-mutates
-// all three roles to the WRONG attributes (SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE
+// all four login roles to the WRONG attributes (SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE
 // all granted) then applies db/bootstrap.sql; every role must come back exactly
 // NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE, LOGIN — the attribute
 // re-assertion db/bootstrap.sql's step 2 performs unconditionally on every run.
@@ -382,7 +382,7 @@ func TestBootstrapSQLAssertsSecurityAttributes(t *testing.T) {
 
 // TestBootstrapSQLFailsClosedOnMissingPassword: Test Spec row 3 / Core AC-3. Covers
 // both wordings of the Given (GUCs unset, or set to an empty string): a subtest where
-// the three GUCs are never set at all, and one where they are explicitly set to the
+// the four GUCs are never set at all, and one where they are explicitly set to the
 // empty string. Either way, applying db/bootstrap.sql must return an error naming the
 // missing setting, and — checked via an actual login against a known sentinel
 // password planted beforehand, not a catalog read — no role's password may have
@@ -761,7 +761,7 @@ func TestBootstrapSQLConcurrentInvocationConverges(t *testing.T) {
 // given — it exits 0, emits none of db/bootstrap.sql's command tags (no DO/ALTER
 // ROLE/GRANT/REVOKE), and leaves every role's password untouched — unless the input
 // is also named explicitly via `-f -`. `make dev-db`'s in-container invocation sets
-// three `-c "SELECT set_config(...)"` GUCs and pipes db/bootstrap.sql over stdin, so
+// four `-c "SELECT set_config(...)"` GUCs and pipes db/bootstrap.sql over stdin, so
 // it depends entirely on that explicit `-f -` to not be a silent no-op. This guards
 // against a future edit reverting to bare `< db/bootstrap.sql` redirection.
 func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
@@ -793,7 +793,7 @@ func TestMakefileDevDBPipesBootstrapViaExplicitFileFlag(t *testing.T) {
 // below fails on an ASSERTION against that stub, never on a missing symbol.
 //
 // DB-backed cases follow the same conventions as the M4-21-02 section above: skip
-// on DATABASE_SUPERUSER_URL only, mutate the SAME three shared roles as the rest
+// on DATABASE_SUPERUSER_URL only, mutate the SAME shared roles as the rest
 // of this file so none use t.Parallel(), and register their restore-to-baseline
 // t.Cleanup BEFORE mutating anything, so a RED failure never leaves the shared
 // roles rotated for the rest of the package's run. TestBootstrapEnabledAllowlist
@@ -942,7 +942,7 @@ func acquireAdvisoryLockRoundTrip(t *testing.T, pool *pgxpool.Pool, key int64) {
 // readBootstrapSQL(t) uses elsewhere in this file — this is what proves the
 // embedded copy is complete, exactly as TestMigrateUpFromEmbedded does for
 // migrations. As with the M4-21-02 section's tests, this package's shared dev/CI
-// Postgres already has the three roles bootstrapped and owning the migrated
+// Postgres already has the roles bootstrapped and owning the migrated
 // schema; forcibly dropping them to honor a literal "empty DB" precondition would
 // destroy that schema out from under every other test in this package, so — like
 // TestBootstrapSQLCreatesRolesWithGivenPasswords — this exercises the
@@ -979,7 +979,7 @@ func TestBootstrapFromEmbedded(t *testing.T) {
 
 // TestBootstrapRejectsEmptyPasswords: Test Spec row 3 / AC-4. A RolePasswords with
 // any ONE field empty must be rejected — with an error naming that field — before
-// any statement touches the database. Sentinel passwords are planted on all three
+// any statement touches the database. Sentinel passwords are planted on all four
 // roles beforehand (mirroring TestBootstrapSQLFailsClosedOnMissingPassword) and
 // re-checked afterward: if Bootstrap validated only the empty field and still
 // applied the other two (valid) passwords it supplied, that would be a partial,
@@ -1196,7 +1196,7 @@ func TestBootstrapThenMigrateSucceedsAsMigrator(t *testing.T) {
 
 // TestBootstrapConvergesWhenRolesAlreadyHaveDifferentPasswords: adversarial
 // coverage for AC-1/AC-7's "one-source invariant" under a precondition no Test
-// Spec row exercises: NOT a fresh/empty DB, but one where all three roles already
+// Spec row exercises: NOT a fresh/empty DB, but one where all four login roles already
 // exist with a DIFFERENT password from a prior Bootstrap run (e.g. a redeployed
 // gateway rotating its own secrets). db.Bootstrap must converge every role to the
 // NEW password and the OLD password must stop working — proving the Go runner
@@ -1341,7 +1341,7 @@ func TestBootstrapBoundedAgainstBlackHoleHost(t *testing.T) {
 // TestBootstrapReleasesAdvisoryLockAfterMidSequenceFailure: adversarial coverage
 // for AC-5. TestBootstrapReleasesAdvisoryLock above only covers the HAPPY path;
 // this proves release also happens when bootstrap.sql itself fails PARTWAY
-// through execution (after the lock is acquired and the three GUCs are set,
+// through execution (after the lock is acquired and the four GUCs are set,
 // unlike a Go-level validation rejection which never acquires the lock at all).
 // Uses an in-memory fs.FS with a deliberately broken bootstrap.sql so the failure
 // is deterministic and doesn't depend on mutating the real file.
@@ -1412,6 +1412,7 @@ func restoreAuthRoles(t *testing.T, pool *pgxpool.Pool) {
 			`ALTER ROLE supabase_auth_admin WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
 			`ALTER ROLE supabase_auth_admin SET search_path = auth`,
 			`GRANT USAGE ON SCHEMA public TO supabase_auth_admin`,
+			`REVOKE CREATE ON SCHEMA public FROM supabase_auth_admin`,
 		)
 	}
 	if roleExists(t, pool, hookReaderRole) {

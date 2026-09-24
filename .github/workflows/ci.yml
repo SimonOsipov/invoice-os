@@ -574,7 +574,7 @@ jobs:
         # an over-broad Down, because the re-up restores whatever it took with it.
         run: scripts/ci/rls-test-gate.sh -count=1 -run 'TestDemoRepairMigration|TestExtraction|TestImportBatchesHeaderRow' ./internal/platform/db/...
       - name: Bootstrap-SQL pgx-caller suite (fail-closed GUCs, idempotency, rotation) + per-test visibility & skip gate
-        # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its three
+        # M4-21-02: proves db/bootstrap.sql itself — now rewritten to read its
         # role passwords from session GUCs instead of psql-only \set/:'var', so a pgx
         # caller (not just psql) can execute the identical file (Decision
         # [one-bootstrap-file]). Covers create-or-converge, security-attribute

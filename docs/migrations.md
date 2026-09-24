@@ -538,8 +538,9 @@ real passwords live **only** in Railway.
    step 2 below never touches either public form; default database name is `railway`,
    private host `postgres.railway.internal:5432`.
 
-2. **Bootstrap the three roles**: choose strong passwords, then set them on the
-   **gateway** service as `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD`,
+2. **Bootstrap the roles**: choose strong passwords, then set them on the
+   **gateway** service as `MIGRATOR_PASSWORD` / `APP_PASSWORD` / `READER_PASSWORD` /
+   `AUTH_ADMIN_PASSWORD`,
    alongside `DATABASE_SUPERUSER_URL=${{Postgres.DATABASE_URL}}` and
    `GATEWAY_DB_BOOTSTRAP=true`. No psql, no public proxy, no manual SQL against Postgres
    at all — on its next boot the gateway bootstraps the roles itself, in-network

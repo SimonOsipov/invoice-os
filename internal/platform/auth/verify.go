@@ -211,7 +211,7 @@ func (v *Verifier) validate(c *gotrueClaims, issuer string) (Identity, error) {
 	}
 	// tenant_id is extracted but not required here; the tenant-context layer
 	// (M2-06) decides what to do when it is absent.
-	return Identity{Subject: c.Subject, Role: c.Role, TenantID: c.AppMetadata.TenantID}, nil
+	return Identity{Subject: c.Subject, Role: c.Role, TenantID: c.AppMetadata.TenantID, Email: c.Email}, nil
 }
 
 // jwksKeys returns the issuer's current key set. Unless forceRefresh is set it

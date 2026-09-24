@@ -42,10 +42,11 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 // WithTenantlessCaller returns a context carrying a verified caller that has no
 // tenant yet. It uses its own key so IdentityFromContext never sees one.
 func WithTenantlessCaller(ctx context.Context, id Identity) context.Context {
-	return ctx // scaffold
+	return context.WithValue(ctx, ctxKeyTenantlessCaller, id)
 }
 
 // TenantlessCallerFromContext returns the tenant-less caller and whether one was present.
 func TenantlessCallerFromContext(ctx context.Context) (Identity, bool) {
-	return Identity{}, false // scaffold
+	id, ok := ctx.Value(ctxKeyTenantlessCaller).(Identity)
+	return id, ok
 }

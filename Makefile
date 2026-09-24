@@ -47,7 +47,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive
+.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-audit test-reconciliation test-approvals test-actor test-invoice test-archive test-idp
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -175,6 +175,15 @@ test-archive: ## Run the AUDIT-05 evidence-bundle suite against the local dev DB
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/archive/...
+
+# Needs Docker. The containers connect as supabase_auth_admin; the trap removes them even on failure.
+test-idp: ## Run the TestIdP suite against real supabase/auth containers on the local dev DB (run `make dev-db` first)
+	@trap 'scripts/ci/idp-down.sh' EXIT; \
+	urls="$$(scripts/ci/idp-up.sh "$(DEV_DB_AUTH_ADMIN_URL)" $(DEV_DB_PORT))" || exit 1; \
+	export $$urls; \
+	IDP_PINNED_TAG="$$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	go test -p 1 -count=1 -run TestIdP ./internal/platform/auth/...
 
 .PHONY: guard-migration-url
 guard-migration-url:

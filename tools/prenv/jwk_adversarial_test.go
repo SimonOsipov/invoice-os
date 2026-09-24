@@ -133,3 +133,30 @@ func TestJWKCheckHugeOrBinaryInputIsRefusedQuietly(t *testing.T) {
 		})
 	}
 }
+
+// RFC 7517 member names are case-sensitive, and so is GoTrue's parser: "D" leaves it a public-only key.
+func TestJWKCheckMemberNamesAreCaseSensitive(t *testing.T) {
+	good := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")
+	d := good["d"].(string)
+	if _, _, code := runJWKCheck(t, mustJSON(t, []any{good})); code != 0 {
+		t.Fatalf("control refused: exit %d", code)
+	}
+	for _, c := range []struct{ from, to string }{
+		{"d", "D"}, {"kty", "KTY"}, {"x", "X"}, {"kid", "KID"},
+	} {
+		t.Run(c.to, func(t *testing.T) {
+			stdin := mustJSON(t, []any{jwkEdit(good, func(k map[string]any) {
+				k[c.to] = k[c.from]
+				delete(k, c.from)
+			})})
+			stdout, stderr, code := runJWKCheck(t, stdin)
+			if code != 1 {
+				t.Errorf("member %q renamed %q: exit %d, want 1 (refused); stdout=%q", c.from, c.to, code, stdout)
+			}
+			assertNoKeyInOutput(t, stdout, stderr, d)
+			if strings.Contains(stdout+stderr, `"D"`) {
+				t.Error(`output echoes the "D" member`)
+			}
+		})
+	}
+}

@@ -133,7 +133,22 @@ func stubEnv(t *testing.T, log, container, name string) string {
 
 var idpContainers = []string{"idp-es256", "idp-hs256", "idp-rebuild"}
 
-func TestIdpUpStdoutIsOnlyTheThreeURLs(t *testing.T) {
+const idpIssuer = "urn:ascomply:auth:ci"
+
+// argvEnv returns the value of `-e NAME=value` in a recorded docker argv, or "" when absent.
+func argvEnv(argv, name string) string {
+	fields := strings.Fields(argv)
+	for i, f := range fields {
+		if f == "-e" && i+1 < len(fields) {
+			if v, ok := strings.CutPrefix(fields[i+1], name+"="); ok {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func TestIdpUpStdoutIsTheThreeURLsAndTheIssuer(t *testing.T) {
 	dsn := "postgres://supabase_auth_admin:" + stubDSNPassword + "@localhost:5448/invoice_os?sslmode=disable"
 	for _, osName := range []string{"Linux", "Darwin"} {
 		t.Run(osName, func(t *testing.T) {
@@ -141,9 +156,32 @@ func TestIdpUpStdoutIsOnlyTheThreeURLs(t *testing.T) {
 			if r.code != 0 {
 				t.Fatalf("exit %d; stderr=%s", r.code, r.stderr)
 			}
-			want := "IDP_ES256_URL=http://localhost:9991\nIDP_HS256_URL=http://localhost:9992\nIDP_REBUILD_URL=http://localhost:9993\n"
-			if r.stdout != want {
-				t.Errorf("stdout = %q, want exactly the three URL lines %q", r.stdout, want)
+			want := []string{
+				"IDP_ES256_URL=http://localhost:9991", "IDP_HS256_URL=http://localhost:9992",
+				"IDP_REBUILD_URL=http://localhost:9993", "IDP_ISSUER=" + idpIssuer,
+			}
+			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
+			if !strings.HasSuffix(r.stdout, "\n") || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+				t.Errorf("stdout = %q, want exactly these lines in any order: %q", r.stdout, want)
+			}
+
+			var printed string
+			for _, l := range got {
+				if v, ok := strings.CutPrefix(l, "IDP_ISSUER="); ok {
+					printed = v
+				}
+			}
+			if printed == "" {
+				t.Error("stdout carries no IDP_ISSUER line")
+			}
+			for _, c := range idpContainers {
+				runs := stubLines(r.log, "RUN", c)
+				if len(runs) != 1 {
+					t.Fatalf("%s started %d times, want 1", c, len(runs))
+				}
+				if passed := argvEnv(runs[0], "GOTRUE_JWT_ISSUER"); passed == "" || passed != printed {
+					t.Errorf("%s: GOTRUE_JWT_ISSUER = %q, printed IDP_ISSUER = %q; they must be equal", c, passed, printed)
+				}
 			}
 			if !strings.Contains(r.stderr, "jwk-check: ok") {
 				t.Error("jwk-check's verdict is not on stderr; the harness did not run it")

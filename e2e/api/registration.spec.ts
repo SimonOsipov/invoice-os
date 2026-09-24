@@ -1,4 +1,4 @@
-// Registration and workspace provisioning over the deployed gateway (AUTH-03 D13).
+// Registration and workspace provisioning over the deployed gateway.
 // The fork's GoTrue has signup on and SMTP blanked, so it mails nothing; the emailed-link
 // path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
 // A pr-<N> fork is PosturePreview, so /auth/login mints any subject, an empty tenant included.
@@ -36,7 +36,7 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(first.status, 'a new address').toBe(202)
     expect(first.body).toEqual(VERIFICATION_PENDING)
 
-    // GoTrue answers the repeat 429 over_email_send_rate_limit; the gateway maps it to 202 (P21).
+    // GoTrue answers the repeat 429 over_email_send_rate_limit; the gateway maps it to 202.
     const repeat = await rawFetch('/auth/register', { method: 'POST', body: credentials })
     expect(repeat.status, 'a repeat must not reveal the address is taken').toBe(202)
     expect(repeat.body).toEqual(VERIFICATION_PENDING)
@@ -109,7 +109,7 @@ test.describe('workspace provisioning (API E2E, over the deployed gateway)', () 
       expect(row, `subject ${subject} in the roster`).toBeDefined()
       expect(row!.role).toBe('admin')
       expect(row!.status).toBe('active')
-      // D6: the mock token carries no email claim.
+      // The mock token carries no email claim.
       expect(row!.email).toBeNull()
     })
   })

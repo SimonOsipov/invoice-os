@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// provisionCaller is the one non-test file allowed to name the DEFINER function (D1's application guard).
+// provisionCaller is the one non-test file allowed to name the DEFINER function (the application-side guard).
 const provisionCaller = "internal/tenancy/store.go"
 
 // TestProvisionWorkspaceCalledOnlyByTheStore scans every non-test .go file's

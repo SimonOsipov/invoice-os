@@ -935,7 +935,7 @@ func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
 	}
 }
 
-// AUTH_SITE_URL unset: both routes refuse without calling GoTrue (D4).
+// AUTH_SITE_URL unset: both routes refuse without calling GoTrue.
 func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	reg := registrationHandlers(authURL, nil, slog.New(slog.DiscardHandler))

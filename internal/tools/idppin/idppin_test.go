@@ -151,7 +151,7 @@ func TestLatestCheckExitCodes(t *testing.T) {
 	}
 }
 
-// Production signup stays closed until it is opened by hand (AUTH-03 D12).
+// Production signup stays closed until it is opened by hand.
 func TestAuthImageKeepsSignupClosed(t *testing.T) {
 	t.Run("parser control", func(t *testing.T) {
 		for body, want := range map[string]string{

@@ -126,7 +126,8 @@ every fork overwrites it with its own.
 
 `AUTH_SITE_URL` is optional at boot. Unset, the gateway logs one warning and both
 registration routes answer 503 `registration is not configured`. A value that is not an
-absolute `http(s)` URL stops the gateway at boot.
+absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
+gateway at boot.
 
 ## Script behaviour on writes
 

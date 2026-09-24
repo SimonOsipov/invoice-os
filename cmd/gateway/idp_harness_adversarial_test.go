@@ -312,7 +312,7 @@ func TestIdpUpMailContainerConfiguration(t *testing.T) {
 				}
 			}
 			if strings.Contains(im[0], "HOOK_CUSTOM_ACCESS_TOKEN") {
-				t.Errorf("idp-mail overrides the image's hook; AC-7 needs the committed one: %s", im[0])
+				t.Errorf("idp-mail overrides the image's hook; the harness must run the committed one: %s", im[0])
 			}
 			if !strings.Contains(im[0]+" ", "-e GOTRUE_JWT_KEYS ") || !strings.Contains(stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS"), stubKeyMarker) {
 				t.Errorf("idp-mail gets no ES256 key by name: %s", im[0])

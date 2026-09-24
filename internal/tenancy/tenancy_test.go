@@ -2575,6 +2575,31 @@ func TestProvision_Validation400(t *testing.T) {
 	}
 }
 
+// Postgres text refuses NUL with 22021, which would surface as a 500.
+func TestProvision_NULIs400(t *testing.T) {
+	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
+		return Tenant{ID: uuid.NewString(), Name: in.WorkspaceName, Kind: "firm"}, uuid.NewString(), nil
+	}}
+	for _, tc := range []struct{ name, body string }{
+		{"workspace_name", `{"workspace_name":"Acme\u0000Ltd","display_name":"Ada"}`},
+		{"display_name", `{"workspace_name":"Acme Ltd","display_name":"A\u0000da"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy.calls = nil
+			rec, body := doProvision(t, spy.provision, tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if msg := provisionErrorBody(t, body); !strings.Contains(msg, tc.name) {
+				t.Errorf("error %q does not name %s", msg, tc.name)
+			}
+			if len(spy.calls) != 0 {
+				t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+			}
+		})
+	}
+}
+
 func TestProvision_Conflict409(t *testing.T) {
 	for _, err := range []error{ErrAlreadyProvisioned, fmt.Errorf("tenancy: provision: %w", ErrAlreadyProvisioned)} {
 		spy := &provisionSpy{fn: func(ProvisionInput) (Tenant, string, error) { return Tenant{}, "", err }}

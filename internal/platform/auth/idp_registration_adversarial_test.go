@@ -102,7 +102,7 @@ func TestIdP_ExpiredLinkFails(t *testing.T) {
 	}
 }
 
-// P21: GoTrue answers a repeat within the minute 429 over_email_send_rate_limit and sends nothing.
+// GoTrue answers a repeat within the minute 429 over_email_send_rate_limit and sends nothing.
 func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 	base := idpMailURL(t)
 	gw := startGateway(t, base)
@@ -120,7 +120,7 @@ func TestIdP_RepeatRegistrationIsAcceptedAndMailsOnce(t *testing.T) {
 	}
 }
 
-// P21: GoTrue answers a confirmed address 200 with a sanitized user and sends nothing.
+// GoTrue answers a confirmed address 200 with a sanitized user and sends nothing.
 func TestIdP_VerifiedAddressRegisteringAgainSendsNoMailAndKeepsThePassword(t *testing.T) {
 	base := idpMailURL(t)
 	gw := startGateway(t, base)

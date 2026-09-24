@@ -40,18 +40,18 @@ func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) ht
 			return
 		}
 
-		// P21: a repeat or confirmed address answers exactly like a new one.
+		// A repeat or confirmed address answers exactly like a new one.
 		switch {
 		case status == http.StatusOK,
 			gt.ErrorCode == "user_already_exists",
 			gt.ErrorCode == "email_exists":
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		case gt.ErrorCode == "over_email_send_rate_limit":
-			// ceiling: GoTrue's instance-wide mail cap answers the same code, so this WARN is its only signal (D15).
+			// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
 			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		case status >= http.StatusInternalServerError && gt.Code == "23505":
-			// P21: the loser of two concurrent signups for one address gets GoTrue's unique-violation 500 (D24).
+			// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
 			log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		case gt.ErrorCode == "validation_failed",
@@ -80,7 +80,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	verified, failed := site+"/?verified=1", site+"/?verify=failed"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// A HEAD prefetch by a link scanner would consume the single-use token (D23).
+		// A HEAD prefetch by a link scanner would consume the single-use token.
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")

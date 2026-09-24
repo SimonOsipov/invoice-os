@@ -150,7 +150,7 @@ func main() {
 	app.Mux.HandleFunc("GET /healthz/fleet", fleetHandler)
 
 	// Public registration, outside /api/ and the verifier, in every build. No CORS wrap:
-	// no browser client calls it yet (D9).
+	// no browser client calls it yet.
 	reg := registrationHandlers(probed["auth"], siteURL, app.Logger)
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
@@ -225,7 +225,7 @@ type registration struct {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503 (D22).
+// A nil siteURL means AUTH_SITE_URL is unset: both routes answer 503.
 func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
@@ -242,7 +242,7 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 }
 
 // mustParseSiteURL parses AUTH_SITE_URL. Unset is allowed and logged; a value that is not
-// an absolute http(s) URL stops boot.
+// an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
 		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register and /auth/verify answer 503")
@@ -251,6 +251,10 @@ func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		fatal(log, "gateway: AUTH_SITE_URL=%q is not an absolute http(s) URL", raw)
+	}
+	// VerifyHandler appends "/?verified=1" to this value.
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		fatal(log, "gateway: AUTH_SITE_URL=%q must not carry user info, a query or a fragment", raw)
 	}
 	return u
 }

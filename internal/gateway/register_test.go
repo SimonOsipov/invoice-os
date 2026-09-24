@@ -42,7 +42,7 @@ const (
 	gtOverRequestRateLimit = `{"code":429,"error_code":"over_request_rate_limit","msg":"Request rate limit reached"}`
 	// internal/api/apierrors/apierrors.go, NewInternalServerError; error_id set for 5xx in internal/api/errors.go.
 	gtInternal = `{"code":500,"error_code":"unexpected_failure","msg":"Internal server error","error_id":"req-1"}`
-	// Measured on v2.197.0: the loser of two concurrent signups for one address (D24).
+	// Measured on v2.197.0: the loser of two concurrent signups for one address.
 	gtDuplicateKey = `{"code":"23505","message":"duplicate key value violates unique constraint \"users_email_partial_key\""}`
 	// A 5xx carrying some other SQLSTATE.
 	gtOtherSQLState = `{"code":"40001","message":"could not serialize access due to concurrent update"}`
@@ -231,7 +231,7 @@ func TestRegister_Pending202AndOnlySignupCalled(t *testing.T) {
 	}
 }
 
-// P21: a repeat or confirmed address must be indistinguishable from a new one.
+// A repeat or confirmed address must be indistinguishable from a new one.
 func TestRegister_ExistingAccountLooksIdentical(t *testing.T) {
 	baseline := doRegister(t, newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, nil, registerBody(regEmail, regPassword))
 	requirePending202(t, baseline)
@@ -267,7 +267,7 @@ func TestRegister_ExistingAccountLooksIdentical(t *testing.T) {
 			}
 			if c.status == http.StatusTooManyRequests || c.status == http.StatusInternalServerError {
 				if n := strings.Count(buf.String(), `"level":"WARN"`); n != 1 {
-					t.Errorf("WARN lines = %d, want exactly 1 (D4): %s", n, buf.String())
+					t.Errorf("WARN lines = %d, want exactly 1: %s", n, buf.String())
 				}
 				if strings.Contains(buf.String(), regEmail) {
 					t.Errorf("log names the address: %s", buf.String())
@@ -478,7 +478,7 @@ func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
 	for _, c := range []struct {
 		name, body, want string
 		status           int
-		wantLog          int // D4: a failure logs the upstream status
+		wantLog          int // a failure logs the upstream status
 	}{
 		{"verified with a session body", gtSession, siteURLValue + "/?verified=1", http.StatusOK, 0},
 		{"failed", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, http.StatusForbidden},

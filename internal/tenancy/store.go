@@ -72,7 +72,7 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 	return t, role, nil
 }
 
-// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity (D2).
+// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.
 var workspaceNamespace = uuid.MustParse("83584a9e-a526-4186-9fbb-508011cac1cc")
 
 // ProvisionWorkspace creates the caller's workspace and its first active admin
@@ -95,7 +95,7 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
 
 	var t Tenant
-	// AC-5: the caller has no membership yet, so the gated seam would refuse before
+	// The caller has no membership yet, so the gated seam would refuse before
 	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
 	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,

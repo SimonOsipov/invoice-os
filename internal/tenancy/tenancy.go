@@ -189,9 +189,11 @@ type membershipsResponse struct {
 // the production implementation.
 type MembershipStatusSetter func(ctx context.Context, userID, status string) (Membership, error)
 
-// maxSetStatusBodyBytes bounds a request body BEFORE it is decoded — the
-// platform server applies no request body limit of its own. Over-cap is a 400,
-// not a 413 (TestMembership_BodyOverCapRejected).
+// maxSetStatusBodyBytes bounds the PATCH body BEFORE it is decoded — the
+// platform server applies no request body limit of its own. A legitimate body
+// is ~30 bytes, so 4 KiB is ~130x headroom without opening the door to
+// unbounded allocation. Over-cap is a 400, not a 413
+// (TestMembership_BodyOverCapRejected).
 const maxSetStatusBodyBytes = 4 * 1024
 
 // setMembershipStatusRequest is the PATCH /v1/memberships/{user_id} wire body.
@@ -268,6 +270,9 @@ type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string,
 // maxNameChars caps workspace_name and display_name after trimming.
 const maxNameChars = 200
 
+// maxProvisionBodyBytes bounds the POST /v1/workspaces body before it is decoded.
+const maxProvisionBodyBytes = 4 << 10
+
 // provisionRequest is the POST /v1/workspaces wire body. Kind is a pointer so an
 // absent kind lets the database default apply.
 type provisionRequest struct {
@@ -284,7 +289,7 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxSetStatusBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, maxProvisionBodyBytes)
 		var req provisionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")
@@ -300,6 +305,15 @@ func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFun
 		}
 		if n := utf8.RuneCountInString(in.DisplayName); n == 0 || n > maxNameChars {
 			writeError(w, http.StatusBadRequest, "display_name must be 1 to 200 characters")
+			return
+		}
+		// Postgres text refuses NUL with 22021, which would answer 500.
+		if strings.ContainsRune(in.WorkspaceName, 0) {
+			writeError(w, http.StatusBadRequest, "workspace_name must not contain a NUL byte")
+			return
+		}
+		if strings.ContainsRune(in.DisplayName, 0) {
+			writeError(w, http.StatusBadRequest, "display_name must not contain a NUL byte")
 			return
 		}
 		if req.Kind != nil {

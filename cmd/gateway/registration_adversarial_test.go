@@ -32,7 +32,7 @@ func TestMustParseSiteURL_AcceptsAbsoluteHTTP(t *testing.T) {
 	}
 }
 
-// D4: unset is allowed and logged once, at WARN, naming the variable.
+// Unset is allowed and logged once, at WARN, naming the variable.
 func TestMustParseSiteURL_UnsetIsNilAndLoggedOnce(t *testing.T) {
 	var buf bytes.Buffer
 	if u := mustParseSiteURL("", slog.New(slog.NewJSONHandler(&buf, nil))); u != nil {
@@ -83,6 +83,9 @@ func TestMustParseSiteURLFatalsOnAMalformedValue(t *testing.T) {
 		"no host":        "https://",
 		"no host a path": "https:///landing",
 		"parse error":    "http://%zz",
+		"query":          "https://www.ascomply.com/?a=1",
+		"fragment":       "https://www.ascomply.com/#top",
+		"user info":      "https://user:pw@www.ascomply.com",
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, out := runSiteURLChild(t, raw)

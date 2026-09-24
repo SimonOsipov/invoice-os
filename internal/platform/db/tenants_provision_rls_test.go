@@ -163,7 +163,7 @@ func TestRLS_ProvisionWorkspace_NoGUCRefused(t *testing.T) {
 	assertNothingWritten(t, id)
 }
 
-// Green at head by design: AC-4 keeps invoice_app SELECT-only on tenants.
+// Green at head by design: invoice_app stays SELECT-only on tenants.
 func TestRLS_AppCannotInsertTenantsDirectly(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

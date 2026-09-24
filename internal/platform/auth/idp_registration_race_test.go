@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// GoTrue answers the losing concurrent /signup 500 with SQLSTATE 23505 (D24).
+// GoTrue answers the losing concurrent /signup 500 with SQLSTATE 23505.
 func TestIdP_ConcurrentRegistrationsAnswerTheSame(t *testing.T) {
 	base := idpMailURL(t)
 	gw := startGateway(t, base)

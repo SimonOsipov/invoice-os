@@ -707,7 +707,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/importer/backfill.go"},                       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
 	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure (AC-5)
+	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -3131,7 +3131,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                          // same exemption, AUDIT-12-07's own test naming it
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
 	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
-	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                          // provisioning's caller is unmembered by definition (AC-5)
+	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                          // provisioning's caller is unmembered by definition
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

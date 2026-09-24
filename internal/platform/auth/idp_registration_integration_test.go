@@ -264,7 +264,7 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	t.Cleanup(pool.Close)
 	store := tenancy.NewStore(pool)
 
-	// D20: the caller goes on the context the way identityMiddleware places it.
+	// The caller goes on the context the way identityMiddleware places it.
 	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces",
 		strings.NewReader(`{"workspace_name":"IdP Works","display_name":"Ada","kind":"in_house"}`))
 	rec := httptest.NewRecorder()

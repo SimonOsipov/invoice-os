@@ -12,7 +12,7 @@ import (
 )
 
 // tenantlessReaders are the only non-test files outside this package allowed to
-// read the tenant-less caller (D5: every other consumer must keep seeing no identity).
+// read the tenant-less caller: every other consumer must keep seeing no identity.
 var tenantlessReaders = []string{
 	"internal/platform/identity.go",
 	"internal/tenancy/store.go",

@@ -25,7 +25,7 @@ const (
 // WordingRegistry).
 func CaveatRegistry() map[string]string {
 	return map[string]string{
-		caveatWordingProvisional: "Provisional wording. The mapping and document-type text below was authored in CHECK-01-02, not taken " +
+		caveatWordingProvisional: "Provisional wording. The document-type text below was authored in CHECK-01-02, not taken " +
 			"from the TypeSafe console session that produced the chosen thresholds. Core AC-8 asks for the vendor's " +
 			"wording verbatim and no text below satisfies it. Reconcile against the live run before quoting this as settled.",
 		caveatDoctypeTitleAnnounced: "All seven synthetic non-invoices announce their own type in a 24pt title line, and " +

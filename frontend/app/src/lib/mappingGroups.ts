@@ -15,8 +15,9 @@
 // lib/importFlow.ts's computeNoEntity (task-304, INVCR-01-19) and lib/importRun.ts's
 // selection-half (BULK-01-03).
 
-import { canSubmitMapping, fillUnplacedFromAliases, initMappingFromHeaders, restoreMapping } from './mapping'
-import type { ImportPreview, SavedMapping, SuggestMapping } from './importApi'
+import { CANON } from '../data'
+import { canSubmitMapping, fillUnplacedFromAliases, initMappingFromHeaders, restoreMapping, toImportMapping } from './mapping'
+import type { CheckMapping, ImportPreview, SavedMapping, SuggestMapping } from './importApi'
 import type { Mapping } from '../types'
 import { fmtDateTime } from './format'
 
@@ -209,6 +210,41 @@ export async function suggestGroups(
     try {
       const res = await suggest(group.preview.document_id)
       result.push(applySuggestion(group, res))
+    } catch {
+      result.push(group)
+    }
+  }
+  return result
+}
+
+// Only unplaces. The suggested snapshot stays, so re-placing a field on its old column
+// brings its badge back.
+export function applyDoubts(group: MappingGroup, doubted: string[]): MappingGroup {
+  const mapping = { ...group.mapping }
+  for (const f of doubted) {
+    if (CANON.some((c) => c.key === f) && mapping[f]) mapping[f] = null
+  }
+  return { ...group, mapping }
+}
+
+// One check at a time, in group order, for unrestored groups with a placement. A failed
+// check or a malformed answer leaves that group as it was.
+export async function checkGroups(
+  groups: MappingGroup[],
+  check: ((documentId: string, mapping: Record<string, string>) => Promise<CheckMapping>) | null,
+): Promise<MappingGroup[]> {
+  if (!check) return groups
+  const result: MappingGroup[] = []
+  for (const group of groups) {
+    const placed = toImportMapping(group.mapping)
+    if (group.restored || Object.keys(placed).length === 0) {
+      result.push(group)
+      continue
+    }
+    try {
+      const doubted: unknown = (await check(group.preview.document_id, placed))?.doubted
+      const ok = Array.isArray(doubted) && doubted.every((d) => typeof d === 'string')
+      result.push(ok ? applyDoubts(group, doubted) : group)
     } catch {
       result.push(group)
     }

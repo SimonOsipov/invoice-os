@@ -41,7 +41,7 @@
 // POST /v1/documents (EXTR-09) mints them too, from the submission service --
 // contract-document-upload.spec.ts owns that route.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, apiBase, getSavedMapping, PERSONAS, suggestMapping } from './client'
+import { login, createEntity, apiBase, checkMapping, getSavedMapping, PERSONAS, suggestMapping } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { listInvoices, rawFetch } from './client'
@@ -913,5 +913,37 @@ test.describe('suggest-mapping contract (API E2E, over the deployed gateway)', (
     expect(leg2.source, 'a saved mapping must outrank a live, present AI answer').toBe('saved')
     expect(leg2.saved_at, 'a saved answer must carry a save timestamp').not.toBeNull()
     expect(leg2.mapping, "the saved FULL mapping must win, not the AI's 1-key answer").toEqual(IMPORT_MAPPING)
+  })
+})
+
+// IMPORT_HEADER plus a twelfth column; a JEVFAKE-DOUBT header makes the mapping-check fake
+// doubt every placement asked about that document.
+function check05Csv(num: string, notesHeader: string): string {
+  const row = [num, '2026-01-15', '87654321-0002', 'CHECK-05 Buyer', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00', '']
+  return `${IMPORT_HEADER},${notesHeader}\n${row.join(',')}\n`
+}
+
+test.describe('check-mapping contract (API E2E, over the deployed gateway)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+  })
+
+  test('CHECK05-API-01: the check endpoint answers the documented body on the deployed stack', async () => {
+    const plain = await uploadDocument(token, check05Csv(`INV-CHECK05API-P-${freshTin()}`, 'Notes'))
+    const marked = await uploadDocument(token, check05Csv(`INV-CHECK05API-M-${freshTin()}`, 'Notes JEVFAKE-DOUBT'))
+    const mapping = { invoice_number: 'Invoice No', vat: 'VAT' }
+
+    expect(await checkMapping(token, { document_id: plain, mapping }), 'the fake default doubts nothing').toEqual({ doubted: [] })
+    expect(await checkMapping(token, { document_id: marked, mapping }), 'the marker doubts every asked field, sorted').toEqual({
+      doubted: ['invoice_number', 'vat'],
+    })
+
+    const refused = await checkMapping(token, { document_id: plain, mapping: { supplier_tin: 'X' } }).catch((e: unknown) => e)
+    expect(refused, 'a non-canonical key is refused').toMatchObject({ kind: 'http', status: 400 })
+    expect(JSON.stringify((refused as { body: unknown }).body)).toContain('supplier_tin')
+
+    expect(await checkMapping(token, { document_id: plain, mapping: {} }), 'an empty mapping asks nothing').toEqual({ doubted: [] })
   })
 })

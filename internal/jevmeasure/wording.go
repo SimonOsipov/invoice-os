@@ -2,15 +2,15 @@ package jevmeasure
 
 import "slices"
 
-// The value-check wording is the one measured in CHECK-00 Jev Measurement Results.
+// The value- and mapping-check wording is the one measured in CHECK-00 Jev Measurement Results.
 
 const (
 	ValueCheckInstructions    = "State whether the following statement about this Nigerian tax invoice is true: the value shown for this field is the value the document prints for that field. The value is written in a normalised form: amounts without thousands separators or currency symbols, dates as YYYY-MM-DD, and currency as a three-letter ISO code."
 	ValueCheckCriteriaTrue    = "The stated value is the same value the invoice prints for this field, ignoring only formatting such as thousands separators, currency symbols, and date format."
 	ValueCheckCriteriaFalse   = "The stated value differs from what the invoice prints for this field: a digit, character, amount, or date is different, missing, or transposed, or the value belongs to another field."
-	MappingCheckInstructions  = "State whether the following statement about this spreadsheet column mapping is true: the column header was correctly mapped to the invoice field it names."
-	MappingCheckCriteriaTrue  = "The column holds the data the mapped field expects, and no other field better matches the column's contents."
-	MappingCheckCriteriaFalse = "The column's data belongs to a different invoice field, or the column does not correspond to any invoice field."
+	MappingCheckInstructions  = "State whether the following statement about this spreadsheet is true: the named column holds the named invoice field. The spreadsheet's first rows are shown; one row is one invoice line, and invoice-level values repeat on every line of the same invoice. Judge from the column's header and its values; a header may use any name, abbreviation or language for its field. The fields are: invoice_number: the invoice's own number, not an order, PO, customer, account or payment reference. issue_date: the date the invoice was issued, not a due, delivery or payment date. buyer_tin: the buyer's (customer's) Tax Identification Number, not the seller's own TIN or an RC number. buyer_name: the buyer's name, not a customer code, address, email or phone. currency: the currency code. subtotal: the invoice's amount before VAT, not a line amount. vat: the invoice's VAT amount, not a VAT rate or a line's tax. total: the invoice's total including VAT, not a line amount, amount paid, balance due or amount after withholding tax. line_description: the line's item or service description. line_quantity: the line's quantity. line_unit_price: the line's price per unit, not a line total."
+	MappingCheckCriteriaTrue  = "The column holds the named field as defined above, whatever its header is called."
+	MappingCheckCriteriaFalse = "The column holds something other than the named field as defined above: another field, a rate or percentage where an amount is defined, a line amount where an invoice amount is defined, the seller's details where the buyer's are defined, or data that is not an invoice field."
 	DocumentTypeInstructions  = "Classify which of the following document types this file is, based on its layout, headings and language."
 )
 

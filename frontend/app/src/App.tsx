@@ -33,6 +33,7 @@ import { pollUntilSettled, startDocumentRun as runDocumentPipelines } from './li
 import type { DocumentRowState } from './lib/documentRun'
 import {
   canSubmitAllMappings,
+  checkGroups,
   groupByLayout,
   groupOfFile,
   rememberMapping,
@@ -43,6 +44,7 @@ import {
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
+  checkMapping,
   createImport,
   getExtractions,
   getSavedMapping,
@@ -954,7 +956,12 @@ function Workspace({ session, onSignOut, initialView, becomePersona, returnToSea
         const suggest = target
           ? (documentId: string) => suggestMapping(authedFetch, base, { entity_id: target, document_id: documentId })
           : null
-        setGroups(await suggestGroups(restored, suggest))
+        const check = target
+          ? (documentId: string, mapping: Record<string, string>) =>
+              checkMapping(authedFetch, base, { document_id: documentId, mapping })
+          : null
+        // ceiling: a mid-check entity switch is not compared with runSeq; guard it if a stale Map step is reported
+        setGroups(await checkGroups(await suggestGroups(restored, suggest), check))
         setGroupIndex(0)
         setCreateStep('mapping')
         // A fresh mapping cycle must not carry a PREVIOUS run's leftovers onto it.

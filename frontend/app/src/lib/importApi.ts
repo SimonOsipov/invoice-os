@@ -501,6 +501,25 @@ export async function suggestMapping(
   return authedFetch<SuggestMapping>(`${base}/api/invoice/v1/imports/suggest-mapping`, { method: 'POST', body: req })
 }
 
+// POST /v1/imports/check-mapping. Mirrors internal/importer/handlers_check.go's
+// checkMappingRequest/checkMappingResponse.
+export interface CheckMappingRequest {
+  document_id: string
+  mapping: Record<string, string>
+}
+
+export interface CheckMapping {
+  doubted: string[]
+}
+
+export async function checkMapping(
+  authedFetch: AuthedFetch,
+  base: string,
+  req: CheckMappingRequest,
+): Promise<CheckMapping> {
+  return authedFetch<CheckMapping>(`${base}/api/invoice/v1/imports/check-mapping`, { method: 'POST', body: req })
+}
+
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through
 // the typed authedFetch wrapper, not xhrJson (08/task-284 AC-2). `authedFetch` seam
 // first, `base` second -- repo convention. Non-2xx rejects with the underlying ApiError

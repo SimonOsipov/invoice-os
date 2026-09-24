@@ -312,6 +312,26 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function suggestMapping(',
     floor: 7,
   },
+  {
+    ts: 'CheckMappingRequest',
+    go: 'checkMappingRequest',
+    goPath: 'internal/importer/handlers_check.go',
+    goAnchor: 'func CheckMappingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function checkMapping(',
+    e2eAnchor: 'export function checkMapping(',
+    floor: 2,
+  },
+  {
+    ts: 'CheckMapping',
+    go: 'checkMappingResponse',
+    goPath: 'internal/importer/handlers_check.go',
+    goAnchor: 'func CheckMappingHandler(',
+    spaPath: 'frontend/app/src/lib/importApi.ts',
+    spaAnchor: 'export async function checkMapping(',
+    e2eAnchor: 'export function checkMapping(',
+    floor: 1,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -439,6 +459,8 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'SavedMappingResponse',
       'SuggestMappingRequest',
       'SuggestMapping',
+      'CheckMappingRequest',
+      'CheckMapping',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -939,6 +961,29 @@ describe('every wire struct in handlers_suggest.go has a mirror row (AIR-07-03)'
     const fixture =
       'type suggestMappingRequest struct {\n\tA string `json:"a"`\n}\n\ntype MappingSuggester interface {\n\tEnabled() bool\n}\n'
     expect(wireStructsAnyCase(fixture)).toEqual(['suggestMappingRequest'])
+  })
+})
+
+// Exact lists: floors of 2 and 1 alone would pass a renamed key.
+describe('the check-mapping wire types', () => {
+  const CHECK_GO_PATH = 'internal/importer/handlers_check.go'
+  const rows: [string, string, string[]][] = [
+    ['CheckMappingRequest', 'checkMappingRequest', ['document_id', 'mapping']],
+    ['CheckMapping', 'checkMappingResponse', ['doubted']],
+  ]
+
+  it.each(rows)('wire mirror: %s', (ts, go, keys) => {
+    const goSrc = repoFile(CHECK_GO_PATH)
+    expect(goSrc, 'control: the Go anchor').toContain('func CheckMappingHandler(')
+    expect(goStructKeys(goSrc, go)).toEqual(keys)
+
+    const spa = repoFile('frontend/app/src/lib/importApi.ts')
+    expect(spa).toContain('export async function checkMapping(')
+    expect(tsInterfaceKeys(spa, ts)).toEqual(keys)
+
+    const e2e = repoFile(E2E_CLIENT)
+    expect(e2e, `lost anchor on ${E2E_CLIENT} for ${ts}`).toContain('export function checkMapping(')
+    expect(tsInterfaceKeys(e2e, ts)).toEqual(keys)
   })
 })
 

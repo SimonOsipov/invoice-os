@@ -105,7 +105,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_JWT_ISSUER` | `urn:ascomply:auth:production` | `urn:ascomply:auth:pr-<N>` |
 | `GOTRUE_SMTP_HOST` | (image value) | empty: no mailer |
 | `GOTRUE_DISABLE_SIGNUP` | unset (image value `true`) until registration U3, then `false` | `false` |
-| `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | unset: a fork sends no mail |
+| `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | not written; after U2 a fork inherits production's value, inert because a fork sends no mail |
 | `GOTRUE_JWT_KEYS` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_JWT_SECRET` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_SMTP_PASS` | **secret, sealed**; the Resend API key, unset until U4 | empty |
@@ -277,7 +277,7 @@ other GoTrue route (`/token`, `/recover`, `/admin/*`) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The
-   gateway posts the same body to GoTrue `/signup`. GoTrue creates an unconfirmed user and
+   gateway posts only those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend.
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
@@ -319,9 +319,11 @@ already has an account. The answer never carries the user id or any GoTrue field
 | Outcome | Answer |
 |---|---|
 | GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1` |
-| an empty `token`, a `type` other than `signup`, a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, the upstream status logged |
-| any method except GET, including HEAD | 405, `Allow: GET`; GoTrue is not called |
-| `AUTH_SITE_URL` unset | 503 `registration is not configured` |
+| an empty `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
+| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
+| HEAD | 405 `{"error":"method not allowed"}`, `Allow: GET`; GoTrue is not called |
+| any method other than GET or HEAD | 405 from the router, `Allow: GET, HEAD`; GoTrue is not called |
+| GET or HEAD while `AUTH_SITE_URL` is unset | 503 `registration is not configured` |
 
 The link's `redirect_to` is ignored. The redirect target is always the gateway's own
 `AUTH_SITE_URL`, never a query value. HEAD is refused because a link scanner's HEAD prefetch
@@ -412,7 +414,8 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_DISABLE_SIGNUP
 To close registration again, set the value back to `true` the same way and redeploy `auth`.
 
 **Deploy the writes.** The next push run on `main` deploys `gateway` and `auth` with the new
-values. To deploy sooner, re-run the latest push `dev-env` run as a whole run
+values; a push that changes only `docs/**` or `*.md` starts no run (`paths-ignore`). To
+deploy sooner, re-run the latest push `dev-env` run as a whole run
 (`gh run rerun <id>`, not `--failed`); if that re-run gates on stale containers, push an
 empty commit instead.
 

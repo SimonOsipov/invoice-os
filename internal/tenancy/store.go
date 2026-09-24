@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -68,6 +69,18 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 		return Tenant{}, "", err
 	}
 	return t, role, nil
+}
+
+// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity (D2).
+var workspaceNamespace = uuid.MustParse("83584a9e-a526-4186-9fbb-508011cac1cc")
+
+// errProvisionUnimplemented is the D17 scaffold's answer; the executor removes it.
+var errProvisionUnimplemented = errors.New("tenancy: provision workspace not implemented")
+
+// ProvisionWorkspace creates the caller's workspace and its first active admin,
+// returning the tenant and the caller's subject. D17 scaffold: runs no SQL.
+func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tenant, string, error) {
+	return Tenant{}, "", errProvisionUnimplemented
 }
 
 // ListMemberships lists the caller's tenant's memberships (user_id, role,

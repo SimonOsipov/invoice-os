@@ -57,6 +57,9 @@ var (
 	ErrLastActiveAdmin          = errors.New("tenancy: last active admin")
 )
 
+// ErrAlreadyProvisioned means the caller already has a workspace.
+var ErrAlreadyProvisioned = errors.New("tenancy: already provisioned")
+
 // MeLoader resolves the current caller's tenant and their domain role (from
 // memberships). The handler depends on this narrow function type rather than a
 // pool, so its HTTP contract is unit-testable without a database; the production
@@ -250,6 +253,25 @@ func SetMembershipStatusHandler(set MembershipStatusSetter, log *slog.Logger) ht
 			return
 		}
 		writeJSON(w, http.StatusOK, membership)
+	}
+}
+
+// ProvisionInput is the POST /v1/workspaces body after trimming and validation.
+// An empty Kind lets the database default apply.
+type ProvisionInput struct {
+	WorkspaceName string
+	DisplayName   string
+	Kind          string
+}
+
+// ProvisionFunc creates the caller's workspace. The string is the caller's
+// subject: the handler cannot read the tenant-less caller itself.
+type ProvisionFunc func(ctx context.Context, in ProvisionInput) (Tenant, string, error)
+
+// ProvisionHandler returns POST /v1/workspaces. D17 scaffold: 501, no behaviour.
+func ProvisionHandler(provision ProvisionFunc, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

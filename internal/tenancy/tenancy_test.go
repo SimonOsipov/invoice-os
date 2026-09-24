@@ -2423,3 +2423,201 @@ func TestMembership_NoOpOnAlreadySuspendedAdminTarget(t *testing.T) {
 		t.Errorf("audit rows for %s = %d, want unchanged %d", event, after, before)
 	}
 }
+
+// --- POST /v1/workspaces (ProvisionHandler) ---------------------------------
+
+type provisionSpy struct {
+	calls []ProvisionInput
+	fn    func(ProvisionInput) (Tenant, string, error)
+}
+
+func (s *provisionSpy) provision(_ context.Context, in ProvisionInput) (Tenant, string, error) {
+	s.calls = append(s.calls, in)
+	return s.fn(in)
+}
+
+func doProvision(t *testing.T, provision ProvisionFunc, body string) (*httptest.ResponseRecorder, map[string]json.RawMessage) {
+	t.Helper()
+	r := httptest.NewRequest("POST", "/v1/workspaces", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	ProvisionHandler(provision, nil).ServeHTTP(rec, r)
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return rec, decoded
+}
+
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// provisionErrorBody asserts the flat {"error": msg} envelope and returns msg.
+func provisionErrorBody(t *testing.T, body map[string]json.RawMessage) string {
+	t.Helper()
+	if got := sortedKeys(body); !slices.Equal(got, []string{"error"}) {
+		t.Errorf("error body keys = %v, want [error]", got)
+	}
+	var msg string
+	if err := json.Unmarshal(body["error"], &msg); err != nil {
+		t.Fatalf("error value %s is not a string: %v", body["error"], err)
+	}
+	if msg == "" {
+		t.Error("error message is empty")
+	}
+	return msg
+}
+
+const validProvisionBody = `{"workspace_name":"Acme Ltd","display_name":"Ada"}`
+
+func TestProvision_Created201MeShape(t *testing.T) {
+	tenantID, subject := uuid.NewString(), uuid.NewString()
+	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
+		kind := in.Kind
+		if kind == "" {
+			kind = "firm"
+		}
+		return Tenant{ID: tenantID, Name: in.WorkspaceName, Kind: kind}, subject, nil
+	}}
+
+	for _, tc := range []struct {
+		name, body string
+		wantIn     ProvisionInput
+		wantKind   string
+	}{
+		{"names trimmed, kind absent", `{"workspace_name":"  Acme Ltd  ","display_name":" Ada "}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada"}, "firm"},
+		{"kind in_house", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"in_house"}`, ProvisionInput{WorkspaceName: "Acme Ltd", DisplayName: "Ada", Kind: "in_house"}, "in_house"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy.calls = nil
+			rec, body := doProvision(t, spy.provision, tc.body)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			if len(spy.calls) != 1 || spy.calls[0] != tc.wantIn {
+				t.Errorf("provision calls = %+v, want exactly [%+v]", spy.calls, tc.wantIn)
+			}
+			if got := sortedKeys(body); !slices.Equal(got, []string{"tenant", "user"}) {
+				t.Errorf("top-level keys = %v, want [tenant user]", got)
+			}
+			var tenant, user map[string]json.RawMessage
+			if err := json.Unmarshal(body["tenant"], &tenant); err != nil {
+				t.Fatalf("decode tenant %s: %v", body["tenant"], err)
+			}
+			if err := json.Unmarshal(body["user"], &user); err != nil {
+				t.Fatalf("decode user %s: %v", body["user"], err)
+			}
+			if got := sortedKeys(tenant); !slices.Equal(got, []string{"id", "kind", "name"}) {
+				t.Errorf("tenant keys = %v, want [id kind name]", got)
+			}
+			if got := sortedKeys(user); !slices.Equal(got, []string{"id", "role"}) {
+				t.Errorf("user keys = %v, want [id role]", got)
+			}
+			var me meBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+				t.Fatalf("decode as meBody: %v", err)
+			}
+			if me.Tenant.ID != tenantID || me.Tenant.Name != "Acme Ltd" || me.Tenant.Kind != tc.wantKind {
+				t.Errorf("tenant = %+v, want {%s Acme Ltd %s}", me.Tenant, tenantID, tc.wantKind)
+			}
+			if me.User.ID != subject || me.User.Role != "admin" {
+				t.Errorf("user = %+v, want {%s admin}", me.User, subject)
+			}
+		})
+	}
+}
+
+func TestProvision_Validation400(t *testing.T) {
+	long := strings.Repeat("a", 201)
+	atCap := strings.Repeat("a", 200)
+	spy := &provisionSpy{fn: func(in ProvisionInput) (Tenant, string, error) {
+		return Tenant{ID: uuid.NewString(), Name: in.WorkspaceName, Kind: "firm"}, uuid.NewString(), nil
+	}}
+
+	// Positive control: the same handler accepts names at the 200-character cap.
+	t.Run("200-char names accepted", func(t *testing.T) {
+		spy.calls = nil
+		rec, _ := doProvision(t, spy.provision, `{"workspace_name":"`+atCap+`","display_name":"`+atCap+`","kind":"firm"}`)
+		if rec.Code != http.StatusCreated || len(spy.calls) != 1 {
+			t.Fatalf("status = %d, calls = %d, want 201 and 1 call (body=%s)", rec.Code, len(spy.calls), rec.Body.String())
+		}
+	})
+
+	for _, tc := range []struct{ name, body string }{
+		{"workspace_name missing", `{"display_name":"Ada"}`},
+		{"workspace_name blank", `{"workspace_name":"   ","display_name":"Ada"}`},
+		{"workspace_name 201 chars", `{"workspace_name":"` + long + `","display_name":"Ada"}`},
+		{"display_name missing", `{"workspace_name":"Acme Ltd"}`},
+		{"display_name blank", `{"workspace_name":"Acme Ltd","display_name":" \t "}`},
+		{"display_name 201 chars", `{"workspace_name":"Acme Ltd","display_name":"` + long + `"}`},
+		{"kind bogus", `{"workspace_name":"Acme Ltd","display_name":"Ada","kind":"bogus"}`},
+		{"malformed JSON", `{"workspace_name":`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spy.calls = nil
+			rec, body := doProvision(t, spy.provision, tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			provisionErrorBody(t, body)
+			if len(spy.calls) != 0 {
+				t.Errorf("provision called %d time(s), want 0", len(spy.calls))
+			}
+		})
+	}
+}
+
+func TestProvision_Conflict409(t *testing.T) {
+	for _, err := range []error{ErrAlreadyProvisioned, fmt.Errorf("tenancy: provision: %w", ErrAlreadyProvisioned)} {
+		spy := &provisionSpy{fn: func(ProvisionInput) (Tenant, string, error) { return Tenant{}, "", err }}
+		rec, body := doProvision(t, spy.provision, validProvisionBody)
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%v: status = %d, want 409", err, rec.Code)
+		}
+		// statusForErr's rule: a sentinel's "tenancy: " prefix never reaches a client.
+		if msg := provisionErrorBody(t, body); strings.HasPrefix(msg, "tenancy:") {
+			t.Errorf("%v: message %q leaks the sentinel text", err, msg)
+		}
+		if len(spy.calls) != 1 {
+			t.Errorf("%v: provision called %d time(s), want 1", err, len(spy.calls))
+		}
+	}
+}
+
+func TestProvision_NoCaller401(t *testing.T) {
+	spy := &provisionSpy{fn: func(ProvisionInput) (Tenant, string, error) { return Tenant{}, "", db.ErrNoTenant }}
+	rec, body := doProvision(t, spy.provision, validProvisionBody)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	// "unauthorized" is every tenancy handler's 401 message (statusForErr).
+	if msg := provisionErrorBody(t, body); msg != "unauthorized" {
+		t.Errorf("error = %q, want %q", msg, "unauthorized")
+	}
+	if len(spy.calls) != 1 {
+		t.Errorf("provision called %d time(s), want 1", len(spy.calls))
+	}
+}
+
+func TestProvision_Internal500(t *testing.T) {
+	spy := &provisionSpy{fn: func(ProvisionInput) (Tenant, string, error) { return Tenant{}, "", errors.New("boom: pg detail") }}
+	rec, body := doProvision(t, spy.provision, validProvisionBody)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	// "internal server error" is every tenancy handler's 500 message (statusForErr).
+	if msg := provisionErrorBody(t, body); msg != "internal server error" {
+		t.Errorf("error = %q, want %q (no internals)", msg, "internal server error")
+	}
+	if len(spy.calls) != 1 {
+		t.Errorf("provision called %d time(s), want 1", len(spy.calls))
+	}
+}

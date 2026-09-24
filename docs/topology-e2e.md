@@ -171,7 +171,7 @@ of a PR environment.
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
 up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Every
-environment is now a **fresh, cold, from-scratch 14-service build** (a new PR fork,
+environment is now a **fresh, cold, from-scratch 15-service build** (a new PR fork,
 or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
 an edge case: each Railway service has a service-level **Watch Paths** filter that makes
 `railway up` skip (no deployment created) when the diff misses the service's watched
@@ -193,7 +193,7 @@ experiments falsified scale-to-0 and diff-driven alternatives).
 
 The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
 `fleet-gate` / the e2e SPA `/health` wait (200s → 600s) — since every environment is now a
-cold 14-service build, not the exception a warm redeploy used to be (Decision
+cold 15-service build, not the exception a warm redeploy used to be (Decision
 `[gate-windows-provisional]`).
 
 ## Related

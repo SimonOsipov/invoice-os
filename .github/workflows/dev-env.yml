@@ -63,7 +63,7 @@ name: Dev Env (deploy full fleet + verify)
 #    or if any deployment trigger appears. See docs/deploy-model.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
-#  - Railway Watch Paths empty on all 14 non-Postgres services, or `railway up`
+#  - Railway Watch Paths empty on all 15 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
 #    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
@@ -321,6 +321,15 @@ jobs:
       # token cannot satisfy. Drop the guard and every dispatch run breaks.
       # ----------------------------------------------------------------------
 
+      # First after `resolve`: GoTrue must never boot a fork without its own key.
+      # GOTRUE_SITE_URL waits for `urls` (set-fork-auth-site).
+      - name: Write the fork's auth configuration (never in the persistent env)
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+        run: bash scripts/ci/railway-env.sh set-fork-auth "$ENV_ID"
+
       - name: Audit sealed variables in the source environment (they do not fork)
         if: github.event_name == 'pull_request'
         env:
@@ -351,7 +360,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
 
-      - name: Assert Watch Paths are empty on all 14 non-Postgres services (M3-16 invariant)
+      - name: Assert Watch Paths are empty on all 15 non-Postgres services (M3-16 invariant)
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           RAILWAY_QUERY_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || secrets.RAILWAY_API_TOKEN }}
@@ -386,7 +395,7 @@ jobs:
             exit 1
           fi
 
-          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","landing","app","ops-console","support-console"]'
+          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","auth","landing","app","ops-console","support-console"]'
 
           missing=$(echo "$resp" | jq -r --argjson names "$expected_json" '
             ([.data.environment.serviceInstances.edges[]?.node.serviceName]) as $present
@@ -408,12 +417,12 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          echo "All 14 non-Postgres service instances report empty Watch Paths."
+          echo "All 15 non-Postgres service instances report empty Watch Paths."
 
       # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
       # variables, which the step above the seam already checked, so this only
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
-      # earlier: that step queries all 14 service names and hard-fails if any is
+      # earlier: that step queries all 15 service names and hard-fails if any is
       # missing, which is what proves the 8 context services and the `docling`
       # sidecar have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the 6 service
@@ -498,6 +507,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           echo "gateway=$gateway_url app=$app_url landing=$landing_url ops-console=$ops_console_url support-console=$support_console_url"
+
+      - name: Write the fork's auth site URL
+        if: github.event_name == 'pull_request'
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          ENV_ID: ${{ steps.resolve.outputs.environment_id }}
+          LANDING_URL: ${{ steps.urls.outputs.landing_url }}
+        run: bash scripts/ci/railway-env.sh set-fork-auth-site "$ENV_ID" "$LANDING_URL"
 
       # Must run after `urls` (consumes the discovered values) and before any
       # service that bakes or reads them deploys.
@@ -645,7 +662,8 @@ jobs:
           reset=""
           purge=""
           mock=""
-          # 900s (180 x 5s): EVERY environment is now a cold build of all 11
+          issuers=""
+          # 900s (180 x 5s): EVERY environment is now a cold build of all 15
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
           # exception the old 360s window assumed. Widen further if the
@@ -669,7 +687,8 @@ jobs:
               reset=$(printf '%s' "$body" | jq -r '.db_reset // empty' 2>/dev/null || echo '')
               purge=$(printf '%s' "$body" | jq -r '.demo_purge // empty' 2>/dev/null || echo '')
               mock=$(printf '%s' "$body" | jq -r '.mock_issuer // empty' 2>/dev/null || echo '')
-              echo "  gateway healthy on $seen (schema migrated; db_reset=${reset:-none}, demo_purge=${purge:-none}, mock_issuer=${mock:-none})"
+              issuers=$(printf '%s' "$body" | jq -r '.auth_issuers // empty' 2>/dev/null || echo '')
+              echo "  gateway healthy on $seen (schema migrated; db_reset=${reset:-none}, demo_purge=${purge:-none}, mock_issuer=${mock:-none}, auth_issuers=${issuers:-none})"
               ok=1
               break
             fi
@@ -727,6 +746,12 @@ jobs:
             echo "::error::gateway is serving $EXPECTED_BUILD but reports mock_issuer='${mock:-none}', want '$want_mock'. On a PR, 'absent' means scripts/ci/stamp-mock-issuer.sh did not tag the build, and 'off' means ENVIRONMENT or GATEWAY_MOCK_ISSUER gated it off. On the persistent environment, anything but 'absent' means a tagged gateway binary was deployed there. 'none' means the gateway predates the field."
             exit 1
           fi
+          # A fork trusts its mock and its own GoTrue; production trusts only its GoTrue.
+          if [ "$IS_PR" = "true" ]; then want_issuers=2; else want_issuers=1; fi
+          if [ "$issuers" != "$want_issuers" ]; then
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports auth_issuers='${issuers:-none}', want '$want_issuers'. On a PR, '1' means set-fork-auth did not write AUTH_ADDITIONAL_ISSUERS on the gateway. On the persistent environment, '2' means AUTH_ADDITIONAL_ISSUERS is set there and a second issuer is trusted. 'none' means the gateway predates the field."
+            exit 1
+          fi
 
           # Production serves neither mint route. The old container answers
           # (jwks 200, login 403) until the rolling deploy drains, so poll for 404.
@@ -750,7 +775,7 @@ jobs:
             done
           fi
 
-  # 3. Deploy the eight context services and the `docling` sidecar, only after the
+  # 3. Deploy the eight context services, the `docling` sidecar and `auth`, only after the
   #    gateway is healthy. They boot against the already-migrated schema and never run
   #    migrations. Skipped for draft PRs.
   deploy-context:
@@ -763,7 +788,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation, docling]
+        service: [tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation, docling, auth]
     steps:
       - uses: actions/checkout@v4
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
@@ -824,11 +849,11 @@ jobs:
         timeout-minutes: 15
 
   # 6. Post-deploy verification (a): the fleet /healthz gate. Poll the
-  #    gateway's fleet-health roll-up until all 9 backends are green (they may
+  #    gateway's fleet-health roll-up until all 10 backends are green (they may
   #    cold-start after `up`); fail the run naming the culprit if any stays
   #    down.
   fleet-gate:
-    name: Fleet /healthz gate (all 9 backends green)
+    name: Fleet /healthz gate (all 10 backends green)
     needs: [deploy-context, prepare-env]
     if: always() && needs.deploy-context.result == 'success'
     runs-on: ubuntu-latest
@@ -855,7 +880,7 @@ jobs:
           for _ in $(seq 1 120); do
             code=$(curl -sS --connect-timeout 5 --max-time 10 -o /tmp/fleet.json -w '%{http_code}' "$GATEWAY_URL/healthz/fleet" 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then
-              stale=$(jq -r --arg b "$EXPECTED_BUILD" '[.services[] | select(.build != $b) | "\(.name)=\(.build // "none")"] | join(", ")' /tmp/fleet.json 2>/dev/null || echo 'unparseable')
+              stale=$(jq -r --arg b "$EXPECTED_BUILD" '[.services[] | select(.name != "auth" and .build != $b) | "\(.name)=\(.build // "none")"] | join(", ")' /tmp/fleet.json 2>/dev/null || echo 'unparseable')
               if [ -z "$stale" ]; then break; fi
             fi
             sleep 5
@@ -871,7 +896,7 @@ jobs:
             echo "::error::fleet is healthy but not on $EXPECTED_BUILD after 600s — still serving: $stale. A 'none' build means that service predates the /healthz build field or its stamp step did not run; any other value means its new container never replaced the old one. Running E2E here would verify the wrong commit."
             exit 1
           fi
-          echo "All 9 backends green on $EXPECTED_BUILD."
+          echo "All 10 backends green on $EXPECTED_BUILD (auth reports no build)."
 
       # docling has no public domain, so the gateway's roll-up is CI's only route
       # to it. The step above already blocks on every service's build; this one

@@ -9,7 +9,7 @@ judgment call, the recipe is broken: fix the recipe, then the service.
 also gets its own ephemeral environment, forked from `development` by `dev-env.yml`'s
 `prepare-env` job, but a new service is never created *in* one of those directly: it is
 created once, here, on `development`, and every subsequent PR fork inherits it. Measured
-(M4-23-04): a fork inherits all 14 service instances with `watchPatterns: []`, the service
+(M4-23-04): a fork inherits every service instance with `watchPatterns: []`, the service
 domains (auto-renamed) and the Postgres TCP proxy. It does **not** inherit a Postgres
 *deployment* (started explicitly), a *volume*, or **sealed variables**.
 `$ENV` throughout this recipe always means `development`'s id below:

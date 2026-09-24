@@ -20,6 +20,8 @@ type RolePasswords struct {
 	Migrator string
 	App      string
 	Reader   string
+	// AuthAdmin is the supabase_auth_admin login password.
+	AuthAdmin string
 }
 
 // BootstrapAdvisoryLockKey is the fixed, project-scoped pg_advisory_lock key

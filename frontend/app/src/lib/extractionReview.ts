@@ -70,12 +70,16 @@ export interface ExtractionDocument {
   stored_at: string
 }
 
+// extraction_jobs.document_type's CHECK set: every verdict but a tax invoice.
+export type DocumentType = 'receipt' | 'proforma' | 'quotation' | 'credit note' | 'delivery note' | 'statement' | 'purchase order'
+
 // internal/extraction/reader.go, ExtractionDetail.
 export interface ExtractionDetail {
   id: string
   document_id: string
   state: string
   failure_kind: string | null
+  document_type: DocumentType | null
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

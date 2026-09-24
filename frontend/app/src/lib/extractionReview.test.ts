@@ -590,6 +590,7 @@ describe('getExtractionDetail', () => {
       document_id: 'd1',
       state: 'succeeded',
       failure_kind: null,
+      document_type: null,
       document: mkDocument(),
       pages: [],
       fields: [],

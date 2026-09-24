@@ -176,8 +176,19 @@ func writeLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string,
 	return nil
 }
 
-// writeDocumentTypeTx records a non-invoice verdict in the result transaction.
+// writeDocumentTypeTx records a non-invoice verdict in the result transaction. Zero rows
+// affected is an error for writeLayoutTx's reason: the row is the caller's own.
 func writeDocumentTypeTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, docType string) error {
+	ct, err := tx.Exec(ctx,
+		`UPDATE extraction_jobs SET document_type = $3
+		  WHERE tenant_id = $1 AND id = $2`,
+		tenantID, jobID, docType)
+	if err != nil {
+		return fmt.Errorf("extraction: write document type for job %s: %w", jobID, err)
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("extraction: write document type for job %s: no row affected", jobID)
+	}
 	return nil
 }
 

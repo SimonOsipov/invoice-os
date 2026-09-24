@@ -1235,6 +1235,7 @@ export interface ExtractionDetail {
   document_id: string
   state: string
   failure_kind: string | null
+  document_type: string | null
   document: ExtractionDocument
   pages: ExtractionPage[]
   fields: ExtractionFieldState[]

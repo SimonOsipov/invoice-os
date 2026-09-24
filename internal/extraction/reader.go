@@ -230,12 +230,12 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 
 	var storedAt time.Time
 	err := tx.QueryRow(ctx,
-		`SELECT j.id, j.document_id, j.state, j.failure_kind,
+		`SELECT j.id, j.document_id, j.state, j.failure_kind, j.document_type,
 		        d.filename, d.declared_content_type, d.size_bytes, d.created_at
 		   FROM extraction_jobs j
 		   JOIN documents d ON d.id = j.document_id
 		  WHERE j.id = $1`,
-		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind,
+		jobID).Scan(&out.ID, &out.DocumentID, &out.State, &out.FailureKind, &out.DocumentType,
 		&out.Document.Filename, &out.Document.ContentType, &out.Document.SizeBytes, &storedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

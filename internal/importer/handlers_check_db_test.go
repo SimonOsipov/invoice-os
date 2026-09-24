@@ -55,3 +55,33 @@ func TestCheckMappingHandler_ACrossTenantDocumentIs404(t *testing.T) {
 		t.Errorf("off: opens %d, Ask %d; want 0, 0", opens, len(off.calls))
 	}
 }
+
+// The store's read has no tenant filter, so the 404 above is RLS's: a pool that bypasses RLS reads B's document.
+func TestCheckMappingHandler_TheCrossTenantRefusalIsRLS(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "check-mapping rls A")
+	tenantB := seedTenant(t, super, "check-mapping rls B")
+	objects := newMemObjects()
+	docB := storeDocumentAs(t, document.NewService(document.NewStore(app), objects), tenantB, "data.csv", "text/csv",
+		csvBody(t, []string{"Invoice No"}, [][]string{{"INV-1"}}))
+	body := checkReqBody(t, docB.ID, chkOnePlacement)
+	idA := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantA}
+
+	for _, tc := range []struct {
+		name     string
+		svc      *document.Service
+		wantCode int
+		wantAsks int
+	}{
+		{"invoice_app under RLS", document.NewService(document.NewStore(app), objects), http.StatusNotFound, 0},
+		{"control: superuser bypasses RLS", document.NewService(document.NewStore(super), objects), http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &mcStub{enabled: true, resp: mcNouls(map[string]float64{"invoice_number": 1})}
+			rec, raw := doCheckRequest(t, tc.svc.Open, stub, nil, &idA, body)
+			if rec.Code != tc.wantCode || len(stub.calls) != tc.wantAsks {
+				t.Errorf("status %d, Ask %d; want %d, %d (body=%s)", rec.Code, len(stub.calls), tc.wantCode, tc.wantAsks, raw)
+			}
+		})
+	}
+}

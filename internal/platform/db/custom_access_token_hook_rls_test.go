@@ -256,8 +256,9 @@ func TestRLS_AuthAdminCannotReadMembershipsDirectly(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := auth.Exec(ctx, tc.sql)
-			if code := pgCode(err); code != "42501" {
-				t.Errorf("%s as supabase_auth_admin: SQLSTATE %q, want 42501: %v", tc.sql, code, err)
+			// An RLS WITH CHECK refusal is also 42501; only a missing privilege says "permission denied".
+			if code := pgCode(err); code != "42501" || !strings.Contains(err.Error(), "permission denied") {
+				t.Errorf("%s as supabase_auth_admin: SQLSTATE %q, want 42501 permission denied: %v", tc.sql, code, err)
 			}
 		})
 	}

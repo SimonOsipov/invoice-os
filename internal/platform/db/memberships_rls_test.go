@@ -451,7 +451,12 @@ func TestRLS_MembershipsCrossTenantStatusUpdateInvisible(t *testing.T) {
 // id, taken from the embedded filename rather than hardcoded.
 func membershipsMigrationVersion(t *testing.T) int64 {
 	t.Helper()
-	const glob = "*_memberships_status_and_identity.sql"
+	return migrationVersion(t, "*_memberships_status_and_identity.sql")
+}
+
+// migrationVersion is the goose version of the one embedded migration matching glob.
+func migrationVersion(t *testing.T, glob string) int64 {
+	t.Helper()
 	matches, err := fs.Glob(migrations.FS, glob)
 	if err != nil {
 		t.Fatalf("glob %s in migrations.FS: %v", glob, err)
@@ -517,6 +522,7 @@ func TestRLS_MembershipsDownDropsExactlyThreeColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	reapplyHookMigrationOnCleanup(t, provider)
 
 	// Restore the column set regardless of how the assertions below turn out — later
 	// tests in this package depend on status/display_name/email existing.
@@ -566,6 +572,7 @@ func TestRLS_MembershipsPreMigrationRowBackfillsToActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build migration provider: %v", err)
 	}
+	reapplyHookMigrationOnCleanup(t, provider)
 	t.Cleanup(func() {
 		if _, err := provider.Up(context.Background()); err != nil {
 			t.Errorf("restore memberships schema: %v", err)

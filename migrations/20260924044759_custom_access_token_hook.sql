@@ -1,6 +1,7 @@
 -- GoTrue's custom access token hook: projects app_metadata.tenant_id from memberships.
 -- SECURITY DEFINER owned by NOLOGIN auth_hook_reader, whose policy is the only cross-tenant
--- read; supabase_auth_admin gets EXECUTE only. Asserted by custom_access_token_hook_rls_test.go.
+-- read of memberships; supabase_auth_admin gets EXECUTE only.
+-- Asserted by custom_access_token_hook_rls_test.go.
 
 -- +goose Up
 -- +goose StatementBegin
@@ -29,7 +30,7 @@ ALTER FUNCTION public.custom_access_token_hook(jsonb) OWNER TO auth_hook_reader;
 -- +goose Down
 DROP POLICY auth_hook_lookup ON public.memberships;
 -- Table-level REVOKE also removes the column grants and still runs if an out-of-order
--- Down already dropped status (TestMigrateUpFromEmbedded after the memberships round-trips).
+-- ledger rolled status back first.
 REVOKE SELECT ON public.memberships FROM auth_hook_reader;
 -- Only the owner can drop it. RESET before goose deletes its version row in this transaction.
 SET LOCAL ROLE auth_hook_reader;

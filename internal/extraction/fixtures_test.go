@@ -110,6 +110,8 @@ var fxCorpus = []struct {
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
 	// The value check's one-doubt fixture: outside every corpus_ ratchet.
 	{fxJevDoubt, fxBuildJevDoubtInvoice},
+	// The document-type check's receipt fixture: outside every corpus_ ratchet.
+	{fxJevReceipt, fxBuildJevReceiptInvoice},
 	// AIR-08-13's deployed line-items fixture: outside every corpus_ ratchet.
 	{fxAILines, fxBuildAILinesInvoice},
 	// CHECK-01-03's seven non-invoice types: the document-type check's negative half.
@@ -1817,6 +1819,25 @@ func fxBuildJevDoubtInvoice() []byte {
 	return fxTextPage(fxJevDoubtLines()...)
 }
 
+// fxJevReceipt: jev_doubt_invoice.pdf's labels and geometry, so the supplier pair decides the same
+// way; the marker steers the fake's document-type choice to receipt.
+const fxJevReceipt = "jev_receipt_invoice.pdf"
+
+const fxJevReceiptMarker = "JEVFAKE-CHOICE-cmVjZWlwdA"
+
+func fxJevReceiptLines() []fxLine {
+	return []fxLine{
+		{12, 72, 690, "Invoice Number: JR-4410"},
+		{12, 72, 672, "From: Owerri Traders Limited"},
+		{12, 72, 654, "Supplier TIN: 34567890-0001"},
+		{3, 72, 38, fxJevReceiptMarker},
+	}
+}
+
+func fxBuildJevReceiptInvoice() []byte {
+	return fxTextPage()
+}
+
 // fxLinesWithMarkerAt returns lines with its own last entry (the marker) moved to index i, the
 // others keeping their order -- TestFixtures_AISteeredOutcomeIgnoresTokenOrder's rotation.
 func fxLinesWithMarkerAt(lines []fxLine, i int) []fxLine {
@@ -2111,6 +2132,96 @@ func TestFixtures_JevDoubtIgnoresTokenOrder(t *testing.T) {
 			out := extraction.CheckValuesForTest(t.Context(), client, pages, slices.Clone(in))
 			fxAssertJevDoubtOutcome(t, in, out)
 		})
+	}
+}
+
+// TestFixtures_JevReceiptDecidesOnlyTheNumberAndTheSupplier: the draft files, and the marker
+// anchors nothing.
+func TestFixtures_JevReceiptDecidesOnlyTheNumberAndTheSupplier(t *testing.T) {
+	pages := fxPagesFromBytes(t, fxBuildJevReceiptInvoice())
+
+	candidates := extraction.Resolve(pages, rvGeneric())
+	if len(candidates) == 0 {
+		t.Fatal("Resolve returned no candidates, want the number and the supplier pair")
+	}
+	for _, c := range candidates {
+		if strings.Contains(c.Value, "JEVFAKE") {
+			t.Errorf("candidate %s = %q carries the marker", c.Field, c.Value)
+		}
+	}
+
+	byName := make(map[string]extraction.FieldResult)
+	for _, r := range fxJevDecided(pages) {
+		byName[r.Name] = r
+	}
+	want := map[string]string{"invoice_number": "JR-4410", "supplier_name": "Owerri Traders Limited", "supplier_tin": "34567890-0001"}
+	for _, name := range extraction.HeaderFields {
+		r, ok := byName[name]
+		if !ok {
+			t.Errorf("no %s row", name)
+			continue
+		}
+		if v, decided := want[name]; decided {
+			if r.Reason != extraction.ReasonNone || r.Value == nil || *r.Value != v {
+				t.Errorf("%s = %+v, want decided %q", name, r, v)
+			}
+			continue
+		}
+		if r.Reason != extraction.ReasonMissing || r.Value != nil {
+			t.Errorf("%s = %+v, want missing with no value", name, r)
+		}
+	}
+}
+
+// TestFixtures_JevReceiptRecordsAReceiptAndMovesNoRow: the verdict is recorded and every row is
+// left as the engine decided it.
+func TestFixtures_JevReceiptRecordsAReceiptAndMovesNoRow(t *testing.T) {
+	client := fxJevFake(t)
+	pages := fxPagesFromBytes(t, fxBuildJevReceiptInvoice())
+	in := fxJevDecided(pages)
+	if len(in) == 0 {
+		t.Fatal("the engine returned no rows")
+	}
+
+	out, verdict := extraction.CheckDocumentForTest(t.Context(), client, pages, slices.Clone(in))
+	if verdict != "receipt" {
+		t.Errorf("verdict = %q, want receipt", verdict)
+	}
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("check moved a row: got %+v, want the input unchanged %+v", out, in)
+	}
+}
+
+// TestFixtures_JevReceiptWithoutItsMarkerRecordsNothing: the control -- the same page minus the
+// marker files with no verdict.
+func TestFixtures_JevReceiptWithoutItsMarkerRecordsNothing(t *testing.T) {
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(fxJevReceiptMarker, "JEVFAKE-CHOICE-"))
+	if err != nil || string(raw) != "receipt" {
+		t.Fatalf("marker payload = %q (err %v), want receipt", raw, err)
+	}
+
+	client := fxJevFake(t)
+	lines := fxJevReceiptLines()
+	if last := lines[len(lines)-1]; last.text != fxJevReceiptMarker {
+		t.Fatalf("the generator does not place the marker last: %+v", last)
+	}
+	if !bytes.Equal(fxTextPage(lines...), fxBuildJevReceiptInvoice()) {
+		t.Fatal("fxBuildJevReceiptInvoice is not fxTextPage(fxJevReceiptLines()...)")
+	}
+
+	pages := fxPagesFromBytes(t, fxTextPage(lines[:len(lines)-1]...))
+	in := fxJevDecided(pages)
+	i := slices.IndexFunc(in, func(r extraction.FieldResult) bool { return r.Name == "invoice_number" })
+	if i < 0 || in[i].Reason != extraction.ReasonNone || in[i].Value == nil || *in[i].Value != "JR-4410" {
+		t.Fatalf("the unmarked page does not decide invoice_number JR-4410: %+v", in)
+	}
+
+	out, verdict := extraction.CheckDocumentForTest(t.Context(), client, pages, slices.Clone(in))
+	if verdict != "" {
+		t.Errorf("verdict over the unmarked page = %q, want none", verdict)
+	}
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("check over the unmarked page = %+v, want the input unchanged %+v", out, in)
 	}
 }
 
@@ -2997,7 +3108,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt, fxJevReceipt}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}

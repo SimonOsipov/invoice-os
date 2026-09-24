@@ -36,12 +36,13 @@ const (
 // differ between the mock issuer (dev/CI) and Supabase GoTrue (M8), so the M8
 // cutover is a config change rather than a code change.
 type Config struct {
-	Issuer     string        // required: expected "iss"
-	JWKSURL    string        // required: where the signing public keys are served
-	Audience   string        // expected "aud"; defaults to "authenticated"
-	CacheTTL   time.Duration // JWKS cache lifetime; defaults to 1h
-	HTTPClient *http.Client  // JWKS fetch client; defaults to a 10s-timeout client
-	Logger     *slog.Logger  // defaults to slog.Default()
+	Issuer     string          // required: expected "iss"
+	JWKSURL    string          // required: where the signing public keys are served
+	Additional []TrustedIssuer // further issuers, each verified against its own JWKS
+	Audience   string          // expected "aud"; defaults to "authenticated"
+	CacheTTL   time.Duration   // JWKS cache lifetime; defaults to 1h
+	HTTPClient *http.Client    // JWKS fetch client; defaults to a 10s-timeout client
+	Logger     *slog.Logger    // defaults to slog.Default()
 }
 
 // Verifier validates GoTrue-shaped JWTs against a configured issuer and its

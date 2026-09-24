@@ -45,19 +45,27 @@ type Config struct {
 	Logger     *slog.Logger    // defaults to slog.Default()
 }
 
-// Verifier validates GoTrue-shaped JWTs against a configured issuer and its
-// JWKS. It caches the key set with a TTL and, on a signature/kid failure while
-// using cached keys, refetches once to ride out key rotation.
+// Verifier validates GoTrue-shaped JWTs against a set of trusted issuers, each
+// with its own JWKS. It caches each key set with a TTL and, on a signature/kid
+// failure while using cached keys, refetches once to ride out key rotation.
 type Verifier struct {
 	cfg  Config
 	http *http.Client
 	log  *slog.Logger
 
+	sets map[string]*keySet // keyed by issuer
+
+	now func() time.Time // overridable in tests
+}
+
+// keySet is one issuer's cached JWKS.
+type keySet struct {
+	issuer  string
+	jwksURL string
+
 	mu        sync.RWMutex
 	keys      map[string]crypto.PublicKey
 	fetchedAt time.Time
-
-	now func() time.Time // overridable in tests
 }
 
 // NewVerifier validates the config and returns a ready Verifier.
@@ -80,17 +88,31 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Verifier{cfg: cfg, http: cfg.HTTPClient, log: cfg.Logger, now: time.Now}, nil
+	sets := map[string]*keySet{cfg.Issuer: {issuer: cfg.Issuer, jwksURL: cfg.JWKSURL}}
+	for i, ti := range cfg.Additional {
+		if ti.Issuer == "" || ti.JWKSURL == "" {
+			return nil, fmt.Errorf("auth: Config.Additional[%d] needs Issuer and JWKSURL", i)
+		}
+		if _, dup := sets[ti.Issuer]; dup {
+			return nil, fmt.Errorf("auth: Config.Additional[%d] repeats issuer %q", i, ti.Issuer)
+		}
+		sets[ti.Issuer] = &keySet{issuer: ti.Issuer, jwksURL: ti.JWKSURL}
+	}
+	return &Verifier{cfg: cfg, http: cfg.HTTPClient, log: cfg.Logger, sets: sets, now: time.Now}, nil
 }
 
 // Verify checks a token's signature and claims and returns the caller identity.
 // Every failure returns an error wrapping ErrUnauthorized with no distinguishing
 // detail, so middleware can answer 401 without leaking why.
 func (v *Verifier) Verify(ctx context.Context, token string) (Identity, error) {
-	id, err := v.verifyWith(ctx, token, false)
+	ks, err := v.selectKeySet(token)
+	if err != nil {
+		return Identity{}, err
+	}
+	id, err := v.verifyWith(ctx, ks, token, false)
 	if errors.Is(err, errStaleKey) {
 		// Cached keys were stale (rotation): refetch once and retry.
-		id, err = v.verifyWith(ctx, token, true)
+		id, err = v.verifyWith(ctx, ks, token, true)
 	}
 	if err != nil {
 		if errors.Is(err, errStaleKey) {
@@ -102,8 +124,23 @@ func (v *Verifier) Verify(ctx context.Context, token string) (Identity, error) {
 	return id, nil
 }
 
-func (v *Verifier) verifyWith(ctx context.Context, token string, forceRefresh bool) (Identity, error) {
-	keys, usedCache, err := v.jwksKeys(ctx, forceRefresh)
+// selectKeySet picks the key set by the token's unverified iss. An unknown iss is
+// refused before any fetch, so a forged iss cannot drive outbound requests.
+func (v *Verifier) selectKeySet(token string) (*keySet, error) {
+	var claims jwt.MapClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(token, &claims); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnauthorized, err)
+	}
+	iss, _ := claims["iss"].(string)
+	ks, ok := v.sets[iss]
+	if !ok {
+		return nil, fmt.Errorf("%w: untrusted issuer", ErrUnauthorized)
+	}
+	return ks, nil
+}
+
+func (v *Verifier) verifyWith(ctx context.Context, ks *keySet, token string, forceRefresh bool) (Identity, error) {
+	keys, usedCache, err := v.jwksKeys(ctx, ks, forceRefresh)
 	if err != nil {
 		return Identity{}, fmt.Errorf("%w: jwks: %v", ErrUnauthorized, err)
 	}
@@ -133,13 +170,13 @@ func (v *Verifier) verifyWith(ctx context.Context, token string, forceRefresh bo
 		return Identity{}, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 
-	return v.validate(&claims)
+	return v.validate(&claims, ks.issuer)
 }
 
 // validate enforces the claim contract beyond signature and expiry (expiry is
 // checked by gotrueClaims.Valid during parsing).
-func (v *Verifier) validate(c *gotrueClaims) (Identity, error) {
-	if c.Issuer != v.cfg.Issuer {
+func (v *Verifier) validate(c *gotrueClaims, issuer string) (Identity, error) {
+	if c.Issuer != issuer {
 		return Identity{}, fmt.Errorf("%w: bad issuer", ErrUnauthorized)
 	}
 	if string(c.Audience) != v.cfg.Audience {
@@ -156,30 +193,30 @@ func (v *Verifier) validate(c *gotrueClaims) (Identity, error) {
 	return Identity{Subject: c.Subject, Role: c.Role, TenantID: c.AppMetadata.TenantID}, nil
 }
 
-// jwksKeys returns the current key set. Unless forceRefresh is set it serves a
-// fresh cache; usedCache reports whether the returned keys came from the cache
-// (only then is a rotation retry meaningful).
-func (v *Verifier) jwksKeys(ctx context.Context, forceRefresh bool) (map[string]crypto.PublicKey, bool, error) {
+// jwksKeys returns the issuer's current key set. Unless forceRefresh is set it
+// serves a fresh cache; usedCache reports whether the returned keys came from
+// the cache (only then is a rotation retry meaningful).
+func (v *Verifier) jwksKeys(ctx context.Context, ks *keySet, forceRefresh bool) (map[string]crypto.PublicKey, bool, error) {
 	if !forceRefresh {
-		v.mu.RLock()
-		keys, fresh := v.keys, v.keys != nil && v.now().Sub(v.fetchedAt) < v.cfg.CacheTTL
-		v.mu.RUnlock()
+		ks.mu.RLock()
+		keys, fresh := ks.keys, ks.keys != nil && v.now().Sub(ks.fetchedAt) < v.cfg.CacheTTL
+		ks.mu.RUnlock()
 		if fresh {
 			return keys, true, nil
 		}
 	}
-	keys, err := v.fetchJWKS(ctx)
+	keys, err := v.fetchJWKS(ctx, ks.jwksURL)
 	if err != nil {
 		return nil, false, err
 	}
-	v.mu.Lock()
-	v.keys, v.fetchedAt = keys, v.now()
-	v.mu.Unlock()
+	ks.mu.Lock()
+	ks.keys, ks.fetchedAt = keys, v.now()
+	ks.mu.Unlock()
 	return keys, false, nil
 }
 
-func (v *Verifier) fetchJWKS(ctx context.Context) (map[string]crypto.PublicKey, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.cfg.JWKSURL, nil)
+func (v *Verifier) fetchJWKS(ctx context.Context, jwksURL string) (map[string]crypto.PublicKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return nil, err
 	}

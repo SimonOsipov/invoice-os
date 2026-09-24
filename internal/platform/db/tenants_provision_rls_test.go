@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const provisionCall = `SELECT public.provision_workspace($1::uuid, $2::text, $3::text, $4::uuid, $5::text, $6::text)`
@@ -290,6 +292,11 @@ const provisionSig = "public.provision_workspace(uuid, text, text, uuid, text, t
 
 func TestRLS_ProvisionWorkspace_FunctionShape(t *testing.T) {
 	h := requireHarness(t)
+	assertProvisionShape(t, h.super)
+}
+
+func assertProvisionShape(t *testing.T, q querier) {
+	t.Helper()
 	ctx := context.Background()
 
 	var (
@@ -302,13 +309,13 @@ func TestRLS_ProvisionWorkspace_FunctionShape(t *testing.T) {
 		grantees  []string
 		publicAny bool
 	)
-	if err := h.super.QueryRow(ctx, `SELECT to_regprocedure($1) IS NOT NULL`, provisionSig).Scan(&found); err != nil {
+	if err := q.QueryRow(ctx, `SELECT to_regprocedure($1) IS NOT NULL`, provisionSig).Scan(&found); err != nil {
 		t.Fatalf("to_regprocedure: %v", err)
 	}
 	if !found {
 		t.Fatalf("%s: want present, got absent", provisionSig)
 	}
-	if err := h.super.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 		SELECT p.prosecdef, pg_get_userbyid(p.proowner), coalesce(p.proconfig, '{}'), p.proargnames, p.prorettype::regtype::text,
 		       coalesce((SELECT array_agg(pg_get_userbyid(a.grantee) || '=' || a.privilege_type ORDER BY 1)
 		                 FROM aclexplode(p.proacl) a WHERE a.grantee <> 0), '{}'),
@@ -430,5 +437,393 @@ func TestRLS_ProvisionWorkspaceDownDropsOnlyTheFunction(t *testing.T) {
 	}
 	if !reflect.DeepEqual(after.Policies, before.Policies) {
 		t.Errorf("tenants/memberships policies changed by the Down: before %v, after %v", before.Policies, after.Policies)
+	}
+}
+
+func TestRLS_ProvisionWorkspace_NullRequiredArgsWriteNothing(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		what, column string
+		name, userID any
+	}{
+		{"NULL name", "name", nil, uuid.NewString()},
+		// The tenant insert succeeds first; the membership failure must take it back.
+		{"NULL user id", "user_id", "Null probe", nil},
+	} {
+		id := uuid.NewString()
+		cleanupTenant(t, id)
+		err := db.WithinTenantTx(ctx, h.app, id, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, provisionCall, id, c.name, nil, c.userID, "Ada", "ada@example.test")
+			return e
+		})
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != c.column {
+			t.Fatalf("%s: want 23502 on column %s, got %v", c.what, c.column, err)
+		}
+		assertNothingWritten(t, id)
+	}
+}
+
+func TestRLS_ProvisionWorkspace_ExistingTenantCannotGainAnAdmin(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	owner := uuid.NewString()
+	if _, err := h.super.Exec(ctx, `INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'admin')`, h.tenantA, owner); err != nil {
+		t.Fatalf("seed tenant A's admin: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE user_id = $1`, owner)
+	})
+	before := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, h.tenantA)
+	if before == 0 {
+		t.Fatalf("tenant A has no memberships — the unchanged check would be vacuous")
+	}
+
+	attacker := newProvisionArgs(h.tenantA)
+	err := provisionAs(ctx, h.app, h.tenantA, attacker)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "tenants_pkey" {
+		t.Fatalf("provision an existing tenant under its own GUC: want 23505 on tenants_pkey, got %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, h.tenantA); n != before {
+		t.Errorf("tenant A memberships = %d after the refused call, want %d", n, before)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE user_id = $1`, attacker.userID); n != 0 {
+		t.Errorf("attacker memberships = %d, want 0", n)
+	}
+}
+
+// The call binds to the GUC's value at call time, not the first value the tx set.
+func TestRLS_ProvisionWorkspace_BindsTheCurrentGUC(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	run := func(gucs []string, callID string) error {
+		tx, err := h.app.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		for _, g := range gucs {
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, g); err != nil {
+				t.Fatalf("set GUC %q: %v", g, err)
+			}
+		}
+		if err := newProvisionArgs(callID).exec(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	a, b := uuid.NewString(), uuid.NewString()
+	cleanupTenant(t, a, b)
+	if err := run([]string{a, b}, b); err != nil {
+		t.Fatalf("GUC A then B, call B: want success, got %v", err)
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM tenants WHERE id = $1`, b); n != 1 {
+		t.Fatalf("tenant B rows = %d, want 1", n)
+	}
+
+	for _, c := range []struct {
+		what string
+		gucs []string
+	}{
+		{"GUC A then C, call A", []string{a, uuid.NewString()}},
+		{"GUC A then emptied, call A", []string{a, ""}},
+	} {
+		assertPgRefusal(t, c.what, run(c.gucs, a), "42501", "row-level security")
+	}
+	assertNothingWritten(t, a)
+}
+
+// shippedProvisionUpTx re-creates provision_workspace from the embedded migration in a
+// superuser tx that always rolls back, so an edit to the .sql file reaches these tests.
+func shippedProvisionUpTx(t *testing.T) pgx.Tx {
+	t.Helper()
+	ctx := context.Background()
+	matches, err := fs.Glob(migrations.FS, "*_provision_workspace.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("glob *_provision_workspace.sql = %v (err %v), want exactly one file", matches, err)
+	}
+	up := auditEntitySectionOf(t, matches[0], "Up")
+
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	for _, s := range []string{
+		`SET LOCAL lock_timeout = '15s'`,
+		`SET LOCAL ROLE invoice_migrator`,
+		`DROP FUNCTION ` + provisionSig,
+		up,
+		`RESET ROLE`,
+	} {
+		if _, err := tx.Exec(ctx, s); err != nil {
+			t.Fatalf("re-apply the shipped Up (%.60q): %v", s, err)
+		}
+	}
+	return tx
+}
+
+// asRole runs fn in a savepoint as role under guc ("" leaves the GUC untouched). A failed
+// fn rolls the savepoint back; a successful one keeps its writes and restores the superuser.
+func asRole(ctx context.Context, tx pgx.Tx, role, guc string, fn func(pgx.Tx) error) error {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	stmts := []string{`SET LOCAL ROLE ` + role}
+	if guc != "" {
+		stmts = append(stmts, `SELECT set_config('app.current_tenant', '`+guc+`', true)`)
+	}
+	for _, s := range stmts {
+		if _, err := sp.Exec(ctx, s); err != nil {
+			_ = sp.Rollback(ctx)
+			return fmt.Errorf("%s: %w", s, err)
+		}
+	}
+	if err := fn(sp); err != nil {
+		_ = sp.Rollback(ctx)
+		return err
+	}
+	if _, err := sp.Exec(ctx, `RESET ROLE; SELECT set_config('app.current_tenant', '', true)`); err != nil {
+		_ = sp.Rollback(ctx)
+		return err
+	}
+	return sp.Commit(ctx)
+}
+
+func provisionInTx(ctx context.Context, tx pgx.Tx, role, guc string, a provisionArgs) error {
+	return asRole(ctx, tx, role, guc, func(sp pgx.Tx) error { return a.exec(ctx, sp) })
+}
+
+func assertNothingWrittenIn(t *testing.T, tx pgx.Tx, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if n := mustCount(t, tx, `SELECT count(*) FROM tenants WHERE id = $1`, id); n != 0 {
+			t.Errorf("tenants rows for %s = %d, want 0", id, n)
+		}
+		if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE tenant_id = $1`, id); n != 0 {
+			t.Errorf("memberships rows for %s = %d, want 0", id, n)
+		}
+	}
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_CreatesTenantAndActiveAdmin(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	id := uuid.NewString()
+	in := "in_house"
+	a := newProvisionArgs(id)
+	a.kind = &in
+
+	if err := provisionInTx(ctx, tx, "invoice_app", id, a); err != nil {
+		t.Fatalf("provision as invoice_app under a matching GUC: want success, got %v", err)
+	}
+	var gotID, name, kind string
+	if err := tx.QueryRow(ctx, `SELECT id::text, name, kind FROM tenants WHERE id = $1`, id).Scan(&gotID, &name, &kind); err != nil {
+		t.Fatalf("read tenant: %v", err)
+	}
+	if gotID != id || name != a.name || kind != "in_house" {
+		t.Errorf("tenant (id, name, kind) = (%s, %q, %q), want (%s, %q, in_house)", gotID, name, kind, id, a.name)
+	}
+	rows, err := tx.Query(ctx, `SELECT user_id::text || '|' || role || '|' || status || '|' || coalesce(display_name, '<nil>') || '|' || coalesce(email, '<nil>')
+		FROM memberships WHERE tenant_id = $1`, id)
+	if err != nil {
+		t.Fatalf("read memberships: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("collect memberships: %v", err)
+	}
+	want := []string{strings.Join([]string{a.userID, "admin", "active", a.display, a.email}, "|")}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("memberships = %v, want exactly %v", got, want)
+	}
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_MismatchedGUCRefused(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	gucA, idB := uuid.NewString(), uuid.NewString()
+
+	err := provisionInTx(ctx, tx, "invoice_app", gucA, newProvisionArgs(idB))
+	assertPgRefusal(t, "provision id B under GUC A", err, "42501", "row-level security")
+	assertNothingWrittenIn(t, tx, gucA, idB)
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_NoGUCRefused(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	id := uuid.NewString()
+
+	err := asRole(ctx, tx, "invoice_app", "", func(sp pgx.Tx) error {
+		var guc *string
+		if err := sp.QueryRow(ctx, `SELECT nullif(current_setting('app.current_tenant', true), '')`).Scan(&guc); err != nil {
+			return err
+		}
+		if guc != nil {
+			t.Fatalf("app.current_tenant = %q, want unset — the probe would not test the no-GUC case", *guc)
+		}
+		return newProvisionArgs(id).exec(ctx, sp)
+	})
+	assertPgRefusal(t, "provision with no GUC", err, "42501", "row-level security")
+	assertNothingWrittenIn(t, tx, id)
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_AppStaysSelectOnlyOnTenants(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	id := uuid.NewString()
+
+	if err := asRole(ctx, tx, "invoice_app", id, func(sp pgx.Tx) error {
+		_, e := sp.Exec(ctx, `SELECT count(*) FROM tenants`)
+		return e
+	}); err != nil {
+		t.Fatalf("invoice_app SELECT on tenants: want success, got %v", err)
+	}
+	err := asRole(ctx, tx, "invoice_app", id, func(sp pgx.Tx) error {
+		_, e := sp.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, 'direct insert probe')`, id)
+		return e
+	})
+	assertPgRefusal(t, "direct INSERT INTO tenants as invoice_app", err, "42501", "permission denied for table tenants")
+	assertNothingWrittenIn(t, tx, id)
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_OnlyAppMayExecute(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+
+	for _, role := range []string{"invoice_tenant_reader", "supabase_auth_admin"} {
+		id := uuid.NewString()
+		err := provisionInTx(ctx, tx, role, id, newProvisionArgs(id))
+		assertPgRefusal(t, role+" executes provision_workspace", err, "42501", "permission denied for function provision_workspace")
+		assertNothingWrittenIn(t, tx, id)
+	}
+	id := uuid.NewString()
+	if err := provisionInTx(ctx, tx, "invoice_app", id, newProvisionArgs(id)); err != nil {
+		t.Fatalf("invoice_app executes provision_workspace: want success, got %v", err)
+	}
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_KindDefaultsAndChecks(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	in, bogus := "in_house", "bogus"
+
+	for _, c := range []struct {
+		kind *string
+		want string
+	}{{nil, "firm"}, {&in, "in_house"}} {
+		id := uuid.NewString()
+		a := newProvisionArgs(id)
+		a.kind = c.kind
+		if err := provisionInTx(ctx, tx, "invoice_app", id, a); err != nil {
+			t.Fatalf("provision with kind %v: want success, got %v", c.kind, err)
+		}
+		var kind string
+		if err := tx.QueryRow(ctx, `SELECT kind FROM tenants WHERE id = $1`, id).Scan(&kind); err != nil {
+			t.Fatalf("read kind: %v", err)
+		}
+		if kind != c.want {
+			t.Errorf("kind after provisioning with %v = %q, want %q", c.kind, kind, c.want)
+		}
+	}
+
+	id := uuid.NewString()
+	a := newProvisionArgs(id)
+	a.kind = &bogus
+	err := provisionInTx(ctx, tx, "invoice_app", id, a)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "tenants_kind_check" {
+		t.Fatalf("provision with kind 'bogus': want 23514 on tenants_kind_check, got %v", err)
+	}
+	assertNothingWrittenIn(t, tx, id)
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_SecondCallRefused(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	id := uuid.NewString()
+	first := newProvisionArgs(id)
+	if err := provisionInTx(ctx, tx, "invoice_app", id, first); err != nil {
+		t.Fatalf("first provision: want success, got %v", err)
+	}
+
+	second := newProvisionArgs(id)
+	second.name = "Second name"
+	err := provisionInTx(ctx, tx, "invoice_app", id, second)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" || pgErr.ConstraintName != "tenants_pkey" {
+		t.Fatalf("second provision of the same id: want 23505 on tenants_pkey, got %v", err)
+	}
+	var name string
+	if err := tx.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1`, id).Scan(&name); err != nil {
+		t.Fatalf("read tenant: %v", err)
+	}
+	if name != first.name {
+		t.Errorf("tenant name after the refused second call = %q, want %q", name, first.name)
+	}
+	rows, err := tx.Query(ctx, `SELECT user_id::text FROM memberships WHERE tenant_id = $1`, id)
+	if err != nil {
+		t.Fatalf("read memberships: %v", err)
+	}
+	users, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("collect memberships: %v", err)
+	}
+	if !reflect.DeepEqual(users, []string{first.userID}) {
+		t.Errorf("memberships after the refused second call = %v, want only %s", users, first.userID)
+	}
+}
+
+func TestRLS_ProvisionWorkspace_ShippedUp_FunctionShape(t *testing.T) {
+	requireHarness(t)
+	assertProvisionShape(t, shippedProvisionUpTx(t))
+}
+
+// pg_temp is searched first even under an empty search_path, so only schema-qualified names
+// keep the definer off a caller's look-alike temp tables.
+func TestRLS_ProvisionWorkspace_ShippedUp_TempTableHijackIgnored(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := shippedProvisionUpTx(t)
+	id := uuid.NewString()
+	a := newProvisionArgs(id)
+
+	err := asRole(ctx, tx, "invoice_app", id, func(sp pgx.Tx) error {
+		if _, e := sp.Exec(ctx, `
+			CREATE TEMP TABLE tenants (id uuid, name text, kind text);
+			CREATE TEMP TABLE memberships (tenant_id uuid, user_id uuid, role text, status text, display_name text, email text);
+			GRANT ALL ON pg_temp.tenants, pg_temp.memberships TO PUBLIC;
+			SET LOCAL search_path = pg_temp, public`); e != nil {
+			return fmt.Errorf("plant temp tables: %w", e)
+		}
+		if e := a.exec(ctx, sp); e != nil {
+			return e
+		}
+		if n := mustCount(t, sp, `SELECT (SELECT count(*) FROM pg_temp.tenants) + (SELECT count(*) FROM pg_temp.memberships)`); n != 0 {
+			t.Errorf("rows written to the caller's temp tables = %d, want 0", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("provision with planted temp tables: want success, got %v", err)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM public.tenants WHERE id = $1`, id); n != 1 {
+		t.Errorf("public.tenants rows = %d, want 1", n)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM public.memberships WHERE tenant_id = $1`, id); n != 1 {
+		t.Errorf("public.memberships rows = %d, want 1", n)
 	}
 }

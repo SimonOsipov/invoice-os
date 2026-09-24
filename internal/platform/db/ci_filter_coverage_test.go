@@ -184,7 +184,10 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				strings.HasPrefix(n, "TestPurge") ||
 				strings.HasPrefix(n, "TestHandlerMapping") ||
 				strings.HasPrefix(n, "TestExtraction") ||
-				strings.HasPrefix(n, "TestImportBatchesHeaderRow")
+				strings.HasPrefix(n, "TestImportBatchesHeaderRow") ||
+				strings.HasPrefix(n, "TestBootstrapCreatesAuth") ||
+				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
+				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing"
 		}
 		var historical []string
 		for _, n := range names {

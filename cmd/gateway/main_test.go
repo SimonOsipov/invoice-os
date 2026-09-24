@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -505,5 +506,88 @@ func TestGatewayMainFatalsOnAnUpstreamError(t *testing.T) {
 	})
 	if fatals != 1 {
 		t.Errorf("%s: the `%s != nil` guard calls fatal %d time(s), want 1 -- boot must stop, and it must stop at ERROR", path, errName, fatals)
+	}
+}
+
+// TestGatewayMainPassesAuthAdminPassword accepts either wiring the plan allows:
+// resolveRolePassword("AUTH_ADMIN_PASSWORD", "", app.Logger) or os.Getenv("AUTH_ADMIN_PASSWORD").
+func TestGatewayMainPassesAuthAdminPassword(t *testing.T) {
+	const path = "main.go"
+	f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	var lits []*ast.CompositeLit
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if sel, ok := cl.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "RolePasswords" {
+			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "db" {
+				lits = append(lits, cl)
+			}
+		}
+		return true
+	})
+	if len(lits) != 1 {
+		t.Fatalf("%s: found %d db.RolePasswords literal(s), want exactly 1", path, len(lits))
+	}
+
+	fields := map[string]ast.Expr{}
+	for _, e := range lits[0].Elts {
+		if kv, ok := e.(*ast.KeyValueExpr); ok {
+			if id, ok := kv.Key.(*ast.Ident); ok {
+				fields[id.Name] = kv.Value
+			}
+		}
+	}
+	if _, ok := fields["Reader"]; !ok {
+		t.Fatalf("%s: the db.RolePasswords literal has no Reader field -- this scan found the wrong literal", path)
+	}
+	val, ok := fields["AuthAdmin"]
+	if !ok {
+		t.Fatalf("%s: the db.RolePasswords literal has no AuthAdmin field", path)
+	}
+
+	call, ok := val.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("%s: AuthAdmin is %T, want a call reading AUTH_ADMIN_PASSWORD", path, val)
+	}
+	strArg := func(i int) (string, bool) {
+		if i >= len(call.Args) {
+			return "", false
+		}
+		lit, ok := call.Args[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(lit.Value)
+		return s, err == nil
+	}
+
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		if fn.Name != "resolveRolePassword" {
+			t.Fatalf("%s: AuthAdmin calls %s, want resolveRolePassword or os.Getenv", path, fn.Name)
+		}
+		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
+			t.Errorf("%s: AuthAdmin's resolveRolePassword first argument = %q, want \"AUTH_ADMIN_PASSWORD\"", path, name)
+		}
+		// No deprecated name exists for this variable.
+		if old, ok := strArg(1); !ok || old != "" {
+			t.Errorf("%s: AuthAdmin's resolveRolePassword fallback = %q, want \"\"", path, old)
+		}
+	case *ast.SelectorExpr:
+		pkg, ok := fn.X.(*ast.Ident)
+		if !ok || pkg.Name != "os" || fn.Sel.Name != "Getenv" {
+			t.Fatalf("%s: AuthAdmin calls a selector other than os.Getenv", path)
+		}
+		if name, ok := strArg(0); !ok || name != "AUTH_ADMIN_PASSWORD" {
+			t.Errorf("%s: AuthAdmin reads os.Getenv(%q), want \"AUTH_ADMIN_PASSWORD\"", path, name)
+		}
+	default:
+		t.Fatalf("%s: AuthAdmin calls %T, want resolveRolePassword or os.Getenv", path, call.Fun)
 	}
 }

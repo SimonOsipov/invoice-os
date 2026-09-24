@@ -498,6 +498,8 @@ test('AIRL-01: a placement chip stays inside its column at every swept width', a
   await suggestResp
 
   const columns = page.locator('[data-testid="map-column"]')
+  // The Map step opens after the placement check, not the suggest response.
+  await expect(columns.first()).toBeVisible()
   expect(await columns.count(), 'control: at least one column must render, or the sweep below is vacuous').toBeGreaterThan(0)
   const anyChip = columns.locator('span[draggable]')
   expect(await anyChip.count(), 'control: at least one placed chip must render, or the sweep below is vacuous').toBeGreaterThan(0)

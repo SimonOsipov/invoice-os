@@ -5,7 +5,7 @@
     "dockerfilePath": "sidecar/auth/Dockerfile"
   },
   "deploy": {
-    "healthcheckPath": "/.well-known/jwks.json",
+    "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE"
   }
 }

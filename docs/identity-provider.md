@@ -148,11 +148,17 @@ Production writes are the user's. The environment id is
 
 **U1 — Create the `auth` service in the production environment**, per
 [add-a-service.md](./add-a-service.md) §5 and its sidecar appendix.
-- Set `dockerfilePath=sidecar/auth/Dockerfile`, `healthcheckPath=/.well-known/jwks.json`
-  and `restartPolicyType=ON_FAILURE` on the instance, because `railwayConfigFile` is
-  rejected for new services.
-- Set instance `watchPatterns: []`.
-- `deploymentTriggerDelete` any trigger `serviceCreate` attached.
+- Create it empty: `serviceCreate` with only `projectId` and `name`, no GitHub source. CI
+  deploys `auth` with `railway up` (a tarball), so it needs no source. A sourceless service
+  gets no deployment trigger, so a variable or dashboard edit cannot rebuild it from GitHub
+  `main`. A source-connected service was measured doing that rebuild on 2026-09-24.
+- Set `dockerfilePath=sidecar/auth/Dockerfile`, `healthcheckPath=/health`,
+  `restartPolicyType=ON_FAILURE` and `watchPatterns: []` on the instance, because
+  `railwayConfigFile` is rejected for new services.
+- `healthcheckPath` is GoTrue's own `/health`. `serviceInstanceUpdate` rejects
+  `/.well-known/jwks.json` with "Error in healthcheckPath - Invalid input". The gateway's
+  fleet probe of `auth` still reads `/.well-known/jwks.json`; that is a separate check.
+- Done 2026-09-24: service id `0cf7f5d8-23de-4879-9a2d-fa603ab966b6`.
 - **No public domain. No variables.** The service stays undeployed until U3b and the first
   push after merge.
 - **Needed before the PR's first deploy gate**, because forks inherit services from

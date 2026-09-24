@@ -341,7 +341,7 @@ its column shows where it departs.
 | Source | `cmd/<svc>/` (Go) | `sidecar/<svc>/` (Python) | `sidecar/auth/Dockerfile` only: `FROM` the digest-pinned image plus `ENV` |
 | Config file | `cmd/<svc>/railway.json` | `sidecar/<svc>/railway.json` | `sidecar/auth/railway.json` (values also set on the instance) |
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-service `sidecar/<svc>/Dockerfile` | per-service, no `ARG SERVICE` |
-| Health | `/healthz` | `/healthz` (same contract, same `build` field) | probed at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
+| Health | `/healthz` | `/healthz` (same contract, same `build` field) | instance health check `/health` (GoTrue's; Railway rejects the JWKS path); fleet probe at `/.well-known/jwks.json`; reports no `build`, so fleet-gate exempts `auth` from the `build` check by name |
 | Ingress | private-networking only (gateway is the exception) | private-networking only | private-networking only |
 | Watch patterns | empty (§3) | empty (§3) | empty (§3) |
 

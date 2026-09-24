@@ -13,6 +13,8 @@ import { ApiError } from '@invoice-os/api-client'
 import {
   AI_UNAVAILABLE_FIELD,
   applyDraft,
+  DOCUMENT_TYPE_NOTICE,
+  documentTypeNotice,
   correctedMarker,
   docMetaLine,
   fetchPageImage,
@@ -36,6 +38,7 @@ import {
   typedEntry,
 } from './extractionReview'
 import type {
+  DocumentType,
   DraftEntries,
   ExtractionCorrected,
   ExtractionDetail,
@@ -1548,5 +1551,35 @@ describe('isAIUnavailable, adversarial', () => {
   it('AIR04-P5: value and region do not decide the state, as in the Go importer', () => {
     expect(isAIUnavailable([marker({ value: 'INV-1' })])).toBe(true)
     expect(isAIUnavailable([marker({ region: mkRegion() })])).toBe(true)
+  })
+})
+
+describe('document-type notice', () => {
+  const keys = Object.keys(DOCUMENT_TYPE_NOTICE) as DocumentType[]
+
+  it("documentTypeNotice returns null for no verdict and the table's sentence otherwise", () => {
+    expect(documentTypeNotice(null)).toBeNull()
+    expect(documentTypeNotice('something_new' as DocumentType)).toBeNull()
+    expect(documentTypeNotice('constructor' as DocumentType)).toBeNull()
+    expect(keys).toHaveLength(7)
+    for (const k of keys) {
+      expect(documentTypeNotice(k), `key ${k}`).toBe(DOCUMENT_TYPE_NOTICE[k])
+      expect(DOCUMENT_TYPE_NOTICE[k], `entry ${k}`).not.toBe('')
+      expect(DOCUMENT_TYPE_NOTICE[k]).not.toMatch(/jev|typesafe/i)
+      expect(DOCUMENT_TYPE_NOTICE[k]).not.toMatch(/\bAI\b/)
+    }
+  })
+
+  it('DOCUMENT_TYPE_NOTICE claims no outcome', () => {
+    expect(keys).toHaveLength(7)
+    for (const k of keys) {
+      const s = DOCUMENT_TYPE_NOTICE[k]
+      // Positive half: an empty sentence passes every negative below.
+      expect(s, `entry ${k}`).toMatch(/not a tax invoice\./)
+      expect(s).not.toMatch(/was created/)
+      expect(s).not.toMatch(/imported as usual/)
+      expect(s).not.toMatch(/draft/i)
+      expect(s).not.toMatch(/submit it\./)
+    }
   })
 })

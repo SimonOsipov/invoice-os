@@ -43,6 +43,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { AI_UNAVAILABLE_FIELD } from '../lib/extractionReview'
 import type {
+  DocumentType,
   ExtractionDetail,
   ExtractionDocument,
   ExtractionFieldState,
@@ -54,6 +55,7 @@ import { AI_UNAVAILABLE_REFUSAL, deadLetterRefusal } from '../lib/documentRun'
 import { linesFromFields, linesToPost } from '../lib/lineItems'
 import type { LineItemInput, LineRole } from '../lib/lineItems'
 import type { PlatformCtx } from '../types'
+import { infoGlyph } from '../glyphs'
 import { ExtractionReview } from './ExtractionReview'
 
 const JOB_ID = 'c3d4e5f6-a7b8-4c3d-9e4f-5a6b7c8d9e0f'
@@ -2929,5 +2931,170 @@ describe('the offered text never rides a Save (AIR-03-04, AC-5)', () => {
 
     expect(postedFields(w)).toEqual(['buyer_name'])
     expect(writes(w)[0].body).toEqual({ value: 'ZENITH HOLDINGS LTD', method: 'typed', region: null, anchor_label: '' })
+  })
+})
+
+// ==========================================================================================
+// The document-type strip
+// ==========================================================================================
+
+describe('the document type', () => {
+  // The approved copy, typed out: a test that read the table would pass on any sentence.
+  const NOTICES: [DocumentType, string][] = [
+    ['receipt', 'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+    ['proforma', 'This looks like a proforma invoice, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+    ['quotation', 'This looks like a quotation, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+    [
+      'credit note',
+      'This looks like a credit note, not a tax invoice. Its import was not changed. A credit note files here as an ordinary invoice with negative amounts. Check it before you submit an invoice from it.',
+    ],
+    ['delivery note', 'This looks like a delivery note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+    ['statement', 'This looks like a statement of account, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+    ['purchase order', 'This looks like a purchase order, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
+  ]
+  const RECEIPT = NOTICES[0][1]
+
+  function strip(): HTMLElement | null {
+    return screen.queryByTestId('extraction-document-type')
+  }
+
+  function testids(el: Element): string[] {
+    return Array.from(el.children).map((c) => (c as HTMLElement).dataset.testid ?? '<no testid>')
+  }
+
+  // Positive control for the absence rows: the same mount with a verdict does show the strip.
+  async function receiptShowsTheStrip(): Promise<void> {
+    cleanup()
+    render(review({ ctx: serving(mkDetail({ document_type: 'receipt' })).ctx }))
+    await flush()
+    expect(strip(), 'control: a receipt verdict rendered no strip').not.toBeNull()
+  }
+
+  it('the document type: no verdict renders no strip', async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: null })).ctx }))
+    await flush()
+
+    expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
+    expect(fieldRows(), 'the fields pane rendered no row').toHaveLength(3)
+    expect(strip()).toBeNull()
+    expect(testids(root()), 'the root gained or lost a child').toEqual(['extraction-review-body', '<no testid>'])
+    expect(testids(body())).toEqual(['extraction-canvas', 'extraction-fields'])
+
+    await receiptShowsTheStrip()
+  })
+
+  it.each(NOTICES)('the document type: each verdict renders its own sentence (%s)', async (t, sentence) => {
+    render(review({ ctx: serving(mkDetail({ document_type: t })).ctx }))
+    await flush()
+
+    const s = strip()
+    expect(s, `no strip for ${t}`).not.toBeNull()
+    expect(s!.textContent).toBe(sentence)
+  })
+
+  it('the document type: a credit note says it files as an ordinary invoice with negative amounts', async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: 'credit note' })).ctx }))
+    await flush()
+
+    const s = strip()
+    expect(s, 'no strip for a credit note').not.toBeNull()
+    expect(s!.textContent).toContain('files as an ordinary invoice with negative amounts')
+    expect(s!.textContent).toContain('not a tax invoice')
+  })
+
+  it('the document type: the strip sits above the body, not in it', async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: 'receipt' })).ctx }))
+    await flush()
+
+    const s = strip()
+    expect(s, 'no strip for a receipt').not.toBeNull()
+    expect(s!.compareDocumentPosition(body()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(body().contains(s)).toBe(false)
+    expect(root().contains(s)).toBe(true)
+    expect(testids(root())[0], 'the strip is not the root’s first child').toBe('extraction-document-type')
+    expect(testids(body())).toEqual(['extraction-canvas', 'extraction-fields'])
+  })
+
+  it('the document type: the strip is text only and takes the no-region strip treatment', async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: 'quotation' })).ctx }))
+    await flush()
+
+    const s = strip()
+    expect(s, 'no strip for a quotation').not.toBeNull()
+    const el = s!
+    expect(el.querySelectorAll('button, a, input, [role]')).toHaveLength(0)
+    expect(el.hasAttribute('role')).toBe(false)
+    for (const node of [el, ...Array.from(el.querySelectorAll('*'))]) {
+      const key = Object.keys(node).find((k) => k.startsWith('__reactProps$'))
+      if (node === el) expect(key, 'floor: the React props key must be readable').toBeTruthy()
+      if (!key) continue
+      const props = (node as unknown as Record<string, Record<string, unknown>>)[key]
+      expect(Object.keys(props).filter((p) => /^on[A-Z]/.test(p)), `${node.tagName} carries a handler`).toEqual([])
+    }
+
+    expect(el.style.flex).toBe('0 0 auto')
+    expect(el.style.display).toBe('flex')
+    expect(el.style.alignItems).toBe('center')
+    expect(el.style.gap).toBe('9px')
+    expect(el.style.padding).toBe('9px 16px')
+    expect(el.style.background).toBe('var(--bg-3)')
+    expect(el.style.borderBottom).toBe('1px solid var(--line-1)')
+
+    const svgs = el.querySelectorAll('svg')
+    expect(svgs, 'the strip carries no info glyph').toHaveLength(1)
+    const { container } = render(<>{infoGlyph}</>)
+    expect(svgs[0].outerHTML, 'the glyph is not infoGlyph').toBe(container.querySelector('svg')!.outerHTML)
+
+    const text = within(el).getByText('This looks like a quotation', { exact: false })
+    expect(text.style.fontSize).toBe('12px')
+    expect(text.style.color).toBe('var(--fg-2)')
+  })
+
+  it('the document type: the dead-letter and AI-unavailable rungs ignore a verdict', async () => {
+    render(
+      review({ ctx: serving(mkDetail({ state: 'dead_lettered', failure_kind: 'extract_failed', document_type: 'receipt' })).ctx }),
+    )
+    await flush()
+    expect(screen.getByText(sentenceFor('extract_failed')), 'the dead-letter sentence did not render').toBeTruthy()
+    expect(strip(), 'the dead-letter rung rendered the strip').toBeNull()
+
+    cleanup()
+    const marker: ExtractionFieldState = {
+      name: AI_UNAVAILABLE_FIELD,
+      value: null,
+      region: null,
+      reason: 'unreadable',
+      alternatives: [],
+      corrected: null,
+    }
+    render(review({ ctx: serving(mkDetail({ fields: [marker], document_type: 'receipt' })).ctx, onOpenInvoice: () => {} }))
+    await flush()
+    expect(screen.getByText(AI_UNAVAILABLE_REFUSAL), 'the AI-unavailable sentence did not render').toBeTruthy()
+    expect(strip(), 'the AI-unavailable rung rendered the strip').toBeNull()
+
+    await receiptShowsTheStrip()
+  })
+
+  it('the document type: an unknown value renders no strip', async () => {
+    render(review({ ctx: serving(mkDetail({ document_type: 'something_new' as DocumentType })).ctx }))
+    await flush()
+
+    expect(frames(), 'the document pane rendered no frame').toHaveLength(3)
+    expect(fieldRows(), 'the fields pane rendered no row').toHaveLength(3)
+    expect(strip()).toBeNull()
+
+    await receiptShowsTheStrip()
+  })
+
+  it('the document type: a quarantined receipt shows the same sentence', async () => {
+    const fields = [mkField({ name: 'invoice_number', value: null, region: null, reason: 'missing' }), ...THREE_FIELDS.slice(1)]
+    render(review({ ctx: serving(mkDetail({ document_type: 'receipt', fields })).ctx, onOpenInvoice: null }))
+    await flush()
+
+    expect(screen.getByTestId('extraction-point-invoice_number'), 'the no-number field lost its missing state').toBeTruthy()
+    expect(screen.queryByTestId('extraction-open-invoice'), 'an invoice hand-off rendered with no invoice').toBeNull()
+    const s = strip()
+    expect(s, 'no strip for a quarantined receipt').not.toBeNull()
+    expect(s!.textContent).toBe(RECEIPT)
   })
 })

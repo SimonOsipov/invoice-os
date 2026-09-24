@@ -141,6 +141,20 @@ const NOTE_GENERIC = 'This value disagrees with the other numbers on the documen
 
 const SUPPLIER_MISMATCH_FIELDS = ['supplier_tin', 'supplier_name']
 
+export const DOCUMENT_TYPE_NOTICE: Record<DocumentType, string> = {
+  receipt: '',
+  proforma: '',
+  quotation: '',
+  'credit note': '',
+  'delivery note': '',
+  statement: '',
+  'purchase order': '',
+}
+
+export function documentTypeNotice(_t: DocumentType | null): string | null {
+  return null
+}
+
 /** The curated label, or the raw wire name -- never a mechanical humanisation of it. */
 export function fieldLabel(name: string): string {
   return FIELD_LABELS[name] ?? name

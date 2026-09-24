@@ -10,10 +10,16 @@
 #                            set-ai-fake <environment-id|--self-test>|
 #                            set-fork-environment <environment-id|--self-test>|
 #                            set-production-environment <environment-id>|
+#                            set-fork-auth <environment-id|--self-test>|
+#                            set-fork-auth-site <environment-id> <landing-url>|
+#                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            delete-environment <name>|list-environments>
 #
 # `set-production-environment` is run by hand, once, never from a workflow: it
 # sets the persistent environment's gateway ENVIRONMENT=production.
+#
+# `set-production-auth` is run by hand, once, never from a workflow: it writes
+# the persistent environment's auth configuration, before and after merge.
 #
 # M4-23-02: Railway's PR Environments must stay OFF for this project.
 #
@@ -2446,6 +2452,438 @@ cmd_set_production_environment() {
   echo "gateway ENVIRONMENT=production confirmed in environment $env_id."
 }
 
+# --- Auth provider configuration ---------------------------------------------
+#
+# A fork gets its own key, JWT secret and admin password; production's are
+# supplied by hand. Secrets reach Railway on curl's stdin and are never printed.
+
+AUTH_INTERNAL_URL="http://auth.railway.internal:8080"
+AUTH_JWKS_URL="$AUTH_INTERNAL_URL/.well-known/jwks.json"
+AUTH_MOCK_ISSUER="https://mock.fiscalbridge.dev"
+AUTH_LOOPBACK_JWKS_URL="http://127.0.0.1:8080/.well-known/jwks.json"
+AUTH_PRODUCTION_SITE_URL="https://www.ascomply.com"
+# A reference, not a secret: Railway renders the gateway's password into it.
+# shellcheck disable=SC2016  # ${{...}} is a Railway reference, not a shell expansion.
+AUTH_DSN_REFERENCE='postgresql://supabase_auth_admin:${{gateway.AUTH_ADMIN_PASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.PGDATABASE}}'
+
+# Unrendered, so DATABASE_URL reads back as the reference and never with the password in it.
+# shellcheck disable=SC2016  # $p/$e/$s are GraphQL variables — not shell expansions.
+AUTH_VARIABLES_QUERY='query authVars($p: String!, $e: String!, $s: String!) {
+  variables(projectId: $p, environmentId: $e, serviceId: $s, unrendered: true)
+}'
+
+# Set by auth_build_prenv.
+AUTH_PRENV=""
+AUTH_PRENV_DIR=""
+
+auth_issuer() {
+  printf 'urn:ascomply:auth:%s' "$1"
+}
+
+auth_additional_issuers() {
+  jq -cn --arg i "$1" --arg u "$AUTH_JWKS_URL" '[{issuer: $i, jwks_url: $u}]'
+}
+
+# Increments `failures`, a local of auth_self_test.
+auth_expect() {
+  local id="$1" what="$2" got="$3" want="$4"
+  if [ "$got" != "$want" ]; then
+    echo "::error::self-test $id FAILED: $what is '$got', want '$want'"
+    failures=$((failures + 1))
+    return 0
+  fi
+  echo "  $id ok -> $what"
+}
+
+auth_self_test() {
+  local failures=0
+
+  auth_expect U1 "the fork issuer" "$(auth_issuer pr-7)" "urn:ascomply:auth:pr-7"
+  auth_expect U2 "the production issuer" "$(auth_issuer production)" "urn:ascomply:auth:production"
+  auth_expect U3 "the additional issuer set" "$(auth_additional_issuers "$(auth_issuer pr-7)")" \
+    '[{"issuer":"urn:ascomply:auth:pr-7","jwks_url":"http://auth.railway.internal:8080/.well-known/jwks.json"}]'
+  # shellcheck disable=SC2016  # ${{...}} is a Railway reference, not a shell expansion.
+  auth_expect U4 "the DSN reference" "$AUTH_DSN_REFERENCE" \
+    'postgresql://supabase_auth_admin:${{gateway.AUTH_ADMIN_PASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.PGDATABASE}}'
+
+  if [ "$failures" != "0" ]; then
+    echo "::error::Fork auth self-test: $failures fixture(s) FAILED."
+    exit 1
+  fi
+  echo "Fork auth self-test: 4 fixtures passed, no token read, no network call."
+}
+
+# auth_build_prenv <what>: builds tools/prenv once; the binary is removed at exit.
+auth_build_prenv() {
+  local root
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  AUTH_PRENV_DIR=$(mktemp -d)
+  trap 'rm -rf "$AUTH_PRENV_DIR"' EXIT
+  if ! (cd "$root" && go build -o "$AUTH_PRENV_DIR/prenv" ./tools/prenv); then
+    echo "::error::Could not build tools/prenv, so $1 was NOT written."
+    exit 1
+  fi
+  AUTH_PRENV="$AUTH_PRENV_DIR/prenv"
+}
+
+# upsert_secret_variable <env-id> <svc-id> <label> <name> <value>
+# The value goes to jq and curl on stdin: argv is visible in `ps`.
+upsert_secret_variable() {
+  local env_id="$1" svc_id="$2" label="$3" name="$4" value="$5" body
+
+  body=$(printf '%s' "$value" | jq -Rs --arg q "$VARIABLE_UPSERT_MUTATION" \
+    --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" --arg s "$svc_id" --arg n "$name" \
+    '{query: $q, variables: {input: {projectId: $p, environmentId: $e, serviceId: $s, name: $n, value: ., skipDeploys: true}}}')
+
+  if ! GQL_RESPONSE=$(printf '%s' "$body" | curl -fsS --connect-timeout 5 --max-time 15 \
+        --request POST \
+        --url "$RAILWAY_GRAPHQL_URL" \
+        --header "Authorization: Bearer $RAILWAY_API_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data @-); then
+    echo "::error::Railway GraphQL request failed while setting $label.$name in environment $env_id"
+    exit 1
+  fi
+  if echo "$GQL_RESPONSE" | jq -e '.errors' >/dev/null 2>&1; then
+    echo "::error::Railway GraphQL error while setting $label.$name in environment $env_id: $(echo "$GQL_RESPONSE" | jq -c '[.errors[]?.message]')"
+    exit 1
+  fi
+  echo "  $label.$name = <redacted>"
+}
+
+# auth_read <env-id> <svc-id> <label>: leaves the unrendered map in GQL_RESPONSE.
+auth_read() {
+  graphql_post "$(gql_body "$AUTH_VARIABLES_QUERY" \
+    "$(jq -n --arg p "$RAILWAY_PROJECT_ID" --arg e "$1" --arg s "$2" '{p: $p, e: $e, s: $s}')")" \
+    "re-reading $3 variables in environment $1"
+}
+
+# auth_kind <variables-response-json> <name>: unreadable, absent, empty or present.
+auth_kind() {
+  local kind
+  kind=$(printf '%s' "$1" | jq -r --arg n "$2" '
+    if (.data.variables | type) != "object" then "unreadable"
+    elif (.data.variables | has($n)) | not then "absent"
+    elif .data.variables[$n] == "" then "empty"
+    else "present" end' 2>/dev/null) || kind="unreadable"
+  printf '%s' "${kind:-unreadable}"
+}
+
+# value_verdict <variables-response-json> <label> <name> <want>
+# Exact match, so absent never passes for want "". Prints no read value.
+value_verdict() {
+  local resp="$1" label="$2" name="$3" want="$4" kind got
+
+  kind=$(auth_kind "$resp" "$name")
+  case "$kind" in
+    unreadable)
+      echo "::error::$label's variable map is unreadable, so $label.$name could not be checked."
+      return 1 ;;
+    absent)
+      echo "::error::$label.$name is absent after the write; want '$want'."
+      return 1 ;;
+  esac
+
+  # The sentinel keeps a trailing newline that $(...) would otherwise strip.
+  got=$(printf '%s' "$resp" | jq -j --arg n "$name" '.data.variables[$n]' && printf x)
+  got=${got%x}
+  if [ "$got" != "$want" ]; then
+    if [ -z "$got" ]; then
+      echo "::error::$label.$name is empty after the write; want '$want'."
+    else
+      echo "::error::$label.$name reads a different value after the write; want '$want'."
+    fi
+    return 1
+  fi
+  echo "  $label.$name confirmed."
+}
+
+# secret_verdict <variables-response-json> <label> <name> [prenv]
+# Present and non-empty; with prenv, also exactly one ES256 signing key. Prints no value.
+secret_verdict() {
+  local resp="$1" label="$2" name="$3" prenv="${4:-}" kind
+
+  kind=$(auth_kind "$resp" "$name")
+  case "$kind" in
+    present) ;;
+    absent|empty)
+      echo "::error::$label.$name is $kind after the write."
+      return 1 ;;
+    *)
+      echo "::error::$label's variable map is unreadable, so $label.$name could not be checked."
+      return 1 ;;
+  esac
+
+  if [ -n "$prenv" ] && ! printf '%s' "$resp" | jq -j --arg n "$name" '.data.variables[$n]' \
+      | "$prenv" jwk-check >/dev/null 2>&1; then
+    echo "::error::$label.$name is not exactly one ES256 signing key after the write."
+    return 1
+  fi
+  echo "  $label.$name is present."
+}
+
+# auth_write <env-id> <svc-id> <label> NAME=value...: non-secrets only.
+auth_write() {
+  local env_id="$1" svc_id="$2" label="$3" pair
+  shift 3
+  for pair in "$@"; do
+    upsert_variable "$env_id" "$svc_id" "$label" "${pair%%=*}" "${pair#*=}"
+  done
+}
+
+# auth_check <label> NAME=value...: value_verdict each against GQL_RESPONSE.
+auth_check() {
+  local label="$1" resp="$GQL_RESPONSE" pair rc=0
+  shift
+  for pair in "$@"; do
+    value_verdict "$resp" "$label" "${pair%%=*}" "${pair#*=}" || rc=1
+  done
+  return "$rc"
+}
+
+auth_refuse_persistent() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write fork auth configuration in the persistent environment ($1). This command only writes a pr-<N> fork."
+    exit 1
+  fi
+}
+
+# cmd_set_fork_auth <environment-id|--self-test>
+# Same guard order as cmd_set_ai_fake. Runs before the `urls` step, so it
+# writes everything except GOTRUE_SITE_URL (set-fork-auth-site).
+cmd_set_fork_auth() {
+  local env_id="${1:-}"
+
+  if [ "$env_id" = "--self-test" ]; then
+    auth_self_test
+    return
+  fi
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-auth <environment-id>"
+    exit 2
+  fi
+
+  require_source_env
+  auth_refuse_persistent "$env_id"
+  require_env
+  assert_environment_is_ephemeral "$env_id" AUTH
+
+  local name
+  name=$(echo "$GQL_RESPONSE" | jq -r --arg id "$env_id" \
+    '[.data.environments.edges[]?.node | select(.id == $id) | .name] | first // ""')
+  if [ -z "$name" ]; then
+    echo "::error::Environment $env_id has no name, so its issuer cannot be formed. AUTH was NOT set."
+    exit 1
+  fi
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local settle="$GQL_RESPONSE" gw_id auth_id
+  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH)
+  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" AUTH)
+
+  auth_build_prenv "the fork auth configuration"
+  # Generated, never read from the source: a fork must not sign with production's key.
+  local jwk jwt_secret admin_pw issuer additional
+  jwk=$("$AUTH_PRENV" jwk-es256)
+  jwt_secret=$(openssl rand -hex 32)
+  admin_pw=$(openssl rand -hex 32)
+  issuer=$(auth_issuer "$name")
+  additional=$(auth_additional_issuers "$issuer")
+
+  local auth_vars=(
+    "GOTRUE_JWT_ISSUER=$issuer"
+    "DATABASE_URL=$AUTH_DSN_REFERENCE"
+    "API_EXTERNAL_URL=$AUTH_INTERNAL_URL"
+    "PORT=8080"
+    # Forks send no mail.
+    "GOTRUE_SMTP_HOST="
+    "GOTRUE_SMTP_PASS="
+  )
+  # A fork inherits production's issuer; its mock stays primary and its own GoTrue is additional.
+  local gateway_vars=(
+    "AUTH_ISSUER=$AUTH_MOCK_ISSUER"
+    "AUTH_JWKS_URL=$AUTH_LOOPBACK_JWKS_URL"
+    "AUTH_ADDITIONAL_ISSUERS=$additional"
+    "AUTH_URL=$AUTH_INTERNAL_URL"
+  )
+
+  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_KEYS "$jwk"
+  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_SECRET "$jwt_secret"
+  auth_write "$env_id" "$auth_id" auth "${auth_vars[@]}"
+  upsert_secret_variable "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "$admin_pw"
+  auth_write "$env_id" "$gw_id" gateway "${gateway_vars[@]}"
+
+  local bad=0
+  auth_read "$env_id" "$auth_id" auth
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET || bad=1
+  auth_check auth "${auth_vars[@]}" || bad=1
+  auth_read "$env_id" "$gw_id" gateway
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD || bad=1
+  auth_check gateway "${gateway_vars[@]}" || bad=1
+  if [ "$bad" != "0" ]; then
+    echo "::error::The fork auth configuration in environment $env_id did not read back as written."
+    exit 1
+  fi
+  echo "Fork auth configuration confirmed in environment $env_id: issuer $issuer, with a fresh key, JWT secret and admin password."
+}
+
+# cmd_set_fork_auth_site <environment-id> <landing-url>
+# Runs after the `urls` step, which discovers the landing URL.
+cmd_set_fork_auth_site() {
+  local env_id="${1:-}" url="${2:-}"
+
+  if [ -z "$env_id" ]; then
+    echo "::error::usage: railway-env.sh set-fork-auth-site <environment-id> <landing-url>"
+    exit 2
+  fi
+
+  require_source_env
+  auth_refuse_persistent "$env_id"
+  case "$url" in
+    https://?*) ;;
+    *)
+      echo "::error::GOTRUE_SITE_URL must be the fork's https:// landing URL; got '$url'. GOTRUE_SITE_URL was NOT set."
+      exit 1 ;;
+  esac
+
+  require_env
+  assert_environment_is_ephemeral "$env_id" GOTRUE_SITE_URL
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local auth_id
+  auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "environment $env_id" GOTRUE_SITE_URL)
+
+  upsert_variable "$env_id" "$auth_id" auth GOTRUE_SITE_URL "$url"
+  auth_read "$env_id" "$auth_id" auth
+  auth_check auth "GOTRUE_SITE_URL=$url" || exit 1
+  echo "auth.GOTRUE_SITE_URL confirmed in environment $env_id."
+}
+
+# cmd_set_production_auth <--pre-merge|--post-merge> <environment-id>
+# Run by hand, once, never from a workflow. Every refusal precedes require_env.
+cmd_set_production_auth() {
+  local phase="${1:-}" env_id="${2:-}"
+  local usage="usage: railway-env.sh set-production-auth <--pre-merge|--post-merge> <environment-id>"
+
+  if [ -z "$phase" ]; then
+    echo "::error::$usage"
+    exit 2
+  fi
+  case "$phase" in
+    --pre-merge|--post-merge) ;;
+    *)
+      echo "::error::set-production-auth needs a phase flag before the environment id: --pre-merge (gateway AUTH_URL) or --post-merge (the auth configuration)."
+      exit 1 ;;
+  esac
+  if [ -z "$env_id" ]; then
+    echo "::error::$usage"
+    exit 2
+  fi
+
+  require_source_env
+  if [ "$env_id" != "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to write production auth configuration in $env_id. This command writes only the persistent environment ($RAILWAY_DEV_ENVIRONMENT_ID)."
+    exit 1
+  fi
+
+  if [ "$phase" = "--post-merge" ]; then
+    local v missing=0
+    for v in AUTH_ADMIN_PASSWORD AUTH_JWT_KEYS AUTH_JWT_SECRET; do
+      if [ -z "${!v:-}" ]; then
+        echo "::error::$v is not set. --post-merge reads each secret from the environment."
+        missing=1
+      fi
+    done
+    [ "$missing" = "0" ] || exit 1
+    # The DSN reference interpolates this password, so only hex is safe in it.
+    if ! [[ "$AUTH_ADMIN_PASSWORD" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "::error::AUTH_ADMIN_PASSWORD is not 64 lowercase hex characters (openssl rand -hex 32). Value not printed."
+      exit 1
+    fi
+  fi
+
+  require_env
+
+  graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "listing service instances in environment $env_id"
+  local settle="$GQL_RESPONSE" gw_id
+  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH)
+
+  if [ "$phase" = "--pre-merge" ]; then
+    upsert_variable "$env_id" "$gw_id" gateway AUTH_URL "$AUTH_INTERNAL_URL"
+    auth_read "$env_id" "$gw_id" gateway
+    auth_check gateway "AUTH_URL=$AUTH_INTERNAL_URL" || exit 1
+    echo "gateway.AUTH_URL confirmed in environment $env_id."
+    return
+  fi
+
+  local auth_id
+  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" AUTH)
+
+  # A sealed variable is edited in the dashboard; an upsert over one is unmeasured.
+  graphql_post "$(gql_body "$SEALED_AUDIT_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
+    "reading sealed variables in environment $env_id"
+  if echo "$GQL_RESPONSE" | jq -e '.data.environment == null' >/dev/null 2>&1; then
+    echo "::error::Railway returned a null environment for $env_id, so the sealed flags could not be read. Nothing was written."
+    exit 1
+  fi
+  local name sealed=0
+  for name in GOTRUE_JWT_KEYS GOTRUE_JWT_SECRET GOTRUE_SMTP_PASS; do
+    if echo "$GQL_RESPONSE" | jq -e --arg n "$name" --arg s "$auth_id" \
+        'any(.data.environment.variables.edges[]?.node; .name == $n and .serviceId == $s and .isSealed == true)' >/dev/null; then
+      echo "::error::auth.$name is already sealed in environment $env_id. Change it in the dashboard; this command does not write over a sealed variable."
+      sealed=1
+    fi
+  done
+  [ "$sealed" = "0" ] || exit 1
+
+  auth_build_prenv "the production auth configuration"
+  local issuer
+  issuer=$(auth_issuer production)
+  local auth_vars=(
+    "PORT=8080"
+    "DATABASE_URL=$AUTH_DSN_REFERENCE"
+    "API_EXTERNAL_URL=$AUTH_INTERNAL_URL"
+    "GOTRUE_SITE_URL=$AUTH_PRODUCTION_SITE_URL"
+    "GOTRUE_JWT_ISSUER=$issuer"
+  )
+  # AUTH_ADDITIONAL_ISSUERS stays unset: production trusts one issuer.
+  local gateway_vars=(
+    "AUTH_ISSUER=$issuer"
+    "AUTH_JWKS_URL=$AUTH_JWKS_URL"
+  )
+
+  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_KEYS "$AUTH_JWT_KEYS"
+  upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_JWT_SECRET "$AUTH_JWT_SECRET"
+  if [ -n "${RESEND_API_KEY:-}" ]; then
+    upsert_secret_variable "$env_id" "$auth_id" auth GOTRUE_SMTP_PASS "$RESEND_API_KEY"
+  fi
+  auth_write "$env_id" "$auth_id" auth "${auth_vars[@]}"
+  upsert_secret_variable "$env_id" "$gw_id" gateway AUTH_ADMIN_PASSWORD "$AUTH_ADMIN_PASSWORD"
+  auth_write "$env_id" "$gw_id" gateway "${gateway_vars[@]}"
+
+  # Read back before the user seals anything: a sealed value cannot be read.
+  local bad=0
+  auth_read "$env_id" "$auth_id" auth
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET || bad=1
+  if [ -n "${RESEND_API_KEY:-}" ]; then
+    secret_verdict "$GQL_RESPONSE" auth GOTRUE_SMTP_PASS || bad=1
+  fi
+  auth_check auth "${auth_vars[@]}" || bad=1
+  auth_read "$env_id" "$gw_id" gateway
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD || bad=1
+  auth_check gateway "${gateway_vars[@]}" || bad=1
+  if [ "$bad" != "0" ]; then
+    echo "::error::The production auth configuration in environment $env_id did not read back as written."
+    exit 1
+  fi
+  echo "Production auth configuration confirmed in environment $env_id. Seal the secrets in the dashboard now."
+}
+
 case "${1:-}" in
   assert-project-settings)   cmd_assert_project_settings ;;
   disable-pr-environments)   cmd_disable_pr_environments ;;
@@ -2460,10 +2898,13 @@ case "${1:-}" in
   set-ai-fake)               cmd_set_ai_fake "${2:-}" ;;
   set-fork-environment)      cmd_set_fork_environment "${2:-}" ;;
   set-production-environment) cmd_set_production_environment "${2:-}" ;;
+  set-fork-auth)             cmd_set_fork_auth "${2:-}" ;;
+  set-fork-auth-site)        shift; cmd_set_fork_auth_site "$@" ;;
+  set-production-auth)       shift; cmd_set_production_auth "$@" ;;
   delete-environment)        cmd_delete_environment "${2:-}" ;;
   list-environments)         cmd_list_environments ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|delete-environment <name>|list-environments>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|delete-environment <name>|list-environments>"
     exit 2
     ;;
 esac

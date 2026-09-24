@@ -15,17 +15,19 @@ plain SQL, timestamped `YYYYMMDDHHMMSS_slug.sql`, single-file `-- +goose Up` /
 
 ---
 
-## 1. The three connection identities (never collapse them)
+## 1. The four connection identities (never collapse them)
 
 RLS is only enforceable if the roles it applies to are **non-superuser**, lack
-**BYPASSRLS**, and do **not own** the tables. So there are three distinct identities,
-each with its own connection string:
+**BYPASSRLS**, and do **not own** the tables. So there are four distinct login
+identities, each with its own connection string, plus one NOLOGIN role
+(`auth_hook_reader`, below) that no connection string names:
 
 | Env var | Role | Superuser? | Used by | When |
 |---|---|---|---|---|
 | `DATABASE_URL` | `invoice_app` | no (NOBYPASSRLS) | every service binary | runtime queries |
 | `DATABASE_MIGRATION_URL` | `invoice_migrator` | no (NOBYPASSRLS) | goose | the migration step only |
 | `DATABASE_SUPERUSER_URL` | Postgres superuser | yes | `db/bootstrap.sql` | at boot, gated (see below) |
+| `DATABASE_URL` on the `auth` service | `supabase_auth_admin` | no (NOBYPASSRLS) | GoTrue | runtime and GoTrue's own migrations, schema `auth` only |
 
 **The load-bearing rule:** never point the app or the migration step at Railway's
 `${{Postgres.DATABASE_URL}}` (the superuser). A superuser has **BYPASSRLS** — every
@@ -66,6 +68,16 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
   only it — read every tenant row, while `invoice_app` still sees only its current one.
   It has no runtime URL yet; that is provisioned when its first consumer (M5-06
   reconciliation) lands. See §8.
+- `supabase_auth_admin` (added AUTH-02) — `LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
+  NOCREATEROLE`, owns schema `auth`, `search_path = auth`, `USAGE ON SCHEMA public` and no
+  grant on any `public` table. GoTrue's login role; its password is
+  `AUTH_ADMIN_PASSWORD`. It reaches `memberships` only through the access-token hook. See
+  [identity-provider.md](./identity-provider.md).
+- `auth_hook_reader` (added AUTH-02) — `NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB
+  NOCREATEROLE`, `USAGE, CREATE ON SCHEMA public`. It owns the SECURITY DEFINER
+  `public.custom_access_token_hook` and holds the one policy that lets it read
+  `(user_id, tenant_id, status)` on `memberships` for every tenant. No DSN or password
+  exists for it. See §8.
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
@@ -124,7 +136,9 @@ How the ordering works (wired at **M2-12**, when the gateway exists):
    runs `goose up` (against `DATABASE_MIGRATION_URL`) as part of coming up healthy, so the
    schema is fully migrated *before* it reports healthy.
 2. Only after the gateway is healthy does CI deploy the **eight context services** and the
-   `docling` sidecar. They boot against an already-migrated schema and never run migrations themselves.
+   `docling` and `auth` sidecars. They boot against an already-migrated schema and never run
+   goose migrations themselves. (`auth` runs GoTrue's own migrations in schema `auth`; it needs
+   the roles from bootstrap, or U2 on production, and the hook migration the gateway applied.)
 
 This gives a **global ordering barrier** (schema-before-fleet) using only in-network
 connections — the gateway is the one service that already needs privileged DB reach, so
@@ -141,7 +155,7 @@ it doubles as the migrator. No context service is granted the migrator URL.
 > healthy. The CI ordering lives in `.github/workflows/dev-env.yml` (the `preview-backend.yml`
 > name above is retired — dev-env.yml superseded it at M2-14): deploy the
 > gateway → poll its public `/healthz` until 200 (the health-gate, which also surfaces a
-> failed migration) → deploy the eight context services and the `docling` sidecar. Because the gateway embeds the
+> failed migration) → deploy the eight context services and the `docling` and `auth` sidecars. Because the gateway embeds the
 > SQL, its `cmd/gateway/railway.json` watch patterns include `migrations/**` — the one
 > service for which a migration change would rebuild the image if Railway's committed
 > `watchPatterns` field were wired to anything (it isn't — add-a-service.md §3's gotcha;
@@ -410,6 +424,35 @@ is exactly what this policy grants, nothing more. Its Railway connection URL is
 provisioned when M5-06 (reconciliation) becomes its first consumer (same
 store-on-`Postgres`-service pattern as the app/migrator URLs — see the Appendix).
 
+### The second, bounded cross-tenant reader — `auth_hook_reader` (AUTH-02)
+
+`auth_hook_reader` is a second cross-tenant reader, but not an enumeration identity: it
+cannot log in, and it is reachable only as a per-user lookup. It owns the SECURITY DEFINER
+function `public.custom_access_token_hook(event jsonb)`, and one policy lets it read
+`(user_id, tenant_id, status)` for every tenant:
+
+```sql
+CREATE POLICY auth_hook_lookup ON public.memberships
+    FOR SELECT TO auth_hook_reader USING (true);
+```
+
+- GoTrue's login role `supabase_auth_admin` has `EXECUTE` on the function and **no** grant
+  or policy on `memberships`: one `user_id` in, one `tenant_id` (exactly one active
+  membership) or nothing out.
+- `invoice_migrator` reaches the role only by an explicit `SET ROLE` (`INHERIT FALSE`), so
+  its own reads of `memberships` stay tenant-scoped. The only code that issues one is the
+  hook migration's Down.
+- `invoice_app` and `invoice_tenant_reader` cannot execute the hook (`REVOKE … FROM
+  PUBLIC`).
+- Residual: a leaked GoTrue DSN can call the hook once per GoTrue user and map each user
+  with exactly one active membership to its tenant. It cannot bulk-read statuses or
+  multiple memberships.
+
+DEFINER works here because the owner is not the table owner: `FORCE ROW LEVEL SECURITY`
+binds a DEFINER function owned by `invoice_migrator` to zero rows, but a function owned by a
+role with a role-scoped permissive policy sees what that policy allows. Operations:
+[identity-provider.md](./identity-provider.md).
+
 ### Testing
 
 The isolation matrix is proven by the **M2-07 adversarial RLS suite**
@@ -595,6 +638,8 @@ real passwords live **only** in Railway.
   per-service `cmd/<svc>/.env.example` and env-var conventions for service binaries.
 - [deploy-model.md](./deploy-model.md) — the per-PR ephemeral-environment model (create →
   deploy → verify → teardown → sweep) the dev Postgres is exempt from.
+- [identity-provider.md](./identity-provider.md) — the `auth` service: its roles on
+  production (U2), variables, sealed secrets and key rotation.
 - `db/bootstrap.sql`, root `Makefile`, `migrations/` — the harness this doc specifies.
 - `tools/revalidate-invoices` — the retrospective pass §9 runs; its package comment carries
   the full flag reference.

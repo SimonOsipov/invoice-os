@@ -92,7 +92,8 @@ added to — a missing `GATEWAY_DB_RESET` fails closed (no reset), not open.
 
 **Exception, measured (M4-23-04): sealed variables do NOT fork.** A sealed variable on
 `development` would simply be absent in every PR environment. `prepare-env` therefore fails
-loudly if `development` holds any — do not add one.
+loudly if `development` holds any — do not add one. The only exception is `GOTRUE_JWT_KEYS`,
+`GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`: `set-fork-auth` writes the fork's own.
 
 **Written per fork, not inherited:** a fork no longer relies on the gateway's `AUTH_ISSUER`
 and `AUTH_JWKS_URL` it copied from production. `set-fork-auth` (the first prepare-env step

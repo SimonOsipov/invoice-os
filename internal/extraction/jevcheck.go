@@ -1,4 +1,4 @@
-// jevcheck.go asks Jev, once per extraction attempt, whether each decided header value is what the page prints.
+// jevcheck.go asks Jev, once per extraction attempt, whether each decided header value is what the page prints, and what kind of document it is.
 package extraction
 
 import (
@@ -90,39 +90,55 @@ var documentTypeOptions = []jev.Option{
 	{Name: "purchase order", Description: "A buyer's own request to a supplier to provide goods or services, not a supplier's demand for payment."},
 }
 
-// DocumentTypeQuestion is a test-first stub.
 func DocumentTypeQuestion() jev.Question {
-	return jev.Question{}
+	return jev.Question{
+		Type:         jev.TypeChoice,
+		Instructions: documentTypeInstructions,
+		Options:      slices.Clone(documentTypeOptions),
+		Default:      taxInvoice,
+	}
 }
 
-// documentRequest is a test-first stub.
+// documentRequest always asks the type question, even with no value to check.
 func documentRequest(pages []TokenPage, results []FieldResult) (jev.Request, []int) {
-	return valueCheckRequest(pages, results)
+	req, asked := valueCheckRequest(pages, results)
+	if len(asked) == 0 {
+		req = jev.Request{Purpose: jev.PurposeDocumentType, State: DoclingPromptText(pages), Questions: map[string]jev.Question{}}
+	}
+	req.Questions[documentTypeQuestionID] = DocumentTypeQuestion()
+	return req, asked
 }
 
-// documentTypeVerdict is a test-first stub; "" is no verdict.
+// documentTypeVerdict returns "" for no verdict; only a known non-invoice name may reach the column's CHECK.
 func documentTypeVerdict(resp jev.Response) string {
-	return ""
+	a, ok := resp.Answers[documentTypeQuestionID]
+	if !ok || a.Type != jev.TypeChoice || a.Choice == taxInvoice || a.Confidence < documentTypeThreshold ||
+		!slices.ContainsFunc(documentTypeOptions, func(o jev.Option) bool { return o.Name == a.Choice }) {
+		return ""
+	}
+	return a.Choice
 }
 
-// checkDocument returns results unchanged whenever the value check cannot run in full.
-// Test-first stub: it asks the value questions only and records no verdict.
+// checkDocument returns results unchanged and no verdict when the call fails.
+// An unusable answer of one kind leaves the other kind's answer in force.
 func checkDocument(ctx context.Context, j JevAsker, pages []TokenPage, results []FieldResult) ([]FieldResult, string) {
 	if j == nil || !j.Enabled() {
 		return results, ""
 	}
-	req, asked := valueCheckRequest(pages, results)
-	if len(asked) == 0 {
-		return results, ""
-	}
+	req, asked := documentRequest(pages, results)
 	resp, err := j.Ask(ctx, req)
 	if err != nil {
 		return results, ""
 	}
+	usable := len(asked) > 0
 	for _, i := range asked {
 		if a, ok := resp.Answers[results[i].Name]; !ok || a.Type != jev.TypeNoul {
-			return results, ""
+			usable = false
 		}
 	}
-	return applyValueCheck(results, asked, resp), ""
+	out := results
+	if usable {
+		out = applyValueCheck(results, asked, resp)
+	}
+	return out, documentTypeVerdict(resp)
 }

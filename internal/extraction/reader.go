@@ -181,10 +181,12 @@ type ExtractionDetail struct {
 	State      string `json:"state"`
 	// Beside state, the other scalar a reader consults to explain a terminal job. No
 	// omitempty (TestExtractionDetail_FailureKindMarshalsAsExplicitNull).
-	FailureKind *string                `json:"failure_kind"`
-	Document    ExtractionDocument     `json:"document"`
-	Pages       []ExtractionPage       `json:"pages"`
-	Fields      []ExtractionFieldState `json:"fields"`
+	FailureKind *string `json:"failure_kind"`
+	// NULL on the wire unless the worker recorded a non-invoice verdict.
+	DocumentType *string                `json:"document_type"`
+	Document     ExtractionDocument     `json:"document"`
+	Pages        []ExtractionPage       `json:"pages"`
+	Fields       []ExtractionFieldState `json:"fields"`
 }
 
 // emptyDetail is what every failure path returns: a nil slice marshals to JSON null and every

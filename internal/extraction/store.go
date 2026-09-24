@@ -176,6 +176,11 @@ func writeLayoutTokensTx(ctx context.Context, tx pgx.Tx, tenantID, jobID string,
 	return nil
 }
 
+// writeDocumentTypeTx records a non-invoice verdict in the result transaction.
+func writeDocumentTypeTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, docType string) error {
+	return nil
+}
+
 // writeFieldResultsTx writes one row per decided field at candidate_rank 0, then one row per
 // alternative at ranks 1..N in slice order. It binds ReasonNone and a nil Region as SQL NULL:
 // the reason_code CHECK admits four words or NULL, and the all-NULL arm is what

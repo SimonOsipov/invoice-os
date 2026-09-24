@@ -28,6 +28,21 @@ func LatestCorrectionsPerFieldForTest(ctx context.Context, tx pgx.Tx, jobID stri
 	return latestCorrectionsPerFieldTx(ctx, tx, jobID)
 }
 
+// DocumentTypeVerdictsForTest is every option name a verdict may carry.
+func DocumentTypeVerdictsForTest() []string {
+	var out []string
+	for _, o := range documentTypeOptions {
+		if o.Name != taxInvoice {
+			out = append(out, o.Name)
+		}
+	}
+	return out
+}
+
+func WriteDocumentTypeForTest(ctx context.Context, tx pgx.Tx, tenantID, jobID, docType string) error {
+	return writeDocumentTypeTx(ctx, tx, tenantID, jobID, docType)
+}
+
 // PageOneReadTimeoutForTest hands the external handler specs the page-read bound.
 const PageOneReadTimeoutForTest = pageOneReadTimeout
 

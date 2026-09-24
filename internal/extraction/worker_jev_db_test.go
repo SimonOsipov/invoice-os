@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -87,6 +88,41 @@ func wjNoul(scores map[string]float64) jev.Response {
 	return jev.Response{Answers: answers}
 }
 
+// wjReceipt adds a confident receipt verdict to wjNoul's answers.
+func wjReceipt(scores map[string]float64) jev.Response {
+	return wjWithType(wjNoul(scores), "receipt", 1)
+}
+
+func wjWithType(resp jev.Response, choice string, confidence float64) jev.Response {
+	resp.Answers["document_type"] = jev.Answer{Type: jev.TypeChoice, Choice: choice, Confidence: confidence}
+	return resp
+}
+
+// wjDocumentType reads extraction_jobs.document_type as the superuser; nil is SQL NULL.
+func wjDocumentType(t *testing.T, ctx context.Context, jobID string) *string {
+	t.Helper()
+	var got *string
+	if err := stRequire(t).super.QueryRow(ctx,
+		`SELECT document_type FROM extraction_jobs WHERE id = $1`, jobID).Scan(&got); err != nil {
+		t.Fatalf("read document_type for job %s: %v", jobID, err)
+	}
+	return got
+}
+
+func wjAssertNoVerdict(t *testing.T, ctx context.Context, label, jobID string) {
+	t.Helper()
+	if got := wjDocumentType(t, ctx, jobID); got != nil {
+		t.Errorf("%s: document_type = %q, want NULL", label, *got)
+	}
+}
+
+func wjAssertVerdict(t *testing.T, ctx context.Context, label, jobID, want string) {
+	t.Helper()
+	if got := wjDocumentType(t, ctx, jobID); got == nil || *got != want {
+		t.Errorf("%s: document_type = %s, want %q", label, wkStr(got), want)
+	}
+}
+
 // wjDoubtAll doubts both fields wjPage decides with wjAI.
 func wjDoubtAll() jev.Response { return wjNoul(map[string]float64{"invoice_number": 0, "total": 0}) }
 
@@ -112,12 +148,12 @@ func wjFlaggedRankZero(rows []wpRow) int {
 
 // wjAssertWritesToday runs wjPage with asker and with Jev nil, and requires equal rows, boxes and
 // audit counts, plus wantCalls on the asker so the equality cannot hold over a never-asked seam.
-func wjAssertWritesToday(t *testing.T, riverJobID int64, asker *wkJev, wantCalls int) {
+func wjAssertWritesToday(t *testing.T, riverJobID int64, asker *wkJev, wantCalls int) (off, got wkAIRun) {
 	t.Helper()
 	ctx := t.Context()
 	pages := []extraction.Page{wjPage()}
-	off := wkRunJev(t, ctx, riverJobID, pages, wjAI(), nil)
-	got := wkRunJev(t, ctx, riverJobID+1, pages, wjAI(), asker)
+	off = wkRunJev(t, ctx, riverJobID, pages, wjAI(), nil)
+	got = wkRunJev(t, ctx, riverJobID+1, pages, wjAI(), asker)
 
 	if n := asker.count(); n != wantCalls {
 		t.Errorf("the Jev seam saw %d call(s), want %d", n, wantCalls)
@@ -130,6 +166,7 @@ func wjAssertWritesToday(t *testing.T, riverJobID int64, asker *wkJev, wantCalls
 	if of != gf || ofl != gfl {
 		t.Errorf("audit {FieldCount %d, FlaggedCount %d}, want the Jev-nil run's {%d, %d}", gf, gfl, of, ofl)
 	}
+	return off, got
 }
 
 func TestRLS_ExtractWorkerAsksJevOnceAfterTheDecision(t *testing.T) {
@@ -194,6 +231,7 @@ func TestRLS_ExtractWorkerNeverAsksJevWithoutDoclingText(t *testing.T) {
 		if n := stub.count(); n != 0 {
 			t.Errorf("the Jev seam saw %d call(s) on the mock arm, want 0", n)
 		}
+		wjAssertNoVerdict(t, ctx, "the mock arm", xid)
 	})
 
 	t.Run("zero-character text read", func(t *testing.T) {
@@ -204,6 +242,7 @@ func TestRLS_ExtractWorkerNeverAsksJevWithoutDoclingText(t *testing.T) {
 		if n := stub.count(); n != 0 {
 			t.Errorf("the Jev seam saw %d call(s) on a zero-character read, want 0", n)
 		}
+		wjAssertNoVerdict(t, ctx, "a zero-character read", r.jobID)
 	})
 
 	t.Run("zero-character read filled by the image read", func(t *testing.T) {
@@ -218,11 +257,13 @@ func TestRLS_ExtractWorkerNeverAsksJevWithoutDoclingText(t *testing.T) {
 		if n := aiStub.count(); n != 1 {
 			t.Fatalf("the image read ran %d time(s), want 1 -- the arm under test was not reached", n)
 		}
-		rows := wpResults(t, ctx, wkExtractionJobID(t, ctx, tenantID, 954012))
+		xid := wkExtractionJobID(t, ctx, tenantID, 954012)
+		rows := wpResults(t, ctx, xid)
 		wpAssertRankZero(t, rows, "invoice_number", stPtr("INV-5520"), nil)
 		if n := stub.count(); n != 0 {
 			t.Errorf("the Jev seam saw %d call(s) on an image read, want 0", n)
 		}
+		wjAssertNoVerdict(t, ctx, "an image read", xid)
 	})
 
 	t.Run("control: the text branch asks", func(t *testing.T) {
@@ -245,6 +286,7 @@ func TestRLS_ExtractWorkerNeverAsksJevWhenTheAIFailedOrTheRulesFailed(t *testing
 		if n := stub.count(); n != 0 {
 			t.Errorf("the Jev seam saw %d call(s) after the AI failed, want 0", n)
 		}
+		wjAssertNoVerdict(t, ctx, "the AI-failed job", r.jobID)
 	})
 
 	t.Run("the Rules load failed", func(t *testing.T) {
@@ -499,4 +541,157 @@ func TestRLS_ExtractWorkerJevRequestCarriesOnlyItsOwnJobsDocument(t *testing.T) 
 	if _, ok := stub.reqs[1].Questions["invoice_number"]; ok {
 		t.Errorf("job B was asked invoice_number, which only job A's page decides")
 	}
+}
+
+func TestRLS_ExtractWorkerRecordsAConfidentReceiptAndNothingElse(t *testing.T) {
+	ctx := t.Context()
+	pages := []extraction.Page{wjPage()}
+	off := wkRunJev(t, ctx, 954200, pages, wjAI(), nil)
+	stub := &wkJev{enabled: true, resp: wjReceipt(map[string]float64{"invoice_number": 1, "total": 1})}
+	got := wkRunJev(t, ctx, 954201, pages, wjAI(), stub)
+
+	if n := stub.count(); n != 1 {
+		t.Fatalf("the Jev seam saw %d call(s), want 1", n)
+	}
+	wjAssertVerdict(t, ctx, "the steered job", got.jobID, "receipt")
+	wjAssertNoVerdict(t, ctx, "the Jev-nil twin", off.jobID)
+
+	if len(off.rows) == 0 || len(off.boxes) == 0 {
+		t.Fatalf("the Jev-nil run wrote %d row(s) and %d box(es); the equality below holds over nothing", len(off.rows), len(off.boxes))
+	}
+	if a, b := wjRender(off), wjRender(got); !slices.Equal(a, b) {
+		t.Errorf("rows and boxes differ from the Jev-nil run:\n nil: %v\n got: %v", a, b)
+	}
+	of, ofl := wjAuditCounts(t, off)
+	gf, gfl := wjAuditCounts(t, got)
+	if of != gf || ofl != gfl {
+		t.Errorf("audit {FieldCount %d, FlaggedCount %d}, want the Jev-nil run's {%d, %d}", gf, gfl, of, ofl)
+	}
+}
+
+func TestRLS_ExtractWorkerRecordsNoVerdictWhenSkippedOrUnsure(t *testing.T) {
+	ctx := t.Context()
+	scores := map[string]float64{"invoice_number": 1, "total": 1}
+	skipped := func(reason error) error { return fmt.Errorf("%w: %w", jev.ErrCheckSkipped, reason) }
+
+	for _, tc := range []struct {
+		name      string
+		river     int64
+		asker     *wkJev
+		wantCalls int
+	}{
+		// Every skipped asker still carries a receipt answer: only the skip may drop it.
+		{"off", 954210, &wkJev{enabled: false, resp: wjReceipt(scores)}, 0},
+		{"refused", 954212, &wkJev{enabled: true, resp: wjReceipt(scores), err: skipped(errors.New("refused"))}, 1},
+		{"unavailable", 954214, &wkJev{enabled: true, resp: wjReceipt(scores), err: skipped(errors.New("unavailable"))}, 1},
+		{"deadline", 954216, &wkJev{enabled: true, resp: wjReceipt(scores), err: skipped(context.DeadlineExceeded)}, 1},
+		{"tax invoice", 954218, &wkJev{enabled: true, resp: wjWithType(wjNoul(scores), "tax invoice", 1)}, 1},
+		{"below threshold", 954220, &wkJev{enabled: true, resp: wjWithType(wjNoul(scores), "receipt", 0.89)}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.asker.err != nil && !errors.Is(tc.asker.err, jev.ErrCheckSkipped) {
+				t.Fatalf("the error %v must wrap ErrCheckSkipped", tc.asker.err)
+			}
+			off, got := wjAssertWritesToday(t, tc.river, tc.asker, tc.wantCalls)
+			wjAssertNoVerdict(t, ctx, "the Jev-nil run", off.jobID)
+			wjAssertNoVerdict(t, ctx, "the asker run", got.jobID)
+		})
+	}
+
+	t.Run("control: a receipt at 1 records", func(t *testing.T) {
+		off, got := wjAssertWritesToday(t, 954222, &wkJev{enabled: true, resp: wjReceipt(scores)}, 1)
+		wjAssertNoVerdict(t, ctx, "the Jev-nil run", off.jobID)
+		wjAssertVerdict(t, ctx, "the asker run", got.jobID, "receipt")
+	})
+}
+
+func TestRLS_ExtractWorkerRecordsTheFakesSteeredReceipt(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := jev.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	steered := wjPage()
+	steered.Tokens = append(steered.Tokens, extraction.Token{
+		Text:   "JEVFAKE-CHOICE-cmVjZWlwdA",
+		Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.95, X1: 0.5, Y1: 0.97},
+	})
+
+	a := wkRunJev(t, ctx, 954230, []extraction.Page{steered}, wjAI(), client)
+	b := wkRunJev(t, ctx, 954231, []extraction.Page{wjPage()}, wjAI(), client)
+	wjAssertVerdict(t, ctx, "the steered page", a.jobID, "receipt")
+	wjAssertNoVerdict(t, ctx, "the plain page", b.jobID)
+
+	var lines []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "jev call" {
+			lines = append(lines, m)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("the logger recorded %d %q line(s), want 2 (one per job): %q", len(lines), "jev call", buf.String())
+	}
+	for i, m := range lines {
+		if m["outcome"] != "fake" || m["purpose"] != "value_check" || m["question_count"] != float64(3) {
+			t.Errorf("jev call line %d = outcome %v, purpose %v, question_count %v; want fake, value_check, 3", i, m["outcome"], m["purpose"], m["question_count"])
+		}
+	}
+}
+
+// A verdict written outside the result transaction would survive the rolled-back attempt.
+func TestRLS_ExtractWorkerVerdictSharesTheResultTransactionsFate(t *testing.T) {
+	ctx := t.Context()
+	auditBoom := errors.New("the audit port refused")
+	scores := map[string]float64{"invoice_number": 1, "total": 1}
+
+	// run drives one river job twice: attempt 1 with a failing audit port, attempt 2 with a working one.
+	run := func(t *testing.T, riverJobID int64, second jev.Response) string {
+		t.Helper()
+		tenantID, documentID := wkFixture(t, ctx)
+		ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wjPage()}}, wpStoreRules(t).load, &wkAuditRecorder{})
+		ew.AI = wjAI()
+		ew.Audit = func(context.Context, pgx.Tx, extraction.ExtractionAudit) error { return auditBoom }
+		first := &wkJev{enabled: true, resp: wjReceipt(scores)}
+		ew.Jev = first
+		key := uuid.NewString()
+
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 1, 3, tenantID, documentID, key)); !errors.Is(err, auditBoom) {
+			t.Fatalf("attempt 1: Work returned %v, want the audit port's error", err)
+		}
+		if n := first.count(); n != 1 {
+			t.Fatalf("attempt 1: the Jev seam saw %d call(s), want 1 -- the receipt answer was never read", n)
+		}
+		xid := wkExtractionJobID(t, ctx, tenantID, riverJobID)
+		wjAssertNoVerdict(t, ctx, "after the rolled-back attempt", xid)
+
+		rec := &wkAuditRecorder{}
+		ew.Audit = rec.record
+		ew.Jev = &wkJev{enabled: true, resp: second}
+		if err := ew.Work(ctx, extraction.NewExtractJobForTest(riverJobID, 2, 3, tenantID, documentID, key)); err != nil {
+			t.Fatalf("attempt 2: Work: %v", err)
+		}
+		stAssertJobState(t, ctx, xid, "succeeded")
+		if n := len(rec.events()); n != 1 {
+			t.Errorf("attempt 2 called the audit port %d time(s), want 1", n)
+		}
+		return xid
+	}
+
+	xid := run(t, 954240, wjWithType(wjNoul(scores), "tax invoice", 1))
+	wjAssertNoVerdict(t, ctx, "attempt 2 answered tax invoice", xid)
+
+	t.Run("control: attempt 2 answered receipt records", func(t *testing.T) {
+		xid := run(t, 954241, wjReceipt(scores))
+		wjAssertVerdict(t, ctx, "attempt 2 answered receipt", xid, "receipt")
+	})
 }

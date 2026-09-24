@@ -86,18 +86,20 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	if !ok {
 		return Tenant{}, "", db.ErrNoTenant
 	}
-	subject, err := uuid.Parse(caller.Subject)
+	parsed, err := uuid.Parse(caller.Subject)
 	if err != nil {
 		return Tenant{}, "", db.ErrNoTenant
 	}
-	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(caller.Subject)).String()
+	// uuid.Parse accepts several spellings; hash the canonical one so each identity gets one workspace.
+	subject := parsed.String()
+	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
 
 	var t Tenant
 	// AC-5: the caller has no membership yet, so the gated seam would refuse before
 	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
 	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,
-			tenantID, in.WorkspaceName, nullIfEmpty(in.Kind), subject.String(), in.DisplayName, nullIfEmpty(caller.Email),
+			tenantID, in.WorkspaceName, nullIfEmpty(in.Kind), subject, in.DisplayName, nullIfEmpty(caller.Email),
 		); err != nil {
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "tenants_pkey" {
@@ -110,7 +112,7 @@ func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tena
 	if err != nil {
 		return Tenant{}, "", err
 	}
-	return t, caller.Subject, nil
+	return t, subject, nil
 }
 
 // nullIfEmpty sends "" as SQL NULL.

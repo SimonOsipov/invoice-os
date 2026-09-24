@@ -400,26 +400,266 @@ func TestInvoiceMain_ReadsTheAIKeyOnlyThroughFromEnv(t *testing.T) {
 	}
 }
 
-// TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf (AIR-07-02 Constraint): an
-// unparseable AI_FAKE must stop the boot through fatal(app.Logger, ...), never
-// log.Fatalf -- fatal's own doc comment explains why log.Fatalf is silent under
-// LOG_LEVEL=warn.
+// TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf: an unparseable AI_FAKE stops the
+// boot through fatal(app.Logger, ...), never log.Fatalf (see fatal's doc comment). The
+// window ends at jev.FromEnv( so the Jev block's fatal( cannot satisfy it.
 func TestInvoiceMain_AIFakeFailureUsesFatalNotLogFatalf(t *testing.T) {
 	src := sourceWithoutComments(t, "main.go")
 
-	idx := callSiteIndex(src, "ai.FromEnv")
-	if idx == -1 {
-		t.Fatal("cmd/invoice/main.go has no ai.FromEnv( call site -- AIR-07-02's ai client is not wired, or this test's anchor moved")
+	for _, msg := range aiGuard(src) {
+		t.Error(msg)
 	}
-	end := idx + 400
-	if end > len(src) {
-		end = len(src)
+
+	// Each guard reds on its own branch's deletion and only on that.
+	t.Run("AIBranchDeleted", func(t *testing.T) {
+		mut := dropErrBranchAfter(t, src, "ai.FromEnv")
+		if len(aiGuard(mut)) == 0 {
+			t.Error("the AI guard stays green with the ai.FromEnv error branch deleted")
+		}
+		if msgs := jevGuard(mut); len(msgs) != 0 {
+			t.Errorf("the Jev guard reds on the AI branch's deletion: %v", msgs)
+		}
+	})
+	t.Run("JevBranchDeleted", func(t *testing.T) {
+		mut := dropErrBranchAfter(t, src, "jev.FromEnv")
+		if msgs := aiGuard(mut); len(msgs) != 0 {
+			t.Errorf("the AI guard reds on the Jev branch's deletion: %v", msgs)
+		}
+		if len(jevGuard(mut)) == 0 {
+			t.Error("the Jev guard stays green with the jev.FromEnv error branch deleted")
+		}
+	})
+}
+
+// TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf: both jev.FromEnv errors stop
+// the boot through fatal(app.Logger, ...), never log.Fatal.
+func TestInvoiceMain_JevFromEnvFailureUsesFatalNotLogFatalf(t *testing.T) {
+	for _, msg := range jevGuard(sourceWithoutComments(t, "main.go")) {
+		t.Error(msg)
 	}
-	window := src[idx:end]
+}
+
+func aiGuard(src string) []string {
+	return fatalGuard(src, "ai.FromEnv", "jev.FromEnv")
+}
+
+func jevGuard(src string) []string {
+	return fatalGuard(src, "jev.FromEnv", "app.Mux.HandleFunc")
+}
+
+// fatalGuard reports why the code from from( to the next end( lacks fatal( or holds log.Fatal.
+func fatalGuard(src, from, end string) []string {
+	i := callSiteIndex(src, from)
+	if i == -1 {
+		return []string{"cmd/invoice/main.go has no " + from + "( call site"}
+	}
+	j := callSiteIndex(src[i:], end)
+	if j == -1 {
+		return []string{"cmd/invoice/main.go has no " + end + "( after " + from + "( to end the window"}
+	}
+	window := src[i : i+j]
+	var msgs []string
 	if !strings.Contains(window, "fatal(") {
-		t.Errorf("no fatal( within 400 bytes after the ai.FromEnv( call site -- an unparseable AI_FAKE must stop the boot:\n%s", window)
+		msgs = append(msgs, "no fatal( between "+from+"( and "+end+"(:\n"+window)
 	}
 	if strings.Contains(window, "log.Fatal") {
-		t.Errorf("found log.Fatal within 400 bytes after the ai.FromEnv( call site -- use fatal(app.Logger, ...), which logs at ERROR:\n%s", window)
+		msgs = append(msgs, "log.Fatal between "+from+"( and "+end+"( -- use fatal(app.Logger, ...):\n"+window)
 	}
+	return msgs
+}
+
+// dropErrBranchAfter deletes the first `if err != nil {...}` after anchor( from src.
+func dropErrBranchAfter(t *testing.T, src, anchor string) string {
+	t.Helper()
+	i := callSiteIndex(src, anchor)
+	if i == -1 {
+		t.Fatalf("no %s( call site to mutate", anchor)
+	}
+	const head = "if err != nil {"
+	k := strings.Index(src[i:], head)
+	if k == -1 {
+		t.Fatalf("no %q after %s(", head, anchor)
+	}
+	open := i + k + len(head) - 1
+	if next := callSiteIndex(src[i:], "app.Mux.HandleFunc"); next != -1 && i+next < open {
+		t.Fatalf("the first %q after %s( lies past the next app.Mux.HandleFunc( -- not its error branch", head, anchor)
+	}
+	depth := 0
+	for p := open; p < len(src); p++ {
+		switch src[p] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return src[:i+k] + src[p+1:]
+			}
+		}
+	}
+	t.Fatalf("unbalanced braces after %s(", anchor)
+	return ""
+}
+
+// TestInvoiceMain_RegistersTheCheckMappingRoute: the check route is mounted with
+// importer.CheckMappingHandler(docSvc.Open, <client>, app.Logger). POST /v1/imports is
+// the control that proves the walk sees a shipped registration.
+func TestInvoiceMain_RegistersTheCheckMappingRoute(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+
+	var foundCreate, foundCheck bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		switch strings.Trim(lit.Value, `"`) {
+		case "POST /v1/imports":
+			foundCreate = true
+			if !isSelectorCall(call.Args[1], "importer", "CreateHandler") {
+				t.Error(`the control needle "POST /v1/imports" no longer names importer.CreateHandler`)
+			}
+		case "POST /v1/imports/check-mapping":
+			foundCheck = true
+			hc, ok := call.Args[1].(*ast.CallExpr)
+			if !ok || !isSelector(hc.Fun, "importer", "CheckMappingHandler") {
+				t.Fatalf("POST /v1/imports/check-mapping's handler is not importer.CheckMappingHandler(...), got %#v", call.Args[1])
+			}
+			if len(hc.Args) != 3 {
+				t.Fatalf("importer.CheckMappingHandler has %d argument(s), want 3 (open, jev client, logger)", len(hc.Args))
+			}
+			if !isSelector(hc.Args[0], "docSvc", "Open") {
+				t.Errorf("CheckMappingHandler's first argument is not docSvc.Open, got %#v", hc.Args[0])
+			}
+			if _, ok := hc.Args[1].(*ast.Ident); !ok {
+				t.Errorf("CheckMappingHandler's second argument is not a plain identifier (the jev client), got %#v", hc.Args[1])
+			}
+			if !isSelector(hc.Args[2], "app", "Logger") {
+				t.Errorf("CheckMappingHandler's third argument is not app.Logger, got %#v", hc.Args[2])
+			}
+		}
+		return true
+	})
+
+	if !foundCreate {
+		t.Fatal("control needle: no POST /v1/imports registration found -- the AST walk is broken")
+	}
+	if !foundCheck {
+		t.Error(`no app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+}
+
+// TestInvoiceMain_BuildsTheJevClientOnceAndHandsItToTheCheck: main() assigns from
+// jev.FromEnv once, as a statement of its own body, and that variable is
+// CheckMappingHandler's second argument.
+func TestInvoiceMain_BuildsTheJevClientOnceAndHandsItToTheCheck(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+	fromEnvAssign := func(n ast.Node, pkg string) (*ast.AssignStmt, bool) {
+		a, ok := n.(*ast.AssignStmt)
+		if !ok || len(a.Rhs) != 1 || len(a.Lhs) == 0 {
+			return nil, false
+		}
+		return a, isSelectorCall(a.Rhs[0], pkg, "FromEnv")
+	}
+
+	var total, aiTotal int
+	ast.Inspect(f, func(n ast.Node) bool {
+		if _, ok := fromEnvAssign(n, "jev"); ok {
+			total++
+		}
+		if _, ok := fromEnvAssign(n, "ai"); ok {
+			aiTotal++
+		}
+		return true
+	})
+	if aiTotal != 1 {
+		t.Fatalf("control: found %d ai.FromEnv assignment(s), want 1 -- the walk is broken", aiTotal)
+	}
+
+	var mainFn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "main" {
+			mainFn = fd
+		}
+	}
+	if mainFn == nil || mainFn.Body == nil {
+		t.Fatal("no func main() in cmd/invoice/main.go")
+	}
+	var client string
+	var topLevel int
+	for _, st := range mainFn.Body.List {
+		a, ok := fromEnvAssign(st, "jev")
+		if !ok {
+			continue
+		}
+		topLevel++
+		if id, ok := a.Lhs[0].(*ast.Ident); ok {
+			client = id.Name
+		}
+	}
+	if total != 1 || topLevel != 1 {
+		t.Fatalf("found %d jev.FromEnv assignment(s), %d of them statements of main()'s body; want exactly 1 of each", total, topLevel)
+	}
+	if client == "" || client == "_" {
+		t.Fatalf("jev.FromEnv's result is assigned to %q, want a named client variable", client)
+	}
+
+	var reaches bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isSelector(call.Fun, "importer", "CheckMappingHandler") || len(call.Args) < 2 {
+			return true
+		}
+		if id, ok := call.Args[1].(*ast.Ident); ok && id.Name == client {
+			reaches = true
+		}
+		return true
+	})
+	if !reaches {
+		t.Errorf("jev.FromEnv's result (%s) is not importer.CheckMappingHandler's second argument", client)
+	}
+}
+
+// TestInvoiceMain_ReadsTheJevKeyOnlyThroughFromEnv: the Jev variables are read only
+// inside jev.FromEnv, never named in this file.
+func TestInvoiceMain_ReadsTheJevKeyOnlyThroughFromEnv(t *testing.T) {
+	src := sourceWithoutComments(t, "main.go")
+	if !strings.Contains(src, `"invoice"`) {
+		t.Fatal(`control: the literal "invoice" is missing from the stripped source -- string literals did not survive`)
+	}
+	if callSiteIndex(src, "jev.FromEnv") == -1 {
+		t.Error("cmd/invoice/main.go has no jev.FromEnv( call site -- the Jev key is read nowhere")
+	}
+	for _, lit := range []string{`"TYPESAFE_API_KEY"`, `"JEV_FAKE"`} {
+		if n := strings.Count(src, lit); n != 0 {
+			t.Errorf("cmd/invoice/main.go contains the literal %s %d time(s), want 0 -- read it only inside jev.FromEnv", lit, n)
+		}
+	}
+}
+
+func isSelector(e ast.Expr, recv, name string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && x.Name == recv
+}
+
+func isSelectorCall(e ast.Expr, pkg, name string) bool {
+	call, ok := e.(*ast.CallExpr)
+	return ok && isSelector(call.Fun, pkg, name)
 }

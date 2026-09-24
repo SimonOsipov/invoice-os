@@ -49,9 +49,10 @@ func documentTypeMigrationName(t *testing.T) string {
 	return matches[0]
 }
 
+// documentTypeSection strips comments, so a commented-out statement neither satisfies nor trips a scan.
 func documentTypeSection(t *testing.T, section string) string {
 	t.Helper()
-	return auditEntitySectionOf(t, documentTypeMigrationName(t), section)
+	return auditEntityStripComments(auditEntitySectionOf(t, documentTypeMigrationName(t), section))
 }
 
 func documentTypeColumnPresent(t *testing.T, ctx context.Context, tx pgx.Tx) bool {
@@ -116,7 +117,7 @@ func TestExtractionJobsDocumentType_MigrationFileIsOrderedAndComplete(t *testing
 	down := documentTypeSection(t, "Down")
 	upper := strings.ToUpper(up)
 
-	if !strings.Contains(up, "ADD COLUMN document_type text") {
+	if !strings.Contains(upper, "ADD COLUMN DOCUMENT_TYPE TEXT") {
 		t.Errorf("%s Up never contains %q:\n%s", name, "ADD COLUMN document_type text", up)
 	}
 	if n := strings.Count(upper, "ADD COLUMN"); n != 1 {

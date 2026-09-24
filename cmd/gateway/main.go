@@ -212,6 +212,20 @@ func gatewayHandlers(
 	return api, gateway.FleetHealthHandler(all, healthPaths, log)
 }
 
+// registration holds the public registration handlers main mounts outside /api/.
+type registration struct {
+	Register, Verify http.Handler
+}
+
+// registrationHandlers builds the registration handlers against GoTrue at authURL.
+// A nil siteURL means AUTH_SITE_URL is unset.
+func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registration {
+	return registration{
+		Register: gateway.RegisterHandler(authURL, nil, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, nil, log),
+	}
+}
+
 // loadUpstreams reads each service's base URL from <NAME>_URL, returning the
 // routed and probed maps separately. A missing or invalid URL fails startup —
 // including a probed one: a gateway reporting a fleet it cannot see is worse

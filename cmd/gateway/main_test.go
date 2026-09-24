@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -881,5 +883,77 @@ func TestGatewayMainProbesAuthAtItsJWKSPath(t *testing.T) {
 	}
 	if !found {
 		t.Error("healthPaths has no `auth` entry")
+	}
+}
+
+// fakeAuth answers 200 on every path with a body that satisfies both /signup and
+// /verify, and records "METHOD path" per call.
+func fakeAuth(t *testing.T) (*url.URL, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","access_token":"at","refresh_token":"rt"}`))
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse fake url: %v", err)
+	}
+	return u, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(calls)
+	}
+}
+
+func serveRegistration(h http.Handler, method, target, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
+	return rec
+}
+
+func TestRegistrationHandlers_WiresBothRoutes(t *testing.T) {
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, slog.New(slog.DiscardHandler))
+
+	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	rec = serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", "")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
+		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
+	}
+	if got, want := calls(), []string{"POST /signup", "POST /verify"}; !slices.Equal(got, want) {
+		t.Errorf("GoTrue saw %v, want %v", got, want)
+	}
+}
+
+// AUTH_SITE_URL unset: both routes refuse without calling GoTrue (D4).
+func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
+	authURL, calls := fakeAuth(t)
+	reg := registrationHandlers(authURL, nil, slog.New(slog.DiscardHandler))
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
+		"Verify":   serveRegistration(reg.Verify, http.MethodGet, "/auth/verify?token=T&type=signup", ""),
+	} {
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
+			continue
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+			t.Errorf("%s body = %s, want {\"error\":\"registration is not configured\"}", name, rec.Body.String())
+		}
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("GoTrue saw %v, want no calls", got)
 	}
 }

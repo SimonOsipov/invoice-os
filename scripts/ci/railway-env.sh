@@ -2725,6 +2725,8 @@ cmd_set_fork_auth() {
     "DATABASE_URL=$AUTH_DSN_REFERENCE"
     "API_EXTERNAL_URL=$AUTH_INTERNAL_URL"
     "PORT=8080"
+    # Forks accept registrations; the image default keeps production closed.
+    "GOTRUE_DISABLE_SIGNUP=false"
     # Forks send no mail.
     "GOTRUE_SMTP_HOST="
     "GOTRUE_SMTP_PASS="
@@ -2759,7 +2761,8 @@ cmd_set_fork_auth() {
 }
 
 # cmd_set_fork_auth_site <environment-id> <landing-url>
-# Runs after the `urls` step, which discovers the landing URL.
+# Runs after the `urls` step, which discovers the landing URL. Writes it as
+# auth.GOTRUE_SITE_URL and gateway.AUTH_SITE_URL, which a fork inherits from production.
 cmd_set_fork_auth_site() {
   local env_id="${1:-}" url="${2:-}"
 
@@ -2782,13 +2785,19 @@ cmd_set_fork_auth_site() {
 
   graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$env_id" '{e: $e}')")" \
     "listing service instances in environment $env_id"
-  local auth_id
-  auth_id=$(service_id_by_name "$GQL_RESPONSE" auth "environment $env_id" GOTRUE_SITE_URL)
+  local settle="$GQL_RESPONSE" auth_id gw_id
+  auth_id=$(service_id_by_name "$settle" auth "environment $env_id" GOTRUE_SITE_URL)
+  gw_id=$(service_id_by_name "$settle" gateway "environment $env_id" AUTH_SITE_URL)
 
   upsert_variable "$env_id" "$auth_id" auth GOTRUE_SITE_URL "$url"
   auth_read "$env_id" "$auth_id" auth
   auth_check auth "GOTRUE_SITE_URL=$url" || exit 1
   echo "auth.GOTRUE_SITE_URL confirmed in environment $env_id."
+
+  upsert_variable "$env_id" "$gw_id" gateway AUTH_SITE_URL "$url"
+  auth_read "$env_id" "$gw_id" gateway
+  auth_check gateway "AUTH_SITE_URL=$url" || exit 1
+  echo "gateway.AUTH_SITE_URL confirmed in environment $env_id."
 }
 
 # cmd_set_production_auth <--pre-merge|--post-merge> <environment-id>

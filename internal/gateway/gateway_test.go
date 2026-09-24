@@ -1102,6 +1102,8 @@ func TestS2STokenNeverReachesUpstream(t *testing.T) {
 const (
 	provisioningPath = "/api/tenancy/v1/workspaces"
 	testEmail        = "ada@example.test"
+	// The wire name identityMiddleware reads; a literal so renaming headerUserEmail fails a test.
+	wireUserEmail = "X-User-Email"
 )
 
 func TestTenantlessTokenAllowedOnlyOnProvisioning(t *testing.T) {
@@ -1123,7 +1125,7 @@ func TestTenantlessTokenAllowedOnlyOnProvisioning(t *testing.T) {
 	}
 	assertHeader(t, cap.header, headerTenantID, "")
 	assertHeader(t, cap.header, headerUserID, testSubject)
-	assertHeader(t, cap.header, headerUserEmail, testEmail)
+	assertHeader(t, cap.header, wireUserEmail, testEmail)
 }
 
 func TestTenantlessTokenForbiddenElsewhere(t *testing.T) {
@@ -1163,7 +1165,7 @@ func TestUserEmailHeaderInjectedAndClientCopyStripped(t *testing.T) {
 	tg := setupGateway(t)
 	tok := tg.mint(t, auth.MintOptions{Subject: testSubject, Role: testRole, TenantID: testTenant, Email: testEmail})
 	r := request("GET", "/api/tenancy/v1/ping", tok)
-	r.Header.Set(headerUserEmail, "evil@x")
+	r.Header.Set(wireUserEmail, "evil@x")
 
 	rec := httptest.NewRecorder()
 	tg.handler.ServeHTTP(rec, r)
@@ -1175,7 +1177,7 @@ func TestUserEmailHeaderInjectedAndClientCopyStripped(t *testing.T) {
 	if cap.hits != 1 {
 		t.Fatalf("tenancy hits = %d, want 1", cap.hits)
 	}
-	assertHeader(t, cap.header, headerUserEmail, testEmail)
+	assertHeader(t, cap.header, wireUserEmail, testEmail)
 }
 
 func assertHeader(t *testing.T, h http.Header, key, want string) {

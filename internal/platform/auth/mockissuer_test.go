@@ -74,7 +74,7 @@ func TestMockIssuer_MintDefaultsAreVerifiable(t *testing.T) {
 func TestMockMint_EmailOmittedWhenEmpty(t *testing.T) {
 	iss := mustIssuer(t)
 
-	// omitempty keeps email-less mock tokens inside the golden shape (TestGoldenTokenContract).
+	// omitempty keeps email-less mock tokens byte-identical to before the claim existed.
 	without := decodeSegment(t, mustMint(t, iss, MintOptions{Subject: testSubject}), 1)
 	if without["sub"] != testSubject {
 		t.Fatalf("decoded claims sub = %v, want %q", without["sub"], testSubject)

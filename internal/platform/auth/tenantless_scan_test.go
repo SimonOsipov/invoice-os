@@ -46,9 +46,9 @@ func TestTenantlessCallerKeyReadOnlyByProvisioning(t *testing.T) {
 			parsed++
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
-			// Any selector reference counts, not only a call: a function value escapes too.
+			// Any identifier counts, not only a call: a function value or a dot-import escapes too.
 			ast.Inspect(f, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "TenantlessCallerFromContext" {
+				if id, ok := n.(*ast.Ident); ok && id.Name == "TenantlessCallerFromContext" {
 					sites[rel]++
 				}
 				return true
@@ -60,16 +60,21 @@ func TestTenantlessCallerKeyReadOnlyByProvisioning(t *testing.T) {
 		}
 	}
 
-	if parsed < 150 {
-		t.Fatalf("parsed %d non-test .go files under internal/ and cmd/, want >= 150", parsed)
-	}
-	if sites["internal/tenancy/store.go"] == 0 {
-		t.Errorf("control needle: no TenantlessCallerFromContext reference in internal/tenancy/store.go")
-	}
-	for file, n := range sites {
-		if strings.HasPrefix(file, "internal/platform/auth/") || slices.Contains(tenantlessReaders, file) {
-			continue
+	// Two subtests so the subset half can be mutation-proven while the needle waits for store.go.
+	t.Run("only allowed files reference it", func(t *testing.T) {
+		if parsed < 150 {
+			t.Fatalf("parsed %d non-test .go files under internal/ and cmd/, want >= 150", parsed)
 		}
-		t.Errorf("%s references TenantlessCallerFromContext %d time(s); only %v may", file, n, tenantlessReaders)
-	}
+		for file, n := range sites {
+			if strings.HasPrefix(file, "internal/platform/auth/") || slices.Contains(tenantlessReaders, file) {
+				continue
+			}
+			t.Errorf("%s references TenantlessCallerFromContext %d time(s); only %v may", file, n, tenantlessReaders)
+		}
+	})
+	t.Run("control needle", func(t *testing.T) {
+		if sites["internal/tenancy/store.go"] == 0 {
+			t.Errorf("no TenantlessCallerFromContext reference in internal/tenancy/store.go")
+		}
+	})
 }

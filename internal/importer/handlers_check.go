@@ -29,8 +29,8 @@ type checkMappingResponse struct {
 	Doubted []string `json:"doubted"`
 }
 
-// CheckMappingHandler serves POST /v1/imports/check-mapping: SuggestMappingHandler's request
-// and open/decode ladders, then one Ask over the same ten-row window.
+// CheckMappingHandler serves POST /v1/imports/check-mapping: SuggestMappingHandler's
+// open/decode ladders, then one Ask over the same ten-row window.
 func CheckMappingHandler(
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	checker MappingChecker,

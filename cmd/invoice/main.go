@@ -28,6 +28,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 )
 
@@ -194,6 +195,11 @@ func main() {
 	if err != nil {
 		fatal(app.Logger, "invoice: ai: %v", err)
 	}
+	// An unset TYPESAFE_API_KEY is off; both FromEnv errors stop the boot.
+	jevClient, err := jev.FromEnv(app.Logger)
+	if err != nil {
+		fatal(app.Logger, "invoice: jev: %v", err)
+	}
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored
@@ -209,6 +215,7 @@ func main() {
 	// still answers 200 source:"none", never a 5xx (TestSuggestHandler_OffAnswersNoneWithRowOne,
 	// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred).
 	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.Open, impStore.SavedMapping, aiClient, app.Logger))
+	app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(docSvc.Open, jevClient, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
 	// import_batches and, until now, reached the browser only inside the POST

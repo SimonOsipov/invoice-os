@@ -50,6 +50,10 @@ func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) ht
 			// ceiling: GoTrue's instance-wide mail cap answers the same code, so this WARN is its only signal (D15).
 			log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+		case status >= http.StatusInternalServerError && gt.Code == "23505":
+			// P21: the loser of two concurrent signups for one address gets GoTrue's unique-violation 500 (D24).
+			log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		case gt.ErrorCode == "validation_failed",
 			gt.ErrorCode == "weak_password",
 			gt.ErrorCode == "email_address_invalid":
@@ -115,6 +119,8 @@ func RegistrationNotConfigured() http.Handler {
 type gotrueError struct {
 	ErrorCode string `json:"error_code"`
 	Msg       string `json:"msg"`
+	// Numeric on API errors; a SQLSTATE string on an unhandled database error.
+	Code any `json:"code"`
 }
 
 // postGoTrue posts body as JSON and returns the status and any error fields; the rest of

@@ -42,6 +42,10 @@ const (
 	gtOverRequestRateLimit = `{"code":429,"error_code":"over_request_rate_limit","msg":"Request rate limit reached"}`
 	// internal/api/apierrors/apierrors.go, NewInternalServerError; error_id set for 5xx in internal/api/errors.go.
 	gtInternal = `{"code":500,"error_code":"unexpected_failure","msg":"Internal server error","error_id":"req-1"}`
+	// Measured on v2.197.0: the loser of two concurrent signups for one address (D24).
+	gtDuplicateKey = `{"code":"23505","message":"duplicate key value violates unique constraint \"users_email_partial_key\""}`
+	// A 5xx carrying some other SQLSTATE.
+	gtOtherSQLState = `{"code":"40001","message":"could not serialize access due to concurrent update"}`
 	// internal/api/verify.go, verifyTokenHash: expired or unknown email link.
 	gtOTPExpired = `{"code":403,"error_code":"otp_expired","msg":"Email link is invalid or has expired"}`
 )
@@ -241,6 +245,7 @@ func TestRegister_ExistingAccountLooksIdentical(t *testing.T) {
 		{"unconfirmed repeat within 60s, 429 over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit},
 		{"autoconfirm repeat, 422 user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists},
 		{"422 email_exists", http.StatusUnprocessableEntity, gtEmailExists},
+		{"concurrent duplicate, 500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
@@ -260,7 +265,7 @@ func TestRegister_ExistingAccountLooksIdentical(t *testing.T) {
 			if got, want := rec.Header().Get("Content-Type"), baseline.Header().Get("Content-Type"); got != want {
 				t.Errorf("Content-Type = %q, want %q", got, want)
 			}
-			if c.status == http.StatusTooManyRequests {
+			if c.status == http.StatusTooManyRequests || c.status == http.StatusInternalServerError {
 				if n := strings.Count(buf.String(), `"level":"WARN"`); n != 1 {
 					t.Errorf("WARN lines = %d, want exactly 1 (D4): %s", n, buf.String())
 				}
@@ -286,6 +291,8 @@ func TestRegister_GoTrueErrorMapping(t *testing.T) {
 		{"signup_disabled", http.StatusUnprocessableEntity, gtSignupDisabled, http.StatusServiceUnavailable, "registration is closed"},
 		{"over_request_rate_limit", http.StatusTooManyRequests, gtOverRequestRateLimit, http.StatusTooManyRequests, ""},
 		{"500", http.StatusInternalServerError, gtInternal, http.StatusBadGateway, ""},
+		{"500 other SQLSTATE", http.StatusInternalServerError, gtOtherSQLState, http.StatusBadGateway, ""},
+		{"422 SQLSTATE 23505", http.StatusUnprocessableEntity, gtDuplicateKey, http.StatusBadGateway, ""},
 		{"closed port", 0, "", http.StatusBadGateway, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {

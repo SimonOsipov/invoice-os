@@ -76,6 +76,12 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 	verified, failed := site+"/?verified=1", site+"/?verify=failed"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A HEAD prefetch by a link scanner would consume the single-use token (D23).
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		// redirect_to is ignored: the target is server configuration, never a query value.
 		q := r.URL.Query()
 		token := q.Get("token")

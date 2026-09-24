@@ -257,3 +257,21 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 		t.Errorf("a wrong method reached GoTrue: %v", got[before:])
 	}
 }
+
+// ServeMux lets "GET /auth/verify" serve HEAD, so the handler itself must refuse a link-scanner prefetch.
+func TestVerify_HeadIsRefusedWithoutConsumingTheToken(t *testing.T) {
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, slog.New(slog.DiscardHandler))
+	mux := http.NewServeMux()
+	mux.Handle("GET /auth/verify", reg.Verify)
+
+	rec := serveRegistration(mux, http.MethodHead, "/auth/verify?token=T&type=signup", "")
+
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("HEAD /auth/verify = %d Allow %q, want 405 Allow GET", rec.Code, rec.Header().Get("Allow"))
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("HEAD /auth/verify reached GoTrue %v; a prefetch consumed the token", got)
+	}
+}

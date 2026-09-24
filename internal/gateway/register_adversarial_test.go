@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
@@ -266,5 +268,25 @@ func TestVerify_HugeSessionBodyIsDiscarded(t *testing.T) {
 		if strings.Contains(out, sessionAT) {
 			t.Errorf("session value escaped: %.200s", out)
 		}
+	}
+}
+
+// Only GET verifies; any other method, HEAD included, is refused before GoTrue sees the token.
+func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
+	for _, method := range []string{http.MethodHead, http.MethodPost, http.MethodPut, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtSession)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, "/auth/verify?token="+verifyToken+"&type=signup", nil)
+
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler)).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodGet {
+				t.Errorf("%s = %d Allow %q, want 405 Allow GET", method, rec.Code, rec.Header().Get("Allow"))
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("%s reached GoTrue %d times, want 0", method, n)
+			}
+		})
 	}
 }

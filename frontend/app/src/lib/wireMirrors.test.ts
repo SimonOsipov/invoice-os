@@ -116,7 +116,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export async function getExtractionDetail(',
     e2eAnchor: 'export function getExtractionDetail(',
-    // 7 -> 8 for document_type. The three-way equality is set-based and therefore blind to a
+    // The three-way equality is set-based and therefore blind to a
     // key added to all three legs at once; the floor is what bites.
     floor: 8,
   },

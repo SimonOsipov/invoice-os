@@ -9727,6 +9727,9 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
   await expect(strip).toBeVisible()
   await expect(strip).toHaveText(RECEIPT_NOTICE)
 
+  await expect(page.locator('[data-testid^="extraction-field-"]'), 'the pane does not render one cell per header field').toHaveCount(
+    VOCABULARY.length,
+  )
   // The verdict moves no row: the three printed values stay decided with no pill.
   const wire = new Map(detail.fields.map((f) => [f.name, f]))
   for (const name of Object.keys(JEV_RECEIPT_READ) as (keyof typeof JEV_RECEIPT_READ)[]) {
@@ -9739,9 +9742,6 @@ test('CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the 
     const w = wire.get(name)
     expect({ value: w?.value, reason: w?.reason }, `${name} on the wire`).toEqual({ value: null, reason: 'missing' })
   }
-  await expect(page.locator('[data-testid^="extraction-field-"]'), 'the pane does not render one cell per header field').toHaveCount(
-    VOCABULARY.length,
-  )
   expect(
     detail.fields.map((f) => f.name),
     'the verdict became a field row',

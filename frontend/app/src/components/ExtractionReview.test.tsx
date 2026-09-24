@@ -2946,7 +2946,7 @@ describe('the document type', () => {
     ['quotation', 'This looks like a quotation, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     [
       'credit note',
-      'This looks like a credit note, not a tax invoice. Its import was not changed. A credit note files here as an ordinary invoice with negative amounts. Check it before you submit an invoice from it.',
+      'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.',
     ],
     ['delivery note', 'This looks like a delivery note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
     ['statement', 'This looks like a statement of account, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'],
@@ -2992,14 +2992,16 @@ describe('the document type', () => {
     expect(s!.textContent).toBe(sentence)
   })
 
-  it('the document type: a credit note says it files as an ordinary invoice with negative amounts', async () => {
+  it('the document type: a credit note carries no filing claim', async () => {
     render(review({ ctx: serving(mkDetail({ document_type: 'credit note' })).ctx }))
     await flush()
 
     const s = strip()
     expect(s, 'no strip for a credit note').not.toBeNull()
-    expect(s!.textContent).toContain('files here as an ordinary invoice with negative amounts')
+    expect(s!.textContent).toBe(NOTICES.find(([t]) => t === 'credit note')![1])
     expect(s!.textContent).toContain('not a tax invoice')
+    expect(s!.textContent).not.toContain('negative')
+    expect(s!.textContent).not.toContain('files')
   })
 
   it('the document type: the strip sits above the body, not in it', async () => {
@@ -3103,7 +3105,7 @@ describe('the document type, adversarial', () => {
   const RECEIPT =
     'This looks like a receipt, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
   const CREDIT_NOTE =
-    'This looks like a credit note, not a tax invoice. Its import was not changed. A credit note files here as an ordinary invoice with negative amounts. Check it before you submit an invoice from it.'
+    'This looks like a credit note, not a tax invoice. Its import was not changed. Check it before you submit an invoice from it.'
 
   function strip(): HTMLElement | null {
     return screen.queryByTestId('extraction-document-type')

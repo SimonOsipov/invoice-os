@@ -2089,7 +2089,7 @@ func TestFixtures_JevDoubtWithoutItsMarkerChangesNothing(t *testing.T) {
 	in := fxJevDecided(pages)
 	i := slices.IndexFunc(in, func(r extraction.FieldResult) bool { return r.Name == "invoice_number" })
 	if i < 0 || in[i].Reason != extraction.ReasonNone || in[i].Value == nil || *in[i].Value != "JD-3310" {
-		t.Fatalf("the unmarked page does not decide invoice_number JD-3310, so the control asks nothing: %+v", in)
+		t.Fatalf("the unmarked page does not decide invoice_number JD-3310: %+v", in)
 	}
 
 	out := extraction.CheckValuesForTest(t.Context(), client, pages, slices.Clone(in))

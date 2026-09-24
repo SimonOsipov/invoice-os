@@ -2459,7 +2459,7 @@ cmd_set_production_environment() {
 
 AUTH_INTERNAL_URL="http://auth.railway.internal:8080"
 AUTH_JWKS_URL="$AUTH_INTERNAL_URL/.well-known/jwks.json"
-AUTH_MOCK_ISSUER="https://mock.fiscalbridge.dev"
+AUTH_MOCK_ISSUER="https://mock.ascomply.dev"
 AUTH_LOOPBACK_JWKS_URL="http://127.0.0.1:8080/.well-known/jwks.json"
 AUTH_PRODUCTION_SITE_URL="https://www.ascomply.com"
 # A reference, not a secret: Railway renders the gateway's password into it.
@@ -2598,10 +2598,10 @@ value_verdict() {
   echo "  $label.$name confirmed."
 }
 
-# secret_verdict <variables-response-json> <label> <name> [prenv]
-# Present and non-empty; with prenv, also exactly one ES256 signing key. Prints no value.
+# secret_verdict <variables-response-json> <label> <name> <want> [prenv]
+# Equal to want, compared in shell; with prenv, also exactly one ES256 signing key. Prints no value.
 secret_verdict() {
-  local resp="$1" label="$2" name="$3" prenv="${4:-}" kind
+  local resp="$1" label="$2" name="$3" want="$4" prenv="${5:-}" kind got
 
   kind=$(auth_kind "$resp" "$name")
   case "$kind" in
@@ -2614,12 +2614,19 @@ secret_verdict() {
       return 1 ;;
   esac
 
-  if [ -n "$prenv" ] && ! printf '%s' "$resp" | jq -j --arg n "$name" '.data.variables[$n]' \
-      | "$prenv" jwk-check >/dev/null 2>&1; then
+  # A fork inherits the source value, so presence alone cannot show the write landed.
+  got=$(printf '%s' "$resp" | jq -j --arg n "$name" '.data.variables[$n]' && printf x)
+  got=${got%x}
+  if [ "$got" != "$want" ]; then
+    echo "::error::$label.$name reads a different value after the write. Value not printed."
+    return 1
+  fi
+
+  if [ -n "$prenv" ] && ! printf '%s' "$got" | "$prenv" jwk-check >/dev/null 2>&1; then
     echo "::error::$label.$name is not exactly one ES256 signing key after the write."
     return 1
   fi
-  echo "  $label.$name is present."
+  echo "  $label.$name confirmed."
 }
 
 # auth_write <env-id> <svc-id> <label> NAME=value...: non-secrets only.
@@ -2716,11 +2723,11 @@ cmd_set_fork_auth() {
 
   local bad=0
   auth_read "$env_id" "$auth_id" auth
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$AUTH_PRENV" || bad=1
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$jwk" "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$jwt_secret" || bad=1
   auth_check auth "${auth_vars[@]}" || bad=1
   auth_read "$env_id" "$gw_id" gateway
-  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD || bad=1
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$admin_pw" || bad=1
   auth_check gateway "${gateway_vars[@]}" || bad=1
   if [ "$bad" != "0" ]; then
     echo "::error::The fork auth configuration in environment $env_id did not read back as written."
@@ -2841,6 +2848,10 @@ cmd_set_production_auth() {
   [ "$sealed" = "0" ] || exit 1
 
   auth_build_prenv "the production auth configuration"
+  if ! printf '%s' "$AUTH_JWT_KEYS" | "$AUTH_PRENV" jwk-check >/dev/null 2>&1; then
+    echo "::error::AUTH_JWT_KEYS is not exactly one ES256 signing key. Value not printed. Nothing was written."
+    exit 1
+  fi
   local issuer
   issuer=$(auth_issuer production)
   local auth_vars=(
@@ -2868,14 +2879,14 @@ cmd_set_production_auth() {
   # Read back before the user seals anything: a sealed value cannot be read.
   local bad=0
   auth_read "$env_id" "$auth_id" auth
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$AUTH_PRENV" || bad=1
-  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_KEYS "$AUTH_JWT_KEYS" "$AUTH_PRENV" || bad=1
+  secret_verdict "$GQL_RESPONSE" auth GOTRUE_JWT_SECRET "$AUTH_JWT_SECRET" || bad=1
   if [ -n "${RESEND_API_KEY:-}" ]; then
-    secret_verdict "$GQL_RESPONSE" auth GOTRUE_SMTP_PASS || bad=1
+    secret_verdict "$GQL_RESPONSE" auth GOTRUE_SMTP_PASS "$RESEND_API_KEY" || bad=1
   fi
   auth_check auth "${auth_vars[@]}" || bad=1
   auth_read "$env_id" "$gw_id" gateway
-  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD || bad=1
+  secret_verdict "$GQL_RESPONSE" gateway AUTH_ADMIN_PASSWORD "$AUTH_ADMIN_PASSWORD" || bad=1
   auth_check gateway "${gateway_vars[@]}" || bad=1
   if [ "$bad" != "0" ]; then
     echo "::error::The production auth configuration in environment $env_id did not read back as written."

@@ -24,7 +24,7 @@ const (
 
 	authInternalURL  = "http://auth.railway.internal:8080"
 	authJWKSURL      = authInternalURL + "/.well-known/jwks.json"
-	authMockIssuer   = "https://mock.fiscalbridge.dev"
+	authMockIssuer   = "https://mock.ascomply.dev"
 	authLoopbackJWKS = "http://127.0.0.1:8080/.well-known/jwks.json"
 	authProdIssuer   = "urn:ascomply:auth:production"
 	authForkIssuer   = "urn:ascomply:auth:" + authForkName
@@ -36,7 +36,7 @@ const (
 	authSourcePassword  = "5eed0000000000000000000000000000000000000000000000000000000000bb"
 	authSourceResendKey = "re_x_planted_source_resend_key"
 
-	// Production inputs for --post-merge.
+	// Fake values planted as --post-merge inputs to prove no secret is printed.
 	authProdPassword  = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
 	authProdJWTSecret = "f9e8d7c6b5a4938271605f4e3d2c1b0af9e8d7c6b5a4938271605f4e3d2c1b0a"
 	authProdResendKey = "re_planted_production_resend_key"

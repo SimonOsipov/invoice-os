@@ -513,11 +513,11 @@ export interface CheckMapping {
 }
 
 export async function checkMapping(
-  _authedFetch: AuthedFetch,
-  _base: string,
-  _req: CheckMappingRequest,
+  authedFetch: AuthedFetch,
+  base: string,
+  req: CheckMappingRequest,
 ): Promise<CheckMapping> {
-  return { doubted: [] }
+  return authedFetch<CheckMapping>(`${base}/api/invoice/v1/imports/check-mapping`, { method: 'POST', body: req })
 }
 
 // A plain-JSON GET, unlike previewImport/createImport's multipart POSTs -- goes through

@@ -37,7 +37,10 @@ const (
 	minRefetchInterval = 30 * time.Second
 )
 
-var errRefetchThrottled = errors.New("refetch throttled")
+var (
+	errRefetchThrottled = errors.New("refetch throttled")
+	errFetchPanicked    = errors.New("jwks fetch panicked")
+)
 
 // Config configures a Verifier. The M8 cutover is a config change rather than
 // a code change.
@@ -235,18 +238,7 @@ func (v *Verifier) jwksKeys(ctx context.Context, ks *keySet, forceRefresh bool) 
 			ks.lastForced = now
 		}
 		ks.mu.Unlock()
-
-		// The fetch is shared, so one caller's cancellation must not fail it for the rest.
-		call.keys, call.err = v.fetchJWKS(context.WithoutCancel(ctx), ks.jwksURL)
-		ks.mu.Lock()
-		if call.err != nil {
-			ks.failed, ks.lastForced = true, now
-		} else {
-			ks.keys, ks.fetchedAt, ks.failed = call.keys, v.now(), false
-		}
-		ks.inflight = nil
-		ks.mu.Unlock()
-		close(call.done)
+		v.runFetch(ctx, ks, call, now)
 	} else {
 		ks.mu.Unlock()
 		select {
@@ -261,6 +253,25 @@ func (v *Verifier) jwksKeys(ctx context.Context, ks *keySet, forceRefresh bool) 
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 	return v.cachedOrStale(ks, v.now(), call.err)
+}
+
+// runFetch performs the shared fetch. The cleanup is deferred so a panic still
+// counts as a failed fetch and releases the waiters; the panic then propagates.
+func (v *Verifier) runFetch(ctx context.Context, ks *keySet, call *fetchCall, start time.Time) {
+	call.err = errFetchPanicked
+	defer func() {
+		ks.mu.Lock()
+		if call.err != nil {
+			ks.failed, ks.lastForced = true, start
+		} else {
+			ks.keys, ks.fetchedAt, ks.failed = call.keys, v.now(), false
+		}
+		ks.inflight = nil
+		ks.mu.Unlock()
+		close(call.done)
+	}()
+	// The fetch is shared, so one caller's cancellation must not fail it for the rest.
+	call.keys, call.err = v.fetchJWKS(context.WithoutCancel(ctx), ks.jwksURL)
 }
 
 // cachedOrStale answers when no fetch result is usable: the cached keys while

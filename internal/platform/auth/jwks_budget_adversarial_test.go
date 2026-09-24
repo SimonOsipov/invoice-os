@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -390,4 +391,67 @@ func TestJWKS_PanickingFetchDoesNotWedgeTheIssuer(t *testing.T) {
 		t.Fatalf("identity = %+v, want subject %s tenant tenant-x", id, testSubject)
 	}
 	r.wantFetches(t, 1, "fetch after the panic")
+}
+
+// A recovery then a new outage warns again; the throttle spans one outage, not the process.
+func TestJWKS_StaleWarnReturnsAfterRecoveryThenNewFailure(t *testing.T) {
+	r := newBudgetRig(t)
+	r.prime(t)
+	r.jwks.set(failing())
+	r.clock.at(2 * time.Hour)
+	assertVerifies(t, r.v, r.token(t), "tenant-x", "first outage")
+	if got := warnCount(r); got != 1 {
+		t.Fatalf("first outage: WARN lines = %d, want 1", got)
+	}
+
+	r.jwks.set(r.iss.JWKSHandler())
+	r.clock.at(2*time.Hour + 30*time.Second)
+	assertVerifies(t, r.v, r.token(t), "tenant-x", "recovery")
+	r.wantFetches(t, 3, "recovery fetch")
+
+	r.jwks.set(failing())
+	r.clock.at(3*time.Hour + 31*time.Second)
+	assertVerifies(t, r.v, r.token(t), "tenant-x", "second outage")
+	r.wantFetches(t, 4, "second outage fetch")
+	if got := warnCount(r); got != 2 {
+		t.Fatalf("second outage: WARN lines = %d, want 2; log:\n%s", got, r.logs.String())
+	}
+}
+
+// The throttle is per issuer: one issuer's WARN never silences another's.
+func TestJWKS_StaleWarnThrottleIsPerIssuer(t *testing.T) {
+	a := newCountedIssuer(t, testIssuer)
+	b := newCountedIssuer(t, additionalIssuer)
+	logs := &lockedBuffer{}
+	v, err := NewVerifier(Config{
+		Issuer: a.iss.issuer, JWKSURL: a.url, CacheTTL: time.Hour,
+		Additional: []TrustedIssuer{{Issuer: b.iss.issuer, JWKSURL: b.url}},
+		Logger:     slog.New(slog.NewTextHandler(logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	clock := &fakeClock{t: budgetT0}
+	v.now = clock.now
+	tokA := mustMint(t, a.iss, MintOptions{Subject: testSubject, TenantID: "ta"})
+	tokB := mustMint(t, b.iss, MintOptions{Subject: testSubject, TenantID: "tb"})
+	assertVerifies(t, v, tokA, "ta", "prime a")
+	assertVerifies(t, v, tokB, "tb", "prime b")
+
+	a.hits.set(failing())
+	b.hits.set(failing())
+	clock.at(2 * time.Hour)
+	assertVerifies(t, v, tokA, "ta", "stale a")
+	clock.at(2*time.Hour + time.Second)
+	assertVerifies(t, v, tokB, "tb", "stale b")
+
+	out := logs.String()
+	if n := strings.Count(out, "level=WARN"); n != 2 {
+		t.Fatalf("WARN lines = %d, want 2 (one per issuer); log:\n%s", n, out)
+	}
+	for _, iss := range []string{a.iss.issuer, b.iss.issuer} {
+		if !strings.Contains(out, "issuer="+iss) {
+			t.Errorf("no WARN names issuer %s; log:\n%s", iss, out)
+		}
+	}
 }

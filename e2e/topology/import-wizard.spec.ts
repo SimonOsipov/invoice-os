@@ -2033,10 +2033,10 @@ test('BULK-E2E-01 (Core AC 1/2/3): shared-layout multi-file run -- select, cap-r
   // own [coverage-sentence-is-unconditional] pairs with CreateMapping's own
   // `groups.length > 1` gate on the pager: this run's ONE group renders NO "GROUP X OF Y"
   // span at all), and the coverage sentence names both files by filename.
-  await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
   await expect(
     page.getByText('This mapping applies to 2 files: shared-layout-lagos.csv and shared-layout-abuja.csv.', { exact: true }),
   ).toBeVisible()
+  await expect(page.getByText(/^GROUP \d+ OF \d+$/), 'a single-group run renders no group pager').toHaveCount(0)
 
   await page.getByRole('button', { name: 'invoice_number' }).click()
   await page.getByText('Invoice No', { exact: true }).click()
@@ -2184,6 +2184,8 @@ test('BULK-E2E-03 (Core AC 5, [sequential-not-parallel], spreadsheet path): a cr
   await previewResp
 
   // Same shared header on both files -- one group, one Map step (mirrors BULK-E2E-01d).
+  // The Map step opens after the placement check, not the preview response.
+  await expect(page.locator('[data-testid="map-column"]').first()).toBeVisible()
   await expect(page.getByText(/^GROUP \d+ OF \d+$/)).toHaveCount(0)
 
   await page.getByRole('button', { name: 'invoice_number' }).click()

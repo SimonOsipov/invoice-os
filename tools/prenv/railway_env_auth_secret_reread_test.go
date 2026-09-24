@@ -1,4 +1,4 @@
-// railway_env_auth_defects_test.go holds red tests for open defects in the auth writers.
+// railway_env_auth_secret_reread_test.go pins the exact secret re-read and the pre-write key check.
 package main
 
 import (
@@ -64,6 +64,30 @@ func TestSetProductionAuth_PostMergeRefusesAnInvalidKeyBeforeAnyWrite(t *testing
 			}
 			if m := s.mutations(t); len(m) != 0 {
 				t.Errorf("production received %d mutation(s) before the bad key was refused", len(m))
+			}
+		})
+	}
+}
+
+// Production before the seal: an older value on re-read means this write did not land.
+func TestSetProductionAuth_SecretReReadMustEqualTheWrittenValue(t *testing.T) {
+	older := freshJWK(t)
+	for _, c := range []struct{ svc, variable, stale string }{
+		{authProdAuthID, "GOTRUE_JWT_KEYS", older},
+		{authProdAuthID, "GOTRUE_JWT_SECRET", authSourceJWTSecret},
+		{authProdAuthID, "GOTRUE_SMTP_PASS", authSourceResendKey},
+		{productionGatewayID, "AUTH_ADMIN_PASSWORD", authSourcePassword},
+	} {
+		t.Run(c.variable, func(t *testing.T) {
+			s := newProdAuthShim(t, prodSealed())
+			s.bendRead(t, c.svc, "."+c.variable+" = "+jqString(t, c.stale))
+			stdout, stderr, code := s.run(t, prodAuthExports(authProdPassword, freshJWK(t), authProdJWTSecret, authProdResendKey), "set-production-auth", "--post-merge", persistentEnvironmentID)
+			out := stdout + stderr
+			if code != 1 || !strings.Contains(errorLines(out), c.variable+" reads a different value") {
+				t.Errorf("exit %d and error lines %q, want exit 1: %s reads a different value", code, errorLines(out), c.variable)
+			}
+			if strings.Contains(out, c.stale) {
+				t.Error("the output carries the value it read")
 			}
 		})
 	}

@@ -179,6 +179,7 @@ func TestSetForkAuth_ReReadEdges(t *testing.T) {
 		{"AUTH_URL with a trailing newline", authForkGatewayID, "AUTH_URL", `.AUTH_URL = "` + authInternalURL + `\n"`, ""},
 		{"GOTRUE_SMTP_HOST absent, not blank", authForkAuthID, "GOTRUE_SMTP_HOST", `del(.GOTRUE_SMTP_HOST)`, ""},
 		{"GOTRUE_SMTP_PASS reads the source key", authForkAuthID, "GOTRUE_SMTP_PASS", `.GOTRUE_SMTP_PASS = "` + authSourceResendKey + `"`, authSourceResendKey},
+		{"GOTRUE_JWT_SECRET with a trailing newline", authForkAuthID, "GOTRUE_JWT_SECRET", `.GOTRUE_JWT_SECRET += "\n"`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newForkAuthShim(t, freshJWK(t))
@@ -192,6 +193,44 @@ func TestSetForkAuth_ReReadEdges(t *testing.T) {
 				t.Error("the failed re-read printed the value it read")
 			}
 		})
+	}
+}
+
+// AC-3 names absent, empty and mismatch as distinct failures; the error says which.
+func TestAuthReReadSaysAbsentOrEmpty(t *testing.T) {
+	for _, c := range []struct{ name, svc, filter, says string }{
+		{"a non-secret absent", authForkGatewayID, `del(.AUTH_URL)`, "gateway.AUTH_URL is absent"},
+		{"a secret absent", authForkAuthID, `del(.GOTRUE_JWT_SECRET)`, "auth.GOTRUE_JWT_SECRET is absent"},
+		{"a secret empty", authForkGatewayID, `.AUTH_ADMIN_PASSWORD = ""`, "gateway.AUTH_ADMIN_PASSWORD is empty"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newForkAuthShim(t, freshJWK(t))
+			s.bendRead(t, c.svc, c.filter)
+			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
+			if code != 1 || !strings.Contains(errorLines(stdout+stderr), c.says) {
+				t.Errorf("exit %d and error lines %q, want exit 1 saying %q", code, errorLines(stdout+stderr), c.says)
+			}
+		})
+	}
+}
+
+// The fork has no pre-write key check, so the read-back jwk-check is the only guard on the generator.
+func TestSetForkAuth_AnInvalidGeneratedKeyFails(t *testing.T) {
+	s := newForkAuthShim(t, freshJWK(t))
+	fake := "#!/bin/sh\nif [ \"$1\" = jwk-es256 ]; then echo '[]'; exit 0; fi\nexec '" + binPath + "' \"$@\"\n"
+	goShim := "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=\"$2\"; shift; done\n" +
+		"cat > \"$out\" <<'FAKE'\n" + fake + "FAKE\nchmod +x \"$out\"\n"
+	writeFile(t, filepath.Join(s.dir, "go"), goShim)
+	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
+	out := stdout + stderr
+	if got := oneUpsert(t, s.upserts(t), authForkAuthID, "GOTRUE_JWT_KEYS"); got != "[]" {
+		t.Fatalf("control: the fake generator did not run; key written = %q", got)
+	}
+	if code != 1 || !strings.Contains(errorLines(out), "GOTRUE_JWT_KEYS is not exactly one ES256 signing key") {
+		t.Errorf("exit %d and error lines %q, want exit 1 refusing GOTRUE_JWT_KEYS", code, errorLines(out))
 	}
 }
 

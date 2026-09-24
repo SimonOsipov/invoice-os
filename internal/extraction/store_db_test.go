@@ -1833,3 +1833,36 @@ func TestRLS_WriteDocumentTypeAcceptsEveryVerdictAndTheCheckRefusesTaxInvoice(t 
 		t.Error("a write to a job that does not exist returned nil, want an error for zero rows affected")
 	}
 }
+
+func TestRLS_WriteDocumentTypeNeverReachesAnotherTenantsJob(t *testing.T) {
+	ctx := t.Context()
+	h := stRequire(t)
+	tenantA, documentA := stTenant(t, ctx)
+	tenantB, _ := stTenant(t, ctx)
+	jobA := rdSeedJob(t, ctx, tenantA, documentA, "succeeded", time.Now().UTC(), nil)
+	write := func(txTenant, argTenant string) error {
+		return db.WithinTenantTx(ctx, h.app, txTenant, func(tx pgx.Tx) error {
+			return extraction.WriteDocumentTypeForTest(ctx, tx, argTenant, jobA, "receipt")
+		})
+	}
+
+	for _, tc := range []struct{ name, txTenant, argTenant string }{
+		{"tenant B's transaction and tenant", tenantB, tenantB},
+		{"tenant A's transaction, tenant B named", tenantA, tenantB},
+		{"tenant B's transaction, tenant A named", tenantB, tenantA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := write(tc.txTenant, tc.argTenant); err == nil {
+				t.Error("the write returned nil, want the zero-rows error")
+			}
+			wjAssertNoVerdict(t, ctx, "tenant A's job", jobA)
+		})
+	}
+
+	t.Run("control: tenant A writes its own job", func(t *testing.T) {
+		if err := write(tenantA, tenantA); err != nil {
+			t.Fatalf("tenant A's own write: %v", err)
+		}
+		wjAssertVerdict(t, ctx, "tenant A's job", jobA, "receipt")
+	})
+}

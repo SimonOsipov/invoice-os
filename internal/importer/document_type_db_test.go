@@ -134,17 +134,24 @@ func TestSettledExtraction_ReadsNoDocumentType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse document.go: %v", err)
 	}
-	var body string
+	// String literals only: a comment naming document_type is not a read.
+	var lits []string
 	for _, d := range f.Decls {
 		fd, ok := d.(*ast.FuncDecl)
 		if !ok || fd.Name.Name != "SettledExtraction" || fd.Recv == nil || fd.Body == nil {
 			continue
 		}
-		body = string(src[fset.Position(fd.Body.Pos()).Offset:fset.Position(fd.Body.End()).Offset])
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if bl, ok := n.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+				lits = append(lits, bl.Value)
+			}
+			return true
+		})
 	}
-	if body == "" {
-		t.Fatal("found no (*Store).SettledExtraction body in document.go")
+	if len(lits) == 0 {
+		t.Fatal("found no string literal in a (*Store).SettledExtraction body in document.go")
 	}
+	body := strings.Join(lits, "\n")
 	for _, want := range []string{"coalesce(d.filename, '')", "FROM extraction_field_results"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the located body lacks %q; the scan below is not reading SettledExtraction's queries", want)

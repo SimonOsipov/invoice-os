@@ -307,6 +307,7 @@ func TestRLS_ExtractWorkerNeverAsksJevWhenTheAIFailedOrTheRulesFailed(t *testing
 		if n := stub.count(); n != 0 {
 			t.Errorf("the Jev seam saw %d call(s) after the Rules load failed, want 0", n)
 		}
+		wjAssertNoVerdict(t, ctx, "the Rules-failed job", wkExtractionJobID(t, ctx, tenantID, 954021))
 	})
 
 	t.Run("control: an answered AI call asks", func(t *testing.T) {
@@ -694,4 +695,49 @@ func TestRLS_ExtractWorkerVerdictSharesTheResultTransactionsFate(t *testing.T) {
 		xid := run(t, 954241, wjReceipt(scores))
 		wjAssertVerdict(t, ctx, "attempt 2 answered receipt", xid, "receipt")
 	})
+}
+
+// One worker, one document, two jobs: the later job's verdict lands on its own row only.
+func TestRLS_ExtractWorkerVerdictStaysOnItsOwnJob(t *testing.T) {
+	ctx := t.Context()
+	scores := map[string]float64{"invoice_number": 1, "total": 1}
+	tenantID, documentID := wkFixture(t, ctx)
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wjPage()}}, wpStoreRules(t).load, &wkAuditRecorder{})
+	ew.AI = wjAI()
+
+	ew.Jev = &wkJev{enabled: true, resp: wjWithType(wjNoul(scores), "tax invoice", 1)}
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(954250, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("first job: Work: %v", err)
+	}
+	ew.Jev = &wkJev{enabled: true, resp: wjReceipt(scores)}
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(954251, 1, 3, tenantID, documentID, uuid.NewString())); err != nil {
+		t.Fatalf("second job: Work: %v", err)
+	}
+	first := wkExtractionJobID(t, ctx, tenantID, 954250)
+	second := wkExtractionJobID(t, ctx, tenantID, 954251)
+	if first == second {
+		t.Fatalf("both river jobs map to extraction job %s; the test needs two rows", first)
+	}
+	wjAssertNoVerdict(t, ctx, "the earlier job on the same document", first)
+	wjAssertVerdict(t, ctx, "the later job", second, "receipt")
+}
+
+func TestRLS_ExtractWorkerWritesNoVerdictWhenTheJobDeadLetters(t *testing.T) {
+	ctx := t.Context()
+	tenantID, documentID := wkFixture(t, ctx)
+	rulesErr := errors.New("rules store down")
+	rules := &wpRules{inner: func(context.Context, string, string) ([]extraction.AnchorRule, error) { return nil, rulesErr }}
+	stub := &wkJev{enabled: true, resp: wjReceipt(map[string]float64{"invoice_number": 1, "total": 1})}
+	ew := wpWorker(t, wkOK(), wpCorpusOpener(t), &wpReader{pages: []extraction.Page{wjPage()}}, rules.load, &wkAuditRecorder{})
+	ew.AI = wjAI()
+	ew.Jev = stub
+	if err := ew.Work(ctx, extraction.NewExtractJobForTest(954260, 3, 3, tenantID, documentID, uuid.NewString())); !errors.Is(err, rulesErr) {
+		t.Fatalf("Work returned %v, want the rules error", err)
+	}
+	xid := wkExtractionJobID(t, ctx, tenantID, 954260)
+	stAssertJobState(t, ctx, xid, "dead_lettered")
+	if n := stub.count(); n != 0 {
+		t.Errorf("the Jev seam saw %d call(s) on a dead-lettered job, want 0", n)
+	}
+	wjAssertNoVerdict(t, ctx, "the dead-lettered job", xid)
 }

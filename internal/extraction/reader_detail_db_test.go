@@ -1929,6 +1929,67 @@ func TestRLS_ExtractionDetailServesTheDocumentType(t *testing.T) {
 	}
 }
 
+func TestRLS_ExtractionDetailServesEveryVerdictVerbatimAndNoOtherTenants(t *testing.T) {
+	ctx := t.Context()
+	r := rdReader(t)
+	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	ctxB, tenantB, docB := rdTenant(t, ctx, "active")
+	plant := func(tenantID, documentID, verdict string) string {
+		t.Helper()
+		jobID := rdSeedJob(t, ctx, tenantID, documentID, "succeeded", time.Now().UTC(), nil)
+		ct, err := stRequire(t).super.Exec(ctx,
+			`UPDATE extraction_jobs SET document_type = $2 WHERE id = $1`, jobID, verdict)
+		if err != nil || ct.RowsAffected() != 1 {
+			t.Fatalf("plant %q on job %s: rows %d, err %v", verdict, jobID, ct.RowsAffected(), err)
+		}
+		return jobID
+	}
+	get := func(reqCtx context.Context, jobID string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/v1/extractions/"+jobID, nil)
+		req.SetPathValue("id", jobID)
+		w := httptest.NewRecorder()
+		extraction.DetailHandler(r.Detail, nil)(w, req.WithContext(reqCtx))
+		return w
+	}
+
+	verdicts := extraction.DocumentTypeVerdictsForTest()
+	if len(verdicts) != 7 {
+		t.Fatalf("DocumentTypeVerdictsForTest() = %v, want seven names", verdicts)
+	}
+	for _, v := range verdicts {
+		t.Run(v, func(t *testing.T) {
+			jobID := plant(tenantA, docA, v)
+			w := get(ctxA, jobID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			want, _ := json.Marshal(v)
+			if got := rvdJSONKey(t, w.Body.Bytes(), "document_type"); got != string(want) {
+				t.Errorf("document_type = %s, want %s", got, want)
+			}
+		})
+	}
+
+	t.Run("tenant B reads tenant A's verdict", func(t *testing.T) {
+		jobA := plant(tenantA, docA, "credit note")
+		if _, err := r.Detail(ctxB, jobA); !errors.Is(err, extraction.ErrNotFound) {
+			t.Errorf("tenant B's Detail of tenant A's job returned %v, want ErrNotFound", err)
+		}
+		w := get(ctxB, jobA)
+		if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "credit note") {
+			t.Errorf("tenant B's GET of tenant A's job = %d %s, want 404 without the verdict", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("control: tenant B reads its own verdict", func(t *testing.T) {
+		jobB := plant(tenantB, docB, "statement")
+		got, err := r.Detail(ctxB, jobB)
+		if err != nil || got.DocumentType == nil || *got.DocumentType != "statement" {
+			t.Errorf("tenant B's own Detail = %s, %v; want statement", wkStr(got.DocumentType), err)
+		}
+	})
+}
+
 // FK-8 (AC-7/8). The two extraction DTOs answer the same question about the same job with the
 // same value. Asserted against a literal first, then against each other: an equality alone is
 // satisfied by two DTOs that are both wrong, and by two absent keys.

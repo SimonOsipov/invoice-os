@@ -389,3 +389,44 @@ func kindOf(t *testing.T, req DSNRequirement) int64 {
 	}
 	return f.Int()
 }
+
+// auth.DATABASE_URL is IfPresent: production has none until after merge, and every fork writes one.
+func TestDSNCheck_AuthDatabaseURLIfPresent(t *testing.T) {
+	m := healthyMap()
+	if _, ok := m["auth"]; ok {
+		t.Fatal("healthyMap already carries auth; the absent case would not be absent")
+	}
+	if got := CheckDSNs(m); len(got) != 0 {
+		t.Errorf("a map without auth reports %v, want clean", offenderStrings(got))
+	}
+	if stdout, stderr, code := runDSNCheck(t, m); code != 0 {
+		t.Errorf("dsn-check on a map without auth exits %d, want 0; output = %q", code, stdout+stderr)
+	}
+
+	m["auth"] = map[string]string{"DATABASE_URL": "postgresql://supabase_auth_admin:" + sentinelPW + "@" + railwayHost}
+	if got := CheckDSNs(m); len(got) != 0 {
+		t.Errorf("a healthy auth.DATABASE_URL reports %v, want clean", offenderStrings(got))
+	}
+
+	for _, c := range []struct {
+		name, value string
+		defect      DSNDefect
+	}{
+		{"unrendered", authDSNReference, DefectUnrendered},
+		{"empty password", "postgresql://supabase_auth_admin:@" + railwayHost, DefectEmptyPassword},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := healthyMap()
+			m["auth"] = map[string]string{"DATABASE_URL": c.value}
+			want := []Offender{{"auth", "DATABASE_URL", c.defect}}
+			if got := CheckDSNs(m); !reflect.DeepEqual(got, want) {
+				t.Errorf("offenders = %v, want %v", offenderStrings(got), offenderStrings(want))
+			}
+			stdout, stderr, code := runDSNCheck(t, m)
+			if code == 0 || !strings.Contains(stdout, "auth DATABASE_URL "+string(c.defect)) {
+				t.Errorf("dsn-check exits %d and does not report auth DATABASE_URL %s; stdout = %q", code, c.defect, stdout)
+			}
+			assertNoSentinel(t, stdout, stderr)
+		})
+	}
+}

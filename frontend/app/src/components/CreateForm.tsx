@@ -10,10 +10,9 @@
 //  - NOTHING here may affirm a filing. There is no success banner, no tick, no optimistic
 //    row: the affirmation is the real invoice detail screen rendering the server's own row,
 //    reached only after the 201. `ctx.fileDraft` has no dep that could report success.
-//  - The summary must render the number that actually crosses the wire. The mapper's
-//    `total` is subtotal + vat with NO withholding deduction, so the old `sub + vat − wht`
-//    row and its WHT line were removed rather than restyled — they showed a total the
-//    invoice does not contain.
+//  - The summary renders the exact strings that cross the wire: manual mode shows
+//    `draftTotals` (the mapper's own math), carried mode the reading. There is no WHT row:
+//    the filed `total` is subtotal + vat with no withholding deduction.
 //
 // Every field on this screen is editable and every one of them is transmitted. Fields with
 // no column behind them (billing address, WHT, document type) were removed outright: a
@@ -23,8 +22,8 @@
 // Carried mode (ctx.handOffReading) is the exception to all of this: the server files the
 // reading, so its values (currency included) are read-only and only the number is typed.
 
-import { amount, fmt } from '../lib/format'
-import { fileDraftGate } from '../lib/invoiceDraft'
+import { fmt } from '../lib/format'
+import { draftTotals, fileDraftGate } from '../lib/invoiceDraft'
 import { plusGlyph, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
@@ -36,8 +35,7 @@ const dash = (v: string | null) => (v === null ? '—' : undefined)
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   const { active, activeEntity, draft, filing, filingError, handOffReading: reading } = ctx
 
-  const sub = amount(draft.items)
-  const vat = sub * 0.075
+  const totals = draftTotals(draft.items)
 
   // The SAME pure gate App.tsx re-checks before firing the request, so the label and the
   // handler can never disagree about why filing is unavailable. Entity first (an in-house
@@ -188,7 +186,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
             {reading === null ? (
-              <span data-testid="summary-subtotal" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(sub)}</span>
+              <span data-testid="summary-subtotal" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{totals.subtotal ?? '—'}</span>
             ) : (
               <span data-testid="carried-subtotal" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{reading.subtotal ?? '—'}</span>
             )}
@@ -196,7 +194,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{reading === null ? 'VAT · 7.5%' : 'VAT'}</span>
             {reading === null ? (
-              <span data-testid="summary-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(vat)}</span>
+              <span data-testid="summary-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{totals.vat ?? '—'}</span>
             ) : (
               <span data-testid="carried-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{reading.vat ?? '—'}</span>
             )}
@@ -205,7 +203,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 14, borderTop: '1px solid var(--line-1)', marginBottom: 20 }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>Total due</span>
           {reading === null ? (
-            <span data-testid="summary-total" className="money" style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sub + vat)}</span>
+            <span data-testid="summary-total" className="money" style={{ fontSize: 18, fontWeight: 700 }}>{totals.total ?? '—'}</span>
           ) : (
             <span data-testid="carried-total" className="money" style={{ fontSize: 18, fontWeight: 700 }}>{reading.total ?? '—'}</span>
           )}

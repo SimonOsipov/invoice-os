@@ -118,10 +118,17 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
 }
 
 // The filed subtotal/vat/total strings; null when any line is unparseable or there are no lines.
-// Mode A stub (TEST-03-04): returns all-null until the executor moves the math here.
+// CreateForm's manual summary renders these, so the screen shows what crosses the wire.
 export function draftTotals(items: LineItem[]): { subtotal: string | null; vat: string | null; total: string | null } {
-  void items
-  return { subtotal: null, vat: null, total: null }
+  const exactSubtotal = sumAmounts(items.map(lineAmount))
+  const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
+  const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
+  const total = subtotal === null || vat === null ? null : round2(addScaled(subtotal, vat))
+  return {
+    subtotal: subtotal === null ? null : renderScaled(subtotal),
+    vat: vat === null ? null : renderScaled(vat),
+    total: total === null ? null : renderScaled(total),
+  }
 }
 
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
@@ -150,10 +157,7 @@ export function draftToCreateRequest(
     }
   })
 
-  const exactSubtotal = sumAmounts(amounts)
-  const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
-  const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
-  const total = subtotal === null || vat === null ? null : round2(addScaled(subtotal, vat))
+  const { subtotal, vat, total } = draftTotals(draft.items)
 
   return {
     entity_id: entity.id,
@@ -166,9 +170,9 @@ export function draftToCreateRequest(
     buyer_tin: nullIfBlank(draft.buyerTin),
     buyer_name: nullIfBlank(draft.buyer),
     currency: nullIfBlank(draft.currency),
-    subtotal: subtotal === null ? null : renderScaled(subtotal),
-    vat: vat === null ? null : renderScaled(vat),
-    total: total === null ? null : renderScaled(total),
+    subtotal,
+    vat,
+    total,
     line_items: lineItems,
     // Spread, not `source_document_id: sourceDocumentId`: an explicit `undefined` would
     // still make the key PRESENT, and SD-8 reads presence with `in`, not the value.

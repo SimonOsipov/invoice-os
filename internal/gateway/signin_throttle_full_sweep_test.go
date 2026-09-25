@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// D19 "no sweep on every call": while the map stays full and no key can have
+// No sweep on every call: while the map stays full and no key can have
 // expired, refused new addresses must not each pay an O(maxKeys) sweep.
 func TestSignInThrottle_FullMapDoesNotSweepPerCall(t *testing.T) {
 	const maxKeys = 100

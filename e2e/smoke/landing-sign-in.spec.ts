@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { seedConsent } from './landingConsent'
 
-// The sign-in modal carries the email form above the persona list (AUTH-05 D7), so it is
+// The sign-in modal carries the email form above the persona list, so it is
 // taller than the viewport on a short phone. Its card must stay inside the viewport and
 // scroll its own content. Geometry has no jsdom oracle; this is behaviour, not a visual diff.
 
@@ -26,7 +26,7 @@ for (const viewport of VIEWPORTS) {
     await page.setViewportSize(viewport)
     await seedConsent(page, false)
 
-    // signin=ready opens the modal with the form, as the app's start bounce does (D25 step 3).
+    // signin=ready opens the modal with the form, as the app's start bounce does.
     await page.goto(`${LANDING_URL}/?state=${STATE}&signin=ready`)
     const dialog = page.getByRole('dialog', { name: 'Sign in' })
     await expect(dialog).toBeVisible()

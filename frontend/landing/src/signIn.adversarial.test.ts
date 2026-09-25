@@ -1,4 +1,4 @@
-// AUTH-05-06 adversarial: the landing sign-in client off its happy path.
+// Adversarial: the landing sign-in client off its happy path.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client/client'

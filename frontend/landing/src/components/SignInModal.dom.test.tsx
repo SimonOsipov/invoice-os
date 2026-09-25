@@ -44,11 +44,11 @@ afterEach(() => {
 
 async function mount(onClose: () => void = vi.fn(), state: string | null = null): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose, state }))
+    root.render(createElement(SignInModal, { onClose, heldState: () => state }))
   })
 }
 
-// The AUTH-05-07 anchor: absence checks scope here, not to the whole dialog.
+// The picker anchor: absence checks scope here, not to the whole dialog.
 function picker(): HTMLElement {
   const p = dialog().querySelector<HTMLElement>('[data-testid="persona-picker"]')
   expect(p, 'expected the persona picker').not.toBeNull()

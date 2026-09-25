@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// D25 steps 2-3 in the app: the front door and the `?auth=start` bounce carry the stored state.
+// The front door and the `?auth=start` bounce carry the stored state.
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
@@ -162,7 +162,7 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
   })
 })
 
-// QA Mode B (AUTH-05-11): adversarial coverage at App level.
+// Adversarial coverage at App level.
 const X = 'XxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxX'
 
 describe('signInState adversarial: App', () => {

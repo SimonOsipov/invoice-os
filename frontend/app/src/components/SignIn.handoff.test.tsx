@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AUTH-05-08 QA Mode B: SignInLoading with and without a persona (D9).
+// SignInLoading with and without a persona.
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 

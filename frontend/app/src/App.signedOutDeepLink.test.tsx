@@ -90,7 +90,7 @@ function storedSignInState(): string | null {
   }
 }
 
-// The front-door bounce since AUTH-05-11 (D25): landing plus the stored state, nothing else.
+// The front-door bounce: landing plus the stored state, nothing else.
 function stateBounce(): string {
   return `https://landing.example/?state=${storedSignInState()}`
 }
@@ -770,7 +770,7 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
       ctx.signOut()
     })
 
-    // Two writes: signOut's own tail goes to bare landing (D25 step 2, unchanged), then the
+    // Two writes: signOut's own tail goes to bare landing (unchanged), then the
     // front-door effect re-fires on activeSession->null and bounces with the stored state.
     expect(hrefWrites, 'signOut writes href twice: its own tail, then the front-door re-fire').toEqual([
       'https://landing.example',

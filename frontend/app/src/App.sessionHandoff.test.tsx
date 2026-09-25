@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// AUTH-05-08 Mode A: the app redeems a landing hand-off code (D8, D9, D18, D23, D25).
+// The app redeems a landing hand-off code.
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
@@ -500,7 +500,7 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
       expect(rec?.handoff, url).toBe(true)
       expect(rec?.token, url).toBe(OLD_T)
       expect(rec?.me, url).toEqual(OLD_ME)
-      // D18 accepted limit (QA N5): no notice is shown.
+      // Accepted limit: no notice is shown.
       await settle()
       expect(document.body.textContent, url).toBe(baseline)
       expect(screen.queryByRole('alert'), url).toBeNull()

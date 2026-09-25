@@ -1,4 +1,4 @@
-// Landing sign-in client (AUTH-05 D12, D25).
+// Landing sign-in client.
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
 import { appBase } from './auth'

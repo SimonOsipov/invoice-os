@@ -25,7 +25,7 @@ var handoffRoutes = map[string]string{
 
 const (
 	handoffAllowedOrigin = "https://landing.example"
-	handoffState         = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" // 43 base64url chars (D25)
+	handoffState         = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" // 43 base64url chars
 )
 
 func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {

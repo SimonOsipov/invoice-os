@@ -139,10 +139,10 @@ describe('F-2: the sign-in control opens the sign-in modal', () => {
   })
 })
 
-// AUTH-05-07 AC-3/AC-8: the boot URL's `state` and `signin` (D23, D25 step 3).
+// The boot URL's `state` and `signin`.
 describe('AUTH-05-07: the boot sign-in params', () => {
   const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
-  // D23 copy.
+  // Outcome copy.
   const NO_WORKSPACE = 'This account has no workspace yet.'
   const FAILED = "We couldn't open your workspace. Sign in again."
 

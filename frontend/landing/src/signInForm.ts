@@ -1,4 +1,4 @@
-// Pure validator for the landing sign-in form (AUTH-05 D7).
+// Pure validator for the landing sign-in form.
 import { EMAIL_RE } from './components/demoForm'
 
 export type SignInFormValues = {

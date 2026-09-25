@@ -179,7 +179,7 @@ func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
 	}
 }
 
-// Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service (D24).
+// Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service.
 func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
 

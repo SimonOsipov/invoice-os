@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// AUTH-05-07 AC-1..7: the landing sign-in form. Real signIn.ts, fetch stubbed.
+// The landing sign-in form. Real signIn.ts, fetch stubbed.
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -13,7 +13,7 @@ import { SignInModal } from './SignInModal'
 
 const HOME = 'https://www.ascomply.com/'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
-// D12 401 copy.
+// 401 copy.
 const INCORRECT = 'Email or password is incorrect.'
 // signInForm.ts validator copy.
 const EMAIL_REQUIRED = 'Enter your work email.'
@@ -58,7 +58,7 @@ function unconfigure(): void {
 
 async function mountForm(state: string | null, initialError?: string): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInForm, { state, initialError }))
+    root.render(createElement(SignInForm, { heldState: () => state, initialError }))
   })
 }
 
@@ -128,7 +128,7 @@ describe('AC-1: the form sits in the modal only when configured', () => {
   it('the form renders only when configured', async () => {
     configure()
     await act(async () => {
-      root.render(createElement(SignInModal, { onClose: vi.fn(), state: STATE }))
+      root.render(createElement(SignInModal, { onClose: vi.fn(), heldState: () => STATE }))
     })
     let d = one<HTMLElement>(document, '[role="dialog"]')
     const picker = one<HTMLElement>(d, '[data-testid="persona-picker"]')
@@ -137,7 +137,7 @@ describe('AC-1: the form sits in the modal only when configured', () => {
     expect(d.textContent).toContain('or explore with a demo profile')
     const pw = one<HTMLInputElement>(d, 'input[type="password"]')
     expect(picker.contains(pw)).toBe(false)
-    // D7: the form sits above the persona list.
+    // The form sits above the persona list.
     expect(pw.compareDocumentPosition(picker) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const heading = Array.from(d.querySelectorAll('h3')).map((h) => h.textContent)
     expect(heading.indexOf('Sign in to your workspace')).toBeGreaterThanOrEqual(0)
@@ -147,7 +147,7 @@ describe('AC-1: the form sits in the modal only when configured', () => {
     root = createRoot(container)
     unconfigure()
     await act(async () => {
-      root.render(createElement(SignInModal, { onClose: vi.fn(), state: STATE }))
+      root.render(createElement(SignInModal, { onClose: vi.fn(), heldState: () => STATE }))
     })
     d = one<HTMLElement>(document, '[role="dialog"]')
     expect(d.querySelectorAll('[data-persona]').length).toBe(4)
@@ -184,7 +184,7 @@ describe('AC-2: the held state', () => {
     vi.stubGlobal('fetch', fetchMock)
     await mountForm(STATE)
     expect(container.textContent).not.toContain('Continue with email')
-    // Email is trimmed; the password is sent as typed (AUTH-05-06 QA note).
+    // Email is trimmed; the password is sent as typed.
     await fill('  ada@okafor.ng  ', ' s3cret ')
     await submit()
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -235,7 +235,7 @@ describe('AC-5: busy', () => {
     await fill('ada@okafor.ng', 'pw')
     await submit()
     expectBusy()
-    // D22: the retired OTP label stays banned.
+    // The retired OTP label stays banned.
     expect(container.textContent).not.toContain('Signing in')
     expect(consoleError).not.toHaveBeenCalled()
   })

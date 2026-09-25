@@ -33,7 +33,7 @@ func reconcileCalls(t *testing.T) []reconcileCall {
 		}
 		calls = append(calls, reconcileCall{m[1], m[2], m[3], m[4], m[5]})
 	}
-	// 9 upserts + 9 verifies at HEAD before AUTH-05-05.
+	// A floor: the 9 upserts + 9 verifies that predate the landing gateway variable.
 	if len(calls) < 18 {
 		t.Fatalf("parsed %d upsert/verify calls in reconcile_url_variables, want >= 18 (extraction is broken)", len(calls))
 	}

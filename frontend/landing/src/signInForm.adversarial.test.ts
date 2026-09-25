@@ -1,4 +1,4 @@
-// AUTH-05-06 adversarial: the sign-in validator off its happy path.
+// Adversarial: the sign-in validator off its happy path.
 import { describe, expect, it } from 'vitest'
 
 import { validateDemoForm } from './components/demoForm'
@@ -29,7 +29,7 @@ describe('validateSignInForm adversarial', () => {
     expect(validateSignInForm({ email: 'nope', password: '' })).toEqual({ email: MALFORMED, password: NO_PASSWORD })
   })
 
-  // D12/D7 say "password required, never trimmed": a non-empty whitespace password passes.
+  // The spec says "password required, never trimmed": a non-empty whitespace password passes.
   it('passes a whitespace-only password because the password is never trimmed', () => {
     expect(validateSignInForm({ email: VALID_EMAIL, password: '   ' })).toEqual({})
     expect(validateSignInForm({ email: VALID_EMAIL, password: '' }).password).toBe(NO_PASSWORD)

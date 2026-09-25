@@ -9,10 +9,9 @@
 // `persona` is stored by id only and rehydrated from APP_PERSONAS — persona definitions
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
-// A hand-off record (`handoff: true`, AUTH-05 D8) rebuilds its persona from `me` instead.
+// A hand-off record (`handoff: true`) rebuilds its persona from `me` instead.
 
-import { APP_PERSONAS, type Me, type Session } from '../auth'
-import { handoffPersona } from './sessionHandoff'
+import { APP_PERSONAS, type Me, type Persona, type Session } from '../auth'
 
 export const SESSION_KEY = 'invoice-os.session'
 export const SESSION_SCHEMA_VERSION = 1
@@ -28,6 +27,11 @@ export function serializeSession(session: Session): string {
     // Written only when set, so a persona record stays byte-identical.
     ...(session.handoff ? { handoff: true } : {}),
   })
+}
+
+// Identity comes from /me; the rest stays the firm persona until AUTH-09.
+export function handoffPersona(me: Me): Persona {
+  return { ...APP_PERSONAS.firm, subject: me.user.id, tenantId: me.tenant.id }
 }
 
 function hasMeIds(me: unknown): me is Me {
@@ -108,7 +112,7 @@ export function clearSession(): void {
 // app can open ('firm'/'inhouse' — 'developer'/'support' belong to the consoles).
 //
 // A valid param WINS over a stored persona session; a live hand-off session wins over the
-// param (AUTH-05 D18, App.tsx). It used to lose to one, on the reasoning that a
+// param (App.tsx). It used to lose to one, on the reasoning that a
 // param sitting in an already-open workspace's URL is a stale leftover. But the landing page
 // is the app's only front door and lives on a DIFFERENT origin, so it cannot clear this
 // origin's stored session when the user picks a profile — the param is the entire hand-off.

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// QA Mode B (AUTH-05-11): adversarial coverage for lib/signInState.ts.
+// Adversarial coverage for lib/signInState.ts.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -113,8 +113,8 @@ describe('signInState adversarial: blob shape', () => {
     expect(consumeSignInState(5000)).toBe(S)
   })
 
-  // DEFECT (executor choice 2): D25 step 1 says the module mirrors lib/deepLink.ts, which
-  // refuses a future timestamp; D18's ceiling relies on a 10-minute life. A future `at`
+  // DEFECT (executor choice 2): the module is meant to mirror lib/deepLink.ts, which
+  // refuses a future timestamp; the live-session ceiling relies on a 10-minute life. A future `at`
   // (clock moved back, or a tampered blob) keeps the state live past that life.
   it('signInState adversarial: a future-dated blob is not live', () => {
     const now = 1_000_000

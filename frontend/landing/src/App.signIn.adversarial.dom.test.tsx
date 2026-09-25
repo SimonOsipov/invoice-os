@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// AUTH-05-07 QA: adversarial coverage for landing's boot read and strip of `state` and `signin` (D23, D25 step 3).
+// Adversarial coverage for landing's boot read and strip of `state` and `signin`.
 /// <reference types="node" />
 import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -148,7 +148,7 @@ describe('AUTH-05-07 adversarial: boot params', () => {
   })
 
   it('configured: a front-door state alone opens nothing but is held', async () => {
-    // Only a `signin` outcome opens the modal; the front-door bounce (D25 step 2) carries none.
+    // Only a `signin` outcome opens the modal; the front-door bounce carries none.
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
     vi.stubGlobal('fetch', fetchMock)
     await bootAt(`/?state=${STATE}`)

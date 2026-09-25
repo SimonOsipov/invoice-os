@@ -1,4 +1,4 @@
-// AUTH-05-08 QA Mode B: adversarial coverage for the hand-off helpers and record.
+// Adversarial coverage for the hand-off helpers and record.
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
@@ -73,7 +73,7 @@ describe('redeemHandoff adversarial', () => {
     await expect(redeemHandoff(GATEWAY, CODE, STATE)).rejects.toBeInstanceOf(TypeError)
   })
 
-  // Pinned, advisory: the gateway always answers a string (D4), so the client does not check it.
+  // Pinned, advisory: the gateway always answers a string, so the client does not check it.
   it('pinned: a non-string access_token is passed through unchecked', async () => {
     stubFetch({ status: 200, body: { access_token: 12345 } }, { status: 200, body: ME })
     const s = await redeemHandoff(GATEWAY, CODE, STATE)
@@ -194,7 +194,7 @@ describe('one token-shape regex', () => {
   })
 })
 
-// D20 (AC-16): the comments the change made false are corrected.
+// The comments the hand-off made false are corrected.
 describe('D20 comment corrections', () => {
   const src = (f: string) => readFileSync(path.join(process.cwd(), 'src', f), 'utf8')
 
@@ -208,7 +208,7 @@ describe('D20 comment corrections', () => {
   it('App.tsx states that a live hand-off session is not dropped', () => {
     const s = src('App.tsx')
     expect(s).not.toContain('boots with NO session even when one is stored: the user just chose')
-    expect(s).toContain('unless that stored session is a live hand-off session (D18)')
+    expect(s).toContain('unless that stored session is a live hand-off session: the user just chose')
   })
 
   it('SignIn.tsx names the hand-off in the SignInLoading comment', () => {

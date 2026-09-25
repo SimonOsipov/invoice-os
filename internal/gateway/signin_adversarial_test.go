@@ -96,7 +96,7 @@ func TestSignIn_GoTrue429Refunds(t *testing.T) {
 	requireNothingCounted(t, rig.throttle, regEmail)
 }
 
-// The limit is in bytes, which bounds the throttle key's memory (D19 ceiling).
+// The limit is in bytes, which bounds the throttle key's memory.
 func TestSignIn_EmailLimitCountsBytes(t *testing.T) {
 	const domain = "@x.io"
 	over := strings.Repeat("é", 125) + domain     // 255 bytes, 130 runes

@@ -1,4 +1,4 @@
-// App-minted sign-in state (D25): binds a hand-off code to this tab. Mirrors lib/deepLink.ts's
+// App-minted sign-in state: binds a hand-off code to this tab. Mirrors lib/deepLink.ts's
 // versioned-blob, warn-never-throw conventions. Never reads window.location.
 import { landingBase } from '../auth'
 
@@ -8,7 +8,8 @@ export const SIGN_IN_STATE_TTL_MS = 10 * 60 * 1000
 
 export type SignInOutcome = 'ready' | 'failed' | 'no-workspace'
 
-const STATE_RE = /^[A-Za-z0-9_-]{43}$/
+// 32 bytes in unpadded base64url: the shape of a sign-in state and a hand-off code.
+export const BASE64URL_43 = /^[A-Za-z0-9_-]{43}$/
 
 // 32 random bytes, base64url without padding: 43 characters.
 function mint(): string {
@@ -33,7 +34,7 @@ function liveState(raw: string | null, now: number): string | null {
     p == null ||
     p.v !== SIGN_IN_STATE_SCHEMA_VERSION ||
     typeof p.s !== 'string' ||
-    !STATE_RE.test(p.s) ||
+    !BASE64URL_43.test(p.s) ||
     typeof p.at !== 'number' ||
     Number.isNaN(p.at)
   ) {
@@ -44,16 +45,25 @@ function liveState(raw: string | null, now: number): string | null {
 
 // Reuses a live state, else mints and stores one. Storage failure yields an unstored state.
 export function ensureSignInState(now: number = Date.now()): string {
-  let s: string | null = null
   try {
-    s = liveState(sessionStorage.getItem(SIGN_IN_STATE_KEY), now)
+    const s = liveState(sessionStorage.getItem(SIGN_IN_STATE_KEY), now)
     if (s) return s
-    s = mint()
+  } catch (e) {
+    console.warn(`[signInState] failed to store state at "${SIGN_IN_STATE_KEY}":`, e)
+    return mint()
+  }
+  return mintSignInState(now)
+}
+
+// Mints and stores a new state, replacing any held one.
+export function mintSignInState(now: number = Date.now()): string {
+  const s = mint()
+  try {
     sessionStorage.setItem(SIGN_IN_STATE_KEY, JSON.stringify({ v: SIGN_IN_STATE_SCHEMA_VERSION, s, at: now }))
   } catch (e) {
     console.warn(`[signInState] failed to store state at "${SIGN_IN_STATE_KEY}":`, e)
   }
-  return s ?? mint()
+  return s
 }
 
 // One-shot: removes the key whatever it held, returns the state only when live.

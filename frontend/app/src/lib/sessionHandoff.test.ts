@@ -1,4 +1,4 @@
-// AUTH-05-08 Mode A: the hand-off code helpers (D8, D9, D25).
+// The hand-off code helpers.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'

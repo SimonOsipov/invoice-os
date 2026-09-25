@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Nav } from './components/Nav'
 import { SignInModal } from './components/SignInModal'
 import { DemoModal } from './components/DemoModal'
@@ -21,26 +21,36 @@ import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
 import { readSignInState } from './signIn'
 
-// D23 copy for the app's ?signin= outcome; `ready` opens the modal with no message.
+// Copy for the app's ?signin= outcome; `ready` opens the modal with no message.
 const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
   ['ready', undefined],
   ['no-workspace', 'This account has no workspace yet.'],
   ['failed', "We couldn't open your workspace. Sign in again."],
 ])
 
+// Held a minute short of the app's 10-minute state TTL, so a posted state is still live there.
+const STATE_HOLD_MS = 9 * 60 * 1000
+
 // Pure read: the strip runs in an effect, so StrictMode's double init sees the same URL.
 function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
-  return { state, error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
+  return { state, bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono, .grid-bg, .dot-bg) that every section relies on.
 export default function App() {
-  // The state is held in memory only (D25 step 3), never in storage.
+  // The state is held in memory only, never in storage.
   const [signInBoot] = useState(() => readSignInBoot(window.location.search))
+  // A bfcache restore drops the state for good.
+  const [stateDropped, setStateDropped] = useState(false)
+  // Stable until a drop, so the open form re-checks only then.
+  const heldState = useCallback(
+    () => (!stateDropped && Date.now() - signInBoot.bootAt < STATE_HOLD_MS ? signInBoot.state : null),
+    [signInBoot, stateDropped],
+  )
   const [signInOpen, setSignInOpen] = useState(signInBoot.open)
   const [signInError, setSignInError] = useState(signInBoot.error)
   const [demoOpen, setDemoOpen] = useState(false)
@@ -56,6 +66,14 @@ export default function App() {
   }
   const onSignIn = () => setSignInOpen(true)
   const privacy = isPrivacyPath(window.location.pathname)
+
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setStateDropped(true)
+    }
+    window.addEventListener('pageshow', onShow)
+    return () => window.removeEventListener('pageshow', onShow)
+  }, [])
 
   // Strip `state` and `signin` for any value; every other param stays.
   useEffect(() => {
@@ -140,7 +158,7 @@ export default function App() {
       )}
       {signInOpen && (
         <SignInModal
-          state={signInBoot.state}
+          heldState={heldState}
           initialError={signInError}
           onClose={() => {
             setSignInOpen(false)

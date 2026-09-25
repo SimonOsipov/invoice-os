@@ -426,7 +426,7 @@ describe('adversarial / edge coverage (QA)', () => {
   })
 })
 
-// AUTH-05-08 Mode A: the hand-off record (D8).
+// The hand-off record.
 describe('hand-off session record (AUTH-05 D8)', () => {
   const ME: Me = {
     tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },

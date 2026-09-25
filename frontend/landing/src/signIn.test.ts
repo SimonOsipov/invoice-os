@@ -1,4 +1,4 @@
-// AUTH-05-06 AC-1..4: the landing sign-in client.
+// The landing sign-in client.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client/client'
@@ -111,11 +111,11 @@ describe('startUrl', () => {
 
 describe('signInErrorMessage', () => {
   it('signInErrorMessage maps each status', () => {
-    // D12 copy, verbatim.
-    const INCORRECT = 'Email or password is incorrect.' // D12: 401
-    const UNVERIFIED = 'Verify your email address first. The link is in your inbox.' // D12: 403
-    const THROTTLED = 'Too many attempts. Try again in a minute.' // D12: 429
-    const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.' // D12: anything else
+    // Copy, verbatim.
+    const INCORRECT = 'Email or password is incorrect.' // 401
+    const UNVERIFIED = 'Verify your email address first. The link is in your inbox.' // 403
+    const THROTTLED = 'Too many attempts. Try again in a minute.' // 429
+    const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.' // anything else
 
     const cases: [string, unknown, string][] = [
       ['401', new ApiError('http', 'invalid email or password', 401), INCORRECT],

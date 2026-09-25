@@ -22,7 +22,9 @@ type HandoffStore struct {
 	ttl     time.Duration
 	now     func() time.Time
 	entries map[[32]byte]handoffEntry // keyed by sha256(code); the plaintext code is never stored
-	sweeps  int
+	// nextExpiry is never later than the earliest live expiry, so a Put before it has nothing to sweep.
+	nextExpiry time.Time
+	sweeps     int
 }
 
 type handoffEntry struct {
@@ -44,18 +46,30 @@ func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) (string, bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	// ceiling: O(n) sweep on every Put; amortise it if live codes reach ~10k.
-	s.sweep(now)
-	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{accessToken, stateHash, now.Add(s.ttl)}
+	if !now.Before(s.nextExpiry) {
+		s.sweep(now)
+	}
+	if len(s.entries) >= HandoffMaxLive {
+		return "", false
+	}
+	exp := now.Add(s.ttl)
+	if len(s.entries) == 0 || exp.Before(s.nextExpiry) {
+		s.nextExpiry = exp
+	}
+	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{accessToken, stateHash, exp}
 	return code, true
 }
 
-// sweep drops expired entries; the caller holds s.mu.
+// sweep drops expired entries and resets nextExpiry; the caller holds s.mu.
+// ceiling: O(n) scan on a Put after the earliest code expired, n <= HandoffMaxLive; bucket by expiry if it shows in profiles.
 func (s *HandoffStore) sweep(now time.Time) {
 	s.sweeps++
+	s.nextExpiry = time.Time{}
 	for k, e := range s.entries {
 		if !now.Before(e.expiresAt) {
 			delete(s.entries, k)
+		} else if s.nextExpiry.IsZero() || e.expiresAt.Before(s.nextExpiry) {
+			s.nextExpiry = e.expiresAt
 		}
 	}
 }

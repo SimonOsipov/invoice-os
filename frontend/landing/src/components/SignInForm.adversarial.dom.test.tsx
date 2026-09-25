@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
-// AUTH-05-07 QA: adversarial coverage for SignInForm and its SignInModal gate. Real signIn.ts, fetch stubbed.
+// Adversarial coverage for SignInForm and its SignInModal gate. Real signIn.ts, fetch stubbed.
 /// <reference types="node" />
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -17,7 +17,7 @@ import { SignInModal } from './SignInModal'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const HOME = 'https://www.ascomply.com/'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
-// D12 copy.
+// Error copy.
 const UNVERIFIED = 'Verify your email address first. The link is in your inbox.'
 const THROTTLED = 'Too many attempts. Try again in a minute.'
 const UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
@@ -59,13 +59,13 @@ function configure(): void {
 
 async function mountForm(state: string | null, initialError?: string): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInForm, { state, initialError }))
+    root.render(createElement(SignInForm, { heldState: () => state, initialError }))
   })
 }
 
 async function mountModal(state: string | null, initialError?: string): Promise<HTMLElement> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose: vi.fn(), state, initialError }))
+    root.render(createElement(SignInModal, { onClose: vi.fn(), heldState: () => state, initialError }))
   })
   const all = document.querySelectorAll<HTMLElement>('[role="dialog"]')
   expect(all.length).toBe(1)

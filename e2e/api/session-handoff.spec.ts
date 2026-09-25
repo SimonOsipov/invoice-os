@@ -1,4 +1,4 @@
-// The sign-in hand-off over the deployed gateway (AUTH-05): sign-in yields a single-use code
+// The sign-in hand-off over the deployed gateway: sign-in yields a single-use code
 // bound to a state, the exchange redeems it once, both routes answer the landing preflight, and
 // sign-in is throttled per address. Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Spec values from D2/D19; a drift here changes the security bound.
+// Spec values; a drift here changes the security bound.
 func TestHandoffAndThrottle_ConstantsPinned(t *testing.T) {
 	if HandoffTTL != 60*time.Second {
 		t.Errorf("HandoffTTL = %v, want 60s", HandoffTTL)
@@ -63,7 +63,7 @@ func TestHandoffStore_ExpiredWrongStateStillRemoves(t *testing.T) {
 	}
 }
 
-// The state hash is compared in constant time (D25 step 5). The AST carries no
+// The state hash is compared in constant time. The AST carries no
 // comments, so a commented-out call does not count. Go identifiers are
 // case-sensitive, so the match is exact on purpose.
 func TestHandoffStore_TakeComparesStateInConstantTime(t *testing.T) {

@@ -3,7 +3,7 @@ import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type S
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
-import { consumeSignInState, ensureSignInState, landingSignInUrl } from './lib/signInState'
+import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
@@ -1820,9 +1820,9 @@ export default function App() {
   // card before the mint → /me round trip resolves. Declared BEFORE `session` because the
   // session initializer below reads it.
   const [bootSession] = useState(() => resolveBootSession())
-  // D18: a live stored hand-off session wins over `?handoff=` and `?persona=`.
+  // A live stored hand-off session wins over `?handoff=` and `?persona=`.
   const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
-  // D9: an unconfigured gateway ignores the code (it is still stripped).
+  // An unconfigured gateway ignores the code (it is still stripped).
   const [handoffCode] = useState(() =>
     liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
   )
@@ -1833,7 +1833,7 @@ export default function App() {
     const p = new URLSearchParams(window.location.search).get('persona')
     return shouldAutoSignIn(p) ? (p as PersonaId) : null
   })
-  // `?auth=start` (D25 step 3): landing asks for a state. `?handoff=` and `?persona=` win over it.
+  // `?auth=start`: landing asks for a state. `?handoff=` and `?persona=` win over it.
   const [authStart] = useState(
     () => !autoPersona && !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
@@ -1844,7 +1844,7 @@ export default function App() {
   // only buys a dashboard that 401s a moment later.
   //
   // A deep-link hand-off (`?persona=` or `?handoff=`) boots with NO session even when one is
-  // stored, unless that stored session is a live hand-off session (D18): the user just chose
+  // stored, unless that stored session is a live hand-off session: the user just chose
   // on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
   // here would render the PREVIOUS persona's workspace for the duration of the mint → /me
   // round trip — and re-persist it via the mirror effect below — before swapping identity
@@ -1983,7 +1983,7 @@ export default function App() {
   // bounce off. Reads the URL directly rather than depending on render state — this is the
   // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
   // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
-  // suppressed by a live hand-off session (D18) is stripped as well.
+  // suppressed by a live hand-off session is stripped as well.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (((autoPersona || liveHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
@@ -1991,7 +1991,7 @@ export default function App() {
     }
   }, [autoPersona, liveHandoff])
 
-  // D9/D25: redeem the code once (the ref survives StrictMode's double effect). No stored
+  // Redeem the code once (the ref survives StrictMode's double effect). No stored
   // state means a code this tab never asked for: no exchange, failure arm.
   useEffect(() => {
     const base = gatewayBase()
@@ -2008,7 +2008,7 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] hand-off redemption failed:', err)
-        // Exchange never answers 403 (D4), so a 403 is /me's: no workspace (D10, D23).
+        // Exchange never answers 403, so a 403 is /me's: no workspace.
         const outcome = err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed'
         const dest = landingSignInUrl(ensureSignInState(), outcome)
         // Stays pending while leaving, so the front door adds no second navigation.
@@ -2019,9 +2019,10 @@ export default function App() {
   }, [handoffCode])
 
   // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.
+  // A fresh state gives landing the full TTL to hold it.
   useEffect(() => {
     if (!authStart || startBounced.current) return
-    const dest = landingBase() ? landingSignInUrl(ensureSignInState(), 'ready') : null
+    const dest = landingBase() ? landingSignInUrl(mintSignInState(), 'ready') : null
     if (dest) {
       startBounced.current = true
       window.location.href = dest

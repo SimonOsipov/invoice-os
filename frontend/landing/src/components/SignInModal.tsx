@@ -18,7 +18,9 @@ function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number
   )
 }
 
-export function SignInModal({ onClose, state = null, initialError }: { onClose: () => void; state?: string | null; initialError?: string }) {
+const NO_STATE = () => null
+
+export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { onClose: () => void; heldState?: () => string | null; initialError?: string }) {
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -78,7 +80,7 @@ export function SignInModal({ onClose, state = null, initialError }: { onClose: 
           {signInConfigured() && (
             <>
               <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 16px' }}>Sign in to your workspace</h3>
-              <SignInForm state={state} initialError={initialError} />
+              <SignInForm heldState={heldState} initialError={initialError} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 18px', fontSize: 12, color: 'var(--fg-3)' }}>
                 <span style={{ flex: 1, height: 1, background: 'var(--line-1)' }} />
                 or explore with a demo profile

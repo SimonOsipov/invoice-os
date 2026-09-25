@@ -744,14 +744,14 @@ test("deployed app: Back past a company switch cannot resume the previous compan
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// AUTH-05: the real sign-in hand-off, driven through the landing form against a fresh GoTrue
-// account with its own workspace (forks auto-confirm, D11).
+// The real sign-in hand-off, driven through the landing form against a fresh GoTrue
+// account with its own workspace (forks auto-confirm).
 const VERIFIED = '[title="Tenant verified via /v1/me"]'
 const SESSION_KEY = 'invoice-os.session'
 const JWT_IN_URL = /eyJ[\w-]+\.[\w-]+\./
 // internal/gateway/handoff.go HandoffTTL.
 const HANDOFF_TTL_MS = 60_000
-// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES (D23) and src/signIn.ts INCORRECT (D12).
+// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES and src/signIn.ts INCORRECT.
 const HANDOFF_FAILED = "We couldn't open your workspace. Sign in again."
 const INCORRECT = 'Email or password is incorrect.'
 // internal/gateway/signin.go: the exchange refusal.
@@ -903,7 +903,7 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
-// D18/D25: a code redeems only with the state its own tab minted on the app origin.
+// A code redeems only with the state its own tab minted on the app origin.
 test('deployed app: a hand-off code minted in another browser signs no tab in', async ({ browser }) => {
   test.setTimeout(180_000)
   const account = await provisionRealAccount('handoff-csrf')

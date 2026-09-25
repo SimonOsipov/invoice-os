@@ -1,4 +1,4 @@
-// Landing email/password sign-in (AUTH-05 D7, D25). Posts to the gateway, then hands the code to the app.
+// Landing email/password sign-in. Posts to the gateway, then hands the code to the app.
 import { useEffect, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
 import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
@@ -19,12 +19,19 @@ function Alert({ id, text }: { id?: string; text: string }) {
   )
 }
 
-export function SignInForm({ state, initialError }: { state: string | null; initialError?: string }) {
+// heldState is read at open and again at submit: an expired or dropped state is never posted.
+export function SignInForm({ heldState, initialError }: { heldState: () => string | null; initialError?: string }) {
+  const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<SignInFormErrors>({})
   const [formError, setFormError] = useState(initialError)
   const [submitting, setSubmitting] = useState(false)
+
+  // A new getter means App dropped the state while the form is open.
+  useEffect(() => {
+    if (!heldState()) setState(null)
+  }, [heldState])
 
   // A back/forward-cache restore would otherwise show the page frozen mid-submit.
   useEffect(() => {
@@ -38,7 +45,7 @@ export function SignInForm({ state, initialError }: { state: string | null; init
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // No state in memory: the app mints one and bounces back with ?state= (D25 step 3).
+  // No state in memory: the app mints one and bounces back with ?state=.
   if (!state) {
     return (
       <div>
@@ -62,6 +69,11 @@ export function SignInForm({ state, initialError }: { state: string | null; init
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (submitting || !state) return
+    const live = heldState()
+    if (!live) {
+      setState(null)
+      return
+    }
     const next = validateSignInForm({ email, password })
     setErrors(next)
     if (next.email || next.password) {
@@ -71,7 +83,7 @@ export function SignInForm({ state, initialError }: { state: string | null; init
     setFormError(undefined)
     setSubmitting(true)
     try {
-      const url = handoffUrl(await signInWithPassword(email.trim(), password, state))
+      const url = handoffUrl(await signInWithPassword(email.trim(), password, live))
       if (url) {
         window.location.href = url
         return

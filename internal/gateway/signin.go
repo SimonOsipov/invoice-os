@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -14,7 +15,7 @@ const (
 	maxEmailBytes        = 254
 )
 
-// stateShape is a 32-byte state in unpadded base64url (D25).
+// stateShape is a 32-byte state in unpadded base64url.
 var stateShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // SignInHandler answers POST /auth/sign-in with a single-use exchange code.
@@ -36,6 +37,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
+		in.Email = strings.TrimSpace(in.Email)
 		if in.Email == "" || in.Password == "" {
 			writeError(w, http.StatusBadRequest, "email and password are required")
 			return
@@ -64,8 +66,14 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			log.WarnContext(r.Context(), "sign-in: gotrue unreachable", slog.String("error", err.Error()))
 			writeError(w, http.StatusBadGateway, "sign-in is unavailable")
 		case status == http.StatusOK && sess.AccessToken != "":
+			code, ok := store.Put(sess.AccessToken, sha256.Sum256([]byte(in.State)))
+			if !ok {
+				throttle.Refund(in.Email)
+				log.WarnContext(r.Context(), "sign-in: hand-off store full")
+				writeError(w, http.StatusServiceUnavailable, "sign-in is unavailable")
+				return
+			}
 			throttle.Reset(in.Email)
-			code, _ := store.Put(sess.AccessToken, sha256.Sum256([]byte(in.State)))
 			writeJSON(w, http.StatusOK, map[string]string{"code": code})
 		// A banned address answers exactly like a wrong password; the reservation stands.
 		case gt.ErrorCode == "invalid_credentials", gt.ErrorCode == "user_banned":

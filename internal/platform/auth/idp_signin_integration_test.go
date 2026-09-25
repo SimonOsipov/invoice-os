@@ -37,7 +37,7 @@ func newHandoff(t *testing.T, base string) handoff {
 	}
 }
 
-// newState mints a 43-character base64url state, as the app does (D25).
+// newState mints a 43-character base64url state, as the app does.
 func newState(t *testing.T) string {
 	t.Helper()
 	b := make([]byte, 32)

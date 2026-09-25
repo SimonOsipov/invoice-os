@@ -95,7 +95,7 @@ export async function login(persona: Persona): Promise<string> {
   return access_token
 }
 
-// A sign-in state in the app's shape: 32 random bytes, base64url, 43 characters (AUTH-05 D25).
+// A sign-in state in the app's shape: 32 random bytes, base64url, 43 characters.
 export function mintSignInState(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return Buffer.from(bytes).toString('base64url')
@@ -125,7 +125,7 @@ export interface RealAccount {
   workspaceName: string
 }
 
-// A fresh GoTrue account with a workspace of its own. Forks auto-confirm (AUTH-05 D11), so
+// A fresh GoTrue account with a workspace of its own. Forks auto-confirm, so
 // the account signs in at once; a later sign-in carries the new tenant claim.
 export async function provisionRealAccount(prefix: string): Promise<RealAccount> {
   const id = crypto.randomUUID()

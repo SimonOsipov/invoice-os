@@ -1,4 +1,4 @@
-// AUTH-05-06 AC-5: the sign-in validator.
+// The sign-in validator.
 import { describe, expect, it } from 'vitest'
 
 import { validateSignInForm, type SignInFormValues } from './signInForm'

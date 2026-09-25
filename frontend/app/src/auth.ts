@@ -84,7 +84,7 @@ export interface Session {
   // true when the /me round trip succeeded — the tenant identity was proven against
   // the live backend, not just assumed from the persona.
   verified: boolean
-  // Set only for a session redeemed from a landing hand-off code (AUTH-05 D8).
+  // Set only for a session redeemed from a landing hand-off code.
   handoff?: true
 }
 

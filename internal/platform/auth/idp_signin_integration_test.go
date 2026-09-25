@@ -56,26 +56,44 @@ func serveJSON(t *testing.T, h http.Handler, path string, body any) (int, string
 	return rec.Code, rec.Body.String()
 }
 
-func field(t *testing.T, body, name string) string {
+// Failure messages print keys, statuses and the error field only; a body may carry a live JWT.
+func fields(t *testing.T, body string) map[string]string {
 	t.Helper()
 	var m map[string]string
 	if err := json.Unmarshal([]byte(body), &m); err != nil {
-		t.Fatalf("body is not a JSON object of strings: %s", body)
+		t.Fatalf("body (%d bytes) is not a JSON object of strings", len(body))
 	}
-	return m[name]
+	return m
+}
+
+func field(t *testing.T, body, name string) string {
+	t.Helper()
+	return fields(t, body)[name]
+}
+
+func keys(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 func (h handoff) code(t *testing.T, u idpUser, state string) string {
 	t.Helper()
 	status, body := serveJSON(t, h.signIn, "/auth/sign-in", map[string]string{"email": u.email, "password": u.password, "state": state})
 	if status != http.StatusOK {
-		t.Fatalf("sign-in: status %d, body %s; want 200", status, body)
+		t.Fatalf("sign-in: status %d, error %q; want 200", status, field(t, body, "error"))
 	}
-	code := field(t, body, "code")
-	if len(code) != 43 {
-		t.Fatalf("sign-in code %q is %d characters, want 43", code, len(code))
+	m := fields(t, body)
+	// The 200 body holds the code alone: GoTrue's token must not reach landing.
+	if len(m) != 1 {
+		t.Fatalf("sign-in body keys %v, want [code] only", keys(m))
 	}
-	return code
+	if code := m["code"]; len(code) != 43 {
+		t.Fatalf("sign-in code is %d characters, want 43", len(code))
+	}
+	return m["code"]
 }
 
 func (h handoff) redeem(t *testing.T, code, state string) (int, string) {
@@ -91,11 +109,12 @@ func TestIdP_SignInCodeRedeemsForAVerifiableToken(t *testing.T) {
 
 	status, body := h.redeem(t, h.code(t, u, s), s)
 	if status != http.StatusOK {
-		t.Fatalf("exchange: status %d, body %s; want 200", status, body)
+		t.Fatalf("exchange: status %d, error %q; want 200", status, field(t, body, "error"))
 	}
-	tok := field(t, body, "access_token")
+	m := fields(t, body)
+	tok := m["access_token"]
 	if tok == "" {
-		t.Fatalf("exchange body has no access_token: %s", body)
+		t.Fatalf("exchange body has no access_token; keys %v", keys(m))
 	}
 	id, err := idpVerifier(t, base).Verify(context.Background(), tok)
 	if err != nil {

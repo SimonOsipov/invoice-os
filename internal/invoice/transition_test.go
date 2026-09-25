@@ -39,6 +39,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -442,13 +443,10 @@ func TestTransition_AtomicityRollsBackOnActorCheckFailure(t *testing.T) {
 	})
 }
 
-// INV-SM-06: SELECT ... FOR UPDATE serializes concurrent transitions on the
-// same row -- of N concurrent draft->validated calls on the SAME invoice,
-// exactly one succeeds; every other resolves to ErrRedundantTransition (the
-// row lock forces the losers to observe the winner's already-applied
-// status), and exactly one invoice_status_history row (to_status=validated)
-// exists afterward. Using N=6 (rather than the spec's minimal "two") gives
-// the race a stronger chance to manifest if serialization is broken.
+// INV-SM-06: of N concurrent draft->validated calls on the SAME invoice,
+// exactly one succeeds; every other resolves to ErrRedundantTransition, and
+// exactly one invoice_status_history row (to_status=validated) exists
+// afterward. The row lock's proof is TestTransition_BlockedLoserSeesCommittedWinnerStatus.
 func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -503,7 +501,132 @@ func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 		t.Errorf("invoice status after concurrent transitions = %q, want %q", status, StatusValidated)
 	}
 	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 1 {
-		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want exactly 1 (FOR UPDATE serialized the race)", hn)
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want exactly 1", hn)
+	}
+}
+
+// A Transition blocked on another tx's row lock must decide on that tx's
+// committed status. Without FOR UPDATE it reads "draft" before blocking and
+// then overwrites the winner.
+func TestTransition_BlockedLoserSeesCommittedWinnerStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "TEST-03-02 row-lock tenant")
+	entityID := seedEntity(t, super, tenantID, "TEST-03-02 row-lock entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TEST-03-02-LOCK"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder tx: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+
+	var holderPID int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatalf("read holder pid: %v", err)
+	}
+	var locked string
+	if err := holder.QueryRow(ctx, `SELECT id FROM invoices WHERE id = $1 FOR UPDATE`, inv.ID).Scan(&locked); err != nil {
+		t.Fatalf("holder lock the invoice row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Transition(c, inv.ID, StatusValidated)
+		done <- err
+	}()
+
+	waitBlockedOn(t, super, holderPID)
+	if _, err := holder.Exec(ctx, `UPDATE invoices SET status = 'validated' WHERE id = $1`, inv.ID); err != nil {
+		t.Fatalf("holder update status: %v", err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("holder commit: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRedundantTransition) {
+			t.Errorf("blocked Transition(->validated) err = %v, want ErrRedundantTransition", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Store.Transition never returned after the holder committed")
+	}
+
+	if st := statusOf(t, super, inv.ID); st != StatusValidated {
+		t.Errorf("status after the race = %q, want %q", st, StatusValidated)
+	}
+	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 0 {
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want 0: the blocked Transition must not write", hn)
+	}
+}
+
+// When the lock holder rolls back, the blocked Transition waits (no NOWAIT /
+// SKIP LOCKED), then applies its own edge exactly once.
+func TestTransition_BlockedTransitionProceedsAfterHolderRollsBack(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "TEST-03-02 row-lock rollback tenant")
+	entityID := seedEntity(t, super, tenantID, "TEST-03-02 row-lock rollback entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TEST-03-02-LOCK-RB"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder tx: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+
+	var holderPID int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatalf("read holder pid: %v", err)
+	}
+	var locked string
+	if err := holder.QueryRow(ctx, `SELECT id FROM invoices WHERE id = $1 FOR UPDATE`, inv.ID).Scan(&locked); err != nil {
+		t.Fatalf("holder lock the invoice row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Transition(c, inv.ID, StatusValidated)
+		done <- err
+	}()
+
+	waitBlockedOn(t, super, holderPID)
+	if _, err := holder.Exec(ctx, `UPDATE invoices SET status = 'validated' WHERE id = $1`, inv.ID); err != nil {
+		t.Fatalf("holder update status: %v", err)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("holder rollback: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("blocked Transition(->validated) err = %v, want nil: the holder rolled back", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Store.Transition never returned after the holder rolled back")
+	}
+
+	if st := statusOf(t, super, inv.ID); st != StatusValidated {
+		t.Errorf("status after the rollback = %q, want %q", st, StatusValidated)
+	}
+	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 1 {
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want 1", hn)
 	}
 }
 

@@ -117,6 +117,20 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
   return sum
 }
 
+// The filed subtotal/vat/total strings; null when any line is unparseable or there are no lines.
+// CreateForm's manual summary renders these, so the screen shows what crosses the wire.
+export function draftTotals(items: LineItem[]): { subtotal: string | null; vat: string | null; total: string | null } {
+  const exactSubtotal = sumAmounts(items.map(lineAmount))
+  const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
+  const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
+  const total = subtotal === null || vat === null ? null : round2(addScaled(subtotal, vat))
+  return {
+    subtotal: subtotal === null ? null : renderScaled(subtotal),
+    vat: vat === null ? null : renderScaled(vat),
+    total: total === null ? null : renderScaled(total),
+  }
+}
+
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
 // object-literal insertion order is what crosses the network. It follows createRequest's
 // own field order (handlers.go's `type createRequest`) and InvoiceCreateInput's
@@ -143,10 +157,7 @@ export function draftToCreateRequest(
     }
   })
 
-  const exactSubtotal = sumAmounts(amounts)
-  const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
-  const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
-  const total = subtotal === null || vat === null ? null : round2(addScaled(subtotal, vat))
+  const { subtotal, vat, total } = draftTotals(draft.items)
 
   return {
     entity_id: entity.id,
@@ -159,9 +170,9 @@ export function draftToCreateRequest(
     buyer_tin: nullIfBlank(draft.buyerTin),
     buyer_name: nullIfBlank(draft.buyer),
     currency: nullIfBlank(draft.currency),
-    subtotal: subtotal === null ? null : renderScaled(subtotal),
-    vat: vat === null ? null : renderScaled(vat),
-    total: total === null ? null : renderScaled(total),
+    subtotal,
+    vat,
+    total,
     line_items: lineItems,
     // Spread, not `source_document_id: sourceDocumentId`: an explicit `undefined` would
     // still make the key PRESENT, and SD-8 reads presence with `in`, not the value.
@@ -169,10 +180,8 @@ export function draftToCreateRequest(
   }
 }
 
-// The manual form's one round trip, extracted out of the Workspace component because
-// vitest runs environment:'node' with no jsdom and no Testing Library -- a handler living
-// inside Workspace would have no oracle at all. Same "node-testable without jsdom"
-// convention lib/importFlow.ts states for its own gates.
+// The manual form's one round trip, extracted out of the Workspace component. Same
+// "node-testable without jsdom" convention lib/importFlow.ts states for its own gates.
 //
 // `create` is typed `Promise<{id:string}>`, the structural minimum, so a spec fixture
 // needn't build a 20-field InvoiceRecord (createInvoice's real InvoiceRecord return is

@@ -1,24 +1,11 @@
-// RED specs (INVCR-01-02, task-278, Mode A) — pin draftToCreateRequest before the
-// executor implements the body in Stage 3. Every spec below currently fails because the
-// stub throws `new Error('not implemented')` before ever computing a result -- that IS
-// the correct RED reason (assertion / not-implemented), not an import/compile error.
-//
-// Red-first honesty (task-278 plan): CREATE-1/CREATE-2 (lib/invoices.test.ts), DRAFT-1,
-// DRAFT-2, DRAFT-7 are genuinely discriminating -- each fails against a plausible wrong
-// implementation. DRAFT-3, DRAFT-5, DRAFT-6, DRAFT-8 are weak-but-real guards: they rule
-// out one specific named mistake (`?? ''`, re-hyphenation, `Client.tin`) but any careful
-// first implementation passes them. DRAFT-4 is a pure regression guard -- red only
-// because the stub throws; no plausible implementation fails it.
-//
-// DRAFT-3 pins the C7 residual risk in place DELIBERATELY: it asserts the UNREPAIRED
-// pass-through. If it ever fails, that is a decision about C7 (see the story description
-// / QA Debate Log finding C7), not a bug to fix here.
+// C7 note: DRAFT-3 asserts the unrepaired TIN pass-through on purpose; a failure there is a product decision, not a bug.
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
 import {
   draftToCreateRequest,
+  draftTotals,
   fileDraftGate,
   fileDraftInvoice,
   fileSuppliedNumber,
@@ -167,6 +154,29 @@ describe('draftToCreateRequest: money', () => {
     expect(result.subtotal).toBeNull()
     expect(result.vat).toBeNull()
     expect(result.total).toBeNull()
+  })
+})
+
+describe('draftToCreateRequest: VAT base', () => {
+  it('VAT is taken from the ROUNDED subtotal: exact 0.195 files vat 0.02', () => {
+    // 0.20 x 0.075 = 0.015 -> 0.02; the exact 0.195 x 0.075 = 0.014625 -> 0.01.
+    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 0.5, price: 0.39 }] }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.subtotal).toBe('0.20')
+    expect(result.vat).toBe('0.02')
+    expect(result.total).toBe('0.22')
+  })
+
+  it('VAT from rounded subtotal: a subtotal already at 2dp is unaffected', () => {
+    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 1, price: 100.0 }] }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.subtotal).toBe('100.00')
+    expect(result.vat).toBe('7.50')
+    expect(result.total).toBe('107.50')
   })
 })
 
@@ -757,3 +767,29 @@ describe('fileSuppliedNumber: ordering + refusal (EXTR27-F1, F2)', () => {
   })
 })
 
+
+describe('draftTotals (TEST-03-04)', () => {
+  const cases: Array<[string, Draft['items']]> = [
+    ['one line', [{ desc: 'A', qty: 1, price: 20.93 }]],
+    [
+      'three lines, 3-decimal qty',
+      [
+        { desc: 'A', qty: 1.005, price: 19.99 },
+        { desc: 'B', qty: 2.125, price: 0.99 },
+        { desc: 'C', qty: 0.333, price: 1000.005 },
+      ],
+    ],
+    ['empty items', []],
+    ['NaN qty', [{ desc: 'A', qty: NaN, price: 10 }]],
+  ]
+
+  it('draftTotals agrees with draftToCreateRequest', () => {
+    const wires = cases.map(([, items]) => draftToCreateRequest({ ...baseDraft, items }, baseEntity))
+    // Two cases must file real figures, or an all-null draftTotals passes the table.
+    expect(wires.filter((w) => w.total !== null)).toHaveLength(2)
+    cases.forEach(([name, items], i) => {
+      const wire = wires[i]!
+      expect(draftTotals(items), name).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total })
+    })
+  })
+})

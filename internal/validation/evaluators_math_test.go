@@ -367,6 +367,53 @@ func TestConditional_IfTrueThenRequiredPasses(t *testing.T) {
 	}
 }
 
+// conditionalTINPayload is an NG invoice (the rule's `if` holds) with the given supplier.tin.
+func conditionalTINPayload(tin string) Payload {
+	return Payload{"invoice": map[string]any{
+		"country":  "NG",
+		"supplier": map[string]any{"tin": tin},
+	}}
+}
+
+// A present but blank TIN must fail `then required`, the same as an absent one.
+func TestConditional_IfTrueThenRequiredWhitespaceOnlyFails(t *testing.T) {
+	r := conditionalTINRule()
+	v, err := mustEval(t, conditionalEval{}, conditionalTINPayload("   "), r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal(`Eval() violation = nil, want non-nil: supplier.tin "   " is blank`)
+	}
+	if v.RuleKey != r.Key {
+		t.Errorf("Eval() violation RuleKey = %q, want %q", v.RuleKey, r.Key)
+	}
+}
+
+func TestConditional_IfTrueThenRequiredTabNewlineFails(t *testing.T) {
+	r := conditionalTINRule()
+	v, err := mustEval(t, conditionalEval{}, conditionalTINPayload("\t\n"), r)
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v == nil {
+		t.Fatal(`Eval() violation = nil, want non-nil: supplier.tin "\t\n" is blank`)
+	}
+	if v.RuleKey != r.Key {
+		t.Errorf("Eval() violation RuleKey = %q, want %q", v.RuleKey, r.Key)
+	}
+}
+
+func TestConditional_IfTrueThenRequiredPaddedValuePasses(t *testing.T) {
+	v, err := mustEval(t, conditionalEval{}, conditionalTINPayload("  123  "), conditionalTINRule())
+	if err != nil {
+		t.Fatalf("Eval() unexpected error: %v", err)
+	}
+	if v != nil {
+		t.Errorf(`Eval() violation = %+v, want nil: supplier.tin "  123  " holds a real value`, v)
+	}
+}
+
 // TestConditional_IfFalseSkips: same rule, country="GH" (if false) and
 // supplier.tin STILL absent => nil -- `then` must never be evaluated when
 // `if` is false, even though `then` would fail if it were checked.

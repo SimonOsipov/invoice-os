@@ -1,6 +1,6 @@
 // Registration and workspace provisioning over the deployed gateway.
-// The fork's GoTrue has signup on and SMTP blanked, so it mails nothing; the emailed-link
-// path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
+// The fork's GoTrue has signup on, SMTP blanked and autoconfirm on, so it mails nothing; the
+// emailed-link path is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds instead.
 // A pr-<N> fork is PosturePreview, so /auth/login mints any subject, an empty tenant included.
 // Every run uses a fresh address and subject: the auth.users, tenants and memberships rows
 // it creates survive the per-deploy reset.
@@ -36,7 +36,7 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     expect(first.status, 'a new address').toBe(202)
     expect(first.body).toEqual(VERIFICATION_PENDING)
 
-    // GoTrue answers the repeat 429 over_email_send_rate_limit; the gateway maps it to 202.
+    // GoTrue answers the repeat 422 user_already_exists; the gateway maps it to 202.
     const repeat = await rawFetch('/auth/register', { method: 'POST', body: credentials })
     expect(repeat.status, 'a repeat must not reveal the address is taken').toBe(202)
     expect(repeat.body).toEqual(VERIFICATION_PENDING)

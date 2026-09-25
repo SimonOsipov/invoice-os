@@ -1451,6 +1451,7 @@ reconcile_url_variables() {
   upsert_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
   upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
+  upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_GATEWAY_URL "$gateway_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
   upsert_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
@@ -1462,13 +1463,14 @@ reconcile_url_variables() {
   verify_variable "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway CORS_ALLOWED_ORIGINS "$origins"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_GATEWAY_URL "$gateway_url"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_LANDING_URL "$landing_url"
+  verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_GATEWAY_URL "$gateway_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_APP_URL "$app_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_OPS_URL "$ops_url"
   verify_variable "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console VITE_LANDING_URL "$landing_url"
   verify_variable "$env_id" "$RAILWAY_SVC_LANDING_ID" landing VITE_SUPPORT_URL "$support_url"
   verify_variable "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console VITE_LANDING_URL "$landing_url"
   verify_variable "$env_id" "$RAILWAY_SVC_APP_ID" app VITE_DEMO_MODE true
-  echo "All 9 environment variables confirmed by independent re-query."
+  echo "All 10 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
@@ -2730,6 +2732,8 @@ cmd_set_fork_auth() {
     # Forks send no mail.
     "GOTRUE_SMTP_HOST="
     "GOTRUE_SMTP_PASS="
+    # Forks confirm without mail so the deployed sign-in spec can run.
+    "GOTRUE_MAILER_AUTOCONFIRM=true"
   )
   # A fork inherits production's issuer; its mock stays primary and its own GoTrue is additional.
   local gateway_vars=(

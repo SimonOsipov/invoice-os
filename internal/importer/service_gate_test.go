@@ -876,3 +876,77 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 		})
 	}
 }
+
+// runDryRunWarningOnly dry-runs impvCleanFileFixture against a fake gate that
+// gives IMPV-CLEAN-2 a warning only and IMPV-VATWRONG a blocking error.
+func runDryRunWarningOnly(t *testing.T) BatchResult {
+	t.Helper()
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "TEST-03-02 warning-only tenant")
+	entityID := seedEntityWithTIN(t, super, tenantID, "TEST-03-02 warning-only entity", "12345678-0001")
+
+	fg := &fakeGate{evaluateResult: invoice.EvalResult{
+		RuleSetVersion: 1,
+		ByRef: map[string][]invoice.Violation{
+			"IMPV-CLEAN-2":  {{RuleKey: "advisory-x", Severity: "warning"}},
+			"IMPV-VATWRONG": {{RuleKey: "vat-standard-rate", Severity: "error"}},
+		},
+	}}
+	svc := newTestServiceWithGate(app, fg)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvCleanFileFixture(), true)
+	if err != nil {
+		t.Fatalf("dry-run Import: %v", err)
+	}
+	if fg.evaluateCalls != 1 {
+		t.Fatalf("gate.Evaluate called %d times, want 1", fg.evaluateCalls)
+	}
+	return res
+}
+
+// A warning does not block promotion, so the preview must count it clean.
+func TestServiceImport_DryRunWarningOnlyInvoiceCountsClean(t *testing.T) {
+	res := runDryRunWarningOnly(t)
+
+	if res.InvoicesClean != 2 || res.InvoicesWithViolations != 1 {
+		t.Errorf("(InvoicesClean, InvoicesWithViolations) = (%d, %d), want (2, 1)", res.InvoicesClean, res.InvoicesWithViolations)
+	}
+	if len(res.InvoiceViolations) == 0 {
+		t.Fatal("InvoiceViolations is empty, want IMPV-CLEAN-2 and IMPV-VATWRONG")
+	}
+	var got []string
+	for _, iv := range res.InvoiceViolations {
+		got = append(got, iv.InvoiceNumber)
+	}
+	if len(got) != 2 || got[0] != "IMPV-CLEAN-2" || got[1] != "IMPV-VATWRONG" {
+		t.Errorf("InvoiceViolations invoice numbers = %v, want [IMPV-CLEAN-2 IMPV-VATWRONG]", got)
+	}
+}
+
+func TestServiceImport_DryRunWarningOnlyInvoiceHasNoInvoiceID(t *testing.T) {
+	res := runDryRunWarningOnly(t)
+
+	if len(res.InvoiceViolations) == 0 {
+		t.Fatal("InvoiceViolations is empty, want an IMPV-CLEAN-2 entry")
+	}
+	var found *InvoiceViolations
+	for i := range res.InvoiceViolations {
+		if res.InvoiceViolations[i].InvoiceNumber == "IMPV-CLEAN-2" {
+			found = &res.InvoiceViolations[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("InvoiceViolations = %+v, want an IMPV-CLEAN-2 entry", res.InvoiceViolations)
+	}
+	if found.InvoiceID != "" {
+		t.Errorf("IMPV-CLEAN-2 InvoiceID = %q, want empty: dry-run creates no invoice", found.InvoiceID)
+	}
+	if len(found.Rows) != 1 || found.Rows[0] != 4 {
+		t.Errorf("IMPV-CLEAN-2 Rows = %v, want [4]", found.Rows)
+	}
+	if !impvHasViolation(found.Violations, "advisory-x") {
+		t.Errorf("IMPV-CLEAN-2 Violations = %+v, want advisory-x", found.Violations)
+	}
+}

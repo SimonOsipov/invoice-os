@@ -39,6 +39,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -504,6 +505,69 @@ func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 	}
 	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 1 {
 		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want exactly 1 (FOR UPDATE serialized the race)", hn)
+	}
+}
+
+// A Transition blocked on another tx's row lock must decide on that tx's
+// committed status. Without FOR UPDATE it reads "draft" before blocking and
+// then overwrites the winner.
+func TestTransition_BlockedLoserSeesCommittedWinnerStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "TEST-03-02 row-lock tenant")
+	entityID := seedEntity(t, super, tenantID, "TEST-03-02 row-lock entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TEST-03-02-LOCK"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder tx: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+
+	var holderPID int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatalf("read holder pid: %v", err)
+	}
+	var locked string
+	if err := holder.QueryRow(ctx, `SELECT id FROM invoices WHERE id = $1 FOR UPDATE`, inv.ID).Scan(&locked); err != nil {
+		t.Fatalf("holder lock the invoice row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Transition(c, inv.ID, StatusValidated)
+		done <- err
+	}()
+
+	waitBlockedOn(t, super, holderPID)
+	if _, err := holder.Exec(ctx, `UPDATE invoices SET status = 'validated' WHERE id = $1`, inv.ID); err != nil {
+		t.Fatalf("holder update status: %v", err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatalf("holder commit: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRedundantTransition) {
+			t.Errorf("blocked Transition(->validated) err = %v, want ErrRedundantTransition", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Store.Transition never returned after the holder committed")
+	}
+
+	if st := statusOf(t, super, inv.ID); st != StatusValidated {
+		t.Errorf("status after the race = %q, want %q", st, StatusValidated)
+	}
+	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 0 {
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want 0: the blocked Transition must not write", hn)
 	}
 }
 

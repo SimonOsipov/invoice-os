@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
-import { SESSION_KEY, serializeSession } from './lib/session'
+import { SESSION_KEY, parseStoredSession, serializeSession } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import type { PlatformCtx } from './types'
@@ -100,6 +100,7 @@ const networkDown: Reply = () => Promise.reject(new TypeError('Failed to fetch')
 let fetchUrls: string[] = []
 let exchangeBodies: unknown[] = []
 let meAuth: (string | null)[] = []
+let exchangeAuth: (string | null)[] = []
 let loginCalls = 0
 let exchangeReply: Reply = ok({ access_token: T })
 let meReply: Reply = ok(ME)
@@ -111,6 +112,7 @@ function routeFetch() {
       fetchUrls.push(url)
       if (url === `${GATEWAY}/auth/exchange`) {
         exchangeBodies.push(JSON.parse(init?.body ?? 'null'))
+        exchangeAuth.push(init?.headers?.get('Authorization') ?? null)
         return exchangeReply()
       }
       if (url === `${GATEWAY}/api/tenancy/v1/me`) {
@@ -134,6 +136,13 @@ function routeFetch() {
       })()
     }),
   )
+}
+
+// Lets pending fetches and effects run, so a late write would be seen.
+async function settle(ms = 30) {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms))
+  })
 }
 
 async function bootApp(opts: { strict?: boolean } = {}) {
@@ -175,6 +184,7 @@ beforeEach(() => {
   fetchUrls = []
   exchangeBodies = []
   meAuth = []
+  exchangeAuth = []
   loginCalls = 0
   exchangeReply = ok({ access_token: T })
   meReply = ok(ME)
@@ -442,15 +452,33 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     configure()
     ensureSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
-    interceptHref()
+    const warn = vi.spyOn(console, 'warn')
+    const { hrefWrites } = interceptHref()
     await bootApp({ strict: true })
     await waitFor(() => expect(exchangeBodies.length).toBeGreaterThan(0))
     await waitForVerifiedWorkspace()
+    await settle()
     expect(exchangeBodies).toHaveLength(1)
+    // A second effect run finds the state consumed; without the latch it takes the failure arm.
+    expect(hrefWrites).toEqual([])
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('hand-off'))).toEqual([])
   })
 
   it('a live hand-off session is not replaced by a URL', async () => {
     const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
+    // Baseline: the same stored session booted with no param. A URL boot must render the same text.
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    const baseline = document.body.textContent ?? ''
+    expect(baseline.length, 'the baseline workspace rendered text').toBeGreaterThan(0)
+    cleanup()
+    capturedCtx = undefined as PlatformCtx | undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
     const urls = [`/?handoff=${CODE}`, '/?persona=firm']
     expect(urls.length).toBeGreaterThan(0)
     for (const url of urls) {
@@ -473,6 +501,8 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
       expect(rec?.token, url).toBe(OLD_T)
       expect(rec?.me, url).toEqual(OLD_ME)
       // D18 accepted limit (QA N5): no notice is shown.
+      await settle()
+      expect(document.body.textContent, url).toBe(baseline)
       expect(screen.queryByRole('alert'), url).toBeNull()
       cleanup()
       capturedCtx = undefined
@@ -502,5 +532,444 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     expect(window.location.search).toBe('')
     expect(fetchUrls).toEqual([])
     expect(hrefWrites, 'the front door runs with the unconsumed state').toEqual([`${LANDING}/?state=${S}`])
+  })
+})
+
+// QA Mode B: adversarial coverage for the redemption.
+describe('AUTH-05-08 adversarial', () => {
+  function consoleSpies() {
+    return (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+  }
+  function consoleText(spies: { mock: { calls: unknown[][] } }[]): string {
+    return spies
+      .flatMap((s) => s.mock.calls.flat())
+      .map((a) => (a instanceof Error ? `${a.name} ${a.message} ${a.stack ?? ''}` : typeof a === 'string' ? a : (JSON.stringify(a) ?? String(a))))
+      .join('\n')
+  }
+  const stateRemovals = () =>
+    (sessionStorage.removeItem as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter((c) => c[0] === STATE_KEY).length
+  // Accepts only the token the exchange issued, like the real gateway.
+  function gatewayMe() {
+    meReply = () => (meAuth[meAuth.length - 1] === `Bearer ${T}` ? ok(ME)() : fail(401, 'unauthorized')())
+  }
+  function resetTab() {
+    cleanup()
+    vi.restoreAllMocks()
+    vi.stubGlobal('sessionStorage', createMemoryStorage())
+    vi.stubGlobal('localStorage', createMemoryStorage())
+    routeFetch()
+    capturedCtx = undefined
+    meAuth = []
+    exchangeAuth = []
+    exchangeBodies = []
+    exchangeReply = ok({ access_token: T })
+    meReply = ok(ME)
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', '/')
+  }
+
+  it('an exchange 200 without a usable access_token stores no session', async () => {
+    const bodies: [string, unknown][] = [
+      ['no access_token', {}],
+      ['numeric access_token', { access_token: 12345 }],
+      ['null access_token', { access_token: null }],
+      ['empty access_token', { access_token: '' }],
+    ]
+    expect(bodies.length).toBeGreaterThan(0)
+    for (const [name, body] of bodies) {
+      configure()
+      ensureSignInState()
+      exchangeReply = ok(body)
+      gatewayMe()
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const { hrefWrites } = interceptHref()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites, name).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(exchangeBodies, name).toHaveLength(1)
+      expect(localStorage.getItem(SESSION_KEY), name).toBeNull()
+      expect(capturedCtx, name).toBeUndefined()
+      expect(warn, name).toHaveBeenCalledTimes(1)
+      resetTab()
+    }
+  })
+
+  it('a /me 500, 401, network or malformed failure reports failed', async () => {
+    const cases: [string, Reply][] = [
+      ['me 500', fail(500, 'internal server error')],
+      ['me 401', fail(401, 'unauthorized')],
+      ['me network', networkDown],
+      ['me malformed body', () => Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.reject(new SyntaxError('bad json')) })],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const [name, reply] of cases) {
+      configure()
+      const S = ensureSignInState()
+      meReply = reply
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const { hrefWrites } = interceptHref()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites, name).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(meAuth, name).toEqual([`Bearer ${T}`])
+      expect(storedState(), `${name}: the retry carries a fresh state, not the consumed one`).not.toBe(S)
+      expect(localStorage.getItem(SESSION_KEY), name).toBeNull()
+      expect(warn, name).toHaveBeenCalledTimes(1)
+      expect(hrefWrites.filter((h) => h.includes(T)), name).toEqual([])
+      resetTab()
+    }
+  })
+
+  it('a /me 200 with no tenant reports failed', async () => {
+    configure()
+    ensureSignInState()
+    meReply = ok({ user: ME.user })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  // Pinned, advisory: cmd/tenancy's MeHandler always returns tenant.id, so this is unreachable.
+  // Redemption stores a record the parser rejects; flip if redemption should apply the parse guard.
+  it('pinned: a /me 200 with a tenant but no tenant id mounts and stores an unparseable record', async () => {
+    configure()
+    ensureSignInState()
+    meReply = ok({ tenant: { name: 'No Id' }, user: ME.user })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(storedRecord()?.handoff).toBe(true)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(parseStoredSession(localStorage.getItem(SESSION_KEY))).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  // Pinned: /auth/exchange never answers 403 (signin.go ExchangeHandler: 200/400/405; CORS: 204),
+  // so any ApiError 403 is read as /me's. Flip if the arm should key on the failing call.
+  it('pinned: an exchange 403 reports no-workspace', async () => {
+    configure()
+    ensureSignInState()
+    exchangeReply = fail(403, 'forbidden')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
+    expect(meAuth).toEqual([])
+  })
+
+  it('a non-ApiError carrying status 403 reports failed', async () => {
+    configure()
+    ensureSignInState()
+    // apiFetch wraps every fetch failure in ApiError, so the non-ApiError is thrown while reading /me.
+    meReply = ok({
+      user: ME.user,
+      get tenant(): never {
+        throw Object.assign(new Error('not an ApiError'), { status: 403 })
+      },
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(String(warn.mock.calls[0]?.[1])).toContain('not an ApiError')
+  })
+
+  it('a /me 404 reports failed, not no-workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(404, 'not found')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+  })
+
+  it('the token and the code never reach a URL, an href or the console', async () => {
+    const cases: [string, Reply][] = [
+      ['success', ok(ME)],
+      ['me 403', fail(403, 'forbidden')],
+      ['me 500', fail(500, 'boom')],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const [name, reply] of cases) {
+      configure()
+      ensureSignInState()
+      meReply = reply
+      const spies = consoleSpies()
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const replace = vi.spyOn(window.history, 'replaceState')
+      const push = vi.spyOn(window.history, 'pushState')
+      const { hrefWrites } = interceptHref()
+      await bootApp()
+      await waitFor(() => expect(meAuth, `${name}: the token did arrive`).toEqual([`Bearer ${T}`]))
+      await settle()
+      const written = [...historyUrls([replace, push]), ...hrefWrites, window.location.href]
+      expect(written.length, name).toBeGreaterThan(0)
+      expect(written.filter((u) => u.includes(T) || u.includes(CODE)), name).toEqual([])
+      expect(consoleText(spies).includes(T), `${name}: console output carries the token`).toBe(false)
+      expect(consoleText(spies).includes(CODE), `${name}: console output carries the code`).toBe(false)
+      resetTab()
+    }
+  })
+
+  it('no storage write carries the code or the consumed state', async () => {
+    configure()
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    const raw = localStorage.getItem(SESSION_KEY) ?? ''
+    expect(raw).toContain(ME.user.id)
+    expect(raw).not.toContain(CODE)
+    expect(raw).not.toContain(S)
+    const writes = [localStorage, sessionStorage].flatMap((st) =>
+      (st.setItem as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[1])),
+    )
+    expect(writes.length).toBeGreaterThan(0)
+    expect(writes.filter((w) => w.includes(CODE))).toEqual([])
+    expect(sessionStorage.getItem(STATE_KEY)).toBeNull()
+  })
+
+  it('the state is consumed exactly once on success and on failure', async () => {
+    const cases: [string, Reply][] = [
+      ['success', ok({ access_token: T })],
+      ['failure', fail(400, 'invalid or expired code')],
+    ]
+    expect(cases.length).toBeGreaterThan(0)
+    for (const [name, reply] of cases) {
+      configure()
+      const S = ensureSignInState()
+      exchangeReply = reply
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const { hrefWrites } = interceptHref()
+      await bootApp({ strict: true })
+      await waitFor(() => expect(exchangeBodies, name).toHaveLength(1))
+      await settle()
+      expect(exchangeBodies, name).toEqual([{ code: CODE, state: S }])
+      expect(stateRemovals(), name).toBe(1)
+      if (name === 'failure') {
+        expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`])
+        expect(storedState(), 'the consumed state is never reused').not.toBe(S)
+      } else {
+        expect(sessionStorage.getItem(STATE_KEY)).toBeNull()
+      }
+      resetTab()
+    }
+  })
+
+  it('a second tab with the same code never exchanges', async () => {
+    // First tab fails; the second tab has its own empty sessionStorage and no stored session.
+    configure()
+    ensureSignInState()
+    exchangeReply = fail(400, 'invalid or expired code')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    let { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    cleanup()
+    vi.stubGlobal('sessionStorage', createMemoryStorage())
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    ;({ hrefWrites } = interceptHref())
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(exchangeBodies, 'only the first tab exchanged').toHaveLength(1)
+
+    // First tab succeeds; the second tab shares localStorage, so the live session wins.
+    resetTab()
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    cleanup()
+    capturedCtx = undefined
+    vi.stubGlobal('sessionStorage', createMemoryStorage())
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    ;({ hrefWrites } = interceptHref())
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies, 'the second tab resumed the stored session').toHaveLength(1)
+    expect(hrefWrites).toEqual([])
+    expect(window.location.search).toBe('')
+  })
+
+  it('pinned: a repeated ?handoff= redeems the first value only', async () => {
+    const OTHER = 'QPONMLKJIHGFEDCBAzyxwvutsrqponmlkjihgfedcba'
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&handoff=${OTHER}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies.map((b) => (b as { code: string }).code)).toEqual([CODE])
+    expect(window.location.search).toBe('')
+  })
+
+  it('pinned: a repeated ?handoff= whose first value is malformed is ignored', async () => {
+    configure()
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=short&handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(window.location.search).toBe('')
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${S}`])
+  })
+
+  it('an expired hand-off record on reload goes to the front door', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(jwt(OLD_ME.user.id, nowSec() - 1), OLD_ME))
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}`])
+    expect(storedState()).toEqual(expect.stringMatching(new RegExp(`^${STATE_RE}$`)))
+    expect(capturedCtx).toBeUndefined()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(fetchUrls).toEqual([])
+  })
+
+  it('sign-out clears a hand-off session', async () => {
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(storedRecord()?.handoff).toBe(true)
+    await act(async () => {
+      capturedCtx?.signOut()
+    })
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(hrefWrites[0]).toBe(LANDING)
+  })
+
+  it('sign-out of a hand-off session with no landing URL shows the picker', async () => {
+    configure({ landing: false })
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await act(async () => {
+      capturedCtx?.signOut()
+    })
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+    expect(screen.queryByText('Opening your workspace…')).toBeNull()
+  })
+
+  it('the Bearer header goes only to /me during redemption', async () => {
+    configure()
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeAuth).toEqual([null])
+    expect(meAuth).toEqual([`Bearer ${T}`])
+  })
+
+  it('StrictMode fails with one warn and one href write', async () => {
+    configure()
+    ensureSignInState()
+    exchangeReply = fail(400, 'invalid or expired code')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp({ strict: true })
+    await waitFor(() => expect(hrefWrites.length).toBeGreaterThan(0))
+    await settle()
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`])
+    expect(exchangeBodies).toHaveLength(1)
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('hand-off redemption failed'))).toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a slow navigation after failure keeps the loading splash and navigates once', async () => {
+    configure()
+    ensureSignInState()
+    exchangeReply = fail(400, 'invalid or expired code')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    await settle(60)
+    expect(hrefWrites).toHaveLength(1)
+    expect(screen.getByText('Opening your workspace…')).toBeTruthy()
+    expect(screen.queryByText('Choose an account')).toBeNull()
+  })
+
+  it('a pending redemption shows "Opening your workspace…" and no picker', async () => {
+    configure({ landing: false })
+    ensureSignInState()
+    exchangeReply = () => new Promise(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(exchangeBodies).toHaveLength(1))
+    expect(screen.getByText('Opening your workspace…')).toBeTruthy()
+    expect(screen.queryByText(/Signing in as/)).toBeNull()
+    expect(screen.queryByText('Choose an account')).toBeNull()
+    expect(hrefWrites).toEqual([])
+    expect(window.location.search, 'the code leaves before the redemption resolves').toBe('')
+  })
+
+  it('?auth=start bounces over a live hand-off session and keeps it', async () => {
+    const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(storedRecord()?.token).toBe(OLD_T)
+    expect(storedRecord()?.handoff).toBe(true)
+    expect(exchangeBodies).toHaveLength(0)
+  })
+
+  it('pinned: a corrupt record on a ?persona= boot warns once and the persona signs in', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, '{not json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', '/?persona=firm')
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    expect(loginCalls).toBe(1)
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[session]'))).toHaveLength(1)
+  })
+
+  it('a live hand-off session boot writes no history entry carrying handoff or persona', async () => {
+    const OLD_T = jwt(OLD_ME.user.id, nowSec() + 3600)
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
+    ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&persona=firm`)
+    const replace = vi.spyOn(window.history, 'replaceState')
+    const push = vi.spyOn(window.history, 'pushState')
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    const urls = historyUrls([replace, push])
+    expect(urls.length).toBeGreaterThan(0)
+    expect(urls.filter((u) => /handoff=|persona=/.test(u))).toEqual([])
+    expect(window.location.search).toBe('')
+    expect(exchangeBodies).toHaveLength(0)
+    expect(loginCalls).toBe(0)
   })
 })

@@ -1019,8 +1019,7 @@ export interface BulkBarView {
 }
 
 // THE LOADING GATE (`canSubmit`/`canSubmitAll`) is this subtask's primary correctness
-// requirement, and it is here rather than in the component because the component cannot
-// be unit-tested. ReviewInvoicesTab keeps the PREVIOUS page's envelope across the whole
+// requirement. ReviewInvoicesTab keeps the PREVIOUS page's envelope across the whole
 // loading gap (`page.data ?? lastPage.current`), so `rows` keeps its identity, the prune
 // effect never fires, the selection survives and the table is only DIMMED -- never
 // disabled. Ungated, "select 5 -> Next -> submit before the response lands" puts the

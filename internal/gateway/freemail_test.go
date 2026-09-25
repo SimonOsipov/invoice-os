@@ -118,3 +118,38 @@ func TestFreeMailDomains_HoldsRecordedMinimum(t *testing.T) {
 		}
 	}
 }
+
+func TestIsFreeMail_Adversarial(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		inputs []string
+		want   bool
+	}{
+		{"upper_trailing_dot", []string{"USER@GMAIL.COM.", "User@Mail.Gmail.Com.."}, true},
+		{"subdomain_trailing_dots", []string{"user@mail.gmail.com...", "user@a.b.outlook.com."}, true},
+		{"whitespace_and_trailing_dot", []string{" \tuser@gmail.com.\n", " user@gmail.com "}, true},
+		{"whitespace_in_local_part", []string{"us er@gmail.com"}, true},
+		{"listed_domain_as_local_part", []string{"gmail.com@corp.example", "x.gmail.com@corp.example"}, false},
+		{"near_miss_trailing_dot", []string{"user@evilgmail.com.", "user@gmail.com.corp.example."}, false},
+		{"dots_only_domain", []string{"user@.", "user@..."}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, in := range c.inputs {
+				if got := isFreeMail(in); got != c.want {
+					t.Errorf("isFreeMail(%q) = %v, want %v", in, got, c.want)
+				}
+			}
+		})
+	}
+}
+
+func TestIsFreeMail_EveryListedDomainUpperCaseTrailingDot(t *testing.T) {
+	requireRecordedMinimum(t)
+	for _, d := range freeMailDomains {
+		for _, in := range []string{" X@" + strings.ToUpper(d) + ". ", "x@SUB." + strings.ToUpper(d) + ".."} {
+			if !isFreeMail(in) {
+				t.Errorf("isFreeMail(%q) = false, want true", in)
+			}
+		}
+	}
+}

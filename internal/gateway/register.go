@@ -32,6 +32,10 @@ func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) ht
 			writeError(w, http.StatusBadRequest, "email and password are required")
 			return
 		}
+		if isFreeMail(in.Email) {
+			writeError(w, http.StatusBadRequest, "a business email address is required; personal email providers are not accepted")
+			return
+		}
 
 		status, gt, err := postGoTrue(r, client, signup, in)
 		if err != nil {

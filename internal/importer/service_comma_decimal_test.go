@@ -357,6 +357,8 @@ func TestIsCommaDecimal_MoreShapes(t *testing.T) {
 		want bool
 	}{
 		{"1.234.567,89", true},
+		{"1.234,567", true}, // only the dot-before-comma clause decides these two
+		{"1.5,000", true},
 		{"1 234,56", true},
 		{"\t12,50\n", true},
 		{",50", true},
@@ -374,6 +376,21 @@ func TestIsCommaDecimal_MoreShapes(t *testing.T) {
 			t.Errorf("isCommaDecimal(%q) = %v, want %v", tc.raw, got, tc.want)
 		}
 	}
+}
+
+// "1.234,567" has three digits after the comma, so only the dot-before-comma clause catches it.
+func TestServiceImport_CommaDecimalDotBeforeThreeDigitCommaQuarantined(t *testing.T) {
+	rows := [][]string{
+		mkRow("INV-DC", "2026-01-10", "T1", "B1", "NGN", "1.234,567", "0.00", "1234.57", "Item", "1", "1234.57"), // sheet 2
+		healthyRow(), // sheet 3
+	}
+	super, entityID, res := commaDecimalImport(t, "COMMA-DOT3", rows, false)
+
+	if got := countInvoicesByNumber(t, super, entityID, "INV-DC"); got != 0 {
+		t.Errorf("INV-DC persisted = %d, want 0", got)
+	}
+	assertOneCommaError(t, res.Errors, []int{2}, "subtotal")
+	assertHealthyStored(t, super, entityID)
 }
 
 // Whitespace-only and missing (short-row) cells read as blank, never as comma-decimal.

@@ -353,11 +353,71 @@ describe('?auth=start mints a fresh state', () => {
   })
 
   it('control: the front door still reuses the same live state', () => {
-    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - 30_000 }))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     const { hrefWrites } = interceptHref()
     render(<App />)
     expect(hrefWrites).toEqual([`https://landing.example/?state=${X}`])
-    expect(storedAt()).toBe(NOW - NINE_MIN)
+    expect(storedAt()).toBe(NOW - 30_000)
+  })
+})
+
+// Landing holds a state 9 min, so the front door reuses one only while it has that much TTL left.
+describe('the front door re-mints a state older than a minute', () => {
+  const NOW = new Date('2026-09-25T12:00:00Z').getTime()
+  const MINUTE = 60 * 1000
+
+  function storedAt(): unknown {
+    const raw = sessionStorage.getItem(KEY)
+    return raw == null ? null : (JSON.parse(raw) as { at?: unknown }).at
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a state one ms under a minute old is reused and not re-stamped', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - MINUTE + 1 }))
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${X}`])
+    expect(storedState()).toBe(X)
+    expect(storedAt()).toBe(NOW - MINUTE + 1)
+  })
+
+  for (const [label, age] of [
+    ['a minute', MINUTE],
+    ['9.5 minutes', 9.5 * MINUTE],
+  ] as const) {
+    it(`a state ${label} old is replaced by a new one stamped now`, () => {
+      sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - age }))
+      const { hrefWrites } = interceptHref()
+      render(<App />)
+      const s = storedState()
+      expect(s).toEqual(expect.stringMatching(STATE_RE))
+      expect(s, 'the aged state is not reused').not.toBe(X)
+      expect(storedAt()).toBe(NOW)
+      expect(hrefWrites).toEqual([`https://landing.example/?state=${s}`])
+    })
+  }
+
+  it('StrictMode over an aged state navigates once with one fresh state', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - 9.5 * MINUTE }))
+    const { hrefWrites } = interceptHref()
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    const s = storedState()
+    expect(s).not.toBe(X)
+    expect(storedAt()).toBe(NOW)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}`])
   })
 })

@@ -12,7 +12,7 @@ import (
 
 const (
 	maxRegisterBodyBytes = 4 << 10
-	// Caps what is read from GoTrue: an error body is small, and a session body is discarded.
+	// Caps what is read from GoTrue: an error body and a session body are both small.
 	maxGoTrueBodyBytes = 64 << 10
 )
 
@@ -37,7 +37,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, log *slog.Logger) ht
 			return
 		}
 
-		status, gt, err := postGoTrue(r, client, signup, in)
+		status, gt, err := postGoTrue(r, client, signup, in, nil)
 		if err != nil {
 			log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
 			writeError(w, http.StatusBadGateway, "registration is unavailable")
@@ -97,7 +97,7 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token})
+		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, nil)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "verify: gotrue unreachable", slog.String("error", err.Error()))
@@ -127,9 +127,9 @@ type gotrueError struct {
 	Code any `json:"code"`
 }
 
-// postGoTrue posts body as JSON and returns the status and any error fields; the rest of
-// the response, including a session, is discarded unread.
-func postGoTrue(r *http.Request, client *http.Client, target string, body any) (int, gotrueError, error) {
+// postGoTrue posts body as JSON and returns the status and any error fields. A 200 body is
+// decoded into ok when ok is non-nil, and discarded otherwise.
+func postGoTrue(r *http.Request, client *http.Client, target string, body, ok any) (int, gotrueError, error) {
 	var gt gotrueError
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -146,8 +146,11 @@ func postGoTrue(r *http.Request, client *http.Client, target string, body any) (
 	}
 	defer resp.Body.Close()
 	lr := io.LimitReader(resp.Body, maxGoTrueBodyBytes)
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode != http.StatusOK:
 		_ = json.NewDecoder(lr).Decode(&gt)
+	case ok != nil:
+		_ = json.NewDecoder(lr).Decode(ok)
 	}
 	_, _ = io.Copy(io.Discard, lr)
 	return resp.StatusCode, gt, nil

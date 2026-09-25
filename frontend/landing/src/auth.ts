@@ -77,7 +77,7 @@ const resolveBase = (v: string | undefined): string | null => {
   const trimmed = (v ?? '').trim().replace(/\/+$/, '')
   return trimmed || null
 }
-const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
+export const appBase = () => resolveBase(import.meta.env.VITE_APP_URL)
 const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
 const supportBase = () => resolveBase(import.meta.env.VITE_SUPPORT_URL)
 

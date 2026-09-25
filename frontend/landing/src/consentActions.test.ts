@@ -41,7 +41,8 @@ const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
   ['whole-location assignment', /\blocation\s*=[^=]/],
   ['computed location member', /location\s*\[/],
   ['computed window member', /window\s*\[/],
-  ['history navigation', /\bhistory\s*\./],
+  // replaceState is exempt: App.tsx strips the boot sign-in params with it, and it cannot reload.
+  ['history navigation', /\bhistory\s*\.(?!replaceState\s*\()/],
   // A self-href anchor clicked in script is a reload with no location reference.
   ['programmatic click', /\.click\s*\(/],
   // ga-disable assembled from fragments.
@@ -97,12 +98,40 @@ describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
       'const privacy = isPrivacyPath(window.location.pathname)',
       "const hostname = opts?.hostname ?? window.location.hostname",
       "w.gtag('config', id)",
+      "window.history.replaceState(null, '', url.pathname + url.search + url.hash)",
     ]
     for (const sample of legal) {
       for (const [label, re] of FORBIDDEN) {
         expect(re.test(sample), `${label} false-positives on shipped code: ${sample}`).toBe(false)
       }
     }
+  })
+
+  it('control: the history needle exempts only a direct replaceState call', () => {
+    const needle = FORBIDDEN.find(([label]) => label === 'history navigation')
+    expect(needle).toBeDefined()
+    const re = needle![1]
+    const hits = [
+      'window.history.go(0)',
+      'history.back()',
+      'history.forward()',
+      "history.pushState(null, '', '/')",
+      "history . replaceState(null, '', '/')",
+      "history.\nreplaceState(null, '', '/')",
+      "history.replaceStateX(null, '', '/')",
+      'const r = history.replaceState',
+      "history.replaceState(null, '', '/'); history.go(0)",
+    ]
+    for (const s of hits) expect(re.test(s), `not caught: ${s}`).toBe(true)
+    for (const s of ["window.history.replaceState(null, '', '/')", "history.replaceState (null, '', '/')"]) {
+      expect(re.test(s), `false positive: ${s}`).toBe(false)
+    }
+  })
+
+  it('App.tsx uses the replaceState exemption once and no other history member', () => {
+    const src = readFileSync(join(HERE, 'App.tsx'), 'utf8')
+    expect(src.match(/\bhistory\s*\./g)?.length).toBe(1)
+    expect(src.match(/\bhistory\.replaceState\(/g)?.length).toBe(1)
   })
 
   it('AC-5: none of the four files reloads the page or sets ga-disable', () => {

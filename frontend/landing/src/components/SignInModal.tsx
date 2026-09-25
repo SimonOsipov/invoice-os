@@ -1,9 +1,11 @@
-// Landing sign-in: pick a demo persona and go straight to the workspace its role may open.
-// No backend call here; the destination app mints the session from ?persona=<id>.
+// Landing sign-in: the email/password form (when configured) above the demo persona picker.
+// The form posts to the gateway; a persona pick makes no backend call, the app mints from ?persona=<id>.
 
 import { useEffect } from 'react'
 import { BrandMark } from '../icons'
 import { LANDING_PERSONAS, destUrl, type LandingPersona } from '../auth'
+import { signInConfigured } from '../signIn'
+import { SignInForm } from './SignInForm'
 
 function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number; sw?: number }) {
   const paths = Array.isArray(d) ? d : [d]
@@ -16,7 +18,9 @@ function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number
   )
 }
 
-export function SignInModal({ onClose }: { onClose: () => void }) {
+const NO_STATE = () => null
+
+export function SignInModal({ onClose, heldState = NO_STATE, initialError }: { onClose: () => void; heldState?: () => string | null; initialError?: string }) {
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -56,7 +60,7 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
 
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden', animation: 'siCardIn 200ms var(--ease-out)' }}
+        style={{ width: '100%', maxWidth: 452, background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: '0 32px 64px -24px oklch(16% .03 210 / .42)', overflow: 'hidden', maxHeight: 'calc(100vh - 48px)', overflowY: 'auto', animation: 'siCardIn 200ms var(--ease-out)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px', borderBottom: '1px solid var(--line-1)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -73,29 +77,42 @@ export function SignInModal({ onClose }: { onClose: () => void }) {
 
         <div style={{ padding: '22px 20px 20px' }}>
           <div className="eyebrow" style={{ marginBottom: 8 }}>SIGN IN</div>
-          <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>Choose an account</h3>
-          <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>Pick a demo profile to continue. Each role opens only the workspace it's allowed to use.</p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
-            {LANDING_PERSONAS.map((p) => (
-              // data-persona: stable selector for the persona-picker test oracle
-              <button
-                data-persona={p.id}
-                key={p.id}
-                onClick={() => pickPersona(p)}
-                className="si-persona"
-                style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
-              >
-                <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{p.name}</span>
-                  <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title} · {p.org}</span>
-                  <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--action)', background: 'var(--action-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>{p.access}</span>
-                </span>
-                <span style={{ flex: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
-                  <Glyph d="m9 18 6-6-6-6" size={16} sw={1.8} />
-                </span>
-              </button>
-            ))}
+          {signInConfigured() && (
+            <>
+              <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 16px' }}>Sign in to your workspace</h3>
+              <SignInForm heldState={heldState} initialError={initialError} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '22px 0 18px', fontSize: 12, color: 'var(--fg-3)' }}>
+                <span style={{ flex: 1, height: 1, background: 'var(--line-1)' }} />
+                or explore with a demo profile
+                <span style={{ flex: 1, height: 1, background: 'var(--line-1)' }} />
+              </div>
+            </>
+          )}
+          <div data-testid="persona-picker">
+            <h3 style={{ fontSize: 20, letterSpacing: '-0.02em', fontWeight: 600, margin: '0 0 6px' }}>Choose an account</h3>
+            <p style={{ fontSize: 13, lineHeight: 1.55, color: 'var(--fg-2)', margin: 0 }}>Pick a demo profile to continue. Each role opens only the workspace it's allowed to use.</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
+              {LANDING_PERSONAS.map((p) => (
+                // data-persona: stable selector for the persona-picker test oracle
+                <button
+                  data-persona={p.id}
+                  key={p.id}
+                  onClick={() => pickPersona(p)}
+                  className="si-persona"
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', padding: '12px 13px', cursor: 'pointer', fontFamily: 'var(--font-sans)' }}
+                >
+                  <span style={{ flex: 'none', width: 38, height: 38, borderRadius: 'var(--radius-md)', background: p.avBg, color: p.avColor, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700 }}>{p.initials}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{p.name}</span>
+                    <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.title} · {p.org}</span>
+                    <span className="mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 7, fontSize: 9, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--action)', background: 'var(--action-tint)', borderRadius: 'var(--radius-sm)', padding: '2px 6px' }}>{p.access}</span>
+                  </span>
+                  <span style={{ flex: 'none', color: 'var(--fg-3)', display: 'inline-flex' }}>
+                    <Glyph d="m9 18 6-6-6-6" size={16} sw={1.8} />
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

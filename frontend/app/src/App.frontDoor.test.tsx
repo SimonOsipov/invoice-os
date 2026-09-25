@@ -60,6 +60,17 @@ function workspaceIsRendered(): boolean {
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
 
+function storedSignInState(): string | null {
+  const raw = sessionStorage.getItem('invoice-os.signInState')
+  if (raw == null) return null
+  try {
+    const s = JSON.parse(raw)?.s
+    return typeof s === 'string' ? s : null
+  } catch {
+    return null
+  }
+}
+
 // Matches 5/5 sibling App test files that mount a live session (FD-4 is the row that
 // reaches Workspace); harmless no-op for the other rows.
 vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
@@ -67,6 +78,7 @@ vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
   vi.stubGlobal('localStorage', createMemoryStorage())
+  vi.stubGlobal('sessionStorage', createMemoryStorage())
   window.history.replaceState(null, '', '/')
 })
 
@@ -91,7 +103,9 @@ describe('front door: the redirect arm (F-201)', () => {
     stubLocation()
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    expect(window.location.href).toBe('https://landing.example')
+    const s = storedSignInState()
+    expect(window.location.href).toBe(`https://landing.example/?state=${s}`)
+    expect(s).toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/))
   })
 
   it('FD-2: it offers no second sign-in', () => {

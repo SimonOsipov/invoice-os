@@ -20,6 +20,10 @@ M2-14.4).
    `title="Tenant verified via /v1/me"`. That marker is the discriminator — the static firm
    fallback shows the same "OKAFOR & PARTNERS" label, so only the marker proves the round
    trip (mint → `GET /api/tenancy/v1/me`) resolved a backend identity.
+   `e2e/topology/auth.spec.ts` also drives a real sign-in through the landing form: a fresh
+   fork account signs in, the code hand-off lands it in its own workspace, no token appears
+   in any URL, and a code minted in another browser signs no tab in
+   ([identity-provider.md](./identity-provider.md) "Sign-in and hand-off").
 3. **Cross-tenant isolation** — mints a tenant-A and a tenant-B token via the gateway's mock
    issuer and asserts `GET /api/tenancy/v1/me` returns exactly the caller's own tenant. Both
    rows exist in the seeded table, so RLS (JWT-verify → inject `X-Tenant-ID` → `SET LOCAL
@@ -41,8 +45,9 @@ gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is
                 seeded, and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + auth + 4 SPAs (app is gateway-wired: VITE_GATEWAY_URL
-                is a durable Railway reference variable, M4-21-05)
+            ──> deploy 8 context services + docling + auth + 4 SPAs (app and landing are
+                gateway-wired: prepare-env's `reconcile-urls` writes VITE_GATEWAY_URL on
+                both per run)
             ──> verify: smoke (landing + consoles) + api (typed contract suite) +
                 topology (fleet gate, browser login, isolation)
 ```
@@ -70,15 +75,20 @@ itself, so the PR Environments feature is not needed — and `railway-invariants
 every PR** while it is enabled or while any deployment trigger exists. Do not turn it on.
 What remains one-time / human-applied:
 
-### Railway variables (durable reference variables, not per-run `--set`)
+### Railway variables
 
-`app.VITE_GATEWAY_URL`, `gateway.GATEWAY_MOCK_ISSUER`, and `gateway.CORS_ALLOWED_ORIGINS`
-are durable Railway **reference variables** on `development` (M4-21-05, task-129). They are
-carried into every PR environment along with the rest of `development`'s variable topology
-by the `environmentCreate` fork `prepare-env` issues (not by Railway's PR Environments
-feature, which is off), so the workflow no longer sets any of them per-run.
-`GATEWAY_MOCK_ISSUER` forks, but only a `-tags mockissuer` gateway build honours it.
-`deploy-gateway` stamps that tag on `pull_request` only (`scripts/ci/stamp-mock-issuer.sh`).
+`gateway.GATEWAY_MOCK_ISSUER` is a durable variable on `development`. It is carried into
+every PR environment along with the rest of `development`'s variable topology by the
+`environmentCreate` fork `prepare-env` issues (not by Railway's PR Environments feature,
+which is off). `GATEWAY_MOCK_ISSUER` forks, but only a `-tags mockissuer` gateway build
+honours it. `deploy-gateway` stamps that tag on `pull_request` only
+(`scripts/ci/stamp-mock-issuer.sh`).
+
+**Written per run, not inherited:** the URL variables. On a PR, prepare-env's
+`reconcile-urls` step writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
+four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LANDING_URL`,
+the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
+`VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
 
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service
@@ -104,11 +114,15 @@ key, JWT secret and admin password. The gateway health gate asserts `auth_issuer
 PR. If the round trip 401s on a PR environment, check that step first. See
 [identity-provider.md](./identity-provider.md).
 
-**A fork accepts registrations but sends no mail.** `set-fork-auth` also writes
-`auth.GOTRUE_DISABLE_SIGNUP=false`, so the fork's GoTrue accepts `/signup`; the image
+**A fork accepts registrations, sends no mail, and confirms at once.** `set-fork-auth` also
+writes `auth.GOTRUE_DISABLE_SIGNUP=false`, so the fork's GoTrue accepts `/signup`; the image
 default keeps production closed. It blanks `GOTRUE_SMTP_HOST` and `GOTRUE_SMTP_PASS`, and a
 blank SMTP host selects GoTrue's no-op mailer, so no confirmation mail leaves a fork and
-`GOTRUE_MAILER_URLPATHS_CONFIRMATION` is not written. `set-fork-auth-site` (after the
+`GOTRUE_MAILER_URLPATHS_CONFIRMATION` is not written. It writes
+`auth.GOTRUE_MAILER_AUTOCONFIRM=true` (forks only; production keeps the image value
+`false`), so a fork registration is confirmed at once and the deployed sign-in specs can sign
+it in. A repeat registration then answers GoTrue `user_already_exists`, which
+`/auth/register` maps to the same 202. `set-fork-auth-site` (after the
 `urls` step) writes the fork's landing URL as both `auth.GOTRUE_SITE_URL` and
 `gateway.AUTH_SITE_URL`; without the second, the fork's `/auth/register` and `/auth/verify`
 answer 503 `registration is not configured`. The emailed-link half is proven only by the
@@ -154,7 +168,7 @@ converges the PR environment to EXACTLY the curated 10-entity demo portfolio + i
 invoices, every time. This is gated independently of (and more narrowly than) the seed
 gate above: `ResetEnabled` requires `GATEWAY_DB_RESET=true` (a separate durable Railway
 variable from `GATEWAY_DB_BOOTSTRAP`, forked from `development` the same way
-`GATEWAY_MOCK_ISSUER`/`CORS_ALLOWED_ORIGINS`/`VITE_GATEWAY_URL` already are — see
+`GATEWAY_MOCK_ISSUER` already is — see
 "Railway variables" above) AND `RAILWAY_ENVIRONMENT_NAME` — deliberately NOT
 `ENVIRONMENT`, which CI's `set-fork-environment` sets to the literal string `"development"`
 inside every PR fork (see "GitHub secrets" above and `db.ResetEnabled`'s doc comment) — matching

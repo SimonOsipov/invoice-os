@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  // The gateway the sign-in form posts to. Unset means no sign-in form.
+  readonly VITE_GATEWAY_URL?: string
   // Base URLs of the sibling SPAs the sign-in routes to after a persona pick. Each PR
   // now deploys to its own ephemeral Railway environment with an unpredictable domain
   // suffix (M4-23), so there is no hardcoded default — unset means destUrl() returns null

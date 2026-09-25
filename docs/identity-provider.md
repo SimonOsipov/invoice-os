@@ -4,8 +4,9 @@ The `auth` Railway service runs a pinned, unmodified `supabase/auth` (GoTrue) im
 signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`, and
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
-The gateway reaches it for JWKS, for the fleet probe, and for GoTrue's `/signup` and
-`/verify` on behalf of the two public registration routes (see Registration).
+The gateway reaches it for JWKS, for the fleet probe, for GoTrue's `/signup` and
+`/verify` on behalf of the two public registration routes (see Registration), and for
+GoTrue's password grant on behalf of the public sign-in route (see Sign-in and hand-off).
 
 Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 `auth_hook_reader` roles), [deploy-model.md](./deploy-model.md) (where `auth` deploys),
@@ -84,7 +85,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_JWT_DEFAULT_GROUP_NAME` | `authenticated` | The `role` claim. v2.197.0 logs a deprecation warning for it |
 | `GOTRUE_JWT_EXP` | `3600` | Access-token lifetime, seconds |
 | `GOTRUE_DISABLE_SIGNUP` | `true` | Production stays closed until registration U3. PR forks (`set-fork-auth`) and the CI `idp` containers override it to `false` |
-| `GOTRUE_MAILER_AUTOCONFIRM` | `false` | |
+| `GOTRUE_MAILER_AUTOCONFIRM` | `false` | PR forks (`set-fork-auth`) override it to `true` |
 | `GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED` | `true` | |
 | `GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI` | `pg-functions://postgres/public/custom_access_token_hook` | Only schema and function are read |
 | `GOTRUE_SMTP_HOST` | `smtp.resend.com` | Forks override it to empty |
@@ -105,6 +106,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_JWT_ISSUER` | `urn:ascomply:auth:production` | `urn:ascomply:auth:pr-<N>` |
 | `GOTRUE_SMTP_HOST` | (image value) | empty: no mailer |
 | `GOTRUE_DISABLE_SIGNUP` | unset (image value `true`) until registration U3, then `false` | `false` |
+| `GOTRUE_MAILER_AUTOCONFIRM` | unset (image value `false`) | `true`: a fork sends no mail, so a registration is confirmed at once and can sign in |
 | `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | not written; after U2 a fork inherits production's value, inert because a fork sends no mail |
 | `GOTRUE_JWT_KEYS` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_JWT_SECRET` | **secret, sealed** | freshly generated per fork |
@@ -272,9 +274,11 @@ time. The production key exists only in the Railway variable U3b writes and then
 
 ## Registration
 
-GoTrue stays private. The gateway is the only public surface, and it calls exactly two
-GoTrue paths under `AUTH_URL`: `/signup` and `/verify`. It forwards no client path, so no
-other GoTrue route (`/token`, `/recover`, `/admin/*`) is reachable from outside.
+GoTrue stays private. The gateway is the only public surface, and it calls three GoTrue
+paths under `AUTH_URL`: `/signup` and `/verify` for registration, and
+`/token?grant_type=password` for sign-in (see Sign-in and hand-off). It forwards no client
+path or query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, or `/token` with any
+other grant) is reachable from outside.
 
 **The flow:**
 1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
@@ -287,9 +291,9 @@ other GoTrue route (`/token`, `/recover`, `/admin/*`) is reachable from outside.
 3. `GET /auth/verify?token=…&type=signup` posts `{"type":"signup","token_hash":<token>}` to
    GoTrue `/verify`, discards the session GoTrue returns, and redirects the browser to
    `AUTH_SITE_URL`. No token reaches a URL.
-4. The verified user signs in (a GoTrue password grant; no public sign-in route exists
-   until AUTH-05). The first token carries no tenant: the access-token hook projects a
-   tenant only for exactly one active membership.
+4. The verified user signs in through `POST /auth/sign-in` and redeems the code at
+   `POST /auth/exchange` (see Sign-in and hand-off). The first token carries no tenant: the
+   access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this one method and path only. Tenancy creates the tenant and its first active admin
@@ -344,13 +348,17 @@ already carries a tenant or the caller already provisioned one; 500 otherwise. T
 is a UUIDv5 of the caller's subject, so one identity provisions at most one workspace.
 
 **Ceilings:**
-- `ceiling:` every GoTrue call now comes from the gateway's IP. The per-IP
-  `RATE_LIMIT_VERIFY` (30) is shared by all registrants, and `RATE_LIMIT_EMAIL_SENT`
-  (30 per hour) is instance-wide, so production sends about 30 confirmation mails per hour.
-  A registrant during the cap gets 202 and no mail; the WARN log line
-  `registration: gotrue email send rate limit` is the only signal. Set
-  `GOTRUE_RATE_LIMIT_EMAIL_SENT` and a trusted client-IP header when signup traffic
-  approaches it.
+- `ceiling:` GoTrue's per-request rate limiters, `/verify` and `/token` included, are off in
+  this fleet. On v2.197.0 they key on the header named by `GOTRUE_RATE_LIMIT_HEADER` and do
+  nothing while it is unset (`middleware.go` `performRateLimitingWithHeader`); no image,
+  script or runbook sets it. Sign-in has the gateway's own per-address throttle instead (see
+  Sign-in and hand-off); the gateway throttles neither registration nor verify. A
+  per-client-IP limit needs a client-IP header the gateway can trust, and Railway's
+  `X-Forwarded-For` handling is unmeasured. Revisit before registration U3.
+- `ceiling:` `RATE_LIMIT_EMAIL_SENT` (30 per hour) is instance-wide, so production sends
+  about 30 confirmation mails per hour. A registrant during the cap gets 202 and no mail; the
+  WARN log line `registration: gotrue email send rate limit` is the only signal. Set
+  `GOTRUE_RATE_LIMIT_EMAIL_SENT` when signup traffic approaches it.
 - `ceiling:` the session GoTrue issues on verify is discarded but stays live in
   `auth.refresh_tokens` until AUTH-07 builds revocation.
 
@@ -367,6 +375,118 @@ is a UUIDv5 of the caller's subject, so one identity provisions at most one work
 - The smallest change that closes the scanner half: `GET /auth/verify` renders a page with
   one form button, and `POST /auth/verify` verifies. The hijack half also needs password
   recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
+
+## Sign-in and hand-off
+
+The landing SPA is the sign-in surface, and it is a different origin from the app. No cookie
+or other channel is shared between them, so the session crosses in the URL as a short-lived,
+single-use code, never as a token. The code is bound to a `state` that the app minted in the
+same tab, so a code minted in another browser signs nobody in.
+
+**The flow:**
+1. A signed-out app tab calls `ensureSignInState` (`frontend/app/src/lib/signInState.ts`). It
+   reuses a live state or mints 32 random bytes as 43 base64url characters, and stores
+   `{v:1, s, at}` at `sessionStorage['invoice-os.signInState']` for 10 minutes. It never reads
+   a state from a URL.
+2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
+   from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
+   Landing keeps the state in memory only and strips `state` and `signin` at boot.
+3. A visitor who opened landing directly has no state. The modal then shows "Continue with
+   email", which goes to `<app>?auth=start`. The app ensures a state and returns to landing
+   with `signin=ready`, which opens the modal with the form.
+4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
+   `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
+   token with `sha256(state)` and answers a code. The refresh token is discarded.
+5. Landing navigates to `<app>?handoff=<code>`. The app strips the param at mount, before
+   redemption resolves.
+6. The app reads and removes its stored state (`consumeSignInState`) and posts
+   `{"code","state"}` to `POST /auth/exchange`. It then calls `GET /api/tenancy/v1/me` with
+   the token and stores the session at `localStorage['invoice-os.session']` with
+   `handoff: true`. A tab with no live state makes no exchange call and goes to step 7.
+7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
+   answered 403) or `signin=failed` (anything else), carrying a fresh state. Landing opens
+   the modal with "This account has no workspace yet." or "We couldn't open your workspace.
+   Sign in again." An unknown `signin` value is stripped and ignored.
+
+The token travels only in the exchange answer and the `Authorization` header; landing never
+holds it. Landing renders the form only when `VITE_GATEWAY_URL` and `VITE_APP_URL` are set,
+and otherwise shows the persona list alone. The app ignores `?handoff=` when its
+`VITE_GATEWAY_URL` is unset.
+
+**`POST /auth/sign-in`** `{"email","password","state"}`, 4 KiB body limit, outside `/api/`,
+no verifier, wrapped in CORS, in every build:
+
+| Outcome | Answer |
+|---|---|
+| GoTrue 200 with a non-empty `access_token` | 200 `{"code":"<43 characters>"}` |
+| a malformed body, or one over 4 KiB | 400 `invalid request body`; GoTrue is not called |
+| an empty email or password | 400 `email and password are required`; GoTrue is not called |
+| `state` missing or not 43 base64url characters | 400 `state is required`; GoTrue is not called |
+| an email longer than 254 bytes | 400 `invalid email address`; GoTrue is not called |
+| the address is over the throttle, or the throttle is full and the address is new | 429 `too many requests`; GoTrue is not called |
+| GoTrue `invalid_credentials` or `user_banned` | 401 `invalid email or password` |
+| GoTrue `email_not_confirmed` | 403 `email address not verified` |
+| GoTrue 429 (reachable only if `GOTRUE_RATE_LIMIT_HEADER` is ever set) | 429 `too many requests` |
+| GoTrue 200 without `access_token`, any other answer, or GoTrue unreachable | 502 `sign-in is unavailable`, logged at WARN with the upstream status or the error only |
+
+A banned address answers exactly like a wrong password. The gateway never logs the email,
+the password, the code or the token.
+
+**`POST /auth/exchange`** `{"code","state"}`, 1 KiB body limit, the same wrapping:
+
+| Outcome | Answer |
+|---|---|
+| a live code with the state that minted it | 200 `{"access_token":"<jwt>"}`; the code is gone |
+| an unknown, expired, already redeemed, empty or malformed code; a missing or wrong state; a malformed body | 400 `invalid or expired code` |
+
+A code redeems only with the state that minted it. A missing or wrong state answers the same
+400 as an unknown code, and it spends the code: `Take` deletes the entry under the lock
+before it checks expiry and compares `sha256(state)` in constant time.
+
+Both routes set `Cache-Control: no-store` and use the flat `{"error"}` envelope. Each is
+registered twice, POST and OPTIONS, because a POST-only route answers the CORS preflight
+with 405. The CORS layer answers a preflight; any other non-POST request answers 405.
+
+**The code** (`internal/gateway/handoff.go` `HandoffStore`): 32 random bytes, 43 base64url
+characters, stored only as `sha256(code)`, live for 60 s (`HandoffTTL`), single use.
+
+**The throttle** (`internal/gateway/signin_throttle.go` `SignInThrottle`), keyed by the
+lower-cased, trimmed address: at most 10 attempts in a 15-minute window counted from its
+first attempt (`SignInMaxFailures`, `SignInWindow`).
+- An attempt is reserved before GoTrue is called, so a parallel burst cannot pass the limit.
+- `invalid_credentials` and `user_banned` keep the reservation. A 200 clears the address. Any
+  other outcome refunds it, because it did not test a password.
+- The map holds at most 100,000 addresses (`SignInMaxKeys`). Expired keys are swept at most
+  once a minute, or at once when the map is full. When it is still full, a new address gets
+  429 and the gateway logs one WARN per minute; an address already counted keeps its count.
+
+**Precedence in the app.** A live stored hand-off session wins over `?handoff=` and
+`?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
+user signed in as A who signs in on landing as B arrives back in A's workspace with no
+message; B's code expires unused. Sign out first to switch accounts.
+
+**Ceilings:**
+- `ceiling:` the code store and the throttle are in-process. A gateway restart drops
+  unredeemed codes (the user signs in again) and clears the counts, and a second replica
+  would refuse a code minted on the other. Move both to Postgres before the gateway runs
+  more than one replica.
+- `ceiling:` 10 wrong attempts every 15 minutes, about 960 requests a day, keep an address
+  locked out indefinitely, correct password included, because the 429 comes before GoTrue.
+- `ceiling:` there is no per-client-IP limit, so credential stuffing across many addresses is
+  not slowed, and about 111 new addresses per second fill the throttle map and block sign-in
+  for new addresses. GoTrue applies no limit of its own (Registration, Ceilings). Revisit
+  with a measured client-IP header before registration U3.
+- `ceiling:` an unknown or banned address answers faster than a known one with a wrong
+  password, because GoTrue returns before it checks the password. Response time can show
+  that an account exists. Revisit before registration U3.
+- `ceiling:` the discarded refresh token stays live in `auth.refresh_tokens` until AUTH-07.
+  The session ends at `GOTRUE_JWT_EXP` (3600 s), and the app returns the user to landing.
+- `ceiling:` the Railway edge access log records the app's boot URL with the code and
+  landing's boot URL with the state, and the browser's global history keeps the app URL
+  (`replaceState` does not purge it). The code is dead after 60 s or one use, and useless
+  without its state. Someone who can read the edge log within a state's 10 minutes could bind
+  their own code to a victim's state and send the victim the link; that needs privileged log
+  access.
 
 ## Opening registration in production (registration U1–U4)
 
@@ -439,8 +559,80 @@ empty commit instead.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
 
-Provisioning a workspace on production cannot be checked from outside until AUTH-05 ships a
-public sign-in path. The U4 account stays in production's `auth.users`; no route deletes it.
+To check provisioning, sign in with the U4 account and redeem the code (the `curl` pair in
+sign-in U3 below, with the real password), then post
+`{"workspace_name":"<name>","display_name":"<you>"}` to `POST /api/tenancy/v1/workspaces`
+with `Authorization: Bearer <access_token>`: it answers 201. The U4 account and its workspace
+stay in production; no route deletes them.
+
+## Opening sign-in in production (sign-in U1–U3)
+
+These steps are separate from the two U1–U4 lists above. Production writes are the user's.
+The sign-in routes answer from the first deploy after AUTH-05 merges. Until U1 and U2 deploy,
+production landing renders no sign-in form and the persona door is unchanged.
+
+Production's gateway allows the app origin alone, and production's landing has no
+`VITE_GATEWAY_URL`. `reconcile-urls` writes both on a PR fork only and refuses the persistent
+environment, so production is written by hand. The commands use the same `P` and `E` as
+"Opening registration":
+
+```
+P=9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+E=6c864094-6a06-452f-8495-be77d8a94fe7
+```
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | after merge, before U2 | gateway `CORS_ALLOWED_ORIGINS` gains the landing origin |
+| U2 | after U1 | landing `VITE_GATEWAY_URL` |
+| U3 | after U1 and U2 have deployed | none: `curl` checks |
+
+**U1 — gateway `CORS_ALLOWED_ORIGINS`.** Read the current value first. If it holds more than
+`https://app.ascomply.com`, keep every origin it holds and append the landing one.
+
+```
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected before: https://app.ascomply.com
+railway variables --set 'CORS_ALLOWED_ORIGINS=https://app.ascomply.com,https://www.ascomply.com' -p "$P" -e "$E" -s gateway --skip-deploys
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.CORS_ALLOWED_ORIGINS'
+# expected: https://app.ascomply.com,https://www.ascomply.com
+```
+
+**U2 — landing `VITE_GATEWAY_URL`.** A `VITE_*` value is a build argument, so it takes effect
+only when landing is rebuilt.
+
+```
+railway variables --set 'VITE_GATEWAY_URL=https://api.ascomply.com' -p "$P" -e "$E" -s landing --skip-deploys
+railway variables -p "$P" -e "$E" -s landing --json | jq -r '.VITE_GATEWAY_URL'
+# expected: https://api.ascomply.com
+```
+
+**Deploy the writes** as in "Opening registration": the next push run on `main` that changes
+code, a whole-run re-run of the latest push `dev-env` run, or an empty commit.
+
+**U3 — check by hand:**
+1. The landing preflight is granted:
+   ```
+   curl -si -X OPTIONS https://api.ascomply.com/auth/sign-in -H 'Origin: https://www.ascomply.com' -H 'Access-Control-Request-Method: POST'
+   ```
+   It answers 204 with `access-control-allow-origin: https://www.ascomply.com`.
+2. A wrong password is refused. `S` is any 43 base64url characters:
+   ```
+   S=$(openssl rand 32 | base64 | tr '+/' '-_' | tr -d '=')
+   curl -sS -X POST https://api.ascomply.com/auth/sign-in -H 'Content-Type: application/json' -d "{\"email\":\"nobody@<your-company-domain>\",\"password\":\"wrong-password\",\"state\":\"$S\"}"
+   ```
+   It answers 401 `{"error":"invalid email or password"}`.
+3. An unknown code is refused:
+   ```
+   curl -sS -X POST https://api.ascomply.com/auth/exchange -H 'Content-Type: application/json' -d "{\"code\":\"x\",\"state\":\"$S\"}"
+   ```
+   It answers 400 `{"error":"invalid or expired code"}`.
+4. On `https://www.ascomply.com`, "Explore the platform" shows "Continue with email" above
+   the persona list.
+
+With a verified account, step 2 with the real password answers 200 `{"code":"…"}`, and step 3
+with that code and the same `S` answers 200 `{"access_token":"…"}`. A full sign-in through the
+browser also needs a provisioned workspace, and so registration U3 and U4 above.
 
 ## Sealed secrets
 

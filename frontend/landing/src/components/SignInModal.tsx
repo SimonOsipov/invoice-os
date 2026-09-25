@@ -16,7 +16,7 @@ function Glyph({ d, size = 16, sw = 1.7 }: { d: string | string[]; size?: number
   )
 }
 
-export function SignInModal({ onClose }: { onClose: () => void }) {
+export function SignInModal({ onClose }: { onClose: () => void; state?: string | null; initialError?: string }) {
   // Close on Escape (never a native dialog).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

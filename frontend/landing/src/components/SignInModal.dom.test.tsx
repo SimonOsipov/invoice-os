@@ -42,11 +42,29 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-async function mount(onClose: () => void = vi.fn()): Promise<void> {
+async function mount(onClose: () => void = vi.fn(), state: string | null = null): Promise<void> {
   await act(async () => {
-    root.render(createElement(SignInModal, { onClose }))
+    root.render(createElement(SignInModal, { onClose, state }))
   })
 }
+
+// The AUTH-05-07 anchor: absence checks scope here, not to the whole dialog.
+function picker(): HTMLElement {
+  const p = dialog().querySelector<HTMLElement>('[data-testid="persona-picker"]')
+  expect(p, 'expected the persona picker').not.toBeNull()
+  return p!
+}
+
+// Gateway unset: signInConfigured() is false whatever the SPA targets are.
+function unconfigured(): void {
+  vi.stubEnv('VITE_GATEWAY_URL', '')
+}
+
+function configured(): void {
+  vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.example.test')
+}
+
+const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 function dialog(): HTMLElement {
   const d = document.querySelector<HTMLElement>('[role="dialog"]')
@@ -120,12 +138,14 @@ describe('the pick', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('T01-5: no intermediate step follows a pick', async () => {
+  it('T01-5 unconfigured: no intermediate step follows a pick', async () => {
     stubTargets(ALL_TARGETS)
+    unconfigured()
     await mount()
     await clickPersona('firm')
     const d = dialog()
-    expect(d.querySelectorAll('input').length).toBe(0)
+    expect(picker().querySelectorAll('input').length).toBe(0)
+    expect(d.querySelectorAll('form').length).toBe(0)
     for (const s of CODE_STEP_TEXT) {
       expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
     }
@@ -133,13 +153,15 @@ describe('the pick', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('T01-6: an unconfigured target is a no-op', async () => {
+  it('T01-6 unconfigured: an unconfigured target is a no-op', async () => {
     stubTargets({})
+    unconfigured()
     await mount()
     await clickPersona('firm')
     expect(locationStub.href).toBe(HOME)
     expect(dialog().querySelectorAll('[data-persona]').length).toBe(4)
-    expect(dialog().querySelectorAll('input').length).toBe(0)
+    expect(picker().querySelectorAll('input').length).toBe(0)
+    expect(dialog().querySelectorAll('form').length).toBe(0)
     expect(vi.getTimerCount()).toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -153,16 +175,60 @@ describe('the pick', () => {
     expect(locationStub.href).toBe('https://ops.example.test?persona=developer')
     expect(consoleError).not.toHaveBeenCalled()
   })
+
+  it('T01-5/T01-6 configured counterparts', async () => {
+    // App and gateway set (configured); ops unset, so developer is an unconfigured target.
+    stubTargets({ VITE_APP_URL: 'https://app.example.test' })
+    configured()
+    await mount(vi.fn(), STATE)
+    expect(dialog().querySelectorAll('input[type="password"]').length).toBe(1)
+
+    await clickPersona('developer')
+    expect(locationStub.href).toBe(HOME)
+    expect(vi.getTimerCount()).toBe(0)
+
+    await clickPersona('firm')
+    expect(locationStub.href).toBe('https://app.example.test?persona=firm')
+    const d = dialog()
+    for (const s of CODE_STEP_TEXT) {
+      expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
+    }
+    expect(picker().querySelectorAll('[data-persona]').length).toBe(4)
+    expect(picker().querySelectorAll('input').length).toBe(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
 })
 
 describe('removed chrome', () => {
-  it('T01-8: the picker has no password or SSO footer', async () => {
-    await mount()
+  it('T01-8 unconfigured: the picker has no password or SSO footer', async () => {
+    unconfigured()
+    await mount(vi.fn(), STATE)
     const d = dialog()
     expect(d.textContent).toContain('Choose an account')
+    expect(picker().querySelectorAll('input').length).toBe(0)
+    expect(d.querySelectorAll('input').length).toBe(0)
     expect(d.querySelectorAll('a').length).toBe(0)
+    expect(FOOTER_TEXT.length).toBeGreaterThan(0)
     for (const s of FOOTER_TEXT) {
       expect(d.textContent, `dialog still shows "${s}"`).not.toContain(s)
+    }
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('T01-8 configured: the persona picker has no password or SSO footer', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE)
+    const d = dialog()
+    // Positive half: the configured form is on the dialog.
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+    const p = picker()
+    expect(p.querySelectorAll('[data-persona]').length).toBe(4)
+    expect(p.querySelectorAll('input').length).toBe(0)
+    expect(p.querySelectorAll('a').length).toBe(0)
+    expect(FOOTER_TEXT.length).toBeGreaterThan(0)
+    for (const s of FOOTER_TEXT) {
+      expect(d.textContent, `dialog shows "${s}"`).not.toContain(s)
     }
     expect(consoleError).not.toHaveBeenCalled()
   })

@@ -534,7 +534,7 @@ func TestRegistration_NotConfigured503(t *testing.T) {
 
 const freeMailRefusal = "a business email address is required; personal email providers are not accepted"
 
-// requireFreeMailRefused requires the D6 refusal and that GoTrue was never called.
+// requireFreeMailRefused requires the free-mail 400 and that GoTrue was never called.
 func requireFreeMailRefused(t *testing.T, fake *fakeGoTrue, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	if rec.Code != http.StatusBadRequest {
@@ -575,7 +575,7 @@ func TestRegister_EveryListedDomainRefused(t *testing.T) {
 	}
 }
 
-// Kills a suffix match without the dot boundary, and forwarding a normalised address.
+// A lookalike domain is not free mail, and the address is forwarded unnormalised.
 func TestRegister_BusinessAndLookalikeDomainsReachGoTrue(t *testing.T) {
 	// Mixed case: a lower-case input cannot tell forwarded from normalised.
 	for _, email := range []string{"user@corp.example", "user@gmai1.com", "user@evilgmail.com", "User@Corp.Example"} {
@@ -599,7 +599,7 @@ func TestRegister_BusinessAndLookalikeDomainsReachGoTrue(t *testing.T) {
 	}
 }
 
-// Kills the free-mail branch placed above the empty-field check.
+// An empty field is reported before a free-mail domain.
 func TestRegister_EmptyFieldCheckPrecedesFreeMail(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 

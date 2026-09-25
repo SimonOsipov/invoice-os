@@ -120,7 +120,7 @@ func postRegister(t *testing.T, gw, email string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
-// Real GoTrue decides whether these forms are addresses at all; none may register (D12).
+// None may register. The gateway refuses the trailing-dot row; real GoTrue decides the rest.
 func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
 	gw := startGateway(t, idpMailURL(t))
 	conn := superConn(t)

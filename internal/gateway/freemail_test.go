@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// d3Domains is the minimum list Decision D3 records; freeMailDomains may grow past it.
-var d3Domains = []string{
+// recordedDomains is the recorded minimum; freeMailDomains may grow past it.
+var recordedDomains = []string{
 	"gmail.com", "googlemail.com",
 	"outlook.com", "hotmail.com", "live.com", "msn.com",
 	"yahoo.com", "ymail.com", "rocketmail.com",
@@ -21,8 +21,8 @@ var d3Domains = []string{
 
 func requireRecordedMinimum(t *testing.T) {
 	t.Helper()
-	if len(freeMailDomains) < len(d3Domains) {
-		t.Fatalf("len(freeMailDomains) = %d, want >= %d (D3)", len(freeMailDomains), len(d3Domains))
+	if len(freeMailDomains) < len(recordedDomains) {
+		t.Fatalf("len(freeMailDomains) = %d, want >= %d", len(freeMailDomains), len(recordedDomains))
 	}
 }
 
@@ -112,9 +112,9 @@ func TestFreeMailDomains_WellFormed(t *testing.T) {
 }
 
 func TestFreeMailDomains_HoldsRecordedMinimum(t *testing.T) {
-	for _, d := range d3Domains {
+	for _, d := range recordedDomains {
 		if !slices.Contains(freeMailDomains, d) {
-			t.Errorf("freeMailDomains lacks %q (D3)", d)
+			t.Errorf("freeMailDomains lacks %q", d)
 		}
 	}
 }

@@ -314,7 +314,7 @@ func TestRegister_FreeMailRefusalIsSilentJSON(t *testing.T) {
 	}
 }
 
-// Kills trimming the address before it is forwarded.
+// The gateway trims only to classify; GoTrue receives the address as posted.
 func TestRegister_PaddedBusinessAddressForwardedVerbatim(t *testing.T) {
 	const email = " user@corp.example "
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)

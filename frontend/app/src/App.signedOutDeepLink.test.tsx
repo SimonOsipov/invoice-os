@@ -77,6 +77,23 @@ function workspaceIsRendered(): boolean {
 }
 
 const SEAT_SESSION: Session = { persona: APP_PERSONAS.firm, token: 'tok', me: null, verified: true }
+const STATE_RE = /^[A-Za-z0-9_-]{43}$/
+
+function storedSignInState(): string | null {
+  const raw = sessionStorage.getItem('invoice-os.signInState')
+  if (raw == null) return null
+  try {
+    const s = JSON.parse(raw)?.s
+    return typeof s === 'string' ? s : null
+  } catch {
+    return null
+  }
+}
+
+// The front-door bounce since AUTH-05-11 (D25): landing plus the stored state, nothing else.
+function stateBounce(): string {
+  return `https://landing.example/?state=${storedSignInState()}`
+}
 const REVIEW_ID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
 const INVOICE_ID = 'd4c3b2a1-6f5e-4a78-9bcd-1234567890ab'
 const EXTRACTION_JOB_ID = 'e5f6a7b8-9012-4c3d-9e4f-0987654321ba'
@@ -181,15 +198,18 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
-    expect(hrefWrites[hrefWrites.length - 1]).toBe('https://landing.example')
+    expect(hrefWrites[hrefWrites.length - 1]).toBe(stateBounce())
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
   })
 
   it('capture_theBounceUrlCarriesNothingExtra', () => {
     const { hrefWrites } = stubLocation({ pathname: '/audit' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
-    // Byte-equal: no suffix, no param, no hash appended to the landing base.
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    // Byte-equal: the state and nothing else -- no path, no other param, no hash.
+    expect(hrefWrites).toEqual([stateBounce()])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
   })
 
   it('capture_theBareRootIsNotStored', () => {
@@ -198,7 +218,8 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
     render(<App />)
     expect(readDestination()).toBeNull()
     // The bounce itself is unaffected by the root's non-capturability.
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    expect(hrefWrites).toEqual([stateBounce()])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
   })
 
   it('capture_aLiveSessionStoresNothing', () => {
@@ -246,7 +267,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
       'the front door must capture the path and the query it owns',
     ).toEqual([['/audit', `?invoice=${INVOICE_ID}`]])
     expect(readDestination()).toEqual({ path: '/audit', query: `?invoice=${INVOICE_ID}` })
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    expect(hrefWrites).toEqual([stateBounce()])
   })
 
   // shouldAutoSignIn('bogus') is false, so autoPersona stays null and the front door DOES
@@ -261,7 +282,7 @@ describe('front door: capturing the destination before the bounce (ROUTE-05-02)'
       readDestination(),
       'an unowned persona param must not survive into the stored query',
     ).toEqual({ path: '/audit', query: '' })
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    expect(hrefWrites).toEqual([stateBounce()])
   })
 })
 
@@ -276,7 +297,7 @@ describe('front door: adversarial coverage (QA)', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     render(<App />)
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
-    expect(hrefWrites).toEqual(['https://landing.example'])
+    expect(hrefWrites).toEqual([stateBounce()])
   })
 
   it('capture_aSecondSessionlessRenderOverwritesTheFirst', () => {
@@ -286,7 +307,7 @@ describe('front door: adversarial coverage (QA)', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     const { unmount } = render(<App />)
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
-    expect(first.hrefWrites).toEqual(['https://landing.example'])
+    expect(first.hrefWrites).toEqual([stateBounce()])
     unmount()
 
     stubLocation({ pathname: '/reports' })
@@ -749,16 +770,13 @@ describe('Sign-out clears the captured destination (ROUTE-05-05)', () => {
       ctx.signOut()
     })
 
-    // Two identical writes, not one: signOut's own tail navigates, then the front-door
-    // effect re-fires on the activeSession->null transition (Part 2 of this task's Stage 1
-    // notes) and navigates again since landingBase() is still configured -- captureDestination
-    // is refused but the unconditional `if (dest) window.location.href = dest` below it still
-    // runs. Harmless (same URL, a real browser only navigates once) but worth pinning exactly
-    // rather than asserting a single write that isn't what happens.
-    expect(hrefWrites.every((w) => w === 'https://landing.example'), 'every write must target landingBase()').toBe(
-      true,
-    )
-    expect(hrefWrites.length, 'signOut writes href twice: its own tail, then the front-door re-fire').toBe(2)
+    // Two writes: signOut's own tail goes to bare landing (D25 step 2, unchanged), then the
+    // front-door effect re-fires on activeSession->null and bounces with the stored state.
+    expect(hrefWrites, 'signOut writes href twice: its own tail, then the front-door re-fire').toEqual([
+      'https://landing.example',
+      stateBounce(),
+    ])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
   })
 })
 
@@ -847,13 +865,14 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
     restore()
   })
 
-  it('noUrl_theBounceHrefIsExactlyTheLandingBase', async () => {
+  it('noUrl_theBounceHrefCarriesOnlyTheState', async () => {
     const { hrefWrites, restore } = await runSignedOutDeepLinkJourney()
-    // The stubbed literal, never landingBase(): asserting against the function makes both
+    // The stubbed literal, never landingSignInUrl(): asserting against the function makes both
     // sides move together when it breaks.
-    expect(hrefWrites, 'the bounce must be the bare landing base -- no ?next=, no fragment').toEqual([
-      'https://landing.example',
+    expect(hrefWrites, 'the bounce must be landing plus the state -- no ?next=, no fragment').toEqual([
+      stateBounce(),
     ])
+    expect(storedSignInState()).toEqual(expect.stringMatching(STATE_RE))
     restore()
   })
 
@@ -879,7 +898,7 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
       path: '/audit',
       query: '',
     })
-    expect(unowned.hrefWrites).toEqual(['https://landing.example'])
+    expect(unowned.hrefWrites).toEqual([stateBounce()])
     first.unmount()
     sessionStorage.clear()
 
@@ -889,7 +908,7 @@ describe('The destination never travels in a URL (ROUTE-05-06)', () => {
       path: '/audit',
       query: `?invoice=${INVOICE_ID}`,
     })
-    expect(owned.hrefWrites).toEqual(['https://landing.example'])
+    expect(owned.hrefWrites).toEqual([stateBounce()])
   })
 
   // AC-8 style restore: reuses the bounce-then-restore journey with a view-owned query, so

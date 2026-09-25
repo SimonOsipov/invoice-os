@@ -39,7 +39,7 @@ function liveState(raw: string | null, now: number): string | null {
   ) {
     return null
   }
-  return now - p.at < SIGN_IN_STATE_TTL_MS ? p.s : null
+  return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.s : null
 }
 
 // Reuses a live state, else mints and stores one. Storage failure yields an unstored state.

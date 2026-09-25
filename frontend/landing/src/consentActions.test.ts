@@ -107,6 +107,33 @@ describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
     }
   })
 
+  it('control: the history needle exempts only a direct replaceState call', () => {
+    const needle = FORBIDDEN.find(([label]) => label === 'history navigation')
+    expect(needle).toBeDefined()
+    const re = needle![1]
+    const hits = [
+      'window.history.go(0)',
+      'history.back()',
+      'history.forward()',
+      "history.pushState(null, '', '/')",
+      "history . replaceState(null, '', '/')",
+      "history.\nreplaceState(null, '', '/')",
+      "history.replaceStateX(null, '', '/')",
+      'const r = history.replaceState',
+      "history.replaceState(null, '', '/'); history.go(0)",
+    ]
+    for (const s of hits) expect(re.test(s), `not caught: ${s}`).toBe(true)
+    for (const s of ["window.history.replaceState(null, '', '/')", "history.replaceState (null, '', '/')"]) {
+      expect(re.test(s), `false positive: ${s}`).toBe(false)
+    }
+  })
+
+  it('App.tsx uses the replaceState exemption once and no other history member', () => {
+    const src = readFileSync(join(HERE, 'App.tsx'), 'utf8')
+    expect(src.match(/\bhistory\s*\./g)?.length).toBe(1)
+    expect(src.match(/\bhistory\.replaceState\(/g)?.length).toBe(1)
+  })
+
   it('AC-5: none of the four files reloads the page or sets ga-disable', () => {
     const files = readScanned()
     // Durable control needle: present in App.tsx and analytics.ts today and after

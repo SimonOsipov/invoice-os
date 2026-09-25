@@ -5,10 +5,6 @@
 // up, so a simulated 401 produces a genuine ApiError{kind:'http', status:401} — proof at
 // the integration level, not a re-implementation of apiFetch's own contract (already
 // covered by C1-C8 in client.test.ts).
-//
-// Every spec below currently fails because createAuthedFetch's stub throws `new
-// Error('not implemented')` before ever calling the real apiFetch/fetch — that IS the
-// correct RED reason (assertion / not-implemented), not an import/compile/setup error.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
@@ -160,6 +156,17 @@ describe('authedFetch 401 seam', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer live')
+  })
+
+  it('U11: a null getToken() sends no Authorization, even when opts carry a token', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = createAuthedFetch(() => null, vi.fn())
+
+    await af('/x', { token: 'stale' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(new Headers(init?.headers).has('Authorization')).toBe(false)
   })
 })
 

@@ -1,7 +1,5 @@
 // RED specs (INVCR-01-02, task-278, Mode A) — pin draftToCreateRequest before the
-// executor implements the body in Stage 3. Every spec below currently fails because the
-// stub throws `new Error('not implemented')` before ever computing a result -- that IS
-// the correct RED reason (assertion / not-implemented), not an import/compile error.
+// executor implements the body in Stage 3.
 //
 // Red-first honesty (task-278 plan): CREATE-1/CREATE-2 (lib/invoices.test.ts), DRAFT-1,
 // DRAFT-2, DRAFT-7 are genuinely discriminating -- each fails against a plausible wrong

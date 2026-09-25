@@ -2,10 +2,6 @@
 // executor implements the bodies. Mirrors the mocking style of
 // packages/api-client/src/client.test.ts: vi.stubGlobal for localStorage,
 // vi.spyOn(console, 'warn'/'error') for the no-error invariant, afterEach cleanup.
-//
-// Every spec below currently fails because the stub throws `new Error('not
-// implemented')` — that IS the correct RED reason (assertion / not-implemented),
-// not an import/compile/setup error.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from '../auth'

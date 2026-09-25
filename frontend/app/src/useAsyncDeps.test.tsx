@@ -8,10 +8,12 @@ import { useAsync } from '@invoice-os/api-client'
 
 function deferred<T>() {
   let settle!: (v: T) => void
-  const promise = new Promise<T>((res) => {
+  let fail!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
     settle = res
+    fail = rej
   })
-  return { promise, settle }
+  return { promise, settle, fail }
 }
 
 describe('useAsync deps change', () => {
@@ -52,5 +54,46 @@ describe('useAsync deps change', () => {
 
     expect(result.current.status).toBe('ready')
     expect(result.current.data).toEqual(['fresh'])
+  })
+
+  it('a deps change discards the in-flight rejection of a non-immediate run', async () => {
+    const pending = deferred<string[]>()
+    const { result, rerender } = renderHook(
+      ({ k }: { k: string }) => useAsync<string[]>(() => pending.promise, { immediate: false, deps: [k] }),
+      { initialProps: { k: 'a' } },
+    )
+    act(() => result.current.run())
+    rerender({ k: 'b' })
+    await act(async () => pending.fail(new Error('stale')))
+
+    expect(result.current.status, 'a rejection from before the deps change landed').toBe('loading')
+    expect(result.current.error).toBeNull()
+  })
+
+  it('without a deps change the same rejection lands', async () => {
+    const pending = deferred<string[]>()
+    const { result } = renderHook(() => useAsync<string[]>(() => pending.promise, { immediate: false, deps: ['a'] }))
+    act(() => result.current.run())
+    await act(async () => pending.fail(new Error('boom')))
+
+    expect(result.current.status).toBe('error')
+    expect(result.current.error?.message).toBe('boom')
+  })
+
+  it('an immediate run superseded by a deps change never overwrites the newer result', async () => {
+    const runs = [deferred<string[]>(), deferred<string[]>()]
+    let calls = 0
+    const { result, rerender } = renderHook(
+      ({ k }: { k: string }) => useAsync<string[]>(() => runs[calls++]!.promise, { deps: [k] }),
+      { initialProps: { k: 'a' } },
+    )
+    rerender({ k: 'b' })
+    expect(calls, 'mount and the deps change each start a run').toBe(2)
+
+    await act(async () => runs[1]!.settle(['new']))
+    await act(async () => runs[0]!.settle(['old']))
+
+    expect(result.current.status).toBe('ready')
+    expect(result.current.data).toEqual(['new'])
   })
 })

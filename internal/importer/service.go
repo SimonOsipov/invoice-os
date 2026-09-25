@@ -370,13 +370,49 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 	return ""
 }
 
-// isCommaDecimal reports whether raw uses a comma as the decimal mark.
-// Stub: not implemented yet.
-func isCommaDecimal(raw string) bool { return false }
+// isCommaDecimal reports whether raw uses a comma as the decimal mark: a dot
+// before a comma, or a comma not followed by exactly three digits.
+func isCommaDecimal(raw string) bool {
+	s := strings.TrimSpace(raw)
+	c := strings.IndexByte(s, ',')
+	if c < 0 {
+		return false
+	}
+	if strings.Contains(s[:c], ".") {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != ',' {
+			continue
+		}
+		n := 0
+		for j := i + 1; j < len(s) && s[j] >= '0' && s[j] <= '9'; j++ {
+			n++
+		}
+		if n != 3 {
+			return true
+		}
+	}
+	return false
+}
 
-// commaDecimalField returns the first numeric field with a comma-decimal cell, or "".
-// Stub: not implemented yet, and not called from the classify loop.
-func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string { return "" }
+// commaDecimalField returns the first numeric field with a comma-decimal cell
+// on any row of the group, or "". It reads raw cells: normalizeNumeric would
+// turn "12,50" into "1250" and hide it.
+func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
+	for _, field := range []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"} {
+		idx, ok := colIndex[field]
+		if !ok {
+			continue
+		}
+		for _, ri := range rowIdxs {
+			if idx < len(rows[ri]) && isCommaDecimal(rows[ri][idx]) {
+				return field
+			}
+		}
+	}
+	return ""
+}
 
 // buildCreateInput assembles one invoice.CreateInput for a READY group:
 // header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total)
@@ -565,7 +601,9 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //     ([grouping], non-contiguous OK); a blank/empty invoice_number is
 //     ungroupable -> quarantined with a scalar-Row RowError citing its own
 //     sheet row.
-//  3. Classify each group: an in-file header-field disagreement quarantines
+//  3. Classify each group: a numeric cell on any row that uses a comma as
+//     the decimal mark quarantines it first (RowError.Field the offending
+//     field); else an in-file header-field disagreement quarantines
 //     it (RowError.Rows = every one of the group's sheet rows, [dedup]/
 //     [errors-shape]); else a non-empty issue_date that doesn't parse as
 //     YYYY-MM-DD quarantines it too (RowError.Field "issue_date" -- Core
@@ -653,6 +691,16 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	for _, num := range order {
 		g := groups[num]
+		if field := commaDecimalField(rows, colIndex, g.rowIdxs); field != "" {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(headerRow, g.rowIdxs),
+				Field:   field,
+				Message: fmt.Sprintf("%s uses a comma as the decimal mark; write it with a dot, e.g. 1234.56", field),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
 		if field := headerConflictField(rows, colIndex, g.rowIdxs); field != "" {
 			errorsList = append(errorsList, RowError{
 				Rows:    sheetRows(headerRow, g.rowIdxs),

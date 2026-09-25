@@ -155,6 +155,14 @@ func main() {
 	app.Mux.Handle("POST /auth/register", reg.Register)
 	app.Mux.Handle("GET /auth/verify", reg.Verify)
 
+	// Public sign-in hand-off for the landing origin, in every build.
+	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
+	h := handoffHandlers(probed["auth"], app.Logger)
+	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
+	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
+	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
+	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
+
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
 	if mockIssuerCompiled {
@@ -247,12 +255,19 @@ type handoff struct {
 }
 
 // handoffHandlers builds the sign-in and exchange handlers against GoTrue at authURL.
-// Stub until AUTH-05-03 lands.
+// Both share one code store: a code minted by sign-in is redeemable only through exchange.
 func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
-	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
-	})
-	return handoff{SignIn: stub, Exchange: stub}
+	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return handoff{
+		SignIn:   gateway.SignInHandler(authURL, client, store, throttle, log),
+		Exchange: gateway.ExchangeHandler(store),
+	}
 }
 
 // mustParseSiteURL parses AUTH_SITE_URL. Unset is allowed and logged; a value that is not

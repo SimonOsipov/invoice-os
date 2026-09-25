@@ -150,6 +150,17 @@ describe('authedFetch 401 seam', () => {
     const headers = new Headers(init?.headers)
     expect(headers.get('Authorization')).toBe('Bearer tok')
   })
+
+  it('U10: getToken() wins over a token passed in opts', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = createAuthedFetch(() => 'live', vi.fn())
+
+    await af('/x', { token: 'stale' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer live')
+  })
 })
 
 describe('authedFetch end-to-end: a real 401 clears the persisted session (Decision (g), → AC-3)', () => {

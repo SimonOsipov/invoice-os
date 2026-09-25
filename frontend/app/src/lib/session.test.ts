@@ -155,6 +155,30 @@ describe('parseStoredSession corruption/version guards', () => {
     expect(warn).toHaveBeenCalled()
     expect(error).not.toHaveBeenCalled()
   })
+
+  it('S35: a stored session with verified missing is rejected', () => {
+    const blob = JSON.parse(serializeSession(firmSession()))
+    // Positive half: the untouched blob parses, so only the deletion below can reject it.
+    expect(parseStoredSession(JSON.stringify(blob))).not.toBeNull()
+    delete blob.verified
+    const { warn, error } = spyOnConsole()
+
+    const result = parseStoredSession(JSON.stringify(blob))
+
+    expect(result).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('S36: a stored session with verified "true" (a string) is rejected', () => {
+    const blob = { ...JSON.parse(serializeSession(firmSession())), verified: 'true' }
+    const { warn } = spyOnConsole()
+
+    const result = parseStoredSession(JSON.stringify(blob))
+
+    expect(result).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('no-gateway (unverified) session', () => {
@@ -324,6 +348,21 @@ describe('isTokenExpired / resolveBootSession', () => {
     for (const t of ['tok', '', 'a.b', 'a.!!!not-base64!!!.c', jwt({ sub: 'x' }), jwt({ exp: 'soon' })]) {
       expect(isTokenExpired(t, Date.now()), `token ${JSON.stringify(t)}`).toBe(false)
     }
+  })
+
+  // `{"exp":…,"s":"???"}` encodes to a payload with `_` (standard base64 `/`), which atob rejects.
+  it('S33: an expired token whose base64url payload contains "_" reads expired', () => {
+    const token = jwt({ exp: 1, s: '???' })
+    expect(token.split('.')[1]).toContain('_')
+
+    expect(isTokenExpired(token, 2000_000)).toBe(true)
+  })
+
+  it('S34: the same payload with a future exp is not expired', () => {
+    const token = jwt({ exp: 4102444800, s: '???' })
+    expect(token.split('.')[1]).toContain('_')
+
+    expect(isTokenExpired(token, 2000_000)).toBe(false)
   })
 
   it('S29: resolveBootSession drops an expired session so the workspace never mounts on a dead token', () => {

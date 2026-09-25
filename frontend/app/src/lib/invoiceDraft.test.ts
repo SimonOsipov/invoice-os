@@ -170,6 +170,29 @@ describe('draftToCreateRequest: money', () => {
   })
 })
 
+describe('draftToCreateRequest: VAT base', () => {
+  it('VAT is taken from the ROUNDED subtotal: exact 0.195 files vat 0.02', () => {
+    // 0.20 x 0.075 = 0.015 -> 0.02; the exact 0.195 x 0.075 = 0.014625 -> 0.01.
+    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 0.5, price: 0.39 }] }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.subtotal).toBe('0.20')
+    expect(result.vat).toBe('0.02')
+    expect(result.total).toBe('0.22')
+  })
+
+  it('VAT from rounded subtotal: a subtotal already at 2dp is unaffected', () => {
+    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 1, price: 100.0 }] }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.subtotal).toBe('100.00')
+    expect(result.vat).toBe('7.50')
+    expect(result.total).toBe('107.50')
+  })
+})
+
 describe('draftToCreateRequest: supplier TIN (C7)', () => {
   it('DRAFT-3 a 12-bare-digit entity TIN is passed through unchanged', () => {
     const entity: Pick<Entity, 'id' | 'name' | 'tin'> = { ...baseEntity, tin: '100123450001' }

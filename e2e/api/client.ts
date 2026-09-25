@@ -95,6 +95,52 @@ export async function login(persona: Persona): Promise<string> {
   return access_token
 }
 
+// A sign-in state in the app's shape: 32 random bytes, base64url, 43 characters (AUTH-05 D25).
+export function mintSignInState(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Buffer.from(bytes).toString('base64url')
+}
+
+// POST /auth/sign-in: the single-use hand-off code for a confirmed GoTrue account.
+export async function signInForCode(email: string, password: string, state: string): Promise<string> {
+  const { code } = await apiFetch<{ code: string }>(`${apiBase()}/auth/sign-in`, {
+    method: 'POST',
+    body: { email, password, state },
+  })
+  return code
+}
+
+// POST /auth/exchange: redeems a code with its own state for a GoTrue access token.
+export async function exchangeCode(code: string, state: string): Promise<string> {
+  const { access_token } = await apiFetch<{ access_token: string }>(`${apiBase()}/auth/exchange`, {
+    method: 'POST',
+    body: { code, state },
+  })
+  return access_token
+}
+
+export interface RealAccount {
+  email: string
+  password: string
+  workspaceName: string
+}
+
+// A fresh GoTrue account with a workspace of its own. Forks auto-confirm (AUTH-05 D11), so
+// the account signs in at once; a later sign-in carries the new tenant claim.
+export async function provisionRealAccount(prefix: string): Promise<RealAccount> {
+  const id = crypto.randomUUID()
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16), workspaceName: `Hand-off E2E ${id.slice(0, 8)}` }
+  await apiFetch(`${apiBase()}/auth/register`, { method: 'POST', body: { email: account.email, password: account.password } })
+  const state = mintSignInState()
+  const token = await exchangeCode(await signInForCode(account.email, account.password, state), state)
+  await apiFetch(`${apiBase()}/api/tenancy/v1/workspaces`, {
+    method: 'POST',
+    token,
+    body: { workspace_name: account.workspaceName, display_name: 'Hand-off E2E' },
+  })
+  return account
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

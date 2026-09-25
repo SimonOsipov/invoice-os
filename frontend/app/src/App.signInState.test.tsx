@@ -161,3 +161,145 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
     expect(window.location.search).toBe('')
   })
 })
+
+// QA Mode B (AUTH-05-11): adversarial coverage at App level.
+const X = 'XxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxXxX'
+
+describe('signInState adversarial: App', () => {
+  it('App adversarial: a URL state beside auth=start is never adopted', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', `/?state=${X}&auth=start`)
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(s).not.toBe(X)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+  })
+
+  it('App adversarial: a URL state on a sessionless boot is never adopted', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', `/?state=${X}`)
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(s).not.toBe(X)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}`])
+  })
+
+  it('App adversarial: the front door reuses a live stored state', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: Date.now() }))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${X}`])
+  })
+
+  it('App adversarial: auth=start over a stored session mounts no Workspace and keeps the destination', () => {
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    captureDestination('/audit', '', Date.now())
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    const { container } = render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(container.innerHTML, 'nothing renders while the bounce leaves').toBe('')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
+  })
+
+  it('App adversarial: a stored session without auth=start mounts the Workspace', () => {
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const { hrefWrites } = interceptHref()
+    const { container } = render(<App />)
+    expect(hrefWrites).toEqual([])
+    expect(container.innerHTML).not.toBe('')
+  })
+
+  it('App adversarial: persona wins over auth=start with one strip', async () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start&persona=firm')
+    const replace = vi.spyOn(window.history, 'replaceState')
+    const { hrefWrites } = interceptHref()
+    await act(async () => {
+      render(<App />)
+    })
+    expect(signInSpy).toHaveBeenCalledWith(APP_PERSONAS.firm)
+    expect(hrefWrites).toEqual([])
+    expect(storedState(), 'no state is minted').toBeNull()
+    // The strip writes a null history state; Workspace's own URL writes carry `{ e }`.
+    const strips = replace.mock.calls.filter((c) => c[0] === null)
+    expect(strips.length).toBe(1)
+    expect(window.location.search).toBe('')
+  })
+
+  it('App adversarial: StrictMode auth=start navigates once', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+  })
+
+  it('App adversarial: a repeated auth param reads the first value', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start&auth=other')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(window.location.search).toBe('')
+  })
+
+  it('App adversarial: auth=other is stripped and takes the plain front door', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=other&auth=start')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}`])
+    expect(window.location.search).toBe('')
+  })
+
+  // Pins executor choice 1: the strip keeps the path and drops the whole query.
+  it('App adversarial: auth=other over a stored session keeps the path and strips the query', () => {
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/audit?auth=other&utm_source=x')
+    const { hrefWrites } = interceptHref()
+    const { container } = render(<App />)
+    expect(hrefWrites).toEqual([])
+    expect(container.innerHTML).not.toBe('')
+    expect(window.location.pathname).toBe('/audit')
+    expect(window.location.search).toBe('')
+  })
+
+  // No session: Workspace would canonicalise the URL itself.
+  it('App adversarial: an unused persona param is not stripped', () => {
+    window.history.replaceState(null, '', '/?persona=bogus')
+    render(<App />)
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+    expect(window.location.search).toBe('?persona=bogus')
+  })
+
+  // Pins executor choice 4.
+  it('App adversarial: no landing URL mints no state', () => {
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+    expect(hrefWrites).toEqual([])
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
+  it('App adversarial: auth=start without a landing URL mints no state', () => {
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+    expect(hrefWrites).toEqual([])
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+})

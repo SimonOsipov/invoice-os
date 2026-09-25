@@ -343,8 +343,8 @@ A sessionless visit to a real path is remembered across the landing round trip i
   location through `parseLocation` and re-serialises with `routeQuery`, so an unowned param
   is discarded before storage is touched.
 - **Restore** — `Workspace`'s one-source `{ path, search }` boot seed, and only when the live
-  pathname is the bare root. That is the shape the `?persona=` hand-off always arrives in
-  (`destUrl` carries no path); a live non-root path is the URL the browser is showing and
+  pathname is the bare root. That is the shape the `?persona=` and `?handoff=` hand-offs always
+  arrive in (`destUrl` and `handoffUrl` carry no path); a live non-root path is the URL the browser is showing and
   always wins. Path and query resolve in one statement, so a restored destination's query can
   never be paired with the live root's.
 - **Clear** — `Workspace`'s mount-alignment effect (consume-once, on every mount) and
@@ -363,11 +363,13 @@ they asked for — the pre-ROUTE-05 behaviour, not a crash and not a wrong scree
 bounds the window to ten minutes. `lib/deepLink.test.ts` pins one version below and one
 above current.
 
-The round trip crosses two origins, so nothing below the browser can observe it. Its two
-oracles are both in `e2e/topology/auth.spec.ts`: `deployed app: a signed-out deep link
+The round trip crosses two origins, so nothing below the browser can observe it. Its three
+oracles are all in `e2e/topology/auth.spec.ts`: `deployed app: a signed-out deep link
 returns to its destination after sign-in` (the path) and `deployed app: a signed-out deep
 link returns to its FILTER after sign-in` (the query — the only spec anywhere that exercises
-a restored query end to end).
+a restored query end to end) drive the persona door; `deployed app: a real sign-in from the
+front door returns to its destination with no token in any URL` drives the real sign-in (the
+path).
 
 **The merged shape (ROUTE-02 merge).** The `{ path, search }` seed resolves the destination
 first; `parseLocation` then decodes it into the eight fields. A signed-out visit to

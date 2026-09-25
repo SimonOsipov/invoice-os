@@ -531,3 +531,87 @@ func TestRegistration_NotConfigured503(t *testing.T) {
 		t.Errorf("GoTrue saw %d calls, want 0", n)
 	}
 }
+
+const freeMailRefusal = "a business email address is required; personal email providers are not accepted"
+
+// requireFreeMailRefused requires the D6 refusal and that GoTrue was never called.
+func requireFreeMailRefused(t *testing.T, fake *fakeGoTrue, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != freeMailRefusal {
+		t.Errorf("error = %q, want %q", got, freeMailRefusal)
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+func TestRegister_FreeMailRefused400NoUpstreamCall(t *testing.T) {
+	for _, c := range []struct{ name, email string }{
+		{"gmail", "user@gmail.com"},
+		{"upper", "USER@GMAIL.COM"},
+		{"whitespace", " user@gmail.com "},
+		{"plus_tag", "user+tag@gmail.com"},
+		{"subdomain", "user@mail.gmail.com"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			requireFreeMailRefused(t, fake, doRegister(t, fake.URL, nil, registerBody(c.email, regPassword)))
+		})
+	}
+}
+
+func TestRegister_EveryListedDomainRefused(t *testing.T) {
+	if len(freeMailDomains) < 20 {
+		t.Fatalf("freeMailDomains has %d entries, want >= 20", len(freeMailDomains))
+	}
+	for _, d := range freeMailDomains {
+		t.Run(d, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			requireFreeMailRefused(t, fake, doRegister(t, fake.URL, nil, registerBody("reg@"+d, regPassword)))
+		})
+	}
+}
+
+// Kills a suffix match without the dot boundary, and forwarding a normalised address.
+func TestRegister_BusinessAndLookalikeDomainsReachGoTrue(t *testing.T) {
+	// Mixed case: a lower-case input cannot tell forwarded from normalised.
+	for _, email := range []string{"user@corp.example", "user@gmai1.com", "user@evilgmail.com", "User@Corp.Example"} {
+		t.Run(email, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+			requirePending202(t, doRegister(t, fake.URL, nil, registerBody(email, regPassword)))
+
+			calls := fake.Calls()
+			if len(calls) != 1 || calls[0].Path != "/signup" {
+				t.Fatalf("GoTrue saw %+v, want exactly one /signup call", calls)
+			}
+			var sent struct{ Email string }
+			if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+				t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
+			}
+			if sent.Email != email {
+				t.Errorf("forwarded email = %q, want %q byte for byte", sent.Email, email)
+			}
+		})
+	}
+}
+
+// Kills the free-mail branch placed above the empty-field check.
+func TestRegister_EmptyFieldCheckPrecedesFreeMail(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	rec := doRegister(t, fake.URL, nil, registerBody("user@gmail.com", ""))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != "email and password are required" {
+		t.Errorf("error = %q, want %q", got, "email and password are required")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}

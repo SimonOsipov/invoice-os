@@ -104,6 +104,77 @@ func registrant(t *testing.T, gw string) idpUser {
 	return u
 }
 
+// The gateway's refusal copy; TestRegister_FreeMailRefused400NoUpstreamCall pins the same string.
+const freeMailRefusal = "a business email address is required; personal email providers are not accepted"
+
+// postRegister posts email through the gateway handler and returns the status and body.
+func postRegister(t *testing.T, gw, email string) (int, string) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]string{"email": email, "password": "pw-" + uuid.NewString()})
+	resp, err := noRedirect.Post(gw+"/auth/register", "application/json", strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatalf("POST /auth/register: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body)
+}
+
+// Real GoTrue decides whether these forms are addresses at all; none may register (D12).
+func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
+	gw := startGateway(t, idpMailURL(t))
+	conn := superConn(t)
+	ctx := context.Background()
+
+	for _, c := range []struct{ name, domain string }{
+		{"fullwidth", "ｇｍａｉｌ.com"},
+		{"ideographic_full_stop", "gmail。com"},
+		{"trailing_dots", "gmail.com.."},
+		{"leading_space_in_domain", " gmail.com"},
+		{"trailing_zero_width_space", "gmail.com​"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			local := "idp-fm-" + uuid.NewString()
+			posted, ascii := local+"@"+c.domain, local+"@gmail.com"
+			t.Cleanup(func() {
+				_, _ = conn.Exec(ctx, `DELETE FROM auth.users WHERE lower(email) IN (lower($1), $2)`, posted, ascii)
+			})
+
+			status, body := postRegister(t, gw, posted)
+			t.Logf("%q -> %d %s", posted, status, body)
+
+			if status == http.StatusAccepted {
+				t.Errorf("status = 202 for %q, want a refusal", posted)
+			}
+			var n int
+			if err := conn.QueryRow(ctx, `SELECT count(*) FROM auth.users WHERE lower(email) IN (lower($1), $2)`,
+				posted, ascii).Scan(&n); err != nil {
+				t.Fatalf("count auth.users: %v", err)
+			}
+			if n != 0 {
+				t.Errorf("auth.users holds %d rows for %q or %q, want 0", n, posted, ascii)
+			}
+		})
+	}
+
+	t.Run("control_upper_case", func(t *testing.T) {
+		posted := "idp-fm-" + uuid.NewString() + "@GMAIL.COM"
+		t.Cleanup(func() {
+			_, _ = conn.Exec(ctx, `DELETE FROM auth.users WHERE lower(email) = lower($1)`, posted)
+		})
+
+		status, body := postRegister(t, gw, posted)
+
+		if status != http.StatusBadRequest {
+			t.Fatalf("status = %d for %q, want 400: %s", status, posted, body)
+		}
+		var e struct{ Error string }
+		if err := json.Unmarshal([]byte(body), &e); err != nil || e.Error != freeMailRefusal {
+			t.Errorf("body = %s, want error %q", body, freeMailRefusal)
+		}
+	})
+}
+
 type mailpitSearch struct {
 	Messages []struct {
 		ID string `json:"ID"`

@@ -147,13 +147,34 @@ describe('AUTH-05-07 adversarial: boot params', () => {
     expect(window.location.search).toBe('')
   })
 
-  it('configured: a valid state alone opens the form', async () => {
-    // Executor's rule, unspecified by the story: a front-door bounce (D25 step 2) carries no `signin`.
+  it('configured: a front-door state alone opens nothing but is held', async () => {
+    // Only a `signin` outcome opens the modal; the front-door bounce (D25 step 2) carries none.
+    const fetchMock = vi.fn().mockReturnValue(new Promise(() => undefined))
+    vi.stubGlobal('fetch', fetchMock)
     await bootAt(`/?state=${STATE}`)
-    const d = onlyDialog()
-    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
-    expect(d.querySelectorAll('[role="alert"]').length).toBe(0)
+    pageMounted()
+    expect(dialogs().length).toBe(0)
     expect(window.location.search).toBe('')
+
+    await openFromNav()
+    const d = onlyDialog()
+    expect(d.querySelectorAll('[role="alert"]').length).toBe(0)
+    expect(d.textContent).not.toContain('Continue with email')
+    const email = d.querySelectorAll<HTMLInputElement>('input[type="email"]')
+    const password = d.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(email.length).toBe(1)
+    expect(password.length).toBe(1)
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(email[0], 'ada@okafor.ng')
+      email[0].dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(password[0], 'pw')
+      password[0].dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect((JSON.parse(init.body as string) as { state: unknown }).state).toBe(STATE)
   })
 
   it('StrictMode: the boot read survives the double effect', async () => {

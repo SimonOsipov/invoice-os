@@ -290,3 +290,46 @@ func TestVerify_NonGetIs405WithoutUpstreamCall(t *testing.T) {
 		})
 	}
 }
+
+// A refusal is a JSON answer and writes no log line.
+func TestRegister_FreeMailRefusalIsSilentJSON(t *testing.T) {
+	// Positive pair: the captured logger records a line on another branch.
+	log, buf := captureLog()
+	doRegister(t, closedURL(t), log, registerBody(regEmail, regPassword))
+	if buf.Len() == 0 {
+		t.Fatal("no log line on the unreachable branch: the silence assertion below proves nothing")
+	}
+
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	log, buf = captureLog()
+
+	rec := doRegister(t, fake.URL, log, registerBody("user@gmail.com", regPassword))
+
+	requireFreeMailRefused(t, fake, rec)
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("refusal wrote a log line: %s", buf.String())
+	}
+}
+
+// Kills trimming the address before it is forwarded.
+func TestRegister_PaddedBusinessAddressForwardedVerbatim(t *testing.T) {
+	const email = " user@corp.example "
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+
+	requirePending202(t, doRegister(t, fake.URL, nil, registerBody(email, regPassword)))
+
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("GoTrue saw %d calls, want 1", len(calls))
+	}
+	var sent struct{ Email string }
+	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+		t.Fatalf("signup body %q is not JSON: %v", calls[0].Body, err)
+	}
+	if sent.Email != email {
+		t.Errorf("forwarded email = %q, want %q", sent.Email, email)
+	}
+}

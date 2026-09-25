@@ -143,8 +143,9 @@ func TestIdP_FreeMailVariantsAreNotAccepted(t *testing.T) {
 			status, body := postRegister(t, gw, posted)
 			t.Logf("%q -> %d %s", posted, status, body)
 
-			if status == http.StatusAccepted {
-				t.Errorf("status = 202 for %q, want a refusal", posted)
+			// 400, not merely non-202: a 502 from an unreachable GoTrue is not a refusal.
+			if status != http.StatusBadRequest {
+				t.Errorf("status = %d for %q, want 400", status, posted)
 			}
 			var n int
 			if err := conn.QueryRow(ctx, `SELECT count(*) FROM auth.users WHERE lower(email) IN (lower($1), $2)`,

@@ -391,7 +391,7 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
-`registration is closed`; a free-mail address answers 400 with the policy message at any time. Neither affects any other route.
+`registration is closed`; a free-mail address answers 400 with the policy message. Neither affects any other route.
 
 **U1 — gateway `AUTH_SITE_URL`:**
 

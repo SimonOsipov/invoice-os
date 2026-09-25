@@ -83,6 +83,10 @@ jobs:
             idp:
               - 'sidecar/auth/**'
               - 'internal/platform/auth/**'
+              - 'internal/platform/*.go'
+              - 'internal/platform/db/**'
+              - 'internal/gateway/**'
+              - 'internal/tenancy/**'
               - 'migrations/**'
               - 'db/**'
               - 'tools/prenv/**'
@@ -785,6 +789,7 @@ jobs:
     env:
       DATABASE_SUPERUSER_URL: postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disable
       DATABASE_MIGRATION_URL: postgres://invoice_migrator:migrator@localhost:5432/invoice_os?sslmode=disable
+      DATABASE_URL: postgres://invoice_app:app@localhost:5432/invoice_os?sslmode=disable
       MIGRATOR_PASSWORD: migrator
       APP_PASSWORD: app
       READER_PASSWORD: reader
@@ -800,7 +805,7 @@ jobs:
         run: make db-bootstrap
       - name: Apply all migrations (as migrator)
         run: make migrate-up
-      - name: Start idp-es256, idp-hs256 and idp-rebuild (stdout is the three URLs only)
+      - name: Start the idp containers and mailpit (stdout is the URLs and the issuer only)
         run: scripts/ci/idp-up.sh "$DATABASE_AUTH_ADMIN_URL" 5432 >> "$GITHUB_ENV"
       - name: Read the pinned supabase/auth tag
         run: echo "IDP_PINNED_TAG=$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" >> "$GITHUB_ENV"
@@ -810,7 +815,7 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestIdP ./internal/platform/auth/...
       - name: Container logs on failure
         if: failure()
-        run: for c in idp-es256 idp-hs256 idp-rebuild; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
+        run: for c in idp-es256 idp-hs256 idp-rebuild idp-mail mailpit; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

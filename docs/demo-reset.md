@@ -107,7 +107,7 @@ Four tables carry `tenant_id` and are deliberately never purged.
 
 | Table | Why it is spared |
 |---|---|
-| `memberships` | there is no runtime `INSERT` path, so nothing accumulates; the seed's `DO UPDATE` converges identity and status on every boot anyway |
+| `memberships` | the only runtime `INSERT` (`provision_workspace`) creates a new tenant's first admin, never a demo tenant's row, so nothing accumulates; the seed's `DO UPDATE` converges identity and status on every boot anyway |
 | `approval_policies` | `internal/demopolicy` rebuilds a policy for the **two persona tenants only**, so purging all four would leave the other two with no policy and nothing to restore one |
 | `approval_policy_versions` | same reason — and the sealed version a run pointed at must outlive that run |
 | `approval_policy_steps` | same reason; the step tree belongs to a sealed version |

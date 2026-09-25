@@ -43,6 +43,7 @@ type MintOptions struct {
 	Subject  string
 	Role     string
 	TenantID string
+	Email    string // minted only when non-empty
 	TTL      time.Duration
 }
 
@@ -66,6 +67,7 @@ func (m *MockIssuer) Mint(opts MintOptions) (string, error) {
 		ExpiresAt:   now.Add(opts.TTL).Unix(),
 		Role:        opts.Role,
 		AppMetadata: appMetadata{TenantID: opts.TenantID},
+		Email:       opts.Email,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	tok.Header["kid"] = m.kid

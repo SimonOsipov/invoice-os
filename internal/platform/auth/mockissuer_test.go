@@ -70,3 +70,21 @@ func TestMockIssuer_MintDefaultsAreVerifiable(t *testing.T) {
 		t.Fatalf("identity = %+v", id)
 	}
 }
+
+func TestMockMint_EmailOmittedWhenEmpty(t *testing.T) {
+	iss := mustIssuer(t)
+
+	// omitempty keeps email-less mock tokens byte-identical to before the claim existed.
+	without := decodeSegment(t, mustMint(t, iss, MintOptions{Subject: testSubject}), 1)
+	if without["sub"] != testSubject {
+		t.Fatalf("decoded claims sub = %v, want %q", without["sub"], testSubject)
+	}
+	if v, ok := without["email"]; ok {
+		t.Errorf("claims minted without Email carry an email key: %v", v)
+	}
+
+	with := decodeSegment(t, mustMint(t, iss, MintOptions{Subject: testSubject, Email: "ada@example.test"}), 1)
+	if got := with["email"]; got != "ada@example.test" {
+		t.Errorf("claims minted with Email: email = %v, want %q", got, "ada@example.test")
+	}
+}

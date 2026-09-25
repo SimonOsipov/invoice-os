@@ -32,16 +32,18 @@ export function apiBase(): string {
 // application/json ONLY when body is present; omitting body sends no
 // request body and no Content-Type at all (this is what enables M3-15-04's
 // no-body -> io.EOF -> 400 case). Never throws on a non-2xx status — body is
-// best-effort parsed JSON, undefined if parsing fails.
+// best-effort parsed JSON, undefined if parsing fails. redirect: 'manual' returns the
+// 3xx itself, so a caller can read its Location (client.test.ts pins it).
 export async function rawFetch(
   path: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: unknown },
-): Promise<{ status: number; body: unknown }> {
+  init?: { method?: string; headers?: Record<string, string>; body?: unknown; redirect?: RequestRedirect },
+): Promise<{ status: number; body: unknown; location: string | null }> {
   const hasBody = init?.body !== undefined
   const res = await fetch(`${apiBase()}${path}`, {
     method: init?.method,
     headers: hasBody ? { ...init?.headers, 'Content-Type': 'application/json' } : init?.headers,
     body: hasBody ? JSON.stringify(init?.body) : undefined,
+    redirect: init?.redirect,
   })
   let body: unknown
   try {
@@ -49,7 +51,7 @@ export async function rawFetch(
   } catch {
     body = undefined
   }
-  return { status: res.status, body }
+  return { status: res.status, body, location: res.headers.get('Location') }
 }
 
 export interface Persona {

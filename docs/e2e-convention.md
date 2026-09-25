@@ -81,6 +81,11 @@ What a spec still cannot assume is an empty table:
     seeded staffing rows in the same `Provision` call (Decision [include-workflow-roles]).
     A role or staffing row a spec creates at runtime on a demo tenant does NOT survive the
     next deploy; the seeded ones always come back.
+- `api/registration.spec.ts` leaves rows that persist across pushes to one PR environment:
+  each run's `auth.users` row (GoTrue's schema, which neither the reset nor the purge
+  touches) and the tenant and membership its fork chain provisions (the reset excludes
+  `tenants` and `memberships`, and the purge touches the four demo tenants only). This is
+  harmless, because every run registers a fresh address and provisions for a fresh subject.
 
 So the rule is unchanged, and `workers: 1` still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and

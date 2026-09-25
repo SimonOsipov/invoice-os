@@ -5,7 +5,7 @@
 // is entirely mock-data (data.tsx) with no backend to protect, so a fabricated
 // localStorage entry is enough to get in. Real enforcement needs an operator identity the
 // gateway will actually vouch for (its `authorize()` refuses every tenant-less token
-// today, internal/gateway/gateway.go) — M7. This is the routing shape that lands into, so
+// except on POST /api/tenancy/v1/workspaces, internal/gateway/gateway.go) — M7. This is the routing shape that lands into, so
 // it becomes a swap rather than a rewrite.
 //
 // Mirrors the ops console's module one-for-one so the two stay one idiom, and keeps its

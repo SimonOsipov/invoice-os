@@ -64,7 +64,7 @@ var purgeTables = []string{
 }
 
 // purgeExcludedTables carries tenant_id but is deliberately never purged:
-// memberships has no runtime INSERT path, and internal/demopolicy rebuilds the
+// memberships' only runtime INSERT creates a new tenant, never a demo one, and internal/demopolicy rebuilds the
 // approval-policy tables for the two persona tenants only, so purging them
 // would leave the other two with no policy and nothing to restore it. Together
 // with purgeTables it must equal the live schema's tenant_id-bearing set

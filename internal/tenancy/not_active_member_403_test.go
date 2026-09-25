@@ -58,6 +58,21 @@ func TestMeHandler_NotActiveMemberIs403(t *testing.T) {
 	}
 }
 
+// POST /v1/workspaces: dead through Store.ProvisionWorkspace (ungated core), kept for the scan.
+func TestProvisionHandler_NotActiveMemberIs403(t *testing.T) {
+	provision := ProvisionFunc(func(context.Context, ProvisionInput) (Tenant, string, error) {
+		return Tenant{}, "", fmt.Errorf("tenancy: provision: %w", db.ErrNotActiveMember)
+	})
+	rec, body := doProvision(t, provision, validProvisionBody)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if msg := provisionErrorBody(t, body); msg != db.NotActiveMemberMessage {
+		t.Errorf("error = %q, want db.NotActiveMemberMessage %q", msg, db.NotActiveMemberMessage)
+	}
+}
+
 func TestMembershipsHandler_NotActiveMemberIs403(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 	load := MembershipsLoader(func(context.Context) ([]Membership, error) {

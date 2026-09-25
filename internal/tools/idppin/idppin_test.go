@@ -150,3 +150,38 @@ func TestLatestCheckExitCodes(t *testing.T) {
 		}
 	}
 }
+
+// Production signup stays closed until it is opened by hand.
+func TestAuthImageKeepsSignupClosed(t *testing.T) {
+	t.Run("parser control", func(t *testing.T) {
+		for body, want := range map[string]string{
+			"ENV GOTRUE_DISABLE_SIGNUP=true":                                    "true",
+			"ENV A=1 \\\n    GOTRUE_DISABLE_SIGNUP=false \\\n    B=2":           "false",
+			"env GOTRUE_DISABLE_SIGNUP=false":                                   "false",
+			"# ENV GOTRUE_DISABLE_SIGNUP=true\nENV GOTRUE_DISABLE_SIGNUP=false": "false",
+		} {
+			if got := dockerfileEnv(t, body)["GOTRUE_DISABLE_SIGNUP"]; got != want {
+				t.Errorf("dockerfileEnv(%q) GOTRUE_DISABLE_SIGNUP = %q, want %q", body, got, want)
+			}
+		}
+		if _, ok := dockerfileEnv(t, "# ENV GOTRUE_DISABLE_SIGNUP=true\n")["GOTRUE_DISABLE_SIGNUP"]; ok {
+			t.Error("a commented-out ENV line was parsed")
+		}
+	})
+
+	raw, err := os.ReadFile(committedDockerfile)
+	if err != nil {
+		t.Fatalf("reading the committed %s: %v", committedDockerfile, err)
+	}
+	env := dockerfileEnv(t, string(raw))
+	if len(env) == 0 {
+		t.Fatal("control: the committed Dockerfile sets no ENV, so the parser read nothing")
+	}
+	got, ok := env["GOTRUE_DISABLE_SIGNUP"]
+	if !ok {
+		t.Fatalf("sidecar/auth/Dockerfile sets no GOTRUE_DISABLE_SIGNUP; ENV keys = %v", env)
+	}
+	if got != "true" {
+		t.Errorf("sidecar/auth/Dockerfile GOTRUE_DISABLE_SIGNUP = %q, want \"true\"", got)
+	}
+}

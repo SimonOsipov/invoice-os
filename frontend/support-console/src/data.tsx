@@ -2,8 +2,8 @@
 // (Support Console.dc.html:741-767 and 1189-1245).
 //
 // ALL OF IT IS FICTION. This console reads across every tenant, and no such read path
-// exists yet — the gateway refuses any token without a tenant (internal/gateway/
-// gateway.go `authorize()`), and the three database roles are all RLS-bound. Wiring these
+// exists yet — the gateway refuses any token without a tenant except on
+// POST /api/tenancy/v1/workspaces (internal/gateway/gateway.go `authorize()`), and the three database roles are all RLS-bound. Wiring these
 // screens to real data needs an operator identity and a cross-tenant read path, which is
 // M7. Until then the shapes here are the contract that work will have to satisfy.
 

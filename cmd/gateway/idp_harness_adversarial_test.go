@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -148,7 +149,7 @@ func argvEnv(argv, name string) string {
 	return ""
 }
 
-func TestIdpUpStdoutIsTheThreeURLsAndTheIssuer(t *testing.T) {
+func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
 	dsn := "postgres://supabase_auth_admin:" + stubDSNPassword + "@localhost:5448/invoice_os?sslmode=disable"
 	for _, osName := range []string{"Linux", "Darwin"} {
 		t.Run(osName, func(t *testing.T) {
@@ -158,7 +159,8 @@ func TestIdpUpStdoutIsTheThreeURLsAndTheIssuer(t *testing.T) {
 			}
 			want := []string{
 				"IDP_ES256_URL=http://localhost:9991", "IDP_HS256_URL=http://localhost:9992",
-				"IDP_REBUILD_URL=http://localhost:9993", "IDP_ISSUER=" + idpIssuer,
+				"IDP_REBUILD_URL=http://localhost:9993", "IDP_MAIL_URL=http://localhost:9994",
+				"MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
 			}
 			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
 			if !strings.HasSuffix(r.stdout, "\n") || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
@@ -275,6 +277,113 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 	}
 }
 
+func TestIdpUpMailContainerConfiguration(t *testing.T) {
+	dsn := "postgres://supabase_auth_admin:" + stubDSNPassword + "@localhost:5448/invoice_os?sslmode=disable"
+	for _, osName := range []string{"Linux", "Darwin"} {
+		t.Run(osName, func(t *testing.T) {
+			r := runIdpUp(t, osName, dsn, "5448")
+			if r.code != 0 {
+				t.Fatalf("exit %d; stderr=%s", r.code, r.stderr)
+			}
+			mp := stubLines(r.log, "RUN", "mailpit")
+			im := stubLines(r.log, "RUN", "idp-mail")
+			if len(mp) != 1 || len(im) != 1 {
+				t.Fatalf("mailpit started %d times, idp-mail %d times; want 1 each", len(mp), len(im))
+			}
+			if !regexp.MustCompile(` axllent/mailpit:v[0-9.]+@sha256:[0-9a-f]{64}$`).MatchString(mp[0]) {
+				t.Errorf("mailpit image is not pinned by tag and digest: %s", mp[0])
+			}
+
+			smtpHost := "localhost"
+			if osName != "Linux" {
+				smtpHost = "host.docker.internal"
+			}
+			for name, want := range map[string]string{
+				"GOTRUE_MAILER_AUTOCONFIRM":           "false",
+				"GOTRUE_SMTP_HOST":                    smtpHost,
+				"GOTRUE_SMTP_PORT":                    "1025",
+				"GOTRUE_MAILER_URLPATHS_CONFIRMATION": "http://localhost:9995/auth/verify",
+				"GOTRUE_DISABLE_SIGNUP":               "false",
+				"PORT":                                "9994",
+				"GOTRUE_JWT_ISSUER":                   idpIssuer,
+			} {
+				if got := argvEnv(im[0], name); got != want {
+					t.Errorf("idp-mail %s = %q, want %q: %s", name, got, want, im[0])
+				}
+			}
+			if strings.Contains(im[0], "HOOK_CUSTOM_ACCESS_TOKEN") {
+				t.Errorf("idp-mail overrides the image's hook; the harness must run the committed one: %s", im[0])
+			}
+			if !strings.Contains(im[0]+" ", "-e GOTRUE_JWT_KEYS ") || !strings.Contains(stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS"), stubKeyMarker) {
+				t.Errorf("idp-mail gets no ES256 key by name: %s", im[0])
+			}
+			for _, secret := range []string{stubKeyMarker, stubSecretMarker, stubDSNPassword} {
+				if strings.Contains(im[0], secret) {
+					t.Errorf("idp-mail argv carries %s", secret)
+				}
+			}
+
+			if osName == "Linux" {
+				for _, argv := range []string{mp[0], im[0]} {
+					if !strings.Contains(argv, "--network host") || strings.Contains(argv, " -p ") {
+						t.Errorf("on Linux: want --network host and no -p: %s", argv)
+					}
+				}
+			} else {
+				for _, want := range []string{"-p 1025:1025", "-p 8025:8025"} {
+					if !strings.Contains(mp[0], want) || strings.Contains(mp[0], "--network") {
+						t.Errorf("mailpit off Linux: want %s and no --network: %s", want, mp[0])
+					}
+				}
+				if !strings.Contains(im[0], "-p 9994:9994") {
+					t.Errorf("idp-mail off Linux: want -p 9994:9994: %s", im[0])
+				}
+			}
+
+			// docker keeps the last -e of a name, so a second AUTOCONFIRM would silently win.
+			for _, c := range append(slices.Clone(idpContainers), "idp-mail") {
+				if n := strings.Count(stubLines(r.log, "RUN", c)[0], "-e GOTRUE_MAILER_AUTOCONFIRM="); n != 1 {
+					t.Errorf("%s passes GOTRUE_MAILER_AUTOCONFIRM %d times, want 1", c, n)
+				}
+			}
+		})
+	}
+}
+
+func TestIdpDownRemovesEveryContainerIdpUpStarts(t *testing.T) {
+	up := runIdpUp(t, "Linux", "postgres://supabase_auth_admin:pw@localhost:5448/invoice_os", "5448")
+	var started []string
+	for _, l := range strings.Split(up.log, "\n") {
+		if rest, ok := strings.CutPrefix(l, "RUN "); ok {
+			started = append(started, strings.Fields(rest)[0])
+		}
+	}
+	if len(started) < 5 {
+		t.Fatalf("control: idp-up.sh started %v; want at least five containers", started)
+	}
+
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "stub.log")
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte("#!/usr/bin/env bash\necho \"$*\" >>\""+logPath+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join("..", "..", "scripts", "ci", "idp-down.sh"))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("idp-down.sh: %v: %s", err, out)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := strings.Fields(string(log))
+	for _, c := range started {
+		if !slices.Contains(removed, c) {
+			t.Errorf("idp-down.sh leaves %s running; it ran: %s", c, log)
+		}
+	}
+}
+
 func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 	good := runIdpUp(t, "Linux", "postgres://supabase_auth_admin:pw@localhost:5448/invoice_os", "5448")
 	if good.code != 0 || !strings.Contains(good.log, "RUN idp-es256") {
@@ -305,6 +414,7 @@ func TestIdpUpRefusesANonAuthAdminDSN(t *testing.T) {
 // plannedIdPFilter is the idp paths filter the plan lists; the job must run when any of them changes.
 var plannedIdPFilter = []string{
 	"sidecar/auth/**", "internal/platform/auth/**", "migrations/**", "db/**", "tools/prenv/**",
+	"internal/gateway/**", "internal/tenancy/**", "internal/platform/*.go", "internal/platform/db/**",
 	"internal/tools/idppin/**", "scripts/ci/idp-*.sh", "Makefile", ".github/workflows/ci.yml", "go.mod", "go.sum",
 }
 

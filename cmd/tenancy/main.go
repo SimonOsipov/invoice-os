@@ -56,6 +56,10 @@ func main() {
 	// gateway proxies it unchanged: its mount carries no method.
 	app.Mux.HandleFunc("PATCH /v1/memberships/{user_id}", tenancy.SetMembershipStatusHandler(store.SetMembershipStatus, app.Logger))
 
+	// POST /v1/workspaces — a tenant-less caller provisions their first workspace;
+	// the gateway lets a token without a tenant reach this route only.
+	app.Mux.HandleFunc("POST /v1/workspaces", tenancy.ProvisionHandler(store.ProvisionWorkspace, app.Logger))
+
 	if err := app.Run(context.Background()); err != nil {
 		log.Fatalf("tenancy: %v", err)
 	}

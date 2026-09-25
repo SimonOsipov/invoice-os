@@ -15,11 +15,15 @@ type Identity struct {
 	Subject  string // GoTrue "sub": the user id (a UUID)
 	Role     string // GoTrue "role": a Postgres role, e.g. "authenticated"
 	TenantID string // app_metadata.tenant_id: the tenant the caller acts within
+	Email    string // GoTrue "email"; "" when the token carries none
 }
 
 type ctxKey int
 
-const ctxKeyIdentity ctxKey = iota
+const (
+	ctxKeyIdentity ctxKey = iota
+	ctxKeyTenantlessCaller
+)
 
 // WithIdentity returns a context carrying the verified identity. The middleware
 // calls it after a successful Verify; business-logic tests call it directly as
@@ -32,5 +36,17 @@ func WithIdentity(ctx context.Context, id Identity) context.Context {
 // IdentityFromContext returns the verified identity and whether one was present.
 func IdentityFromContext(ctx context.Context) (Identity, bool) {
 	id, ok := ctx.Value(ctxKeyIdentity).(Identity)
+	return id, ok
+}
+
+// WithTenantlessCaller returns a context carrying a verified caller that has no
+// tenant yet. It uses its own key so IdentityFromContext never sees one.
+func WithTenantlessCaller(ctx context.Context, id Identity) context.Context {
+	return context.WithValue(ctx, ctxKeyTenantlessCaller, id)
+}
+
+// TenantlessCallerFromContext returns the tenant-less caller and whether one was present.
+func TenantlessCallerFromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(ctxKeyTenantlessCaller).(Identity)
 	return id, ok
 }

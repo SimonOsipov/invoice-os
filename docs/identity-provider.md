@@ -4,7 +4,8 @@ The `auth` Railway service runs a pinned, unmodified `supabase/auth` (GoTrue) im
 signs ES256 access tokens, serves their public keys at `/.well-known/jwks.json`, and
 projects the tenant into `app_metadata.tenant_id` through the Postgres access-token hook.
 It is private-network only (`http://auth.railway.internal:8080`); it has no public domain.
-The gateway reaches it for JWKS and for the fleet probe.
+The gateway reaches it for JWKS, for the fleet probe, and for GoTrue's `/signup` and
+`/verify` on behalf of the two public registration routes (see Registration).
 
 Related: [migrations.md](./migrations.md) §1 (the `supabase_auth_admin` and
 `auth_hook_reader` roles), [deploy-model.md](./deploy-model.md) (where `auth` deploys),
@@ -82,7 +83,7 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_JWT_AUD` | `authenticated` | The verifier's audience constant |
 | `GOTRUE_JWT_DEFAULT_GROUP_NAME` | `authenticated` | The `role` claim. v2.197.0 logs a deprecation warning for it |
 | `GOTRUE_JWT_EXP` | `3600` | Access-token lifetime, seconds |
-| `GOTRUE_DISABLE_SIGNUP` | `true` | No registration ships yet; only CI containers override it |
+| `GOTRUE_DISABLE_SIGNUP` | `true` | Production stays closed until registration U3. PR forks (`set-fork-auth`) and the CI `idp` containers override it to `false` |
 | `GOTRUE_MAILER_AUTOCONFIRM` | `false` | |
 | `GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED` | `true` | |
 | `GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI` | `pg-functions://postgres/public/custom_access_token_hook` | Only schema and function are read |
@@ -103,6 +104,8 @@ Nothing below is a secret value; secrets are named, never shown.
 | `GOTRUE_SITE_URL` | `https://www.ascomply.com` | the fork's landing URL |
 | `GOTRUE_JWT_ISSUER` | `urn:ascomply:auth:production` | `urn:ascomply:auth:pr-<N>` |
 | `GOTRUE_SMTP_HOST` | (image value) | empty: no mailer |
+| `GOTRUE_DISABLE_SIGNUP` | unset (image value `true`) until registration U3, then `false` | `false` |
+| `GOTRUE_MAILER_URLPATHS_CONFIRMATION` | `https://api.ascomply.com/auth/verify` after registration U2; unset before it | not written; after U2 a fork inherits production's value, inert because a fork sends no mail |
 | `GOTRUE_JWT_KEYS` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_JWT_SECRET` | **secret, sealed** | freshly generated per fork |
 | `GOTRUE_SMTP_PASS` | **secret, sealed**; the Resend API key, unset until U4 | empty |
@@ -116,9 +119,15 @@ Nothing below is a secret value; secrets are named, never shown.
 | `AUTH_JWKS_URL` | `http://auth.railway.internal:8080/.well-known/jwks.json` after U3b | `http://127.0.0.1:8080/.well-known/jwks.json` (the mock) |
 | `AUTH_ADDITIONAL_ISSUERS` | unset: production trusts one issuer (`/healthz` `auth_issuers=1`) | the fork's GoTrue issuer and JWKS URL (`auth_issuers=2`) |
 | `AUTH_ADMIN_PASSWORD` | **secret, not sealed**: 64 hex characters, rendered into `auth.DATABASE_URL` | freshly generated per fork |
+| `AUTH_SITE_URL` | `https://www.ascomply.com` after registration U1; unset before it | the fork's landing URL (`set-fork-auth-site`) |
 
 `AUTH_ADMIN_PASSWORD` stays unsealed: the `auth.DATABASE_URL` reference renders it, and
 every fork overwrites it with its own.
+
+`AUTH_SITE_URL` is optional at boot. Unset, the gateway logs one warning and both
+registration routes answer 503 `registration is not configured`. A value that is not an
+absolute `http(s)` URL, or that carries user info, a query or a fragment, stops the
+gateway at boot.
 
 ## Script behaviour on writes
 
@@ -251,7 +260,8 @@ bash scripts/ci/railway-env.sh set-production-auth --post-merge 6c864094-6a06-45
   `/api/` call.
 
 **U4 — Verify `ascomply.com` in Resend (SPF and DKIM DNS records) and supply the API key.**
-Signup is off, so nothing sends mail yet; this gates registration, not the provider. Until
+Production signup stays closed until registration U3 (below), so no confirmation mail goes
+out before then; this step gates registration, not the provider. Until
 done, `GOTRUE_SMTP_PASS` stays unset on production, and GoTrue boots with the Resend host
 configured but sends nothing. Once the key exists after U3b's seals, add it as a dashboard
 edit on `auth` (`GOTRUE_SMTP_PASS`), then seal it: `set-production-auth` refuses to run once
@@ -259,6 +269,167 @@ any of its targets is sealed.
 
 No GitHub secret is needed. The CI `idp` job and every fork generate their own keys at run
 time. The production key exists only in the Railway variable U3b writes and then seals.
+
+## Registration
+
+GoTrue stays private. The gateway is the only public surface, and it calls exactly two
+GoTrue paths under `AUTH_URL`: `/signup` and `/verify`. It forwards no client path, so no
+other GoTrue route (`/token`, `/recover`, `/admin/*`) is reachable from outside.
+
+**The flow:**
+1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The
+   gateway posts only those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
+   mails a confirmation link through Resend.
+2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
+   `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
+   host, so production sets an absolute URL.
+3. `GET /auth/verify?token=…&type=signup` posts `{"type":"signup","token_hash":<token>}` to
+   GoTrue `/verify`, discards the session GoTrue returns, and redirects the browser to
+   `AUTH_SITE_URL`. No token reaches a URL.
+4. The verified user signs in (a GoTrue password grant; no public sign-in route exists
+   until AUTH-05). The first token carries no tenant: the access-token hook projects a
+   tenant only for exactly one active membership.
+5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
+   `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
+   on this one method and path only. Tenancy creates the tenant and its first active admin
+   in one transaction through `public.provision_workspace`
+   ([migrations.md](./migrations.md) §1) and answers 201 in the `GET /v1/me` shape.
+6. The next token (a refresh grant or a new sign-in) carries `app_metadata.tenant_id`.
+
+**`POST /auth/register`**, outside `/api/`, no verifier, no CORS wrap, in every build:
+
+| Outcome | Answer |
+|---|---|
+| GoTrue 200 (a new address, an unconfirmed repeat, or a confirmed address) | 202 `{"status":"verification_pending"}` |
+| GoTrue `user_already_exists` or `email_exists` | the same 202 |
+| GoTrue `over_email_send_rate_limit` (an unconfirmed repeat within 60 s, or the instance mail cap) | the same 202, logged at WARN |
+| GoTrue 5xx whose `code` is SQLSTATE `23505` (the loser of two concurrent signups for one address) | the same 202, logged at WARN |
+| a malformed body, or an empty email or password | 400 `{"error"}` |
+| GoTrue `validation_failed`, `weak_password`, `email_address_invalid` | 400 with GoTrue's `msg` |
+| GoTrue `signup_disabled` | 503 `registration is closed` |
+| any other GoTrue 429 | 429 `too many requests` |
+| GoTrue unreachable, or any other answer | 502 `registration is unavailable`, logged |
+| `AUTH_SITE_URL` unset | 503 `registration is not configured` |
+
+The four 202 rows answer identically, so the response never tells whether an address
+already has an account. The answer never carries the user id or any GoTrue field except
+`msg`.
+
+**`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
+
+| Outcome | Answer |
+|---|---|
+| GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1` |
+| an empty `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
+| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
+| HEAD | 405 `{"error":"method not allowed"}`, `Allow: GET`; GoTrue is not called |
+| any method other than GET or HEAD | 405 from the router, `Allow: GET, HEAD`; GoTrue is not called |
+| GET or HEAD while `AUTH_SITE_URL` is unset | 503 `registration is not configured` |
+
+The link's `redirect_to` is ignored. The redirect target is always the gateway's own
+`AUTH_SITE_URL`, never a query value. HEAD is refused because a link scanner's HEAD prefetch
+would otherwise consume the single-use token.
+
+**`POST /api/tenancy/v1/workspaces`:** 201 with `{tenant:{id,name,kind}, user:{id,role}}`;
+400 for a malformed body, a name outside 1–200 characters, or a `kind` other than `firm` or
+`in_house`; 401 for no caller or a subject that is not a UUID; 409 `this account already has a workspace` when the token
+already carries a tenant or the caller already provisioned one; 500 otherwise. The tenant id
+is a UUIDv5 of the caller's subject, so one identity provisions at most one workspace.
+
+**Ceilings:**
+- `ceiling:` every GoTrue call now comes from the gateway's IP. The per-IP
+  `RATE_LIMIT_VERIFY` (30) is shared by all registrants, and `RATE_LIMIT_EMAIL_SENT`
+  (30 per hour) is instance-wide, so production sends about 30 confirmation mails per hour.
+  A registrant during the cap gets 202 and no mail; the WARN log line
+  `registration: gotrue email send rate limit` is the only signal. Set
+  `GOTRUE_RATE_LIMIT_EMAIL_SENT` and a trusted client-IP header when signup traffic
+  approaches it.
+- `ceiling:` the session GoTrue issues on verify is discarded but stays live in
+  `auth.refresh_tokens` until AUTH-07 builds revocation.
+
+**Accepted risks of a link that verifies on GET:**
+- *Pre-account hijack.* GoTrue does not update an existing unconfirmed user on a repeat
+  signup; it re-sends the confirmation mail for the **first** registrant's password. An
+  attacker who registers `victim@corp` first causes a mail to the victim. If the victim then
+  registers, their 202 is identical, and their click confirms the **attacker's** password.
+  The attacker then owns a verified account at the victim's address. No password-recovery
+  path exists yet, so the victim cannot take it back.
+- *Link scanners.* A mail scanner that prefetches links with GET consumes the single-use
+  token, and the victim's own click lands on `?verify=failed`. A scanner can also confirm an
+  attacker's pre-registration with no human click.
+- The smallest change that closes the scanner half: `GET /auth/verify` renders a page with
+  one form button, and `POST /auth/verify` verifies. The hijack half also needs password
+  recovery, or a delete-and-re-create of an unconfirmed user on a repeat signup.
+
+## Opening registration in production (registration U1–U4)
+
+These steps are separate from the first-time setup's U1–U4 above. Production writes are the
+user's. Every write skips deploys, so it changes nothing until the next deploy of that
+service. Each write is followed by its re-read; the re-read must print the expected value.
+
+The commands name project `9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3` and the production
+environment `6c864094-6a06-452f-8495-be77d8a94fe7`:
+
+```
+P=9ce6caf1-8c9b-4c77-b40d-3d6f1efa48a3
+E=6c864094-6a06-452f-8495-be77d8a94fe7
+```
+
+| Step | When | Production write |
+|---|---|---|
+| U1 | any time after merge | gateway `AUTH_SITE_URL` |
+| U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
+| U3 | when registration opens: after AUTH-04 merges | auth `GOTRUE_DISABLE_SIGNUP=false` |
+| U4 | after U1–U3 have deployed | none: an end-to-end check by hand |
+
+Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
+`registration is not configured`. Between U1 and U3, register answers 503
+`registration is closed`. Neither affects any other route.
+
+**U1 — gateway `AUTH_SITE_URL`:**
+
+```
+railway variables --set 'AUTH_SITE_URL=https://www.ascomply.com' -p "$P" -e "$E" -s gateway --skip-deploys
+railway variables -p "$P" -e "$E" -s gateway --json | jq -r '.AUTH_SITE_URL'
+# expected: https://www.ascomply.com
+```
+
+**U2 — auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION`:**
+
+```
+railway variables --set 'GOTRUE_MAILER_URLPATHS_CONFIRMATION=https://api.ascomply.com/auth/verify' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_URLPATHS_CONFIRMATION'
+# expected: https://api.ascomply.com/auth/verify
+```
+
+**U3 — auth `GOTRUE_DISABLE_SIGNUP=false`. Do this only after AUTH-04 merges.** The
+AUTH-00 decision S6 makes registration open with free-mail domains refused. AUTH-04 ships
+that refusal; opening production before it admits free-mail registrants.
+
+```
+railway variables --set 'GOTRUE_DISABLE_SIGNUP=false' -p "$P" -e "$E" -s auth --skip-deploys
+railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_DISABLE_SIGNUP'
+# expected: false
+```
+
+To close registration again, set the value back to `true` the same way and redeploy `auth`.
+
+**Deploy the writes.** The next push run on `main` deploys `gateway` and `auth` with the new
+values; a push that changes only `docs/**` or `*.md` starts no run (`paths-ignore`). To
+deploy sooner, re-run the latest push `dev-env` run as a whole run
+(`gh run rerun <id>`, not `--failed`); if that re-run gates on stale containers, push an
+empty commit instead.
+
+**U4 — check by hand with a real business mailbox:**
+1. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"<you>@<your-company-domain>","password":"<12+ characters>"}'`
+   answers 202 `{"status":"verification_pending"}`.
+2. The mail arrives from `no-reply@ascomply.com`. Its link starts
+   `https://api.ascomply.com/auth/verify?token=`.
+3. Opening the link lands on `https://www.ascomply.com/?verified=1`. Opening it a second
+   time lands on `?verify=failed`.
+
+Provisioning a workspace on production cannot be checked from outside until AUTH-05 ships a
+public sign-in path. The U4 account stays in production's `auth.users`; no route deletes it.
 
 ## Sealed secrets
 

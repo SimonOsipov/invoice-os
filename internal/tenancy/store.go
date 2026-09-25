@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -14,8 +16,8 @@ import (
 
 // Store reads tenancy data as the invoice_app role. It holds the app-role pool
 // (DATABASE_URL); every read sets the app.current_tenant GUC for its transaction
-// so RLS enforces isolation — through db.WithinRequestTenantTx, except Me, which
-// is exempt from that seam's membership gate (AUDIT-10 §5).
+// so RLS enforces isolation — through db.WithinRequestTenantTx, except Me and
+// ProvisionWorkspace, which are exempt from that seam's membership gate.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -35,8 +37,8 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // Both queries run inside the SAME transaction, so a missing tenant row surfaces
 // as ErrTenantNotFound before the membership query ever runs.
 func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
-	// AUDIT-10 §5: the ONE exemption from the request seam's membership gate.
-	// /v1/me is the SPA's boot call and auth.ts signIn throws on failure, so
+	// AUDIT-10 §5: exempt from the request seam's membership gate, as is
+	// ProvisionWorkspace. /v1/me is the SPA's boot call and auth.ts signIn throws on failure, so
 	// gating it would turn every suspended session into an unexplained sign-in
 	// failure with nothing able to say why (TestStoreMe_AnswersForASuspendedMember).
 	id, ok := auth.IdentityFromContext(ctx)
@@ -68,6 +70,57 @@ func (s *Store) Me(ctx context.Context) (Tenant, string, error) {
 		return Tenant{}, "", err
 	}
 	return t, role, nil
+}
+
+// workspaceNamespace keys uuidv5(subject): one self-provisioned workspace per identity.
+var workspaceNamespace = uuid.MustParse("83584a9e-a526-4186-9fbb-508011cac1cc")
+
+// ProvisionWorkspace creates the caller's workspace and its first active admin
+// through public.provision_workspace, returning the stored tenant and the
+// caller's subject. A tenant-bearing caller already has a workspace.
+func (s *Store) ProvisionWorkspace(ctx context.Context, in ProvisionInput) (Tenant, string, error) {
+	if _, ok := auth.IdentityFromContext(ctx); ok {
+		return Tenant{}, "", ErrAlreadyProvisioned
+	}
+	caller, ok := auth.TenantlessCallerFromContext(ctx)
+	if !ok {
+		return Tenant{}, "", db.ErrNoTenant
+	}
+	parsed, err := uuid.Parse(caller.Subject)
+	if err != nil {
+		return Tenant{}, "", db.ErrNoTenant
+	}
+	// uuid.Parse accepts several spellings; hash the canonical one so each identity gets one workspace.
+	subject := parsed.String()
+	tenantID := uuid.NewSHA1(workspaceNamespace, []byte(subject)).String()
+
+	var t Tenant
+	// The caller has no membership yet, so the gated seam would refuse before
+	// the closure; exempt like Me (TestRLS_UngatedCoreIsWorkerAndExemptionOnly).
+	err = db.WithinTenantTx(ctx, s.pool, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT public.provision_workspace($1, $2, $3, $4, $5, $6)`,
+			tenantID, in.WorkspaceName, nullIfEmpty(in.Kind), subject, in.DisplayName, nullIfEmpty(caller.Email),
+		); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "tenants_pkey" {
+				return ErrAlreadyProvisioned
+			}
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind)
+	})
+	if err != nil {
+		return Tenant{}, "", err
+	}
+	return t, subject, nil
+}
+
+// nullIfEmpty sends "" as SQL NULL.
+func nullIfEmpty(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 // ListMemberships lists the caller's tenant's memberships (user_id, role,

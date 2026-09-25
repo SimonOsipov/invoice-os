@@ -81,6 +81,23 @@ case adversarially; M2-06 adds `FORCE ROW LEVEL SECURITY`.)
 - Bootstrap also `REVOKE CREATE ON SCHEMA public FROM PUBLIC` (a no-op on PG15+, kept for
   PG13/14 + defense-in-depth).
 
+**The one path that creates a tenant at runtime: `public.provision_workspace` (AUTH-03).**
+`invoice_app` stays `SELECT`-only on `tenants`. It creates a tenant only through this
+SECURITY DEFINER function, which `invoice_migrator` owns
+(`migrations/20260924184759_provision_workspace.sql`):
+- The function inserts the `tenants` row and then its first `memberships` row. Role
+  `admin` and status `active` are literals in the body, not parameters. It cannot update,
+  delete, or write any other table.
+- `EXECUTE` is revoked from `PUBLIC` and granted to `invoice_app` only.
+- The owner is `NOBYPASSRLS` and both tables are `FORCE`d, so `tenant_isolation` still
+  applies inside the function. The caller must set `app.current_tenant` to the new tenant id
+  first; a mismatched or unset GUC fails with 42501.
+- The only caller is `tenancy.Store.ProvisionWorkspace`, through the ungated
+  `db.WithinTenantTx` (§4); a source scan pins that. Nothing restricts which `invoice_app`
+  connection may call it; that application guard is the limit.
+- Down drops the function. No `SET ROLE` is needed, because the migrator owns it.
+- Proven by `internal/platform/db/tenants_provision_rls_test.go` in the `rls` job.
+
 `bootstrap.sql` is idempotent (DO-block role creation + `ALTER ROLE` re-assertion), run
 as the superuser via psql. `make db-bootstrap` runs it with dev-default passwords; real
 passwords live only in Railway.
@@ -182,7 +199,7 @@ a new object is granted **in the same migration that creates the object**:
 ```sql
 -- +goose Up
 CREATE TABLE tenants (...);              -- owned by invoice_migrator
-GRANT SELECT, INSERT, UPDATE ON tenants TO invoice_app;   -- explicit, minimal
+GRANT SELECT ON tenants TO invoice_app;  -- explicit, minimal; writes go through provision_workspace (§1)
 ```
 
 **Do not** use blanket `ALTER DEFAULT PRIVILEGES … GRANT ALL … TO invoice_app`. The point
@@ -227,7 +244,7 @@ with no configuration. That is why the M2-01 skeleton migration is a no-op.
 ### The helper (M2-06): `WithinTenantTx`
 
 Application code never issues `SET LOCAL` by hand. The two sanctioned entry points are
-`db.WithinTenantTx` (workers, CLIs, `GET /v1/me`) and `db.WithinRequestTenantTx` (every
+`db.WithinTenantTx` (workers, CLIs, `GET /v1/me`, `POST /v1/workspaces`) and `db.WithinRequestTenantTx` (every
 other HTTP read), both in `internal/platform/db`. The core is:
 
 ```go
@@ -249,7 +266,7 @@ What it guarantees:
   input returns `ErrNoTenant` and issues **no** statement — the helper can never run an
   unscoped query.
 - **Explicit tenant, not context-derived.** The core helper takes the tenant as an
-  argument, so it serves the worker (§8), the `tools/*` CLIs and `GET /v1/me`.
+  argument, so it serves the worker (§8), the `tools/*` CLIs, `GET /v1/me` and `POST /v1/workspaces`.
   `WithinRequestTenantTx` pulls the tenant from the request `auth.Identity` for handlers.
 
 `WithinRequestTenantTx` is **not** a thin wrapper over the core. It opens its own
@@ -261,7 +278,7 @@ no-row exception). The gate's `SELECT status FROM memberships WHERE user_id = $1
 `set_config` above in a single `pgx.Batch`, so on the HTTP path **neither statement is
 visible to a plain `pgx.QueryTracer`** — pgx routes `SendBatch` through `pgx.BatchTracer`.
 A subject that is not a UUID skips the lookup and delegates to the core unchanged, and
-`GET /v1/me` is the one deliberate exemption (it calls `WithinTenantTx` directly).
+`GET /v1/me` and `POST /v1/workspaces` are the two deliberate exemptions (they call `WithinTenantTx` directly).
 
 ---
 
@@ -358,7 +375,8 @@ environment is created from, and the target of live demo calls.
 > `db.PurgeDemoTenants` runs inside `db.Provision` on **every** gated boot and deletes the
 > four demo tenants' (`db.DemoTenants`) rows from every tenant-owned table before `db.Seed` restores their
 > curated state. Four tenant-owned tables are spared (`db.purgeExcludedTables`):
-> `memberships`, which has no runtime INSERT path, and the three approval-policy tables,
+> `memberships`, whose only runtime INSERT (`provision_workspace`, §1) creates a new
+> tenant's first admin and never a demo tenant's row, and the three approval-policy tables,
 > which `internal/demopolicy` rebuilds for two of the four tenants only — purging them
 > would leave the other two with no policy and nothing to restore it. The purge is gated
 > like the seed, by `db.BootstrapEnabled`; this environment's gateway reads

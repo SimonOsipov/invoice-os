@@ -28,6 +28,7 @@ const (
 	headerTenantID  = "X-Tenant-ID"
 	headerUserID    = "X-User-ID"
 	headerUserRole  = "X-User-Role"
+	headerUserEmail = "X-User-Email"
 	headerRequestID = "X-Request-ID"
 	// headerS2SToken is 04's service-to-service peer credential
 	// (internal/validation/s2s.go). The gateway never mints it and never
@@ -79,7 +80,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := auth.IdentityFromContext(r.Context())
-	if status := authorize(service, id); status != 0 {
+	if status := authorize(r, service, id); status != 0 {
 		rt.log.WarnContext(r.Context(), "gateway authz denied",
 			slog.String("service", service), slog.Int("status", status))
 		writeError(w, status, strings.ToLower(http.StatusText(status)))
@@ -88,15 +89,23 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
+// tenantlessPath is the one route a token with no tenant may reach: it creates that tenant.
+const tenantlessPath = "/api/tenancy/v1/workspaces"
+
 // authorize returns 0 when the identity may use the service, otherwise the HTTP
 // status to answer. P1 rule: every context service is tenant-scoped, so a valid
-// token carrying no tenant is forbidden. The M7 ops console adds its operator-role
-// rule here, keyed on service.
-func authorize(service string, id auth.Identity) int {
-	if id.TenantID == "" {
+// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces.
+// The M7 ops console adds its operator-role rule here, keyed on service.
+func authorize(r *http.Request, service string, id auth.Identity) int {
+	if id.TenantID == "" && !isProvisioning(r) {
 		return http.StatusForbidden
 	}
 	return 0
+}
+
+// isProvisioning matches the escaped path, so an encoded variant (v1%2Fworkspaces) is not exempt.
+func isProvisioning(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.EscapedPath() == tenantlessPath
 }
 
 // newReverseProxy builds the per-service reverse proxy. The path prefix is
@@ -139,6 +148,7 @@ func injectIdentity(pr *httputil.ProxyRequest) {
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
+	pr.Out.Header.Set(headerUserEmail, id.Email)
 	pr.Out.Header.Del(headerS2SToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {
 		pr.Out.Header.Set(headerRequestID, rid)

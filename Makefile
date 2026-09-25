@@ -182,6 +182,7 @@ test-idp: ## Run the TestIdP suite against real supabase/auth containers on the 
 	urls="$$(scripts/ci/idp-up.sh "$(DEV_DB_AUTH_ADMIN_URL)" $(DEV_DB_PORT))" || exit 1; \
 	export $$urls; \
 	IDP_PINNED_TAG="$$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" \
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 -run TestIdP ./internal/platform/auth/...
 

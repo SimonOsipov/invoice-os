@@ -148,7 +148,7 @@ test.describe('read-path suspension (API E2E, over the deployed gateway)', () =>
   })
 
   test('a suspended member can still read /v1/me', async () => {
-    // The one deliberate exemption (D-5): /v1/me is the SPA's only boot round trip, and
+    // A deliberate exemption (D-5), as is POST /v1/workspaces: /v1/me is the SPA's only boot round trip, and
     // gating it would turn every suspended session into an unexplained sign-in failure with
     // nothing left able to say why. Its shape does not change, so the key sets are asserted
     // exactly — the same idiom contract-tenancy.spec.ts uses.

@@ -63,7 +63,18 @@ func TestSignInThrottle_FullMapFreesEarliestExpiryOnTime(t *testing.T) {
 	if th.Reserve("e@x.com") {
 		t.Fatal("e at t0+30s on a refilled map = true, want false")
 	}
-	clk.Advance(10 * time.Second)
+	// The gate re-arms at b's expiry; refusals before it do not sweep.
+	base := th.SweepsForTest()
+	for i := 0; i < 9; i++ {
+		clk.Advance(time.Second)
+		if th.Reserve(fmt.Sprintf("x%d@x.com", i)) {
+			t.Fatalf("x%d before b expired = true, want false", i)
+		}
+	}
+	if n := th.SweepsForTest() - base; n != 0 {
+		t.Fatalf("sweeps before the re-armed gate = %d, want 0", n)
+	}
+	clk.Advance(time.Second)
 	if !th.Reserve("e@x.com") {
 		t.Fatal("e at t0+40s, when b expired = false, want true")
 	}

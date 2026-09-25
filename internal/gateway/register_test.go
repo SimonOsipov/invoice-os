@@ -564,9 +564,7 @@ func TestRegister_FreeMailRefused400NoUpstreamCall(t *testing.T) {
 }
 
 func TestRegister_EveryListedDomainRefused(t *testing.T) {
-	if len(freeMailDomains) < 20 {
-		t.Fatalf("freeMailDomains has %d entries, want >= 20", len(freeMailDomains))
-	}
+	requireRecordedMinimum(t)
 	for _, d := range freeMailDomains {
 		t.Run(d, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)

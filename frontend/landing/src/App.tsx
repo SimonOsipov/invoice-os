@@ -32,7 +32,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
 function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
-  return { state, error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) || state !== null }
+  return { state, error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
 }
 
 // The whole page lives under `.asc-app` — that scope defines the design-system

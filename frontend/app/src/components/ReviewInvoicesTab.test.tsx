@@ -2,7 +2,7 @@
 // D-28 closed (post-APPR-16 gap): this tab's own pager freeze had no component test file
 // when APPR-16-04 shipped (Pager.test.ts's source-scan carved it out deliberately). This
 // is that harness -- minimal, scoped to the freeze itself, not broad coverage of the tab.
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -102,7 +102,7 @@ function tabCtx(): PlatformCtx {
   return ctx as unknown as PlatformCtx
 }
 
-function renderTab() {
+function renderTab(onSubmitted: () => void = vi.fn()) {
   return render(
     <ReviewInvoicesTab
       ctx={tabCtx()}
@@ -110,7 +110,7 @@ function renderTab() {
       batchIds={['b1']}
       batches={[batch()]}
       totals={{ allTotal: 3, cleanTotal: 3, failingTotal: 0, queuedTotal: 0 }}
-      onSubmitted={vi.fn()}
+      onSubmitted={onSubmitted}
     />,
   )
 }
@@ -184,5 +184,140 @@ describe('ReviewInvoicesTab pager: freezes for the whole in-flight window (D-28 
     const pager = screen.getByTestId('review-pager')
     expect(within(pager).getByTestId('pager-blocked-reason').textContent, 'the visible reason must be BULK_COPY.pagerReason').toBe(BULK_COPY.pagerReason)
     expect(screen.getByText(BULK_COPY.pagerReason), 'queryable by text, not just by attribute').toBeTruthy()
+  })
+})
+
+describe('ReviewInvoicesTab bulk submit: drives the real component', () => {
+  const SUBMIT_URL = 'https://gw/api/invoice/v1/invoices/submissions'
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+  interface Call {
+    url: string
+    method: string
+    auth: string | null
+    body: unknown
+  }
+
+  // Routes the tab's three endpoints; `submit` answers every POST so a spec can hold it pending.
+  function stubFetch(submit: () => Promise<MockResponse>) {
+    const calls: Call[] = []
+    const rows = [row({ id: 'inv-a', invoice_number: 'INV-A' }), row({ id: 'inv-b', invoice_number: 'INV-B' })]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: { method?: string; headers?: Headers; body?: string }) => {
+        const method = init?.method ?? 'GET'
+        calls.push({ url, method, auth: init?.headers?.get('Authorization') ?? null, body: init?.body == null ? undefined : JSON.parse(init.body) })
+        if (url.includes('/violation-summary')) return Promise.resolve(rulesResponse())
+        if (method === 'POST' && url.endsWith('/invoices/submissions')) return submit()
+        return Promise.resolve(listResponse(rows, { limit: 50, offset: 0, total: 2 }))
+      }),
+    )
+    return {
+      posts: () => calls.filter((c) => c.method === 'POST'),
+      listGets: () => calls.filter((c) => c.method === 'GET' && !c.url.includes('/violation-summary')),
+    }
+  }
+
+  function okResults(results: unknown[]): MockResponse {
+    return { ok: true, status: 200, json: () => Promise.resolve({ results }) }
+  }
+
+  async function selectBothAndArm() {
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByLabelText('Select invoice INV-B'))
+    fireEvent.click(screen.getByTestId('review-bulk-submit'))
+  }
+
+  it('select two, arm, confirm: one POST with exactly those ids', async () => {
+    const net = stubFetch(() => Promise.resolve(okResults([])))
+    renderTab()
+    await selectBothAndArm()
+    fireEvent.click(screen.getByTestId('review-bulk-confirm'))
+
+    await waitFor(() => expect(net.posts()).toHaveLength(1))
+    const [post] = net.posts()
+    expect(post.url).toBe(SUBMIT_URL)
+    expect(post.auth).toBe('Bearer tok')
+    const body = post.body as { invoice_ids: string[]; idempotency_key: string }
+    expect(body.invoice_ids).toEqual(['inv-a', 'inv-b'])
+    expect(body.idempotency_key).toMatch(UUID_V4)
+  })
+
+  it('a 2xx shows one result row per item, refetches, calls onSubmitted, clears the selection', async () => {
+    const net = stubFetch(() =>
+      Promise.resolve(
+        okResults([
+          { invoice_id: 'inv-a', enqueued: true, status: 'queued' },
+          { invoice_id: 'inv-b', enqueued: false, status: 'validated', reason: 'duplicate_request' },
+        ]),
+      ),
+    )
+    const onSubmitted = vi.fn()
+    renderTab(onSubmitted)
+    await selectBothAndArm()
+    const listBefore = net.listGets().length
+    expect(listBefore).toBeGreaterThanOrEqual(1)
+    fireEvent.click(screen.getByTestId('review-bulk-confirm'))
+
+    const panel = await screen.findByTestId('review-submit-results')
+    // Child 0 is the header row; one row per result item follows.
+    const resultRows = Array.from(panel.children).slice(1)
+    expect(resultRows).toHaveLength(2)
+    // 'Queued': bulkOutcome literal (lib/reviewBatch.ts). Skip label: SKIP_REASON_LABELS.duplicate_request (lib/invoices.ts).
+    expect(Array.from(resultRows[0].children).map((c) => c.textContent)).toEqual(['INV-A', 'Queued'])
+    expect(Array.from(resultRows[1].children).map((c) => c.textContent)).toEqual(['INV-B', 'Already submitted with this request'])
+
+    expect(onSubmitted).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(net.listGets().length).toBeGreaterThan(listBefore))
+    expect(screen.getByLabelText('Select invoice INV-A'), 'rows still render, so the bar is gone because the selection is empty').toBeTruthy()
+    expect(screen.queryByTestId('review-bulk-bar')).toBeNull()
+  })
+
+  it('arming without confirming sends nothing', async () => {
+    const net = stubFetch(() => Promise.resolve(okResults([])))
+    renderTab()
+    await screen.findByText('INV-A')
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('review-bulk-submit'))
+
+    expect(screen.getByTestId('review-bulk-confirm')).toBeTruthy()
+    await act(async () => {})
+    expect(net.listGets().length, 'the stub is live').toBeGreaterThanOrEqual(1)
+    expect(net.posts()).toHaveLength(0)
+  })
+
+  it('a request-level failure keeps the selection and shows the error, no results', async () => {
+    const net = stubFetch(() => Promise.resolve(submitErrorResponse(500, 'boom')))
+    const onSubmitted = vi.fn()
+    renderTab(onSubmitted)
+    await selectBothAndArm()
+    fireEvent.click(screen.getByTestId('review-bulk-confirm'))
+
+    await screen.findByTestId('review-submit-error')
+    expect(net.posts()).toHaveLength(1)
+    expect(screen.queryByTestId('review-submit-results')).toBeNull()
+    expect(screen.getByTestId('review-bulk-bar')).toBeTruthy()
+    expect(screen.getByTestId('review-bulk-submit').textContent, 'both ids still selected').toBe('Submit 2 for transmission')
+    expect(onSubmitted).not.toHaveBeenCalled()
+  })
+
+  it('two confirms inside one act send one POST', async () => {
+    const pending = deferred<MockResponse>()
+    const net = stubFetch(() => pending.promise)
+    renderTab()
+    await selectBothAndArm()
+    const confirm = screen.getByTestId('review-bulk-confirm')
+
+    // No re-render between the clicks, so the second reaches submit() with the stale `armed` phase.
+    act(() => {
+      confirm.click()
+      confirm.click()
+    })
+    await act(async () => {})
+    expect(net.posts()).toHaveLength(1)
+
+    pending.resolve(okResults([]))
+    await waitFor(() => expect(screen.queryByTestId('review-bulk-bar')).toBeNull())
   })
 })

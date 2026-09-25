@@ -1,16 +1,4 @@
-// RED specs (INVCR-01-02, task-278, Mode A) — pin draftToCreateRequest before the
-// executor implements the body in Stage 3.
-//
-// Red-first honesty (task-278 plan): CREATE-1/CREATE-2 (lib/invoices.test.ts), DRAFT-1,
-// DRAFT-2, DRAFT-7 are genuinely discriminating -- each fails against a plausible wrong
-// implementation. DRAFT-3, DRAFT-5, DRAFT-6, DRAFT-8 are weak-but-real guards: they rule
-// out one specific named mistake (`?? ''`, re-hyphenation, `Client.tin`) but any careful
-// first implementation passes them. DRAFT-4 is a pure regression guard -- red only
-// because the stub throws; no plausible implementation fails it.
-//
-// DRAFT-3 pins the C7 residual risk in place DELIBERATELY: it asserts the UNREPAIRED
-// pass-through. If it ever fails, that is a decision about C7 (see the story description
-// / QA Debate Log finding C7), not a bug to fix here.
+// C7 note: DRAFT-3 asserts the unrepaired TIN pass-through on purpose; a failure there is a product decision, not a bug.
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'

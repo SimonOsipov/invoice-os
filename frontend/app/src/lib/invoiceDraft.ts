@@ -180,10 +180,8 @@ export function draftToCreateRequest(
   }
 }
 
-// The manual form's one round trip, extracted out of the Workspace component because
-// vitest runs environment:'node' with no jsdom and no Testing Library -- a handler living
-// inside Workspace would have no oracle at all. Same "node-testable without jsdom"
-// convention lib/importFlow.ts states for its own gates.
+// The manual form's one round trip, extracted out of the Workspace component. Same
+// "node-testable without jsdom" convention lib/importFlow.ts states for its own gates.
 //
 // `create` is typed `Promise<{id:string}>`, the structural minimum, so a spec fixture
 // needn't build a 20-field InvoiceRecord (createInvoice's real InvoiceRecord return is

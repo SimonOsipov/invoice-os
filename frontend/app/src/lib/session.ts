@@ -5,12 +5,13 @@
 // version-guard contract.
 //
 // Persisted shape (localStorage[SESSION_KEY]):
-//   { v: SESSION_SCHEMA_VERSION, personaId: PersonaId, token: string|null, me: Me|null, verified: boolean }
+//   { v: SESSION_SCHEMA_VERSION, personaId: PersonaId, token: string|null, me: Me|null, verified: boolean, handoff?: true }
 // `persona` is stored by id only and rehydrated from APP_PERSONAS — persona definitions
 // (name/subject/tenantId/role) are canonical in code, so persisting only the id avoids
 // stale-persona drift and reduces the corruption guard to a simple membership check.
+// A hand-off record (`handoff: true`) rebuilds its persona from `me` instead.
 
-import { APP_PERSONAS, type Session } from '../auth'
+import { APP_PERSONAS, type Me, type Persona, type Session } from '../auth'
 
 export const SESSION_KEY = 'invoice-os.session'
 export const SESSION_SCHEMA_VERSION = 1
@@ -23,7 +24,19 @@ export function serializeSession(session: Session): string {
     token: session.token,
     me: session.me,
     verified: session.verified,
+    // Written only when set, so a persona record stays byte-identical.
+    ...(session.handoff ? { handoff: true } : {}),
   })
+}
+
+// Identity comes from /me; the rest stays the firm persona until AUTH-09.
+export function handoffPersona(me: Me): Persona {
+  return { ...APP_PERSONAS.firm, subject: me.user.id, tenantId: me.tenant.id }
+}
+
+function hasMeIds(me: unknown): me is Me {
+  const m = me as { user?: { id?: unknown }; tenant?: { id?: unknown } } | null
+  return typeof m?.user?.id === 'string' && typeof m?.tenant?.id === 'string'
 }
 
 // Parse + validate a persisted blob back into a Session, rebuilding `persona` from
@@ -43,8 +56,12 @@ export function parseStoredSession(raw: string | null): Session | null {
       Object.prototype.hasOwnProperty.call(APP_PERSONAS, parsed.personaId) &&
       (typeof parsed.token === 'string' || parsed.token === null) &&
       typeof parsed.verified === 'boolean' &&
-      (parsed.me === null || (typeof parsed.me === 'object' && parsed.me !== null))
+      (parsed.me === null || (typeof parsed.me === 'object' && parsed.me !== null)) &&
+      (parsed.handoff !== true || hasMeIds(parsed.me))
     ) {
+      if (parsed.handoff === true) {
+        return { persona: handoffPersona(parsed.me), token: parsed.token, me: parsed.me, verified: parsed.verified, handoff: true }
+      }
       return {
         persona: APP_PERSONAS[parsed.personaId as keyof typeof APP_PERSONAS],
         token: parsed.token,
@@ -94,7 +111,8 @@ export function clearSession(): void {
 // The `?persona=` deep-link guard: auto-sign-in fires when the param names a persona this
 // app can open ('firm'/'inhouse' — 'developer'/'support' belong to the consoles).
 //
-// A valid param WINS over a stored session. It used to lose to one, on the reasoning that a
+// A valid param WINS over a stored persona session; a live hand-off session wins over the
+// param (App.tsx). It used to lose to one, on the reasoning that a
 // param sitting in an already-open workspace's URL is a stale leftover. But the landing page
 // is the app's only front door and lives on a DIFFERENT origin, so it cannot clear this
 // origin's stored session when the user picks a profile — the param is the entire hand-off.

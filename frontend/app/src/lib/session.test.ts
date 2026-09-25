@@ -8,7 +8,8 @@
 // not an import/compile/setup error.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { APP_PERSONAS, type Session } from '../auth'
+import { APP_PERSONAS, type Me, type Session } from '../auth'
+import { handoffPersona } from './sessionHandoff'
 import {
   SESSION_KEY,
   SESSION_SCHEMA_VERSION,
@@ -422,5 +423,49 @@ describe('adversarial / edge coverage (QA)', () => {
 
     expect(restored).not.toBeNull()
     expect(restored?.me).toEqual({ unexpectedShape: true })
+  })
+})
+
+// The hand-off record.
+describe('hand-off session record (AUTH-05 D8)', () => {
+  const ME: Me = {
+    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+  }
+
+  it('a hand-off session round-trips', () => {
+    const session: Session = { persona: handoffPersona(ME), token: 'jwt', me: ME, verified: true, handoff: true }
+    const raw = serializeSession(session)
+    expect(JSON.parse(raw)).toEqual({ v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true })
+    const restored = parseStoredSession(raw)
+    expect(restored?.persona.subject).toBe(ME.user.id)
+    expect(restored?.persona.tenantId).toBe(ME.tenant.id)
+    expect(restored?.handoff).toBe(true)
+    expect(restored).toEqual(session)
+  })
+
+  it('a persona record is unchanged', () => {
+    expect(serializeSession(firmSession())).toBe(
+      '{"v":1,"personaId":"firm","token":"jwt","me":{"tenant":{"id":"11111111-1111-1111-1111-111111111111","name":"Okafor & Partners"},"user":{"id":"c0000000-0000-0000-0000-000000000001","role":"authenticated"}},"verified":true}',
+    )
+  })
+
+  it('a handoff record without a usable me is rejected', () => {
+    const base = { v: 1, personaId: 'firm', token: 'jwt', verified: true, handoff: true }
+    const rows: [string, unknown][] = [
+      ['me null', null],
+      ['no user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { role: 'authenticated' } }],
+      ['no tenant id', { tenant: { name: 'X' }, user: { id: ME.user.id, role: 'authenticated' } }],
+      ['numeric user id', { tenant: { id: ME.tenant.id, name: 'X' }, user: { id: 9, role: 'authenticated' } }],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    // Control: the same record with a usable me parses.
+    expect(parseStoredSession(JSON.stringify({ ...base, me: ME }))).not.toBeNull()
+    for (const [name, me] of rows) {
+      const { warn } = spyOnConsole()
+      expect(parseStoredSession(JSON.stringify({ ...base, me })), name).toBeNull()
+      expect(warn, name).toHaveBeenCalled()
+      vi.restoreAllMocks()
+    }
   })
 })

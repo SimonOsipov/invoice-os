@@ -81,11 +81,18 @@ What a spec still cannot assume is an empty table:
     seeded staffing rows in the same `Provision` call (Decision [include-workflow-roles]).
     A role or staffing row a spec creates at runtime on a demo tenant does NOT survive the
     next deploy; the seeded ones always come back.
-- `api/registration.spec.ts` leaves rows that persist across pushes to one PR environment:
-  each run's `auth.users` row (GoTrue's schema, which neither the reset nor the purge
-  touches) and the tenant and membership its fork chain provisions (the reset excludes
-  `tenants` and `memberships`, and the purge touches the four demo tenants only). This is
-  harmless, because every run registers a fresh address and provisions for a fresh subject.
+- Three specs leave rows that persist across pushes to one PR environment, in `auth.users`
+  (GoTrue's schema, which neither the reset nor the purge touches) and in `tenants` and
+  `memberships` (the reset excludes both, and the purge touches the four demo tenants only):
+  - `api/registration.spec.ts`: each run's `auth.users` row, and the tenant and membership
+    its fork chain provisions.
+  - `topology/auth.spec.ts`: each real-account journey (`provisionRealAccount` in
+    `api/client.ts`) leaves an `auth.users` row, a tenant and a membership.
+  - `api/session-handoff.spec.ts`: each registering test leaves an `auth.users` row only; it
+    provisions no workspace.
+
+  This is harmless, because every run registers a fresh address and provisions for a fresh
+  subject.
 
 So the rule is unchanged, and `workers: 1` still holds: every spec creates per-run-unique
 data (fresh TINs, random UUIDs, high offsets for empty-state), acts on rows it created, and
@@ -102,10 +109,11 @@ but **what backs the assertion**:
 | `app` SPA | gateway-wired (real API, real DB) | a **contract**: rendered state matches what the API returned |
 | `ops-console` | mock data, no backend | **fixture behaviour** — that the console's own client-side logic works |
 | `support-console` | mock data, no backend | same |
-| `landing` | static marketing | render, plus client-side navigation |
+| `landing` | marketing, plus a gateway-backed sign-in form | render and client-side navigation; the sign-in form is a **contract** — a real account signs in and lands in its workspace |
 
-The `app` SPA remains the only place a browser test can prove the **stack** integrates end
-to end. The consoles and the landing page carry functional coverage of their own
+The `app` SPA, and the landing sign-in form that hands off to it, remain the only places a
+browser test can prove the **stack** integrates end to end. The consoles and the rest of the
+landing page carry functional coverage of their own
 client-side behaviour because a browser is the only place it can be observed: every
 frontend vitest project defaults to `node`, and the files that opt into jsdom per-file
 (`// @vitest-environment jsdom`) get a DOM with no layout engine — so a control's

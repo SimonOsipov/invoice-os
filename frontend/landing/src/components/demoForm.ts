@@ -52,7 +52,7 @@ export type DemoFormState = typeof DEFAULT_FORM
 export type DemoFieldKey = Exclude<keyof DemoFormState, 'consent'>
 export type DemoStep = 'form' | 'submitting' | 'success' | 'error'
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+export const EMAIL_RE =/^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // Only the three required fields validate — Role/Taxpayer size/Monthly invoices
 // never block submit. An unchecked consent adds its own error key and must never

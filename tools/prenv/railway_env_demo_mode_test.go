@@ -11,9 +11,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -174,5 +176,91 @@ func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
 	}
 	if !strings.Contains(m[1], "scripts/ci/**") {
 		t.Errorf("ci.yml's go: paths filter does not include 'scripts/ci/**' — a commit touching only scripts/ci/railway-env.sh matches no filter, so the Go job (and every guard in this file) is skipped on exactly the edit it guards")
+	}
+}
+
+// Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service.
+func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
+	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
+
+	// Bash names are case-sensitive, so the pattern is too.
+	namePattern := regexp.MustCompile(`(?m)^\s*upsert_variable\s+"\$env_id"\s+"\$RAILWAY_SVC_LANDING_ID"\s+landing\s+(VITE_\w+)\s`)
+	names := make(map[string]bool)
+	for _, m := range namePattern.FindAllStringSubmatch(body, -1) {
+		names[m[1]] = true
+	}
+	// APP, OPS, SUPPORT and GATEWAY.
+	if len(names) < 4 {
+		t.Fatalf("found %d distinct VITE_* upserts on the landing service (%v), want >= 4", len(names), names)
+	}
+
+	dockerfilePath := filepath.Join(repoRoot(t), "frontend", "landing", "Dockerfile")
+	raw, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dockerfilePath, err)
+	}
+	// Dockerfile comments are whole lines starting with #.
+	var lines []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if s := strings.TrimSpace(l); s != "" && !strings.HasPrefix(s, "#") {
+			lines = append(lines, s)
+		}
+	}
+	build := slices.Index(lines, "RUN pnpm --filter @invoice-os/landing build")
+	if build < 0 {
+		t.Fatalf("control: %s has no `RUN pnpm --filter @invoice-os/landing build` line", dockerfilePath)
+	}
+
+	// Exact lines before the build step; a prefix match would let VITE_APP_URL cover VITE_APP_URL_X.
+	for name := range names {
+		for _, want := range []string{"ARG " + name, "ENV " + name + "=$" + name} {
+			i := slices.Index(lines, want)
+			if i < 0 {
+				t.Errorf("%s is upserted onto landing but %s has no %q line", name, dockerfilePath, want)
+			} else if i > build {
+				t.Errorf("%s: %q comes after the landing build step", dockerfilePath, want)
+			}
+		}
+	}
+}
+
+func TestLandingDependsOnAPIClient(t *testing.T) {
+	root := repoRoot(t)
+	path := filepath.Join(root, "frontend", "landing", "package.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var pkg struct {
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	if err := json.Unmarshal(raw, &pkg); err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	if pkg.Dependencies["@invoice-os/design-tokens"] != "workspace:*" {
+		t.Fatalf("control: %s dependencies lack @invoice-os/design-tokens workspace:*; got %v", path, pkg.Dependencies)
+	}
+	if got := pkg.Dependencies["@invoice-os/api-client"]; got != "workspace:*" {
+		t.Errorf("%s dependencies[@invoice-os/api-client] = %q, want \"workspace:*\" (AC-4)", path, got)
+	}
+
+	// The Dockerfile installs with --frozen-lockfile, so the lockfile importer must agree.
+	lock, err := os.ReadFile(filepath.Join(root, "pnpm-lock.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?ms)^  frontend/landing:\n(.*?)(?:^  \S|\z)`).FindSubmatch(lock)
+	if m == nil {
+		t.Fatalf("control: pnpm-lock.yaml has no frontend/landing importer")
+	}
+	importer := string(m[1])
+	entry := func(name string) string {
+		return "      '@invoice-os/" + name + "':\n        specifier: workspace:*\n        version: link:../../packages/" + name + "\n"
+	}
+	if !strings.Contains(importer, entry("design-tokens")) {
+		t.Fatalf("control: the frontend/landing lockfile importer lacks the design-tokens link entry; the shape is stale")
+	}
+	if !strings.Contains(importer, entry("api-client")) {
+		t.Errorf("pnpm-lock.yaml's frontend/landing importer lacks @invoice-os/api-client -> link:../../packages/api-client; `pnpm install --frozen-lockfile` would fail")
 	}
 }

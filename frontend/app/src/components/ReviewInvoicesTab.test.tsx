@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // D-28 closed (post-APPR-16 gap): this tab's own pager freeze had no component test file
 // when APPR-16-04 shipped (Pager.test.ts's source-scan carved it out deliberately). This
-// is that harness -- minimal, scoped to the freeze itself, not broad coverage of the tab.
+// is that harness.
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -242,6 +242,19 @@ describe('ReviewInvoicesTab bulk submit: drives the real component', () => {
     const body = post.body as { invoice_ids: string[]; idempotency_key: string }
     expect(body.invoice_ids).toEqual(['inv-a', 'inv-b'])
     expect(body.idempotency_key).toMatch(UUID_V4)
+  })
+
+  it('a partial selection sends only the ticked id, not the whole page', async () => {
+    const net = stubFetch(() => Promise.resolve(okResults([])))
+    renderTab()
+    await screen.findByText('INV-A')
+    expect(screen.getByLabelText('Select invoice INV-B').hasAttribute('disabled'), 'INV-B is selectable but left unticked').toBe(false)
+    fireEvent.click(screen.getByLabelText('Select invoice INV-A'))
+    fireEvent.click(screen.getByTestId('review-bulk-submit'))
+    fireEvent.click(screen.getByTestId('review-bulk-confirm'))
+
+    await waitFor(() => expect(net.posts()).toHaveLength(1))
+    expect((net.posts()[0].body as { invoice_ids: string[] }).invoice_ids).toEqual(['inv-a'])
   })
 
   it('a 2xx shows one result row per item, refetches, calls onSubmitted, clears the selection', async () => {

@@ -119,7 +119,7 @@ func TestHandoffStore_CodeShape(t *testing.T) {
 	h := stateHash(randomState(t))
 	seen := make(map[string]bool, 1000)
 	for i := 0; i < 1000; i++ {
-		c := s.Put("tok", h)
+		c, _ := s.Put("tok", h)
 		if !codeShape.MatchString(c) {
 			t.Fatalf("Put #%d = %q, want 43 base64url characters", i, c)
 		}
@@ -136,7 +136,7 @@ func TestHandoffStore_CodeShape(t *testing.T) {
 func TestHandoffStore_TakeIsSingleUse(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	st := randomState(t)
-	c := s.Put("T", stateHash(st))
+	c, _ := s.Put("T", stateHash(st))
 	if tok, ok := s.Take(c, st); !ok || tok != "T" {
 		t.Fatalf("first Take = (%q, %v), want (\"T\", true)", tok, ok)
 	}
@@ -150,13 +150,13 @@ func TestHandoffStore_ExpiresAtTTL(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, clk.Now)
 	st := randomState(t)
 
-	c := s.Put("T", stateHash(st))
+	c, _ := s.Put("T", stateHash(st))
 	clk.Advance(HandoffTTL - time.Nanosecond)
 	if tok, ok := s.Take(c, st); !ok || tok != "T" {
 		t.Fatalf("Take at ttl-1ns = (%q, %v), want (\"T\", true)", tok, ok)
 	}
 
-	c2 := s.Put("T2", stateHash(st))
+	c2, _ := s.Put("T2", stateHash(st))
 	clk.Advance(HandoffTTL)
 	if tok, ok := s.Take(c2, st); ok || tok != "" {
 		t.Fatalf("Take at ttl = (%q, %v), want (\"\", false)", tok, ok)
@@ -168,8 +168,8 @@ func TestHandoffStore_ExpiredTakeStillRemoves(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, clk.Now)
 	st := randomState(t)
 
-	c := s.Put("T", stateHash(st))
-	control := s.Put("C", stateHash(st))
+	c, _ := s.Put("T", stateHash(st))
+	control, _ := s.Put("C", stateHash(st))
 	clk.Advance(HandoffTTL)
 	if _, ok := s.Take(c, st); ok {
 		t.Fatal("Take of an expired code = true, want false")
@@ -188,7 +188,7 @@ func TestHandoffStore_ExpiredTakeStillRemoves(t *testing.T) {
 func TestHandoffStore_ConcurrentTakeOneWinner(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	st := randomState(t)
-	c := s.Put("T", stateHash(st))
+	c, _ := s.Put("T", stateHash(st))
 
 	var (
 		wg    sync.WaitGroup
@@ -217,7 +217,7 @@ func TestHandoffStore_ConcurrentTakeOneWinner(t *testing.T) {
 
 func TestHandoffStore_KeysAreHashed(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
-	c := s.Put("T", stateHash(randomState(t)))
+	c, _ := s.Put("T", stateHash(randomState(t)))
 	raw, _ := base64.RawURLEncoding.DecodeString(c)
 	needles := [][]byte{[]byte(c)}
 	if len(raw) > 0 {
@@ -237,8 +237,8 @@ func TestHandoffStore_KeysAreHashed(t *testing.T) {
 func TestHandoffStore_WrongStateRefusedAndSpends(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	s1, s2 := randomState(t), randomState(t)
-	c := s.Put("T", stateHash(s1))
-	control := s.Put("C", stateHash(s1))
+	c, _ := s.Put("T", stateHash(s1))
+	control, _ := s.Put("C", stateHash(s1))
 
 	if _, ok := s.Take(c, s2); ok {
 		t.Fatal("Take with the wrong state = true, want false")
@@ -254,7 +254,7 @@ func TestHandoffStore_WrongStateRefusedAndSpends(t *testing.T) {
 func TestHandoffStore_RightStateRedeems(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	s1 := randomState(t)
-	c := s.Put("T", stateHash(s1))
+	c, _ := s.Put("T", stateHash(s1))
 	if tok, ok := s.Take(c, s1); !ok || tok != "T" {
 		t.Fatalf("Take = (%q, %v), want (\"T\", true)", tok, ok)
 	}
@@ -263,8 +263,8 @@ func TestHandoffStore_RightStateRedeems(t *testing.T) {
 func TestHandoffStore_EmptyStateRefused(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	s1 := randomState(t)
-	c := s.Put("T", stateHash(s1))
-	control := s.Put("C", stateHash(s1))
+	c, _ := s.Put("T", stateHash(s1))
+	control, _ := s.Put("C", stateHash(s1))
 
 	if tok, ok := s.Take(c, ""); ok || tok != "" {
 		t.Fatalf("Take with empty state = (%q, %v), want (\"\", false)", tok, ok)
@@ -284,7 +284,7 @@ func TestHandoffStore_UnknownAndEmptyCode(t *testing.T) {
 		t.Fatalf("Take(random) = (%q, %v), want (\"\", false)", tok, ok)
 	}
 
-	c := s.Put("T", stateHash(st))
+	c, _ := s.Put("T", stateHash(st))
 	if _, ok := s.Take(randomState(t), st); ok {
 		t.Fatal("Take(random) on a non-empty store = true, want false")
 	}

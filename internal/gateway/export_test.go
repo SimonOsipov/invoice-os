@@ -12,3 +12,10 @@ func (t *SignInThrottle) SweepsForTest() int {
 	defer t.mu.Unlock()
 	return t.sweeps
 }
+
+// SweepsForTest reports how many expiry sweeps the store has run.
+func (s *HandoffStore) SweepsForTest() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sweeps
+}

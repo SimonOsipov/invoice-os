@@ -1,5 +1,5 @@
 // AUTH-05-08 QA Mode B: adversarial coverage for the hand-off helpers and record.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -169,6 +169,28 @@ describe('session.ts and sessionHandoff.ts import cycle', () => {
       expect(h.isLiveHandoffSession({ persona: APP_PERSONAS.firm, token: LIVE, me: ME, verified: true, handoff: true }, NOW)).toBe(true)
       expect(s.parseStoredSession(JSON.stringify({ v: 1, personaId: 'firm', token: LIVE, me: ME, verified: true, handoff: true }))?.persona.subject).toBe(ME.user.id)
     }
+  })
+
+  // F6: one direction only.
+  it('session.ts and sessionHandoff.ts do not import each other', () => {
+    const src = (f: string) => readFileSync(path.join(process.cwd(), 'src/lib', f), 'utf8')
+    const imports = (s: string, m: string) => new RegExp(`from '\\./${m}'`).test(s)
+    const session = src('session.ts')
+    const handoff = src('sessionHandoff.ts')
+    expect(session.length).toBeGreaterThan(0)
+    expect(handoff.length).toBeGreaterThan(0)
+    expect(imports(session, 'sessionHandoff') && imports(handoff, 'session'), 'session.ts <-> sessionHandoff.ts cycle').toBe(false)
+  })
+})
+
+// F8: the 43-character base64url shape is defined once.
+describe('one token-shape regex', () => {
+  it('lib/*.ts define the 43-character shape exactly once', () => {
+    const dir = path.join(process.cwd(), 'src/lib')
+    const files = readdirSync(dir).filter((f) => f.endsWith('.ts') && !f.includes('.test.'))
+    expect(files).toContain('signInState.ts')
+    const hits = files.filter((f) => readFileSync(path.join(dir, f), 'utf8').includes('[A-Za-z0-9_-]{43}'))
+    expect(hits).toHaveLength(1)
   })
 })
 

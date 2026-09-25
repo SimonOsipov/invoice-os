@@ -303,3 +303,61 @@ describe('signInState adversarial: App', () => {
     expect(sessionStorage.getItem(KEY)).toBeNull()
   })
 })
+
+// F1b: the start bounce always mints, so landing holds a state with the full TTL.
+describe('?auth=start mints a fresh state', () => {
+  const NOW = new Date('2026-09-25T12:00:00Z').getTime()
+  const NINE_MIN = 9 * 60 * 1000
+
+  function storedAt(): unknown {
+    const raw = sessionStorage.getItem(KEY)
+    return raw == null ? null : (JSON.parse(raw) as { at?: unknown }).at
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(NOW)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('auth=start replaces a live stored state and stamps it now', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(s, 'the live stored state is not reused').not.toBe(X)
+    expect(storedAt()).toBe(NOW)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+  })
+
+  it('StrictMode auth=start over a live state navigates once with the stored fresh state', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    const s = storedState()
+    expect(s, 'the live stored state is not reused').not.toBe(X)
+    expect(storedAt()).toBe(NOW)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+  })
+
+  it('control: the front door still reuses the same live state', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    const { hrefWrites } = interceptHref()
+    render(<App />)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${X}`])
+    expect(storedAt()).toBe(NOW - NINE_MIN)
+  })
+})

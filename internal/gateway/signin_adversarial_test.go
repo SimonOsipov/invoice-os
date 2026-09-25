@@ -181,7 +181,7 @@ func TestExchange_ConcurrentRedeemOneWinner(t *testing.T) {
 	const racers = 32
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	code := rig.store.Put(sessionAT, stateHash(s))
+	code, _ := rig.store.Put(sessionAT, stateHash(s))
 
 	recs := make([]int, racers)
 	bodies := make([]string, racers)

@@ -27,11 +27,11 @@ func TestHandoffAndThrottle_ConstantsPinned(t *testing.T) {
 func TestHandoffStore_PutAfterTakeIsFresh(t *testing.T) {
 	s := NewHandoffStore(HandoffTTL, time.Now)
 	st := randomState(t)
-	c1 := s.Put("T1", stateHash(st))
+	c1, _ := s.Put("T1", stateHash(st))
 	if tok, ok := s.Take(c1, st); !ok || tok != "T1" {
 		t.Fatalf("Take(c1) = (%q, %v), want (\"T1\", true)", tok, ok)
 	}
-	c2 := s.Put("T2", stateHash(st))
+	c2, _ := s.Put("T2", stateHash(st))
 	if c2 == c1 {
 		t.Fatal("Put after Take reused the spent code")
 	}
@@ -47,8 +47,8 @@ func TestHandoffStore_ExpiredWrongStateStillRemoves(t *testing.T) {
 	clk := newTestClock()
 	s := NewHandoffStore(HandoffTTL, clk.Now)
 	s1, s2 := randomState(t), randomState(t)
-	c := s.Put("T", stateHash(s1))
-	control := s.Put("C", stateHash(s1))
+	c, _ := s.Put("T", stateHash(s1))
+	control, _ := s.Put("C", stateHash(s1))
 
 	clk.Advance(HandoffTTL)
 	if tok, ok := s.Take(c, s2); ok || tok != "" {

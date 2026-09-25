@@ -973,3 +973,106 @@ describe('AUTH-05-08 adversarial', () => {
     expect(loginCalls).toBe(0)
   })
 })
+
+// F5: each redemption call aborts after 15 s and takes the failure arm.
+describe('a hung redemption times out', () => {
+  const TIMEOUT_MS = 15_000
+  let signals: Record<'exchange' | 'me', (AbortSignal | undefined)[]>
+
+  // A fetch that never settles unless its signal aborts, as a real fetch does.
+  function hang(signal?: AbortSignal | null): Promise<never> {
+    return new Promise((_, reject) => {
+      if (!signal) return
+      if (signal.aborted) return reject(signal.reason)
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+    })
+  }
+
+  function stubFetch(exchangeHangs: boolean) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === `${GATEWAY}/auth/exchange`) {
+          signals.exchange.push(init?.signal ?? undefined)
+          return exchangeHangs ? hang(init?.signal) : ok({ access_token: T })()
+        }
+        if (url === `${GATEWAY}/api/tenancy/v1/me`) {
+          signals.me.push(init?.signal ?? undefined)
+          return hang(init?.signal)
+        }
+        return hang(init?.signal)
+      }),
+    )
+  }
+
+  async function tick(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
+  }
+
+  beforeEach(() => {
+    signals = { exchange: [], me: [] }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // jsdom's AbortSignal.timeout runs on the window's real timers; route it through the fake ones.
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      const c = new AbortController()
+      setTimeout(() => c.abort(new DOMException('The operation timed out.', 'TimeoutError')), ms)
+      return c.signal
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  for (const [leg, exchangeHangs] of [
+    ['exchange', true],
+    ['/me', false],
+  ] as const) {
+    it(`a hung ${leg} fails once at 15 s, not before`, async () => {
+      configure()
+      ensureSignInState()
+      stubFetch(exchangeHangs)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      window.history.replaceState(null, '', `/?handoff=${CODE}`)
+      const { hrefWrites } = interceptHref()
+      await bootApp()
+      await tick(0)
+      expect(signals.exchange, 'one exchange call').toHaveLength(1)
+      expect(signals.me, 'the /me call').toHaveLength(exchangeHangs ? 0 : 1)
+
+      await tick(TIMEOUT_MS - 1)
+      expect(hrefWrites, 'no navigation before 15 s').toEqual([])
+      expect(warn).not.toHaveBeenCalled()
+      expect(screen.getByText('Opening your workspace…')).toBeTruthy()
+
+      await tick(1)
+      expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`])
+      expect(AbortSignal.timeout).toHaveBeenCalledWith(TIMEOUT_MS)
+      expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}&signin=failed$`))
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('hand-off redemption failed'))).toHaveLength(1)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+
+      await tick(TIMEOUT_MS)
+      expect(hrefWrites, 'still one navigation').toHaveLength(1)
+    })
+  }
+
+  it('both redemption calls carry an abort signal', async () => {
+    configure()
+    ensureSignInState()
+    stubFetch(false)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await tick(0)
+    expect(signals.exchange).toHaveLength(1)
+    expect(signals.me).toHaveLength(1)
+    expect(signals.exchange[0], 'exchange signal').toBeInstanceOf(AbortSignal)
+    expect(signals.me[0], '/me signal').toBeInstanceOf(AbortSignal)
+  })
+})

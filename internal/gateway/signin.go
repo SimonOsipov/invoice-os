@@ -65,7 +65,8 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 			writeError(w, http.StatusBadGateway, "sign-in is unavailable")
 		case status == http.StatusOK && sess.AccessToken != "":
 			throttle.Reset(in.Email)
-			writeJSON(w, http.StatusOK, map[string]string{"code": store.Put(sess.AccessToken, sha256.Sum256([]byte(in.State)))})
+			code, _ := store.Put(sess.AccessToken, sha256.Sum256([]byte(in.State)))
+			writeJSON(w, http.StatusOK, map[string]string{"code": code})
 		// A banned address answers exactly like a wrong password; the reservation stands.
 		case gt.ErrorCode == "invalid_credentials", gt.ErrorCode == "user_banned":
 			writeError(w, http.StatusUnauthorized, "invalid email or password")

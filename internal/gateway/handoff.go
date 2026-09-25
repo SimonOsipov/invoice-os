@@ -12,6 +12,9 @@ import (
 // HandoffTTL is how long an exchange code stays redeemable.
 const HandoffTTL = 60 * time.Second
 
+// HandoffMaxLive caps live codes; a full store refuses Put.
+const HandoffMaxLive = 10_000
+
 // HandoffStore holds single-use exchange codes, each bound to a sign-in state.
 // ceiling: in-process, so a restart drops live codes and replicas do not share them; move to a shared store before scaling out.
 type HandoffStore struct {
@@ -19,6 +22,7 @@ type HandoffStore struct {
 	ttl     time.Duration
 	now     func() time.Time
 	entries map[[32]byte]handoffEntry // keyed by sha256(code); the plaintext code is never stored
+	sweeps  int
 }
 
 type handoffEntry struct {
@@ -31,8 +35,8 @@ func NewHandoffStore(ttl time.Duration, now func() time.Time) *HandoffStore {
 	return &HandoffStore{ttl: ttl, now: now, entries: make(map[[32]byte]handoffEntry)}
 }
 
-// Put stores accessToken and returns a fresh exchange code.
-func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) string {
+// Put stores accessToken and returns a fresh exchange code; false means the store is full.
+func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) (string, bool) {
 	b := make([]byte, 32)
 	rand.Read(b) // never fails on Go 1.24+
 	code := base64.RawURLEncoding.EncodeToString(b)
@@ -41,13 +45,19 @@ func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) string {
 	defer s.mu.Unlock()
 	now := s.now()
 	// ceiling: O(n) sweep on every Put; amortise it if live codes reach ~10k.
+	s.sweep(now)
+	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{accessToken, stateHash, now.Add(s.ttl)}
+	return code, true
+}
+
+// sweep drops expired entries; the caller holds s.mu.
+func (s *HandoffStore) sweep(now time.Time) {
+	s.sweeps++
 	for k, e := range s.entries {
 		if !now.Before(e.expiresAt) {
 			delete(s.entries, k)
 		}
 	}
-	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{accessToken, stateHash, now.Add(s.ttl)}
-	return code
 }
 
 // Take redeems code once; a wrong state or expired code still spends it.

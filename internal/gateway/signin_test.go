@@ -518,7 +518,7 @@ func TestSignIn_StateRequired(t *testing.T) {
 func TestExchange_RedeemsOnce(t *testing.T) {
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	code := rig.store.Put(sessionAT, stateHash(s))
+	code, _ := rig.store.Put(sessionAT, stateHash(s))
 
 	tok := requireOnlyKey(t, rig.doExchange(exchangeBody(code, s)), "access_token")
 	if tok != sessionAT {
@@ -562,7 +562,7 @@ func TestExchange_MissingStateRefused(t *testing.T) {
 		{"empty", func(code string) string { return exchangeBody(code, "") }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			code := rig.store.Put(sessionAT, stateHash(s))
+			code, _ := rig.store.Put(sessionAT, stateHash(s))
 
 			requireRefusal(t, rig.doExchange(c.body(code)), http.StatusBadRequest, msgBadCode)
 			if tok, ok := rig.store.Take(code, s); ok {
@@ -589,9 +589,9 @@ func TestSignInThenExchange_RoundTrip(t *testing.T) {
 func TestExchange_RefusalsAreIdentical(t *testing.T) {
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	live := rig.store.Put(sessionAT, stateHash(s))
-	expiring := rig.store.Put(sessionAT, stateHash(s))
-	oversized := rig.store.Put(sessionAT, stateHash(s))
+	live, _ := rig.store.Put(sessionAT, stateHash(s))
+	expiring, _ := rig.store.Put(sessionAT, stateHash(s))
+	oversized, _ := rig.store.Put(sessionAT, stateHash(s))
 
 	ref := rig.doExchange(exchangeBody(randomState(t), s))
 	requireRefusal(t, ref, http.StatusBadRequest, msgBadCode)

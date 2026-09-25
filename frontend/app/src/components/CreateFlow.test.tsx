@@ -780,4 +780,44 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
     expect(shown).toEqual({ subtotal: '—', vat: '—', total: '—' })
     expect(container.querySelectorAll('[data-testid^="carried-"]'), 'manual mode renders no carried- ids').toHaveLength(0)
   })
+
+  it('an empty line list shows — in every summary row', () => {
+    const { filed, shown } = renderSummary([])
+    expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: null, vat: null, total: null })
+    expect(shown).toEqual({ subtotal: '—', vat: '—', total: '—' })
+  })
+
+  it('a large amount shows the filed string with no grouping or ₦ (12345.67)', () => {
+    const { filed, shown } = renderSummary([{ desc: 'Item', qty: 1, price: 12345.67 }])
+    expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: '12345.67', vat: '925.93', total: '13271.60' })
+    expect(shown).toEqual({ subtotal: '12345.67', vat: '925.93', total: '13271.60' })
+  })
+
+  it('a multi-line subtotal rounds the exact sum, not the rounded lines (3 × 10.005)', () => {
+    const line = { desc: 'Item', qty: 1, price: 10.005 }
+    const { filed, shown } = renderSummary([line, { ...line }, { ...line }])
+    // Summing the rounded line_totals would give 30.03 / 32.28.
+    expect(filed.line_items.map((l) => l.line_total)).toEqual(['10.01', '10.01', '10.01'])
+    expect(shown).toEqual({ subtotal: '30.02', vat: '2.25', total: '32.27' })
+    expect(shown).toEqual({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total })
+  })
+
+  it('the summary follows an edited line on rerender', () => {
+    const draft = (price: number): Draft => ({ number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: 'Item', qty: 1, price }] })
+    const { container, rerender } = render(<CreateFlow ctx={createFlowCtx('form', null, { draft: draft(20.93), activeEntity: S_ENTITY })} />)
+    const total = () => container.querySelector('[data-testid="summary-total"]')?.textContent
+    expect(total()).toBe('22.50')
+    rerender(<CreateFlow ctx={createFlowCtx('form', null, { draft: draft(6.6), activeEntity: S_ENTITY })} />)
+    expect(total()).toBe('7.10')
+    expect(container.querySelector('[data-testid="summary-subtotal"]')?.textContent).toBe('6.60')
+  })
+
+  it('carried mode renders the reading, never the manual summary ids', () => {
+    const { container } = render(
+      <CreateFlow ctx={carriedCtx({ draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: 'Item', qty: 1, price: 20.93 }] } })} />,
+    )
+    expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('1075.00')
+    expect(container.querySelectorAll('[data-testid^="summary-"]')).toHaveLength(0)
+    expect(container.textContent).not.toContain('22.50')
+  })
 })

@@ -281,8 +281,9 @@ path or query, so no other GoTrue route (`/recover`, `/otp`, `/admin/*`, or `/to
 other grant) is reachable from outside.
 
 **The flow:**
-1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. The
-   gateway posts only those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
+1. The client posts `{"email","password"}` to `POST /auth/register` on the gateway. Unless
+   the address is at a free-mail domain (400, GoTrue not called), the gateway posts only
+   those two fields to GoTrue `/signup`. GoTrue creates an unconfirmed user and
    mails a confirmation link through Resend.
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
    `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
@@ -309,6 +310,7 @@ other grant) is reachable from outside.
 | GoTrue `over_email_send_rate_limit` (an unconfirmed repeat within 60 s, or the instance mail cap) | the same 202, logged at WARN |
 | GoTrue 5xx whose `code` is SQLSTATE `23505` (the loser of two concurrent signups for one address) | the same 202, logged at WARN |
 | a malformed body, or an empty email or password | 400 `{"error"}` |
+| an address at a listed free-mail domain or its subdomain | 400 `{"error":"a business email address is required; personal email providers are not accepted"}`; GoTrue is not called |
 | GoTrue `validation_failed`, `weak_password`, `email_address_invalid` | 400 with GoTrue's `msg` |
 | GoTrue `signup_disabled` | 503 `registration is closed` |
 | any other GoTrue 429 | 429 `too many requests` |
@@ -318,6 +320,11 @@ other grant) is reachable from outside.
 The four 202 rows answer identically, so the response never tells whether an address
 already has an account. The answer never carries the user id or any GoTrue field except
 `msg`.
+
+The free-mail list lives in `internal/gateway/freemail.go` `freeMailDomains`. To extend it,
+add one lower-case domain; its subdomains are refused too. Fullwidth, ideographic-dot and
+inner-whitespace forms of a listed domain are refused by GoTrue's own format check (400),
+guarded by `TestIdP_FreeMailVariantsAreNotAccepted`.
 
 **`GET /auth/verify?token=…&type=signup`**, outside `/api/`:
 
@@ -499,12 +506,13 @@ E=6c864094-6a06-452f-8495-be77d8a94fe7
 |---|---|---|
 | U1 | any time after merge | gateway `AUTH_SITE_URL` |
 | U2 | any time after merge | auth `GOTRUE_MAILER_URLPATHS_CONFIRMATION` |
-| U3 | when registration opens: after AUTH-04 merges | auth `GOTRUE_DISABLE_SIGNUP=false` |
+| U3 | when registration opens: after AUTH-04 and AUTH-16 merge | auth `GOTRUE_DISABLE_SIGNUP=false` |
 | U4 | after U1–U3 have deployed | none: an end-to-end check by hand |
 
 Until U1 deploys, production's `POST /auth/register` and `GET /auth/verify` answer 503
 `registration is not configured`. Between U1 and U3, register answers 503
-`registration is closed`. Neither affects any other route.
+`registration is closed`. Neither affects any other route. From U1 on, a free-mail address
+answers 400 with the policy message, also while signup is closed.
 
 **U1 — gateway `AUTH_SITE_URL`:**
 
@@ -522,9 +530,10 @@ railway variables -p "$P" -e "$E" -s auth --json | jq -r '.GOTRUE_MAILER_URLPATH
 # expected: https://api.ascomply.com/auth/verify
 ```
 
-**U3 — auth `GOTRUE_DISABLE_SIGNUP=false`. Do this only after AUTH-04 merges.** The
+**U3 — auth `GOTRUE_DISABLE_SIGNUP=false`. Do this only after AUTH-04 and AUTH-16 merge.** The
 AUTH-00 decision S6 makes registration open with free-mail domains refused. AUTH-04 ships
-that refusal; opening production before it admits free-mail registrants.
+that refusal; opening production before it admits free-mail registrants. AUTH-16 closes the
+registration timing leak.
 
 ```
 railway variables --set 'GOTRUE_DISABLE_SIGNUP=false' -p "$P" -e "$E" -s auth --skip-deploys
@@ -547,6 +556,8 @@ empty commit instead.
    `https://api.ascomply.com/auth/verify?token=`.
 3. Opening the link lands on `https://www.ascomply.com/?verified=1`. Opening it a second
    time lands on `?verify=failed`.
+4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
+   answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
 
 To check provisioning, sign in with the U4 account and redeem the code (the `curl` pair in
 sign-in U3 below, with the real password), then post

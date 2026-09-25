@@ -13,6 +13,8 @@ import { resolveTarget } from '../targets'
 const VERIFICATION_PENDING = { status: 'verification_pending' }
 // internal/gateway/register.go RegisterHandler: the empty-field refusal.
 const FIELDS_REQUIRED = 'email and password are required'
+// internal/gateway/register.go RegisterHandler: the free-mail refusal.
+const FREE_MAIL_REFUSED = 'a business email address is required; personal email providers are not accepted'
 // internal/tenancy/tenancy.go statusForErr, ErrAlreadyProvisioned.
 const ALREADY_PROVISIONED = 'this account already has a workspace'
 // internal/gateway/gateway.go ServeHTTP: strings.ToLower(http.StatusText(403)).
@@ -49,6 +51,15 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     })
     assertErrorEnvelope(res, 400, 'empty password')
     expect((res.body as { error: string }).error).toBe(FIELDS_REQUIRED)
+  })
+
+  test('a free-mail address is refused with the policy message', async () => {
+    const res = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: { email: `reg-${crypto.randomUUID()}@gmail.com`, password: crypto.randomUUID().slice(0, 12) },
+    })
+    assertErrorEnvelope(res, 400, 'free-mail address')
+    expect((res.body as { error: string }).error).toBe(FREE_MAIL_REFUSED)
   })
 
   test('a bogus verification link redirects 303 to the landing failure page', async () => {

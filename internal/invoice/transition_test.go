@@ -443,13 +443,10 @@ func TestTransition_AtomicityRollsBackOnActorCheckFailure(t *testing.T) {
 	})
 }
 
-// INV-SM-06: SELECT ... FOR UPDATE serializes concurrent transitions on the
-// same row -- of N concurrent draft->validated calls on the SAME invoice,
-// exactly one succeeds; every other resolves to ErrRedundantTransition (the
-// row lock forces the losers to observe the winner's already-applied
-// status), and exactly one invoice_status_history row (to_status=validated)
-// exists afterward. Using N=6 (rather than the spec's minimal "two") gives
-// the race a stronger chance to manifest if serialization is broken.
+// INV-SM-06: of N concurrent draft->validated calls on the SAME invoice,
+// exactly one succeeds; every other resolves to ErrRedundantTransition, and
+// exactly one invoice_status_history row (to_status=validated) exists
+// afterward. The row lock's proof is TestTransition_BlockedLoserSeesCommittedWinnerStatus.
 func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -504,7 +501,7 @@ func TestTransition_ConcurrentSameEdgeSerializesToOneWinner(t *testing.T) {
 		t.Errorf("invoice status after concurrent transitions = %q, want %q", status, StatusValidated)
 	}
 	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 1 {
-		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want exactly 1 (FOR UPDATE serialized the race)", hn)
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want exactly 1", hn)
 	}
 }
 

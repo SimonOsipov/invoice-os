@@ -188,7 +188,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>Subtotal</span>
             {reading === null ? (
-              <span className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(sub)}</span>
+              <span data-testid="summary-subtotal" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(sub)}</span>
             ) : (
               <span data-testid="carried-subtotal" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{reading.subtotal ?? '—'}</span>
             )}
@@ -196,7 +196,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{reading === null ? 'VAT · 7.5%' : 'VAT'}</span>
             {reading === null ? (
-              <span className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(vat)}</span>
+              <span data-testid="summary-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{fmt(vat)}</span>
             ) : (
               <span data-testid="carried-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{reading.vat ?? '—'}</span>
             )}
@@ -205,7 +205,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 14, borderTop: '1px solid var(--line-1)', marginBottom: 20 }}>
           <span style={{ fontSize: 14, fontWeight: 600 }}>Total due</span>
           {reading === null ? (
-            <span className="money" style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sub + vat)}</span>
+            <span data-testid="summary-total" className="money" style={{ fontSize: 18, fontWeight: 700 }}>{fmt(sub + vat)}</span>
           ) : (
             <span data-testid="carried-total" className="money" style={{ fontSize: 18, fontWeight: 700 }}>{reading.total ?? '—'}</span>
           )}

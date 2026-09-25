@@ -17,6 +17,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import {
   draftToCreateRequest,
+  draftTotals,
   fileDraftGate,
   fileDraftInvoice,
   fileSuppliedNumber,
@@ -778,3 +779,29 @@ describe('fileSuppliedNumber: ordering + refusal (EXTR27-F1, F2)', () => {
   })
 })
 
+
+describe('draftTotals (TEST-03-04)', () => {
+  const cases: Array<[string, Draft['items']]> = [
+    ['one line', [{ desc: 'A', qty: 1, price: 20.93 }]],
+    [
+      'three lines, 3-decimal qty',
+      [
+        { desc: 'A', qty: 1.005, price: 19.99 },
+        { desc: 'B', qty: 2.125, price: 0.99 },
+        { desc: 'C', qty: 0.333, price: 1000.005 },
+      ],
+    ],
+    ['empty items', []],
+    ['NaN qty', [{ desc: 'A', qty: NaN, price: 10 }]],
+  ]
+
+  it('draftTotals agrees with draftToCreateRequest', () => {
+    const wires = cases.map(([, items]) => draftToCreateRequest({ ...baseDraft, items }, baseEntity))
+    // Two cases must file real figures, or an all-null draftTotals passes the table.
+    expect(wires.filter((w) => w.total !== null)).toHaveLength(2)
+    cases.forEach(([name, items], i) => {
+      const wire = wires[i]!
+      expect(draftTotals(items), name).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total })
+    })
+  })
+})

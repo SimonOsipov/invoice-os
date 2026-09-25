@@ -117,6 +117,13 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
   return sum
 }
 
+// The filed subtotal/vat/total strings; null when any line is unparseable or there are no lines.
+// Mode A stub (TEST-03-04): returns all-null until the executor moves the math here.
+export function draftTotals(items: LineItem[]): { subtotal: string | null; vat: string | null; total: string | null } {
+  void items
+  return { subtotal: null, vat: null, total: null }
+}
+
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
 // object-literal insertion order is what crosses the network. It follows createRequest's
 // own field order (handlers.go's `type createRequest`) and InvoiceCreateInput's

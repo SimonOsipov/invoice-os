@@ -68,7 +68,14 @@ func TestIsCommaDecimal_Shapes(t *testing.T) {
 		{"1234,", true},
 		{" 12,50 ", true},
 		{"-1,50", true},
+		{"123,", true}, // a valid lead group, so only the digit-run check catches it
+		{"1234,500", true},
+		{"12345,678", true},
+		{"-1234,500", true},
+		{"12,345,67", true},
+		{"$1,234", true},
 		{"1,234", false},
+		{"-123,456", false},
 		{"1,234.56", false},
 		{"1,234,567.89", false},
 		{"1234.56", false},
@@ -390,6 +397,21 @@ func TestServiceImport_CommaDecimalDotBeforeThreeDigitCommaQuarantined(t *testin
 		t.Errorf("INV-DC persisted = %d, want 0", got)
 	}
 	assertOneCommaError(t, res.Errors, []int{2}, "subtotal")
+	assertHealthyStored(t, super, entityID)
+}
+
+// "1234,500" has three digits after the comma, so only the leading-group clause catches it.
+func TestServiceImport_CommaDecimalLongLeadingGroupQuarantined(t *testing.T) {
+	rows := [][]string{
+		mkRow("INV-LG", "2026-01-10", "T1", "B1", "NGN", "1234.50", "0.00", "1234.50", "Item", "1234,500", "1.00"), // sheet 2
+		healthyRow(), // sheet 3
+	}
+	super, entityID, res := commaDecimalImport(t, "COMMA-LEAD", rows, false)
+
+	if got := countInvoicesByNumber(t, super, entityID, "INV-LG"); got != 0 {
+		t.Errorf("INV-LG persisted = %d, want 0", got)
+	}
+	assertOneCommaError(t, res.Errors, []int{2}, "line_quantity")
 	assertHealthyStored(t, super, entityID)
 }
 

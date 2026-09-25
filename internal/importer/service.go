@@ -368,15 +368,19 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 	return ""
 }
 
-// isCommaDecimal reports whether raw uses a comma as the decimal mark: a dot
-// before a comma, or a comma not followed by exactly three digits.
+// leadGroupRe is the only valid text before a grouping comma.
+var leadGroupRe = regexp.MustCompile(`^-?[0-9]{1,3}$`)
+
+// isCommaDecimal reports whether raw has a comma that is not thousands
+// grouping. Grouping means the text before the first comma is an optional
+// sign and 1-3 digits, and every comma is followed by exactly three digits.
 func isCommaDecimal(raw string) bool {
 	s := strings.TrimSpace(raw)
 	c := strings.IndexByte(s, ',')
 	if c < 0 {
 		return false
 	}
-	if strings.Contains(s[:c], ".") {
+	if !leadGroupRe.MatchString(s[:c]) {
 		return true
 	}
 	for i := 0; i < len(s); i++ {

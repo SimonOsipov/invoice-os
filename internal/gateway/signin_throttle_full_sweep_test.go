@@ -38,3 +38,33 @@ func TestSignInThrottle_FullMapDoesNotSweepPerCall(t *testing.T) {
 		t.Fatal("new address once held keys expired = false, want true")
 	}
 }
+
+// The full-map gate opens at the earliest held expiry, not a later one.
+// All steps stay inside one minute, so the cadence sweep never runs.
+func TestSignInThrottle_FullMapFreesEarliestExpiryOnTime(t *testing.T) {
+	const window = 30 * time.Second
+	th, clk := newTestThrottle(3, window)
+	reserveN(t, th, "a@x.com", 1) // t0
+	clk.Advance(10 * time.Second)
+	reserveN(t, th, "b@x.com", 1) // t0+10s
+	clk.Advance(10 * time.Second)
+	reserveN(t, th, "c@x.com", 1) // t0+20s
+	if th.Reserve("d@x.com") {
+		t.Fatal("d at t0+20s on a full map = true, want false")
+	}
+	clk.Advance(10*time.Second - time.Nanosecond)
+	if th.Reserve("d@x.com") {
+		t.Fatal("d at t0+30s-1ns = true, want false")
+	}
+	clk.Advance(time.Nanosecond)
+	if !th.Reserve("d@x.com") {
+		t.Fatal("d at t0+30s, when a expired = false, want true")
+	}
+	if th.Reserve("e@x.com") {
+		t.Fatal("e at t0+30s on a refilled map = true, want false")
+	}
+	clk.Advance(10 * time.Second)
+	if !th.Reserve("e@x.com") {
+		t.Fatal("e at t0+40s, when b expired = false, want true")
+	}
+}

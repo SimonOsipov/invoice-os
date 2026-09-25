@@ -204,3 +204,28 @@ describe('F3: a bfcache restore drops the held state', () => {
     expect(postedStates()).toEqual([STATE])
   })
 })
+
+describe('held state: adversarial', () => {
+  it('a retry after a 401 that crosses 9 min posts nothing and shows Continue with email', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'invalid email or password' }), { status: 401 }))
+    await bootAt(`/?state=${STATE}&signin=ready`)
+    await fillAndSubmit(onlyDialog())
+    expect(postedStates()).toEqual([STATE])
+    expectFields(onlyDialog())
+    await advance(HOLD_MS)
+    await act(async () => onlyDialog().querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    expect(fetchMock, 'one post only').toHaveBeenCalledTimes(1)
+    expectContinue(onlyDialog())
+  })
+
+  it('a bfcache restore mid-submit drops the state; no second post', async () => {
+    await bootAt(`/?state=${STATE}&signin=ready`)
+    await fillAndSubmit(onlyDialog())
+    expect(postedStates()).toEqual([STATE])
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
+    expectContinue(onlyDialog())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})

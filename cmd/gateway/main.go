@@ -241,6 +241,20 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 	}
 }
 
+// handoff holds the public sign-in hand-off handlers main mounts outside /api/.
+type handoff struct {
+	SignIn, Exchange http.Handler
+}
+
+// handoffHandlers builds the sign-in and exchange handlers against GoTrue at authURL.
+// Stub until AUTH-05-03 lands.
+func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+	})
+	return handoff{SignIn: stub, Exchange: stub}
+}
+
 // mustParseSiteURL parses AUTH_SITE_URL. Unset is allowed and logged; a value that is not
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {

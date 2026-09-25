@@ -881,15 +881,21 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 // gives IMPV-CLEAN-2 a warning only and IMPV-VATWRONG a blocking error.
 func runDryRunWarningOnly(t *testing.T) BatchResult {
 	t.Helper()
+	return runDryRunClean2(t, []invoice.Violation{{RuleKey: "advisory-x", Severity: "warning"}})
+}
+
+// runDryRunClean2 is runDryRunWarningOnly with IMPV-CLEAN-2's violations given.
+func runDryRunClean2(t *testing.T, clean2 []invoice.Violation) BatchResult {
+	t.Helper()
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	tenantID := seedTenant(t, super, "TEST-03-02 warning-only tenant")
 	entityID := seedEntityWithTIN(t, super, tenantID, "TEST-03-02 warning-only entity", "12345678-0001")
 
 	fg := &fakeGate{evaluateResult: invoice.EvalResult{
-		RuleSetVersion: 1,
+		RuleSetVersion: 2,
 		ByRef: map[string][]invoice.Violation{
-			"IMPV-CLEAN-2":  {{RuleKey: "advisory-x", Severity: "warning"}},
+			"IMPV-CLEAN-2":  clean2,
 			"IMPV-VATWRONG": {{RuleKey: "vat-standard-rate", Severity: "error"}},
 		},
 	}}
@@ -948,5 +954,32 @@ func TestServiceImport_DryRunWarningOnlyInvoiceHasNoInvoiceID(t *testing.T) {
 	}
 	if !impvHasViolation(found.Violations, "advisory-x") {
 		t.Errorf("IMPV-CLEAN-2 Violations = %+v, want advisory-x", found.Violations)
+	}
+}
+
+// A warning listed before an error must not mask it: the invoice blocks.
+func TestServiceImport_DryRunWarningPlusErrorInvoiceCountsViolating(t *testing.T) {
+	res := runDryRunClean2(t, []invoice.Violation{
+		{RuleKey: "advisory-x", Severity: "warning"},
+		{RuleKey: "tin-format", Severity: "error"},
+	})
+
+	if res.InvoicesClean != 1 || res.InvoicesWithViolations != 2 {
+		t.Errorf("(InvoicesClean, InvoicesWithViolations) = (%d, %d), want (1, 2)", res.InvoicesClean, res.InvoicesWithViolations)
+	}
+	if len(res.InvoiceViolations) == 0 {
+		t.Fatal("InvoiceViolations is empty, want IMPV-CLEAN-2 and IMPV-VATWRONG")
+	}
+	var clean2 *InvoiceViolations
+	for i := range res.InvoiceViolations {
+		if res.InvoiceViolations[i].InvoiceNumber == "IMPV-CLEAN-2" {
+			clean2 = &res.InvoiceViolations[i]
+		}
+	}
+	if clean2 == nil {
+		t.Fatalf("InvoiceViolations = %+v, want an IMPV-CLEAN-2 entry", res.InvoiceViolations)
+	}
+	if !impvHasViolation(clean2.Violations, "advisory-x") || !impvHasViolation(clean2.Violations, "tin-format") {
+		t.Errorf("IMPV-CLEAN-2 Violations = %+v, want advisory-x and tin-format", clean2.Violations)
 	}
 }

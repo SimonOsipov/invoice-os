@@ -571,6 +571,68 @@ func TestTransition_BlockedLoserSeesCommittedWinnerStatus(t *testing.T) {
 	}
 }
 
+// When the lock holder rolls back, the blocked Transition waits (no NOWAIT /
+// SKIP LOCKED), then applies its own edge exactly once.
+func TestTransition_BlockedTransitionProceedsAfterHolderRollsBack(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+
+	tenantID := seedTenant(t, super, "TEST-03-02 row-lock rollback tenant")
+	entityID := seedEntity(t, super, tenantID, "TEST-03-02 row-lock rollback entity")
+	store := NewStore(app)
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, CreateInput{EntityID: entityID, InvoiceNumber: "TEST-03-02-LOCK-RB"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin holder tx: %v", err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+
+	var holderPID int
+	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatalf("read holder pid: %v", err)
+	}
+	var locked string
+	if err := holder.QueryRow(ctx, `SELECT id FROM invoices WHERE id = $1 FOR UPDATE`, inv.ID).Scan(&locked); err != nil {
+		t.Fatalf("holder lock the invoice row: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Transition(c, inv.ID, StatusValidated)
+		done <- err
+	}()
+
+	waitBlockedOn(t, super, holderPID)
+	if _, err := holder.Exec(ctx, `UPDATE invoices SET status = 'validated' WHERE id = $1`, inv.ID); err != nil {
+		t.Fatalf("holder update status: %v", err)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("holder rollback: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("blocked Transition(->validated) err = %v, want nil: the holder rolled back", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("Store.Transition never returned after the holder rolled back")
+	}
+
+	if st := statusOf(t, super, inv.ID); st != StatusValidated {
+		t.Errorf("status after the rollback = %q, want %q", st, StatusValidated)
+	}
+	if hn := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND to_status = 'validated'`, inv.ID); hn != 1 {
+		t.Errorf("invoice_status_history rows (to_status=validated) = %d, want 1", hn)
+	}
+}
+
 // INV-SM-07: after a legal transition, the newest invoice_status_history.actor
 // and the newest audit_log.actor both equal the caller's Subject.
 // (TestTransition_LegalEdgesSucceedWithTripleWrite already asserts this per

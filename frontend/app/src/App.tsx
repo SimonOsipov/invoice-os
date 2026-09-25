@@ -1838,6 +1838,7 @@ export default function App() {
     () => !autoPersona && !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
   const startBounced = useRef(false)
+  const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
   // token already past its `exp` resolves to NO session — entering the workspace on one
@@ -2037,9 +2038,11 @@ export default function App() {
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || autoPersona || authStart || handoffPending) return
+    if (activeSession || autoPersona || authStart || handoffPending || frontDoorBounced.current) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
+      // The ref keeps StrictMode to one navigation.
+      frontDoorBounced.current = true
       // Store only the query the codec authored: parse the live location, re-serialise it,
       // keep the query half. An unowned param is discarded here, before storage is touched.
       const at = parseLocation(window.location.pathname, window.location.search)

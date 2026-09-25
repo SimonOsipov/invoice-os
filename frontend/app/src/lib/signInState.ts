@@ -5,6 +5,8 @@ import { landingBase } from '../auth'
 export const SIGN_IN_STATE_KEY = 'invoice-os.signInState'
 export const SIGN_IN_STATE_SCHEMA_VERSION = 1
 export const SIGN_IN_STATE_TTL_MS = 10 * 60 * 1000
+// The TTL minus landing's 9-minute hold, so a reused state is still live when landing posts it.
+export const SIGN_IN_STATE_REUSE_MS = 60_000
 
 export type SignInOutcome = 'ready' | 'failed' | 'no-workspace'
 
@@ -20,8 +22,8 @@ function mint(): string {
     .replace(/=+$/, '')
 }
 
-// The stored state when the blob is well-formed and under the TTL, else null.
-function liveState(raw: string | null, now: number): string | null {
+// The stored state and its mint time when the blob is well-formed, else null.
+function storedState(raw: string | null): { s: string; at: number } | null {
   if (raw == null) return null
   let parsed: unknown
   try {
@@ -40,14 +42,21 @@ function liveState(raw: string | null, now: number): string | null {
   ) {
     return null
   }
+  return { s: p.s, at: p.at }
+}
+
+// The stored state when under the TTL, else null.
+function liveState(raw: string | null, now: number): string | null {
+  const p = storedState(raw)
+  if (p == null) return null
   return p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.s : null
 }
 
-// Reuses a live state, else mints and stores one. Storage failure yields an unstored state.
+// Reuses a state minted under a minute ago, else mints and stores one. Storage failure yields an unstored state.
 export function ensureSignInState(now: number = Date.now()): string {
   try {
-    const s = liveState(sessionStorage.getItem(SIGN_IN_STATE_KEY), now)
-    if (s) return s
+    const p = storedState(sessionStorage.getItem(SIGN_IN_STATE_KEY))
+    if (p && p.at <= now && now - p.at < SIGN_IN_STATE_REUSE_MS) return p.s
   } catch (e) {
     console.warn(`[signInState] failed to store state at "${SIGN_IN_STATE_KEY}":`, e)
     return mint()

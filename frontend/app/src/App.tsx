@@ -3,7 +3,8 @@ import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type S
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
-import { ensureSignInState, landingSignInUrl } from './lib/signInState'
+import { consumeSignInState, ensureSignInState, landingSignInUrl } from './lib/signInState'
+import { HANDOFF_PARAM, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -1818,13 +1819,23 @@ export default function App() {
   // "Choose an account" picker — the landing → app hand-off never flashes that redundant
   // card before the mint → /me round trip resolves. Declared BEFORE `session` because the
   // session initializer below reads it.
+  const [bootSession] = useState(() => resolveBootSession())
+  // D18: a live stored hand-off session wins over `?handoff=` and `?persona=`.
+  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession))
+  // D9: an unconfigured gateway ignores the code (it is still stripped).
+  const [handoffCode] = useState(() =>
+    liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
+  )
+  const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
+  const redeemStarted = useRef(false)
   const [autoPersona] = useState<PersonaId | null>(() => {
+    if (liveHandoff || handoffCode) return null
     const p = new URLSearchParams(window.location.search).get('persona')
     return shouldAutoSignIn(p) ? (p as PersonaId) : null
   })
-  // `?auth=start` (D25 step 3): landing asks for a state. `?persona=` wins over it.
+  // `?auth=start` (D25 step 3): landing asks for a state. `?handoff=` and `?persona=` win over it.
   const [authStart] = useState(
-    () => !autoPersona && new URLSearchParams(window.location.search).get('auth') === 'start',
+    () => !autoPersona && !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
   )
   const startBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
@@ -1832,13 +1843,14 @@ export default function App() {
   // token already past its `exp` resolves to NO session — entering the workspace on one
   // only buys a dashboard that 401s a moment later.
   //
-  // A deep-link hand-off boots with NO session even when one is stored: the user just chose
-  // a profile on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
+  // A deep-link hand-off (`?persona=` or `?handoff=`) boots with NO session even when one is
+  // stored, unless that stored session is a live hand-off session (D18): the user just chose
+  // on the landing page and that choice wins (see shouldAutoSignIn). Rehydrating
   // here would render the PREVIOUS persona's workspace for the duration of the mint → /me
   // round trip — and re-persist it via the mirror effect below — before swapping identity
   // under the user. Starting empty shows the loading splash for the persona actually being
   // signed in, and the same mirror effect clears the superseded session on that first pass.
-  const [seat, setSeat] = useState<Session | null>(() => (autoPersona ? null : resolveBootSession()))
+  const [seat, setSeat] = useState<Session | null>(() => (autoPersona || handoffCode ? null : bootSession))
   // Demo-only stand-in, never persisted: `standIn === null` iff the active identity IS the seat.
   const [standIn, setStandIn] = useState<Session | null>(null)
   const [carriedView, setCarriedView] = useState<View | null>(null)
@@ -1970,13 +1982,41 @@ export default function App() {
   // replaceState, not a navigation: it must not add a history entry the back button can
   // bounce off. Reads the URL directly rather than depending on render state — this is the
   // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
-  // `auth` is one-shot too, and is stripped whether it was used or not.
+  // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
+  // suppressed by a live hand-off session (D18) is stripped as well.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if ((autoPersona && params.has('persona')) || params.has('auth')) {
+    if (((autoPersona || liveHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
       window.history.replaceState(null, '', window.location.pathname)
     }
-  }, [autoPersona])
+  }, [autoPersona, liveHandoff])
+
+  // D9/D25: redeem the code once (the ref survives StrictMode's double effect). No stored
+  // state means a code this tab never asked for: no exchange, failure arm.
+  useEffect(() => {
+    const base = gatewayBase()
+    if (!handoffCode || !base || redeemStarted.current) return
+    redeemStarted.current = true
+    const state = consumeSignInState()
+    const redemption = state
+      ? redeemHandoff(base, handoffCode, state)
+      : Promise.reject(new Error('no sign-in state in this tab'))
+    redemption.then(
+      (session) => {
+        setSeat(session)
+        setHandoffPending(false)
+      },
+      (err: unknown) => {
+        console.warn('[app] hand-off redemption failed:', err)
+        // Exchange never answers 403 (D4), so a 403 is /me's: no workspace (D10, D23).
+        const outcome = err instanceof ApiError && err.status === 403 ? 'no-workspace' : 'failed'
+        const dest = landingSignInUrl(ensureSignInState(), outcome)
+        // Stays pending while leaving, so the front door adds no second navigation.
+        if (dest) window.location.href = dest
+        else setHandoffPending(false)
+      },
+    )
+  }, [handoffCode])
 
   // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.
   useEffect(() => {
@@ -1992,11 +2032,11 @@ export default function App() {
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
   // page rather than being offered a second place to sign in here.
   //
-  // Suppressed when a ?persona= deep link is present: that hand-off is ABOUT to mint a
-  // fresh token, so bouncing to landing would break landing → app. Also skipped when no
+  // Suppressed while a ?persona= mint or a ?handoff= redemption is in flight (the failed
+  // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || autoPersona || authStart) return
+    if (activeSession || autoPersona || authStart || handoffPending) return
     const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // Store only the query the codec authored: parse the live location, re-serialise it,
@@ -2006,7 +2046,7 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [activeSession, autoPersona, authStart])
+  }, [activeSession, autoPersona, authStart, handoffPending])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
@@ -2015,6 +2055,7 @@ export default function App() {
     // picker, so the landing → app hand-off doesn't flash "Choose an account" before the
     // mint → /me round trip resolves.
     if (autoPersona) return <SignInLoading persona={APP_PERSONAS[autoPersona]} />
+    if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has
     // already started that navigation; render nothing rather than flash a picker the user

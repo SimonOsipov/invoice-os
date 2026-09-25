@@ -148,7 +148,7 @@ describe('AC-2: Workspace provably does not mount while ?persona= is live', () =
   it('ordering_theSeatInitialiserIsWhatGuaranteesIt', () => {
     const src = readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8')
     expect(
-      /autoPersona \? null :/.test(src),
+      /autoPersona \|\| handoffCode \? null :/.test(src),
       'App.tsx no longer starts `seat` at null when autoPersona is set -- the ordering claim above must be re-derived',
     ).toBe(true)
   })

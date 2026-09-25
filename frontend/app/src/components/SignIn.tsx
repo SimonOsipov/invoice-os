@@ -97,12 +97,10 @@ export function SignIn({ signingIn, onPick }: { signingIn: PersonaId | null; onP
   )
 }
 
-// Loading splash shown while a landing deep-link (?persona=) auto-sign-in is in flight
-// (App.tsx render gate). It replaces the interactive persona picker for that window so
-// the landing → app hand-off shows a neutral "signing you in" state instead of flashing
-// the "Choose an account" card before the mint → /me round trip resolves. Same card
-// chrome as SignIn so the two never visually jump.
-export function SignInLoading({ persona }: { persona: Persona }) {
+// Loading splash shown while a `?persona=` auto-sign-in or a `?handoff=` redemption is in
+// flight (App.tsx render gate), so the picker never flashes first. With no persona (the
+// hand-off) it reads "Opening your workspace…". Same card chrome as SignIn.
+export function SignInLoading({ persona }: { persona?: Persona }) {
   return (
     <div
       className="asc-app"
@@ -124,7 +122,7 @@ export function SignInLoading({ persona }: { persona: Persona }) {
 
         <div style={{ padding: '44px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Spinner />
-          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-2)' }}>Signing in as {persona.name}…</div>
+          <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-2)' }}>{persona ? `Signing in as ${persona.name}…` : 'Opening your workspace…'}</div>
           <div style={{ fontSize: 12.5, color: 'var(--fg-3)' }}>Resolving your workspace with the backend.</div>
         </div>
       </div>

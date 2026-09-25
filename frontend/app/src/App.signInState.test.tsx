@@ -352,6 +352,24 @@ describe('?auth=start mints a fresh state', () => {
     expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
   })
 
+  // Under a minute old, ensureSignInState would reuse it; only a mint replaces it.
+  it('auth=start replaces a state under a minute old, StrictMode included', () => {
+    sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - 30_000 }))
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/?auth=start')
+    const { hrefWrites } = interceptHref()
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(s, 'the stored state is not reused').not.toBe(X)
+    expect(storedAt()).toBe(NOW)
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+  })
+
   it('control: the front door still reuses the same live state', () => {
     sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - 30_000 }))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')

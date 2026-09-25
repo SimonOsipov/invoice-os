@@ -749,6 +749,8 @@ test("deployed app: Back past a company switch cannot resume the previous compan
 const VERIFIED = '[title="Tenant verified via /v1/me"]'
 const SESSION_KEY = 'invoice-os.session'
 const JWT_IN_URL = /eyJ[\w-]+\.[\w-]+\./
+// internal/gateway/handoff.go HandoffTTL.
+const HANDOFF_TTL_MS = 60_000
 // frontend/landing/src/App.tsx SIGN_IN_OUTCOMES (D23) and src/signIn.ts INCORRECT (D12).
 const HANDOFF_FAILED = "We couldn't open your workspace. Sign in again."
 const INCORRECT = 'Email or password is incorrect.'
@@ -779,6 +781,16 @@ async function submitSignIn(page: Page, email: string, password: string): Promis
   await dialog.getByLabel('Work email', { exact: true }).fill(email)
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByRole('button', { name: 'Sign in →', exact: true }).click()
+}
+
+// Origin and path only: a failure message must not print the leaked secret.
+function leakingUrls(urls: string[], token?: string): string[] {
+  return urls
+    .filter((u) => JWT_IN_URL.test(u) || (token != null && u.includes(token)))
+    .map((u) => {
+      const at = new URL(u)
+      return at.origin + at.pathname.replace(/eyJ[\w.-]*/g, '<jwt>')
+    })
 }
 
 function isHandoffNavigation(url: string): boolean {
@@ -819,17 +831,17 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
   await expectInWorkspace(page, account)
   await expect(page.getByRole('heading', { level: 1, name: 'Audit log', exact: true })).toBeVisible()
   await expect(page, 'the restored destination did not settle on /audit').toHaveURL(/\/audit$/)
-  expect(new URL(page.url()).searchParams.has('handoff'), `?handoff= survived at ${page.url()}`).toBe(false)
+  expect(new URL(page.url()).searchParams.has('handoff'), '?handoff= survived the redemption').toBe(false)
 
   const raw = await page.evaluate((key) => localStorage.getItem(key), SESSION_KEY)
   const session = JSON.parse(raw ?? 'null') as { token?: string; handoff?: boolean } | null
   expect(session?.handoff, 'the stored session is not marked as a hand-off').toBe(true)
+  // Positive control for storedSession, which the CSRF journey reads only for absence.
+  expect(await storedSession(page.context()), 'storedSession missed the app session').toBe(raw)
   const token = session!.token!
-  expect(token).toMatch(JWT_IN_URL)
-  for (const url of urls) {
-    expect(url.includes(token), `the token appeared in ${url}`).toBe(false)
-    expect(url, 'a JWT appeared in a URL').not.toMatch(JWT_IN_URL)
-  }
+  expect(JWT_IN_URL.test(token), 'the stored token is not a JWT').toBe(true)
+  expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+  expect(leakingUrls(urls, token), 'the token or a JWT appeared in these URLs').toEqual([])
 
   // The code's own state, read off the app -> landing navigation: a right-state second redemption.
   const code = new URL(handoffNav.url()).searchParams.get('handoff')!
@@ -884,8 +896,9 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
     submitSignIn(page, account.email, account.password),
   ])
   await expectInWorkspace(page, account)
-  expect(new URL(page.url()).searchParams.has('handoff'), `?handoff= survived at ${page.url()}`).toBe(false)
-  for (const url of urls) expect(url, 'a JWT appeared in a URL').not.toMatch(JWT_IN_URL)
+  expect(new URL(page.url()).searchParams.has('handoff'), '?handoff= survived the redemption').toBe(false)
+  expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+  expect(leakingUrls(urls), 'a JWT appeared in these URLs').toEqual([])
 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
@@ -922,6 +935,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
   })
 
   await test.step("a tab holding its own state is refused, and the attacker's code is spent", async () => {
+    const mintedAt = Date.now()
     const c2 = await signInForCode(account.email, account.password, attackerState)
     const context = await browser.newContext()
     try {
@@ -936,6 +950,8 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
         victim.goto(`${APP_URL}/?handoff=${c2}`),
       ])
       expect(exchange.status(), 'the exchange with the victim tab state').toBe(400)
+      // An expired code answers the same 400, which would prove nothing about the state.
+      expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
       await expect(victim.getByRole('dialog', { name: 'Sign in' })).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()

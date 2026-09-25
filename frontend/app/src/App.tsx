@@ -3,6 +3,7 @@ import { APP_PERSONAS, landingBase, signIn, type Persona, type PersonaId, type S
 import { SignIn, SignInLoading } from './components/SignIn'
 import { resolveBootSession, saveSession, clearSession, shouldAutoSignIn } from './lib/session'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
+import { ensureSignInState, landingSignInUrl } from './lib/signInState'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, defaultDraft, resolveActiveClient } from './lib/clients'
@@ -1821,6 +1822,11 @@ export default function App() {
     const p = new URLSearchParams(window.location.search).get('persona')
     return shouldAutoSignIn(p) ? (p as PersonaId) : null
   })
+  // `?auth=start` (D25 step 3): landing asks for a state. `?persona=` wins over it.
+  const [authStart] = useState(
+    () => !autoPersona && new URLSearchParams(window.location.search).get('auth') === 'start',
+  )
+  const startBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
   // token already past its `exp` resolves to NO session — entering the workspace on one
@@ -1964,12 +1970,23 @@ export default function App() {
   // replaceState, not a navigation: it must not add a history entry the back button can
   // bounce off. Reads the URL directly rather than depending on render state — this is the
   // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
+  // `auth` is one-shot too, and is stripped whether it was used or not.
   useEffect(() => {
-    if (!autoPersona) return
-    if (new URLSearchParams(window.location.search).has('persona')) {
+    const params = new URLSearchParams(window.location.search)
+    if ((autoPersona && params.has('persona')) || params.has('auth')) {
       window.history.replaceState(null, '', window.location.pathname)
     }
   }, [autoPersona])
+
+  // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.
+  useEffect(() => {
+    if (!authStart || startBounced.current) return
+    const dest = landingBase() ? landingSignInUrl(ensureSignInState(), 'ready') : null
+    if (dest) {
+      startBounced.current = true
+      window.location.href = dest
+    }
+  }, [authStart])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
@@ -1979,8 +1996,8 @@ export default function App() {
   // fresh token, so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (activeSession || autoPersona) return
-    const dest = landingBase()
+    if (activeSession || autoPersona || authStart) return
+    const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
     if (dest) {
       // Store only the query the codec authored: parse the live location, re-serialise it,
       // keep the query half. An unowned param is discarded here, before storage is touched.
@@ -1989,8 +2006,10 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [activeSession, autoPersona])
+  }, [activeSession, autoPersona, authStart])
 
+  // Mounting Workspace would clear the captured destination before the start bounce leaves.
+  if (authStart && landingBase()) return null
   if (!activeSession) {
     // A deep-link auto-sign-in is in flight: show a loading splash, NOT the persona
     // picker, so the landing → app hand-off doesn't flash "Choose an account" before the

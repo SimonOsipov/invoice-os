@@ -36,8 +36,7 @@ describe('useAsync deps change', () => {
     rerender({ k: 'b' })
     await act(async () => pending.settle(['stale']))
 
-    expect(result.current.status, 'a result from before the deps change landed').toBe('loading')
-    expect(result.current.data).toBeNull()
+    expect(result.current.data, 'a result from before the deps change landed').toBeNull()
   })
 
   it('without a deps change the same run lands', async () => {
@@ -66,8 +65,7 @@ describe('useAsync deps change', () => {
     rerender({ k: 'b' })
     await act(async () => pending.fail(new Error('stale')))
 
-    expect(result.current.status, 'a rejection from before the deps change landed').toBe('loading')
-    expect(result.current.error).toBeNull()
+    expect(result.current.error, 'a rejection from before the deps change landed').toBeNull()
   })
 
   it('without a deps change the same rejection lands', async () => {

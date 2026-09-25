@@ -370,6 +370,14 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 	return ""
 }
 
+// isCommaDecimal reports whether raw uses a comma as the decimal mark.
+// Stub: not implemented yet.
+func isCommaDecimal(raw string) bool { return false }
+
+// commaDecimalField returns the first numeric field with a comma-decimal cell, or "".
+// Stub: not implemented yet, and not called from the classify loop.
+func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string { return "" }
+
 // buildCreateInput assembles one invoice.CreateInput for a READY group:
 // header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total)
 // come from the group's first row (they agree across the group, by

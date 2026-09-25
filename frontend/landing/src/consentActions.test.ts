@@ -41,7 +41,8 @@ const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
   ['whole-location assignment', /\blocation\s*=[^=]/],
   ['computed location member', /location\s*\[/],
   ['computed window member', /window\s*\[/],
-  ['history navigation', /\bhistory\s*\./],
+  // replaceState is exempt: App.tsx strips the boot sign-in params with it, and it cannot reload.
+  ['history navigation', /\bhistory\s*\.(?!replaceState\s*\()/],
   // A self-href anchor clicked in script is a reload with no location reference.
   ['programmatic click', /\.click\s*\(/],
   // ga-disable assembled from fragments.
@@ -97,6 +98,7 @@ describe('T3-9: no page reload and no ga-disable (USER DECISION 1)', () => {
       'const privacy = isPrivacyPath(window.location.pathname)',
       "const hostname = opts?.hostname ?? window.location.hostname",
       "w.gtag('config', id)",
+      "window.history.replaceState(null, '', url.pathname + url.search + url.hash)",
     ]
     for (const sample of legal) {
       for (const [label, re] of FORBIDDEN) {

@@ -19,12 +19,30 @@ import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { isPrivacyPath } from './route'
+import { readSignInState } from './signIn'
+
+// D23 copy for the app's ?signin= outcome; `ready` opens the modal with no message.
+const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
+  ['ready', undefined],
+  ['no-workspace', 'This account has no workspace yet.'],
+  ['failed', "We couldn't open your workspace. Sign in again."],
+])
+
+// Pure read: the strip runs in an effect, so StrictMode's double init sees the same URL.
+function readSignInBoot(search: string) {
+  const state = readSignInState(search)
+  const outcome = new URLSearchParams(search).get('signin') ?? ''
+  return { state, error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) || state !== null }
+}
 
 // The whole page lives under `.asc-app` — that scope defines the design-system
 // tokens (--accent, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label,
 // .mono, .grid-bg, .dot-bg) that every section relies on.
 export default function App() {
-  const [signInOpen, setSignInOpen] = useState(false)
+  // The state is held in memory only (D25 step 3), never in storage.
+  const [signInBoot] = useState(() => readSignInBoot(window.location.search))
+  const [signInOpen, setSignInOpen] = useState(signInBoot.open)
+  const [signInError, setSignInError] = useState(signInBoot.error)
   const [demoOpen, setDemoOpen] = useState(false)
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
@@ -38,6 +56,15 @@ export default function App() {
   }
   const onSignIn = () => setSignInOpen(true)
   const privacy = isPrivacyPath(window.location.pathname)
+
+  // Strip `state` and `signin` for any value; every other param stays.
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('state') && !url.searchParams.has('signin')) return
+    url.searchParams.delete('state')
+    url.searchParams.delete('signin')
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash)
+  }, [])
 
   // Page-level depth, deliberately outside Nav.tsx's scroll effect: that one owns the
   // nav indicator, and folding analytics in makes every nav change an analytics change.
@@ -111,7 +138,16 @@ export default function App() {
           }}
         />
       )}
-      {signInOpen && <SignInModal onClose={() => setSignInOpen(false)} />}
+      {signInOpen && (
+        <SignInModal
+          state={signInBoot.state}
+          initialError={signInError}
+          onClose={() => {
+            setSignInOpen(false)
+            setSignInError(undefined)
+          }}
+        />
+      )}
       {demoOpen && <DemoModal onClose={() => setDemoOpen(false)} />}
     </div>
   )

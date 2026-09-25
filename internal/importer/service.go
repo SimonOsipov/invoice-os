@@ -130,9 +130,7 @@ var headerFieldOrder = []string{
 }
 
 // decimalNumberRe is a best-effort "does this look like a plain decimal
-// number" check, used only for post-Create-error field attribution
-// (bestEffortBadNumericField) — never to pre-reject input (that's Postgres's
-// job at Create, per [review-authority]).
+// number" check.
 var decimalNumberRe = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
 
 // invoiceGroup buffers the rows sharing one mapped invoice_number value

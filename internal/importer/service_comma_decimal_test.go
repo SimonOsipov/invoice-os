@@ -293,3 +293,158 @@ func TestServiceImport_CommaDecimalBeatsHeaderConflictReason(t *testing.T) {
 	}
 	assertOneCommaError(t, res.Errors, []int{2, 3}, "subtotal")
 }
+
+// assertHealthyStored checks healthyRow's invoice landed with its values.
+func assertHealthyStored(t *testing.T, super *pgxpool.Pool, entityID string) {
+	t.Helper()
+	id := invoiceIDByNumber(t, super, entityID, "INV-OK")
+	for q, want := range map[string]string{
+		`SELECT subtotal::text FROM invoices WHERE id = $1`:             "1234.56",
+		`SELECT vat::text FROM invoices WHERE id = $1`:                  "92.59",
+		`SELECT total::text FROM invoices WHERE id = $1`:                "1327.15",
+		`SELECT quantity::text FROM line_items WHERE invoice_id = $1`:   "2.000",
+		`SELECT unit_price::text FROM line_items WHERE invoice_id = $1`: "617.28",
+	} {
+		if got := readNumericText(t, super, q, id); got == nil || *got != want {
+			t.Errorf("INV-OK %s = %v, want %q", q, got, want)
+		}
+	}
+}
+
+func healthyRow() []string {
+	return mkRow("INV-OK", "2026-01-11", "T2", "B2", "NGN", "1,234.56", "92.59", "1,327.15", "Item", "2", "617.28")
+}
+
+// Every numeric field, every AC shape, with the bad cell only on the group's third row.
+func TestServiceImport_CommaDecimalEachFieldOnThirdRow(t *testing.T) {
+	col := map[string]int{"subtotal": 5, "vat": 6, "total": 7, "line_quantity": 9, "line_unit_price": 10}
+	shapes := map[string]string{"dot_before_comma": "1.234,56", "two_digits": "12,50", "one_digit": "1,5", "negative": "-1,50", "padded": "  12,50  "}
+	fields := []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"}
+	if len(fields) != len(col) || len(shapes) == 0 {
+		t.Fatalf("fixture tables out of sync")
+	}
+	for _, field := range fields {
+		for shape, cell := range shapes {
+			t.Run(field+"/"+shape, func(t *testing.T) {
+				base := func() []string {
+					return mkRow("INV-F", "2026-01-10", "T1", "B1", "NGN", "30.00", "0.00", "30.00", "Item", "1", "10.00")
+				}
+				bad := base()
+				bad[col[field]] = cell
+				rows := [][]string{base(), base(), bad, healthyRow()} // sheets 2,3,4,5
+				super, entityID, res := commaDecimalImport(t, "COMMA-"+field+"-"+shape, rows, false)
+
+				if got := countInvoicesByNumber(t, super, entityID, "INV-F"); got != 0 {
+					t.Errorf("INV-F persisted = %d, want 0", got)
+				}
+				assertOneCommaError(t, res.Errors, []int{2, 3, 4}, field)
+				if want := field + " " + commaDecimalMsg; !strings.HasPrefix(res.Errors[0].Message, want) {
+					t.Errorf("Message = %q, want prefix %q", res.Errors[0].Message, want)
+				}
+				if res.RowsTotal != 4 || res.RowsInvalid != 3 || res.RowsValid != 1 || res.ReadyInvoices != 1 || res.QuarantinedInvoices != 1 {
+					t.Errorf("counters (total=%d valid=%d invalid=%d ready=%d quarantined=%d), want (4,1,3,1,1)",
+						res.RowsTotal, res.RowsValid, res.RowsInvalid, res.ReadyInvoices, res.QuarantinedInvoices)
+				}
+				assertHealthyStored(t, super, entityID)
+			})
+		}
+	}
+}
+
+func TestIsCommaDecimal_MoreShapes(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"1.234.567,89", true},
+		{"1 234,56", true},
+		{"\t12,50\n", true},
+		{",50", true},
+		{",", true},
+		{"1,23", true},
+		{"1,234,567", false},
+		{"-1,234.56", false},
+		{" 1,234 ", false},
+		{"1,234.5", false},
+		{"\t \n", false},
+		{"0", false},
+	}
+	for _, tc := range cases {
+		if got := isCommaDecimal(tc.raw); got != tc.want {
+			t.Errorf("isCommaDecimal(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// Whitespace-only and missing (short-row) cells read as blank, never as comma-decimal.
+func TestServiceImport_CommaDecimalBlankAndShortCellsNotQuarantined(t *testing.T) {
+	short := mkRow("INV-S", "2026-01-10", "T1", "B1", "NGN", "10.00", "0.00", "10.00", "Item", "1", "10.00")[:9]
+	rows := [][]string{
+		mkRow("INV-W", "2026-01-10", "T1", "B1", "NGN", "10.00", " \t ", "10.00", "Item", "1", "10.00"),
+		short,
+		healthyRow(),
+	}
+	super, entityID, res := commaDecimalImport(t, "COMMA-BLANK", rows, false)
+
+	for _, re := range res.Errors {
+		if strings.Contains(re.Message, commaDecimalMsg) {
+			t.Errorf("unexpected comma-decimal error %+v", re)
+		}
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "INV-W"); got != 1 {
+		t.Errorf("INV-W persisted = %d, want 1", got)
+	}
+	w := invoiceIDByNumber(t, super, entityID, "INV-W")
+	if got := readNumericText(t, super, `SELECT vat::text FROM invoices WHERE id = $1`, w); got != nil {
+		t.Errorf("INV-W vat = %q, want NULL", *got)
+	}
+	assertHealthyStored(t, super, entityID)
+}
+
+// A comma cell on a short row's last present column is still caught.
+func TestServiceImport_CommaDecimalOnShortRowQuarantined(t *testing.T) {
+	short := mkRow("INV-SC", "2026-01-10", "T1", "B1", "NGN", "10.00", "0.00", "10,50", "Item", "1", "10.00")[:8]
+	rows := [][]string{short, healthyRow()}
+	super, entityID, res := commaDecimalImport(t, "COMMA-SHORT", rows, false)
+
+	if got := countInvoicesByNumber(t, super, entityID, "INV-SC"); got != 0 {
+		t.Errorf("INV-SC persisted = %d, want 0", got)
+	}
+	assertOneCommaError(t, res.Errors, []int{2}, "total")
+	assertHealthyStored(t, super, entityID)
+}
+
+// Parity across every quarantine reason at once, not only the comma one.
+func TestServiceImport_CommaDecimalMixedReasonsDryRunParity(t *testing.T) {
+	fixture := func() [][]string {
+		return [][]string{
+			mkRow("INV-Q1", "2026-01-10", "T1", "B1", "NGN", "20.00", "0.00", "20.00", "A", "1", "10.00"),   // sheet 2
+			mkRow("INV-Q1", "2026-01-10", "T1", "B1", "NGN", "20.00", "0.00", "20.00", "B", "1,5", "10.00"), // sheet 3
+			mkRow("INV-NA", "2026-01-10", "T1", "B1", "NGN", "N/A", "0.00", "10.00", "A", "1", "10.00"),     // sheet 4
+			mkRow("INV-HC", "2026-01-10", "T1", "B1", "NGN", "10.00", "0.00", "10.00", "A", "1", "5.00"),    // sheet 5
+			mkRow("INV-HC", "2026-01-10", "T1", "B1", "NGN", "11.00", "0.00", "10.00", "B", "1", "5.00"),    // sheet 6
+			healthyRow(), // sheet 7
+		}
+	}
+	super, dryEntity, dryRes := commaDecimalImport(t, "COMMA-MIX-DRY", fixture(), true)
+	if got := countInvoicesForEntity(t, super, dryEntity); got != 0 {
+		t.Errorf("dry-run wrote %d invoices rows, want 0", got)
+	}
+	_, realEntity, realRes := commaDecimalImport(t, "COMMA-MIX-REAL", fixture(), false)
+
+	want := []rowErrorKey{
+		{Rows: "[2 3]", Field: "line_quantity", Message: "line_quantity uses a comma as the decimal mark; write it with a dot, e.g. 1234.56"},
+		{Rows: "[4]", Field: "subtotal", Message: "subtotal is not a valid number"},
+		{Rows: "[5 6]", Field: "subtotal", Message: "rows disagree on subtotal"},
+	}
+	for name, res := range map[string]BatchResult{"dry-run": dryRes, "real": realRes} {
+		if got := rowErrorKeys(res.Errors); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s errors = %+v, want %+v", name, got, want)
+		}
+		if res.RowsTotal != 6 || res.RowsValid != 1 || res.RowsInvalid != 5 || res.ReadyInvoices != 1 || res.QuarantinedInvoices != 3 {
+			t.Errorf("%s counters (total=%d valid=%d invalid=%d ready=%d quarantined=%d), want (6,1,5,1,3)",
+				name, res.RowsTotal, res.RowsValid, res.RowsInvalid, res.ReadyInvoices, res.QuarantinedInvoices)
+		}
+	}
+	assertHealthyStored(t, super, realEntity)
+}

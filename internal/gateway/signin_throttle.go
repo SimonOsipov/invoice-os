@@ -26,8 +26,10 @@ type SignInThrottle struct {
 	now       func() time.Time
 	counts    map[string]signInCount
 	lastSweep time.Time
-	lastWarn  time.Time
-	sweeps    int
+	// nextExpiry never exceeds the earliest live expiry: later keys expire after every survivor.
+	nextExpiry time.Time
+	lastWarn   time.Time
+	sweeps     int
 }
 
 type signInCount struct {
@@ -53,7 +55,9 @@ func (t *SignInThrottle) Reserve(email string) bool {
 	}
 	c, held := t.counts[key]
 	if !held && len(t.counts) >= t.maxKeys {
-		t.sweep(now)
+		if !now.Before(t.nextExpiry) {
+			t.sweep(now)
+		}
 		// ceiling: fails closed at maxKeys (~30 MB); a flood of new addresses blocks new sign-ins until keys expire.
 		if len(t.counts) >= t.maxKeys {
 			if now.Sub(t.lastWarn) >= time.Minute {
@@ -78,9 +82,13 @@ func (t *SignInThrottle) Reserve(email string) bool {
 func (t *SignInThrottle) sweep(now time.Time) {
 	t.sweeps++
 	t.lastSweep = now
+	t.nextExpiry = time.Time{}
 	for k, c := range t.counts {
-		if !now.Before(c.start.Add(t.window)) {
+		exp := c.start.Add(t.window)
+		if !now.Before(exp) {
 			delete(t.counts, k)
+		} else if t.nextExpiry.IsZero() || exp.Before(t.nextExpiry) {
+			t.nextExpiry = exp
 		}
 	}
 }

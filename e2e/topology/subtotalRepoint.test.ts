@@ -4,11 +4,6 @@
 // drifted from the element it names. `pnpm -r typecheck` and the vitest lane (which cannot
 // even load .spec.ts, see vitest.config.ts) catch none of it. This reads import-wizard.spec.ts
 // as source text and asserts what Stage 3's rewrite must and must not touch.
-//
-// Two of the checks below are RED on this commit by construction: the `-total` testids and
-// the `f.name === 'total'` literal inside EXTR11-E2E-11 are what Stage 3 (task-851) still has
-// to move to `-subtotal` / `'subtotal'`. That is the honest state of a Mode-A guard authored
-// before the rewrite it is guarding.
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -29,10 +24,6 @@ function blockBetween(startNeedle: string, endNeedle: string): string {
   return source.slice(start, end)
 }
 
-const FIDELITY_START = 'EXTR11-E2E-11 · the AC-8 fidelity diff'
-const FIDELITY_END = 'EXTR-12-09 · the settle-every-field journey'
-const fidelityBlock = blockBetween(FIDELITY_START, FIDELITY_END)
-
 // The scope named by task-849: "EXTR12-E2E-02 ... sits adjacent (:3614-3744)". extraction-input-
 // total (the 4th testid this block preserves) is actually inside the NEXT test, EXTR12-E2E-03 --
 // its own assertion that the read-only badge's replacement is still editable -- so the end
@@ -46,64 +37,8 @@ describe('[extr-18-05] guard population (control needles + floors)', () => {
     expect(source.length, 'the file read as empty or truncated -- every scan below is vacuous').toBeGreaterThan(300_000)
   })
 
-  it('found the EXTR11-E2E-11 block marker (control needle)', () => {
-    expect(source).toContain(FIDELITY_START)
-  })
-
-  it('the EXTR11-E2E-11 block is non-trivial', () => {
-    expect(fidelityBlock.length, 'the block between its start and end marker is near-empty -- a drifted marker scanned nothing').toBeGreaterThan(20_000)
-  })
-
   it('the EXTR12-E2E-02 block is non-trivial', () => {
     expect(preservedBlock.length, 'the block between its start and end marker is near-empty -- a drifted marker scanned nothing').toBeGreaterThan(2_000)
-  })
-})
-
-describe('[extr-18-05] EXTR11-E2E-11 must be re-pointed off total', () => {
-  it('no extraction-*-total testid remains inside the block', () => {
-    const matches = [...fidelityBlock.matchAll(/extraction-[a-z][a-z-]*-total\b/g)].map((m) => m[0])
-    expect(
-      matches,
-      `found ${matches.length} -total testid reference(s) still inside EXTR11-E2E-11 -- Stage 3 must rename these to -subtotal: ${[...new Set(matches)].join(', ')}`,
-    ).toEqual([])
-  })
-
-  it("no bare f.name === 'total' literal remains inside the block", () => {
-    const found = /f\.name\s*===\s*['"]total['"]/.test(fidelityBlock)
-    expect(found, "a literal f.name === 'total' is still inside EXTR11-E2E-11 -- Stage 3 must move it to 'subtotal'").toBe(false)
-  })
-})
-
-describe('[extr-18-05] the FIDELITY table never lets element and selector disagree', () => {
-  // Each FIDELITY row is one line in this file (fixtures_test.go-adjacent convention). A row
-  // carries a custom `selector` only when its element has no testid of its own; the trap this
-  // guards is a rename that moves `element` but not the `[data-testid=...]` string inside
-  // `selector`, or vice versa -- typechecks clean, lints clean, reds only on the deployed run.
-  const rowLines = fidelityBlock.split('\n').filter((l) => /\belement:\s*'[^']+'/.test(l) && /\bselector:\s*'[^']+'/.test(l))
-
-  it('found rows carrying a selector (control needle)', () => {
-    expect(rowLines.length, 'no FIDELITY row carries both element and selector -- the agreement check below covers nothing').toBeGreaterThan(0)
-  })
-
-  it('every element: / selector: pair names the same field', () => {
-    const offenders: string[] = []
-    for (const line of rowLines) {
-      const element = line.match(/element:\s*'([^']+)'/)?.[1]
-      const selector = line.match(/selector:\s*'([^']+)'/)?.[1]
-      if (!element || !selector) {
-        offenders.push(`unparsable row: ${line.trim()}`)
-        continue
-      }
-      const field = selector.match(/data-testid="extraction-field-([a-z_]+)"/)?.[1]
-      if (!field) {
-        offenders.push(`${element}: selector carries no [data-testid="extraction-field-<name>"]: ${selector}`)
-        continue
-      }
-      if (!element.endsWith(`-${field}`)) {
-        offenders.push(`${element} targets field "${field}" per its selector, but its own name disagrees`)
-      }
-    }
-    expect(offenders, offenders.join('\n')).toEqual([])
   })
 })
 

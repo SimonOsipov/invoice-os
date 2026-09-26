@@ -508,8 +508,7 @@ describe('the screen shell', () => {
     // the half this subtask added to `ExtractionCanvas.tsx`'s `PANE`: without it this pane
     // grows to its ground's content and the ground never scrolls — the relationship
     // `EXTR11-E2E-06`'s zoom-150 `groundScrollsY` clause measures on the deployed build.
-    // `borderRight` has no behavioural oracle at any layer; its only check is the fidelity
-    // diff `EXTR11-E2E-11` (EXTR-11-09). Pinned here so it cannot vanish unremarked.
+    // `borderRight` has no behavioural oracle at any layer; this pin is its only check.
     expect(pick(canvasPane().style, ['flex', 'minWidth', 'minHeight', 'borderRight'])).toEqual({
       flex: '1 1 auto',
       minWidth: '0',
@@ -525,8 +524,8 @@ describe('the screen shell', () => {
     // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep and
     // `EXTR12-E2E-07`'s floor descent both protect; `minHeight: 0` is the half this subtask added to
     // `ExtractionFields.tsx`'s `PANE`, and `EXTR11-E2E-02b`'s
-    // precondition is what would notice its absence. `background` is fidelity only —
-    // `EXTR11-E2E-11`'s diff, nothing else.
+    // precondition is what would notice its absence. `background` is fidelity only; this pin
+    // is its only check.
     expect(pick(fieldsPane().style, ['flex', 'minWidth', 'minHeight', 'background'])).toEqual({
       flex: '1 1 620px',
       minWidth: '470px',

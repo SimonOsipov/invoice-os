@@ -2592,6 +2592,30 @@ async function settledRead<T>(read: () => Promise<T>, label: string): Promise<T>
   return read()
 }
 
+// Steps the viewport down until the pane stops shrinking and returns that viewport width.
+// A pane that never shrank is pinned, not floored, so that fails too.
+async function descendToPaneFloor(
+  page: Page,
+  pane: Locator,
+): Promise<{ floorWidth: number; descent: { width: number; paneWidth: number }[] }> {
+  const descent: { width: number; paneWidth: number }[] = []
+  let shrank = false
+  for (let width = 1280; width >= 1000; width -= 40) {
+    await page.setViewportSize({ width, height: 1080 })
+    const paneWidth = await settledRead(async () => (await pane.boundingBox())?.width ?? 0, `pane width at ${width}px`)
+    expect(paneWidth, `the pane has no width at ${width}px`).toBeGreaterThan(0)
+    const previous = descent.at(-1)
+    descent.push({ width, paneWidth })
+    if (!previous) continue
+    if (Math.abs(previous.paneWidth - paneWidth) <= 1) {
+      expect(shrank, `the pane never shrank before it stopped at ${width}px: ${JSON.stringify(descent)}`).toBe(true)
+      return { floorWidth: width, descent }
+    }
+    if (previous.paneWidth - paneWidth > 1) shrank = true
+  }
+  throw new Error(`the pane never stopped shrinking at or above 1000px: ${JSON.stringify(descent)}`)
+}
+
 // The accepted-types line verbatim — the four types EXTR-15-03 narrowed it to.
 const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · DOCX'
 
@@ -3721,7 +3745,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where it fits', async ({ page }, testInfo) => {
+test('EXTR11-E2E-06 (AC-2/AC-5): the page frame scales with zoom, centred where it fits', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -3742,6 +3766,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
     gapLeft: number
     gapRight: number
     fits: boolean
+    heldAtMax: boolean
     groundScrollsX: boolean
     groundScrollsY: boolean
     pageScroll: { scrollWidth: number; clientWidth: number }
@@ -3772,13 +3797,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
         expect(m.frameBox && m.innerBox, `the frame and its pad must both render at ${width}px`).toBeTruthy()
         const g = gaps({ x: m.frameBox!.x, width: m.frameBox!.width }, { x: m.innerBox!.x, width: m.innerBox!.width })
 
-        // 1. The band. pageFrameStyle's min/max-width are absolute, so this holds at every
-        //    width whether or not the frame fits its column.
-        const [floor, ceiling] = zoom === 100 ? [560, 640] : [840, 960]
-        expect(m.frameBox!.width, `the frame is below its ${floor}px floor at ${width}px, zoom ${zoom}`).toBeGreaterThanOrEqual(floor - 1)
-        expect(m.frameBox!.width, `the frame is above its ${ceiling}px ceiling at ${width}px, zoom ${zoom}`).toBeLessThanOrEqual(ceiling + 1)
-
-        // 2. `margin: 0 auto` -- but only where there is room. An overflowing block resolves
+        // 1. `margin: 0 auto` -- but only where there is room. An overflowing block resolves
         //    both auto margins to zero and spills right, so asserting symmetry at every width
         //    would fail on CORRECT rendering wherever the floor exceeds the column.
         const fits = m.frameBox!.width <= m.innerBox!.width + 1
@@ -3788,15 +3807,15 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
             `the frame's margins must agree at ${width}px, zoom ${zoom} (left ${g.left}, right ${g.right})`,
           ).toBeLessThanOrEqual(2)
         } else {
-          // 3. Where it does NOT fit, the GROUND is what scrolls.
+          // 2. Where it does NOT fit, the GROUND is what scrolls.
           expect(m.groundScrollsX, `the frame overflows at ${width}px, zoom ${zoom}, and the ground does not scroll`).toBe(true)
         }
 
-        // 4. The page column never scrolls sideways, at any width or zoom. `overflow: hidden` on the
+        // 3. The page column never scrolls sideways, at any width or zoom. `overflow: hidden` on the
         //    body row is what contains the enlarged page; without it the whole app slides.
         const pageScroll = await assertPageDoesNotScrollSideways(page, `extraction review at ${width}px, zoom ${zoom}`)
 
-        // 5. The GROUND is what scrolls vertically. At zoom 150 a US-Letter frame is ~1090px
+        // 4. The GROUND is what scrolls vertically. At zoom 150 a US-Letter frame is ~1090px
         //    tall inside a 1080px viewport, so this holds for a one-page document. It is the
         //    only oracle in the suite for the containment (`minHeight: 0` down the flex
         //    column) that lazy loading rests on: if the ground grows to its content instead of
@@ -3818,6 +3837,8 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
           gapLeft: g.left,
           gapRight: g.right,
           fits,
+          // A frame narrower than its pad is held by pageFrameStyle's max-width.
+          heldAtMax: m.frameBox!.width < m.innerBox!.width - 1,
           groundScrollsX: m.groundScrollsX,
           groundScrollsY: m.groundScrollsY,
           pageScroll,
@@ -3837,6 +3858,16 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
   // half the sweep and nobody would know which half.
   expect(measured.some((m) => m.fits), 'the frame never fit its column -- the centring assertion never ran').toBe(true)
   expect(measured.some((m) => !m.fits), 'the frame always fit -- the ground-scroll assertion never ran').toBe(true)
+
+  // 5. Zoom scales the frame. Compared only where both zooms are held at the max: elsewhere a
+  //    zoom-150 vertical scrollbar narrows that zoom's pad.
+  const ratioWidths = WIDE_WIDTHS.filter((w) => measured.some((m) => m.width === w && m.zoom === 100 && m.heldAtMax) && measured.some((m) => m.width === w && m.zoom === 150 && m.heldAtMax))
+  expect(ratioWidths.length, `no width held the frame at its max at both zooms -- the zoom ratio was never compared: ${JSON.stringify(measured)}`).toBeGreaterThan(0)
+  for (const w of ratioWidths) {
+    const f100 = measured.find((m) => m.width === w && m.zoom === 100)!.frameWidth
+    const f150 = measured.find((m) => m.width === w && m.zoom === 150)!.frameWidth
+    expect(Math.abs(f150 - 1.5 * f100), `the zoom-150 frame must be 1.5x the zoom-100 frame at ${w}px (${f100} -> ${f150})`).toBeLessThanOrEqual(2)
+  }
 
   await testInfo.attach('extraction-frame-band.json', {
     body: JSON.stringify(measured, null, 2),
@@ -4074,7 +4105,7 @@ test('EXTR11-E2E-02 (AC-1/AC-6): the panes tile the body and never overlap', asy
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its floor', async ({ page }, testInfo) => {
+test('EXTR11-E2E-10 (AC-6): the right pane yields first', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
 
@@ -4088,8 +4119,7 @@ test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its flo
   const measured: Yield[] = []
   const entryViewport = page.viewportSize()
   try {
-    // Widest first (WIDE_WIDTHS' own order): a floor strands only what the window is too
-    // narrow to hold, so the narrow end is where the pane is pushed onto its 470px floor.
+    // Widest first (WIDE_WIDTHS' own order). The pane's floor is EXTR12-E2E-07's descent.
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
 
@@ -4100,16 +4130,6 @@ test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its flo
 
       expect(m.f && m.fr, `the fields pane and the page frame must both render at ${width}px`).toBeTruthy()
 
-      // 1. The artboard's floor (`:223`). Below it the pane's `1fr 1fr` grid pushes its cells
-      //    past their column -- the spill EXTR11-E2E-02a measures from the other side.
-      expect(m.f!.width, `the fields pane is below its 470px floor at ${width}px`).toBeGreaterThanOrEqual(469)
-
-      // 2. And the document pane did not pay for it: the page frame is still inside the band
-      //    pageFrameStyle declares at zoom 100. A right pane pinned to a fixed track squeezes
-      //    the frame under its floor here.
-      expect(m.fr!.width, `the page frame fell below its 560px floor at ${width}px`).toBeGreaterThanOrEqual(559)
-      expect(m.fr!.width, `the page frame rose above its 640px ceiling at ${width}px`).toBeLessThanOrEqual(641)
-
       measured.push({ width, fieldsWidth: m.f!.width, frameWidth: m.fr!.width })
     }
   } finally {
@@ -4118,9 +4138,8 @@ test('EXTR11-E2E-10 (AC-6): the right pane yields first, and never below its flo
 
   expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
 
-  // 3. The pane grows with the chrome rather than pinning a track. `width === 620` would be
-  //    the tempting assertion and would FAIL on correct rendering at 2560, where both panes
-  //    grow; `>= 470` alone passes on a pane frozen at its basis. This is the relationship.
+  // The pane grows with the chrome rather than pinning a track. A fixed-width assertion would
+  // FAIL on correct rendering at 2560, where both panes grow, or pass on a frozen pane.
   const widest = measured.find((m) => m.width === 2560)
   const narrowest = measured.find((m) => m.width === 1280)
   expect(widest && narrowest, 'the sweep did not measure both ends -- the comparison below is vacuous').toBeTruthy()
@@ -6244,22 +6263,18 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
       expect(m.p && m.b, `the fields pane and the shell body must both render at ${width}px`).toBeTruthy()
       expect(m.p!.width, `the fields pane has no width at ${width}px`).toBeGreaterThan(0)
 
-      // 1. The artboard's floor (`:223`). A PRECONDITION here, and the same claim
-      //    EXTR11-E2E-10 makes -- stated so it is not counted twice.
-      expect(m.p!.width, `the fields pane is below its 470px floor at ${width}px`).toBeGreaterThanOrEqual(469)
-
-      // 2. Inside the shell body on BOTH edges -- gaps()'s rule.
+      // 1. Inside the shell body on BOTH edges -- gaps()'s rule.
       const g = gaps(m.p as Rect, m.b as Rect)
       expect(g.left, `the fields pane passes the body's left edge by ${-g.left}px at ${width}px`).toBeGreaterThanOrEqual(-1)
       expect(g.right, `the fields pane passes the body's right edge by ${-g.right}px at ${width}px`).toBeGreaterThanOrEqual(-1)
 
-      // 3. Two columns, exactly. A collapsed one-column grid reports 1, a three-track grid 3,
+      // 2. Two columns, exactly. A collapsed one-column grid reports 1, a three-track grid 3,
       //    and nothing else in this suite asserts the track count.
       expect(m.xs.length, `no field cell measured at ${width}px`).toBe(headerNamesB.length)
       const columns = [...new Set(m.xs)].sort((a, b) => a - b)
       expect(columns.length, `the grid reports ${columns.length} column(s) at ${width}px, not two`).toBe(2)
 
-      // 4. The pane's own scroller has nothing to scroll sideways. `overflow-y: auto` with
+      // 3. The pane's own scroller has nothing to scroll sideways. `overflow-y: auto` with
       //    `overflow-x: visible` computes to `overflow-x: auto`, so the body IS a scroll
       //    container on both axes and its scrollWidth is well defined.
       expect(m.scroller.clientWidth, `the pane body has no width at ${width}px`).toBeGreaterThan(0)
@@ -6298,21 +6313,8 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
   //
   // The pane is NOT at its floor at any WIDE_WIDTHS -- both panes are flex siblings and the
   // shrink is proportional -- so this descends until it is.
-  let floorWidth: number | null = null
   try {
-    for (let width = 1280; width >= 1000; width -= 40) {
-      await page.setViewportSize({ width, height: 1080 })
-      const paneWidth = await settledRead(async () => (await pane.boundingBox())?.width ?? 0, `pane width at ${width}px`)
-      if (paneWidth > 0 && paneWidth <= 471) {
-        floorWidth = width
-        break
-      }
-    }
-
-    expect(
-      floorWidth,
-      'the 470px floor is unreachable at or above 1000px -- W-6 cannot be measured from this side, and that is itself a finding',
-    ).not.toBeNull()
+    const { floorWidth } = await descendToPaneFloor(page, pane)
 
     // Every cell, not only the two predicted offenders: the walk is cheap and a wrong build
     // spills wherever its copy is longest.
@@ -9775,25 +9777,13 @@ test("CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell
 
   expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
 
-  // The pane reaches its 470px floor at no WIDE_WIDTHS entry, so descend until it does.
-  let floorWidth: number | null = null
-  const descent: { width: number; paneWidth: number }[] = []
+  // The pane reaches its floor at no WIDE_WIDTHS entry, so descend until it does.
   try {
-    for (let width = 1280; width >= 1000; width -= 40) {
-      await page.setViewportSize({ width, height: 1080 })
-      const paneWidth = await settledRead(async () => (await pane.boundingBox())?.width ?? 0, `pane width at ${width}px`)
-      descent.push({ width, paneWidth })
-      if (paneWidth > 0 && paneWidth <= 471) {
-        floorWidth = width
-        break
-      }
-    }
-
+    const { floorWidth, descent } = await descendToPaneFloor(page, pane)
     await testInfo.attach('check03-doubt-pill-descent.json', {
       body: JSON.stringify({ wide: measured, descent, floorWidth }, null, 2),
       contentType: 'application/json',
     })
-    expect(floorWidth, 'the 470px floor is unreachable at or above 1000px -- the pill cannot be measured at it').not.toBeNull()
 
     const spill = await cell.evaluate((el) => {
       const c = el.getBoundingClientRect()

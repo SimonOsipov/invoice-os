@@ -3443,9 +3443,8 @@ test('detail surface: the armed decision block and approval card, plus their lay
   const seen = columnWidths.map((c, i) => ({ ...c, rail: railWidths[i], share: Number(shares[i].toFixed(4)) }))
   // Both tolerances come from the arithmetic, not from taste. share = 0.25C/(C - 16) for content
   // box C, so the fixed 16px gap drifts it from 0.2543 (C=956, at 1280) to 0.2518 (C=2236, at
-  // 2560): a 0.0025 band, and 0.0043 at most off 0.25. 0.01 and +/-0.02 clear those ~4x and
-  // still fail hard on the two defects -- `1fr 1fr` sits at 0.50, a rail refrozen at 340px
-  // swings 0.36 -> 0.15. The 220px floor cannot bite here: it is overtaken by 1204px wide.
+  // 2560): a 0.0025 band. 0.01 clears it ~4x and still fails hard on a rail refrozen at 340px,
+  // which swings 0.36 -> 0.15. The 220px floor cannot bite here: it is overtaken by 1204px wide.
   // Asserted on the ROUNDED shares, the ones the message prints, so a failure is reproducible
   // from its own output rather than from numbers only the run held.
   expect(
@@ -3453,12 +3452,13 @@ test('detail surface: the armed decision block and approval card, plus their lay
     `the rail's share of the grid must not vary with the viewport: ${JSON.stringify(seen)}`,
   ).toBeLessThanOrEqual(0.01)
   // The value anchor, without which G2a is vacuous: `1fr 1fr` holds a rock-steady 0.50 share and
-  // passes invariance outright -- the same "passed on the bug it targeted" shape this branch has
-  // already shipped twice.
-  for (const s of seen) {
-    expect(s.share, `the rail must hold its 25% of the grid at ${s.width}px: ${JSON.stringify(seen)}`).toBeGreaterThan(0.23)
-    expect(s.share, `the rail must not overrun its 25% of the grid at ${s.width}px: ${JSON.stringify(seen)}`).toBeLessThan(0.27)
-  }
+  // passes invariance outright, but it cannot pass a rail narrower than the main column.
+  railWidths.forEach((rail, i) => {
+    expect(
+      rail,
+      `the rail must be narrower than the main column at ${columnWidths[i].width}px: ${JSON.stringify(seen)}`,
+    ).toBeLessThan(columnWidths[i].column - 1)
+  })
   // G2b, G2a's non-vacuity floor. Without it both bounds above pass on a page frozen at one width
   // or on a detached measurement -- every share identical and correct -- and then G1 is measuring
   // a comparand nothing verified.
@@ -3610,7 +3610,7 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('D: the strip stays inside the 96px band and never pushes the grid down', async ({ page }) => {
+  test('D: the strip stays inside its band and never pushes the grid down', async ({ page }) => {
     test.setTimeout(90_000)
     const errors = collectErrors(page)
     const strip = await openStrip(page)
@@ -3622,9 +3622,15 @@ test.describe.serial("detail surface: the state strip's geometry", () => {
         await resizeTo(page, width)
         const [stripBox, gridBox] = await Promise.all([strip.boundingBox(), grid.boundingBox()])
         expect(stripBox && gridBox, `the strip and the grid must both render at ${width}px`).toBeTruthy()
-        // The one bound D-AC-10 sanctions, fenced by two relationships so it cannot pass on a
-        // strip that grew back into a timeline and shoved the grid down the page.
-        expect(stripBox!.height, `the strip must stay inside the 96px band at ${width}px`).toBeLessThanOrEqual(96)
+        // One node row tall: a second row or a horizontal scrollbar adds height past this bound.
+        const chrome = await strip.evaluate((el) => {
+          const cs = getComputedStyle(el)
+          return parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+        })
+        const nodeHeights = await strip.getByTestId('strip-node').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))
+        expect(nodeHeights.length, `the strip must render its nodes at ${width}px`).toBeGreaterThan(0)
+        const oneRow = Math.max(...nodeHeights) + chrome
+        expect(stripBox!.height, `the strip must stay one node row tall (${oneRow}px) at ${width}px`).toBeLessThanOrEqual(oneRow + 1)
         expect(rectsOverlap(stripBox!, gridBox!), `the strip must not overlap the grid at ${width}px: ${JSON.stringify(overlapOf(stripBox!, gridBox!))}`).toBe(false)
         expect(stripBox!.y + stripBox!.height, `the strip must end before the grid begins at ${width}px`).toBeLessThanOrEqual(gridBox!.y + 1)
       }

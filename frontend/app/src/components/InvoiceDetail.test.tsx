@@ -1468,7 +1468,7 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
     // The ordering specs above only pin "strip precedes the rail cards", which a strip
     // moved INSIDE the grid still satisfies -- the whole app suite stays green on that
     // move. AC-1's containment claim is otherwise proved only by the browser sweep
-    // (invoice-surfaces.spec.ts "D: the strip stays inside the 96px band").
+    // (invoice-surfaces.spec.ts "D: the strip stays inside its band").
     mockDetailFetch(detailRecord({ status: 'accepted' }))
     const { container } = render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
 

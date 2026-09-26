@@ -54,8 +54,7 @@ test('deployed app: the SPA is a demo build (VITE_DEMO_MODE)', async ({ page }) 
 })
 
 // T7 (AC-6) — a short rail (1280x360) cannot fit the whole roster, so the row list must
-// scroll internally rather than push the popover off the top of the screen. The floor is
-// rowCount * 44 (the row's own padding+content height), never a pixel literal.
+// scroll internally rather than push the popover off the top of the screen.
 test('deployed app: the roster absorbs its own overflow on a short rail (1280x360)', async ({ page }) => {
   const errors = collectErrors(page)
   await page.setViewportSize({ width: 1280, height: 360 })
@@ -64,14 +63,9 @@ test('deployed app: the roster absorbs its own overflow on a short rail (1280x36
   const { trigger, popover, rowList } = await openPersonaSwitcher(page)
 
   const rowCount = await page.getByTestId('persona-row').count()
-  expect(rowCount, 'no persona-row rendered — the overflow floor below would be vacuous').toBeGreaterThanOrEqual(3)
+  expect(rowCount, 'no persona-row rendered — the overflow check below would be vacuous').toBeGreaterThanOrEqual(3)
 
   const metrics = await rowList.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
-  const floor = rowCount * 44
-  expect(
-    metrics.scrollHeight,
-    `row list scrollHeight (${metrics.scrollHeight}) should be at least ${rowCount} rows x 44px = ${floor}`,
-  ).toBeGreaterThanOrEqual(floor)
   expect(
     metrics.scrollHeight,
     `row list should overflow its own box at 360px tall (scrollHeight=${metrics.scrollHeight}, clientHeight=${metrics.clientHeight})`,

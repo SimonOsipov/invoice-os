@@ -13,6 +13,8 @@
 // AC1/AC2 alone only prove read isolation on tenancy's own tables; AC3 additionally
 // proves RLS holds on a DIFFERENT service (portfolio), reached through the same
 // gateway + JWT path, across create/read/update/mutate — not just a single SELECT.
+// The last describe adds invoice writes: B's five writes to A's invoice answer an
+// unknown id's 404 and change nothing.
 import { test, expect } from '@playwright/test'
 import {
   login,
@@ -248,6 +250,8 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
 
     const before = await snapshotInvoice(tokenA, created.id)
     expect(before.approval.state, 'validate must arm an open run, so approve has a real target').toBe('open')
+    expect(before.approval.steps.length, 'the open run must carry steps, or its deep-equal is vacuous').toBeGreaterThan(0)
+    expect(before.history.length, "A's history must hold the validate transition").toBeGreaterThan(0)
 
     // Well-formed bodies, so tenancy is the only reason left to refuse.
     const headers = { Authorization: `Bearer ${tokenB}` }

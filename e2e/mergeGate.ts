@@ -1,6 +1,7 @@
 // Fails the required "E2E gate" check unless E2E passed or was not needed.
 // Usage: node e2e/mergeGate.ts  (reads CHANGES_RESULT, E2E_RELEVANT, PR_DRAFT, E2E_RESULT)
 // Node >= 22.18 runs this file without flags, so keep it to erasable TypeScript.
+// TEST-04 AC-5 probe: scratch PR, never merged.
 
 import { fileURLToPath } from 'node:url'
 

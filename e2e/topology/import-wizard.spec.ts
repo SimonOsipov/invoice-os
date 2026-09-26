@@ -7119,7 +7119,7 @@ test('EXTR13-LAYOUT-02: forty lines overflow the scrollbox at 1280 and never the
   // does overflow, so there is something for the scrollbox to hold.
   expect(
     narrow.box.scrollWidth,
-    `the grid fits its scrollbox at 1280px (${narrow.box.scrollWidth} in ${narrow.box.clientWidth}) -- there is no overflow to contain, so the page claim below proves nothing`,
+    `the grid fits its scrollbox at 1280px (${narrow.box.scrollWidth} in ${narrow.box.clientWidth}) -- there is no overflow to contain, so the page claim proves nothing`,
   ).toBeGreaterThan(narrow.box.clientWidth + 1)
 
   // Half two, the page never scrolling sideways, is asserted inside readAt at both arms.

@@ -550,7 +550,7 @@ test.describe('Audit screen', () => {
       contentType: 'application/json',
     })
 
-    await expect(assertPageDoesNotScrollSideways(page, 'probe')).rejects.toThrow()
+    await expect(assertPageDoesNotScrollSideways(page, 'probe')).rejects.toThrow(/probe: the page column scrolls sideways/)
     expect(pfScrollOverflow, 'the injected child must overflow .pf-scroll').toBeGreaterThanOrEqual(599)
   })
 

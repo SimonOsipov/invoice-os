@@ -374,16 +374,28 @@ describe('the sweeps measure settled geometry', () => {
 
 // --- the page column does not scroll sideways ----------------------------------
 //
-// `.pf-shell` clips at 100vh, so `.pf-scroll` scrolls and the document never does.
+// `.pf-shell` clips at 100vh, so `.pf-scroll` scrolls.
 function scrollerPage(reading: { scrollWidth: number; clientWidth: number }) {
   const selectors: string[] = []
+  const calls = { evaluate: 0 }
   const page = {
     locator: (selector: string) => {
       selectors.push(selector)
-      return { evaluate: (fn: (el: unknown) => unknown) => Promise.resolve(fn({ ...reading })) } as unknown as Locator
+      return {
+        evaluate: (fn: (el: unknown) => unknown) => {
+          calls.evaluate++
+          return Promise.resolve(fn({ ...reading }))
+        },
+      } as unknown as Locator
     },
   } as unknown as Page
-  return { page, selectors }
+  return { page, selectors, calls }
+}
+
+async function rejection(p: Promise<unknown>): Promise<string> {
+  const err = await p.then(() => null, (e: unknown) => e)
+  expect(err, 'expected the helper to reject').toBeInstanceOf(Error)
+  return (err as Error).message
 }
 
 describe('assertPageDoesNotScrollSideways', () => {
@@ -420,5 +432,45 @@ describe('assertPageDoesNotScrollSideways', () => {
     const { page, selectors } = scrollerPage({ scrollWidth: 1668, clientWidth: 1668 })
     await assertPageDoesNotScrollSideways(page, 'selector')
     expect(selectors).toEqual(['main.pf-main .pf-scroll'])
+  })
+})
+
+describe('assertPageDoesNotScrollSideways — edges', () => {
+  it('passes at exactly 1px of overflow and fails at 2px, on a second base width', async () => {
+    await expect(assertPageDoesNotScrollSideways(scrollerPage({ scrollWidth: 901, clientWidth: 900 }).page, 'edge')).resolves.toEqual({
+      scrollWidth: 901,
+      clientWidth: 900,
+    })
+    const message = await rejection(assertPageDoesNotScrollSideways(scrollerPage({ scrollWidth: 902, clientWidth: 900 }).page, 'edge'))
+    expect(message).toContain('902')
+    expect(message).toContain('900')
+  })
+
+  it('passes when scrollWidth is below clientWidth', async () => {
+    const { page } = scrollerPage({ scrollWidth: 1200, clientWidth: 1268 })
+    await expect(assertPageDoesNotScrollSideways(page, 'negative')).resolves.toEqual({ scrollWidth: 1200, clientWidth: 1268 })
+  })
+
+  it('rejects a zero-width column with content as "no box", not as overflow', async () => {
+    const message = await rejection(assertPageDoesNotScrollSideways(scrollerPage({ scrollWidth: 800, clientWidth: 0 }).page, 'collapsed'))
+    expect(message).toContain('collapsed')
+    expect(message).toMatch(/no box/)
+    expect(message).not.toMatch(/scrolls sideways/)
+  })
+
+  it('names the label in both failure messages, and each message names only its own failure', async () => {
+    const noBox = await rejection(assertPageDoesNotScrollSideways(scrollerPage({ scrollWidth: 0, clientWidth: 0 }).page, 'label-a'))
+    const overflow = await rejection(assertPageDoesNotScrollSideways(scrollerPage({ scrollWidth: 1700, clientWidth: 1668 }).page, 'label-b'))
+    expect(noBox).toContain('label-a')
+    expect(overflow).toContain('label-b')
+    expect(overflow).toMatch(/scrolls sideways/)
+    expect(overflow).not.toMatch(/no box/)
+  })
+
+  it('reads the scroller once, in one evaluate', async () => {
+    const fake = scrollerPage({ scrollWidth: 1668, clientWidth: 1668 })
+    await assertPageDoesNotScrollSideways(fake.page, 'once')
+    expect(fake.selectors).toHaveLength(1)
+    expect(fake.calls.evaluate).toBe(1)
   })
 })

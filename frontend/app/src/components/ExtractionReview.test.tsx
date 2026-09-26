@@ -521,8 +521,8 @@ describe('the screen shell', () => {
     render(review({ ctx: serving().ctx }))
     await flush()
 
-    // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep and
-    // `EXTR12-E2E-07`'s floor descent both protect; `minHeight: 0` is the half this subtask added to
+    // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep
+    // protects; `minHeight: 0` is the half this subtask added to
     // `ExtractionFields.tsx`'s `PANE`, and `EXTR11-E2E-02b`'s
     // precondition is what would notice its absence. `background` is fidelity only.
     expect(pick(fieldsPane().style, ['flex', 'minWidth', 'minHeight', 'background'])).toEqual({

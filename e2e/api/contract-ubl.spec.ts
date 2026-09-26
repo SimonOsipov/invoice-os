@@ -89,11 +89,16 @@ function section(xml: string, tag: string): string {
   return found[0]
 }
 
-// Text of the single `tag` element in xml, whatever its attributes (currencyID).
+const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', apos: "'", quot: '"' }
+
+// Text of the single `tag` element in xml, whatever its attributes (currencyID), unescaped:
+// Go's EscapeText emits &amp; &lt; &gt; and numeric refs (&#39; &#34; &#xA;).
 function elementText(xml: string, tag: string): string {
   const found = [...xml.matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?>([^<]*)</${tag}>`, 'g'))]
   expect(found.length, `exactly one <${tag}> element`).toBe(1)
-  return found[0][1]
+  return found[0][1].replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|apos|quot));/g, (_, hex, dec, name) =>
+    name ? XML_ENTITIES[name] : String.fromCodePoint(hex ? parseInt(hex, 16) : parseInt(dec, 10)),
+  )
 }
 
 function detailFetch(token: string, invoiceId: string): Promise<RawResult> {

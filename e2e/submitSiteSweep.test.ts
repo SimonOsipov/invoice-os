@@ -513,11 +513,7 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
       expect(hit, 'target:queued not found inside createFailedInvoice -- the helper, or its inner call, moved').toBe(true)
     })
 
-    // AC-8's literal floor (18: 13 target:queued + 5 batch POSTs) is the file's population
-    // BEFORE this subtask's own rollup/list/enforcement test added a 14th target:queued site
-    // (line ~1196). TEST-04-04's evidence-bundle submit makes 20; TEST-04-05's cross-tenant
-    // refusals (one transition, one batch POST) make the measured 22. Floored at the
-    // measured population so this scanner cannot itself carry slack.
+    // Floored at the measured population so this scanner cannot itself carry slack.
     it('floor: at least 22 submit-driving sites (measured population)', () => {
       expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 22`).toBeGreaterThanOrEqual(22)
     })
@@ -619,8 +615,8 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    matches nothing here. Nothing in e2e/ does this today for the needles this file cares
 //    about.
 //
-// 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api 20
-//    (this file's own scan), topology 13 (7 submitSelected callers + 1 detail-submit-confirm +
+// 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api (the
+//    'floor: at least N submit-driving sites' test above), topology 13 (7 submitSelected callers + 1 detail-submit-confirm +
 //    1 review-bulk-confirm + 4 transitionInvoice). AC-9 as literally worded said "fails below
 //    7"; re-verified 2026-08-18 as a miscount (7 was arithmetic on the way to 9, not the
 //    intended floor) and corrected here, rather than quietly kept, once a floor of 7 against

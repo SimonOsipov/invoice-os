@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import * as layout from './layout'
 import {
   assertFillsColumn,
+  assertPageDoesNotScrollSideways,
   assertSameHeight,
   enclosesRect,
   gaps,
@@ -368,5 +369,56 @@ describe('the sweeps measure settled geometry', () => {
     const pairs = await assertSameHeight(fake.page, a, b, 'fake')
     expect(pairs).toHaveLength(WIDE_WIDTHS.length)
     for (const pair of pairs) expect(pair.delta).toBe(0)
+  })
+})
+
+// --- the page column does not scroll sideways ----------------------------------
+//
+// `.pf-shell` clips at 100vh, so `.pf-scroll` scrolls and the document never does.
+function scrollerPage(reading: { scrollWidth: number; clientWidth: number }) {
+  const selectors: string[] = []
+  const page = {
+    locator: (selector: string) => {
+      selectors.push(selector)
+      return { evaluate: (fn: (el: unknown) => unknown) => Promise.resolve(fn({ ...reading })) } as unknown as Locator
+    },
+  } as unknown as Page
+  return { page, selectors }
+}
+
+describe('assertPageDoesNotScrollSideways', () => {
+  it('passes on a page column that fits', async () => {
+    const { page } = scrollerPage({ scrollWidth: 1668, clientWidth: 1668 })
+    await expect(assertPageDoesNotScrollSideways(page, 'fits')).resolves.toEqual({ scrollWidth: 1668, clientWidth: 1668 })
+  })
+
+  it('tolerates one pixel of rounding', async () => {
+    const { page } = scrollerPage({ scrollWidth: 1669, clientWidth: 1668 })
+    await expect(assertPageDoesNotScrollSideways(page, 'rounding')).resolves.toEqual({ scrollWidth: 1669, clientWidth: 1668 })
+  })
+
+  it('throws on a page column that scrolls sideways', async () => {
+    const { page } = scrollerPage({ scrollWidth: 1670, clientWidth: 1668 })
+    const err = await assertPageDoesNotScrollSideways(page, 'audit-wide').then(() => null, (e: unknown) => e)
+    expect(err, 'a 2px overflow must reject').toBeInstanceOf(Error)
+    const message = (err as Error).message
+    expect(message).toContain('audit-wide')
+    expect(message).toContain('1670')
+    expect(message).toContain('1668')
+  })
+
+  it('throws when the page column has no box', async () => {
+    const { page } = scrollerPage({ scrollWidth: 0, clientWidth: 0 })
+    const err = await assertPageDoesNotScrollSideways(page, 'unmounted').then(() => null, (e: unknown) => e)
+    expect(err, 'a zero-width column must reject, not pass as a fit').toBeInstanceOf(Error)
+    const message = (err as Error).message
+    expect(message).toContain('unmounted')
+    expect(message).toMatch(/no box/)
+  })
+
+  it("reads the app shell's scroller, not the document", async () => {
+    const { page, selectors } = scrollerPage({ scrollWidth: 1668, clientWidth: 1668 })
+    await assertPageDoesNotScrollSideways(page, 'selector')
+    expect(selectors).toEqual(['main.pf-main .pf-scroll'])
   })
 })

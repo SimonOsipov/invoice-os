@@ -1,5 +1,5 @@
-// layout.ts — geometry helpers for layout assertions, per RALPH_PROMPT.md
-// Phase 3.5 step 4 ("Assert the relationship, not the dimension").
+// layout.ts — geometry helpers for layout assertions: assert the
+// relationship, not the dimension.
 //
 // A width assertion passes on the very bug it should catch. BUG-03-05 capped the
 // invoice detail at 1080px inside a much wider column and pinned it left; the

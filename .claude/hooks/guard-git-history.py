@@ -18,15 +18,15 @@ Deliberately narrow. It denies two things and nothing else:
   2. A branch-moving git write aimed at the MAIN CHECKOUT from a worktree session.
      M4-10's executor ran `git -C "$MAIN" reset --hard <sha>` and silently moved
      the user's main branch. A worktree session has no reason to move main; that
-     is what made the rule "always work in $WORKTREE_PATH" (the RALPH_PROMPT.md
-     Anti-Patterns row) worth enforcing rather than restating.
+     is what made the rule "always work in $WORKTREE_PATH" worth enforcing
+     rather than restating.
 
 What it does NOT deny, on purpose:
   - `git commit --amend`. On an unpushed commit it is useful and harmless; on a
     pushed one the follow-up push is non-fast-forward and fails on its own unless
     forced — and forcing is denied by rule 1.
   - `fetch`, `worktree add/remove/prune`, `branch -d/-D` against the main
-    checkout. RALPH Phase 0 and /post-merge-cleanup need exactly these.
+    checkout. Worktree setup and /post-merge-cleanup need exactly these.
   - Anything at all when the session itself is running in the main checkout.
     That is the user's own space and their own session.
 
@@ -158,7 +158,7 @@ def run() -> int:
             f"Blocked: `git {sub}` against the main checkout ({main}) from a worktree session.\n"
             f"  {segment}\n"
             "That moves a branch or the working tree in the user's own checkout. Work in this "
-            "worktree instead (RALPH_PROMPT.md, Anti-Patterns).\n"
+            "worktree instead.\n"
             "Reads, `fetch`, `worktree ...` and `branch -d` against the main checkout are allowed.\n"
         )
     return 0

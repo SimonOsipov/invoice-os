@@ -15,12 +15,10 @@
 // topology suite's default active client. There is no delete endpoint, so this row and its
 // invoice outlive the run.
 //
-// AC 8 and AC 9 of the parent story (scrubbed request/response headers, verbatim body
-// bytes) are proven ONLY in internal/archive/exchange_db_test.go, never here: every seeded
-// app_exchange row has NULL bodies and {} headers by deliberate design
-// (db/seed.dev.sql:684), and this spec's own invoice is never submitted either -- so a
-// deployed assertion about scrubbed headers or verbatim bodies would pass vacuously either
-// way, over data that was never real transmission evidence.
+// Scrubbed request/response headers and verbatim body bytes (AC 8 and AC 9 of the parent
+// story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
+// invoice is never submitted. The second describe submits one through the mock adapter and
+// proves only that its body files exist and the request body carries the invoice number.
 // Departure from docs/e2e-convention.md's "containment, never a literal count": the bundle
 // is scoped to an entity this file creates in beforeAll and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
@@ -28,9 +26,20 @@
 // assertion cannot see.
 import { test, expect } from '@playwright/test'
 import { unzipSync } from 'fflate'
-import { createEntity, createInvoice, login, apiBase, PERSONAS } from './client'
+import {
+  approveUntilClosed,
+  apiBase,
+  createEntity,
+  createInvoice,
+  firmApproverTokens,
+  getInvoice,
+  login,
+  rawFetch,
+  validateInvoice,
+  PERSONAS,
+} from './client'
 import { freshTin } from './fixtures'
-import { assertErrorEnvelope, type RawResult } from './contract-helpers'
+import { assertErrorEnvelope, ensureFirmPolicyActive, type RawResult } from './contract-helpers'
 
 // bundleFetch(): a bare fetch, never apiFetch/rawFetch -- both always res.json() the body
 // and hand back neither headers nor bytes (client.ts:36-53), the same reasoning
@@ -135,16 +144,84 @@ async function fetchBundle(
   return { zip, manifest, filename }
 }
 
+// A wide, fixed period rather than one centered on "now": invoices.go's WHERE clause
+// scopes on entity_id AND created_at, and entity_id already isolates this query to only
+// what this spec creates -- so widening the window buys immunity to clock skew between
+// this runner and the deployed gateway at no cost in precision. parseRequest enforces no
+// max-window or future-`to` bound, so a 15-year span is not rejected.
+const period = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
+
+// Honours quoted fields and doubled quotes: the header columns carry JSON.
+function parseCsv(text: string): Record<string, string>[] {
+  const records: string[][] = []
+  let record: string[] = []
+  let field = ''
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') {
+        field += '"'
+        i++
+      } else if (c === '"') {
+        quoted = false
+      } else {
+        field += c
+      }
+    } else if (c === '"') {
+      quoted = true
+    } else if (c === ',') {
+      record.push(field)
+      field = ''
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++
+      record.push(field)
+      records.push(record)
+      record = []
+      field = ''
+    } else {
+      field += c
+    }
+  }
+  if (field !== '' || record.length > 0) {
+    record.push(field)
+    records.push(record)
+  }
+  const [header, ...rows] = records
+  return rows.map((r) => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ''])))
+}
+
+// Own copy of invoice-surfaces.spec.ts's submittable fixture (no cross-suite imports).
+// 99999999-0001 is the mock adapter's explicit accept trigger (docs/mock-app-adapter.md).
+function acceptInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '99999999-0001',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// internal/submission jobstore.go markJobAccepted writes this submission_jobs.state.
+const JOB_STATE_ACCEPTED = 'accepted'
+// internal/submission exchange_bridge.go OutcomeSent: ExchangeFor's outcome once the bytes reached the wire.
+const OUTCOME_SENT = 'sent'
+// internal/submission exchange_bridge.go OpSubmit: the accept trigger answers on Submit, with no poll.
+const OP_SUBMIT = 'submit'
+// internal/submission mock_adapter.go MockAdapter.Submit: http.StatusOK on the accept branch.
+const MOCK_ACCEPT_HTTP_STATUS = '200'
+
 test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
   let token: string
   let entityId: string
   let invoiceNumber: string
-  // A wide, fixed period rather than one centered on "now": invoices.go's WHERE clause
-  // scopes on entity_id AND created_at, and entity_id already isolates this query to only
-  // what this spec creates -- so widening the window buys immunity to clock skew between
-  // this runner and the deployed gateway at no cost in precision. parseRequest enforces no
-  // max-window or future-`to` bound, so a 15-year span is not rejected.
-  const period = { from: '2020-01-01T00:00:00Z', to: '2035-01-01T00:00:00Z' }
 
   test.beforeAll(async () => {
     token = await login(PERSONAS.A)
@@ -220,5 +297,76 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
 
     assertErrorEnvelope(await asRaw(downloadRes), 404, 'download of an unknown entity')
     assertErrorEnvelope(await asRaw(previewRes), 404, 'preview of an unknown entity')
+  })
+})
+
+test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+    await ensureFirmPolicyActive(token)
+  })
+
+  test('an invoice accepted through the mock adapter carries its submission, exchange rows, body files and fiscal outcome into the bundle', async () => {
+    test.setTimeout(240_000)
+
+    const entity = await createEntity(token, { name: `Zz AUDIT-05 submitted ${freshTin()}`, tin: freshTin() })
+    const invoiceNumber = `INV-AUDIT-05-S-${freshTin()}`
+    const created = await createInvoice(token, { entity_id: entity.id, ...acceptInvoiceFields(invoiceNumber) })
+
+    const validated = await validateInvoice(token, created.id)
+    expect(validated.status, 'the clean fixture should promote draft -> validated').toBe('validated')
+
+    await approveUntilClosed(created.id, await firmApproverTokens())
+
+    const submitted = await rawFetch('/api/invoice/v1/invoices/submissions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: { invoice_ids: [created.id], idempotency_key: crypto.randomUUID() },
+    })
+    expect(submitted.status, 'batch-submit status').toBe(200)
+    const results = (submitted.body as { results: { enqueued: boolean }[] }).results
+    expect(results[0].enqueued, 'the approved, validated invoice should be enqueued').toBe(true)
+
+    await expect
+      .poll(async () => (await getInvoice(token, created.id)).status, {
+        message: 'the worker should drive the invoice to accepted',
+        timeout: 120_000,
+        intervals: [1_000],
+      })
+      .toBe('accepted')
+    const invoice = await getInvoice(token, created.id)
+    expect(invoice.irn, 'GET irn').toBeTruthy()
+    expect(invoice.csid, 'GET csid').toBeTruthy()
+
+    const { zip, manifest } = await fetchBundle(token, entity.id, period)
+    const decoder = new TextDecoder()
+
+    const invoiceRow = parseCsv(decoder.decode(zip['invoices.csv'])).find((r) => r.invoice_id === created.id)
+    expect(invoiceRow, 'invoices.csv must carry the submitted invoice').toBeDefined()
+    expect(invoiceRow!.status, 'invoices.csv status').toBe(invoice.status)
+    expect(invoiceRow!.irn, "invoices.csv irn must equal the GET's").toBe(invoice.irn)
+    expect(invoiceRow!.csid, "invoices.csv csid must equal the GET's").toBe(invoice.csid)
+
+    const submissions = parseCsv(decoder.decode(zip['submissions.csv']))
+    expect(submissions, 'submissions.csv must hold exactly one job row').toHaveLength(1)
+    expect(submissions[0].invoice_id, 'submissions.csv invoice_id').toBe(created.id)
+    expect(submissions[0].state, 'submissions.csv state').toBe(JOB_STATE_ACCEPTED)
+
+    const exchange = parseCsv(decoder.decode(zip['exchange.csv']))
+    const attempts = exchange.filter((r) => r.invoice_id === created.id)
+    expect(attempts.length, 'exchange.csv must hold at least one attempt for this invoice').toBeGreaterThanOrEqual(1)
+    // exchange.go orders rows by occurred_at, so the last row is the attempt that got the verdict.
+    const last = attempts[attempts.length - 1]
+    expect(last.operation, 'last attempt operation').toBe(OP_SUBMIT)
+    expect(last.outcome, 'last attempt outcome').toBe(OUTCOME_SENT)
+    expect(last.http_status, 'last attempt http_status').toBe(MOCK_ACCEPT_HTTP_STATUS)
+    expect(Object.keys(zip), 'the request body file must be in the ZIP').toContain(last.request_body_file)
+    expect(Object.keys(zip), 'the response body file must be in the ZIP').toContain(last.response_body_file)
+    expect(decoder.decode(zip[last.request_body_file]), 'the request body must carry the invoice number').toContain(invoiceNumber)
+
+    expect(manifest.counts.submissions, 'manifest submissions count').toBe(1)
+    expect(manifest.counts.exchange_attempts, 'manifest exchange_attempts must equal the exchange.csv rows').toBe(exchange.length)
   })
 })

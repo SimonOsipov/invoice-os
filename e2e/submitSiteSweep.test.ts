@@ -39,6 +39,7 @@ const TOPOLOGY_DIR = join(E2E_ROOT, 'topology')
 const CONTRACT_INVOICE = 'contract-invoice.spec.ts'
 const INVOICE_SURFACES = 'invoice-surfaces.spec.ts'
 const IMPORT_WIZARD = 'import-wizard.spec.ts'
+const EVIDENCE_BUNDLE = 'evidence-bundle.spec.ts'
 
 function listSpecFiles(dir: string): string[] {
   const out: string[] = []
@@ -365,6 +366,12 @@ const API_MANIFEST: ManifestEntry[] = [
     2,
   ],
   [CONTRACT_INVOICE, 'test:both transmit doors refuse a preparer with the same 403 body', 'batch-post:/invoices/submissions', 1],
+  [
+    EVIDENCE_BUNDLE,
+    'test:an invoice accepted through the mock adapter carries its submission, exchange rows, body files and fiscal outcome into the bundle',
+    'batch-post:/invoices/submissions',
+    1,
+  ],
 ]
 
 const TOPOLOGY_MANIFEST: ManifestEntry[] = [

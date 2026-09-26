@@ -218,3 +218,4 @@ prevent quiet erosion.
 A spec may be named for the **axis** it varies (`api/persona-inhouse.spec.ts`) as well as
 for a capability: *organize by capability, not by date* forbids **dated** files, not files
 named for their subject.
+<!-- TEST-04 probe: docs-only PR, delete me -->

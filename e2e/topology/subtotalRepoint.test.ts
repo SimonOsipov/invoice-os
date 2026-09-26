@@ -1,9 +1,8 @@
 // EXTR-18-05 (task-849) local guard. The twelve specs this story re-points cannot run
 // locally -- they need a deployed environment (docs/e2e-convention.md) -- and every failure
-// mode here is a plain string: a wrong testid, a wrong field-name literal, a selector that
-// drifted from the element it names. `pnpm -r typecheck` and the vitest lane (which cannot
-// even load .spec.ts, see vitest.config.ts) catch none of it. This reads import-wizard.spec.ts
-// as source text and asserts what Stage 3's rewrite must and must not touch.
+// mode here is a plain string: a wrong testid or a wrong field-name literal. `pnpm -r typecheck`
+// and the vitest lane (which cannot even load .spec.ts, see vitest.config.ts) catch none of it.
+// This reads import-wizard.spec.ts as source text and asserts what Stage 3's rewrite must not touch.
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'

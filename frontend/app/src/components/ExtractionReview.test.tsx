@@ -524,8 +524,7 @@ describe('the screen shell', () => {
     // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep and
     // `EXTR12-E2E-07`'s floor descent both protect; `minHeight: 0` is the half this subtask added to
     // `ExtractionFields.tsx`'s `PANE`, and `EXTR11-E2E-02b`'s
-    // precondition is what would notice its absence. `background` is fidelity only; this pin
-    // is its only check.
+    // precondition is what would notice its absence. `background` is fidelity only.
     expect(pick(fieldsPane().style, ['flex', 'minWidth', 'minHeight', 'background'])).toEqual({
       flex: '1 1 620px',
       minWidth: '470px',

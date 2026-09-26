@@ -5757,8 +5757,7 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 //   EXTR12-E2E-01 (:3569)   UPDATED in 13-02/07 -- the per-field pill loop excludes line names.
 //   EXTR11-E2E-04/04b (:2858) UPDATED in 13-02 -- the wire body's field SET is the widened
 //                           twenty-three, listed literally as the only deployed oracle for it.
-//   EXTR11-E2E-11 (:4611)   UPDATED in 13-02/07 per D-13 -- no artboard row for the grid, and
-//                           both sweeps bounded to the header pane; the artboard table is since deleted.
+//   EXTR11-E2E-11 (:4611)   UPDATED in 13-02/07 per D-13; the artboard table is since deleted.
 //   EXTR12-E2E-06 (:4998)   UPDATED in 13-02 -- the `extraction-marker-` sweep resolves BY NAME
 //                           to the three settled fields, so a line marker cannot stand in.
 //   EXTR11-E2E-02 (:3257)   DELIBERATELY UNCHANGED -- it measures the shell's two flex siblings

@@ -21,7 +21,7 @@ import { createEntity, createInvoice, getAuditLog, login, PERSONAS } from '../ap
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { approvalRun404Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 
 // Mirrors frontend/app/src/components/AuditRow.tsx's AUDIT_TABLE_MIN_WIDTH. Hand-kept:
@@ -236,8 +236,7 @@ test.describe('Audit screen', () => {
 
     // And the page does NOT: this is the half that stops the h1 and the strip being
     // dragged sideways with the table.
-    const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(bodyOverflow, 'the page body must not scroll sideways when the table does').toBeLessThanOrEqual(1)
+    await assertPageDoesNotScrollSideways(page, `audit table at ${SCROLL_WIDTH}px`)
   })
 
   test('audit_rowHonoursMinWidthAtEveryWidth', async ({ page }) => {
@@ -521,8 +520,38 @@ test.describe('Audit screen', () => {
     await page.getByTestId('audit-company-trigger').click({ timeout: 15_000 })
     await expect(page.getByTestId('audit-company-panel')).toBeVisible({ timeout: 15_000 })
 
-    const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(bodyOverflow, 'an open popover must not widen the page past its own scrollbar').toBeLessThanOrEqual(1)
+    await assertPageDoesNotScrollSideways(page, 'audit with the company popover open')
+  })
+
+  // Proves the page-scroll helper can go red. The documentElement number is recorded, not
+  // asserted: it measures the premise that `.pf-shell` clips the document.
+  test('audit_pageScrollCheckCanGoRed', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    await expect(page.getByTestId('audit-filter-card')).toBeVisible({ timeout: 15_000 })
+
+    const { documentElementOverflow, pfScrollOverflow } = await page.evaluate(() => {
+      const scroller = document.querySelector('main.pf-main .pf-scroll')
+      const child = scroller?.firstElementChild
+      if (!scroller || !child) throw new Error('main.pf-main .pf-scroll or its first child is missing')
+      const wide = document.createElement('div')
+      wide.style.width = `${scroller.clientWidth + 600}px`
+      wide.style.height = '1px'
+      child.appendChild(wide)
+      return {
+        documentElementOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        pfScrollOverflow: scroller.scrollWidth - scroller.clientWidth,
+      }
+    })
+    await testInfo.attach('page-scroll-probe.json', {
+      body: JSON.stringify({ documentElementOverflow, pfScrollOverflow }, null, 2),
+      contentType: 'application/json',
+    })
+
+    await expect(assertPageDoesNotScrollSideways(page, 'probe')).rejects.toThrow()
+    expect(pfScrollOverflow, 'the injected child must overflow .pf-scroll').toBeGreaterThanOrEqual(599)
   })
 
   // AUDIT-08 AC-1/2/3/9/10. The one deployed-build oracle for the whole

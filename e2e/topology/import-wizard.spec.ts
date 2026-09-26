@@ -92,7 +92,7 @@ import {
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
 import {
   buildAir07TitleRowCsv,
@@ -3744,7 +3744,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
     fits: boolean
     groundScrollsX: boolean
     groundScrollsY: boolean
-    bodyScrollsX: boolean
+    pageScroll: { scrollWidth: number; clientWidth: number }
   }
   const measured: Fit[] = []
 
@@ -3764,7 +3764,6 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
             ground.evaluate((el) => ({
               groundScrollsX: el.scrollWidth > el.clientWidth + 1,
               groundScrollsY: el.scrollHeight > el.clientHeight + 1,
-              bodyScrollsX: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
             })),
           ])
           return { frameBox, innerBox, ...scroll }
@@ -3793,9 +3792,9 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
           expect(m.groundScrollsX, `the frame overflows at ${width}px, zoom ${zoom}, and the ground does not scroll`).toBe(true)
         }
 
-        // 4. The body never scrolls sideways, at any width or zoom. `overflow: hidden` on the
+        // 4. The page column never scrolls sideways, at any width or zoom. `overflow: hidden` on the
         //    body row is what contains the enlarged page; without it the whole app slides.
-        expect(m.bodyScrollsX, `the page itself scrolls horizontally at ${width}px, zoom ${zoom}`).toBe(false)
+        const pageScroll = await assertPageDoesNotScrollSideways(page, `extraction review at ${width}px, zoom ${zoom}`)
 
         // 5. The GROUND is what scrolls vertically. At zoom 150 a US-Letter frame is ~1090px
         //    tall inside a 1080px viewport, so this holds for a one-page document. It is the
@@ -3821,7 +3820,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame stays in its band, centred where
           fits,
           groundScrollsX: m.groundScrollsX,
           groundScrollsY: m.groundScrollsY,
-          bodyScrollsX: m.bodyScrollsX,
+          pageScroll,
         })
       }
     }
@@ -7092,14 +7091,13 @@ test('EXTR13-LAYOUT-02: forty lines overflow the scrollbox at 1280 and never the
   const scroll = page.getByTestId('line-item-scroll')
   const readAt = async (width: number) => {
     await page.setViewportSize({ width, height: 1080 })
-    return settledRead(async () => {
-      const box = await scroll.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-      const doc = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }))
-      return { width, box, doc }
-    }, `forty-line overflow at ${width}px`)
+    const box = await settledRead(
+      () => scroll.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth })),
+      `forty-line overflow at ${width}px`,
+    )
+    // Core AC 9: the page itself never gains a horizontal scroll under forty lines.
+    const pageScroll = await assertPageDoesNotScrollSideways(page, `forty lines at ${width}px`)
+    return { width, box, pageScroll }
   }
 
   const entryViewport = page.viewportSize()
@@ -7124,15 +7122,7 @@ test('EXTR13-LAYOUT-02: forty lines overflow the scrollbox at 1280 and never the
     `the grid fits its scrollbox at 1280px (${narrow.box.scrollWidth} in ${narrow.box.clientWidth}) -- there is no overflow to contain, so the page claim below proves nothing`,
   ).toBeGreaterThan(narrow.box.clientWidth + 1)
 
-  // Half two, and Core AC 9: the page itself never gains a horizontal scroll under forty lines.
-  expect(
-    narrow.doc.scrollWidth,
-    `forty lines pushed the page ${narrow.doc.scrollWidth - narrow.doc.clientWidth}px past its viewport at 1280px`,
-  ).toBeLessThanOrEqual(narrow.doc.clientWidth + 1)
-  expect(
-    wide.doc.scrollWidth,
-    `forty lines pushed the page ${wide.doc.scrollWidth - wide.doc.clientWidth}px past its viewport at 2560px`,
-  ).toBeLessThanOrEqual(wide.doc.clientWidth + 1)
+  // Half two, the page never scrolling sideways, is asserted inside readAt at both arms.
 
   // The control arm. Without it a grid pinned to a constant width -- one that ALWAYS overflows,
   // at any viewport -- passes both halves above. At 2560 the same forty lines fit their

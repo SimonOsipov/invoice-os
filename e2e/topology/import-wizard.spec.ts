@@ -3837,7 +3837,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame scales with zoom, centred where 
           gapLeft: g.left,
           gapRight: g.right,
           fits,
-          // A frame narrower than its pad is held by pageFrameStyle's max-width.
+          // Narrower than its padded box. At zoom 150 only pageFrameStyle's max-width holds it there.
           heldAtMax: m.frameBox!.width < m.innerBox!.width - 1,
           groundScrollsX: m.groundScrollsX,
           groundScrollsY: m.groundScrollsY,
@@ -3930,7 +3930,7 @@ test('EXTR11-E2E-08 (AC-5): the toolbar never overlaps the ground', async ({ pag
 
 // EXTR-11-06's half of the pane relationship: the two panes never cover each other, and no
 // field row spills the column it is laid out in. EXTR-11-07 owns `EXTR11-E2E-02` proper (the
-// panes TILE the body) and `-10` (the right pane yields first, never below 470px); this row is
+// panes TILE the body) and `-10` (the right pane yields first); this row is
 // the overlap half plus the spill, written where the pane's own grid is written.
 test('EXTR11-E2E-02a (AC-1/AC-6): the panes never overlap, and no field row spills its column', async ({ page }, testInfo) => {
   test.setTimeout(300_000)

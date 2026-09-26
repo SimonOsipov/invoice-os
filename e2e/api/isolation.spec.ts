@@ -22,10 +22,18 @@ import {
   getEntity,
   updateEntity,
   offboardEntity,
+  createInvoice,
+  validateInvoice,
+  getInvoice,
+  getInvoiceHistory,
+  getInvoiceApproval,
+  rawFetch,
   PERSONAS,
   ApiError,
+  type Invoice,
 } from './client'
 import { freshTin } from './fixtures'
+import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 import { TENANTS } from '../topology/targets'
 
 // captureRejection(): mirrors packages/api-client/src/client.test.ts's helper — wraps a
@@ -146,5 +154,127 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     const afterAttack = await getEntity(tokenA, entityA.id)
     expect(afterAttack.name).toBe(entityA.name)
     expect(afterAttack.status).toBe('active')
+  })
+})
+
+// cleanInvoiceFields(): own copy of persona-inhouse.spec.ts's fixture (no cross-suite
+// imports). Fires zero violations, so validate promotes it and arms the firm run.
+function cleanInvoiceFields(invoiceNumber: string) {
+  return {
+    invoice_number: invoiceNumber,
+    issue_date: '2026-01-01T00:00:00Z',
+    supplier_tin: freshTin(),
+    supplier_name: 'Acme Nigeria Ltd',
+    buyer_tin: '87654321-0002',
+    buyer_name: 'Buyer Ltd',
+    currency: 'NGN',
+    subtotal: '1000',
+    vat: '75',
+    total: '1075',
+    line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+  }
+}
+
+// satisfies makes the list exhaustive both ways: a key added to or dropped from Invoice
+// fails typecheck here.
+const INVOICE_KEYS = Object.keys({
+  id: true,
+  entity_id: true,
+  import_batch_id: true,
+  invoice_number: true,
+  status: true,
+  issue_date: true,
+  supplier_tin: true,
+  supplier_name: true,
+  buyer_tin: true,
+  buyer_name: true,
+  currency: true,
+  subtotal: true,
+  vat: true,
+  total: true,
+  violations: true,
+  rule_set_version_id: true,
+  created_at: true,
+  irn: true,
+  csid: true,
+  qr_payload: true,
+  rejection_reasons: true,
+  kept_as_is_at: true,
+  kept_as_is_by: true,
+  kept_as_is_reason: true,
+  line_items: true,
+} satisfies Record<keyof Invoice, true>) as (keyof Invoice)[]
+
+// snapshotInvoice(): what a cross-tenant write could change. overdue is computed from
+// time.Now() on every read, so it and its input due_at are dropped from each step.
+async function snapshotInvoice(token: string, id: string) {
+  const inv = await getInvoice(token, id)
+  const run = await getInvoiceApproval(token, id)
+  return {
+    invoice: Object.fromEntries(INVOICE_KEYS.map((k) => [k, inv[k]])),
+    history: await getInvoiceHistory(token, id),
+    approval: {
+      run_id: run.run_id,
+      state: run.state,
+      steps: run.steps.map(({ due_at, overdue, ...rest }) => rest),
+    },
+  }
+}
+
+// Each B refusal is compared with B's refusal for a random id, so a route that 404s
+// everyone cannot pass and no body works as an existence oracle.
+test.describe('cross-tenant invoice writes (API E2E)', () => {
+  let tokenA: string
+  let tokenB: string
+
+  test.beforeAll(async () => {
+    tokenA = await login(PERSONAS.A)
+    tokenB = await login(PERSONAS.B)
+    await ensureFirmPolicyActive(tokenA)
+  })
+
+  // One test, so a retry re-arranges a fresh invoice and the after-read shares the writes' retry unit.
+  test("B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing", async () => {
+    test.setTimeout(120_000)
+
+    const tin = freshTin()
+    const entity = await createEntity(tokenA, { name: `Zz TEST-04 cross-tenant ${tin}`, tin })
+    const created = await createInvoice(tokenA, { entity_id: entity.id, ...cleanInvoiceFields(`INV-TEST-04-X-${freshTin()}`) })
+    const validated = await validateInvoice(tokenA, created.id)
+    expect(validated.status, 'the clean fixture must promote draft -> validated').toBe('validated')
+
+    const ownRead = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${tokenA}` } })
+    expect(ownRead.status, "positive control: A's own GET of its invoice").toBe(200)
+
+    const before = await snapshotInvoice(tokenA, created.id)
+    expect(before.approval.state, 'validate must arm an open run, so approve has a real target').toBe('open')
+
+    // Well-formed bodies, so tenancy is the only reason left to refuse.
+    const headers = { Authorization: `Bearer ${tokenB}` }
+    const verbs: Record<string, (id: string) => ReturnType<typeof rawFetch>> = {
+      edit: (id) => rawFetch(`/api/invoice/v1/invoices/${id}`, { method: 'PATCH', headers, body: { buyer_name: 'cross-tenant write' } }),
+      validate: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', headers }),
+      transition: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', headers, body: { target: 'queued' } }),
+      submit: (id) =>
+        rawFetch('/api/invoice/v1/invoices/submissions', {
+          method: 'POST',
+          headers,
+          body: { invoice_ids: [id], idempotency_key: crypto.randomUUID() },
+        }),
+      approve: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/approvals`, { method: 'POST', headers, body: { decision: 'approved' } }),
+    }
+
+    for (const [verb, send] of Object.entries(verbs)) {
+      const onA = await send(created.id)
+      const onRandom = await send(crypto.randomUUID())
+      assertErrorEnvelope(onA, 404, `${verb}: B on A's invoice`)
+      assertErrorEnvelope(onRandom, 404, `${verb}: B on a random id`)
+      expect(onA.body, `${verb}: B's refusal for A's invoice must equal its refusal for a random id`).toEqual(onRandom.body)
+    }
+
+    const after = await snapshotInvoice(tokenA, created.id)
+    expect(after.invoice, "A's invoice (Invoice keys) after B's five writes").toEqual(before.invoice)
+    expect(after.history, "A's status history after B's five writes").toEqual(before.history)
+    expect(after.approval, "A's approval run after B's five writes").toEqual(before.approval)
   })
 })

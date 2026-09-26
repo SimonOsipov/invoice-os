@@ -40,6 +40,7 @@ const CONTRACT_INVOICE = 'contract-invoice.spec.ts'
 const INVOICE_SURFACES = 'invoice-surfaces.spec.ts'
 const IMPORT_WIZARD = 'import-wizard.spec.ts'
 const EVIDENCE_BUNDLE = 'evidence-bundle.spec.ts'
+const ISOLATION = 'isolation.spec.ts'
 
 function listSpecFiles(dir: string): string[] {
   const out: string[] = []
@@ -372,6 +373,18 @@ const API_MANIFEST: ManifestEntry[] = [
     'batch-post:/invoices/submissions',
     1,
   ],
+  [
+    ISOLATION,
+    "test:B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing",
+    'target:queued',
+    1,
+  ],
+  [
+    ISOLATION,
+    "test:B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing",
+    'batch-post:/invoices/submissions',
+    1,
+  ],
 ]
 
 const TOPOLOGY_MANIFEST: ManifestEntry[] = [
@@ -502,10 +515,11 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 
     // AC-8's literal floor (18: 13 target:queued + 5 batch POSTs) is the file's population
     // BEFORE this subtask's own rollup/list/enforcement test added a 14th target:queued site
-    // (line ~1196). TEST-04-04's evidence-bundle submit makes the measured 20. Floored at
-    // the measured population so this scanner cannot itself carry slack.
-    it('floor: at least 20 submit-driving sites (measured population)', () => {
-      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 20`).toBeGreaterThanOrEqual(20)
+    // (line ~1196). TEST-04-04's evidence-bundle submit makes 20; TEST-04-05's cross-tenant
+    // refusals (one transition, one batch POST) make the measured 22. Floored at the
+    // measured population so this scanner cannot itself carry slack.
+    it('floor: at least 22 submit-driving sites (measured population)', () => {
+      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 22`).toBeGreaterThanOrEqual(22)
     })
 
     it('every submit-driving call site is in the manifest', () => {

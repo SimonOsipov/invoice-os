@@ -82,7 +82,7 @@ on:
   # `paths-ignore`, NOT the `changes` job's `e2e` filter, and deliberately: this
   # trigger's job is to keep the live environment converged on `main`, so its
   # failure direction must be an unnecessary deploy, never a missed one. A
-  # duplicated 20-entry allowlist would drift from that filter and silently
+  # duplicated allowlist would drift from that filter and silently
   # reintroduce exactly the staleness this trigger exists to prevent.
   push:
     branches: [main]
@@ -161,10 +161,10 @@ jobs:
               # M4-23-08: the create/reconcile/teardown/sweep logic lives here now, so a PR
               # touching it must fire the gate that validates it.
               - 'scripts/ci/**'
-              # EXTR-03-08: without this a Python-only PR matches no filter, fires no gate, and
-              # merges green having deployed nothing. Widening `paths` only changes WHEN the gate
-              # runs -- it fires the same gate over the same services it already deploys. What
-              # fails closed on an absent service is expected_json, which this does not touch.
+              # EXTR-03-08: without this a Python-only PR merges green having deployed nothing
+              # (TestWorkflows_SidecarPathsAreFiltered). Widening this list only changes WHEN the
+              # deploy runs. What fails closed on an absent service is expected_json, which this
+              # does not touch.
               - 'sidecar/**'
               - 'go.mod'
               - 'go.sum'

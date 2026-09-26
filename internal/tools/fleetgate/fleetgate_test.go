@@ -632,24 +632,28 @@ func TestWorkflows_SidecarPathsAreFiltered(t *testing.T) {
 	root := repoRoot(t)
 
 	devLines := strings.Split(readFile(t, filepath.Join(root, devEnvRel)), "\n")
-	pr := findKey(devLines, 0, "pull_request:")
-	if pr < 0 {
-		t.Fatalf("%s: no `pull_request:` trigger", devEnvRel)
+	jobs := findKey(devLines, 0, "jobs:")
+	if jobs < 0 {
+		t.Fatalf("%s: no `jobs:` key", devEnvRel)
 	}
-	pathsAt := findKey(devLines, pr, "paths:")
-	if pathsAt < 0 {
-		t.Fatalf("%s: the `pull_request:` trigger has no `paths:` allowlist", devEnvRel)
+	changes := findKey(devLines, jobs, "changes:")
+	if changes < 0 {
+		t.Fatalf("%s: no `changes` job", devEnvRel)
 	}
-	devPaths, devAt := yamlListAt(devLines, pathsAt)
+	filterAt := findKey(devLines, changes, "e2e:")
+	if filterAt < 0 {
+		t.Fatalf("%s: the `changes` job has no `e2e:` path filter", devEnvRel)
+	}
+	devPaths, devAt := yamlListAt(devLines, filterAt)
 	if len(devPaths) == 0 {
-		t.Fatalf("%s:%d: parsed an empty `paths:` list", devEnvRel, pathsAt+1)
+		t.Fatalf("%s:%d: parsed an empty `e2e:` filter list", devEnvRel, filterAt+1)
 	}
 	if !assertMember(t, devEnvRel, devPaths, devAt, "sidecar/**") {
-		t.Errorf("%s: `sidecar/**` absent from the pull_request paths allowlist -- a Python-only PR fires no deploy gate", devEnvRel)
+		t.Errorf("%s: `sidecar/**` absent from the `changes` job's e2e filter -- a Python-only PR fires no deploy gate", devEnvRel)
 	}
 	// Control: a member every version of this list has carried.
 	if !contains(devPaths, "internal/**") {
-		t.Errorf("%s: the `paths:` list parsed to %v, which does not contain `internal/**` -- the parse reached the wrong block", devEnvRel, devPaths)
+		t.Errorf("%s: the `e2e:` filter parsed to %v, which does not contain `internal/**` -- the parse reached the wrong block", devEnvRel, devPaths)
 	}
 
 	ciLines := strings.Split(readFile(t, filepath.Join(root, ciRel)), "\n")

@@ -42,9 +42,10 @@ concurrency:
   cancel-in-progress: false
   queue: max
 
-# No `paths:` filter, deliberately. dev-env.yml HAS one, so the environment may exist from
-# an earlier commit whose paths matched even when the closing state's do not. The
-# absent-environment path is a cheap exit-0 no-op, so always running costs nothing.
+# No `paths:` filter, deliberately. The path decision lives in dev-env.yml's `changes` job, so
+# the environment may exist from an earlier commit whose paths matched even when the closing
+# state's do not. The absent-environment path is a cheap exit-0 no-op, so always running
+# costs nothing.
 
 permissions:
   contents: read   # teardown writes nothing to the repo

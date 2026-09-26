@@ -3,6 +3,7 @@
 Governs the Playwright suites in `e2e/`. They run against a **deployed** environment
 only (no local server) as the post-deploy step in `.github/workflows/dev-env.yml`, and
 are auto-collected via `testMatch **/*.spec.ts` — a new spec needs no workflow edit.
+The workflow's `E2E gate` job reports the suites' verdict to GitHub as one check.
 
 ## Organize by capability, not by date
 

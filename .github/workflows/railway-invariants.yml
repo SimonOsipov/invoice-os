@@ -4,9 +4,9 @@ name: Railway Invariants
 # exists in any environment (Railway must never deploy this project outside CI's
 # ordering). Assert-only — this workflow never silently repairs.
 #
-# Why a standalone workflow rather than a job in dev-env.yml: every job there is
-# draft-gated and dev-env.yml is additionally paths-filtered, so an assertion placed
-# there would not run on a draft PR at all. This one has NO draft gate and NO paths
+# Why a standalone workflow rather than a job in dev-env.yml: its deploy jobs are
+# draft-gated and relevance-gated (the `changes` job; the trigger has no paths filter),
+# so an assertion placed there would not run on a draft PR at all. This one has NO draft gate and NO paths
 # filter on purpose — it must run on every PR, including drafts, from the first push.
 #
 # The repair path (projectUpdate) is reachable ONLY via

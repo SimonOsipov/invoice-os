@@ -39,6 +39,8 @@ const TOPOLOGY_DIR = join(E2E_ROOT, 'topology')
 const CONTRACT_INVOICE = 'contract-invoice.spec.ts'
 const INVOICE_SURFACES = 'invoice-surfaces.spec.ts'
 const IMPORT_WIZARD = 'import-wizard.spec.ts'
+const EVIDENCE_BUNDLE = 'evidence-bundle.spec.ts'
+const ISOLATION = 'isolation.spec.ts'
 
 function listSpecFiles(dir: string): string[] {
   const out: string[] = []
@@ -365,6 +367,24 @@ const API_MANIFEST: ManifestEntry[] = [
     2,
   ],
   [CONTRACT_INVOICE, 'test:both transmit doors refuse a preparer with the same 403 body', 'batch-post:/invoices/submissions', 1],
+  [
+    EVIDENCE_BUNDLE,
+    'test:an invoice accepted through the mock adapter carries its submission, exchange rows, body files and fiscal outcome into the bundle',
+    'batch-post:/invoices/submissions',
+    1,
+  ],
+  [
+    ISOLATION,
+    "test:B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing",
+    'target:queued',
+    1,
+  ],
+  [
+    ISOLATION,
+    "test:B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing",
+    'batch-post:/invoices/submissions',
+    1,
+  ],
 ]
 
 const TOPOLOGY_MANIFEST: ManifestEntry[] = [
@@ -493,12 +513,9 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
       expect(hit, 'target:queued not found inside createFailedInvoice -- the helper, or its inner call, moved').toBe(true)
     })
 
-    // AC-8's literal floor (18: 13 target:queued + 5 batch POSTs) is the file's population
-    // BEFORE this subtask's own rollup/list/enforcement test added a 14th target:queued site
-    // (line ~1196). Floored at the measured 19, not the AC's stale 18, so this scanner cannot
-    // itself carry the slack it exists to remove from the topology side.
-    it('floor: at least 19 submit-driving sites (AC-8 baseline 18 + this subtask\'s own new site)', () => {
-      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 19`).toBeGreaterThanOrEqual(19)
+    // Floored at the measured population so this scanner cannot itself carry slack.
+    it('floor: at least 22 submit-driving sites (measured population)', () => {
+      expect(apiMatches.length, `found ${apiMatches.length} submit-driving sites in e2e/api/*.spec.ts, floor is 22`).toBeGreaterThanOrEqual(22)
     })
 
     it('every submit-driving call site is in the manifest', () => {
@@ -598,8 +615,8 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 //    matches nothing here. Nothing in e2e/ does this today for the needles this file cares
 //    about.
 //
-// 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api 19
-//    (this file's own scan), topology 14 (8 submitSelected callers + 1 detail-submit-confirm +
+// 4. THE FLOORS ARE EXACT, NOT SOFT -- both equal today's full measured population: api (the
+//    'floor: at least N submit-driving sites' test above), topology 13 (7 submitSelected callers + 1 detail-submit-confirm +
 //    1 review-bulk-confirm + 4 transitionInvoice). AC-9 as literally worded said "fails below
 //    7"; re-verified 2026-08-18 as a miscount (7 was arithmetic on the way to 9, not the
 //    intended floor) and corrected here, rather than quietly kept, once a floor of 7 against

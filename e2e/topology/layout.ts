@@ -210,3 +210,16 @@ export async function assertSameHeight(
 
   return measured
 }
+
+/** Asserts the app shell's scroller, `.pf-scroll`, has a box and does not scroll sideways. */
+export async function assertPageDoesNotScrollSideways(page: Page, label: string): Promise<{ scrollWidth: number; clientWidth: number }> {
+  const reading = await page
+    .locator('main.pf-main .pf-scroll')
+    .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(reading.clientWidth, `${label}: the page column (.pf-scroll) has no box`).toBeGreaterThan(0)
+  expect(
+    reading.scrollWidth - reading.clientWidth,
+    `${label}: the page column scrolls sideways (scrollWidth ${reading.scrollWidth} vs clientWidth ${reading.clientWidth})`,
+  ).toBeLessThanOrEqual(1)
+  return reading
+}

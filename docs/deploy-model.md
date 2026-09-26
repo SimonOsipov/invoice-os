@@ -14,6 +14,11 @@ actually existing: CI now creates, tears down and sweeps them itself.
   > The fork is issued by **CI**, not by Railway's PR Environments feature — that feature
   > never created anything here (Railway is not subscribed to this repo's PR events) and is
   > OFF, see [Railway PR Environments are OFF](#railway-pr-environments-are-off) below.
+
+  Every PR event, draft or ready, reports an **`E2E gate`** check. It passes when no path in
+  the `changes` job's `e2e` filter changed (no deploy runs), fails on a draft PR with
+  relevant changes, and otherwise fails unless the `e2e` job succeeded. To retry it, re-run
+  the whole workflow, never "re-run failed jobs".
 - **Close a PR (merged or abandoned)** → `.github/workflows/dev-env-teardown.yml`
   (**M4-23-05**) deletes that PR's **whole ephemeral environment** via `environmentDelete`,
   at environment granularity (Decision `[teardown-deletes-environment]`) — not the old
@@ -180,7 +185,8 @@ in its own order, breaking the gateway-first sequencing `dev-env.yml` depends on
 So CI asserts both, and fails loudly rather than repairing:
 
 - `.github/workflows/railway-invariants.yml` — runs on **every** `pull_request`, with no
-  draft gate and no `paths:` filter (unlike `dev-env.yml`, whose jobs are all draft-gated),
+  draft gate and no path decision (unlike `dev-env.yml`, whose deploy jobs are draft-gated
+  and gated on its `changes` job's path filter),
   so drift is caught from the first push of any branch.
 - `scripts/ci/railway-env.sh assert-project-settings` — reads the project back over
   Railway's GraphQL API and exits non-zero unless it positively observes

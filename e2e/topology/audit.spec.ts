@@ -21,13 +21,8 @@ import { createEntity, createInvoice, getAuditLog, login, PERSONAS } from '../ap
 import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { approvalRun404Dropper } from './consoleGate'
-import { assertFillsColumn, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
+import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 import { APP_URL, FIRM_PERSONA, INHOUSE_PERSONA } from './targets'
-
-// Mirrors frontend/app/src/components/AuditRow.tsx's AUDIT_TABLE_MIN_WIDTH. Hand-kept:
-// e2e/ has no import path into the SPA's source, the same way every other wire mirror in
-// this suite is hand-kept.
-const TABLE_MIN_WIDTH = 868
 
 // Narrow enough to force the table past its floor -- see the file header.
 const SCROLL_WIDTH = 900
@@ -236,29 +231,34 @@ test.describe('Audit screen', () => {
 
     // And the page does NOT: this is the half that stops the h1 and the strip being
     // dragged sideways with the table.
-    const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(bodyOverflow, 'the page body must not scroll sideways when the table does').toBeLessThanOrEqual(1)
+    await assertPageDoesNotScrollSideways(page, `audit table at ${SCROLL_WIDTH}px`)
   })
 
-  test('audit_rowHonoursMinWidthAtEveryWidth', async ({ page }) => {
+  test('audit_rowFillsTheTableAtEveryWidth', async ({ page }) => {
     test.setTimeout(180_000)
     await signInAs(page, 'firm')
     await openAudit(page)
     await expect(page.getByTestId('audit-row').first()).toBeVisible()
 
-    const measured: Array<{ width: number; row: number; head: number }> = []
+    const measured: Array<{ width: number; row: number; head: number; table: number }> = []
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
       const row = page.getByTestId('audit-row').first()
       const head = page.getByTestId('audit-table-head')
+      const table = page.getByTestId('audit-table')
       await expect
         .poll(async () => (await row.boundingBox())?.width ?? null, {
           message: `the row must render at ${width}px`,
           timeout: 10_000,
         })
-        .toBeGreaterThanOrEqual(TABLE_MIN_WIDTH)
-      const [rowBox, headBox] = await Promise.all([row.boundingBox(), head.boundingBox()])
-      if (rowBox && headBox) measured.push({ width, row: rowBox.width, head: headBox.width })
+        .toBeGreaterThan(0)
+      // clientWidth is the table's box inside its 1px border, which is the row's full span.
+      const [rowBox, headBox, tableWidth] = await Promise.all([
+        row.boundingBox(),
+        head.boundingBox(),
+        table.evaluate((el) => el.clientWidth),
+      ])
+      if (rowBox && headBox) measured.push({ width, row: rowBox.width, head: headBox.width, table: tableWidth })
 
       // Attached, never compared to a baseline -- visual regression is banned here
       // (docs/e2e-convention.md). This is the rendered half of
@@ -273,6 +273,7 @@ test.describe('Audit screen', () => {
     // Head and body draw the same grid, so a column boundary cannot drift between them.
     for (const m of measured) {
       expect(Math.abs(m.row - m.head), `head and row must share a width at ${m.width}px`).toBeLessThanOrEqual(1)
+      expect(Math.abs(m.row - m.table), `the row must fill the table at ${m.width}px`).toBeLessThanOrEqual(1)
     }
     await test.info().attach('audit-row-widths', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
   })
@@ -521,8 +522,38 @@ test.describe('Audit screen', () => {
     await page.getByTestId('audit-company-trigger').click({ timeout: 15_000 })
     await expect(page.getByTestId('audit-company-panel')).toBeVisible({ timeout: 15_000 })
 
-    const bodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(bodyOverflow, 'an open popover must not widen the page past its own scrollbar').toBeLessThanOrEqual(1)
+    await assertPageDoesNotScrollSideways(page, 'audit with the company popover open')
+  })
+
+  // Proves the page-scroll helper can go red. The documentElement number is recorded, not
+  // asserted: it measures the premise that `.pf-shell` clips the document.
+  test('audit_pageScrollCheckCanGoRed', async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await signInAs(page, 'firm')
+    await openAudit(page)
+    await page.setViewportSize({ width: 1280, height: 1080 })
+    await expect(page.getByTestId('audit-filter-card')).toBeVisible({ timeout: 15_000 })
+
+    const { documentElementOverflow, pfScrollOverflow } = await page.evaluate(() => {
+      const scroller = document.querySelector('main.pf-main .pf-scroll')
+      const child = scroller?.firstElementChild
+      if (!scroller || !child) throw new Error('main.pf-main .pf-scroll or its first child is missing')
+      const wide = document.createElement('div')
+      wide.style.width = `${scroller.clientWidth + 600}px`
+      wide.style.height = '1px'
+      child.appendChild(wide)
+      return {
+        documentElementOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        pfScrollOverflow: scroller.scrollWidth - scroller.clientWidth,
+      }
+    })
+    await testInfo.attach('page-scroll-probe.json', {
+      body: JSON.stringify({ documentElementOverflow, pfScrollOverflow }, null, 2),
+      contentType: 'application/json',
+    })
+
+    await expect(assertPageDoesNotScrollSideways(page, 'probe')).rejects.toThrow(/probe: the page column scrolls sideways/)
+    expect(pfScrollOverflow, 'the injected child must overflow .pf-scroll').toBeGreaterThanOrEqual(599)
   })
 
   // AUDIT-08 AC-1/2/3/9/10. The one deployed-build oracle for the whole

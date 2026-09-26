@@ -158,7 +158,7 @@ func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 }
 
 // T5 (AC-4) — RED at HEAD: scripts/** is in no ci.yml paths filter (F2). Mirrors
-// dev-env.yml:92, which already lists scripts/ci/**. Without this, T1-T4 above are
+// dev-env.yml, which already lists scripts/ci/**. Without this, T1-T4 above are
 // inert on exactly the edit they guard: a scripts-only commit matches no filter, the
 // Go job is skipped, and `go test ./...` never runs.
 func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {

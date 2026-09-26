@@ -73,42 +73,16 @@ name: Dev Env (deploy full fleet + verify)
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'frontend/**'
-      - 'packages/**'
-      - 'e2e/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'migrations/**'
-      - 'db/**'
-      - 'tools/prenv/**'
-      # M4-23-08: the create/reconcile/teardown/sweep logic lives here now, so a PR
-      # touching it must fire the gate that validates it.
-      - 'scripts/ci/**'
-      # EXTR-03-08: without this a Python-only PR matches no filter, fires no gate, and
-      # merges green having deployed nothing. Widening `paths` only changes WHEN the gate
-      # runs -- it fires the same gate over the same services it already deploys. What
-      # fails closed on an absent service is expected_json, which this does not touch.
-      - 'sidecar/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-      - 'Dockerfile.dockerignore'
-      - 'Caddyfile'
-      - 'package.json'
-      - 'pnpm-workspace.yaml'
-      - 'pnpm-lock.yaml'
-      - '.github/workflows/dev-env.yml'
   # Merging to `main` deploys the persistent environment, so what is live is
   # what is on `main`. Before this, NOTHING deployed on merge: a PR deployed to
   # its own ephemeral env, dev-env-teardown.yml deleted that env on close, and
   # the persistent env kept serving whatever was last dispatched by hand — it
   # sat 3 merged PRs / 16 commits stale before anyone noticed.
   #
-  # `paths-ignore`, NOT the `paths` allowlist above, and deliberately: this
+  # `paths-ignore`, NOT the `changes` job's `e2e` filter, and deliberately: this
   # trigger's job is to keep the live environment converged on `main`, so its
   # failure direction must be an unnecessary deploy, never a missed one. A
-  # duplicated 20-entry allowlist would drift from the one above and silently
+  # duplicated allowlist would drift from that filter and silently
   # reintroduce exactly the staleness this trigger exists to prevent.
   push:
     branches: [main]
@@ -157,11 +131,57 @@ env:
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
 jobs:
+  # Decides whether this PR needs the deploy chain; `E2E gate` passes a PR it marks not relevant.
+  # A skipped or renamed filter yields '', which the gate fails (e2e/mergeGate.ts).
+  changes:
+    name: Detect E2E-relevant changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+      - uses: dorny/paths-filter@v3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            e2e:
+              - 'frontend/**'
+              - 'packages/**'
+              - 'e2e/**'
+              - 'cmd/**'
+              - 'internal/**'
+              - 'migrations/**'
+              - 'db/**'
+              - 'tools/prenv/**'
+              # M4-23-08: the create/reconcile/teardown/sweep logic lives here now, so a PR
+              # touching it must fire the gate that validates it.
+              - 'scripts/ci/**'
+              # EXTR-03-08: without this a Python-only PR merges green having deployed nothing
+              # (TestWorkflows_SidecarPathsAreFiltered). Widening this list only changes WHEN the
+              # deploy runs. What fails closed on an absent service is expected_json, which this
+              # does not touch.
+              - 'sidecar/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - 'Dockerfile.dockerignore'
+              - 'Caddyfile'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+              - 'pnpm-lock.yaml'
+              - '.github/workflows/dev-env.yml'
+
   # 0. CI gate: never deploy red code. On a PR, wait for the required `CI`
   #    workflow to go GREEN on THIS commit before any deploy job runs.
   #    workflow_dispatch bypasses this gate (manual force-deploy for live
-  #    debugging); draft PRs skip it (and everything below). Every deploy job
-  #    is transitively downstream of deploy-gateway, so gating deploy-gateway
+  #    debugging); draft PRs and PRs the `changes` job marks not E2E-relevant
+  #    skip it and the deploy chain below, while `E2E gate` still reports.
+  #    Every deploy job is transitively downstream of deploy-gateway, so gating deploy-gateway
   #    on this one job gates the whole pipeline. Runs in PARALLEL with
   #    prepare-env below (neither needs the other) to keep wall-clock time
   #    down — CI can take up to ~20m, environment preparation far less now
@@ -181,9 +201,11 @@ jobs:
     # run deploys normally, so the live environment still converges on the last
     # commit merged. Treating `cancelled` as "skip quietly" would be strictly
     # worse: it is indistinguishable from a human cancelling a deploy on purpose.
+    needs: [changes]
     if: >-
-      ( github.event_name == 'pull_request' && github.event.pull_request.draft == false ) ||
-      github.event_name == 'push'
+      ( ( github.event_name == 'pull_request' && github.event.pull_request.draft == false ) ||
+        github.event_name == 'push' ) &&
+      needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -232,11 +254,13 @@ jobs:
     # `github.event.pull_request.draft == false`. On a push that expression is
     # `null == false`, which GitHub's loose comparison coerces to true — correct
     # by accident, via a coercion rule no reader should have to know.
+    needs: [changes]
     if: >-
-      always() &&
-      ( github.event_name == 'workflow_dispatch' ||
-        github.event_name == 'push' ||
-        github.event.pull_request.draft == false )
+      ( always() &&
+        ( github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'push' ||
+          github.event.pull_request.draft == false ) ) &&
+      needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     # Raised 10 -> 20 by M4-23-04. The seam now creates the Postgres volume and
     # brings Postgres up in a fresh fork, waiting for it (<=420s). At 10
@@ -1103,6 +1127,25 @@ jobs:
           path: e2e/report-topology/
           if-no-files-found: ignore
           retention-days: 7
+
+  # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
+  e2e-gate:
+    name: E2E gate
+    needs: [changes, e2e]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node e2e/mergeGate.ts
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          E2E_RELEVANT: ${{ needs.changes.outputs.e2e }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          E2E_RESULT: ${{ needs.e2e.result }}
 
   # NOTE: there is still no scale-down job here — teardown is a separate
   # workflow, .github/workflows/dev-env-teardown.yml (M4-23-05), which deletes

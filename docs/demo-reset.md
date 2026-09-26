@@ -235,8 +235,8 @@ in `scripts/ci/railway-env.sh` upserts and independently re-verifies `app.VITE_D
 (`:1242`, `:1252`) against `$RAILWAY_SVC_APP_ID`, the same `ARG`/`ENV` build-arg mechanism
 `frontend/app/Dockerfile` already uses for `VITE_GATEWAY_URL` and `VITE_LANDING_URL` (`:17-26`).
 It runs from the `Point the fork's URL variables at the fork` step
-(`.github/workflows/dev-env.yml:514-525`), gated `github.event_name == 'pull_request'` and, at
-the enclosing `prepare-env` job, on the PR being non-draft (`:229-239`) — so a draft PR's
+(`.github/workflows/dev-env.yml`), gated `github.event_name == 'pull_request'` and, at
+the enclosing `prepare-env` job, on the PR being non-draft — so a draft PR's
 environment never gets the flag and never deploys at all.
 
 **Production.** The `app` service has `VITE_DEMO_MODE=true` (measured 2026-09-23), so the

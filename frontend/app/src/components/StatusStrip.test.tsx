@@ -8,7 +8,7 @@
 //
 // jsdom HAS NO LAYOUT ENGINE. Every flex / min-width / white-space assertion below reads
 // an inline style PROP, never a measured box. The geometry claims -- above the fold, no
-// caption ellipsised, the rail absorbing the slack, the 96px band -- are provable only in
+// caption ellipsised, the rail absorbing the slack -- are provable only in
 // a browser and belong to the sweep in e2e/topology/invoice-surfaces.spec.ts (arch §7 A-D).
 //
 // Two specs render nothing and are GREEN in the red commit by design -- the token

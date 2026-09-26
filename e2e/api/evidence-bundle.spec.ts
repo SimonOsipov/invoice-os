@@ -19,8 +19,8 @@
 // story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
 // invoice is never submitted. The second describe submits one through the mock adapter and
 // proves only that its body files exist and the request body carries the invoice number.
-// Departure from docs/e2e-convention.md's "containment, never a literal count": the bundle
-// is scoped to an entity this file creates in beforeAll and nothing else ever touches, so
+// Departure from docs/e2e-convention.md's "containment, never a literal count": each
+// describe's bundle is scoped to an entity it creates and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
 // here -- it proves no OTHER entity's invoice leaked into the bundle, which a toContain
 // assertion cannot see.
@@ -327,6 +327,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     })
     expect(submitted.status, 'batch-submit status').toBe(200)
     const results = (submitted.body as { results: { enqueued: boolean }[] }).results
+    expect(results, 'one result for one requested invoice').toHaveLength(1)
     expect(results[0].enqueued, 'the approved, validated invoice should be enqueued').toBe(true)
 
     await expect
@@ -357,7 +358,7 @@ test.describe('evidence bundle for a submitted invoice (API E2E)', () => {
     const exchange = parseCsv(decoder.decode(zip['exchange.csv']))
     const attempts = exchange.filter((r) => r.invoice_id === created.id)
     expect(attempts.length, 'exchange.csv must hold at least one attempt for this invoice').toBeGreaterThanOrEqual(1)
-    // exchange.go orders rows by occurred_at, so the last row is the attempt that got the verdict.
+    // internal/archive exchange.go orders rows by occurred_at, so the last row is the attempt that got the verdict.
     const last = attempts[attempts.length - 1]
     expect(last.operation, 'last attempt operation').toBe(OP_SUBMIT)
     expect(last.outcome, 'last attempt outcome').toBe(OUTCOME_SENT)

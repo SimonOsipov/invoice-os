@@ -46,7 +46,7 @@ backlog/
 
 # ---- Claude Code (local project instructions, not versioned) ----
 CLAUDE.md
-# RALPH story worktrees live here (see RALPH_PROMPT.md) — never commit them
+# Agent story worktrees live here — never commit them
 .claude/worktrees/
 # RALPH per-worktree orchestration scratch (session state, not repo content).
 # Untracked-but-not-ignored kept getting swept into `git add -A` by agents.

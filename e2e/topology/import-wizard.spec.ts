@@ -7843,9 +7843,8 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
     `the seeding DOCX did not settle succeeded (kind ${seedJobs[GOLDEN_DOCX_NAME].failure_kind ?? 'null'}, error ${seedJobs[GOLDEN_DOCX_NAME].last_error ?? 'none'})`,
   ).toBe('succeeded')
 
-  // The precondition read off the REGISTER, not off the landing: which surface run 1 ends on is
-  // routeAfterRun's business and no AC of this story's, but the invoice existing is the whole
-  // basis of run 2. Listed by entity rather than searched by `q`, so nothing here depends on
+  // The precondition read off the REGISTER, not off the landing: the invoice existing is the
+  // whole basis of run 2. Listed by entity rather than searched by `q`, so nothing here depends on
   // the search predicate's matching rules.
   // POLLED, not read once: a settled extraction is not a filed invoice. The SPA calls the
   // import endpoint AFTER the job reaches its terminal state, so a single read here races the

@@ -7423,12 +7423,17 @@ async function runDocumentsIn(
   await page.locator('input[type="file"]#pf-import-file').setInputFiles(files)
   await page.getByRole('button', { name: 'Extract invoices' }).click()
 
+  // expect.poll's message is a string fixed at call time, so the URL at failure is appended here:
+  // a late route from an earlier run shows up as the page sitting on another screen.
   await expect
     .poll(() => Object.keys(documentIds).length, {
-      message: `not every document reached storage (${JSON.stringify(documentIds)})`,
+      message: 'not every document reached storage',
       timeout: 120_000,
     })
     .toBe(files.length)
+    .catch((e: Error) => {
+      throw new Error(`${e.message}\ncaptured ${JSON.stringify(documentIds)}; page was at ${page.url()}`, { cause: e })
+    })
   // Every upload is captured, so the handler has nothing left to do and must not outlive this
   // call -- see captureUpload's own note.
   await page.unroute('**/api/submission/v1/documents', captureUpload)
@@ -7855,6 +7860,16 @@ test('EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and r
       },
     )
     .toContain(GOLDEN_DOCX_NUMBER)
+
+  // Run 1 routes to its review AFTER the import lands; starting run 2 earlier lets that late
+  // navigation replace run 2's wizard before it uploads anything.
+  await expect
+    .poll(() => new URL(page.url()).pathname, {
+      message: "run 1 never landed on its extraction review -- run 2 would race run 1's late route",
+      timeout: 180_000,
+    })
+    .toMatch(/^\/extraction\/[0-9a-fA-F-]{36}$/)
+  await expect(page.getByTestId('extraction-review-body')).toBeVisible()
 
   // --- run 2: the same document again, beside one that quarantines -----------------------
   const { jobs } = await runDocumentsIn(page, token, [

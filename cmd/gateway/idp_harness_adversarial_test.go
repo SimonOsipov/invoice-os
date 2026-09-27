@@ -132,7 +132,7 @@ func stubEnv(t *testing.T, log, container, name string) string {
 	return ""
 }
 
-var idpContainers = []string{"idp-es256", "idp-hs256", "idp-rebuild"}
+var idpContainers = []string{"idp-es256", "idp-hs256", "idp-rebuild", "idp-short"}
 
 const idpIssuer = "urn:ascomply:auth:ci"
 
@@ -160,7 +160,7 @@ func TestIdpUpStdoutIsTheURLsAndTheIssuer(t *testing.T) {
 			want := []string{
 				"IDP_ES256_URL=http://localhost:9991", "IDP_HS256_URL=http://localhost:9992",
 				"IDP_REBUILD_URL=http://localhost:9993", "IDP_MAIL_URL=http://localhost:9994",
-				"MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
+				"IDP_SHORT_URL=http://localhost:9996", "MAILPIT_URL=http://localhost:8025", "IDP_ISSUER=" + idpIssuer,
 			}
 			got := strings.Split(strings.TrimSuffix(r.stdout, "\n"), "\n")
 			if !strings.HasSuffix(r.stdout, "\n") || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
@@ -215,7 +215,7 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if !strings.Contains(r.log, "docker build -q -f sidecar/auth/Dockerfile -t idp:ci sidecar/auth") {
 				t.Errorf("the committed Dockerfile was not built; stub log:\n%s", r.log)
 			}
-			ports := map[string]string{"idp-es256": "9991", "idp-hs256": "9992", "idp-rebuild": "9993"}
+			ports := map[string]string{"idp-es256": "9991", "idp-hs256": "9992", "idp-rebuild": "9993", "idp-short": "9996"}
 			for _, c := range idpContainers {
 				runs := stubLines(r.log, "RUN", c)
 				if len(runs) != 1 {
@@ -254,13 +254,17 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 
 			es := stubEnv(t, r.log, "idp-es256", "GOTRUE_JWT_KEYS")
 			rb := stubEnv(t, r.log, "idp-rebuild", "GOTRUE_JWT_KEYS")
-			if !strings.Contains(es, stubKeyMarker) || !strings.Contains(rb, stubKeyMarker) {
-				t.Fatalf("es256 or rebuild got no generated key: %q / %q", es, rb)
+			sh := stubEnv(t, r.log, "idp-short", "GOTRUE_JWT_KEYS")
+			if !strings.Contains(es, stubKeyMarker) || !strings.Contains(rb, stubKeyMarker) || !strings.Contains(sh, stubKeyMarker) {
+				t.Fatalf("es256, rebuild or short got no generated key: %q / %q / %q", es, rb, sh)
 			}
 			if es == rb {
 				t.Error("idp-rebuild reuses idp-es256's key; each container gets its own")
 			}
-			for c, want := range map[string]bool{"idp-es256": true, "idp-hs256": false, "idp-rebuild": true} {
+			if sh == es || sh == rb || sh == stubEnv(t, r.log, "idp-mail", "GOTRUE_JWT_KEYS") {
+				t.Error("idp-short reuses another container's key; each container gets its own")
+			}
+			for c, want := range map[string]bool{"idp-es256": true, "idp-hs256": false, "idp-rebuild": true, "idp-short": true} {
 				if got := strings.Contains(stubLines(r.log, "RUN", c)[0]+" ", "-e GOTRUE_JWT_KEYS "); got != want {
 					t.Errorf("%s forwards GOTRUE_JWT_KEYS = %v, want %v", c, got, want)
 				}
@@ -268,9 +272,19 @@ func TestIdpUpContainerConfiguration(t *testing.T) {
 			if rbArgv := stubLines(r.log, "RUN", "idp-rebuild")[0]; !strings.Contains(rbArgv, "GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI=pg-functions://postgres/public/test_rebuild_claims_hook") {
 				t.Errorf("idp-rebuild does not point the hook at test_rebuild_claims_hook: %s", rbArgv)
 			}
-			for _, c := range []string{"idp-es256", "idp-hs256"} {
+			for _, c := range []string{"idp-es256", "idp-hs256", "idp-short"} {
 				if strings.Contains(stubLines(r.log, "RUN", c)[0], "HOOK_CUSTOM_ACCESS_TOKEN_URI") {
 					t.Errorf("%s overrides the image's hook URI", c)
+				}
+			}
+			// Only idp-short shortens the TTL; the other suites assume the image's 3600 s.
+			for _, c := range append(slices.Clone(idpContainers), "idp-mail") {
+				want := ""
+				if c == "idp-short" {
+					want = "5"
+				}
+				if got := argvEnv(stubLines(r.log, "RUN", c)[0], "GOTRUE_JWT_EXP"); got != want {
+					t.Errorf("%s: GOTRUE_JWT_EXP = %q, want %q", c, got, want)
 				}
 			}
 		})
@@ -358,8 +372,8 @@ func TestIdpDownRemovesEveryContainerIdpUpStarts(t *testing.T) {
 			started = append(started, strings.Fields(rest)[0])
 		}
 	}
-	if len(started) < 5 {
-		t.Fatalf("control: idp-up.sh started %v; want at least five containers", started)
+	if len(started) < 6 {
+		t.Fatalf("control: idp-up.sh started %v; want at least six containers", started)
 	}
 
 	dir := t.TempDir()

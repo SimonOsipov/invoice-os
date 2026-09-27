@@ -2,7 +2,8 @@
 # scripts/ci/idp-up.sh <auth-admin-dsn> <db-host-port>
 #
 # Builds sidecar/auth/Dockerfile and starts idp-es256, idp-hs256 and idp-rebuild on 9991-9993,
-# plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its confirmation links there.
+# plus mailpit (SMTP 1025, API 8025) and idp-mail on 9994, which mails its confirmation links there,
+# and idp-short on 9996, whose access tokens expire after 5 s (9995 is the mailed-link verify handler).
 # Stdout carries only the NAME=url lines and IDP_ISSUER (safe for $GITHUB_ENV); the rest goes to stderr.
 # The DSN must be supabase_auth_admin's: a superuser would hide a missing grant or search_path.
 set -euo pipefail
@@ -91,7 +92,7 @@ start_mailpit() {
   exit 1
 }
 
-# The first three never mail; idp-mail does.
+# Only idp-mail mails.
 no_mail=(-e GOTRUE_MAILER_AUTOCONFIRM=true -e GOTRUE_SMTP_HOST=)
 
 # Sequential: each GoTrue runs its migrations on boot, so the first finishes them alone.
@@ -108,10 +109,13 @@ start idp-mail 9994 -e GOTRUE_JWT_KEYS \
   -e GOTRUE_MAILER_AUTOCONFIRM=false \
   -e GOTRUE_SMTP_HOST="$smtp_host" -e GOTRUE_SMTP_PORT=1025 -e GOTRUE_SMTP_PASS=unused \
   -e GOTRUE_MAILER_URLPATHS_CONFIRMATION=http://localhost:9995/auth/verify
+es256_keys
+start idp-short 9996 -e GOTRUE_JWT_KEYS "${no_mail[@]}" -e GOTRUE_JWT_EXP=5
 
 echo "IDP_ES256_URL=http://localhost:9991"
 echo "IDP_HS256_URL=http://localhost:9992"
 echo "IDP_REBUILD_URL=http://localhost:9993"
 echo "IDP_MAIL_URL=http://localhost:9994"
+echo "IDP_SHORT_URL=http://localhost:9996"
 echo "MAILPIT_URL=http://localhost:8025"
 echo "IDP_ISSUER=$issuer"

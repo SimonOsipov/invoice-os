@@ -820,7 +820,7 @@ jobs:
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestIdP ./internal/platform/auth/...
       - name: Container logs on failure
         if: failure()
-        run: for c in idp-es256 idp-hs256 idp-rebuild idp-mail mailpit; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
+        run: for c in idp-es256 idp-hs256 idp-rebuild idp-mail idp-short mailpit; do echo "::group::$c"; docker logs --tail 100 "$c" || true; echo "::endgroup::"; done
 
   # The M2-08 smoke + M2-09 exactly-once queue suites. Prove the async job spine end to end
   # against a real Postgres AS invoice_app (non-superuser, NOBYPASSRLS): the transactional-

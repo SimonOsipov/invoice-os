@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	EnvKey  = "TYPESAFE_API_KEY"
+	EnvKey  = "OPENROUTER_API_KEY" // shared with the AI client
 	EnvFake = "JEV_FAKE"
 )
 

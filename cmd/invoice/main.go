@@ -195,7 +195,7 @@ func main() {
 	if err != nil {
 		fatal(app.Logger, "invoice: ai: %v", err)
 	}
-	// An unset TYPESAFE_API_KEY is off; both FromEnv errors stop the boot.
+	// An unset OPENROUTER_API_KEY is off; both FromEnv errors stop the boot.
 	jevClient, err := jev.FromEnv(app.Logger)
 	if err != nil {
 		fatal(app.Logger, "invoice: jev: %v", err)

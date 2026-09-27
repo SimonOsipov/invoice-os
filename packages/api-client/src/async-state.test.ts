@@ -9,7 +9,7 @@
 //
 // useAsync's runtime path is not tested here — Decision (i) in the story: hook logic is
 // covered by testing the extracted pure reducer + helpers, and the runtime path is exercised
-// by the surface that wires it. Its shape is pinned in async-state.hook-shape.test.ts.
+// by the surface that wires it.
 import { describe, expect, it } from 'vitest'
 
 import { ApiError } from './client'

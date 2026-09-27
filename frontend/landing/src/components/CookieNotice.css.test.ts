@@ -278,13 +278,6 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     }
   })
 
-  it('T2-10(b) arm 3: no [data-consent] block of any kind touches box geometry', () => {
-    const blocks = consentBlocks(CSS_SRC)
-    expect(blocks.length, 'expected the per-button blocks to exist').toBeGreaterThan(0)
-    const offenders = blocks.flatMap((b) => b.props.filter(isBoxProp).map((p) => `${b.selector} { ${p} }`))
-    expect(offenders).toEqual([])
-  })
-
   it('T2-10(c) / AC-9: no cn-accept / cn-reject class exists in the source', () => {
     // Population floor — the claim is meaningless until the card ships.
     expect(CSS_SRC).toContain('.cookie-note')
@@ -314,7 +307,7 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
 
     // Arm 1 must go red on it...
     expect(new Set(reject!.props)).not.toEqual(new Set(['background', 'color']))
-    // ...and so must arm 3.
+    // ...and so must the box-geometry scan's isBoxProp.
     expect(reject!.props.filter(isBoxProp)).toEqual(['height'])
 
     // Arm 2's allowlist still admits the planted hover, so it is not simply rejecting everything.

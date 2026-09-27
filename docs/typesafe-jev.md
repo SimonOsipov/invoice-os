@@ -105,13 +105,13 @@ source environment holds a sealed variable, except `GOTRUE_JWT_KEYS`, `GOTRUE_JW
 `GOTRUE_SMTP_PASS` on `auth`. `set-ai-fake` is the one defence. It runs on
 every PR `prepare-env` run and refuses any environment that is not ephemeral. For each of
 `submission` and `invoice` it:
-1. upserts `JEV_FAKE=true` and the retired `TYPESAFE_API_KEY=""`, beside the same pair for the AI client;
+1. upserts `JEV_FAKE=true` and `OPENROUTER_API_KEY=""`, beside `AI_FAKE=true` for the AI client;
 2. reads `JEV_FAKE` back and fails the job unless it is `true`;
-3. re-reads the variable map and fails the job if the retired `TYPESAFE_API_KEY` or
-   `OPENROUTER_API_KEY` is anything but absent or `""`.
+3. re-reads the variable map and fails the job if `OPENROUTER_API_KEY` is anything but
+   absent or `""`.
 
-`set-ai-fake` keeps blanking and auditing the retired `TYPESAFE_API_KEY` until the user
-deletes it from production, because a fork still copies it from there.
+`set-ai-fake` blanks and audits `OPENROUTER_API_KEY` only. The retired `TYPESAFE_API_KEY`
+was deleted from production on 2026-09-27, so no fork copies it.
 
 The key check never prints a value. `set-ai-fake --self-test` runs its fixtures with no
 token and no network call.

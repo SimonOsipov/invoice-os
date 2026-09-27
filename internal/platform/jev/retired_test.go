@@ -54,7 +54,7 @@ func retiredRouteScan(t *testing.T, root string) (scanned, hits []string) {
 			switch {
 			case strings.Contains(strings.ToLower(src), retiredHost):
 				hits = append(hits, rel+": names "+retiredHost)
-			case strings.HasSuffix(rel, ".go") && strings.Contains(src, retiredKeyVar):
+			case strings.Contains(src, retiredKeyVar):
 				hits = append(hits, rel+": names "+retiredKeyVar)
 			}
 			return nil
@@ -85,19 +85,10 @@ func TestNoSourceNamesTheRetiredRoute(t *testing.T) {
 		}
 	}
 
-	const railwayEnv = "scripts/ci/railway-env.sh"
-	for _, want := range []string{"internal/platform/jev/client.go", railwayEnv} {
+	// The planted-tree tests below prove a .sh or workflow naming the key is flagged.
+	for _, want := range []string{"internal/platform/jev/client.go", "scripts/ci/railway-env.sh", ".github/workflows/dev-env.yml"} {
 		if !slices.Contains(scanned, want) {
 			t.Errorf("the walk did not visit %s", want)
-		}
-	}
-	// The key-name rule stops at .go files because set-ai-fake still blanks and audits the retired key.
-	if !strings.Contains(readRepoFile(t, root, railwayEnv), retiredKeyVar) {
-		t.Errorf("%s no longer names %s -- the .sh control below proves nothing; drop it with the retired-key blank", railwayEnv, retiredKeyVar)
-	}
-	for _, h := range hits {
-		if strings.HasPrefix(h, railwayEnv+":") {
-			t.Errorf("flagged %s, want the key-name rule limited to .go files: %s", railwayEnv, h)
 		}
 	}
 
@@ -137,9 +128,6 @@ func TestRetiredRouteScan_FindsAPlantedNeedle(t *testing.T) {
 	if len(scanned) == 0 {
 		t.Fatal("scanned zero files in the planted tree")
 	}
-	if !slices.Contains(scanned, "scripts/key.sh") {
-		t.Errorf("the walk did not visit scripts/key.sh, so its absence from hits proves nothing")
-	}
 	for _, skipped := range []string{"internal/x/both_test.go", "e2e/node_modules/pkg/index.js"} {
 		if slices.Contains(scanned, skipped) {
 			t.Errorf("the walk scanned %s, want it skipped", skipped)
@@ -151,13 +139,13 @@ func TestRetiredRouteScan_FindsAPlantedNeedle(t *testing.T) {
 		flagged = append(flagged, strings.SplitN(h, ":", 2)[0])
 	}
 	slices.Sort(flagged)
-	want := []string{"internal/x/key.go", "scripts/host.sh"}
+	want := []string{"internal/x/key.go", "scripts/host.sh", "scripts/key.sh"}
 	if !slices.Equal(flagged, want) {
 		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
 	}
 }
 
-// Every root and file kind the guard owns; the key-name rule stops at .go, so a workflow naming it is not flagged.
+// Every root and file kind the guard owns, for both the host and the key name.
 func TestRetiredRouteScan_FlagsEveryRootAndFileKind(t *testing.T) {
 	root := t.TempDir()
 	plant := map[string]string{
@@ -188,7 +176,7 @@ func TestRetiredRouteScan_FlagsEveryRootAndFileKind(t *testing.T) {
 		flagged = append(flagged, strings.SplitN(h, ":", 2)[0])
 	}
 	slices.Sort(flagged)
-	want := []string{".github/workflows/w.yml", "cmd/svc/main.go", "e2e/tests/route.spec.ts", "internal/y/y.go", "tools/z/z.go"}
+	want := []string{".github/workflows/k.yml", ".github/workflows/w.yml", "cmd/svc/main.go", "e2e/tests/route.spec.ts", "internal/y/y.go", "tools/z/z.go"}
 	if !slices.Equal(flagged, want) {
 		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
 	}

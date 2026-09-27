@@ -1270,6 +1270,16 @@ func TestSubmissionMain_JevClientIsBuiltOnceBeforeTheQueue(t *testing.T) {
 	}
 }
 
+// jev may not import ai (TestJevPackage_StaysInsideThePlatformFence), so the shared key is proved here.
+func TestSubmissionMain_JevAndAIReadOneKey(t *testing.T) {
+	if ai.EnvKey != "OPENROUTER_API_KEY" {
+		t.Errorf("ai.EnvKey = %q, want %q", ai.EnvKey, "OPENROUTER_API_KEY")
+	}
+	if jev.EnvKey != ai.EnvKey {
+		t.Errorf("jev.EnvKey = %q, want ai.EnvKey %q: Jev and the AI client read one key", jev.EnvKey, ai.EnvKey)
+	}
+}
+
 // An unset key boots with the client off: the worker gets a non-nil asker that asks nothing.
 func TestNewExtractWorker_AnOffJevClientIsWiredAndDisabled(t *testing.T) {
 	t.Setenv(jev.EnvKey, "")

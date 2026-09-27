@@ -272,3 +272,54 @@ func TestJevDoc_EveryNamedTestExists(t *testing.T) {
 		}
 	}
 }
+
+var htmlCommentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// The consts are matched in exact case; prose is matched in any case and across line wraps.
+func TestJevDoc_NamesTheOpenRouterRouteNotTheStaleLines(t *testing.T) {
+	// Newlines survive the strip, so a reported line number stays the file's.
+	doc := htmlCommentRE.ReplaceAllStringFunc(readJevDoc(t, jevRepoRoot(t)), func(c string) string {
+		return strings.Repeat("\n", strings.Count(c, "\n"))
+	})
+	for _, want := range []struct{ name, value string }{{"endpoint", endpoint}, {"Model", Model}, {"EnvKey", EnvKey}} {
+		if !strings.Contains(doc, want.value) {
+			t.Errorf("%s does not name the %s const's value %q", jevDoc, want.name, want.value)
+		}
+	}
+
+	flat := strings.Join(strings.Fields(strings.ToLower(doc)), " ")
+	for _, stale := range []string{
+		"No production key exists",
+		"`output_tokens` is not logged",
+		"the version that answered is not logged",
+		"sends `State` to TypeSafe",
+		"before a production key is set",
+	} {
+		if strings.Contains(flat, strings.ToLower(stale)) {
+			t.Errorf("%s still says %q", jevDoc, stale)
+		}
+	}
+
+	// stalerefs reads line by line and exempts a line holding "retired".
+	type docLine struct {
+		n    int
+		text string
+	}
+	var named []docLine
+	sawKey := false
+	for i, line := range strings.Split(doc, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "typesafe_api_key") || strings.Contains(lower, "api.typesafe.ai") {
+			named = append(named, docLine{i + 1, line})
+			sawKey = sawKey || strings.Contains(lower, "typesafe_api_key")
+		}
+	}
+	if !sawKey {
+		t.Fatalf("%s names TYPESAFE_API_KEY nowhere, want the key row to mark it retired", jevDoc)
+	}
+	for _, l := range named {
+		if !strings.Contains(strings.ToLower(l.text), "retired") {
+			t.Errorf("%s:%d names the retired route or key without the word retired: %q", jevDoc, l.n, l.text)
+		}
+	}
+}

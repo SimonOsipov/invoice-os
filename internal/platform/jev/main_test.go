@@ -65,9 +65,9 @@ func noDials(t *testing.T, fn func()) {
 
 func TestMain_RefusesNonLoopbackHosts(t *testing.T) {
 	before := dials.Load()
-	_, err := http.Get("https://api.typesafe.ai/")
+	_, err := http.Get("https://openrouter.ai/")
 	if err == nil {
-		t.Fatal("http.Get(api.typesafe.ai) err = nil, want the guard to refuse it")
+		t.Fatal("http.Get(openrouter.ai) err = nil, want the guard to refuse it")
 	}
 	if !strings.Contains(err.Error(), "jev test guard") {
 		t.Errorf("err = %v, want it to contain %q", err, "jev test guard")

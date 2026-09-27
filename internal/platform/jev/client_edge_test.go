@@ -460,7 +460,7 @@ func TestAsk_NoFailurePathNamesTheEndpointOrTheRequest(t *testing.T) {
 			}
 			lower := strings.ToLower(text)
 			for _, needle := range []string{"secretkey", "secretstate", "secretquestion", "secretpurpose",
-				strings.ToLower(ts.URL), "http", "/v1/", "typesafe", "127.0.0.1", "post", "dial", "eof"} {
+				strings.ToLower(ts.URL), "http", "/v1/", "typesafe", "openrouter", "127.0.0.1", "post", "dial", "eof"} {
 				if strings.Contains(lower, needle) {
 					t.Errorf("err text %q contains %q", text, needle)
 				}
@@ -599,17 +599,21 @@ func TestAsk_ConcurrentRetriesKeepTheirOwnUsage(t *testing.T) {
 	}
 }
 
-// Retyped on purpose: the vendor SDK and the measurement harness read this exact name.
-func TestFromEnv_ReadsTheTypesafeAPIKeyVariable(t *testing.T) {
-	t.Setenv("TYPESAFE_API_KEY", "k")
+// Retyped on purpose: the AI client reads this exact name, and Jev shares its key.
+func TestFromEnv_ReadsTheOpenRouterKey(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "k")
+	unsetEnv(t, "TYPESAFE_API_KEY")
 	unsetEnv(t, EnvFake)
 
+	if EnvKey != "OPENROUTER_API_KEY" {
+		t.Errorf("EnvKey = %q, want %q", EnvKey, "OPENROUTER_API_KEY")
+	}
 	c, err := FromEnv(nil)
 	if err != nil {
 		t.Fatalf("FromEnv() err = %v, want nil", err)
 	}
 	if c.cfg.key != "k" {
-		t.Errorf("cfg.key = %q, want %q read from TYPESAFE_API_KEY", c.cfg.key, "k")
+		t.Errorf("cfg.key = %q, want %q read from OPENROUTER_API_KEY", c.cfg.key, "k")
 	}
 }
 

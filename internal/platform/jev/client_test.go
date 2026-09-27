@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -99,7 +100,14 @@ func (ts *testServer) hang(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (ts *testServer) endpoint() string { return ts.URL + "/v1/systemone" }
+// endpoint keeps the production const's path, so a path assertion sees a change to it.
+func (ts *testServer) endpoint() string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Path == "" {
+		panic(fmt.Sprintf("endpoint const %q has no parsable path: %v", endpoint, err))
+	}
+	return ts.URL + u.Path
+}
 
 func reply(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -287,8 +295,8 @@ func TestAsk_SendsOnePostForTheModel(t *testing.T) {
 	if got.method != http.MethodPost {
 		t.Errorf("method = %q, want POST", got.method)
 	}
-	if got.path != "/v1/systemone" {
-		t.Errorf("path = %q, want /v1/systemone", got.path)
+	if got.path != "/api/v1/systemone" {
+		t.Errorf("path = %q, want /api/v1/systemone", got.path)
 	}
 	if h := got.header.Get("Authorization"); h != "Bearer k" {
 		t.Errorf("Authorization = %q, want %q", h, "Bearer k")
@@ -305,8 +313,8 @@ func TestAsk_SendsOnePostForTheModel(t *testing.T) {
 		t.Errorf("body keys = %v, want exactly [model questions state]", keys)
 	}
 	var model string
-	if err := json.Unmarshal(body["model"], &model); err != nil || model != "jev-latest" {
-		t.Errorf("model = %q (err %v), want %q", model, err, "jev-latest")
+	if err := json.Unmarshal(body["model"], &model); err != nil || model != "~typesafe/jev-latest" {
+		t.Errorf("model = %q (err %v), want %q", model, err, "~typesafe/jev-latest")
 	}
 }
 
@@ -685,7 +693,7 @@ func TestAsk_OneFailureThenSuccess(t *testing.T) {
 }
 
 func TestAsk_RetriesEachRetryableStatusOnce(t *testing.T) {
-	for _, status := range []int{408, 429, 500, 503, 529} {
+	for _, status := range []int{408, 429, 500, 502, 503, 524, 529} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			ts := newServer(t, func(n int32, w http.ResponseWriter, r *http.Request) {
 				if n == 1 {
@@ -845,7 +853,7 @@ func TestAsk_TheRetryNeedsMoreThanTheWaitLeft(t *testing.T) {
 // -- AC-6 --
 
 func TestAsk_RefusedStatusIsNotRetried(t *testing.T) {
-	for _, status := range []int{401, 422, 400, 403} {
+	for _, status := range []int{401, 422, 400, 402, 403, 404, 413} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			ts := newServer(t, func(_ int32, w http.ResponseWriter, r *http.Request) {
 				reply(w, status, `{"detail":"no"}`)
@@ -857,6 +865,26 @@ func TestAsk_RefusedStatusIsNotRetried(t *testing.T) {
 			wantSkipped(t, err, textRefused)
 		})
 	}
+}
+
+// A cost that is not a JSON number fails the decode, like a malformed usage.
+func TestAsk_ANonNumericCostIsUnavailable(t *testing.T) {
+	const answers = `{"answers":{"q1":{"type":"noul","noul":0.95}},"usage":{"input_tokens":1,"output_tokens":0,"cost":`
+	t.Run("numeric_cost_control", func(t *testing.T) {
+		ts := newServer(t, replyWith(http.StatusOK, answers+`0.001}}`))
+		resp, err := clockClient(ts, newFakeClock()).Ask(t.Context(), noulReq("s"))
+		if err != nil {
+			t.Fatalf("Ask() err = %v, want nil: the fixture's answers must pass on their own", err)
+		}
+		wantNoul(t, resp, "q1", 0.95)
+	})
+	t.Run("string_cost", func(t *testing.T) {
+		ts := newServer(t, replyWith(http.StatusOK, answers+`"free"}}`))
+		resp, err := clockClient(ts, newFakeClock()).Ask(t.Context(), noulReq("s"))
+		wantHits(t, ts, 1)
+		wantSkipped(t, err, textUnavailable)
+		wantNoAnswers(t, resp)
+	})
 }
 
 func TestAsk_ARedirectWithoutALocationIsRefused(t *testing.T) {

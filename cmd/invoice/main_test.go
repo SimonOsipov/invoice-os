@@ -650,7 +650,7 @@ func TestInvoiceMain_ReadsTheJevKeyOnlyThroughFromEnv(t *testing.T) {
 	if callSiteIndex(src, "jev.FromEnv") == -1 {
 		t.Error("cmd/invoice/main.go has no jev.FromEnv( call site -- the Jev key is read nowhere")
 	}
-	for _, lit := range []string{`"TYPESAFE_API_KEY"`, `"JEV_FAKE"`} {
+	for _, lit := range []string{`"OPENROUTER_API_KEY"`, `"JEV_FAKE"`} {
 		if n := strings.Count(src, lit); n != 0 {
 			t.Errorf("cmd/invoice/main.go contains the literal %s %d time(s), want 0 -- read it only inside jev.FromEnv", lit, n)
 		}
@@ -911,7 +911,7 @@ func TestInvoiceMain_NamesNoJevVariableAnyOtherWay(t *testing.T) {
 			if v == `"invoice"` {
 				sawInvoice = true
 			}
-			for _, name := range []string{"typesafe_api_key", "jev_fake"} {
+			for _, name := range []string{"openrouter_api_key", "jev_fake"} {
 				if strings.Contains(v, name) {
 					t.Errorf("main.go holds the string literal %s, which names %s", n.Value, strings.ToUpper(name))
 				}

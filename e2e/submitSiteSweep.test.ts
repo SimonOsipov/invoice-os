@@ -321,9 +321,8 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
   })
 })
 
-// KNOWN LIMITATIONS -- read before trusting this guard as total. Modelled on
-// topology/no-publish.test.ts:261-300. Each of these was considered while building this
-// scanner and left open deliberately, not by oversight.
+// KNOWN LIMITATIONS -- read before trusting this guard as total. Each of these was
+// considered while building this scanner and left open deliberately, not by oversight.
 //
 // 1. A getByTestId(...).click() CANNOT BE RESOLVED TO A SUBMIT STATICALLY UNLESS THE CHAIN
 //    IS WRITTEN DIRECTLY. `testidClickLiteral` only matches `page.getByTestId('x').click()`

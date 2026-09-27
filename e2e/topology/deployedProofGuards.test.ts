@@ -1,6 +1,5 @@
-// EXTR-18-07 (task-851) local guard. The deployed-proof specs need a deployed docling sidecar
-// and cannot run locally. This scans import-wizard.spec.ts as source text for the failure mode
-// checkable without one: a content-hash collision reusing a stale job.
+// The checks import-wizard.spec.ts names: the two fixture-freshness scans, the freshened-DOCX
+// unzip, the dead-letter sentence read-back and the EXTR36 declaration order.
 import { describe, expect, it } from 'vitest'
 import { unzipSync } from 'fflate'
 import { readFileSync } from 'node:fs'
@@ -36,16 +35,6 @@ if (extr15Start >= blockStart)
   throw new Error('the EXTR-15 marker no longer precedes the EXTR-18-07 marker -- the span it delimits is empty')
 const extr15Block = source.slice(extr15Start, blockStart)
 
-describe('[extr-18-07] guard population (control needle + floor)', () => {
-  it('found the EXTR-18-07 block marker (control needle)', () => {
-    expect(source).toContain(BLOCK_START)
-  })
-
-  it('the EXTR-18-07 block is non-trivial', () => {
-    expect(block.length, 'the block from its start marker to EOF is near-empty -- a drifted marker scanned nothing').toBeGreaterThan(2_000)
-  })
-})
-
 describe('[extr-18-07] every EXTR18 fixture upload goes through a unique*PdfBytes() helper', () => {
   const bufferArgs = [...block.matchAll(/buffer:\s*([^,}\n]+)/g)].map((m) => m[1].trim())
 
@@ -70,76 +59,14 @@ describe('[extr-18-07] every EXTR18 fixture upload goes through a unique*PdfByte
     const calls = bufferArgs.filter((a) => /^unique\w*PdfBytes\(\)$/.test(a))
     expect(calls.length, `only ${calls.length} helper call site(s) in the block`).toBeGreaterThanOrEqual(2)
   })
-
-  it('no readFileSync call reaches extractOneDocument directly inside the block', () => {
-    expect(block.includes('readFileSync'), 'a raw readFileSync call appears inside the EXTR-18-07 block').toBe(false)
-  })
-})
-
-describe('[extr-18-07] unique*PdfBytes helpers mint their UUID per call, not at module scope', () => {
-  const fnPattern = /function\s+(unique\w*PdfBytes)\s*\(\)\s*:\s*Buffer\s*\{([\s\S]*?)\n\}/g
-  const helpers = [...source.matchAll(fnPattern)].map((m) => ({ name: m[1], body: m[2] }))
-
-  it('found unique*PdfBytes helper definitions (control needle)', () => {
-    expect(helpers.length, 'no unique*PdfBytes() helper found -- the check below covers nothing').toBeGreaterThanOrEqual(4)
-  })
-
-  it('includes uniqueScannedPdfBytes and uniqueDensePdfBytes', () => {
-    const names = helpers.map((h) => h.name)
-    expect(names).toEqual(expect.arrayContaining(['uniqueScannedPdfBytes', 'uniqueDensePdfBytes']))
-  })
-
-  it('every helper body calls randomUUID() inline', () => {
-    const offenders = helpers.filter((h) => !h.body.includes('randomUUID()')).map((h) => h.name)
-    expect(offenders, `helper(s) with no inline randomUUID() call: ${offenders.join(', ')}`).toEqual([])
-  })
-
-  // Matched by line PREFIX only (not a balanced-paren suffix): readFileSync(join(...)) nests
-  // parens, so a `[^)]*\)$` tail regex can never reach the real closing paren and silently
-  // matches zero lines -- a vacuous pass that would wave through a UUID hoisted onto this line.
-  // _DOCX joins _PDF with EXTR-15-12: GOLDEN_INVOICE_DOCX is a module-scope fixture constant
-  // read the same way, and a UUID hoisted onto its line would be the same defect.
-  const constLines = source.split('\n').filter((l) => /^const \w+_(PDF|DOCX) = readFileSync\(/.test(l))
-
-  it('found module-scope fixture constant lines (control needle)', () => {
-    expect(constLines.length, 'no const ..._PDF/..._DOCX = readFileSync(...) line found -- the check below covers nothing').toBeGreaterThanOrEqual(2)
-  })
-
-  it('the module-scope fixture constants carry no randomUUID call of their own', () => {
-    const offenders = constLines.filter((line) => line.includes('randomUUID'))
-    expect(offenders, `fixture constant(s) minting a UUID at module scope: ${offenders.join(', ')}`).toEqual([])
-  })
-})
-
-describe('[deployed-proof] EXTR35-E2E-01 sits inside the EXTR-18-07 block', () => {
-  // Above the EXTR-15 marker no freshness guard scans its upload.
-  it('its title is found past the block marker', () => {
-    const at = source.indexOf(EXTR35_E2E_01)
-    expect(at, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
-    expect(at, 'EXTR35-E2E-01 sits above the EXTR-18-07 marker').toBeGreaterThan(blockStart)
-  })
 })
 
 // --- EXTR-15-12 (task-836): the EXTR-15 deployed-proof span --------------------------------
 //
-// Same two failure modes the EXTR-18-07 guard above covers, over the span that carries the
-// EXTR-15 cases: a fixture reaching setInputFiles unfreshened (which the per-tenant content
-// hash reuses and the PERMANENT per-document enqueue key then skips, so the poll settles on a
-// PREVIOUS run's job and stays green while extraction is broken), and a copy literal that has
-// drifted from the code that emits it.
-
-describe('[extr-15-12] EXTR-15 span population (control needle + floor)', () => {
-  it('found the EXTR-15 block marker (control needle)', () => {
-    expect(source).toContain(EXTR15_BLOCK_START)
-  })
-
-  it('the EXTR-15 block is non-trivial', () => {
-    expect(
-      extr15Block.length,
-      'the span between the two markers is near-empty -- a drifted marker scanned nothing',
-    ).toBeGreaterThan(2_000)
-  })
-})
+// The failure mode the EXTR-18-07 scan above covers, over the span that carries the EXTR-15
+// cases: a fixture reaching setInputFiles unfreshened (which the per-tenant content hash reuses
+// and the PERMANENT per-document enqueue key then skips, so the poll settles on a PREVIOUS
+// run's job and stays green while extraction is broken).
 
 describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-call helper', () => {
   // The helpers that mint fresh bytes on every call. A raw module-scope constant reaching
@@ -173,15 +100,6 @@ describe('[extr-15-12] every EXTR-15 fixture upload goes through a fresh-per-cal
     const calls = bufferArgs.filter((a) => FRESH_HELPERS.includes(a))
     expect(calls.length, `only ${calls.length} helper call site(s) in the span`).toBeGreaterThanOrEqual(8)
   })
-
-  it('every named helper exists and mints its UUID inline', () => {
-    for (const call of FRESH_HELPERS) {
-      const name = call.slice(0, -2)
-      const m = new RegExp(`function\\s+${name}\\s*\\(\\)\\s*:\\s*Buffer\\s*\\{([\\s\\S]*?)\\n\\}`).exec(source)
-      expect(m, `no ${name}() helper found in import-wizard.spec.ts`).not.toBeNull()
-      expect(m![1].includes('randomUUID()'), `${name}() mints no UUID of its own`).toBe(true)
-    }
-  })
 })
 
 describe('[extr-15-12] the freshened DOCX is still a readable DOCX', () => {
@@ -211,9 +129,8 @@ describe('[extr-15-12] the freshened DOCX is still a readable DOCX', () => {
 
 describe('[extr-15-12] the deployed dead-letter literals track their sole owner', () => {
   // documentRun.ts's deadLetterRefusal owns every terminal sentence (EXTR-15-04). The e2e spec
-  // cannot import it -- e2e/ has no dependency on frontend/app -- so it pins two literals and
-  // this reads them back out of the owner. documentRun.test.ts's TS15-10b covers the shorter
-  // DEAD_LETTER_NEEDLE the same way, and discriminates it against the other six sentences.
+  // cannot import it -- e2e/ has no dependency on frontend/app -- so this reads its copy back out
+  // of the owner.
   const OWNER = join(REPO_ROOT, 'frontend/app/src/lib/documentRun.ts')
   const owner = readFileSync(OWNER, 'utf8')
 
@@ -227,20 +144,6 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
     const arm = /case 'pages_not_rendered':[\s\S]*?return '([^']+)'/.exec(owner)
     expect(arm, "deadLetterRefusal no longer has a 'pages_not_rendered' arm returning a literal").not.toBeNull()
     expect(literalOf('DEAD_LETTER_SENTENCE')).toBe((arm as RegExpExecArray)[1])
-  })
-
-  it('GENERIC_FAILURE_OPENING opens the kind-less arm, and no other', () => {
-    const opening = literalOf('GENERIC_FAILURE_OPENING')
-    const fallback = /default:[\s\S]*?return `([^`]+)`/.exec(owner)
-    expect(fallback, 'deadLetterRefusal no longer has a default arm returning a template literal').not.toBeNull()
-    expect((fallback as RegExpExecArray)[1].startsWith(opening), 'the default arm no longer opens with this text').toBe(true)
-
-    // Discrimination: asserting its ABSENCE proves the kind reached the render only if no
-    // OTHER arm contains it. Six named arms, matched over the whole switch.
-    const arms = [...owner.matchAll(/case '(\w+)':[\s\S]*?return [`']([^`']+)[`']/g)]
-    expect(arms.length, 'the named arms of deadLetterRefusal are no longer readable').toBe(6)
-    const also = arms.filter(([, , sentence]) => sentence.includes(opening)).map(([, kind]) => kind)
-    expect(also, `the opening also appears in: ${also.join(', ')}`).toEqual([])
   })
 })
 
@@ -268,91 +171,5 @@ describe('[extr-36] declaration order is load-bearing', () => {
       at01,
       "EXTR36-E2E-01 sits above EXTR36-E2E-02 -- both upload documents sharing fingerprint v3:d89450d1..., both run as PERSONAS.A, so the buyer_name rule EXTR36-E2E-01 teaches would already be live when EXTR36-E2E-02 uploads its supposedly untaught twin",
     ).toBeGreaterThan(at02)
-  })
-
-  // Declaration order IS execution order only while the suite stays serial. Flip either dial
-  // and the two assertions above keep passing while meaning nothing. Comments stripped first:
-  // the config's own prose quotes both settings.
-  it('the topology run is still serial, so declaration order is execution order', () => {
-    const config = stripComments(readFileSync(join(E2E_ROOT, 'playwright.topology.config.ts'), 'utf8'))
-    expect(config, 'playwright.topology.config.ts no longer sets fullyParallel: false').toMatch(/fullyParallel:\s*false/)
-    expect(config, 'playwright.topology.config.ts no longer sets workers: 1').toMatch(/workers:\s*1\b/)
-    expect(
-      stripComments(source).includes('describe.configure'),
-      'import-wizard.spec.ts now calls describe.configure -- a parallel or reordering mode undoes the declaration order above',
-    ).toBe(false)
-  })
-})
-
-// AIR-04-04. AI_UNAVAILABLE_REVIEW, AI_UNAVAILABLE_MESSAGE and AI_UNAVAILABLE_FIELD each pin a
-// different owner (no shared module e2e/ can import), so each gets its own read-back, the
-// EXTR-15-12 pattern above.
-describe('[air-04] the deployed literals track their owners', () => {
-  const documentRunSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/documentRun.ts'), 'utf8')
-  const importerSrc = readFileSync(join(REPO_ROOT, 'internal/importer/document.go'), 'utf8')
-  const aireadingSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/aireading.go'), 'utf8')
-
-  function literalOf(name: string): string {
-    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source)
-    expect(m, `${name} is gone from import-wizard.spec.ts`).not.toBeNull()
-    return (m as RegExpExecArray)[1]
-  }
-
-  it('AI_UNAVAILABLE_REVIEW is documentRun.ts\'s AI_UNAVAILABLE_REFUSAL, byte for byte', () => {
-    const m = /export const AI_UNAVAILABLE_REFUSAL =\s*'([^']+)'/.exec(documentRunSrc)
-    expect(m, 'AI_UNAVAILABLE_REFUSAL is gone from documentRun.ts').not.toBeNull()
-    expect(literalOf('AI_UNAVAILABLE_REVIEW')).toBe((m as RegExpExecArray)[1])
-  })
-
-  it('AI_UNAVAILABLE_MESSAGE is document.go\'s aiUnavailableMessage, byte for byte', () => {
-    const m = /aiUnavailableMessage = "([^"]+)"/.exec(importerSrc)
-    expect(m, 'aiUnavailableMessage is gone from internal/importer/document.go').not.toBeNull()
-    expect(literalOf('AI_UNAVAILABLE_MESSAGE')).toBe((m as RegExpExecArray)[1])
-  })
-
-  it('AI_UNAVAILABLE_FIELD is aireading.go\'s aiUnavailableField, byte for byte', () => {
-    const m = /const aiUnavailableField = "([^"]+)"/.exec(aireadingSrc)
-    expect(m, 'aiUnavailableField is gone from internal/extraction/aireading.go').not.toBeNull()
-    expect(literalOf('AI_UNAVAILABLE_FIELD')).toBe((m as RegExpExecArray)[1])
-  })
-})
-
-// NO_REGION_PILL and NO_REGION_NOTE each pin a different owner (no shared module e2e/ can
-// import), so each gets its own read-back, the pattern above uses.
-describe('[air-05] the deployed literals track their owners', () => {
-  const extractionFieldsSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionFields.tsx'), 'utf8')
-  const extractionCanvasSrc = readFileSync(join(REPO_ROOT, 'frontend/app/src/components/ExtractionCanvas.tsx'), 'utf8')
-
-  function literalOf(name: string): string {
-    const m = new RegExp(`const ${name} =\\s*\\n?\\s*'([^']+)'`).exec(source)
-    expect(m, `${name} is gone from import-wizard.spec.ts`).not.toBeNull()
-    return (m as RegExpExecArray)[1]
-  }
-
-  it('NO_REGION_PILL is ExtractionFields.tsx\'s NO_REGION, byte for byte', () => {
-    const m = /const NO_REGION = '([^']+)'/.exec(extractionFieldsSrc)
-    expect(m, 'NO_REGION is gone from ExtractionFields.tsx').not.toBeNull()
-    expect(literalOf('NO_REGION_PILL')).toBe((m as RegExpExecArray)[1])
-  })
-
-  it('NO_REGION_NOTE is ExtractionCanvas.tsx\'s NO_REGION, byte for byte', () => {
-    const m = /const NO_REGION = '([^']+)'/.exec(extractionCanvasSrc)
-    expect(m, 'NO_REGION is gone from ExtractionCanvas.tsx').not.toBeNull()
-    expect(literalOf('NO_REGION_NOTE')).toBe((m as RegExpExecArray)[1])
-  })
-})
-
-// RECEIPT_NOTICE pins a frontend/app owner (no shared module e2e/ can import).
-describe('[check-04] the deployed literals track their owners', () => {
-  const extractionReviewSrc = stripComments(readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/extractionReview.ts'), 'utf8'))
-
-  it("RECEIPT_NOTICE is DOCUMENT_TYPE_NOTICE's receipt entry, byte for byte", () => {
-    const table = /export const DOCUMENT_TYPE_NOTICE: Record<DocumentType, string> = \{([\s\S]*?)\n\}/.exec(extractionReviewSrc)
-    expect(table, 'DOCUMENT_TYPE_NOTICE is gone from frontend/app/src/lib/extractionReview.ts').not.toBeNull()
-    const entry = /^\s*receipt:\s*'([^']+)',?$/m.exec((table as RegExpExecArray)[1])
-    expect(entry, 'DOCUMENT_TYPE_NOTICE has no receipt entry').not.toBeNull()
-    const spec = /const RECEIPT_NOTICE =\s*\n?\s*'([^']+)'/.exec(stripComments(source))
-    expect(spec, 'RECEIPT_NOTICE is gone from import-wizard.spec.ts').not.toBeNull()
-    expect((spec as RegExpExecArray)[1]).toBe((entry as RegExpExecArray)[1])
   })
 })

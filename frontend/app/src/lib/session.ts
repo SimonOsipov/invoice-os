@@ -158,6 +158,11 @@ export function shouldAutoSignIn(personaParam: string | null): boolean {
   return personaParam === 'firm' || personaParam === 'inhouse'
 }
 
+// Stub (AUTH-06 D25): the unverified payload read, extracted from isTokenExpired.
+export function decodeJwtPayload(_token: string | null): Record<string, unknown> | null {
+  return null
+}
+
 // Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
 // gateway is the only authority — so this is a courtesy check, not a security control: it
 // exists so a reload on a token the gateway will certainly reject doesn't boot into the

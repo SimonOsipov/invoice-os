@@ -10,6 +10,7 @@ import {
   SESSION_KEY,
   SESSION_SCHEMA_VERSION,
   clearSession,
+  decodeJwtPayload,
   isTokenExpired,
   loadSession,
   parseStoredSession,
@@ -360,6 +361,21 @@ describe('isTokenExpired / resolveBootSession', () => {
     expect(token.split('.')[1]).toContain('_')
 
     expect(isTokenExpired(token, 2000_000)).toBe(false)
+  })
+
+  it('decodeJwtPayload reads a base64url payload', () => {
+    const claims = { sub: 'x', exp: 1, s: '???>>>' }
+    const payload = jwt(claims).split('.')[1]
+    expect(payload).toContain('-')
+    expect(payload).toContain('_')
+    expect(payload.length % 4).not.toBe(0)
+    expect(decodeJwtPayload(`header.${payload}.signature`)).toEqual(claims)
+
+    const unreadable = [null, '', 'opaque', `header.${payload}`, `header.${btoa('{not json')}.signature`, 'a.!!!not-base64!!!.c']
+    expect(unreadable.length).toBeGreaterThan(0)
+    for (const t of unreadable) {
+      expect(decodeJwtPayload(t), `token ${JSON.stringify(t)}`).toBeNull()
+    }
   })
 
   it('S29: resolveBootSession drops an expired session so the workspace never mounts on a dead token', () => {

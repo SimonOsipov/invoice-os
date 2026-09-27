@@ -1,4 +1,4 @@
-// The renewal module (AUTH-06-05). Clock and storage are injected; fetch is a controllable stub.
+// The renewal module. Clock and storage are injected; fetch is a controllable stub.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from '../auth'
@@ -145,26 +145,13 @@ describe('renewAt / deadline / isRenewalDue (AC-1)', () => {
       ['exp only', jwt({ sub: SUB, exp: EXP, app_metadata: { tenant_id: TENANT } })],
       ['iat only', jwt({ sub: SUB, iat: IAT, app_metadata: { tenant_id: TENANT } })],
       ['string times', jwt({ ...claims('A0'), iat: String(IAT), exp: String(EXP) })],
+      ['string iat', jwt({ ...claims('A0'), iat: String(IAT) })],
       ['opaque', 'opaque-token'],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, token] of rows) {
       expect(isRenewalDue(hsession({ token }), RECEIVED), name).toBe(true)
     }
-  })
-
-  it('a session without renewal is never due, even with unreadable times', () => {
-    const rows: [string, Session][] = [
-      ['persona, opaque token', { persona: APP_PERSONAS.firm, token: 'opaque-token', me: ME, verified: true }],
-      ['persona, null token', { persona: APP_PERSONAS.firm, token: null, me: null, verified: false }],
-      ['hand-off without renewal, exp only', hsession({ token: jwt({ sub: SUB, exp: 1 }), refresh: null })],
-    ]
-    expect(rows.length).toBeGreaterThan(0)
-    for (const [name, s] of rows) {
-      expect(isRenewalDue(s, DEADLINE + 10 * HOUR), name).toBe(false)
-    }
-    // Control: the same opaque token with a renewal is due.
-    expect(isRenewalDue(hsession({ token: 'opaque-token' }), RECEIVED)).toBe(true)
   })
 })
 
@@ -408,6 +395,7 @@ describe('createRenewer', () => {
       ['persona', { persona: APP_PERSONAS.firm, token: expired, me: ME, verified: true }],
       ['hand-off without renewal', hsession({ token: expired, refresh: null })],
       ['persona, opaque token', { persona: APP_PERSONAS.firm, token: 'opaque-token', me: ME, verified: true }],
+      ['persona, null token', { persona: APP_PERSONAS.firm, token: null, me: null, verified: false }],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, tracked] of rows) {
@@ -553,6 +541,10 @@ describe('createRenewer', () => {
     expect(h.onRenewed).toHaveBeenCalledWith({ ...next, token: A1, renewal: { refreshToken: 'R1', receivedAt: RENEW_AT } })
     expect(ended.error).toBeInstanceOf(SessionEndedError)
     expect(h.onEnded).toHaveBeenCalledTimes(1)
+    // A different session in between cleared the latch, so the old one may try again.
+    h.renewer.track(endedSession)
+    expect((await outcome(h.renewer.fresh())).value).toBe(A1)
+    expect(h.net.calls).toHaveLength(3)
   })
 
   it('storage cleared mid-flight writes nothing', async () => {

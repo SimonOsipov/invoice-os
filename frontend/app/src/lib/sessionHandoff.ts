@@ -23,7 +23,7 @@ export async function redeemHandoff(base: string, code: string, state: string, n
     signal,
   })
   const me = await apiFetch<Me>(`${base}/api/tenancy/v1/me`, { token, signal })
-  // A missing or malformed refresh token is an older gateway's answer: a session without renewal.
+  // A missing or malformed refresh token gives a session without renewal.
   const renewal = typeof refreshToken === 'string' && refreshToken !== '' ? { refreshToken, receivedAt: now } : undefined
   return { persona: handoffPersona(me), token, me, verified: true, handoff: true, ...(renewal ? { renewal } : {}) }
 }

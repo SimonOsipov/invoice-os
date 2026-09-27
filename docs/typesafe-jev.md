@@ -66,6 +66,10 @@ in one call per extraction attempt, on its Docling text branch only
 mapping questions in one call per unrestored layout group, through
 `POST /v1/imports/check-mapping` (`internal/importer/jevcheck.go`).
 
+Before merge, the key holder proves one `ok` call per question type with
+`JEV_PROBE=1 OPENROUTER_API_KEY=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe`;
+without both variables the probe logs why it declined and passes without a call.
+
 ## Env knobs
 
 | Variable | Read by | Meaning |

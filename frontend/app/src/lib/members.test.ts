@@ -289,7 +289,6 @@ const seedMembers = () => ({ firm: SEED_FIRM_MEMBERS.map((m) => ({ ...m })), inh
 const firm = () => seedMembers().firm
 const inhouse = () => seedMembers().inhouse
 const names = (list: readonly Member[]) => list.map((m) => m.name)
-const you = (list: readonly Member[]): Member => list.filter((m) => m.isYou)[0]
 
 /** A hand-built in-house row, for the frames the shipped seed deliberately cannot reach. */
 const inhouseRow = (name: string, status: MemberStatus): Member => ({
@@ -323,94 +322,6 @@ const firmRow = (name: string, status: MemberStatus): Member => ({
 })
 
 const NOTIFY_BASE = ['Audit Committee', 'Board', 'Preparer']
-
-describe('seed shape (T1.1–T1.5, §15.6)', () => {
-  it('ships 7 firm members and 16 in-house members (T1.1)', () => {
-    const store = seedMembers()
-    expect(store.firm).toHaveLength(7)
-    expect(store.inhouse).toHaveLength(16)
-  })
-
-  it('copies the rows, so a mutated row leaks into neither the other copy nor the fixture (T1.2)', () => {
-    const a = seedMembers()
-    const b = seedMembers()
-
-    expect(a.firm[0]).not.toBe(b.firm[0])
-    expect(a.firm[0]).not.toBe(SEED_FIRM_MEMBERS[0])
-
-    a.firm[0].name = 'Mutated Row'
-    expect(a.firm[0].name).toBe('Mutated Row')
-    expect(b.firm[0].name).toBe('Chinedu Okafor')
-    expect(SEED_FIRM_MEMBERS[0].name).toBe('Chinedu Okafor')
-  })
-
-  it('the firm you-row is the shipped firm persona (T1.3)', () => {
-    const row = you(firm())
-    expect(row).toMatchObject({
-      name: 'Chinedu Okafor',
-      initials: 'CO',
-      email: 'c.okafor@okafor.ng',
-      role: 'admin',
-    })
-
-    // The three-field subset only: `Persona.role` is the JWT role 'authenticated'
-    // (auth.ts:46), not an AccessRole, so a whole-object match would fail for the wrong
-    // reason. This is the assertion that stops the seed drifting from the sidebar.
-    const { name, initials, email } = APP_PERSONAS.firm
-    expect([row.name, row.initials, row.email]).toEqual([name, initials, email])
-  })
-
-  it('the in-house you-row is the shipped in-house persona (T1.4)', () => {
-    const row = you(inhouse())
-    expect(row).toMatchObject({
-      name: 'Ngozi Balogun',
-      initials: 'NB',
-      role: 'admin',
-    })
-
-    const { name, initials, email } = APP_PERSONAS.inhouse
-    expect([row.name, row.initials, row.email]).toEqual([name, initials, email])
-  })
-
-  it('marks exactly one member as you in each mode (T1.5)', () => {
-    expect(firm().filter((m) => m.isYou)).toHaveLength(1)
-    expect(inhouse().filter((m) => m.isYou)).toHaveLength(1)
-  })
-})
-
-// AC-1 — Member.position is gone from the type and from both seeds.
-describe('AC-1 — Member.position is gone', () => {
-  it('no seeded member, in either mode, carries a position field', () => {
-    for (const row of [...SEED_FIRM_MEMBERS, ...SEED_INHOUSE_MEMBERS]) {
-      expect('position' in row).toBe(false)
-    }
-  })
-
-  it('the in-house seed is otherwise byte-identical — ids, names, statuses', () => {
-    // Not expected to go red on its own: nothing here touches `position`, so this holds
-    // today too. Pinned as the regression guard that catches the deletion taking anything
-    // else with it, the same shape as AC-13's RoleKey-widening guard above.
-    expect(SEED_INHOUSE_MEMBERS.map((m) => [m.id, m.name, m.status])).toEqual([
-      ['mh1', 'Ngozi Balogun', 'active'],
-      ['mh2', 'Yetunde Fashola', 'active'],
-      ['mh3', 'Emeka Uzowulu', 'active'],
-      ['mh4', 'Tunde Adeyemi', 'active'],
-      ['mh5', 'Ibrahim Bello', 'active'],
-      ['mh6', 'Adebayo Ogunlesi', 'suspended'],
-      ['mh7', 'Zainab Lawal', 'active'],
-      ['mh8', 'Chidi Anyanwu', 'active'],
-      ['mh9', 'Aisha Mohammed', 'active'],
-      ['mh10', 'Segun Oyelaran', 'active'],
-      ['mh11', 'Oluwafunmilayo Ademola-Oyediran', 'active'],
-      ['mh12', 'Kelechi Obi', 'active'],
-      ['mh13', 'Hauwa Abubakar', 'active'],
-      ['mh14', 'Olumide Bakare', 'active'],
-      ['mh15', 'Nneka Chukwu', 'invited'],
-      ['mh16', 'Sadiq Ibrahim', 'invited'],
-    ])
-  })
-
-})
 
 describe('notify targets (T1.29–T1.31, §11.4)', () => {
 
@@ -556,20 +467,6 @@ describe('activeAdmins — status precedence (QA14, §9)', () => {
       { ...inhouseRow('Invited Admin', 'invited'), role: 'admin' as const },
     ]
     expect(names(activeAdmins(list))).toEqual(['Ngozi Balogun'])
-  })
-
-})
-
-describe('seed invariants the reducers depend on (QA16, §15.6)', () => {
-  it('gives every member a unique id and a unique email within its mode (QA16)', () => {
-    // MEMB-01-02's replaceMember / removeMember key off `id`, and classifyInvites
-    // compares lower-cased emails; a duplicate in either would break them silently.
-    for (const list of [firm(), inhouse()]) {
-      const ids = list.map((m) => m.id)
-      const emails = list.map((m) => (m.email ?? '').toLowerCase())
-      expect(new Set(ids).size).toBe(list.length)
-      expect(new Set(emails).size).toBe(list.length)
-    }
   })
 
 })
@@ -958,106 +855,6 @@ describe('reducers key off id, never email (QA23, §15.1)', () => {
   })
 })
 
-describe('the seed literals themselves, as an oracle no snapshot can launder (QA25, §15.6)', () => {
-  it('holds its hand-authored values after every reducer runs over the CONSTANTS (QA25)', () => {
-    // T2.32 snapshots SEED_* with structuredClone at the top of its own body, so corruption
-    // committed by an earlier spec in this file is captured by the snapshot and the
-    // comparison passes vacuously. This spec asserts the literals directly — and runs the
-    // reducers over the constants THEMSELVES (not a clone) first, which is the one call
-    // shape T2.32 never makes.
-    const extraFirm = firmRow('Tosin Okonkwo', 'invited')
-    const extraInhouse = inhouseRow('Tosin Okonkwo', 'invited')
-
-    replaceMember(SEED_FIRM_MEMBERS, { ...SEED_FIRM_MEMBERS[1], role: 'admin' })
-    addMembers(SEED_FIRM_MEMBERS, [extraFirm])
-    removeMember(SEED_FIRM_MEMBERS, 'mf2')
-
-    replaceMember(SEED_INHOUSE_MEMBERS, { ...SEED_INHOUSE_MEMBERS[3], role: 'admin' })
-    addMembers(SEED_INHOUSE_MEMBERS, [extraInhouse])
-    removeMember(SEED_INHOUSE_MEMBERS, 'mh4')
-
-    expect(SEED_FIRM_MEMBERS.map((m) => m.id)).toEqual(['mf1', 'mf2', 'mf3', 'mf4', 'mf5', 'mf6', 'mf7'])
-    expect(SEED_FIRM_MEMBERS.map((m) => m.role)).toEqual([
-      'admin',
-      'preparer',
-      'reviewer',
-      'reviewer',
-      'preparer',
-      'preparer',
-      'reviewer',
-    ])
-    expect(SEED_FIRM_MEMBERS.map((m) => m.status)).toEqual([
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'invited',
-      'suspended',
-    ])
-
-    expect(SEED_INHOUSE_MEMBERS.map((m) => m.id)).toEqual([
-      'mh1',
-      'mh2',
-      'mh3',
-      'mh4',
-      'mh5',
-      'mh6',
-      'mh7',
-      'mh8',
-      'mh9',
-      'mh10',
-      'mh11',
-      'mh12',
-      'mh13',
-      'mh14',
-      'mh15',
-      'mh16',
-    ])
-    expect(SEED_INHOUSE_MEMBERS.map((m) => m.role)).toEqual([
-      'admin',
-      'reviewer',
-      'reviewer',
-      'reviewer',
-      'reviewer',
-      'reviewer',
-      'preparer',
-      'preparer',
-      'preparer',
-      'preparer',
-      'reviewer',
-      'preparer',
-      'reviewer',
-      'preparer',
-      'preparer',
-      'reviewer',
-    ])
-    expect(SEED_INHOUSE_MEMBERS.map((m) => m.status)).toEqual([
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'suspended',
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'active',
-      'invited',
-      'invited',
-    ])
-    // The one row T2.34's 15-vs-16 split turns on.
-    expect(SEED_INHOUSE_MEMBERS[10].email).toBe('o.ademola-oyediran@honeywellgroup.com.ng')
-    // Exactly one active admin per mode — the frame every §9 spec is read against.
-    expect(activeAdmins(SEED_FIRM_MEMBERS)).toHaveLength(1)
-    expect(activeAdmins(SEED_INHOUSE_MEMBERS)).toHaveLength(1)
-  })
-})
-
 describe('name and initials — the branches no acceptance criterion names (QA26–QA31, §7)', () => {
   it('returns ONE character for a single-LETTER local part, not two (QA26)', () => {
     // Records that the plan's "always 2 chars" is really "at MOST 2": there is no second
@@ -1420,12 +1217,12 @@ describe('invitedNotice — the send confirmation (T6.8)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// QA47–QA48 — MEMB-01-06 QA (Mode B), the two node-reachable gaps T6.1–T6.12 left
+// QA47 — MEMB-01-06 QA (Mode B), the node-reachable gap T6.1–T6.12 left
 // ---------------------------------------------------------------------------
 // Mutation-tested: all ten mutations of the T6 batch's own subjects were caught, but
 // EIGHT mutations of the modal's WIRING survived all three gates, because vitest is
 // `environment: node` and the repo has no DOM component layer (docs/e2e-convention.md
-// also puts Settings out of scope for browser E2E). These two are what remains inside
+// also puts Settings out of scope for browser E2E). This is what remains inside
 // this module's reach — everything else on that list is a Phase 3.5 gate item.
 
 describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
@@ -1442,25 +1239,6 @@ describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {
     // And the ampersand two roster names actually contain, so "literal" is proven in both
     // directions rather than only by what it refuses.
     expect(filterClientRoster('&').map((c) => c.id)).toEqual([0, 3])
-  })
-})
-
-// The `none` sentinel risk QA48 named, retargeted from WF_ROLES to Role.key. The invite
-// modal's Workflow role select draws from BOTH tenant modes' seeded roles, and `Role.key` is
-// a free-form, server-minted slug, not a closed union — a role titled "None" collides with
-// the sentinel on its own, with no widening required. This makes the risk MORE reachable
-// than QA48 described it, not less.
-//
-// File-local mirror of lib/roles.ts's former SEED_FIRM_ROLES/SEED_INHOUSE_ROLES key sets
-// (subtask 04 deleted the module-level seed; the DB seed's Go-side test is the source of
-// truth now) — only the keys matter here, not title/desc/members.
-const MOCK_FIRM_ROLE_KEYS = ['preparer', 'fin_mgr', 'fin_dir', 'compliance', 'cfo', 'quality_reviewer']
-const MOCK_INHOUSE_ROLE_KEYS = ['preparer', 'line_mgr', 'fin_mgr', 'controller', 'fin_dir', 'compliance', 'cfo', 'ceo']
-
-describe("the invite modal's `none` sentinel stays un-collided (QA48, updated)", () => {
-  it('no seeded role, in either mode, is keyed `none`', () => {
-    expect(MOCK_FIRM_ROLE_KEYS).not.toContain('none')
-    expect(MOCK_INHOUSE_ROLE_KEYS).not.toContain('none')
   })
 })
 

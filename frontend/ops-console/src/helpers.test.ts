@@ -3,7 +3,7 @@
 // JSON MUST track the live sandbox/live toggle (`env`) rather than being frozen at
 // module scope. `EVIDENCE_DATA`/`EvidenceBundle` (charts.ts) deliberately excludes
 // `request` for exactly this reason — `EvidenceDrawer.tsx` computes it per render via
-// `reqJSON(row, env)`. Nothing in charts.test.ts or data.test.ts exercises `reqJSON`
+// `reqJSON(row, env)`. Nothing in charts.test.ts exercises `reqJSON`
 // directly (it lives in helpers.ts, untested until now), so this is new coverage, not a
 // duplicate.
 //

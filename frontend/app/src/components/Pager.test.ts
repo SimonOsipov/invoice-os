@@ -1,5 +1,5 @@
 // Source pins with no render sibling: the review tab uses the shared Pager, its call site's
-// busy/reason wiring, and the reason node's aria-describedby gate. Behaviour lives in
+// `loading` busy arm, and the reason node's aria-describedby gate. Behaviour lives in
 // Pager.render.test.tsx and ReviewInvoicesTab.test.tsx.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

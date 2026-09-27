@@ -262,7 +262,7 @@ const TOPOLOGY_MANIFEST: ManifestEntry[] = [
 // sites. They are inventoried once, by hand, for the PR body; this file does not re-derive
 // that count on every run.
 //
-// AC-17: persona-surfaces.spec.ts:830's `approvals-bulk-submit` testid is the bulk APPROVE
+// AC-17: persona-surfaces.spec.ts's `approvals-bulk-submit` testid is the bulk APPROVE
 // control (its bar reads "Approve N invoices?") -- not a submit site, and not one of
 // SUBMIT_TESTIDS above. persona-surfaces.spec.ts is out of this scan's scope entirely: only
 // the firm tenant (PERSONAS.A) was newly governed by this story, and persona-surfaces.spec.ts's
@@ -327,10 +327,10 @@ describe('firm-tenant submit-site sweep (task-575)', () => {
 // 1. A getByTestId(...).click() CANNOT BE RESOLVED TO A SUBMIT STATICALLY UNLESS THE CHAIN
 //    IS WRITTEN DIRECTLY. `testidClickLiteral` only matches `page.getByTestId('x').click()`
 //    written as one chained expression. `const btn = page.getByTestId('x'); ...;
-//    await btn.click()` -- exactly what invoice-surfaces.spec.ts:1677 does with
-//    'batch-submit-confirm', deliberately, as a locator held across several assertions
-//    before the file re-arms and calls submitSelected() instead -- is invisible to this
-//    scanner. It happens to be safe today because 1677's confirmBtn is never itself
+//    await btn.click()` -- exactly what invoice-surfaces.spec.ts's register-confirm-stage
+//    test does with 'batch-submit-confirm', deliberately, as a locator held across several
+//    assertions before the file re-arms and calls submitSelected() instead -- is invisible to
+//    this scanner. It happens to be safe today because that confirmBtn is never itself
 //    clicked, but a future test that DOES click through a held locator would not be
 //    caught, floor or manifest.
 //

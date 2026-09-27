@@ -158,9 +158,19 @@ export function shouldAutoSignIn(personaParam: string | null): boolean {
   return personaParam === 'firm' || personaParam === 'inhouse'
 }
 
-// Stub (AUTH-06 D25): the unverified payload read, extracted from isTokenExpired.
-export function decodeJwtPayload(_token: string | null): Record<string, unknown> | null {
-  return null
+// Unverified read of a three-part JWT's payload; null for anything else.
+export function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  const parts = token?.split('.')
+  if (parts?.length !== 3 || !parts[1]) {
+    return null
+  }
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const claims: unknown = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
+    return claims !== null && typeof claims === 'object' && !Array.isArray(claims) ? (claims as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
 }
 
 // Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
@@ -175,20 +185,8 @@ export function decodeJwtPayload(_token: string | null): Record<string, unknown>
 // every outstanding token. Those are caught by the 401 handler, which stays the real
 // backstop. Same comparison the gateway makes (internal/platform/auth/claims.go:58).
 export function isTokenExpired(token: string | null, nowMs: number = Date.now()): boolean {
-  if (!token) {
-    return false
-  }
-  const payload = token.split('.')[1]
-  if (!payload) {
-    return false
-  }
-  try {
-    const b64 = payload.replace(/-/g, '+').replace(/_/g, '/')
-    const claims = JSON.parse(atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, '=')))
-    return typeof claims?.exp === 'number' && nowMs >= claims.exp * 1000
-  } catch {
-    return false
-  }
+  const exp = decodeJwtPayload(token)?.exp
+  return typeof exp === 'number' && nowMs >= exp * 1000
 }
 
 // Boot-time session resolution: an expired token with no renewal is NOT a session (the

@@ -517,7 +517,7 @@ describe('the screen shell', () => {
     })
   })
 
-  it('leaves the fields pane its own basis, its floor and the artboard ground', async () => {
+  it('lets the fields pane shrink below its content height', async () => {
     render(review({ ctx: serving().ctx }))
     await flush()
 

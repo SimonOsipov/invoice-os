@@ -83,7 +83,7 @@ describe('ViolationsTable', () => {
     for (const row of rows) expect(within(row).getAllByRole('cell')).toHaveLength(4)
   })
 
-  it('violationsTable_messageCellDeclaresWrapAndLineHeight', () => {
+  it('violationsTable_messageCellDeclaresLineHeight', () => {
     render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
 
     const cell = screen.getByText('Total does not equal subtotal plus VAT').closest('td')

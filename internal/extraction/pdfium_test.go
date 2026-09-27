@@ -353,8 +353,7 @@ func TestPDFiumReader_NeverSetsTables(t *testing.T) {
 }
 
 // TestPDFiumReader_PinsNameAndVersion: both are persisted as extraction_jobs.extractor /
-// .extractor_version, so a drifting value orphans every stored row. Mirrors
-// TestMockExtractor_PinsNameAndVersion.
+// .extractor_version, so a drifting value orphans every stored row.
 func TestPDFiumReader_PinsNameAndVersion(t *testing.T) {
 	first, second := extraction.NewPDFiumReader(), extraction.NewPDFiumReader()
 

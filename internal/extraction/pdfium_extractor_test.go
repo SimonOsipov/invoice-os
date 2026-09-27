@@ -168,8 +168,7 @@ func TestPDFiumExtractor_ChecksCancellationBeforeTheWasmPool(t *testing.T) {
 }
 
 // TestPDFiumExtractor_PinsNameAndVersion: both are persisted as extraction_jobs.extractor /
-// .extractor_version, so a drifting value orphans every stored row. Mirrors
-// TestMockExtractor_PinsNameAndVersion.
+// .extractor_version, so a drifting value orphans every stored row.
 func TestPDFiumExtractor_PinsNameAndVersion(t *testing.T) {
 	first, second := extraction.NewPDFiumExtractor(), extraction.NewPDFiumExtractor()
 

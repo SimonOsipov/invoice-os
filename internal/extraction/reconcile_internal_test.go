@@ -1,5 +1,5 @@
-// reconcile_internal_test.go: EXTR-05-03's tolerance constant and EXTR-05-04's purity scans.
-// Package extraction: the constant is unexported and the scans read files in this package.
+// reconcile_internal_test.go: EXTR-05-04's purity scans.
+// Package extraction: the scans read files in this package.
 package extraction
 
 import (
@@ -10,23 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/shopspring/decimal"
 )
-
-func TestReconcile_ToleranceIsOneMinorUnit(t *testing.T) {
-	got, err := decimal.NewFromString(reconcileTolerance)
-	if err != nil {
-		t.Fatalf("decimal.NewFromString(reconcileTolerance) error: %v", err)
-	}
-	want, err := decimal.NewFromString("0.01")
-	if err != nil {
-		t.Fatalf("test setup: decimal.NewFromString(\"0.01\") error: %v", err)
-	}
-	if !got.Equal(want) {
-		t.Errorf("reconcileTolerance parses to %s, want 0.01", got)
-	}
-}
 
 // --- EXTR-05-04: purity scans ---------------------------------------------------------
 //

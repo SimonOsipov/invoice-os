@@ -8,7 +8,7 @@ import (
 )
 
 // Stamped into extraction_jobs.extractor / .extractor_version on every row, so a mock-produced
-// result stays identifiable. Pinned by TestMockExtractor_PinsNameAndVersion.
+// result stays identifiable.
 const (
 	mockExtractorName    = "mock"
 	mockExtractorVersion = "v1"

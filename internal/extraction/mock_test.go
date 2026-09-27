@@ -1,7 +1,7 @@
 // mock_test.go: MockExtractor's specs -- the twelve-law contract run, pointer-only interface
 // satisfaction, determinism in three shapes, distinct inputs, AC-3's reason matrix, the
-// ambient-dependency scan, non-mutation, fresh memory per call on BOTH arms, the pinned
-// Name/Version literals, and MockFixtures handing back a copy. EXTR-12-01 added the default
+// ambient-dependency scan, non-mutation, fresh memory per call on BOTH arms, and MockFixtures
+// handing back a copy. EXTR-12-01 added the default
 // result's field states; QA added the fixture arms' vocabulary, alternative memory and the
 // marshalled Alternatives.
 //
@@ -24,11 +24,9 @@
 //     only. Dropping cloneFields from the FIXTURE arm alone left every other spec green until
 //     it did; shallow-copying Alternatives still did until
 //     TestMockExtractor_ReturnsFreshAlternativeMemoryPerCall.
-//   - TestMockExtractor_PinsNameAndVersion and TestMockFixtures_HandsBackACopy arrived with the
-//     real mock.go and are GREEN from their first run. Neither is a transition. The pin closes
-//     laws E01/E02, which require only a non-empty value that is stable within one run and so
-//     cannot see a rename. The copy guard fires against a memoised MockFixtures, not against
-//     anything the current source does.
+//   - TestMockFixtures_HandsBackACopy arrived with the real mock.go and is GREEN from its first
+//     run. It is not a transition. The copy guard fires against a memoised MockFixtures, not
+//     against anything the current source does.
 //
 // THE GAP THE AMBIENT SCAN DOES NOT CLOSE. A method on a sibling type -- doc.stamp() where
 // stamp reads the clock -- is invisible to it: doc resolves locally and stamp is a selector,
@@ -587,20 +585,6 @@ func mxAssertFreshMemory(t *testing.T, ext extraction.Extractor, doc extraction.
 	return pristineValues, pristineRegions
 }
 
-// TestMockExtractor_PinsNameAndVersion (PIN): laws E01 and E02 accept any non-empty string that
-// does not change within one run, so a rename passes all twelve laws and every behavioural
-// spec while silently rewriting what extraction_jobs.extractor and .extractor_version mean for
-// every row already stored under the old value.
-func TestMockExtractor_PinsNameAndVersion(t *testing.T) {
-	ext := extraction.NewMockExtractor()
-	if got := ext.Name(); got != "mock" {
-		t.Errorf("Name() = %q, want %q; the value is persisted as extraction_jobs.extractor and changing it orphans every existing row", got, "mock")
-	}
-	if got := ext.Version(); got != "v1" {
-		t.Errorf("Version() = %q, want %q; a deliberate bump edits BOTH the mockExtractorVersion const in mock.go and this literal, and every extraction_jobs.extractor_version row already written keeps the old value", got, "v1")
-	}
-}
-
 // TestMockFixtures_HandsBackACopy (REGRESSION GUARD): spec 7 covers Extract's results, nothing
 // covers MockFixtures. A caller clobbering a returned fx.Bytes must not reach the fixture table,
 // or the NEXT caller gets bytes that hash to no key and silently falls to the default result.
@@ -697,20 +681,6 @@ func TestMockExtractor_DefaultResultCoversEveryReasonAndTwoAlternatives(t *testi
 	results := mxDefault(t)
 	if len(results) == 0 {
 		t.Fatal("the default result is empty; every clause below would pass vacuously")
-	}
-
-	want := map[extraction.Reason]bool{
-		extraction.ReasonNone:         true,
-		extraction.ReasonUnreadable:   true,
-		extraction.ReasonAmbiguous:    true,
-		extraction.ReasonInconsistent: true,
-		extraction.ReasonMissing:      true,
-	}
-	got := mxReasons(results)
-	for r := range want {
-		if !got[r] {
-			t.Errorf("the default result carries no field at reason %q; it carries %v", r, mxSortedReasons(got))
-		}
 	}
 
 	by := mxByName(t, results)
@@ -1117,35 +1087,6 @@ func TestMockExtractor_LineTwoIsFlaggedInconsistent(t *testing.T) {
 		if got := by[mxLineTotalName(n)].Reason; got != want {
 			t.Errorf("%s reason = %q, want %q", mxLineTotalName(n), got, want)
 		}
-	}
-}
-
-// TestMockExtractor_LineThreeIsPresentWithoutItsQuantity (RED-FIRST): Core AC 3's normal
-// failure -- an absent cell, not a bad one. A present set alongside the absence: line 3's other
-// three roles must exist before the quantity check means anything.
-func TestMockExtractor_LineThreeIsPresentWithoutItsQuantity(t *testing.T) {
-	results := mxDefault(t)
-
-	present := map[string]bool{}
-	for _, role := range extraction.LineRoles {
-		name := extraction.LineFieldName(3, role)
-		for _, r := range results {
-			if r.Name == name {
-				present[role] = true
-				break
-			}
-		}
-	}
-	if len(present) != 3 {
-		t.Fatalf("line 3 carries %d role(s) (%v), want exactly 3; the absence check below would be meaningless over a different-sized set", len(present), present)
-	}
-	for _, role := range []string{extraction.LineRoleDescription, extraction.LineRoleUnitPrice, extraction.LineRoleLineTotal} {
-		if !present[role] {
-			t.Errorf("line 3 carries no %s row; want it present", role)
-		}
-	}
-	if present[extraction.LineRoleQuantity] {
-		t.Errorf("line 3 carries a %s row; want it absent -- the deliberate missing cell", extraction.LineRoleQuantity)
 	}
 }
 

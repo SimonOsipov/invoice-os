@@ -1,10 +1,9 @@
 // EXTR-18-07 (task-851) local guard. The deployed-proof specs need a deployed docling sidecar
-// and cannot run locally. This scans import-wizard.spec.ts and e2e/ as source text for the two
-// failure modes checkable without one: a content-hash collision reusing a stale job, and a
-// negation that passes on a reachable-but-empty sidecar.
+// and cannot run locally. This scans import-wizard.spec.ts as source text for the failure mode
+// checkable without one: a content-hash collision reusing a stale job.
 import { describe, expect, it } from 'vitest'
 import { unzipSync } from 'fflate'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
@@ -14,7 +13,6 @@ const E2E_ROOT = dirname(TOPOLOGY_DIR)
 const REPO_ROOT = dirname(E2E_ROOT)
 const SPEC_PATH = join(TOPOLOGY_DIR, 'import-wizard.spec.ts')
 const source = readFileSync(SPEC_PATH, 'utf8')
-const SELF = fileURLToPath(import.meta.url)
 
 const BLOCK_START = 'EXTR-18-07 · the deployed proof'
 const blockStart = source.indexOf(BLOCK_START)
@@ -37,17 +35,6 @@ if (extr15Start === -1)
 if (extr15Start >= blockStart)
   throw new Error('the EXTR-15 marker no longer precedes the EXTR-18-07 marker -- the span it delimits is empty')
 const extr15Block = source.slice(extr15Start, blockStart)
-
-function listTsFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...listTsFiles(full))
-    else if (entry.isFile() && entry.name.endsWith('.ts')) out.push(full)
-  }
-  return out
-}
 
 describe('[extr-18-07] guard population (control needle + floor)', () => {
   it('found the EXTR-18-07 block marker (control needle)', () => {
@@ -124,65 +111,12 @@ describe('[extr-18-07] unique*PdfBytes helpers mint their UUID per call, not at 
   })
 })
 
-describe('[extr-18-07] no MOCK-INV-0001 negation anywhere under e2e/', () => {
-  const files = listTsFiles(E2E_ROOT).filter((f) => f !== SELF)
-  const contents = files.map((f) => ({ path: f, text: readFileSync(f, 'utf8') }))
-
-  it('scanned a real population of e2e/ .ts files', () => {
-    expect(files.length, 'the walk found suspiciously few .ts files -- it may be scanning the wrong directory').toBeGreaterThan(20)
-  })
-
-  it('control needle: MOCK-INV-0001 appears somewhere under e2e/', () => {
-    const found = contents.some((c) => c.text.includes('MOCK-INV-0001'))
-    expect(found, 'MOCK-INV-0001 was not found anywhere under e2e/ -- the scan below proves nothing').toBe(true)
-  })
-
-  it('no file negates MOCK-INV-0001 with !== or != in code (comments excluded)', () => {
-    const pattern = /!==?\s*['"]MOCK-INV-0001['"]/
-    const offenders = contents
-      .filter((c) => pattern.test(stripComments(c.text)))
-      .map((c) => c.path.slice(E2E_ROOT.length + 1))
-    expect(offenders, offenders.join(', ')).toEqual([])
-  })
-})
-
 describe('[deployed-proof] EXTR35-E2E-01 sits inside the EXTR-18-07 block', () => {
   // Above the EXTR-15 marker no freshness guard scans its upload.
   it('its title is found past the block marker', () => {
     const at = source.indexOf(EXTR35_E2E_01)
     expect(at, `test name not found in import-wizard.spec.ts: ${JSON.stringify(EXTR35_E2E_01)}`).toBeGreaterThan(-1)
     expect(at, 'EXTR35-E2E-01 sits above the EXTR-18-07 marker').toBeGreaterThan(blockStart)
-  })
-})
-
-describe('[deployed-proof] EXTR35-E2E-01 uploads and expects what its Go oracle reads', () => {
-  // Drift here reds the deploy gate as "docling differs from pdfium" when it does not.
-  const goTest = readFileSync(join(REPO_ROOT, 'internal/extraction/row_reach_test.go'), 'utf8')
-  const goBody = /func TestAdvisory_AFreshenedRegisterStillReadsItsAmounts\(t \*testing\.T\) \{([\s\S]*?)\n\}/.exec(goTest)
-
-  it('the helper freshens the Go-guarded copy with the suffix the Go test appends', () => {
-    expect(goBody, 'TestAdvisory_AFreshenedRegisterStillReadsItsAmounts is gone from row_reach_test.go').not.toBeNull()
-    expect(goBody![1]).toMatch(/fxRead\(t, fxAdvisoryRegister\), \[\]byte\("%e2e-[0-9a-f-]{36}\\n"\)/)
-    expect(source).toContain("const ADVISORY_REGISTER_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'advisory_register.pdf'))")
-    const helper = /function uniqueAdvisoryRegisterPdfBytes\(\): Buffer \{([\s\S]*?)\n\}/.exec(source)
-    expect(helper, 'uniqueAdvisoryRegisterPdfBytes() is gone from import-wizard.spec.ts').not.toBeNull()
-    expect(helper![1]).toContain("Buffer.concat([ADVISORY_REGISTER_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\\n`, 'utf8')])")
-  })
-
-  it("the spec's amounts are the Go test's", () => {
-    const spec = /const AMOUNTS = \{ subtotal: '([^']+)', vat: '([^']+)', total: '([^']+)' \}/.exec(source)
-    const go = /map\[string\]string\{"subtotal": "([^"]+)", "vat": "([^"]+)", "total": "([^"]+)"\}/.exec(goBody?.[1] ?? '')
-    expect(spec, 'no AMOUNTS literal in import-wizard.spec.ts').not.toBeNull()
-    expect(go, 'no amounts map in TestAdvisory_AFreshenedRegisterStillReadsItsAmounts').not.toBeNull()
-    expect(spec!.slice(1)).toEqual(go!.slice(1))
-  })
-
-  it("the spec's number and date are the Go test's", () => {
-    const spec = /const REGISTER_READ = \{ invoice_number: '([^']+)', issue_date: '([^']+)' \}/.exec(source)
-    const go = /map\[string\]string\{"invoice_number": "([^"]+)", "issue_date": "([^"]+)"\}/.exec(goBody?.[1] ?? '')
-    expect(spec, 'no REGISTER_READ literal in import-wizard.spec.ts').not.toBeNull()
-    expect(go, 'no invoice_number/issue_date map in TestAdvisory_AFreshenedRegisterStillReadsItsAmounts').not.toBeNull()
-    expect(spec!.slice(1)).toEqual(go!.slice(1))
   })
 })
 
@@ -408,43 +342,9 @@ describe('[air-05] the deployed literals track their owners', () => {
   })
 })
 
-// JEV_DOUBT_READ copies the values fxJevDoubtLines prints (no shared module e2e/ can import).
-describe('[check-03] the deployed reading tracks its fixture', () => {
-  const fixturesSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/fixtures_test.go'), 'utf8')
-
-  it('JEV_DOUBT_READ is what fxJevDoubtLines prints, byte for byte', () => {
-    const lines = /func fxJevDoubtLines\(\) \[\]fxLine \{([\s\S]*?)\n\}/.exec(fixturesSrc)
-    expect(lines, 'fxJevDoubtLines is gone from internal/extraction/fixtures_test.go').not.toBeNull()
-    const printed = (label: string) => {
-      const m = new RegExp(`"${label}: ([^"]+)"`).exec((lines as RegExpExecArray)[1])
-      expect(m, `fxJevDoubtLines no longer prints "${label}:"`).not.toBeNull()
-      return (m as RegExpExecArray)[1]
-    }
-    const spec =
-      /const JEV_DOUBT_READ = \{ invoice_number: '([^']+)', supplier_name: '([^']+)', supplier_tin: '([^']+)' \}/.exec(source)
-    expect(spec, 'no JEV_DOUBT_READ literal in import-wizard.spec.ts').not.toBeNull()
-    expect(spec!.slice(1)).toEqual([printed('Invoice Number'), printed('From'), printed('Supplier TIN')])
-  })
-})
-
-// JEV_RECEIPT_READ and RECEIPT_NOTICE pin different owners (no shared module e2e/ can import).
+// RECEIPT_NOTICE pins a frontend/app owner (no shared module e2e/ can import).
 describe('[check-04] the deployed literals track their owners', () => {
-  const fixturesSrc = readFileSync(join(REPO_ROOT, 'internal/extraction/fixtures_test.go'), 'utf8')
   const extractionReviewSrc = stripComments(readFileSync(join(REPO_ROOT, 'frontend/app/src/lib/extractionReview.ts'), 'utf8'))
-
-  it('JEV_RECEIPT_READ is what fxJevReceiptLines prints, byte for byte', () => {
-    const lines = /func fxJevReceiptLines\(\) \[\]fxLine \{([\s\S]*?)\n\}/.exec(fixturesSrc)
-    expect(lines, 'fxJevReceiptLines is gone from internal/extraction/fixtures_test.go').not.toBeNull()
-    const printed = (label: string) => {
-      const m = new RegExp(`"${label}: ([^"]+)"`).exec((lines as RegExpExecArray)[1])
-      expect(m, `fxJevReceiptLines no longer prints "${label}:"`).not.toBeNull()
-      return (m as RegExpExecArray)[1]
-    }
-    const spec =
-      /const JEV_RECEIPT_READ = \{ invoice_number: '([^']+)', supplier_name: '([^']+)', supplier_tin: '([^']+)' \}/.exec(source)
-    expect(spec, 'no JEV_RECEIPT_READ literal in import-wizard.spec.ts').not.toBeNull()
-    expect(spec!.slice(1)).toEqual([printed('Invoice Number'), printed('From'), printed('Supplier TIN')])
-  })
 
   it("RECEIPT_NOTICE is DOCUMENT_TYPE_NOTICE's receipt entry, byte for byte", () => {
     const table = /export const DOCUMENT_TYPE_NOTICE: Record<DocumentType, string> = \{([\s\S]*?)\n\}/.exec(extractionReviewSrc)

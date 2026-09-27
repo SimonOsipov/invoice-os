@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url'
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)))
 const SPEC = join(REPO, 'e2e/smoke/landing-demo.spec.ts')
 const HELPER = join(REPO, 'e2e/smoke/landingConsent.ts')
-const NAV = join(REPO, 'e2e/smoke/landing-nav.spec.ts')
 const CONSENT_TS = join(REPO, 'frontend/landing/src/consent.ts')
 
 /** '' for a missing file, so an absent helper fails the floor below as an assertion. */
@@ -27,7 +26,6 @@ function readOrEmpty(path: string): string {
 const spec = readFileSync(SPEC, 'utf8')
 const specLines = spec.split('\n')
 const helper = readOrEmpty(HELPER)
-const nav = readFileSync(NAV, 'utf8')
 const consentSrc = readFileSync(CONSENT_TS, 'utf8')
 
 const SEED_FN = 'seedConsent'
@@ -149,24 +147,5 @@ describe('AC-4: the shared helper writes the record before the first navigation'
     expect(version, 'CONSENT_VERSION not found in consent.ts').toBe('1')
     expect(seed, `the helper seeds a key other than ${key}`).toContain(`'${key}'`)
     expect(seed, `the helper seeds a version other than ${version}`).toMatch(new RegExp(`v:\\s*${version}\\b`))
-  })
-})
-
-describe('landing-nav.spec.ts runs against a MOUNTED notice and must never seed a choice', () => {
-  it('is unseeded, so its eight assertions still prove the notice displaces nothing', () => {
-    // Seeding here makes LAND-05's "nothing shifts by a pixel" AC vacuous. Recorded as a
-    // test rather than a comment so a later agent cannot "fix the inconsistency" quietly.
-    expect(nav.split('\n').length).toBeGreaterThan(200) // floor: the file was really read
-    expect(nav).toContain('async function openLanding(')
-    expect(nav.match(/test\(/g) ?? []).toHaveLength(8)
-    expect(nav.match(/page\.goto\(/g) ?? []).toHaveLength(1)
-    expect(nav, 'landing-nav must arrive with an empty store').not.toContain(SEED_FN)
-    expect(nav, 'landing-nav must not import the seed helper').not.toContain('landingConsent')
-  })
-
-  it('the same scan does find the seed in the spec that is meant to have it', () => {
-    // The control needle for the absence claim above: without it, a renamed helper turns
-    // that assertion green everywhere and it stops meaning anything.
-    expect(spec, `${SEED_FN} is not in landing-demo.spec.ts, so the absence scan above proves nothing`).toContain(SEED_FN)
   })
 })

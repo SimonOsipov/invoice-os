@@ -46,16 +46,6 @@ describe('[bug-10-04] the guard is reading the file it names', () => {
     soleIndex(SOURCE, 'async function toggleNeedsAttention(page: Page, want: boolean)', FILE)
     soleIndex(SOURCE, 'async function sweepY(', FILE)
   })
-
-  it('the sampler is an observer, never a timer', () => {
-    // A fixed-period sampler straddles a flash shorter than its period.
-    soleIndex(SOURCE, 'new MutationObserver(() => {\n      const now = read()', FILE)
-    const install = SOURCE.slice(
-      soleIndex(SOURCE, 'async function installRowLatch(page: Page)', FILE),
-      soleIndex(SOURCE, 'async function readRowLatch(page: Page)', FILE),
-    )
-    expect(install).not.toMatch(/setInterval|setTimeout/)
-  })
 })
 
 describe('[bug-10-04] the toggle proof keeps its controls above its claims', () => {

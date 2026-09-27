@@ -521,7 +521,7 @@ describe('the screen shell', () => {
     render(review({ ctx: serving().ctx }))
     await flush()
 
-    // AC-4 (`:223`). Basis, floor and ground are pinned in ExtractionFields.test.tsx; `minHeight: 0`
+    // AC-4. Basis, floor and ground are pinned in ExtractionFields.test.tsx; `minHeight: 0`
     // is pinned only here, and `EXTR11-E2E-02b`'s precondition is what would notice its absence.
     expect(pick(fieldsPane().style, ['minHeight'])).toEqual({ minHeight: '0' })
   })

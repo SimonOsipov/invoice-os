@@ -52,7 +52,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -972,10 +974,22 @@ func trackedGrep(t *testing.T, regex, selfFile string) []string {
 	if n := bytes.Count(listed, []byte{0}); n < 1500 {
 		t.Fatalf("git ls-files listed %d file(s), want at least 1500 (1895 at fb7daf8a) -- a truncated list reads clean", n)
 	}
+	// A tracked file deleted in the checkout is skipped, so any grep stderr is a real read error.
+	var present []byte
+	for _, f := range bytes.Split(bytes.TrimRight(listed, "\x00"), []byte{0}) {
+		if _, err := os.Stat(filepath.Join(root, string(f))); err == nil {
+			present = append(append(present, f...), 0)
+		}
+	}
+	var stderr bytes.Buffer
 	cmd := exec.Command("xargs", "-0", "grep", "-nHE", regex)
 	cmd.Dir = root
-	cmd.Stdin = bytes.NewReader(listed)
+	cmd.Stdin = bytes.NewReader(present)
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if stderr.Len() > 0 {
+		t.Fatalf("xargs grep over the tracked files: %s", stderr.String())
+	}
 	if err != nil {
 		// grep exits 1 on no match; xargs reports a batch exit of 1-125 as 1 (BSD) or 123 (GNU).
 		var exitErr *exec.ExitError

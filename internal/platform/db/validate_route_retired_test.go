@@ -13,6 +13,7 @@ package db_test
 import (
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -138,38 +139,23 @@ func TestRLS_SingleDocumentValidateRouteIsNotRegistered(t *testing.T) {
 // The scan above reads route registrations only; a comment or symbol naming
 // the retired route reads clean. The text scan below covers that half.
 
-// vrGoFiles is every .go file in the repo bar this one, which carries the
-// needles by necessity.
+// vrGoFiles is every tracked .go file bar this one, which carries the needles
+// by necessity. A tracked file deleted in the working tree is skipped.
 func vrGoFiles(t *testing.T, root string) []string {
 	t.Helper()
+	listed, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "-z", "--", "*.go").Output()
+	if err != nil {
+		t.Fatalf("git -C %s ls-files: %v", root, err)
+	}
 	var out []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range strings.Split(string(listed), "\x00") {
+		if filepath.Ext(rel) != ".go" || rel == vrSelfPath {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "testdata", "vendor":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == vrSelfPath {
-			return nil
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			continue
 		}
 		out = append(out, rel)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
 	}
 	sort.Strings(out)
 	return out

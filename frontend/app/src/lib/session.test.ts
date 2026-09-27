@@ -371,7 +371,8 @@ describe('isTokenExpired / resolveBootSession', () => {
     expect(payload.length % 4).not.toBe(0)
     expect(decodeJwtPayload(`header.${payload}.signature`)).toEqual(claims)
 
-    const unreadable = [null, '', 'opaque', `header.${payload}`, `header.${btoa('{not json')}.signature`, 'a.!!!not-base64!!!.c']
+    const nonObject = ['5', '[{"exp":1}]', 'null', '"exp"'].map((j) => `header.${btoa(j).replace(/=+$/, '')}.signature`)
+    const unreadable = [null, '', 'opaque', `header.${payload}`, `header.${btoa('{not json')}.signature`, 'a.!!!not-base64!!!.c', ...nonObject]
     expect(unreadable.length).toBeGreaterThan(0)
     for (const t of unreadable) {
       expect(decodeJwtPayload(t), `token ${JSON.stringify(t)}`).toBeNull()

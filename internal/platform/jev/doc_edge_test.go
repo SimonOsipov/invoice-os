@@ -471,3 +471,16 @@ func TestJevDoc_StatesEachOpenRouterItem(t *testing.T) {
 			"The alias can move to a release that is not on the ZDR list, and nothing enforces ZDR per call")
 	})
 }
+
+// The fork rule must say why the retired key is still blanked, or a reader drops the blank while production holds it.
+func TestJevDoc_ForkRuleStatesTheRetiredKeyBlank(t *testing.T) {
+	doc := htmlCommentRE.ReplaceAllString(readJevDoc(t, jevRepoRoot(t)), "")
+	_, rule, ok := strings.Cut(docSection(t, doc, "## Per environment", "## "), "**Fork rule.**")
+	if !ok {
+		t.Fatalf("%s: Per environment has no **Fork rule.** paragraph", jevDoc)
+	}
+	want := "`set-ai-fake` keeps blanking and auditing the retired `TYPESAFE_API_KEY` until the user deletes it from production"
+	if !strings.Contains(flatLower(rule), flatLower(want)) {
+		t.Errorf("%s: the fork rule does not say %q", jevDoc, want)
+	}
+}

@@ -156,3 +156,40 @@ func TestRetiredRouteScan_FindsAPlantedNeedle(t *testing.T) {
 		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
 	}
 }
+
+// Every root and file kind the guard owns; the key-name rule stops at .go, so a workflow naming it is not flagged.
+func TestRetiredRouteScan_FlagsEveryRootAndFileKind(t *testing.T) {
+	root := t.TempDir()
+	plant := map[string]string{
+		"cmd/svc/main.go":         "package main\n\n// was https://api.typesafe.ai/v1/systemone\n",
+		"internal/y/y.go":         "package y\n\nvar u = \"HTTPS://API.TYPESAFE.AI\"\n",
+		"tools/z/z.go":            "package z\n\n// reads " + retiredKeyVar + "\n",
+		"scripts/ok.sh":           "echo ok\n",
+		".github/workflows/w.yml": "run: curl https://api.typesafe.ai/v1/systemone\n",
+		".github/workflows/k.yml": "env:\n  " + retiredKeyVar + ": x\n",
+		"e2e/tests/route.spec.ts": "const u = 'https://api.typesafe.ai/v1/systemone'\n",
+	}
+	for rel, body := range plant {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	scanned, hits := retiredRouteScan(t, root)
+	if len(scanned) != len(plant) {
+		t.Fatalf("scanned %v, want all %d planted files", scanned, len(plant))
+	}
+	var flagged []string
+	for _, h := range hits {
+		flagged = append(flagged, strings.SplitN(h, ":", 2)[0])
+	}
+	slices.Sort(flagged)
+	want := []string{".github/workflows/w.yml", "cmd/svc/main.go", "e2e/tests/route.spec.ts", "internal/y/y.go", "tools/z/z.go"}
+	if !slices.Equal(flagged, want) {
+		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
+	}
+}

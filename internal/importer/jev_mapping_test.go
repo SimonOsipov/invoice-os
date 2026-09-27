@@ -692,6 +692,47 @@ func TestJevMapping_TheRetiredKeyDoesNotOpenTheGate(t *testing.T) {
 	if msg := jpGateLogs[0]; !strings.Contains(msg, "OPENROUTER_API_KEY") || strings.Contains(msg, "JEV_OUT") {
 		t.Errorf("logged %q, want a reason naming OPENROUTER_API_KEY and not JEV_OUT (which is set)", msg)
 	}
+	if msg := jpGateLogs[0]; strings.Contains(msg, "TYPESAFE") {
+		t.Errorf("logged %q, want no mention of the retired key", msg)
+	}
+}
+
+// An open gate must send its own key: a walk reading another variable measures with the fallback key.
+// A whitespace key counts as set, as jev.FromEnv reads it.
+func TestJevMapping_TheLiveRunSendsTheOpenRouterKey(t *testing.T) {
+	for name, key := range map[string]string{"openrouter key": "sk-or-jp-7f3a", "whitespace key": " "} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			jpSeedOneLayoutFixture(t, dir, "plain_01")
+			t.Setenv("OPENROUTER_API_KEY", key)
+			t.Setenv("TYPESAFE_API_KEY", "sk-retired-jp-7f3a")
+			t.Setenv("JEV_OUT", dir)
+			jpResetGateLogs()
+			var auths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auths = append(auths, r.Header.Get(jevmeasure.AuthHeaderName))
+				var raw map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&raw)
+				questions, _ := raw["questions"].(map[string]any)
+				_, _ = w.Write([]byte(jpNoulBody(questions, "0.90")))
+			}))
+			defer srv.Close()
+
+			if !jpGatedRun(t, srv.URL) {
+				t.Fatalf("jpGatedRun with OPENROUTER_API_KEY=%q and JEV_OUT set = false, want true (logged %q)", key, jpGateLogs)
+			}
+			if len(auths) == 0 {
+				t.Fatal("the open gate sent no call")
+			}
+			// net/http trims a header value, so the whitespace key arrives as the bare prefix.
+			want := strings.TrimSpace(jevmeasure.AuthHeaderPrefix + key)
+			for i, got := range auths {
+				if strings.TrimSpace(got) != want {
+					t.Fatalf("call %d sent %s %q, want %q", i, jevmeasure.AuthHeaderName, got, want)
+				}
+			}
+		})
+	}
 }
 
 // --- AC-2 ---------------------------------------------------------------------------------

@@ -28,17 +28,17 @@ type HandoffStore struct {
 }
 
 type handoffEntry struct {
-	accessToken string
-	stateHash   [32]byte
-	expiresAt   time.Time
+	answer    string // the exchange answer JSON
+	stateHash [32]byte
+	expiresAt time.Time
 }
 
 func NewHandoffStore(ttl time.Duration, now func() time.Time) *HandoffStore {
 	return &HandoffStore{ttl: ttl, now: now, entries: make(map[[32]byte]handoffEntry)}
 }
 
-// Put stores accessToken and returns a fresh exchange code; false means the store is full.
-func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) (string, bool) {
+// Put stores answer and returns a fresh exchange code; false means the store is full.
+func (s *HandoffStore) Put(answer string, stateHash [32]byte) (string, bool) {
 	b := make([]byte, 32)
 	rand.Read(b) // never fails on Go 1.24+
 	code := base64.RawURLEncoding.EncodeToString(b)
@@ -56,7 +56,7 @@ func (s *HandoffStore) Put(accessToken string, stateHash [32]byte) (string, bool
 	if len(s.entries) == 0 || exp.Before(s.nextExpiry) {
 		s.nextExpiry = exp
 	}
-	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{accessToken, stateHash, exp}
+	s.entries[sha256.Sum256([]byte(code))] = handoffEntry{answer, stateHash, exp}
 	return code, true
 }
 
@@ -74,7 +74,7 @@ func (s *HandoffStore) sweep(now time.Time) {
 	}
 }
 
-// Take redeems code once; a wrong state or expired code still spends it.
+// Take redeems code once for its stored answer; a wrong state or expired code still spends it.
 func (s *HandoffStore) Take(code, state string) (string, bool) {
 	key := sha256.Sum256([]byte(code))
 	s.mu.Lock()
@@ -90,5 +90,5 @@ func (s *HandoffStore) Take(code, state string) (string, bool) {
 	if subtle.ConstantTimeCompare(sh[:], e.stateHash[:]) != 1 {
 		return "", false
 	}
-	return e.accessToken, true
+	return e.answer, true
 }

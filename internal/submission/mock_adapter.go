@@ -101,7 +101,7 @@ var (
 // MockConfig is the mock's entire configuration surface ([one-latency-knob]).
 //
 // A VALUE type with no pointer, map or slice field -- that is what lets MockAdapter hold no
-// mutable state at all (M5-03-04's AC-8 asserts exactly that, by reflection).
+// mutable state at all (`TestMockAdapter_HasNoMutableState` polls one ref twice).
 type MockConfig struct {
 	// Latency is the boot-time baseline applied to every in-flight wait. The zero value means
 	// "instant". cmd/submission supplies the real value from APP_ADAPTER_MOCK_LATENCY

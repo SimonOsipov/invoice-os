@@ -9,7 +9,7 @@
 // pgCode harness from store_test.go/transition_adversarial_test.go (same
 // package).
 //
-// Spec-to-test map (task-233 Test Specs table T02-1..T02-8):
+// Spec-to-test map (task-233 Test Specs table T02-2..T02-8):
 //
 //	T02-2 TestTransition_ExhaustiveMatrixLocksLegalEdgeTable, EXTENDED
 //	      (transition_adversarial_test.go's wantLegalEdge oracle + counts)

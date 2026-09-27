@@ -237,6 +237,11 @@ func TestRLS_WorkflowRolesMissingContextFailsClosed(t *testing.T) {
 	roleB, cleanupB := seedWorkflowRole(t, h.tenantB, wrKey("no-guc-b"))
 	defer cleanupB()
 
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM workflow_roles WHERE id IN ($1, $2)`, roleA, roleB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -615,6 +620,11 @@ func TestRLS_WorkflowRoleMembersMissingContextFailsClosed(t *testing.T) {
 	defer cleanupMemB()
 	memberB, cleanupB := seedWorkflowRoleMember(t, h.tenantB, roleB, userB, 0)
 	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM workflow_role_members WHERE id IN ($1, $2)`, memberA, memberB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
 
 	tx, err := h.app.Begin(ctx)
 	if err != nil {

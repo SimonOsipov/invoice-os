@@ -158,13 +158,23 @@ func TestRLS_MembershipsMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
+	rowA, cleanupA := seedMembership(t, h.tenantA, uuid.NewString(), "admin")
+	defer cleanupA()
+	rowB, cleanupB := seedMembership(t, h.tenantB, uuid.NewString(), "admin")
+	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM memberships WHERE id IN ($1, $2)`, rowA, rowB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if n := mustCount(t, tx, `SELECT count(*) FROM memberships`); n != 0 {
-		t.Errorf("memberships visible with no tenant set = %d, want 0", n)
+	if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE id IN ($1, $2)`, rowA, rowB); n != 0 {
+		t.Errorf("seeded memberships rows visible with no tenant set = %d, want 0", n)
 	}
 }
 

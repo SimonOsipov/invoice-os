@@ -132,13 +132,23 @@ func TestRLS_BusinessEntitiesMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
+	rowA, cleanupA := seedBusinessEntity(t, h.tenantA, "BE-04 A Corp")
+	defer cleanupA()
+	rowB, cleanupB := seedBusinessEntity(t, h.tenantB, "BE-04 B Corp")
+	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE id IN ($1, $2)`, rowA, rowB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if n := mustCount(t, tx, `SELECT count(*) FROM business_entities`); n != 0 {
-		t.Errorf("business_entities visible with no tenant set = %d, want 0", n)
+	if n := mustCount(t, tx, `SELECT count(*) FROM business_entities WHERE id IN ($1, $2)`, rowA, rowB); n != 0 {
+		t.Errorf("seeded business_entities rows visible with no tenant set = %d, want 0", n)
 	}
 }
 
@@ -427,12 +437,12 @@ func TestRLS_BusinessEntitiesTenantDeleteCascades(t *testing.T) {
 // RESTRICT (migration 20260718104103). Deleting a business_entities row that still has
 // a live invoice is refused with 23001 restrict_violation — even for invoice_app, which
 // DOES hold the DELETE grant (GRANT ...,DELETE... TO invoice_app). This is the net-new
-// path vs the sibling TestRLS_InvoicesEntityDeleteRestricted (invoices_rls_test.go:648),
+// path vs the sibling TestRLS_InvoicesEntityDeleteRestricted,
 // which deletes via h.super: BE-RLS-12 deletes via h.app inside a tenantA tx (the real
 // runtime identity + context), proving the RESTRICT bites at the DB layer regardless of
 // role privilege, not merely for the superuser. The entity must survive the refusal.
 //
-// Cleanup order matters and copies INV-RLS-16 exactly (invoices_rls_test.go:654-659):
+// Cleanup order matters and copies INV-RLS-16 exactly:
 // the invoice must be removed BEFORE the entity (entity_id is ON DELETE RESTRICT, so
 // cleaning up the entity first would recreate the very violation under test). Deferred
 // funcs run LIFO, so defer the entity cleanup FIRST and the invoice cleanup SECOND —

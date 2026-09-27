@@ -198,13 +198,31 @@ func TestRLS_InvoiceStatusHistoryMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "ISH-04 A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "ISH-04 B Corp")
+	defer cleanupEntityB()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "ISH-04-A")
+	defer cleanupInvoiceA()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "ISH-04-B")
+	defer cleanupInvoiceB()
+	rowA, cleanupA := seedStatusHistory(t, h.tenantA, invoiceA)
+	defer cleanupA()
+	rowB, cleanupB := seedStatusHistory(t, h.tenantB, invoiceB)
+	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM invoice_status_history WHERE id IN ($1, $2)`, rowA, rowB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if n := mustCount(t, tx, `SELECT count(*) FROM invoice_status_history`); n != 0 {
-		t.Errorf("invoice_status_history visible with no tenant set = %d, want 0", n)
+	if n := mustCount(t, tx, `SELECT count(*) FROM invoice_status_history WHERE id IN ($1, $2)`, rowA, rowB); n != 0 {
+		t.Errorf("seeded invoice_status_history rows visible with no tenant set = %d, want 0", n)
 	}
 }
 

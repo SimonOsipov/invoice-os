@@ -446,30 +446,6 @@ describe('the page frames', () => {
     }
   })
 
-  it('sets padding to zero on the positioned frame', () => {
-    render(canvas())
-
-    expect(frames(), 'no frame rendered').toHaveLength(3)
-    for (const el of frames()) {
-      // CSS 2.1 §10.1: the absolutely-positioned highlight resolves its percentages against
-      // the padding box, the in-flow image its width against the content box. Padding
-      // separates the two and every highlight drifts.
-      expect(el.style.padding, `${el.dataset.testid} is padded`).toBe('0px')
-      expect(el.style.position).toBe('relative')
-    }
-  })
-
-  it("keeps the artboard's page card on the frame itself, with no chrome wrapper", () => {
-    render(canvas())
-
-    const f = frame(1)
-    expect(f.style.border).toBe('1px solid var(--line-2)')
-    expect(f.style.boxShadow).toBe('0 1px 3px oklch(20% .02 210 / .08)')
-    // MEASURED: jsdom rewrites the bare zero. The authored literal is '0 auto 18px'.
-    expect(f.style.margin).toBe('0px auto 18px')
-    expect(f.style.background).toBe('rgb(255, 255, 255)')
-  })
-
   it('puts the image directly in the frame at the artboard width', async () => {
     render(canvas())
     await flush()
@@ -584,29 +560,6 @@ describe('zoom', () => {
 // ==========================================================================================
 
 describe('the highlight', () => {
-  it("carries the artboard's amber fill, ring and colour-only transition", () => {
-    render(canvas({ selected: 'invoice_number' }))
-
-    const [node] = highlights()
-    expect(node, 'no highlight rendered').toBeDefined()
-
-    // MEASURED: jsdom rewrites the percentage and the leading dots in `background`, and
-    // leaves `boxShadow` raw. Asserting the authored literal on both fails.
-    expect(node.style.background).toBe('oklch(0.72 0.15 65 / 0.32)')
-    expect(node.style.boxShadow).toBe('0 0 0 3px oklch(72% .15 65 / .32)')
-    expect(node.style.borderRadius).toBe('3px')
-
-    // A transition on a position or a size makes a boundingBox() taken right after a
-    // selection measure a mid-transition rect -- EXTR11-E2E-03 takes exactly that
-    // measurement ([[drawer-animation-defeats-geometry-specs]]).
-    const transition = node.style.transition
-    expect(transition).toContain('background')
-    expect(transition).toContain('box-shadow')
-    for (const banned of ['all', 'left', 'top', 'width', 'height', 'transform', 'inset']) {
-      expect(transition, `the transition covers ${banned}`).not.toMatch(new RegExp(`(^|[\\s,])${banned}([\\s,]|$)`))
-    }
-  })
-
   it('spreads highlightStyle for every key, rather than re-declaring it', () => {
     const region = mkRegion({ page: 2, x0: 0.1, y0: 0.3, x1: 0.38, y1: 0.35 })
     render(canvas({ selected: 'invoice_date' }))

@@ -46,7 +46,7 @@ func signInJSON(email string) string {
 func TestHandoffHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/landed" {
-			_, _ = w.Write([]byte(`{"access_token":"tok-redirected"}`))
+			_, _ = w.Write([]byte(`{"access_token":"tok-redirected","refresh_token":"ref-redirected"}`))
 			return
 		}
 		http.Redirect(w, r, "/landed", http.StatusFound)
@@ -230,7 +230,7 @@ func TestHandoffCodeRedeemsOnceAcrossRequests(t *testing.T) {
 // CORS answers every preflight itself; none reaches the handler or GoTrue. An OPTIONS with no Origin is not a preflight.
 func TestHandoffPreflightIsAnsweredByCORS(t *testing.T) {
 	authURL, calls := countingGoTrue(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"access_token":"tok-C"}`))
+		_, _ = w.Write([]byte(`{"access_token":"tok-C","refresh_token":"ref-C"}`))
 	})
 	mux := handoffMux(t, authURL, true)
 

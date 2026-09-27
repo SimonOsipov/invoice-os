@@ -119,7 +119,8 @@ func TestSignIn_EmailLimitCountsBytes(t *testing.T) {
 }
 
 func TestSignIn_Upstream200OverBodyCapIs502AndRefunds(t *testing.T) {
-	big := `{"access_token":"` + sessionAT + `","user":{"user_metadata":{"pad":"` + strings.Repeat("x", maxGoTrueBodyBytes) + `"}}}`
+	// Both tokens present, so only the body cap can make this 502.
+	big := `{"access_token":"` + sessionAT + `","refresh_token":"` + sessionRT + `","user":{"user_metadata":{"pad":"` + strings.Repeat("x", maxGoTrueBodyBytes) + `"}}}`
 	fake := newTokenFake(t, http.StatusOK, big)
 	rig := newSignInRig(t, fake.URL, nil)
 	s := randomState(t)
@@ -131,7 +132,7 @@ func TestSignIn_Upstream200OverBodyCapIs502AndRefunds(t *testing.T) {
 	requireNothingCounted(t, rig.throttle, regEmail)
 
 	// Positive control: the same session under the cap signs in.
-	fake.set(http.StatusOK, `{"access_token":"`+sessionAT+`","user":{"user_metadata":{"pad":"x"}}}`)
+	fake.set(http.StatusOK, `{"access_token":"`+sessionAT+`","refresh_token":"`+sessionRT+`","user":{"user_metadata":{"pad":"x"}}}`)
 	requireCode(t, newSignInRig(t, fake.URL, nil).doSignIn(signInBody(regEmail, regPassword, s)))
 }
 
@@ -181,7 +182,7 @@ func TestExchange_ConcurrentRedeemOneWinner(t *testing.T) {
 	const racers = 32
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	code, _ := rig.store.Put(sessionAT, stateHash(s))
+	code, _ := rig.store.Put(sessionAnswer, stateHash(s))
 
 	recs := make([]int, racers)
 	bodies := make([]string, racers)
@@ -204,8 +205,8 @@ func TestExchange_ConcurrentRedeemOneWinner(t *testing.T) {
 		switch c {
 		case http.StatusOK:
 			wins++
-			if !strings.Contains(bodies[i], sessionAT) {
-				t.Errorf("winner body %q lacks the token", bodies[i])
+			if at, rt := requireAnswer(t, []byte(bodies[i])); at != sessionAT || rt != sessionRT {
+				t.Errorf("winner answer = (%q, %q), want (%q, %q)", at, rt, sessionAT, sessionRT)
 			}
 		case http.StatusBadRequest:
 			if !strings.Contains(bodies[i], msgBadCode) {

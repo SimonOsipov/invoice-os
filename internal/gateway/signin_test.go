@@ -175,6 +175,47 @@ func requireOnlyKey(t *testing.T, rec *httptest.ResponseRecorder, key string) st
 	return v
 }
 
+// sessionAnswer is the exchange answer a gtSession sign-in stores.
+const sessionAnswer = `{"access_token":"` + sessionAT + `","refresh_token":"` + sessionRT + `"}`
+
+// requireAnswer asserts raw is a JSON object with exactly access_token and refresh_token.
+func requireAnswer(t *testing.T, raw []byte) (access, refresh string) {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("answer %q is not a JSON object: %v", raw, err)
+	}
+	if keys := slices.Sorted(maps.Keys(m)); !slices.Equal(keys, []string{"access_token", "refresh_token"}) {
+		t.Fatalf("answer keys = %v, want exactly [access_token refresh_token]: %s", keys, raw)
+	}
+	access, _ = m["access_token"].(string)
+	refresh, _ = m["refresh_token"].(string)
+	return access, refresh
+}
+
+// requireSessionAnswer asserts a 200 exchange whose body carries sessionAT and sessionRT.
+func requireSessionAnswer(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if at, rt := requireAnswer(t, rec.Body.Bytes()); at != sessionAT || rt != sessionRT {
+		t.Fatalf("answer = (%q, %q), want (%q, %q)", at, rt, sessionAT, sessionRT)
+	}
+}
+
+// requireStoredSession asserts the code redeems in the store for the gtSession answer.
+func requireStoredSession(t *testing.T, store *HandoffStore, code, state string) {
+	t.Helper()
+	stored, ok := store.Take(code, state)
+	if !ok {
+		t.Fatal("store.Take(code, state) = false, want the stored answer")
+	}
+	if at, rt := requireAnswer(t, []byte(stored)); at != sessionAT || rt != sessionRT {
+		t.Fatalf("stored answer = (%q, %q), want (%q, %q)", at, rt, sessionAT, sessionRT)
+	}
+}
+
 func requireCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	code := requireOnlyKey(t, rec, "code")
@@ -205,8 +246,85 @@ func TestSignIn_Success200CodeAndOnlyTokenCalled(t *testing.T) {
 	if want := map[string]any{"email": regEmail, "password": regPassword}; !maps.Equal(sent, want) {
 		t.Errorf("token body = %v, want exactly %v", sent, want)
 	}
-	if tok, ok := rig.store.Take(code, s); !ok || tok != sessionAT {
-		t.Errorf("store.Take(code, state) = (%q, %v), want (%q, true)", tok, ok, sessionAT)
+	requireStoredSession(t, rig.store, code, s)
+}
+
+func TestSignIn_StoresBothTokens(t *testing.T) {
+	const otherAT, otherRT = "eyJhbGciOiJFUzI1NiJ9.other-access.sig", "other-refresh-7k1p"
+	for _, c := range []struct{ name, body, wantAT, wantRT string }{
+		{"gtSession", gtSession, sessionAT, sessionRT},
+		// Other values, refresh_token first, extra keys: the tokens are taken by name, and nothing else is kept.
+		{"reordered", `{"refresh_token":"` + otherRT + `","user":{"id":"u1"},"provider_token":"pt-x","access_token":"` + otherAT + `","expires_in":3600}`, otherAT, otherRT},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newTokenFake(t, http.StatusOK, c.body)
+			rig := newSignInRig(t, fake.URL, nil)
+			s := randomState(t)
+
+			code := requireCode(t, rig.doSignIn(signInBody(regEmail, regPassword, s)))
+			stored, ok := rig.store.Take(code, s)
+			if !ok {
+				t.Fatal("store.Take(code, state) = false, want the stored answer")
+			}
+			if at, rt := requireAnswer(t, []byte(stored)); at != c.wantAT || rt != c.wantRT {
+				t.Errorf("stored answer = (%q, %q), want (%q, %q)", at, rt, c.wantAT, c.wantRT)
+			}
+		})
+	}
+}
+
+func TestSignIn_MissingRefreshToken502(t *testing.T) {
+	for _, c := range []struct{ name, body string }{
+		{"absent", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600}`},
+		{"empty", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600,"refresh_token":""}`},
+		{"null", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600,"refresh_token":null}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newTokenFake(t, http.StatusOK, c.body)
+			clk := newTestClock()
+			store := NewHandoffStore(HandoffTTL, clk.Now)
+			th := NewSignInThrottle(1, SignInMaxKeys, SignInWindow, clk.Now)
+			h := SignInHandler(fake.URL, testClient(), store, th, slog.New(slog.DiscardHandler))
+			s := randomState(t)
+
+			for i := 1; i <= 2; i++ {
+				rec := serve(h, http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, s))
+				requireRefusal(t, rec, http.StatusBadGateway, msgUnavailable)
+				if bytes.Contains(rec.Body.Bytes(), []byte(sessionAT)) {
+					t.Fatalf("attempt %d: body carries the access token: %s", i, rec.Body.String())
+				}
+			}
+			if n := storeMapEntries(store); n != 0 {
+				t.Errorf("store holds %d entries, want 0", n)
+			}
+			// With max=1, the second attempt reaches GoTrue only if the first was refunded.
+			if n := fake.Hits(); n != 2 {
+				t.Errorf("GoTrue hits = %d, want 2", n)
+			}
+
+			// Positive control: a 200 with both tokens signs in on the same throttle.
+			fake.set(http.StatusOK, gtSession)
+			requireCode(t, serve(h, http.MethodPost, "/auth/sign-in", signInBody(regEmail, regPassword, s)))
+			if n := storeMapEntries(store); n != 1 {
+				t.Errorf("store holds %d entries after a sign-in, want 1", n)
+			}
+		})
+	}
+}
+
+func TestExchange_AnswersBothTokens(t *testing.T) {
+	// GoTrue's other secrets and the user object never reach the app.
+	body := `{"access_token":"` + sessionAT + `","refresh_token":"` + sessionRT + `","provider_token":"pt-secret","provider_refresh_token":"prt-secret","user":{"id":"u1"}}`
+	fake := newTokenFake(t, http.StatusOK, body)
+	rig := newSignInRig(t, fake.URL, nil)
+	s := randomState(t)
+
+	code := requireCode(t, rig.doSignIn(signInBody(regEmail, regPassword, s)))
+	rec := rig.doExchange(exchangeBody(code, s))
+
+	requireSessionAnswer(t, rec)
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", got)
 	}
 }
 
@@ -518,12 +636,9 @@ func TestSignIn_StateRequired(t *testing.T) {
 func TestExchange_RedeemsOnce(t *testing.T) {
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	code, _ := rig.store.Put(sessionAT, stateHash(s))
+	code, _ := rig.store.Put(sessionAnswer, stateHash(s))
 
-	tok := requireOnlyKey(t, rig.doExchange(exchangeBody(code, s)), "access_token")
-	if tok != sessionAT {
-		t.Errorf("access_token = %q, want %q", tok, sessionAT)
-	}
+	requireSessionAnswer(t, rig.doExchange(exchangeBody(code, s)))
 	requireRefusal(t, rig.doExchange(exchangeBody(code, s)), http.StatusBadRequest, msgBadCode)
 }
 
@@ -579,19 +694,16 @@ func TestSignInThenExchange_RoundTrip(t *testing.T) {
 
 	code := requireCode(t, rig.doSignIn(signInBody(regEmail, regPassword, s)))
 
-	tok := requireOnlyKey(t, rig.doExchange(exchangeBody(code, s)), "access_token")
-	if tok != sessionAT {
-		t.Errorf("access_token = %q, want %q", tok, sessionAT)
-	}
+	requireSessionAnswer(t, rig.doExchange(exchangeBody(code, s)))
 	requireRefusal(t, rig.doExchange(exchangeBody(code, s)), http.StatusBadRequest, msgBadCode)
 }
 
 func TestExchange_RefusalsAreIdentical(t *testing.T) {
 	rig := newSignInRig(t, closedURL(t), nil)
 	s := randomState(t)
-	live, _ := rig.store.Put(sessionAT, stateHash(s))
-	expiring, _ := rig.store.Put(sessionAT, stateHash(s))
-	oversized, _ := rig.store.Put(sessionAT, stateHash(s))
+	live, _ := rig.store.Put(sessionAnswer, stateHash(s))
+	expiring, _ := rig.store.Put(sessionAnswer, stateHash(s))
+	oversized, _ := rig.store.Put(sessionAnswer, stateHash(s))
 
 	ref := rig.doExchange(exchangeBody(randomState(t), s))
 	requireRefusal(t, ref, http.StatusBadRequest, msgBadCode)
@@ -605,9 +717,7 @@ func TestExchange_RefusalsAreIdentical(t *testing.T) {
 	}
 
 	// Positive control: a live code redeems, so the refusals are not a dead handler.
-	if tok := requireOnlyKey(t, rig.doExchange(exchangeBody(live, s)), "access_token"); tok != sessionAT {
-		t.Fatalf("access_token = %q, want %q", tok, sessionAT)
-	}
+	requireSessionAnswer(t, rig.doExchange(exchangeBody(live, s)))
 	rig.clock.Advance(HandoffTTL)
 	answers["expired"] = rig.doExchange(exchangeBody(expiring, s))
 
@@ -617,6 +727,11 @@ func TestExchange_RefusalsAreIdentical(t *testing.T) {
 	for name, rec := range answers {
 		if rec.Code != ref.Code || !bytes.Equal(rec.Body.Bytes(), ref.Body.Bytes()) {
 			t.Errorf("%s: answered %d %q, want %d %q", name, rec.Code, rec.Body.String(), ref.Code, ref.Body.String())
+		}
+		for _, secret := range []string{sessionAT, sessionRT} {
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Errorf("%s: refusal carries %q", name, secret)
+			}
 		}
 	}
 }
@@ -695,6 +810,8 @@ func TestSignIn_NeverLogsSecrets(t *testing.T) {
 	newSignInRig(t, newTokenFake(t, http.StatusBadRequest, gtEmailNotConfirmed).URL, log).doSignIn(body)
 	newSignInRig(t, newTokenFake(t, http.StatusInternalServerError, gtInternal).URL, log).doSignIn(body)
 	newSignInRig(t, closedURL(t), log).doSignIn(body)
+	newSignInRig(t, newTokenFake(t, http.StatusOK, `{"access_token":"`+sessionAT+`"}`).URL, log).doSignIn(body)
+	newSignInRig(t, newTokenFake(t, http.StatusOK, gtEmptyAccessToken).URL, log).doSignIn(body)
 
 	// Positive control: failures are logged, with the upstream status.
 	if buf.Len() == 0 {

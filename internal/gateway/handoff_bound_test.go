@@ -134,9 +134,7 @@ func TestSignIn_StoreOneUnderCapSignsIn(t *testing.T) {
 	s := randomState(t)
 
 	code := requireCode(t, rig.doSignIn(signInBody(regEmail, regPassword, s)))
-	if tok, ok := rig.store.Take(code, s); !ok || tok != sessionAT {
-		t.Fatalf("Take = (%q, %v), want (%q, true)", tok, ok, sessionAT)
-	}
+	requireStoredSession(t, rig.store, code, s)
 }
 
 func TestSignIn_WhitespaceEmailIsRequired(t *testing.T) {

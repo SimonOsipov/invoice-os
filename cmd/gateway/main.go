@@ -251,7 +251,7 @@ func registrationHandlers(authURL, siteURL *url.URL, log *slog.Logger) registrat
 
 // handoff holds the public sign-in hand-off handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange http.Handler
+	SignIn, Exchange, Refresh http.Handler
 }
 
 // handoffHandlers builds the sign-in and exchange handlers against GoTrue at authURL.

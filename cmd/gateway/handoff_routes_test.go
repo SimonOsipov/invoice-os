@@ -21,6 +21,8 @@ var handoffRoutes = map[string]string{
 	"OPTIONS /auth/sign-in":  "SignIn",
 	"POST /auth/exchange":    "Exchange",
 	"OPTIONS /auth/exchange": "Exchange",
+	"POST /auth/refresh":     "Refresh",
+	"OPTIONS /auth/refresh":  "Refresh",
 }
 
 const (
@@ -89,15 +91,19 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 	}
 }
 
-// handoffMux mounts handoffHandlers on the four patterns the way main does.
+// handoffMux mounts handoffHandlers on the hand-off patterns the way main does.
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
 	h := handoffHandlers(authURL, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
-	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange}
+	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh}
 	mux := http.NewServeMux()
 	for pattern, field := range handoffRoutes {
 		if !withOptions && strings.HasPrefix(pattern, "OPTIONS ") {
+			continue
+		}
+		// An unbuilt handler stays unmounted, so its path 404s rather than panicking; TestHandoffHandlersWiring names it.
+		if fields[field] == nil {
 			continue
 		}
 		mux.Handle(pattern, withCORS(fields[field]))
@@ -124,7 +130,7 @@ func postJSON(mux http.Handler, path, origin, body string) *httptest.ResponseRec
 	return rec
 }
 
-func handoffPaths() []string { return []string{"/auth/sign-in", "/auth/exchange"} }
+func handoffPaths() []string { return []string{"/auth/sign-in", "/auth/exchange", "/auth/refresh"} }
 
 func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

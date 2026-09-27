@@ -257,7 +257,7 @@ adequate.
 3. `skipped_unavailable` conflates a spent budget, a failed answer check and a cancelled
    caller context. The error tells the last one apart: it wraps `ctx.Err()`.
 4. The PR key audit reads `submission` and `invoice` only. A key an operator set anywhere
-   else would fork unaudited. The `OPENROUTER_API_KEY` audit has the same scope.
+   else would fork unaudited.
 5. The `3s` budget and its `1.375s` per-attempt cap are accepted as they are; the measured
    all-attempts latency max was 517 ms on the retired direct route (`CHECK-00 Jev Measurement
    Results`). The extra OpenRouter hop is measured only by the pre-merge live probe. A timed-out

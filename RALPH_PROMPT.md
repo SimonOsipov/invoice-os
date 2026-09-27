@@ -247,7 +247,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
   For an AC that states a rule, at least one row changes a comparison, a branch or a computation. A row that only edits a literal the test restates proves only a value AC.
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
 - **Assert a collection is non-empty** before asserting over its items.
-- **Source scans:** the QA agent's rule "A source scan is the last resort" applies. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe. Never write a test whose subject is another test, a test file or a test fixture.
+- **Source scans:** the QA agent's rules "A source scan is the last resort" and "Never test a test" apply. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe.
 - **Every source scan** (a grep, a source walk, a forbidden-string guard, a site count):
   1. strips comments before it matches (TypeScript: `stripComments` from `@invoice-os/api-client/strip-comments`; Go: `go/ast` or strip first);
   2. reads only the function or block it guards, not the whole file;

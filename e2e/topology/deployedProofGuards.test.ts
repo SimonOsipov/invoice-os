@@ -145,6 +145,20 @@ describe('[extr-15-12] the deployed dead-letter literals track their sole owner'
     expect(arm, "deadLetterRefusal no longer has a 'pages_not_rendered' arm returning a literal").not.toBeNull()
     expect(literalOf('DEAD_LETTER_SENTENCE')).toBe((arm as RegExpExecArray)[1])
   })
+
+  it('GENERIC_FAILURE_OPENING opens the kind-less arm, and no other', () => {
+    const opening = literalOf('GENERIC_FAILURE_OPENING')
+    const fallback = /default:[\s\S]*?return `([^`]+)`/.exec(owner)
+    expect(fallback, 'deadLetterRefusal no longer has a default arm returning a template literal').not.toBeNull()
+    expect((fallback as RegExpExecArray)[1].startsWith(opening), 'the default arm no longer opens with this text').toBe(true)
+
+    // Discrimination: asserting its ABSENCE proves the kind reached the render only if no
+    // OTHER arm contains it. Six named arms, matched over the whole switch.
+    const arms = [...owner.matchAll(/case '(\w+)':[\s\S]*?return [`']([^`']+)[`']/g)]
+    expect(arms.length, 'the named arms of deadLetterRefusal are no longer readable').toBe(6)
+    const also = arms.filter(([, , sentence]) => sentence.includes(opening)).map(([, kind]) => kind)
+    expect(also, `the opening also appears in: ${also.join(', ')}`).toEqual([])
+  })
 })
 
 describe('[extr-36] declaration order is load-bearing', () => {

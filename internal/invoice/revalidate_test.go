@@ -321,7 +321,7 @@ func TestDemoteRevalidated_NilViolationsStoreEmptyArray(t *testing.T) {
 // stamp together. Forced via a phantom rule_set_version_id (a syntactically
 // valid uuid never seeded into rule_set_versions), which trips the FK on
 // invoices.rule_set_version_id -- SQLSTATE 23503. Precedent:
-// TestRLS_InvoicesRuleSetVersionFK (internal/platform/db/invoices_rls_test.go:551),
+// TestRLS_InvoicesRuleSetVersionFK (internal/platform/db/invoices_rls_test.go),
 // store.go:1620-1621 documents the same scenario for ApplyValidation. Not
 // the story's original 256-char-actor design: RevalidateActor's Subject is a
 // fixed literal no caller input can lengthen (see task-411's Implementation

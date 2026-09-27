@@ -245,7 +245,7 @@ export type PlatformCtx = {
   // The raw bearer token, for the ONE transport that cannot go through authedFetch:
   // GET /v1/documents/{id} streams octet-stream bytes and apiFetch always res.json()s.
   // Same `() => session.token` read-at-call-time closure makeImportAuth already exposes.
-  getToken: () => string | null
+  getToken: () => string | null | Promise<string | null>
   user: SignedInUser
   clients: Client[]
   active: Client

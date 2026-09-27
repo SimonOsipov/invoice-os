@@ -39,13 +39,14 @@ export function isSuspended(e: unknown): boolean {
 // onSuspended is optional so the ~30 ctx-fixture call sites stay two-argument; both live
 // construction sites pass it (App.tsx, pinned by App.suspended.test.tsx).
 export function createAuthedFetch(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   onUnauthorized: () => void,
   onSuspended?: () => void,
 ): <T>(url: string, opts?: ApiFetchOptions) => Promise<T> {
   return async function authedFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
     try {
-      return await apiFetch<T>(url, { ...opts, token: getToken() })
+      // stub: a promise from getToken is not awaited yet.
+      return await apiFetch<T>(url, { ...opts, token: getToken() as string | null })
     } catch (e) {
       if (isUnauthorized(e)) onUnauthorized()
       else if (isSuspended(e)) onSuspended?.()
@@ -66,6 +67,11 @@ export function createAuthedFetch(
 // code-review-only residual to just `Workspace`'s `useMemo` forwarding `session` +
 // `onSignOut` into this factory — the token-read + onUnauthorized wiring itself becomes
 // node-testable here, through the live `listEntities`/`createEntity` callers.
-export function makeAuthedFetch(session: Session, onSignOut: () => void, onSuspended?: () => void): AuthedFetch {
+export function makeAuthedFetch(
+  session: Session,
+  onSignOut: () => void,
+  onSuspended?: () => void,
+  _freshToken?: () => string | null | Promise<string | null>,
+): AuthedFetch {
   return createAuthedFetch(() => session.token, onSignOut, onSuspended)
 }

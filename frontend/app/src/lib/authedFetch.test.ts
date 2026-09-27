@@ -11,6 +11,7 @@ import { ApiError } from '@invoice-os/api-client'
 
 import { APP_PERSONAS, type Session } from '../auth'
 import { NOT_ACTIVE_MEMBER_MESSAGE, createAuthedFetch, isSuspended, isUnauthorized, makeAuthedFetch } from './authedFetch'
+import { SessionEndedError } from './renewal'
 import { SESSION_KEY, clearSession, loadSession, saveSession } from './session'
 
 interface MockResponse {
@@ -374,5 +375,60 @@ describe('makeAuthedFetch forwards onSuspended (AC-2)', () => {
     await captureRejection(() => af('/x'))
 
     expect(onSuspended).toHaveBeenCalledTimes(1)
+  })
+})
+
+// A getter may return a promise while a renewal is due (AUTH-06 D9).
+describe('authedFetch with an async getter (AUTH-06 D9, D5)', () => {
+  // Pre-handled, so the stub that never awaits it does not report an unhandled rejection.
+  const ended = () => {
+    const p = Promise.reject(new SessionEndedError())
+    p.catch(() => {})
+    return p
+  }
+
+  it('createAuthedFetch awaits an async getter', async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = createAuthedFetch(() => Promise.resolve('tok'), vi.fn())
+
+    await af('/x')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer tok')
+  })
+
+  it('a plain getter value reaches fetch before the call returns', () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = createAuthedFetch(() => 'tok', vi.fn())
+
+    void af('/x')
+
+    expect(fetchMock, 'a synchronous getter must not defer the request').toHaveBeenCalledTimes(1)
+  })
+
+  it('SessionEndedError does not fire onUnauthorized', async () => {
+    // A 401 here would fire onUnauthorized if the request were sent anyway.
+    const fetchMock = mockFetchOnce({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) })
+    const onUnauthorized = vi.fn()
+    const onSuspended = vi.fn()
+    const af = createAuthedFetch(ended, onUnauthorized, onSuspended)
+
+    const err = await af('/x').then(() => 'resolved', (e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SessionEndedError)
+    expect(fetchMock, 'an ended session sends nothing').not.toHaveBeenCalled()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(onSuspended).not.toHaveBeenCalled()
+  })
+
+  it("makeAuthedFetch's fourth argument is its getter", async () => {
+    const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve({}) })
+    const af = makeAuthedFetch({ ...seededSession(), token: 'A0' }, vi.fn(), vi.fn(), () => Promise.resolve('A1'))
+
+    await af('/x')
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer A1')
   })
 })

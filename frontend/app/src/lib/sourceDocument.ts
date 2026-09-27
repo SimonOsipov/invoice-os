@@ -90,7 +90,7 @@ export async function getDocumentSheet(
 // GET /v1/documents/{id} fixes Content-Type: application/octet-stream + nosniff, so the
 // bytes must be re-typed client-side before any renderer can accept them.
 export async function fetchDocumentBytes(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   base: string,
   documentId: string,
   kind: DocumentKind,

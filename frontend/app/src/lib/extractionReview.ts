@@ -397,7 +397,7 @@ export async function postLineItems(
 // Bare fetch, not authedFetch: the response is bytes and apiFetch always res.json()s. Auth is
 // a bearer header, so a bare <img src> cannot authenticate — the caller owns release().
 export async function fetchPageImage(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   base: string,
   jobId: string,
   page: number,

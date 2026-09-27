@@ -192,7 +192,7 @@ export interface SourceDocumentUpload {
 export type XhrCtor = new () => XMLHttpRequest
 
 export interface ImportAuth {
-  getToken: () => string | null
+  getToken: () => string | null | Promise<string | null>
   onUnauthorized: () => void
   // Optional for the same reason createAuthedFetch's third parameter is (authedFetch.ts).
   onSuspended?: () => void
@@ -217,7 +217,12 @@ export type UploadPhase =
 // SAME arguments in the SAME useMemo (App.tsx) — identical inputs at one construction site
 // make divergence structurally impossible (D3).
 // `() => session.token` is read at CALL time, never captured (authedFetch.ts:38-45).
-export function makeImportAuth(session: Session, onSignOut: () => void, onSuspended?: () => void): ImportAuth {
+export function makeImportAuth(
+  session: Session,
+  onSignOut: () => void,
+  onSuspended?: () => void,
+  _freshToken?: () => string | null | Promise<string | null>,
+): ImportAuth {
   return {
     getToken: () => session.token,
     onUnauthorized: onSignOut,

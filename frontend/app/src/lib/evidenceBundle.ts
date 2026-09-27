@@ -98,7 +98,7 @@ function dispositionFilename(header: string | null, fallback: string): string {
 // not arrayBuffer(). Nothing wraps the fetch call, so an abort propagates untranslated to
 // the caller that owns the controller. EB-01-6, EB-01-10.
 export async function fetchEvidenceBundle(
-  getToken: () => string | null,
+  getToken: () => string | null | Promise<string | null>,
   base: string,
   r: BundleRequest,
   fallbackFilename: string,

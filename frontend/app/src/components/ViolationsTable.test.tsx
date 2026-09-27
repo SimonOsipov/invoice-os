@@ -8,7 +8,7 @@
 // discovered: violationsTable_longMessageRendersInFull (AC-4's only no-truncation
 // oracle -- D6 was deleted because this holds it), violationsTable_wrapperStill-
 // DeclaresOverflowXAuto ([narrow-band]'s failsafe pin) and violationsTable_cleanPass-
-// BlockIsUnchanged (an Out of Scope guard). The other six fail on their assertions.
+// BlockIsUnchanged (an Out of Scope guard). The other five fail on their assertions.
 
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -174,9 +174,9 @@ describe('ViolationsTable', () => {
     expect(cells[3].textContent).toBe('$.unmapped')
   })
 
-  // QA Mode B (BUG-13-01). Every wrap assertion above renders exactly one or two rows, so
-  // a wrap declaration applied per-index rather than per-row would pass them all. Assert
-  // over every row of a wide set, with a length floor so the loop cannot pass vacuously.
+  // QA Mode B (BUG-13-01). The file's only overflow-wrap oracle: every text cell of every
+  // row of a wide set, so a declaration applied per-index rather than per-row still fails.
+  // The length floor stops the loop passing vacuously.
   it('violationsTable_everyRowOfManyDeclaresTheWrapOnAllThreeTextCells', () => {
     const many = Array.from({ length: 25 }, (_, i) =>
       violation({ rule_key: `rule_${i}_unbroken_key`, path: i % 3 === 0 ? undefined : `$_line_${i}_total`, message: `${UNBREAKABLE_MESSAGE}_${i}` }),

@@ -427,6 +427,7 @@ describe('the page frames', () => {
     expect(frames(), 'no frame rendered -- every comparison below would be vacuous').toHaveLength(3)
     expect(pick(frame(1).style, FRAME_KEYS)).toEqual(serialized(pageFrameStyle(mkPage({ page: 1 }), 1), FRAME_KEYS))
     expect(pick(frame(2).style, FRAME_KEYS)).toEqual(serialized(pageFrameStyle(A4, 1), FRAME_KEYS))
+    expect(pick(frame(3).style, FRAME_KEYS)).toEqual(serialized(pageFrameStyle(mkPage({ page: 3 }), 1), FRAME_KEYS))
   })
 
   it('carries no transform on any frame or image', async () => {

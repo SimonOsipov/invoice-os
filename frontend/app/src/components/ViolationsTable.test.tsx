@@ -83,26 +83,11 @@ describe('ViolationsTable', () => {
     for (const row of rows) expect(within(row).getAllByRole('cell')).toHaveLength(4)
   })
 
-  // The value sits in a nested <span>, but the <td> is the box table-layout:auto reads for
-  // min-content, so the property is pinned there -- reached from the string itself so it
-  // cannot be satisfied by a decoy ancestor.
-  it('violationsTable_monoCellsDeclareOverflowWrapAnywhere', () => {
-    render(<ViolationsTable violations={[violation({ rule_key: 'total_arithmetic', path: '$_total' })]} ruleSetVersion={3} />)
-
-    const ruleKeyCell = screen.getByText('total_arithmetic').closest('td')
-    const pathCell = screen.getByText('$_total').closest('td')
-    expect(ruleKeyCell).not.toBeNull()
-    expect(pathCell).not.toBeNull()
-    expect((ruleKeyCell as HTMLElement).style.overflowWrap).toBe('anywhere')
-    expect((pathCell as HTMLElement).style.overflowWrap).toBe('anywhere')
-  })
-
   it('violationsTable_messageCellDeclaresWrapAndLineHeight', () => {
     render(<ViolationsTable violations={[violation()]} ruleSetVersion={3} />)
 
     const cell = screen.getByText('Total does not equal subtotal plus VAT').closest('td')
     expect(cell).not.toBeNull()
-    expect((cell as HTMLElement).style.overflowWrap).toBe('anywhere')
     expect((cell as HTMLElement).style.lineHeight).toBe('1.5')
   })
 

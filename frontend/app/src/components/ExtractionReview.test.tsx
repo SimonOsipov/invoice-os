@@ -521,16 +521,9 @@ describe('the screen shell', () => {
     render(review({ ctx: serving().ctx }))
     await flush()
 
-    // AC-4 (`:223`). `minWidth: 470` is the relationship `EXTR11-E2E-02a`'s spill sweep
-    // protects; `minHeight: 0` is the half this subtask added to
-    // `ExtractionFields.tsx`'s `PANE`, and `EXTR11-E2E-02b`'s
-    // precondition is what would notice its absence. `background` is fidelity only.
-    expect(pick(fieldsPane().style, ['flex', 'minWidth', 'minHeight', 'background'])).toEqual({
-      flex: '1 1 620px',
-      minWidth: '470px',
-      minHeight: '0',
-      background: 'var(--bg-1)',
-    })
+    // AC-4 (`:223`). Basis, floor and ground are pinned in ExtractionFields.test.tsx; `minHeight: 0`
+    // is pinned only here, and `EXTR11-E2E-02b`'s precondition is what would notice its absence.
+    expect(pick(fieldsPane().style, ['minHeight'])).toEqual({ minHeight: '0' })
   })
 })
 

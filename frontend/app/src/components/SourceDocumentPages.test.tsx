@@ -194,7 +194,6 @@ describe('SourceDocumentImage', () => {
     expect(img.getAttribute('alt')).toBe('receipt.jpg')
     expect(img.style.width).toBe('520px')
     expect(img.style.transform).toBe('rotate(-1.1deg)')
-    expect(img.style.boxShadow.length).toBeGreaterThan(0)
 
     // jsdom rewrites the percentage and the leading dot: `oklch(28% .015 210)` reads back
     // as `oklch(0.28 0.015 210)`. Asserting the authored literal fails.

@@ -1637,7 +1637,7 @@ describe('the ground scrolls once per selection', () => {
 describe('SourceDocumentPages.tsx', () => {
   it('no longer claims the server records no page count', () => {
     // cwd, not import.meta.url: under jsdom the latter is an http: URL and fileURLToPath
-    // throws (SourceDocumentPages.test.tsx:528).
+    // throws (SourceDocumentPages.test.tsx:527).
     const src = readFileSync(path.join(process.cwd(), 'src/components/SourceDocumentPages.tsx'), 'utf8')
 
     // The planted needle first: a deleted or moved file must fail here rather than report

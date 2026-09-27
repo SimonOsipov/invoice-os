@@ -148,6 +148,12 @@ func TestIdP_RefreshRotationAndReuse(t *testing.T) {
 	if r2 == r1 || r2 == r0 {
 		t.Fatal("refresh R1 answered an earlier token; want a rotated token")
 	}
+	// Control for the last step: a third-generation token renews while no stale token was presented.
+	_, c0 := h.session(t, u)
+	_, c1 := h.renewOK(t, "control C0", c0)
+	_, c2 := h.renewOK(t, "control C1", c1)
+	h.renewOK(t, "control C2", c2)
+
 	for _, step := range []struct{ label, token string }{{"R0 two generations old", r0}, {"R2 after the family was revoked", r2}} {
 		if status, m := h.renew(t, step.token); status != http.StatusUnauthorized {
 			t.Errorf("refresh %s: status %d, keys %v; want 401", step.label, status, keys(m))
@@ -174,5 +180,28 @@ func TestIdP_RefreshedTokenKeepsTheTenant(t *testing.T) {
 	}
 	if id.TenantID != tenant {
 		t.Errorf("renewed Identity.TenantID = %q, want %s", id.TenantID, tenant)
+	}
+}
+
+// GoTrue's refusals answer 401, never 502: the app signs in again instead of retrying.
+func TestIdP_RefreshRefusalsAnswer401(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	h := newRenewal(t, base)
+
+	_, live := h.session(t, signUp(t, conn, base))
+	h.renewOK(t, "control", live)
+
+	banned := signUp(t, conn, base)
+	_, bannedR := h.session(t, banned)
+	exec(t, conn, `UPDATE auth.users SET banned_until = now() + interval '1 hour' WHERE id = $1`, banned.id)
+
+	for _, c := range []struct{ label, token string }{
+		{"a well-formed token GoTrue never issued", "abcdefghijkl"},
+		{"a banned user's token", bannedR},
+	} {
+		if status, m := h.renew(t, c.token); status != http.StatusUnauthorized {
+			t.Errorf("refresh %s: status %d, keys %v; want 401", c.label, status, keys(m))
+		}
 	}
 }

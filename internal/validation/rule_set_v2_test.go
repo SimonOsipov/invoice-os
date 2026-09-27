@@ -702,9 +702,8 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestRuleSetV2_DetectionCommandBaseline (RS-V2-14, partial): runs
-// task-111 §b's corrected detection regex (see that section for why a
-// re-typed regex re-arms the trap) and asserts its one MECHANICALLY-checkable property: every hit lives inside
-// internal/validation/**, one of the two named §c e2e artifacts,
+// task-111 §b's corrected detection regex and asserts its one
+// MECHANICALLY-checkable property: every hit lives inside internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
 // "no Category-A hit exists outside this scope" claim). detectionHitAllowed below is the
 // allowlist and the one place that enumerates it: every carve-out for a same-named version
@@ -949,9 +948,8 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 	}
 }
 
-// repoRoot resolves the git worktree root so TestRuleSetV2_DetectionCommandBaseline
-// can run the detection command from the right place regardless of `go test`'s
-// working directory (the package dir).
+// repoRoot resolves the git worktree root so trackedGrep reads the right tree
+// regardless of `go test`'s working directory (the package dir).
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
@@ -979,7 +977,7 @@ func trackedGrep(t *testing.T, regex, selfFile string) []string {
 	cmd.Stdin = bytes.NewReader(listed)
 	out, err := cmd.Output()
 	if err != nil {
-		// grep exits 1 on no match; xargs reports any batch that exited 1 as 123.
+		// grep exits 1 on no match; xargs reports a batch exit of 1-125 as 1 (BSD) or 123 (GNU).
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 123) {
 			t.Fatalf("xargs grep over the tracked files: %v", err)

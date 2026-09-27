@@ -225,16 +225,16 @@ func TestRLS_SingleDocumentValidateRouteIsNotReferencedInGo(t *testing.T) {
 
 	root := repoRootDir(t)
 	files := vrGoFiles(t, root)
-	// Floor. An absence assertion over a truncated walk clears everything.
+	// Floor. An absence assertion over a truncated list clears everything.
 	// 707 after self-exclusion at RMV-01-03.
 	if len(files) < 600 {
-		t.Fatalf("walked %d .go file(s), want at least 600 (707 measured at RMV-01-03) — a truncated list reads clean", len(files))
+		t.Fatalf("listed %d .go file(s), want at least 600 (707 measured at RMV-01-03) — a truncated list reads clean", len(files))
 	}
 	if slices.Contains(files, vrSelfPath) {
-		t.Fatalf("the walk must exclude %s — this file carries the needles by necessity", vrSelfPath)
+		t.Fatalf("the list must exclude %s — this file carries the needles by necessity", vrSelfPath)
 	}
 
-	// Non-vacuity: the surviving siblings must be findable by the same walk.
+	// Non-vacuity: the surviving siblings must be findable in the same list.
 	survivors := map[string]bool{}
 	for _, rel := range files {
 		src := vrRead(t, root, rel)
@@ -247,7 +247,7 @@ func TestRLS_SingleDocumentValidateRouteIsNotReferencedInGo(t *testing.T) {
 	}
 	for _, want := range []string{vrBatchRoute, "BatchValidateHandler"} {
 		if !survivors[want] {
-			t.Fatalf("the walk found no %q — it survives this story, so its absence means the walk broke, not that the tree is clean", want)
+			t.Fatalf("the list held no %q — it survives this story, so its absence means the list broke, not that the tree is clean", want)
 		}
 	}
 

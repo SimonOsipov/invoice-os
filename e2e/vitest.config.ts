@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
@@ -8,5 +8,7 @@ export default defineConfig({
     // which would make it try (and fail) to execute them. Unit tests here are *.test.ts
     // only, mirroring packages/api-client and frontend/app's convention.
     include: ['**/*.test.ts'],
+    // Runs under test:hooks (vitest.hooks.config.ts) in the `Claude hooks` CI job.
+    exclude: [...configDefaults.exclude, 'gitHistoryGuard.test.ts'],
   },
 })

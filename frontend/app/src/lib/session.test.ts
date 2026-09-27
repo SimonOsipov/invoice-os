@@ -369,6 +369,28 @@ describe('isTokenExpired / resolveBootSession', () => {
     expect(resolveBootSession(2000_000)).toBeNull()
   })
 
+  it('resolveBootSession keeps an expired renewable session', () => {
+    const storage = createMemoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    const token = jwt({ exp: 1000 })
+    const me = firmSession().me as Me
+    const record = { v: 1, personaId: 'firm', token, me, verified: true, handoff: true }
+    // Control: the same record without the pair is dropped.
+    storage.setItem(SESSION_KEY, JSON.stringify(record))
+    expect(resolveBootSession(2000_000)).toBeNull()
+
+    storage.setItem(SESSION_KEY, JSON.stringify({ ...record, refresh_token: 'R0', received_at: 1000 }))
+
+    expect(resolveBootSession(2000_000)).toEqual({
+      persona: handoffPersona(me),
+      token,
+      me,
+      verified: true,
+      handoff: true,
+      renewal: { refreshToken: 'R0', receivedAt: 1000 },
+    })
+  })
+
   it('S30: resolveBootSession passes a live session through unchanged', () => {
     vi.stubGlobal('localStorage', createMemoryStorage())
     const live = { ...firmSession(), token: jwt({ exp: 9_000_000 }) }
@@ -500,6 +522,67 @@ describe('hand-off session record (AUTH-05 D8)', () => {
       const { warn } = spyOnConsole()
       expect(parseStoredSession(JSON.stringify({ ...base, me })), name).toBeNull()
       expect(warn, name).toHaveBeenCalled()
+      vi.restoreAllMocks()
+    }
+  })
+})
+
+// AUTH-06 D1: the refresh token rides in the same record as the access token.
+describe('renewal pair in the stored record (AUTH-06 D1)', () => {
+  const ME: Me = {
+    tenant: { id: '33333333-3333-3333-3333-333333333333', name: 'Adaeze Ventures' },
+    user: { id: 'd0000000-0000-0000-0000-000000000009', role: 'authenticated' },
+  }
+  const HANDOFF = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true, handoff: true }
+
+  it('a renewable hand-off session round-trips', () => {
+    const session: Session = {
+      persona: handoffPersona(ME),
+      token: 'jwt',
+      me: ME,
+      verified: true,
+      handoff: true,
+      renewal: { refreshToken: 'R0', receivedAt: 1000 },
+    }
+
+    const raw = serializeSession(session)
+
+    expect(JSON.parse(raw)).toEqual({ ...HANDOFF, refresh_token: 'R0', received_at: 1000 })
+    expect(parseStoredSession(raw)).toEqual(session)
+  })
+
+  it('an AUTH-05-era hand-off record parses without renewal', () => {
+    const { warn } = spyOnConsole()
+
+    const restored = parseStoredSession(JSON.stringify(HANDOFF))
+
+    expect(restored).toEqual({ persona: handoffPersona(ME), token: 'jwt', me: ME, verified: true, handoff: true })
+    expect(restored?.renewal).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('a malformed renewal pair is corrupt', () => {
+    const PERSONA = { v: 1, personaId: 'firm', token: 'jwt', me: ME, verified: true }
+    const rows: [string, string][] = [
+      ['pair on a persona record', JSON.stringify({ ...PERSONA, refresh_token: 'R0', received_at: 1000 })],
+      ['pair on a handoff:"true" record', JSON.stringify({ ...PERSONA, handoff: 'true', refresh_token: 'R0', received_at: 1000 })],
+      ['refresh_token only', JSON.stringify({ ...HANDOFF, refresh_token: 'R0' })],
+      ['received_at only', JSON.stringify({ ...HANDOFF, received_at: 1000 })],
+      ["refresh_token ''", JSON.stringify({ ...HANDOFF, refresh_token: '', received_at: 1000 })],
+      ['numeric refresh_token', JSON.stringify({ ...HANDOFF, refresh_token: 123, received_at: 1000 })],
+      ["received_at 'x'", JSON.stringify({ ...HANDOFF, refresh_token: 'R0', received_at: 'x' })],
+      ['null received_at', JSON.stringify({ ...HANDOFF, refresh_token: 'R0', received_at: null })],
+      // JSON.parse reads 1e400 as Infinity.
+      ['non-finite received_at', JSON.stringify({ ...HANDOFF, refresh_token: 'R0' }).replace(/\}$/, ',"received_at":1e400}')],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    // Control: the well-formed pair on a hand-off record parses.
+    expect(parseStoredSession(JSON.stringify({ ...HANDOFF, refresh_token: 'R0', received_at: 1000 }))).not.toBeNull()
+    for (const [name, raw] of rows) {
+      const { warn, error } = spyOnConsole()
+      expect(parseStoredSession(raw), name).toBeNull()
+      expect(warn, name).toHaveBeenCalledTimes(1)
+      expect(error, name).not.toHaveBeenCalled()
       vi.restoreAllMocks()
     }
   })

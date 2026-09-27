@@ -336,6 +336,23 @@ describe('a hand-off session persists (AC-5, AC-6, AC-8)', () => {
     expect(hrefWrites).toEqual([])
   })
 
+  // AUTH-06 D1: the refresh token is stored in the same record as the access token.
+  it('a hand-off boot stores the refresh token with its receipt time', async () => {
+    configure()
+    ensureSignInState()
+    exchangeReply = ok({ access_token: T, refresh_token: 'R0' })
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    const before = Date.now()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    const rec = storedRecord()
+    expect(rec?.token).toBe(T)
+    expect(rec?.refresh_token).toBe('R0')
+    expect(rec?.received_at).toBeGreaterThanOrEqual(before)
+    expect(rec?.received_at).toBeLessThanOrEqual(Date.now())
+  })
+
   it('a captured destination is restored after the hand-off', async () => {
     configure()
     captureDestination('/audit', '', Date.now())

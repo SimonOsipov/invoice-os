@@ -81,6 +81,50 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
     expect(calls[1].auth).toBe(`Bearer ${LIVE}`)
     expect(result).toEqual({ persona: handoffPersona(ME), token: LIVE, me: ME, verified: true, handoff: true })
   })
+
+  function stubExchange(answer: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const body = url.endsWith('/auth/exchange') ? answer : ME
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+      }),
+    )
+  }
+
+  it('redeemHandoff keeps the refresh token with its receipt time', async () => {
+    stubExchange({ access_token: LIVE, refresh_token: 'R0' })
+
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+
+    expect(s.renewal).toEqual({ refreshToken: 'R0', receivedAt: 5000 })
+    expect(s).toEqual({
+      persona: handoffPersona(ME),
+      token: LIVE,
+      me: ME,
+      verified: true,
+      handoff: true,
+      renewal: { refreshToken: 'R0', receivedAt: 5000 },
+    })
+  })
+
+  // D15, D24: a missing, empty or non-string refresh token is an AUTH-05-era answer.
+  it('redeemHandoff without a refresh token sets no renewal', async () => {
+    const rows: [string, object][] = [
+      ['absent', { access_token: LIVE }],
+      ['empty', { access_token: LIVE, refresh_token: '' }],
+      ['numeric', { access_token: LIVE, refresh_token: 42 }],
+      ['null', { access_token: LIVE, refresh_token: null }],
+    ]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const [name, answer] of rows) {
+      stubExchange(answer)
+      const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+      expect(s.token, name).toBe(LIVE)
+      expect(s.handoff, name).toBe(true)
+      expect(s.renewal, name).toBeUndefined()
+    }
+  })
 })
 
 describe('isLiveHandoffSession (D9, D18)', () => {

@@ -35,7 +35,7 @@ the context passed to each attempt is the clock instead.
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `OPENROUTER_API_KEY` | `FromEnv` in `env.go` | Unset or `""`, with `AI_FAKE` not true, means the client is off: `Enabled()` returns false and every `Call` returns `ErrOff` having sent nothing. Any other value counts as set, whitespace included — the value is never trimmed or validated as a plausible key shape. |
+| `OPENROUTER_API_KEY` | `FromEnv` in `env.go` | Unset or `""`, with `AI_FAKE` not true, means the client is off: `Enabled()` returns false and every `Call` returns `ErrOff` having sent nothing. Any other value counts as set, whitespace included — the value is never trimmed or validated as a plausible key shape. The Jev client (`docs/typesafe-jev.md`) reads the same key. |
 | `AI_FAKE` | `FromEnv` in `env.go` | `true` per `strconv.ParseBool` selects fake mode — no network call, an answer steered by a marker instead — and it wins over a key: with `AI_FAKE=true`, a set `OPENROUTER_API_KEY` is never used for the wire request. Unset or `""` is not fake. Any other unparseable value makes `FromEnv` return an error naming `AI_FAKE`; `FromEnv` never exits the process. The value is never trimmed, so `"true "` (trailing space) is an error. |
 
 Model, endpoint and the retry budget are constants — there is no knob for any of them.

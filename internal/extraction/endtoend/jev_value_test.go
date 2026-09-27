@@ -410,7 +410,7 @@ func jvValueQuestion(field, value string) jevmeasure.Question {
 func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 	t.Helper()
 
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
 		key = "jv-test-key"
 	}
@@ -593,21 +593,21 @@ func jvGateLog(t *testing.T, msg string) {
 func jvGateReason(key, out string) string {
 	switch {
 	case key == "" && out == "":
-		return "TYPESAFE_API_KEY and JEV_OUT unset: no client built, no call"
+		return "OPENROUTER_API_KEY and JEV_OUT unset: no client built, no call"
 	case key == "":
-		return "TYPESAFE_API_KEY unset: no client built, no call"
+		return "OPENROUTER_API_KEY unset: no client built, no call"
 	default:
 		return "JEV_OUT unset: no client built, no call"
 	}
 }
 
-// jvGatedRun reads TYPESAFE_API_KEY and JEV_OUT; if either is empty it logs one line naming
+// jvGatedRun reads OPENROUTER_API_KEY and JEV_OUT; if either is empty it logs one line naming
 // which one and returns false without building a client. Copies TestAIText_WriteCorpusKey's
 // shape. When both are set it runs the full walk against baseURL and writes the rendered report
 // under JEV_OUT -- the live run this gate exists to control.
 func jvGatedRun(t *testing.T, baseURL string) bool {
 	t.Helper()
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	out := os.Getenv("JEV_OUT")
 	if key == "" || out == "" {
 		jvGateLog(t, jvGateReason(key, out))
@@ -998,7 +998,7 @@ func jvConfusionTotal(cells map[string]map[string]int) int {
 func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 	negative := func(t *testing.T, key, out string, wantKeyNamed, wantOutNamed bool) {
 		t.Helper()
-		t.Setenv("TYPESAFE_API_KEY", key)
+		t.Setenv("OPENROUTER_API_KEY", key)
 		t.Setenv("JEV_OUT", out)
 		jvResetGateLogs()
 		var calls int
@@ -1017,8 +1017,8 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 			t.Fatalf("jvGatedRun(key=%q, out=%q) logged %d line(s), want exactly 1", key, out, len(jvGateLogs))
 		}
 		msg := jvGateLogs[0]
-		if strings.Contains(msg, "TYPESAFE_API_KEY") != wantKeyNamed {
-			t.Errorf("jvGatedRun(key=%q, out=%q) logged %q; TYPESAFE_API_KEY named = %v, want %v", key, out, msg, strings.Contains(msg, "TYPESAFE_API_KEY"), wantKeyNamed)
+		if strings.Contains(msg, "OPENROUTER_API_KEY") != wantKeyNamed {
+			t.Errorf("jvGatedRun(key=%q, out=%q) logged %q; OPENROUTER_API_KEY named = %v, want %v", key, out, msg, strings.Contains(msg, "OPENROUTER_API_KEY"), wantKeyNamed)
 		}
 		if strings.Contains(msg, "JEV_OUT") != wantOutNamed {
 			t.Errorf("jvGatedRun(key=%q, out=%q) logged %q; JEV_OUT named = %v, want %v", key, out, msg, strings.Contains(msg, "JEV_OUT"), wantOutNamed)
@@ -1032,7 +1032,7 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 
 	// Positive control leg (essential): without it a gate that always returns false passes.
 	t.Run("both set: positive control", func(t *testing.T) {
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", t.TempDir())
 		jvResetGateLogs()
 		var calls int
@@ -1054,6 +1054,72 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 	})
 }
 
+// The retired key alone must not open the gate: an operator holding only it measures nothing.
+func TestJevValue_TheRetiredKeyDoesNotOpenTheGate(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "sk-test")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("JEV_OUT", t.TempDir())
+	jvResetGateLogs()
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"answers":{},"usage":{}}`))
+	}))
+	defer srv.Close()
+
+	if got := jvGatedRun(t, srv.URL); got {
+		t.Errorf("jvGatedRun with only the retired key set = true, want false")
+	}
+	if calls != 0 {
+		t.Errorf("jvGatedRun with only the retired key set sent %d call(s), want 0", calls)
+	}
+	if len(jvGateLogs) != 1 {
+		t.Fatalf("jvGatedRun logged %d line(s), want exactly 1", len(jvGateLogs))
+	}
+	if msg := jvGateLogs[0]; !strings.Contains(msg, "OPENROUTER_API_KEY") || strings.Contains(msg, "JEV_OUT") {
+		t.Errorf("logged %q, want a reason naming OPENROUTER_API_KEY and not JEV_OUT (which is set)", msg)
+	}
+	if msg := jvGateLogs[0]; strings.Contains(msg, "TYPESAFE") {
+		t.Errorf("logged %q, want no mention of the retired key", msg)
+	}
+}
+
+// An open gate must send its own key: a walk reading another variable measures with the fallback key.
+// A whitespace key counts as set, as jev.FromEnv reads it.
+func TestJevValue_TheLiveRunSendsTheOpenRouterKey(t *testing.T) {
+	for name, key := range map[string]string{"openrouter key": "sk-or-jv-7f3a", "whitespace key": " "} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("OPENROUTER_API_KEY", key)
+			t.Setenv("TYPESAFE_API_KEY", "sk-retired-jv-7f3a")
+			t.Setenv("JEV_OUT", t.TempDir())
+			jvResetGateLogs()
+			var auths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auths = append(auths, r.Header.Get(jevmeasure.AuthHeaderName))
+				var raw map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&raw)
+				questions, _ := raw["questions"].(map[string]any)
+				_, _ = w.Write([]byte(jvNoulBody(questions, "0.90")))
+			}))
+			defer srv.Close()
+
+			if !jvGatedRun(t, srv.URL) {
+				t.Fatalf("jvGatedRun with OPENROUTER_API_KEY=%q and JEV_OUT set = false, want true (logged %q)", key, jvGateLogs)
+			}
+			if len(auths) == 0 {
+				t.Fatal("the open gate sent no call")
+			}
+			// net/http trims a header value, so the whitespace key arrives as the bare prefix.
+			want := strings.TrimSpace(jevmeasure.AuthHeaderPrefix + key)
+			for i, got := range auths {
+				if strings.TrimSpace(got) != want {
+					t.Fatalf("call %d sent %s %q, want %q", i, jevmeasure.AuthHeaderName, got, want)
+				}
+			}
+		})
+	}
+}
+
 // Row 20, this binary's copy. jvGatedRun's read/merge/write seam is structurally identical to
 // jpGatedRun's in internal/importer and lives in a different test binary, so the two can drift
 // with every test still green. This is that copy's own oracle: the artifact names, a prior
@@ -1064,7 +1130,7 @@ func TestJevValue_UnsetKeyLogsAndReturns(t *testing.T) {
 func TestJevValue_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
 	gatedRun := func(t *testing.T, out string) {
 		t.Helper()
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", out)
 		srv, _ := jvFake(t, func(state string, questions map[string]any) (string, int) {
 			return jvNoulBody(questions, "0.90"), http.StatusOK
@@ -2193,7 +2259,7 @@ func TestJevValue_TheOperatorSuppliedPriceReachesTheCostLine(t *testing.T) {
 	run := func(t *testing.T, in, out string) string {
 		t.Helper()
 		dir := t.TempDir()
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 		t.Setenv("JEV_PRICE_INPUT_PER_M", in)
 		t.Setenv("JEV_PRICE_OUTPUT_PER_M", out)

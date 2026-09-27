@@ -14,14 +14,17 @@ func (c *Client) logCall(ctx context.Context, req Request, r result, latency tim
 	if c.logger == nil {
 		return
 	}
-	attrs := make([]slog.Attr, 0, 7)
+	attrs := make([]slog.Attr, 0, 10)
 	if id, ok := auth.IdentityFromContext(ctx); ok && id.TenantID != "" {
 		attrs = append(attrs, slog.String("tenant_id", id.TenantID))
 	}
 	attrs = append(attrs,
+		slog.String("model", r.model),
 		slog.String("purpose", string(req.Purpose)),
 		slog.Int("question_count", len(req.Questions)),
 		slog.Int("input_tokens", r.usage.InputTokens),
+		slog.Int("output_tokens", r.usage.OutputTokens),
+		slog.Float64("cost", r.cost),
 		slog.Int64("latency_ms", latency.Milliseconds()),
 		slog.Int("attempts", r.attempts),
 		slog.String("outcome", r.outcome),

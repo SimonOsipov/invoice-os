@@ -18,7 +18,7 @@ import (
 // -- helpers --
 
 // contractKeys is the line's attributes in emission order, after time, level and msg.
-var contractKeys = []string{"tenant_id", "purpose", "question_count", "input_tokens", "latency_ms", "attempts", "outcome"}
+var contractKeys = []string{"tenant_id", "model", "purpose", "question_count", "input_tokens", "output_tokens", "cost", "latency_ms", "attempts", "outcome"}
 
 func jsonLogger(buf *bytes.Buffer) *slog.Logger { return slog.New(slog.NewJSONHandler(buf, nil)) }
 
@@ -419,4 +419,166 @@ func TestLog_ANilLoggerWritesNothing(t *testing.T) {
 		t.Fatalf("Ask() err = %v, want nil", err)
 	}
 	wantNoul(t, resp, "q1", 0.95)
+}
+
+// -- model and cost --
+
+// noulNoModel is a valid noul reply with no model field.
+const noulNoModel = `{"answers":{"q1":{"type":"noul","noul":0.95}},"usage":{"input_tokens":3,"output_tokens":1,"cost":0.0001}}`
+
+func TestLog_ModelAndCostAreTheResponses(t *testing.T) {
+	ts := newServer(t, replyWith(http.StatusOK, `{"model":"typesafe/jev-1.13-20260917","answers":{"q1":{"type":"noul","noul":0.95}},"usage":{"input_tokens":10,"output_tokens":4,"cost":0.00042}}`))
+	buf := &bytes.Buffer{}
+
+	if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+		t.Fatalf("Ask() err = %v, want nil", err)
+	}
+	line := oneLine(t, buf)
+	wantStr(t, line, "outcome", "ok")
+	wantNum(t, line, "input_tokens", 10)
+	wantStr(t, line, "model", "typesafe/jev-1.13-20260917")
+	wantNum(t, line, "output_tokens", 4)
+	wantNum(t, line, "cost", 0.00042)
+}
+
+func TestLog_OutputTokensAndCostAreSummedOverAttempts(t *testing.T) {
+	const m = "typesafe/jev-1.13-20260917"
+	ts := newServer(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			reply(w, http.StatusServiceUnavailable, `{"usage":{"input_tokens":0,"output_tokens":1,"cost":0.001}}`)
+			return
+		}
+		reply(w, http.StatusOK, `{"model":"`+m+`","answers":{"q1":{"type":"noul","noul":0.95}},"usage":{"input_tokens":0,"output_tokens":2,"cost":0.002}}`)
+	})
+	buf := &bytes.Buffer{}
+
+	if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+		t.Fatalf("Ask() err = %v, want nil", err)
+	}
+	wantHits(t, ts, 2)
+	line := oneLine(t, buf)
+	wantNum(t, line, "attempts", 2)
+	wantNum(t, line, "output_tokens", 3)
+	wantNum(t, line, "cost", 0.003)
+	wantStr(t, line, "model", m)
+}
+
+func TestLog_NoAnswerLogsAnEmptyModel(t *testing.T) {
+	invalid := noulReq("s")
+	invalid.Purpose = "bogus"
+	cases := []struct {
+		name, wantOutcome string
+		run               func(*testing.T, *slog.Logger)
+	}{
+		{"off", "off", func(t *testing.T, l *slog.Logger) {
+			ts := newServer(t, replyWith(http.StatusOK, noulOK))
+			_, _ = clockLogClient(ts, "", newFakeClock(), l).Ask(t.Context(), noulReq("s"))
+			wantHits(t, ts, 0)
+		}},
+		{"fake", "fake", func(t *testing.T, l *slog.Logger) {
+			ts := noSendServer(t)
+			_, _ = askFake(t, newClient(fakeConfig(t, ts), l), ts, fakeReq("s"))
+		}},
+		{"invalid_request", "skipped_refused", func(t *testing.T, l *slog.Logger) {
+			ts := newServer(t, replyWith(http.StatusOK, noulOK))
+			_, _ = clockLogClient(ts, "k", newFakeClock(), l).Ask(t.Context(), invalid)
+			wantHits(t, ts, 0)
+		}},
+		{"503_twice_no_body", "skipped_unavailable", func(t *testing.T, l *slog.Logger) {
+			ts := newServer(t, replyWith(http.StatusServiceUnavailable, ""))
+			_, _ = clockLogClient(ts, "k", newFakeClock(), l).Ask(t.Context(), noulReq("s"))
+			wantHits(t, ts, 2)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := &bytes.Buffer{}
+			tc.run(t, jsonLogger(buf))
+
+			line := oneLine(t, buf)
+			wantStr(t, line, "outcome", tc.wantOutcome)
+			wantStr(t, line, "model", "")
+			wantNum(t, line, "output_tokens", 0)
+			wantNum(t, line, "cost", 0)
+		})
+	}
+}
+
+func TestLog_AMissingModelIsOkWithAnEmptyModel(t *testing.T) {
+	ts := newServer(t, replyWith(http.StatusOK, noulNoModel))
+	buf := &bytes.Buffer{}
+
+	if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+		t.Fatalf("Ask() err = %v, want nil", err)
+	}
+	line := oneLine(t, buf)
+	wantStr(t, line, "outcome", "ok")
+	wantStr(t, line, "model", "")
+	wantNum(t, line, "output_tokens", 1)
+}
+
+// encoding/json leaves a float64 at zero on null, so both shapes log 0.
+func TestLog_AnAbsentOrNullCostIsZero(t *testing.T) {
+	for name, usage := range map[string]string{
+		"absent": `{"input_tokens":3,"output_tokens":1}`,
+		"null":   `{"input_tokens":3,"output_tokens":1,"cost":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := newServer(t, replyWith(http.StatusOK, `{"model":"typesafe/jev-1.13-20260917","answers":{"q1":{"type":"noul","noul":0.95}},"usage":`+usage+`}`))
+			buf := &bytes.Buffer{}
+
+			if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+				t.Fatalf("Ask() err = %v, want nil", err)
+			}
+			line := oneLine(t, buf)
+			wantStr(t, line, "outcome", "ok")
+			wantNum(t, line, "output_tokens", 1)
+			wantNum(t, line, "cost", 0)
+		})
+	}
+}
+
+func TestLog_OnlyTheFinalAttemptsModelIsLogged(t *testing.T) {
+	run := func(t *testing.T, second string) map[string]any {
+		t.Helper()
+		ts := newServer(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
+			if n == 1 {
+				reply(w, http.StatusServiceUnavailable, `{"model":"typesafe/jev-X"}`)
+				return
+			}
+			reply(w, http.StatusOK, second)
+		})
+		buf := &bytes.Buffer{}
+		if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+			t.Fatalf("Ask() err = %v, want nil", err)
+		}
+		wantHits(t, ts, 2)
+		line := oneLine(t, buf)
+		wantStr(t, line, "outcome", "ok")
+		wantNum(t, line, "attempts", 2)
+		return line
+	}
+
+	t.Run("control_final_attempt_has_a_model", func(t *testing.T) {
+		wantStr(t, run(t, `{"model":"typesafe/jev-Y","answers":{"q1":{"type":"noul","noul":0.95}}}`), "model", "typesafe/jev-Y")
+	})
+	t.Run("final_attempt_has_no_model", func(t *testing.T) {
+		wantStr(t, run(t, noulNoModel), "model", "")
+	})
+}
+
+func TestLog_ALongModelIsCutTo128Bytes(t *testing.T) {
+	long := "typesafe/" + strings.Repeat("x", 291)
+	if len(long) != 300 {
+		t.Fatalf("fixture model is %d bytes, want 300", len(long))
+	}
+	ts := newServer(t, replyWith(http.StatusOK, `{"model":"`+long+`","answers":{"q1":{"type":"noul","noul":0.95}}}`))
+	buf := &bytes.Buffer{}
+
+	if _, err := clockLogClient(ts, "k", newFakeClock(), jsonLogger(buf)).Ask(t.Context(), noulReq("s")); err != nil {
+		t.Fatalf("Ask() err = %v, want nil", err)
+	}
+	line := oneLine(t, buf)
+	wantStr(t, line, "outcome", "ok")
+	wantStr(t, line, "model", long[:128])
 }

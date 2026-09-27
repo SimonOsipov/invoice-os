@@ -1,5 +1,5 @@
 // Package jev is the client that asks TypeSafe's Jev model typed questions
-// over POST /v1/systemone.
+// through OpenRouter's System One route.
 package jev
 
 import (
@@ -15,10 +15,10 @@ import (
 	"time"
 )
 
-const Model = "jev-latest"
+const Model = "~typesafe/jev-latest"
 
 const (
-	endpoint  = "https://api.typesafe.ai/v1/systemone"
+	endpoint  = "https://openrouter.ai/api/v1/systemone"
 	budget    = 3 * time.Second
 	retryWait = 250 * time.Millisecond
 )
@@ -119,8 +119,13 @@ type result struct {
 	err      error
 	outcome  string // "ok" | "skipped_unavailable" | "skipped_refused" | "off" | "fake"
 	attempts int
-	usage    Usage // summed over attempts, failed ones included
+	usage    Usage   // summed over attempts, failed ones included
+	cost     float64 // summed like usage
+	model    string  // the final attempt's answering model, at most maxModelLen bytes
 }
+
+// maxModelLen bounds the logged model, which the vendor supplies.
+const maxModelLen = 128
 
 // call runs the mode order off, validation, key check, fake, then the wire
 // request and the retry loop.
@@ -154,7 +159,9 @@ func (c *Client) call(ctx context.Context, req Request) result {
 		if decoded && env.Usage != nil {
 			res.usage.InputTokens += env.Usage.InputTokens
 			res.usage.OutputTokens += env.Usage.OutputTokens
+			res.cost += env.Usage.Cost
 		}
+		res.model = env.Model[:min(len(env.Model), maxModelLen)]
 
 		// The caller's ctx, never actx: actx ending is only this attempt's timeout.
 		if err := ctx.Err(); err != nil {
@@ -330,10 +337,12 @@ func (c *Client) post(ctx context.Context, body []byte) (status int, respBody []
 
 // envelope keeps each answer raw, so one bad answer still leaves usage readable.
 type envelope struct {
+	Model   string                     `json:"model"`
 	Answers map[string]json.RawMessage `json:"answers"`
 	Usage   *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens  int     `json:"input_tokens"`
+		OutputTokens int     `json:"output_tokens"`
+		Cost         float64 `json:"cost"`
 	} `json:"usage"`
 }
 

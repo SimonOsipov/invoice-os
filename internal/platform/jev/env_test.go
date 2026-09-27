@@ -1,6 +1,7 @@
 package jev
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -102,8 +103,8 @@ func TestFromEnv_WiresTheRealEndpointAndBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv() err = %v, want nil", err)
 	}
-	if c.cfg.endpoint != "https://api.typesafe.ai/v1/systemone" {
-		t.Errorf("cfg.endpoint = %q, want the vendor URL", c.cfg.endpoint)
+	if c.cfg.endpoint != "https://openrouter.ai/api/v1/systemone" {
+		t.Errorf("cfg.endpoint = %q, want %q", c.cfg.endpoint, "https://openrouter.ai/api/v1/systemone")
 	}
 	if c.cfg.budget != 3*time.Second {
 		t.Errorf("cfg.budget = %v, want 3s", c.cfg.budget)
@@ -244,7 +245,7 @@ func TestFromEnv_FakeWithAKeyRefusesToStart(t *testing.T) {
 		t.Error("FromEnv() client = non-nil, want nil")
 	}
 	text := errText(err)
-	for _, name := range []string{"JEV_FAKE", "TYPESAFE_API_KEY"} {
+	for _, name := range []string{"JEV_FAKE", "OPENROUTER_API_KEY"} {
 		if !strings.Contains(text, name) {
 			t.Errorf("FromEnv() err = %q, want it to name %s", text, name)
 		}
@@ -281,7 +282,7 @@ func TestFromEnv_FakeWithAWhitespaceKeyRefusesToStart(t *testing.T) {
 	if c != nil {
 		t.Error("FromEnv() client = non-nil, want nil")
 	}
-	for _, name := range []string{"JEV_FAKE", "TYPESAFE_API_KEY"} {
+	for _, name := range []string{"JEV_FAKE", "OPENROUTER_API_KEY"} {
 		if !strings.Contains(errText(err), name) {
 			t.Errorf("FromEnv() err = %q, want it to name %s", errText(err), name)
 		}
@@ -302,6 +303,63 @@ func TestFromEnv_AControlByteKeyStillBoots(t *testing.T) {
 	if !c.Enabled() {
 		t.Error("Enabled() = false, want true")
 	}
+}
+
+// The retired key's name is typed out: no constant names it any more.
+func TestFromEnv_TheRetiredTypeSafeKeyIsIgnored(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "k")
+	unsetEnv(t, "OPENROUTER_API_KEY")
+	unsetEnv(t, EnvFake)
+
+	c, err := FromEnv(nil)
+	if err != nil {
+		t.Fatalf("FromEnv() err = %v, want nil", err)
+	}
+	if c == nil {
+		t.Fatal("FromEnv() client = nil, want non-nil")
+	}
+	if c.Enabled() {
+		t.Error("Enabled() = true with only TYPESAFE_API_KEY set, want false")
+	}
+	noDials(t, func() {
+		_, err := askWithin(t, c, t.Context(), noulReq("s"), 2*time.Second)
+		wantSkipped(t, err, textOff)
+	})
+
+	t.Run("control_openrouter_key_set", func(t *testing.T) {
+		t.Setenv("TYPESAFE_API_KEY", "k")
+		t.Setenv("OPENROUTER_API_KEY", "k")
+		unsetEnv(t, EnvFake)
+
+		c, err := FromEnv(nil)
+		if err != nil {
+			t.Fatalf("FromEnv() err = %v, want nil", err)
+		}
+		if !c.Enabled() {
+			t.Error("Enabled() = false with OPENROUTER_API_KEY set, want true")
+		}
+	})
+}
+
+func TestFromEnv_FakeBootsBesideTheRetiredKey(t *testing.T) {
+	t.Setenv(EnvFake, "true")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("TYPESAFE_API_KEY", "k")
+	buf := &bytes.Buffer{}
+
+	c, err := FromEnv(jsonLogger(buf))
+	if err != nil {
+		t.Fatalf("FromEnv() err = %v, want nil: the retired key must not trip the fake-plus-key refusal", err)
+	}
+	if c == nil {
+		t.Fatal("FromEnv() client = nil, want non-nil")
+	}
+	noDials(t, func() {
+		if _, err := askWithin(t, c, t.Context(), fakeReq("s"), 2*time.Second); err != nil {
+			t.Errorf("Ask() err = %v, want nil", err)
+		}
+	})
+	wantStr(t, oneLine(t, buf), "outcome", "fake")
 }
 
 func ptr(s string) *string { return &s }

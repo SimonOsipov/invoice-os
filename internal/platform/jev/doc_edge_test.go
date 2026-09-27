@@ -276,6 +276,22 @@ func TestJevDoc_EveryNamedTestExists(t *testing.T) {
 
 var htmlCommentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
 
+// The probe test lives outside this package, so a lone `TestJevLiveProbe` would fail TestJevDoc_EveryNamedTestExists.
+func TestJevDoc_WhatItIsNamesTheProbeCommandAsOneSpan(t *testing.T) {
+	root := jevRepoRoot(t)
+	src := readRepoFile(t, root, "internal/platform/jev/liveprobe/liveprobe_test.go")
+	if !strings.Contains(src, "\nfunc TestJevLiveProbe(t *testing.T) {") {
+		t.Fatal("internal/platform/jev/liveprobe declares no TestJevLiveProbe; the command would run nothing")
+	}
+	cmd := "JEV_PROBE=1 " + EnvKey + "=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe"
+	doc := htmlCommentRE.ReplaceAllString(readJevDoc(t, root), "")
+	// A code span may wrap; it renders with one space per line break.
+	what := strings.Join(strings.Fields(docSection(t, doc, "## What it is", "## ")), " ")
+	if !strings.Contains(what, "`"+cmd+"`") {
+		t.Errorf("%s What it is does not name the probe command as one backticked span: `%s`", jevDoc, cmd)
+	}
+}
+
 // The consts are matched in exact case; prose is matched in any case and across line wraps.
 func TestJevDoc_NamesTheOpenRouterRouteNotTheStaleLines(t *testing.T) {
 	// Newlines survive the strip, so a reported line number stays the file's.

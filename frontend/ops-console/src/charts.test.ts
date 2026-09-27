@@ -419,6 +419,10 @@ describe('upStrip', () => {
       expect(cells[idx]!.fill).toBe(badFill)
     }
     expect(cells[0]!.fill).not.toBe(badFill)
+    // Red is reserved for bad cells: exactly the four here, none when badIdx is empty.
+    expect(badFill).toBe('var(--status-red-text)')
+    expect(cells.filter((c) => c.fill === badFill).length).toBe(4)
+    expect(upStrip(1, []).some((c) => c.fill === 'var(--status-red-text)')).toBe(false)
   })
 
   it('up_strip_is_deterministic: upStrip(4, [86,87,88,89]) called twice returns deeply equal arrays', () => {

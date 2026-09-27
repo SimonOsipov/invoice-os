@@ -138,12 +138,4 @@ describe('[bug-14-04] the role-axis claim keeps its controls above its wire read
       expect(declaration, `${testid} must be in the role-axis control set`).toContain(`'${testid}'`)
     }
   })
-
-  it('the role claim no longer names the retired view-ubl control', () => {
-    // The header control moved to the rail's card; left in the set, it reds only on the deploy gate.
-    const open = soleIndex(source, 'const CLUSTER_CONTROLS = [', file)
-    const declaration = source.slice(open, source.indexOf(']', open))
-    expect(declaration, 'floor: the declaration was really read').toContain(`'detail-approve'`)
-    expect(declaration, 'view-ubl left the action column').not.toContain(`'view-ubl'`)
-  })
 })

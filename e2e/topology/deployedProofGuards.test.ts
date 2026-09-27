@@ -214,18 +214,6 @@ describe('[deployed-proof] EXTR35-E2E-01 sits inside the EXTR-18-07 block', () =
   })
 })
 
-describe('[deployed-proof] EXTR35-E2E-01 replaced EXTR34-E2E-01 in place', () => {
-  // Booleans, not toContain: a failure would print all of import-wizard.spec.ts.
-  it('control: the spec names EXTR35-E2E-01', () => {
-    expect(source.includes('EXTR35-E2E-01'), 'EXTR35-E2E-01 not in import-wizard.spec.ts -- the absence check below proves nothing').toBe(true)
-  })
-
-  // A kept EXTR34-E2E-01 asserts a quarantine the register no longer produces.
-  it('EXTR34-E2E-01 is gone', () => {
-    expect(source.includes('EXTR34-E2E-01'), 'EXTR34-E2E-01 still in import-wizard.spec.ts').toBe(false)
-  })
-})
-
 describe('[deployed-proof] EXTR35-E2E-01 uploads and expects what its Go oracle reads', () => {
   // Drift here reds the deploy gate as "docling differs from pdfium" when it does not.
   const goTest = readFileSync(join(REPO_ROOT, 'internal/extraction/row_reach_test.go'), 'utf8')

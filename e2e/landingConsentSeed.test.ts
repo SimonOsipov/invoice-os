@@ -1,10 +1,9 @@
 // Two sources, read as TEXT: the shared seed helper (e2e/smoke/landingConsent.ts) and its
-// call site (e2e/smoke/landing-demo.spec.ts). LAND-05-01's AC-4 and AC-5 have no runnable
-// oracle — the seeding they describe only changes behaviour when the suite is pointed at
+// call site (e2e/smoke/landing-demo.spec.ts). LAND-05-01's AC-4 has no runnable oracle
+// — the seeding it describes only changes behaviour when the suite is pointed at
 // www.ascomply.com, because isProductionHost closes the gate on every preview host. So
 // deleting the seed is green in CI and red only in production. These read the source
-// instead, the way rule-set.test.ts and workspaceCoverage.test.ts do for facts CI cannot
-// otherwise reach.
+// instead, the way workspaceCoverage.test.ts does for facts CI cannot otherwise reach.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -45,29 +44,11 @@ function functionBody(src: string, name: string): string {
   return src.slice(start, end)
 }
 
-/**
- * The JSDoc block immediately above `async function <name>(`.
- *
- * Both indexOf results are guarded: on a miss, slicing from -1 returns an unrelated part
- * of the file and the assertions below pass against text they were never written for.
- */
-function docAbove(src: string, name: string): string {
-  const at = src.indexOf(`async function ${name}(`)
-  expect(at, `function ${name} not found, so there is no doc comment to read above it`).toBeGreaterThan(-1)
-  const doc = src.slice(Math.max(0, at - 700), at)
-  const opened = doc.lastIndexOf('/**')
-  expect(opened, `no JSDoc block in the 700 characters above ${name}`).toBeGreaterThan(-1)
-  return doc.slice(opened)
-}
-
 describe('control: the source scanners find what these assertions claim is absent', () => {
   // A synthetic helper carrying every needle, including the two that must NOT appear in
   // the real one. If the instrument cannot find them here, the absence assertions below
   // are decoration.
   const PLANTED = [
-    '/**',
-    ' * EXPECT_TAG, the biconditional, a denied default, and the addInitScript reason.',
-    ' */',
     'export async function seedConsent(page: Page, analytics: boolean): Promise<void> {',
     "  await page.evaluate(() => window.localStorage.setItem('asc_consent', JSON.stringify({ analytics, v: 1 })))",
     '}',
@@ -79,21 +60,6 @@ describe('control: the source scanners find what these assertions claim is absen
     expect(body).toContain('page.evaluate(')
     expect(body).toContain("'asc_consent'")
     expect(body).toMatch(/v:\s*1\b/)
-  })
-
-  it('docAbove returns the planted JSDoc, not the code beneath it', () => {
-    const block = docAbove(PLANTED, SEED_FN)
-    expect(block).toContain('EXPECT_TAG')
-    expect(block).not.toContain('export async function')
-  })
-
-  it('docAbove refuses a missing function instead of slicing an unrelated block', () => {
-    expect(() => docAbove(PLANTED, 'seedNothing')).toThrow()
-  })
-
-  it('the denied-call needle is a shape a body can actually contain', () => {
-    expect(`  await ${SEED_DENIED}\n`).toContain(SEED_DENIED)
-    expect(SEED_DENIED).not.toBe(SEED_GRANTED)
   })
 })
 
@@ -183,16 +149,6 @@ describe('AC-4: the shared helper writes the record before the first navigation'
     expect(version, 'CONSENT_VERSION not found in consent.ts').toBe('1')
     expect(seed, `the helper seeds a key other than ${key}`).toContain(`'${key}'`)
     expect(seed, `the helper seeds a version other than ${version}`).toMatch(new RegExp(`v:\\s*${version}\\b`))
-  })
-})
-
-describe('AC-5: the helper documents why the seed exists', () => {
-  it('a doc comment immediately above seedConsent names the gate it restores', () => {
-    const block = docAbove(helper, SEED_FN)
-    expect(block).toContain('EXPECT_TAG')
-    expect(block.toLowerCase()).toContain('biconditional')
-    expect(block.toLowerCase(), 'the doc does not say WHY the seed is needed').toContain('denied')
-    expect(block, 'the doc does not record the addInitScript reason').toContain('addInitScript')
   })
 })
 

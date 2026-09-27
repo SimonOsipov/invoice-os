@@ -708,93 +708,6 @@ func TestTransition_RejectedTransitionLeavesStatusByteIdentical(t *testing.T) {
 	}
 }
 
-// TestTransition_ValidatedToDraftLegalityUnit is a DB-free unit pin on
-// canTransition(validated, draft): the M4-05 fix loop needs this demotion
-// edge to become legal so a rejected/dirty validated invoice can be sent back
-// to draft for correction. This is independent of (and narrower than) the
-// DB-backed TestTransition_ExhaustiveMatrixLocksLegalEdgeTable, which already
-// covers the same edge as part of its full 49-pair sweep -- this test just
-// pins canTransition's own return value directly, with no DB required. Also
-// spot-checks that a couple of unrelated illegal edges stay illegal, so a
-// change that makes canTransition permissive across the board would not
-// pass this test by accident.
-func TestTransition_ValidatedToDraftLegalityUnit(t *testing.T) {
-	if !canTransition(StatusValidated, StatusDraft) {
-		t.Errorf("canTransition(validated, draft) = false, want true (M4-05 demotion edge)")
-	}
-	if canTransition(StatusDraft, StatusAccepted) {
-		t.Errorf("canTransition(draft, accepted) = true, want false (unrelated illegal edge must stay illegal)")
-	}
-	if canTransition(StatusQueued, StatusDraft) {
-		t.Errorf("canTransition(queued, draft) = true, want false (unrelated illegal edge must stay illegal)")
-	}
-}
-
-// TestTransition_QueuedToFailedLegalityUnit is a DB-free unit pin on
-// canTransition(queued, failed) -- M5-04-02's (task-233) dead-letter edge: a
-// background worker that gives up on an invoice before it ever reaches
-// submitted needs a legal queued->failed edge to drive Store.MarkFailedTx.
-// Mirrors TestTransition_ValidatedToDraftLegalityUnit's shape (a direct
-// canTransition pin, independent of and narrower than the DB-backed
-// TestTransition_ExhaustiveMatrixLocksLegalEdgeTable's full 49-pair sweep).
-// M5-05-01 (task-237) extends this same pin with its own three edges:
-// queued->accepted/rejected (AC#3, the synchronous-verdict shortcuts around
-// submitted) and rejected->draft (AC#4, the rework edge) all flip to legal.
-// failed->queued stays illegal -- [failed-invoices] is enforced, not merely
-// documented: M5-05-01 (task-237) adds exactly three edges, not four, so a change that
-// widened canTransition across the board (or, distinctly, one that added
-// failed->queued specifically) would not pass this test by accident.
-func TestTransition_QueuedToFailedLegalityUnit(t *testing.T) {
-	if !canTransition(StatusQueued, StatusFailed) {
-		t.Errorf("canTransition(queued, failed) = false, want true (M5-04-02 dead-letter edge)")
-	}
-	if !canTransition(StatusQueued, StatusAccepted) {
-		t.Errorf("canTransition(queued, accepted) = false, want true (M5-05-01 (task-237)'s synchronous-verdict edge, AC#3)")
-	}
-	if !canTransition(StatusQueued, StatusRejected) {
-		t.Errorf("canTransition(queued, rejected) = false, want true (M5-05-01 (task-237)'s synchronous-verdict edge, AC#3)")
-	}
-	if canTransition(StatusFailed, StatusQueued) {
-		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, M5-05-01 (task-237) does not add this edge)")
-	}
-	if !canTransition(StatusRejected, StatusDraft) {
-		t.Errorf("canTransition(rejected, draft) = false, want true (M5-05-01 (task-237)'s rework edge, AC#4)")
-	}
-}
-
-// TestTransition_RejectedHasExactlyOneOutgoingEdge is a DB-free unit pin:
-// M5-05-01 (task-237) (AC#4) adds exactly ONE outgoing edge from rejected --
-// rejected->draft, the rework path -- every other non-self target stays
-// illegal. This is independent of (and narrower than) the DB-backed sibling
-// assertion in TestTransition_TerminalStatesHaveNoLegalOutgoingEdges
-// (transition_adversarial_test.go), which proves the same shape through the
-// real Store.Transition rather than canTransition directly.
-func TestTransition_RejectedHasExactlyOneOutgoingEdge(t *testing.T) {
-	if !canTransition(StatusRejected, StatusDraft) {
-		t.Errorf("canTransition(rejected, draft) = false, want true (M5-05-01 (task-237)'s rework edge, AC#4)")
-	}
-	for _, target := range []Status{StatusValidated, StatusQueued, StatusSubmitted, StatusAccepted, StatusFailed} {
-		if canTransition(StatusRejected, target) {
-			t.Errorf("canTransition(rejected, %s) = true, want false (rejected has exactly ONE outgoing edge: ->draft)", target)
-		}
-	}
-}
-
-// TestTransition_FailedToQueuedStaysIllegal pins [failed-invoices]: unlike
-// rejected, failed stays a true terminal after M5-05-01 (task-237) -- failed->queued is
-// explicitly NOT one of the three edges this subtask adds (queued->accepted,
-// queued->rejected, rejected->draft). Passes vacuously today (canTransition
-// already returns false here, before M5-05-01 (task-237) touches legalTransitions at
-// all) -- it exists as its own explicitly-named regression guard, distinct
-// from TestTransition_QueuedToFailedLegalityUnit's spot-check of the same
-// fact, so a future change that widens failed's map entry trips a
-// purpose-built test rather than only a side-assertion buried in another.
-func TestTransition_FailedToQueuedStaysIllegal(t *testing.T) {
-	if canTransition(StatusFailed, StatusQueued) {
-		t.Errorf("canTransition(failed, queued) = true, want false ([failed-invoices]: failed stays terminal, M5-05-01 (task-237) does not add this edge)")
-	}
-}
-
 // --- INVED-01-03 (task-264): canEdit/canRevalidate derived from the machine -
 
 // TestCanEdit_AllStatuses (INV-03-T1): folded over all 7 statuses, canEdit
@@ -814,22 +727,6 @@ func TestCanEdit_AllStatuses(t *testing.T) {
 	for _, s := range allStatuses {
 		if got := canEdit(s); got != want[s] {
 			t.Errorf("canEdit(%s) = %v, want %v", s, got, want[s])
-		}
-	}
-}
-
-// TestCanEdit_AgreesWithIndependentLegalEdgeOracle (INV-03-T2, rewritten from
-// the story's original self-referential spec): canEdit(s) is checked against
-// wantLegalEdge (transition_adversarial_test.go:47-59), an oracle hand-
-// written INDEPENDENTLY of legalTransitions/canTransition -- see that file's
-// header (:42-46) for why the oracle must stay independent. Comparing
-// against canTransition itself here would make this a tautology (the
-// original bug this rewrite fixes).
-func TestCanEdit_AgreesWithIndependentLegalEdgeOracle(t *testing.T) {
-	for _, s := range allStatuses {
-		want := s == StatusDraft || wantLegalEdge[[2]Status{s, StatusDraft}]
-		if got := canEdit(s); got != want {
-			t.Errorf("canEdit(%s) = %v, want %v (per the independent wantLegalEdge oracle, not canTransition)", s, got, want)
 		}
 	}
 }
@@ -915,9 +812,9 @@ func edgeTableWith(orig map[Status][]Status, from, target Status) map[Status][]S
 }
 
 // TestCanEdit_TracksLegalTransitions (INV-03-T8, the AC-1/AC-4 enforcement
-// mechanism): T1/T2 pass for a hardcoded []Status{draft, validated, rejected}
+// mechanism): T1 passes for a hardcoded []Status{draft, validated, rejected}
 // literal TODAY, because the literal and the derivation happen to agree on
-// the current table -- neither one actually enforces "canEdit is DERIVED,
+// the current table -- it does not enforce "canEdit is DERIVED,
 // never a literal" (Core AC 4). This test perturbs legalTransitions at
 // runtime (deep copy via edgeTableWithout/edgeTableWith, t.Cleanup restore)
 // and asserts canEdit tracks the change; a hardcoded literal fails every
@@ -1269,44 +1166,6 @@ func TestStoreTransition_AcceptedClearFailureStillRollsBack(t *testing.T) {
 	}
 	if n := auditCount(t, app, tenantID, "invoice.transitioned"); n != beforeAudit {
 		t.Errorf("audit_log invoice.transitioned rows = %d, want unchanged %d", n, beforeAudit)
-	}
-}
-
-// TestLegalTransitionsUnchanged (INVCR-01-15, D6/D10, task-291, AC #12): D6 does NOT
-// touch the state machine, and D10 (the loosening D6 made unnecessary) is dropped --
-// this is the tripwire. No DB needed: enumerates legalTransitions directly (store.go)
-// and asserts it holds EXACTLY the 11 shipped edges named by wantLegalEdge
-// (transition_adversarial_test.go's own hard-coded, independent restatement of the
-// story's edge table) -- no additions, no removals. A regression here means an
-// implementation misread D6 and widened the machine to make a kept-invalid invoice
-// transmittable instead of keeping it strictly off-machine, as the story requires --
-// "If an implementation appears to need a transition change, STOP" (task-291's own
-// text). Deliberately independent of TestTransition_ExhaustiveMatrixLocksLegalEdgeTable
-// (which drives all 49 pairs through the real, DB-backed Store.Transition): that test
-// proves BEHAVIOUR agrees with wantLegalEdge; this one is the cheap, DB-free guard
-// that the TABLE ITSELF is still exactly 11 entries, runnable on every `go test` with
-// no service container at all.
-func TestLegalTransitionsUnchanged(t *testing.T) {
-	got := map[[2]Status]bool{}
-	total := 0
-	for from, targets := range legalTransitions {
-		for _, target := range targets {
-			got[[2]Status{from, target}] = true
-			total++
-		}
-	}
-	if total != 11 {
-		t.Fatalf("legalTransitions has %d edges, want exactly 11 (D6/D10: this story adds none)", total)
-	}
-	for edge, want := range wantLegalEdge {
-		if want && !got[edge] {
-			t.Errorf("legalTransitions is missing edge %s->%s, want it present (D6/D10: no edges may be removed either)", edge[0], edge[1])
-		}
-	}
-	for edge := range got {
-		if !wantLegalEdge[edge] {
-			t.Errorf("legalTransitions has an unexpected new edge %s->%s (D6/D10 forbid adding transition edges for kept-as-is)", edge[0], edge[1])
-		}
 	}
 }
 

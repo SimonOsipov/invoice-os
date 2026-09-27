@@ -240,10 +240,8 @@ func TestTransition_TerminalStatesHaveNoLegalOutgoingEdges(t *testing.T) {
 
 	// M5-05-01 (task-237) sibling assertion (AC#4): rejected is NOT a terminal -- it
 	// has exactly ONE legal outgoing edge, ->draft. Driven through the real
-	// Store.Transition (not canTransition directly -- that DB-free pin is
-	// TestTransition_RejectedHasExactlyOneOutgoingEdge, transition_test.go),
-	// so this also proves the edge is reachable end to end, not merely
-	// present in legalTransitions.
+	// Store.Transition, so this also proves the edge is reachable end to end,
+	// not merely present in legalTransitions.
 	t.Run("rejected has exactly one outgoing edge", func(t *testing.T) {
 		for _, target := range allStatuses {
 			if target == StatusRejected {

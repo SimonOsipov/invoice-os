@@ -11,8 +11,6 @@
 //
 // Spec-to-test map (task-233 Test Specs table T02-1..T02-8):
 //
-//	T02-1 TestTransition_QueuedToFailedLegalityUnit (transition_test.go, beside
-//	      TestTransition_ValidatedToDraftLegalityUnit)
 //	T02-2 TestTransition_ExhaustiveMatrixLocksLegalEdgeTable, EXTENDED
 //	      (transition_adversarial_test.go's wantLegalEdge oracle + counts)
 //	T02-3 TestMarkFailedTx_NoIdentityInContextSucceeds

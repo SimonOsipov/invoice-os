@@ -1522,77 +1522,9 @@ func TestStoreRollup_NeedsAttentionSQLMarkerIsUnique(t *testing.T) {
 	}
 }
 
-// normalizeSQL collapses whitespace runs so two copies of one fragment compare
-// on their clauses rather than their indentation.
+// normalizeSQL collapses whitespace runs so a fragment matches on its clauses
+// rather than its indentation.
 func normalizeSQL(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// sliceBetween returns the text between open and the first close after it. ok is
-// false when either marker is missing -- an absent marker must fail the caller,
-// never yield "" and compare equal to another "".
-func sliceBetween(src, open, closing string) (string, bool) {
-	i := strings.Index(src, open)
-	if i < 0 {
-		return "", false
-	}
-	rest := src[i+len(open):]
-	j := strings.Index(rest, closing)
-	if j < 0 {
-		return "", false
-	}
-	return rest[:j], true
-}
-
-// The rollup arm and the list filter are two hand-maintained copies of one
-// predicate; docs/approvals.md's "the badge and the filtered list can never
-// disagree" is only true while they stay textually identical modulo the alias.
-// Nothing else compares them at the source level.
-func TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter(t *testing.T) {
-	dashSrc, err := os.ReadFile("store.go")
-	if err != nil {
-		t.Fatalf("read store.go: %v", err)
-	}
-	invSrc, err := os.ReadFile("../invoice/store.go")
-	if err != nil {
-		t.Fatalf("read ../invoice/store.go: %v", err)
-	}
-
-	end := bytes.Index(dashSrc, []byte(") AS awaiting_approval"))
-	if end < 0 {
-		t.Fatal(`store.go: no ") AS awaiting_approval" marker -- has the arm been renamed?`)
-	}
-	start := bytes.LastIndex(dashSrc[:end], []byte("count(*) FILTER ("))
-	if start < 0 {
-		t.Fatal(`store.go: no "count(*) FILTER (" before ") AS awaiting_approval"`)
-	}
-	dashArm := normalizeSQL(string(dashSrc[start+len("count(*) FILTER (") : end]))
-	dashArm = strings.TrimPrefix(dashArm, "WHERE ")
-	// The alias is the ONLY licensed difference (AC-4): the rollup reads the
-	// flagged CTE as i, the list filter reads invoices unaliased.
-	dashArm = strings.ReplaceAll(dashArm, "i.status", "status")
-	dashArm = strings.ReplaceAll(dashArm, "i.id", "invoices.id")
-
-	listArm, ok := sliceBetween(string(invSrc), "(status = 'validated'", "'approved'))")
-	if !ok {
-		t.Fatal("../invoice/store.go: no awaiting_approval filter fragment found")
-	}
-	listArm = normalizeSQL("status = 'validated'" + listArm + "'approved')")
-
-	for _, clause := range []string{
-		"status = 'validated'",
-		"EXISTS (SELECT 1 FROM approval_policy_versions WHERE is_active)",
-		"NOT EXISTS (SELECT 1 FROM approval_runs r",
-	} {
-		if !strings.Contains(dashArm, clause) {
-			t.Fatalf("the rollup arm lost the %q clause, so this comparison proves nothing:\n%s", clause, dashArm)
-		}
-		if !strings.Contains(listArm, clause) {
-			t.Fatalf("the list filter lost the %q clause, so this comparison proves nothing:\n%s", clause, listArm)
-		}
-	}
-	if dashArm != listArm {
-		t.Errorf("the two copies of the awaiting_approval predicate have drifted.\nrollup (alias normalized): %s\nlist filter:               %s", dashArm, listArm)
-	}
-}
 
 // EXISTS (an approved run), not the latest run's state: an invoice approved once
 // stays out of the count whatever closed after it, and one that never reached

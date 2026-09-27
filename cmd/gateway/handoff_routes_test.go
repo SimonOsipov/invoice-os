@@ -134,12 +134,17 @@ func handoffPaths() []string { return []string{"/auth/sign-in", "/auth/exchange"
 
 func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/token" || r.URL.Query().Get("grant_type") != "password" {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"tok-A","refresh_token":"ref-A"}`))
+		switch {
+		case r.URL.Path != "/token":
+			http.NotFound(w, r)
+		case r.URL.Query().Get("grant_type") == "password":
+			_, _ = w.Write([]byte(`{"access_token":"tok-A","refresh_token":"ref-A"}`))
+		case r.URL.Query().Get("grant_type") == "refresh_token":
+			_, _ = w.Write([]byte(`{"access_token":"tok-B","refresh_token":"ref-B"}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer gotrue.Close()
 	authURL, _ := url.Parse(gotrue.URL)
@@ -188,6 +193,22 @@ func TestHandoffPreflightAnswersThroughCORS(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
 		t.Errorf("POST /auth/exchange Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
 	}
+
+	// The exchanged refresh token renews through the same mux and carries the grant.
+	var ex struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ex); err != nil || ex.RefreshToken != "ref-A" {
+		t.Fatalf("exchange body %s carries no ref-A (err %v)", rec.Body, err)
+	}
+	body, _ = json.Marshal(map[string]string{"refresh_token": ex.RefreshToken})
+	rec = postJSON(mux, "/auth/refresh", handoffAllowedOrigin, string(body))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
+		t.Errorf("POST /auth/refresh = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != handoffAllowedOrigin {
+		t.Errorf("POST /auth/refresh Access-Control-Allow-Origin = %q, want %q", got, handoffAllowedOrigin)
+	}
 }
 
 func TestHandoffPreflightDisallowedOriginGetsNoGrant(t *testing.T) {
@@ -219,5 +240,12 @@ func TestHandoffPreflightDisallowedOriginGetsNoGrant(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("POST /auth/exchange from a disallowed origin Access-Control-Allow-Origin = %q, want none", got)
+	}
+	rec = postJSON(mux, "/auth/refresh", origin, `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /auth/refresh from a disallowed origin = %d %s, want 400 from the refresh handler", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("POST /auth/refresh from a disallowed origin Access-Control-Allow-Origin = %q, want none", got)
 	}
 }

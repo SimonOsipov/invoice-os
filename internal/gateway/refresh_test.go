@@ -59,6 +59,9 @@ func TestRefresh_Success200BothTokensOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
 	if at, rt := requireAnswer(t, rec.Body.Bytes()); at != refreshA1 || rt != refreshR1 {
 		t.Errorf("answer = (%q, %q), want (%q, %q)", at, rt, refreshA1, refreshR1)
 	}
@@ -112,10 +115,16 @@ func TestRefresh_GoTrueErrorMapping(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newTokenFake(t, c.status, c.body)
-			rec := doRefresh(newRefresh(fake.URL, nil), refreshBody(refreshR0))
+			log, buf := captureLog()
+			rec := doRefresh(newRefresh(fake.URL, log), refreshBody(refreshR0))
 			requireRefusal(t, rec, c.wantStatus, c.wantMsg)
 			if n := fake.Hits(); n != 1 {
 				t.Errorf("GoTrue saw %d calls, want 1", n)
+			}
+			if c.wantStatus == http.StatusBadGateway {
+				if !strings.Contains(buf.String(), `"level":"WARN"`) || !logHasValue(buf, c.status) {
+					t.Errorf("a 502 must log at WARN with upstream status %d: %q", c.status, buf.String())
+				}
 			}
 			// Every refused 4xx answers the same bytes: the client cannot tell the reasons apart.
 			if c.wantStatus == http.StatusUnauthorized {
@@ -129,7 +138,14 @@ func TestRefresh_GoTrueErrorMapping(t *testing.T) {
 	}
 
 	t.Run("unreachable", func(t *testing.T) {
-		requireRefusal(t, doRefresh(newRefresh(closedURL(t), nil), refreshBody(refreshR0)), http.StatusBadGateway, msgRefreshUnavailable)
+		closed := closedURL(t)
+		log, buf := captureLog()
+		requireRefusal(t, doRefresh(newRefresh(closed, log), refreshBody(refreshR0)), http.StatusBadGateway, msgRefreshUnavailable)
+		// The transport error names the address it could not reach.
+		var line struct{ Level, Error string }
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil || line.Level != "WARN" || !strings.Contains(line.Error, closed.Host) {
+			t.Errorf("unreachable must log one WARN line whose error names %s: %q", closed.Host, buf.String())
+		}
 	})
 }
 
@@ -137,25 +153,73 @@ func TestRefresh_BadBody400NoUpstreamCall(t *testing.T) {
 	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
 	h := newRefresh(fake.URL, nil)
 
-	oversized := refreshBody(strings.Repeat("r", maxExchangeBodyBytes))
+	// refreshBody adds 20 bytes around the token.
+	oneOver := refreshBody(strings.Repeat("r", maxExchangeBodyBytes-19))
 	for _, c := range []struct{ name, body, msg string }{
 		{"not json", `not json`, msgInvalidBody},
-		{"over 1 KiB", oversized, msgInvalidBody},
+		{"no body", ``, msgInvalidBody},
+		{"array", `[]`, msgInvalidBody},
+		{"one byte over 1 KiB", oneOver, msgInvalidBody},
+		{"number token", `{"refresh_token":123}`, msgInvalidBody},
+		{"array token", `{"refresh_token":["` + refreshR0 + `"]}`, msgInvalidBody},
+		{"object token", `{"refresh_token":{"value":"` + refreshR0 + `"}}`, msgInvalidBody},
+		{"bool token", `{"refresh_token":true}`, msgInvalidBody},
 		{"empty object", `{}`, msgRefreshRequired},
 		{"empty token", `{"refresh_token":""}`, msgRefreshRequired},
+		{"null token", `{"refresh_token":null}`, msgRefreshRequired},
 	} {
-		requireRefusal(t, doRefresh(h, c.body), http.StatusBadRequest, c.msg)
+		t.Run(c.name, func(t *testing.T) {
+			before := fake.Hits()
+			requireRefusal(t, doRefresh(h, c.body), http.StatusBadRequest, c.msg)
+			if n := fake.Hits() - before; n != 0 {
+				t.Errorf("GoTrue saw %d calls from a refused body, want 0", n)
+			}
+		})
 	}
-	if n := fake.Hits(); n != 0 {
-		t.Errorf("GoTrue saw %d calls from refused bodies, want 0", n)
+	if len(oneOver) != maxExchangeBodyBytes+1 {
+		t.Fatalf("one-over body is %d bytes, want %d", len(oneOver), maxExchangeBodyBytes+1)
 	}
 
-	// Positive pair: a well-formed body on the same handler does reach GoTrue.
-	if rec := doRefresh(h, refreshBody(refreshR0)); rec.Code != http.StatusOK {
-		t.Errorf("well-formed body: status = %d, want 200: %s", rec.Code, rec.Body.String())
+	// Positive pair: a well-formed body, and one of exactly 1 KiB, on the same handler do reach GoTrue.
+	atLimit := refreshBody(strings.Repeat("r", maxExchangeBodyBytes-20))
+	if len(atLimit) != maxExchangeBodyBytes {
+		t.Fatalf("at-limit body is %d bytes, want %d", len(atLimit), maxExchangeBodyBytes)
 	}
-	if n := fake.Hits(); n != 1 {
-		t.Errorf("GoTrue saw %d calls after one well-formed body, want 1", n)
+	for i, body := range []string{refreshBody(refreshR0), atLimit} {
+		before := fake.Hits()
+		if rec := doRefresh(h, body); rec.Code != http.StatusOK {
+			t.Errorf("body %d (%d bytes): status = %d, want 200: %s", i, len(body), rec.Code, rec.Body.String())
+		}
+		if n := fake.Hits() - before; n != 1 {
+			t.Errorf("body %d (%d bytes): GoTrue saw %d calls, want 1", i, len(body), n)
+		}
+	}
+}
+
+// D2: the handler forwards no client path, query or extra body key to GoTrue.
+func TestRefresh_ForwardsNoClientPathQueryOrKey(t *testing.T) {
+	fake := newTokenFake(t, http.StatusOK, gtRefreshed)
+	h := newRefresh(fake.URL, nil)
+	body := `{"refresh_token":"` + refreshR0 + `","grant_type":"password","email":"x@corp.example","password":"pw"}`
+
+	rec := serve(h, http.MethodPost, "/auth/refresh/../admin/users?grant_type=password&redirect_to=https://evil.example", body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	calls := fake.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("GoTrue saw %d calls, want exactly 1: %+v", len(calls), calls)
+	}
+	if c := calls[0]; c.Path != "/token" || c.RawQuery != "grant_type=refresh_token" {
+		t.Errorf("GoTrue saw %s?%s, want /token?grant_type=refresh_token", c.Path, c.RawQuery)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(calls[0].Body, &sent); err != nil {
+		t.Fatalf("token body %q is not JSON: %v", calls[0].Body, err)
+	}
+	if want := map[string]any{"refresh_token": refreshR0}; !maps.Equal(sent, want) {
+		t.Errorf("token body = %v, want exactly %v", sent, want)
 	}
 }
 

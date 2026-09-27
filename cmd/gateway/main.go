@@ -257,7 +257,7 @@ type handoff struct {
 }
 
 // handoffHandlers builds the sign-in, exchange and refresh handlers against GoTrue at authURL.
-// Both share one code store: a code minted by sign-in is redeemable only through exchange.
+// Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
 func handoffHandlers(authURL *url.URL, log *slog.Logger) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle(gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)

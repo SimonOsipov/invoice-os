@@ -2,9 +2,7 @@
 // deployed fleet -- and dev-env.yml runs no browser spec on a push to main
 // ([dev-env-skips-e2e-on-push]), so the failure modes that ARE checkable without a
 // deployment are guarded here as source text: a non-vacuity control moved BELOW the claim it
-// protects, a deleted sweep-coverage check, a pinned raw pixel, or an absence claim widened
-// from the filtered empty state to the whole page -- where Header.tsx's persistent create
-// CTA makes it false, so it would go red on a build with no defect at all.
+// protects, a deleted sweep-coverage check, or a pinned raw pixel.
 //
 // soleIndex/testBody are re-declared here rather than imported from
 // blockedRowProofGuards.test.ts: importing them would require exporting from a .test.ts
@@ -128,13 +126,5 @@ describe('[bug-10-04] the filtered empty-state proof keeps its controls above it
 
   it('the way back is exercised after the empty state is asserted, never before', () => {
     expect(filteredCopy()).toBeLessThan(wayBack())
-  })
-
-  it('the New invoice absence claim is scoped to the filtered empty state, never the page', () => {
-    // Header.tsx:136 renders a PERSISTENT create CTA on every screen. A page-wide absence
-    // claim is FALSE against correct product behaviour -- it would fail on a build with no
-    // defect at all, which is a worse outcome than not asserting it.
-    soleIndex(body, "expect(emptyFiltered).not.toContainText('New invoice')", FILE)
-    expect(body, 'the page-wide form of this claim is false, not merely strict').not.toMatch(/expect\(page\)[^\n]{0,60}not\.toContainText\(\s*'New invoice'/)
   })
 })

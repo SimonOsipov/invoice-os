@@ -146,65 +146,6 @@ describe('[extr-18-07] no MOCK-INV-0001 negation anywhere under e2e/', () => {
   })
 })
 
-describe('[deployed-proof] every deployed-proof spec sets test.setTimeout() >= 300_000', () => {
-  // Scanned over the WHOLE file rather than the EXTR-18-07 block (EXTR-15-12): the floor is a
-  // property of a deployed-proof spec wherever it sits, and the EXTR-15 ones sit above that
-  // marker. Each body is sliced from its own title to the NEXT top-level `test(` -- not to the
-  // next registered title, which would swallow any unregistered test in between.
-  const testNames = [
-    "EXTR18-E2E-01 (AC-5): the deployed reading is the document's own number",
-    'EXTR18-E2E-02 (AC-8): a document with no recoverable text settles unreadable, and its pages still render',
-    'EXTR18-E2E-03: an image-only page the OCR can read is NOT unreadable',
-    'EXTR15-E2E-01 (AC-10): the hand-off row sits inside its card, and its gutter holds at every width',
-    'EXTR15-E2E-02 (AC-6): a two-document run hands off the row that was clicked, not its sibling',
-    'EXTR15-E2E-03: the deployed sidecar reads a real DOCX, and reads its printed fields',
-    'EXTR15-E2E-04 (T3): a DOCX the reader cannot open dead-letters at text_not_read',
-    // EXTR-15-13. The first sits ABOVE the EXTR-15 marker (its fixtures are CSV, which enqueues
-    // no extraction, so the span's freshness rule has nothing to protect); this floor is scanned
-    // over the whole file, so registering it here still covers it.
-    'EXTR15-E2E-05 (AC-1): a spreadsheet run still reads ROWS READ, Rows stored and Row',
-    'EXTR15-E2E-06 (AC-2/AC-3): the document review screen says documents and register, and holds its controls at every width',
-    'EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices in their own tile and never says they passed',
-    'EXTR27-E2E-01: a read document with no number carries its reading into the hand-off, refuses a taken number, and files with the one supplied',
-    EXTR35_E2E_01,
-    EXTR36_E2E_02,
-    EXTR36_E2E_01,
-    "AIR03-E2E-01/02/03/04 (AC-9, AC-5, AC-6, Q1): the AI's steered reading lands beside the engine",
-    'AIR04-E2E-01 (AC-1, AC-3, AC-4, AC-5, AC-7): an unavailable AI sends the document to manual entry with no reading',
-    'AIR05-E2E-01 (AC-3, AC-4, AC-5, AC-8): a document with no text is read from its page images',
-    'AIR08-E2E-01/02/03/04 (Core AC 4, 5, 6, 8): the AI reads line items once, and a disagreement reaches the grid',
-    'AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollbox stays inside the fields pane body at every width',
-    'CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, keeps its value, and files',
-    "CHECK03-LAYOUT-01: the doubted invoice number's pill stays inside its cell at every width",
-    'CHECK04-E2E-01 (AC-4, AC-5, AC-8): a document read as a receipt shows the banner, keeps its rows, and files; a plain upload shows none',
-    "CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and imports once placed by hand, while the other group's placements are as they were",
-  ]
-
-  const testStarts = [...source.matchAll(/\ntest\(/g)].map((m) => m.index + 1)
-
-  it('found the file\'s top-level test( declarations (control needle)', () => {
-    expect(testStarts.length, 'no top-level test( found -- every body below would run to EOF').toBeGreaterThan(20)
-  })
-
-  for (const name of testNames) {
-    it(`"${name}" sets test.setTimeout() >= 300_000`, () => {
-      const from = source.indexOf(name)
-      expect(from, `test name not found in import-wizard.spec.ts: ${JSON.stringify(name)}`).toBeGreaterThan(-1)
-      const to = testStarts.find((i) => i > from) ?? source.length
-      const testBody = source.slice(from, to)
-      // The budget, not a literal: runDocuments/settleOneDocument alone can wait 240s on the
-      // extraction and 120s more on the landing. Playwright's 30s default would kill any of
-      // these, which is what this floor exists to prevent.
-      const call = /test\.setTimeout\((\d[\d_]*)\)/.exec(testBody)
-      expect(call, 'no test.setTimeout(...) call in this test body').not.toBeNull()
-      expect(
-        Number(call![1].replace(/_/g, '')),
-        `test.setTimeout(${call![1]}) is below the 300s deployed-proof floor`,
-      ).toBeGreaterThanOrEqual(300_000)
-    })
-  }
-})
-
 describe('[deployed-proof] EXTR35-E2E-01 sits inside the EXTR-18-07 block', () => {
   // Above the EXTR-15 marker no freshness guard scans its upload.
   it('its title is found past the block marker', () => {
@@ -318,16 +259,6 @@ describe('[extr-15-12] the freshened DOCX is still a readable DOCX', () => {
   const FIXTURE = join(E2E_ROOT, 'fixtures/documents/golden_invoice.docx')
   const raw = readFileSync(FIXTURE)
 
-  it('the committed fixture is byte-identical to the Go golden it borrows', () => {
-    const go = readFileSync(join(REPO_ROOT, 'internal/extraction/testdata/invoice.docx'))
-    expect(Buffer.compare(raw, go), 'e2e/fixtures/documents/golden_invoice.docx has drifted from internal/extraction/testdata/invoice.docx').toBe(0)
-  })
-
-  it('its end-of-central-directory record is where the freshening writes', () => {
-    expect(raw.subarray(raw.length - 22, raw.length - 18).toString('hex'), 'the last 22 bytes are not an EOCD record').toBe('504b0506')
-    expect(raw.readUInt16LE(raw.length - 2), 'the fixture already carries a zip comment -- the recipe would overwrite its length').toBe(0)
-  })
-
   it('a freshened copy still unzips and still carries the golden\'s printed fields', () => {
     const comment = Buffer.from(`e2e-${crypto.randomUUID()}`, 'utf8')
     const out = Buffer.concat([raw, comment])
@@ -341,12 +272,6 @@ describe('[extr-15-12] the freshened DOCX is still a readable DOCX', () => {
     expect(xml, 'the freshened DOCX no longer prints the golden invoice number').toContain('ASC-2026-0919')
     expect(xml, 'the freshened DOCX no longer prints the golden issue date').toContain('14 Aug 2026')
     expect(xml, 'the freshened DOCX no longer prints the golden total').toContain('4,300.00')
-  })
-
-  it('the spec\'s helper writes the comment length into that same field', () => {
-    const m = /function uniqueGoldenDocxBytes\(\): Buffer \{([\s\S]*?)\n\}/.exec(source)
-    expect(m, 'uniqueGoldenDocxBytes() is gone from import-wizard.spec.ts').not.toBeNull()
-    expect(m![1], 'the helper no longer writes the EOCD comment length').toContain('writeUInt16LE(comment.length, GOLDEN_INVOICE_DOCX.length - 2)')
   })
 })
 

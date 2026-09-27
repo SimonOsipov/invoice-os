@@ -17,7 +17,7 @@ const SRC = fileURLToPath(new URL('.', import.meta.url))
 const SELF = fileURLToPath(import.meta.url)
 
 // Re-declared, never imported from rowBlockedReasonRemoved.test.ts: importing from a
-// .test.ts re-registers that file's describes here (e2e/topology/toggleProofGuards.test.ts:9-11).
+// .test.ts re-registers that file's describes here (e2e/topology/toggleProofGuards.test.ts).
 function sourceFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

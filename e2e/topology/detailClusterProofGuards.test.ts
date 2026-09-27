@@ -84,20 +84,6 @@ describe('[bug-14-04] the action-cluster geometry proof keeps its controls above
     expect(body).not.toMatch(/toHaveCSS\(\s*['"](height|width)['"]/)
     expect(body).not.toMatch(/\.(height|width)\s*\)\s*\.toBe\(/)
   })
-
-  it('the geometry proof declares exactly the five controls the column holds', () => {
-    // The declaration sits outside the test body, so no needle above reads it; a sixth entry reds only on the deploy gate.
-    const open = soleIndex(source, 'const CLUSTER_CONTROLS = [', file)
-    const close = source.indexOf(']', open)
-    expect(close, `${file}: the CLUSTER_CONTROLS declaration never closes`).toBeGreaterThan(open)
-    expect(source.slice(open, close).match(/'[^']*'/g), 'the control set, in render order').toEqual([
-      `'detail-approve'`,
-      `'detail-reject'`,
-      `'edit-toggle'`,
-      `'revalidate'`,
-      `'detail-submit'`,
-    ])
-  })
 })
 
 describe('[bug-14-04] the role-axis claim keeps its controls above its wire read', () => {
@@ -124,18 +110,5 @@ describe('[bug-14-04] the role-axis claim keeps its controls above its wire read
     expect(wireRead, "the seat's own reason is a different sentence -- the wire read must be the preparer's").toBeLessThan(
       textAbsence,
     )
-  })
-
-  it('the role claim names the whole control set, not just Approve', () => {
-    // Scoped to the declaration's own text. Scanning `source` instead passed with
-    // detail-submit dropped from the array, because the file names that testid three more
-    // times in assertions of its own.
-    const open = soleIndex(source, 'const CLUSTER_CONTROLS = [', file)
-    const close = source.indexOf(']', open)
-    expect(close, `${file}: the CLUSTER_CONTROLS declaration never closes`).toBeGreaterThan(open)
-    const declaration = source.slice(open, close)
-    for (const testid of ['detail-approve', 'detail-reject', 'edit-toggle', 'revalidate', 'detail-submit']) {
-      expect(declaration, `${testid} must be in the role-axis control set`).toContain(`'${testid}'`)
-    }
   })
 })

@@ -48,9 +48,13 @@
 package validation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -700,10 +704,8 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestRuleSetV2_DetectionCommandBaseline (RS-V2-14, partial): runs
-// task-111 §b's corrected detection command VERBATIM (character-for-
-// character; see that section for why a re-typed regex re-arms the trap)
-// and asserts its one MECHANICALLY-checkable property: every hit lives inside
-// internal/validation/**, one of the two named §c e2e artifacts,
+// task-111 §b's corrected detection regex and asserts its one
+// MECHANICALLY-checkable property: every hit lives inside internal/validation/**, one of the two named §c e2e artifacts,
 // validationApi.test.ts, the seed migrations, or pnpm-lock.yaml (the plan's own
 // "no Category-A hit exists outside this scope" claim). detectionHitAllowed below is the
 // allowlist and the one place that enumerates it: every carve-out for a same-named version
@@ -743,27 +745,6 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 // scope/count are properties of the DETECTION COMMAND, not of the fixture
 // fix) -- it is a baseline/regression guard, not a red-to-green spec.
 func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
-	root := repoRoot(t)
-	// .ralph/ is per-worktree RALPH scratch, untracked and absent from every CI checkout, so
-	// excluding it hides no shipped code. The regex itself is untouched.
-	cmd := exec.Command("bash", "-c",
-		`grep -rnE '[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report --exclude-dir=.venv --exclude-dir=.ralph`)
-	cmd.Dir = root
-	out, runErr := cmd.Output()
-	if runErr != nil {
-		if _, ok := runErr.(*exec.ExitError); !ok {
-			t.Fatalf("run the detection command: %v", runErr)
-		}
-		// grep exits 1 when it finds nothing -- not itself a Go-level
-		// error; fall through and let the count assertion below report it.
-	}
-
-	trimmed := strings.TrimRight(string(out), "\n")
-	var allLines []string
-	if trimmed != "" {
-		allLines = strings.Split(trimmed, "\n")
-	}
-
 	// THIS file (rule_set_v2_test.go) necessarily reproduces the `version =
 	// 1` pattern itself -- as prose in doc comments, as a pinned literal
 	// copy of today's Category-A bug (RS-V2-11's cleanup mirror), and as
@@ -771,32 +752,11 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 	// Down mirror -- "v1" will always be version=1, by definition, forever;
 	// that is not the bug). It is QA scaffolding, not part of the reviewed
 	// 90-hit baseline the architecture verified live against the repo --
-	// excluded from the scope check below by NAME, the same way the command's
-	// own --exclude-dir flags already carve out non-reviewed directories.
-	// This filters the OUTPUT for the assertion only; no allowlist entry is
-	// written into the command string above.
-	//
-	// .scratch/ is dropped for the same reason: per-worktree agent scratch (RALPH
-	// session state, draft commit messages), never committed, absent from every CI
-	// checkout. A local note quoting a version pin was failing this test on the
-	// author's machine only -- the kind of false red that gets an allowlist widened.
-	// handoffFile is the same class of scratch, dropped by EXACT path: .claude/ also holds
-	// tracked hooks and settings.json, which stay scanned.
+	// excluded from the scope check below by NAME.
+	// This filters the OUTPUT for the assertion only.
 	const selfFile = "internal/validation/rule_set_v2_test.go"
-	const handoffFile = ".claude/handoff.yaml"
-	var lines []string
-	for _, line := range allLines {
-		file, _, ok := strings.Cut(line, ":")
-		if !ok {
-			lines = append(lines, line)
-			continue
-		}
-		file = strings.TrimPrefix(file, "./")
-		if file == selfFile || file == handoffFile || strings.HasPrefix(file, ".scratch/") {
-			continue
-		}
-		lines = append(lines, line)
-	}
+	lines := trackedGrep(t,
+		`[Vv]ersion[[:space:]]*(:|==|!=|<>|=)[[:space:]]*1\b|[Vv]ersion\)?[[:space:]]*\.toBe\(1\)|loadV1`, selfFile)
 
 	if len(lines) == 0 {
 		t.Fatal("detection command returned no hits at all -- it is supposed to be deliberately broad and " +
@@ -810,7 +770,6 @@ func TestRuleSetV2_DetectionCommandBaseline(t *testing.T) {
 			t.Errorf("detection command output line has no path: %q", line)
 			continue
 		}
-		file = strings.TrimPrefix(file, "./")
 		if !detectionHitAllowed(file, line) {
 			t.Errorf("detection command hit in an unexpected location: %q -- expected only "+
 				"internal/validation/**, a non-rule-set version pin in internal/approval/** "+
@@ -991,9 +950,8 @@ func TestRuleSetV2_DetectionAllowlistScope(t *testing.T) {
 	}
 }
 
-// repoRoot resolves the git worktree root so TestRuleSetV2_DetectionCommandBaseline
-// can run the detection command from the right place regardless of `go test`'s
-// working directory (the package dir).
+// repoRoot resolves the git worktree root so trackedGrep reads the right tree
+// regardless of `go test`'s working directory (the package dir).
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
@@ -1001,4 +959,58 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("git rev-parse --show-toplevel: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// trackedGrep runs `grep -nHE regex` over every tracked file and returns the hit
+// lines outside selfFile. selfFile carries the pattern, so no hit there means
+// the scan read nothing.
+func trackedGrep(t *testing.T, regex, selfFile string) []string {
+	t.Helper()
+	root := repoRoot(t)
+	listed, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatalf("git -C %s ls-files: %v", root, err)
+	}
+	if n := bytes.Count(listed, []byte{0}); n < 1500 {
+		t.Fatalf("git ls-files listed %d file(s), want at least 1500 (1895 at fb7daf8a) -- a truncated list reads clean", n)
+	}
+	// A tracked file deleted in the checkout is skipped, so any grep stderr is a real read error.
+	var present []byte
+	for _, f := range bytes.Split(bytes.TrimRight(listed, "\x00"), []byte{0}) {
+		if _, err := os.Stat(filepath.Join(root, string(f))); err == nil {
+			present = append(append(present, f...), 0)
+		}
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command("xargs", "-0", "grep", "-nHE", regex)
+	cmd.Dir = root
+	cmd.Stdin = bytes.NewReader(present)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if stderr.Len() > 0 {
+		t.Fatalf("xargs grep over the tracked files: %s", stderr.String())
+	}
+	if err != nil {
+		// grep exits 1 on no match; xargs reports a batch exit of 1-125 as 1 (BSD) or 123 (GNU).
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || (exitErr.ExitCode() != 1 && exitErr.ExitCode() != 123) {
+			t.Fatalf("xargs grep over the tracked files: %v", err)
+		}
+	}
+	var hits []string
+	selfHit := false
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if file, _, _ := strings.Cut(line, ":"); file == selfFile {
+			selfHit = true
+			continue
+		}
+		hits = append(hits, line)
+	}
+	if !selfHit {
+		t.Fatalf("no hit in %s, which carries the pattern -- the scan read nothing", selfFile)
+	}
+	return hits
 }

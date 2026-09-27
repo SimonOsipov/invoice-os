@@ -1163,7 +1163,7 @@ func TestRLS_SubmissionJobsInvoiceDeleteRestricted(t *testing.T) {
 	})
 	// 23001 restrict_violation, NOT 23503 foreign_key_violation: an EXPLICIT ON DELETE
 	// RESTRICT is checked immediately at the DELETE, while an implicit NO ACTION FK defers
-	// to end-of-statement and raises 23503 (invoices_rls_test.go:645-648, and the shipped
+	// to end-of-statement and raises 23503 (the shipped
 	// siblings TestRLS_InvoicesEntityDeleteRestricted /
 	// TestRLS_BusinessEntitiesEntityDeleteRestrictedForApp both assert 23001 for this exact
 	// shape). Asserting 23503 here would PASS against a weaker NO ACTION FK — the opposite

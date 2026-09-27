@@ -275,8 +275,8 @@ func TestReconcile_TwoBalancingReadingsDoNotBreakTheTie(t *testing.T) {
 	comp := rcAdjacentAt("total", second, extraction.TierGeneric, 0.05)
 
 	// Floor: both readings really do satisfy the identity. The tolerance comparison is STRICTLY
-	// greater (TestReconcile_ToleranceIsOneMinorUnit pins the constant), so a gap of exactly one
-	// kobo balances and this fixture is a genuine two-way tie, not a one-way win.
+	// greater, so a gap of exactly one kobo balances and this fixture is a genuine two-way tie,
+	// not a one-way win.
 	want, tol := rtDec(t, rtSub).Add(rtDec(t, rtVAT)), rtDec(t, "0.01")
 	for _, v := range []string{first, second} {
 		if want.Sub(rtDec(t, v)).Abs().GreaterThan(tol) {

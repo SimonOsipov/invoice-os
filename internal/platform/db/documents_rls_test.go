@@ -915,7 +915,7 @@ func TestRLS_ImportBatchesCrossTenantDocumentRefRejected(t *testing.T) {
 // DOC-22: the reason the pointer lives on the invoice at all. invoices.import_batch_id is
 // ON DELETE SET NULL, so deleting the batch severs the import-run record — the evidence
 // pointer must survive it, along with every other column. Same shape as
-// TestRLS_InvoicesImportBatchDeleteOnlyNullsImportBatchID (invoices_rls_test.go:870).
+// TestRLS_InvoicesImportBatchDeleteOnlyNullsImportBatchID.
 func TestRLS_InvoicesSourceDocumentSurvivesBatchNulling(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -1008,7 +1008,7 @@ func TestRLS_InvoicesSourceDocumentSurvivesBatchNulling(t *testing.T) {
 // DOC-23: RESTRICT must not outlive the tenant. Postgres removes the referencing rows
 // inside the same cascade, so DELETE FROM tenants still succeeds with a cited document
 // present — the property every teardown in this suite depends on
-// (import_batches_rls_test.go:355).
+// (TestRLS_ImportBatchesTenantDeleteCascades).
 func TestRLS_DocumentsTenantDeleteCascades(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

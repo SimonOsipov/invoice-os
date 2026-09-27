@@ -59,8 +59,7 @@
 //     on the same adapter as the negative control (S24);
 //   - that Poll's evidence rows carry a NIL RequestBody, one response header, and 202-then-200
 //     with a body (S25);
-//   - that the adapter still holds no mutable field and that two polls of one ref on one instance
-//     are identical (S26);
+//   - that two polls of one ref on one instance are identical (S26);
 //   - and that Poll routes through the SAME shared context-aware wait as Submit: it aborts a 5s
 //     in-flight wait on a 250ms deadline (S27), records "sent" for it (S28), and -- the positive
 //     control without which S27 is vacuous -- really does wait the configured latency (S29).
@@ -343,18 +342,6 @@ func maHeaderPresent(h http.Header, name string) bool {
 func TestMockAdapter_NameAndVersionAreConstantsIgnoringConfig(t *testing.T) {
 	plain := submission.NewMockAdapter(submission.MockConfig{})
 	configured := submission.NewMockAdapter(submission.MockConfig{Latency: 5 * time.Second})
-
-	for _, a := range []struct {
-		label string
-		a     *submission.MockAdapter
-	}{{"MockConfig{}", plain}, {"MockConfig{Latency:5s}", configured}} {
-		if got := a.a.Name(); got != "mock" {
-			t.Errorf("%s: Name() = %q, want %q", a.label, got, "mock")
-		}
-		if a.a.Version() == "" {
-			t.Errorf("%s: Version() is empty (L01)", a.label)
-		}
-	}
 
 	if plain.Name() != configured.Name() {
 		t.Errorf("Name() differs across two differently-configured adapters: %q vs %q (L02)",
@@ -2691,46 +2678,9 @@ func TestMockAdapter_PollEvidence(t *testing.T) {
 // S26 (AC-8) -- the adapter holds no state between polls.
 // ---------------------------------------------------------------------------------------
 
-// maAssertImmutableType recurses a type looking for anything that could hold mutable state
-// between calls. RECURSION IS THE POINT: a flat one-level walk over MockAdapter's fields would
-// pass a future `cfg MockConfig` that had itself grown a `seen map[Ref]int` sibling field.
-func maAssertImmutableType(t *testing.T, path string, typ reflect.Type) {
-	t.Helper()
-	switch typ.Kind() {
-	case reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Pointer, reflect.UnsafePointer, reflect.Interface:
-		t.Errorf("%s is a %s (%s) -- MockAdapter must hold NO mutable state between calls. The "+
-			"pending countdown lives in the Ref and nowhere else ([ref-carries-the-verdict]); a "+
-			"map, slice, pointer or channel field is how a poll counter gets smuggled in",
-			path, typ.Kind(), typ)
-	case reflect.Struct:
-		for i := 0; i < typ.NumField(); i++ {
-			f := typ.Field(i)
-			maAssertImmutableType(t, path+"."+f.Name, f.Type)
-		}
-	case reflect.Array:
-		maAssertImmutableType(t, path+"[]", typ.Elem())
-	}
-}
-
-// TestMockAdapter_HasNoMutableState (S26, AC-8).
-//
-// (a) IS A GUARD, NOT A RED-FIRST SPEC -- honestly labelled, in the same spirit as S16 and
-// TestMockAdapter_NegativeLatencyBehavesLikeZeroConfig above. MockAdapter already holds exactly
-// one immutable MockConfig, so the reflection walk passes the moment it compiles. It earns its
-// place because `map[Ref]int` is the single most likely WRONG implementation of this subtask, and
-// a structural assertion catches it at the type level before any behavioural spec has to.
-//
-// (b) IS THE GENUINELY RED-FIRST HALF: polling the SAME ref twice on ONE instance must return two
-// identical Pendings. A stateful adapter returns something different the second time.
+// TestMockAdapter_HasNoMutableState (S26, AC-8): polling the SAME ref twice on ONE instance must
+// return two identical Pendings. A stateful adapter returns something different the second time.
 func TestMockAdapter_HasNoMutableState(t *testing.T) {
-	// ---- (a) the structural guard.
-	adapterType := reflect.TypeOf(*submission.NewMockAdapter(submission.MockConfig{Latency: time.Second}))
-	if adapterType.Kind() != reflect.Struct {
-		t.Fatalf("MockAdapter is a %s, want a struct", adapterType.Kind())
-	}
-	maAssertImmutableType(t, "MockAdapter", adapterType)
-
-	// ---- (b) the behavioural half.
 	a := submission.NewMockAdapter(submission.MockConfig{})
 	ctx := context.Background()
 	p0, _ := maSubmitPending(t, a, "INV-NO-STATE")

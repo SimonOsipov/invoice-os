@@ -46,8 +46,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"os/exec"
-	"strings"
 	"testing"
 )
 
@@ -76,34 +74,14 @@ import (
 // run independently of and in addition to the story's own command (which
 // this test does NOT modify or replace).
 func TestRuleSetV2_JSONQuotedVersionPinNotPresent(t *testing.T) {
-	root := repoRoot(t)
-	cmd := exec.Command("bash", "-c",
-		`grep -rnE '"[Rr]ule_?[Ss]et_?[Vv]ersion"[[:space:]]*:[[:space:]]*[0-9]+|"ruleSetVersion"[[:space:]]*:[[:space:]]*[0-9]+' . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=playwright-report`)
-	cmd.Dir = root
-	out, runErr := cmd.Output()
-	if runErr != nil {
-		if _, ok := runErr.(*exec.ExitError); !ok {
-			t.Fatalf("run the JSON-quoted detection pass: %v", runErr)
-		}
-		// grep exits 1 on no matches -- the desired outcome, not a Go-level error.
-	}
-
-	trimmed := strings.TrimRight(string(out), "\n")
-	if trimmed == "" {
-		return // zero hits -- exactly what a healthy repo looks like for this pattern.
-	}
-
 	// THIS file's own doc comment above necessarily reproduces the pattern as
 	// prose (illustrating the exact JSON shape this test guards against) --
 	// excluded by name, the same way rule_set_v2_test.go's
 	// TestRuleSetV2_DetectionCommandBaseline excludes itself for the identical
 	// reason. Not part of the reviewed repo content this test polices.
 	const selfFile = "internal/validation/rule_set_v2_qa_test.go"
-	for _, line := range strings.Split(trimmed, "\n") {
-		file, _, ok := strings.Cut(line, ":")
-		if ok && strings.TrimPrefix(file, "./") == selfFile {
-			continue
-		}
+	for _, line := range trackedGrep(t,
+		`"[Rr]ule_?[Ss]et_?[Vv]ersion"[[:space:]]*:[[:space:]]*[0-9]+|"ruleSetVersion"[[:space:]]*:[[:space:]]*[0-9]+`, selfFile) {
 		t.Errorf("JSON-quoted rule_set_version literal found: %q -- this is the F7 blind spot "+
 			"(QA Debate Log, task-111): a future publish will silently pin this file's version "+
 			"unless it uses a discovered/normalized value instead of a literal", line)

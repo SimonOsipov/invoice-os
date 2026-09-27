@@ -185,13 +185,31 @@ func TestRLS_LineItemsMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "LI-04 A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "LI-04 B Corp")
+	defer cleanupEntityB()
+	invoiceA, cleanupInvoiceA := seedInvoice(t, h.tenantA, entityA, "LI-04-A")
+	defer cleanupInvoiceA()
+	invoiceB, cleanupInvoiceB := seedInvoice(t, h.tenantB, entityB, "LI-04-B")
+	defer cleanupInvoiceB()
+	rowA, cleanupA := seedLineItem(t, h.tenantA, invoiceA, 1)
+	defer cleanupA()
+	rowB, cleanupB := seedLineItem(t, h.tenantB, invoiceB, 1)
+	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id IN ($1, $2)`, rowA, rowB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if n := mustCount(t, tx, `SELECT count(*) FROM line_items`); n != 0 {
-		t.Errorf("line_items visible with no tenant set = %d, want 0", n)
+	if n := mustCount(t, tx, `SELECT count(*) FROM line_items WHERE id IN ($1, $2)`, rowA, rowB); n != 0 {
+		t.Errorf("seeded line_items rows visible with no tenant set = %d, want 0", n)
 	}
 }
 
@@ -623,8 +641,8 @@ func TestRLS_LineItemsCrossTenantDeleteAffectsZeroRows(t *testing.T) {
 // context set, the tenant_isolation predicate is false for every row, so an unqualified
 // DELETE affects nothing even though invoice_app now holds the DELETE grant. This is the
 // mass-delete guard: an unscoped connection must not be able to wipe the table just
-// because the grant was widened. Mirrors TestRLS_LineItemsMissingContextFailsClosed
-// (:177-189), deliberately using a raw h.app.Begin (NOT WithinTenantTx) so no GUC is set.
+// because the grant was widened. Mirrors TestRLS_LineItemsMissingContextFailsClosed,
+// deliberately using a raw h.app.Begin (NOT WithinTenantTx) so no GUC is set.
 func TestRLS_LineItemsDeleteMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

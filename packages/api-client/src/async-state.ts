@@ -78,8 +78,8 @@ export function toApiError(err: unknown): ApiError {
 }
 
 // Thin useReducer+useEffect wrapper over asyncReducer. Its RUNTIME path is not tested here
-// (Decision (i)): that lives with the surface that wires it. Its shape is —
-// async-state.hook-shape.test.ts pins the two facts a lazily-gated caller depends on.
+// (Decision (i)): that lives with the surface that wires it. The deps effect re-reads
+// `immediate` on each run, so a caller can arm a lookup after mount.
 export function useAsync<T>(
   producer: () => Promise<T>,
   opts?: { immediate?: boolean; isEmpty?: (data: T) => boolean; deps?: unknown[] },

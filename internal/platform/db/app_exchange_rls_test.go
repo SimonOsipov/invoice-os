@@ -756,7 +756,7 @@ func TestRLS_AppExchangeGrantMatrixIsSelectInsertOnly(t *testing.T) {
 
 // AE-08: append-only, behavioural half. invoice_app has no UPDATE grant, so an UPDATE of its
 // OWN, visible row is refused at the GRANT layer (42501 insufficient_privilege) before RLS is
-// evaluated — the same shape invoice_status_history_rls_test.go:289 proves for the twin table,
+// evaluated — the same shape TestRLS_InvoiceStatusHistoryAppendOnlyUpdateRefused proves for the twin table,
 // and distinct in cause from AE-05's policy-level 42501 on the same statement as the owner. The
 // superuser read-back proves the row survived untouched; the SELECT that follows is the
 // positive half, showing the SAME row is reachable by the SAME role so the refusal is

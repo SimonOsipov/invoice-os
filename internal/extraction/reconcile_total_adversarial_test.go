@@ -502,8 +502,7 @@ func TestReconcile_AnUnparseableTotalReadingIsSkippedNotZeroed(t *testing.T) {
 }
 
 // The tolerance boundary on the referee's own path: one kobo balances, one kobo and a hair does
-// not. reconcileTolerance's VALUE is pinned by TestReconcile_ToleranceIsOneMinorUnit; the
-// STRICTNESS of the comparison is what this pins.
+// not. The STRICTNESS of the comparison is what this pins.
 func TestReconcile_TheCorroborationBoundaryIsOneKoboInclusive(t *testing.T) {
 	const atBoundary, pastBoundary = "8600.01", "8600.0101" // 8000.00 + 600.00 = 8600.00
 	want, tol := rtDec(t, rtSub).Add(rtDec(t, rtVAT)), rtDec(t, "0.01")

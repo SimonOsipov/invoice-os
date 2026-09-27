@@ -814,10 +814,9 @@ type jvRequest struct {
 }
 
 // jvFake starts an httptest server decoding every request into map[string]any -- never a typed
-// wireRequest mirror (R-16: a typed mirror breaks silently on a field rename in jevmeasure, the
-// steerMarker.test.ts trap already recorded on this repo). Every decoded request is recorded,
-// in arrival order. t.Errorf, not t.Fatalf: FailNow is unsafe off the test's own goroutine, and
-// the handler runs on the server's.
+// wireRequest mirror (R-16: a typed mirror breaks silently on a field rename in jevmeasure).
+// Every decoded request is recorded, in arrival order. t.Errorf, not t.Fatalf: FailNow is
+// unsafe off the test's own goroutine, and the handler runs on the server's.
 func jvFake(t *testing.T, answer func(state string, questions map[string]any) (body string, status int)) (*httptest.Server, *[]jvRequest) {
 	t.Helper()
 	recorded := &[]jvRequest{}

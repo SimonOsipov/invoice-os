@@ -8,6 +8,7 @@ the live gateway). Each has its own config — `playwright.config.ts`,
 `playwright.api.config.ts`, `playwright.topology.config.ts` — and its own reason to exist.
 
 A fourth project, `test:unit`, is not a fleet suite at all: see [Unit tests](#unit-tests).
+A fifth, `test:hooks`, tests the `.claude/hooks` git-history guard in the `Claude hooks` CI job.
 
 There is **no local web server** — the Playwright suites always run against a real
 deployed URL.
@@ -130,6 +131,12 @@ lazily, inside function bodies, for exactly this reason.
 
 ```bash
 pnpm --filter @invoice-os/e2e test:unit
+```
+
+`test:hooks` runs `gitHistoryGuard.test.ts` (`vitest.hooks.config.ts`); `test:unit` excludes it. CI runs it in the `Claude hooks` job, only when `.claude/hooks/**` or either file changes:
+
+```bash
+pnpm --filter @invoice-os/e2e test:hooks
 ```
 
 ## How CI runs them

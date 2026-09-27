@@ -160,13 +160,27 @@ func TestRLS_ImportBatchesMissingContextFailsClosed(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
+	entityA, cleanupEntityA := seedBusinessEntity(t, h.tenantA, "IB-04 A Corp")
+	defer cleanupEntityA()
+	entityB, cleanupEntityB := seedBusinessEntity(t, h.tenantB, "IB-04 B Corp")
+	defer cleanupEntityB()
+	rowA, cleanupA := seedImportBatch(t, h.tenantA, entityA)
+	defer cleanupA()
+	rowB, cleanupB := seedImportBatch(t, h.tenantB, entityB)
+	defer cleanupB()
+
+	// Control: the zero below means nothing unless the rows are there to hide.
+	if n := mustCount(t, h.super, `SELECT count(*) FROM import_batches WHERE id IN ($1, $2)`, rowA, rowB); n != 2 {
+		t.Fatalf("superuser sees %d of the two seeded rows, want 2", n)
+	}
+
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 	defer tx.Rollback(ctx)
-	if n := mustCount(t, tx, `SELECT count(*) FROM import_batches`); n != 0 {
-		t.Errorf("import_batches visible with no tenant set = %d, want 0", n)
+	if n := mustCount(t, tx, `SELECT count(*) FROM import_batches WHERE id IN ($1, $2)`, rowA, rowB); n != 0 {
+		t.Errorf("seeded import_batches rows visible with no tenant set = %d, want 0", n)
 	}
 }
 

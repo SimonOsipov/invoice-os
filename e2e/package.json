@@ -3,13 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "E2E suites against the deployed fleet: three Playwright projects (smoke = SPA render + console coverage + persona boundaries, api = typed HTTP contract suite over the gateway, topology = browser-verified gateway round trips) plus deployment-free vitest unit tests for this package's own seams. See e2e/README.md.",
+  "description": "E2E suites against the deployed fleet: three Playwright projects (smoke = SPA render + console coverage + persona boundaries, api = typed HTTP contract suite over the gateway, topology = browser-verified gateway round trips) plus deployment-free vitest unit tests for this package's own seams, and test:hooks for the .claude/hooks git-history guard (the Claude hooks CI job). See e2e/README.md.",
   "scripts": {
     "test": "playwright test",
     "test:smoke": "playwright test",
     "test:topology": "playwright test --config playwright.topology.config.ts",
     "test:api": "playwright test --config playwright.api.config.ts",
     "test:unit": "vitest run",
+    "test:hooks": "vitest run --config vitest.hooks.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

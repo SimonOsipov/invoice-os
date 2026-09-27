@@ -183,7 +183,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
         {rows.map((m) => {
           // The CURRENT row from the CURRENT list. `isProtectedAdmin` does no identity lookup
           // — it returns true for a detached object that is not in the list at all
-          // (members.test.ts:1421) — so a stale row read from a closure gives a wrong answer.
+          // (members.test.ts QA38) — so a stale row read from a closure gives a wrong answer.
           const protectedAdmin = isProtectedAdmin(members, m)
           // Status alone: `stepsForMember` unions every role they hold and already answers
           // `null` for someone no policy names, so a second gate here would be a rule that

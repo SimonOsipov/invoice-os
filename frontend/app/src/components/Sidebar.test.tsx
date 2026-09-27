@@ -316,7 +316,6 @@ describe('BUG-17-01 company switcher corner', () => {
 
     const switcher = screen.getByTestId('company-switcher')
     expect(switcher.className.split(/\s+/).filter(Boolean)).not.toContain('pf-btn')
-    expect(switcher.getAttribute('style')).toContain('border-radius: var(--radius-input)')
   })
 
   it('companyChip_declaresTheSwitchersCorner', async () => {

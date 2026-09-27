@@ -138,7 +138,7 @@ Runs only when `PLANNING_REQUIRED=true`, inside the worktree.
 Spawn `product-architecture-spec` with the full basic story and its Obsidian path, per its "Expanding a basic story" section. It rewrites the story in place: design, `## Implementation Subtasks`, and `## Decisions`. Pass these rules:
 
 - **Diff every new control against its siblings.** A control added to an existing bar or panel matches the siblings' visibility and disabled treatment. A sibling's shipped decision is the spec.
-- **A layout constant ships a layout assertion.** When a subtask adds or changes a width, grid track, clearance, overflow or alignment, name a topology layout assertion as its deliverable. `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560/1920/1440/1280); `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Planning it here puts it in the first deploy-gate run.
+- **A layout constant ships a relationship assertion.** When a subtask adds or changes a width, grid track, clearance, overflow or alignment, name a topology layout assertion as its deliverable. It asserts a relationship: the element fits, aligns or does not overlap. It never asserts a raw dimension. Phase 3.5 step 4 owns the rule "Assert the relationship, not the dimension". `e2e/topology/layout.ts` sweeps `WIDE_WIDTHS` (2560/1920/1440/1280); `e2e/topology/invoice-surfaces.spec.ts` is the worked example. Planning it here puts it in the first deploy-gate run.
 - **Re-measure every fact the story asserts** — a root cause, a mechanism, a count, another PR's state, whether the prescribed fix can work. Measure it in the worktree. Paste the command and its output into `## Decisions`, one entry per fact, tagged `premise — verified` or `premise — CORRECTED: story said X, actually Y`.
 - **Measure a fact about the deployed app on the deployed app** (browser output, sidecar responses, production data): Playwright MCP or Railway logs. Paste the output into the same `premise —` entry. Never escalate an unmeasured premise.
 - **An AC that already holds at head is not work.** Record the proving test in `## Decisions`; write no subtask.
@@ -244,8 +244,10 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
   ```json
   {"ac": "AC-2 / exit via back button", "file": "frontend/app/src/lib/route.ts", "find": "<exact text, once in the file>", "replace": "<broken text>", "test_file": "frontend/app/src/lib/route.test.ts", "test": "<full test title>"}
   ```
+  For an AC that states a rule, at least one row changes a comparison, a branch or a computation. A row that only edits a literal the test restates proves only a value AC.
   An AC item with no row is a QA failure. A Playwright spec cannot replay locally: cite its assertion for Phase 3.5 and write no row.
 - **Assert a collection is non-empty** before asserting over its items.
+- **Source scans:** the QA agent's rules "A source scan is the last resort" and "Never test a test" apply. A source scan also needs a `## Decisions` entry that names the failure no runtime test can observe.
 - **Every source scan** (a grep, a source walk, a forbidden-string guard, a site count):
   1. strips comments before it matches (TypeScript: `stripComments` from `@invoice-os/api-client/strip-comments`; Go: `go/ast` or strip first);
   2. reads only the function or block it guards, not the whole file;
@@ -254,6 +256,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the cha
 - **An absence scan** also needs a control needle that must be found and a floor on the population scanned. Offer no "zero hits" as evidence until the same command has found a planted hit.
 - **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff main...HEAD -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every file in `docs/`. Treat your own earlier future-tense notes as suspects.
 - **State a shared fact in one place** and cite that place.
+- **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
 - Frontend: Playwright MCP verification against the deployed PR environment once it exists.
 

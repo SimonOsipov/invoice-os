@@ -25,8 +25,8 @@
 //	(extra) TestKeepAsIsHandler_UnkeepClearsMarksAndAudits   (AC #6's only positive leg)
 //	(extra) TestKeepAsIsHandler_UnkeepAlreadyUnkeptIsNoop
 //
-// D10/D6 note: nothing here drives a transition. legalTransitions/the status CHECKs are
-// asserted untouched by TestLegalTransitionsUnchanged (transition_test.go), not here.
+// D10/D6 note: nothing here drives a transition. legalTransitions is
+// asserted untouched by TestLegalTransitions_SetEqualsIndependentOracle (transition_test.go), not here.
 //
 // Run: `make test-rls` will NOT cover this package (it targets ./internal/platform/db/...
 // at port 5432) -- use:

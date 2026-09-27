@@ -13,6 +13,7 @@ package db_test
 import (
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -138,38 +139,23 @@ func TestRLS_SingleDocumentValidateRouteIsNotRegistered(t *testing.T) {
 // The scan above reads route registrations only; a comment or symbol naming
 // the retired route reads clean. The text scan below covers that half.
 
-// vrGoFiles is every .go file in the repo bar this one, which carries the
-// needles by necessity.
+// vrGoFiles is every tracked .go file bar this one, which carries the needles
+// by necessity. A tracked file deleted in the working tree is skipped.
 func vrGoFiles(t *testing.T, root string) []string {
 	t.Helper()
+	listed, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "-z", "--", "*.go").Output()
+	if err != nil {
+		t.Fatalf("git -C %s ls-files: %v", root, err)
+	}
 	var out []string
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range strings.Split(string(listed), "\x00") {
+		if filepath.Ext(rel) != ".go" || rel == vrSelfPath {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "testdata", "vendor":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return relErr
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == vrSelfPath {
-			return nil
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			continue
 		}
 		out = append(out, rel)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
 	}
 	sort.Strings(out)
 	return out
@@ -239,16 +225,16 @@ func TestRLS_SingleDocumentValidateRouteIsNotReferencedInGo(t *testing.T) {
 
 	root := repoRootDir(t)
 	files := vrGoFiles(t, root)
-	// Floor. An absence assertion over a truncated walk clears everything.
+	// Floor. An absence assertion over a truncated list clears everything.
 	// 707 after self-exclusion at RMV-01-03.
 	if len(files) < 600 {
-		t.Fatalf("walked %d .go file(s), want at least 600 (707 measured at RMV-01-03) — a truncated list reads clean", len(files))
+		t.Fatalf("listed %d .go file(s), want at least 600 (707 measured at RMV-01-03) — a truncated list reads clean", len(files))
 	}
 	if slices.Contains(files, vrSelfPath) {
-		t.Fatalf("the walk must exclude %s — this file carries the needles by necessity", vrSelfPath)
+		t.Fatalf("the list must exclude %s — this file carries the needles by necessity", vrSelfPath)
 	}
 
-	// Non-vacuity: the surviving siblings must be findable by the same walk.
+	// Non-vacuity: the surviving siblings must be findable in the same list.
 	survivors := map[string]bool{}
 	for _, rel := range files {
 		src := vrRead(t, root, rel)
@@ -261,7 +247,7 @@ func TestRLS_SingleDocumentValidateRouteIsNotReferencedInGo(t *testing.T) {
 	}
 	for _, want := range []string{vrBatchRoute, "BatchValidateHandler"} {
 		if !survivors[want] {
-			t.Fatalf("the walk found no %q — it survives this story, so its absence means the walk broke, not that the tree is clean", want)
+			t.Fatalf("the list held no %q — it survives this story, so its absence means the list broke, not that the tree is clean", want)
 		}
 	}
 

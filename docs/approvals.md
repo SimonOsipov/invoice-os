@@ -885,9 +885,8 @@ by `TestGetHandler_ApprovalFactsErrorFailsClosedNot500`,
   (`internal/dashboard/store.go`, `GET /v1/rollup`). The Approvals nav badge
   (`Sidebar.tsx`, `bucket.awaiting_approval`) reads it; the dashboard tiles are a later
   APPR-11 subtask. It is the list filter's predicate copied with the query's `i.` alias added,
-  and the two copies are held textually identical by
-  `TestStoreRollup_AwaitingApprovalSQLMatchesTheInvoiceListFilter`, so the count and the
-  filtered list cannot disagree about what the word denotes. It is ungated for the same
+  and `TestStoreList_AwaitingApprovalMatchesDashboardRollup` asserts that the count equals the
+  filtered list's total. It is ungated for the same
   reason the filter is: it is a read surface, and the closing sentence below applies to it
   unchanged. Note the token now carries **three** meanings in this document and only these
   two share a predicate: the batch-submit skip reason above (`BatchSubmitResultItem.Reason`)

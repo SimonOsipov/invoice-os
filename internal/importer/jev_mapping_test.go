@@ -285,7 +285,7 @@ func jpWalk(t *testing.T, baseURL, dir string) []jevmeasure.Outcome {
 	auto := jpAutoSet(t, dir, layouts)
 	aiSet := jpAISet(t, dir, layouts)
 
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
 		key = "jp-test-key"
 	}
@@ -368,9 +368,9 @@ func jpGateLog(t *testing.T, msg string) {
 func jpGateReason(key, out string) string {
 	switch {
 	case key == "" && out == "":
-		return "TYPESAFE_API_KEY and JEV_OUT unset: no client built, no call"
+		return "OPENROUTER_API_KEY and JEV_OUT unset: no client built, no call"
 	case key == "":
-		return "TYPESAFE_API_KEY unset: no client built, no call"
+		return "OPENROUTER_API_KEY unset: no client built, no call"
 	default:
 		return "JEV_OUT unset: no client built, no call"
 	}
@@ -407,14 +407,14 @@ func jpReadLedger(t *testing.T, dir string) []jevmeasure.Outcome {
 	return outcomes
 }
 
-// jpGatedRun reads TYPESAFE_API_KEY and JEV_OUT; either empty logs one line naming which and
+// jpGatedRun reads OPENROUTER_API_KEY and JEV_OUT; either empty logs one line naming which and
 // returns false without building a client -- never t.Skip (rls-test-gate.sh runs this package
 // unfiltered and exits 1 on a skip). Both set: runs the mapping walk, merges it into the
 // $JEV_OUT/jev-outcomes.json ledger (D-1) alongside whatever the value/document-type binary
 // already wrote, and renders jev-report.md / jev-report.json over the merged set.
 func jpGatedRun(t *testing.T, baseURL string) bool {
 	t.Helper()
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	out := os.Getenv("JEV_OUT")
 	if key == "" || out == "" {
 		jpGateLog(t, jpGateReason(key, out))
@@ -616,7 +616,7 @@ func jpAskedCount(t *testing.T, md, check string) int {
 func TestJevMapping_UnsetKeyLogsAndReturns(t *testing.T) {
 	negative := func(t *testing.T, key, out string, wantKeyNamed, wantOutNamed bool) {
 		t.Helper()
-		t.Setenv("TYPESAFE_API_KEY", key)
+		t.Setenv("OPENROUTER_API_KEY", key)
 		t.Setenv("JEV_OUT", out)
 		jpResetGateLogs()
 		var calls int
@@ -635,8 +635,8 @@ func TestJevMapping_UnsetKeyLogsAndReturns(t *testing.T) {
 			t.Fatalf("jpGatedRun logged %d line(s), want exactly 1", len(jpGateLogs))
 		}
 		msg := jpGateLogs[0]
-		if strings.Contains(msg, "TYPESAFE_API_KEY") != wantKeyNamed {
-			t.Errorf("logged %q; TYPESAFE_API_KEY named = %v, want %v", msg, strings.Contains(msg, "TYPESAFE_API_KEY"), wantKeyNamed)
+		if strings.Contains(msg, "OPENROUTER_API_KEY") != wantKeyNamed {
+			t.Errorf("logged %q; OPENROUTER_API_KEY named = %v, want %v", msg, strings.Contains(msg, "OPENROUTER_API_KEY"), wantKeyNamed)
 		}
 		if strings.Contains(msg, "JEV_OUT") != wantOutNamed {
 			t.Errorf("logged %q; JEV_OUT named = %v, want %v", msg, strings.Contains(msg, "JEV_OUT"), wantOutNamed)
@@ -649,7 +649,7 @@ func TestJevMapping_UnsetKeyLogsAndReturns(t *testing.T) {
 	t.Run("both set: positive control", func(t *testing.T) {
 		dir := t.TempDir()
 		jpSeedOneLayoutFixture(t, dir, "plain_01")
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 		jpResetGateLogs()
 		srv, _ := jpFake(t, func(state string, questions map[string]any) (string, int) {
@@ -665,6 +665,74 @@ func TestJevMapping_UnsetKeyLogsAndReturns(t *testing.T) {
 			t.Errorf("jev-report.md not written: %v", err)
 		}
 	})
+}
+
+// The retired key alone must not open the gate: an operator holding only it measures nothing.
+func TestJevMapping_TheRetiredKeyDoesNotOpenTheGate(t *testing.T) {
+	// A seeded fixture keeps an open gate running to completion, so only the gate can decline.
+	dir := t.TempDir()
+	jpSeedOneLayoutFixture(t, dir, "plain_01")
+	t.Setenv("TYPESAFE_API_KEY", "sk-test")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("JEV_OUT", dir)
+	jpResetGateLogs()
+	srv, recorded := jpFake(t, func(state string, questions map[string]any) (string, int) {
+		return jpNoulBody(questions, "0.90"), http.StatusOK
+	})
+
+	if got := jpGatedRun(t, srv.URL); got {
+		t.Errorf("jpGatedRun with only the retired key set = true, want false")
+	}
+	if calls := len(*recorded); calls != 0 {
+		t.Errorf("jpGatedRun with only the retired key set sent %d call(s), want 0", calls)
+	}
+	if len(jpGateLogs) != 1 {
+		t.Fatalf("jpGatedRun logged %d line(s), want exactly 1", len(jpGateLogs))
+	}
+	if msg := jpGateLogs[0]; !strings.Contains(msg, "OPENROUTER_API_KEY") || strings.Contains(msg, "JEV_OUT") {
+		t.Errorf("logged %q, want a reason naming OPENROUTER_API_KEY and not JEV_OUT (which is set)", msg)
+	}
+	if msg := jpGateLogs[0]; strings.Contains(msg, "TYPESAFE") {
+		t.Errorf("logged %q, want no mention of the retired key", msg)
+	}
+}
+
+// An open gate must send its own key: a walk reading another variable measures with the fallback key.
+// A whitespace key counts as set, as jev.FromEnv reads it.
+func TestJevMapping_TheLiveRunSendsTheOpenRouterKey(t *testing.T) {
+	for name, key := range map[string]string{"openrouter key": "sk-or-jp-7f3a", "whitespace key": " "} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			jpSeedOneLayoutFixture(t, dir, "plain_01")
+			t.Setenv("OPENROUTER_API_KEY", key)
+			t.Setenv("TYPESAFE_API_KEY", "sk-retired-jp-7f3a")
+			t.Setenv("JEV_OUT", dir)
+			jpResetGateLogs()
+			var auths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				auths = append(auths, r.Header.Get(jevmeasure.AuthHeaderName))
+				var raw map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&raw)
+				questions, _ := raw["questions"].(map[string]any)
+				_, _ = w.Write([]byte(jpNoulBody(questions, "0.90")))
+			}))
+			defer srv.Close()
+
+			if !jpGatedRun(t, srv.URL) {
+				t.Fatalf("jpGatedRun with OPENROUTER_API_KEY=%q and JEV_OUT set = false, want true (logged %q)", key, jpGateLogs)
+			}
+			if len(auths) == 0 {
+				t.Fatal("the open gate sent no call")
+			}
+			// net/http trims a header value, so the whitespace key arrives as the bare prefix.
+			want := strings.TrimSpace(jevmeasure.AuthHeaderPrefix + key)
+			for i, got := range auths {
+				if strings.TrimSpace(got) != want {
+					t.Fatalf("call %d sent %s %q, want %q", i, jevmeasure.AuthHeaderName, got, want)
+				}
+			}
+		})
+	}
 }
 
 // --- AC-2 ---------------------------------------------------------------------------------
@@ -1293,7 +1361,7 @@ func TestJevMapping_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
 	t.Run("write", func(t *testing.T) {
 		dir := t.TempDir()
 		jpSeedOneLayoutFixture(t, dir, "plain_01")
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 		srv, _ := fake()
 		if got := jpGatedRun(t, srv.URL); !got {
@@ -1331,7 +1399,7 @@ func TestJevMapping_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "jev-outcomes.json"), prior, 0o644); err != nil {
 			t.Fatalf("pre-write jev-outcomes.json: %v", err)
 		}
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 		srv, _ := fake()
 		if got := jpGatedRun(t, srv.URL); !got {
@@ -1358,7 +1426,7 @@ func TestJevMapping_TheArtifactIsWrittenUnderJEVOUT(t *testing.T) {
 	t.Run("replace not append", func(t *testing.T) {
 		dir := t.TempDir()
 		jpSeedOneLayoutFixture(t, dir, "plain_01")
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 
 		srv1, _ := fake()
@@ -1458,7 +1526,7 @@ func TestJevMapping_TheOperatorSuppliedPriceReachesTheCostLine(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		jpSeedOneLayoutFixture(t, dir, "plain_01")
-		t.Setenv("TYPESAFE_API_KEY", "sk-test")
+		t.Setenv("OPENROUTER_API_KEY", "sk-test")
 		t.Setenv("JEV_OUT", dir)
 		t.Setenv("JEV_PRICE_INPUT_PER_M", in)
 		t.Setenv("JEV_PRICE_OUTPUT_PER_M", out)

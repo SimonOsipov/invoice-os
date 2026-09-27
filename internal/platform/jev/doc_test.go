@@ -206,8 +206,8 @@ func derivedLogKeys(t *testing.T, root string) []string {
 	if !logAttrs {
 		t.Fatalf("%s's logCall has no LogAttrs call; the scan read the wrong declaration", rel)
 	}
-	if len(keys) != 7 {
-		t.Fatalf("%s's logCall builds %d slog attr(s) %v, want exactly 7", rel, len(keys), keys)
+	if len(keys) != 10 {
+		t.Fatalf("%s's logCall builds %d slog attr(s) %v, want exactly 10", rel, len(keys), keys)
 	}
 	return keys
 }

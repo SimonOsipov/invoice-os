@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +271,232 @@ func TestJevDoc_EveryNamedTestExists(t *testing.T) {
 		if !strings.Contains(src.String(), "\nfunc "+m[1]+"(t *testing.T) {") {
 			t.Errorf("%s names %s, which no jev test file declares", jevDoc, m[1])
 		}
+	}
+}
+
+var htmlCommentRE = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// The probe test lives outside this package, so a lone `TestJevLiveProbe` would fail TestJevDoc_EveryNamedTestExists.
+func TestJevDoc_WhatItIsNamesTheProbeCommandAsOneSpan(t *testing.T) {
+	root := jevRepoRoot(t)
+	src := readRepoFile(t, root, "internal/platform/jev/liveprobe/liveprobe_test.go")
+	if !strings.Contains(src, "\nfunc TestJevLiveProbe(t *testing.T) {") {
+		t.Fatal("internal/platform/jev/liveprobe declares no TestJevLiveProbe; the command would run nothing")
+	}
+	cmd := "JEV_PROBE=1 " + EnvKey + "=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe"
+	doc := htmlCommentRE.ReplaceAllString(readJevDoc(t, root), "")
+	// A code span may wrap; it renders with one space per line break.
+	what := strings.Join(strings.Fields(docSection(t, doc, "## What it is", "## ")), " ")
+	if !strings.Contains(what, "`"+cmd+"`") {
+		t.Errorf("%s What it is does not name the probe command as one backticked span: `%s`", jevDoc, cmd)
+	}
+}
+
+// The consts are matched in exact case; prose is matched in any case and across line wraps.
+func TestJevDoc_NamesTheOpenRouterRouteNotTheStaleLines(t *testing.T) {
+	// Newlines survive the strip, so a reported line number stays the file's.
+	doc := htmlCommentRE.ReplaceAllStringFunc(readJevDoc(t, jevRepoRoot(t)), func(c string) string {
+		return strings.Repeat("\n", strings.Count(c, "\n"))
+	})
+	for _, want := range []struct{ name, value string }{{"endpoint", endpoint}, {"Model", Model}, {"EnvKey", EnvKey}} {
+		if !strings.Contains(doc, want.value) {
+			t.Errorf("%s does not name the %s const's value %q", jevDoc, want.name, want.value)
+		}
+	}
+
+	flat := strings.Join(strings.Fields(strings.ToLower(doc)), " ")
+	for _, stale := range []string{
+		"No production key exists",
+		"`output_tokens` is not logged",
+		"the version that answered is not logged",
+		"sends `State` to TypeSafe",
+		"before a production key is set",
+	} {
+		if strings.Contains(flat, strings.ToLower(stale)) {
+			t.Errorf("%s still says %q", jevDoc, stale)
+		}
+	}
+
+	// stalerefs reads line by line and exempts a line holding "retired".
+	type docLine struct {
+		n    int
+		text string
+	}
+	var named []docLine
+	sawKey := false
+	for i, line := range strings.Split(doc, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "typesafe_api_key") || strings.Contains(lower, "api.typesafe.ai") {
+			named = append(named, docLine{i + 1, line})
+			sawKey = sawKey || strings.Contains(lower, "typesafe_api_key")
+		}
+	}
+	if !sawKey {
+		t.Fatalf("%s names TYPESAFE_API_KEY nowhere, want the key row to mark it retired", jevDoc)
+	}
+	for _, l := range named {
+		if !strings.Contains(strings.ToLower(l.text), "retired") {
+			t.Errorf("%s:%d names the retired route or key without the word retired: %q", jevDoc, l.n, l.text)
+		}
+	}
+}
+
+// flatLower is text lower-cased with every whitespace run as one space, so a re-wrap cannot hide a claim.
+func flatLower(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
+
+// docRow returns the body row of sec's first table whose first cell starts with first.
+func docRow(t *testing.T, sec, first string) []string {
+	t.Helper()
+	rows := tableBodyRows(sec)
+	if len(rows) == 0 {
+		t.Fatalf("%s: section has no table rows", jevDoc)
+	}
+	for _, r := range rows {
+		if strings.HasPrefix(strings.ToLower(r[0]), strings.ToLower(first)) {
+			return r
+		}
+	}
+	t.Fatalf("%s: no table row starts with %q", jevDoc, first)
+	return nil
+}
+
+var docStatusRE = regexp.MustCompile(`\b[1-5]\d\d\b`)
+
+// Each claim is read from the one section, row or clause that states it; comments are stripped first.
+func TestJevDoc_StatesEachOpenRouterItem(t *testing.T) {
+	doc := htmlCommentRE.ReplaceAllStringFunc(readJevDoc(t, jevRepoRoot(t)), func(c string) string {
+		return strings.Repeat("\n", strings.Count(c, "\n"))
+	})
+	wantAll := func(t *testing.T, where, text string, needles ...string) {
+		t.Helper()
+		flat := flatLower(text)
+		if flat == "" {
+			t.Fatalf("%s: %s is empty", jevDoc, where)
+		}
+		for _, n := range needles {
+			if !strings.Contains(flat, flatLower(n)) {
+				t.Errorf("%s: %s does not say %q", jevDoc, where, n)
+			}
+		}
+	}
+
+	t.Run("audience", func(t *testing.T) {
+		head, _, ok := strings.Cut(doc, "\n## What it is\n")
+		if !ok {
+			t.Fatalf("%s has no %q heading", jevDoc, "## What it is")
+		}
+		_, aud, ok := strings.Cut(head, "**Audience:**")
+		if !ok {
+			t.Fatalf("%s has no **Audience:** line", jevDoc)
+		}
+		aud, _, _ = strings.Cut(aud, "\n\n")
+		wantAll(t, "the audience", aud, "anyone setting `"+EnvKey+"` for Jev")
+	})
+
+	what := docSection(t, doc, "## What it is", "## ")
+	t.Run("what_it_is_route", func(t *testing.T) {
+		wantAll(t, "What it is", what, "`POST` to `"+endpoint+"`", "`Authorization: Bearer <"+EnvKey+">`", "The model is `"+Model+"`")
+	})
+	t.Run("what_it_is_logged_fields", func(t *testing.T) {
+		wantAll(t, "What it is", what, "echoes the versioned model that answered", "its `usage.cost`. Both reach the log line")
+	})
+
+	knobs := docSection(t, doc, "## Env knobs", "## ")
+	t.Run("key_row", func(t *testing.T) {
+		wantAll(t, "the "+EnvKey+" row", strings.Join(docRow(t, knobs, "`"+EnvKey+"`"), " | "),
+			"shared with the AI client", "The retired `TYPESAFE_API_KEY` is read by no product code")
+	})
+	t.Run("fake_row_off_lever", func(t *testing.T) {
+		wantAll(t, "the "+EnvFake+" row", strings.Join(docRow(t, knobs, "`"+EnvFake+"`"), " | "),
+			"with a non-empty `"+EnvKey+"` makes `FromEnv` return an error naming both variables",
+			"in production the only Jev off-lever is deleting the shared key, which also turns off Gemini")
+	})
+
+	t.Run("production_row", func(t *testing.T) {
+		row := docRow(t, docSection(t, doc, "## Per environment", "## "), "production")
+		if len(row) != 5 {
+			t.Fatalf("%s: production row has %d cells, want 5: %q", jevDoc, len(row), row)
+		}
+		if !strings.HasPrefix(flatLower(row[1]), "set") || flatLower(row[2]) != "unset" ||
+			!strings.HasPrefix(flatLower(row[3]), "real") || !strings.HasPrefix(flatLower(row[4]), "the user") {
+			t.Errorf("%s: production row = %q, want key set, %s unset, client real, set by the user", jevDoc, row, EnvFake)
+		}
+	})
+
+	// The two clauses are cut from one paragraph: "Retried once" runs to "Not retried", which runs to its first full stop.
+	retries := flatLower(docSection(t, doc, "## Retries and the budget", "## "))
+	_, retried, ok1 := strings.Cut(retries, "**retried once:**")
+	retried, notRetried, ok2 := strings.Cut(retried, "**not retried:**")
+	notRetried, _, ok3 := strings.Cut(notRetried, ". ")
+	if !ok1 || !ok2 || !ok3 {
+		t.Fatalf("%s: Retries section has no **Retried once:** clause followed by a **Not retried:** sentence", jevDoc)
+	}
+	clause := map[bool][]string{true: docStatusRE.FindAllString(retried, -1), false: docStatusRE.FindAllString(notRetried, -1)}
+	for _, tc := range []struct {
+		statuses []int
+		retry    bool
+	}{
+		{[]int{400, 401, 402, 403, 404, 413, 422}, false},
+		{[]int{502, 524, 529}, true},
+	} {
+		name := map[bool]string{true: "retried_once", false: "not_retried"}[tc.retry]
+		for _, s := range tc.statuses {
+			t.Run(name+"/"+strconv.Itoa(s), func(t *testing.T) {
+				if retryable(s) != tc.retry {
+					t.Fatalf("retryable(%d) = %v, want %v: the list below is checked against the code", s, !tc.retry, tc.retry)
+				}
+				if !slices.Contains(clause[tc.retry], strconv.Itoa(s)) {
+					t.Errorf("%s: the %s clause %v does not name %d", jevDoc, name, clause[tc.retry], s)
+				}
+				if slices.Contains(clause[!tc.retry], strconv.Itoa(s)) {
+					t.Errorf("%s: %d is named in both clauses", jevDoc, s)
+				}
+			})
+		}
+	}
+
+	logSec := docSection(t, doc, "## The log line", "### Outcomes")
+	t.Run("log_model_row", func(t *testing.T) {
+		wantAll(t, "the log model row", strings.Join(docRow(t, logSec, "`model`"), " | "),
+			"from the final attempt only", "its first "+strconv.Itoa(maxModelLen)+" bytes")
+	})
+	t.Run("log_output_tokens_and_cost_rows", func(t *testing.T) {
+		wantAll(t, "the log output_tokens row", strings.Join(docRow(t, logSec, "`output_tokens`"), " | "), "`usage.output_tokens`, summed")
+		wantAll(t, "the log cost row", strings.Join(docRow(t, logSec, "`cost`"), " | "), "`usage.cost`", "summed",
+			"a missing or `null` `cost` counts as `0`")
+	})
+
+	t.Run("data_terms", func(t *testing.T) {
+		wantAll(t, "Data terms", docSection(t, doc, "## Data terms", "## "),
+			"sends `State` to OpenRouter, which routes it to TypeSafe's endpoint on OpenRouter's zero-data-retention (ZDR) list",
+			"The user owns them")
+	})
+
+	limits := docSection(t, doc, "## Known limitations", "## ")
+	t.Run("limitation_answering_version", func(t *testing.T) {
+		wantAll(t, "Known limitations", limits, "The log line's `model` records the version that answered")
+	})
+	t.Run("limitation_thresholds_trusted", func(t *testing.T) {
+		wantAll(t, "Known limitations", limits, "before the thresholds are trusted")
+	})
+	t.Run("limitation_probe", func(t *testing.T) {
+		wantAll(t, "Known limitations", limits, "The extra OpenRouter hop is measured only by the pre-merge live probe")
+	})
+	t.Run("limitation_zdr_alias", func(t *testing.T) {
+		wantAll(t, "Known limitations", limits,
+			"The alias can move to a release that is not on the ZDR list, and nothing enforces ZDR per call")
+	})
+}
+
+// The fork rule must say why the retired key is still blanked, or a reader drops the blank while production holds it.
+func TestJevDoc_ForkRuleStatesTheRetiredKeyBlank(t *testing.T) {
+	doc := htmlCommentRE.ReplaceAllString(readJevDoc(t, jevRepoRoot(t)), "")
+	_, rule, ok := strings.Cut(docSection(t, doc, "## Per environment", "## "), "**Fork rule.**")
+	if !ok {
+		t.Fatalf("%s: Per environment has no **Fork rule.** paragraph", jevDoc)
+	}
+	want := "`set-ai-fake` keeps blanking and auditing the retired `TYPESAFE_API_KEY` until the user deletes it from production"
+	if !strings.Contains(flatLower(rule), flatLower(want)) {
+		t.Errorf("%s: the fork rule does not say %q", jevDoc, want)
 	}
 }

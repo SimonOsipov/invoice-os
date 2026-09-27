@@ -1,5 +1,5 @@
-// Package jevmeasure is the standalone measurement harness for the TypeSafe
-// ("Jev") checks: a minimal HTTP client, the question wording, the outcome
+// Package jevmeasure is the standalone measurement harness for the Jev
+// checks: a minimal HTTP client, the question wording, the outcome
 // row shape, and the report renderer. Stdlib only -- see deps_test.go. No
 // product package imports this; CHECK-02 owns retries, fake mode and logging.
 package jevmeasure
@@ -14,9 +14,9 @@ import (
 	"time"
 )
 
-// Endpoint is the vendor's documented URL (A49). Production callers pass it
-// to NewClient; tests pass an httptest server URL instead.
-const Endpoint = "https://api.typesafe.ai/v1/systemone"
+// Endpoint is OpenRouter's System One route. Live runs pass it to NewClient;
+// tests pass an httptest server URL instead.
+const Endpoint = "https://openrouter.ai/api/v1/systemone"
 
 // AuthHeaderName/AuthHeaderPrefix are the vendor's documented auth header.
 const (

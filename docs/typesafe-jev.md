@@ -1,6 +1,6 @@
 # TypeSafe Jev client
 
-**Audience:** anyone setting the TypeSafe key on a Railway service, anyone debugging a
+**Audience:** anyone setting `OPENROUTER_API_KEY` for Jev on a Railway service, anyone debugging a
 `jev call` log line, and CHECK-03, CHECK-04 and CHECK-05, the stories that wire this
 client.
 
@@ -11,14 +11,17 @@ client.
 
 ## What it is
 
-`internal/platform/jev` asks TypeSafe's Jev model typed questions. In real mode each `Ask`
-sends one `POST` to `https://api.typesafe.ai/v1/systemone` (the `endpoint` const), plus at
-most one retry. The request carries `Authorization: Bearer <key>` and
-`Content-Type: application/json`. The body is `{"state": …, "model": …, "questions": {…}}`.
+`internal/platform/jev` asks TypeSafe's Jev model typed questions through OpenRouter. In
+real mode each `Ask` sends one `POST` to `https://openrouter.ai/api/v1/systemone` (the
+`endpoint` const), plus at most one retry. The request carries
+`Authorization: Bearer <OPENROUTER_API_KEY>` and `Content-Type: application/json`. The body
+is `{"state": …, "model": …, "questions": {…}}`.
 
-The model is `jev-latest`, the `Model` const. It is an alias, and the vendor moves it when a
-release ships.
-On 2026-09-23 it pointed at `jev-1.13.0`.
+The model is `~typesafe/jev-latest`, the `Model` const. It is OpenRouter's latest-release
+alias, and it moves when TypeSafe ships a release. On 2026-09-23 it pointed at `jev-1.13.0`.
+The response echoes the versioned model that answered (for example
+`typesafe/jev-1.13-20260917`) and its `usage.cost`. Both reach the log line, not the
+`Response`.
 
 The caller supplies `State` as one string and a map of questions keyed by question id. A
 request names one `Purpose`: `value_check`, `document_type` or `mapping_check`. Each question
@@ -34,9 +37,10 @@ has one of three types:
 
 `Ask` returns a `Response`. `Answers` holds one `Answer` per asked question id. `Usage`
 holds `InputTokens` and `OutputTokens`, summed over attempts. An answer id nobody asked is
-dropped. A missing `usage` object counts as zero tokens. A missing answer, an answer of the
-wrong type, a `null` required field, a value out of range or a malformed `usage` (such as a
-fractional `input_tokens`) fails the whole call.
+dropped. A missing `usage` object counts as zero tokens, and a missing or `null` `cost` counts
+as `0`. A missing answer, an answer of the wrong type, a `null` required field, a value out of
+range or a malformed `usage` (such as a fractional `input_tokens` or a string `cost`) fails
+the whole call.
 
 Every error `Ask` returns satisfies `errors.Is(err, jev.ErrCheckSkipped)`. The text names
 the outcome only: `jev: check skipped: off`, `jev: check skipped: refused` or
@@ -62,12 +66,16 @@ in one call per extraction attempt, on its Docling text branch only
 mapping questions in one call per unrestored layout group, through
 `POST /v1/imports/check-mapping` (`internal/importer/jevcheck.go`).
 
+Before merge, the key holder proves one `ok` call per question type with
+`JEV_PROBE=1 OPENROUTER_API_KEY=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe`;
+without both variables the probe logs why it declined and passes without a call.
+
 ## Env knobs
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `TYPESAFE_API_KEY` | `FromEnv` in `env.go` (`EnvKey`) | The vendor key. Unset or `""`, with `JEV_FAKE` not true, means the client is off: `Enabled()` returns false, and every `Ask` returns `jev: check skipped: off` having sent nothing. Any other value counts as set, whitespace included. The value is never trimmed. A key holding a control byte other than tab, or DEL, refuses every call before anything is sent. The vendor's own SDK reads the same name. |
-| `JEV_FAKE` | `FromEnv` in `env.go` (`EnvFake`) | `true` per `strconv.ParseBool` selects fake mode: no network call, and a result steered by a marker in `State`. Unset or `""` is not fake. Any other unparseable value makes `FromEnv` return an error naming `JEV_FAKE`. The value is never trimmed, so `"true "` is an error. `JEV_FAKE` true with a non-empty `TYPESAFE_API_KEY` makes `FromEnv` return an error naming both variables, and no client. This differs from `AI_FAKE`, which wins over a key. |
+| `OPENROUTER_API_KEY` | `FromEnv` in `env.go` (`EnvKey`) | The OpenRouter key, shared with the AI client (`docs/ai-client.md`). The retired `TYPESAFE_API_KEY` is read by no product code. Unset or `""`, with `JEV_FAKE` not true, means the client is off: `Enabled()` returns false, and every `Ask` returns `jev: check skipped: off` having sent nothing. Any other value counts as set, whitespace included. The value is never trimmed. A key holding a control byte other than tab, or DEL, refuses every call before anything is sent. |
+| `JEV_FAKE` | `FromEnv` in `env.go` (`EnvFake`) | `true` per `strconv.ParseBool` selects fake mode: no network call, and a result steered by a marker in `State`. Unset or `""` is not fake. Any other unparseable value makes `FromEnv` return an error naming `JEV_FAKE`. The value is never trimmed, so `"true "` is an error. `JEV_FAKE` true with a non-empty `OPENROUTER_API_KEY` makes `FromEnv` return an error naming both variables, and no client. This differs from `AI_FAKE`, which wins over a key. So in production the only Jev off-lever is deleting the shared key, which also turns off Gemini. |
 
 `FromEnv` never exits the process. It returns an error in two cases: an unparseable
 `JEV_FAKE`, and `JEV_FAKE` true with a key set. The error text never holds the key. A caller
@@ -77,11 +85,14 @@ for an `ai.FromEnv` error.
 The model, the endpoint, the budget and the retry wait are constants. No variable changes
 them.
 
+Because the key is shared, `AI_FAKE=true` with `JEV_FAKE` unset and the key set runs the AI
+client fake and Jev real.
+
 ## Per environment
 
-| Environment | `TYPESAFE_API_KEY` | `JEV_FAKE` | Client | Set by |
+| Environment | `OPENROUTER_API_KEY` | `JEV_FAKE` | Client | Set by |
 |---|---|---|---|---|
-| production (persistent) | unset | unset | off | Nobody. No production key exists until the user resolves the data terms (see "Data terms"). `set-ai-fake` refuses this environment's id. |
+| production (persistent) | set, shared with the AI client | unset | real, through OpenRouter | The user. `set-ai-fake` refuses this environment's id. |
 | `pr-<N>` (ephemeral fork) | `""` on `submission` and `invoice` | `true` on `submission` and `invoice` | fake | `set-ai-fake <env-id>` in `dev-env.yml`'s `prepare-env` job, PR-only, no `continue-on-error`. |
 | local compose / developer shell | unset | unset | off | Nobody. |
 
@@ -94,10 +105,13 @@ source environment holds a sealed variable, except `GOTRUE_JWT_KEYS`, `GOTRUE_JW
 `GOTRUE_SMTP_PASS` on `auth`. `set-ai-fake` is the one defence. It runs on
 every PR `prepare-env` run and refuses any environment that is not ephemeral. For each of
 `submission` and `invoice` it:
-1. upserts `JEV_FAKE=true` and `TYPESAFE_API_KEY=""`, beside the same pair for the AI client;
+1. upserts `JEV_FAKE=true` and the retired `TYPESAFE_API_KEY=""`, beside the same pair for the AI client;
 2. reads `JEV_FAKE` back and fails the job unless it is `true`;
-3. re-reads the variable map and fails the job if `TYPESAFE_API_KEY` or
+3. re-reads the variable map and fails the job if the retired `TYPESAFE_API_KEY` or
    `OPENROUTER_API_KEY` is anything but absent or `""`.
+
+`set-ai-fake` keeps blanking and auditing the retired `TYPESAFE_API_KEY` until the user
+deletes it from production, because a fork still copies it from there.
 
 The key check never prints a value. `set-ai-fake --self-test` runs its fixtures with no
 token and no network call.
@@ -153,7 +167,8 @@ before the one retry. The retry is sent only when more than that wait remains be
 deadline. The worst case is `1.375s` + `250ms` + `1.375s`, which is the whole `3s`.
 
 **Retried once:** a transport error, an attempt timeout, HTTP 408, HTTP 429, and HTTP
-500–599 (529 included). **Not retried:** 401, 422, every other non-2xx status, a 3xx that
+500–599 (502, 524 and 529 included). **Not retried:** 400, 401, 402, 403, 404, 413, 422,
+every other non-2xx status, a 3xx that
 `net/http` hands back without a `Location`, and a 2xx whose body does not decode or fails the
 answer check. Any 2xx status is a success once its answers pass the check. `Retry-After` is
 not read.
@@ -171,16 +186,18 @@ One `jev call` line at INFO per `Ask`, on every path, through the logger passed 
 | Key | Meaning |
 |---|---|
 | `tenant_id` | From the caller context's identity, via `auth.IdentityFromContext`. Omitted when there is no identity or its tenant is empty; never logged blank. |
+| `model` | The response's `model` from the final attempt only, cut to its first 128 bytes: the release that answered. `""` when that attempt returned none, and for `off`, `fake` and a request refused before sending. |
 | `purpose` | The request's `Purpose`, logged raw: an invalid purpose is logged as sent. |
 | `question_count` | The number of questions in the request. |
 | `input_tokens` | The vendor's `usage.input_tokens`, summed over attempts, failed attempts included. `0` for `off` and `fake`. |
+| `output_tokens` | The vendor's `usage.output_tokens`, summed the same way. `0` for `off` and `fake`. |
+| `cost` | OpenRouter's `usage.cost` in dollars, summed the same way. A missing or `null` `cost` counts as `0`. `0` for `off` and `fake`. |
 | `latency_ms` | Whole milliseconds across the entire `Ask`, including the retry wait. |
 | `attempts` | `0` for `off`, for a request refused by validation and for a key refused by the header check. `1` for `fake`. Otherwise the attempts entered: a context already cancelled when `Ask` starts logs `1`. |
 | `outcome` | One of the five values below. |
 
 Plus slog's own `time`, `level` and `msg`. The line carries no state, question text, option,
-answer, key, file name or response body. `output_tokens` is not logged: the vendor does not
-bill output tokens. The line is written with a background context, so the platform's
+answer, key, file name or response body. The line is written with a background context, so the platform's
 context-aware handler cannot add a second `tenant_id`. The cost is that `request_id` never
 appears on this line. In a deployed binary the process logger adds its own base fields,
 `service` and `environment`.
@@ -191,7 +208,7 @@ appears on this line. In a deployed binary the process logger adds its own base 
 |---|---|---|---|
 | `ok` | A 2xx whose answers pass the answer check. | – | none |
 | `skipped_unavailable` | A transport error, an attempt timeout, 408, 429 or 500–599 once the retry is spent or does not fit. A 2xx whose body does not decode or fails the answer check. The caller's context cancelled or expired. | once, for the first group only | `jev: check skipped: unavailable`, plus the caller's `ctx.Err()` when its context ended |
-| `skipped_refused` | 401, 422 and every other non-2xx, including a 3xx with no `Location`. A request refused by validation, or a key holding a byte invalid in a header value: nothing is sent, and `attempts` is `0`. | no | `jev: check skipped: refused` |
+| `skipped_refused` | 400, 401, 402, 403, 404, 413, 422 and every other non-2xx, including a 3xx with no `Location`. A request refused by validation, or a key holding a byte invalid in a header value: nothing is sent, and `attempts` is `0`. | no | `jev: check skipped: refused` |
 | `off` | No key, and `JEV_FAKE` not true. Nothing is sent. | – | `jev: check skipped: off` |
 | `fake` | Fake mode answered once validation passed, including the `JEVFAKE-UNAVAILABLE` and `JEVFAKE-REFUSED` errors and a refused `JEVFAKE-CHOICE-` payload. | – | none, or the marker's error with `(fake)` |
 
@@ -209,11 +226,12 @@ CHECK-03, CHECK-04 and CHECK-05 keep this rule. A skipped mapping check answers
 
 ## Data terms
 
-In real mode each `Ask` sends `State` to TypeSafe, and for each question its id, its
+In real mode each `Ask` sends `State` to OpenRouter, which routes it to TypeSafe's endpoint on
+OpenRouter's zero-data-retention (ZDR) list. For each question it also sends its id, its
 `Instructions` and its `criteria` as the type table under "What it is" defines them: a
 `noul`'s `True` and `False` text, every `choice` option `Name` with its `Description`, and
-every `score` level description. The data terms for that transfer are unresolved. The user owns them. No production
-key exists, and none is set until the user resolves them.
+every `score` level description. The data terms for that transfer are unresolved. The user
+owns them (CHECK Q4).
 
 The vendor's Legal page (`https://docs.typesafe.ai/legal.md`, read 2026-09-23) lists a Data
 Processing Agreement. The listing says the agreement covers how the vendor processes customer
@@ -224,15 +242,16 @@ adequate.
 
 1. The value check's threshold `0.5` and its wording were measured on 21 synthetic documents
    (`CHECK-00 Jev Measurement Results`). Re-measure them on real documents before trusting the
-   check in production. No versioned id is pinned: `jev-latest` can move under that threshold
-   (on 2026-09-23 it pointed at `jev-1.13.0`), and the version that answered is not logged.
+   check in production. No versioned id is pinned: `~typesafe/jev-latest` can move under that
+   threshold (on 2026-09-23 it pointed at `jev-1.13.0`). The log line's `model` records the
+   version that answered each call.
    The document-type threshold `0.9` is unmeasured: every answer on the same 21 synthetic
    documents, whose non-invoices announce their type, scored at least `0.9`, so no swept cut
    from `0.30` to `0.90` removed one. It shipped as it is (user decision, 2026-09-24).
    The mapping threshold `0.10` and its wording were measured once, on 48 synthetic csvgen
    layouts (`CHECK-00 Jev Measurement Results` § "Mapping check", 2026-09-24). No cut is
    clean on AI placements: at `0.10` the check caught 1 of 5 wrong ones and unplaced 5 of 313
-   right ones. Re-measure on real spreadsheets before a production key is set.
+   right ones. Re-measure on real spreadsheets before the thresholds are trusted.
 2. `skipped_refused` conflates 401 (a revoked key), 422 (a client bug, or a `state` beyond
    the vendor's context limit), a key refused by the header check, and every other
    non-retryable status. Neither the error nor the log names the status. A revoked key
@@ -245,10 +264,12 @@ adequate.
 3. `skipped_unavailable` conflates a spent budget, a failed answer check and a cancelled
    caller context. The error tells the last one apart: it wraps `ctx.Err()`.
 4. The PR key audit reads `submission` and `invoice` only. A key an operator set anywhere
-   else would fork unaudited. The `OPENROUTER_API_KEY` audit has the same scope.
+   else would fork unaudited.
 5. The `3s` budget and its `1.375s` per-attempt cap are accepted as they are; the measured
-   all-attempts latency max was 517 ms (`CHECK-00 Jev Measurement Results`). A timed-out
-   attempt may still be processed and billed by the vendor, so a retry can bill a call twice.
+   all-attempts latency max was 517 ms on the retired direct route (`CHECK-00 Jev Measurement
+   Results`). The extra OpenRouter hop is measured only by the pre-merge live probe (command
+   under "What it is"); its 2026-09-27 run took 303 to 495 ms per call. A timed-out attempt
+   may still be processed and billed by the vendor, so a retry can bill a call twice.
 6. `cmd/submission` is wired: an unset or empty key boots it, and either `FromEnv` error
    stops it at boot by design. `FromEnv` alone is proved by
    `TestFromEnv_DoesNotExitTheProcess`. `cmd/invoice` is wired the same way: an unset or
@@ -267,10 +288,13 @@ adequate.
 11. The mapping `state` is the first ten rows of the file. When the AI picks a header row low
     in that window, `state` holds few or no data rows below it, so Jev judges those columns
     mostly by their headers. Real mode only; unmeasured.
+12. OpenRouter lists TypeSafe's `jev-1.13` endpoint as zero-data-retention, and the client
+    relies on that list. The alias can move to a release that is not on the ZDR list, and
+    nothing enforces ZDR per call.
 
 ## See also
 
 - `internal/platform/jev/`: `client.go`, `env.go`, `fake.go`, `log.go`.
 - `scripts/ci/railway-env.sh`: `set-ai-fake` and its `--self-test` fixtures.
-- `docs/ai-client.md`: the OpenRouter client, whose shape this client follows.
+- `docs/ai-client.md`: the OpenRouter client, whose shape and key this client shares.
 - `docs/add-a-service.md`, section 4: secrets live only in Railway service variables.

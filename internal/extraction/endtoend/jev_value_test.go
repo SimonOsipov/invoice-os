@@ -410,7 +410,7 @@ func jvValueQuestion(field, value string) jevmeasure.Question {
 func jvWalk(t *testing.T, baseURL string, only ...string) []jevmeasure.Outcome {
 	t.Helper()
 
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
 		key = "jv-test-key"
 	}
@@ -593,21 +593,21 @@ func jvGateLog(t *testing.T, msg string) {
 func jvGateReason(key, out string) string {
 	switch {
 	case key == "" && out == "":
-		return "TYPESAFE_API_KEY and JEV_OUT unset: no client built, no call"
+		return "OPENROUTER_API_KEY and JEV_OUT unset: no client built, no call"
 	case key == "":
-		return "TYPESAFE_API_KEY unset: no client built, no call"
+		return "OPENROUTER_API_KEY unset: no client built, no call"
 	default:
 		return "JEV_OUT unset: no client built, no call"
 	}
 }
 
-// jvGatedRun reads TYPESAFE_API_KEY and JEV_OUT; if either is empty it logs one line naming
+// jvGatedRun reads OPENROUTER_API_KEY and JEV_OUT; if either is empty it logs one line naming
 // which one and returns false without building a client. Copies TestAIText_WriteCorpusKey's
 // shape. When both are set it runs the full walk against baseURL and writes the rendered report
 // under JEV_OUT -- the live run this gate exists to control.
 func jvGatedRun(t *testing.T, baseURL string) bool {
 	t.Helper()
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	out := os.Getenv("JEV_OUT")
 	if key == "" || out == "" {
 		jvGateLog(t, jvGateReason(key, out))

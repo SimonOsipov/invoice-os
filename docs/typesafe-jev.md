@@ -106,6 +106,9 @@ every PR `prepare-env` run and refuses any environment that is not ephemeral. Fo
 3. re-reads the variable map and fails the job if the retired `TYPESAFE_API_KEY` or
    `OPENROUTER_API_KEY` is anything but absent or `""`.
 
+`set-ai-fake` keeps blanking and auditing the retired `TYPESAFE_API_KEY` until the user
+deletes it from production, because a fork still copies it from there.
+
 The key check never prints a value. `set-ai-fake --self-test` runs its fixtures with no
 token and no network call.
 

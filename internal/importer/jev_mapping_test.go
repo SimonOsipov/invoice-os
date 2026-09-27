@@ -285,7 +285,7 @@ func jpWalk(t *testing.T, baseURL, dir string) []jevmeasure.Outcome {
 	auto := jpAutoSet(t, dir, layouts)
 	aiSet := jpAISet(t, dir, layouts)
 
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
 		key = "jp-test-key"
 	}
@@ -368,9 +368,9 @@ func jpGateLog(t *testing.T, msg string) {
 func jpGateReason(key, out string) string {
 	switch {
 	case key == "" && out == "":
-		return "TYPESAFE_API_KEY and JEV_OUT unset: no client built, no call"
+		return "OPENROUTER_API_KEY and JEV_OUT unset: no client built, no call"
 	case key == "":
-		return "TYPESAFE_API_KEY unset: no client built, no call"
+		return "OPENROUTER_API_KEY unset: no client built, no call"
 	default:
 		return "JEV_OUT unset: no client built, no call"
 	}
@@ -407,14 +407,14 @@ func jpReadLedger(t *testing.T, dir string) []jevmeasure.Outcome {
 	return outcomes
 }
 
-// jpGatedRun reads TYPESAFE_API_KEY and JEV_OUT; either empty logs one line naming which and
+// jpGatedRun reads OPENROUTER_API_KEY and JEV_OUT; either empty logs one line naming which and
 // returns false without building a client -- never t.Skip (rls-test-gate.sh runs this package
 // unfiltered and exits 1 on a skip). Both set: runs the mapping walk, merges it into the
 // $JEV_OUT/jev-outcomes.json ledger (D-1) alongside whatever the value/document-type binary
 // already wrote, and renders jev-report.md / jev-report.json over the merged set.
 func jpGatedRun(t *testing.T, baseURL string) bool {
 	t.Helper()
-	key := os.Getenv("TYPESAFE_API_KEY")
+	key := os.Getenv("OPENROUTER_API_KEY")
 	out := os.Getenv("JEV_OUT")
 	if key == "" || out == "" {
 		jpGateLog(t, jpGateReason(key, out))

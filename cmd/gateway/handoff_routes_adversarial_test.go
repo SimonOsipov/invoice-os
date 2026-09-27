@@ -219,8 +219,8 @@ func TestHandoffCodeRedeemsOnceAcrossRequests(t *testing.T) {
 		t.Errorf("sign-in answered a token, not a code: %s", rec.Body)
 	}
 	body, _ := json.Marshal(map[string]string{"code": in.Code, "state": handoffState})
-	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) {
-		t.Fatalf("first POST /auth/exchange = %d %s, want 200 with tok-B", rec.Code, rec.Body)
+	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tok-B"`) || !strings.Contains(rec.Body.String(), `"ref-B"`) {
+		t.Fatalf("first POST /auth/exchange = %d %s, want 200 with tok-B and ref-B", rec.Code, rec.Body)
 	}
 	if rec := postJSON(mux, "/auth/exchange", handoffAllowedOrigin, string(body)); rec.Code != http.StatusBadRequest {
 		t.Errorf("second POST /auth/exchange = %d %s, want 400", rec.Code, rec.Body)

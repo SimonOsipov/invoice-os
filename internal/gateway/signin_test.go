@@ -255,6 +255,8 @@ func TestSignIn_StoresBothTokens(t *testing.T) {
 		{"gtSession", gtSession, sessionAT, sessionRT},
 		// Other values, refresh_token first, extra keys: the tokens are taken by name, and nothing else is kept.
 		{"reordered", `{"refresh_token":"` + otherRT + `","user":{"id":"u1"},"provider_token":"pt-x","access_token":"` + otherAT + `","expires_in":3600}`, otherAT, otherRT},
+		// JSON-escaped values survive: a hand-built answer string would not.
+		{"escaped", `{"access_token":"a\"b\\c<&>","refresh_token":"ré\"\n"}`, "a\"b\\c<&>", "ré\"\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newTokenFake(t, http.StatusOK, c.body)
@@ -278,6 +280,7 @@ func TestSignIn_MissingRefreshToken502(t *testing.T) {
 		{"absent", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600}`},
 		{"empty", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600,"refresh_token":""}`},
 		{"null", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600,"refresh_token":null}`},
+		{"not a string", `{"access_token":"` + sessionAT + `","token_type":"bearer","expires_in":3600,"refresh_token":12345}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newTokenFake(t, http.StatusOK, c.body)

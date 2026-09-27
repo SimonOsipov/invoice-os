@@ -113,8 +113,8 @@ func TestIdP_SignInCodeRedeemsForAVerifiableToken(t *testing.T) {
 	}
 	m := fields(t, body)
 	tok := m["access_token"]
-	if tok == "" {
-		t.Fatalf("exchange body has no access_token; keys %v", keys(m))
+	if tok == "" || m["refresh_token"] == "" || len(m) != 2 {
+		t.Fatalf("exchange body keys %v, want exactly a non-empty access_token and refresh_token", keys(m))
 	}
 	id, err := idpVerifier(t, base).Verify(context.Background(), tok)
 	if err != nil {

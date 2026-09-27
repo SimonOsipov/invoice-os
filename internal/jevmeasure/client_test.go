@@ -305,3 +305,11 @@ func TestClient_DoesNotJudgeTheVendorsAnswers(t *testing.T) {
 		t.Errorf("probabilities[proforma] = %s, want 0.5 verbatim", got)
 	}
 }
+
+// The literal is the point: the harness must measure the OpenRouter route the product calls.
+func TestJevMeasure_EndpointIsOpenRoutersSystemOne(t *testing.T) {
+	const want = "https://openrouter.ai/api/v1/systemone"
+	if Endpoint != want {
+		t.Errorf("Endpoint = %q, want %q", Endpoint, want)
+	}
+}

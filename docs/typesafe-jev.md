@@ -267,8 +267,9 @@ adequate.
    else would fork unaudited.
 5. The `3s` budget and its `1.375s` per-attempt cap are accepted as they are; the measured
    all-attempts latency max was 517 ms on the retired direct route (`CHECK-00 Jev Measurement
-   Results`). The extra OpenRouter hop is measured only by the pre-merge live probe. A timed-out
-   attempt may still be processed and billed by the vendor, so a retry can bill a call twice.
+   Results`). The extra OpenRouter hop is measured only by the pre-merge live probe (command
+   under "What it is"); its 2026-09-27 run took 303 to 495 ms per call. A timed-out attempt
+   may still be processed and billed by the vendor, so a retry can bill a call twice.
 6. `cmd/submission` is wired: an unset or empty key boots it, and either `FromEnv` error
    stops it at boot by design. `FromEnv` alone is proved by
    `TestFromEnv_DoesNotExitTheProcess`. `cmd/invoice` is wired the same way: an unset or

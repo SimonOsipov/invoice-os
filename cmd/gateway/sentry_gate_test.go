@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,6 +31,15 @@ func sentryFleetEntries(sentry string) []map[string]any {
 	return append(s,
 		map[string]any{"name": "docling", "status": "up", "build": "deadbeef"},
 		map[string]any{"name": "auth", "status": "up"})
+}
+
+// sentryFleetAny is sentryFleetEntries as []any, so a row can append a non-object entry.
+func sentryFleetAny(sentry string) []any {
+	var s []any
+	for _, e := range sentryFleetEntries(sentry) {
+		s = append(s, e)
+	}
+	return s
 }
 
 func sentryEntry(t *testing.T, s []map[string]any, name string) map[string]any {
@@ -130,6 +143,59 @@ func TestSentryGateIsDirectional(t *testing.T) {
 		{name: "doclingx_is_not_docling", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
 			return append(s, map[string]any{"name": "doclingx", "status": "up", "build": "deadbeef"})
 		}), wantExit: 1, named: []string{"doclingx=none@deadbeef"}, notNamed: []string{"docling=none"}},
+
+		// QA Mode B adversarial rows.
+		{name: "pr_off_newline", isPR: true, body: withSentry("off", setField("submission", "sentry", "off\n")), wantExit: 1,
+			named: []string{"submission=off"}},
+		{name: "push_on_newline", isPR: false, body: withSentry("on", setField("submission", "sentry", "on\n")), wantExit: 1,
+			named: []string{"submission=on"}},
+		{name: "push_on_space", isPR: false, body: withSentry("on", setField("validation", "sentry", "on ")), wantExit: 1,
+			named: []string{"validation=on "}},
+		{name: "pr_sentry_true", isPR: true, body: withSentry("off", setField("tenancy", "sentry", true)), wantExit: 1,
+			named: []string{"tenancy=true@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "pr_sentry_number", isPR: true, body: withSentry("off", setField("portfolio", "sentry", 0)), wantExit: 1,
+			named: []string{"portfolio=0@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "push_sentry_null", isPR: false, body: withSentry("on", setField("invoice", "sentry", json.RawMessage("null"))), wantExit: 1,
+			named: []string{"invoice=none@deadbeef"}, notNamed: []string{"gateway="}},
+		{name: "push_sentry_false", isPR: false, body: withSentry("off", setField("dashboard", "sentry", false)), wantExit: 1,
+			named: []string{"dashboard="}, notNamed: []string{"gateway="}},
+		{name: "pr_build_none", isPR: true, body: withSentry("off", setField("invoice", "build", nil)), wantExit: 1,
+			named: []string{"invoice=off@none"}, notNamed: []string{"gateway="}},
+		{name: "pr_gateway_on", isPR: true, body: withSentry("off", setField("gateway", "sentry", "on")), wantExit: 1,
+			named: []string{"gateway=on@deadbeef", "set-sentry-off"}, notNamed: []string{"tenancy="}},
+		{name: "push_gateway_stale", isPR: false, body: withSentry("on", setField("gateway", "build", "0ld")), wantExit: 1,
+			named: []string{"gateway=on@0ld"}, notNamed: []string{"tenancy="}},
+		{name: "pr_Auth_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "Auth", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"Auth=none@deadbeef"}},
+		{name: "pr_xauth_is_not_auth", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "xauth", "status": "up", "build": "deadbeef"})
+		}), wantExit: 1, named: []string{"xauth=none@deadbeef"}},
+		// Exemption is by name alone: whatever docling and auth report is not this step's to judge.
+		{name: "pr_exempt_values_ignored", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			sentryEntry(t, s, "docling")["sentry"] = "on"
+			sentryEntry(t, s, "auth")["sentry"] = "on"
+			return s
+		}), wantExit: 0},
+		{name: "pr_second_gateway_stale", isPR: true, body: withSentry("off", func(t *testing.T, s []map[string]any) []map[string]any {
+			return append(s, map[string]any{"name": "gateway", "status": "up", "build": "0ld", "sentry": "off"})
+		}), wantExit: 1, named: []string{"gateway=off@0ld"}, notNamed: []string{"gateway=off@deadbeef"}},
+		{name: "pr_string_entry", isPR: true, body: func(t *testing.T) any {
+			return map[string]any{"services": append(sentryFleetAny("off"), "tenancy")}
+		}, wantExit: 1, named: []string{"not an object"}},
+		{name: "pr_null_entry", isPR: true, body: func(t *testing.T) any {
+			return map[string]any{"services": append(sentryFleetAny("off"), nil)}
+		}, wantExit: 1, named: []string{"=none@none"}},
+		{name: "services_null", isPR: true, body: func(*testing.T) any { return map[string]any{"services": nil} }, wantExit: 1,
+			named: []string{"no services list"}},
+		{name: "services_object", isPR: true, body: func(*testing.T) any {
+			return map[string]any{"services": map[string]any{"gateway": map[string]any{"build": "deadbeef", "sentry": "off"}}}
+		}, wantExit: 1, named: []string{"no services list"}},
+		{name: "top_level_array", isPR: true, body: func(*testing.T) any { return sentryFleetAny("off") }, wantExit: 1,
+			named: []string{"no services list"}},
+		{name: "only_exempt_entries", isPR: true, body: func(*testing.T) any {
+			return map[string]any{"services": sentryFleetAny("off")[len(sentryGoNames):]}
+		}, wantExit: 1, named: []string{"no gateway entry"}},
 	}
 
 	for _, r := range rows {
@@ -188,6 +254,100 @@ func checkSentryPass(t *testing.T, r sentryRow, code int, out string, urls, errs
 	}
 	if r.isPR && !strings.Contains(lines[i], "off") {
 		t.Errorf("the PR success line %q does not name off", lines[i])
+	}
+}
+
+// fleetSeqShim is a curl that serves $SHIM_DIR/fleet.<n> on its n-th call, the last
+// repeating; a call with no file behind it fails as a refused connection.
+const fleetSeqShim = `#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    http*) url="$1" ;;
+  esac
+  shift
+done
+echo "$url" >> "$SHIM_DIR/curl.log"
+n=$(( $(wc -l < "$SHIM_DIR/curl.log") ))
+last=$(cat "$SHIM_DIR/last")
+[ "$n" -le "$last" ] || n=$last
+[ -f "$SHIM_DIR/fleet.$n" ] || exit 7
+cp "$SHIM_DIR/fleet.$n" "$out"
+`
+
+// runSentrySeq runs the step with curl answering bodies in call order; a nil body is a refused connection.
+func runSentrySeq(t *testing.T, run string, isPR bool, bodies ...[]byte) (code int, out string, urls []string) {
+	t.Helper()
+	jq, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatalf("jq is not on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	files := map[string][]byte{"curl": []byte(fleetSeqShim), "sleep": []byte("#!/bin/sh\n"), "last": []byte(strconv.Itoa(len(bodies)))}
+	for i, b := range bodies {
+		if b != nil {
+			files["fleet."+strconv.Itoa(i+1)] = b
+		}
+	}
+	for f, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, f), b, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	block := strings.ReplaceAll(run, "/tmp/", dir+"/")
+	code, out = runGate(t, block, "PATH="+dir+":"+filepath.Dir(jq)+":/usr/bin:/bin", "SHIM_DIR="+dir,
+		"GATEWAY_URL="+probeGatewayURL, "IS_PR="+strconv.FormatBool(isPR))
+	return code, out, readLog(t, filepath.Join(dir, "curl.log"))
+}
+
+func TestSentryGateRetriesTheRollUp(t *testing.T) {
+	run := sentryGateRun(t)
+	if run == "" {
+		t.Fatal("dev-env.yml fleet-gate has no step reading .sentry")
+	}
+	fleet := func(edit func(t *testing.T, s []map[string]any) []map[string]any) []byte {
+		b, err := json.Marshal(withSentry("off", edit)(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	good, invoiceOn := fleet(nil), fleet(setField("invoice", "sentry", "on"))
+
+	rows := []struct {
+		name      string
+		bodies    [][]byte
+		wantExit  int
+		wantFetch int
+		named     string
+	}{
+		{"unreachable", [][]byte{nil}, 1, 5, "/healthz/fleet was unreachable"},
+		{"unparseable", [][]byte{[]byte("not json{")}, 1, 5, "no services list"},
+		{"wrong_shape_then_good", [][]byte{[]byte(`"not json"`), good}, 0, 2, ""},
+		{"down_then_good", [][]byte{nil, nil, nil, nil, good}, 0, 5, ""},
+		{"down_then_offender", [][]byte{nil, invoiceOn}, 1, 2, "invoice=on@deadbeef"},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			code, out, urls := runSentrySeq(t, run, true, r.bodies...)
+			errs := errorLines(out)
+			if code != r.wantExit {
+				t.Fatalf("exits %d, want %d (output %q)", code, r.wantExit, out)
+			}
+			if len(urls) != r.wantFetch || !strings.HasSuffix(urls[0], "/healthz/fleet") {
+				t.Errorf("the curl shim saw %v, want %d /healthz/fleet fetches", urls, r.wantFetch)
+			}
+			if r.wantExit == 0 {
+				if len(errs) != 0 || !strings.Contains(out, "reconciliation") {
+					t.Errorf("a passing run printed errors %q or no success line naming reconciliation (output %q)", errs, out)
+				}
+				return
+			}
+			if !strings.Contains(strings.Join(errs, "\n"), r.named) {
+				t.Errorf("no ::error:: line contains %q: %q", r.named, errs)
+			}
+		})
 	}
 }
 

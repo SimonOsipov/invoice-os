@@ -21,6 +21,7 @@ func initSentry(cfg Config) error {
 		// Client hooks cover every capture path; initSentry is the only sentry.Init.
 		BeforeSend:            scrubEvent,
 		BeforeSendTransaction: scrubEvent,
+		BeforeSendLog:         scrubLog,
 	}); err != nil {
 		return fmt.Errorf("platform: sentry init: %w", err)
 	}

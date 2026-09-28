@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/getsentry/sentry-go/attribute"
 )
 
 // sentryHeaders is an allowlist: a header nobody listed never reaches Sentry.
@@ -83,6 +84,24 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 // scrubLog removes queries and customer text from a log record before it
 // leaves for Sentry. It never drops the record.
 func scrubLog(log *sentry.Log) *sentry.Log {
+	log.Body = ScrubText(log.Body)
+	for k, v := range log.Attributes {
+		// Emitf writes each argument here raw and unquoted, so ScrubText cannot see it.
+		if k == "http.query" || k == "http.fragment" || strings.HasPrefix(k, "sentry.message.parameters.") {
+			delete(log.Attributes, k)
+			continue
+		}
+		switch v.Type() {
+		case attribute.STRING:
+			log.Attributes[k] = attribute.StringValue(ScrubText(v.AsString()))
+		case attribute.STRINGSLICE:
+			ss := v.AsStringSlice()
+			for i := range ss {
+				ss[i] = ScrubText(ss[i])
+			}
+			log.Attributes[k] = attribute.StringSliceValue(ss)
+		}
+	}
 	return log
 }
 

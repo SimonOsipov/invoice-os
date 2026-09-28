@@ -403,9 +403,10 @@ same tab, so a code minted in another browser signs nobody in.
 6. The app reads and removes its stored state (`consumeSignInState`) and posts
    `{"code","state"}` to `POST /auth/exchange`. It then calls `GET /api/tenancy/v1/me` with
    the access token and stores the session at `localStorage['invoice-os.session']` with
-   `handoff: true`, the refresh token (`refresh_token`) and the local time the exchange was
-   sent (`received_at`, epoch ms). A tab with no live state makes no exchange call and goes
-   to step 7.
+   `handoff: true`, the refresh token (`refresh_token`) and `received_at` (epoch ms): the
+   local time the exchange was sent, backdated by `HandoffTTL` (60 s) because the token may
+   have waited that long in the store. A tab with no live state makes no exchange call and
+   goes to step 7.
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
    answered 403) or `signin=failed` (anything else), carrying a fresh state. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
@@ -432,6 +433,7 @@ no verifier, wrapped in CORS, in every build:
 | GoTrue `email_not_confirmed` | 403 `email address not verified` |
 | GoTrue 429 (reachable only if `GOTRUE_RATE_LIMIT_HEADER` is ever set) | 429 `too many requests` |
 | GoTrue 200 without `access_token` or `refresh_token`, any other answer, or GoTrue unreachable | 502 `sign-in is unavailable`, logged at WARN with the upstream status or the error only |
+| GoTrue 200 with both tokens while the hand-off store is full (`HandoffMaxLive`) | 503 `sign-in is unavailable`, logged at WARN; the reservation is refunded |
 
 A banned address answers exactly like a wrong password. The gateway never logs the email,
 the password, the code or either token.
@@ -467,7 +469,12 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 **Precedence in the app.** A live stored hand-off session wins over `?handoff=` and
 `?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
-message; B's code expires unused. Sign out first to switch accounts.
+message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
+session whose access token has expired but which carries a refresh token still wins over
+`?persona=` (the boot renews it); a `?handoff=` code wins over it, because the code is a
+sign-in the user just made. Guarded by `App.sessionRenewal.test.tsx` "an expired renewable
+hand-off session wins over ?persona=" and "a ?handoff= code wins over an expired renewable
+hand-off session".
 
 **Ceilings:**
 - `ceiling:` the code store and the throttle are in-process. A gateway restart drops
@@ -508,41 +515,52 @@ build. The gateway posts `{"refresh_token"}` to GoTrue `/token?grant_type=refres
 | GoTrue 200 with a non-empty `access_token` and `refresh_token` | 200 `{"access_token","refresh_token"}` and no other key |
 | a malformed body, or one over 1 KiB | 400 `invalid request body`; GoTrue is not called |
 | an empty or missing `refresh_token` | 400 `refresh_token is required`; GoTrue is not called |
-| GoTrue 429 | 429 `too many requests` |
+| GoTrue 429 (reachable only if `GOTRUE_RATE_LIMIT_HEADER` is ever set) | 429 `too many requests` |
 | any other GoTrue 4xx (`refresh_token_not_found`, `refresh_token_already_used`, `session_not_found`, `session_expired`, `user_banned`, …) | 401 `invalid or expired refresh token` |
-| GoTrue 200 without either token, GoTrue 5xx, or GoTrue unreachable | 502 `renewal is unavailable`, logged at WARN with the upstream status or the error only |
-| any method but POST (OPTIONS goes to CORS) | 405, `Allow: POST` |
+| GoTrue 200 missing `access_token` or `refresh_token`, any other non-4xx answer, or GoTrue unreachable | 502 `renewal is unavailable`, logged at WARN with the upstream status or the error only |
+| an OPTIONS without an `Origin` | 405 `method not allowed`, `Allow: POST` |
+| any other method but POST | 405 from the router, `Allow: OPTIONS, POST` |
 
-Every answer sets `Cache-Control: no-store`. The gateway never logs either token. Guarded by
-`internal/gateway/refresh_test.go` (`TestRefresh_*`), the CI `idp` job's
-`TestIdP_RefreshRefusalsAnswer401`, and `e2e/api/session-handoff.spec.ts` "the exchange
-answers a refresh token, and a refresh renews it".
+A preflight (an OPTIONS with an `Origin`) is answered by CORS. Every answer the handler
+writes sets `Cache-Control: no-store`; the router's 405 does not. The gateway never logs
+either token. Guarded by `internal/gateway/refresh_test.go` (`TestRefresh_*`),
+`cmd/gateway/handoff_routes_adversarial_test.go` `TestHandoffPreflightIsAnsweredByCORS`,
+the CI `idp` job's `TestIdP_RefreshRefusalsAnswer401`, and `e2e/api/session-handoff.spec.ts`
+"sign-in hand-off (API E2E, over the deployed gateway) › the exchange answers a refresh
+token, and a refresh renews it". No test pins the router's 405.
 
 **The app's rule** (`frontend/app/src/lib/renewal.ts`):
 - **On demand.** Every request that needs a token asks the renewer first. The renewer
-  renews when `now ≥ received_at + 0.8 × (exp − iat)`, then answers with the new token.
-  There is no timer. `exp − iat` is the server's lifetime; `received_at` is the local time
-  the exchange or refresh request was sent, so device clock skew cancels out. Concurrent
-  requests share one renewal.
+  renews when `now ≥ received_at + 0.8 × (exp − iat) × 1000` (ms), then answers with the
+  new token. There is no timer. `exp − iat` is the server's lifetime in seconds;
+  `received_at` is the local time the refresh request was sent, or for a hand-off session
+  the time the exchange was sent less `HandoffTTL` (60 s). Device clock skew cancels out,
+  and the code's wait in the store cannot push the deadline past the token's real `exp`.
+  Concurrent requests share one renewal.
 - **At boot.** A stored session whose access token has expired is kept when it carries a
   refresh token. If it is due, the app shows "Opening your workspace…" and renews before the
   workspace mounts.
 - **Refused:** a 400 or 401, a renewed token whose `app_metadata.tenant_id` is not the
   session's tenant, or a renewed token without a readable `iat`/`exp`. The session ends at
-  once. The front door captures the current path, sends the user to landing with a fresh
-  state, and restores the path after the next sign-in.
+  once and the stored record is removed. The front door captures the current path, sends the
+  user to landing with a sign-in state (Sign-in and hand-off, step 1), and restores the path after the next
+  sign-in.
 - **Transient:** anything else (a network error, the 15 s timeout, 429, 5xx, a 200 without
-  both tokens). Before the deadline, `received_at + (exp − iat)`, the request proceeds with
-  the current token and the next request tries again. At or after the deadline the session
-  ends as if refused.
+  both tokens). Before the deadline, `received_at + (exp − iat) × 1000` (ms), the request
+  proceeds with the current token and the next request tries again. At or after the
+  deadline, or when the times are unreadable, the session ends as if refused but the stored
+  record stays: the refresh token may still be valid, so the next boot renews. Guarded by
+  `renewal.test.ts` "transient at the deadline ends it" and `App.sessionRenewal.test.tsx`
+  "transient after the deadline ends the session".
 - **Tenant check.** The app decodes the renewed token's tenant without verifying it; the
   gateway verifier stays the authority. The access-token hook drops the tenant when the
   membership stops being the one active membership, and a tenant-less token would 403 on
   every tenant route.
 - Guarded by `frontend/app/src/lib/renewal.test.ts`,
   `frontend/app/src/App.sessionRenewal.test.tsx`, and the deployed
-  `e2e/topology/auth.spec.ts` "a real session renews itself past the access token's
-  lifetime" and "a refused renewal returns to landing and keeps the destination".
+  `e2e/topology/auth.spec.ts` "deployed app: a real session renews itself past the access
+  token's lifetime" and "deployed app: a refused renewal returns to landing and keeps the
+  destination".
   `TestIdP_RenewalOutlivesTheAccessTokenTTL` renews after a real expiry against the CI
   container `idp-short` (`GOTRUE_JWT_EXP=5`, port 9996, `scripts/ci/idp-up.sh`).
 
@@ -555,7 +573,9 @@ renews, the renewer re-reads the record:
 - otherwise → renew with the stored refresh token.
 
 Two tabs that renew together send the same refresh token. GoTrue answers a revoked token
-that is the parent of the active token with the active token, at any age. A token two or more
+that is the parent of the active token with the active token (GoTrue v2.197.0
+`tokens/service.go`, at any age; `TestIdP_RefreshRotationAndReuse` pins it for a fresh
+parent). A token two or more
 generations old revokes the whole session for every tab (400 `refresh_token_already_used`,
 which the gateway answers 401). Guarded by `TestIdP_RefreshRotationAndReuse`.
 
@@ -582,10 +602,13 @@ It does not protect against:
 - **Any script running on the app origin**, whether an XSS, a compromised dependency or a
   browser extension with page access. It can read both tokens. With the refresh token it can
   keep the session alive after the tab closes, from another machine, until the session is
-  revoked. Before renewal the same theft bought at most one hour.
+  revoked. GoTrue here sets no session timebox or inactivity timeout (see GoTrue's session
+  values below), and revocation arrives with AUTH-07. Before renewal the same theft bought
+  at most one hour.
 - **Someone with the device's browser profile** (malware, a shared machine left signed in).
 - **A thief who renews in step with the victim.** GoTrue's parent rule answers the previous
-  token with the active one, so two holders who alternate are not detected.
+  token with the active one, so two holders who alternate are not detected. Detection needs
+  a token two generations old.
 - **Sign-out.** Sign-out removes the stored copy but does not revoke it until AUTH-07.
 - **Script access by design.** The token is not `HttpOnly`. A gateway cookie was rejected:
   on every PR fork the app and the gateway are different sites, so it would be a third-party
@@ -624,6 +647,8 @@ production") with
 - `ceiling:` a request from a chain that outlives an ended session is refused only while no
   session is tracked. After a DEMO_MODE stand-in switch, a leftover chain gets the new
   identity's token. DEMO_MODE runs on forks only.
+- `ceiling:` a byte download (evidence bundle, page image, source document) that finds the session ended sends nothing, and its error card can show until the front door's navigation unloads the page; revisit if a user reports it.
+- `ceiling:` on a transient failure the renewer keeps the tracked session's token and deadline even when another tab's newer stored pair supplied the refresh token, so repeated transient failures can end a session while storage holds a newer valid pair (the next boot adopts it); revisit if two-tab users report early sign-outs.
 
 ## Opening registration in production (registration U1–U4)
 

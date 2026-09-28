@@ -554,6 +554,8 @@ describe('an ended renewal and the next boot', () => {
     expect(refreshes()).toHaveLength(1)
     expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the stored session won the boot').toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    // The workspace never mounted, so only the boot strip keeps Back from replaying the link.
+    expect(window.location.search, 'the suppressed ?persona= left the URL').toBe('')
 
     const mark = calls.length
     const second = await reload('/?persona=firm')

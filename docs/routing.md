@@ -517,7 +517,5 @@ landing on a review path — must still account for this writer firing in the sa
 
 **jsdom's environment is per test file, not per test.** `window.history` survives across
 `it()` blocks in one file. A test that pushes a URL leaks it into the next test's boot
-seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. A
-static guard in `App.routeNavigate.test.tsx`
-(`guard_everyAppRenderingTestFileResetsTheJsdomUrl`) enforces this across all 16 files
-that render `<App />`.
+seed unless `beforeEach` resets it with `window.history.replaceState(null, '', '/')`. Every
+file that renders `<App />` does this; no test enforces it.

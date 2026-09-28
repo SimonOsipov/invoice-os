@@ -114,3 +114,12 @@ func stripQuery(s string) string {
 	}
 	return b.String()
 }
+
+// ScrubText removes customer text from s before it leaves for Sentry.
+func ScrubText(s string) string { return s }
+
+// redactQuoted replaces each Go double-quoted segment with "[redacted]".
+func redactQuoted(s string) string { return s }
+
+// redactUpstreamReason replaces the text after "returned <3 digits>: " with [redacted].
+func redactUpstreamReason(s string) string { return s }

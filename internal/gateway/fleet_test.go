@@ -475,19 +475,6 @@ func TestFleetRollupCarriesEachServicesSentryState(t *testing.T) {
 		}
 	})
 
-	t.Run("gateway_on_with_a_dsn_client", func(t *testing.T) {
-		unbind(t)
-		client, err := sentry.NewClient(sentry.ClientOptions{Dsn: "https://public@example.com/1", Transport: sentry.NewHTTPSyncTransport()})
-		if err != nil {
-			t.Fatalf("new client: %v", err)
-		}
-		sentry.CurrentHub().BindClient(client)
-
-		rec, _ := doFleet(t, map[string]*url.URL{"invoice": buildUpstream(t, "abc1234", "")})
-
-		assertEntrySentry(t, rawFleetEntries(t, rec), "gateway", "on")
-	})
-
 	t.Run("on_is_still_up", func(t *testing.T) {
 		unbind(t)
 		rec, body := doFleet(t, map[string]*url.URL{
@@ -502,5 +489,70 @@ func TestFleetRollupCarriesEachServicesSentryState(t *testing.T) {
 			t.Errorf("roll-up = %d %q, want 200 %q", rec.Code, body.Status, fleetOK)
 		}
 		assertEntrySentry(t, entries, "invoice", "on")
+	})
+
+	// One handler: the gateway entry follows the bound client on each request.
+	t.Run("gateway_entry_is_read_per_request", func(t *testing.T) {
+		unbind(t)
+		h := FleetHealthHandler(map[string]*url.URL{"invoice": buildUpstream(t, "abc1234", "")}, nil, nil)
+		serve := func() map[string]map[string]any {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz/fleet", nil))
+			return rawFleetEntries(t, rec)
+		}
+		client, err := sentry.NewClient(sentry.ClientOptions{Dsn: "https://public@example.com/1", Transport: sentry.NewHTTPSyncTransport()})
+		if err != nil {
+			t.Fatalf("new client: %v", err)
+		}
+		sentry.CurrentHub().BindClient(client)
+		assertEntrySentry(t, serve(), "gateway", "on")
+		sentry.CurrentHub().BindClient(nil)
+		assertEntrySentry(t, serve(), "gateway", "off")
+	})
+
+	// The gate names an off-contract value, so the roll-up must not normalise it.
+	t.Run("unexpected_string_is_copied_verbatim", func(t *testing.T) {
+		rec, _ := doFleet(t, map[string]*url.URL{
+			"invoice": buildUpstream(t, "", `{"status":"ok","build":"abc1234","sentry":"maybe"}`),
+		})
+		assertEntrySentry(t, rawFleetEntries(t, rec), "invoice", "maybe")
+	})
+
+	// A non-string cannot be carried, so the entry has no key and the gate reads "none".
+	for _, c := range []struct{ kind, v string }{{"number", `1`}, {"bool", `true`}, {"object", `{"on":true}`}, {"null", `null`}} {
+		v := c.v
+		t.Run(c.kind+"_yields_no_key", func(t *testing.T) {
+			rec, body := doFleet(t, map[string]*url.URL{
+				"invoice": buildUpstream(t, "", `{"status":"ok","build":"abc1234","sentry":`+v+`}`),
+			})
+			inv, ok := rawFleetEntries(t, rec)["invoice"]
+			if !ok {
+				t.Fatalf("roll-up omits invoice: %s", rec.Body.String())
+			}
+			if s, has := inv["sentry"]; has {
+				t.Errorf("invoice sentry = %v, want no key for a %s value", s, v)
+			}
+			if inv["build"] != "abc1234" || inv["status"] != statusUp {
+				t.Errorf("invoice = %v, want up with build abc1234: a bad sentry value costs nothing else", inv)
+			}
+			if rec.Code != http.StatusOK || body.Status != fleetOK {
+				t.Errorf("roll-up = %d %q, want 200 %q", rec.Code, body.Status, fleetOK)
+			}
+		})
+	}
+
+	t.Run("down_upstream_carries_no_sentry", func(t *testing.T) {
+		down, _ := pathRecordingUpstream(t, "/healthz", http.StatusServiceUnavailable, `{"status":"ok","build":"abc1234","sentry":"on"}`)
+		rec, body := doFleet(t, map[string]*url.URL{"invoice": down})
+		inv, ok := rawFleetEntries(t, rec)["invoice"]
+		if !ok {
+			t.Fatalf("roll-up omits invoice: %s", rec.Body.String())
+		}
+		if keys := slices.Sorted(maps.Keys(inv)); !slices.Equal(keys, []string{"error", "name", "status"}) {
+			t.Errorf("down invoice keys = %v, want [error name status] (entry %v)", keys, inv)
+		}
+		if inv["status"] != statusDown || rec.Code != http.StatusServiceUnavailable || body.Status != fleetDegraded {
+			t.Errorf("invoice = %v, roll-up = %d %q; want down, 503 %q", inv, rec.Code, body.Status, fleetDegraded)
+		}
 	})
 }

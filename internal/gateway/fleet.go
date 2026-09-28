@@ -49,7 +49,7 @@ type ServiceHealth struct {
 	// healthy, just not the one under test, and conflating the two would make
 	// /healthz/fleet lie in the other direction. The deploy gate compares it.
 	Build string `json:"build,omitempty"`
-	// Sentry is "on" or "off" as the service reported it, empty when its body has
+	// Sentry is what the service reported, empty when its body has
 	// none or it is probed at a custom path. Never part of the up/down verdict.
 	Sentry string `json:"sentry,omitempty"`
 }
@@ -153,9 +153,9 @@ func probeService(ctx context.Context, client *http.Client, name string, base *u
 	if custom {
 		return ServiceHealth{Name: name, Status: statusUp}
 	}
-	// A body that will not decode leaves Build empty rather than failing the
-	// probe: 2xx already settled up/down, and the deploy gate reports a missing
-	// build as a mismatch on its own terms.
+	// A body that will not decode does not fail the probe: 2xx already settled
+	// up/down, and the deploy gate reports a missing build as a mismatch on its
+	// own terms.
 	var payload struct {
 		Build  string `json:"build"`
 		Sentry string `json:"sentry"`

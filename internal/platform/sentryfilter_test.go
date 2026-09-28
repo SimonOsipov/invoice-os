@@ -1467,6 +1467,30 @@ func TestSentryFilter_KeySitesAreScrubbed(t *testing.T) {
 		assertNoLeak(t, mt.captured())
 	})
 
+	// Only the exact id keys skip the value scrub; a key that scrubs to one does not.
+	t.Run("id_tag_lookalike_key", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		hub.Scope().SetTag("request_id?x=1", `v "`+markerTIN+`"`)
+		hub.Scope().SetTag("tenant_id#x", `v "`+markerIRN+`"`)
+		hub.CaptureException(errors.New("id lookalike anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Tags) == 0 {
+			t.Fatal("event has no tags")
+		}
+		scrubbed := 0
+		for _, v := range ev.Tags {
+			if v == `v "[redacted]"` {
+				scrubbed++
+			}
+		}
+		if scrubbed != 2 {
+			t.Errorf("tags = %v, want both lookalike values v \"[redacted]\"", ev.Tags)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
 	t.Run("context_name", func(t *testing.T) {
 		mt := filteredClient(t, false)
 		hub := sentry.CurrentHub().Clone()

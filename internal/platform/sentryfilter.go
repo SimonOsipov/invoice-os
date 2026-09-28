@@ -2,6 +2,7 @@ package platform
 
 import (
 	"net/textproto"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -18,11 +19,16 @@ var sentryHeaders = map[string]struct{}{
 	"X-Request-Id":   {},
 }
 
-// scrubEvent removes request data, queries and user identity from an error
-// event or transaction before it leaves for Sentry. It never drops the event.
+// scrubEvent removes request data, queries, user identity and customer text
+// from an error event or transaction before it leaves for Sentry. It never
+// drops the event.
 func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 	event.Transaction = stripQuery(event.Transaction)
 	event.User = sentry.User{}
+	event.Message = ScrubText(event.Message)
+	for i := range event.Exception {
+		event.Exception[i].Value = ScrubText(event.Exception[i].Value)
+	}
 
 	if r := event.Request; r != nil {
 		r.URL = stripQuery(r.URL)
@@ -43,13 +49,13 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 	for k, v := range event.Tags {
 		// The id tags stay byte-identical so they keep matching Railway logs.
 		if k != "request_id" && k != "tenant_id" {
-			event.Tags[k] = stripQuery(v)
+			event.Tags[k] = ScrubText(v)
 		}
 	}
 
 	if trace, ok := event.Contexts["trace"]; ok && trace != nil {
 		if d, ok := trace["description"].(string); ok {
-			trace["description"] = stripQuery(d)
+			trace["description"] = ScrubText(d)
 		}
 		if d, ok := trace["data"].(map[string]interface{}); ok {
 			trace["data"] = scrubData(d)
@@ -57,7 +63,7 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 	}
 
 	for _, s := range event.Spans {
-		s.Description = stripQuery(s.Description)
+		s.Description = ScrubText(s.Description)
 		s.Data = scrubData(s.Data)
 	}
 
@@ -67,7 +73,7 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 			continue
 		}
 		c := *b
-		c.Message = stripQuery(c.Message)
+		c.Message = ScrubText(c.Message)
 		c.Data = scrubData(c.Data)
 		event.Breadcrumbs[i] = &c
 	}
@@ -75,7 +81,7 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 }
 
 // scrubData returns a copy of d without query or fragment keys, with string
-// values passed through stripQuery.
+// values passed through ScrubText.
 func scrubData(d map[string]interface{}) map[string]interface{} {
 	if d == nil {
 		return nil
@@ -86,7 +92,7 @@ func scrubData(d map[string]interface{}) map[string]interface{} {
 			continue
 		}
 		if s, ok := v.(string); ok {
-			v = stripQuery(s)
+			v = ScrubText(s)
 		}
 		out[k] = v
 	}
@@ -116,10 +122,45 @@ func stripQuery(s string) string {
 }
 
 // ScrubText removes customer text from s before it leaves for Sentry.
-func ScrubText(s string) string { return s }
+// Convention: an error message %q-quotes every customer-derived value.
+// ceiling: covers quoted text and upstream reasons only; re-triage every Errorf/errors.New site when a Sentry event shows customer text
+func ScrubText(s string) string {
+	return stripQuery(redactUpstreamReason(redactQuoted(s)))
+}
 
 // redactQuoted replaces each Go double-quoted segment with "[redacted]".
-func redactQuoted(s string) string { return s }
+// An unterminated segment is redacted to the end of s.
+func redactQuoted(s string) string {
+	if !strings.Contains(s, `"`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '"' {
+			b.WriteByte(s[i])
+			continue
+		}
+		b.WriteString(`"[redacted]`)
+		for i++; i < len(s) && s[i] != '"'; i++ {
+			if s[i] == '\\' {
+				i++
+			}
+		}
+		if i < len(s) {
+			b.WriteByte('"')
+		}
+	}
+	return b.String()
+}
+
+var upstreamStatus = regexp.MustCompile(`returned [0-9]{3}: `)
 
 // redactUpstreamReason replaces the text after "returned <3 digits>: " with [redacted].
-func redactUpstreamReason(s string) string { return s }
+func redactUpstreamReason(s string) string {
+	loc := upstreamStatus.FindStringIndex(s)
+	if loc == nil {
+		return s
+	}
+	return s[:loc[1]] + "[redacted]"
+}

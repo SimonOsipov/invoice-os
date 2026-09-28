@@ -694,6 +694,12 @@ func invocations(run, needle string) []string {
 
 // forkEnvironmentStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step running set-fork-environment.
 func forkEnvironmentStepFaults(devEnv string) []string {
+	return prOnlyPrepareEnvStepFaults(devEnv, "set-fork-environment", forkEnvironmentRunCmd)
+}
+
+// prOnlyPrepareEnvStepFaults reports each way dev-env.yml departs from one PR-only prepare-env step
+// whose one command naming subcommand is runCmd.
+func prOnlyPrepareEnvStepFaults(devEnv, subcommand, runCmd string) []string {
 	type site struct {
 		job  string
 		step workflowStep
@@ -702,21 +708,21 @@ func forkEnvironmentStepFaults(devEnv string) []string {
 	var sites []site
 	for _, job := range workflowJobsOf(devEnv) {
 		for _, s := range job.steps() {
-			for _, cmd := range invocations(s.keys["run"], "set-fork-environment") {
+			for _, cmd := range invocations(s.keys["run"], subcommand) {
 				sites = append(sites, site{job.name, s, cmd})
 			}
 		}
 	}
 	if len(sites) != 1 {
-		return []string{fmt.Sprintf("%d commands run set-fork-environment, want exactly 1", len(sites))}
+		return []string{fmt.Sprintf("%d commands run %s, want exactly 1", len(sites), subcommand)}
 	}
 	s := sites[0]
 	var faults []string
 	if s.job != "prepare-env" {
-		faults = append(faults, "set-fork-environment runs in job "+s.job+", not prepare-env")
+		faults = append(faults, subcommand+" runs in job "+s.job+", not prepare-env")
 	}
-	if s.cmd != forkEnvironmentRunCmd {
-		faults = append(faults, fmt.Sprintf("the command is %q, want %q", s.cmd, forkEnvironmentRunCmd))
+	if s.cmd != runCmd {
+		faults = append(faults, fmt.Sprintf("the command is %q, want %q", s.cmd, runCmd))
 	}
 	if got := s.step.keys["if"]; got != prOnlyCondition {
 		faults = append(faults, fmt.Sprintf("the step's if: is %q, want %q", got, prOnlyCondition))

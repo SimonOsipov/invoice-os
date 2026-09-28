@@ -43,9 +43,8 @@
 // backend).
 //
 // makeImportAuth(session, onSignOut, onSuspended, freshToken) mirrors makeAuthedFetch with
-// the same parameters (D3, AUDIT-10-07): PlatformCtx exposes only `authedFetch`, so the raw
-// token and onSignOut are otherwise unreachable here. The token is read at CALL time
-// (the renewer's getter, or `session.token`), never captured at construction.
+// the same parameters (D3, AUDIT-10-07). The token is read at CALL time (the renewer's
+// getter, or `session.token`), never captured at construction.
 //
 // Progress contract ([progress-two-phase], AC4/AC6): xhrJson reports RAW loaded/total
 // BYTES, never a fraction — the arithmetic lives in the pure `uploadPercent` so it has a
@@ -212,7 +211,7 @@ export type UploadPhase =
   | { kind: 'error'; error: ApiError }
 
 // Mirrors makeAuthedFetch parameter for parameter so M4-08-06 can instantiate both from the
-// SAME arguments in the SAME useMemo (App.tsx) — identical inputs at one construction site
+// SAME arguments (App.tsx) — identical inputs at one construction site
 // make divergence structurally impossible (D3).
 // The token is read at CALL time, never captured (makeAuthedFetch).
 export function makeImportAuth(

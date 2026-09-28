@@ -57,6 +57,27 @@ function record(token: string, receivedAt: number, me: Me = ME, refresh = 'R0'):
   return JSON.stringify({ v: 1, personaId: 'firm', token, me, verified: true, handoff: true, refresh_token: refresh, received_at: receivedAt })
 }
 
+// The /auth/login mint below answers this token for the DEMO_MODE stand-in.
+const standInToken = (at: number) => jwt(OTHER_ME, nowSec(at), 'P')
+const SEAT_MEMBER: Member = {
+  id: ME.user.id,
+  name: APP_PERSONAS.firm.name,
+  initials: APP_PERSONAS.firm.initials,
+  email: null,
+  role: 'admin',
+  status: 'active',
+  isYou: true,
+}
+const STAND_IN: Member = {
+  id: OTHER_ME.user.id,
+  name: 'Tunde Bello',
+  initials: 'TB',
+  email: 'tunde@example.ng',
+  role: 'preparer',
+  status: 'active',
+  isYou: false,
+}
+
 let capturedCtx: PlatformCtx | undefined
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
@@ -149,7 +170,7 @@ function routeFetch() {
       }
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url === `${GATEWAY}/auth/login`) {
-        return answer(200, { access_token: jwt(OTHER_ME, nowSec(Date.now()), 'P') })()
+        return answer(200, { access_token: standInToken(Date.now()) })()
       }
       return answer(200, {
         entities: [],
@@ -165,6 +186,25 @@ function routeFetch() {
       })()
     }),
   )
+}
+
+// The multipart transport: each send is recorded in `calls`, ordered against the refresh.
+class FakeXhr {
+  url = ''
+  auth: string | null = null
+  upload = { onprogress: null, onload: null }
+  onload = null
+  onerror = null
+  ontimeout = null
+  open(_method: string, url: string) {
+    this.url = url
+  }
+  setRequestHeader(name: string, value: string) {
+    if (name === 'Authorization') this.auth = value
+  }
+  send() {
+    calls.push({ url: `xhr:${this.url}`, auth: this.auth, body: undefined, duringRefresh: refreshesOut > 0 })
+  }
 }
 
 const refreshes = (from = 0) => calls.slice(from).filter((c) => c.url === REFRESH)
@@ -352,6 +392,7 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
     expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
     expect(refreshes()).toHaveLength(1)
     expect(apiCalls()).toEqual([])
+    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     expect(readDestination()?.path).toBe('/audit')
   })
@@ -461,6 +502,23 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     expect(token).toBe(renewedToken())
     expect(refreshes(mark)).toHaveLength(1)
   })
+
+  it('the import upload waits for the renewal and carries the renewed token', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeXhr)
+    await mountFresh()
+    vi.setSystemTime(MID_RENEW_AT)
+    const mark = calls.length
+
+    act(() => capturedCtx!.addPickedFiles([new File(['invoice_number,total\nINV-1,100'], 'a.csv', { type: 'text/csv' })]))
+    act(() => capturedCtx!.readAllColumns())
+    const uploads = () => calls.slice(mark).filter((c) => c.url === `xhr:${GATEWAY}/api/invoice/v1/imports/preview`)
+    await waitFor(() => expect(uploads(), 'the preview upload was never sent').toHaveLength(1))
+
+    expect(calls[mark]?.url, 'the renewal precedes the upload').toBe(REFRESH)
+    expect(refreshes(mark)).toHaveLength(1)
+    expect(uploads()[0]?.duringRefresh).toBe(false)
+    expect(uploads()[0]?.auth).toBe(`Bearer ${renewedToken()}`)
+  })
 })
 
 describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
@@ -496,6 +554,45 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
     expect(hrefWrites, 'the settled renewal adds no navigation').toEqual(afterSignOut)
   })
 
+  it('a stand-in begun during a seat renewal keeps its own token', async () => {
+    vi.stubEnv('VITE_DEMO_MODE', 'true')
+    const { hrefWrites } = await mountFresh()
+    const refresh = deferRefresh()
+    vi.setSystemTime(MID_RENEW_AT)
+    const mark = calls.length
+
+    const seatCtx = capturedCtx
+    let pending: Promise<unknown> = Promise.resolve()
+    await act(async () => {
+      pending = seatCtx!.authedFetch(`${PROBE}/seat`).then(
+        () => 'resolved',
+        (e: unknown) => e,
+      )
+    })
+    meReply = answer(200, OTHER_ME)
+    await act(async () => {
+      await seatCtx!.becomePersona!(STAND_IN, 'dashboard')
+    })
+    await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
+    await act(async () => refresh.release(renewed()))
+    let seatOut: unknown
+    await act(async () => {
+      seatOut = await pending
+    })
+    await settle()
+    const out = await probe(capturedCtx, '/stand-in')
+
+    expect(refreshes(mark), 'the seat request waited on a renewal').toHaveLength(1)
+    expect(errorName(seatOut)).toBe('SessionEndedError')
+    expect(out).toBe('resolved')
+    expect(probes(mark).map((c) => [c.url, c.auth]), 'only the stand-in request is sent, on its own token').toEqual([
+      [`${PROBE}/stand-in`, `Bearer ${standInToken(MID_RENEW_AT)}`],
+    ])
+    expect(storedRecord()?.token, 'the discarded answer is never stored').toBe(A0_FRESH)
+    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(hrefWrites).toEqual([])
+  })
+
   it("another user's record survives a foreign-subject end", async () => {
     const { hrefWrites } = await mountFresh()
     // Another tab signed in a different user.
@@ -517,37 +614,24 @@ describe('a renewal never outlives its session (AC-14, AC-15, AC-17)', () => {
   it('returning from a stand-in renews the seat', async () => {
     vi.stubEnv('VITE_DEMO_MODE', 'true')
     await mountFresh()
-    const seatMember: Member = {
-      id: ME.user.id,
-      name: APP_PERSONAS.firm.name,
-      initials: APP_PERSONAS.firm.initials,
-      email: null,
-      role: 'admin',
-      status: 'active',
-      isYou: true,
-    }
-    const standIn: Member = {
-      id: OTHER_ME.user.id,
-      name: 'Tunde Bello',
-      initials: 'TB',
-      email: 'tunde@example.ng',
-      role: 'preparer',
-      status: 'active',
-      isYou: false,
-    }
     meReply = answer(200, OTHER_ME)
     await act(async () => {
-      await capturedCtx!.becomePersona!(standIn, 'dashboard')
+      await capturedCtx!.becomePersona!(STAND_IN, 'dashboard')
     })
     await waitFor(() => expect(capturedCtx?.user.name).toBe('Tunde Bello'))
     await settle()
     expect(refreshes(), 'a stand-in never renews').toEqual([])
+    expect(await probe(capturedCtx, '/stand-in')).toBe('resolved')
+    expect(
+      probes().map((c) => c.auth),
+      "a stand-in's requests carry its own token",
+    ).toEqual([`Bearer ${standInToken(NOW)}`])
     meReply = answer(200, ME)
     vi.setSystemTime(NOW + 2 * HOUR)
     const mark = calls.length
 
     await act(async () => {
-      await capturedCtx!.returnToSeat!('dashboard', seatMember)
+      await capturedCtx!.returnToSeat!('dashboard', SEAT_MEMBER)
     })
     await waitFor(() => expect(capturedCtx?.user.name).toBe(APP_PERSONAS.firm.name))
     await settle()

@@ -684,6 +684,76 @@ func TestLoadUpstreamsRequiresReconciliationURL(t *testing.T) {
 			t.Errorf("GET /api/tenancy/x = %d, want 502 (routed to a dead upstream)", got)
 		}
 	})
+
+	// X23: a down reconciliation must degrade the roll-up, never be skipped or tolerated.
+	t.Run("down_degrades_rollup", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		t.Cleanup(up.Close)
+		var mu sync.Mutex
+		reconCode, reconPaths := http.StatusOK, []string{}
+		recon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			reconPaths = append(reconPaths, r.URL.Path)
+			w.WriteHeader(reconCode)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		t.Cleanup(recon.Close)
+
+		setUpstreamEnv(t, up.URL)
+		t.Setenv("RECONCILIATION_URL", recon.URL)
+		routed, probed, err := loadUpstreams()
+		if err != nil {
+			t.Fatalf("loadUpstreams: %v", err)
+		}
+		_, fleet := gatewayHandlers(nil, routed, probed, nil, slog.Default())
+		rollup := func() (int, string, map[string]string) {
+			rec := httptest.NewRecorder()
+			fleet(rec, httptest.NewRequest(http.MethodGet, "/healthz/fleet", nil))
+			var body struct {
+				Status   string `json:"status"`
+				Services []struct {
+					Name, Status string
+				} `json:"services"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode /healthz/fleet: %v (body %q)", err, rec.Body.String())
+			}
+			st := map[string]string{}
+			for _, s := range body.Services {
+				st[s.Name] = s.Status
+			}
+			return rec.Code, body.Status, st
+		}
+
+		// Positive control: every backend up, reconciliation probed at its platform /healthz.
+		code, status, st := rollup()
+		if code != http.StatusOK || status != "ok" || st["reconciliation"] != "up" {
+			t.Fatalf("all up: code=%d status=%q reconciliation=%q, want 200 ok up; services=%v", code, status, st["reconciliation"], st)
+		}
+		mu.Lock()
+		paths := slices.Clone(reconPaths)
+		reconCode = http.StatusServiceUnavailable
+		mu.Unlock()
+		if !slices.Equal(paths, []string{"/healthz"}) {
+			t.Errorf("reconciliation probed at %v, want exactly [/healthz]", paths)
+		}
+
+		code, status, st = rollup()
+		if code != http.StatusServiceUnavailable || status != "degraded" {
+			t.Errorf("reconciliation down: code=%d status=%q, want 503 degraded", code, status)
+		}
+		if st["reconciliation"] != "down" {
+			t.Errorf("reconciliation = %q, want down; services=%v", st["reconciliation"], st)
+		}
+		for name, s := range st {
+			if name != "reconciliation" && s != "up" {
+				t.Errorf("%s = %q, want up -- only reconciliation is down", name, s)
+			}
+		}
+	})
 }
 
 // parseMain returns main.go's func main body; the AST scans below read main's wiring.

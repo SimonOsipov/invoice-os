@@ -92,6 +92,11 @@ four SPA origins), `VITE_GATEWAY_URL` on both `app` and `landing`, `app.VITE_LAN
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
 `VITE_LANDING_URL`, and `app.VITE_DEMO_MODE=true`. It refuses the persistent environment.
 
+**Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
+it never picks up a production write made after its creation. `set-fork-reconciliation-url`
+writes `http://reconciliation.railway.internal:8080` and re-reads it
+(`TestSetForkReconciliationURLAgainstAScriptedRailway`).
+
 **New (persona-handoff-fix, Decision [pr-only-reset]): `gateway.GATEWAY_DB_RESET=true`.**
 A plain (non-sealed, non-reference) variable, set on `development`'s gateway service
 alongside its existing `GATEWAY_DB_BOOTSTRAP=true` (docs/migrations.md §2) so it forks the

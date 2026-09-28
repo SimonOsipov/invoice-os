@@ -18,6 +18,7 @@ const GATEWAY = 'https://gw.test'
 const STATE_RE = '[A-Za-z0-9_-]{43}'
 const REFRESH = `${GATEWAY}/auth/refresh`
 const PROBE = `${GATEWAY}/api/probe`
+const EXCHANGE = `${GATEWAY}/auth/exchange`
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -144,6 +145,7 @@ let calls: Call[] = []
 let refreshesOut = 0
 let refreshReply: Reply = renewed()
 let meReply: Reply = answer(200, ME)
+let exchangeReply: Reply = answer(500, { error: 'no exchange expected' })
 
 // The refresh waits until the test releases it.
 function deferRefresh(): { release: (r: Reply) => void } {
@@ -172,6 +174,7 @@ function routeFetch() {
       // As the gateway: no bearer, no identity.
       if (url.startsWith(PROBE) && !init?.headers?.get('Authorization')) return answer(401, { error: 'unauthorized' })()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
+      if (url === EXCHANGE) return exchangeReply()
       if (url === `${GATEWAY}/auth/login`) {
         return answer(200, { access_token: standInToken(Date.now()) })()
       }
@@ -307,6 +310,7 @@ beforeEach(() => {
   refreshesOut = 0
   refreshReply = renewed()
   meReply = answer(200, ME)
+  exchangeReply = answer(500, { error: 'no exchange expected' })
   routeFetch()
 })
 
@@ -369,32 +373,38 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth === `Bearer ${A0_OLD}`), 'the expired token is never sent').toEqual([])
   })
 
-  it('an expired renewable hand-off session wins over ?persona= and ?handoff=', async () => {
-    const urls = ['/?persona=firm', `/?handoff=${'a'.repeat(43)}`]
-    expect(urls.length).toBeGreaterThan(0)
-    for (const url of urls) {
-      calls = []
-      localStorage.clear()
-      sessionStorage.clear()
-      // A tab that asked for a code, so a redemption would really post.
-      ensureSignInState()
-      const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), url)
-      await settle()
+  it('an expired renewable hand-off session wins over ?persona=', async () => {
+    const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
+    await settle()
 
-      expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), `${url}: no persona mint`).toEqual([])
-      expect(calls.filter((c) => c.url === `${GATEWAY}/auth/exchange`), `${url}: no redemption`).toEqual([])
-      await waitForVerifiedWorkspace()
-      expect(calls[0]?.url, `${url}: the boot renewal comes first`).toBe(REFRESH)
-      expect(calls[0]?.body, url).toEqual({ refresh_token: 'R0' })
-      expect(refreshes(), url).toHaveLength(1)
-      expect(storedRecord()?.me, `${url}: the stored session is kept`).toEqual(ME)
-      expect(storedRecord()?.refresh_token, url).toBe('R1')
-      expect(window.location.search, url).toBe('')
-      expect(hrefWrites, url).toEqual([])
-      cleanup()
-      capturedCtx = undefined
-      if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
-    }
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'no persona mint').toEqual([])
+    await waitForVerifiedWorkspace()
+    expect(calls[0]?.url, 'the boot renewal comes first').toBe(REFRESH)
+    expect(calls[0]?.body).toEqual({ refresh_token: 'R0' })
+    expect(refreshes()).toHaveLength(1)
+    expect(storedRecord()?.me, 'the stored session is kept').toEqual(ME)
+    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(window.location.search).toBe('')
+    expect(hrefWrites).toEqual([])
+  })
+
+  // A code is a sign-in the user just made; only an unexpired stored session beats it.
+  it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
+    const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
+    exchangeReply = answer(200, { access_token: NEW_T, refresh_token: 'RN' })
+    meReply = answer(200, OTHER_ME)
+    ensureSignInState()
+    const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), `/?handoff=${'a'.repeat(43)}`)
+    await waitForVerifiedWorkspace(OTHER_ME.tenant.name)
+    await settle()
+
+    expect(calls.filter((c) => c.url === EXCHANGE), 'the code is redeemed').toHaveLength(1)
+    expect(refreshes(), 'the old refresh token is never sent').toEqual([])
+    expect(storedRecord()?.token).toBe(NEW_T)
+    expect(storedRecord()?.refresh_token).toBe('RN')
+    expect(storedRecord()?.me).toEqual(OTHER_ME)
+    expect(window.location.search).toBe('')
+    expect(hrefWrites).toEqual([])
   })
 
   it('StrictMode renews once at boot', async () => {

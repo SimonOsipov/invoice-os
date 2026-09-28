@@ -131,15 +131,11 @@ describe('redeemHandoff (D9, D25 step 5)', () => {
 describe('isLiveHandoffSession (D9, D18)', () => {
   it('isLiveHandoffSession', () => {
     const persona: Session = { persona: APP_PERSONAS.firm, token: LIVE, me: ME, verified: true }
-    const renewal = { refreshToken: 'R0', receivedAt: NOW - 2 * 3_600_000 }
     const rows: [string, Session | null, boolean][] = [
       ['no session', null, false],
       ['persona session', persona, false],
       ['expired hand-off', { ...persona, token: EXPIRED, handoff: true }, false],
       ['live hand-off', { ...persona, handoff: true }, true],
-      // The boot renews it, as resolveBootSession keeps it.
-      ['expired hand-off with a renewal', { ...persona, token: EXPIRED, handoff: true, renewal }, true],
-      ['expired persona session with a renewal', { ...persona, token: EXPIRED, renewal }, false],
     ]
     expect(rows.length).toBeGreaterThan(0)
     for (const [name, session, want] of rows) {

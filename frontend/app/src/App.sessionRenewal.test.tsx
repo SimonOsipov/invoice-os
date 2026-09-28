@@ -391,17 +391,16 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(apiCalls().filter((c) => c.auth === `Bearer ${A0_OLD}`), 'the expired token is never sent').toEqual([])
   })
 
-  it('an expired renewable hand-off session wins over ?persona=', async () => {
+  it('an expired renewable hand-off session loses to ?persona=', async () => {
     const { hrefWrites } = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
+    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
     await settle()
 
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'no persona mint').toEqual([])
-    await waitForVerifiedWorkspace()
-    expect(calls[0]?.url, 'the boot renewal comes first').toBe(REFRESH)
-    expect(calls[0]?.body).toEqual({ refresh_token: 'R0' })
-    expect(refreshes()).toHaveLength(1)
-    expect(storedRecord()?.me, 'the stored session is kept').toEqual(ME)
-    expect(storedRecord()?.refresh_token).toBe('R1')
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(refreshes(), 'the stored refresh token is never sent').toEqual([])
+    expect(storedRecord()?.handoff, 'the persona session replaces the record').toBeUndefined()
+    expect(storedRecord()?.refresh_token).toBeUndefined()
+    expect(storedRecord()?.token).toBe(standInToken(NOW))
     expect(window.location.search).toBe('')
     expect(hrefWrites).toEqual([])
   })
@@ -543,19 +542,17 @@ describe('a refused renewal returns to landing with the destination (AC-4, AC-6,
 })
 
 describe('an ended renewal and the next boot', () => {
-  // No sign-in loop: the refused record is gone, so the next ?persona= link signs the persona in.
-  it('a refused renewal on a ?persona= boot clears the record for the next persona link', async () => {
+  // The refused record is gone, so the next ?persona= link signs the persona in without a refresh.
+  it('a refused renewal at boot clears the record for the next persona link', async () => {
     refreshReply = REFUSED
-    const first = await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
+    const first = await bootWith(record(A0_OLD, OLD_AT), '/')
     await waitFor(() => expect(first.hrefWrites, 'a refused boot renewal navigates to landing').toHaveLength(1))
     await settle()
 
     expect(first.hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=${STATE_RE}$`))
     expect(refreshes()).toHaveLength(1)
-    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the stored session won the boot').toEqual([])
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`)).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
-    // The workspace never mounted, so only the boot strip keeps Back from replaying the link.
-    expect(window.location.search, 'the suppressed ?persona= left the URL').toBe('')
 
     const mark = calls.length
     const second = await reload('/?persona=firm')
@@ -597,7 +594,7 @@ describe('an ended renewal and the next boot', () => {
 })
 
 describe('a kept record and a ?persona= link', () => {
-  // A kept record beats every ?persona= link, so while renewal is down each link bounces to landing.
+  // A kept record must not beat a ?persona= link, or while renewal is down every link bounces to landing.
   it('a ?persona= link after a transient boot failure does not bounce to landing again', async () => {
     refreshReply = UNAVAILABLE
     await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')

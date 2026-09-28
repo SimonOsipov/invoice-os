@@ -1836,10 +1836,9 @@ export default function App() {
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
   const redeemStarted = useRef(false)
-  // A renewable stored hand-off session also beats `?persona=` (not `?handoff=`): the boot renews it.
-  const [keepsHandoff] = useState(() => liveHandoff || (bootSession?.handoff === true && bootSession.renewal !== undefined))
+  // An expired stored session, even a renewable one, loses to `?persona=`: a kept record must not bounce every link.
   const [autoPersona] = useState<PersonaId | null>(() => {
-    if (keepsHandoff || handoffCode) return null
+    if (liveHandoff || handoffCode) return null
     const p = new URLSearchParams(window.location.search).get('persona')
     return shouldAutoSignIn(p) ? (p as PersonaId) : null
   })
@@ -2046,13 +2045,13 @@ export default function App() {
   // bounce off. Reads the URL directly rather than depending on render state — this is the
   // only writer, and it runs once. Same treatment as ops-console/src/App.tsx.
   // `auth` and `handoff` are one-shot too, and are stripped whether used or not. A `persona`
-  // suppressed by a stored hand-off session is stripped as well.
+  // suppressed by a live hand-off session is stripped as well.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (((autoPersona || keepsHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
+    if (((autoPersona || liveHandoff) && params.has('persona')) || params.has('auth') || params.has(HANDOFF_PARAM)) {
       window.history.replaceState(null, '', window.location.pathname)
     }
-  }, [autoPersona, keepsHandoff])
+  }, [autoPersona, liveHandoff])
 
   // Redeem the code once (the ref survives StrictMode's double effect). No stored
   // state means a code this tab never asked for: no exchange, failure arm.

@@ -408,7 +408,8 @@ same tab, so a code minted in another browser signs nobody in.
    have waited that long in the store. A tab with no live state makes no exchange call and
    goes to step 7.
 7. On any failure the app returns to landing with `signin=no-workspace` (the `/me` call
-   answered 403) or `signin=failed` (anything else), carrying a fresh state. Landing opens
+   answered 403) or `signin=failed` (anything else), carrying the state `ensureSignInState`
+   returns: a newly minted one, because step 6 removed the old. Landing opens
    the modal with "This account has no workspace yet." or "We couldn't open your workspace.
    Sign in again." An unknown `signin` value is stripped and ignored.
 
@@ -470,11 +471,11 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 `?persona=`: both are stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
 message; B's code expires unused. Sign out first to switch accounts. A stored hand-off
-session whose access token has expired but which carries a refresh token still wins over
-`?persona=` (the boot renews it); a `?handoff=` code wins over it, because the code is a
-sign-in the user just made. Guarded by `App.sessionRenewal.test.tsx` "an expired renewable
-hand-off session wins over ?persona=" and "a ?handoff= code wins over an expired renewable
-hand-off session".
+session whose access token has expired loses to both, even when it carries a refresh token:
+a kept record must not bounce every `?persona=` link while renewal is down. Guarded by
+`App.sessionRenewal.test.tsx` "an expired renewable hand-off session loses to ?persona=",
+"a ?handoff= code wins over an expired renewable hand-off session" and "a ?persona= link
+after a transient boot failure does not bounce to landing again".
 
 **Ceilings:**
 - `ceiling:` the code store and the throttle are in-process. A gateway restart drops

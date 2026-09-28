@@ -1212,7 +1212,7 @@ func TestReconcile_EmptyEntityTINDoesNotSuppressTheNameCheck(t *testing.T) {
 // production) and this package's own normalizeTIN always land on the same NNNNNNNN-NNNN
 // spelling, so Reconcile's plain == needs no re-normalisation. internal/extraction may not
 // import internal/invoice (TestExtractionPackage_DoesNotImportDocumentPackage's fence, scan B,
-// forbids any in-module edge outside internal/platform/*), so rcShadowMBSSupplierTIN below is a
+// forbids any in-module edge outside internal/platform/...), so rcShadowMBSSupplierTIN below is a
 // deliberate shadow of MBSSupplierTIN's own two branches (supplier_tin.go), pinned by VALUE
 // against the real normalizeTIN via extraction.ShapeTIN.Normalize.
 

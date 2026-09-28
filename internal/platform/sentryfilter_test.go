@@ -871,6 +871,9 @@ func TestSentryFilter_ErrorTextLosesQuotedValues(t *testing.T) {
 		if !strings.Contains(lookups[0].Description, "lookup") {
 			t.Errorf("span description = %q, want it to still hold lookup", lookups[0].Description)
 		}
+		if got, _ := lookups[0].Data["err"].(string); !strings.Contains(got, "decode") {
+			t.Errorf("span data err = %q, want it to still hold decode", got)
+		}
 		assertNoLeak(t, mt.captured())
 	})
 
@@ -897,6 +900,73 @@ func TestSentryFilter_ErrorTextLosesQuotedValues(t *testing.T) {
 		}
 		assertNoLeak(t, mt.captured())
 	})
+
+	t.Run("inner_only_quote", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		inner := fmt.Errorf("issue_date %q is not in YYYY-MM-DD format", markerAmt)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("import row 7: %w", inner))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Exception) < 2 {
+			t.Fatalf("event has %d exception values, want the whole chain", len(ev.Exception))
+		}
+		for i, ex := range ev.Exception {
+			if !strings.Contains(ex.Value, "is not in YYYY-MM-DD format") {
+				t.Errorf("exception[%d] value = %q, want it to still hold is not in YYYY-MM-DD format", i, ex.Value)
+			}
+		}
+		if got := exceptionValue(t, ev); !strings.Contains(got, "import row 7") {
+			t.Errorf("outer exception value = %q, want it to still hold import row 7", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	// errors.Join reaches Sentry as an exception group: the joined value plus one per branch.
+	t.Run("joined_errors", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureException(errors.Join(
+			fmt.Errorf("mapping key %q", markerTIN),
+			fmt.Errorf("issue_date %q", markerIRN),
+		))
+
+		ev := oneEvent(t, mt, "")
+		if len(ev.Exception) < 3 {
+			t.Fatalf("event has %d exception values, want the group and both branches", len(ev.Exception))
+		}
+		var keys, dates int
+		for _, ex := range ev.Exception {
+			if strings.Contains(ex.Value, "mapping key") {
+				keys++
+			}
+			if strings.Contains(ex.Value, "issue_date") {
+				dates++
+			}
+		}
+		if keys < 2 || dates < 2 {
+			t.Errorf("exception values %+v lost an anchor: mapping key in %d, issue_date in %d, want 2 each", ev.Exception, keys, dates)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+}
+
+// Each row fails if the composition order changes; each output must also be a fixed point.
+func TestScrubText(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{fmt.Sprintf("key %q header %q", "Total?", markerTIN), `key "[redacted]" header "[redacted]"`},
+		{`import "returned 500: x" failed: docling returned 422: ` + markerIRN, `import "[redacted]" failed: docling returned 422: [redacted]`},
+		{"GET /v1/invoices?q=" + markerTIN + ` decode "` + markerIRN + `"`, `GET /v1/invoices decode "[redacted]"`},
+		{`docling: /v1/read returned 500: "` + markerTIN, "docling: /v1/read returned 500: [redacted]"},
+		{"nothing to redact", "nothing to redact"},
+		{"", ""},
+	} {
+		got := ScrubText(c.in)
+		if got != c.want {
+			t.Errorf("ScrubText(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if again := ScrubText(got); again != got {
+			t.Errorf("ScrubText is not idempotent on %q: second pass gives %q", got, again)
+		}
+	}
 }
 
 func TestRedactQuoted(t *testing.T) {
@@ -908,6 +978,12 @@ func TestRedactQuoted(t *testing.T) {
 		{`field ""`, `field "[redacted]"`},
 		{"", ""},
 		{"docling: /v1/read returned 500", "docling: /v1/read returned 500"},
+		{`"` + markerTIN + `""` + markerIRN + `"`, `"[redacted]""[redacted]"`},
+		{`x "` + markerTIN + `\\" y "` + markerIRN + `"`, `x "[redacted]" y "[redacted]"`},
+		{`bad "` + markerTIN + `\"`, `bad "[redacted]`},
+		{`bad "` + markerTIN + `\`, `bad "[redacted]`},
+		{`trailing "`, `trailing "[redacted]`},
+		{fmt.Sprintf("Ọ̀yọ́ café %q — 日本", "Adébáyọ̀ "+markerTIN), `Ọ̀yọ́ café "[redacted]" — 日本`},
 	} {
 		if got := redactQuoted(c.in); got != c.want {
 			t.Errorf("redactQuoted(%q) = %q, want %q", c.in, got, c.want)
@@ -926,6 +1002,8 @@ func TestRedactUpstreamReason(t *testing.T) {
 		{prefix + long.String(), prefix + "[redacted]"},
 		{"validation service returned status 502", "validation service returned status 502"},
 		{"returned 5: x", "returned 5: x"},
+		{"returned 4220: x", "returned 4220: x"},
+		{prefix + markerIRN + " retry returned 500: " + markerTIN, prefix + "[redacted]"},
 	} {
 		if got := redactUpstreamReason(c.in); got != c.want {
 			t.Errorf("redactUpstreamReason(%.80q...) = %.80q..., want %q", c.in, got, c.want)

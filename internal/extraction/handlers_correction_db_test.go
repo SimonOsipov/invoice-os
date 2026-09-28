@@ -3,7 +3,7 @@
 // reader_db_test.go's rdTenant, so this file adds no second skip site.
 //
 // The invoice seam is the test's own closure, not internal/invoice: deps_test.go fences this
-// package off everything outside internal/platform/* in BOTH scans, test imports included. What
+// package off everything outside internal/platform/... in BOTH scans, test imports included. What
 // the closure cannot prove -- the fix-loop rules the shared edit path buys -- is proved against
 // EditBySourceDocumentTx in internal/invoice/edit_by_source_document_test.go.
 //

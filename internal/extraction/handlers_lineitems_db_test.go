@@ -5,7 +5,7 @@
 // not merely against application code.
 //
 // The invoice seam is the test's own closure, not internal/invoice: deps_test.go fences this
-// package off everything outside internal/platform/* in BOTH scans, test imports included. So
+// package off everything outside internal/platform/... in BOTH scans, test imports included. So
 // lixApplier writes line_items with raw SQL, mirroring replaceLinesTx's shape; the actual
 // demotion RULE lives in internal/invoice and is proved there -- this file proves only that the
 // handler's ONE transaction carries through whatever the seam does.

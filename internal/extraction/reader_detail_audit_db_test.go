@@ -4,7 +4,7 @@
 // lands between that read's own begin and commit, and a recorder that refuses fails the read.
 //
 // The recorder is the test's own INSERT, not internal/audit.Record: deps_test.go fences this
-// package off everything outside internal/platform/*, and an import of internal/audit here
+// package off everything outside internal/platform/..., and an import of internal/audit here
 // would fail that scan. It writes the same three columns Record writes, through the tx Detail
 // hands it -- so a recorder called outside the transaction, or handed a nil one, writes nothing
 // and the counts below stay at zero.

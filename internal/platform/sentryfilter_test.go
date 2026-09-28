@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,6 +405,83 @@ func TestSentryFilter_NoQueryStringLeaves(t *testing.T) {
 		}
 		assertNoLeak(t, mt.captured())
 	})
+
+	// Go decodes %3F and %23 into r.URL.Path, which feeds request.url and the transaction name.
+	t.Run("encoded_query_in_path", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		r := httptest.NewRequest(http.MethodGet, "/v1/invoices%3Fq="+markerTIN+"%23"+markerIRN, nil)
+		serveThroughSentry(r, readAndCapture("encoded path anchor"))
+
+		ev := oneEvent(t, mt, "")
+		if ev.Request == nil {
+			t.Fatal("error event has no request")
+		}
+		if !strings.HasSuffix(ev.Request.URL, "/v1/invoices") {
+			t.Errorf("request.url = %q, want it to end /v1/invoices", ev.Request.URL)
+		}
+		if tx := oneEvent(t, mt, "transaction"); tx.Transaction != "GET /v1/invoices" {
+			t.Errorf("transaction = %q, want GET /v1/invoices", tx.Transaction)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("trace_description_and_data", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "reconcile.run", sentry.WithDescription("GET /v1/invoices?q="+markerTIN))
+		tx.SetData("url", "https://h/p?q="+markerTIN)
+		tx.SetData("http.query", "q="+markerTIN)
+		tx.SetData("http.fragment", markerIRN)
+		sentry.GetHubFromContext(tx.Context()).CaptureException(errors.New("trace anchor"))
+		tx.Finish()
+
+		for _, typ := range []string{"", "transaction"} {
+			ev := oneEvent(t, mt, typ)
+			trace := ev.Contexts["trace"]
+			if got := trace["description"]; got != "GET /v1/invoices" {
+				t.Errorf("%q event trace description = %v, want GET /v1/invoices", typ, got)
+			}
+			data, ok := trace["data"].(map[string]interface{})
+			if !ok || len(data) == 0 {
+				t.Fatalf("%q event trace data = %#v, want a non-empty map", typ, trace["data"])
+			}
+			if got := data["url"]; got != "https://h/p" {
+				t.Errorf("%q event trace data url = %v, want https://h/p", typ, got)
+			}
+			for _, k := range []string{"http.query", "http.fragment"} {
+				if v, ok := data[k]; ok {
+					t.Errorf("%q event trace data holds %s = %v, want the key absent", typ, k, v)
+				}
+			}
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("request_and_transaction_both_carry_a_query", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureEvent(&sentry.Event{
+			Level:       sentry.LevelError,
+			Message:     "both fields anchor",
+			Transaction: "GET /v1/invoices?q=" + markerTIN + "#" + markerIRN,
+			Request: &sentry.Request{
+				Method:      http.MethodGet,
+				URL:         "https://h/v1/invoices?q=" + markerTIN,
+				QueryString: "q=" + markerTIN,
+			},
+		})
+
+		ev := oneEvent(t, mt, "")
+		if ev.Transaction != "GET /v1/invoices" {
+			t.Errorf("transaction = %q, want GET /v1/invoices", ev.Transaction)
+		}
+		if ev.Request == nil {
+			t.Fatal("event lost its request")
+		}
+		if ev.Request.URL != "https://h/v1/invoices" || ev.Request.QueryString != "" {
+			t.Errorf("request url/query_string = %q / %q, want https://h/v1/invoices / empty", ev.Request.URL, ev.Request.QueryString)
+		}
+		assertNoLeak(t, mt.captured())
+	})
 }
 
 func TestStripQuery(t *testing.T) {
@@ -415,6 +493,8 @@ func TestStripQuery(t *testing.T) {
 		{"/p?a=1 then /q#f", "/p then /q"},
 		{`"a"?b`, `"a"`},
 		{"row #5", "row "}, // accepted cost: prose loses the token after # or ?
+		{"a?x\tb", "a\tb"},
+		{"/p?q=Ünï\nnext", "/p\nnext"},
 		// Guard: mutation is returning a placeholder for any input.
 		{"", ""},
 		// Guard: mutation is cutting at the first space.
@@ -579,6 +659,45 @@ func TestSentryFilter_HeadersPassAnAllowlist(t *testing.T) {
 		}
 		assertNoLeak(t, mt.captured())
 	})
+
+	t.Run("every_listed_name_in_any_case", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureEvent(&sentry.Event{
+			Level:   sentry.LevelError,
+			Message: "mixed case anchor",
+			Request: &sentry.Request{
+				Method: http.MethodGet,
+				URL:    "https://h/v1/x",
+				Headers: map[string]string{
+					"ACCEPT":         "application/json",
+					"content-LENGTH": "42",
+					"Content-type":   "text/csv",
+					"host":           "invoice.internal",
+					"user-agent":     "ops-probe/1",
+					"X-REQUEST-ID":   "req-anchor-2",
+					"x-S2S-TOKEN":    markerCred,
+					"X-Buyer-Tin":    markerTIN,
+				},
+			},
+		})
+
+		ev := oneEvent(t, mt, "")
+		if ev.Request == nil {
+			t.Fatal("event lost its request")
+		}
+		want := map[string]string{
+			"Accept":         "application/json",
+			"Content-Length": "42",
+			"Content-Type":   "text/csv",
+			"Host":           "invoice.internal",
+			"User-Agent":     "ops-probe/1",
+			"X-Request-Id":   "req-anchor-2",
+		}
+		if !reflect.DeepEqual(ev.Request.Headers, want) {
+			t.Errorf("request.headers = %v, want exactly %v", ev.Request.Headers, want)
+		}
+		assertNoLeak(t, mt.captured())
+	})
 }
 
 func TestSentryFilter_KeepsIdentityAsIs(t *testing.T) {
@@ -604,6 +723,35 @@ func TestSentryFilter_KeepsIdentityAsIs(t *testing.T) {
 	}
 	if !ev.User.IsEmpty() {
 		t.Errorf("user = %+v, want empty", ev.User)
+	}
+	assertNoLeak(t, mt.captured())
+
+	clientTenant := `tnt "y"?z=2`
+	CaptureError(WithTenantID(context.Background(), clientTenant), errors.New("tenant anchor"))
+	evs := eventsOfType(mt, "")
+	if len(evs) != 2 {
+		t.Fatalf("recorded %d error events, want 2", len(evs))
+	}
+	if got := evs[1].Tags["tenant_id"]; got != clientTenant {
+		t.Errorf("tenant_id tag = %q, want %q byte-identical", got, clientTenant)
+	}
+}
+
+func TestSentryFilter_TransactionCarriesNoUser(t *testing.T) {
+	mt := filteredClient(t, true)
+	hub := sentry.CurrentHub()
+	hub.PushScope()
+	defer hub.PopScope()
+	hub.Scope().SetUser(sentry.User{ID: markerTIN, Email: "a@b.c"})
+
+	serveThroughSentry(httptest.NewRequest(http.MethodGet, "/v1/invoices", nil), readAndReturn)
+
+	tx := oneEvent(t, mt, "transaction")
+	if tx.Transaction != "GET /v1/invoices" {
+		t.Errorf("transaction = %q, want GET /v1/invoices", tx.Transaction)
+	}
+	if !tx.User.IsEmpty() {
+		t.Errorf("transaction user = %+v, want empty", tx.User)
 	}
 	assertNoLeak(t, mt.captured())
 }

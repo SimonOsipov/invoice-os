@@ -54,10 +54,16 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 		tags := make(map[string]string, len(event.Tags))
 		for k, v := range event.Tags {
 			// The id tags stay byte-identical so they keep matching Railway logs.
-			if k != "request_id" && k != "tenant_id" {
-				v = ScrubText(v)
+			if k == "request_id" || k == "tenant_id" {
+				tags[k] = v
+				continue
 			}
-			tags[ScrubText(k)] = v
+			sk := ScrubText(k)
+			// A lookalike key such as request_id#x never overwrites the real id tag.
+			if _, clash := event.Tags[sk]; clash && (sk == "request_id" || sk == "tenant_id") {
+				continue
+			}
+			tags[sk] = ScrubText(v)
 		}
 		event.Tags = tags
 	}
@@ -222,7 +228,7 @@ func scrubValue(v interface{}) interface{} {
 	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
 		return ScrubText(string(rv.Bytes()))
 	}
-	// ceiling: a byte slice nested in a struct or typed map, or in span data, leaves as base64; revisit if one carries customer text
+	// ceiling: a nested byte slice leaves as base64 and nested raw JSON leaves unquoted, both unscrubbed; revisit if a caller puts either into Sentry data
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return "[redacted]"

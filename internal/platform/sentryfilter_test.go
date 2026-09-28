@@ -1491,6 +1491,26 @@ func TestSentryFilter_KeySitesAreScrubbed(t *testing.T) {
 		assertNoLeak(t, mt.captured())
 	})
 
+	t.Run("id_tag_beats_lookalike_key", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		hub := sentry.CurrentHub().Clone()
+		const realID = `req "1"`
+		hub.Scope().SetTag("request_id", realID)
+		hub.Scope().SetTag("request_id#x", "lookalike")
+		for i := 0; i < 30; i++ {
+			hub.CaptureException(errors.New("id collision anchor"))
+		}
+		evs := mt.captured()
+		if len(evs) != 30 {
+			t.Fatalf("captured %d events, want 30", len(evs))
+		}
+		for i, ev := range evs {
+			if got := ev.Tags["request_id"]; got != realID {
+				t.Fatalf("capture %d: request_id = %q, want %q", i, got, realID)
+			}
+		}
+	})
+
 	t.Run("context_name", func(t *testing.T) {
 		mt := filteredClient(t, false)
 		hub := sentry.CurrentHub().Clone()

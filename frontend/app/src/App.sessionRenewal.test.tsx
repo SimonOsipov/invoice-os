@@ -3,7 +3,7 @@
 
 import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me } from './auth'
 import { EMPTY_BUCKET } from './lib/dashboard'
@@ -212,6 +212,17 @@ const apiCalls = (from = 0) => calls.slice(from).filter((c) => c.url.startsWith(
 const probes = (from = 0) => calls.slice(from).filter((c) => c.url.startsWith(PROBE))
 const errorName = (e: unknown) => (e instanceof Error ? e.name : String(e))
 
+// Records any node carrying `text` that was ever added, even one removed in the same act().
+function watchForText(text: string) {
+  let seen = false
+  const observer = new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) if (n.textContent?.includes(text)) seen = true
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+  onTestFinished(() => observer.disconnect())
+  return { seen: () => seen }
+}
+
 async function settle(ms = 30) {
   await act(async () => {
     await new Promise((r) => setTimeout(r, ms))
@@ -309,8 +320,10 @@ afterEach(() => {
 describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)', () => {
   it('a due session renews before the workspace mounts', async () => {
     const refresh = deferRefresh()
+    const splash = watchForText('Opening your workspace…')
     await bootWith(record(A0_DUE, DUE_AT))
 
+    expect(splash.seen(), 'control: the watcher sees the splash').toBe(true)
     expect(screen.queryByText('Opening your workspace…'), 'a due boot shows the splash').not.toBeNull()
     expect(capturedCtx, 'the workspace waits for the renewal').toBeUndefined()
     expect(apiCalls()).toEqual([])
@@ -330,9 +343,10 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
   })
 
   it('a fresh session mounts with no renewal', async () => {
+    const splash = watchForText('Opening your workspace…')
     await bootWith(record(A0_FRESH, FRESH_AT))
 
-    expect(screen.queryByText('Opening your workspace…')).toBeNull()
+    expect(splash.seen(), 'the splash never renders, not even for one commit').toBe(false)
     await waitForVerifiedWorkspace()
     await settle()
 
@@ -472,7 +486,7 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
     vi.stubEnv('VITE_LANDING_URL', LANDING)
     window.history.replaceState(null, '', '/?persona=firm')
-    interceptHref()
+    const { hrefWrites } = interceptHref()
     await bootApp()
     await waitForVerifiedWorkspace()
     await settle()
@@ -484,8 +498,9 @@ describe('mid-session renewal (AC-5, AC-8, AC-9)', () => {
     const out = await probe(capturedCtx)
 
     expect(out).toBe('resolved')
-    expect(probes(mark)).toHaveLength(1)
+    expect(probes(mark).map((c) => c.auth), 'the expired persona token is still sent').toEqual([`Bearer ${standInToken(NOW)}`])
     expect(refreshes()).toEqual([])
+    expect(hrefWrites).toEqual([])
   })
 
   it('byte transports use the renewed token', async () => {

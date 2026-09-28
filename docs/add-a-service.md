@@ -209,7 +209,9 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   in `prepare-env` writes them to `""` in every `pr-<N>` fork before anything deploys.
   Never seal them: a sealed variable does not fork, and `audit-sealed-variables` fails
   every PR run. A new service joins `set-sentry-off`'s lists in the same change
-  (`TestSentryOffListsMatchTheDeployedFleet`).
+  (`TestSentryOffListsMatchTheDeployedFleet`). A new service probed through the
+  `/healthz/fleet` roll-up without the platform `/healthz` must be exempted by name in
+  `fleet-gate`'s "Gate on the Go fleet's Sentry state" step, as `docling` and `auth` are.
 
 ## 5. Provisioning runbook
 

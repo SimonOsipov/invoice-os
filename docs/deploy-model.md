@@ -102,7 +102,8 @@ PR opened ──> dev-env.yml:
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
                 ──> 8 context services + docling + auth + 4 SPAs (app is gateway-wired)
                 ──> verify: smoke (landing + both consoles) + api + topology (app login,
-                    cross-tenant isolation, fleet /healthz/fleet gate) + demo
+                    cross-tenant isolation, fleet /healthz/fleet gate + its Sentry
+                    state check: every Go service reports sentry "off") + demo
               ──> PR stays open: environment stays up
 PR closed  ──> dev-env-teardown.yml (M4-23-05): prenv name ──> look the name up among
                ephemeral environments ──> environmentDelete ──> confirm by re-query.
@@ -114,7 +115,8 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
                       "absent", auth_issuers == "1", then GET /.well-known/jwks.json and
                       POST /auth/login must answer 404) ──> 8 context + docling + auth +
-                      4 SPAs ──> fleet gate
+                      4 SPAs ──> fleet gate + Sentry state check (every Go service
+                      reports sentry "on" or "off", never absent)
                   ──> no E2E (ephemeral environments only)
 
 workflow_dispatch ──> targets the persistent environment directly (never torn down),

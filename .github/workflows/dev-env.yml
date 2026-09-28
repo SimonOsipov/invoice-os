@@ -962,6 +962,48 @@ jobs:
           fi
           echo "docling is serving $EXPECTED_BUILD."
 
+      # No if: a push must still report on|off, so a production build that stops
+      # reporting fails here. docling and auth lack the platform /healthz.
+      - name: Gate on the Go fleet's Sentry state
+        env:
+          EXPECTED_BUILD: ${{ github.sha }}
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          set -euo pipefail
+          parsed=0
+          for _ in $(seq 1 5); do
+            if curl -sS --connect-timeout 5 --max-time 10 -o /tmp/sentry-fleet.json "$GATEWAY_URL/healthz/fleet" \
+              && jq -e '.services | type == "array"' /tmp/sentry-fleet.json >/dev/null 2>&1; then
+              parsed=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$parsed" != 1 ]; then
+            echo "::error::$GATEWAY_URL/healthz/fleet was unreachable or had no services list after 5 tries; the Go fleet's Sentry state is unknown."
+            exit 1
+          fi
+          if [ "$IS_PR" = "true" ]; then want='^off$'; direction='off'; else want='^(on|off)$'; direction='on or off'; fi
+          checked='[.services[] | select(.name != "docling" and .name != "auth")]'
+          names=$(jq -r "$checked | map(.name) | join(\", \")" /tmp/sentry-fleet.json) || {
+            echo "::error::the fleet roll-up has a services entry that is not an object; the Sentry state is unverified."
+            exit 1
+          }
+          if ! jq -e "$checked | any(.name == \"gateway\")" /tmp/sentry-fleet.json >/dev/null 2>&1; then
+            echo "::error::the fleet roll-up has no gateway entry (checked: ${names:-nothing}); the Sentry state is unverified."
+            exit 1
+          fi
+          offenders=$(jq -r --arg b "$EXPECTED_BUILD" --arg want "$want" "$checked"' | map(select(.build != $b or (if (.sentry | type) == "string" then (.sentry | test($want) | not) else true end)) | "\(.name)=\(.sentry // "none")@\(.build // "none")") | join(", ")' /tmp/sentry-fleet.json) || {
+            echo "::error::the fleet roll-up has a services entry that is not an object; the Sentry state is unverified."
+            exit 1
+          }
+          if [ -n "$offenders" ]; then
+            echo "::error::want Sentry $direction on $EXPECTED_BUILD; offenders: $offenders"
+            echo "::error::'none' means the service predates the sentry field. On a PR, 'on' means a DSN reached the fork: check set-sentry-off in prepare-env. Any other build means its new container never replaced the old one."
+            exit 1
+          fi
+          echo "Sentry $direction on $EXPECTED_BUILD for: $names (docling and auth exempt)."
+
   # 7. Post-deploy verification (b): smoke (landing + both consoles render), api
   #    (typed contract suite against the gateway), topology (browser login
   #    + cross-tenant isolation) via Playwright,

@@ -405,6 +405,19 @@ describe('a due stored session renews at boot (AC-1, AC-2, AC-3, AC-10, AC-16)',
     expect(hrefWrites).toEqual([])
   })
 
+  it('a live renewable hand-off session still beats ?persona=', async () => {
+    const { hrefWrites } = await mountFresh('/?persona=firm')
+
+    expect(calls.filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is not minted').toEqual([])
+    expect(apiCalls().length).toBeGreaterThan(0)
+    expect(apiCalls().filter((c) => c.auth !== `Bearer ${A0_FRESH}`)).toEqual([])
+    expect(storedRecord()?.handoff).toBe(true)
+    expect(storedRecord()?.token).toBe(A0_FRESH)
+    expect(storedRecord()?.refresh_token).toBe('R0')
+    expect(window.location.search, 'the suppressed persona is stripped').toBe('')
+    expect(hrefWrites).toEqual([])
+  })
+
   // A code is a sign-in the user just made; only an unexpired stored session beats it.
   it('a ?handoff= code wins over an expired renewable hand-off session', async () => {
     const NEW_T = jwt(OTHER_ME, nowSec(NOW), 'N')
@@ -597,17 +610,26 @@ describe('a kept record and a ?persona= link', () => {
   // A kept record must not beat a ?persona= link, or while renewal is down every link bounces to landing.
   it('a ?persona= link after a transient boot failure does not bounce to landing again', async () => {
     refreshReply = UNAVAILABLE
-    await bootWith(record(A0_OLD, OLD_AT), '/?persona=firm')
-    await settle(100)
-    expect(calls.length, 'the first boot ran').toBeGreaterThan(0)
+    const first = await bootWith(record(A0_OLD, OLD_AT), '/')
+    await waitFor(() => expect(first.hrefWrites, 'a failed boot renewal navigates to landing').toHaveLength(1))
+    await settle()
+
+    expect(refreshes(), 'the first boot tries the renewal').toHaveLength(1)
+    expect(capturedCtx, 'the workspace never mounts').toBeUndefined()
+    expect(storedRecord()?.token, 'the transient end keeps the record').toBe(A0_OLD)
+    expect(storedRecord()?.refresh_token).toBe('R0')
 
     const mark = calls.length
     const second = await reload('/?persona=firm')
-    await settle(100)
+    await waitFor(() => expect(capturedCtx?.user, 'the persona workspace must mount').toBeDefined())
+    await settle()
 
+    expect(calls.slice(mark).filter((c) => c.url === `${GATEWAY}/auth/login`), 'the persona is minted').toHaveLength(1)
+    expect(refreshes(mark), 'the kept refresh token is not sent').toEqual([])
     expect(second.hrefWrites, 'no second bounce to landing').toEqual([])
-    await waitFor(() => expect(capturedCtx?.user, 'a workspace mounts on the second link').toBeDefined())
-    expect(calls.slice(mark).length).toBeGreaterThan(0)
+    expect(storedRecord()?.token).toBe(standInToken(NOW))
+    expect(storedRecord()?.handoff).toBeUndefined()
+    expect(window.location.search).toBe('')
   })
 })
 

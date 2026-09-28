@@ -108,7 +108,6 @@ func scrubLog(log *sentry.Log) *sentry.Log {
 // scrubSpan returns a scrubbed copy of s. A caller may still write to a
 // finished child span, so Tags and Data are read under the span's own lock.
 func scrubSpan(s *sentry.Span) *sentry.Span {
-	// MakeSerializationSafe is the only exported path that takes the span's lock.
 	(&sentry.Event{Spans: []*sentry.Span{s}}).MakeSerializationSafe()
 	var snap struct {
 		Tags map[string]string      `json:"tags"`

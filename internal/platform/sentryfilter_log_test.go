@@ -283,12 +283,22 @@ func TestSentryLogFilter_DropsUserAttributes(t *testing.T) {
 	hub.PushScope()
 	defer hub.PopScope()
 	hub.Scope().SetUser(sentry.User{ID: markerTIN, Name: markerIRN, Email: "a@" + markerCred + ".ng"})
-	newHubLogger().Info().Emit("user scope anchor")
+	newHubLogger().Info().
+		String("user.tin", markerTIN).
+		String("user", `u "`+markerIRN+`"`).
+		String("userx.id", `u "`+markerIRN+`"`).
+		Emit("user scope anchor")
 
 	l := oneLog(t, mt)
 	for _, k := range attrKeys(l) {
 		if strings.HasPrefix(k, "user.") {
 			t.Errorf("log attribute %s arrived, want every user.* attribute dropped", k)
+		}
+	}
+	// The deleted set is the prefix "user." with its dot.
+	for _, k := range []string{"user", "userx.id"} {
+		if got, want := logAttr(t, l, k).AsString(), `u "[redacted]"`; got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
 	logAttr(t, l, "sentry.environment")

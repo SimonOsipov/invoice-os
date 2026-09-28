@@ -990,6 +990,13 @@ func TestRedactQuoted(t *testing.T) {
 		{`bad input x"y: value "` + markerTIN + `"`, `bad input x"[redacted]`},
 		{`a '"' b`, `a '"' b`},
 		{`'"'`, `'"'`},
+		{`value "` + markerTIN + `" rune '"'`, `value "[redacted]" rune '"'`},
+		{`value "` + markerTIN + `" rune '\"'`, `value "[redacted]" rune '\"'`},
+		{`cut '"`, `cut '"[redacted]`},
+		{`rune '\\' then "` + markerTIN + `"`, `rune '\\' then "[redacted]"`},
+		{`rune '\\'"` + markerTIN + `"`, `rune '\\'"[redacted]"`},
+		{`a\"b "` + markerTIN + `"`, `a\"[redacted]`},
+		{`x "a'"' "` + markerTIN + `"`, `x "[redacted]"' "[redacted]"`},
 	} {
 		if got := redactQuoted(c.in); got != c.want {
 			t.Errorf("redactQuoted(%q) = %q, want %q", c.in, got, c.want)
@@ -1078,6 +1085,9 @@ func TestSentryFilter_SpanTagsAndName(t *testing.T) {
 	if got := s.Tags["arg"]; got != `buyer "[redacted]"` {
 		t.Errorf("span tag arg = %q, want buyer \"[redacted]\"", got)
 	}
+	if got, want := child.Tags["arg"], fmt.Sprintf("buyer %q", markerTIN); got != want {
+		t.Errorf("caller's span tag arg = %q, want %q: the filter must not edit the shared span", got, want)
+	}
 	assertNoLeak(t, mt.captured())
 }
 
@@ -1090,6 +1100,12 @@ func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
 			"args":    []string{`x "` + markerTIN + `"`},
 			"request": map[string]any{"url": "/x?tin=" + markerTIN},
 			"rows":    []interface{}{map[string]interface{}{"irn": `k "` + markerIRN + `"`}},
+			"headers": map[string]string{"x-note": `n "` + markerCred + `"`},
+			"deep": map[string]interface{}{"l2": []interface{}{
+				map[string]interface{}{"l4": []interface{}{`d "` + markerAmt + `"`}},
+			}},
+			"none":  nil,
+			"count": 3,
 		},
 	}, nil)
 	hub.CaptureException(errors.New("nested data anchor"))
@@ -1105,6 +1121,29 @@ func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
 	if req, ok := d["request"].(map[string]interface{}); !ok || req["url"] != "/x" {
 		t.Errorf("breadcrumb request = %#v, want url /x", d["request"])
 	}
+	if rows, ok := d["rows"].([]interface{}); !ok || len(rows) != 1 {
+		t.Errorf("breadcrumb rows = %#v, want one row", d["rows"])
+	} else if row, _ := rows[0].(map[string]interface{}); row["irn"] != `k "[redacted]"` {
+		t.Errorf("breadcrumb rows[0] = %#v, want irn k \"[redacted]\"", rows[0])
+	}
+	if h, ok := d["headers"].(map[string]string); !ok || h["x-note"] != `n "[redacted]"` {
+		t.Errorf("breadcrumb headers = %#v, want x-note n \"[redacted]\"", d["headers"])
+	}
+	deep, _ := d["deep"].(map[string]interface{})
+	l2, _ := deep["l2"].([]interface{})
+	if len(l2) != 1 {
+		t.Fatalf("breadcrumb deep = %#v, want l2 with one entry", d["deep"])
+	}
+	l3, _ := l2[0].(map[string]interface{})
+	if l4, _ := l3["l4"].([]interface{}); len(l4) != 1 || l4[0] != `d "[redacted]"` {
+		t.Errorf("breadcrumb deep.l2[0].l4 = %#v, want [d \"[redacted]\"]", l3["l4"])
+	}
+	if v, ok := d["none"]; !ok || v != nil {
+		t.Errorf("breadcrumb none = %#v (present %v), want a nil value kept", v, ok)
+	}
+	if d["count"] != 3 {
+		t.Errorf("breadcrumb count = %#v, want 3", d["count"])
+	}
 	assertNoLeak(t, mt.captured())
 }
 
@@ -1112,14 +1151,18 @@ func TestSentryFilter_ScopeContextsAreScrubbed(t *testing.T) {
 	mt := filteredClient(t, false)
 	hub := sentry.CurrentHub().Clone()
 	hub.Scope().SetContext("invoice", sentry.Context{
-		"irn":  `x "` + markerIRN + `"`,
-		"list": map[string]interface{}{"url": "/x?tin=" + markerTIN},
+		"irn":        `x "` + markerIRN + `"`,
+		"list":       map[string]interface{}{"url": "/x?tin=" + markerTIN},
+		"http.query": "tin=" + markerTIN,
 	})
 	hub.CaptureException(errors.New("context anchor"))
 
 	ev := oneEvent(t, mt, "")
 	if got := ev.Contexts["invoice"]["irn"]; got != `x "[redacted]"` {
 		t.Errorf("invoice context irn = %v, want x \"[redacted]\"", got)
+	}
+	if v, ok := ev.Contexts["invoice"]["http.query"]; ok {
+		t.Errorf("invoice context holds http.query = %v, want the key absent", v)
 	}
 	rt, ok := ev.Contexts["runtime"]
 	if !ok || rt["name"] != "go" {
@@ -1167,4 +1210,120 @@ func TestSentryFilter_SpanWrittenAfterFinish(t *testing.T) {
 		t.Errorf("span data q = %v, want buyer \"[redacted]\"", got)
 	}
 	assertNoLeak(t, mt.captured())
+}
+
+// spanJSON decodes s as Span.MarshalJSON writes it; numbers stay json.Number.
+func spanJSON(t *testing.T, s *sentry.Span) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal span: %v", err)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	var out map[string]any
+	if err := dec.Decode(&out); err != nil {
+		t.Fatalf("decode span: %v", err)
+	}
+	return out
+}
+
+func TestSentryFilter_SpanCopy(t *testing.T) {
+	// Values here scrub to themselves, so the copy must match the caller's span byte for byte.
+	for _, tc := range []struct {
+		name     string
+		tagsData bool
+		keys     []string
+	}{
+		{"keeps_wire_fields", true, []string{"trace_id", "span_id", "parent_span_id", "name", "op", "description", "status", "start_timestamp", "timestamp", "origin", "tags", "data"}},
+		{"no_tags_or_data", false, []string{"trace_id", "span_id", "parent_span_id", "op", "start_timestamp", "timestamp", "origin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mt := filteredClient(t, true)
+			ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+			tx := sentry.StartTransaction(ctx, "reconcile.run")
+			child := tx.StartChild("db.query")
+			if tc.tagsData {
+				child.Name = "db select"
+				child.Description = "select rows"
+				child.Status = sentry.SpanStatusDeadlineExceeded
+				child.SetTag("table", "invoices")
+				child.SetData("rows", 3)
+			}
+			child.Finish()
+			tx.Finish()
+
+			ev := oneEvent(t, mt, "transaction")
+			if len(ev.Spans) != 1 {
+				t.Fatalf("transaction has %d spans, want 1", len(ev.Spans))
+			}
+			want, got := spanJSON(t, child), spanJSON(t, ev.Spans[0])
+			for _, k := range tc.keys {
+				if _, ok := want[k]; !ok {
+					t.Fatalf("caller's span JSON has no %s: %v", k, want)
+				}
+			}
+			if !tc.tagsData {
+				if _, ok := got["tags"]; ok {
+					t.Errorf("span copy JSON has tags %v, want none", got["tags"])
+				}
+				if _, ok := got["data"]; ok {
+					t.Errorf("span copy JSON has data %v, want none", got["data"])
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("span copy JSON = %v, want the caller's span %v", got, want)
+			}
+			assertNoLeak(t, mt.captured())
+		})
+	}
+
+	t.Run("large_int_keeps_precision", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "reconcile.run")
+		child := tx.StartChild("db.query")
+		child.SetData("id", int64(9007199254740993))
+		child.Finish()
+		tx.Finish()
+
+		ev := oneEvent(t, mt, "transaction")
+		if len(ev.Spans) != 1 {
+			t.Fatalf("transaction has %d spans, want 1", len(ev.Spans))
+		}
+		data, _ := spanJSON(t, ev.Spans[0])["data"].(map[string]any)
+		if got := fmt.Sprint(data["id"]); got != "9007199254740993" {
+			t.Errorf("span data id = %s, want 9007199254740993", got)
+		}
+	})
+
+	// encoding/json writes any depth but reads at most 10000 levels, so this span cannot round-trip.
+	t.Run("undecodable_data_drops_tags_and_data", func(t *testing.T) {
+		mt := filteredClient(t, true)
+		ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+		tx := sentry.StartTransaction(ctx, "reconcile.run")
+		child := tx.StartChild("db.query")
+		deep := map[string]interface{}{}
+		for i, cur := 0, deep; i < 10001; i++ {
+			next := map[string]interface{}{}
+			cur["d"] = next
+			cur = next
+		}
+		child.SetTag("table", "invoices")
+		child.SetData("deep", deep)
+		child.Finish()
+		tx.Finish()
+
+		ev := oneEvent(t, mt, "transaction")
+		if len(ev.Spans) != 1 {
+			t.Fatalf("transaction has %d spans, want 1", len(ev.Spans))
+		}
+		s := ev.Spans[0]
+		if s.Op != "db.query" || s.SpanID != child.SpanID {
+			t.Errorf("span copy op %q id %v, want db.query %v", s.Op, s.SpanID, child.SpanID)
+		}
+		if len(s.Tags) != 0 || len(s.Data) != 0 {
+			t.Errorf("span copy tags %v, %d data keys, want neither", s.Tags, len(s.Data))
+		}
+	})
 }

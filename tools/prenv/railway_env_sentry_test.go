@@ -174,6 +174,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		settle  string
 		bend    map[string]string // service -> jq filter over its read
 		files   map[string]string // shim file -> body
+		arg     string            // defaults to forkEnvID
 		code    int
 		needles []string
 		check   func(t *testing.T, s authShim, out string)
@@ -209,6 +210,34 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		{name: "variables_array", bend: map[string]string{"gateway": "[]"}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
 		{name: "write_refused", files: map[string]string{"upsert-SENTRY_DSN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: noReRead},
 		{name: "write_transport_failure", files: map[string]string{"upsert-SENTRY_DSN.fail": "curl: (22) The requested URL returned error: 502"}, code: 1, check: noReRead},
+		{name: "vite_dsn_survives_on_support_console", bend: map[string]string{"support-console": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
+			refusesAsSet(t, out, "support-console.VITE_SENTRY_DSN")
+			if sentryConfirmed(out) {
+				t.Errorf("a refused re-read printed the confirmation line; output = %q", out)
+			}
+		}},
+		{name: "json_null_value", bend: map[string]string{"gateway": `.SENTRY_DSN = null`}, code: 1, check: gatewaySet},
+		{name: "variables_string", bend: map[string]string{"gateway": `"` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		// The shim then answers {"data":{"variables":}}, which graphql_post passes through.
+		{name: "reread_not_json", bend: map[string]string{"gateway": `error("broken read")`}, code: 1, check: func(t *testing.T, s authShim, out string) { refusesUnreadable(t, out) }},
+		{name: "token_write_refused_after_the_backends", files: map[string]string{"upsert-SENTRY_AUTH_TOKEN.json": `{"errors":[{"message":"Not Authorized"}]}`}, code: 1, check: func(t *testing.T, s authShim, out string) {
+			ids, _ := reReads(s.calls(t))
+			if len(ids) != len(sentryBackends) || slices.Contains(ids, sentrySvcID("landing")) {
+				t.Errorf("re-reads = %v, want exactly the backends and never landing after its write failed", ids)
+			}
+			if sentryConfirmed(out) {
+				t.Errorf("a failed write printed the confirmation line; output = %q", out)
+			}
+		}},
+		// Only the literal compare can refuse here with no call: the ephemeral check would read the list first.
+		{name: "persistent_id_with_every_variable_set", arg: persistentEnvironmentID, code: 1, check: func(t *testing.T, s authShim, out string) {
+			if !strings.Contains(errorLines(out), persistentEnvironmentID) {
+				t.Errorf("no ::error:: line names the persistent environment; output = %q", out)
+			}
+			if calls := s.calls(t); len(calls) != 0 {
+				t.Errorf("the refusal reached Railway: %v", operations(calls))
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -227,7 +256,11 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 				writeFile(t, filepath.Join(s.dir, f), body)
 			}
 
-			stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
+			arg := forkEnvID
+			if c.arg != "" {
+				arg = c.arg
+			}
+			stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", arg)
 			out := stdout + stderr
 			if code != c.code {
 				t.Fatalf("exit %d, want %d; output = %q", code, c.code, out)
@@ -482,4 +515,99 @@ func sentryMatrixList(t *testing.T, content, job string) []string {
 	}
 	t.Fatalf("dev-env.yml job `%s` has no `service: [...]` matrix", job)
 	return nil
+}
+
+// sentry_verdict on shapes set-sentry-off cannot produce: graphql_post exits first on `.errors`, and the shim always wraps a map.
+func TestSentryVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
+	script := "set -euo pipefail\n" + shellFunctionSource(t, "auth_kind", "sentry_verdict") +
+		"rc=0\nsentry_verdict \"$1\" landing \"${@:2}\" || rc=$?\nexit \"$rc\"\n"
+	const (
+		leak  = "sntrys_truth_table_marker"
+		dsn   = "https://truthkey@o1.ingest.de.sentry.io/9"
+		spa   = "VITE_SENTRY_DSN SENTRY_AUTH_TOKEN"
+		pass  = "pass"
+		set   = "set"
+		unred = "unreadable"
+	)
+	vars := func(fields string) string {
+		return `{"data":{"variables":{"DATABASE_URL":"` + leak + `"` + fields + `}}}`
+	}
+
+	cases := []struct {
+		name, json, names, want string
+		named                   []string // <svc>.<NAME> each refusal or pass line must carry
+	}{
+		{"absent", vars(``), "SENTRY_DSN", pass, []string{"landing.SENTRY_DSN is absent"}},
+		{"empty", vars(`,"SENTRY_DSN":""`), "SENTRY_DSN", pass, []string{"landing.SENTRY_DSN is empty"}},
+		{"both spa names empty beside an empty errors array", `{"errors":[],"data":{"variables":{"VITE_SENTRY_DSN":"","SENTRY_AUTH_TOKEN":"","DATABASE_URL":"` + leak + `"}}}`, spa, pass,
+			[]string{"landing.VITE_SENTRY_DSN is empty", "landing.SENTRY_AUTH_TOKEN is empty"}},
+		// The SDK reads the exact name, so another case is not a live DSN.
+		{"lower-case name only", vars(`,"sentry_dsn":"` + dsn + `"`), "SENTRY_DSN", pass, []string{"landing.SENTRY_DSN is absent"}},
+		{"dsn", vars(`,"SENTRY_DSN":"` + dsn + `"`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"single space", vars(`,"SENTRY_DSN":" "`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"newline only", vars(`,"SENTRY_DSN":"\n"`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"json null value", vars(`,"SENTRY_DSN":null`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"false value", vars(`,"SENTRY_DSN":false`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"zero value", vars(`,"SENTRY_DSN":0`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"object value", vars(`,"SENTRY_DSN":{"v":"` + dsn + `"}`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		{"unrendered reference", vars(`,"SENTRY_DSN":"${{shared.SENTRY_DSN}}"`), "SENTRY_DSN", set, []string{"landing.SENTRY_DSN"}},
+		// Every name is checked before the verdict returns.
+		{"both spa names set", vars(`,"VITE_SENTRY_DSN":"` + dsn + `","SENTRY_AUTH_TOKEN":"` + leak + `"`), spa, set,
+			[]string{"landing.VITE_SENTRY_DSN", "landing.SENTRY_AUTH_TOKEN"}},
+		{"only the second spa name set", vars(`,"VITE_SENTRY_DSN":"","SENTRY_AUTH_TOKEN":"` + leak + `"`), spa, set, []string{"landing.SENTRY_AUTH_TOKEN"}},
+		{"only the first spa name set", vars(`,"VITE_SENTRY_DSN":"` + dsn + `","SENTRY_AUTH_TOKEN":""`), spa, set, []string{"landing.VITE_SENTRY_DSN"}},
+		{"errors beside a clean map", `{"errors":[{"message":"Not Authorized"}],"data":{"variables":{"DATABASE_URL":"` + leak + `"}}}`, "SENTRY_DSN", unred, nil},
+		{"errors carrying a value", `{"errors":[{"message":"` + dsn + `"}],"data":{"variables":{"SENTRY_DSN":""}}}`, "SENTRY_DSN", unred, nil},
+		{"top-level null", `null`, "SENTRY_DSN", unred, nil},
+		{"top-level array", `[` + vars(`,"SENTRY_DSN":""`) + `]`, "SENTRY_DSN", unred, nil},
+		{"top-level string", `"` + dsn + `"`, "SENTRY_DSN", unred, nil},
+		{"top-level number", `42`, "SENTRY_DSN", unred, nil},
+		{"empty object", `{}`, "SENTRY_DSN", unred, nil},
+		{"data null", `{"data":null}`, "SENTRY_DSN", unred, nil},
+		{"variables null", `{"data":{"variables":null}}`, "SENTRY_DSN", unred, nil},
+		{"variables a string", `{"data":{"variables":"` + dsn + `"}}`, "SENTRY_DSN", unred, nil},
+		{"variables an array", `{"data":{"variables":["` + dsn + `"]}}`, "SENTRY_DSN", unred, nil},
+		{"not json", leak + `{`, "SENTRY_DSN", unred, nil},
+		{"truncated json", vars(`,"SENTRY_DSN":""`)[:30], "SENTRY_DSN", unred, nil},
+		{"empty input", ``, "SENTRY_DSN", unred, nil},
+		{"two json documents", vars(`,"SENTRY_DSN":""`) + " " + vars(`,"SENTRY_DSN":"`+dsn+`"`), "SENTRY_DSN", unred, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stdout, stderr, code := runBashScript(t, script, append([]string{c.json}, strings.Fields(c.names)...)...)
+			out := stdout + stderr
+			errs := errorLines(out)
+			switch c.want {
+			case pass:
+				if code != 0 || errs != "" {
+					t.Errorf("exit %d with errors %q, want a pass; output = %q", code, errs, out)
+				}
+				for _, n := range c.named {
+					if !strings.Contains(out, n) {
+						t.Errorf("output lacks %q; output = %q", n, out)
+					}
+				}
+			case set:
+				if code == 0 {
+					t.Errorf("exit 0, want a refusal; output = %q", out)
+				}
+				for _, n := range c.named {
+					refusesAsSet(t, out, n)
+				}
+				if strings.Contains(errs, "NOT evidence") {
+					t.Errorf("a readable set value produced the unreadable refusal; output = %q", out)
+				}
+			case unred:
+				if code == 0 {
+					t.Errorf("exit 0, want a refusal; output = %q", out)
+				}
+				refusesUnreadable(t, out)
+			}
+			for _, n := range []string{leak, dsn} {
+				if strings.Contains(out, n) {
+					t.Errorf("the verdict printed %q; output = %q", n, out)
+				}
+			}
+		})
+	}
 }

@@ -1170,6 +1170,7 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 			"header": http.Header{"Accept": {"text/html"}, "X-Note": {`n "` + markerCred + `"`}},
 			"rows":   []map[string]interface{}{{"irn": `k "` + markerIRN + `"`, "line": 1}},
 			"notes":  map[string][]string{"n": {`d "` + markerAmt + `"`, "ok"}},
+			"raw":    []byte(`b "` + markerTIN + `"`),
 			"tin":    tinT(`t "` + markerTIN + `"`),
 			"seq":    []int64{9007199254740993},
 			"deep":   deep,
@@ -1188,6 +1189,7 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	want := `{"deep":"[redacted]",` +
 		`"header":{"Accept":["text/html"],"X-Note":["n \"[redacted]\""]},` +
 		`"notes":{"n":["d \"[redacted]\"","ok"]},` +
+		`"raw":"b \"[redacted]\"",` +
 		`"rows":[{"irn":"k \"[redacted]\"","line":1}],` +
 		`"seq":[9007199254740993],` +
 		`"tin":"t \"[redacted]\""}`
@@ -1199,6 +1201,31 @@ func TestSentryFilter_OtherDataTypesAreScrubbed(t *testing.T) {
 	}
 	if got := scrubValue(make(chan int)); got != "[redacted]" {
 		t.Errorf("scrubValue(chan) = %#v, want [redacted]", got)
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+func TestSentryFilter_MapKeysAreScrubbed(t *testing.T) {
+	mt := filteredClient(t, false)
+	hub := sentry.CurrentHub().Clone()
+	hub.Scope().SetContext("probe", sentry.Context{`k "` + markerIRN + `"`: "v"})
+	hub.AddBreadcrumb(&sentry.Breadcrumb{
+		Category: "db",
+		Data: map[string]interface{}{
+			`k "` + markerTIN + `"`: "top",
+			"nested":                map[string]interface{}{`k "` + markerIRN + `"`: "v"},
+			"strings":               map[string]string{`k "` + markerCred + `"`: "v"},
+			"ints":                  map[string]int{`k "` + markerAmt + `"`: 1},
+		},
+	}, nil)
+	hub.CaptureException(errors.New("map keys anchor"))
+
+	ev := oneEvent(t, mt, "")
+	if len(ev.Breadcrumbs) != 1 {
+		t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
+	}
+	if got := ev.Breadcrumbs[0].Data[`k "[redacted]"`]; got != "top" {
+		t.Errorf("breadcrumb data[k \"[redacted]\"] = %#v, want top", got)
 	}
 	assertNoLeak(t, mt.captured())
 }

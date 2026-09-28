@@ -141,7 +141,8 @@ func scrubSpan(s *sentry.Span) *sentry.Span {
 }
 
 // scrubData returns a copy of d without top-level query or fragment keys,
-// with strings at any depth passed through ScrubText.
+// with keys and strings at any depth passed through ScrubText.
+// ceiling: two keys that redact alike merge; revisit if a lost key hides a fault
 func scrubData(d map[string]interface{}) map[string]interface{} {
 	if d == nil {
 		return nil
@@ -151,7 +152,7 @@ func scrubData(d map[string]interface{}) map[string]interface{} {
 		if k == "http.query" || k == "http.fragment" {
 			continue
 		}
-		out[k] = scrubValue(v)
+		out[ScrubText(k)] = scrubValue(v)
 	}
 	return out
 }
@@ -164,16 +165,19 @@ func scrubValue(v interface{}) interface{} {
 		return v
 	case string:
 		return ScrubText(x)
+	case []byte:
+		// JSON would base64 it, which hides a quoted value from ScrubText.
+		return ScrubText(string(x))
 	case map[string]interface{}:
 		out := make(map[string]interface{}, len(x))
 		for k, e := range x {
-			out[k] = scrubValue(e)
+			out[ScrubText(k)] = scrubValue(e)
 		}
 		return out
 	case map[string]string:
 		out := make(map[string]string, len(x))
 		for k, e := range x {
-			out[k] = ScrubText(e)
+			out[ScrubText(k)] = ScrubText(e)
 		}
 		return out
 	case []interface{}:

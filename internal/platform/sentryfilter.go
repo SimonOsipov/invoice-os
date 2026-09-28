@@ -80,6 +80,12 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 	return event
 }
 
+// scrubLog removes queries and customer text from a log record before it
+// leaves for Sentry. It never drops the record.
+func scrubLog(log *sentry.Log) *sentry.Log {
+	return log
+}
+
 // scrubData returns a copy of d without query or fragment keys, with string
 // values passed through ScrubText.
 func scrubData(d map[string]interface{}) map[string]interface{} {

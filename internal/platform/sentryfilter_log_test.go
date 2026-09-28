@@ -276,3 +276,21 @@ func TestSentryLogFilter_EmptyStringSlice(t *testing.T) {
 		t.Errorf("rows attribute = %q, want empty", got)
 	}
 }
+
+func TestSentryLogFilter_DropsUserAttributes(t *testing.T) {
+	mt := filteredClient(t, false)
+	hub := sentry.CurrentHub()
+	hub.PushScope()
+	defer hub.PopScope()
+	hub.Scope().SetUser(sentry.User{ID: markerTIN, Name: markerIRN, Email: "a@" + markerCred + ".ng"})
+	newHubLogger().Info().Emit("user scope anchor")
+
+	l := oneLog(t, mt)
+	for _, k := range attrKeys(l) {
+		if strings.HasPrefix(k, "user.") {
+			t.Errorf("log attribute %s arrived, want every user.* attribute dropped", k)
+		}
+	}
+	logAttr(t, l, "sentry.environment")
+	assertNoLeak(t, mt.captured())
+}

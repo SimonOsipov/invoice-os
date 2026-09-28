@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/getsentry/sentry-go"
@@ -984,6 +985,11 @@ func TestRedactQuoted(t *testing.T) {
 		{`bad "` + markerTIN + `\`, `bad "[redacted]`},
 		{`trailing "`, `trailing "[redacted]`},
 		{fmt.Sprintf("Ọ̀yọ́ café %q — 日本", "Adébáyọ̀ "+markerTIN), `Ọ̀yọ́ café "[redacted]" — 日本`},
+		{`invalid character '"' after object key: value "` + markerTIN + `"`, `invalid character '"' after object key: value "[redacted]"`},
+		{`invalid character '\"' in literal: value "` + markerTIN + `"`, `invalid character '\"' in literal: value "[redacted]"`},
+		{`bad input x"y: value "` + markerTIN + `"`, `bad input x"[redacted]`},
+		{`a '"' b`, `a '"' b`},
+		{`'"'`, `'"'`},
 	} {
 		if got := redactQuoted(c.in); got != c.want {
 			t.Errorf("redactQuoted(%q) = %q, want %q", c.in, got, c.want)
@@ -1009,4 +1015,156 @@ func TestRedactUpstreamReason(t *testing.T) {
 			t.Errorf("redactUpstreamReason(%.80q...) = %.80q..., want %q", c.in, got, c.want)
 		}
 	}
+}
+
+func TestSentryFilter_QuoteParity(t *testing.T) {
+	t.Run("json_rune_literal_before_a_quoted_value", func(t *testing.T) {
+		var v any
+		jsonErr := json.Unmarshal([]byte(`{"a""b"}`), &v)
+		if jsonErr == nil || !strings.Contains(jsonErr.Error(), `'"'`) {
+			t.Fatalf("json error = %v, want one naming the character '\"'", jsonErr)
+		}
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("%v: value %q", jsonErr, markerTIN))
+
+		got := exceptionValue(t, oneEvent(t, mt, ""))
+		if want := jsonErr.Error() + `: value "[redacted]"`; got != want {
+			t.Errorf("exception value = %q, want %q", got, want)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("stray_quote_operand_before_a_quoted_value", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		stray := errors.New(`header x"y unparsed`)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("%v: value %q", stray, markerTIN))
+
+		if got := exceptionValue(t, oneEvent(t, mt, "")); got != `header x"[redacted]` {
+			t.Errorf("exception value = %q, want header x\"[redacted]", got)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+
+	t.Run("even_string_keeps_unquoted_text", func(t *testing.T) {
+		mt := filteredClient(t, false)
+		sentry.CurrentHub().Clone().CaptureException(fmt.Errorf("import row 7: key %q date %q unparsed", markerIRN, markerTIN))
+
+		want := `import row 7: key "[redacted]" date "[redacted]" unparsed`
+		if got := exceptionValue(t, oneEvent(t, mt, "")); got != want {
+			t.Errorf("exception value = %q, want %q", got, want)
+		}
+		assertNoLeak(t, mt.captured())
+	})
+}
+
+func TestSentryFilter_SpanTagsAndName(t *testing.T) {
+	mt := filteredClient(t, true)
+	ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+	tx := sentry.StartTransaction(ctx, "reconcile.run")
+	child := tx.StartChild("http.client")
+	child.Name = "GET /v1/invoices?q=" + markerTIN
+	child.SetTag("arg", fmt.Sprintf("buyer %q", markerTIN))
+	child.Finish()
+	tx.Finish()
+
+	ev := oneEvent(t, mt, "transaction")
+	if len(ev.Spans) != 1 {
+		t.Fatalf("transaction has %d spans, want 1", len(ev.Spans))
+	}
+	s := ev.Spans[0]
+	if s.Name != "GET /v1/invoices" {
+		t.Errorf("span name = %q, want GET /v1/invoices", s.Name)
+	}
+	if got := s.Tags["arg"]; got != `buyer "[redacted]"` {
+		t.Errorf("span tag arg = %q, want buyer \"[redacted]\"", got)
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+func TestSentryFilter_NestedBreadcrumbData(t *testing.T) {
+	mt := filteredClient(t, false)
+	hub := sentry.CurrentHub().Clone()
+	hub.AddBreadcrumb(&sentry.Breadcrumb{
+		Category: "db",
+		Data: map[string]interface{}{
+			"args":    []string{`x "` + markerTIN + `"`},
+			"request": map[string]any{"url": "/x?tin=" + markerTIN},
+			"rows":    []interface{}{map[string]interface{}{"irn": `k "` + markerIRN + `"`}},
+		},
+	}, nil)
+	hub.CaptureException(errors.New("nested data anchor"))
+
+	ev := oneEvent(t, mt, "")
+	if len(ev.Breadcrumbs) != 1 {
+		t.Fatalf("event has %d breadcrumbs, want 1", len(ev.Breadcrumbs))
+	}
+	d := ev.Breadcrumbs[0].Data
+	if args, ok := d["args"].([]string); !ok || len(args) != 1 || args[0] != `x "[redacted]"` {
+		t.Errorf("breadcrumb args = %#v, want [x \"[redacted]\"]", d["args"])
+	}
+	if req, ok := d["request"].(map[string]interface{}); !ok || req["url"] != "/x" {
+		t.Errorf("breadcrumb request = %#v, want url /x", d["request"])
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+func TestSentryFilter_ScopeContextsAreScrubbed(t *testing.T) {
+	mt := filteredClient(t, false)
+	hub := sentry.CurrentHub().Clone()
+	hub.Scope().SetContext("invoice", sentry.Context{
+		"irn":  `x "` + markerIRN + `"`,
+		"list": map[string]interface{}{"url": "/x?tin=" + markerTIN},
+	})
+	hub.CaptureException(errors.New("context anchor"))
+
+	ev := oneEvent(t, mt, "")
+	if got := ev.Contexts["invoice"]["irn"]; got != `x "[redacted]"` {
+		t.Errorf("invoice context irn = %v, want x \"[redacted]\"", got)
+	}
+	rt, ok := ev.Contexts["runtime"]
+	if !ok || rt["name"] != "go" {
+		t.Errorf("runtime context = %#v, want it to arrive with name go", rt)
+	}
+	assertNoLeak(t, mt.captured())
+}
+
+// Run with -race: a caller may write to a child span after it finished.
+func TestSentryFilter_SpanWrittenAfterFinish(t *testing.T) {
+	mt := filteredClient(t, true)
+	ctx := sentry.SetHubOnContext(context.Background(), sentry.CurrentHub().Clone())
+	tx := sentry.StartTransaction(ctx, "reconcile.run")
+	child := tx.StartChild("db.query")
+	child.SetData("q", fmt.Sprintf("buyer %q", markerTIN))
+	child.Finish()
+
+	done, started := make(chan struct{}), make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			child.SetData("late", fmt.Sprintf("n%d %q", i, markerIRN))
+			if i == 0 {
+				close(started)
+			}
+			select {
+			case <-done:
+				return
+			default:
+			}
+		}
+	}()
+	<-started
+	tx.Finish()
+	close(done)
+	wg.Wait()
+
+	ev := oneEvent(t, mt, "transaction")
+	if len(ev.Spans) != 1 || ev.Spans[0] == child {
+		t.Fatalf("transaction spans = %v, want one scrubbed copy of the child", ev.Spans)
+	}
+	if got := ev.Spans[0].Data["q"]; got != `buyer "[redacted]"` {
+		t.Errorf("span data q = %v, want buyer \"[redacted]\"", got)
+	}
+	assertNoLeak(t, mt.captured())
 }

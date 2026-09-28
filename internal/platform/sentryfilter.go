@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/textproto"
 	"regexp"
 	"strings"
@@ -54,18 +56,16 @@ func scrubEvent(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 		}
 	}
 
-	if trace, ok := event.Contexts["trace"]; ok && trace != nil {
-		if d, ok := trace["description"].(string); ok {
-			trace["description"] = ScrubText(d)
+	for k, c := range event.Contexts {
+		c = scrubData(c)
+		if d, ok := c["data"].(map[string]interface{}); ok && k == "trace" {
+			c["data"] = scrubData(d)
 		}
-		if d, ok := trace["data"].(map[string]interface{}); ok {
-			trace["data"] = scrubData(d)
-		}
+		event.Contexts[k] = c
 	}
 
-	for _, s := range event.Spans {
-		s.Description = ScrubText(s.Description)
-		s.Data = scrubData(s.Data)
+	for i, s := range event.Spans {
+		event.Spans[i] = scrubSpan(s)
 	}
 
 	// Breadcrumbs are shared with the scope, so each is replaced, not edited.
@@ -87,7 +87,7 @@ func scrubLog(log *sentry.Log) *sentry.Log {
 	log.Body = ScrubText(log.Body)
 	for k, v := range log.Attributes {
 		// Emitf writes each argument here raw and unquoted, so ScrubText cannot see it.
-		if k == "http.query" || k == "http.fragment" || strings.HasPrefix(k, "sentry.message.parameters.") {
+		if k == "http.query" || k == "http.fragment" || strings.HasPrefix(k, "sentry.message.parameters.") || strings.HasPrefix(k, "user.") {
 			delete(log.Attributes, k)
 			continue
 		}
@@ -105,8 +105,47 @@ func scrubLog(log *sentry.Log) *sentry.Log {
 	return log
 }
 
-// scrubData returns a copy of d without query or fragment keys, with string
-// values passed through ScrubText.
+// scrubSpan returns a scrubbed copy of s. A caller may still write to a
+// finished child span, so Tags and Data are read under the span's own lock.
+func scrubSpan(s *sentry.Span) *sentry.Span {
+	// MakeSerializationSafe is the only exported path that takes the span's lock.
+	(&sentry.Event{Spans: []*sentry.Span{s}}).MakeSerializationSafe()
+	var snap struct {
+		Tags map[string]string      `json:"tags"`
+		Data map[string]interface{} `json:"data"`
+	}
+	raw, err := json.Marshal(s)
+	if err == nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		err = dec.Decode(&snap)
+	}
+	if err != nil {
+		snap.Tags, snap.Data = nil, nil
+	}
+	for k, v := range snap.Tags {
+		snap.Tags[k] = ScrubText(v)
+	}
+	return &sentry.Span{
+		TraceID:      s.TraceID,
+		SpanID:       s.SpanID,
+		ParentSpanID: s.ParentSpanID,
+		Name:         ScrubText(s.Name),
+		Op:           s.Op,
+		Description:  ScrubText(s.Description),
+		Status:       s.Status,
+		Tags:         snap.Tags,
+		StartTime:    s.StartTime,
+		EndTime:      s.EndTime,
+		Data:         scrubData(snap.Data),
+		Sampled:      s.Sampled,
+		Source:       s.Source,
+		Origin:       s.Origin,
+	}
+}
+
+// scrubData returns a copy of d without top-level query or fragment keys,
+// with strings at any depth passed through ScrubText.
 func scrubData(d map[string]interface{}) map[string]interface{} {
 	if d == nil {
 		return nil
@@ -116,12 +155,42 @@ func scrubData(d map[string]interface{}) map[string]interface{} {
 		if k == "http.query" || k == "http.fragment" {
 			continue
 		}
-		if s, ok := v.(string); ok {
-			v = ScrubText(s)
-		}
-		out[k] = v
+		out[k] = scrubValue(v)
 	}
 	return out
+}
+
+// scrubValue returns a copy of v with every nested string passed through ScrubText.
+func scrubValue(v interface{}) interface{} {
+	switch x := v.(type) {
+	case string:
+		return ScrubText(x)
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, e := range x {
+			out[k] = scrubValue(e)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, e := range x {
+			out[k] = ScrubText(e)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(x))
+		for i, e := range x {
+			out[i] = scrubValue(e)
+		}
+		return out
+	case []string:
+		out := make([]string, len(x))
+		for i, e := range x {
+			out[i] = ScrubText(e)
+		}
+		return out
+	}
+	return v
 }
 
 // stripQuery removes each "?" or "#" and the run of non-whitespace after it.
@@ -154,29 +223,62 @@ func ScrubText(s string) string {
 }
 
 // redactQuoted replaces each Go double-quoted segment with "[redacted]".
-// An unterminated segment is redacted to the end of s.
+// Rule: '"' and '\"' are rune literals, not delimiters; an odd delimiter count redacts from the first delimiter to the end.
 func redactQuoted(s string) string {
 	if !strings.Contains(s, `"`) {
 		return s
 	}
+	first, open := -1, false
+	for i := 0; i < len(s); i++ {
+		switch {
+		case !open && runeLiteralLen(s[i:]) > 0:
+			i += runeLiteralLen(s[i:]) - 1
+		case open && s[i] == '\\':
+			i++
+		case s[i] == '"':
+			if first < 0 {
+				first = i
+			}
+			open = !open
+		}
+	}
+	if first < 0 {
+		return s
+	}
+	if open {
+		return s[:first] + `"[redacted]`
+	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
+		if n := runeLiteralLen(s[i:]); n > 0 {
+			b.WriteString(s[i : i+n])
+			i += n - 1
+			continue
+		}
 		if s[i] != '"' {
 			b.WriteByte(s[i])
 			continue
 		}
-		b.WriteString(`"[redacted]`)
-		for i++; i < len(s) && s[i] != '"'; i++ {
+		b.WriteString(`"[redacted]"`)
+		for i++; s[i] != '"'; i++ {
 			if s[i] == '\\' {
 				i++
 			}
 		}
-		if i < len(s) {
-			b.WriteByte('"')
-		}
 	}
 	return b.String()
+}
+
+// runeLiteralLen returns the length of a '"' or '\"' prefix of s, else 0.
+func runeLiteralLen(s string) int {
+	switch {
+	case strings.HasPrefix(s, `'"'`):
+		return 3
+	case strings.HasPrefix(s, `'\"'`):
+		return 4
+	}
+	return 0
 }
 
 var upstreamStatus = regexp.MustCompile(`returned [0-9]{3}: `)

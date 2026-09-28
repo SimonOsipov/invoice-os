@@ -983,7 +983,7 @@ jobs:
             echo "::error::$GATEWAY_URL/healthz/fleet was unreachable or had no services list after 5 tries; the Go fleet's Sentry state is unknown."
             exit 1
           fi
-          if [ "$IS_PR" = "true" ]; then want='^off$'; direction='off'; else want='^(on|off)$'; direction='on or off'; fi
+          if [ "$IS_PR" = "true" ]; then want='["off"]'; direction='off'; else want='["on","off"]'; direction='on or off'; fi
           checked='[.services[] | select(.name != "docling" and .name != "auth")]'
           names=$(jq -r "$checked | map(.name) | join(\", \")" /tmp/sentry-fleet.json) || {
             echo "::error::the fleet roll-up has a services entry that is not an object; the Sentry state is unverified."
@@ -993,7 +993,7 @@ jobs:
             echo "::error::the fleet roll-up has no gateway entry (checked: ${names:-nothing}); the Sentry state is unverified."
             exit 1
           fi
-          offenders=$(jq -r --arg b "$EXPECTED_BUILD" --arg want "$want" "$checked"' | map(select(.build != $b or (if (.sentry | type) == "string" then (.sentry | test($want) | not) else true end)) | "\(.name)=\(.sentry // "none")@\(.build // "none")") | join(", ")' /tmp/sentry-fleet.json) || {
+          offenders=$(jq -r --arg b "$EXPECTED_BUILD" --argjson want "$want" "$checked"' | map(select(.build != $b or (.sentry | IN($want[]) | not)) | "\(.name)=\(.sentry // "none")@\(.build // "none")") | join(", ")' /tmp/sentry-fleet.json) || {
             echo "::error::the fleet roll-up has a services entry that is not an object; the Sentry state is unverified."
             exit 1
           }
